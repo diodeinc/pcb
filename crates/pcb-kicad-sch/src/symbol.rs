@@ -34,11 +34,161 @@ pub(crate) enum PowerScope {
     Global,
 }
 
-pub(crate) fn power_scope(definition: &SymbolDefinition) -> Result<Option<PowerScope>> {
-    let items = definition
-        .sexpr
-        .as_list()
-        .with_context(|| format!("symbol {} definition is not a list", definition.lib_id))?;
+#[derive(Debug, Clone)]
+struct SymbolSection {
+    unit: u32,
+    body_style: u32,
+    pins: Vec<SymbolPin>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ParsedSymbolDefinition {
+    power_scope: Option<PowerScope>,
+    sections: Vec<SymbolSection>,
+    unit_indices: Vec<u32>,
+    duplicate_pin_numbers_are_jumpers: bool,
+    jumper_pin_groups: Vec<BTreeSet<String>>,
+}
+
+impl ParsedSymbolDefinition {
+    pub fn parse(definition: &SymbolDefinition) -> Result<Self> {
+        let items = definition
+            .sexpr
+            .as_list()
+            .with_context(|| format!("symbol {} definition is not a list", definition.lib_id))?;
+        let mut units = BTreeSet::new();
+        let mut sections = vec![SymbolSection {
+            unit: 0,
+            body_style: 0,
+            pins: parse_pins(items)?,
+        }];
+        for child in &items[2..] {
+            let Some(section) = child.as_list() else {
+                continue;
+            };
+            if section.first().and_then(Sexpr::as_sym) != Some("symbol") {
+                continue;
+            }
+            let name = section
+                .get(1)
+                .and_then(Sexpr::as_atom)
+                .context("nested symbol missing name")?;
+            let (unit, body_style) = section_unit_style(name)?;
+            if unit > 0 {
+                units.insert(unit);
+            }
+            sections.push(SymbolSection {
+                unit,
+                body_style,
+                pins: parse_pins(section)?,
+            });
+        }
+        let unit_indices = if units.is_empty() {
+            vec![1]
+        } else {
+            units.into_iter().collect()
+        };
+        Ok(Self {
+            power_scope: parse_power_scope(items, &definition.lib_id)?,
+            sections,
+            unit_indices,
+            duplicate_pin_numbers_are_jumpers: parse_duplicate_pin_numbers_are_jumpers(
+                items,
+                &definition.lib_id,
+            )?,
+            jumper_pin_groups: parse_jumper_pin_groups(items)?,
+        })
+    }
+
+    pub fn power_scope(&self) -> Option<PowerScope> {
+        self.power_scope
+    }
+
+    pub fn unit_indices(&self) -> &[u32] {
+        &self.unit_indices
+    }
+
+    pub fn duplicate_pin_numbers_are_jumpers(&self) -> bool {
+        self.duplicate_pin_numbers_are_jumpers
+    }
+
+    pub fn jumper_pin_groups(&self) -> &[BTreeSet<String>] {
+        &self.jumper_pin_groups
+    }
+
+    pub fn placed_pins(&self, symbol: &Symbol) -> Result<Vec<SymbolPin>> {
+        let mut pins = self
+            .sections
+            .iter()
+            .filter(|section| {
+                matches_unit(section.unit, symbol.unit)
+                    && matches_body_style(section.body_style, symbol.body_style)
+            })
+            .flat_map(|section| section.pins.iter())
+            .cloned()
+            .collect::<Vec<_>>();
+        pins.sort_by(|a, b| a.number.cmp(&b.number).then_with(|| a.name.cmp(&b.name)));
+        pins.dedup_by(|a, b| a.number == b.number && a.name == b.name && a.point == b.point);
+        let pin_number_counts = pins.iter().fold(BTreeMap::new(), |mut counts, pin| {
+            *counts.entry(pin.number.as_str()).or_insert(0usize) += 1;
+            counts
+        });
+        let mut placed_alternates = BTreeMap::new();
+        for pin in &symbol.pins {
+            let Some(alternate) = pin.alternate.as_deref() else {
+                continue;
+            };
+            if placed_alternates
+                .insert(pin.number.as_str(), alternate)
+                .is_some()
+            {
+                bail!(
+                    "symbol {} selects more than one alternate for pin {}",
+                    symbol.id,
+                    pin.number
+                );
+            }
+        }
+        for number in placed_alternates.keys() {
+            match pin_number_counts.get(number).copied() {
+                None => bail!(
+                    "symbol {} selects an alternate for undefined pin {number}",
+                    symbol.id
+                ),
+                Some(1) => {}
+                Some(count) => bail!(
+                    "symbol {} selects one alternate for {count} definition pins numbered {number}",
+                    symbol.id
+                ),
+            }
+        }
+        let resolved = pins
+            .into_iter()
+            .map(|mut pin| {
+                if let Some(alternate) = placed_alternates.remove(pin.number.as_str()) {
+                    let electrical_type = pin.alternates.get(alternate).ok_or_else(|| {
+                        anyhow!(
+                            "symbol {} pin {} selects undefined alternate {alternate}",
+                            symbol.id,
+                            pin.number
+                        )
+                    })?;
+                    pin.name = crate::kicad::unescape_text(alternate);
+                    pin.electrical_type = electrical_type.clone();
+                }
+                // KiCad parses library-local symbol coordinates with Y inverted,
+                // unlike schematic-page coordinates.
+                pin.point.y = -pin.point.y;
+                pin.point = transform_point(pin.point, symbol);
+                Ok(pin)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        debug_assert!(placed_alternates.is_empty());
+        Ok(resolved)
+    }
+}
+
+fn parse_power_scope(items: &[Sexpr], lib_id: &str) -> Result<Option<PowerScope>> {
     let Some(power) = child_list(items, "power") else {
         return Ok(None);
     };
@@ -47,141 +197,24 @@ pub(crate) fn power_scope(definition: &SymbolDefinition) -> Result<Option<PowerS
         Some("local") => Ok(Some(PowerScope::Local)),
         Some("global") => Ok(Some(PowerScope::Global)),
         value => bail!(
-            "symbol {} has invalid power scope {:?}; expected bare, local, or global",
-            definition.lib_id,
+            "symbol {lib_id} has invalid power scope {:?}; expected bare, local, or global",
             value
         ),
     }
 }
 
-pub(crate) fn unit_indices(definition: &SymbolDefinition) -> Result<Vec<u32>> {
-    let mut units = BTreeSet::new();
-    let items = definition
-        .sexpr
-        .as_list()
-        .with_context(|| format!("symbol {} definition is not a list", definition.lib_id))?;
-    for child in &items[2..] {
-        let Some(section) = child.as_list() else {
-            continue;
-        };
-        if section.first().and_then(Sexpr::as_sym) != Some("symbol") {
-            continue;
-        }
-        let name = section
-            .get(1)
-            .and_then(Sexpr::as_atom)
-            .context("nested symbol missing name")?;
-        let (unit, _) = section_unit_style(name)?;
-        if unit > 0 {
-            units.insert(unit);
-        }
-    }
-    if units.is_empty() {
-        Ok(vec![1])
-    } else {
-        Ok(units.into_iter().collect())
-    }
-}
-
-pub(crate) fn placed_pins(
-    definition: &SymbolDefinition,
-    symbol: &Symbol,
-    include_hidden: bool,
-) -> Result<Vec<SymbolPin>> {
-    let Some(items) = definition.sexpr.as_list() else {
-        bail!("symbol {} definition is not a list", definition.lib_id);
-    };
-    let mut pins = parse_pins(items, include_hidden)?;
-    for child in &items[2..] {
-        let Some(section) = child.as_list() else {
-            continue;
-        };
-        if section.first().and_then(Sexpr::as_sym) != Some("symbol") {
-            continue;
-        }
-        let name = section
-            .get(1)
-            .and_then(Sexpr::as_atom)
-            .context("nested symbol missing name")?;
-        let (unit, body_style) = section_unit_style(name)?;
-        if matches_unit(unit, symbol.unit) && matches_body_style(body_style, symbol.body_style) {
-            pins.extend(parse_pins(section, include_hidden)?);
-        }
-    }
-    pins.sort_by(|a, b| a.number.cmp(&b.number).then_with(|| a.name.cmp(&b.name)));
-    pins.dedup_by(|a, b| a.number == b.number && a.name == b.name && a.point == b.point);
-    let pin_number_counts = pins.iter().fold(BTreeMap::new(), |mut counts, pin| {
-        *counts.entry(pin.number.as_str()).or_insert(0usize) += 1;
-        counts
-    });
-    let mut placed_alternates = BTreeMap::new();
-    for pin in &symbol.pins {
-        let Some(alternate) = pin.alternate.as_deref() else {
-            continue;
-        };
-        if placed_alternates
-            .insert(pin.number.as_str(), alternate)
-            .is_some()
-        {
-            bail!(
-                "symbol {} selects more than one alternate for pin {}",
-                symbol.id,
-                pin.number
-            );
-        }
-    }
-    for number in placed_alternates.keys() {
-        match pin_number_counts.get(number).copied() {
-            None => bail!(
-                "symbol {} selects an alternate for undefined pin {number}",
-                symbol.id
-            ),
-            Some(1) => {}
-            Some(count) => bail!(
-                "symbol {} selects one alternate for {count} definition pins numbered {number}",
-                symbol.id
-            ),
-        }
-    }
-    let resolved = pins
-        .into_iter()
-        .map(|mut pin| {
-            if let Some(alternate) = placed_alternates.remove(pin.number.as_str()) {
-                let electrical_type = pin.alternates.get(alternate).ok_or_else(|| {
-                    anyhow!(
-                        "symbol {} pin {} selects undefined alternate {alternate}",
-                        symbol.id,
-                        pin.number
-                    )
-                })?;
-                pin.name = crate::kicad::unescape_text(alternate);
-                pin.electrical_type = electrical_type.clone();
-            }
-            // KiCad parses library-local symbol coordinates with Y inverted,
-            // unlike schematic-page coordinates.
-            pin.point.y = -pin.point.y;
-            pin.point = transform_point(pin.point, symbol);
-            Ok(pin)
-        })
-        .collect::<Result<Vec<_>>>()?;
-    debug_assert!(placed_alternates.is_empty());
-    Ok(resolved)
-}
-
-fn parse_pins(items: &[Sexpr], include_hidden: bool) -> Result<Vec<SymbolPin>> {
+fn parse_pins(items: &[Sexpr]) -> Result<Vec<SymbolPin>> {
     let mut pins = Vec::new();
     for items in items.iter().filter_map(Sexpr::as_list) {
         if items.first().and_then(Sexpr::as_sym) != Some("pin") {
             continue;
         }
-        if let Some(pin) = parse_pin(items, include_hidden)? {
-            pins.push(pin);
-        }
+        pins.push(parse_pin(items)?);
     }
     Ok(pins)
 }
 
-fn parse_pin(items: &[Sexpr], include_hidden: bool) -> Result<Option<SymbolPin>> {
+fn parse_pin(items: &[Sexpr]) -> Result<SymbolPin> {
     let electrical_type = items
         .get(1)
         .and_then(Sexpr::as_atom)
@@ -189,9 +222,6 @@ fn parse_pin(items: &[Sexpr], include_hidden: bool) -> Result<Option<SymbolPin>>
         .to_string();
     validate_electrical_type(&electrical_type)?;
     let hidden = pin_hidden(items)?;
-    if hidden && !include_hidden {
-        return Ok(None);
-    }
     let at = child_list(items, "at").context("symbol pin missing at")?;
     let point = Point::new(
         number(at.get(1).context("symbol pin missing x")?).context("invalid symbol pin x")?,
@@ -231,7 +261,7 @@ fn parse_pin(items: &[Sexpr], include_hidden: bool) -> Result<Option<SymbolPin>>
             bail!("pin {number} has duplicate alternate {name}");
         }
     }
-    Ok(Some(SymbolPin {
+    Ok(SymbolPin {
         name,
         number,
         numbers,
@@ -239,7 +269,7 @@ fn parse_pin(items: &[Sexpr], include_hidden: bool) -> Result<Option<SymbolPin>>
         electrical_type,
         hidden,
         alternates,
-    }))
+    })
 }
 
 fn pin_hidden(items: &[Sexpr]) -> Result<bool> {
@@ -358,26 +388,22 @@ fn alpha_numeric_pin(value: &str) -> Option<(&str, i64)> {
     })?
 }
 
-pub(crate) fn duplicate_pin_numbers_are_jumpers(definition: &SymbolDefinition) -> Result<bool> {
-    let Some(items) = definition
-        .sexpr
-        .find_list("duplicate_pin_numbers_are_jumpers")
-    else {
+fn parse_duplicate_pin_numbers_are_jumpers(items: &[Sexpr], lib_id: &str) -> Result<bool> {
+    let Some(setting) = child_list(items, "duplicate_pin_numbers_are_jumpers") else {
         return Ok(false);
     };
-    match items.get(1).and_then(Sexpr::as_atom) {
+    match setting.get(1).and_then(Sexpr::as_atom) {
         Some("yes") => Ok(true),
         Some("no") => Ok(false),
         value => bail!(
-            "symbol {} has invalid duplicate_pin_numbers_are_jumpers value {:?}",
-            definition.lib_id,
+            "symbol {lib_id} has invalid duplicate_pin_numbers_are_jumpers value {:?}",
             value
         ),
     }
 }
 
-pub(crate) fn jumper_pin_groups(definition: &SymbolDefinition) -> Result<Vec<BTreeSet<String>>> {
-    let Some(groups) = definition.sexpr.find_list("jumper_pin_groups") else {
+fn parse_jumper_pin_groups(items: &[Sexpr]) -> Result<Vec<BTreeSet<String>>> {
+    let Some(groups) = child_list(items, "jumper_pin_groups") else {
         return Ok(Vec::new());
     };
     groups[1..]
@@ -470,7 +496,8 @@ mod tests {
                   (name "B") (number "2"))))"#,
         )
         .unwrap();
-        assert_eq!(unit_indices(&definition).unwrap(), vec![1, 2]);
+        let definition = ParsedSymbolDefinition::parse(&definition).unwrap();
+        assert_eq!(definition.unit_indices(), &[1, 2]);
 
         let symbol = Symbol {
             id: "symbol".into(),
@@ -486,7 +513,7 @@ mod tests {
             unsupported: Vec::new(),
         };
         assert_eq!(
-            placed_pins(&definition, &symbol, false).unwrap(),
+            definition.placed_pins(&symbol).unwrap(),
             vec![SymbolPin {
                 name: "B".into(),
                 number: "2".into(),

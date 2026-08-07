@@ -44,7 +44,7 @@ ConnectivityAnalysis {
                         "R1.R",
                     ),
                     pin_name: "1",
-                    pin_keys: {
+                    pin_numbers: {
                         "1",
                     },
                 },
@@ -73,7 +73,7 @@ ConnectivityAnalysis {
                         "R1.R",
                     ),
                     pin_name: "2",
-                    pin_keys: {
+                    pin_numbers: {
                         "2",
                     },
                 },
@@ -82,7 +82,7 @@ ConnectivityAnalysis {
                         "R2.R",
                     ),
                     pin_name: "1",
-                    pin_keys: {
+                    pin_numbers: {
                         "1",
                     },
                 },
@@ -111,7 +111,7 @@ ConnectivityAnalysis {
                         "R2.R",
                     ),
                     pin_name: "2",
-                    pin_keys: {
+                    pin_numbers: {
                         "2",
                     },
                 },
