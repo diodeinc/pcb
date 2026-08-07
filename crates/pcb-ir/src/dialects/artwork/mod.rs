@@ -777,7 +777,10 @@ mod tests {
                 PathCmd::line_to(Point::new(1.0, 0.0)),
             ])],
         );
-        doc.push_block_object(block, Object::new(Polarity::Dark, Geometry::Stroke { path }));
+        doc.push_block_object(
+            block,
+            Object::new(Polarity::Dark, Geometry::Stroke { path }),
+        );
         let layer = doc.push_layer(Layer::new("F.Cu", LayerRole::Copper, Side::Top));
         doc.push_object(
             layer,

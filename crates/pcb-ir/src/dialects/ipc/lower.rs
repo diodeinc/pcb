@@ -208,19 +208,15 @@ where
             out.push_block_object(block, object);
         }
         for (polarity, order, block) in classes {
-            objects.extend(
-                group
-                    .placements
-                    .slice(&doc.feature_placements)
-                    .iter()
-                    .map(|&transform| artwork::Object {
-                        polarity,
-                        order,
-                        geometry: artwork::Geometry::Instance { block, transform },
-                        bbox: out.blocks[block as usize].bbox.transformed(transform),
-                        meta: ObjectMeta::default(),
-                    }),
-            );
+            objects.extend(group.placements.slice(&doc.feature_placements).iter().map(
+                |&transform| artwork::Object {
+                    polarity,
+                    order,
+                    geometry: artwork::Geometry::Instance { block, transform },
+                    bbox: out.blocks[block as usize].bbox.transformed(transform),
+                    meta: ObjectMeta::default(),
+                },
+            ));
         }
     }
     out.diagnostics.extend(doc.diagnostics.clone());
