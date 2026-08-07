@@ -52,13 +52,6 @@ where
     L: Clone,
 {
     normalize_preserving(doc);
-    if !doc.feature_placement_groups.is_empty()
-        && doc.features.iter().any(|feature| {
-            feature.flags.clears_previous_in_set || feature.bucket == FeatureBucket::Cutout
-        })
-    {
-        expand_feature_placement_groups(doc);
-    }
     resolve_set_voids(doc);
     subtract_layer_cutouts(doc);
     compact(doc);
@@ -180,19 +173,7 @@ pub fn normalize_bounds<S, L>(doc: &mut Document<S, L>) {
     }
 
     for feature_index in 0..doc.features.len() {
-        let local_bbox = doc.arena.paths_bbox(doc.features[feature_index].paths);
-        let bbox = if let Some(group_id) = doc.features[feature_index].placement_group {
-            let group = &doc.feature_placement_groups[group_id as usize];
-            group
-                .placements
-                .slice(&doc.feature_placements)
-                .iter()
-                .map(|&transform| local_bbox.transformed(transform))
-                .fold(BBox::empty(), BBox::union)
-        } else {
-            local_bbox
-        };
-        doc.features[feature_index].bbox = bbox;
+        doc.features[feature_index].bbox = doc.placed_paths_bbox(&doc.features[feature_index]);
     }
 
     for set_index in 0..doc.feature_sets.len() {
@@ -366,17 +347,19 @@ fn materialize_feature_placement<S, L>(
     feature: &mut Feature<S>,
     placement: Affine2,
 ) {
+    let scale = placement.m00.hypot(placement.m10);
     let path_start = doc.arena.paths.len() as u32;
     for path_index in feature.paths.indices() {
         let path = doc.arena.paths[path_index as usize];
         let contours = doc.arena.transformed_contour_bufs(path.contours, placement);
-        doc.arena.push_path(path.paint, contours);
+        doc.arena.push_path(path.paint.scaled(scale), contours);
     }
     let paths = Span::new(path_start, doc.arena.paths.len() as u32 - path_start);
     feature.placement_group = None;
     feature.transform = placement.concat(feature.transform);
     feature.center = placement.transform_point(feature.center);
     feature.paths = paths;
+    feature.stroke_width *= scale;
     feature.bbox = doc.arena.paths_bbox(paths);
 }
 
@@ -686,6 +669,16 @@ where
     S: Clone,
     L: Clone,
 {
+    // Void subtraction images features in layer coordinates, so shared
+    // placement groups must be materialized before any void can cut.
+    if !doc.feature_placement_groups.is_empty()
+        && doc
+            .features
+            .iter()
+            .any(|feature| feature.flags.clears_previous_in_set)
+    {
+        expand_feature_placement_groups(doc);
+    }
     for layer_index in 0..doc.layers.len() {
         let layer = doc.layers[layer_index].clone();
         for mut feature_indices in layer_features_by_set(doc, &layer).into_values() {
@@ -738,6 +731,16 @@ where
     S: Clone,
     L: Clone,
 {
+    // Cutout subtraction images features in layer coordinates, so shared
+    // placement groups must be materialized before any cutout can cut.
+    if !doc.feature_placement_groups.is_empty()
+        && doc
+            .features
+            .iter()
+            .any(|feature| feature.bucket == FeatureBucket::Cutout)
+    {
+        expand_feature_placement_groups(doc);
+    }
     for layer_index in 0..doc.layers.len() {
         let layer = doc.layers[layer_index].clone();
         let cutouts = layer_cutout_sets(doc, &layer);

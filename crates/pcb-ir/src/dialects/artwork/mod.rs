@@ -656,7 +656,7 @@ fn expand_object_into_layer<LayerMeta, ObjectMeta: Clone>(
     polarity: Polarity,
     block_limit: usize,
 ) {
-    let polarity = combined_polarity(polarity, object.polarity);
+    let polarity = polarity.compose(object.polarity);
     if let Geometry::Instance {
         block,
         transform: placement,
@@ -702,8 +702,9 @@ fn expand_object_into_layer<LayerMeta, ObjectMeta: Clone>(
                 path
             } else {
                 let source_path = source.arena.path(path);
+                let scale = transform.m00.hypot(transform.m10);
                 target.push_path(
-                    source_path.paint,
+                    source_path.paint.scaled(scale),
                     source
                         .arena
                         .transformed_contour_bufs(source_path.contours, transform),
@@ -727,14 +728,6 @@ fn expand_object_into_layer<LayerMeta, ObjectMeta: Clone>(
             meta: object.meta.clone(),
         },
     );
-}
-
-fn combined_polarity(parent: Polarity, child: Polarity) -> Polarity {
-    match (parent, child) {
-        (Polarity::Dark, child) => child,
-        (Polarity::Clear, Polarity::Dark) => Polarity::Clear,
-        (Polarity::Clear, Polarity::Clear) => Polarity::Dark,
-    }
 }
 
 /// Convenience constructors for stroked paths shared by lowerings.
@@ -771,6 +764,48 @@ mod tests {
         assert_eq!(doc.objects.len(), 1);
         assert_eq!(doc.arena.path(path).contours.len(), 1);
         doc.validate().unwrap();
+    }
+
+    #[test]
+    fn expanding_scaled_instances_scales_stroke_widths() {
+        let mut doc = Document::<(), ()>::new();
+        let block = doc.push_block();
+        let path = doc.push_path(
+            Paint::Stroke(crate::geom::StrokeStyle::round(0.2)),
+            vec![ContourBuf::new(vec![
+                PathCmd::move_to(Point::new(0.0, 0.0)),
+                PathCmd::line_to(Point::new(1.0, 0.0)),
+            ])],
+        );
+        doc.push_block_object(block, Object::new(Polarity::Dark, Geometry::Stroke { path }));
+        let layer = doc.push_layer(Layer::new("F.Cu", LayerRole::Copper, Side::Top));
+        doc.push_object(
+            layer,
+            Object::new(
+                Polarity::Dark,
+                Geometry::Instance {
+                    block,
+                    transform: Affine2::placement(
+                        Point::new(5.0, 5.0),
+                        90.0,
+                        crate::geom::Mirror::NONE,
+                        2.0,
+                    ),
+                },
+            ),
+        );
+        normalize_bounds(&mut doc);
+
+        let expanded = expand_instances(&doc);
+        let stroke = expanded
+            .objects
+            .iter()
+            .find_map(|object| match object.geometry {
+                Geometry::Stroke { path } => expanded.arena.path(path).paint.stroke(),
+                _ => None,
+            })
+            .expect("expanded stroke object");
+        assert!((stroke.width - 0.4).abs() <= 1e-9);
     }
 
     #[test]

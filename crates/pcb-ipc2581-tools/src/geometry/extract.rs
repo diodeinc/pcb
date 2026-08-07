@@ -940,12 +940,7 @@ fn extract_feature_placement_group(
                 bail!("nested IPC feature placement groups are not supported");
             }
             feature.placement_group = Some(group_id);
-            let local_bbox = doc.arena.paths_bbox(feature.paths);
-            feature.bbox = placements
-                .slice(&doc.feature_placements)
-                .iter()
-                .map(|&transform| local_bbox.transformed(transform))
-                .fold(BBox::empty(), BBox::union);
+            feature.bbox = doc.placed_paths_bbox(&feature);
             features.push(feature);
         }
     }

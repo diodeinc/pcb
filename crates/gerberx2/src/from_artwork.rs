@@ -249,14 +249,6 @@ fn writer_placement(at: GerberPoint, transform: WriterApertureTransform) -> Affi
     )
 }
 
-fn compose_polarity(outer: Polarity, inner: Polarity) -> Polarity {
-    match (outer, inner) {
-        (Polarity::Dark, inner) => inner,
-        (Polarity::Clear, Polarity::Dark) => Polarity::Clear,
-        (Polarity::Clear, Polarity::Clear) => Polarity::Dark,
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct RegionTemplateKey(Vec<Vec<RegionSegmentKey>>);
 
@@ -451,7 +443,7 @@ fn lower_artwork_object(
             aperture,
             transform,
         } => {
-            let artwork_aperture =
+            let mut artwork_aperture =
                 layer
                     .apertures
                     .get(aperture as usize)
@@ -461,6 +453,28 @@ fn lower_artwork_object(
                             "artwork flash references missing aperture {aperture}"
                         ))
                     })?;
+            let mut transform = transform;
+            if !transform.preserves_circles(1e-9) {
+                // Similarity transforms lower to Gerber load state below;
+                // contour apertures absorb any remaining non-similarity
+                // basis by transforming their outline, and the aperture
+                // table dedups per transformed shape.
+                let ApertureShape::Contour { outline, fill_rule } = &artwork_aperture.shape else {
+                    return Err(GerberError::InvalidStructure(
+                        "cannot lower a non-similarity artwork flash to Gerber".to_string(),
+                    ));
+                };
+                let basis = Affine2 {
+                    m02: 0.0,
+                    m12: 0.0,
+                    ..transform
+                };
+                artwork_aperture = Aperture::solid(ApertureShape::Contour {
+                    outline: geom_path::transform_cmds(outline.cmds.iter().copied(), basis),
+                    fill_rule: *fill_rule,
+                });
+                transform = Affine2::translation(Point::new(transform.m02, transform.m12));
+            }
             let default_function = vec!["Conductor".to_string()];
             let aperture_function = object
                 .meta
@@ -495,7 +509,7 @@ fn lower_artwork_object(
                     at,
                     aperture: placement.aperture,
                 },
-                polarity: compose_polarity(object.polarity, placement.polarity),
+                polarity: object.polarity.compose(placement.polarity),
                 aperture_transform,
                 attributes,
             });

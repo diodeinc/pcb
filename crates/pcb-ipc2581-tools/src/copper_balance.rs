@@ -439,27 +439,10 @@ fn local_partial_void_template(shape: &pcb_ir::geom::region::Shape) -> Result<(I
 }
 
 fn localized_template_contour(contour: &ContourBuf, origin: Point) -> ContourBuf {
-    let point = |point: Point| Point::new(point.x - origin.x, point.y - origin.y);
-    let commands = contour
-        .cmds
-        .iter()
-        .map(|command| match command.op {
-            PathOp::MoveTo => pcb_ir::geom::path::PathCmd::move_to(point(command.p0)),
-            PathOp::LineTo => pcb_ir::geom::path::PathCmd::line_to(point(command.p0)),
-            PathOp::ArcTo => pcb_ir::geom::path::PathCmd::arc_to(
-                point(command.p0),
-                point(command.p1),
-                command.clockwise,
-            ),
-            PathOp::CubicTo => pcb_ir::geom::path::PathCmd::cubic_to(
-                point(command.p0),
-                point(command.p1),
-                point(command.p2),
-            ),
-            PathOp::Close => pcb_ir::geom::path::PathCmd::close(),
-        })
-        .collect();
-    ContourBuf::new(commands)
+    pcb_ir::geom::path::transform_cmds(
+        contour.cmds.iter().copied(),
+        pcb_ir::geom::Affine2::translation(Point::new(-origin.x, -origin.y)),
+    )
 }
 
 fn serialized_contour_key(contour: &IpcContour) -> String {

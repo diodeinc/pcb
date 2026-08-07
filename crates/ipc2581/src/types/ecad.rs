@@ -308,6 +308,12 @@ pub struct FeatureSet {
 }
 
 impl FeatureSet {
+    /// Iterate features, descending into placement groups.
+    ///
+    /// Placement-group members are yielded once, in group-local coordinates:
+    /// the group's `locations` and `xform` are NOT applied. Consumers that
+    /// need placed occurrences must match [`SetFeature::PlacementGroup`]
+    /// directly and apply its placements themselves.
     fn iter_features(&self) -> impl Iterator<Item = &SetFeature> {
         self.features.iter().flat_map(|feature| match feature {
             SetFeature::PlacementGroup(group) => group.features.iter(),

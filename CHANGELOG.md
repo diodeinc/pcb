@@ -22,7 +22,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `--layout-target` now takes `board` or `board-array` on every command, and defaults to `board-array`.
 - Copper balancing now accounts for the full panel stack and handles narrow frames and gutters more accurately.
 - Copper balancing now counterweights the stack's imbalance from the frame instead of extending it.
-- IPC-2581 and Gerber panel exports now preserve repeated balance, board, and panel geometry as reusable placements and aperture blocks.
+- IPC-2581 and Gerber panel exports now deduplicate repeated balance, board, and panel geometry.
 - `pcb layout --temp`; layouts are now always generated in their configured directory.
 - `ipc2581 render --flat`, which produced the same output as a plain render.
 

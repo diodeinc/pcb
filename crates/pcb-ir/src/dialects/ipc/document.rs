@@ -78,6 +78,15 @@ impl<Symbol, LayerFunction> Document<Symbol, LayerFunction> {
             })
     }
 
+    /// Layer-space bounds of a feature's local paths across its placements.
+    pub fn placed_paths_bbox(&self, feature: &Feature<Symbol>) -> BBox {
+        let local = self.arena.paths_bbox(feature.paths);
+        self.placements_for_feature(feature)
+            .iter()
+            .map(|&placement| local.transformed(placement))
+            .fold(BBox::empty(), BBox::union)
+    }
+
     /// Detach every contour occurrence of a feature in layer coordinates.
     pub fn placed_feature_contours(&self, feature: &Feature<Symbol>) -> Vec<ContourBuf> {
         self.placements_for_feature(feature)
