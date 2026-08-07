@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.25] - 2026-08-07
+
 ### Fixed
 
 - Gerber manufacturing exports now expand panel instances for compatibility with CAM systems that do not support aperture blocks.
@@ -1518,7 +1520,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.24...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.25...HEAD
+[0.4.25]: https://github.com/diodeinc/pcb/compare/v0.4.24...v0.4.25
 [0.4.24]: https://github.com/diodeinc/pcb/compare/v0.4.23...v0.4.24
 [0.4.23]: https://github.com/diodeinc/pcb/compare/v0.4.22...v0.4.23
 [0.4.22]: https://github.com/diodeinc/pcb/compare/v0.4.21...v0.4.22
