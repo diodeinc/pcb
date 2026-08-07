@@ -57,13 +57,14 @@ pub(super) fn reduce(netlist: &Schematic) -> Result<ConnectivityGraph> {
 fn component_terminal(netlist: &Schematic, port: &InstanceRef) -> Option<Terminal> {
     let (component_ref, pin_name) = netlist.component_ref_and_pin_for_port(port)?;
     let component_path = crate::canonical_component_path(&component_ref.instance_path)?;
-    let mut pin_keys = BTreeSet::from([pin_name.clone()]);
-    pin_keys.extend(pads_for_port(netlist, port));
-    pin_keys.retain(|key| !key.is_empty());
+    let pin_numbers = pads_for_port(netlist, port)
+        .into_iter()
+        .filter(|number| !number.is_empty())
+        .collect();
     Some(Terminal::ComponentPin {
         component: ComponentIdentity::ManagedPath(component_path),
         pin_name,
-        pin_keys,
+        pin_numbers,
     })
 }
 

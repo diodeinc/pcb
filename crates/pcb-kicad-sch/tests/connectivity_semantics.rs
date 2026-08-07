@@ -409,11 +409,12 @@ fn stacked_pin_numbers_expand_to_exact_logical_numbers() {
         .local_label("NET", (0.0, 0.0));
 
     let graph = ConnectivityGraph::from_kicad(&builder.build()).unwrap();
-    let Terminal::ComponentPin { pin_keys, .. } = graph.groups[0].terminals.first().unwrap() else {
+    let Terminal::ComponentPin { pin_numbers, .. } = graph.groups[0].terminals.first().unwrap()
+    else {
         panic!("expected component pin");
     };
-    assert!(pin_keys.is_superset(&names(&["1", "2", "3", "P"])));
-    assert!(!pin_keys.contains("[1-3]"));
+    assert_eq!(pin_numbers, &names(&["1", "2", "3"]));
+    assert!(!pin_numbers.contains("[1-3]"));
 }
 
 #[test]
@@ -492,11 +493,12 @@ fn malformed_stacked_pin_number_remains_literal() {
         .local_label("NET", (0.0, 0.0));
 
     let graph = ConnectivityGraph::from_kicad(&builder.build()).unwrap();
-    let Terminal::ComponentPin { pin_keys, .. } = graph.groups[0].terminals.first().unwrap() else {
+    let Terminal::ComponentPin { pin_numbers, .. } = graph.groups[0].terminals.first().unwrap()
+    else {
         panic!("expected component pin");
     };
 
-    assert!(pin_keys.contains("[3-1]"));
+    assert!(pin_numbers.contains("[3-1]"));
 }
 
 #[test]

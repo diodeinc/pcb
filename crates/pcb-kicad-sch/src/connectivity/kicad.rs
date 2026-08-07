@@ -26,8 +26,17 @@ pub(super) fn reduce(document: &SchDocument) -> Result<ConnectivityGraph> {
             *counts.entry(instance.page.id.as_str()).or_insert(0usize) += 1;
             counts
         });
+    let mut parsed_definitions =
+        BTreeMap::<String, BTreeMap<String, symbol::ParsedSymbolDefinition>>::new();
     for instance in instances {
-        let reduced = reduce_page(&instance, instance_counts[instance.page.id.as_str()] > 1)?;
+        let definitions = parsed_definitions
+            .entry(instance.page.id.clone())
+            .or_default();
+        let reduced = reduce_page(
+            &instance,
+            instance_counts[instance.page.id.as_str()] > 1,
+            definitions,
+        )?;
         components.extend(reduced.components);
         groups.extend(reduced.groups);
     }
@@ -188,7 +197,11 @@ struct ReducedPage {
     groups: Vec<ScopedConnectionGroup>,
 }
 
-fn reduce_page(instance: &PageInstance<'_>, repeated_page: bool) -> Result<ReducedPage> {
+fn reduce_page(
+    instance: &PageInstance<'_>,
+    repeated_page: bool,
+    symbol_definitions: &mut BTreeMap<String, symbol::ParsedSymbolDefinition>,
+) -> Result<ReducedPage> {
     let page = instance.page;
     let mut components = Vec::new();
     let mut connectables = Vec::new();
@@ -203,11 +216,14 @@ fn reduce_page(instance: &PageInstance<'_>, repeated_page: bool) -> Result<Reduc
                         placed.id
                     );
                 }
+                let definition =
+                    cached_symbol_definition(page, &instance.id, placed, symbol_definitions)?;
                 collect_symbol(
                     page,
                     &instance.id,
                     repeated_page,
                     placed,
+                    definition,
                     &mut components,
                     &mut connectables,
                 )?;
@@ -296,29 +312,46 @@ fn reduce_page(instance: &PageInstance<'_>, repeated_page: bool) -> Result<Reduc
     })
 }
 
+fn cached_symbol_definition<'a>(
+    page: &SchPage,
+    page_instance_id: &str,
+    placed: &Symbol,
+    parsed: &'a mut BTreeMap<String, symbol::ParsedSymbolDefinition>,
+) -> Result<&'a symbol::ParsedSymbolDefinition> {
+    match parsed.entry(placed.lib_id.clone()) {
+        std::collections::btree_map::Entry::Occupied(entry) => Ok(entry.into_mut()),
+        std::collections::btree_map::Entry::Vacant(entry) => {
+            let definition = page
+                .library
+                .definitions
+                .get(&placed.lib_id)
+                .with_context(|| {
+                    format!(
+                        "symbol {} on page instance {page_instance_id} has no cached definition {}",
+                        placed.id, placed.lib_id
+                    )
+                })?;
+            Ok(entry.insert(symbol::ParsedSymbolDefinition::parse(definition)?))
+        }
+    }
+}
+
 fn collect_symbol(
     page: &SchPage,
     page_instance_id: &str,
     repeated_page: bool,
     placed: &Symbol,
+    definition: &symbol::ParsedSymbolDefinition,
     components: &mut Vec<ComponentNode>,
     connectables: &mut Vec<Connectable>,
 ) -> Result<()> {
-    let definition = page.library.definitions.get(&placed.lib_id);
-    let definition = definition.with_context(|| {
-        format!(
-            "symbol {} on page instance {page_instance_id} has no cached definition {}",
-            placed.id, placed.lib_id
-        )
-    })?;
-    let pins = symbol::placed_pins(definition, placed, true).with_context(|| {
+    let pins = definition.placed_pins(placed).with_context(|| {
         format!(
             "failed to resolve symbol {} on page instance {page_instance_id}",
             placed.id
         )
     })?;
-    let power_scope = symbol::power_scope(definition)?;
-    if let Some(power_scope) = power_scope {
+    if let Some(power_scope) = definition.power_scope() {
         let net_name = placed
             .field_value("Value")
             .filter(|value| !value.is_empty())
@@ -368,14 +401,10 @@ fn collect_symbol(
         || ComponentIdentity::KiCadSymbol(location),
         |path| ComponentIdentity::ManagedPath(path.to_string()),
     );
-    let duplicate_numbers = symbol::duplicate_pin_numbers_are_jumpers(definition)?;
-    let jumper_groups = symbol::jumper_pin_groups(definition)?;
+    let duplicate_numbers = definition.duplicate_pin_numbers_are_jumpers();
+    let jumper_groups = definition.jumper_pin_groups();
     for pin in pins {
         let pin_name = static_net_text("symbol pin name", &pin.name)?;
-        let mut pin_keys = pin.numbers.clone();
-        if !pin_name.is_empty() {
-            pin_keys.insert(pin_name.clone());
-        }
         connectables.push(Connectable {
             geometry: Geometry::Point {
                 at: pin.point.into(),
@@ -389,14 +418,14 @@ fn collect_symbol(
             terminal: Some(Terminal::ComponentPin {
                 component: component.clone(),
                 pin_name,
-                pin_keys,
+                pin_numbers: pin.numbers.clone(),
             }),
             hierarchy: None,
             internal_links: internal_link_keys(
                 placed,
                 &pin.numbers,
                 duplicate_numbers,
-                &jumper_groups,
+                jumper_groups,
             ),
         });
     }

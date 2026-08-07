@@ -988,7 +988,7 @@ fn label_to_sexpr(label: &Label) -> Sexpr {
         Sexpr::int(label_spin_to_kicad_angle(label.spin)),
     ]));
 
-    if label.fields_autoplaced && !label.fields.is_empty() {
+    if label.fields_autoplaced {
         items.push(Sexpr::list(vec![
             Sexpr::symbol("fields_autoplaced"),
             Sexpr::symbol("yes"),
@@ -1952,6 +1952,45 @@ mod tests {
         };
 
         assert!(symbol.fields_autoplaced);
+    }
+
+    #[test]
+    fn label_fields_autoplaced_round_trips_without_properties() {
+        let content = SAMPLE.replace(
+            "  (sheet_instances",
+            r#"  (label "NET"
+    (at 20 20 0)
+    (fields_autoplaced yes)
+    (effects (font (size 1.27 1.27)))
+    (uuid "label-1")
+  )
+  (sheet_instances"#,
+        );
+        let document = SchDocument::from_kicad_sch(&content).expect("parse schematic");
+        let label = document.pages[0]
+            .items
+            .iter()
+            .find_map(|item| match item {
+                SchItem::Label(label) if label.id == "label-1" => Some(label),
+                _ => None,
+            })
+            .expect("parsed label");
+        assert!(label.fields_autoplaced);
+        assert!(label.fields.is_empty());
+
+        let formatted = document.to_kicad_sch().expect("format schematic");
+        let reparsed = SchDocument::from_kicad_sch(&formatted).expect("reparse schematic");
+        let label = reparsed.pages[0]
+            .items
+            .iter()
+            .find_map(|item| match item {
+                SchItem::Label(label) if label.id == "label-1" => Some(label),
+                _ => None,
+            })
+            .expect("round-tripped label");
+
+        assert!(label.fields_autoplaced);
+        assert!(label.fields.is_empty());
     }
 
     #[test]

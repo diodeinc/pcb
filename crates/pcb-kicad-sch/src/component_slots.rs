@@ -25,7 +25,9 @@ pub(crate) fn component_symbol_slots(netlist: &Schematic) -> Result<Vec<SymbolSl
 
 fn component_unit_indices(netlist: &Schematic, instance: &Instance) -> Result<Vec<u32>> {
     match component_symbol_definition(netlist, instance)? {
-        Some(definition) => symbol::unit_indices(&definition),
+        Some(definition) => Ok(symbol::ParsedSymbolDefinition::parse(&definition)?
+            .unit_indices()
+            .to_vec()),
         None => Ok(vec![1]),
     }
 }

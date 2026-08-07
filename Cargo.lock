@@ -4316,7 +4316,7 @@ dependencies = [
 
 [[package]]
 name = "pcb-kicad-sch"
-version = "0.4.23"
+version = "0.4.24"
 dependencies = [
  "anyhow",
  "insta",
