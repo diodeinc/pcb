@@ -9,7 +9,7 @@ use std::{
 
 use pcb_kicad_sch::{
     KicadProject, SchDocument, SchItem,
-    analysis::{SchematicAnalysis, analyze_connectivity},
+    analysis::{ConnectivityAnalysis, analyze_connectivity},
     connectivity::ConnectivityGraph,
 };
 
@@ -41,7 +41,7 @@ impl AnalysisFixture {
         Self { netlist, project }
     }
 
-    pub fn analyze(&self) -> SchematicAnalysis {
+    pub fn analyze(&self) -> ConnectivityAnalysis {
         analyze_connectivity(&self.zener_connectivity(), &self.kicad_connectivity())
     }
 

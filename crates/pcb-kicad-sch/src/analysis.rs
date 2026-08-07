@@ -81,13 +81,13 @@ pub enum SchematicIssue {
 }
 
 #[derive(Debug, Clone)]
-pub struct SchematicAnalysis {
+pub struct ConnectivityAnalysis {
     pub components: BTreeMap<SymbolSlotKey, ComponentAnalysis>,
     pub nets: BTreeMap<String, NetAnalysis>,
     issues: Vec<SchematicIssue>,
 }
 
-impl SchematicAnalysis {
+impl ConnectivityAnalysis {
     pub fn issues(&self) -> &[SchematicIssue] {
         &self.issues
     }
@@ -101,7 +101,7 @@ impl SchematicAnalysis {
 pub fn analyze_schematic(
     document: &SchDocument,
     netlist: &Schematic,
-) -> anyhow::Result<SchematicAnalysis> {
+) -> anyhow::Result<ConnectivityAnalysis> {
     Ok(analyze_connectivity(
         &ConnectivityGraph::from_zener(netlist)?,
         &ConnectivityGraph::from_kicad(document)?,
@@ -112,11 +112,11 @@ pub fn analyze_schematic(
 pub fn analyze_connectivity(
     expected: &ConnectivityGraph,
     observed: &ConnectivityGraph,
-) -> SchematicAnalysis {
+) -> ConnectivityAnalysis {
     let components = analyze_components(expected, observed);
     let nets = analyze_nets(expected, observed);
     let issues = collect_issues(expected, observed, &components, &nets);
-    SchematicAnalysis {
+    ConnectivityAnalysis {
         components,
         nets,
         issues,
