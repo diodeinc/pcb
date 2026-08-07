@@ -1000,12 +1000,9 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
         .unwrap();
     assert!(top_gerber.contents.contains("G36*"));
     assert!(top_gerber.contents.contains("G37*"));
-    // Nested array hierarchy and repeated contours remain in aperture blocks
-    // instead of expanding the same region at every placement.
-    assert!(top_gerber.contents.contains("%ABD"));
+    // Manufacturing Gerbers expand array hierarchy for broad CAM compatibility.
+    assert!(!top_gerber.contents.contains("%ABD"));
     assert!(top_gerber.contents.contains("%LPC*%"));
-    // Groups below the sharing threshold legitimately stay regions.
-    assert!(top_gerber.contents.matches("D03*").count() >= void_count / 2);
 
     // The composed Gerber image must match the composed IPC image.
     let ipc_copper = crate::copper_balance::composed_copper_image(&parsed, "TOP").unwrap();
