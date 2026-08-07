@@ -186,12 +186,7 @@ fn parse_pin(items: &[Sexpr], include_hidden: bool) -> Result<Option<SymbolPin>>
         .context("symbol pin missing electrical type")?
         .to_string();
     validate_electrical_type(&electrical_type)?;
-    let hidden = items.iter().any(|item| {
-        item.as_atom() == Some("hide")
-            || item
-                .as_list()
-                .is_some_and(|list| list.first().and_then(Sexpr::as_sym) == Some("hide"))
-    });
+    let hidden = pin_hidden(items)?;
     if hidden && !include_hidden {
         return Ok(None);
     }
@@ -243,6 +238,29 @@ fn parse_pin(items: &[Sexpr], include_hidden: bool) -> Result<Option<SymbolPin>>
         hidden,
         alternates,
     }))
+}
+
+fn pin_hidden(items: &[Sexpr]) -> Result<bool> {
+    let mut hidden = false;
+    for item in items {
+        if item.as_atom() == Some("hide") {
+            // KiCad versions before 20241004 used a bare `hide` token.
+            hidden = true;
+            continue;
+        }
+        let Some(list) = item.as_list() else {
+            continue;
+        };
+        if list.first().and_then(Sexpr::as_sym) != Some("hide") {
+            continue;
+        }
+        hidden = match list.get(1).and_then(Sexpr::as_atom) {
+            Some("yes") => true,
+            Some("no") => false,
+            _ => bail!("symbol pin hide must be yes or no"),
+        };
+    }
+    Ok(hidden)
 }
 
 fn validate_electrical_type(electrical_type: &str) -> Result<()> {
