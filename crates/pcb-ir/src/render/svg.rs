@@ -39,10 +39,13 @@ pub fn svg<LayerMeta>(doc: &mask::Document<LayerMeta>, options: &RenderOptions) 
 /// repeated geometry stays repeated instead of being copied per placement.
 /// Polarity runs paint sequentially: a clear run masks everything painted
 /// before it, which is exactly how the same artwork images in Gerber.
-pub fn artwork_svg<LayerMeta, ObjectMeta>(
+pub fn artwork_svg<LayerMeta: Clone, ObjectMeta: Clone>(
     doc: &artwork::Document<LayerMeta, ObjectMeta>,
     options: &RenderOptions,
 ) -> String {
+    if !doc.blocks.is_empty() {
+        return artwork_svg(&artwork::expand_instances(doc), options);
+    }
     let layers = crate::render::layer_indices(doc.layers.len(), options.layers.as_deref());
     let bbox = crate::render::artwork_bbox(doc, Some(&layers));
     let mut defs = String::new();
@@ -207,6 +210,9 @@ fn write_artwork_object<LayerMeta, ObjectMeta>(
                 line_join_name(stroke.join),
             )
             .unwrap();
+        }
+        Geometry::Instance { .. } => {
+            unreachable!("artwork instances are expanded before SVG rendering")
         }
     }
 }

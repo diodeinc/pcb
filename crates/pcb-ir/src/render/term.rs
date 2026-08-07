@@ -24,7 +24,7 @@ pub fn to_terminal<LayerMeta>(
 }
 
 /// Render artwork layers as an inline terminal image.
-pub fn artwork_to_terminal<LayerMeta, ObjectMeta>(
+pub fn artwork_to_terminal<LayerMeta: Clone, ObjectMeta: Clone>(
     doc: &crate::dialects::artwork::Document<LayerMeta, ObjectMeta>,
     options: &RenderOptions,
 ) -> Result<(), String> {

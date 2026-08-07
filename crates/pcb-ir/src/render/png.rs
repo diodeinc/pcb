@@ -16,7 +16,7 @@ pub fn png<LayerMeta>(
 
 /// Rasterize artwork layers to a PNG, through the same SVG the SVG backend
 /// writes.
-pub fn artwork_png<LayerMeta, ObjectMeta>(
+pub fn artwork_png<LayerMeta: Clone, ObjectMeta: Clone>(
     doc: &artwork::Document<LayerMeta, ObjectMeta>,
     options: &RenderOptions,
 ) -> Result<Vec<u8>, String> {

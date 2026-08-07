@@ -15,6 +15,7 @@ use pcb_ir::dialects::ipc::{
 use pcb_ir::geom::{BBox, ContourBuf, ContourSet, Point, Polarity};
 
 pub use extract::{extract_layer, extract_layer_for_view, extract_layout};
+pub(crate) use extract::{extract_step_layer_local, is_panel_step, step_repeat_transform};
 
 type GeometryDocument =
     pcb_ir::dialects::ipc::Document<ipc2581::Symbol, ipc2581::types::LayerFunction>;
@@ -156,12 +157,7 @@ impl ReliefFeatureCandidate {
 }
 
 fn feature_contours(doc: &GeometryDocument, feature: &Feature<Symbol>) -> Vec<ContourBuf> {
-    feature
-        .paths
-        .slice(&doc.arena.paths)
-        .iter()
-        .flat_map(|path| doc.arena.path_contours(path))
-        .collect()
+    doc.placed_feature_contours(feature)
 }
 
 fn relief_feature_layer(layer_function: LayerFunction) -> bool {

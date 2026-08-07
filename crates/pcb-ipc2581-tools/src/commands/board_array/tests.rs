@@ -957,10 +957,16 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
     let parsed = Ipc2581::parse(&xml).unwrap();
     assert!(xml.matches("<Contour>").count() > 0);
     assert!(xml.matches("<EntryUser").count() > 0);
-    assert!(xml.matches("<UserPrimitiveRef").count() >= void_count);
+    assert!(xml.matches("<Location ").count() >= void_count);
+    assert!(xml.matches("<UserPrimitiveRef").count() < void_count);
 
-    let top =
+    let mut top =
         geometry::extract_layer_for_view(&parsed, "TOP", ArtworkScope::ArrayFlattened).unwrap();
+    assert!(
+        !top.feature_placement_groups.is_empty(),
+        "shared IPC Locations should remain a placement group"
+    );
+    pcb_ir::dialects::ipc::process::expand_feature_placement_groups(&mut top);
     let balance_paths = |polarity: pcb_ir::geom::Polarity| {
         let paths = top
             .features
@@ -994,9 +1000,9 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
         .unwrap();
     assert!(top_gerber.contents.contains("G36*"));
     assert!(top_gerber.contents.contains("G37*"));
-    // The repeated voids share one outline-macro aperture flashed at clear
-    // polarity instead of re-describing each void.
-    assert!(top_gerber.contents.contains("%AMREPEAT0*"));
+    // Nested array hierarchy and repeated contours remain in aperture blocks
+    // instead of expanding the same region at every placement.
+    assert!(top_gerber.contents.contains("%ABD"));
     assert!(top_gerber.contents.contains("%LPC*%"));
     // Groups below the sharing threshold legitimately stay regions.
     assert!(top_gerber.contents.matches("D03*").count() >= void_count / 2);

@@ -13,9 +13,8 @@ pub struct Parser<'a> {
     aperture_attributes: HashMap<Symbol, Attribute>,
     object_attributes: HashMap<Symbol, Attribute>,
     aperture_definitions: Vec<ApertureDefinition>,
-    aperture_lookup: HashMap<i32, ApertureDefinition>,
+    aperture_lookup: HashMap<i32, usize>,
     macro_lookup: HashMap<Symbol, ApertureMacro>,
-    block_lookup: HashMap<i32, Vec<GraphicalObject>>,
     aperture_macros: Vec<ApertureMacro>,
     objects: Vec<GraphicalObject>,
     region: Option<RegionBuilder>,
@@ -56,7 +55,6 @@ impl<'a> Parser<'a> {
             aperture_definitions: Vec::new(),
             aperture_lookup: HashMap::new(),
             macro_lookup: HashMap::new(),
-            block_lookup: HashMap::new(),
             aperture_macros: Vec::new(),
             objects: Vec::new(),
             region: None,
@@ -193,7 +191,8 @@ impl<'a> Parser<'a> {
             let aperture = self.parse_aperture_definition(rest)?;
             self.commands
                 .push(Command::ApertureDefinition(aperture.clone()));
-            self.aperture_lookup.insert(aperture.code, aperture.clone());
+            self.aperture_lookup
+                .insert(aperture.code, self.aperture_definitions.len());
             self.aperture_definitions.push(aperture);
             return Ok(());
         }
@@ -252,15 +251,14 @@ impl<'a> Parser<'a> {
                     .take()
                     .ok_or_else(|| self.syntax("AB close without matching AB open"))?;
                 let objects = self.objects.split_off(block.object_start);
-                self.block_lookup
-                    .insert(block.aperture_code, objects.clone());
                 let aperture = ApertureDefinition {
                     code: block.aperture_code,
                     template: ApertureTemplate::Block { objects },
                     geometry: None,
                     attributes: self.aperture_attributes.values().cloned().collect(),
                 };
-                self.aperture_lookup.insert(aperture.code, aperture.clone());
+                self.aperture_lookup
+                    .insert(aperture.code, self.aperture_definitions.len());
                 self.aperture_definitions.push(aperture);
                 self.commands.push(Command::EndBlockAperture);
             } else {
@@ -446,18 +444,10 @@ impl<'a> Parser<'a> {
                     return Err(self.syntax("D03 flash is not allowed inside a region"));
                 }
                 let aperture = self.current_aperture()?;
-                if let Some(block_objects) = self.block_lookup.get(&aperture) {
-                    let objects = block_objects
-                        .iter()
-                        .cloned()
-                        .map(|object| transform_block_object(object, point, &self.state));
-                    self.objects.extend(objects);
-                } else {
-                    self.objects.push(self.graphical_object(ObjectKind::Flash {
-                        at: point,
-                        aperture,
-                    }));
-                }
+                self.objects.push(self.graphical_object(ObjectKind::Flash {
+                    at: point,
+                    aperture,
+                }));
                 self.state.current_point = Some(point);
             }
             OperationCode::Plot => {
@@ -591,7 +581,8 @@ impl<'a> Parser<'a> {
             | ObjectKind::Flash { aperture, .. } => self
                 .aperture_lookup
                 .get(aperture)
-                .map(|aperture| aperture.attributes.clone())
+                .and_then(|&index| self.aperture_definitions.get(index))
+                .map(|definition| definition.attributes.clone())
                 .unwrap_or_default(),
             ObjectKind::Region { .. } => self.aperture_attributes.values().cloned().collect(),
         };
@@ -1293,14 +1284,6 @@ fn translate_object(object: GraphicalObject, dx: f64, dy: f64) -> GraphicalObjec
     transform_object(object, LinearTransform::identity(), Point { x: dx, y: dy })
 }
 
-fn transform_block_object(
-    object: GraphicalObject,
-    origin: Point,
-    state: &GraphicsState,
-) -> GraphicalObject {
-    transform_object(object, LinearTransform::from_state(state), origin)
-}
-
 fn transform_object(
     mut object: GraphicalObject,
     outer: LinearTransform,
@@ -1377,10 +1360,6 @@ impl LinearTransform {
             m10: 0.0,
             m11: 1.0,
         }
-    }
-
-    fn from_state(state: &GraphicsState) -> Self {
-        Self::from_parts(state.mirroring, state.rotation_degrees, state.scaling)
     }
 
     fn from_parts(mirroring: Mirroring, rotation_degrees: f64, scale: f64) -> Self {

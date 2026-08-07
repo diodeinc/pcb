@@ -27,6 +27,9 @@ pub struct Feature<Symbol> {
     pub source_step_kind: LayoutStepKind,
     /// Index into `doc.feature_sets`, when the feature came from a set.
     pub set: Option<u32>,
+    /// Shared placement group for source-local geometry. An absent group means
+    /// the feature paths are already in layer coordinates.
+    pub placement_group: Option<u32>,
     pub source: SourceRef,
     pub intent: FeatureIntent<Symbol>,
     pub fiducial_kind: FiducialKind,
@@ -83,6 +86,7 @@ impl<Symbol> Feature<Symbol> {
             source_step_ref: None,
             source_step_kind: LayoutStepKind::Unknown,
             set: None,
+            placement_group: None,
             source: SourceRef::default(),
             intent,
             fiducial_kind: FiducialKind::Unknown,
@@ -368,6 +372,18 @@ pub struct FeatureSet<Symbol> {
     /// Spans `doc.features`.
     pub features: Span,
     pub bbox: BBox,
+}
+
+/// Shared placements for one IPC `Features` container.
+///
+/// Every feature that references this group keeps one local path definition;
+/// the placements stamp the complete ordered group without copying geometry.
+#[derive(Debug, Clone, Copy)]
+pub struct FeaturePlacementGroup {
+    /// Spans `doc.feature_placements`.
+    pub placements: Span,
+    /// Spans the local definitions in `doc.features`.
+    pub features: Span,
 }
 
 #[derive(Debug, Clone)]

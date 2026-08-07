@@ -41,7 +41,26 @@ fn validate_homogeneous_features_into<Symbol, LayerFunction>(
     doc: &Document<Symbol, LayerFunction>,
     diagnostics: &mut Diagnostics,
 ) {
+    for (group_index, group) in doc.feature_placement_groups.iter().enumerate() {
+        if let Err(error) = checked_span(group.features, "features", doc.features.len()) {
+            diagnostics.error(format!("feature placement group {group_index}: {error}"));
+        }
+        if let Err(error) = checked_span(
+            group.placements,
+            "feature placements",
+            doc.feature_placements.len(),
+        ) {
+            diagnostics.error(format!("feature placement group {group_index}: {error}"));
+        }
+    }
     for (feature_index, feature) in doc.features.iter().enumerate() {
+        if let Some(group) = feature.placement_group
+            && group as usize >= doc.feature_placement_groups.len()
+        {
+            diagnostics.error(format!(
+                "feature {feature_index} references missing placement group {group}"
+            ));
+        }
         if let Err(error) = checked_span(feature.paths, "feature paths", doc.arena.paths.len()) {
             diagnostics.error(format!("feature {feature_index}: {error}"));
             continue;

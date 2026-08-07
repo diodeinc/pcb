@@ -622,11 +622,22 @@ fn collect_support_layer_geometry<Symbol: Copy + PartialEq, LayerFunction>(
     let obstacles = scoped_features
         .into_iter()
         .map(|(reach, features)| {
-            let region = ContourSet::from_painted_paths(
+            let region = ContourSet::from_placed_painted_paths(
                 &source.document.arena,
-                features
-                    .into_iter()
-                    .flat_map(|feature| feature.paths.slice(&source.document.arena.paths)),
+                features.into_iter().flat_map(|feature| {
+                    source
+                        .document
+                        .placements_for_feature(feature)
+                        .iter()
+                        .copied()
+                        .flat_map(move |placement| {
+                            feature
+                                .paths
+                                .slice(&source.document.arena.paths)
+                                .iter()
+                                .map(move |path| (path, placement))
+                        })
+                }),
                 tol::REGION_MM,
             );
             BoardArrayScopedObstacle { reach, region }
@@ -697,9 +708,9 @@ fn validate_options(options: BalancingRegionOptions) -> Result<(), BalancingRegi
 mod tests {
     use super::*;
     use crate::dialects::ipc::{
-        Feature, FeatureDomain, FeatureKind, FeatureRole, FeatureSet, LayoutInstance,
-        LayoutPurpose, LayoutStep, LayoutStepKind, Spec, SpecItem, SpecItemKind, SpecRef,
-        StepProfile,
+        Feature, FeatureDomain, FeatureKind, FeaturePlacementGroup, FeatureRole, FeatureSet,
+        LayoutInstance, LayoutPurpose, LayoutStep, LayoutStepKind, Spec, SpecItem, SpecItemKind,
+        SpecRef, StepProfile,
     };
     use crate::geom::{
         Affine2, BBox, ContourBuf, LineCap, Paint, PathCmd, Point, Polarity, Span, StrokeStyle,
@@ -1055,6 +1066,48 @@ mod tests {
         assert!(collection.support_features_for_layer(200).is_empty());
         assert!(!collection.has_same_support_scope(100, 200));
         assert!(collection.has_same_support_scope(200, 300));
+    }
+
+    #[test]
+    fn support_geometry_applies_shared_feature_placements() {
+        let mut support = TestDocument::new();
+        let path = support.push_path(
+            Paint::Fill {
+                rule: FillRule::NonZero,
+            },
+            [rectangle_contour(0.0, 0.0, 1.0, 1.0)],
+        );
+        let mut feature = Feature::new(FeatureKind::Primitive, Polarity::Dark);
+        feature.paths = Span::single(path);
+        feature.intent.span = FeatureSpan::Layer(100);
+        feature.placement_group = Some(0);
+        support.features.push(feature);
+        support.feature_placements.extend([
+            Affine2::translation(crate::geom::Point::new(10.0, 0.0)),
+            Affine2::translation(crate::geom::Point::new(20.0, 0.0)),
+        ]);
+        support
+            .feature_placement_groups
+            .push(FeaturePlacementGroup {
+                placements: Span::new(0, 2),
+                features: Span::single(0),
+            });
+
+        let geometry = collect_support_layer_geometry(
+            BoardArraySupportDocument::new(
+                &support,
+                BoardArraySupportLayerPolicy::AllPaintedFeatures,
+            ),
+            &[BoardArrayCopperLayer::new(100, Side::Top)],
+        );
+        let region = geometry.region_for_layer(100);
+
+        assert_eq!(geometry.feature_count, 1);
+        assert_eq!(geometry.path_count, 1);
+        assert!((region.area() - 2.0).abs() <= 1e-6);
+        assert_eq!(region.bbox.min.x, 10.0);
+        assert_eq!(region.bbox.max.x, 21.0);
+        assert!(!region.contains_point(crate::geom::Point::new(0.5, 0.5)));
     }
 
     #[test]
