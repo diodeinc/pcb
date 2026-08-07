@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -7,7 +7,8 @@ use anyhow::{Context, Result, bail};
 use gerberx2::{GerberLayer, write_layer};
 use ipc2581::Ipc2581;
 use ipc2581::types::{
-    FillProperty, LayerFunction, Side as IpcSide, StandardPrimitive, ecad::Layer,
+    FillProperty, LayerFunction, Side as IpcSide, StandardPrimitive,
+    ecad::{Layer, Step},
 };
 
 use crate::geometry;
@@ -20,7 +21,8 @@ use pcb_ir::dialects::artwork::{
 use pcb_ir::dialects::ipc::{
     ArtworkLowering, ArtworkObjectKind, ArtworkScope, Feature, FeatureBucket, FeatureDomain,
     FeatureOperation, FeatureRole, FiducialKind, LayoutPurpose, PlatingKind, PrimitiveRef,
-    ProfileSet, lower_layer_to_artwork_with, profile_occurrences_for, relief,
+    ProfileSet, lower_layer_to_artwork_objects_with, lower_layer_to_artwork_with,
+    profile_occurrences_for, relief,
 };
 use pcb_ir::dialects::{LayerRole, Side as IrSide};
 use pcb_ir::geom::path::{ContourBuf, PathCmd, PathOp};
@@ -74,33 +76,33 @@ pub fn build_gerber_x2_files_with_options(
     let has_profile_plan = plans
         .iter()
         .any(|plan| plan.role == GerberLayerRole::Profile);
+    let part = gerber_part_for_ipc_view(ipc, view)?;
 
     for plan in &plans {
         let source_layer = plan.layer;
         let layer_name = ipc.resolve(source_layer.name);
-        let mut doc = geometry::extract_layer_for_view(ipc, layer_name, view)
-            .with_context(|| format!("failed to extract IPC-2581 layer '{layer_name}'"))?;
-        pcb_ir::dialects::ipc::process::normalize_for_artwork(&mut doc);
-        if let Err(error) = pcb_ir::dialects::ipc::validate_artwork_ready(&doc) {
-            bail!("IPC-2581 layer '{layer_name}' is not artwork-ready: {error}");
-        }
+        let spec = GerberArtworkSpec {
+            role: plan.role,
+            side: ir_side(source_layer.side),
+            meta: layer_attributes(plan.file_function.clone(), part),
+            view,
+        };
+        let artwork = if view == ArtworkScope::ArrayFlattened {
+            hierarchical_artwork_from_ipc_layer(ipc, source_layer, layer_name, spec)?
+        } else {
+            let mut doc = geometry::extract_layer_for_view(ipc, layer_name, view)
+                .with_context(|| format!("failed to extract IPC-2581 layer '{layer_name}'"))?;
+            pcb_ir::dialects::ipc::process::normalize_for_artwork(&mut doc);
+            if let Err(error) = pcb_ir::dialects::ipc::validate_artwork_ready(&doc) {
+                bail!("IPC-2581 layer '{layer_name}' is not artwork-ready: {error}");
+            }
+            artwork_from_ipc_layer(ipc, &doc, 0, spec)?
+        };
         if matches!(plan.role, GerberLayerRole::Vcut | GerberLayerRole::Score)
-            && doc.layers[0].features.is_empty()
+            && artwork.layers[0].objects.is_empty()
         {
             continue;
         }
-        let part = gerber_part_for_doc(&doc);
-        let artwork = artwork_from_ipc_layer(
-            ipc,
-            &doc,
-            0,
-            GerberArtworkSpec {
-                role: plan.role,
-                side: ir_side(source_layer.side),
-                meta: layer_attributes(plan.file_function.clone(), part),
-                view,
-            },
-        )?;
         let layer = lower_artwork_layer(&artwork)?;
         if plan.role == GerberLayerRole::Profile && layer.objects.is_empty() {
             continue;
@@ -395,12 +397,21 @@ impl GerberPart {
     }
 }
 
-fn gerber_part_for_doc(doc: &IpcGeometryDocument) -> GerberPart {
-    if pcb_ir::dialects::ipc::root_panel_step(doc).is_some() {
-        GerberPart::Array
-    } else {
-        GerberPart::Single
-    }
+fn primary_step(ipc: &Ipc2581) -> Result<&Step> {
+    let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
+    crate::steps::primary_step(ipc, &ecad.cad_data.steps)
+        .context("IPC-2581 ECAD section has no Step")
+}
+
+fn gerber_part_for_ipc_view(ipc: &Ipc2581, view: ArtworkScope) -> Result<GerberPart> {
+    let step = primary_step(ipc)?;
+    Ok(
+        if view != ArtworkScope::Board && geometry::is_panel_step(step) {
+            GerberPart::Array
+        } else {
+            GerberPart::Single
+        },
+    )
 }
 
 fn layer_attributes(file_function: Vec<String>, part: GerberPart) -> LayerAttributes {
@@ -472,6 +483,157 @@ fn artwork_from_ipc_layer(
         );
     }
     Ok(artwork)
+}
+
+/// Preserve the reusable IPC Step graph as reusable artwork blocks.
+///
+/// Each source Step is normalized and lowered exactly once in local
+/// coordinates. The root Step's geometry lands directly on the layer while
+/// repeated child Steps become transformed block instances, so a board
+/// repeated into an assembly panel and that panel repeated into a fabrication
+/// panel remains a semantic hierarchy — and a Step without repeats lowers to
+/// plain flat artwork.
+fn hierarchical_artwork_from_ipc_layer(
+    ipc: &Ipc2581,
+    source_layer: &Layer,
+    layer_name: &str,
+    spec: GerberArtworkSpec,
+) -> Result<GerberArtwork> {
+    let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
+    let root = crate::steps::primary_step(ipc, &ecad.cad_data.steps)
+        .context("IPC-2581 ECAD section has no Step")?;
+    let mut artwork = GerberArtwork::new();
+    let artwork_layer = artwork.push_layer(pcb_ir::dialects::artwork::Layer {
+        name: layer_name.to_string(),
+        role: spec.role.ir_role(),
+        side: spec.side,
+        objects: Span::EMPTY,
+        bbox: BBox::empty(),
+        meta: spec.meta,
+    });
+    let context = HierarchicalArtworkContext {
+        ipc,
+        steps: &ecad.cad_data.steps,
+        layers: &ecad.cad_data.layers,
+        source_layer,
+        layer_name,
+    };
+    let mut blocks = HashMap::from([(root.name, None)]);
+    let objects = build_step_artwork_objects(&context, root, &mut artwork, &mut blocks)?;
+    for object in objects {
+        artwork.push_object(artwork_layer, object);
+    }
+    pcb_ir::dialects::artwork::normalize_bounds(&mut artwork);
+    artwork.validate().map_err(|error| {
+        anyhow::anyhow!("invalid hierarchical artwork for '{layer_name}': {error}")
+    })?;
+    Ok(artwork)
+}
+
+struct HierarchicalArtworkContext<'a> {
+    ipc: &'a Ipc2581,
+    steps: &'a [Step],
+    layers: &'a [Layer],
+    source_layer: &'a Layer,
+    layer_name: &'a str,
+}
+
+fn build_step_artwork_block(
+    context: &HierarchicalArtworkContext<'_>,
+    step: &Step,
+    artwork: &mut GerberArtwork,
+    blocks: &mut HashMap<ipc2581::Symbol, Option<u32>>,
+) -> Result<u32> {
+    match blocks.get(&step.name).copied() {
+        Some(Some(block)) => return Ok(block),
+        Some(None) => bail!(
+            "StepRepeat cycle references Step '{}'",
+            context.ipc.resolve(step.name)
+        ),
+        None => {}
+    }
+    blocks.insert(step.name, None);
+    let objects = build_step_artwork_objects(context, step, artwork, blocks)?;
+    let block = artwork.push_block();
+    for object in objects {
+        artwork.push_block_object(block, object);
+    }
+    blocks.insert(step.name, Some(block));
+    Ok(block)
+}
+
+fn build_step_artwork_objects(
+    context: &HierarchicalArtworkContext<'_>,
+    step: &Step,
+    artwork: &mut GerberArtwork,
+    blocks: &mut HashMap<ipc2581::Symbol, Option<u32>>,
+) -> Result<Vec<ArtworkObject<ObjectAttributes>>> {
+    let children = step
+        .step_repeats
+        .iter()
+        .map(|repeat| {
+            let child_step = context
+                .steps
+                .iter()
+                .find(|candidate| candidate.name == repeat.step_ref)
+                .with_context(|| {
+                    format!(
+                        "StepRepeat references unknown Step '{}'",
+                        context.ipc.resolve(repeat.step_ref)
+                    )
+                })?;
+            let child = build_step_artwork_block(context, child_step, artwork, blocks)?;
+            Ok((child, repeat))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut local = geometry::extract_step_layer_local(
+        context.ipc,
+        step,
+        context.layers,
+        context.source_layer,
+        context.layer_name,
+    )
+    .with_context(|| {
+        format!(
+            "failed to extract IPC-2581 Step '{}' layer '{}'",
+            context.ipc.resolve(step.name),
+            context.layer_name
+        )
+    })?;
+    pcb_ir::dialects::ipc::process::normalize_for_artwork(&mut local);
+    if let Err(error) = pcb_ir::dialects::ipc::validate_artwork_ready(&local) {
+        bail!(
+            "IPC-2581 Step '{}' layer '{}' is not artwork-ready: {error}",
+            context.ipc.resolve(step.name),
+            context.layer_name
+        );
+    }
+
+    let mut lowering = GerberLowering {
+        ipc: context.ipc,
+        doc: &local,
+    };
+    let mut objects = lower_layer_to_artwork_objects_with(&local, 0, artwork, &mut lowering);
+    objects.extend(
+        children
+            .into_iter()
+            .filter(|&(child, _)| !artwork.blocks[child as usize].objects.is_empty())
+            .flat_map(|(child, repeat)| {
+                (0..repeat.ny).flat_map(move |iy| {
+                    (0..repeat.nx).map(move |ix| {
+                        ArtworkObject::new(
+                            Polarity::Dark,
+                            ArtworkGeometry::Instance {
+                                block: child,
+                                transform: geometry::step_repeat_transform(repeat, ix, iy),
+                            },
+                        )
+                    })
+                })
+            }),
+    );
+    Ok(objects)
 }
 
 /// Gerber's source-specific half of IPC artwork lowering: standard-dictionary
@@ -546,7 +708,7 @@ fn synthetic_profile_gerber_file(
         bbox: BBox::empty(),
         meta: layer_attributes(
             vec!["Profile".to_string(), "NP".to_string()],
-            gerber_part_for_view(&doc, view),
+            gerber_part_for_ipc_view(ipc, view)?,
         ),
     });
     append_profile_occurrences(
@@ -914,14 +1076,6 @@ fn debug_num(value: f64) -> String {
         text.pop();
     }
     if text == "-0" { "0".to_string() } else { text }
-}
-
-fn gerber_part_for_view(doc: &IpcGeometryDocument, view: ArtworkScope) -> GerberPart {
-    if view == ArtworkScope::Board {
-        GerberPart::Single
-    } else {
-        gerber_part_for_doc(doc)
-    }
 }
 
 fn append_profile_occurrences(
@@ -1657,7 +1811,14 @@ mod tests {
             .unwrap();
         assert!(array_fab.contents.contains("%TF.Part,Array*%"));
         let parsed = gerberx2::GerberX2::parse(&array_fab.contents).unwrap();
-        assert_eq!(parsed.objects().len(), 8);
+        assert_eq!(
+            parsed.objects().len(),
+            2,
+            "board flashes stay compact block instances"
+        );
+        let artwork = gerberx2::geometry::extract_document(&parsed);
+        let expanded = pcb_ir::dialects::artwork::expand_instances(&artwork);
+        assert_eq!(expanded.objects.len(), 8);
     }
 
     #[test]
@@ -2244,13 +2405,13 @@ mod tests {
     }
 
     #[test]
-    fn gerber_board_array_target_flattens_repeated_board_instances_as_array() {
+    fn gerber_preserves_nested_panel_repeats() {
         let ipc = ipc::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
   <Content roleRef="owner">
     <FunctionMode mode="FABRICATION"/>
-    <StepRef name="panel"/>
+    <StepRef name="fab"/>
     <LayerRef name="TOP"/>
     <DictionaryStandard units="MILLIMETER">
       <EntryStandard id="pad"><Circle diameter="1"/></EntryStandard>
@@ -2291,6 +2452,9 @@ mod tests {
         </Profile>
         <StepRepeat stepRef="board" x="4" y="6" nx="2" ny="1" dx="14" dy="0"/>
       </Step>
+      <Step name="fab" type="PALLET">
+        <StepRepeat stepRef="panel" x="0" y="0" nx="3" ny="1" dx="30" dy="0"/>
+      </Step>
     </CadData>
   </Ecad>
 </IPC-2581>"#,
@@ -2303,11 +2467,30 @@ mod tests {
             .find(|file| file.filename == "F_Cu.gtl")
             .unwrap();
         assert!(top.contents.contains("%TF.Part,Array*%"));
-
+        assert_eq!(
+            top.layer.objects.len(),
+            3,
+            "fab-panel root places three assembly-panel flashes inline"
+        );
+        assert_eq!(
+            top.layer
+                .apertures
+                .iter()
+                .filter(|aperture| matches!(
+                    aperture.template,
+                    gerberx2::WriterApertureTemplate::Block { .. }
+                ))
+                .count(),
+            2,
+            "board and assembly panel each retain one definition"
+        );
+        assert_eq!(top.contents.matches("%ABD").count(), 2);
         let parsed = gerberx2::GerberX2::parse(&top.contents).unwrap();
-        let geometry = gerberx2::geometry::extract_document(&parsed);
-        assert!(geometry.objects.len() >= 2);
-        assert!(geometry.layers[0].bbox.width() > 14.0);
+        assert_eq!(parsed.objects().len(), 3);
+        let artwork = gerberx2::geometry::extract_document(&parsed);
+        assert_eq!(artwork.blocks.len(), 2);
+        let expanded = pcb_ir::dialects::artwork::expand_instances(&artwork);
+        assert_eq!(expanded.objects.len(), 6);
     }
 
     #[test]

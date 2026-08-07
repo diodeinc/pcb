@@ -6,9 +6,10 @@ use ipc2581::XmlWriter;
 use ipc2581::types::{
     Units,
     ecad::{FeatureUserPrimitive, Polarity, SetFeature},
-    primitives::{Contour, UserPrimitive, UserShapeType},
+    primitives::{UserPrimitive, UserShapeType},
 };
 use ipc2581::write;
+use std::collections::BTreeMap;
 
 use crate::copper_balance::{BalanceVoidInstance, BalanceVoidTemplate};
 
@@ -64,10 +65,19 @@ pub(crate) fn write_generated_layer_feature(
         write::spec_ref(writer, spec_ref);
     }
     write_set_features(writer, units, &layer_feature.features, names)?;
+    let mut instances_by_template = BTreeMap::<&str, Vec<&BalanceVoidInstance>>::new();
     for instance in &layer_feature.instance_refs {
+        instances_by_template
+            .entry(instance.template.as_str())
+            .or_default()
+            .push(instance);
+    }
+    for (template, instances) in instances_by_template {
         writer.start_element("Features", &[]);
-        write::location(writer, "Location", instance.x, instance.y, units);
-        writer.empty_element("UserPrimitiveRef", &[("id", instance.template.as_str())]);
+        for instance in instances {
+            write::location(writer, "Location", instance.x, instance.y, units);
+        }
+        writer.empty_element("UserPrimitiveRef", &[("id", template)]);
         writer.end_element("Features");
     }
     writer.end_element("Set");
@@ -175,14 +185,7 @@ fn write_user_dictionary_entries(
     for template in templates {
         writer.start_element("EntryUser", &[("id", template.id.as_str())]);
         writer.start_element("UserSpecial", &[]);
-        write::contour(
-            writer,
-            units,
-            &Contour {
-                polygon: template.polygon.clone(),
-                cutouts: Vec::new(),
-            },
-        );
+        write::contour(writer, units, &template.contour);
         writer.end_element("UserSpecial");
         writer.end_element("EntryUser");
     }

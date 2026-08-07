@@ -36,6 +36,18 @@ pub enum Polarity {
     Clear,
 }
 
+impl Polarity {
+    /// Compose a nested polarity with its parent context: painting through a
+    /// clear parent inverts the child, and two inversions cancel.
+    pub fn compose(self, child: Self) -> Self {
+        match (self, child) {
+            (Self::Dark, child) => child,
+            (Self::Clear, Self::Dark) => Self::Clear,
+            (Self::Clear, Self::Clear) => Self::Dark,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StrokeStyle {
     pub width: f64,
@@ -108,6 +120,19 @@ impl Paint {
         match self {
             Self::Stroke(stroke) => Some(*stroke),
             _ => None,
+        }
+    }
+
+    /// Scale stroke widths by a placement's uniform scale factor so a
+    /// transformed centerline images at the same physical width as sweeping
+    /// the pen in the local frame and then transforming the outline.
+    pub fn scaled(self, scale: f64) -> Self {
+        match self {
+            Self::Stroke(mut stroke) => {
+                stroke.width *= scale;
+                Self::Stroke(stroke)
+            }
+            paint => paint,
         }
     }
 }

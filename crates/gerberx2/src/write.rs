@@ -171,7 +171,26 @@ pub enum WriterMacroExpression {
 pub struct WriterObject {
     pub kind: ObjectKind,
     pub polarity: Polarity,
+    /// Gerber aperture load transformation active for this object.
+    pub aperture_transform: WriterApertureTransform,
     pub attributes: Vec<AttributeValue>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WriterApertureTransform {
+    pub mirroring: Mirroring,
+    pub rotation_degrees: f64,
+    pub scaling: f64,
+}
+
+impl Default for WriterApertureTransform {
+    fn default() -> Self {
+        Self {
+            mirroring: Mirroring::None,
+            rotation_degrees: 0.0,
+            scaling: 1.0,
+        }
+    }
 }
 
 impl WriterObject {
@@ -179,6 +198,7 @@ impl WriterObject {
         Self {
             kind,
             polarity: Polarity::Dark,
+            aperture_transform: WriterApertureTransform::default(),
             attributes: Vec::new(),
         }
     }
@@ -232,6 +252,7 @@ struct Writer<'a> {
     current_aperture: Option<i32>,
     current_polarity: Polarity,
     current_plot_mode: Option<PlotMode>,
+    current_aperture_transform: WriterApertureTransform,
 }
 
 impl<'a> Writer<'a> {
@@ -242,6 +263,7 @@ impl<'a> Writer<'a> {
             current_aperture: None,
             current_polarity: Polarity::Dark,
             current_plot_mode: None,
+            current_aperture_transform: WriterApertureTransform::default(),
         }
     }
 
@@ -442,23 +464,15 @@ impl<'a> Writer<'a> {
 
     fn write_block_aperture(&mut self, code: i32, objects: &[WriterObject]) -> Result<()> {
         self.output.push_str(&format!("%ABD{code}*%\n"));
-        let saved_aperture = self.current_aperture;
-        let saved_polarity = self.current_polarity;
-        let saved_plot_mode = self.current_plot_mode;
-        self.current_aperture = None;
-        self.current_polarity = Polarity::Dark;
-        self.current_plot_mode = None;
         for object in objects {
             self.write_object(object)?;
         }
         self.output.push_str("%AB*%\n");
-        self.current_aperture = saved_aperture;
-        self.current_polarity = saved_polarity;
-        self.current_plot_mode = saved_plot_mode;
         Ok(())
     }
 
     fn write_object(&mut self, object: &WriterObject) -> Result<()> {
+        self.set_aperture_transform(object.aperture_transform)?;
         self.set_polarity(object.polarity);
         for attr in &object.attributes {
             self.write_attribute("TO", attr)?;
@@ -503,6 +517,44 @@ impl<'a> Writer<'a> {
 
         if !object.attributes.is_empty() {
             self.output.push_str("%TD*%\n");
+        }
+        Ok(())
+    }
+
+    fn set_aperture_transform(&mut self, transform: WriterApertureTransform) -> Result<()> {
+        if !transform.rotation_degrees.is_finite() {
+            return Err(GerberError::InvalidNumber(format!(
+                "non-finite aperture rotation {}",
+                transform.rotation_degrees
+            )));
+        }
+        if !transform.scaling.is_finite() || transform.scaling <= 0.0 {
+            return Err(GerberError::InvalidNumber(format!(
+                "invalid aperture scaling {}",
+                transform.scaling
+            )));
+        }
+        if self.current_aperture_transform.mirroring != transform.mirroring {
+            let value = match transform.mirroring {
+                Mirroring::None => "N",
+                Mirroring::X => "X",
+                Mirroring::Y => "Y",
+                Mirroring::XY => "XY",
+            };
+            self.output.push_str(&format!("%LM{value}*%\n"));
+            self.current_aperture_transform.mirroring = transform.mirroring;
+        }
+        if self.current_aperture_transform.rotation_degrees != transform.rotation_degrees {
+            self.output.push_str("%LR");
+            self.write_decimal(transform.rotation_degrees);
+            self.output.push_str("*%\n");
+            self.current_aperture_transform.rotation_degrees = transform.rotation_degrees;
+        }
+        if self.current_aperture_transform.scaling != transform.scaling {
+            self.output.push_str("%LS");
+            self.write_decimal(transform.scaling);
+            self.output.push_str("*%\n");
+            self.current_aperture_transform.scaling = transform.scaling;
         }
         Ok(())
     }

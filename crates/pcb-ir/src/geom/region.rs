@@ -21,8 +21,9 @@ use i_overlay::float::single::SingleFloatOverlay;
 use i_overlay::mesh::outline::offset::OutlineOffset;
 use i_overlay::mesh::style::{LineJoin as OutlineLineJoin, OutlineStyle};
 
+use crate::geom::affine::Affine2;
 use crate::geom::bbox::BBox;
-use crate::geom::path::{ContourBuf, PathCmd, contours_to_kurbo, stroke_to_fill};
+use crate::geom::path::{ContourBuf, PathCmd, contours_to_kurbo, stroke_to_fill, transform_cmds};
 use crate::geom::point::Point;
 use crate::geom::store::{Path, PathArena};
 use crate::geom::style::{FillRule, Paint, Polarity};
@@ -237,16 +238,47 @@ impl ContourSet {
         paths: impl IntoIterator<Item = &'a Path>,
         tolerance: f64,
     ) -> Self {
+        Self::from_placed_painted_paths(
+            arena,
+            paths.into_iter().map(|path| (path, Affine2::IDENTITY)),
+            tolerance,
+        )
+    }
+
+    /// Build the union of painted path occurrences after applying placement.
+    ///
+    /// Stroke outlines are constructed in the path's local frame before the
+    /// affine transform is applied, so mirrored and scaled IPC placements
+    /// retain the same geometric meaning as a materialized feature.
+    pub fn from_placed_painted_paths<'a>(
+        arena: &PathArena,
+        paths: impl IntoIterator<Item = (&'a Path, Affine2)>,
+        tolerance: f64,
+    ) -> Self {
         let mut rings = Vec::new();
-        for path in paths {
+        for (path, placement) in paths {
             let contours = arena.path_contours(path);
-            let path_rings = match path.paint {
-                Paint::Fill { rule } => simplify_rings(rings_from_contours(&contours), rule),
-                Paint::Stroke(stroke) => stroke_to_fill(&contours, stroke.into())
-                    .map(|outline| simplify_rings(rings_from_contours(&outline), FillRule::NonZero))
-                    .unwrap_or_default(),
-                Paint::None => Vec::new(),
+            let contours = match path.paint {
+                Paint::Fill { .. } => contours,
+                Paint::Stroke(stroke) => {
+                    stroke_to_fill(&contours, stroke.into()).unwrap_or_default()
+                }
+                Paint::None => continue,
             };
+            let contours = if placement.is_identity() {
+                contours
+            } else {
+                contours
+                    .into_iter()
+                    .map(|contour| transform_cmds(contour.cmds, placement))
+                    .collect()
+            };
+            let fill_rule = match path.paint {
+                Paint::Fill { rule } => rule,
+                Paint::Stroke(_) => FillRule::NonZero,
+                Paint::None => unreachable!("unpainted paths were skipped"),
+            };
+            let path_rings = simplify_rings(rings_from_contours(&contours), fill_rule);
             rings.extend(path_rings);
         }
         Self::new(rings, FillRule::NonZero, tolerance)

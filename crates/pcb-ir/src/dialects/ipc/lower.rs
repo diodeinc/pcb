@@ -124,67 +124,161 @@ pub fn lower_layer_to_artwork_with<Symbol, LayerFunction, LayerMeta, ObjectMeta>
 ) -> artwork::Document<LayerMeta, ObjectMeta>
 where
     Symbol: Copy + Eq + Hash,
+    ObjectMeta: Default,
 {
     let mut out = artwork::Document::new();
-    let layer = &doc.layers[layer_index];
     let artwork_layer = out.push_layer(header);
-    let mut instance_apertures = HashMap::<Symbol, u32>::new();
+    for object in lower_layer_to_artwork_objects_with(doc, layer_index, &mut out, lowering) {
+        out.push_object(artwork_layer, object);
+    }
+    artwork::normalize_bounds(&mut out);
+    out
+}
 
-    for feature in layer.features.slice(&doc.features) {
-        if let Some((aperture, transform, bbox)) =
-            flash_for(&mut out, doc, feature, lowering, &mut instance_apertures)
-        {
-            let meta = lowering.object_meta(feature, ArtworkObjectKind::Flash);
-            let order = lowering.paint_order(feature);
-            out.push_object(
-                artwork_layer,
-                artwork::Object {
-                    polarity: feature.polarity,
-                    order,
-                    geometry: artwork::Geometry::Flash {
-                        aperture,
-                        transform,
-                    },
-                    bbox,
-                    meta,
-                },
+/// Lower one IPC layer's features into artwork objects for the caller to
+/// place on a layer or in a block.
+///
+/// This is the hierarchy-preserving counterpart to
+/// [`lower_layer_to_artwork_with`]. Apertures, paths, and diagnostics are
+/// interned directly in `out`; placement-group blocks are created before the
+/// returned objects so block references remain topologically ordered.
+pub fn lower_layer_to_artwork_objects_with<Symbol, LayerFunction, LayerMeta, ObjectMeta>(
+    doc: &Document<Symbol, LayerFunction>,
+    layer_index: usize,
+    out: &mut artwork::Document<LayerMeta, ObjectMeta>,
+    lowering: &mut impl ArtworkLowering<Symbol, ObjectMeta>,
+) -> Vec<artwork::Object<ObjectMeta>>
+where
+    Symbol: Copy + Eq + Hash,
+    ObjectMeta: Default,
+{
+    let layer = &doc.layers[layer_index];
+    let layer_features = layer.features.slice(&doc.features);
+    let mut instance_apertures = HashMap::<Symbol, u32>::new();
+    let mut objects = Vec::new();
+
+    for (offset, feature) in layer_features.iter().enumerate() {
+        let Some(group_id) = feature.placement_group else {
+            lower_feature_artwork(
+                doc,
+                feature,
+                out,
+                lowering,
+                &mut instance_apertures,
+                &mut objects,
             );
+            continue;
+        };
+        let group = doc.feature_placement_groups[group_id as usize];
+        if layer.features.start + offset as u32 != group.features.start {
             continue;
         }
 
-        for path in feature.paths.slice(&doc.arena.paths) {
-            let (paint, kind, make_geometry): (_, _, fn(u32) -> artwork::Geometry) = match path
-                .paint
+        let mut block_objects = Vec::new();
+        for member in group.features.slice(&doc.features) {
+            lower_feature_artwork(
+                doc,
+                member,
+                out,
+                lowering,
+                &mut instance_apertures,
+                &mut block_objects,
+            );
+        }
+        // Partition lowered members by polarity and paint stage: each class
+        // becomes one reusable block whose instances carry the class polarity
+        // and stage, so polarity runs and stage sorting order compact groups
+        // exactly like the flat features they stand for. Block content is
+        // normalized to dark; the instance polarity composes it back.
+        let mut classes = Vec::<(Polarity, artwork::PaintOrder, u32)>::new();
+        for mut object in block_objects {
+            let class = (object.polarity, object.order.stage);
+            let block = match classes
+                .iter()
+                .find(|(polarity, order, _)| (*polarity, order.stage) == class)
             {
-                Paint::Fill { rule } => (Paint::Fill { rule }, ArtworkObjectKind::Region, |path| {
-                    artwork::Geometry::Region { path }
-                }),
-                Paint::Stroke(stroke) => (
-                    Paint::Stroke(lowering.stroke_style(stroke)),
-                    ArtworkObjectKind::Stroke,
-                    |path| artwork::Geometry::Stroke { path },
-                ),
-                Paint::None => continue,
+                Some(&(_, _, block)) => block,
+                None => {
+                    let block = out.push_block();
+                    classes.push((object.polarity, object.order, block));
+                    block
+                }
             };
-            let path_id = out.push_path(paint, doc.arena.path_contours(path));
-            let bbox = out.path_bbox(path_id);
-            let meta = lowering.object_meta(feature, kind);
-            out.push_object(
-                artwork_layer,
-                artwork::Object {
+            object.polarity = Polarity::Dark;
+            out.push_block_object(block, object);
+        }
+        for (polarity, order, block) in classes {
+            objects.extend(group.placements.slice(&doc.feature_placements).iter().map(
+                |&transform| artwork::Object {
+                    polarity,
+                    order,
+                    geometry: artwork::Geometry::Instance { block, transform },
+                    bbox: out.blocks[block as usize].bbox.transformed(transform),
+                    meta: ObjectMeta::default(),
+                },
+            ));
+        }
+    }
+    out.diagnostics.extend(doc.diagnostics.clone());
+    objects
+}
+
+fn lower_feature_artwork<Symbol, LayerFunction, LayerMeta, ObjectMeta>(
+    doc: &Document<Symbol, LayerFunction>,
+    feature: &Feature<Symbol>,
+    out: &mut artwork::Document<LayerMeta, ObjectMeta>,
+    lowering: &mut impl ArtworkLowering<Symbol, ObjectMeta>,
+    instance_apertures: &mut HashMap<Symbol, u32>,
+    objects: &mut Vec<artwork::Object<ObjectMeta>>,
+) where
+    Symbol: Copy + Eq + Hash,
+{
+    if let Some((aperture, transform, bbox)) =
+        flash_for(out, doc, feature, lowering, instance_apertures)
+    {
+        objects.push(artwork::Object {
+            polarity: feature.polarity,
+            order: lowering.paint_order(feature),
+            geometry: artwork::Geometry::Flash {
+                aperture,
+                transform,
+            },
+            bbox,
+            meta: lowering.object_meta(feature, ArtworkObjectKind::Flash),
+        });
+        return;
+    }
+
+    objects.extend(
+        feature
+            .paths
+            .slice(&doc.arena.paths)
+            .iter()
+            .filter_map(|path| {
+                let (paint, kind, make_geometry): (_, _, fn(u32) -> artwork::Geometry) =
+                    match path.paint {
+                        Paint::Fill { rule } => {
+                            (Paint::Fill { rule }, ArtworkObjectKind::Region, |path| {
+                                artwork::Geometry::Region { path }
+                            })
+                        }
+                        Paint::Stroke(stroke) => (
+                            Paint::Stroke(lowering.stroke_style(stroke)),
+                            ArtworkObjectKind::Stroke,
+                            |path| artwork::Geometry::Stroke { path },
+                        ),
+                        Paint::None => return None,
+                    };
+                let path_id = out.push_path(paint, doc.arena.path_contours(path));
+                Some(artwork::Object {
                     polarity: feature.polarity,
                     order: lowering.paint_order(feature),
                     geometry: make_geometry(path_id),
-                    bbox,
-                    meta,
-                },
-            );
-        }
-    }
-
-    out.diagnostics.extend(doc.diagnostics.clone());
-    artwork::normalize_bounds(&mut out);
-    out
+                    bbox: out.path_bbox(path_id),
+                    meta: lowering.object_meta(feature, kind),
+                })
+            }),
+    );
 }
 
 /// The shared aperture a feature flashes through, if any: one the source
@@ -627,8 +721,128 @@ fn transformed_profile_cutout_contours<Symbol, LayerFunction>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dialects::ipc::feature::FeaturePlacementGroup;
     use crate::geom::path::PathCmd;
     use crate::geom::{BBox, Point};
+
+    #[test]
+    fn preserves_shared_feature_group_when_lowered_or_expanded() {
+        let mut doc = Document::<u32, ()>::new();
+        let first_path = doc.push_path(
+            Paint::Fill {
+                rule: FillRule::NonZero,
+            },
+            [rectangle_contour(0.0, 0.0, 2.0, 1.0)],
+        );
+        let second_path = doc.push_path(
+            Paint::Fill {
+                rule: FillRule::NonZero,
+            },
+            [rectangle_contour(3.0, 0.0, 4.0, 1.0)],
+        );
+        for path in [first_path, second_path] {
+            let mut feature = Feature::new(FeatureKind::Polygon, Polarity::Dark);
+            feature.paths = Span::single(path);
+            feature.placement_group = Some(0);
+            doc.features.push(feature);
+        }
+        doc.feature_placements.extend([
+            Affine2::translation(Point::new(10.0, 20.0)),
+            Affine2::translation(Point::new(30.0, 40.0)),
+        ]);
+        doc.feature_placement_groups.push(FeaturePlacementGroup {
+            placements: Span::new(0, 2),
+            features: Span::new(0, 2),
+        });
+        doc.layers.push(crate::dialects::ipc::Layer {
+            name: "TOP".to_string(),
+            source_layer_ref: 0,
+            layer_function: (),
+            spec_refs: Span::EMPTY,
+            sets: Span::EMPTY,
+            features: Span::new(0, 2),
+            bbox: BBox::empty(),
+        });
+
+        let artwork = lower_layer_to_artwork(&doc, 0, LayerRole::Copper, Side::Top);
+
+        assert_eq!(artwork.blocks.len(), 1);
+        assert_eq!(artwork.blocks[0].objects.len(), 2);
+        assert_eq!(artwork.objects.len(), 2);
+        assert_eq!(artwork.arena.paths.len(), 2);
+        assert!(artwork.objects.iter().all(|object| matches!(
+            object.geometry,
+            artwork::Geometry::Instance { block: 0, .. }
+        )));
+
+        crate::dialects::ipc::process::expand_feature_placement_groups(&mut doc);
+        assert_eq!(
+            doc.features
+                .iter()
+                .map(|feature| feature.bbox.min.x)
+                .collect::<Vec<_>>(),
+            [10.0, 13.0, 30.0, 33.0]
+        );
+    }
+
+    #[test]
+    fn placement_group_instances_carry_member_polarity_and_stage() {
+        let mut doc = Document::<u32, ()>::new();
+        let path = doc.push_path(
+            Paint::Fill {
+                rule: FillRule::NonZero,
+            },
+            [rectangle_contour(0.0, 0.0, 1.0, 1.0)],
+        );
+        let mut feature = Feature::new(FeatureKind::Polygon, Polarity::Clear);
+        feature.paths = Span::single(path);
+        feature.placement_group = Some(0);
+        doc.features.push(feature);
+        doc.feature_placements.extend([
+            Affine2::translation(Point::new(10.0, 0.0)),
+            Affine2::translation(Point::new(20.0, 0.0)),
+        ]);
+        doc.feature_placement_groups.push(FeaturePlacementGroup {
+            placements: Span::new(0, 2),
+            features: Span::single(0),
+        });
+        doc.layers.push(crate::dialects::ipc::Layer {
+            name: "TOP".to_string(),
+            source_layer_ref: 0,
+            layer_function: (),
+            spec_refs: Span::EMPTY,
+            sets: Span::EMPTY,
+            features: Span::single(0),
+            bbox: BBox::empty(),
+        });
+
+        let artwork = lower_layer_to_artwork(&doc, 0, LayerRole::Copper, Side::Top);
+
+        // The instances stand in for clear features: they must form the same
+        // polarity run the flat lowering produced, with block content stored
+        // dark so composition restores the member polarity.
+        assert_eq!(artwork.objects.len(), 2);
+        assert!(
+            artwork
+                .objects
+                .iter()
+                .all(|object| object.polarity == Polarity::Clear)
+        );
+        assert!(
+            artwork.blocks[0]
+                .objects
+                .iter()
+                .all(|object| object.polarity == Polarity::Dark)
+        );
+        let expanded = artwork::expand_instances(&artwork);
+        assert_eq!(expanded.objects.len(), 2);
+        assert!(
+            expanded
+                .objects
+                .iter()
+                .all(|object| object.polarity == Polarity::Clear)
+        );
+    }
 
     #[test]
     fn material_removal_union_is_winding_insensitive() {

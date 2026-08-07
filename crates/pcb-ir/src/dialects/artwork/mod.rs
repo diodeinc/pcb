@@ -20,6 +20,10 @@ use crate::geom::{
 #[derive(Debug, Clone, Default)]
 pub struct Document<LayerMeta = (), ObjectMeta = ()> {
     pub apertures: Vec<Aperture>,
+    /// Reusable ordered sub-images. Blocks are target-independent: Gerber
+    /// lowers them to aperture blocks while targets without native instancing
+    /// compose and expand them explicitly.
+    pub blocks: Vec<Block<ObjectMeta>>,
     pub layers: Vec<Layer<LayerMeta>>,
     pub objects: Vec<Object<ObjectMeta>>,
     pub arena: PathArena,
@@ -30,6 +34,7 @@ impl<LayerMeta, ObjectMeta> Document<LayerMeta, ObjectMeta> {
     pub fn new() -> Self {
         Self {
             apertures: Vec::new(),
+            blocks: Vec::new(),
             layers: Vec::new(),
             objects: Vec::new(),
             arena: PathArena::default(),
@@ -41,6 +46,26 @@ impl<LayerMeta, ObjectMeta> Document<LayerMeta, ObjectMeta> {
         layer.objects = Span::new(self.objects.len() as u32, 0);
         let id = self.layers.len() as u32;
         self.layers.push(layer);
+        id
+    }
+
+    /// Create an empty reusable artwork block.
+    pub fn push_block(&mut self) -> u32 {
+        let id = self.blocks.len() as u32;
+        self.blocks.push(Block {
+            objects: Vec::new(),
+            bbox: BBox::empty(),
+        });
+        id
+    }
+
+    /// Append an object to a block.
+    pub fn push_block_object(&mut self, block_id: u32, object: Object<ObjectMeta>) -> u32 {
+        let block = &mut self.blocks[block_id as usize];
+        let id = block.objects.len() as u32;
+        let bbox = object.bbox;
+        block.objects.push(object);
+        block.bbox = block.bbox.union(bbox);
         id
     }
 
@@ -92,6 +117,22 @@ impl<LayerMeta, ObjectMeta> Document<LayerMeta, ObjectMeta> {
 
     pub fn validate(&self) -> Result<(), crate::geom::Diagnostics> {
         let mut diagnostics = crate::geom::Diagnostics::default();
+        for (index, block) in self.blocks.iter().enumerate() {
+            if let Err(message) = crate::geom::validate_bbox("artwork block", index, block.bbox) {
+                diagnostics.error(message);
+            }
+            let object_name = format!("artwork block {index} object");
+            for (object_index, object) in block.objects.iter().enumerate() {
+                if let Some(error) = geometry_ref_error(self, object.geometry, index) {
+                    diagnostics.error(format!("{object_name} {object_index} {error}"));
+                }
+                if let Err(message) =
+                    crate::geom::validate_bbox(&object_name, object_index, object.bbox)
+                {
+                    diagnostics.error(message);
+                }
+            }
+        }
         for (index, layer) in self.layers.iter().enumerate() {
             if let Err(message) =
                 layer
@@ -105,21 +146,8 @@ impl<LayerMeta, ObjectMeta> Document<LayerMeta, ObjectMeta> {
             }
         }
         for (index, object) in self.objects.iter().enumerate() {
-            match object.geometry {
-                Geometry::Flash { aperture, .. } => {
-                    if aperture as usize >= self.apertures.len() {
-                        diagnostics.error(format!(
-                            "artwork object {index} references missing aperture {aperture}"
-                        ));
-                    }
-                }
-                Geometry::Stroke { path } | Geometry::Region { path } => {
-                    if path as usize >= self.arena.paths.len() {
-                        diagnostics.error(format!(
-                            "artwork object {index} references missing path {path}"
-                        ));
-                    }
-                }
+            if let Some(error) = geometry_ref_error(self, object.geometry, self.blocks.len()) {
+                diagnostics.error(format!("artwork object {index} {error}"));
             }
             if let Err(message) = crate::geom::validate_bbox("artwork object", index, object.bbox) {
                 diagnostics.error(message);
@@ -128,6 +156,39 @@ impl<LayerMeta, ObjectMeta> Document<LayerMeta, ObjectMeta> {
         self.arena.validate_into("artwork", &mut diagnostics);
         diagnostics.into_result()
     }
+}
+
+fn geometry_ref_error<LayerMeta, ObjectMeta>(
+    doc: &Document<LayerMeta, ObjectMeta>,
+    geometry: Geometry,
+    block_limit: usize,
+) -> Option<String> {
+    match geometry {
+        Geometry::Flash { aperture, .. } if aperture as usize >= doc.apertures.len() => {
+            Some(format!("references missing aperture {aperture}"))
+        }
+        Geometry::Stroke { path } | Geometry::Region { path }
+            if path as usize >= doc.arena.paths.len() =>
+        {
+            Some(format!("references missing path {path}"))
+        }
+        Geometry::Instance { block, .. } if block as usize >= doc.blocks.len() => {
+            Some(format!("references missing block {block}"))
+        }
+        Geometry::Instance { block, .. } if block as usize >= block_limit => Some(format!(
+            "references block {block}; reusable blocks must reference earlier blocks"
+        )),
+        _ => None,
+    }
+}
+
+/// A reusable ordered sub-image in local coordinates.
+#[derive(Debug, Clone)]
+pub struct Block<Meta = ()> {
+    /// Blocks are topologically ordered: instances may only reference an
+    /// earlier block. This makes cycles unrepresentable in valid artwork.
+    pub objects: Vec<Object<Meta>>,
+    pub bbox: BBox,
 }
 
 #[derive(Debug, Clone)]
@@ -198,12 +259,14 @@ pub enum Geometry {
     Stroke { path: u32 },
     /// A filled region path (`arena.paths` index, fill paint).
     Region { path: u32 },
+    /// A reusable ordered sub-image placed under an affine transform.
+    Instance { block: u32, transform: Affine2 },
 }
 
 impl Geometry {
     pub fn path(self) -> Option<u32> {
         match self {
-            Self::Flash { .. } => None,
+            Self::Flash { .. } | Self::Instance { .. } => None,
             Self::Stroke { path } | Self::Region { path } => Some(path),
         }
     }
@@ -309,8 +372,22 @@ impl Aperture {
 /// Recompute object and layer bounds bottom-up (after arena mutation).
 pub fn normalize_bounds<LayerMeta, ObjectMeta>(doc: &mut Document<LayerMeta, ObjectMeta>) {
     doc.arena.recompute_bounds();
+    for block_index in 0..doc.blocks.len() {
+        let bboxes = doc.blocks[block_index]
+            .objects
+            .iter()
+            .map(|object| geometry_bbox(doc, object.geometry))
+            .collect::<Vec<_>>();
+        for (object, bbox) in doc.blocks[block_index].objects.iter_mut().zip(bboxes) {
+            object.bbox = bbox;
+        }
+        doc.blocks[block_index].bbox = doc.blocks[block_index]
+            .objects
+            .iter()
+            .fold(BBox::empty(), |bbox, object| bbox.union(object.bbox));
+    }
     for object_index in 0..doc.objects.len() {
-        doc.objects[object_index].bbox = object_bbox(doc, object_index);
+        doc.objects[object_index].bbox = geometry_bbox(doc, doc.objects[object_index].geometry);
     }
     for layer in &mut doc.layers {
         layer.bbox = layer
@@ -323,8 +400,17 @@ pub fn normalize_bounds<LayerMeta, ObjectMeta>(doc: &mut Document<LayerMeta, Obj
 
 /// Rewrite flashes and strokes into filled region objects.
 pub fn expand_native_geometry_to_regions<LayerMeta, ObjectMeta>(
-    mut doc: Document<LayerMeta, ObjectMeta>,
-) -> Document<LayerMeta, ObjectMeta> {
+    doc: Document<LayerMeta, ObjectMeta>,
+) -> Document<LayerMeta, ObjectMeta>
+where
+    LayerMeta: Clone,
+    ObjectMeta: Clone,
+{
+    let mut doc = if doc.blocks.is_empty() {
+        doc
+    } else {
+        expand_instances(&doc)
+    };
     expand_strokes_to_regions(&mut doc);
     expand_flashes_to_regions(&mut doc);
     normalize_bounds(&mut doc);
@@ -483,15 +569,15 @@ fn object_image_rings<LayerMeta, ObjectMeta>(
                 )
             })
             .unwrap_or_default(),
-        Geometry::Flash { .. } | Geometry::Stroke { .. } => Vec::new(),
+        Geometry::Flash { .. } | Geometry::Stroke { .. } | Geometry::Instance { .. } => Vec::new(),
     }
 }
 
-fn object_bbox<LayerMeta, ObjectMeta>(
+fn geometry_bbox<LayerMeta, ObjectMeta>(
     doc: &Document<LayerMeta, ObjectMeta>,
-    object_index: usize,
+    geometry: Geometry,
 ) -> BBox {
-    match doc.objects[object_index].geometry {
+    match geometry {
         Geometry::Region { path } | Geometry::Stroke { path } => doc
             .arena
             .paths
@@ -512,7 +598,136 @@ fn object_bbox<LayerMeta, ObjectMeta>(
                     .fold(BBox::empty(), |bbox, contour| bbox.union(contour.bbox))
             })
             .unwrap_or_else(BBox::empty),
+        Geometry::Instance { block, transform } => doc
+            .blocks
+            .get(block as usize)
+            .map(|block| block.bbox.transformed(transform))
+            .unwrap_or_else(BBox::empty),
     }
+}
+
+/// Materialize all reusable block instances into ordinary layer objects.
+///
+/// This is the explicit fallback for consumers that cannot preserve
+/// hierarchy. Paths are transformed exactly once at each final placement;
+/// aperture flashes retain composed affine transforms.
+pub fn expand_instances<LayerMeta: Clone, ObjectMeta: Clone>(
+    doc: &Document<LayerMeta, ObjectMeta>,
+) -> Document<LayerMeta, ObjectMeta> {
+    let mut out = Document::new();
+    out.apertures = doc.apertures.clone();
+    out.arena = doc.arena.clone();
+    out.diagnostics = doc.diagnostics.clone();
+
+    for layer in &doc.layers {
+        out.push_layer(Layer {
+            name: layer.name.clone(),
+            role: layer.role,
+            side: layer.side,
+            objects: Span::EMPTY,
+            bbox: BBox::empty(),
+            meta: layer.meta.clone(),
+        });
+    }
+
+    for (layer_index, layer) in doc.layers.iter().enumerate() {
+        for object in layer.objects.slice(&doc.objects) {
+            expand_object_into_layer(
+                doc,
+                &mut out,
+                layer_index as u32,
+                object,
+                Affine2::IDENTITY,
+                Polarity::Dark,
+                doc.blocks.len(),
+            );
+        }
+    }
+    normalize_bounds(&mut out);
+    out
+}
+
+fn expand_object_into_layer<LayerMeta, ObjectMeta: Clone>(
+    source: &Document<LayerMeta, ObjectMeta>,
+    target: &mut Document<LayerMeta, ObjectMeta>,
+    layer: u32,
+    object: &Object<ObjectMeta>,
+    transform: Affine2,
+    polarity: Polarity,
+    block_limit: usize,
+) {
+    let polarity = polarity.compose(object.polarity);
+    if let Geometry::Instance {
+        block,
+        transform: placement,
+    } = object.geometry
+    {
+        let Some(block_definition) = source.blocks.get(block as usize) else {
+            target.warn(format!(
+                "Skipping artwork instance of missing block {block}"
+            ));
+            return;
+        };
+        if block as usize >= block_limit {
+            target.warn(format!(
+                "Skipping artwork instance of non-earlier block {block}"
+            ));
+            return;
+        }
+        let transform = transform.concat(placement);
+        for child in &block_definition.objects {
+            expand_object_into_layer(
+                source,
+                target,
+                layer,
+                child,
+                transform,
+                polarity,
+                block as usize,
+            );
+        }
+        return;
+    }
+
+    let geometry = match object.geometry {
+        Geometry::Flash {
+            aperture,
+            transform: flash,
+        } => Geometry::Flash {
+            aperture,
+            transform: transform.concat(flash),
+        },
+        Geometry::Stroke { path } | Geometry::Region { path } => {
+            let path = if transform.is_identity() {
+                path
+            } else {
+                let source_path = source.arena.path(path);
+                let scale = transform.m00.hypot(transform.m10);
+                target.push_path(
+                    source_path.paint.scaled(scale),
+                    source
+                        .arena
+                        .transformed_contour_bufs(source_path.contours, transform),
+                )
+            };
+            match object.geometry {
+                Geometry::Stroke { .. } => Geometry::Stroke { path },
+                Geometry::Region { .. } => Geometry::Region { path },
+                _ => unreachable!(),
+            }
+        }
+        Geometry::Instance { .. } => unreachable!(),
+    };
+    target.push_object(
+        layer,
+        Object {
+            polarity,
+            order: object.order,
+            geometry,
+            bbox: BBox::empty(),
+            meta: object.meta.clone(),
+        },
+    );
 }
 
 /// Convenience constructors for stroked paths shared by lowerings.
@@ -549,6 +764,115 @@ mod tests {
         assert_eq!(doc.objects.len(), 1);
         assert_eq!(doc.arena.path(path).contours.len(), 1);
         doc.validate().unwrap();
+    }
+
+    #[test]
+    fn expanding_scaled_instances_scales_stroke_widths() {
+        let mut doc = Document::<(), ()>::new();
+        let block = doc.push_block();
+        let path = doc.push_path(
+            Paint::Stroke(crate::geom::StrokeStyle::round(0.2)),
+            vec![ContourBuf::new(vec![
+                PathCmd::move_to(Point::new(0.0, 0.0)),
+                PathCmd::line_to(Point::new(1.0, 0.0)),
+            ])],
+        );
+        doc.push_block_object(
+            block,
+            Object::new(Polarity::Dark, Geometry::Stroke { path }),
+        );
+        let layer = doc.push_layer(Layer::new("F.Cu", LayerRole::Copper, Side::Top));
+        doc.push_object(
+            layer,
+            Object::new(
+                Polarity::Dark,
+                Geometry::Instance {
+                    block,
+                    transform: Affine2::placement(
+                        Point::new(5.0, 5.0),
+                        90.0,
+                        crate::geom::Mirror::NONE,
+                        2.0,
+                    ),
+                },
+            ),
+        );
+        normalize_bounds(&mut doc);
+
+        let expanded = expand_instances(&doc);
+        let stroke = expanded
+            .objects
+            .iter()
+            .find_map(|object| match object.geometry {
+                Geometry::Stroke { path } => expanded.arena.path(path).paint.stroke(),
+                _ => None,
+            })
+            .expect("expanded stroke object");
+        assert!((stroke.width - 0.4).abs() <= 1e-9);
+    }
+
+    #[test]
+    fn preserves_nested_reusable_blocks_until_explicit_expansion() {
+        let mut doc = Document::<(), ()>::new();
+        let aperture = doc.push_aperture(Aperture::circle(1.0));
+        let board = doc.push_block();
+        doc.push_block_object(
+            board,
+            Object::new(
+                Polarity::Clear,
+                Geometry::Flash {
+                    aperture,
+                    transform: Affine2::IDENTITY,
+                },
+            ),
+        );
+
+        let array = doc.push_block();
+        for x in [0.0, 2.0] {
+            doc.push_block_object(
+                array,
+                Object::new(
+                    Polarity::Clear,
+                    Geometry::Instance {
+                        block: board,
+                        transform: Affine2::translation(Point::new(x, 0.0)),
+                    },
+                ),
+            );
+        }
+
+        let layer = doc.push_layer(Layer::new("F.Cu", LayerRole::Copper, Side::Top));
+        doc.push_object(
+            layer,
+            Object::new(
+                Polarity::Dark,
+                Geometry::Instance {
+                    block: array,
+                    transform: Affine2::placement(
+                        Point::new(10.0, 20.0),
+                        90.0,
+                        crate::geom::Mirror::NONE,
+                        1.0,
+                    ),
+                },
+            ),
+        );
+        normalize_bounds(&mut doc);
+        doc.validate().unwrap();
+
+        assert_eq!(doc.layers[0].bbox.min, Point::new(9.5, 19.5));
+        assert_eq!(doc.layers[0].bbox.max, Point::new(10.5, 22.5));
+
+        let expanded = expand_instances(&doc);
+        assert_eq!(expanded.objects.len(), 2);
+        assert!(
+            expanded
+                .objects
+                .iter()
+                .all(|object| object.polarity == Polarity::Dark),
+            "clear block flashes toggle polarity through every nesting level"
+        );
+        assert_eq!(expanded.layers[0].bbox, doc.layers[0].bbox);
     }
 
     #[test]

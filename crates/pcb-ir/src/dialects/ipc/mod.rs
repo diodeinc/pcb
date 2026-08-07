@@ -38,8 +38,8 @@ pub use balancing_region::{
 pub use document::{Document, Layer};
 pub use feature::{
     Feature, FeatureBucket, FeatureDomain, FeatureFlags, FeatureIntent, FeatureKind,
-    FeatureMaterial, FeatureOperation, FeatureRole, FeatureSet, FeatureSpan, FiducialKind, PinRef,
-    PlatingKind, PrimitiveRef, SourceRef,
+    FeatureMaterial, FeatureOperation, FeaturePlacementGroup, FeatureRole, FeatureSet, FeatureSpan,
+    FiducialKind, PinRef, PlatingKind, PrimitiveRef, SourceRef,
 };
 pub use layout::{
     LayoutGraph, LayoutInstance, LayoutMargins, LayoutPurpose, LayoutRepeat, LayoutStep,
@@ -48,7 +48,7 @@ pub use layout::{
 pub use lower::{
     ArtworkLowering, ArtworkObjectKind, BoardArrayFabricationProfile, BoardArrayReliefFeatures,
     FabricationProfileOptions, board_array_fabrication_profile, lower_layer_to_artwork,
-    lower_layer_to_artwork_with, lower_to_nc,
+    lower_layer_to_artwork_objects_with, lower_layer_to_artwork_with, lower_to_nc,
 };
 pub use spec::{Spec, SpecItem, SpecItemKind, SpecProperty, SpecRef};
 pub use surface_layers::{

@@ -560,6 +560,7 @@ mod tests {
             <Features>
               <Xform rotation="90"/>
               <Location x="10" y="20"/>
+              <Location x="30" y="40"/>
               <UserSpecial>
                 <Line startX="0" startY="0" endX="1" endY="0">
                   <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
@@ -577,17 +578,26 @@ mod tests {
         let doc = Ipc2581::parse(xml).expect("parse multi-feature Features block");
         let set = &doc.ecad().unwrap().cad_data.steps[0].layer_features[0].sets[0];
 
-        assert_eq!(set.features.len(), 2);
-        let ecad::SetFeature::UserPrimitive(user_primitive) = &set.features[0] else {
+        assert_eq!(set.features.len(), 1);
+        let ecad::SetFeature::PlacementGroup(group) = &set.features[0] else {
+            panic!("expected one shared placement group");
+        };
+        assert_eq!(
+            group.locations,
+            vec![Point { x: 10.0, y: 20.0 }, Point { x: 30.0, y: 40.0 }]
+        );
+        assert_eq!(group.xform.unwrap().rotation, 90.0);
+        assert_eq!(group.features.len(), 2);
+        let ecad::SetFeature::UserPrimitive(user_primitive) = &group.features[0] else {
             panic!("expected inline user primitive first");
         };
-        assert_eq!((user_primitive.x, user_primitive.y), (10.0, 20.0));
+        assert_eq!((user_primitive.x, user_primitive.y), (0.0, 0.0));
 
-        let ecad::SetFeature::UserPrimitiveRef(primitive_ref) = &set.features[1] else {
+        let ecad::SetFeature::UserPrimitiveRef(primitive_ref) = &group.features[1] else {
             panic!("expected user primitive reference second");
         };
         assert_eq!(doc.resolve(primitive_ref.id), "URECT_408");
-        assert_eq!((primitive_ref.x, primitive_ref.y), (10.0, 20.0));
+        assert_eq!((primitive_ref.x, primitive_ref.y), (0.0, 0.0));
     }
 
     #[test]

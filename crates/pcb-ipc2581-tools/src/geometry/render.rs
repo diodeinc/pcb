@@ -59,23 +59,12 @@ pub fn layer_has_native_content(geometry: &GeometryDocument) -> bool {
 /// layer, dropping borrowed features. Returns `None` when nothing is native.
 pub fn native_layer_document(geometry: &GeometryDocument) -> Option<GeometryDocument> {
     let layer = geometry.layers.first()?;
-
     let source_layer_ref = layer.source_layer_ref;
-    let features = layer
-        .features
-        .slice(&geometry.features)
-        .iter()
-        .filter(|feature| feature.source_layer_ref == Some(source_layer_ref))
-        .cloned()
-        .collect::<Vec<_>>();
-    if features.is_empty() {
-        return None;
-    }
-
     let mut native = geometry.clone();
-    native.layers[0].features = Span::new(0, features.len() as u32);
-    native.features = features;
-    Some(native)
+    pcb_ir::dialects::ipc::process::retain_features(&mut native, |feature| {
+        feature.source_layer_ref == Some(source_layer_ref)
+    });
+    (!native.features.is_empty()).then_some(native)
 }
 
 /// Lower a single-layer geometry document to artwork, with the display

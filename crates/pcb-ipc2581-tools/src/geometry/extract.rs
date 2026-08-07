@@ -452,7 +452,7 @@ pub fn extract_layer_for_view(
             layer_name,
             mode,
         )?,
-        None => extract_step_layer(ipc, step, &ecad.cad_data.layers, layer, layer_name)?,
+        None => extract_step_layer_local(ipc, step, &ecad.cad_data.layers, layer, layer_name)?,
     };
 
     match view {
@@ -621,7 +621,7 @@ fn append_step_layer_tree(
         return Ok(BBox::empty());
     }
 
-    let step_doc = extract_step_layer(
+    let step_doc = extract_step_layer_local(
         context.ipc,
         step,
         context.layers,
@@ -671,7 +671,7 @@ fn append_step_layer_tree(
     Ok(bbox)
 }
 
-fn extract_step_layer(
+pub(crate) fn extract_step_layer_local(
     ipc: &Ipc2581,
     step: &Step,
     layers: &[Layer],
@@ -740,57 +740,15 @@ fn extract_step_layer(
                     set_index: set_index as u32,
                     feature_index: feature_index as u32,
                 };
-                let features = match set_feature {
-                    SetFeature::Pad(pad) => extract_pad(
-                        &context, layer.name, set.net, polarity, source, pad, &mut doc,
-                    )?
-                    .into_iter()
-                    .collect(),
-                    SetFeature::Fiducial(fiducial) => {
-                        extract_fiducial(&context, set.net, polarity, source, fiducial, &mut doc)?
-                            .into_iter()
-                            .collect()
-                    }
-                    SetFeature::Trace(trace) => {
-                        extract_trace(&context, set.net, polarity, source, trace, &mut doc)
-                            .into_iter()
-                            .collect()
-                    }
-                    SetFeature::UserPrimitive(primitive) => extract_inline_user_primitive(
-                        &context, set.net, polarity, source, primitive, &mut doc,
-                    )?,
-                    SetFeature::Polygon(polygon) => vec![extract_polygon(
-                        set.net, polarity, source, polygon, &mut doc,
-                    )],
-                    SetFeature::Line(line) => vec![extract_line(
-                        &context, set.net, polarity, source, line, &mut doc,
-                    )],
-                    SetFeature::Arc(arc) => vec![extract_arc(
-                        &context, set.net, polarity, source, arc, &mut doc,
-                    )],
-                    SetFeature::Polyline(polyline) => vec![extract_feature_polyline(
-                        &context, set.net, polarity, source, polyline, &mut doc,
-                    )],
-                    SetFeature::StandardPrimitiveRef(primitive_ref) => extract_feature_primitive(
-                        &context,
-                        set.net,
-                        polarity,
-                        source,
-                        primitive_ref,
-                        FeaturePrimitiveKind::Standard,
-                        &mut doc,
-                    )?,
-                    SetFeature::UserPrimitiveRef(primitive_ref) => extract_feature_primitive(
-                        &context,
-                        set.net,
-                        polarity,
-                        source,
-                        primitive_ref,
-                        FeaturePrimitiveKind::User,
-                        &mut doc,
-                    )?,
-                    SetFeature::Hole(_) | SetFeature::Slot(_) => Vec::new(),
-                };
+                let features = extract_set_feature(
+                    &context,
+                    layer.name,
+                    set.net,
+                    polarity,
+                    source,
+                    set_feature,
+                    &mut doc,
+                )?;
 
                 for mut feature in features {
                     feature.source_step_ref = Some(step.name);
@@ -886,7 +844,112 @@ fn extract_step_layer(
     Ok(doc)
 }
 
-fn step_repeat_transform(repeat: &StepRepeat, ix: u32, iy: u32) -> Affine2 {
+fn extract_set_feature(
+    context: &ExtractContext<'_>,
+    layer_ref: Symbol,
+    net: Option<Symbol>,
+    polarity: GeometryPolarity,
+    source: SourceRef,
+    set_feature: &SetFeature,
+    doc: &mut GeometryDocument,
+) -> Result<Vec<GeometryFeature>> {
+    match set_feature {
+        SetFeature::Pad(pad) => Ok(extract_pad(
+            context, layer_ref, net, polarity, source, pad, doc,
+        )?
+        .into_iter()
+        .collect()),
+        SetFeature::Fiducial(fiducial) => Ok(extract_fiducial(
+            context, net, polarity, source, fiducial, doc,
+        )?
+        .into_iter()
+        .collect()),
+        SetFeature::Trace(trace) => Ok(extract_trace(context, net, polarity, source, trace, doc)
+            .into_iter()
+            .collect()),
+        SetFeature::UserPrimitive(primitive) => {
+            extract_inline_user_primitive(context, net, polarity, source, primitive, doc)
+        }
+        SetFeature::Polygon(polygon) => {
+            Ok(vec![extract_polygon(net, polarity, source, polygon, doc)])
+        }
+        SetFeature::Line(line) => Ok(vec![extract_line(
+            context, net, polarity, source, line, doc,
+        )]),
+        SetFeature::Arc(arc) => Ok(vec![extract_arc(context, net, polarity, source, arc, doc)]),
+        SetFeature::Polyline(polyline) => Ok(vec![extract_feature_polyline(
+            context, net, polarity, source, polyline, doc,
+        )]),
+        SetFeature::StandardPrimitiveRef(primitive_ref) => extract_feature_primitive(
+            context,
+            net,
+            polarity,
+            source,
+            primitive_ref,
+            FeaturePrimitiveKind::Standard,
+            doc,
+        ),
+        SetFeature::UserPrimitiveRef(primitive_ref) => extract_feature_primitive(
+            context,
+            net,
+            polarity,
+            source,
+            primitive_ref,
+            FeaturePrimitiveKind::User,
+            doc,
+        ),
+        SetFeature::PlacementGroup(group) => {
+            extract_feature_placement_group(context, layer_ref, net, polarity, source, group, doc)
+        }
+        SetFeature::Hole(_) | SetFeature::Slot(_) => Ok(Vec::new()),
+    }
+}
+
+fn extract_feature_placement_group(
+    context: &ExtractContext<'_>,
+    layer_ref: Symbol,
+    net: Option<Symbol>,
+    polarity: GeometryPolarity,
+    source: SourceRef,
+    group: &ipc2581::types::ecad::FeaturePlacementGroup,
+    doc: &mut GeometryDocument,
+) -> Result<Vec<GeometryFeature>> {
+    let placement_start = doc.feature_placements.len() as u32;
+    doc.feature_placements.extend(
+        group.locations.iter().map(|location| {
+            ipc_placement(Point::new(location.x, location.y), group.xform).transform
+        }),
+    );
+    let placements = Span::new(
+        placement_start,
+        doc.feature_placements.len() as u32 - placement_start,
+    );
+    let group_id = doc.feature_placement_groups.len() as u32;
+    doc.feature_placement_groups.push(FeaturePlacementGroup {
+        placements,
+        features: Span::EMPTY,
+    });
+
+    let feature_start = doc.features.len() as u32;
+    let mut features = Vec::new();
+    for child in &group.features {
+        for mut feature in
+            extract_set_feature(context, layer_ref, net, polarity, source, child, doc)?
+        {
+            if feature.placement_group.is_some() {
+                bail!("nested IPC feature placement groups are not supported");
+            }
+            feature.placement_group = Some(group_id);
+            feature.bbox = doc.placed_paths_bbox(&feature);
+            features.push(feature);
+        }
+    }
+    doc.feature_placement_groups[group_id as usize].features =
+        Span::new(feature_start, features.len() as u32);
+    Ok(features)
+}
+
+pub(crate) fn step_repeat_transform(repeat: &StepRepeat, ix: u32, iy: u32) -> Affine2 {
     Affine2::placement(
         Point::new(
             repeat.x + ix as f64 * repeat.dx,
@@ -945,6 +1008,7 @@ fn append_transformed_layer(
 ) -> Result<BBox> {
     let layer = &source.layers[layer_index];
     let mut layer_bbox = BBox::empty();
+    let mut placement_groups = HashMap::<u32, u32>::new();
 
     for source_set_index in layer.sets.indices() {
         let source_set = &source.feature_sets[source_set_index as usize];
@@ -975,21 +1039,64 @@ fn append_transformed_layer(
         });
 
         for feature in source_set.features.slice(&source.features) {
+            let target_placement_group = if let Some(source_group_id) = feature.placement_group {
+                if let Some(&target_group_id) = placement_groups.get(&source_group_id) {
+                    Some(target_group_id)
+                } else {
+                    let source_group = &source.feature_placement_groups[source_group_id as usize];
+                    let placement_start = target.feature_placements.len() as u32;
+                    target.feature_placements.extend(
+                        source_group
+                            .placements
+                            .slice(&source.feature_placements)
+                            .iter()
+                            .map(|&placement| transform.concat(placement)),
+                    );
+                    let target_group_id = target.feature_placement_groups.len() as u32;
+                    target.feature_placement_groups.push(FeaturePlacementGroup {
+                        placements: Span::new(
+                            placement_start,
+                            target.feature_placements.len() as u32 - placement_start,
+                        ),
+                        features: Span::new(
+                            target.features.len() as u32,
+                            source_group.features.count,
+                        ),
+                    });
+                    placement_groups.insert(source_group_id, target_group_id);
+                    Some(target_group_id)
+                }
+            } else {
+                None
+            };
             let path_start = target.arena.paths.len() as u32;
             for path_index in feature.paths.indices() {
-                target
-                    .arena
-                    .append_path_from(&source.arena, path_index, transform);
+                target.arena.append_path_from(
+                    &source.arena,
+                    path_index,
+                    if target_placement_group.is_some() {
+                        Affine2::IDENTITY
+                    } else {
+                        transform
+                    },
+                );
             }
             let path_count = target.arena.paths.len() as u32 - path_start;
             let paths = Span::new(path_start, path_count);
-            let bbox = target.arena.paths_bbox(paths);
+            let bbox = if target_placement_group.is_some() {
+                feature.bbox.transformed(transform)
+            } else {
+                target.arena.paths_bbox(paths)
+            };
 
             let mut feature = feature.clone();
-            feature.transform = transform.concat(feature.transform);
+            if target_placement_group.is_none() {
+                feature.transform = transform.concat(feature.transform);
+                feature.center = transform.transform_point(feature.center);
+            }
             feature.bbox = bbox;
             feature.paths = paths;
-            feature.center = transform.transform_point(feature.center);
+            feature.placement_group = target_placement_group;
             feature.set = Some(target_set);
             feature.source.set_index = feature
                 .source
@@ -1259,7 +1366,7 @@ fn layout_step_kind(step: &Step) -> LayoutStepKind {
     }
 }
 
-fn is_panel_step(step: &Step) -> bool {
+pub(crate) fn is_panel_step(step: &Step) -> bool {
     matches!(step.step_type, Some(StepType::Pallet))
         || (step.step_type.is_none() && !step.step_repeats.is_empty())
 }
