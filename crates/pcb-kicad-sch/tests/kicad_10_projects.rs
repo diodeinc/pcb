@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, path::PathBuf};
+use std::path::PathBuf;
 
 use pcb_kicad_sch::{KicadProject, connectivity::ConnectivityGraph};
 
@@ -19,18 +19,5 @@ fn issue_24201_reduces_hierarchical_connectivity() {
             .all(|component| component.managed_slot.is_none())
     );
     assert!(graph.groups.iter().all(|group| group.terminals.len() == 2));
-
-    let named_groups = graph
-        .groups
-        .iter()
-        .map(|group| group.names.clone())
-        .collect::<BTreeSet<_>>();
-    assert_eq!(
-        named_groups,
-        BTreeSet::from([
-            BTreeSet::from(["A".to_string()]),
-            BTreeSet::from(["B".to_string()]),
-        ])
-    );
     assert!(graph.groups.iter().all(|group| group.origins.len() == 2));
 }

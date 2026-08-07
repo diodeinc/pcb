@@ -40,7 +40,9 @@ pub enum ComponentIdentity {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectionGroup {
-    /// Labels and power-symbol names that identify this connection.
+    /// Logical labels and power-symbol names that identify this connection.
+    /// KiCad sheet-pin and hierarchical-label aliases are topology only and
+    /// do not appear here.
     pub names: BTreeSet<String>,
     pub terminals: BTreeSet<Terminal>,
     pub origins: BTreeSet<ConnectionOrigin>,
