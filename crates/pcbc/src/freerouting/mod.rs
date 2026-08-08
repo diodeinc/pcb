@@ -23,7 +23,7 @@ use pcb_ui::prelude::*;
 use crate::route::{RouteArgs, format_duration, import_ses};
 
 mod api;
-use api::{DEFAULT_TIMEOUT, FreeroutingApiClient, GET_OUTPUT_TIMEOUT, JobOutput, JobState};
+use api::{FreeroutingApiClient, GET_OUTPUT_TIMEOUT, JobOutput, JobState};
 
 const FREEROUTING_VERSION: &str = "2.3.0";
 
@@ -35,9 +35,9 @@ const FREEROUTING_JAR_SHA256: &str =
 
 const FREEROUTING_MAX_PASSES: u32 = 200;
 
-/// get_output serializes the whole in-progress board server-side, so cache
-/// refreshes are throttled to this interval instead of every ~1s poll tick.
-const OUTPUT_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
+/// Margin added to our poll deadline so FreeRouting's own job_timeout only
+/// fires as a backstop.
+const JOB_TIMEOUT_SAFETY_MARGIN_SECS: u64 = 30;
 
 fn freerouting_jar_filename() -> String {
     format!("freerouting-{FREEROUTING_VERSION}.jar")
@@ -542,12 +542,12 @@ fn run_freerouting(
         .unwrap_or_else(|| "pcb-route".to_string());
     let job_id = api.enqueue_job(&session_id, &job_name)?;
 
-    // Full HH:MM:SS so FreeRouting's job_timeout matches our poll deadline
-    // exactly, rather than rounding down and timing out early.
+    // Safety net only — our poll loop fetches output and cancels at
+    // timeout_secs; this covers the case where that fails to happen.
     api.update_settings(
         &job_id,
         FREEROUTING_MAX_PASSES,
-        &format_hms(timeout_secs.max(1)),
+        &format_hms(timeout_secs.max(1) + JOB_TIMEOUT_SAFETY_MARGIN_SECS),
     )?;
 
     let dsn_bytes = std::fs::read(dsn_path).context("Failed to read DSN file for upload")?;
@@ -613,27 +613,17 @@ fn poll_job(
     let deadline = start + Duration::from_secs(timeout_secs);
     let mut consecutive_errors = 0u32;
     let mut last_printed_pass: Option<u32> = None;
-    let mut last_known_output: Option<Vec<u8>> = None;
-    let mut last_output_refresh: Option<Instant> = None;
 
     loop {
         for _ in 0..10 {
             if CANCEL.load(Ordering::SeqCst) {
-                let _ = api.cancel_job(job_id);
-                return Ok(PollResult {
-                    outcome: RunOutcome::Cancelled,
-                    output: best_effort_output(api, job_id).or(last_known_output),
-                });
+                return Ok(stop_and_capture(api, job_id));
             }
             thread::sleep(Duration::from_millis(100));
         }
 
         if Instant::now() > deadline {
-            let _ = api.cancel_job(job_id);
-            return Ok(PollResult {
-                outcome: RunOutcome::Cancelled,
-                output: best_effort_output(api, job_id).or(last_known_output),
-            });
+            return Ok(stop_and_capture(api, job_id));
         }
 
         // Hide the pass counter until it's > 0: FreeRouting's initial routing
@@ -655,9 +645,6 @@ fn poll_job(
                 }
                 match status.state {
                     JobState::Completed => {
-                        // Unlike Cancelled/TimedOut below, a failed fetch here
-                        // must downgrade to Cancelled rather than silently
-                        // reporting Completed with a stale cached snapshot.
                         return Ok(match api.get_output(job_id, GET_OUTPUT_TIMEOUT) {
                             Ok(JobOutput::Data(bytes)) => PollResult {
                                 outcome: RunOutcome::Completed,
@@ -669,22 +656,21 @@ fn poll_job(
                             },
                             Err(_) => {
                                 eprintln!(
-                                    "  {} FreeRouting finished but its final output could not be fetched; saving last known progress instead.",
+                                    "  {} FreeRouting finished but its final output could not be fetched.",
                                     "!".yellow()
                                 );
                                 PollResult {
                                     outcome: RunOutcome::Cancelled,
-                                    output: last_known_output,
+                                    output: None,
                                 }
                             }
                         });
                     }
+                    // FreeRouting stopped on its own (job_timeout fired).
                     JobState::Cancelled | JobState::TimedOut => {
-                        // FreeRouting stopped on its own (e.g. internal
-                        // job_timeout), so we never cached output beforehand.
                         return Ok(PollResult {
                             outcome: RunOutcome::Cancelled,
-                            output: best_effort_output(api, job_id).or(last_known_output),
+                            output: best_effort_output(api, job_id),
                         });
                     }
                     JobState::Invalid => {
@@ -696,37 +682,12 @@ fn poll_job(
                     | JobState::ReadyToStart
                     | JobState::Running
                     | JobState::Paused
-                    | JobState::Stopping => {
-                        // Refresh the cache now, while the API is guaranteed
-                        // to serve it, instead of waiting until we're racing
-                        // a cancellation (see OUTPUT_REFRESH_INTERVAL).
-                        let should_refresh = last_output_refresh
-                            .is_none_or(|t| t.elapsed() >= OUTPUT_REFRESH_INTERVAL);
-                        if should_refresh {
-                            if let Ok(JobOutput::Data(bytes)) =
-                                api.get_output(job_id, DEFAULT_TIMEOUT)
-                            {
-                                last_known_output = Some(bytes);
-                            }
-                            last_output_refresh = Some(Instant::now());
-                        }
-                    }
+                    | JobState::Stopping => {}
                 }
             }
             Err(e) => {
                 consecutive_errors += 1;
                 if consecutive_errors >= 20 {
-                    if last_known_output.is_some() {
-                        eprintln!(
-                            "  {} Lost contact with FreeRouting API server: {e}",
-                            "!".yellow()
-                        );
-                        eprintln!("  Saving last known routing progress.");
-                        return Ok(PollResult {
-                            outcome: RunOutcome::Cancelled,
-                            output: last_known_output,
-                        });
-                    }
                     anyhow::bail!("Lost contact with FreeRouting API server: {e}");
                 }
             }
@@ -734,8 +695,19 @@ fn poll_job(
     }
 }
 
+/// Fetches output before cancelling: `/output` unconditionally reports "no
+/// output" once a job settles into `CANCELLED`.
+fn stop_and_capture(api: &FreeroutingApiClient, job_id: &str) -> PollResult {
+    let output = best_effort_output(api, job_id);
+    let _ = api.cancel_job(job_id);
+    PollResult {
+        outcome: RunOutcome::Cancelled,
+        output,
+    }
+}
+
 fn best_effort_output(api: &FreeroutingApiClient, job_id: &str) -> Option<Vec<u8>> {
-    match api.get_output(job_id, DEFAULT_TIMEOUT) {
+    match api.get_output(job_id, GET_OUTPUT_TIMEOUT) {
         Ok(JobOutput::Data(bytes)) => Some(bytes),
         _ => None,
     }
