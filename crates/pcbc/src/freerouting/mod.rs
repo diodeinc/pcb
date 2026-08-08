@@ -67,7 +67,7 @@ pub fn execute(
 ) -> Result<()> {
     // Check Java before the auto-download fallback pays for a big download.
     let expected_hash = hex_decode32(FREEROUTING_JAR_SHA256);
-    let explicit_jar = resolve_explicit_freerouting_jar(args.fr_jar.as_deref(), &expected_hash)?;
+    let explicit_jar = resolve_explicit_freerouting_jar(&expected_hash)?;
 
     let java_path = resolve_java()?;
 
@@ -251,23 +251,9 @@ fn is_java_version_sufficient(java_path: impl AsRef<Path>) -> bool {
 // FreeRouting JAR resolution
 // ---------------------------------------------------------------------------
 
-/// `--fr-jar` flag (priority 1) or `FREEROUTING_JAR` env var (priority 2).
-/// `Ok(None)` means neither is set — caller falls back to the verified cache.
-fn resolve_explicit_freerouting_jar(
-    provided: Option<&Path>,
-    expected_hash: &[u8; 32],
-) -> Result<Option<PathBuf>> {
-    if let Some(path) = provided {
-        if path.exists() {
-            warn_on_hash_mismatch(path, expected_hash);
-            return Ok(Some(path.to_path_buf()));
-        }
-        anyhow::bail!(
-            "FreeRouting JAR not found at --fr-jar path: {}",
-            path.display()
-        );
-    }
-
+/// `FREEROUTING_JAR` env var. `Ok(None)` means it's not set — caller falls
+/// back to the verified cache.
+fn resolve_explicit_freerouting_jar(expected_hash: &[u8; 32]) -> Result<Option<PathBuf>> {
     if let Ok(path) = std::env::var("FREEROUTING_JAR") {
         let p = PathBuf::from(&path);
         if p.exists() {
@@ -285,7 +271,7 @@ fn find_or_download_freerouting_jar(expected_hash: &[u8; 32]) -> Result<PathBuf>
     let cache_dir = dirs::cache_dir()
         .context(
             "Could not determine a cache directory (check $HOME).\n\
-             Use --fr-jar <path> or set FREEROUTING_JAR to point at a JAR directly.",
+             Set FREEROUTING_JAR to point at a JAR directly.",
         )?
         .join("pcb")
         .join("freerouting");
@@ -297,7 +283,7 @@ fn find_or_download_freerouting_jar(expected_hash: &[u8; 32]) -> Result<PathBuf>
         anyhow::bail!(
             "Refusing to use FreeRouting cache dir {} — it's owned by another user.\n\
              This can happen when the system cache/temp dir is shared between users.\n\
-             Remove the directory (if you control it) or set --fr-jar/FREEROUTING_JAR \
+             Remove the directory (if you control it) or set FREEROUTING_JAR \
              to point at a JAR directly.",
             cache_dir.display()
         );
@@ -765,7 +751,7 @@ fn format_hms(total_secs: u64) -> String {
     format!("{hh:02}:{mm:02}:{ss:02}")
 }
 
-/// Non-fatal warning for --fr-jar/FREEROUTING_JAR: an explicit user override
+/// Non-fatal warning for FREEROUTING_JAR: an explicit user override
 /// may intentionally point at a patched build, so a mismatch isn't rejected.
 fn warn_on_hash_mismatch(path: &Path, expected_hash: &[u8; 32]) {
     match sha256_file(path) {

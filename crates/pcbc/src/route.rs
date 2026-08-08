@@ -48,10 +48,6 @@ pub struct RouteArgs {
     /// [deeppcb] Override project ID (default: derived from .zen file name)
     #[arg(long)]
     pub project_id: Option<String>,
-
-    /// [freerouting] Path to freerouting.jar (default: search FREEROUTING_JAR env or $PATH)
-    #[arg(long)]
-    pub fr_jar: Option<PathBuf>,
 }
 
 pub fn execute(args: RouteArgs) -> Result<()> {
@@ -59,7 +55,12 @@ pub fn execute(args: RouteArgs) -> Result<()> {
 
     match args.engine {
         RouteEngine::Deeppcb => execute_deeppcb(args),
-        RouteEngine::Freerouting => execute_freerouting(args),
+        RouteEngine::Freerouting => {
+            if args.project_id.is_some() {
+                anyhow::bail!("--project-id only applies to --engine deeppcb");
+            }
+            execute_freerouting(args)
+        }
     }
 }
 

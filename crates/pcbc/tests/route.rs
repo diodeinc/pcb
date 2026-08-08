@@ -112,9 +112,9 @@ fn test_freerouting_bad_jar_path() {
     sandbox.write("board.zen", BOARD_WITH_LAYOUT_ZEN);
     scaffold_layout(&mut sandbox);
 
-    let (code, stdout, stderr) =
-        run_route_freerouting(&mut sandbox, &["--fr-jar", "/nonexistent/freerouting.jar"]);
-    assert_ne!(code, 0, "expected failure for a nonexistent --fr-jar path");
+    sandbox.env("FREEROUTING_JAR", "/nonexistent/freerouting.jar");
+    let (code, stdout, stderr) = run_route_freerouting(&mut sandbox, &[]);
+    assert_ne!(code, 0, "expected failure for a nonexistent FREEROUTING_JAR path");
     let combined = format!("{stdout}{stderr}");
     assert!(
         combined.contains("FreeRouting JAR not found"),
@@ -483,16 +483,9 @@ fn test_freerouting_cli() {
         );
     }
 
-    let (code, stdout, stderr) = run_route_freerouting(
-        &mut sandbox,
-        &[
-            "--no-open",
-            "--fr-jar",
-            &jar_path.to_string_lossy(),
-            "--timeout",
-            "1",
-        ],
-    );
+    sandbox.env("FREEROUTING_JAR", jar_path.to_string_lossy().to_string());
+    let (code, stdout, stderr) =
+        run_route_freerouting(&mut sandbox, &["--no-open", "--timeout", "1"]);
 
     assert!(
         code == 0,
