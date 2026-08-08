@@ -12,21 +12,17 @@ log() {
 KICAD_METADATA_URL=https://kicad-mirror.api.diode.computer/packages/kicad/diode/10.0/latest.json
 
 log 'Downloading Diode KiCad package metadata'
-tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
-curl -fsSL "$KICAD_METADATA_URL" -o "$tmp/latest.json"
-KICAD_DEB_URL=$(/usr/bin/python3 -c \
-  'import json, sys; print(json.load(open(sys.argv[1]))["deb_url"])' \
-  "$tmp/latest.json")
-KICAD_SHA256=$(/usr/bin/python3 -c \
-  'import json, sys; print(json.load(open(sys.argv[1]))["sha256"])' \
-  "$tmp/latest.json")
+metadata=$(curl -fsSL "$KICAD_METADATA_URL")
+deb_url=$(jq -er .deb_url <<<"$metadata")
+sha256=$(jq -er .sha256 <<<"$metadata")
 
 log 'Downloading Diode KiCad package'
-curl -fsSL "$KICAD_DEB_URL" -o "$tmp/kicad.deb"
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+curl -fsSL "$deb_url" -o "$tmp/kicad.deb"
 
 log 'Verifying Diode KiCad package checksum'
-printf '%s  %s\n' "$KICAD_SHA256" "$tmp/kicad.deb" | sha256sum --check --strict
+printf '%s  %s\n' "$sha256" "$tmp/kicad.deb" | sha256sum --check --strict
 
 log 'Installing Diode KiCad package'
 export DEBIAN_FRONTEND=noninteractive
