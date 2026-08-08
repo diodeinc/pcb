@@ -1,5 +1,3 @@
-#![cfg(not(target_os = "windows"))]
-
 use pcb_test_utils::sandbox::Sandbox;
 use std::path::PathBuf;
 use std::process::Command;
@@ -9,17 +7,6 @@ const BOARD_NO_LAYOUT_ZEN: &str = r#"
 p1 = Net("P1")
 "#;
 
-/// Kills the wrapped child on drop, so a spawned FreeRouting process doesn't
-/// leak past a failed assertion.
-struct ChildGuard(std::process::Child);
-
-impl Drop for ChildGuard {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
-
 const BOARD_WITH_LAYOUT_ZEN: &str = r#"
 LoadCap = Module("@stdlib/generics/Capacitor.zen")
 vcc = Net("VCC")
@@ -28,8 +15,22 @@ LoadCap(name = "C1", value = "100nF", package = "0402", P1 = vcc, P2 = gnd)
 Layout(name="TestBoard", path="build/TestBoard", bom_profile=None)
 "#;
 
+/// Kills the wrapped child on drop, so a spawned FreeRouting process doesn't
+/// leak past a failed assertion.
+#[cfg(not(target_os = "windows"))]
+struct ChildGuard(std::process::Child);
+
+#[cfg(not(target_os = "windows"))]
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 /// Unlike `BOARD_WITH_LAYOUT_ZEN`, has nets that actually need a routed
 /// trace, so FreeRouting produces a real output object.
+#[cfg(not(target_os = "windows"))]
 const BOARD_WITH_ROUTABLE_NETS_ZEN: &str = r#"
 Resistor = Module("@stdlib/generics/Resistor.zen")
 
@@ -123,62 +124,34 @@ fn test_freerouting_bad_jar_path() {
 }
 
 // ---------------------------------------------------------------------------
-// Integration tests — need Java + FreeRouting JAR on the host
+// Integration tests — need Java + FreeRouting JAR on the host. `#[ignore]`d
+// so a plain `cargo test -p pcbc` never downloads or runs an external JAR;
+// run explicitly with `--ignored` and prerequisites must be present, or the
+// test fails loudly rather than silently passing.
 // ---------------------------------------------------------------------------
 
-/// Resolve the FreeRouting JAR path for integration tests: `FREEROUTING_TEST_JAR`
-/// or `FREEROUTING_JAR` env var, a cached download, or fetch one. Returns
-/// `None` so the calling test can skip.
-fn resolve_freerouting_jar() -> Option<PathBuf> {
+/// Resolve the FreeRouting JAR path from `FREEROUTING_TEST_JAR` (or
+/// `FREEROUTING_JAR`). Panics if neither is set to an existing path, rather
+/// than silently skipping — these tests are only run explicitly.
+#[cfg(not(target_os = "windows"))]
+fn resolve_freerouting_jar() -> PathBuf {
     for var in &["FREEROUTING_TEST_JAR", "FREEROUTING_JAR"] {
         if let Ok(path) = std::env::var(var) {
             let p = PathBuf::from(&path);
             if p.exists() {
-                return Some(p);
+                return p;
             }
+            panic!("{var} is set but does not exist: {path}");
         }
     }
 
-    let cache_dir = dirs::cache_dir()
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join("pcb")
-        .join("test-cache");
-    let cached = cache_dir.join("freerouting-2.3.0.jar");
-
-    if cached.exists() {
-        return Some(cached);
-    }
-
-    if let Err(e) = std::fs::create_dir_all(&cache_dir) {
-        eprintln!("[route test] Skipping: failed to create cache dir: {e}");
-        return None;
-    }
-
-    let urls = [
-        "https://github.com/freerouting/freerouting/releases/download/v2.3.0/freerouting-2.3.0.jar",
-    ];
-
-    for url in &urls {
-        eprintln!("[route test] Downloading FreeRouting JAR from {url} ...");
-        let downloaded = reqwest::blocking::get(*url)
-            .and_then(|resp| resp.error_for_status())
-            .and_then(|resp| resp.bytes())
-            .ok()
-            .filter(|bytes| !bytes.is_empty())
-            .and_then(|bytes| std::fs::write(&cached, &bytes).ok());
-        if downloaded.is_some() {
-            eprintln!("[route test] Downloaded to {}", cached.display());
-            return Some(cached);
-        }
-    }
-
-    eprintln!(
-        "[route test] Skipping: could not download FreeRouting JAR. \
-         Set FREEROUTING_TEST_JAR to a pre-downloaded jar."
+    panic!(
+        "FREEROUTING_TEST_JAR (or FREEROUTING_JAR) must be set to a FreeRouting jar \
+         to run this ignored integration test"
     );
-    None
 }
 
+#[cfg(not(target_os = "windows"))]
 fn java_compatible() -> bool {
     let output = match Command::new("java").arg("-version").output() {
         Ok(o) => o,
@@ -201,6 +174,7 @@ fn java_compatible() -> bool {
 
 /// Poll `url` until it returns HTTP 200 or `deadline` elapses. Bypasses the
 /// sandbox's dead HTTP(S) proxy explicitly, matching `FreeroutingApiClient`.
+#[cfg(not(target_os = "windows"))]
 fn wait_for_http_ok(url: &str, deadline: Duration) -> bool {
     let client = match reqwest::blocking::Client::builder().no_proxy().build() {
         Ok(c) => c,
@@ -224,6 +198,7 @@ fn wait_for_http_ok(url: &str, deadline: Duration) -> bool {
 /// Spawn a FreeRouting API server on a free loopback port and wait for it to
 /// report ready. Mirrors the flags `FreeroutingServer::spawn` uses in
 /// production.
+#[cfg(not(target_os = "windows"))]
 fn spawn_freerouting_server(jar_path: &PathBuf) -> (ChildGuard, u16) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -257,16 +232,15 @@ fn spawn_freerouting_server(jar_path: &PathBuf) -> (ChildGuard, u16) {
 }
 
 #[test]
+#[ignore]
+#[cfg(not(target_os = "windows"))]
 fn test_freerouting_api_server_boots() {
-    if !java_compatible() {
-        eprintln!("[route test] Skipping: Java 25+ not available");
-        return;
-    }
+    assert!(
+        java_compatible(),
+        "Java 25+ is required to run this ignored integration test"
+    );
 
-    let jar_path = match resolve_freerouting_jar() {
-        Some(j) => j,
-        None => return,
-    };
+    let jar_path = resolve_freerouting_jar();
 
     let (_child, _port) = spawn_freerouting_server(&jar_path);
 }
@@ -275,24 +249,23 @@ fn test_freerouting_api_server_boots() {
 /// cancel -> output) to confirm `GET /jobs/{id}/output` returns valid,
 /// non-empty output for a cancelled job.
 #[test]
+#[ignore]
+#[cfg(not(target_os = "windows"))]
 fn test_freerouting_cancel_returns_output() {
-    if !java_compatible() {
-        eprintln!("[route test] Skipping: Java 25+ not available");
-        return;
-    }
-    let jar_path = match resolve_freerouting_jar() {
-        Some(j) => j,
-        None => return,
-    };
+    assert!(
+        java_compatible(),
+        "Java 25+ is required to run this ignored integration test"
+    );
+    let jar_path = resolve_freerouting_jar();
     let kicad_missing = Command::new("kicad-cli")
         .arg("version")
         .output()
         .map(|o| !o.status.success())
         .unwrap_or(true);
-    if kicad_missing {
-        eprintln!("[route test] Skipping: KiCad not installed");
-        return;
-    }
+    assert!(
+        !kicad_missing,
+        "kicad-cli is required to run this ignored integration test"
+    );
 
     let mut sandbox = Sandbox::new().with_workspace();
     sandbox.write("board.zen", BOARD_WITH_ROUTABLE_NETS_ZEN);
@@ -303,10 +276,12 @@ fn test_freerouting_cancel_returns_output() {
         .unchecked()
         .run()
         .expect("layout command failed");
-    if !build_output.status.success() {
-        eprintln!("[route test] Skipping: layout generation failed (KiCad Python not available?)");
-        return;
-    }
+    assert!(
+        build_output.status.success(),
+        "layout generation failed (KiCad Python not available?):\nstdout:{}\nstderr:{}",
+        String::from_utf8_lossy(&build_output.stdout),
+        String::from_utf8_lossy(&build_output.stderr)
+    );
 
     let board_path = sandbox
         .default_cwd()
@@ -319,16 +294,13 @@ import sys
 brd = pcbnew.LoadBoard(sys.argv[1])
 pcbnew.ExportSpecctraDSN(brd, sys.argv[2])
 "#;
-    if pcb_kicad::PythonScriptBuilder::new(dsn_script)
+    let dsn_ok = pcb_kicad::PythonScriptBuilder::new(dsn_script)
         .arg(board_path.to_string_lossy())
         .arg(dsn_path.to_string_lossy())
         .run()
-        .is_err()
-        || !dsn_path.exists()
-    {
-        eprintln!("[route test] Skipping: DSN export failed (KiCad Python not available?)");
-        return;
-    }
+        .is_ok()
+        && dsn_path.exists();
+    assert!(dsn_ok, "DSN export failed (KiCad Python not available?)");
 
     let (_child, port) = spawn_freerouting_server(&jar_path);
 
@@ -436,28 +408,25 @@ pcbnew.ExportSpecctraDSN(brd, sys.argv[2])
 }
 
 #[test]
+#[ignore]
+#[cfg(not(target_os = "windows"))]
 fn test_freerouting_cli() {
-    if !java_compatible() {
-        eprintln!("[route test] Skipping: Java 25+ not available");
-        return;
-    }
+    assert!(
+        java_compatible(),
+        "Java 25+ is required to run this ignored integration test"
+    );
 
-    let jar_path = match resolve_freerouting_jar() {
-        Some(j) => j,
-        None => return,
-    };
+    let jar_path = resolve_freerouting_jar();
 
     let kicad_missing = Command::new("kicad-cli")
         .arg("version")
         .output()
         .map(|o| !o.status.success())
         .unwrap_or(true);
-
-    if kicad_missing {
-        eprintln!("[route test] Skipping full integration: KiCad not installed");
-        eprintln!("  (JAR downloaded to {})", jar_path.display());
-        return;
-    }
+    assert!(
+        !kicad_missing,
+        "kicad-cli is required to run this ignored integration test"
+    );
 
     let mut sandbox = Sandbox::new().with_workspace();
     sandbox.write("board.zen", BOARD_WITH_LAYOUT_ZEN);
@@ -470,18 +439,12 @@ fn test_freerouting_cli() {
         .run()
         .expect("layout command failed");
 
-    if !build_output.status.success() {
-        let stderr = String::from_utf8_lossy(&build_output.stderr);
-        if stderr.contains("Python") || stderr.contains("kicad") || stderr.contains("KiCad") {
-            eprintln!("[route test] Skipping: KiCad Python not available");
-            return;
-        }
-        panic!(
-            "layout generation failed:\nstdout:{}\nstderr:{}",
-            String::from_utf8_lossy(&build_output.stdout),
-            stderr,
-        );
-    }
+    assert!(
+        build_output.status.success(),
+        "layout generation failed (KiCad Python not available?):\nstdout:{}\nstderr:{}",
+        String::from_utf8_lossy(&build_output.stdout),
+        String::from_utf8_lossy(&build_output.stderr)
+    );
 
     sandbox.env("FREEROUTING_JAR", jar_path.to_string_lossy().to_string());
     let (code, stdout, stderr) =
