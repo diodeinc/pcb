@@ -130,25 +130,19 @@ fn test_freerouting_bad_jar_path() {
 // test fails loudly rather than silently passing.
 // ---------------------------------------------------------------------------
 
-/// Resolve the FreeRouting JAR path from `FREEROUTING_TEST_JAR` (or
-/// `FREEROUTING_JAR`). Panics if neither is set to an existing path, rather
-/// than silently skipping — these tests are only run explicitly.
+/// Resolve the FreeRouting JAR path from `FREEROUTING_TEST_JAR`. Panics if
+/// it isn't set to an existing path, rather than silently skipping — these
+/// tests are only run explicitly.
 #[cfg(not(target_os = "windows"))]
 fn resolve_freerouting_jar() -> PathBuf {
-    for var in &["FREEROUTING_TEST_JAR", "FREEROUTING_JAR"] {
-        if let Ok(path) = std::env::var(var) {
-            let p = PathBuf::from(&path);
-            if p.exists() {
-                return p;
-            }
-            panic!("{var} is set but does not exist: {path}");
-        }
-    }
-
-    panic!(
-        "FREEROUTING_TEST_JAR (or FREEROUTING_JAR) must be set to a FreeRouting jar \
-         to run this ignored integration test"
-    );
+    let path = std::env::var("FREEROUTING_TEST_JAR").unwrap_or_else(|_| {
+        panic!(
+            "FREEROUTING_TEST_JAR must be set to a FreeRouting jar to run this ignored integration test"
+        )
+    });
+    let p = PathBuf::from(&path);
+    assert!(p.exists(), "FREEROUTING_TEST_JAR does not exist: {path}");
+    p
 }
 
 #[cfg(not(target_os = "windows"))]
