@@ -36,8 +36,9 @@ const FREEROUTING_JAR_SHA256: &str =
 const FREEROUTING_MAX_PASSES: u32 = 200;
 
 /// Margin added to our poll deadline so FreeRouting's own job_timeout only
-/// fires as a backstop.
-const JOB_TIMEOUT_SAFETY_MARGIN_SECS: u64 = 30;
+/// fires as a backstop. Must exceed `GET_OUTPUT_TIMEOUT`, or FreeRouting's
+/// timeout can fire mid-fetch and refuse output.
+const JOB_TIMEOUT_SAFETY_MARGIN_SECS: u64 = 150;
 
 fn freerouting_jar_filename() -> String {
     format!("freerouting-{FREEROUTING_VERSION}.jar")
