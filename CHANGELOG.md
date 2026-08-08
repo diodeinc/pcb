@@ -14,6 +14,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Exported Gerbers declare `%TF.FilePolarity,Positive`.
 - Drill tool diameters snap to 1 µm, cleaning up float dust from EDA exports, and the tool table is sorted by diameter.
 - Pads with rounded or custom shapes now export as shared Gerber aperture flashes instead of repeated regions, shrinking mask and paste layers.
+- Rounded-rectangle pads export as compact parameterized macro apertures, and hexagon and octagon pads as polygon apertures.
+- Gerber output no longer repeats object attributes on every object.
 
 ## [0.4.25] - 2026-08-07
 

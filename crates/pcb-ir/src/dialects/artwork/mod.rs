@@ -299,6 +299,12 @@ pub enum ApertureShape {
         vertices: u32,
         rotation_degrees: f64,
     },
+    /// Rectangle with all four corners rounded to `radius`.
+    RoundRect {
+        width: f64,
+        height: f64,
+        radius: f64,
+    },
     /// An arbitrary origin-local filled contour, shared by every flash of
     /// this aperture, painted under its source path's fill rule. This is
     /// how repeated dictionary instances stay instances all the way to the
@@ -333,6 +339,11 @@ impl Aperture {
                 vertices,
                 rotation_degrees,
             } => shapes::regular_polygon(*diameter, *vertices, *rotation_degrees),
+            ApertureShape::RoundRect {
+                width,
+                height,
+                radius,
+            } => shapes::rounded_rect(*width, *height, *radius, shapes::ALL_CORNERS, true),
             ApertureShape::Contour { outline, .. } => return vec![outline.clone()],
         };
         let mut contours: Vec<ContourBuf> = outer.into_iter().collect();
@@ -356,7 +367,8 @@ impl Aperture {
                 BBox::from_point(Point::ZERO).expand(diameter / 2.0)
             }
             ApertureShape::Rectangle { width, height }
-            | ApertureShape::Obround { width, height } => BBox::new(
+            | ApertureShape::Obround { width, height }
+            | ApertureShape::RoundRect { width, height, .. } => BBox::new(
                 Point::new(-width / 2.0, -height / 2.0),
                 Point::new(width / 2.0, height / 2.0),
             ),

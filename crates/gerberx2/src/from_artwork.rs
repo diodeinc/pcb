@@ -325,6 +325,23 @@ struct GerberObjectGroup {
     objects: Vec<WriterObject>,
 }
 
+/// Emission order for commuting groups: stage first, then object attributes
+/// and aperture so identical writer state runs together. A group's objects
+/// all lower from one artwork object and share attributes.
+fn group_order(group: &GerberObjectGroup) -> (PaintStage, &[AttributeValue], i32) {
+    let first = group.objects.first();
+    (
+        group.stage,
+        first.map_or(&[], |object| object.attributes.as_slice()),
+        first.map_or(i32::MAX, |object| match object.kind {
+            ObjectKind::Draw { aperture, .. }
+            | ObjectKind::Arc { aperture, .. }
+            | ObjectKind::Flash { aperture, .. } => aperture,
+            ObjectKind::Region { .. } => i32::MAX,
+        }),
+    )
+}
+
 impl GerberPlan {
     fn push_group(&mut self, stage: PaintStage, polarity: Polarity, objects: Vec<WriterObject>) {
         if objects.is_empty() {
@@ -340,8 +357,11 @@ impl GerberPlan {
     fn into_ordered_objects(self) -> Vec<WriterObject> {
         // Dark paint commutes with dark paint and clear with clear, but not
         // across a polarity change: stage ordering (fills before pads) may
-        // only permute groups within each maximal same-polarity run. Final
-        // cutouts are terminal by definition and emit after everything.
+        // only permute groups within each maximal same-polarity run. Within
+        // a stage the same commutativity lets groups cluster by object
+        // attributes and aperture, so the writer's attribute and tool state
+        // changes as rarely as possible. Final cutouts are terminal by
+        // definition and emit after everything.
         let (cutouts, mut painted): (Vec<_>, Vec<_>) = self
             .groups
             .into_iter()
@@ -353,7 +373,7 @@ impl GerberPlan {
             while end < painted.len() && painted[end].polarity == polarity {
                 end += 1;
             }
-            painted[start..end].sort_by_key(|group| group.stage);
+            painted[start..end].sort_by(|a, b| group_order(a).cmp(&group_order(b)));
             start = end;
         }
         painted
@@ -370,6 +390,7 @@ struct ApertureTable {
     by_key: HashMap<ApertureKey, i32>,
     apertures: Vec<WriterAperture>,
     aperture_macros: Vec<WriterApertureMacro>,
+    roundrect_macro_defined: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -399,6 +420,11 @@ enum ApertureTemplateKey {
         vertices: u32,
         rotation_microdeg: i64,
         hole_nm: i64,
+    },
+    RoundRect {
+        width_nm: i64,
+        height_nm: i64,
+        radius_nm: i64,
     },
     Contour(Vec<Vec<(i64, i64)>>),
 }
@@ -551,6 +577,39 @@ impl ApertureTable {
                     function,
                 )
             }
+            ApertureShape::RoundRect {
+                width,
+                height,
+                radius,
+            } => {
+                if width <= 0.0 || height <= 0.0 || radius <= 0.0 {
+                    return Err(GerberError::InvalidStructure(format!(
+                        "cannot export non-positive Gerber rounded-rectangle aperture \
+                         {width} x {height} r {radius}"
+                    )));
+                }
+                if hole_diameter.is_some() {
+                    return Err(GerberError::InvalidStructure(
+                        "cannot export a Gerber rounded-rectangle aperture with a hole".to_string(),
+                    ));
+                }
+                if !self.roundrect_macro_defined {
+                    self.aperture_macros.push(roundrect_macro());
+                    self.roundrect_macro_defined = true;
+                }
+                self.define(
+                    ApertureTemplateKey::RoundRect {
+                        width_nm: quantize_mm(width),
+                        height_nm: quantize_mm(height),
+                        radius_nm: quantize_mm(radius),
+                    },
+                    WriterApertureTemplate::Macro {
+                        name: ROUNDRECT_MACRO_NAME.to_string(),
+                        parameters: vec![width, height, radius],
+                    },
+                    function,
+                )
+            }
         }
     }
 
@@ -653,6 +712,74 @@ impl ApertureTable {
 
     fn into_parts(self) -> (Vec<WriterAperture>, Vec<WriterApertureMacro>) {
         (self.apertures, self.aperture_macros)
+    }
+}
+
+const ROUNDRECT_MACRO_NAME: &str = "RoundedRect";
+
+/// The shared parameterized rounded-rectangle macro: two centered rectangles
+/// leaving the corner insets uncovered, plus one circle per corner. Parameters
+/// are `$1` width, `$2` height, `$3` corner radius; at the obround and circle
+/// degeneracies a rectangle collapses to zero area and drops out.
+fn roundrect_macro() -> WriterApertureMacro {
+    use WriterMacroExpression as Expression;
+    let number = |value: f64| Expression::Number(value);
+    let variable = |index: usize| Expression::Variable(index);
+    let subtract =
+        |left: Expression, right: Expression| Expression::Subtract(Box::new(left), Box::new(right));
+    let multiply =
+        |left: Expression, right: Expression| Expression::Multiply(Box::new(left), Box::new(right));
+    let divide =
+        |left: Expression, right: Expression| Expression::Divide(Box::new(left), Box::new(right));
+    // `$n/2-$3` and its negation `$3-$n/2`: the corner-circle center offset.
+    let inset = |axis: usize, positive: bool| {
+        if positive {
+            subtract(divide(variable(axis), number(2.0)), variable(3))
+        } else {
+            subtract(variable(3), divide(variable(axis), number(2.0)))
+        }
+    };
+
+    let mut primitives = vec![
+        WriterMacroPrimitive::Shape {
+            code: 21,
+            parameters: vec![
+                number(1.0),
+                variable(1),
+                subtract(variable(2), multiply(number(2.0), variable(3))),
+                number(0.0),
+                number(0.0),
+                number(0.0),
+            ],
+        },
+        WriterMacroPrimitive::Shape {
+            code: 21,
+            parameters: vec![
+                number(1.0),
+                subtract(variable(1), multiply(number(2.0), variable(3))),
+                variable(2),
+                number(0.0),
+                number(0.0),
+                number(0.0),
+            ],
+        },
+    ];
+    primitives.extend(
+        [(true, true), (false, true), (true, false), (false, false)].map(|(right, top)| {
+            WriterMacroPrimitive::Shape {
+                code: 1,
+                parameters: vec![
+                    number(1.0),
+                    multiply(number(2.0), variable(3)),
+                    inset(1, right),
+                    inset(2, top),
+                ],
+            }
+        }),
+    );
+    WriterApertureMacro {
+        name: ROUNDRECT_MACRO_NAME.to_string(),
+        primitives,
     }
 }
 

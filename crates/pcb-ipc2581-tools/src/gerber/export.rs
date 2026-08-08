@@ -1223,9 +1223,59 @@ fn exact_flash_aperture(primitive: &StandardPrimitive, transform: Affine2) -> Op
                 axis_aligned_size(transform, oval.shape.size.width, oval.shape.size.height)?;
             Aperture::solid(ApertureShape::Obround { width, height })
         }
+        StandardPrimitive::RectRound(rect) => {
+            let corners = [
+                rect.shape.upper_right,
+                rect.shape.upper_left,
+                rect.shape.lower_right,
+                rect.shape.lower_left,
+            ];
+            if corners.iter().any(|rounded| !rounded) {
+                return None;
+            }
+            let (width, height) =
+                axis_aligned_size(transform, rect.shape.size.width, rect.shape.size.height)?;
+            let radius = rect.shape.radius * uniform_scale(transform)?;
+            if radius <= 0.0 {
+                Aperture::solid(ApertureShape::Rectangle { width, height })
+            } else {
+                Aperture::solid(ApertureShape::RoundRect {
+                    width,
+                    height,
+                    radius,
+                })
+            }
+        }
+        StandardPrimitive::Hexagon(hexagon) => {
+            regular_polygon_aperture(6, hexagon.shape.point_to_point, transform)?
+        }
+        StandardPrimitive::Octagon(octagon) => {
+            regular_polygon_aperture(8, octagon.shape.point_to_point, transform)?
+        }
         _ => return None,
     };
     Some(aperture)
+}
+
+/// IPC hexagons and octagons place their first vertex pointing down (-90°);
+/// a rigid rotation folds into the Gerber polygon aperture's own rotation,
+/// while mirrored placements keep the contour fallback.
+fn regular_polygon_aperture(
+    vertices: u32,
+    point_to_point: f64,
+    transform: Affine2,
+) -> Option<Aperture> {
+    let scale = uniform_scale(transform)?;
+    let determinant = transform.m00 * transform.m11 - transform.m01 * transform.m10;
+    if determinant <= 0.0 {
+        return None;
+    }
+    let rotation_degrees = transform.m10.atan2(transform.m00).to_degrees() - 90.0;
+    Some(Aperture::solid(ApertureShape::Polygon {
+        diameter: point_to_point * scale,
+        vertices,
+        rotation_degrees,
+    }))
 }
 
 fn standard_flash_feature_is_eligible(feature: &Feature<ipc2581::Symbol>) -> bool {
@@ -1581,6 +1631,10 @@ mod tests {
         assert!(
             copper.contents.matches("%ADD").count() <= 2,
             "repeated pads share one aperture definition"
+        );
+        assert!(
+            copper.contents.contains("%AMRoundedRect*"),
+            "axis-aligned rounded rectangles use the parameterized macro"
         );
 
         let parsed = gerberx2::GerberX2::parse(&copper.contents).unwrap();
