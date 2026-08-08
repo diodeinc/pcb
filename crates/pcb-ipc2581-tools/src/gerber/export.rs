@@ -1664,6 +1664,85 @@ mod tests {
     }
 
     #[test]
+    fn oversized_corner_radius_clamps_to_the_obround_image() {
+        let ipc = ipc::Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <LayerRef name="TOP"/>
+    <DictionaryStandard units="MILLIMETER">
+      <EntryStandard id="pad"><RectRound width="2" height="1" radius="0.75" upperRight="true" upperLeft="true" lowerRight="true" lowerLeft="true"/></EntryStandard>
+    </DictionaryStandard>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <Datum x="0" y="0"/>
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="10" y="0"/>
+            <PolyStepSegment x="10" y="10"/>
+            <PolyStepSegment x="0" y="10"/>
+            <PolyStepSegment x="0" y="0"/>
+          </Polygon>
+        </Profile>
+        <PadStackDef name="padstack">
+          <PadstackPadDef layerRef="TOP" padUse="REGULAR">
+            <StandardPrimitiveRef id="pad"/>
+          </PadstackPadDef>
+        </PadStackDef>
+        <LayerFeature layerRef="TOP">
+          <Set net="N1">
+            <Pad padstackDefRef="padstack">
+              <Location x="5" y="5"/>
+              <StandardPrimitiveRef id="pad"/>
+            </Pad>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+        let files = build_gerber_x2_files(&ipc, ArtworkScope::Board).unwrap();
+        let copper = files
+            .iter()
+            .find(|file| file.filename == "F_Cu.gtl")
+            .unwrap();
+        let parsed = gerberx2::GerberX2::parse(&copper.contents).unwrap();
+        let mask = pcb_ir::dialects::artwork::compose_to_mask(
+            &gerberx2::geometry::extract_document(&parsed),
+        );
+        let mut rings = Vec::new();
+        for layer in &mask.layers {
+            for shape in mask.shapes(layer) {
+                rings.extend(pcb_ir::geom::region::rings_from_contours(
+                    &mask.arena.path_contours(shape),
+                ));
+            }
+        }
+        let copper_area = pcb_ir::geom::ContourSet::new(
+            rings,
+            pcb_ir::geom::FillRule::NonZero,
+            pcb_ir::geom::tol::REGION_MM,
+        )
+        .area();
+        // The radius clamps to height / 2, so the pad images as a 2x1 obround.
+        let clamped = 0.5;
+        let expected = 2.0 * 1.0 - clamped * clamped * (4.0 - std::f64::consts::PI);
+        assert!(
+            (copper_area - expected).abs() <= expected * 0.02,
+            "expected clamped obround area {expected:.4}, got {copper_area:.4}"
+        );
+    }
+
+    #[test]
     fn negative_set_after_an_overlay_pad_erases_it_natively() {
         // Sequential set semantics: the clear paints after the pad, erasing
         // the overlap, and exports natively as clear polarity.

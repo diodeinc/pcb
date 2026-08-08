@@ -299,7 +299,8 @@ pub enum ApertureShape {
         vertices: u32,
         rotation_degrees: f64,
     },
-    /// Rectangle with all four corners rounded to `radius`.
+    /// Rectangle with all four corners rounded to `radius`. A radius above
+    /// `min(width, height) / 2` images clamped to that limit.
     RoundRect {
         width: f64,
         height: f64,

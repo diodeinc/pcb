@@ -593,6 +593,10 @@ impl ApertureTable {
                         "cannot export a Gerber rounded-rectangle aperture with a hole".to_string(),
                     ));
                 }
+                // An oversized radius images clamped, matching how
+                // `shapes::rounded_rect` flattens the same aperture; past the
+                // limit the macro's rectangle terms would go negative.
+                let radius = radius.min(width / 2.0).min(height / 2.0);
                 if !self.roundrect_macro_defined {
                     self.aperture_macros.push(roundrect_macro());
                     self.roundrect_macro_defined = true;
