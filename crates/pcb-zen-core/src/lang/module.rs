@@ -116,6 +116,9 @@ impl ModulePath {
         ModulePath { segments: vec![] }
     }
 
+    /// A root is a design boundary: elaboration state (pin constraints,
+    /// capability identities) starts empty here and never crosses. Loads and
+    /// children push a segment, so only a genuine root answers true.
     pub fn is_root(&self) -> bool {
         self.segments.is_empty()
     }

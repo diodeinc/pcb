@@ -15,6 +15,7 @@ pub(crate) mod param_decl;
 pub mod part;
 pub(crate) mod path;
 pub(crate) mod pin_erc;
+pub(crate) mod pinmux;
 pub mod spice_model;
 pub mod stackup;
 pub mod symbol;
