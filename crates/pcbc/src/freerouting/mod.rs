@@ -25,17 +25,13 @@ use crate::route::{RouteArgs, format_duration, import_ses};
 mod api;
 use api::{DEFAULT_TIMEOUT, FreeroutingApiClient, GET_OUTPUT_TIMEOUT, JobOutput, JobState};
 
-const FREEROUTING_VERSION: &str = "2.2.5";
+const FREEROUTING_VERSION: &str = "2.3.0";
 
-// TEMPORARY: pinned to a fork's release, not upstream freerouting/freerouting
-// — upstream has been slow to cut releases off `main`. Revert `FREEROUTING_REPO`
-// to `"freerouting/freerouting"` (and re-pin `FREEROUTING_JAR_SHA256`) once
-// upstream catches up.
-const FREEROUTING_REPO: &str = "AdamMomen/freerouting";
+const FREEROUTING_REPO: &str = "freerouting/freerouting";
 
 /// SHA-256 of the `freerouting-{FREEROUTING_VERSION}.jar` release artifact.
 const FREEROUTING_JAR_SHA256: &str =
-    "9a932414209c8431a75cda9f4d2104c1c79d57029b463fd89c3408eb4945783d";
+    "3cf18d608437740bc497db6b8ef5888e2e60a08de0def20691d1bad0c0e0ee24";
 
 const FREEROUTING_MAX_PASSES: u32 = 200;
 

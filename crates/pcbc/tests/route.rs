@@ -143,7 +143,7 @@ fn resolve_freerouting_jar() -> Option<PathBuf> {
         .unwrap_or_else(|| PathBuf::from("/tmp"))
         .join("pcb")
         .join("test-cache");
-    let cached = cache_dir.join("freerouting-2.2.5.jar");
+    let cached = cache_dir.join("freerouting-2.3.0.jar");
 
     if cached.exists() {
         return Some(cached);
@@ -155,7 +155,7 @@ fn resolve_freerouting_jar() -> Option<PathBuf> {
     }
 
     let urls = [
-        "https://github.com/AdamMomen/freerouting/releases/download/v2.2.5/freerouting-2.2.5.jar",
+        "https://github.com/freerouting/freerouting/releases/download/v2.3.0/freerouting-2.3.0.jar",
     ];
 
     for url in &urls {
