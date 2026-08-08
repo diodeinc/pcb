@@ -181,9 +181,23 @@ fn publish_board(src: &Path, dst: &Path) -> Result<()> {
     if std::fs::rename(src, dst).is_ok() {
         return Ok(());
     }
-    let tmp = dst.with_extension("kicad_pcb.tmp");
-    std::fs::copy(src, &tmp).context("Failed to stage routed board for publish")?;
-    std::fs::rename(&tmp, dst).context("Failed to publish routed board")?;
+    // Cross-filesystem fallback: copy via a uniquely-named temp file, then
+    // publish atomically.
+    let dst_dir = dst
+        .parent()
+        .context("Expected board path to have a parent directory")?;
+    let mut tmp = tempfile::Builder::new()
+        .prefix(".pcb.route.")
+        .suffix(".kicad_pcb")
+        .tempfile_in(dst_dir)
+        .with_context(|| format!("Failed to create temp file in {}", dst_dir.display()))?;
+    let mut src_file = std::fs::File::open(src).context("Failed to open routed board for publish")?;
+    std::io::copy(&mut src_file, tmp.as_file_mut())
+        .context("Failed to stage routed board for publish")?;
+    tmp.persist(dst)
+        .map(|_| ())
+        .map_err(|e| anyhow::anyhow!(e))
+        .with_context(|| format!("Failed to publish {}", dst.display()))?;
     Ok(())
 }
 
