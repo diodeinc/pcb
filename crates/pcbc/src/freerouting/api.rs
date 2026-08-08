@@ -46,6 +46,9 @@ pub enum JobState {
     /// The job's input (DSN) could not be processed at all — a terminal
     /// failure state distinct from `Cancelled`/`TimedOut`.
     Invalid,
+    /// The router crashed or was killed server-side — a terminal failure
+    /// distinct from `Cancelled`/`TimedOut`/`Invalid`.
+    Terminated,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -361,6 +364,7 @@ mod tests {
             ("\"CANCELLED\"", JobState::Cancelled),
             ("\"TIMED_OUT\"", JobState::TimedOut),
             ("\"INVALID\"", JobState::Invalid),
+            ("\"TERMINATED\"", JobState::Terminated),
         ];
         for (json, expected) in cases {
             let actual: JobState = serde_json::from_str(json)

@@ -741,8 +741,15 @@ fn poll_job(
                             }
                         });
                     }
-                    // FreeRouting stopped on its own (job_timeout fired).
-                    JobState::Cancelled | JobState::TimedOut => {
+                    // Cancelled/TimedOut are expected stops; Terminated is a crash —
+                    // salvage partial output either way.
+                    JobState::Cancelled | JobState::TimedOut | JobState::Terminated => {
+                        if status.state == JobState::Terminated {
+                            eprintln!(
+                                "  {} FreeRouting terminated unexpectedly; salvaging partial output.",
+                                "!".yellow()
+                            );
+                        }
                         return Ok(PollResult {
                             outcome: RunOutcome::Cancelled,
                             output: best_effort_output(api, job_id),
