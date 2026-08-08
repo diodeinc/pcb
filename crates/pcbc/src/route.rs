@@ -41,7 +41,7 @@ pub struct RouteArgs {
     #[arg(long)]
     pub no_open: bool,
 
-    /// [deeppcb] Routing timeout in minutes (default: 20, max: 60)
+    /// Routing timeout in minutes (default: 20, max: 60)
     #[arg(long, short = 't', default_value = "20")]
     pub timeout: u32,
 
@@ -52,10 +52,6 @@ pub struct RouteArgs {
     /// [freerouting] Path to freerouting.jar (default: search FREEROUTING_JAR env or $PATH)
     #[arg(long)]
     pub fr_jar: Option<PathBuf>,
-
-    /// [freerouting] FreeRouting timeout in minutes (default: 5, max: 60)
-    #[arg(long, default_value = "5")]
-    pub fr_timeout: u64,
 }
 
 pub fn execute(args: RouteArgs) -> Result<()> {
@@ -100,7 +96,7 @@ fn resolve_board(zen_path: &Path) -> Result<(PathBuf, PathBuf)> {
 }
 
 fn execute_freerouting(args: RouteArgs) -> Result<()> {
-    if args.fr_timeout > 60 {
+    if args.timeout > 60 {
         anyhow::bail!("Timeout cannot exceed 60 minutes");
     }
 

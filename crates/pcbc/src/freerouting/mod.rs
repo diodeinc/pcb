@@ -139,7 +139,7 @@ pub fn execute(
         &fr_jar,
         &dsn_path,
         &ses_path,
-        args.fr_timeout * 60,
+        args.timeout as u64 * 60,
     )?;
 
     if !ses_path.exists() {

@@ -489,7 +489,7 @@ fn test_freerouting_cli() {
             "--no-open",
             "--fr-jar",
             &jar_path.to_string_lossy(),
-            "--fr-timeout",
+            "--timeout",
             "1",
         ],
     );
