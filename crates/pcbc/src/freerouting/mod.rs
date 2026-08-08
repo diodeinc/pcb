@@ -978,4 +978,53 @@ mod tests {
         assert_eq!(format_hms(3661), "01:01:01");
         assert_eq!(format_hms(0), "00:00:00");
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn detach_process_group_puts_child_in_its_own_group() {
+        let mut command = Command::new("sleep");
+        command.arg("5").stdout(std::process::Stdio::null());
+        detach_process_group(&mut command);
+        let child = command.spawn().unwrap();
+
+        // process_group(0) makes the child its own group leader, so its pgid
+        // equals its own pid, not ours — this is what keeps it out of the
+        // terminal's SIGINT delivery to our foreground group.
+        let child_pgid = unsafe { libc_getpgid(child.id() as i32) };
+        let our_pgid = unsafe { libc_getpgid(0) };
+        assert_eq!(child_pgid, child.id() as i32);
+        assert_ne!(child_pgid, our_pgid);
+
+        let _ = Command::new("kill").arg(child.id().to_string()).status();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn kill_child_now_kills_the_stored_pid() {
+        let mut child = Command::new("sleep")
+            .arg("5")
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        CHILD_PID.store(child.id(), Ordering::SeqCst);
+
+        kill_child_now();
+
+        let status = child.wait().unwrap();
+        assert_eq!(
+            std::os::unix::process::ExitStatusExt::signal(&status),
+            Some(9)
+        );
+        CHILD_PID.store(0, Ordering::SeqCst);
+    }
+
+    #[cfg(unix)]
+    unsafe extern "C" {
+        fn getpgid(pid: i32) -> i32;
+    }
+
+    #[cfg(unix)]
+    unsafe fn libc_getpgid(pid: i32) -> i32 {
+        unsafe { getpgid(pid) }
+    }
 }
