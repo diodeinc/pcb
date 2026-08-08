@@ -3,8 +3,10 @@
 # See https://ampcode.com/manual/orbs for the contract.
 set -euo pipefail
 
+SECONDS=0
+
 log() {
-  printf '[orb setup %s] %s\n' "$(date -Is)" "$*" >&2
+  printf '[orb setup %s +%ss] %s\n' "$(date -Is)" "$SECONDS" "$*" >&2
 }
 
 # --- Rust toolchain (pinned to stable by rust-toolchain.toml) ----------------
@@ -89,4 +91,4 @@ sudo ldconfig
 log 'Verifying KiCad command-line tools and Python bindings'
 kicad-cli --version >/dev/null
 /usr/bin/python3 -c 'import pcbnew'
-log 'Orb setup complete'
+log "Orb setup complete in ${SECONDS}s"
