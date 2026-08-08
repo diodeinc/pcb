@@ -329,17 +329,31 @@ where
     if feature.kind != FeatureKind::Primitive || !is_rigid(feature.transform) {
         return None;
     }
+    if let Some(&aperture) = apertures.get(&primitive) {
+        return Some((aperture, feature.transform));
+    }
+    // Derive the origin-local template from this first instance; every
+    // sibling shares the aperture and differs only by its rigid transform.
+    let shape = contour_flash_aperture(doc, feature)?;
+    let aperture = out.push_aperture(artwork::Aperture::solid(shape));
+    apertures.insert(primitive, aperture);
+    Some((aperture, feature.transform))
+}
+
+/// The feature's whole image as an origin-local contour aperture: its single
+/// filled path pulled back through the inverse of its placement transform.
+/// Flashing the aperture through `feature.transform` reproduces the source
+/// image exactly, so repeated placements of one shape share one definition.
+pub fn contour_flash_aperture<Symbol, LayerFunction>(
+    doc: &Document<Symbol, LayerFunction>,
+    feature: &Feature<Symbol>,
+) -> Option<artwork::ApertureShape> {
     let [path] = feature.paths.slice(&doc.arena.paths) else {
         return None;
     };
     if !path.is_filled() {
         return None;
     }
-    if let Some(&aperture) = apertures.get(&primitive) {
-        return Some((aperture, feature.transform));
-    }
-    // Derive the origin-local template from this first instance; every
-    // sibling shares the aperture and differs only by its rigid transform.
     let inverse = feature.transform.inverse()?;
     let local = doc
         .arena
@@ -347,15 +361,11 @@ where
         .iter()
         .map(|contour| transform_cmds(contour.cmds.iter().copied(), inverse))
         .collect::<Vec<_>>();
-    let [local] = local.as_slice() else {
-        return None;
-    };
-    let aperture = out.push_aperture(artwork::Aperture::solid(artwork::ApertureShape::Contour {
-        outline: local.clone(),
+    let [outline] = local.try_into().ok()?;
+    Some(artwork::ApertureShape::Contour {
+        outline,
         fill_rule: path.fill_rule().unwrap_or(FillRule::NonZero),
-    }));
-    apertures.insert(primitive, aperture);
-    Some((aperture, feature.transform))
+    })
 }
 
 /// A drilled or fiducial feature whose whole image is one filled circle.

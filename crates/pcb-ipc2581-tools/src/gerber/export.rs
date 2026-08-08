@@ -418,7 +418,9 @@ fn layer_attributes(file_function: Vec<String>, part: GerberPart) -> LayerAttrib
     LayerAttributes {
         file_function,
         part: Some(vec![part.as_str().to_string()]),
-        file_polarity: None,
+        // Every exported layer is a positive image; clears stay inside the
+        // file as %LPC state rather than flipping the file polarity.
+        file_polarity: Some("Positive".to_string()),
     }
 }
 
@@ -435,7 +437,8 @@ fn copper_layer_output(
     let filename = match side {
         Some(IpcSide::Top) => "F_Cu.gtl".to_string(),
         Some(IpcSide::Bottom) => "B_Cu.gbl".to_string(),
-        _ => format!("In{}_Cu.gbr", copper_index),
+        // KiCad numbers inner layers from 1, excluding the top layer.
+        _ => format!("In{}_Cu.gbr", copper_index - 1),
     };
     let index = match side {
         Some(IpcSide::Top) => 1,
@@ -649,8 +652,7 @@ impl ArtworkLowering<ipc2581::Symbol, ObjectAttributes> for GerberLowering<'_> {
         &mut self,
         feature: &Feature<ipc2581::Symbol>,
     ) -> Option<(Aperture, Affine2, BBox)> {
-        let (aperture, at, bbox) = standard_flash_aperture(self.ipc, feature)?;
-        Some((aperture, Affine2::translation(at), bbox))
+        standard_flash_aperture(self.ipc, self.doc, feature)
     }
 
     fn stroke_style(&mut self, stroke: StrokeStyle) -> StrokeStyle {
@@ -1177,8 +1179,9 @@ fn ir_side(side: Option<IpcSide>) -> IrSide {
 
 fn standard_flash_aperture(
     ipc: &Ipc2581,
+    doc: &IpcGeometryDocument,
     feature: &Feature<ipc2581::Symbol>,
-) -> Option<(Aperture, Point, BBox)> {
+) -> Option<(Aperture, Affine2, BBox)> {
     if !standard_flash_feature_is_eligible(feature) {
         return None;
     }
@@ -1188,35 +1191,41 @@ fn standard_flash_aperture(
         return None;
     }
 
+    if let Some(aperture) = exact_flash_aperture(primitive, feature.transform) {
+        let at = feature.center;
+        let bbox = flash_bbox(at, &aperture);
+        return Some((aperture, Affine2::translation(at), bbox));
+    }
+
+    // Every other solid catalogue shape flashes through a contour aperture
+    // shared per shape, keeping repeated pads one definition each instead of
+    // re-painting a region at every placement.
+    let shape = pcb_ir::dialects::ipc::contour_flash_aperture(doc, feature)?;
+    Some((Aperture::solid(shape), feature.transform, feature.bbox))
+}
+
+/// The catalogue primitives Gerber expresses as exact standard apertures.
+fn exact_flash_aperture(primitive: &StandardPrimitive, transform: Affine2) -> Option<Aperture> {
     let aperture = match primitive {
         StandardPrimitive::Circle(circle) => {
-            let scale = uniform_scale(feature.transform)?;
+            let scale = uniform_scale(transform)?;
             Aperture::solid(ApertureShape::Circle {
                 diameter: circle.shape.diameter * scale,
             })
         }
         StandardPrimitive::RectCenter(rect) => {
-            let (width, height) = axis_aligned_size(
-                feature.transform,
-                rect.shape.size.width,
-                rect.shape.size.height,
-            )?;
+            let (width, height) =
+                axis_aligned_size(transform, rect.shape.size.width, rect.shape.size.height)?;
             Aperture::solid(ApertureShape::Rectangle { width, height })
         }
         StandardPrimitive::Oval(oval) => {
-            let (width, height) = axis_aligned_size(
-                feature.transform,
-                oval.shape.size.width,
-                oval.shape.size.height,
-            )?;
+            let (width, height) =
+                axis_aligned_size(transform, oval.shape.size.width, oval.shape.size.height)?;
             Aperture::solid(ApertureShape::Obround { width, height })
         }
         _ => return None,
     };
-
-    let at = feature.center;
-    let bbox = flash_bbox(at, &aperture);
-    Some((aperture, at, bbox))
+    Some(aperture)
 }
 
 fn standard_flash_feature_is_eligible(feature: &Feature<ipc2581::Symbol>) -> bool {
@@ -1497,6 +1506,106 @@ mod tests {
         assert!(
             (copper_area - expected).abs() <= expected * 0.01,
             "expected intact fill area {expected:.2}, got {copper_area:.2}"
+        );
+    }
+
+    #[test]
+    fn catalogue_pads_flash_through_shared_apertures() {
+        // Solid catalogue shapes with no exact Gerber aperture (here
+        // RectRound) still flash through a shared contour aperture instead
+        // of re-painting a region at every placement.
+        let ipc = ipc::Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <LayerRef name="TOP"/>
+    <DictionaryStandard units="MILLIMETER">
+      <EntryStandard id="pad"><RectRound width="2" height="1" radius="0.25" upperRight="true" upperLeft="true" lowerRight="true" lowerLeft="true"/></EntryStandard>
+    </DictionaryStandard>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <Datum x="0" y="0"/>
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="20" y="0"/>
+            <PolyStepSegment x="20" y="20"/>
+            <PolyStepSegment x="0" y="20"/>
+            <PolyStepSegment x="0" y="0"/>
+          </Polygon>
+        </Profile>
+        <PadStackDef name="padstack">
+          <PadstackPadDef layerRef="TOP" padUse="REGULAR">
+            <StandardPrimitiveRef id="pad"/>
+          </PadstackPadDef>
+        </PadStackDef>
+        <LayerFeature layerRef="TOP">
+          <Set net="N1">
+            <Pad padstackDefRef="padstack">
+              <Location x="5" y="5"/>
+              <StandardPrimitiveRef id="pad"/>
+            </Pad>
+            <Pad padstackDefRef="padstack">
+              <Location x="5" y="15"/>
+              <StandardPrimitiveRef id="pad"/>
+            </Pad>
+            <Pad padstackDefRef="padstack">
+              <Xform rotation="45"/>
+              <Location x="15" y="10"/>
+              <StandardPrimitiveRef id="pad"/>
+            </Pad>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+        let files = build_gerber_x2_files(&ipc, ArtworkScope::Board).unwrap();
+        let copper = files
+            .iter()
+            .find(|file| file.filename == "F_Cu.gtl")
+            .unwrap();
+        assert_eq!(copper.contents.matches("D03*").count(), 3);
+        assert!(
+            !copper.contents.contains("G36*"),
+            "catalogue pads must flash, not flatten to regions"
+        );
+        assert!(
+            copper.contents.matches("%ADD").count() <= 2,
+            "repeated pads share one aperture definition"
+        );
+
+        let parsed = gerberx2::GerberX2::parse(&copper.contents).unwrap();
+        let mask = pcb_ir::dialects::artwork::compose_to_mask(
+            &gerberx2::geometry::extract_document(&parsed),
+        );
+        let mut rings = Vec::new();
+        for layer in &mask.layers {
+            for shape in mask.shapes(layer) {
+                rings.extend(pcb_ir::geom::region::rings_from_contours(
+                    &mask.arena.path_contours(shape),
+                ));
+            }
+        }
+        let copper_area = pcb_ir::geom::ContourSet::new(
+            rings,
+            pcb_ir::geom::FillRule::NonZero,
+            pcb_ir::geom::tol::REGION_MM,
+        )
+        .area();
+        let corner_deficit = 0.25 * 0.25 * (4.0 - std::f64::consts::PI);
+        let expected = 3.0 * (2.0 - corner_deficit);
+        assert!(
+            (copper_area - expected).abs() <= expected * 0.02,
+            "expected three roundrect pads with area {expected:.4}, got {copper_area:.4}"
         );
     }
 

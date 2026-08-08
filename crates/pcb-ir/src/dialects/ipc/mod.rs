@@ -47,8 +47,9 @@ pub use layout::{
 };
 pub use lower::{
     ArtworkLowering, ArtworkObjectKind, BoardArrayFabricationProfile, BoardArrayReliefFeatures,
-    FabricationProfileOptions, board_array_fabrication_profile, lower_layer_to_artwork,
-    lower_layer_to_artwork_objects_with, lower_layer_to_artwork_with, lower_to_nc,
+    FabricationProfileOptions, board_array_fabrication_profile, contour_flash_aperture,
+    lower_layer_to_artwork, lower_layer_to_artwork_objects_with, lower_layer_to_artwork_with,
+    lower_to_nc,
 };
 pub use spec::{Spec, SpecItem, SpecItemKind, SpecProperty, SpecRef};
 pub use surface_layers::{

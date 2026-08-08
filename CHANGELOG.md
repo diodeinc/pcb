@@ -8,6 +8,13 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- Inner copper Gerbers now use KiCad's layer numbering (`In1_Cu`, `In2_Cu`, ...).
+- Exported Gerbers declare `%TF.FilePolarity,Positive`.
+- Drill tool diameters snap to 1 µm, cleaning up float dust from EDA exports, and the tool table is sorted by diameter.
+- Pads with rounded or custom shapes now export as shared Gerber aperture flashes instead of repeated regions, shrinking mask and paste layers.
+
 ## [0.4.25] - 2026-08-07
 
 ### Fixed
