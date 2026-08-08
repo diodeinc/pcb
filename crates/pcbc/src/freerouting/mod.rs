@@ -6,12 +6,12 @@
 //! output on timeout/interrupt, which the API's `GET /jobs/{id}/output`
 //! supports.
 
+use std::fs::File;
 use std::io::Read;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -31,7 +31,7 @@ const FREEROUTING_REPO: &str = "freerouting/freerouting";
 
 /// SHA-256 of the `freerouting-{FREEROUTING_VERSION}.jar` release artifact.
 const FREEROUTING_JAR_SHA256: &str =
-    "3cf18d608437740bc497db6b8ef5888e2e60a08de0def20691d1bad0c0e0ee24";
+    "0044edd4dc56a5c75afec82a3d5692b858bd3c7a0565689cd69c0f18448592e5";
 
 const FREEROUTING_MAX_PASSES: u32 = 200;
 
@@ -446,13 +446,22 @@ enum RunOutcome {
 struct FreeroutingServer {
     child: Child,
     base_url: String,
-    stdout: Arc<Mutex<String>>,
-    stderr: Arc<Mutex<String>>,
+    /// stdout+stderr, piped straight to disk instead of buffered in memory —
+    /// a long run can produce more log output than we want to hold live.
+    log_path: PathBuf,
 }
 
 impl FreeroutingServer {
     fn spawn(java_path: &Path, jar_path: &Path) -> Result<Self> {
         let port = pick_free_port()?;
+
+        let log_path =
+            std::env::temp_dir().join(format!("pcb-freerouting-{}.log", std::process::id()));
+        let log_file =
+            File::create(&log_path).context("Failed to create FreeRouting log file")?;
+        let log_file_stderr = log_file
+            .try_clone()
+            .context("Failed to duplicate FreeRouting log file handle")?;
 
         let mut command = Command::new(java_path);
         command
@@ -464,26 +473,22 @@ impl FreeroutingServer {
             .arg("--api_server.authentication.enabled=false")
             .arg(format!("--api_server-endpoints=http://127.0.0.1:{port}"))
             .arg("--usage_and_diagnostic_data.disable_analytics=true")
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
+            .stdout(Stdio::from(log_file))
+            .stderr(Stdio::from(log_file_stderr));
         // Otherwise Java shares pcb's foreground process group and gets the
         // terminal's Ctrl+C SIGINT directly, exiting before we fetch output.
         detach_process_group(&mut command);
 
-        let mut child = command
+        let child = command
             .spawn()
             .context("Failed to launch FreeRouting API server (java -jar)")?;
 
         CHILD_PID.store(child.id(), Ordering::SeqCst);
 
-        let stdout = capture_stream(child.stdout.take().unwrap());
-        let stderr = capture_stream(child.stderr.take().unwrap());
-
         Ok(Self {
             child,
             base_url: format!("http://127.0.0.1:{port}"),
-            stdout,
-            stderr,
+            log_path,
         })
     }
 
@@ -491,12 +496,19 @@ impl FreeroutingServer {
         Ok(self.child.try_wait()?.is_none())
     }
 
-    fn log(&self) -> String {
-        format!(
-            "{}{}",
-            self.stdout.lock().unwrap(),
-            self.stderr.lock().unwrap()
-        )
+    /// Exit status if the child has already exited, for inclusion in error
+    /// messages — `None` while it's still running.
+    fn exit_status(&mut self) -> Option<std::process::ExitStatus> {
+        self.child.try_wait().ok().flatten()
+    }
+
+    /// `path: status` line pointing at the on-disk log, for error messages —
+    /// the log itself isn't inlined since it can be arbitrarily large.
+    fn log_summary(&mut self) -> String {
+        match self.exit_status() {
+            Some(status) => format!("log: {} (exit status: {status})", self.log_path.display()),
+            None => format!("log: {}", self.log_path.display()),
+        }
     }
 }
 
@@ -563,25 +575,6 @@ fn pick_free_port() -> Result<u16> {
     Ok(listener.local_addr()?.port())
 }
 
-fn capture_stream(mut stream: impl Read + Send + 'static) -> Arc<Mutex<String>> {
-    let buf: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
-    let buf2 = buf.clone();
-    thread::spawn(move || {
-        let mut chunk = [0u8; 4096];
-        loop {
-            match stream.read(&mut chunk) {
-                Ok(0) => break,
-                Ok(n) => buf2
-                    .lock()
-                    .unwrap()
-                    .push_str(&String::from_utf8_lossy(&chunk[..n])),
-                Err(_) => break,
-            }
-        }
-    });
-    buf
-}
-
 fn run_freerouting(
     java_path: &Path,
     jar_path: &Path,
@@ -595,11 +588,7 @@ fn run_freerouting(
     let api = FreeroutingApiClient::new(server.base_url.clone())?;
     if let Err(e) = api.wait_ready(Duration::from_secs(15), || server.still_alive()) {
         spinner.error("Failed to start FreeRouting");
-        let log = server.log();
-        if log.trim().is_empty() {
-            return Err(e);
-        }
-        anyhow::bail!("{e}\n{}", log.trim());
+        anyhow::bail!("{e}\n{}", server.log_summary());
     }
 
     let session_id = api
@@ -630,7 +619,7 @@ fn run_freerouting(
 
     let spinner = Spinner::builder("Running FreeRouting...").start();
     let start = Instant::now();
-    let poll_result = poll_job(&api, &job_id, timeout_secs, &spinner)?;
+    let poll_result = poll_job(&api, &job_id, timeout_secs, &spinner, &mut server)?;
     let elapsed = start.elapsed().as_secs_f64();
     match (poll_result.outcome, poll_result.output.is_some()) {
         (RunOutcome::Completed, true) => {
@@ -677,6 +666,7 @@ fn poll_job(
     job_id: &str,
     timeout_secs: u64,
     spinner: &Spinner,
+    server: &mut FreeroutingServer,
 ) -> Result<PollResult> {
     let start = Instant::now();
     let deadline = start + Duration::from_secs(timeout_secs);
@@ -770,7 +760,10 @@ fn poll_job(
             Err(e) => {
                 consecutive_errors += 1;
                 if consecutive_errors >= 20 {
-                    anyhow::bail!("Lost contact with FreeRouting API server: {e}");
+                    anyhow::bail!(
+                        "Lost contact with FreeRouting API server: {e}\n{}",
+                        server.log_summary()
+                    );
                 }
             }
         }
