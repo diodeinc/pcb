@@ -10,7 +10,7 @@ use std::io::Read;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -52,6 +52,12 @@ fn freerouting_jar_url() -> String {
 /// Set by the Ctrl+C handler; only a request — `run_freerouting` owns the
 /// `Child` and does the actual killing.
 static CANCEL: AtomicBool = AtomicBool::new(false);
+
+/// Set on a second Ctrl+C: skip fetching partial output and kill Java now.
+static FORCE_KILL: AtomicBool = AtomicBool::new(false);
+
+/// FreeRouting's pid, so the Ctrl+C handler can kill it directly.
+static CHILD_PID: AtomicU32 = AtomicU32::new(0);
 
 pub fn execute(
     args: &RouteArgs,
@@ -103,9 +109,16 @@ pub fn execute(
     let ses_path = work_dir.path().join(format!("{board_name}.ses"));
 
     CANCEL.store(false, Ordering::SeqCst);
+    FORCE_KILL.store(false, Ordering::SeqCst);
+    CHILD_PID.store(0, Ordering::SeqCst);
     if let Err(e) = ctrlc::set_handler(|| {
-        eprintln!("\n  Stopping FreeRouting and fetching the best result so far...");
-        CANCEL.store(true, Ordering::SeqCst);
+        if CANCEL.swap(true, Ordering::SeqCst) {
+            eprintln!("\n  Force-stopping FreeRouting...");
+            FORCE_KILL.store(true, Ordering::SeqCst);
+            kill_child_now();
+        } else {
+            eprintln!("\n  Stopping FreeRouting and fetching the best result so far...");
+        }
     }) {
         eprintln!("{} Could not set Ctrl+C handler: {}", "!".yellow(), e);
     }
@@ -441,7 +454,8 @@ impl FreeroutingServer {
     fn spawn(java_path: &Path, jar_path: &Path) -> Result<Self> {
         let port = pick_free_port()?;
 
-        let mut child = Command::new(java_path)
+        let mut command = Command::new(java_path);
+        command
             .arg("-Djava.awt.headless=true")
             .arg("-jar")
             .arg(jar_path)
@@ -451,9 +465,16 @@ impl FreeroutingServer {
             .arg(format!("--api_server-endpoints=http://127.0.0.1:{port}"))
             .arg("--usage_and_diagnostic_data.disable_analytics=true")
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        // Otherwise Java shares pcb's foreground process group and gets the
+        // terminal's Ctrl+C SIGINT directly, exiting before we fetch output.
+        detach_process_group(&mut command);
+
+        let mut child = command
             .spawn()
             .context("Failed to launch FreeRouting API server (java -jar)")?;
+
+        CHILD_PID.store(child.id(), Ordering::SeqCst);
 
         let stdout = capture_stream(child.stdout.take().unwrap());
         let stderr = capture_stream(child.stderr.take().unwrap());
@@ -483,6 +504,54 @@ impl Drop for FreeroutingServer {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        CHILD_PID.store(0, Ordering::SeqCst);
+    }
+}
+
+/// Puts `command`'s child in its own process group so it doesn't receive
+/// signals sent to pcb's foreground process group.
+#[cfg(unix)]
+fn detach_process_group(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    command.process_group(0);
+}
+
+#[cfg(windows)]
+fn detach_process_group(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
+    command.creation_flags(CREATE_NEW_PROCESS_GROUP);
+}
+
+#[cfg(not(any(unix, windows)))]
+fn detach_process_group(_command: &mut Command) {}
+
+/// Called from the Ctrl+C handler on a second press.
+#[cfg(unix)]
+fn kill_child_now() {
+    let pid = CHILD_PID.load(Ordering::SeqCst);
+    if pid != 0 {
+        // SAFETY: kill(2) with a plain pid and signal cannot fail in a way
+        // that matters here.
+        unsafe {
+            libc_kill(pid as i32, 9);
+        }
+    }
+}
+
+/// Best-effort only; `FORCE_KILL` still reaches `Child::kill()` via the poll loop.
+#[cfg(not(unix))]
+fn kill_child_now() {}
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn kill(pid: i32, sig: i32) -> i32;
+}
+
+#[cfg(unix)]
+unsafe fn libc_kill(pid: i32, sig: i32) {
+    unsafe {
+        kill(pid, sig);
     }
 }
 
@@ -616,6 +685,12 @@ fn poll_job(
 
     loop {
         for _ in 0..10 {
+            if FORCE_KILL.load(Ordering::SeqCst) {
+                return Ok(PollResult {
+                    outcome: RunOutcome::Cancelled,
+                    output: None,
+                });
+            }
             if CANCEL.load(Ordering::SeqCst) {
                 return Ok(stop_and_capture(api, job_id));
             }
