@@ -65,8 +65,7 @@ pub fn execute(
     project_path: &Path,
     board_name: &str,
 ) -> Result<()> {
-    // Java check happens before the PATH search / auto-download fallback so
-    // a machine without Java doesn't pay for a multi-megabyte download first.
+    // Check Java before the auto-download fallback pays for a big download.
     let expected_hash = hex_decode32(FREEROUTING_JAR_SHA256);
     let explicit_jar = resolve_explicit_freerouting_jar(args.fr_jar.as_deref(), &expected_hash)?;
 
@@ -253,7 +252,7 @@ fn is_java_version_sufficient(java_path: impl AsRef<Path>) -> bool {
 // ---------------------------------------------------------------------------
 
 /// `--fr-jar` flag (priority 1) or `FREEROUTING_JAR` env var (priority 2).
-/// `Ok(None)` means neither is set — caller falls back to PATH/auto-download.
+/// `Ok(None)` means neither is set — caller falls back to the verified cache.
 fn resolve_explicit_freerouting_jar(
     provided: Option<&Path>,
     expected_hash: &[u8; 32],
@@ -281,36 +280,15 @@ fn resolve_explicit_freerouting_jar(
     Ok(None)
 }
 
-/// Priority: `freerouting.jar` on `$PATH`, then auto-download to
-/// `~/.cache/pcb/freerouting/`.
+/// Downloads to (and caches in) `~/.cache/pcb/freerouting/`, verified by SHA-256.
 fn find_or_download_freerouting_jar(expected_hash: &[u8; 32]) -> Result<PathBuf> {
-    // Unlike --fr-jar/FREEROUTING_JAR, a PATH match is discovered implicitly,
-    // so it's still hash-checked rather than handed straight to `java -jar`.
-    if let Ok(paths) = std::env::var("PATH") {
-        for dir in std::env::split_paths(&paths) {
-            let candidate = dir.join("freerouting.jar");
-            if !candidate.exists() {
-                continue;
-            }
-            match sha256_file(&candidate) {
-                Ok(hash) if hash == *expected_hash => return Ok(candidate),
-                _ => eprintln!(
-                    "  {} {} does not match the pinned FreeRouting v{FREEROUTING_VERSION} SHA-256, ignoring",
-                    "!".yellow(),
-                    candidate.display()
-                ),
-            }
-        }
-    }
-
-    // Fall back to a uid-scoped temp subdir when dirs::cache_dir() is
-    // unavailable — a fixed shared path could be pre-staked by another user.
-    let cache_dir = match dirs::cache_dir() {
-        Some(dir) => dir.join("pcb").join("freerouting"),
-        None => process_temp_dir()
-            .join(temp_cache_subdir())
-            .join("freerouting"),
-    };
+    let cache_dir = dirs::cache_dir()
+        .context(
+            "Could not determine a cache directory (check $HOME).\n\
+             Use --fr-jar <path> or set FREEROUTING_JAR to point at a JAR directly.",
+        )?
+        .join("pcb")
+        .join("freerouting");
     let jar_filename = freerouting_jar_filename();
     let cached = cache_dir.join(&jar_filename);
 
@@ -338,7 +316,7 @@ fn find_or_download_freerouting_jar(expected_hash: &[u8; 32]) -> Result<PathBuf>
     // Per-process suffix so concurrent `pcb route` invocations don't race the
     // same `.tmp`/`.part` file.
     let tmp_path = cache_dir.join(format!("{jar_filename}.{}.tmp", std::process::id()));
-    download_to_file(&freerouting_jar_url(), &tmp_path, 3)?;
+    download_to_file(&freerouting_jar_url(), &tmp_path)?;
 
     let actual_hash =
         sha256_file(&tmp_path).context("Failed to hash downloaded FreeRouting JAR")?;
@@ -359,25 +337,6 @@ fn find_or_download_freerouting_jar(expected_hash: &[u8; 32]) -> Result<PathBuf>
     println!("  Downloaded to {}", cached.display());
 
     Ok(cached)
-}
-
-fn process_temp_dir() -> PathBuf {
-    std::env::temp_dir()
-}
-
-/// Per-uid subdirectory under `process_temp_dir()` so different local users
-/// never share the fallback cache path. `restrict_dir_to_owner` is defense
-/// in depth on top of this, not the primary mechanism.
-#[cfg(unix)]
-fn temp_cache_subdir() -> String {
-    // SAFETY: geteuid takes no arguments and cannot fail.
-    let euid = unsafe { libc_geteuid() };
-    format!("pcb-{euid}")
-}
-
-#[cfg(not(unix))]
-fn temp_cache_subdir() -> String {
-    "pcb".to_string()
 }
 
 /// Chmod `dir` to owner-only, returning `false` (don't reuse it) if it's
@@ -850,90 +809,83 @@ fn hex_decode32(hex: &str) -> [u8; 32] {
     .expect("FREEROUTING_JAR_SHA256 must decode to exactly 32 bytes")
 }
 
-/// Retries transient failures (network errors, 5xx); 4xx is treated as
-/// permanent.
-fn download_to_file(url: &str, dest: &Path, max_attempts: u32) -> Result<()> {
+/// Single attempt; no idle timeout in reqwest's blocking client, so
+/// `TOTAL_TIMEOUT` stays generous to not fail slow-but-live connections.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+const TOTAL_TIMEOUT: Duration = Duration::from_secs(600);
+const MAX_DOWNLOAD_BYTES: u64 = 200 * 1024 * 1024;
+
+fn download_to_file(url: &str, dest: &Path) -> Result<()> {
     let part_path = dest.with_extension(format!(
         "{}.part",
         dest.extension().and_then(|e| e.to_str()).unwrap_or("tmp")
     ));
 
-    for attempt in 1..=max_attempts {
-        match try_download_to_file(url, &part_path) {
-            Ok(()) => {
-                std::fs::rename(&part_path, dest).context("Failed to finalize downloaded file")?;
-                return Ok(());
-            }
-            Err(DownloadError::Permanent(e)) => return Err(e),
-            Err(DownloadError::Transient(e)) => {
-                let _ = std::fs::remove_file(&part_path);
-                if attempt < max_attempts {
-                    let delay = Duration::from_secs(2u64.pow(attempt));
-                    eprintln!(
-                        "  Download failed (attempt {attempt}/{max_attempts}), retrying in {}s: {e}",
-                        delay.as_secs()
-                    );
-                    thread::sleep(delay);
-                } else {
-                    return Err(e.context(format!("Download failed after {max_attempts} attempts")));
-                }
-            }
-        }
+    let result = try_download_to_file(url, &part_path);
+    if result.is_err() {
+        let _ = std::fs::remove_file(&part_path);
     }
+    result?;
 
-    unreachable!()
+    std::fs::rename(&part_path, dest).context("Failed to finalize downloaded file")
 }
 
-enum DownloadError {
-    /// Not worth retrying (e.g. HTTP 4xx, or we already wrote a bad file).
-    Permanent(anyhow::Error),
-    /// Worth retrying (network error, HTTP 5xx).
-    Transient(anyhow::Error),
-}
+fn try_download_to_file(url: &str, part_path: &Path) -> Result<()> {
+    let client = reqwest::blocking::Client::builder()
+        .connect_timeout(CONNECT_TIMEOUT)
+        .timeout(TOTAL_TIMEOUT)
+        .build()
+        .context("Failed to build HTTP client")?;
+    let response = client
+        .get(url)
+        .send()
+        .with_context(|| format!("Failed to download {url}"))?
+        .error_for_status()
+        .with_context(|| format!("Download failed: {url}"))?;
 
-fn try_download_to_file(url: &str, part_path: &Path) -> Result<(), DownloadError> {
-    let response = reqwest::blocking::get(url).map_err(|e| DownloadError::Transient(e.into()))?;
-
-    let status = response.status();
-    if status.is_client_error() {
-        return Err(DownloadError::Permanent(anyhow::anyhow!(
-            "download failed with client error {status}: {url}"
-        )));
+    if let Some(total) = response.content_length()
+        && total > MAX_DOWNLOAD_BYTES
+    {
+        anyhow::bail!(
+            "Download of {url} reports {total} bytes, exceeding the {MAX_DOWNLOAD_BYTES}-byte limit"
+        );
     }
-    let mut response = response.error_for_status().map_err(|e| {
-        if status.is_server_error() {
-            DownloadError::Transient(e.into())
-        } else {
-            DownloadError::Permanent(e.into())
-        }
-    })?;
 
-    let mut file =
-        std::fs::File::create(part_path).map_err(|e| DownloadError::Transient(e.into()))?;
+    let mut file = std::fs::File::create(part_path).context("Failed to create download file")?;
 
-    match response.content_length() {
-        Some(total) if total > 0 => {
-            let bar = pcb_ui::ProgressBar::builder(total)
+    let bar = match response.content_length() {
+        Some(total) if total > 0 => Some(
+            pcb_ui::ProgressBar::builder(total)
                 .message(format!("Downloading FreeRouting ({FREEROUTING_VERSION})"))
                 .template("{msg}  |{bar:40.green/gray}| {bytes}/{total_bytes} ({bytes_per_sec}, eta {eta})")
-                .start();
-            let mut buf = [0u8; 65536];
-            loop {
-                let n = std::io::Read::read(&mut response, &mut buf)
-                    .map_err(|e| DownloadError::Transient(e.into()))?;
-                if n == 0 {
-                    break;
-                }
-                std::io::Write::write_all(&mut file, &buf[..n])
-                    .map_err(|e| DownloadError::Transient(e.into()))?;
-                bar.inc(n as u64);
-            }
-            bar.finish();
+                .start(),
+        ),
+        _ => None,
+    };
+
+    let mut response = response;
+    let mut buf = [0u8; 65536];
+    let mut written = 0u64;
+    loop {
+        let n = std::io::Read::read(&mut response, &mut buf)
+            .with_context(|| format!("Failed to read response body from {url}"))?;
+        if n == 0 {
+            break;
         }
-        _ => {
-            std::io::copy(&mut response, &mut file)
-                .map_err(|e| DownloadError::Transient(e.into()))?;
+        written += n as u64;
+        if written > MAX_DOWNLOAD_BYTES {
+            anyhow::bail!(
+                "Download of {url} exceeded the {MAX_DOWNLOAD_BYTES}-byte limit; aborting"
+            );
         }
+        std::io::Write::write_all(&mut file, &buf[..n])
+            .context("Failed to write downloaded bytes to disk")?;
+        if let Some(bar) = &bar {
+            bar.inc(n as u64);
+        }
+    }
+    if let Some(bar) = bar {
+        bar.finish();
     }
 
     Ok(())
