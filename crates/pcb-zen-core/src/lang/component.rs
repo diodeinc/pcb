@@ -2009,8 +2009,16 @@ where
                 }
 
                 if v_val.get_type() != "Net" {
+                    // `at()` belongs on a module input, where io()/config()
+                    // hand its constraint to pin_solve; here it is just a
+                    // wrapper the pin cannot read.
+                    let hint = if v_val.get_type() == "PinAt" {
+                        " — at() constrains a module input, not a component pin"
+                    } else {
+                        ""
+                    };
                     return Err(starlark::Error::new_other(anyhow!(format!(
-                        "Pin '{}' must be connected to a Net, got {}",
+                        "Pin '{}' must be connected to a Net, got {}{hint}",
                         signal_name,
                         v_val.get_type()
                     ))));

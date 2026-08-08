@@ -1,0 +1,198 @@
+"""
+Type: Microcontroller (pin-capability model demo)
+Description: STM32G030F6P6 (TSSOP-20) showing the peripheral capability model
+end to end: `peripheral()`/`pool()` tables, dict-of-roles capability demands,
+`pin_solve()` at elaboration and `pin_map()` feeding `Component(pins=...)`.
+
+The caller connects only the capabilities it uses; the solver assigns
+peripheral instances and pins (AF matrix included), enforces exclusivity, and
+records `pin_assignment` / `swap_classes` as module properties.
+
+Pin data per ST DS12991 (STM32G030x6/x8), figure 5 and tables 12-14. On
+TSSOP-20 several ports share one physical pad (pin 1 = PB7/PB8, pin 15 =
+PB0/PB1/PB2/PA8, pin 19 = PA14/PA15 where PA14 is also BOOT0, pin 20 =
+PB3/PB4/PB5/PB6), and PA9/PA10 exist only as SYSCFG remaps of the PA11/PA12
+pads. Candidate pins are therefore named after the PADS so the solver's pin
+exclusivity is the package's, not the port matrix's; `data` records which
+port and AF realize each candidate (`remap` flags SYSCFG_CFGR1).
+"""
+
+load("@stdlib/pinmux.zen", "at", "peripheral", "pin", "pin_map", "pin_request", "pin_solve", "pool")
+load("@stdlib/interfaces.zen", "Uart", "Usart", "Spi", "I2c", "Swd", "AdcIn", "GpioPin")
+load("@stdlib/checks.zen", "voltage_within")
+load("@stdlib/units.zen", "Voltage")
+
+# --- Capability tables (datasheet facts) --------------------------------------
+
+USART1 = peripheral(
+    "USART1",
+    provides = [Usart],  # implies Uart (stdlib): serves plain-UART requests too
+    rebind = "firmware",
+    signals = {
+        "TX": [pin("PA11/PA9", data = {"port": "PA9", "af": 1, "remap": True}),
+               pin("PB3/PB4/PB5/PB6", data = {"port": "PB6", "af": 0})],
+        "RX": [pin("PA12/PA10", data = {"port": "PA10", "af": 1, "remap": True}),
+               pin("PB7/PB8", data = {"port": "PB7", "af": 0})],
+        "CK": [pin("PB0/PB1/PB2/PA8", data = {"port": "PA8", "af": 1}),
+               pin("PB3/PB4/PB5/PB6", data = {"port": "PB3", "af": 4})],
+        "RTS": [pin("PA12/PA10", data = {"port": "PA12", "af": 1}),
+                pin("PB3/PB4/PB5/PB6", data = {"port": "PB3", "af": 4})],
+        "CTS": [pin("PA11/PA9", data = {"port": "PA11", "af": 1}),
+                pin("PB3/PB4/PB5/PB6", data = {"port": "PB4", "af": 4})],
+    },
+    attrs = {"baud_max": "8MHz"},
+)
+
+USART2 = peripheral(
+    "USART2",
+    provides = [Usart],
+    rebind = "firmware",
+    signals = {
+        # PA14 carries the BOOT0 strap; PA1 is RTS_DE_CK: CK and RTS are the
+        # same pin, so a request using both is structurally infeasible — as on
+        # the silicon.
+        "TX": [pin("PA2", data = {"af": 1}),
+               pin("PA14/PA15", data = {"port": "PA14", "af": 1}, strap = True)],
+        "RX": [pin("PA3", data = {"af": 1}),
+               pin("PA14/PA15", data = {"port": "PA15", "af": 1}, strap = True)],
+        "CK": [pin("PA1", data = {"af": 1})],
+        "RTS": [pin("PA1", data = {"af": 1})],
+        "CTS": [pin("PA0", data = {"af": 1})],
+    },
+    attrs = {"baud_max": "8MHz"},
+)
+
+SPI1 = peripheral(
+    "SPI1",
+    provides = [Spi],
+    rebind = "firmware",
+    signals = {
+        "CS": [pin("PA4", data = {"af": 0}),
+               pin("PA14/PA15", data = {"port": "PA15", "af": 0}, strap = True),
+               pin("PB0/PB1/PB2/PA8", data = {"port": "PB0", "af": 0})],
+        "CLK": [pin("PA5", data = {"af": 0}),
+                pin("PA1", data = {"af": 0}),
+                pin("PB3/PB4/PB5/PB6", data = {"port": "PB3", "af": 0})],
+        "MISO": [pin("PA6", data = {"af": 0}),
+                 pin("PA11/PA9", data = {"port": "PA11", "af": 0}),
+                 pin("PB3/PB4/PB5/PB6", data = {"port": "PB4", "af": 0})],
+        "MOSI": [pin("PA7", data = {"af": 0}),
+                 pin("PA2", data = {"af": 0}),
+                 pin("PA12/PA10", data = {"port": "PA12", "af": 0}),
+                 pin("PB3/PB4/PB5/PB6", data = {"port": "PB5", "af": 0})],
+    },
+    attrs = {"clk_max": "32MHz"},
+)
+
+I2C1 = peripheral(
+    "I2C1",
+    provides = [I2c],
+    rebind = "firmware",
+    signals = {
+        "SCL": [pin("PB3/PB4/PB5/PB6", data = {"port": "PB6", "af": 6}),
+                pin("PB7/PB8", data = {"port": "PB8", "af": 6}),
+                pin("PA11/PA9", data = {"port": "PA9", "af": 6, "remap": True})],
+        "SDA": [pin("PB7/PB8", data = {"port": "PB7", "af": 6}),
+                pin("PB9/PC14", data = {"port": "PB9", "af": 6}),
+                pin("PA12/PA10", data = {"port": "PA10", "af": 6, "remap": True})],
+    },
+    attrs = {"clk_max": "1MHz"},
+)
+
+SWD_PORT = peripheral(
+    "SWD",
+    provides = [Swd],
+    rebind = "fixed",
+    signals = {
+        "SWDIO": [pin("PA13", data = {"af": 0})],
+        "SWCLK": [pin("PA14/PA15", data = {"port": "PA14", "af": 0})],
+    },
+)
+
+ADC_CH = [
+    peripheral("ADC1_IN%d" % i, provides = [AdcIn], rebind = "fixed",
+               signals = {"IN": [pin("PA%d" % i, data = {"ch": i})]})
+    for i in range(8)
+]
+
+# PA13 and the PA14/PA15 pad stay out of the pool: this module keeps the
+# debug port alive.
+GPIO_POOL = pool(
+    "GPIO",
+    provides = [GpioPin],
+    pins = [
+        pin("PB7/PB8", data = {"port": "PB7"}),
+        pin("PB9/PC14", data = {"port": "PB9"}),
+        "PC15",
+        "PA0", "PA1", "PA2", "PA3", "PA4", "PA5", "PA6", "PA7",
+        pin("PB0/PB1/PB2/PA8", data = {"port": "PA8"}),
+        pin("PA11/PA9", data = {"port": "PA11"}),
+        pin("PA12/PA10", data = {"port": "PA12"}),
+        pin("PB3/PB4/PB5/PB6", data = {"port": "PB6"}),
+    ],
+)
+
+PERIPHS = [USART1, USART2, SPI1, I2C1, SWD_PORT] + ADC_CH + GPIO_POOL
+
+# --- What the design asks for --------------------------------------------------
+# Every countable capability is demanded through a dict: the DESIGN names
+# each role ("DEBUG", "FLASH", "LED", "VBAT"...) and there are as many
+# entries as it needs — the module never bakes in application roles. Pin
+# constraints ride the value: Mcu(uart = {"DEBUG": at(dbg, "PA2")}).
+# Only singular hardware ports keep a named io() slot (SWD).
+
+VDD = io(Power)   # pad 4 also bonds VDDA
+VSS = io(Ground)  # pad 5 also bonds VSSA
+NRST = io(Net, optional = True)
+
+SWD = io(Swd)
+uart = config(dict, default = {})  # role name -> Uart instance (or at(...))
+spi = config(dict, default = {})   # role name -> Spi instance (or at(...))
+i2c = config(dict, default = {})   # role name -> I2c instance (or at(...))
+gpio = config(dict, default = {})  # role name -> Net (or at(net, pad))
+adc = config(dict, default = {})   # role name -> Net
+
+res = pin_solve(PERIPHS, [pin_request("SWD", Swd, instance = "SWD")]
+  + [pin_request(n, Uart, bind = uart[n]) for n in uart]
+  + [pin_request(n, Spi, bind = spi[n]) for n in spi]
+  + [pin_request(n, I2c, bind = i2c[n]) for n in i2c]
+  + [pin_request(n, GpioPin, bind = gpio[n]) for n in gpio]
+  + [pin_request(n, AdcIn, bind = adc[n]) for n in adc])
+
+named = {"SWD": SWD}
+for roles in [uart, spi, i2c, gpio, adc]:
+    named.update(roles)
+m = pin_map(res["assignment"], named)
+
+# Logic-level contract: every signal this MCU drives or reads lives between
+# 0V and VDD — computed from the caller's ACTUAL rail, never hardcoded (the
+# same die is a 1.8V part on a 1.8V rail). Nets with no declared voltage are
+# skipped (stdlib guard): declaring levels is how a design opts into the
+# check, and how a 5V net gets rejected at build time.
+def _enforce_logic_levels():
+    v = VDD.voltage
+    if v == None:
+        return
+    lvl = voltage_within(Voltage(min = 0.0, max = v.max), name = "logic_level")
+    for net in m.values():
+        lvl(net)
+
+_enforce_logic_levels()
+
+# Every candidate pad no request claimed is intentionally open — the solver
+# knows the full mux-pin set from the capability tables, no separate list.
+pins = m
+pins.update({"VDD": VDD, "VSS": VSS, "NRST": NRST})
+
+Component(
+    name = "MCU",
+    symbol = Symbol(library = "./STM32G030.kicad_sym"),
+    footprint = "Package_SO:TSSOP-20_4.4x6.5mm_P0.65mm",
+    prefix = "U",
+    part = Part(
+        mpn = "STM32G030F6P6",
+        manufacturer = "STMicroelectronics",
+        datasheet = "https://www.st.com/resource/en/datasheet/stm32g030f6.pdf",
+    ),
+    pins = pins,
+)

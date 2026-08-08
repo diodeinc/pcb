@@ -600,10 +600,7 @@ pub(crate) fn instantiate_not_connected<'v>(
         }
     }
 
-    let (declaration_path, declaration_span) = eval
-        .call_stack_top_location()
-        .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
-        .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None));
+    let (declaration_path, declaration_span) = open_net_site(eval);
 
     if ignored_name.is_some() {
         eval.add_diagnostic(
@@ -617,7 +614,30 @@ pub(crate) fn instantiate_not_connected<'v>(
         );
     }
 
-    Ok(eval.heap().alloc(NetValue {
+    Ok(alloc_open_net_at(
+        eval.heap(),
+        declaration_path,
+        declaration_span,
+    ))
+}
+
+/// Where an open net is being created, for its declaration site.
+fn open_net_site<'v>(
+    eval: &Evaluator<'v, '_, '_>,
+) -> (String, Option<starlark::codemap::ResolvedSpan>) {
+    eval.call_stack_top_location()
+        .map(|loc| (loc.file.filename().to_string(), Some(loc.resolve_span())))
+        .unwrap_or_else(|| (eval.source_path().unwrap_or_default(), None))
+}
+
+/// The one place an intentionally open net is built. `NotConnected()` and
+/// `pin_map`'s tie-off both come through here.
+fn alloc_open_net_at<'v>(
+    heap: Heap<'v>,
+    declaration_path: String,
+    declaration_span: Option<starlark::codemap::ResolvedSpan>,
+) -> Value<'v> {
+    heap.alloc(NetValue {
         net_id: generate_net_id(),
         name: String::new(),
         template_name: None,
@@ -630,7 +650,13 @@ pub(crate) fn instantiate_not_connected<'v>(
         type_name: "Net".to_string(),
         connection_intent: ConnectionIntent::Open,
         properties: SmallMap::new(),
-    }))
+    })
+}
+
+/// An intentionally open net, as `NotConnected()` builds one.
+pub(crate) fn alloc_open_net<'v>(eval: &mut Evaluator<'v, '_, '_>) -> Value<'v> {
+    let (path, span) = open_net_site(eval);
+    alloc_open_net_at(eval.heap(), path, span)
 }
 
 /// A callable type constructor for creating typed nets

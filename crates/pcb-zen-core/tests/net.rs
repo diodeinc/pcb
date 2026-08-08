@@ -573,3 +573,58 @@ fn net_constructor_positional_cast_preserves_behavior() {
     let schematic = sch_result.output.expect("expected schematic output");
     assert_eq!(schematic.nets["SIG"].kind, "Net");
 }
+
+#[test]
+fn diffpair_impedance_reaches_net_properties_through_nesting() {
+    // The pin solver ignores `impedance`; the router must still get it.
+    let result = eval_zen(vec![
+        (
+            "/mcu.zen".to_string(),
+            r#"
+load("@stdlib/interfaces.zen", "Usb2")
+usb = io("USB", Usb2)
+Component(
+    name = "U1",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
+    pin_defs = {"PA11": "1", "PA12": "2"},
+    pins = {"PA11": usb.D.N, "PA12": usb.D.P},
+    skip_bom = True,
+)
+"#
+            .to_string(),
+        ),
+        (
+            "/test.zen".to_string(),
+            r#"
+load("@stdlib/interfaces.zen", "Usb2")
+Mcu = Module("./mcu.zen")
+BUS = Usb2("BUS")
+Mcu(name = "U1", USB = BUS)
+"#
+            .to_string(),
+        ),
+    ]);
+
+    assert!(
+        !result.diagnostics.has_errors(),
+        "did not expect errors, got: {:?}",
+        result.diagnostics
+    );
+    let sch_result = result
+        .output
+        .expect("expected eval output")
+        .to_schematic_with_diagnostics();
+    assert!(
+        !sch_result.diagnostics.has_errors(),
+        "schematic conversion failed: {:?}",
+        sch_result.diagnostics
+    );
+    let schematic = sch_result.output.expect("expected schematic output");
+    for net in ["BUS_D_P", "BUS_D_N"] {
+        let value = schematic.nets[net]
+            .properties
+            .get("differential_impedance")
+            .unwrap_or_else(|| panic!("{net} lost its differential_impedance property"));
+        assert_eq!(value.string(), Some("90"), "{net} impedance");
+    }
+}
