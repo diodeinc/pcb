@@ -5064,6 +5064,7 @@ dependencies = [
  "open",
  "pathdiff",
  "pcb-canonical",
+ "pcb-command-runner",
  "pcb-component-gen",
  "pcb-diode-api",
  "pcb-docgen",
