@@ -55,9 +55,8 @@ log 'Verifying Diode KiCad package checksum'
 printf '%s  %s\n' "$sha256" "$tmp/kicad.deb" | sha256sum --check --strict
 
 log 'Installing Diode KiCad package'
-export DEBIAN_FRONTEND=noninteractive
 sudo apt-get update -qq
-sudo apt-get install -y -qq "$tmp/kicad.deb"
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$tmp/kicad.deb"
 
 # Fail setup immediately if the command-line tools or Python bindings are not
 # usable; otherwise the problem surfaces much later as pcb-layout test failures.
