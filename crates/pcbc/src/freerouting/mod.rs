@@ -697,8 +697,11 @@ fn poll_job(
                 // interval rather than gated on pass changes: FreeRouting can sit
                 // on one pass (e.g. an extended pass 0) for a long time, and once
                 // the job settles into a terminal state, `/output` can refuse to
-                // return partial data.
-                if Instant::now().duration_since(last_cache_attempt) >= OUTPUT_CACHE_INTERVAL {
+                // return partial data. Gated on RUNNING so it doesn't fire an extra
+                // fetch right before a terminal-state fetch below.
+                if status.state == JobState::Running
+                    && Instant::now().duration_since(last_cache_attempt) >= OUTPUT_CACHE_INTERVAL
+                {
                     last_cache_attempt = Instant::now();
                     if let Ok(JobOutput::Data(bytes)) = api.get_output(job_id, DEFAULT_TIMEOUT) {
                         cached_output = Some(bytes);
@@ -722,7 +725,7 @@ fn poll_job(
                                 );
                                 PollResult {
                                     outcome: RunOutcome::Cancelled,
-                                    output: None,
+                                    output: cached_output,
                                 }
                             }
                         });
