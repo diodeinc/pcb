@@ -10,7 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
-- KiCad integration now uses KiCad's native Python environment.
+- KiCad Python scripts no longer inject package-specific module paths.
 
 ### Fixed
 
