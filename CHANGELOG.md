@@ -10,7 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
-- KiCad project imports now preserve valid stackups with more than ten copper layers instead of silently generating a four-layer board.
+- KiCad imports now preserve stackups with more than ten copper layers.
 
 ## [0.4.26] - 2026-08-08
 
