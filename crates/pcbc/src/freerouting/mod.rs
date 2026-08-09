@@ -39,6 +39,9 @@ const FREEROUTING_MAX_PASSES: u32 = 200;
 /// timeout can fire mid-fetch and refuse output.
 const JOB_TIMEOUT_SAFETY_MARGIN_SECS: u64 = 150;
 
+/// How often `poll_job` refreshes its salvage cache of in-progress output.
+const OUTPUT_CACHE_INTERVAL: Duration = Duration::from_secs(5);
+
 fn freerouting_jar_filename() -> String {
     format!("freerouting-{FREEROUTING_VERSION}.jar")
 }
@@ -653,6 +656,7 @@ fn poll_job(
     let mut consecutive_errors = 0u32;
     let mut last_printed_pass: Option<u32> = None;
     let mut cached_output: Option<Vec<u8>> = None;
+    let mut last_cache_attempt = start;
 
     loop {
         for _ in 0..10 {
@@ -688,9 +692,14 @@ fn poll_job(
                 consecutive_errors = 0;
                 if status.current_pass.is_some() && status.current_pass != last_printed_pass {
                     last_printed_pass = status.current_pass;
-                    // Opportunistically cache output while still RUNNING: once the
-                    // job settles into a terminal state, FreeRouting's `/output`
-                    // can refuse to return partial data.
+                }
+                // Opportunistically cache output while still RUNNING, on a fixed
+                // interval rather than gated on pass changes: FreeRouting can sit
+                // on one pass (e.g. an extended pass 0) for a long time, and once
+                // the job settles into a terminal state, `/output` can refuse to
+                // return partial data.
+                if Instant::now().duration_since(last_cache_attempt) >= OUTPUT_CACHE_INTERVAL {
+                    last_cache_attempt = Instant::now();
                     if let Ok(JobOutput::Data(bytes)) = api.get_output(job_id, DEFAULT_TIMEOUT) {
                         cached_output = Some(bytes);
                     }
