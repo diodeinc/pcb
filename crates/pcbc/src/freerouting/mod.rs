@@ -6,7 +6,6 @@
 //! output on timeout/interrupt, which the API's `GET /jobs/{id}/output`
 //! supports.
 
-use std::fs::File;
 use std::io::Read;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -23,7 +22,7 @@ use pcb_ui::prelude::*;
 use crate::route::{RouteArgs, format_duration, import_ses};
 
 mod api;
-use api::{FreeroutingApiClient, GET_OUTPUT_TIMEOUT, JobOutput, JobState};
+use api::{DEFAULT_TIMEOUT, FreeroutingApiClient, GET_OUTPUT_TIMEOUT, JobOutput, JobState};
 
 const FREEROUTING_VERSION: &str = "2.3.0";
 
@@ -194,6 +193,15 @@ fn publish_board(src: &Path, dst: &Path) -> Result<()> {
     let mut src_file = std::fs::File::open(src).context("Failed to open routed board for publish")?;
     std::io::copy(&mut src_file, tmp.as_file_mut())
         .context("Failed to stage routed board for publish")?;
+    // `tempfile` creates the staging file owner-only (0o600); match the
+    // source board's mode so publishing doesn't silently tighten permissions.
+    let src_perms = src_file
+        .metadata()
+        .context("Failed to read source board metadata")?
+        .permissions();
+    tmp.as_file()
+        .set_permissions(src_perms)
+        .context("Failed to set published board permissions")?;
     tmp.persist(dst)
         .map(|_| ())
         .map_err(|e| anyhow::anyhow!(e))
@@ -414,9 +422,16 @@ impl FreeroutingServer {
     fn spawn(java_path: &Path, jar_path: &Path) -> Result<Self> {
         let port = pick_free_port()?;
 
-        let log_path =
-            std::env::temp_dir().join(format!("pcb-freerouting-{}.log", std::process::id()));
-        let log_file = File::create(&log_path).context("Failed to create FreeRouting log file")?;
+        // Unique, non-predictable name via `tempfile` — a fixed PID-based path in
+        // the shared temp dir could be pre-staked (e.g. as a symlink) by another
+        // local user.
+        let (log_file, log_path) = tempfile::Builder::new()
+            .prefix("pcb-freerouting-")
+            .suffix(".log")
+            .tempfile()
+            .context("Failed to create FreeRouting log file")?
+            .keep()
+            .context("Failed to persist FreeRouting log file")?;
         let (log_stdout, log_stderr) = pcb_command_runner::log_file_stdio(&log_file)?;
 
         let mut command = Command::new(java_path);
@@ -500,8 +515,21 @@ fn kill_child_now() {
     }
 }
 
+/// Called from the Ctrl+C handler on a second press. Actually kills the
+/// process (not just sets `FORCE_KILL`): a second press can land while we're
+/// blocked in an output fetch, past the point where the poll loop checks it.
+#[cfg(windows)]
+fn kill_child_now() {
+    let pid = CHILD_PID.load(Ordering::SeqCst);
+    if pid != 0 {
+        let _ = Command::new("taskkill")
+            .args(["/F", "/PID", &pid.to_string()])
+            .output();
+    }
+}
+
 /// Best-effort only; `FORCE_KILL` still reaches `Child::kill()` via the poll loop.
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn kill_child_now() {}
 
 #[cfg(unix)]
@@ -624,6 +652,7 @@ fn poll_job(
     let deadline = start + Duration::from_secs(timeout_secs);
     let mut consecutive_errors = 0u32;
     let mut last_printed_pass: Option<u32> = None;
+    let mut cached_output: Option<Vec<u8>> = None;
 
     loop {
         for _ in 0..10 {
@@ -634,13 +663,13 @@ fn poll_job(
                 });
             }
             if CANCEL.load(Ordering::SeqCst) {
-                return Ok(stop_and_capture(api, job_id));
+                return Ok(stop_and_capture(api, job_id, &cached_output));
             }
             thread::sleep(Duration::from_millis(100));
         }
 
         if Instant::now() > deadline {
-            return Ok(stop_and_capture(api, job_id));
+            return Ok(stop_and_capture(api, job_id, &cached_output));
         }
 
         // Hide the pass counter until it's > 0: FreeRouting's initial routing
@@ -659,6 +688,12 @@ fn poll_job(
                 consecutive_errors = 0;
                 if status.current_pass.is_some() && status.current_pass != last_printed_pass {
                     last_printed_pass = status.current_pass;
+                    // Opportunistically cache output while still RUNNING: once the
+                    // job settles into a terminal state, FreeRouting's `/output`
+                    // can refuse to return partial data.
+                    if let Ok(JobOutput::Data(bytes)) = api.get_output(job_id, DEFAULT_TIMEOUT) {
+                        cached_output = Some(bytes);
+                    }
                 }
                 match status.state {
                     JobState::Completed => {
@@ -694,7 +729,7 @@ fn poll_job(
                         }
                         return Ok(PollResult {
                             outcome: RunOutcome::Cancelled,
-                            output: best_effort_output(api, job_id),
+                            output: best_effort_output(api, job_id).or(cached_output),
                         });
                     }
                     JobState::Invalid => {
@@ -723,9 +758,14 @@ fn poll_job(
 }
 
 /// Fetches output before cancelling: `/output` unconditionally reports "no
-/// output" once a job settles into `CANCELLED`.
-fn stop_and_capture(api: &FreeroutingApiClient, job_id: &str) -> PollResult {
-    let output = best_effort_output(api, job_id);
+/// output" once a job settles into `CANCELLED`. Falls back to `cached_output`
+/// (last output seen while `RUNNING`) if the fetch comes back empty.
+fn stop_and_capture(
+    api: &FreeroutingApiClient,
+    job_id: &str,
+    cached_output: &Option<Vec<u8>>,
+) -> PollResult {
+    let output = best_effort_output(api, job_id).or_else(|| cached_output.clone());
     let _ = api.cancel_job(job_id);
     PollResult {
         outcome: RunOutcome::Cancelled,
