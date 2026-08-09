@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- KiCad Python scripts no longer inject package-specific module paths.
+
 ### Fixed
 
 - KiCad imports now preserve stackups with more than ten copper layers.
