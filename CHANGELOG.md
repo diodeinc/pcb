@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- KiCad integration now uses KiCad's native Python environment.
+
 ### Fixed
 
 - KiCad imports now preserve stackups with more than ten copper layers.
