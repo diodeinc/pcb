@@ -4,18 +4,26 @@ use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use std::io::{self, BufRead, Write};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use url::Url;
 
 use crate::WorkspaceContext;
 
 const AUTHTYPE_CAPABILITY: &str = "authtype";
-const DIODEHUB_HOST: &str = "code.diode.computer";
+const DEFAULT_DIODEHUB_HOST: &str = "code.diode.computer";
 const MAX_CREDENTIAL_LINE_BYTES: usize = 65_535;
 
 #[derive(Args, Debug)]
 #[command(about = "Configure or provide Git credentials using PCB authentication")]
 pub struct GitAuthArgs {
+    /// DiodeHub host assigned to this credential helper
+    #[arg(long, hide = true)]
+    host: Option<String>,
+
     /// Git credential helper operation, `configure`, or `unconfigure`
     operation: String,
+
+    /// DiodeHub HTTPS repository URL to configure
+    repository_url: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -69,15 +77,21 @@ pub fn execute(args: GitAuthArgs, ctx: &WorkspaceContext) -> Result<()> {
     let mut stdout = io::stdout().lock();
 
     match args.operation.as_str() {
-        "configure" => pcb_zen::git::configure_diodehub_credentials_globally()?,
+        "configure" => {
+            let repository_url = args.repository_url.as_deref().context(
+                "Missing DiodeHub repository URL; use `pcb auth git configure <repository-url>`",
+            )?;
+            pcb_zen::git::configure_diodehub_credentials_globally(repository_url)?;
+        }
         "unconfigure" => pcb_zen::git::unconfigure_diodehub_credentials_globally()?,
         "capability" => {
             writeln!(stdout, "version 0")?;
             writeln!(stdout, "capability {AUTHTYPE_CAPABILITY}")?;
         }
         "get" => {
+            let host = args.host.as_deref().unwrap_or(DEFAULT_DIODEHUB_HOST);
             let result = read_credential_request(stdin.lock())
-                .and_then(|request| provide_credential(ctx, request, &mut stdout));
+                .and_then(|request| provide_credential(ctx, host, request, &mut stdout));
             if let Err(error) = result {
                 writeln!(stdout, "quit=true")?;
                 writeln!(stdout)?;
@@ -96,12 +110,17 @@ pub fn execute(args: GitAuthArgs, ctx: &WorkspaceContext) -> Result<()> {
 
 fn provide_credential(
     ctx: &WorkspaceContext,
+    configured_host: &str,
     request: CredentialRequest,
     output: &mut impl Write,
 ) -> Result<()> {
-    if request.protocol.as_deref() != Some(b"https")
-        || request.host.as_deref() != Some(DIODEHUB_HOST.as_bytes())
-    {
+    if request.protocol.as_deref() != Some(b"https") {
+        return Ok(());
+    }
+    let Some(request_host) = request.host.as_deref() else {
+        return Ok(());
+    };
+    if credential_hostname(request_host)? != configured_host {
         return Ok(());
     }
 
@@ -118,7 +137,7 @@ fn provide_credential(
     }
 
     let path = std::str::from_utf8(path).context("Git credential path is not UTF-8")?;
-    let credential = exchange_credential(ctx, DIODEHUB_HOST, path)?;
+    let credential = exchange_credential(ctx, configured_host, path)?;
 
     writeln!(output, "capability[]={AUTHTYPE_CAPABILITY}")?;
     writeln!(output, "authtype=Bearer")?;
@@ -128,6 +147,16 @@ fn provide_credential(
     output.flush()?;
 
     Ok(())
+}
+
+fn credential_hostname(authority: &[u8]) -> Result<String> {
+    let authority = std::str::from_utf8(authority).context("Git credential host is not UTF-8")?;
+    let url =
+        Url::parse(&format!("https://{authority}")).context("Git credential host is invalid")?;
+    Ok(url
+        .host_str()
+        .context("Git credential host is invalid")?
+        .to_owned())
 }
 
 fn exchange_credential(
@@ -273,5 +302,17 @@ mod tests {
                 .to_string()
                 .contains("Git credential request line exceeds 65535 bytes")
         );
+    }
+
+    #[test]
+    fn normalizes_credential_hostnames() {
+        for (authority, hostname) in [
+            ("code.example.com:443", "code.example.com"),
+            ("code.example.com:8443", "code.example.com"),
+            ("[2001:db8::1:2]", "[2001:db8::1:2]"),
+            ("[2001:db8::1:2]:8443", "[2001:db8::1:2]"),
+        ] {
+            assert_eq!(credential_hostname(authority.as_bytes()).unwrap(), hostname);
+        }
     }
 }

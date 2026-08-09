@@ -1,66 +1,404 @@
 //! Lowerings out of the IPC dialect: per-layer artwork, NC drill/rout
 //! documents, and fabrication profiles.
 
+use std::collections::HashMap;
+use std::hash::Hash;
+
 use crate::dialects::ipc::analysis::{
     ProfileOccurrenceRole, ProfileSet, profile_occurrences_for, root_panel_step,
 };
 use crate::dialects::ipc::feature::{
-    Feature, FeatureBucket, FeatureKind, FeatureOperation, FeatureSpan, PlatingKind,
+    Feature, FeatureBucket, FeatureKind, FeatureOperation, FeatureRole, FeatureSpan, PlatingKind,
+    PrimitiveRef,
 };
 use crate::dialects::ipc::layout::{LayoutPurpose, LayoutStepKind, StepProfile};
 use crate::dialects::ipc::{Document, relief};
 use crate::dialects::{LayerRole, Side};
 use crate::dialects::{artwork, nc};
-use crate::geom::path::ContourBuf;
-use crate::geom::{Affine2, BBox, ContourSet, PaintKind, Point, Polarity, Span};
+use crate::geom::path::{ContourBuf, transform_cmds};
+use crate::geom::{
+    Affine2, BBox, ContourSet, FillRule, Paint, Point, Polarity, Span, StrokeStyle, tol,
+};
+
+/// How one artwork object was expressed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArtworkObjectKind {
+    /// A shared aperture stamped under a placement transform.
+    Flash,
+    /// A filled region path.
+    Region,
+    /// A stroked centerline path.
+    Stroke,
+}
+
+/// Source-specific hooks for artwork lowering.
+///
+/// Everything a lowering can decide from the IR alone — dictionary-instance
+/// apertures, circular flashes, per-path regions and strokes, paint staging —
+/// lives in [`lower_layer_to_artwork_with`]. A source dialect implements this
+/// trait only for what it alone knows: apertures declared by its own shape
+/// catalogue, the stroke styles its target can express, and the per-object
+/// metadata that target carries.
+pub trait ArtworkLowering<Symbol, ObjectMeta> {
+    /// An aperture the source document declares for this feature, with its
+    /// placement and bounds. Returning `None` falls through to the generic
+    /// instance, circle, and per-path tiers.
+    fn source_aperture(
+        &mut self,
+        _feature: &Feature<Symbol>,
+    ) -> Option<(artwork::Aperture, Affine2, BBox)> {
+        None
+    }
+
+    /// Rewrite a stroke into what the target can express. Gerber traces, for
+    /// example, are round-joined by construction.
+    fn stroke_style(&mut self, stroke: StrokeStyle) -> StrokeStyle {
+        stroke
+    }
+
+    /// Which paint stage a feature belongs to. Override where the target
+    /// stages material removal differently from [`paint_order`].
+    fn paint_order(&mut self, feature: &Feature<Symbol>) -> artwork::PaintOrder {
+        paint_order(feature)
+    }
+
+    fn object_meta(&mut self, feature: &Feature<Symbol>, kind: ArtworkObjectKind) -> ObjectMeta;
+}
+
+/// The default lowering: no source catalogue, native strokes, net metadata.
+struct NetMetaLowering;
+
+impl<Symbol: Clone> ArtworkLowering<Symbol, Option<Symbol>> for NetMetaLowering {
+    fn object_meta(
+        &mut self,
+        feature: &Feature<Symbol>,
+        _kind: ArtworkObjectKind,
+    ) -> Option<Symbol> {
+        feature.net.clone()
+    }
+}
 
 /// Lower one layer's features into a single-layer artwork document.
 ///
 /// Run [`process::normalize_for_artwork`](crate::dialects::ipc::process::normalize_for_artwork)
 /// first so set voids, negative polarity, and cutouts are resolved.
-pub fn lower_layer_to_artwork<Symbol: Clone, LayerFunction: Clone>(
+pub fn lower_layer_to_artwork<Symbol, LayerFunction>(
     doc: &Document<Symbol, LayerFunction>,
     layer_index: usize,
     role: LayerRole,
     side: Side,
-) -> artwork::Document<LayerFunction, Option<Symbol>> {
-    let mut out = artwork::Document::new();
+) -> artwork::Document<LayerFunction, Option<Symbol>>
+where
+    Symbol: Copy + Eq + Hash,
+    LayerFunction: Clone,
+{
     let layer = &doc.layers[layer_index];
-    let artwork_layer = out.push_layer(artwork::Layer {
-        name: layer.name.clone(),
-        role,
-        side,
-        objects: Span::EMPTY,
-        bbox: BBox::empty(),
-        meta: layer.layer_function.clone(),
-    });
+    lower_layer_to_artwork_with(
+        doc,
+        layer_index,
+        artwork::Layer {
+            name: layer.name.clone(),
+            role,
+            side,
+            objects: Span::EMPTY,
+            bbox: BBox::empty(),
+            meta: layer.layer_function.clone(),
+        },
+        &mut NetMetaLowering,
+    )
+}
 
-    for feature in layer.features.slice(&doc.features) {
-        for path in feature.paths.slice(&doc.arena.paths) {
-            let make_geometry: fn(u32) -> artwork::Geometry = match path.paint.kind() {
-                PaintKind::Fill => |path| artwork::Geometry::Region { path },
-                PaintKind::Stroke => |path| artwork::Geometry::Stroke { path },
-                PaintKind::None => continue,
-            };
-            let path_id = out.push_path(path.paint, doc.arena.path_contours(path));
-            out.push_object(
-                artwork_layer,
-                artwork::Object {
-                    polarity: feature.polarity,
-                    order: paint_order(feature),
-                    geometry: make_geometry(path_id),
-                    bbox: path.bbox,
-                    meta: feature.net.clone(),
-                },
-            );
-        }
+/// Lower one layer's features into artwork, resolving repeated geometry to
+/// shared apertures.
+///
+/// Repeated dictionary instances stay instances: every sibling placement of
+/// one dictionary entry flashes through a single aperture instead of carrying
+/// its own copy of the shape. Targets that can express instancing — Gerber
+/// apertures, SVG `<use>` — inherit that directly, and targets that cannot
+/// expand it in [`artwork::compose_to_mask`].
+pub fn lower_layer_to_artwork_with<Symbol, LayerFunction, LayerMeta, ObjectMeta>(
+    doc: &Document<Symbol, LayerFunction>,
+    layer_index: usize,
+    header: artwork::Layer<LayerMeta>,
+    lowering: &mut impl ArtworkLowering<Symbol, ObjectMeta>,
+) -> artwork::Document<LayerMeta, ObjectMeta>
+where
+    Symbol: Copy + Eq + Hash,
+    ObjectMeta: Default,
+{
+    let mut out = artwork::Document::new();
+    let artwork_layer = out.push_layer(header);
+    for object in lower_layer_to_artwork_objects_with(doc, layer_index, &mut out, lowering) {
+        out.push_object(artwork_layer, object);
     }
-
-    out.diagnostics.extend(doc.diagnostics.clone());
     artwork::normalize_bounds(&mut out);
     out
 }
 
+/// Lower one IPC layer's features into artwork objects for the caller to
+/// place on a layer or in a block.
+///
+/// This is the hierarchy-preserving counterpart to
+/// [`lower_layer_to_artwork_with`]. Apertures, paths, and diagnostics are
+/// interned directly in `out`; placement-group blocks are created before the
+/// returned objects so block references remain topologically ordered.
+pub fn lower_layer_to_artwork_objects_with<Symbol, LayerFunction, LayerMeta, ObjectMeta>(
+    doc: &Document<Symbol, LayerFunction>,
+    layer_index: usize,
+    out: &mut artwork::Document<LayerMeta, ObjectMeta>,
+    lowering: &mut impl ArtworkLowering<Symbol, ObjectMeta>,
+) -> Vec<artwork::Object<ObjectMeta>>
+where
+    Symbol: Copy + Eq + Hash,
+    ObjectMeta: Default,
+{
+    let layer = &doc.layers[layer_index];
+    let layer_features = layer.features.slice(&doc.features);
+    let mut instance_apertures = HashMap::<Symbol, u32>::new();
+    let mut objects = Vec::new();
+
+    for (offset, feature) in layer_features.iter().enumerate() {
+        let Some(group_id) = feature.placement_group else {
+            lower_feature_artwork(
+                doc,
+                feature,
+                out,
+                lowering,
+                &mut instance_apertures,
+                &mut objects,
+            );
+            continue;
+        };
+        let group = doc.feature_placement_groups[group_id as usize];
+        if layer.features.start + offset as u32 != group.features.start {
+            continue;
+        }
+
+        let mut block_objects = Vec::new();
+        for member in group.features.slice(&doc.features) {
+            lower_feature_artwork(
+                doc,
+                member,
+                out,
+                lowering,
+                &mut instance_apertures,
+                &mut block_objects,
+            );
+        }
+        // Partition lowered members by polarity and paint stage: each class
+        // becomes one reusable block whose instances carry the class polarity
+        // and stage, so polarity runs and stage sorting order compact groups
+        // exactly like the flat features they stand for. Block content is
+        // normalized to dark; the instance polarity composes it back.
+        let mut classes = Vec::<(Polarity, artwork::PaintOrder, u32)>::new();
+        for mut object in block_objects {
+            let class = (object.polarity, object.order.stage);
+            let block = match classes
+                .iter()
+                .find(|(polarity, order, _)| (*polarity, order.stage) == class)
+            {
+                Some(&(_, _, block)) => block,
+                None => {
+                    let block = out.push_block();
+                    classes.push((object.polarity, object.order, block));
+                    block
+                }
+            };
+            object.polarity = Polarity::Dark;
+            out.push_block_object(block, object);
+        }
+        for (polarity, order, block) in classes {
+            objects.extend(group.placements.slice(&doc.feature_placements).iter().map(
+                |&transform| artwork::Object {
+                    polarity,
+                    order,
+                    geometry: artwork::Geometry::Instance { block, transform },
+                    bbox: out.blocks[block as usize].bbox.transformed(transform),
+                    meta: ObjectMeta::default(),
+                },
+            ));
+        }
+    }
+    out.diagnostics.extend(doc.diagnostics.clone());
+    objects
+}
+
+fn lower_feature_artwork<Symbol, LayerFunction, LayerMeta, ObjectMeta>(
+    doc: &Document<Symbol, LayerFunction>,
+    feature: &Feature<Symbol>,
+    out: &mut artwork::Document<LayerMeta, ObjectMeta>,
+    lowering: &mut impl ArtworkLowering<Symbol, ObjectMeta>,
+    instance_apertures: &mut HashMap<Symbol, u32>,
+    objects: &mut Vec<artwork::Object<ObjectMeta>>,
+) where
+    Symbol: Copy + Eq + Hash,
+{
+    if let Some((aperture, transform, bbox)) =
+        flash_for(out, doc, feature, lowering, instance_apertures)
+    {
+        objects.push(artwork::Object {
+            polarity: feature.polarity,
+            order: lowering.paint_order(feature),
+            geometry: artwork::Geometry::Flash {
+                aperture,
+                transform,
+            },
+            bbox,
+            meta: lowering.object_meta(feature, ArtworkObjectKind::Flash),
+        });
+        return;
+    }
+
+    objects.extend(
+        feature
+            .paths
+            .slice(&doc.arena.paths)
+            .iter()
+            .filter_map(|path| {
+                let (paint, kind, make_geometry): (_, _, fn(u32) -> artwork::Geometry) =
+                    match path.paint {
+                        Paint::Fill { rule } => {
+                            (Paint::Fill { rule }, ArtworkObjectKind::Region, |path| {
+                                artwork::Geometry::Region { path }
+                            })
+                        }
+                        Paint::Stroke(stroke) => (
+                            Paint::Stroke(lowering.stroke_style(stroke)),
+                            ArtworkObjectKind::Stroke,
+                            |path| artwork::Geometry::Stroke { path },
+                        ),
+                        Paint::None => return None,
+                    };
+                let path_id = out.push_path(paint, doc.arena.path_contours(path));
+                Some(artwork::Object {
+                    polarity: feature.polarity,
+                    order: lowering.paint_order(feature),
+                    geometry: make_geometry(path_id),
+                    bbox: out.path_bbox(path_id),
+                    meta: lowering.object_meta(feature, kind),
+                })
+            }),
+    );
+}
+
+/// The shared aperture a feature flashes through, if any: one the source
+/// declares, one derived from a repeated dictionary instance, or a plain
+/// circle for a drilled or fiducial feature.
+fn flash_for<Symbol, LayerFunction, LayerMeta, ObjectMeta>(
+    out: &mut artwork::Document<LayerMeta, ObjectMeta>,
+    doc: &Document<Symbol, LayerFunction>,
+    feature: &Feature<Symbol>,
+    lowering: &mut impl ArtworkLowering<Symbol, ObjectMeta>,
+    apertures: &mut HashMap<Symbol, u32>,
+) -> Option<(u32, Affine2, BBox)>
+where
+    Symbol: Copy + Eq + Hash,
+{
+    if let Some((aperture, transform, bbox)) = lowering.source_aperture(feature) {
+        return Some((out.push_aperture(aperture), transform, bbox));
+    }
+    if let Some((aperture, transform)) = instance_aperture(out, doc, feature, apertures) {
+        return Some((aperture, transform, feature.bbox));
+    }
+    let (at, diameter) = circle_flash(doc, feature)?;
+    Some((
+        out.push_aperture(artwork::Aperture::circle(diameter)),
+        Affine2::translation(at),
+        BBox::from_point(at).expand(diameter / 2.0),
+    ))
+}
+
+/// A user-dictionary instance feature: a placed reference whose local shape
+/// is shared by every sibling instance. The shape flashes through one contour
+/// aperture per dictionary entry, keeping repeated geometry repeated all the
+/// way to the output. Standard-dictionary references stay out: those are
+/// exact catalogue primitives that a source lowering flashes through standard
+/// apertures instead.
+fn instance_aperture<Symbol, LayerFunction, LayerMeta, ObjectMeta>(
+    out: &mut artwork::Document<LayerMeta, ObjectMeta>,
+    doc: &Document<Symbol, LayerFunction>,
+    feature: &Feature<Symbol>,
+    apertures: &mut HashMap<Symbol, u32>,
+) -> Option<(u32, Affine2)>
+where
+    Symbol: Copy + Eq + Hash,
+{
+    let Some(PrimitiveRef::User(primitive)) = feature.primitive_ref else {
+        return None;
+    };
+    if feature.kind != FeatureKind::Primitive || !is_rigid(feature.transform) {
+        return None;
+    }
+    if let Some(&aperture) = apertures.get(&primitive) {
+        return Some((aperture, feature.transform));
+    }
+    // Derive the origin-local template from this first instance; every
+    // sibling shares the aperture and differs only by its rigid transform.
+    let shape = contour_flash_aperture(doc, feature)?;
+    let aperture = out.push_aperture(artwork::Aperture::solid(shape));
+    apertures.insert(primitive, aperture);
+    Some((aperture, feature.transform))
+}
+
+/// The feature's whole image as an origin-local contour aperture: its single
+/// filled path pulled back through the inverse of its placement transform.
+/// Flashing the aperture through `feature.transform` reproduces the source
+/// image exactly, so repeated placements of one shape share one definition.
+pub fn contour_flash_aperture<Symbol, LayerFunction>(
+    doc: &Document<Symbol, LayerFunction>,
+    feature: &Feature<Symbol>,
+) -> Option<artwork::ApertureShape> {
+    let [path] = feature.paths.slice(&doc.arena.paths) else {
+        return None;
+    };
+    if !path.is_filled() {
+        return None;
+    }
+    let inverse = feature.transform.inverse()?;
+    let local = doc
+        .arena
+        .path_contours(path)
+        .iter()
+        .map(|contour| transform_cmds(contour.cmds.iter().copied(), inverse))
+        .collect::<Vec<_>>();
+    let [outline] = local.try_into().ok()?;
+    Some(artwork::ApertureShape::Contour {
+        outline,
+        fill_rule: path.fill_rule().unwrap_or(FillRule::NonZero),
+    })
+}
+
+/// A drilled or fiducial feature whose whole image is one filled circle.
+fn circle_flash<Symbol, LayerFunction>(
+    doc: &Document<Symbol, LayerFunction>,
+    feature: &Feature<Symbol>,
+) -> Option<(Point, f64)> {
+    if feature.outer_diameter <= 0.0 || feature.paths.len() != 1 {
+        return None;
+    }
+    if !feature.paths.slice(&doc.arena.paths)[0].is_filled() {
+        return None;
+    }
+    (feature.is_fiducial()
+        || feature.intent.role == FeatureRole::Hole
+        || feature.intent.operation == FeatureOperation::Drill)
+        .then_some((feature.center, feature.outer_diameter))
+}
+
+/// Rotation plus translation, without mirroring or scaling.
+fn is_rigid(transform: Affine2) -> bool {
+    let determinant = transform.m00 * transform.m11 - transform.m01 * transform.m10;
+    (determinant - 1.0).abs() <= tol::EPSILON_MM
+        && (transform.m00 * transform.m00 + transform.m10 * transform.m10 - 1.0).abs()
+            <= tol::EPSILON_MM
+}
+
+/// Which paint stage a feature belongs to.
+///
+/// Targets that image a removal as a clear (mask composition, SVG) and
+/// targets that only order it (Gerber) disagree on how wide `FinalCutout`
+/// should reach, so a source lowering may override this through
+/// [`ArtworkLowering::paint_order`].
 pub fn paint_order<Symbol>(feature: &Feature<Symbol>) -> artwork::PaintOrder {
     let stage = if feature.bucket == FeatureBucket::Cutout {
         artwork::PaintStage::FinalCutout
@@ -393,8 +731,128 @@ fn transformed_profile_cutout_contours<Symbol, LayerFunction>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dialects::ipc::feature::FeaturePlacementGroup;
     use crate::geom::path::PathCmd;
     use crate::geom::{BBox, Point};
+
+    #[test]
+    fn preserves_shared_feature_group_when_lowered_or_expanded() {
+        let mut doc = Document::<u32, ()>::new();
+        let first_path = doc.push_path(
+            Paint::Fill {
+                rule: FillRule::NonZero,
+            },
+            [rectangle_contour(0.0, 0.0, 2.0, 1.0)],
+        );
+        let second_path = doc.push_path(
+            Paint::Fill {
+                rule: FillRule::NonZero,
+            },
+            [rectangle_contour(3.0, 0.0, 4.0, 1.0)],
+        );
+        for path in [first_path, second_path] {
+            let mut feature = Feature::new(FeatureKind::Polygon, Polarity::Dark);
+            feature.paths = Span::single(path);
+            feature.placement_group = Some(0);
+            doc.features.push(feature);
+        }
+        doc.feature_placements.extend([
+            Affine2::translation(Point::new(10.0, 20.0)),
+            Affine2::translation(Point::new(30.0, 40.0)),
+        ]);
+        doc.feature_placement_groups.push(FeaturePlacementGroup {
+            placements: Span::new(0, 2),
+            features: Span::new(0, 2),
+        });
+        doc.layers.push(crate::dialects::ipc::Layer {
+            name: "TOP".to_string(),
+            source_layer_ref: 0,
+            layer_function: (),
+            spec_refs: Span::EMPTY,
+            sets: Span::EMPTY,
+            features: Span::new(0, 2),
+            bbox: BBox::empty(),
+        });
+
+        let artwork = lower_layer_to_artwork(&doc, 0, LayerRole::Copper, Side::Top);
+
+        assert_eq!(artwork.blocks.len(), 1);
+        assert_eq!(artwork.blocks[0].objects.len(), 2);
+        assert_eq!(artwork.objects.len(), 2);
+        assert_eq!(artwork.arena.paths.len(), 2);
+        assert!(artwork.objects.iter().all(|object| matches!(
+            object.geometry,
+            artwork::Geometry::Instance { block: 0, .. }
+        )));
+
+        crate::dialects::ipc::process::expand_feature_placement_groups(&mut doc);
+        assert_eq!(
+            doc.features
+                .iter()
+                .map(|feature| feature.bbox.min.x)
+                .collect::<Vec<_>>(),
+            [10.0, 13.0, 30.0, 33.0]
+        );
+    }
+
+    #[test]
+    fn placement_group_instances_carry_member_polarity_and_stage() {
+        let mut doc = Document::<u32, ()>::new();
+        let path = doc.push_path(
+            Paint::Fill {
+                rule: FillRule::NonZero,
+            },
+            [rectangle_contour(0.0, 0.0, 1.0, 1.0)],
+        );
+        let mut feature = Feature::new(FeatureKind::Polygon, Polarity::Clear);
+        feature.paths = Span::single(path);
+        feature.placement_group = Some(0);
+        doc.features.push(feature);
+        doc.feature_placements.extend([
+            Affine2::translation(Point::new(10.0, 0.0)),
+            Affine2::translation(Point::new(20.0, 0.0)),
+        ]);
+        doc.feature_placement_groups.push(FeaturePlacementGroup {
+            placements: Span::new(0, 2),
+            features: Span::single(0),
+        });
+        doc.layers.push(crate::dialects::ipc::Layer {
+            name: "TOP".to_string(),
+            source_layer_ref: 0,
+            layer_function: (),
+            spec_refs: Span::EMPTY,
+            sets: Span::EMPTY,
+            features: Span::single(0),
+            bbox: BBox::empty(),
+        });
+
+        let artwork = lower_layer_to_artwork(&doc, 0, LayerRole::Copper, Side::Top);
+
+        // The instances stand in for clear features: they must form the same
+        // polarity run the flat lowering produced, with block content stored
+        // dark so composition restores the member polarity.
+        assert_eq!(artwork.objects.len(), 2);
+        assert!(
+            artwork
+                .objects
+                .iter()
+                .all(|object| object.polarity == Polarity::Clear)
+        );
+        assert!(
+            artwork.blocks[0]
+                .objects
+                .iter()
+                .all(|object| object.polarity == Polarity::Dark)
+        );
+        let expanded = artwork::expand_instances(&artwork);
+        assert_eq!(expanded.objects.len(), 2);
+        assert!(
+            expanded
+                .objects
+                .iter()
+                .all(|object| object.polarity == Polarity::Clear)
+        );
+    }
 
     #[test]
     fn material_removal_union_is_winding_insensitive() {

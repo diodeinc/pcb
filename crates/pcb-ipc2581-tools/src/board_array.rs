@@ -3,7 +3,7 @@ use std::fmt::Write;
 use anyhow::{Context, Result};
 use ipc2581::Ipc2581;
 use ipc2581::types::LayerFunction;
-use pcb_ir::dialects::ipc::{LayoutStep, LayoutStepKind, View};
+use pcb_ir::dialects::ipc::{ArtworkScope, LayoutStep, LayoutStepKind};
 use pcb_ir::geom::path::{PathCmd, PathOp};
 use pcb_ir::geom::{Affine2, Arc, BBox, ContourBuf, Point};
 
@@ -173,18 +173,16 @@ fn board_array_layer_overlays(
         .iter()
         .filter_map(|layer| {
             let layer_name = accessor.ipc().resolve(layer.name);
-            let Ok(mut doc) = crate::geometry::extract_layer_for_view(
+            let Ok(doc) = crate::geometry::extract_layer_for_view(
                 accessor.ipc(),
                 layer_name,
-                View::ArraySupport,
+                ArtworkScope::ArraySupport,
             ) else {
                 return None;
             };
-            if !crate::geometry::render::layer_has_native_content(&doc) {
-                return None;
-            }
-            pcb_ir::dialects::ipc::process::compose_for_rendering(&mut doc);
-            let paths = layer_paths(&doc, array_height);
+            let mut native = crate::geometry::render::native_layer_document(&doc)?;
+            pcb_ir::dialects::ipc::process::compose_for_rendering(&mut native);
+            let paths = layer_paths(&native, array_height);
             (!paths.is_empty()).then_some(BoardArrayLayerOverlay {
                 function: layer.layer_function,
                 paths,
@@ -228,12 +226,63 @@ fn layer_paths(doc: &GeometryDocument, panel_height: f64) -> Vec<BoardArrayLayer
     };
     let transform = y_flip_transform(panel_height);
 
-    layer
-        .features
-        .slice(&doc.features)
+    // V-score features draw as stroked guides; everything else composes
+    // through the shared layer image fold, which resolves paint polarity.
+    let features = layer.features.slice(&doc.features);
+    let mut paths = features
         .iter()
-        .filter(|feature| feature.source_layer_ref == Some(layer.source_layer_ref))
+        .filter(|feature| feature.is_vscore())
         .flat_map(|feature| feature_paths(doc, feature, transform))
+        .collect::<Vec<_>>();
+
+    let image_features = features
+        .iter()
+        .filter(|feature| !feature.is_vscore())
+        .cloned()
+        .collect::<Vec<_>>();
+    if !image_features.is_empty() {
+        let mut image = doc.clone();
+        image.layers[0].features = pcb_ir::geom::Span::new(0, image_features.len() as u32);
+        image.features = image_features;
+        let mask = crate::geometry::render::layer_mask(
+            &image,
+            false,
+            pcb_ir::dialects::ipc::ProfileSet::RootOnly,
+        );
+        paths.extend(mask_paths(&mask, transform));
+    }
+
+    paths
+}
+
+fn mask_paths(
+    mask: &pcb_ir::dialects::mask::Document<LayerFunction>,
+    transform: Affine2,
+) -> Vec<BoardArrayLayerPath> {
+    let Some(layer) = mask.layers.first() else {
+        return Vec::new();
+    };
+
+    mask.shapes(layer)
+        .iter()
+        .filter_map(|shape| {
+            let mut data = String::new();
+            for contour in mask.arena.contours(shape.contours) {
+                let transformed = pcb_ir::geom::path::transform_cmds(
+                    mask.arena.cmds(*contour).iter().copied(),
+                    transform,
+                );
+                append_path_cmds(&mut data, &transformed.cmds);
+            }
+            (!data.is_empty()).then_some(BoardArrayLayerPath {
+                data,
+                bbox: transform_bbox(shape.bbox, transform),
+                stroke_width: 0.0,
+                filled: true,
+                stroked: false,
+                vscore: false,
+            })
+        })
         .collect()
 }
 
@@ -991,5 +1040,97 @@ mod tests {
 
         assert_eq!(svg.matches("array-layer-copper").count(), 1);
         assert!(!svg.contains("M7 5.5 L15 5.5"));
+    }
+
+    #[test]
+    fn renders_clear_features_as_holes_in_the_layer_overlay() {
+        let ipc = ipc2581::Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="panel"/>
+    <LayerRef name="TOP"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="10" y="0"/>
+            <PolyStepSegment x="10" y="5"/>
+            <PolyStepSegment x="0" y="5"/>
+          </Polygon>
+        </Profile>
+      </Step>
+      <Step name="panel" type="PALLET">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="0" y="24"/>
+            <PolyStepSegment x="44" y="24"/>
+            <PolyStepSegment x="44" y="0"/>
+          </Polygon>
+        </Profile>
+        <LayerFeature layerRef="TOP">
+          <Set>
+            <Features>
+              <UserSpecial>
+                <Contour>
+                  <Polygon>
+                    <PolyBegin x="1" y="19"/>
+                    <PolyStepSegment x="9" y="19"/>
+                    <PolyStepSegment x="9" y="23"/>
+                    <PolyStepSegment x="1" y="23"/>
+                    <PolyStepSegment x="1" y="19"/>
+                  </Polygon>
+                </Contour>
+              </UserSpecial>
+            </Features>
+          </Set>
+          <Set polarity="NEGATIVE">
+            <Features>
+              <UserSpecial>
+                <Contour>
+                  <Polygon>
+                    <PolyBegin x="4" y="20"/>
+                    <PolyStepSegment x="6" y="20"/>
+                    <PolyStepSegment x="6" y="22"/>
+                    <PolyStepSegment x="4" y="22"/>
+                    <PolyStepSegment x="4" y="20"/>
+                  </Polygon>
+                </Contour>
+              </UserSpecial>
+            </Features>
+          </Set>
+        </LayerFeature>
+        <StepRepeat stepRef="board" x="5" y="5.5" nx="3" ny="2" dx="12" dy="8"/>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+        let accessor = IpcAccessor::new(&ipc);
+
+        let svg = render_board_array_overview_svg(&accessor).unwrap().unwrap();
+
+        assert_eq!(
+            svg.matches("array-layer-copper").count(),
+            1,
+            "the layer composes to one image path"
+        );
+        let copper = svg
+            .lines()
+            .find(|line| line.contains("array-layer-copper"))
+            .unwrap();
+        assert_eq!(
+            copper.matches('M').count(),
+            2,
+            "the clear feature survives as a hole subpath, not a copper fill"
+        );
     }
 }

@@ -32,11 +32,15 @@ pub(super) fn normalized_stack_weights(
 }
 
 /// Sparse row-normalized convolution from panel-lattice samples to a shared
-/// evaluation field. `smooth_adjoint` is the exact transpose of `smooth`, so
-/// projected gradient follows the same density model used by the objective.
+/// evaluation field, stored CSR (row offsets over flat index/weight arrays)
+/// so the per-iteration passes stream contiguously. `smooth_adjoint` is the
+/// exact transpose of `smooth`, so projected gradient follows the same
+/// density model used by the objective.
 pub(super) struct LatticeDensityKernel {
     sample_count: usize,
-    rows: Vec<Vec<(usize, f64)>>,
+    row_offsets: Vec<u32>,
+    sample_indices: Vec<u32>,
+    weights: Vec<f64>,
 }
 
 impl LatticeDensityKernel {
@@ -80,53 +84,79 @@ impl LatticeDensityKernel {
                 })
                 .collect::<Vec<(i64, i64, f64)>>()
         });
-        let rows = evaluation_sites
-            .iter()
-            .map(|&(column, row)| {
-                let mut neighbors = offsets[column.rem_euclid(2) as usize]
-                    .iter()
-                    .filter_map(|&(column_offset, row_offset, weight)| {
-                        let sample_index =
-                            sample_indices.get(&(column + column_offset, row + row_offset))?;
-                        Some((*sample_index, weight))
-                    })
-                    .collect::<Vec<_>>();
-                let weight_sum = neighbors.iter().map(|(_, weight)| weight).sum::<f64>();
-                if weight_sum > 0.0 {
-                    for (_, weight) in &mut neighbors {
-                        *weight /= weight_sum;
-                    }
+        let mut row_offsets = Vec::with_capacity(evaluation_sites.len() + 1);
+        let mut csr_sample_indices = Vec::new();
+        let mut weights = Vec::new();
+        row_offsets.push(0_u32);
+        for &(column, row) in &evaluation_sites {
+            let row_start = weights.len();
+            for &(column_offset, row_offset, weight) in &offsets[column.rem_euclid(2) as usize] {
+                if let Some(sample_index) =
+                    sample_indices.get(&(column + column_offset, row + row_offset))
+                {
+                    csr_sample_indices.push(*sample_index as u32);
+                    weights.push(weight);
                 }
-                neighbors
-            })
-            .collect();
+            }
+            let weight_sum = weights[row_start..].iter().sum::<f64>();
+            if weight_sum > 0.0 {
+                for weight in &mut weights[row_start..] {
+                    *weight /= weight_sum;
+                }
+            }
+            row_offsets.push(weights.len() as u32);
+        }
         Self {
             sample_count: samples.len(),
-            rows,
+            row_offsets,
+            sample_indices: csr_sample_indices,
+            weights,
         }
+    }
+
+    pub(super) fn row_count(&self) -> usize {
+        self.row_offsets.len() - 1
     }
 
     pub(super) fn smooth(&self, values: &[f64]) -> Vec<f64> {
-        debug_assert_eq!(values.len(), self.sample_count);
-        self.rows
-            .iter()
-            .map(|row| {
-                row.iter()
-                    .map(|(sample_index, weight)| weight * values[*sample_index])
-                    .sum()
-            })
-            .collect()
+        let mut result = vec![0.0; self.row_count()];
+        self.smooth_into(values, &mut result);
+        result
     }
 
+    pub(super) fn smooth_into(&self, values: &[f64], result: &mut [f64]) {
+        debug_assert_eq!(values.len(), self.sample_count);
+        debug_assert_eq!(result.len(), self.row_count());
+        for (row, result) in result.iter_mut().enumerate() {
+            let span = self.row_offsets[row] as usize..self.row_offsets[row + 1] as usize;
+            *result = self.sample_indices[span.clone()]
+                .iter()
+                .zip(&self.weights[span])
+                .map(|(sample_index, weight)| weight * values[*sample_index as usize])
+                .sum();
+        }
+    }
+
+    #[cfg(test)]
     pub(super) fn smooth_adjoint(&self, values: &[f64]) -> Vec<f64> {
-        debug_assert_eq!(values.len(), self.rows.len());
         let mut result = vec![0.0; self.sample_count];
-        for (value, row) in values.iter().zip(&self.rows) {
-            for (sample_index, weight) in row {
-                result[*sample_index] += weight * value;
+        self.smooth_adjoint_into(values, &mut result);
+        result
+    }
+
+    pub(super) fn smooth_adjoint_into(&self, values: &[f64], result: &mut [f64]) {
+        debug_assert_eq!(values.len(), self.row_count());
+        debug_assert_eq!(result.len(), self.sample_count);
+        result.fill(0.0);
+        for (row, value) in values.iter().enumerate() {
+            let span = self.row_offsets[row] as usize..self.row_offsets[row + 1] as usize;
+            for (sample_index, weight) in self.sample_indices[span.clone()]
+                .iter()
+                .zip(&self.weights[span])
+            {
+                result[*sample_index as usize] += weight * value;
             }
         }
-        result
     }
 }
 
@@ -164,123 +194,47 @@ pub(super) fn lattice_cell_coverage(
     region: &ContourSet,
     profile: DenseCopperBalanceProfile,
 ) -> Vec<f64> {
-    const STRATA: usize = 3;
-    let offset = |index: usize, span: f64| ((index as f64 + 0.5) / STRATA as f64 - 0.5) * span;
-    let mut subsamples = Vec::with_capacity(points.len() * STRATA * STRATA);
-    for point in points {
-        for row in 0..STRATA {
-            for column in 0..STRATA {
-                subsamples.push(Point::new(
-                    point.x + offset(column, profile.lattice_column_pitch_mm()),
-                    point.y + offset(row, profile.pitch_mm),
-                ));
-            }
-        }
-    }
-    scanline_indicator(&subsamples, region)
-        .chunks_exact(STRATA * STRATA)
-        .map(|tile| tile.iter().sum::<f64>() / (STRATA * STRATA) as f64)
-        .collect()
+    region.cell_coverage(
+        points,
+        (profile.lattice_column_pitch_mm(), profile.pitch_mm),
+    )
 }
 
-fn scanline_indicator(points: &[Point], region: &ContourSet) -> Vec<f64> {
-    let mut result = vec![0.0; points.len()];
-    let mut by_y = (0..points.len()).collect::<Vec<_>>();
-    by_y.sort_by(|left, right| {
-        points[*left]
-            .y
-            .total_cmp(&points[*right].y)
-            .then_with(|| points[*left].x.total_cmp(&points[*right].x))
-    });
-    let edges = region
-        .rings
-        .iter()
-        .flat_map(|ring| {
-            ring.iter()
-                .copied()
-                .zip(ring.iter().copied().cycle().skip(1))
-                .take(ring.len())
-        })
-        .collect::<Vec<_>>();
-
-    let mut first = 0;
-    while first < by_y.len() {
-        let y = points[by_y[first]].y;
-        let mut last = first + 1;
-        while last < by_y.len() && (points[by_y[last]].y - y).abs() <= NUMERIC_EPSILON {
-            last += 1;
-        }
-        let mut crossings = edges
+/// Euclidean projection onto `{x : lower <= x <= upper, sum(x) = target}`.
+///
+/// Water-filling: one common shift moves every value, the box clamps, and the
+/// shift that lands the clamped sum on the target is found by bisection. A
+/// target outside what the box can reach saturates every value at the nearer
+/// bound, which is the closest feasible point.
+pub(super) fn project_box_sum(values: &[f64], lower: f64, upper: f64, target: f64) -> Vec<f64> {
+    let clamped_sum = |shift: f64| -> f64 {
+        values
             .iter()
-            .filter_map(|([x0, y0], [x1, y1])| {
-                let direction = if *y0 <= y && y < *y1 {
-                    1
-                } else if *y1 <= y && y < *y0 {
-                    -1
-                } else {
-                    return None;
-                };
-                let x = x0 + (y - y0) * (x1 - x0) / (y1 - y0);
-                Some((x, direction))
-            })
-            .collect::<Vec<_>>();
-        crossings.sort_by(|left, right| left.0.total_cmp(&right.0));
-        let mut crossing_index = 0;
-        let mut winding = 0;
-        for &point_index in &by_y[first..last] {
-            while crossing_index < crossings.len()
-                && crossings[crossing_index].0 <= points[point_index].x
-            {
-                winding += crossings[crossing_index].1;
-                crossing_index += 1;
-            }
-            result[point_index] = (winding != 0) as u8 as f64;
-        }
-        first = last;
-    }
-    result
-}
-
-pub(super) fn project_box_sum(
-    values: &[f64],
-    lower: &[f64],
-    upper: &[f64],
-    target: f64,
-) -> Vec<f64> {
-    debug_assert_eq!(values.len(), lower.len());
-    debug_assert_eq!(values.len(), upper.len());
+            .map(|value| (value - shift).clamp(lower, upper))
+            .sum()
+    };
     let mut low_shift = values
         .iter()
-        .zip(upper)
-        .map(|(value, bound)| value - bound)
+        .map(|value| value - upper)
         .min_by(f64::total_cmp)
         .unwrap_or(0.0);
     let mut high_shift = values
         .iter()
-        .zip(lower)
-        .map(|(value, bound)| value - bound)
+        .map(|value| value - lower)
         .max_by(f64::total_cmp)
         .unwrap_or(0.0);
-    for _ in 0..64 {
-        let shift = (low_shift + high_shift) / 2.0;
-        let sum = values
-            .iter()
-            .zip(lower)
-            .zip(upper)
-            .map(|((value, lower), upper)| (value - shift).clamp(*lower, *upper))
-            .sum::<f64>();
-        if sum > target {
-            low_shift = shift;
+    for _ in 0..44 {
+        let trial = (low_shift + high_shift) / 2.0;
+        if clamped_sum(trial) > target {
+            low_shift = trial;
         } else {
-            high_shift = shift;
+            high_shift = trial;
         }
     }
     let shift = (low_shift + high_shift) / 2.0;
     values
         .iter()
-        .zip(lower)
-        .zip(upper)
-        .map(|((value, lower), upper)| (value - shift).clamp(*lower, *upper))
+        .map(|value| (value - shift).clamp(lower, upper))
         .collect()
 }
 
@@ -289,23 +243,41 @@ pub(super) fn spatial_result_from_squared_radii(
     squared_radii: &[f64],
     baseline: DenseCopperBalanceResult,
     layer: SpatialCopperBalanceLayerRequest<'_>,
-    retained_area_mm2: f64,
+    density_domain_area_mm2: f64,
+    profile: DenseCopperBalanceProfile,
 ) -> DenseCopperBalanceResult {
+    // Snap the continuous radius field to the fabrication step so the voids
+    // form a small set of repeated templates; round-to-nearest keeps the
+    // aggregate area error stochastic and far below the solve tolerance.
+    let quantize = |radius_squared: f64| {
+        ((radius_squared.sqrt() / profile.void_radius_step_mm).round()
+            * profile.void_radius_step_mm)
+            .clamp(profile.min_void_radius_mm, profile.max_void_radius_mm)
+    };
     let full_voids = centers
         .iter()
         .zip(squared_radii)
         .map(|(center, radius_squared)| DenseCopperVoid {
             center: *center,
-            radius_mm: radius_squared.sqrt(),
+            radius_mm: quantize(*radius_squared),
         })
         .collect::<Vec<_>>();
-    let full_void_area_mm2 = ROUNDED_HEXAGON_AREA_FACTOR * squared_radii.iter().sum::<f64>();
+    let full_void_area_mm2 = ROUNDED_HEXAGON_AREA_FACTOR
+        * full_voids
+            .iter()
+            .map(|void| void.radius_mm * void.radius_mm)
+            .sum::<f64>();
     let partial_voids = baseline.partial_voids;
     let void_area_mm2 = full_void_area_mm2 + partial_voids.area();
     let generated_area_mm2 = (baseline.usable.area() - void_area_mm2).max(0.0);
-    let achieved_density = (layer.existing_copper.area() + generated_area_mm2) / retained_area_mm2;
-    let equivalent_radius_mm =
-        (squared_radii.iter().sum::<f64>() / squared_radii.len() as f64).sqrt();
+    let achieved_density =
+        (layer.existing_copper.area() + generated_area_mm2) / density_domain_area_mm2;
+    let equivalent_radius_mm = (full_voids
+        .iter()
+        .map(|void| void.radius_mm * void.radius_mm)
+        .sum::<f64>()
+        / full_voids.len() as f64)
+        .sqrt();
     let solution = DenseCopperBalanceSolution {
         mode: DenseCopperBalanceMode::Perforated {
             void_radius_mm: equivalent_radius_mm,
@@ -330,6 +302,29 @@ mod tests {
     use super::super::lattice::hex_aligned_lattice_centers;
     use super::*;
     use crate::geom::{BBox, ContourSet, Point, tol};
+
+    /// The projection lands the sum on the target when the box can reach it,
+    /// and saturates at the nearer bound when it cannot.
+    #[test]
+    fn box_sum_projection_hits_reachable_targets_and_saturates_otherwise() {
+        let values: [f64; 5] = [0.10, 0.42, -0.30, 0.25, 0.61];
+        let (lower, upper) = (0.04_f64, 0.42_f64);
+
+        for target in [0.6, 1.0, 1.9] {
+            let projected = project_box_sum(&values, lower, upper, target);
+            assert!(projected.iter().all(|v| (lower..=upper).contains(v)));
+            assert!(
+                (projected.iter().sum::<f64>() - target).abs() <= 1e-9,
+                "{projected:?}"
+            );
+        }
+
+        // Beyond the box's reach on either side, every value saturates.
+        let low = project_box_sum(&values, lower, upper, 0.0);
+        assert!(low.iter().all(|v| (v - lower).abs() <= 1e-9));
+        let high = project_box_sum(&values, lower, upper, 10.0);
+        assert!(high.iter().all(|v| (v - upper).abs() <= 1e-9));
+    }
 
     #[test]
     fn density_kernel_adjoint_matches_the_forward_operator() {

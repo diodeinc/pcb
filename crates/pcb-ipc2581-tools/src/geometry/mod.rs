@@ -5,8 +5,8 @@ pub mod render;
 use anyhow::{Context, Result, bail};
 use ipc2581::{Ipc2581, Symbol, types::LayerFunction};
 use pcb_ir::dialects::ipc::{
-    BoardArrayFabricationProfile, BoardArrayReliefFeatures, Feature, FeatureBucket, FeatureDomain,
-    FeatureKind, PlatingKind, View,
+    ArtworkScope, BoardArrayFabricationProfile, BoardArrayReliefFeatures, Feature, FeatureBucket,
+    FeatureDomain, FeatureKind, PlatingKind,
     relief::{
         DEFAULT_RELIEF_TOLERANCE_MM, DEFAULT_SCORE_ALIGNMENT_TOLERANCE_MM, VScoreLine,
         vscore_lines_for,
@@ -15,6 +15,7 @@ use pcb_ir::dialects::ipc::{
 use pcb_ir::geom::{BBox, ContourBuf, ContourSet, Point, Polarity};
 
 pub use extract::{extract_layer, extract_layer_for_view, extract_layout};
+pub(crate) use extract::{extract_step_layer_local, is_panel_step, step_repeat_transform};
 
 type GeometryDocument =
     pcb_ir::dialects::ipc::Document<ipc2581::Symbol, ipc2581::types::LayerFunction>;
@@ -29,7 +30,7 @@ pub fn board_array_vscore_lines(ipc: &Ipc2581) -> Result<Vec<VScoreLine>> {
         .filter(|layer| layer.layer_function == LayerFunction::VCut)
     {
         let layer_name = ipc.resolve(source_layer.name);
-        let doc = extract_layer_for_view(ipc, layer_name, View::ArrayFlattened)
+        let doc = extract_layer_for_view(ipc, layer_name, ArtworkScope::ArrayFlattened)
             .with_context(|| format!("failed to extract IPC-2581 V-cut layer '{layer_name}'"))?;
         lines.extend(vscore_lines_for(&doc));
     }
@@ -120,7 +121,7 @@ fn collect_relief_feature_candidates(
         .filter(|layer| relief_feature_layer(layer.layer_function))
     {
         let layer_name = ipc.resolve(layer.name);
-        let doc = extract_layer_for_view(ipc, layer_name, View::ArrayFlattened)
+        let doc = extract_layer_for_view(ipc, layer_name, ArtworkScope::ArrayFlattened)
             .with_context(|| format!("failed to extract IPC-2581 layer '{layer_name}'"))?;
         for feature in &doc.features {
             if is_through_cutout(feature) {
@@ -156,12 +157,7 @@ impl ReliefFeatureCandidate {
 }
 
 fn feature_contours(doc: &GeometryDocument, feature: &Feature<Symbol>) -> Vec<ContourBuf> {
-    feature
-        .paths
-        .slice(&doc.arena.paths)
-        .iter()
-        .flat_map(|path| doc.arena.path_contours(path))
-        .collect()
+    doc.placed_feature_contours(feature)
 }
 
 fn relief_feature_layer(layer_function: LayerFunction) -> bool {

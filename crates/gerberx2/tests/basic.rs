@@ -1,7 +1,8 @@
 use gerberx2::{
     ApertureTemplate, AttributeValue, Command, Contour, ContourSegment, GerberLayer, GerberX2,
     ObjectKind, PathCommand, Point, Unit, WriterAperture, WriterApertureMacro,
-    WriterApertureTemplate, WriterMacroExpression, WriterMacroPrimitive, WriterObject,
+    WriterApertureTemplate, WriterApertureTransform, WriterMacroExpression, WriterMacroPrimitive,
+    WriterObject,
 };
 use pcb_ir::geom::Polarity;
 
@@ -74,6 +75,7 @@ fn writes_idiomatic_x2_layer_from_object_ir() {
                 aperture: 11,
             },
             polarity: Polarity::Dark,
+            aperture_transform: WriterApertureTransform::default(),
             attributes: vec![
                 AttributeValue::new(".N", ["GND"]),
                 AttributeValue::new(".C", ["U1"]),
@@ -186,10 +188,15 @@ fn writes_macro_and_block_apertures_without_flattening() {
             WriterAperture {
                 code: 20,
                 template: WriterApertureTemplate::Block {
-                    objects: vec![WriterObject::dark(ObjectKind::Flash {
-                        at: Point { x: 1.0, y: 0.0 },
-                        aperture: 10,
-                    })],
+                    objects: vec![WriterObject {
+                        kind: ObjectKind::Flash {
+                            at: Point { x: 1.0, y: 0.0 },
+                            aperture: 10,
+                        },
+                        polarity: Polarity::Clear,
+                        aperture_transform: WriterApertureTransform::default(),
+                        attributes: Vec::new(),
+                    }],
                 },
                 attributes: Vec::new(),
             },
@@ -203,6 +210,10 @@ fn writes_macro_and_block_apertures_without_flattening() {
                 at: Point { x: 2.0, y: 3.0 },
                 aperture: 20,
             }),
+            WriterObject::dark(ObjectKind::Flash {
+                at: Point { x: 4.0, y: 4.0 },
+                aperture: 10,
+            }),
         ],
         ..GerberLayer::default()
     };
@@ -212,6 +223,7 @@ fn writes_macro_and_block_apertures_without_flattening() {
     assert!(output.contains("%AMROUNDRECT*"));
     assert!(output.contains("%ADD11ROUNDRECT,0.2X0.4*%"));
     assert!(output.contains("%ABD20*%"));
+    assert!(output.contains("%AB*%\n%LPD*%"));
 
     let parsed = GerberX2::parse(&output).unwrap();
     assert_eq!(parsed.aperture_macros().len(), 1);
@@ -224,10 +236,18 @@ fn writes_macro_and_block_apertures_without_flattening() {
         parsed.aperture_definitions()[2].template,
         ApertureTemplate::Block { .. }
     ));
-    assert_eq!(parsed.objects().len(), 2);
+    assert_eq!(parsed.objects().len(), 3);
     assert!(matches!(
         parsed.objects()[1].kind,
-        ObjectKind::Flash { at, aperture: 10 } if at.x == 3.0 && at.y == 3.0
+        ObjectKind::Flash { at, aperture: 20 } if at.x == 2.0 && at.y == 3.0
+    ));
+    assert_eq!(parsed.objects()[1].polarity, Polarity::Dark);
+    assert_eq!(parsed.objects()[2].polarity, Polarity::Dark);
+    let artwork = gerberx2::geometry::extract_document(&parsed);
+    assert_eq!(artwork.blocks.len(), 1);
+    assert!(matches!(
+        artwork.objects[1].geometry,
+        pcb_ir::dialects::artwork::Geometry::Instance { block: 0, .. }
     ));
 }
 
@@ -342,9 +362,9 @@ fn normalizes_inch_macro_aperture_geometry_to_mm() {
 }
 
 #[test]
-fn expands_block_apertures_when_flashed() {
+fn preserves_block_apertures_when_flashed() {
     let gerber = GerberX2::parse(
-        "%FSLAX26Y26*%\n%MOMM*%\n%ADD10C,0.1*%\n%ABD20*%\nD10*\nX1000000Y0D03*\n%AB*%\nD20*\nX2000000Y3000000D03*\nM02*\n",
+        "%FSLAX26Y26*%\n%MOMM*%\n%ADD10C,0.1*%\n%ABD20*%\nD10*\n%LPC*%\nX1000000Y0D03*\n%AB*%\nD20*\n%LPC*%\nX2000000Y3000000D03*\nM02*\n",
     )
     .unwrap();
 
@@ -358,13 +378,24 @@ fn expands_block_apertures_when_flashed() {
         gerber.objects()[0].kind,
         ObjectKind::Flash {
             at,
-            aperture: 10,
-        } if at.x == 3.0 && at.y == 3.0
+            aperture: 20,
+        } if at.x == 2.0 && at.y == 3.0
     ));
+    assert_eq!(gerber.objects()[0].polarity, Polarity::Clear);
+
+    let artwork = gerberx2::geometry::extract_document(&gerber);
+    assert_eq!(artwork.blocks.len(), 1);
+    assert_eq!(artwork.blocks[0].objects.len(), 1);
+    assert!(matches!(
+        artwork.objects[0].geometry,
+        pcb_ir::dialects::artwork::Geometry::Instance { block: 0, .. }
+    ));
+    let expanded = pcb_ir::dialects::artwork::expand_instances(&artwork);
+    assert_eq!(expanded.objects[0].polarity, Polarity::Dark);
 }
 
 #[test]
-fn expands_block_apertures_with_flash_transform() {
+fn preserves_block_apertures_with_flash_transform() {
     let gerber = GerberX2::parse(
         "%FSLAX26Y26*%\n%MOMM*%\n%ADD10C,0.1*%\n%ABD20*%\nD10*\nX1000000Y0D03*\n%AB*%\n%LR90*%\n%LS2*%\nD20*\nX2000000Y3000000D03*\nM02*\n",
     )
@@ -376,11 +407,17 @@ fn expands_block_apertures_with_flash_transform() {
         object.kind,
         ObjectKind::Flash {
             at,
-            aperture: 10,
-        } if close(at.x, 2.0) && close(at.y, 5.0)
+            aperture: 20,
+        } if close(at.x, 2.0) && close(at.y, 3.0)
     ));
     assert!(close(object.rotation_degrees, 90.0));
     assert!(close(object.scaling, 2.0));
+    let artwork = gerberx2::geometry::extract_document(&gerber);
+    assert!(matches!(
+        artwork.objects[0].geometry,
+        pcb_ir::dialects::artwork::Geometry::Instance { block: 0, transform }
+            if close(transform.m02, 2.0) && close(transform.m12, 3.0)
+    ));
 }
 
 #[test]

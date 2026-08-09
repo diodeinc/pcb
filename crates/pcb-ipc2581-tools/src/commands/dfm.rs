@@ -7,14 +7,14 @@
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use pcb_ir::dialects::ipc::View;
+use pcb_ir::dialects::ipc::ArtworkScope;
 use pcb_ir::geom::region::rings_from_contours;
 use pcb_ir::geom::{ContourSet, FillRule, dfm};
 
 use crate::ipc2581::Ipc2581;
 use crate::utils::file as file_utils;
 
-pub fn execute(file: &Path, view: View, min_width_mm: f64) -> Result<()> {
+pub fn execute(file: &Path, view: ArtworkScope, min_width_mm: f64) -> Result<()> {
     if !(min_width_mm.is_finite() && min_width_mm > 0.0) {
         bail!("minimum width must be positive; got {min_width_mm}");
     }

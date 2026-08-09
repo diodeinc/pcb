@@ -184,6 +184,10 @@ pub struct PadstackHoleDef {
 pub struct PadstackPadDef {
     pub layer_ref: Symbol,
     pub pad_use: PadUse,
+    /// Shape offset from the padstack origin, in millimeters. The pad's
+    /// `Xform` rotates and mirrors this offset together with the shape.
+    pub x: f64,
+    pub y: f64,
     pub standard_primitive_ref: Option<Symbol>,
     pub user_primitive_ref: Option<Symbol>,
 }
@@ -304,57 +308,70 @@ pub struct FeatureSet {
 }
 
 impl FeatureSet {
+    /// Iterate features, descending into placement groups.
+    ///
+    /// Placement-group members are yielded once, in group-local coordinates:
+    /// the group's `locations` and `xform` are NOT applied. Consumers that
+    /// need placed occurrences must match [`SetFeature::PlacementGroup`]
+    /// directly and apply its placements themselves.
+    fn iter_features(&self) -> impl Iterator<Item = &SetFeature> {
+        self.features.iter().flat_map(|feature| match feature {
+            SetFeature::PlacementGroup(group) => group.features.iter(),
+            _ => std::slice::from_ref(feature).iter(),
+        })
+    }
+
     pub fn holes(&self) -> impl Iterator<Item = &Hole> {
-        self.features.iter().filter_map(|feature| match feature {
+        self.iter_features().filter_map(|feature| match feature {
             SetFeature::Hole(hole) => Some(hole),
             _ => None,
         })
     }
 
     pub fn slots(&self) -> impl Iterator<Item = &Slot> {
-        self.features.iter().filter_map(|feature| match feature {
+        self.iter_features().filter_map(|feature| match feature {
             SetFeature::Slot(slot) => Some(slot),
             _ => None,
         })
     }
 
     pub fn pads(&self) -> impl Iterator<Item = &Pad> {
-        self.features.iter().filter_map(|feature| match feature {
+        self.iter_features().filter_map(|feature| match feature {
             SetFeature::Pad(pad) => Some(pad),
             _ => None,
         })
     }
 
     pub fn fiducials(&self) -> impl Iterator<Item = &Fiducial> {
-        self.features.iter().filter_map(|feature| match feature {
+        self.iter_features().filter_map(|feature| match feature {
             SetFeature::Fiducial(fiducial) => Some(fiducial),
             _ => None,
         })
     }
 
     pub fn traces(&self) -> impl Iterator<Item = &Trace> {
-        self.features.iter().filter_map(|feature| match feature {
+        self.iter_features().filter_map(|feature| match feature {
             SetFeature::Trace(trace) => Some(trace),
             _ => None,
         })
     }
 
     pub fn polygons(&self) -> impl Iterator<Item = &super::Polygon> {
-        self.features.iter().filter_map(|feature| match feature {
+        self.iter_features().filter_map(|feature| match feature {
             SetFeature::Polygon(polygon) => Some(polygon),
             _ => None,
         })
     }
 
     pub fn lines(&self) -> impl Iterator<Item = &Line> {
-        self.features.iter().filter_map(|feature| match feature {
+        self.iter_features().filter_map(|feature| match feature {
             SetFeature::Line(line) => Some(line),
             _ => None,
         })
     }
 
     pub fn polylines(&self) -> impl Iterator<Item = &FeaturePolyline> {
-        self.features.iter().filter_map(|feature| match feature {
+        self.iter_features().filter_map(|feature| match feature {
             SetFeature::Polyline(polyline) => Some(polyline),
             _ => None,
         })
@@ -376,6 +393,17 @@ pub enum SetFeature {
     Polyline(FeaturePolyline),
     StandardPrimitiveRef(FeaturePrimitiveRef),
     UserPrimitiveRef(FeaturePrimitiveRef),
+    /// One or more local feature definitions placed at shared IPC
+    /// `Features/Location` transforms. Keeping the definitions separate from
+    /// their placements avoids cloning arbitrary contours for every location.
+    PlacementGroup(FeaturePlacementGroup),
+}
+
+#[derive(Debug, Clone)]
+pub struct FeaturePlacementGroup {
+    pub xform: Option<super::Xform>,
+    pub locations: Vec<super::Point>,
+    pub features: Vec<SetFeature>,
 }
 
 /// Inline user primitive feature carried directly by a Features block.

@@ -1,8 +1,8 @@
 //! Lower parsed Gerber into a pcb-ir artwork document.
 //!
-//! Standard-aperture flashes are preserved as native `Flash` objects with an
-//! aperture table so round trips keep pad identity; macro/block flashes and
-//! shaped draws are flattened to filled regions.
+//! Standard-aperture flashes and aperture-block instances are preserved so
+//! round trips keep both pad identity and reusable hierarchy. Macro flashes
+//! and shaped draws are flattened only where pcb-ir has no native equivalent.
 
 use std::collections::HashMap;
 
@@ -65,123 +65,186 @@ pub fn extract_document(gerber: &GerberX2) -> GerberArtworkDocument {
         .iter()
         .map(|aperture| (aperture.code, aperture))
         .collect::<HashMap<_, _>>();
-
-    for (object_index, object) in gerber.objects().iter().enumerate() {
-        match &object.kind {
-            gerber::ObjectKind::Flash { at, aperture } => {
-                let Some(definition) = apertures.get(aperture) else {
-                    doc.warn(format!("flash references undefined aperture D{aperture}"));
-                    continue;
-                };
-                let transform = object_transform(object, point(*at));
-                let mut meta = meta_from_object(object, object_index, SourceKind::Flash);
-                meta.aperture = Some(*aperture);
-
-                if let Some(standard) = standard_aperture(&definition.template) {
-                    let aperture_id = doc.push_aperture(standard);
-                    doc.push_object(
-                        layer,
-                        Object {
-                            polarity: meta.polarity,
-                            order: Default::default(),
-                            geometry: Geometry::Flash {
-                                aperture: aperture_id,
-                                transform,
-                            },
-                            bbox: BBox::empty(),
-                            meta,
-                        },
-                    );
-                } else if let Some(geometry) = &definition.geometry {
-                    push_flattened_paths(
-                        &mut doc,
-                        layer,
-                        meta,
-                        aperture_paths(geometry, transform),
-                    );
-                } else {
-                    doc.warn(format!(
-                        "flash aperture D{aperture} has no lowered geometry"
-                    ));
-                }
-            }
-            gerber::ObjectKind::Draw {
-                start,
-                end,
-                aperture,
-            } => {
-                let mut meta = meta_from_object(object, object_index, SourceKind::Draw);
-                meta.aperture = Some(*aperture);
-                if let Some(width) = circular_aperture_diameter(&apertures, *aperture) {
-                    push_flattened_paths(
-                        &mut doc,
-                        layer,
-                        meta,
-                        vec![line_path(
-                            point(*start),
-                            point(*end),
-                            width * object.scaling.abs(),
-                        )],
-                    );
-                } else if let Some(geometry) = aperture_geometry(&apertures, *aperture) {
-                    push_flattened_paths(
-                        &mut doc,
-                        layer,
-                        meta,
-                        sampled_line_sweep(point(*start), point(*end), object, geometry),
-                    );
-                } else {
-                    doc.warn(format!("D{aperture} draw aperture has no lowered geometry"));
-                }
-            }
-            gerber::ObjectKind::Arc {
-                start,
-                end,
-                center_offset,
-                clockwise,
-                aperture,
-            } => {
-                let mut meta = meta_from_object(object, object_index, SourceKind::Arc);
-                meta.aperture = Some(*aperture);
-                let start = point(*start);
-                let center = Point::new(start.x + center_offset.x, start.y + center_offset.y);
-                if let Some(width) = circular_aperture_diameter(&apertures, *aperture) {
-                    push_flattened_paths(
-                        &mut doc,
-                        layer,
-                        meta,
-                        vec![arc_path(
-                            start,
-                            point(*end),
-                            center,
-                            *clockwise,
-                            width * object.scaling.abs(),
-                        )],
-                    );
-                } else if let Some(geometry) = aperture_geometry(&apertures, *aperture) {
-                    push_flattened_paths(
-                        &mut doc,
-                        layer,
-                        meta,
-                        sampled_arc_sweep(start, point(*end), center, *clockwise, object, geometry),
-                    );
-                } else {
-                    doc.warn(format!("D{aperture} arc aperture has no lowered geometry"));
-                }
-            }
-            gerber::ObjectKind::Region { contours } => {
-                let meta = meta_from_object(object, object_index, SourceKind::Region);
-                push_flattened_paths(&mut doc, layer, meta, region_paths(contours));
-            }
-        }
+    let mut blocks = HashMap::<i32, u32>::new();
+    for definition in gerber.aperture_definitions() {
+        let gerber::ApertureTemplate::Block { objects } = &definition.template else {
+            continue;
+        };
+        let block = doc.push_block();
+        extract_objects(
+            &mut doc,
+            ArtworkTarget::Block(block),
+            objects,
+            &apertures,
+            &blocks,
+        );
+        blocks.insert(definition.code, block);
     }
+    extract_objects(
+        &mut doc,
+        ArtworkTarget::Layer(layer),
+        gerber.objects(),
+        &apertures,
+        &blocks,
+    );
 
     artwork::normalize_bounds(&mut doc);
     doc
 }
 
+#[derive(Debug, Clone, Copy)]
+enum ArtworkTarget {
+    Layer(u32),
+    Block(u32),
+}
+
+impl ArtworkTarget {
+    fn push(self, doc: &mut GerberArtworkDocument, object: Object<GerberObjectMeta>) {
+        match self {
+            Self::Layer(layer) => doc.push_object(layer, object),
+            Self::Block(block) => doc.push_block_object(block, object),
+        };
+    }
+}
+
+fn extract_objects(
+    doc: &mut GerberArtworkDocument,
+    target: ArtworkTarget,
+    objects: &[gerber::GraphicalObject],
+    apertures: &HashMap<i32, &gerber::ApertureDefinition>,
+    blocks: &HashMap<i32, u32>,
+) {
+    for (object_index, object) in objects.iter().enumerate() {
+        extract_object(doc, target, object_index, object, apertures, blocks);
+    }
+}
+
+fn extract_object(
+    doc: &mut GerberArtworkDocument,
+    target: ArtworkTarget,
+    object_index: usize,
+    object: &gerber::GraphicalObject,
+    apertures: &HashMap<i32, &gerber::ApertureDefinition>,
+    blocks: &HashMap<i32, u32>,
+) {
+    match &object.kind {
+        gerber::ObjectKind::Flash { at, aperture } => {
+            let Some(definition) = apertures.get(aperture) else {
+                doc.warn(format!("flash references undefined aperture D{aperture}"));
+                return;
+            };
+            let transform = object_transform(object, point(*at));
+            let mut meta = meta_from_object(object, object_index, SourceKind::Flash);
+            meta.aperture = Some(*aperture);
+
+            if let Some(&block) = blocks.get(aperture) {
+                target.push(
+                    doc,
+                    Object {
+                        polarity: meta.polarity,
+                        order: Default::default(),
+                        geometry: Geometry::Instance { block, transform },
+                        bbox: BBox::empty(),
+                        meta,
+                    },
+                );
+            } else if let Some(standard) = standard_aperture(&definition.template) {
+                let aperture_id = doc.push_aperture(standard);
+                target.push(
+                    doc,
+                    Object {
+                        polarity: meta.polarity,
+                        order: Default::default(),
+                        geometry: Geometry::Flash {
+                            aperture: aperture_id,
+                            transform,
+                        },
+                        bbox: BBox::empty(),
+                        meta,
+                    },
+                );
+            } else if let Some(geometry) = &definition.geometry {
+                push_flattened_paths(doc, target, meta, aperture_paths(geometry, transform));
+            } else {
+                doc.warn(format!(
+                    "flash aperture D{aperture} has no lowered geometry"
+                ));
+            }
+        }
+        gerber::ObjectKind::Draw {
+            start,
+            end,
+            aperture,
+        } => {
+            let mut meta = meta_from_object(object, object_index, SourceKind::Draw);
+            meta.aperture = Some(*aperture);
+            if let Some(width) = circular_aperture_diameter(apertures, *aperture) {
+                push_flattened_paths(
+                    doc,
+                    target,
+                    meta,
+                    vec![line_path(
+                        point(*start),
+                        point(*end),
+                        width * object.scaling.abs(),
+                    )],
+                );
+            } else if let Some(geometry) = aperture_geometry(apertures, *aperture) {
+                push_flattened_paths(
+                    doc,
+                    target,
+                    meta,
+                    sampled_line_sweep(point(*start), point(*end), object, geometry),
+                );
+            } else {
+                doc.warn(format!("D{aperture} draw aperture has no lowered geometry"));
+            }
+        }
+        gerber::ObjectKind::Arc {
+            start,
+            end,
+            center_offset,
+            clockwise,
+            aperture,
+        } => {
+            let mut meta = meta_from_object(object, object_index, SourceKind::Arc);
+            meta.aperture = Some(*aperture);
+            let start = point(*start);
+            let center = Point::new(start.x + center_offset.x, start.y + center_offset.y);
+            if let Some(width) = circular_aperture_diameter(apertures, *aperture) {
+                push_flattened_paths(
+                    doc,
+                    target,
+                    meta,
+                    vec![arc_path(
+                        start,
+                        point(*end),
+                        center,
+                        *clockwise,
+                        width * object.scaling.abs(),
+                    )],
+                );
+            } else if let Some(geometry) = aperture_geometry(apertures, *aperture) {
+                push_flattened_paths(
+                    doc,
+                    target,
+                    meta,
+                    sampled_arc_sweep(start, point(*end), center, *clockwise, object, geometry),
+                );
+            } else {
+                doc.warn(format!("D{aperture} arc aperture has no lowered geometry"));
+            }
+        }
+        gerber::ObjectKind::Region { contours } => {
+            let meta = meta_from_object(object, object_index, SourceKind::Region);
+            push_flattened_paths(doc, target, meta, region_paths(contours));
+        }
+    }
+}
+
 /// Convert a standard aperture template into an artwork aperture. Macro and
-/// block templates return `None` and are flattened instead.
+/// block templates return `None`; blocks are handled as instances and macros
+/// use their parsed fallback geometry.
 fn standard_aperture(template: &gerber::ApertureTemplate) -> Option<Aperture> {
     let (shape, hole_diameter) = match *template {
         gerber::ApertureTemplate::Circle {
@@ -301,7 +364,7 @@ struct ExtractedPath {
 
 fn push_flattened_paths(
     doc: &mut GerberArtworkDocument,
-    layer: u32,
+    target: ArtworkTarget,
     meta: GerberObjectMeta,
     paths: Vec<ExtractedPath>,
 ) {
@@ -313,8 +376,8 @@ fn push_flattened_paths(
         let extracted = paths.into_iter().next().unwrap();
         let is_stroked = matches!(extracted.paint, Paint::Stroke(_));
         let path = doc.push_path(extracted.paint, extracted.contours);
-        doc.push_object(
-            layer,
+        target.push(
+            doc,
             Object {
                 polarity: meta.polarity,
                 order: Default::default(),
@@ -352,8 +415,8 @@ fn push_flattened_paths(
         },
         contours,
     );
-    doc.push_object(
-        layer,
+    target.push(
+        doc,
         Object {
             polarity: meta.polarity,
             order: Default::default(),

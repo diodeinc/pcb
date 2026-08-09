@@ -1,18 +1,18 @@
-//! Render backends for composed mask documents.
+//! Render backends for artwork and composed mask documents.
 //!
-//! All entry points take a [`mask::Document`](crate::dialects::mask::Document)
-//! and a [`RenderOptions`]. To render artwork or IPC geometry, lower it first
-//! (`artwork::compose_to_mask`, `ipc::lower_layer_to_artwork`).
+//! Artwork renders keep the source's structure: apertures stay shared, so
+//! repeated geometry stays repeated and polarity runs paint sequentially.
+//! Mask renders take an already-composed image. Both take a [`RenderOptions`].
 
 mod png;
 mod svg;
 mod term;
 
-pub use png::png;
-pub use svg::svg;
-pub use term::{can_render_to_terminal, to_terminal, write_kitty_png};
+pub use png::{artwork_png, png};
+pub use svg::{artwork_svg, svg};
+pub use term::{artwork_to_terminal, can_render_to_terminal, to_terminal, write_kitty_png};
 
-use crate::dialects::mask;
+use crate::dialects::{artwork, mask};
 use crate::geom::{BBox, Point};
 
 pub(crate) const VIEWBOX_PADDING_MM: f64 = 1.0;
@@ -63,11 +63,26 @@ pub enum SizeConstraint {
 /// The bbox a render of these layers covers (padded; falls back to a default
 /// viewport for empty documents).
 pub fn bbox<LayerMeta>(doc: &mask::Document<LayerMeta>, layers: Option<&[usize]>) -> BBox {
-    let bbox = layer_indices(doc, layers)
-        .into_iter()
-        .fold(BBox::empty(), |bbox, index| {
-            bbox.union(doc.layers[index].bbox)
-        });
+    padded_bbox(
+        layer_indices(doc.layers.len(), layers)
+            .into_iter()
+            .map(|index| doc.layers[index].bbox),
+    )
+}
+
+pub(crate) fn artwork_bbox<LayerMeta, ObjectMeta>(
+    doc: &artwork::Document<LayerMeta, ObjectMeta>,
+    layers: Option<&[usize]>,
+) -> BBox {
+    padded_bbox(
+        layer_indices(doc.layers.len(), layers)
+            .into_iter()
+            .map(|index| doc.layers[index].bbox),
+    )
+}
+
+pub(crate) fn padded_bbox(bboxes: impl IntoIterator<Item = BBox>) -> BBox {
+    let bbox = bboxes.into_iter().fold(BBox::empty(), BBox::union);
     if bbox.is_empty() {
         BBox::new(Point::new(0.0, 0.0), Point::new(100.0, 100.0))
     } else {
@@ -75,23 +90,15 @@ pub fn bbox<LayerMeta>(doc: &mask::Document<LayerMeta>, layers: Option<&[usize]>
     }
 }
 
-pub(crate) fn layer_indices<LayerMeta>(
-    doc: &mask::Document<LayerMeta>,
-    layers: Option<&[usize]>,
-) -> Vec<usize> {
+pub(crate) fn layer_indices(layer_count: usize, layers: Option<&[usize]>) -> Vec<usize> {
     match layers {
         Some(layers) => layers.to_vec(),
-        None => (0..doc.layers.len()).collect(),
+        None => (0..layer_count).collect(),
     }
 }
 
-/// Pixel dimensions for a raster render under the given constraint.
-pub(crate) fn pixel_size<LayerMeta>(
-    doc: &mask::Document<LayerMeta>,
-    layers: Option<&[usize]>,
-    max_dimension_px: u32,
-) -> (u32, u32) {
-    let bbox = bbox(doc, layers);
+/// Pixel dimensions for a raster render of this bbox under the given constraint.
+pub(crate) fn pixel_size(bbox: BBox, max_dimension_px: u32) -> (u32, u32) {
     if bbox.is_empty() || bbox.width() <= 0.0 || bbox.height() <= 0.0 {
         return (max_dimension_px, max_dimension_px);
     }

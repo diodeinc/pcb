@@ -1,13 +1,14 @@
 //! Structural validation for IPC documents headed to artwork export.
 
 use crate::dialects::ipc::Document;
-use crate::dialects::ipc::feature::{Feature, FeatureBucket};
+use crate::dialects::ipc::feature::Feature;
 use crate::geom::path::{PathCmd, PathOp};
-use crate::geom::{Diagnostics, PaintKind, Point, Polarity, Span, tol};
+use crate::geom::{Diagnostics, PaintKind, Point, Span, tol};
 
 /// Check that every feature is exportable as native artwork: no unresolved
-/// set-void or negative-polarity semantics, homogeneous paint per feature,
-/// and circular arcs. All problems are collected.
+/// set-void semantics, homogeneous paint per feature, and circular arcs.
+/// Clear polarity is native — ordered artwork paints it with exactly IPC's
+/// sequential semantics. All problems are collected.
 pub fn validate_artwork_ready<Symbol, LayerFunction>(
     doc: &Document<Symbol, LayerFunction>,
 ) -> Result<(), Diagnostics> {
@@ -20,11 +21,6 @@ pub fn validate_artwork_ready<Symbol, LayerFunction>(
         if feature.flags.clears_previous_in_set {
             diagnostics.error(format!(
                 "feature {feature_index} still has unresolved set-void clear semantics"
-            ));
-        }
-        if feature.bucket != FeatureBucket::Cutout && feature.polarity != Polarity::Dark {
-            diagnostics.error(format!(
-                "feature {feature_index} still has unresolved negative polarity"
             ));
         }
         validate_feature_arcs(doc, feature_index, feature, &mut diagnostics);
@@ -45,7 +41,26 @@ fn validate_homogeneous_features_into<Symbol, LayerFunction>(
     doc: &Document<Symbol, LayerFunction>,
     diagnostics: &mut Diagnostics,
 ) {
+    for (group_index, group) in doc.feature_placement_groups.iter().enumerate() {
+        if let Err(error) = checked_span(group.features, "features", doc.features.len()) {
+            diagnostics.error(format!("feature placement group {group_index}: {error}"));
+        }
+        if let Err(error) = checked_span(
+            group.placements,
+            "feature placements",
+            doc.feature_placements.len(),
+        ) {
+            diagnostics.error(format!("feature placement group {group_index}: {error}"));
+        }
+    }
     for (feature_index, feature) in doc.features.iter().enumerate() {
+        if let Some(group) = feature.placement_group
+            && group as usize >= doc.feature_placement_groups.len()
+        {
+            diagnostics.error(format!(
+                "feature {feature_index} references missing placement group {group}"
+            ));
+        }
         if let Err(error) = checked_span(feature.paths, "feature paths", doc.arena.paths.len()) {
             diagnostics.error(format!("feature {feature_index}: {error}"));
             continue;

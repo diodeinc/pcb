@@ -1,8 +1,10 @@
-use crate::dialects::ipc::feature::{Feature, FeatureSet, PinRef};
+use crate::dialects::ipc::feature::{Feature, FeaturePlacementGroup, FeatureSet, PinRef};
 use crate::dialects::ipc::layout::{LayoutGraph, StepProfile, StepProfileCutout};
 use crate::dialects::ipc::spec::{Spec, SpecItem, SpecProperty, SpecRef};
 use crate::geom::path::ContourBuf;
 use crate::geom::{Affine2, BBox, Diagnostic, Paint, PathArena};
+
+const IDENTITY_PLACEMENT: [Affine2; 1] = [Affine2::IDENTITY];
 
 /// Source-faithful IPC-2581 geometry document.
 ///
@@ -21,6 +23,8 @@ pub struct Document<Symbol, LayerFunction> {
     pub spec_refs: Vec<SpecRef<Symbol>>,
     pub feature_sets: Vec<FeatureSet<Symbol>>,
     pub features: Vec<Feature<Symbol>>,
+    pub feature_placement_groups: Vec<FeaturePlacementGroup>,
+    pub feature_placements: Vec<Affine2>,
     pub pin_refs: Vec<PinRef<Symbol>>,
     pub arena: PathArena,
     pub diagnostics: Vec<Diagnostic>,
@@ -58,6 +62,44 @@ impl<Symbol, LayerFunction> Document<Symbol, LayerFunction> {
             .transformed_contours_bbox(path.contours, transform)
     }
 
+    /// Layer-space placements for one feature definition.
+    ///
+    /// Ungrouped features already use layer coordinates and therefore have
+    /// one identity placement. Grouped features retain one local definition
+    /// and expose every placement recorded by the source IPC `Features`
+    /// container.
+    pub fn placements_for_feature(&self, feature: &Feature<Symbol>) -> &[Affine2] {
+        feature
+            .placement_group
+            .map_or(&IDENTITY_PLACEMENT, |group| {
+                self.feature_placement_groups[group as usize]
+                    .placements
+                    .slice(&self.feature_placements)
+            })
+    }
+
+    /// Layer-space bounds of a feature's local paths across its placements.
+    pub fn placed_paths_bbox(&self, feature: &Feature<Symbol>) -> BBox {
+        let local = self.arena.paths_bbox(feature.paths);
+        self.placements_for_feature(feature)
+            .iter()
+            .map(|&placement| local.transformed(placement))
+            .fold(BBox::empty(), BBox::union)
+    }
+
+    /// Detach every contour occurrence of a feature in layer coordinates.
+    pub fn placed_feature_contours(&self, feature: &Feature<Symbol>) -> Vec<ContourBuf> {
+        self.placements_for_feature(feature)
+            .iter()
+            .flat_map(|&placement| {
+                feature
+                    .paths
+                    .indices()
+                    .flat_map(move |path| self.transformed_path_contours(path, placement))
+            })
+            .collect()
+    }
+
     pub fn warn(&mut self, message: impl Into<String>) {
         self.diagnostics.push(Diagnostic::warning(message));
     }
@@ -76,6 +118,8 @@ impl<Symbol, LayerFunction> Default for Document<Symbol, LayerFunction> {
             spec_refs: Vec::new(),
             feature_sets: Vec::new(),
             features: Vec::new(),
+            feature_placement_groups: Vec::new(),
+            feature_placements: Vec::new(),
             pin_refs: Vec::new(),
             arena: PathArena::default(),
             diagnostics: Vec::new(),

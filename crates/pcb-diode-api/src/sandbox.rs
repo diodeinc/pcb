@@ -11,7 +11,9 @@ use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Utc};
 use reqwest::StatusCode;
 use reqwest::blocking::Client;
-use reqwest::header::{CONTENT_TYPE, ETAG, IF_MATCH, IF_NONE_MATCH, LOCATION};
+use reqwest::header::{
+    CONTENT_TYPE, ETAG, HeaderMap, HeaderName, HeaderValue, IF_MATCH, IF_NONE_MATCH, LOCATION,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -45,19 +47,46 @@ pub struct SandboxClient {
     api_base_url: String,
     ctx: WorkspaceContext,
     http: Client,
-    access: Arc<Mutex<BTreeMap<String, SandboxAccess>>>,
 }
 
-/// Short-lived, sandbox-scoped credentials minted by the API. All sandbox
-/// file/exec traffic goes directly to `data_plane_url` with `token`; the API
-/// bearer token is only used for minting. Expiry is handled reactively: a
-/// 401/403 from the data plane invalidates the cache and re-mints, so there
-/// is no clock-based refresh logic to get wrong.
+/// Provider-neutral transport details minted atomically by the API.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct SandboxAccess {
-    token: String,
-    data_plane_url: String,
+struct SandboxConnection {
+    http: SandboxHttpConnection,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct SandboxHttpConnection {
+    endpoint: String,
+    #[serde(default)]
+    headers: BTreeMap<String, String>,
+}
+
+fn sandbox_headers(values: &BTreeMap<String, String>) -> Result<HeaderMap> {
+    let mut headers = HeaderMap::new();
+    for (name, value) in values {
+        let name = HeaderName::from_bytes(name.as_bytes())
+            .with_context(|| format!("Invalid sandbox connection header name: {name}"))?;
+        let mut value = HeaderValue::from_bytes(value.as_bytes())
+            .context("Invalid sandbox connection header value")?;
+        value.set_sensitive(true);
+        headers.insert(name, value);
+    }
+    Ok(headers)
+}
+
+fn validate_sandbox_endpoint(api_base_url: &str, endpoint: &str) -> Result<()> {
+    let endpoint = reqwest::Url::parse(endpoint).context("Invalid sandbox connection endpoint")?;
+    if !matches!(endpoint.scheme(), "http" | "https") || endpoint.host_str().is_none() {
+        bail!("Sandbox connection endpoint must be an HTTP(S) URL with a host");
+    }
+
+    let api = reqwest::Url::parse(api_base_url).context("Invalid Diode API URL")?;
+    if api.scheme() == "https" && endpoint.scheme() != "https" {
+        bail!("Sandbox connection endpoint cannot downgrade an HTTPS API connection");
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -231,12 +260,14 @@ impl SandboxClient {
             ctx,
             http: Client::builder()
                 .connect_timeout(Duration::from_secs(10))
+                // Minted headers are scoped to the returned endpoint. Never
+                // forward them to a redirect target.
+                .redirect(reqwest::redirect::Policy::none())
                 // Every request sets an explicit per-request timeout instead
                 // of relying on the blocking client's 30s default.
                 .timeout(None)
                 .build()
                 .context("Failed to create sandbox HTTP client")?,
-            access: Arc::new(Mutex::new(BTreeMap::new())),
         })
     }
 
@@ -322,7 +353,7 @@ impl SandboxClient {
     pub fn write_file(&self, sandbox_id: &str, path: &str, bytes: &[u8]) -> Result<()> {
         require_safe_absolute_path(path)?;
         let response = self.data_plane_request(sandbox_id, |http, base| {
-            http.put(sandbox_fs_url(base, sandbox_id, "/fs/write", path))
+            http.put(sandbox_fs_url(base, "/fs/write", path))
                 .header(CONTENT_TYPE, "application/octet-stream")
                 .body(bytes.to_vec())
                 .timeout(FILE_TRANSFER_TIMEOUT)
@@ -345,7 +376,7 @@ impl SandboxClient {
         require_safe_absolute_path(path)?;
         let response = self.data_plane_request(sandbox_id, |http, base| {
             let request = http
-                .put(sandbox_fs_url(base, sandbox_id, "/fs/write", path))
+                .put(sandbox_fs_url(base, "/fs/write", path))
                 .header(CONTENT_TYPE, "application/octet-stream")
                 .body(bytes.to_vec())
                 .timeout(FILE_TRANSFER_TIMEOUT);
@@ -424,14 +455,14 @@ impl SandboxClient {
     fn read_response(&self, sandbox_id: &str, path: &str) -> Result<reqwest::blocking::Response> {
         require_safe_absolute_path(path)?;
         self.data_plane_request(sandbox_id, |http, base| {
-            http.get(sandbox_fs_url(base, sandbox_id, "/fs/read", path))
+            http.get(sandbox_fs_url(base, "/fs/read", path))
                 .timeout(FILE_TRANSFER_TIMEOUT)
         })
     }
 
     fn create_exec(&self, sandbox_id: &str, request: &ExecSyncRequest) -> Result<String> {
         let response = self.data_plane_request(sandbox_id, |http, base| {
-            http.post(sandbox_endpoint_url(base, sandbox_id, "/exec"))
+            http.post(sandbox_endpoint_url(base, "/exec"))
                 .json(request)
                 .timeout(DEFAULT_REQUEST_TIMEOUT)
         })?;
@@ -474,7 +505,6 @@ impl SandboxClient {
         let response = self.data_plane_request(sandbox_id, |http, base| {
             http.get(sandbox_endpoint_url(
                 base,
-                sandbox_id,
                 &format!("/exec/{}", encode_segment(exec_id)),
             ))
             .timeout(DEFAULT_REQUEST_TIMEOUT)
@@ -507,7 +537,7 @@ impl SandboxClient {
     fn stat(&self, sandbox_id: &str, path: &str) -> Result<Option<SandboxStat>> {
         require_safe_absolute_path(path)?;
         let response = self.data_plane_request(sandbox_id, |http, base| {
-            http.get(sandbox_fs_url(base, sandbox_id, "/fs/stat", path))
+            http.get(sandbox_fs_url(base, "/fs/stat", path))
                 .timeout(DEFAULT_REQUEST_TIMEOUT)
         })?;
         if response.status() == StatusCode::NOT_FOUND {
@@ -523,7 +553,6 @@ impl SandboxClient {
         let response = self.data_plane_request(sandbox_id, |http, base| {
             http.delete(sandbox_endpoint_url(
                 base,
-                sandbox_id,
                 &format!("/exec/{}", encode_segment(exec_id)),
             ))
             .timeout(DEFAULT_REQUEST_TIMEOUT)
@@ -532,11 +561,6 @@ impl SandboxClient {
         Ok(())
     }
 
-    /// Send a data-plane request with the sandbox-scoped token, re-minting
-    /// once if the token was rejected (expired mid-session). The orchestrator
-    /// authorizes before forwarding anything to the sandbox, so a 401/403
-    /// means the request was never executed and the retry cannot double-apply
-    /// a write.
     fn data_plane_request<F>(
         &self,
         sandbox_id: &str,
@@ -545,50 +569,18 @@ impl SandboxClient {
     where
         F: Fn(&Client, &str) -> reqwest::blocking::RequestBuilder,
     {
-        let response = self.send_data_plane(sandbox_id, &build)?;
-        let status = response.status();
-        if status != StatusCode::UNAUTHORIZED && status != StatusCode::FORBIDDEN {
-            return Ok(response);
-        }
-        log::debug!("Sandbox data-plane request was rejected ({status}); re-minting access token");
-        self.invalidate_access(sandbox_id);
-        self.send_data_plane(sandbox_id, &build)
-    }
-
-    fn send_data_plane<F>(&self, sandbox_id: &str, build: &F) -> Result<reqwest::blocking::Response>
-    where
-        F: Fn(&Client, &str) -> reqwest::blocking::RequestBuilder,
-    {
-        let access = self.access(sandbox_id)?;
-        build(&self.http, &access.data_plane_url)
-            .bearer_auth(&access.token)
+        // ENG-675 deliberately renews the complete endpoint + credentials
+        // capability for every request. Do not cache either part independently.
+        let connection = self.mint_connection(sandbox_id)?;
+        validate_sandbox_endpoint(&self.api_base_url, &connection.http.endpoint)?;
+        let headers = sandbox_headers(&connection.http.headers)?;
+        build(&self.http, &connection.http.endpoint)
+            .headers(headers)
             .send()
             .context("Sandbox request failed")
     }
 
-    fn access(&self, sandbox_id: &str) -> Result<SandboxAccess> {
-        // The mutex is held across the mint so concurrent callers (sync
-        // workers, the lock heartbeat) share one mint instead of stampeding
-        // the API; they all need the same token anyway.
-        let mut cache = self
-            .access
-            .lock()
-            .map_err(|_| anyhow!("sandbox access cache lock poisoned"))?;
-        if let Some(access) = cache.get(sandbox_id) {
-            return Ok(access.clone());
-        }
-        let access = self.mint_access(sandbox_id)?;
-        cache.insert(sandbox_id.to_string(), access.clone());
-        Ok(access)
-    }
-
-    fn invalidate_access(&self, sandbox_id: &str) {
-        if let Ok(mut cache) = self.access.lock() {
-            cache.remove(sandbox_id);
-        }
-    }
-
-    fn mint_access(&self, sandbox_id: &str) -> Result<SandboxAccess> {
+    fn mint_connection(&self, sandbox_id: &str) -> Result<SandboxConnection> {
         let url = self.url(&format!(
             "/api/sandboxes/{}/access-token",
             encode_segment(sandbox_id)
@@ -597,7 +589,7 @@ impl SandboxClient {
             .authenticated(self.http.post(url))?
             .timeout(DEFAULT_REQUEST_TIMEOUT)
             .send()
-            .context("Failed to mint sandbox access token")?;
+            .context("Failed to mint sandbox connection")?;
         let status = response.status();
         if status == StatusCode::UNAUTHORIZED {
             bail!("Sandbox API request was not authorized. Run `pcb auth login`.");
@@ -607,11 +599,11 @@ impl SandboxClient {
         }
         if !status.is_success() {
             let text = response.text().unwrap_or_default();
-            bail!("Failed to mint sandbox access token ({status}): {text}");
+            bail!("Failed to mint sandbox connection ({status}): {text}");
         }
         response
             .json()
-            .context("Invalid sandbox access token response")
+            .context("Invalid sandbox connection response")
     }
 
     fn url(&self, path: &str) -> String {
@@ -672,21 +664,24 @@ fn exec_output_path(output_id: &str, kind: &str) -> String {
     format!("{EXEC_OUTPUT_DIR}/{output_id}.{kind}")
 }
 
-fn sandbox_endpoint_url(data_plane_url: &str, sandbox_id: &str, endpoint: &str) -> String {
-    format!(
-        "{}/sandboxes/{}{}",
-        data_plane_url.trim_end_matches('/'),
-        encode_segment(sandbox_id),
-        endpoint
-    )
+fn sandbox_endpoint_url(connection_endpoint: &str, endpoint: &str) -> String {
+    let query_start = connection_endpoint
+        .find('?')
+        .unwrap_or(connection_endpoint.len());
+    let (base, query) = connection_endpoint.split_at(query_start);
+    format!("{}{}{}", base.trim_end_matches('/'), endpoint, query)
 }
 
-fn sandbox_fs_url(data_plane_url: &str, sandbox_id: &str, endpoint: &str, path: &str) -> String {
-    format!(
-        "{}?path={}",
-        sandbox_endpoint_url(data_plane_url, sandbox_id, endpoint),
-        encode_segment(path)
-    )
+fn sandbox_fs_url(connection_endpoint: &str, endpoint: &str, path: &str) -> String {
+    let url = sandbox_endpoint_url(connection_endpoint, endpoint);
+    let separator = if !url.contains('?') {
+        "?"
+    } else if url.ends_with(['?', '&']) {
+        ""
+    } else {
+        "&"
+    };
+    format!("{url}{separator}path={}", encode_segment(path))
 }
 
 fn ensure_data_plane_success(
@@ -992,17 +987,63 @@ mod tests {
     #[test]
     fn builds_sandbox_endpoint_urls() {
         assert_eq!(
-            sandbox_endpoint_url("https://sandbox.api.diode.computer/", "sbx 1", "/fs/read"),
-            "https://sandbox.api.diode.computer/sandboxes/sbx%201/fs/read"
+            sandbox_endpoint_url(
+                "https://sandbox.api.diode.computer/connections/sbx-1/?route=foo%2Fbar&sig=a%2Bb",
+                "/fs/read"
+            ),
+            "https://sandbox.api.diode.computer/connections/sbx-1/fs/read?route=foo%2Fbar&sig=a%2Bb"
         );
         assert_eq!(
             sandbox_fs_url(
-                "http://localhost:8080",
-                "sbx_1",
+                "http://localhost:8080/routed/sandbox?route=foo%2Fbar&sig=a%2Bb",
                 "/fs/read",
                 "/home/sandbox/My Board/main.zen"
             ),
-            "http://localhost:8080/sandboxes/sbx_1/fs/read?path=%2Fhome%2Fsandbox%2FMy%20Board%2Fmain.zen"
+            "http://localhost:8080/routed/sandbox/fs/read?route=foo%2Fbar&sig=a%2Bb&path=%2Fhome%2Fsandbox%2FMy%20Board%2Fmain.zen"
+        );
+    }
+
+    #[test]
+    fn marks_sandbox_headers_sensitive() {
+        let headers = sandbox_headers(&BTreeMap::from([(
+            "x-provider-credential".to_string(),
+            "secret".to_string(),
+        )]))
+        .unwrap();
+        assert_eq!(headers["x-provider-credential"], "secret");
+        assert!(headers["x-provider-credential"].is_sensitive());
+        assert!(
+            sandbox_headers(&BTreeMap::from([(
+                "bad header".to_string(),
+                "secret".to_string()
+            )]))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn validates_sandbox_endpoint_security() {
+        assert!(
+            validate_sandbox_endpoint(
+                "https://api.diode.computer",
+                "https://provider.example/sandbox"
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_sandbox_endpoint("http://localhost:3001", "http://localhost:9000/sandbox")
+                .is_ok()
+        );
+        assert!(
+            validate_sandbox_endpoint(
+                "https://api.diode.computer",
+                "http://provider.example/sandbox"
+            )
+            .is_err()
+        );
+        assert!(
+            validate_sandbox_endpoint("https://api.diode.computer", "file:///tmp/not-a-sandbox")
+                .is_err()
         );
     }
 

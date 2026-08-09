@@ -11,7 +11,6 @@ use std::net::TcpListener;
 use std::path::PathBuf;
 
 use crate::WorkspaceContext;
-use crate::aws_auth::{self, AwsDiodeToken};
 
 const NOT_AUTHENTICATED_MESSAGE: &str = "Not authenticated. Run `pcb auth login` to authenticate.";
 const DIODE_API_AUTH_NONE: &str = "none";
@@ -191,26 +190,17 @@ pub fn refresh_tokens() -> Result<AuthTokens> {
 }
 
 pub fn get_valid_token_with_context(ctx: &WorkspaceContext) -> Result<String> {
-    get_valid_token_with_sources(
-        ctx,
-        aws_auth::get_service_token,
-        refresh_tokens_with_context,
-    )
+    get_valid_token_with_sources(ctx, refresh_tokens_with_context)
 }
 
 fn get_valid_token_with_sources(
     ctx: &WorkspaceContext,
-    aws_service_token: impl Fn(&WorkspaceContext) -> Result<AwsDiodeToken>,
     refresh_tokens: impl Fn(&WorkspaceContext) -> Result<AuthTokens>,
 ) -> Result<String> {
-    let aws_token = || {
-        aws_service_token(ctx)
-            .map(|token| token.access_token)
-            .map_err(|_| anyhow::anyhow!(NOT_AUTHENTICATED_MESSAGE))
-    };
+    let not_authenticated = || anyhow::anyhow!(NOT_AUTHENTICATED_MESSAGE);
 
     let Some(tokens) = load_tokens_with_context(ctx)? else {
-        return aws_token();
+        return Err(not_authenticated());
     };
 
     if !tokens.is_expired() {
@@ -219,7 +209,7 @@ fn get_valid_token_with_sources(
 
     match refresh_tokens(ctx) {
         Ok(new_tokens) => Ok(new_tokens.access_token),
-        Err(_) => aws_token(),
+        Err(_) => Err(not_authenticated()),
     }
 }
 
@@ -330,7 +320,8 @@ pub fn login() -> Result<()> {
 pub fn logout_with_context(ctx: &WorkspaceContext) -> Result<()> {
     pcb_zen::git::clear_diodehub_credential_cache();
     clear_tokens_with_context(ctx)?;
-    aws_auth::clear_service_token(ctx)?;
+    // Bearer tokens left behind by the retired AWS credential exchange.
+    let _ = fs::remove_dir_all(get_auth_dir()?.join("service-auth"));
     println!("✓ Logged out successfully");
     Ok(())
 }
@@ -361,23 +352,10 @@ pub fn status_with_context(ctx: &WorkspaceContext) -> Result<()> {
                 println!("  Token expires in: {}", tokens.time_until_expiry());
             }
         }
-        None => match aws_auth::get_service_token(ctx) {
-            Ok(token) => {
-                println!("  Status: Logged in");
-                println!("  Method: AWS credentials");
-                if let Some(aws_principal_arn) = &token.aws_principal_arn {
-                    println!("  AWS principal: {}", aws_principal_arn);
-                }
-                println!(
-                    "  Token expires in: {}",
-                    time_until_expiry(token.expires_at)
-                );
-            }
-            Err(_) => {
-                println!("  Status: Not logged in");
-                println!("\nRun `pcb auth login` to authenticate.");
-            }
-        },
+        None => {
+            println!("  Status: Not logged in");
+            println!("\nRun `pcb auth login` to authenticate.");
+        }
     }
     Ok(())
 }
@@ -539,37 +517,20 @@ mod tests {
         (tempdir, guard, WorkspaceContext::default())
     }
 
-    fn service_token(access_token: &str) -> AwsDiodeToken {
-        AwsDiodeToken {
-            access_token: access_token.to_string(),
-            expires_at: unix_now() + 3600,
-            aws_principal_arn: None,
-        }
-    }
-
     #[test]
     #[serial]
-    fn no_auth_file_and_aws_exchange_success_returns_service_token() {
+    fn no_auth_file_returns_not_authenticated() {
         let (_tempdir, _guard, ctx) = isolated_context();
-        let aws_calls = Cell::new(0);
         let refresh_calls = Cell::new(0);
 
-        let token = get_valid_token_with_sources(
-            &ctx,
-            |_| {
-                aws_calls.set(aws_calls.get() + 1);
-                Ok(service_token("aws-service-token"))
-            },
-            |_| {
-                refresh_calls.set(refresh_calls.get() + 1);
-                anyhow::bail!("refresh should not be called")
-            },
-        )
-        .unwrap();
+        let err = get_valid_token_with_sources(&ctx, |_| {
+            refresh_calls.set(refresh_calls.get() + 1);
+            anyhow::bail!("refresh should not be called")
+        })
+        .unwrap_err();
 
-        assert_eq!(token, "aws-service-token");
+        assert_eq!(err.to_string(), NOT_AUTHENTICATED_MESSAGE);
         assert_eq!(refresh_calls.get(), 0);
-        assert_eq!(aws_calls.get(), 1);
     }
 
     #[test]
@@ -583,7 +544,20 @@ mod tests {
 
     #[test]
     #[serial]
-    fn expired_auth_file_refresh_failure_falls_back_to_aws_exchange() {
+    fn logout_purges_legacy_service_auth_tokens() {
+        let (tempdir, _guard, ctx) = isolated_context();
+        let stale = tempdir.path().join("service-auth/api.toml");
+        fs::create_dir_all(stale.parent().unwrap()).unwrap();
+        fs::write(&stale, "access_token = \"stale-bearer\"\n").unwrap();
+
+        logout_with_context(&ctx).unwrap();
+
+        assert!(!stale.exists());
+    }
+
+    #[test]
+    #[serial]
+    fn expired_auth_file_refresh_failure_returns_not_authenticated() {
         let (_tempdir, _guard, ctx) = isolated_context();
         save_tokens(
             &ctx,
@@ -593,55 +567,50 @@ mod tests {
             Some("user@example.com"),
         )
         .unwrap();
-        let aws_calls = Cell::new(0);
         let refresh_calls = Cell::new(0);
 
-        let token = get_valid_token_with_sources(
-            &ctx,
-            |_| {
-                aws_calls.set(aws_calls.get() + 1);
-                Ok(service_token("aws-service-token"))
-            },
-            |_| {
-                refresh_calls.set(refresh_calls.get() + 1);
-                anyhow::bail!("refresh failed")
-            },
-        )
-        .unwrap();
-
-        assert_eq!(token, "aws-service-token");
-        assert_eq!(refresh_calls.get(), 1);
-        assert_eq!(aws_calls.get(), 1);
-    }
-
-    #[test]
-    #[serial]
-    fn no_auth_file_and_aws_unavailable_returns_existing_error() {
-        let (_tempdir, _guard, ctx) = isolated_context();
-        let aws_calls = Cell::new(0);
-        let refresh_calls = Cell::new(0);
-
-        let err = get_valid_token_with_sources(
-            &ctx,
-            |_| {
-                aws_calls.set(aws_calls.get() + 1);
-                anyhow::bail!("aws unavailable")
-            },
-            |_| {
-                refresh_calls.set(refresh_calls.get() + 1);
-                anyhow::bail!("refresh should not be called")
-            },
-        )
+        let err = get_valid_token_with_sources(&ctx, |_| {
+            refresh_calls.set(refresh_calls.get() + 1);
+            anyhow::bail!("refresh failed")
+        })
         .unwrap_err();
 
         assert_eq!(err.to_string(), NOT_AUTHENTICATED_MESSAGE);
-        assert_eq!(refresh_calls.get(), 0);
-        assert_eq!(aws_calls.get(), 1);
+        assert_eq!(refresh_calls.get(), 1);
     }
 
     #[test]
     #[serial]
-    fn valid_auth_file_does_not_call_aws_exchange() {
+    fn expired_auth_file_refresh_success_returns_new_token() {
+        let (_tempdir, _guard, ctx) = isolated_context();
+        save_tokens(
+            &ctx,
+            "expired-token",
+            "refresh-token",
+            unix_now() - 3600,
+            Some("user@example.com"),
+        )
+        .unwrap();
+        let refresh_calls = Cell::new(0);
+
+        let token = get_valid_token_with_sources(&ctx, |_| {
+            refresh_calls.set(refresh_calls.get() + 1);
+            Ok(AuthTokens {
+                access_token: "refreshed-token".to_string(),
+                refresh_token: "refresh-token".to_string(),
+                expires_at: unix_now() + 3600,
+                email: Some("user@example.com".to_string()),
+            })
+        })
+        .unwrap();
+
+        assert_eq!(token, "refreshed-token");
+        assert_eq!(refresh_calls.get(), 1);
+    }
+
+    #[test]
+    #[serial]
+    fn valid_auth_file_returns_local_token_without_refreshing() {
         let (_tempdir, _guard, ctx) = isolated_context();
         save_tokens(
             &ctx,
@@ -651,24 +620,15 @@ mod tests {
             Some("user@example.com"),
         )
         .unwrap();
-        let aws_calls = Cell::new(0);
         let refresh_calls = Cell::new(0);
 
-        let token = get_valid_token_with_sources(
-            &ctx,
-            |_| {
-                aws_calls.set(aws_calls.get() + 1);
-                anyhow::bail!("aws should not be called")
-            },
-            |_| {
-                refresh_calls.set(refresh_calls.get() + 1);
-                anyhow::bail!("refresh should not be called")
-            },
-        )
+        let token = get_valid_token_with_sources(&ctx, |_| {
+            refresh_calls.set(refresh_calls.get() + 1);
+            anyhow::bail!("refresh should not be called")
+        })
         .unwrap();
 
         assert_eq!(token, "local-token");
         assert_eq!(refresh_calls.get(), 0);
-        assert_eq!(aws_calls.get(), 0);
     }
 }

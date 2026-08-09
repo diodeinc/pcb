@@ -62,11 +62,22 @@ jobs:
               image: ghcr.io/diodeinc/kicad:10.0.5
               options: --user root
     steps:
+      - name: Cache APT packages (Ubuntu)
+        if: matrix.config.name == 'Ubuntu'
+        uses: actions/cache@v6
+        with:
+          path: /tmp/apt-cache/archives
+          key: apt-${{ runner.os }}-${{ runner.arch }}-debian-trixie-${{ env.KICAD_VERSION }}-ca-certificates-curl-build-essential-pkg-config
+          restore-keys: |
+            apt-${{ runner.os }}-${{ runner.arch }}-debian-trixie-${{ env.KICAD_VERSION }}-
+
       - name: Install Dependencies (Ubuntu)
         if: matrix.config.name == 'Ubuntu'
         run: |
-          apt-get update
-          apt-get install -y ca-certificates curl build-essential pkg-config libssl-dev
+          apt_cache_dir=/tmp/apt-cache/archives
+          mkdir -p "$apt_cache_dir/partial"
+          apt-get -o Dir::Cache::archives="$apt_cache_dir/" update
+          apt-get -o Dir::Cache::archives="$apt_cache_dir/" install -y --no-install-recommends ca-certificates curl build-essential pkg-config
 
       - uses: actions/checkout@v7
 

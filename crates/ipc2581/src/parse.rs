@@ -2,6 +2,17 @@ use crate::types::*;
 use crate::{Interner, Ipc2581Error, Result, Symbol};
 use uppsala::{Document, NodeId as Node};
 
+fn single_feature_offset(locations: &[Point], xform: Option<Xform>) -> Point {
+    if locations.len() <= 1 && xform.is_none() {
+        locations
+            .first()
+            .copied()
+            .unwrap_or(Point { x: 0.0, y: 0.0 })
+    } else {
+        Point { x: 0.0, y: 0.0 }
+    }
+}
+
 /// Parser context holding the string interner and unit context
 pub struct Parser<'a> {
     pub interner: Interner,
@@ -2228,9 +2239,8 @@ impl<'a> Parser<'a> {
 
     fn parse_features(&mut self, features_node: &Node) -> Result<Vec<ecad::SetFeature>> {
         let units = self.ecad_units.unwrap_or(Units::Millimeter);
-        let mut offset = Point { x: 0.0, y: 0.0 };
-        let mut xform_seen = false;
-        let mut location_seen = false;
+        let mut locations = Vec::new();
+        let mut xform = None;
         // IPC-2581C specifies one Feature child, but KiCad emits multiple
         // substitution-group children in a single Features container. Accept
         // that de facto shape without relaxing the container's child ordering.
@@ -2238,14 +2248,15 @@ impl<'a> Parser<'a> {
 
         for child in self.element_children(features_node) {
             let child_name = self.name(&child);
+            let offset = single_feature_offset(&locations, xform);
             match child_name {
                 "Xform" => {
-                    if xform_seen || location_seen || !features.is_empty() {
+                    if xform.is_some() || !locations.is_empty() || !features.is_empty() {
                         return Err(Ipc2581Error::InvalidStructure(
                             "Xform must be the first child of Features".to_string(),
                         ));
                     }
-                    xform_seen = true;
+                    xform = Some(self.parse_xform(&child, units));
                 }
                 "Location" => {
                     if !features.is_empty() {
@@ -2253,14 +2264,10 @@ impl<'a> Parser<'a> {
                             "Location must precede the Feature in Features".to_string(),
                         ));
                     }
-                    let location = Point {
+                    locations.push(Point {
                         x: self.parse_f64_attr_with_units(&child, "x", "Location", units)?,
                         y: self.parse_f64_attr_with_units(&child, "y", "Location", units)?,
-                    };
-                    if !location_seen {
-                        offset = location;
-                    }
-                    location_seen = true;
+                    });
                 }
                 "Polygon" => {
                     let polygon = self.parse_polygon(&child, units)?;
@@ -2287,27 +2294,30 @@ impl<'a> Parser<'a> {
                     features.push(self.parse_contour_feature(&child, units, offset)?);
                 }
                 "UserSpecial" => {
+                    let primitive = self.parse_user_special(&child, units)?;
                     features.push(ecad::SetFeature::UserPrimitive(
                         ecad::FeatureUserPrimitive {
-                            primitive: self.parse_user_special(&child, units)?,
+                            primitive,
                             x: offset.x,
                             y: offset.y,
                         },
                     ));
                 }
                 "StandardPrimitiveRef" => {
+                    let id = self.required_attr(&child, "id", "StandardPrimitiveRef")?;
                     features.push(ecad::SetFeature::StandardPrimitiveRef(
                         ecad::FeaturePrimitiveRef {
-                            id: self.required_attr(&child, "id", "StandardPrimitiveRef")?,
+                            id,
                             x: offset.x,
                             y: offset.y,
                         },
                     ));
                 }
                 "UserPrimitiveRef" => {
+                    let id = self.required_attr(&child, "id", "UserPrimitiveRef")?;
                     features.push(ecad::SetFeature::UserPrimitiveRef(
                         ecad::FeaturePrimitiveRef {
-                            id: self.required_attr(&child, "id", "UserPrimitiveRef")?,
+                            id,
                             x: offset.x,
                             y: offset.y,
                         },
@@ -2325,7 +2335,20 @@ impl<'a> Parser<'a> {
             return Err(Ipc2581Error::MissingElement("Feature in Features"));
         }
 
-        Ok(features)
+        if locations.len() > 1 || xform.is_some() {
+            if locations.is_empty() {
+                locations.push(Point { x: 0.0, y: 0.0 });
+            }
+            Ok(vec![ecad::SetFeature::PlacementGroup(
+                ecad::FeaturePlacementGroup {
+                    xform,
+                    locations,
+                    features,
+                },
+            )])
+        } else {
+            Ok(features)
+        }
     }
 
     fn parse_contour_feature(
@@ -2965,6 +2988,23 @@ impl<'a> Parser<'a> {
         let pad_use_str = self.required_attr(node, "padUse", "PadstackPadDef")?;
         let pad_use = self.parse_pad_use(self.interner.resolve(pad_use_str))?;
 
+        // The optional Location is the layer shape's offset from the
+        // padstack origin.
+        let units = self.ecad_units.unwrap_or(Units::Millimeter);
+        let location = self
+            .element_children(node)
+            .find(|n| self.name(n) == "Location");
+        let coordinate = |axis: &str| {
+            location
+                .as_ref()
+                .and_then(|n| self.attr(n, axis))
+                .and_then(|value| value.parse::<f64>().ok())
+                .map(|value| crate::units::to_mm(value, units))
+                .unwrap_or(0.0)
+        };
+        let x = coordinate("x");
+        let y = coordinate("y");
+
         // Parse StandardPrimitiveRef if present
         let standard_primitive_ref = self
             .element_children(node)
@@ -2982,6 +3022,8 @@ impl<'a> Parser<'a> {
         Ok(PadstackPadDef {
             layer_ref,
             pad_use,
+            x,
+            y,
             standard_primitive_ref,
             user_primitive_ref,
         })

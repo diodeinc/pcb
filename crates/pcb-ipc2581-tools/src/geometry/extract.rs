@@ -93,17 +93,41 @@ fn ipc_placement(location: Point, xform: Option<Xform>) -> IpcPlacement {
     }
 }
 
+impl IpcPlacement {
+    /// Re-pivot the placement for a padstack shape carried at `offset` from
+    /// the padstack origin.
+    ///
+    /// A pad's `Location` is the shape's unrotated position — origin plus
+    /// offset — while its `Xform` rotates the padstack about the origin. The
+    /// final center therefore moves by the rotated offset minus the raw one:
+    /// `center + (R - I) * offset`. Unrotated pads keep their location
+    /// unchanged. This composition reproduces both the drill origins and the
+    /// rendered shape centers of KiCad's own Gerber exports for offset
+    /// padstacks.
+    fn with_shape_offset(self, offset: Point) -> Self {
+        let rotated = self.transform.transform_vector(offset);
+        let center = Point::new(
+            self.center.x + rotated.x - offset.x,
+            self.center.y + rotated.y - offset.y,
+        );
+        IpcPlacement {
+            center,
+            xform: self.xform,
+            transform: Affine2::placement(
+                center,
+                self.xform.rotation,
+                Mirror::across_y(self.xform.mirror),
+                self.xform.scale,
+            ),
+        }
+    }
+}
+
 fn apply_ipc_placement(feature: &mut GeometryFeature, placement: IpcPlacement) {
     feature.transform = placement.transform;
     feature.center = placement.center;
     feature.rotation_degrees = placement.xform.rotation;
     feature.scale = placement.xform.scale;
-}
-
-#[derive(Debug, Clone, Copy)]
-enum PadPrimitiveRef {
-    Standard(Symbol),
-    User(Symbol),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -387,13 +411,13 @@ fn plating_kind(status: PlatingStatus) -> PlatingKind {
 }
 
 pub fn extract_layer(ipc: &Ipc2581, layer_name: &str) -> Result<GeometryDocument> {
-    extract_layer_for_view(ipc, layer_name, View::ArrayFlattened)
+    extract_layer_for_view(ipc, layer_name, ArtworkScope::ArrayFlattened)
 }
 
 pub fn extract_layer_for_view(
     ipc: &Ipc2581,
     layer_name: &str,
-    view: View,
+    view: ArtworkScope,
 ) -> Result<GeometryDocument> {
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
     let layer = ecad
@@ -406,42 +430,36 @@ pub fn extract_layer_for_view(
         .context("IPC-2581 ECAD section has no Step")?;
 
     let step = match view {
-        View::Board => canonical_board_step(ipc, &ecad.cad_data.steps, primary_step)?,
-        View::ArrayLocal | View::ArraySupport | View::ArrayFlattened | View::LayoutSymbolic => {
+        ArtworkScope::Board => canonical_board_step(ipc, &ecad.cad_data.steps, primary_step)?,
+        ArtworkScope::ArrayLocal | ArtworkScope::ArraySupport | ArtworkScope::ArrayFlattened => {
             primary_step
         }
     };
 
-    let mut doc = match view {
-        View::Board => extract_step_layer(ipc, step, &ecad.cad_data.layers, layer, layer_name)?,
-        View::ArraySupport if is_panel_step(step) => extract_panel_layer(
+    let panel_mode = match view {
+        ArtworkScope::ArraySupport => Some(PanelLayerMode::SupportOnly),
+        ArtworkScope::ArrayFlattened => Some(PanelLayerMode::Flattened),
+        ArtworkScope::Board | ArtworkScope::ArrayLocal => None,
+    };
+
+    let mut doc = match panel_mode.filter(|_| is_panel_step(step)) {
+        Some(mode) => extract_panel_layer(
             ipc,
             &ecad.cad_data.steps,
             &ecad.cad_data.layers,
             step,
             layer,
             layer_name,
-            PanelLayerMode::SupportOnly,
+            mode,
         )?,
-        View::ArrayFlattened if is_panel_step(step) => extract_panel_layer(
-            ipc,
-            &ecad.cad_data.steps,
-            &ecad.cad_data.layers,
-            step,
-            layer,
-            layer_name,
-            PanelLayerMode::Flattened,
-        )?,
-        View::ArrayLocal | View::ArraySupport | View::ArrayFlattened | View::LayoutSymbolic => {
-            extract_step_layer(ipc, step, &ecad.cad_data.layers, layer, layer_name)?
-        }
+        None => extract_step_layer_local(ipc, step, &ecad.cad_data.layers, layer, layer_name)?,
     };
 
     match view {
-        View::Board | View::ArrayLocal | View::ArraySupport => {
+        ArtworkScope::Board | ArtworkScope::ArrayLocal | ArtworkScope::ArraySupport => {
             append_step_only_layout_geometry(&mut doc, step)
         }
-        View::ArrayFlattened | View::LayoutSymbolic => {
+        ArtworkScope::ArrayFlattened => {
             append_layout_geometry(&mut doc, ipc, &ecad.cad_data.steps, step)?
         }
     }
@@ -603,7 +621,7 @@ fn append_step_layer_tree(
         return Ok(BBox::empty());
     }
 
-    let step_doc = extract_step_layer(
+    let step_doc = extract_step_layer_local(
         context.ipc,
         step,
         context.layers,
@@ -653,7 +671,7 @@ fn append_step_layer_tree(
     Ok(bbox)
 }
 
-fn extract_step_layer(
+pub(crate) fn extract_step_layer_local(
     ipc: &Ipc2581,
     step: &Step,
     layers: &[Layer],
@@ -722,57 +740,15 @@ fn extract_step_layer(
                     set_index: set_index as u32,
                     feature_index: feature_index as u32,
                 };
-                let features = match set_feature {
-                    SetFeature::Pad(pad) => extract_pad(
-                        &context, layer.name, set.net, polarity, source, pad, &mut doc,
-                    )?
-                    .into_iter()
-                    .collect(),
-                    SetFeature::Fiducial(fiducial) => {
-                        extract_fiducial(&context, set.net, polarity, source, fiducial, &mut doc)?
-                            .into_iter()
-                            .collect()
-                    }
-                    SetFeature::Trace(trace) => {
-                        extract_trace(&context, set.net, polarity, source, trace, &mut doc)
-                            .into_iter()
-                            .collect()
-                    }
-                    SetFeature::UserPrimitive(primitive) => extract_inline_user_primitive(
-                        &context, set.net, polarity, source, primitive, &mut doc,
-                    )?,
-                    SetFeature::Polygon(polygon) => vec![extract_polygon(
-                        set.net, polarity, source, polygon, &mut doc,
-                    )],
-                    SetFeature::Line(line) => vec![extract_line(
-                        &context, set.net, polarity, source, line, &mut doc,
-                    )],
-                    SetFeature::Arc(arc) => vec![extract_arc(
-                        &context, set.net, polarity, source, arc, &mut doc,
-                    )],
-                    SetFeature::Polyline(polyline) => vec![extract_feature_polyline(
-                        &context, set.net, polarity, source, polyline, &mut doc,
-                    )],
-                    SetFeature::StandardPrimitiveRef(primitive_ref) => extract_feature_primitive(
-                        &context,
-                        set.net,
-                        polarity,
-                        source,
-                        primitive_ref,
-                        FeaturePrimitiveKind::Standard,
-                        &mut doc,
-                    )?,
-                    SetFeature::UserPrimitiveRef(primitive_ref) => extract_feature_primitive(
-                        &context,
-                        set.net,
-                        polarity,
-                        source,
-                        primitive_ref,
-                        FeaturePrimitiveKind::User,
-                        &mut doc,
-                    )?,
-                    SetFeature::Hole(_) | SetFeature::Slot(_) => Vec::new(),
-                };
+                let features = extract_set_feature(
+                    &context,
+                    layer.name,
+                    set.net,
+                    polarity,
+                    source,
+                    set_feature,
+                    &mut doc,
+                )?;
 
                 for mut feature in features {
                     feature.source_step_ref = Some(step.name);
@@ -868,7 +844,112 @@ fn extract_step_layer(
     Ok(doc)
 }
 
-fn step_repeat_transform(repeat: &StepRepeat, ix: u32, iy: u32) -> Affine2 {
+fn extract_set_feature(
+    context: &ExtractContext<'_>,
+    layer_ref: Symbol,
+    net: Option<Symbol>,
+    polarity: GeometryPolarity,
+    source: SourceRef,
+    set_feature: &SetFeature,
+    doc: &mut GeometryDocument,
+) -> Result<Vec<GeometryFeature>> {
+    match set_feature {
+        SetFeature::Pad(pad) => Ok(extract_pad(
+            context, layer_ref, net, polarity, source, pad, doc,
+        )?
+        .into_iter()
+        .collect()),
+        SetFeature::Fiducial(fiducial) => Ok(extract_fiducial(
+            context, net, polarity, source, fiducial, doc,
+        )?
+        .into_iter()
+        .collect()),
+        SetFeature::Trace(trace) => Ok(extract_trace(context, net, polarity, source, trace, doc)
+            .into_iter()
+            .collect()),
+        SetFeature::UserPrimitive(primitive) => {
+            extract_inline_user_primitive(context, net, polarity, source, primitive, doc)
+        }
+        SetFeature::Polygon(polygon) => {
+            Ok(vec![extract_polygon(net, polarity, source, polygon, doc)])
+        }
+        SetFeature::Line(line) => Ok(vec![extract_line(
+            context, net, polarity, source, line, doc,
+        )]),
+        SetFeature::Arc(arc) => Ok(vec![extract_arc(context, net, polarity, source, arc, doc)]),
+        SetFeature::Polyline(polyline) => Ok(vec![extract_feature_polyline(
+            context, net, polarity, source, polyline, doc,
+        )]),
+        SetFeature::StandardPrimitiveRef(primitive_ref) => extract_feature_primitive(
+            context,
+            net,
+            polarity,
+            source,
+            primitive_ref,
+            FeaturePrimitiveKind::Standard,
+            doc,
+        ),
+        SetFeature::UserPrimitiveRef(primitive_ref) => extract_feature_primitive(
+            context,
+            net,
+            polarity,
+            source,
+            primitive_ref,
+            FeaturePrimitiveKind::User,
+            doc,
+        ),
+        SetFeature::PlacementGroup(group) => {
+            extract_feature_placement_group(context, layer_ref, net, polarity, source, group, doc)
+        }
+        SetFeature::Hole(_) | SetFeature::Slot(_) => Ok(Vec::new()),
+    }
+}
+
+fn extract_feature_placement_group(
+    context: &ExtractContext<'_>,
+    layer_ref: Symbol,
+    net: Option<Symbol>,
+    polarity: GeometryPolarity,
+    source: SourceRef,
+    group: &ipc2581::types::ecad::FeaturePlacementGroup,
+    doc: &mut GeometryDocument,
+) -> Result<Vec<GeometryFeature>> {
+    let placement_start = doc.feature_placements.len() as u32;
+    doc.feature_placements.extend(
+        group.locations.iter().map(|location| {
+            ipc_placement(Point::new(location.x, location.y), group.xform).transform
+        }),
+    );
+    let placements = Span::new(
+        placement_start,
+        doc.feature_placements.len() as u32 - placement_start,
+    );
+    let group_id = doc.feature_placement_groups.len() as u32;
+    doc.feature_placement_groups.push(FeaturePlacementGroup {
+        placements,
+        features: Span::EMPTY,
+    });
+
+    let feature_start = doc.features.len() as u32;
+    let mut features = Vec::new();
+    for child in &group.features {
+        for mut feature in
+            extract_set_feature(context, layer_ref, net, polarity, source, child, doc)?
+        {
+            if feature.placement_group.is_some() {
+                bail!("nested IPC feature placement groups are not supported");
+            }
+            feature.placement_group = Some(group_id);
+            feature.bbox = doc.placed_paths_bbox(&feature);
+            features.push(feature);
+        }
+    }
+    doc.feature_placement_groups[group_id as usize].features =
+        Span::new(feature_start, features.len() as u32);
+    Ok(features)
+}
+
+pub(crate) fn step_repeat_transform(repeat: &StepRepeat, ix: u32, iy: u32) -> Affine2 {
     Affine2::placement(
         Point::new(
             repeat.x + ix as f64 * repeat.dx,
@@ -927,6 +1008,7 @@ fn append_transformed_layer(
 ) -> Result<BBox> {
     let layer = &source.layers[layer_index];
     let mut layer_bbox = BBox::empty();
+    let mut placement_groups = HashMap::<u32, u32>::new();
 
     for source_set_index in layer.sets.indices() {
         let source_set = &source.feature_sets[source_set_index as usize];
@@ -957,21 +1039,64 @@ fn append_transformed_layer(
         });
 
         for feature in source_set.features.slice(&source.features) {
+            let target_placement_group = if let Some(source_group_id) = feature.placement_group {
+                if let Some(&target_group_id) = placement_groups.get(&source_group_id) {
+                    Some(target_group_id)
+                } else {
+                    let source_group = &source.feature_placement_groups[source_group_id as usize];
+                    let placement_start = target.feature_placements.len() as u32;
+                    target.feature_placements.extend(
+                        source_group
+                            .placements
+                            .slice(&source.feature_placements)
+                            .iter()
+                            .map(|&placement| transform.concat(placement)),
+                    );
+                    let target_group_id = target.feature_placement_groups.len() as u32;
+                    target.feature_placement_groups.push(FeaturePlacementGroup {
+                        placements: Span::new(
+                            placement_start,
+                            target.feature_placements.len() as u32 - placement_start,
+                        ),
+                        features: Span::new(
+                            target.features.len() as u32,
+                            source_group.features.count,
+                        ),
+                    });
+                    placement_groups.insert(source_group_id, target_group_id);
+                    Some(target_group_id)
+                }
+            } else {
+                None
+            };
             let path_start = target.arena.paths.len() as u32;
             for path_index in feature.paths.indices() {
-                target
-                    .arena
-                    .append_path_from(&source.arena, path_index, transform);
+                target.arena.append_path_from(
+                    &source.arena,
+                    path_index,
+                    if target_placement_group.is_some() {
+                        Affine2::IDENTITY
+                    } else {
+                        transform
+                    },
+                );
             }
             let path_count = target.arena.paths.len() as u32 - path_start;
             let paths = Span::new(path_start, path_count);
-            let bbox = target.arena.paths_bbox(paths);
+            let bbox = if target_placement_group.is_some() {
+                feature.bbox.transformed(transform)
+            } else {
+                target.arena.paths_bbox(paths)
+            };
 
             let mut feature = feature.clone();
-            feature.transform = transform.concat(feature.transform);
+            if target_placement_group.is_none() {
+                feature.transform = transform.concat(feature.transform);
+                feature.center = transform.transform_point(feature.center);
+            }
             feature.bbox = bbox;
             feature.paths = paths;
-            feature.center = transform.transform_point(feature.center);
+            feature.placement_group = target_placement_group;
             feature.set = Some(target_set);
             feature.source.set_index = feature
                 .source
@@ -1241,7 +1366,7 @@ fn layout_step_kind(step: &Step) -> LayoutStepKind {
     }
 }
 
-fn is_panel_step(step: &Step) -> bool {
+pub(crate) fn is_panel_step(step: &Step) -> bool {
     matches!(step.step_type, Some(StepType::Pallet))
         || (step.step_type.is_none() && !step.step_repeats.is_empty())
 }
@@ -1336,10 +1461,7 @@ fn extract_pad(
         _ => FeatureRole::Pad,
     };
 
-    let placement = ipc_placement(Point::new(x, y), pad.xform);
-
-    let primitive_ref = pad_primitive_ref(pad, padstack, layer_ref);
-    let Some(primitive_ref) = primitive_ref else {
+    let Some(shape) = pad_shape(pad, padstack, layer_ref) else {
         doc.warn(format!(
             "Skipping padstack '{}' because it has no regular primitive for layer '{}'",
             context.ipc.resolve(padstack.name),
@@ -1347,10 +1469,12 @@ fn extract_pad(
         ));
         return Ok(None);
     };
+    let placement = ipc_placement(Point::new(x, y), pad.xform).with_shape_offset(shape.offset);
+    let primitive_ref = shape.primitive;
 
     let path_start = doc.arena.paths.len() as u32;
     let paint = match primitive_ref {
-        PadPrimitiveRef::Standard(primitive_ref) => {
+        PrimitiveRef::Standard(primitive_ref) => {
             let Some(primitive) = context.standard_primitives.get(&primitive_ref).copied() else {
                 doc.warn(format!(
                     "Skipping padstack '{}' because primitive '{}' is missing",
@@ -1361,7 +1485,7 @@ fn extract_pad(
             };
             lower_standard_primitive(context, doc, primitive, placement.transform)?
         }
-        PadPrimitiveRef::User(primitive_ref) => {
+        PrimitiveRef::User(primitive_ref) => {
             let Some(primitive) = context.user_primitives.get(&primitive_ref).copied() else {
                 doc.warn(format!(
                     "Skipping padstack '{}' because user primitive '{}' is missing",
@@ -1395,11 +1519,7 @@ fn extract_pad(
     feature.intent.role = role;
     apply_ipc_placement(&mut feature, placement);
     feature.padstack_ref = Some(padstack_ref);
-    feature.primitive_ref = match primitive_ref {
-        PadPrimitiveRef::Standard(primitive_ref) | PadPrimitiveRef::User(primitive_ref) => {
-            Some(primitive_ref)
-        }
-    };
+    feature.primitive_ref = Some(primitive_ref);
     feature.intent.plating = padstack
         .hole_def
         .as_ref()
@@ -1420,22 +1540,22 @@ fn extract_pad(
     Ok(Some(feature))
 }
 
-fn pad_primitive_ref(
+/// The shape a pad paints on one layer: its primitive plus the layer
+/// definition's offset from the padstack origin.
+///
+/// The layer's `PadstackPadDef` is the sole authority for the offset, even
+/// when the pad-level inline primitive reference wins the primitive choice.
+struct PadShape {
+    primitive: PrimitiveRef<Symbol>,
+    offset: Point,
+}
+
+fn pad_shape(
     pad: &ipc2581::types::Pad,
     padstack: &ipc2581::types::PadStackDef,
     layer_ref: Symbol,
-) -> Option<PadPrimitiveRef> {
-    pad.standard_primitive_ref
-        .map(PadPrimitiveRef::Standard)
-        .or_else(|| pad.user_primitive_ref.map(PadPrimitiveRef::User))
-        .or_else(|| find_pad_primitive_ref(padstack, layer_ref))
-}
-
-fn find_pad_primitive_ref(
-    padstack: &ipc2581::types::PadStackDef,
-    layer_ref: Symbol,
-) -> Option<PadPrimitiveRef> {
-    padstack
+) -> Option<PadShape> {
+    let pad_def = padstack
         .pad_defs
         .iter()
         .find(|pad_def| pad_def.layer_ref == layer_ref && pad_def.pad_use == PadUse::Regular)
@@ -1443,13 +1563,21 @@ fn find_pad_primitive_ref(
             padstack.pad_defs.iter().find(|pad_def| {
                 pad_def.layer_ref == layer_ref && pad_def.pad_use == PadUse::Thermal
             })
-        })
-        .and_then(|pad_def| {
-            pad_def
-                .standard_primitive_ref
-                .map(PadPrimitiveRef::Standard)
-                .or_else(|| pad_def.user_primitive_ref.map(PadPrimitiveRef::User))
-        })
+        });
+    let primitive = pad
+        .standard_primitive_ref
+        .map(PrimitiveRef::Standard)
+        .or_else(|| pad.user_primitive_ref.map(PrimitiveRef::User))
+        .or_else(|| {
+            pad_def.and_then(|pad_def| {
+                pad_def
+                    .standard_primitive_ref
+                    .map(PrimitiveRef::Standard)
+                    .or_else(|| pad_def.user_primitive_ref.map(PrimitiveRef::User))
+            })
+        })?;
+    let offset = pad_def.map_or(Point::default(), |pad_def| Point::new(pad_def.x, pad_def.y));
+    Some(PadShape { primitive, offset })
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1474,7 +1602,7 @@ fn extract_feature_primitive(
         1.0,
     );
     let path_start = doc.arena.paths.len() as u32;
-    let paint = match primitive_kind {
+    let (paint, primitive_ref) = match primitive_kind {
         FeaturePrimitiveKind::Standard => {
             let Some(primitive) = context.standard_primitives.get(&primitive_ref.id).copied()
             else {
@@ -1484,7 +1612,10 @@ fn extract_feature_primitive(
                 ));
                 return Ok(Vec::new());
             };
-            lower_standard_primitive(context, doc, primitive, transform)?
+            (
+                lower_standard_primitive(context, doc, primitive, transform)?,
+                PrimitiveRef::Standard(primitive_ref.id),
+            )
         }
         FeaturePrimitiveKind::User => {
             let Some(primitive) = context.user_primitives.get(&primitive_ref.id).copied() else {
@@ -1494,7 +1625,10 @@ fn extract_feature_primitive(
                 ));
                 return Ok(Vec::new());
             };
-            lower_user_primitive(context, doc, primitive, transform)
+            (
+                lower_user_primitive(context, doc, primitive, transform),
+                PrimitiveRef::User(primitive_ref.id),
+            )
         }
     };
 
@@ -1507,7 +1641,7 @@ fn extract_feature_primitive(
             transform,
             path_start,
             paint,
-            Some(primitive_ref.id),
+            Some(primitive_ref),
         ),
     )
 }
@@ -1537,7 +1671,7 @@ fn primitive_path_feature(
     transform: Affine2,
     path_start: u32,
     paint: PrimitivePaint,
-    primitive_ref: Option<Symbol>,
+    primitive_ref: Option<PrimitiveRef<Symbol>>,
 ) -> GeometryFeature {
     let mut feature = GeometryFeature::new(
         FeatureKind::Primitive,
@@ -1599,7 +1733,7 @@ fn extract_fiducial(
             };
             (
                 lower_standard_primitive(context, doc, primitive, placement.transform)?,
-                Some(*primitive_ref),
+                Some(PrimitiveRef::Standard(*primitive_ref)),
                 standard_primitive_outer_diameter(primitive),
             )
         }
@@ -3341,7 +3475,7 @@ mod tests {
         )
         .unwrap();
 
-        let layer = extract_layer_for_view(&ipc, "TOP", View::Board).unwrap();
+        let layer = extract_layer_for_view(&ipc, "TOP", ArtworkScope::Board).unwrap();
         let path = &layer.arena.paths[layer.features[0].paths.start as usize];
 
         assert_eq!(path.stroke().unwrap().pattern, LinePattern::Phantom);
@@ -3401,7 +3535,7 @@ mod tests {
         )
         .unwrap();
 
-        let top = extract_layer_for_view(&ipc, "TOP", View::ArrayFlattened).unwrap();
+        let top = extract_layer_for_view(&ipc, "TOP", ArtworkScope::ArrayFlattened).unwrap();
         assert_eq!(top.specs.len(), 1);
         assert_eq!(top.layers[0].spec_refs.count, 1);
         assert_eq!(top.feature_sets.len(), 1);
@@ -3420,7 +3554,7 @@ mod tests {
         assert_eq!(top.features[0].pin_refs.count, 1);
         assert_eq!(ipc.resolve(top.pin_refs[0].pin), "1");
 
-        let vcut = extract_layer_for_view(&ipc, "VCUT", View::ArrayFlattened).unwrap();
+        let vcut = extract_layer_for_view(&ipc, "VCUT", ArtworkScope::ArrayFlattened).unwrap();
         assert_eq!(vcut.layers[0].spec_refs.count, 1);
         assert_eq!(vcut.feature_sets[0].spec_refs.count, 1);
         assert_eq!(vcut.features[0].intent.domain, FeatureDomain::VCut);
@@ -3996,8 +4130,8 @@ mod tests {
         let ipc = ipc2581::Ipc2581::parse(panel_layer_fixture())
             .expect("synthetic panel fixture should parse");
 
-        let board =
-            extract_layer_for_view(&ipc, "TOP", View::Board).expect("board layer should extract");
+        let board = extract_layer_for_view(&ipc, "TOP", ArtworkScope::Board)
+            .expect("board layer should extract");
         let board_layer = &board.layers[0];
         let board_features = board_layer.features.slice(&board.features);
 
@@ -4012,7 +4146,7 @@ mod tests {
             1
         );
 
-        let panel = extract_layer_for_view(&ipc, "TOP", View::ArrayFlattened)
+        let panel = extract_layer_for_view(&ipc, "TOP", ArtworkScope::ArrayFlattened)
             .expect("panel layer should extract");
         let panel_layer = &panel.layers[0];
         let panel_features = panel_layer.features.slice(&panel.features);
@@ -4030,27 +4164,10 @@ mod tests {
     }
 
     #[test]
-    fn symbolic_panel_extraction_carries_repeats_without_child_features() {
-        let ipc = ipc2581::Ipc2581::parse(panel_layer_fixture())
-            .expect("synthetic panel fixture should parse");
-        let doc = extract_layer_for_view(&ipc, "TOP", View::LayoutSymbolic)
-            .expect("panel layer should extract");
-        let layer = &doc.layers[0];
-        let features = layer.features.slice(&doc.features);
-
-        assert_eq!(features.len(), 1);
-        assert_eq!(features[0].center, Point::new(40.0, 5.0));
-        assert_eq!(doc.layout.steps.len(), 2);
-        assert_eq!(doc.layout.repeats.len(), 1);
-        assert_eq!(doc.layout.instances.len(), 2);
-        assert_eq!(board_instance_count(&doc), 2);
-    }
-
-    #[test]
     fn step_only_panel_extraction_omits_repeat_graph_expansion() {
         let ipc = ipc2581::Ipc2581::parse(panel_layer_fixture())
             .expect("synthetic panel fixture should parse");
-        let doc = extract_layer_for_view(&ipc, "TOP", View::ArrayLocal)
+        let doc = extract_layer_for_view(&ipc, "TOP", ArtworkScope::ArrayLocal)
             .expect("panel layer should extract");
         let layer = &doc.layers[0];
         let features = layer.features.slice(&doc.features);
@@ -4137,7 +4254,7 @@ mod tests {
     fn nested_panel_layer_extraction_materializes_descendant_board_features() {
         let ipc = ipc2581::Ipc2581::parse(nested_panel_fixture())
             .expect("synthetic nested panel fixture should parse");
-        let doc = extract_layer_for_view(&ipc, "TOP", View::ArrayFlattened)
+        let doc = extract_layer_for_view(&ipc, "TOP", ArtworkScope::ArrayFlattened)
             .expect("nested panel layer should extract");
         let layer = &doc.layers[0];
         let features = layer.features.slice(&doc.features);
@@ -4156,6 +4273,27 @@ mod tests {
             ]
         );
         assert_eq!(board_instance_count(&doc), 4);
+    }
+
+    /// The reported fabrication-panel bug: a render of a nested panel has to
+    /// carry every descendant board's copper, not just the root step's own
+    /// support geometry.
+    #[test]
+    fn nested_panel_render_draws_every_descendant_board_instance() {
+        let ipc = ipc2581::Ipc2581::parse(nested_panel_fixture())
+            .expect("synthetic nested panel fixture should parse");
+        let mut doc = extract_layer_for_view(&ipc, "TOP", ArtworkScope::ArrayFlattened)
+            .expect("nested panel layer should extract");
+        pcb_ir::dialects::ipc::process::normalize_for_artwork(&mut doc);
+
+        let svg = crate::geometry::render::render_layer_svg(
+            &doc,
+            false,
+            ArtworkScope::ArrayFlattened.profile_set(),
+        );
+
+        // One drawn pad per board across both nested repeat levels.
+        assert_eq!(svg.matches("<path d=").count(), 4, "{svg}");
     }
 
     #[test]
@@ -4385,6 +4523,70 @@ mod tests {
         );
         assert!((slot.bbox.width() - 0.60).abs() < 1e-6);
         assert!((slot.bbox.height() - 1.70).abs() < 1e-6);
+    }
+
+    #[test]
+    fn padstack_shape_offsets_pivot_about_the_recovered_origin() {
+        // A pad's Location is the shape's unrotated position (origin plus
+        // the PadstackPadDef offset); Xform rotation pivots about the
+        // origin. An unrotated pad stays at its Location; a 270-degree pad
+        // moves by (R - I) * offset. This matches KiCad's own Gerber and
+        // drill output for offset padstacks.
+        let ipc = Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <LayerRef name="TOP"/>
+    <DictionaryStandard units="MILLIMETER">
+      <EntryStandard id="square">
+        <RectCenter width="8" height="8"/>
+      </EntryStandard>
+    </DictionaryStandard>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <PadStackDef name="offset_pad">
+          <PadstackPadDef layerRef="TOP" padUse="REGULAR">
+            <Location x="-2.0" y="-2.0"/>
+            <StandardPrimitiveRef id="square"/>
+          </PadstackPadDef>
+        </PadStackDef>
+        <LayerFeature layerRef="TOP">
+          <Set>
+            <Pad padstackDefRef="offset_pad">
+              <Location x="10" y="10"/>
+              <StandardPrimitiveRef id="square"/>
+            </Pad>
+            <Pad padstackDefRef="offset_pad">
+              <Xform rotation="270.0"/>
+              <Location x="40" y="10"/>
+              <StandardPrimitiveRef id="square"/>
+            </Pad>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+
+        let doc = extract_layer(&ipc, "TOP").unwrap();
+        assert_eq!(doc.features.len(), 2);
+
+        let unrotated = doc.features[0].bbox;
+        assert!((unrotated.center().x - 10.0).abs() < 1e-9);
+        assert!((unrotated.center().y - 10.0).abs() < 1e-9);
+
+        // (R270 - I) * (-2, -2) = (-2, 2) - (-2, -2) = (0, 4).
+        let rotated = doc.features[1].bbox;
+        assert!((rotated.center().x - 40.0).abs() < 1e-9);
+        assert!((rotated.center().y - 14.0).abs() < 1e-9);
     }
 
     #[test]

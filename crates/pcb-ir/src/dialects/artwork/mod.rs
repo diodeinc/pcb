@@ -20,6 +20,9 @@ use crate::geom::{
 #[derive(Debug, Clone, Default)]
 pub struct Document<LayerMeta = (), ObjectMeta = ()> {
     pub apertures: Vec<Aperture>,
+    /// Reusable ordered sub-images. Blocks are target-independent; consumers
+    /// either preserve or expand them explicitly.
+    pub blocks: Vec<Block<ObjectMeta>>,
     pub layers: Vec<Layer<LayerMeta>>,
     pub objects: Vec<Object<ObjectMeta>>,
     pub arena: PathArena,
@@ -30,6 +33,7 @@ impl<LayerMeta, ObjectMeta> Document<LayerMeta, ObjectMeta> {
     pub fn new() -> Self {
         Self {
             apertures: Vec::new(),
+            blocks: Vec::new(),
             layers: Vec::new(),
             objects: Vec::new(),
             arena: PathArena::default(),
@@ -41,6 +45,26 @@ impl<LayerMeta, ObjectMeta> Document<LayerMeta, ObjectMeta> {
         layer.objects = Span::new(self.objects.len() as u32, 0);
         let id = self.layers.len() as u32;
         self.layers.push(layer);
+        id
+    }
+
+    /// Create an empty reusable artwork block.
+    pub fn push_block(&mut self) -> u32 {
+        let id = self.blocks.len() as u32;
+        self.blocks.push(Block {
+            objects: Vec::new(),
+            bbox: BBox::empty(),
+        });
+        id
+    }
+
+    /// Append an object to a block.
+    pub fn push_block_object(&mut self, block_id: u32, object: Object<ObjectMeta>) -> u32 {
+        let block = &mut self.blocks[block_id as usize];
+        let id = block.objects.len() as u32;
+        let bbox = object.bbox;
+        block.objects.push(object);
+        block.bbox = block.bbox.union(bbox);
         id
     }
 
@@ -92,6 +116,22 @@ impl<LayerMeta, ObjectMeta> Document<LayerMeta, ObjectMeta> {
 
     pub fn validate(&self) -> Result<(), crate::geom::Diagnostics> {
         let mut diagnostics = crate::geom::Diagnostics::default();
+        for (index, block) in self.blocks.iter().enumerate() {
+            if let Err(message) = crate::geom::validate_bbox("artwork block", index, block.bbox) {
+                diagnostics.error(message);
+            }
+            let object_name = format!("artwork block {index} object");
+            for (object_index, object) in block.objects.iter().enumerate() {
+                if let Some(error) = geometry_ref_error(self, object.geometry, index) {
+                    diagnostics.error(format!("{object_name} {object_index} {error}"));
+                }
+                if let Err(message) =
+                    crate::geom::validate_bbox(&object_name, object_index, object.bbox)
+                {
+                    diagnostics.error(message);
+                }
+            }
+        }
         for (index, layer) in self.layers.iter().enumerate() {
             if let Err(message) =
                 layer
@@ -105,21 +145,8 @@ impl<LayerMeta, ObjectMeta> Document<LayerMeta, ObjectMeta> {
             }
         }
         for (index, object) in self.objects.iter().enumerate() {
-            match object.geometry {
-                Geometry::Flash { aperture, .. } => {
-                    if aperture as usize >= self.apertures.len() {
-                        diagnostics.error(format!(
-                            "artwork object {index} references missing aperture {aperture}"
-                        ));
-                    }
-                }
-                Geometry::Stroke { path } | Geometry::Region { path } => {
-                    if path as usize >= self.arena.paths.len() {
-                        diagnostics.error(format!(
-                            "artwork object {index} references missing path {path}"
-                        ));
-                    }
-                }
+            if let Some(error) = geometry_ref_error(self, object.geometry, self.blocks.len()) {
+                diagnostics.error(format!("artwork object {index} {error}"));
             }
             if let Err(message) = crate::geom::validate_bbox("artwork object", index, object.bbox) {
                 diagnostics.error(message);
@@ -128,6 +155,39 @@ impl<LayerMeta, ObjectMeta> Document<LayerMeta, ObjectMeta> {
         self.arena.validate_into("artwork", &mut diagnostics);
         diagnostics.into_result()
     }
+}
+
+fn geometry_ref_error<LayerMeta, ObjectMeta>(
+    doc: &Document<LayerMeta, ObjectMeta>,
+    geometry: Geometry,
+    block_limit: usize,
+) -> Option<String> {
+    match geometry {
+        Geometry::Flash { aperture, .. } if aperture as usize >= doc.apertures.len() => {
+            Some(format!("references missing aperture {aperture}"))
+        }
+        Geometry::Stroke { path } | Geometry::Region { path }
+            if path as usize >= doc.arena.paths.len() =>
+        {
+            Some(format!("references missing path {path}"))
+        }
+        Geometry::Instance { block, .. } if block as usize >= doc.blocks.len() => {
+            Some(format!("references missing block {block}"))
+        }
+        Geometry::Instance { block, .. } if block as usize >= block_limit => Some(format!(
+            "references block {block}; reusable blocks must reference earlier blocks"
+        )),
+        _ => None,
+    }
+}
+
+/// A reusable ordered sub-image in local coordinates.
+#[derive(Debug, Clone)]
+pub struct Block<Meta = ()> {
+    /// Blocks are topologically ordered: instances may only reference an
+    /// earlier block. This makes cycles unrepresentable in valid artwork.
+    pub objects: Vec<Object<Meta>>,
+    pub bbox: BBox,
 }
 
 #[derive(Debug, Clone)]
@@ -198,26 +258,28 @@ pub enum Geometry {
     Stroke { path: u32 },
     /// A filled region path (`arena.paths` index, fill paint).
     Region { path: u32 },
+    /// A reusable ordered sub-image placed under an affine transform.
+    Instance { block: u32, transform: Affine2 },
 }
 
 impl Geometry {
     pub fn path(self) -> Option<u32> {
         match self {
-            Self::Flash { .. } => None,
+            Self::Flash { .. } | Self::Instance { .. } => None,
             Self::Stroke { path } | Self::Region { path } => Some(path),
         }
     }
 }
 
 /// A standard aperture: a primitive shape with an optional round hole.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Aperture {
     pub shape: ApertureShape,
     /// Diameter of the round hole through the aperture; `0.0` means solid.
     pub hole_diameter: f64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ApertureShape {
     Circle {
         diameter: f64,
@@ -237,6 +299,21 @@ pub enum ApertureShape {
         vertices: u32,
         rotation_degrees: f64,
     },
+    /// Rectangle with all four corners rounded to `radius`. A radius above
+    /// `min(width, height) / 2` images clamped to that limit.
+    RoundRect {
+        width: f64,
+        height: f64,
+        radius: f64,
+    },
+    /// An arbitrary origin-local filled contour, shared by every flash of
+    /// this aperture, painted under its source path's fill rule. This is
+    /// how repeated dictionary instances stay instances all the way to the
+    /// output.
+    Contour {
+        outline: ContourBuf,
+        fill_rule: FillRule,
+    },
 }
 
 impl Aperture {
@@ -254,15 +331,21 @@ impl Aperture {
     /// Flatten to local-space contours. With a hole, the result is the outer
     /// shape plus the hole contour and must be filled with `EvenOdd`.
     pub fn contours(&self) -> Vec<ContourBuf> {
-        let outer = match self.shape {
-            ApertureShape::Circle { diameter } => shapes::circle(diameter),
-            ApertureShape::Rectangle { width, height } => shapes::rect(width, height),
-            ApertureShape::Obround { width, height } => shapes::obround(width, height, true),
+        let outer = match &self.shape {
+            ApertureShape::Circle { diameter } => shapes::circle(*diameter),
+            ApertureShape::Rectangle { width, height } => shapes::rect(*width, *height),
+            ApertureShape::Obround { width, height } => shapes::obround(*width, *height, true),
             ApertureShape::Polygon {
                 diameter,
                 vertices,
                 rotation_degrees,
-            } => shapes::regular_polygon(diameter, vertices, rotation_degrees),
+            } => shapes::regular_polygon(*diameter, *vertices, *rotation_degrees),
+            ApertureShape::RoundRect {
+                width,
+                height,
+                radius,
+            } => shapes::rounded_rect(*width, *height, *radius, shapes::ALL_CORNERS, true),
+            ApertureShape::Contour { outline, .. } => return vec![outline.clone()],
         };
         let mut contours: Vec<ContourBuf> = outer.into_iter().collect();
         if !contours.is_empty() && self.hole_diameter > 0.0 {
@@ -272,26 +355,28 @@ impl Aperture {
     }
 
     pub fn fill_rule(&self) -> FillRule {
-        if self.hole_diameter > 0.0 {
-            FillRule::EvenOdd
-        } else {
-            FillRule::NonZero
+        match &self.shape {
+            ApertureShape::Contour { fill_rule, .. } => *fill_rule,
+            _ if self.hole_diameter > 0.0 => FillRule::EvenOdd,
+            _ => FillRule::NonZero,
         }
     }
 
     pub fn bbox(&self) -> BBox {
-        match self.shape {
+        match &self.shape {
             ApertureShape::Circle { diameter } => {
                 BBox::from_point(Point::ZERO).expand(diameter / 2.0)
             }
             ApertureShape::Rectangle { width, height }
-            | ApertureShape::Obround { width, height } => BBox::new(
+            | ApertureShape::Obround { width, height }
+            | ApertureShape::RoundRect { width, height, .. } => BBox::new(
                 Point::new(-width / 2.0, -height / 2.0),
                 Point::new(width / 2.0, height / 2.0),
             ),
             ApertureShape::Polygon { diameter, .. } => {
                 BBox::from_point(Point::ZERO).expand(diameter / 2.0)
             }
+            ApertureShape::Contour { outline, .. } => outline.bbox,
         }
     }
 }
@@ -299,8 +384,22 @@ impl Aperture {
 /// Recompute object and layer bounds bottom-up (after arena mutation).
 pub fn normalize_bounds<LayerMeta, ObjectMeta>(doc: &mut Document<LayerMeta, ObjectMeta>) {
     doc.arena.recompute_bounds();
+    for block_index in 0..doc.blocks.len() {
+        let bboxes = doc.blocks[block_index]
+            .objects
+            .iter()
+            .map(|object| geometry_bbox(doc, object.geometry))
+            .collect::<Vec<_>>();
+        for (object, bbox) in doc.blocks[block_index].objects.iter_mut().zip(bboxes) {
+            object.bbox = bbox;
+        }
+        doc.blocks[block_index].bbox = doc.blocks[block_index]
+            .objects
+            .iter()
+            .fold(BBox::empty(), |bbox, object| bbox.union(object.bbox));
+    }
     for object_index in 0..doc.objects.len() {
-        doc.objects[object_index].bbox = object_bbox(doc, object_index);
+        doc.objects[object_index].bbox = geometry_bbox(doc, doc.objects[object_index].geometry);
     }
     for layer in &mut doc.layers {
         layer.bbox = layer
@@ -313,8 +412,17 @@ pub fn normalize_bounds<LayerMeta, ObjectMeta>(doc: &mut Document<LayerMeta, Obj
 
 /// Rewrite flashes and strokes into filled region objects.
 pub fn expand_native_geometry_to_regions<LayerMeta, ObjectMeta>(
-    mut doc: Document<LayerMeta, ObjectMeta>,
-) -> Document<LayerMeta, ObjectMeta> {
+    doc: Document<LayerMeta, ObjectMeta>,
+) -> Document<LayerMeta, ObjectMeta>
+where
+    LayerMeta: Clone,
+    ObjectMeta: Clone,
+{
+    let mut doc = if doc.blocks.is_empty() {
+        doc
+    } else {
+        expand_instances(&doc)
+    };
     expand_strokes_to_regions(&mut doc);
     expand_flashes_to_regions(&mut doc);
     normalize_bounds(&mut doc);
@@ -329,6 +437,30 @@ pub fn expand_native_geometry_to_regions<LayerMeta, ObjectMeta>(
 /// clears and final cutouts remove painted material. A layer containing only
 /// final-cutout objects, such as a drill or rout document, images the
 /// removals themselves.
+/// Order a layer's objects for painting.
+///
+/// Dark paint commutes with dark paint and clear with clear, but not across
+/// a polarity change, so stage ordering may only permute objects within each
+/// maximal same-polarity run. Final cutouts are terminal by definition and
+/// paint after everything.
+pub fn paint_ordered<ObjectMeta>(objects: &[Object<ObjectMeta>]) -> Vec<&Object<ObjectMeta>> {
+    let (cutouts, mut painted): (Vec<_>, Vec<_>) = objects
+        .iter()
+        .partition(|object| object.order.stage == PaintStage::FinalCutout);
+    let mut start = 0;
+    while start < painted.len() {
+        let polarity = painted[start].polarity;
+        let mut end = start + 1;
+        while end < painted.len() && painted[end].polarity == polarity {
+            end += 1;
+        }
+        painted[start..end].sort_by_key(|object| object.order.stage);
+        start = end;
+    }
+    painted.extend(cutouts);
+    painted
+}
+
 pub fn compose_to_mask<LayerMeta: Clone, ObjectMeta: Clone>(
     doc: &Document<LayerMeta, ObjectMeta>,
 ) -> mask::Document<LayerMeta> {
@@ -347,8 +479,7 @@ pub fn compose_to_mask<LayerMeta: Clone, ObjectMeta: Clone>(
     }
 
     for (layer_index, layer) in doc.layers.iter().enumerate() {
-        let mut objects = layer.objects.slice(&doc.objects).iter().collect::<Vec<_>>();
-        objects.sort_by_key(|object| object.order.stage);
+        let objects = paint_ordered(layer.objects.slice(&doc.objects));
         let has_material = objects
             .iter()
             .any(|object| object.order.stage != PaintStage::FinalCutout);
@@ -414,7 +545,7 @@ fn expand_flashes_to_regions<LayerMeta, ObjectMeta>(doc: &mut Document<LayerMeta
         else {
             continue;
         };
-        let Some(aperture) = doc.apertures.get(aperture as usize).copied() else {
+        let Some(aperture) = doc.apertures.get(aperture as usize).cloned() else {
             doc.warn("Skipping artwork flash with invalid aperture reference");
             continue;
         };
@@ -450,15 +581,15 @@ fn object_image_rings<LayerMeta, ObjectMeta>(
                 )
             })
             .unwrap_or_default(),
-        Geometry::Flash { .. } | Geometry::Stroke { .. } => Vec::new(),
+        Geometry::Flash { .. } | Geometry::Stroke { .. } | Geometry::Instance { .. } => Vec::new(),
     }
 }
 
-fn object_bbox<LayerMeta, ObjectMeta>(
+fn geometry_bbox<LayerMeta, ObjectMeta>(
     doc: &Document<LayerMeta, ObjectMeta>,
-    object_index: usize,
+    geometry: Geometry,
 ) -> BBox {
-    match doc.objects[object_index].geometry {
+    match geometry {
         Geometry::Region { path } | Geometry::Stroke { path } => doc
             .arena
             .paths
@@ -479,7 +610,136 @@ fn object_bbox<LayerMeta, ObjectMeta>(
                     .fold(BBox::empty(), |bbox, contour| bbox.union(contour.bbox))
             })
             .unwrap_or_else(BBox::empty),
+        Geometry::Instance { block, transform } => doc
+            .blocks
+            .get(block as usize)
+            .map(|block| block.bbox.transformed(transform))
+            .unwrap_or_else(BBox::empty),
     }
+}
+
+/// Materialize all reusable block instances into ordinary layer objects.
+///
+/// This is the explicit fallback for consumers that cannot preserve
+/// hierarchy. Paths are transformed exactly once at each final placement;
+/// aperture flashes retain composed affine transforms.
+pub fn expand_instances<LayerMeta: Clone, ObjectMeta: Clone>(
+    doc: &Document<LayerMeta, ObjectMeta>,
+) -> Document<LayerMeta, ObjectMeta> {
+    let mut out = Document::new();
+    out.apertures = doc.apertures.clone();
+    out.arena = doc.arena.clone();
+    out.diagnostics = doc.diagnostics.clone();
+
+    for layer in &doc.layers {
+        out.push_layer(Layer {
+            name: layer.name.clone(),
+            role: layer.role,
+            side: layer.side,
+            objects: Span::EMPTY,
+            bbox: BBox::empty(),
+            meta: layer.meta.clone(),
+        });
+    }
+
+    for (layer_index, layer) in doc.layers.iter().enumerate() {
+        for object in layer.objects.slice(&doc.objects) {
+            expand_object_into_layer(
+                doc,
+                &mut out,
+                layer_index as u32,
+                object,
+                Affine2::IDENTITY,
+                Polarity::Dark,
+                doc.blocks.len(),
+            );
+        }
+    }
+    normalize_bounds(&mut out);
+    out
+}
+
+fn expand_object_into_layer<LayerMeta, ObjectMeta: Clone>(
+    source: &Document<LayerMeta, ObjectMeta>,
+    target: &mut Document<LayerMeta, ObjectMeta>,
+    layer: u32,
+    object: &Object<ObjectMeta>,
+    transform: Affine2,
+    polarity: Polarity,
+    block_limit: usize,
+) {
+    let polarity = polarity.compose(object.polarity);
+    if let Geometry::Instance {
+        block,
+        transform: placement,
+    } = object.geometry
+    {
+        let Some(block_definition) = source.blocks.get(block as usize) else {
+            target.warn(format!(
+                "Skipping artwork instance of missing block {block}"
+            ));
+            return;
+        };
+        if block as usize >= block_limit {
+            target.warn(format!(
+                "Skipping artwork instance of non-earlier block {block}"
+            ));
+            return;
+        }
+        let transform = transform.concat(placement);
+        for child in &block_definition.objects {
+            expand_object_into_layer(
+                source,
+                target,
+                layer,
+                child,
+                transform,
+                polarity,
+                block as usize,
+            );
+        }
+        return;
+    }
+
+    let geometry = match object.geometry {
+        Geometry::Flash {
+            aperture,
+            transform: flash,
+        } => Geometry::Flash {
+            aperture,
+            transform: transform.concat(flash),
+        },
+        Geometry::Stroke { path } | Geometry::Region { path } => {
+            let path = if transform.is_identity() {
+                path
+            } else {
+                let source_path = source.arena.path(path);
+                let scale = transform.m00.hypot(transform.m10);
+                target.push_path(
+                    source_path.paint.scaled(scale),
+                    source
+                        .arena
+                        .transformed_contour_bufs(source_path.contours, transform),
+                )
+            };
+            match object.geometry {
+                Geometry::Stroke { .. } => Geometry::Stroke { path },
+                Geometry::Region { .. } => Geometry::Region { path },
+                _ => unreachable!(),
+            }
+        }
+        Geometry::Instance { .. } => unreachable!(),
+    };
+    target.push_object(
+        layer,
+        Object {
+            polarity,
+            order: object.order,
+            geometry,
+            bbox: BBox::empty(),
+            meta: object.meta.clone(),
+        },
+    );
 }
 
 /// Convenience constructors for stroked paths shared by lowerings.
@@ -516,6 +776,115 @@ mod tests {
         assert_eq!(doc.objects.len(), 1);
         assert_eq!(doc.arena.path(path).contours.len(), 1);
         doc.validate().unwrap();
+    }
+
+    #[test]
+    fn expanding_scaled_instances_scales_stroke_widths() {
+        let mut doc = Document::<(), ()>::new();
+        let block = doc.push_block();
+        let path = doc.push_path(
+            Paint::Stroke(crate::geom::StrokeStyle::round(0.2)),
+            vec![ContourBuf::new(vec![
+                PathCmd::move_to(Point::new(0.0, 0.0)),
+                PathCmd::line_to(Point::new(1.0, 0.0)),
+            ])],
+        );
+        doc.push_block_object(
+            block,
+            Object::new(Polarity::Dark, Geometry::Stroke { path }),
+        );
+        let layer = doc.push_layer(Layer::new("F.Cu", LayerRole::Copper, Side::Top));
+        doc.push_object(
+            layer,
+            Object::new(
+                Polarity::Dark,
+                Geometry::Instance {
+                    block,
+                    transform: Affine2::placement(
+                        Point::new(5.0, 5.0),
+                        90.0,
+                        crate::geom::Mirror::NONE,
+                        2.0,
+                    ),
+                },
+            ),
+        );
+        normalize_bounds(&mut doc);
+
+        let expanded = expand_instances(&doc);
+        let stroke = expanded
+            .objects
+            .iter()
+            .find_map(|object| match object.geometry {
+                Geometry::Stroke { path } => expanded.arena.path(path).paint.stroke(),
+                _ => None,
+            })
+            .expect("expanded stroke object");
+        assert!((stroke.width - 0.4).abs() <= 1e-9);
+    }
+
+    #[test]
+    fn preserves_nested_reusable_blocks_until_explicit_expansion() {
+        let mut doc = Document::<(), ()>::new();
+        let aperture = doc.push_aperture(Aperture::circle(1.0));
+        let board = doc.push_block();
+        doc.push_block_object(
+            board,
+            Object::new(
+                Polarity::Clear,
+                Geometry::Flash {
+                    aperture,
+                    transform: Affine2::IDENTITY,
+                },
+            ),
+        );
+
+        let array = doc.push_block();
+        for x in [0.0, 2.0] {
+            doc.push_block_object(
+                array,
+                Object::new(
+                    Polarity::Clear,
+                    Geometry::Instance {
+                        block: board,
+                        transform: Affine2::translation(Point::new(x, 0.0)),
+                    },
+                ),
+            );
+        }
+
+        let layer = doc.push_layer(Layer::new("F.Cu", LayerRole::Copper, Side::Top));
+        doc.push_object(
+            layer,
+            Object::new(
+                Polarity::Dark,
+                Geometry::Instance {
+                    block: array,
+                    transform: Affine2::placement(
+                        Point::new(10.0, 20.0),
+                        90.0,
+                        crate::geom::Mirror::NONE,
+                        1.0,
+                    ),
+                },
+            ),
+        );
+        normalize_bounds(&mut doc);
+        doc.validate().unwrap();
+
+        assert_eq!(doc.layers[0].bbox.min, Point::new(9.5, 19.5));
+        assert_eq!(doc.layers[0].bbox.max, Point::new(10.5, 22.5));
+
+        let expanded = expand_instances(&doc);
+        assert_eq!(expanded.objects.len(), 2);
+        assert!(
+            expanded
+                .objects
+                .iter()
+                .all(|object| object.polarity == Polarity::Dark),
+            "clear block flashes toggle polarity through every nesting level"
+        );
+        assert_eq!(expanded.layers[0].bbox, doc.layers[0].bbox);
     }
 
     #[test]
@@ -567,19 +936,21 @@ mod tests {
             object
         };
 
-        // Painted out of stage order: overlay trace first, then the base pour
-        // with a clear, then a dark-drawn final cutout.
-        let overlay = rect(&mut doc, 4.0, 4.0, 6.0, 6.0);
-        doc.push_object(
-            layer,
-            stage_object(Polarity::Dark, overlay, PaintStage::Overlay),
-        );
+        // The thermal-relief pattern in its paint order: pour, clearance,
+        // then the overlay trace over the cleared area, then a dark-drawn
+        // final cutout. Stage ordering may only permute within polarity
+        // runs, so the trace survives because it follows the clear.
         let base = rect(&mut doc, 0.0, 0.0, 10.0, 10.0);
         doc.push_object(layer, stage_object(Polarity::Dark, base, PaintStage::Base));
         let base_clear = rect(&mut doc, 3.0, 3.0, 7.0, 7.0);
         doc.push_object(
             layer,
             stage_object(Polarity::Clear, base_clear, PaintStage::Base),
+        );
+        let overlay = rect(&mut doc, 4.0, 4.0, 6.0, 6.0);
+        doc.push_object(
+            layer,
+            stage_object(Polarity::Dark, overlay, PaintStage::Overlay),
         );
         let cutout = rect(&mut doc, 0.0, 0.0, 1.0, 1.0);
         doc.push_object(
@@ -595,7 +966,7 @@ mod tests {
             crate::geom::tol::REGION_MM,
         );
 
-        // Overlay survives the base-stage clear painted after it.
+        // The overlay trace follows the clear in paint order and survives.
         assert!(image.contains_point(Point::new(5.0, 5.0)));
         // The base clear still removes material around the overlay.
         assert!(!image.contains_point(Point::new(3.5, 5.0)));

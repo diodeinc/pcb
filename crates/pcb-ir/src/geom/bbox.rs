@@ -1,3 +1,4 @@
+use crate::geom::affine::Affine2;
 use crate::geom::point::Point;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -79,6 +80,25 @@ impl BBox {
                 && self.max.is_finite()
                 && self.min.x <= self.max.x
                 && self.min.y <= self.max.y)
+    }
+
+    /// Axis-aligned bounds after applying an arbitrary affine transform.
+    pub fn transformed(self, transform: Affine2) -> Self {
+        if self.is_empty() {
+            return self;
+        }
+        [
+            Point::new(self.min.x, self.min.y),
+            Point::new(self.max.x, self.min.y),
+            Point::new(self.max.x, self.max.y),
+            Point::new(self.min.x, self.max.y),
+        ]
+        .into_iter()
+        .map(|point| transform.transform_point(point))
+        .fold(Self::empty(), |mut bbox, point| {
+            bbox.include_point(point);
+            bbox
+        })
     }
 }
 

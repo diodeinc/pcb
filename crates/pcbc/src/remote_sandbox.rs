@@ -39,9 +39,6 @@ struct RemoteLayoutResult {
 }
 
 pub fn execute_layout(uri: SandboxFileUri, args: LayoutArgs) -> Result<()> {
-    if args.temp {
-        bail!("Remote sandbox layout does not support --temp");
-    }
     let should_open = !args.no_open && !args.check;
 
     let client = sandbox_client(&uri)?;
@@ -83,7 +80,6 @@ pub fn execute_open(uri: SandboxFileUri, args: OpenArgs) -> Result<()> {
             config: Vec::new(),
             no_open: true,
             offline: args.offline,
-            temp: false,
             check: false,
             suppress: Vec::new(),
             no_sync: true,

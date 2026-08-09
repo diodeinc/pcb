@@ -1,6 +1,7 @@
 use resvg::{tiny_skia, usvg};
 
-use crate::dialects::mask;
+use crate::dialects::{artwork, mask};
+use crate::geom::BBox;
 use crate::render::{RenderOptions, SizeConstraint};
 
 /// Rasterize mask layers to a PNG. `Auto` renders at the default maximum
@@ -9,31 +10,42 @@ pub fn png<LayerMeta>(
     doc: &mask::Document<LayerMeta>,
     options: &RenderOptions,
 ) -> Result<Vec<u8>, String> {
+    let bbox = crate::render::bbox(doc, options.layers.as_deref());
+    svg_to_png(&crate::render::svg(doc, &raster_options(options, bbox)))
+}
+
+/// Rasterize artwork layers to a PNG, through the same SVG the SVG backend
+/// writes.
+pub fn artwork_png<LayerMeta: Clone, ObjectMeta: Clone>(
+    doc: &artwork::Document<LayerMeta, ObjectMeta>,
+    options: &RenderOptions,
+) -> Result<Vec<u8>, String> {
+    let bbox = crate::render::artwork_bbox(doc, options.layers.as_deref());
+    svg_to_png(&crate::render::artwork_svg(
+        doc,
+        &raster_options(options, bbox),
+    ))
+}
+
+/// Resolve a size constraint into the fixed pixel size a raster needs.
+fn raster_options(options: &RenderOptions, bbox: BBox) -> RenderOptions {
     let (width_px, height_px) = match options.size {
-        SizeConstraint::Auto => crate::render::pixel_size(
-            doc,
-            options.layers.as_deref(),
-            crate::render::DEFAULT_MAX_DIMENSION_PX,
-        ),
-        SizeConstraint::MaxDimension(max) => {
-            crate::render::pixel_size(doc, options.layers.as_deref(), max)
+        SizeConstraint::Auto => {
+            crate::render::pixel_size(bbox, crate::render::DEFAULT_MAX_DIMENSION_PX)
         }
+        SizeConstraint::MaxDimension(max) => crate::render::pixel_size(bbox, max),
         SizeConstraint::Fixed {
             width_px,
             height_px,
         } => (width_px, height_px),
     };
-    let svg = crate::render::svg(
-        doc,
-        &RenderOptions {
-            layers: options.layers.clone(),
-            size: SizeConstraint::Fixed {
-                width_px,
-                height_px,
-            },
+    RenderOptions {
+        layers: options.layers.clone(),
+        size: SizeConstraint::Fixed {
+            width_px,
+            height_px,
         },
-    );
-    svg_to_png(&svg)
+    }
 }
 
 fn svg_to_png(svg: &str) -> Result<Vec<u8>, String> {

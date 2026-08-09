@@ -5,6 +5,8 @@ NotConnected nets are treated as regular nets for connectivity.
 Any "no connect" behavior is expressed via pad pin type in the adapter.
 """
 
+from __future__ import annotations
+
 from ..lens import get
 
 
@@ -46,7 +48,7 @@ class MockProperty:
 class MockNetlist:
     """Mock netlist object for testing get()."""
 
-    def __init__(self, parts: list = None, nets: list = None):
+    def __init__(self, parts: list | None = None, nets: list | None = None):
         self.parts = parts or []
         self.nets = nets or []
 

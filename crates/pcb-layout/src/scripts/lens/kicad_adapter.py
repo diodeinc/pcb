@@ -16,36 +16,37 @@ the Python sync runs. FPID changes are now handled as delete + add operations
 since EntityId includes fpid.
 """
 
-from typing import Any, Dict, List, Optional, Set, Tuple
+from __future__ import annotations
+
 import logging
 import os
 import uuid as uuid_module
+from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
-from .types import (
-    EntityId,
-    Position,
-    FootprintView,
-    FootprintComplement,
-    GroupView,
-    GroupComplement,
-    BoardView,
-    TrackComplement,
-    ViaComplement,
-    ZoneComplement,
-    GraphicComplement,
-    default_footprint_complement,
-)
 from .hierplace import (
     PlacementRect,
     Rect,
+    compute_cluster_bbox,
     pack,
     pad_for_depth,
-    compute_cluster_bbox,
 )
 from .oplog import OpLog
-from typing import TYPE_CHECKING
-from dataclasses import dataclass
+from .types import (
+    BoardView,
+    EntityId,
+    FootprintComplement,
+    FootprintView,
+    GraphicComplement,
+    GroupComplement,
+    GroupView,
+    Position,
+    TrackComplement,
+    ViaComplement,
+    ZoneComplement,
+    default_footprint_complement,
+)
 
 if TYPE_CHECKING:
     from .changeset import SyncChangeset
@@ -63,7 +64,7 @@ FRAGMENT_ZONE_PRIORITY_BIAS = 1
 _UNCASTABLE_GROUP_ITEM_CLASSES = {"PCB_GENERATOR"}
 
 
-def resolve_package_uri(uri: str, package_roots: Dict[str, str]) -> Path:
+def resolve_package_uri(uri: str, package_roots: dict[str, str]) -> Path:
     """Resolve a package:// URI to an absolute filesystem path.
 
     Uses longest-prefix matching against the package_roots map.
@@ -74,10 +75,13 @@ def resolve_package_uri(uri: str, package_roots: Dict[str, str]) -> Path:
     best_root = None
 
     for url, root in package_roots.items():
-        if rest.startswith(url) and (len(rest) == len(url) or rest[len(url)] == "/"):
-            if best_url is None or len(url) > len(best_url):
-                best_url = url
-                best_root = root
+        if (
+            rest.startswith(url)
+            and (len(rest) == len(url) or rest[len(url)] == "/")
+            and (best_url is None or len(url) > len(best_url))
+        ):
+            best_url = url
+            best_root = root
 
     if best_url is None or best_root is None:
         raise ValueError(f"Unknown package in URI: {uri}")
@@ -88,7 +92,7 @@ def resolve_package_uri(uri: str, package_roots: Dict[str, str]) -> Path:
     return Path(best_root)
 
 
-def get_footprint_field(fp: Any, name: str) -> Optional[Any]:
+def get_footprint_field(fp: Any, name: str) -> Any | None:
     """Look up a footprint field by name across KiCad 9 and 10."""
     if hasattr(fp, "GetFieldByName"):
         return fp.GetFieldByName(name)
@@ -97,12 +101,12 @@ def get_footprint_field(fp: Any, name: str) -> Optional[Any]:
     return None
 
 
-def get_group_items(group: Any) -> List[Any]:
+def get_group_items(group: Any) -> list[Any]:
     """Return group items, skipping KiCad item classes the Python wrapper cannot cast."""
     if not hasattr(group, "GetItemsDeque"):
         return list(group.GetItems())
 
-    items: List[Any] = []
+    items: list[Any] = []
     for item in group.GetItemsDeque():
         item_class = str(item.GetClass()).upper() if hasattr(item, "GetClass") else ""
         if item_class in _UNCASTABLE_GROUP_ITEM_CLASSES:
@@ -111,7 +115,7 @@ def get_group_items(group: Any) -> List[Any]:
     return items
 
 
-def get_group_items_for_detach(group: Any) -> List[Any]:
+def get_group_items_for_detach(group: Any) -> list[Any]:
     """Return every raw group item that can be passed to PCB_GROUP.RemoveItem."""
     if not hasattr(group, "GetItemsDeque"):
         return list(group.GetItems())
@@ -128,7 +132,7 @@ def _discover_kicad_pcb_file(layout_dir: Path) -> Path:
     if not layout_dir.is_dir():
         raise FileNotFoundError(f"Layout fragment not found: {layout_dir}")
 
-    pro_files: List[Path] = [
+    pro_files: list[Path] = [
         entry
         for entry in layout_dir.iterdir()
         if entry.is_file() and entry.suffix == ".kicad_pro"
@@ -150,11 +154,11 @@ class FragmentPlan:
     which entities they cover, and which footprints belong to each fragment.
     """
 
-    loaded: Dict[EntityId, "FragmentDataType"]  # authoritative fragments only
-    owner: Dict[EntityId, EntityId]  # entity -> owning authoritative fragment
+    loaded: dict[EntityId, FragmentDataType]  # authoritative fragments only
+    owner: dict[EntityId, EntityId]  # entity -> owning authoritative fragment
     descendant_ids: frozenset  # all entities covered by any fragment
-    descendant_footprints: Dict[
-        EntityId, List[EntityId]
+    descendant_footprints: dict[
+        EntityId, list[EntityId]
     ]  # fragment -> covered footprints
 
     def is_covered(self, eid: EntityId) -> bool:
@@ -166,12 +170,12 @@ class FragmentPlan:
         return eid in self.loaded
 
 
-def extract_zone_outline_positions(zone: Any) -> List[Position]:
+def extract_zone_outline_positions(zone: Any) -> list[Position]:
     """Extract the zone's main outline as a list of Positions.
 
     Uses the correct KiCad API: SHAPE_POLY_SET.COutline(0).CPoints()
     """
-    positions: List[Position] = []
+    positions: list[Position] = []
     outline = zone.Outline()
     if not outline or outline.OutlineCount() <= 0:
         return positions
@@ -180,7 +184,7 @@ def extract_zone_outline_positions(zone: Any) -> List[Position]:
     return positions
 
 
-def _get_entity_id_from_footprint(fp: Any) -> Optional[EntityId]:
+def _get_entity_id_from_footprint(fp: Any) -> EntityId | None:
     """Extract EntityId from a KiCad footprint.
 
     The canonical EntityId includes both path and fpid.
@@ -218,7 +222,7 @@ def _get_item_bbox(item: Any, pcbnew: Any) -> Any:
 # =============================================================================
 
 
-def _compute_items_bbox(items: List[Any], pcbnew: Any) -> Optional[Rect]:
+def _compute_items_bbox(items: list[Any], pcbnew: Any) -> Rect | None:
     """Compute bounding box of a list of KiCad items.
 
     This is the single source of truth for bbox computation from KiCad objects.
@@ -243,7 +247,7 @@ def _compute_items_bbox(items: List[Any], pcbnew: Any) -> Optional[Rect]:
 
 def _move_footprint_to(
     fp: Any, target_x: int, target_y: int, pcbnew: Any
-) -> Optional[Tuple[int, int]]:
+) -> tuple[int, int] | None:
     """Move footprint so its bbox top-left is at (target_x, target_y).
 
     Returns (width, height) of the footprint, or None if move failed.
@@ -262,7 +266,7 @@ def _move_footprint_to(
 
 def _move_group_to(
     group: Any, target_x: int, target_y: int, pcbnew: Any
-) -> Optional[Tuple[int, int]]:
+) -> tuple[int, int] | None:
     """Move all items in a group so the group's bbox top-left is at (target_x, target_y).
 
     Returns (dx, dy) applied to all items, or None if move failed.
@@ -283,10 +287,10 @@ def _move_group_to(
 
 
 def _build_rects_from_footprints(
-    entity_ids: List[EntityId],
-    fps_by_entity_id: Dict[EntityId, Any],
+    entity_ids: list[EntityId],
+    fps_by_entity_id: dict[EntityId, Any],
     pcbnew: Any,
-) -> List[PlacementRect]:
+) -> list[PlacementRect]:
     """Build PlacementRects from KiCad footprints by reading their bboxes.
 
     This is the single source of truth for building rects from live KiCad objects.
@@ -308,13 +312,13 @@ def _build_rects_from_footprints(
     return rects
 
 
-def _build_groups_index(kicad_board: Any) -> Dict[str, Any]:
+def _build_groups_index(kicad_board: Any) -> dict[str, Any]:
     """Build fresh index of groups by name.
 
     Must be called after any structural change (deletions/additions) to avoid
     stale SWIG pointers. KiCad's SWIG bindings become invalid after board mutations.
     """
-    idx: Dict[str, Any] = {}
+    idx: dict[str, Any] = {}
     for g in kicad_board.Groups():
         name = g.GetName()
         if not name:
@@ -325,13 +329,13 @@ def _build_groups_index(kicad_board: Any) -> Dict[str, Any]:
     return idx
 
 
-def _build_footprints_index(kicad_board: Any) -> Dict[EntityId, Any]:
+def _build_footprints_index(kicad_board: Any) -> dict[EntityId, Any]:
     """Build fresh index of footprints by entity ID.
 
     Must be called after any structural change (deletions/additions) to avoid
     stale SWIG pointers. KiCad's SWIG bindings become invalid after board mutations.
     """
-    idx: Dict[EntityId, Any] = {}
+    idx: dict[EntityId, Any] = {}
     for fp in kicad_board.GetFootprints():
         entity_id = _get_entity_id_from_footprint(fp)
         if entity_id:
@@ -343,7 +347,7 @@ def _build_pad_net_map(
     entity_id: EntityId,
     view: BoardView,
     kicad_board: Any,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Build a mapping from pad/pin name to KiCad NETINFO for a footprint.
 
     Looks up net assignments from SOURCE (BoardView.nets) rather than copying
@@ -357,7 +361,7 @@ def _build_pad_net_map(
     Returns:
         Dict mapping pin_name -> NETINFO object (or None if net not found)
     """
-    pad_net_map: Dict[str, Any] = {}
+    pad_net_map: dict[str, Any] = {}
 
     for net_view in view.nets.values():
         for conn_entity_id, pin_name in net_view.connections:
@@ -373,7 +377,7 @@ def _apply_pad_assignment(
     fp: Any,
     pad_name: str,
     net_info: Any,
-    pin_type: Optional[str] = None,
+    pin_type: str | None = None,
 ) -> int:
     """Apply a net assignment to all physical pads with the given pad name."""
     applied = 0
@@ -393,12 +397,12 @@ def _apply_pad_assignment(
 
 
 def _build_fragment_plan(
-    changeset: "SyncChangeset",
+    changeset: SyncChangeset,
     board_view: BoardView,
     pcbnew: Any,
     oplog: OpLog,
-    placeable_footprints: Set[EntityId],
-    package_roots: Dict[str, str],
+    placeable_footprints: set[EntityId],
+    package_roots: dict[str, str],
 ) -> FragmentPlan:
     """Build a FragmentPlan implementing Rule A (Top-Most Fragment Wins).
 
@@ -438,8 +442,8 @@ def _build_fragment_plan(
     ]
     groups_with_layout.sort(key=lambda x: (x[0].path.depth, str(x[0].path)))
 
-    loaded: Dict[EntityId, FragmentData] = {}
-    authoritative: Set[EntityId] = set()
+    loaded: dict[EntityId, FragmentData] = {}
+    authoritative: set[EntityId] = set()
 
     # Phase 1: Determine authoritative fragments (Rule A)
     for gid, gv in groups_with_layout:
@@ -464,12 +468,12 @@ def _build_fragment_plan(
             authoritative.add(gid)
         except ValueError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - any fragment load failure falls back to HierPlace
             logger.warning(f"Fragment {gv.layout_path} not found, using HierPlace: {e}")
 
     # Phase 2: Compute coverage maps in one pass
-    owner: Dict[EntityId, EntityId] = {}
-    descendant_footprints: Dict[EntityId, List[EntityId]] = {
+    owner: dict[EntityId, EntityId] = {}
+    descendant_footprints: dict[EntityId, list[EntityId]] = {
         gid: [] for gid in authoritative
     }
 
@@ -487,8 +491,8 @@ def _build_fragment_plan(
             descendant_footprints[auth].append(fid)
 
     # Sort for determinism
-    for gid in descendant_footprints:
-        descendant_footprints[gid].sort(key=lambda e: str(e.path))
+    for fids in descendant_footprints.values():
+        fids.sort(key=lambda e: str(e.path))
 
     # Log authoritative fragments for debugging
     if authoritative:
@@ -504,8 +508,8 @@ def _build_fragment_plan(
 
 
 def _find_authoritative_ancestor(
-    eid: EntityId, authoritative: Set[EntityId]
-) -> Optional[EntityId]:
+    eid: EntityId, authoritative: set[EntityId]
+) -> EntityId | None:
     """Walk up parent chain to find authoritative fragment ancestor."""
     p = eid.path.parent()
     while p:
@@ -517,19 +521,19 @@ def _find_authoritative_ancestor(
 
 
 def _collect_item_sizes(
-    changeset: "SyncChangeset",
-    fps_by_entity_id: Dict[EntityId, Any],
-    groups_by_name: Dict[str, Any],
+    changeset: SyncChangeset,
+    fps_by_entity_id: dict[EntityId, Any],
+    groups_by_name: dict[str, Any],
     pcbnew: Any,
     plan: FragmentPlan,
-    exclude_footprints: Optional[Set[EntityId]] = None,
-) -> Dict[EntityId, Tuple[int, int]]:
+    exclude_footprints: set[EntityId] | None = None,
+) -> dict[EntityId, tuple[int, int]]:
     """Collect width/height for all newly-added items from KiCad bboxes.
 
     This is the ONLY place we read geometry from KiCad for layout.
     Uses FragmentPlan to determine which items to skip (covered by fragments).
     """
-    sizes: Dict[EntityId, Tuple[int, int]] = {}
+    sizes: dict[EntityId, tuple[int, int]] = {}
     exclude = exclude_footprints or set()
 
     # Footprints (excluding inherited ones and fragment-covered ones)
@@ -550,7 +554,7 @@ def _collect_item_sizes(
     return sizes
 
 
-def _get_group_bbox_size(group: Any, pcbnew: Any) -> Tuple[int, int]:
+def _get_group_bbox_size(group: Any, pcbnew: Any) -> tuple[int, int]:
     """Get the bounding box size of a KiCad group."""
     if not group:
         return (0, 0)
@@ -559,9 +563,9 @@ def _get_group_bbox_size(group: Any, pcbnew: Any) -> Tuple[int, int]:
 
 
 def _build_rects(
-    entity_ids: List[EntityId],
-    sizes: Dict[EntityId, Tuple[int, int]],
-) -> List[PlacementRect]:
+    entity_ids: list[EntityId],
+    sizes: dict[EntityId, tuple[int, int]],
+) -> list[PlacementRect]:
     """Build PlacementRects for entities with non-zero sizes."""
     rects = []
     for eid in entity_ids:
@@ -572,9 +576,9 @@ def _build_rects(
 
 
 def _compute_depths(
-    tree: Dict[Optional[EntityId], List[EntityId]],
-    group_ids: Set[EntityId],
-) -> Dict[EntityId, int]:
+    tree: dict[EntityId | None, list[EntityId]],
+    group_ids: set[EntityId],
+) -> dict[EntityId, int]:
     """Compute hierarchy depth for each entity (bottom-up).
 
     Depth determines padding: depth 0 = tight, higher = more spacing.
@@ -582,7 +586,7 @@ def _compute_depths(
     - Group with only footprints: depth 1
     - Group with child groups: 1 + max(child depths)
     """
-    depths: Dict[EntityId, int] = {}
+    depths: dict[EntityId, int] = {}
 
     def get_depth(eid: EntityId) -> int:
         if eid in depths:
@@ -609,18 +613,18 @@ def _compute_depths(
 
 
 def _compute_hierarchical_layout(
-    tree: Dict[Optional[EntityId], List[EntityId]],
-    sizes: Dict[EntityId, Tuple[int, int]],
-    group_ids: Set[EntityId],
-    fragment_group_ids: Set[EntityId],
-    existing_bbox: Optional[Rect],
-) -> Dict[EntityId, Tuple[int, int]]:
+    tree: dict[EntityId | None, list[EntityId]],
+    sizes: dict[EntityId, tuple[int, int]],
+    group_ids: set[EntityId],
+    fragment_group_ids: set[EntityId],
+    existing_bbox: Rect | None,
+) -> dict[EntityId, tuple[int, int]]:
     """Pure hierarchical layout: bottom-up packing, then top-down position propagation.
 
     Uses pack() for local group packing and root placement.
     Padding scales with hierarchy depth for visual separation.
     """
-    child_local_pos: Dict[EntityId, Dict[EntityId, Tuple[int, int]]] = {}
+    child_local_pos: dict[EntityId, dict[EntityId, tuple[int, int]]] = {}
     sizes = dict(sizes)  # Make mutable copy
 
     # Compute depths for depth-based padding
@@ -675,16 +679,16 @@ def _compute_hierarchical_layout(
 
 
 def _apply_hierarchical_layout(
-    layout: Dict[EntityId, Tuple[int, int]],
-    changeset: "SyncChangeset",
-    fps_by_entity_id: Dict[EntityId, Any],
-    groups_by_name: Dict[str, Any],
+    layout: dict[EntityId, tuple[int, int]],
+    changeset: SyncChangeset,
+    fps_by_entity_id: dict[EntityId, Any],
+    groups_by_name: dict[str, Any],
     pcbnew: Any,
-    fragment_group_ids: Set[EntityId],
+    fragment_group_ids: set[EntityId],
     board_view: BoardView,
     oplog: OpLog,
-    exclude_footprints: Optional[Set[EntityId]] = None,
-    group_move_deltas: Optional[Dict[EntityId, Tuple[int, int]]] = None,
+    exclude_footprints: set[EntityId] | None = None,
+    group_move_deltas: dict[EntityId, tuple[int, int]] | None = None,
 ) -> int:
     """Apply computed layout to KiCad objects using unified move helpers."""
     placed_count = 0
@@ -693,7 +697,7 @@ def _apply_hierarchical_layout(
         group_move_deltas = {}
 
     # Pre-compute footprints that belong to fragment groups (moved with their group)
-    fragment_footprints: Set[EntityId] = set()
+    fragment_footprints: set[EntityId] = set()
     for gid in fragment_group_ids:
         gv = board_view.groups.get(gid)
         if gv:
@@ -732,12 +736,12 @@ def _apply_hierarchical_layout(
 
 
 def apply_changeset(
-    changeset: "SyncChangeset",
+    changeset: SyncChangeset,
     kicad_board: Any,
     pcbnew: Any,
-    footprint_lib_map: Dict[str, str],
-    package_roots: Dict[str, str],
-    board_path: Optional[Path] = None,
+    footprint_lib_map: dict[str, str],
+    package_roots: dict[str, str],
+    board_path: Path | None = None,
 ) -> OpLog:
     """Apply a SyncChangeset to a KiCad board.
 
@@ -772,7 +776,7 @@ def apply_changeset(
     groups_by_name = _build_groups_index(kicad_board)
 
     # Build KIID->footprint index for old boards without Path field (O(N) once, not O(N²))
-    fps_by_kiid: Dict[str, Any] = {}
+    fps_by_kiid: dict[str, Any] = {}
     for fp in kicad_board.GetFootprints():
         kiid_path = fp.GetPath().AsString()
         if kiid_path:
@@ -780,7 +784,7 @@ def apply_changeset(
             if parts:
                 fps_by_kiid[parts[-1]] = fp
 
-    def _lookup_fp(entity_id: EntityId) -> Optional[Any]:
+    def _lookup_fp(entity_id: EntityId) -> Any | None:
         """Look up footprint by EntityId, falling back to KIID index for old boards."""
         fp = fps_by_entity_id.get(entity_id)
         if fp:
@@ -864,7 +868,7 @@ def apply_changeset(
                     pad_count=pad_count,
                 )
                 logger.info(f"Added footprint: {entity_id}")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - one bad footprint must not abort the whole sync
             logger.error(f"Failed to add footprint {entity_id}: {e}")
 
     # 2b. GR-ADD - create groups (routing applied in Phase 6 after membership rebuild)
@@ -1008,13 +1012,13 @@ def _apply_fragment_routing(
     group: Any,
     group_view: GroupView,
     entity_id: EntityId,
-    fragment_data: "FragmentDataType",
+    fragment_data: FragmentDataType,
     board_view: BoardView,
     kicad_board: Any,
     pcbnew: Any,
     oplog: OpLog,
-    package_roots: Dict[str, str],
-    move_delta: Tuple[int, int] = (0, 0),
+    package_roots: dict[str, str],
+    move_delta: tuple[int, int] = (0, 0),
 ) -> None:
     """Apply routing from a layout fragment to a new group.
 
@@ -1038,7 +1042,8 @@ def _apply_fragment_routing(
         layout_file = _discover_kicad_pcb_file(layout_dir)
     except ValueError:
         raise
-    except Exception:
+    except Exception as e:  # noqa: BLE001 - fragment is optional; skip it rather than fail the sync
+        logger.warning(f"Skipping layout fragment for {group_name}: {e}")
         return
     if not layout_file.exists():
         return
@@ -1048,7 +1053,7 @@ def _apply_fragment_routing(
     # Build net remapping from fragment nets to board nets
     from .lens import build_fragment_net_remap
 
-    board_pad_net_map: Dict[Tuple[EntityId, str], str] = {}
+    board_pad_net_map: dict[tuple[EntityId, str], str] = {}
     for net_name, net_view in board_view.nets.items():
         for conn_entity_id, pad_name in net_view.connections:
             board_pad_net_map[(conn_entity_id, pad_name)] = net_name
@@ -1063,8 +1068,8 @@ def _apply_fragment_routing(
     valid_nets = set(board_view.nets.keys()) | {""}
 
     # Build UUID lookup tables from the fragment board
-    fragment_tracks: Dict[str, Any] = {}
-    fragment_vias: Dict[str, Any] = {}
+    fragment_tracks: dict[str, Any] = {}
+    fragment_vias: dict[str, Any] = {}
     for track in fragment_board.GetTracks():
         item_uuid = str(track.m_Uuid.AsString())
         if "VIA" in track.GetClass().upper():
@@ -1072,11 +1077,11 @@ def _apply_fragment_routing(
         else:
             fragment_tracks[item_uuid] = track
 
-    fragment_zones: Dict[str, Any] = {}
+    fragment_zones: dict[str, Any] = {}
     for zone in fragment_board.Zones():
         fragment_zones[str(zone.m_Uuid.AsString())] = zone
 
-    fragment_graphics: Dict[str, Any] = {}
+    fragment_graphics: dict[str, Any] = {}
     for drawing in fragment_board.GetDrawings():
         parent = drawing.GetParent()
         if (
@@ -1190,10 +1195,10 @@ def _apply_fragment_routing(
 
 
 def _build_group_tree(
-    changeset: "SyncChangeset",
+    changeset: SyncChangeset,
     plan: FragmentPlan,
-    exclude_footprints: Optional[Set[EntityId]] = None,
-) -> Dict[Optional[EntityId], List[EntityId]]:
+    exclude_footprints: set[EntityId] | None = None,
+) -> dict[EntityId | None, list[EntityId]]:
     """Build a tree of groups and footprints by parent EntityId.
 
     Returns a dict mapping parent_entity_id -> list of child EntityIds.
@@ -1204,11 +1209,11 @@ def _build_group_tree(
     """
     from collections import defaultdict
 
-    tree: Dict[Optional[EntityId], List[EntityId]] = defaultdict(list)
-    added_group_ids: Set[EntityId] = set(changeset.added_groups)
+    tree: dict[EntityId | None, list[EntityId]] = defaultdict(list)
+    added_group_ids: set[EntityId] = set(changeset.added_groups)
     exclude = exclude_footprints or set()
 
-    def parent_for(entity_id: EntityId) -> Optional[EntityId]:
+    def parent_for(entity_id: EntityId) -> EntityId | None:
         """Walk up ancestry to find nearest added group parent."""
         p = entity_id.path.parent()
         while p:
@@ -1242,11 +1247,11 @@ def _build_group_tree(
 
 
 def _apply_position_inheritance(
-    changeset: "SyncChangeset",
-    fps_by_entity_id: Dict[EntityId, Any],
+    changeset: SyncChangeset,
+    fps_by_entity_id: dict[EntityId, Any],
     pcbnew: Any,
     oplog: OpLog,
-) -> Tuple[int, Set[EntityId]]:
+) -> tuple[int, set[EntityId]]:
     """Apply position inheritance for FPID changes.
 
     When a footprint's FPID changes, it appears as removed (old fpid) + added (new fpid)
@@ -1255,7 +1260,7 @@ def _apply_position_inheritance(
     Returns (placed_count, inherited_footprint_ids).
     """
     placed_count = 0
-    inherited: Set[EntityId] = set()
+    inherited: set[EntityId] = set()
 
     # Map path -> (old EntityId, old complement)
     removed_by_path = {
@@ -1287,11 +1292,11 @@ def _apply_position_inheritance(
 
 def _apply_fragment_positions(
     plan: FragmentPlan,
-    inherited: Set[EntityId],
-    fps_by_entity_id: Dict[EntityId, Any],
+    inherited: set[EntityId],
+    fps_by_entity_id: dict[EntityId, Any],
     pcbnew: Any,
     oplog: OpLog,
-) -> Tuple[int, Set[EntityId]]:
+) -> tuple[int, set[EntityId]]:
     """Apply positions from fragments to ALL descendant footprints (Rule B).
 
     For each authoritative fragment:
@@ -1302,7 +1307,7 @@ def _apply_fragment_positions(
     Returns (count, positioned_ids).
     """
     placed = 0
-    positioned: Set[EntityId] = set()
+    positioned: set[EntityId] = set()
 
     for gid in sorted(plan.loaded.keys(), key=lambda e: str(e.path)):
         fragment_data = plan.loaded[gid]
@@ -1311,8 +1316,8 @@ def _apply_fragment_positions(
         ]
 
         # Separate into in-fragment (have positions) and orphans (don't)
-        in_fragment: List[Tuple[EntityId, FootprintComplement]] = []
-        orphans: List[EntityId] = []
+        in_fragment: list[tuple[EntityId, FootprintComplement]] = []
+        orphans: list[EntityId] = []
 
         for fid in descendant_fps:
             fp = fps_by_entity_id.get(fid)
@@ -1347,8 +1352,8 @@ def _apply_fragment_positions(
 
 
 def _lookup_fragment_complement(
-    fid: EntityId, gid: EntityId, fragment_data: "FragmentDataType"
-) -> Optional[FootprintComplement]:
+    fid: EntityId, gid: EntityId, fragment_data: FragmentDataType
+) -> FootprintComplement | None:
     """Look up footprint complement from fragment by relative path or name."""
     rel = fid.path.relative_to(gid.path)
     comp = fragment_data.footprint_complements.get(str(rel)) if rel else None
@@ -1356,13 +1361,13 @@ def _lookup_fragment_complement(
 
 
 def _pack_orphans(
-    orphans: List[EntityId],
-    in_fragment: List[Tuple[EntityId, FootprintComplement]],
+    orphans: list[EntityId],
+    in_fragment: list[tuple[EntityId, FootprintComplement]],
     gid: EntityId,
-    fps_by_entity_id: Dict[EntityId, Any],
+    fps_by_entity_id: dict[EntityId, Any],
     pcbnew: Any,
     oplog: OpLog,
-) -> Tuple[int, Set[EntityId]]:
+) -> tuple[int, set[EntityId]]:
     """Pack orphan footprints to the right of the fragment bbox.
 
     Uses unified helpers: _build_rects_from_footprints, pack, _move_footprint_to.
@@ -1381,7 +1386,7 @@ def _pack_orphans(
     orphan_layout = pack(orphan_rects, anchor=fragment_bbox, gap=pad_for_depth(0))
 
     placed = 0
-    positioned: Set[EntityId] = set()
+    positioned: set[EntityId] = set()
     for fid, (target_x, target_y) in orphan_layout.items():
         fp = fps_by_entity_id.get(fid)
         if fp and _move_footprint_to(fp, target_x, target_y, pcbnew):
@@ -1393,14 +1398,14 @@ def _pack_orphans(
 
 
 def _run_hierarchical_placement(
-    changeset: "SyncChangeset",
+    changeset: SyncChangeset,
     board_view: BoardView,
-    fps_by_entity_id: Dict[EntityId, Any],
-    groups_by_name: Dict[str, Any],
+    fps_by_entity_id: dict[EntityId, Any],
+    groups_by_name: dict[str, Any],
     kicad_board: Any,
     pcbnew: Any,
     oplog: OpLog,
-    package_roots: Dict[str, str],
+    package_roots: dict[str, str],
 ) -> int:
     """Position new items using HierPlace rules.
 
@@ -1457,7 +1462,7 @@ def _run_hierarchical_placement(
     if not layout:
         return placed
 
-    group_move_deltas: Dict[EntityId, Tuple[int, int]] = {}
+    group_move_deltas: dict[EntityId, tuple[int, int]] = {}
     placed += _apply_hierarchical_layout(
         layout,
         changeset,
@@ -1495,9 +1500,9 @@ def _run_hierarchical_placement(
 
 def _compute_existing_bbox(
     kicad_board: Any,
-    exclude_entity_ids: Set[EntityId],
+    exclude_entity_ids: set[EntityId],
     pcbnew: Any,
-) -> Optional[Rect]:
+) -> Rect | None:
     """Compute bbox of board edge + existing footprints for placement anchor."""
     min_x = min_y = float("inf")
     max_x = max_y = float("-inf")
@@ -1540,9 +1545,7 @@ def apply_footprint_placement(
     target_on_back = complement.layer == "B.Cu"
     current_on_back = fp.IsFlipped()
 
-    if target_on_back and not current_on_back:
-        fp.Flip(fp.GetPosition(), True)
-    elif not target_on_back and current_on_back:
+    if target_on_back and not current_on_back or not target_on_back and current_on_back:
         fp.Flip(fp.GetPosition(), True)
 
     fp.SetOrientation(pcbnew.EDA_ANGLE(complement.orientation, pcbnew.DEGREES_T))
@@ -1550,7 +1553,7 @@ def apply_footprint_placement(
 
 
 def _resolve_field_value(
-    value: str, package_roots: Dict[str, str], layout_dir: Optional[Path]
+    value: str, package_roots: dict[str, str], layout_dir: Path | None
 ) -> str:
     """Resolve package:// URIs in field values to layout-relative paths."""
     if not value.startswith(PACKAGE_URI_PREFIX) or not layout_dir:
@@ -1565,8 +1568,8 @@ def _resolve_field_value(
 def _apply_view_to_footprint(
     fp: Any,
     view: FootprintView,
-    package_roots: Dict[str, str],
-    layout_dir: Optional[Path],
+    package_roots: dict[str, str],
+    layout_dir: Path | None,
 ) -> None:
     """Apply view properties to a footprint. Hides newly-created custom fields."""
     fp.SetReference(view.reference)
@@ -1590,9 +1593,9 @@ def _create_footprint(
     complement: FootprintComplement,
     board: Any,
     pcbnew: Any,
-    footprint_lib_map: Dict[str, str],
-    package_roots: Dict[str, str],
-    layout_dir: Optional[Path],
+    footprint_lib_map: dict[str, str],
+    package_roots: dict[str, str],
+    layout_dir: Path | None,
 ) -> Any:
     """Create a new KiCad footprint from view and complement."""
     if ":" not in view.fpid:
@@ -1632,8 +1635,8 @@ def _update_footprint_view(
     fp: Any,
     view: FootprintView,
     pcbnew: Any,
-    package_roots: Dict[str, str],
-    layout_dir: Optional[Path],
+    package_roots: dict[str, str],
+    layout_dir: Path | None,
 ) -> None:
     """Update footprint view properties from SOURCE."""
     _apply_view_to_footprint(fp, view, package_roots, layout_dir)
@@ -1642,8 +1645,8 @@ def _update_footprint_view(
 def load_layout_fragment_with_footprints(
     layout_path: str,
     pcbnew: Any,
-    package_roots: Dict[str, str],
-) -> "FragmentDataType":
+    package_roots: dict[str, str],
+) -> FragmentDataType:
     """Load a layout fragment including footprint positions.
 
     Returns a FragmentData with pure Python dataclasses only (no KiCad C++ objects).
@@ -1660,8 +1663,8 @@ def load_layout_fragment_with_footprints(
 
     layout_board = pcbnew.LoadBoard(str(layout_file))
 
-    footprint_complements: Dict[str, FootprintComplement] = {}
-    pad_net_map: Dict[Tuple[str, str], str] = {}
+    footprint_complements: dict[str, FootprintComplement] = {}
+    pad_net_map: dict[tuple[str, str], str] = {}
 
     for fp in layout_board.GetFootprints():
         reference = fp.GetReference()
@@ -1708,8 +1711,8 @@ def load_layout_fragment_with_footprints(
                 fp_key = path_str if path_str else reference
                 pad_net_map[(fp_key, pad_name)] = net.GetNetname()
 
-    tracks: List[TrackComplement] = []
-    vias: List[ViaComplement] = []
+    tracks: list[TrackComplement] = []
+    vias: list[ViaComplement] = []
 
     for track in layout_board.GetTracks():
         item_class = track.GetClass().upper()
@@ -1743,7 +1746,7 @@ def load_layout_fragment_with_footprints(
                 )
             )
 
-    zones: List[ZoneComplement] = []
+    zones: list[ZoneComplement] = []
     for zone in layout_board.Zones():
         item_uuid = str(zone.m_Uuid.AsString())
         net = zone.GetNet()
@@ -1762,7 +1765,7 @@ def load_layout_fragment_with_footprints(
             )
         )
 
-    graphics: List[GraphicComplement] = []
+    graphics: list[GraphicComplement] = []
     for drawing in layout_board.GetDrawings():
         parent = drawing.GetParent()
         if (
@@ -1776,7 +1779,7 @@ def load_layout_fragment_with_footprints(
         graphic_type = drawing.GetClass()
         layer = layout_board.GetLayerName(drawing.GetLayer())
 
-        geometry: Dict[str, Any] = {}
+        geometry: dict[str, Any] = {}
         if hasattr(drawing, "GetStart"):
             start = drawing.GetStart()
             geometry["start"] = {"x": start.x, "y": start.y}

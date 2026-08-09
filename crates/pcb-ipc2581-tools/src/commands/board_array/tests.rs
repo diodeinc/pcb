@@ -1,14 +1,14 @@
-use super::balance::{
-    balance_features, extract_array_support_layers, generate_automatic_board_array_copper_balance,
-};
+use crate::copper_balance::balance_features;
+
+use super::balance::{extract_array_support_layers, generate_automatic_board_array_copper_balance};
 use super::*;
 use crate::accessors::IpcAccessor;
 use crate::ipc2581::types::LayerFunction;
 use crate::manufacturing::{ManufacturingPackage, build_manufacturing_package};
 use pcb_ir::dialects::ipc::{
-    BalancingRegionOptions, BoardArraySupportDocument, FeatureBucket, FeatureDomain, FeatureIntent,
-    FeatureKind, FeatureOperation, FeatureRole, FeatureSpan, FiducialKind, LayoutStepKind,
-    PlatingKind, View, board_array_balancing_region, collect_board_array_balancing_input,
+    ArtworkScope, BalancingRegionOptions, BoardArraySupportDocument, FeatureBucket, FeatureDomain,
+    FeatureIntent, FeatureKind, FeatureOperation, FeatureRole, FeatureSpan, FiducialKind,
+    LayoutStepKind, PlatingKind, board_array_balancing_region, collect_board_array_balancing_input,
 };
 use pcb_ir::geom::copper_balance::{
     DenseCopperBalanceMode, DenseCopperBalanceProfile, SpatialCopperBalanceLayerRequest,
@@ -130,7 +130,8 @@ fn creates_rounded_panel_step_from_board_bbox() {
     assert_point_close(first_instance.bbox.min, Point::new(7.5, 7.5));
     assert_point_close(first_instance.bbox.max, Point::new(17.5, 17.5));
 
-    let vcut = geometry::extract_layer_for_view(&ipc, "V-Score", View::ArrayFlattened).unwrap();
+    let vcut =
+        geometry::extract_layer_for_view(&ipc, "V-Score", ArtworkScope::ArrayFlattened).unwrap();
     assert!(vcut.features.len() > 24);
     assert!(
         vcut.features
@@ -188,9 +189,10 @@ fn generated_board_array_has_a_certified_safe_balancing_region() {
     assert!(result.certificate.passes(1e-4));
 }
 
-#[test]
-fn board_array_creation_automatically_balances_every_copper_layer() {
-    let input = board_fixture_with_top_line_mm()
+/// A two-copper-layer board with copper only on TOP, on the smallest sheet:
+/// balancing costs the panel's area, and nothing here asks how many boards fit.
+fn two_layer_board_xml() -> String {
+    board_fixture_with_top_line_mm()
         .replace(
             r#"<LayerRef name="TOP"/>"#,
             r#"<LayerRef name="TOP"/>
@@ -201,15 +203,21 @@ fn board_array_creation_automatically_balances_every_copper_layer() {
             r#"<Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
   <Layer name="BOTTOM" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>"#,
         )
-        .replace(r#"lineWidth="0.2""#, r#"lineWidth="4""#);
+        .replace(r#"lineWidth="0.2""#, r#"lineWidth="4""#)
+}
+
+#[test]
+fn board_array_balancing_solves_every_copper_layer() {
+    let input = two_layer_board_xml();
     let ipc = Ipc2581::parse(&input).unwrap();
-    let (options, validation_mode, panelization) = auto_board_array_options(&ipc, None).unwrap();
+    let sheet = Some(AutoSheetSize::A7);
+    let (options, validation_mode, panelization) = auto_board_array_options(&ipc, sheet).unwrap();
     let spec = build_board_array_spec(&ipc, &options, validation_mode, panelization).unwrap();
     let provisional_xml = write_board_array_xml(&input, &spec).unwrap();
     let provisional = Ipc2581::parse(&provisional_xml).unwrap();
     let balance = generate_automatic_board_array_copper_balance(&provisional).unwrap();
 
-    assert!(balance.retained_area_mm2 > 0.0);
+    assert!(balance.panel_area_mm2 > 0.0);
     assert_eq!(balance.layers.len(), 2);
     assert!(
         balance
@@ -227,8 +235,8 @@ fn board_array_creation_automatically_balances_every_copper_layer() {
         .iter()
         .find(|layer| layer.layer_name == "BOTTOM")
         .unwrap();
-    assert!(top.board_target_density > 0.0);
-    assert_eq!(bottom.board_target_density, 0.0);
+    assert!(top.target_density > 0.0);
+    assert_eq!(bottom.target_density, 0.0);
     assert!(!top.features.is_empty());
     assert!(bottom.features.is_empty());
 
@@ -240,34 +248,42 @@ fn board_array_creation_automatically_balances_every_copper_layer() {
                 .intersection(&layer.existing_copper)
                 .is_empty()
         );
-        assert_eq!(
-            layer.result.solution.target_density,
-            layer.board_target_density
-        );
+        assert_eq!(layer.result.solution.target_density, layer.target_density);
         assert!(
             layer.result.solution.residual_error
-                <= (layer.result.solution.initial_density - layer.board_target_density).abs()
-                    + 1e-9
+                <= (layer.result.solution.initial_density - layer.target_density).abs() + 1e-9
         );
     }
+}
 
-    let creation = create_auto_board_array(&input, None).unwrap();
-    assert_eq!(creation.copper_balance.layers.len(), 2);
-    for report in &creation.copper_balance.layers {
+/// The same panel through creation itself: the report's accounting and the
+/// generated geometry in the emitted document.
+#[test]
+fn board_array_creation_reports_and_emits_the_balance() {
+    let input = two_layer_board_xml();
+    let creation = create_auto_board_array(&input, Some(AutoSheetSize::A7), true).unwrap();
+    let copper_balance = creation.copper_balance.as_ref().unwrap();
+    assert_eq!(copper_balance.layers.len(), 2);
+    for report in &copper_balance.layers {
+        // Fixed copper, fillable region, and permanently bare area partition
+        // that layer's density domain exactly.
         assert!(
             (report.existing_copper_area_mm2
                 + report.usable_area_mm2
                 + report.fixed_empty_area_mm2
-                - creation.copper_balance.retained_area_mm2)
+                - report.density_domain_area_mm2)
                 .abs()
                 <= 1e-6
         );
+        // Unfillable panel material stays out of the denominator entirely.
+        assert!(report.density_domain_area_mm2 <= copper_balance.panel_area_mm2 + 1e-6);
         assert!(
             report.residual_error <= (report.initial_density - report.target_density).abs() + 1e-9
         );
     }
     let xml = creation.xml;
-    assert!(!xml.contains(r#"<Set polarity="NEGATIVE">"#));
+    // Perforated balance planes carry their voids as a negative instance set.
+    assert!(xml.contains(r#"<Set polarity="NEGATIVE">"#));
     assert!(xml.matches("<Contour>").count() > 0);
 }
 
@@ -277,36 +293,66 @@ fn board_array_creation_accepts_no_source_copper_layers() {
         r#"<Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>"#,
         r#"<Layer name="TOP" layerFunction="SOLDERMASK" side="TOP" polarity="POSITIVE"/>"#,
     );
-    let creation = create_auto_board_array(&input, None).unwrap();
+    let creation = create_auto_board_array(&input, None, true).unwrap();
 
-    assert!(creation.copper_balance.layers.is_empty());
+    assert!(creation.copper_balance.unwrap().layers.is_empty());
 }
 
+#[test]
+fn board_array_creation_can_skip_copper_balancing() {
+    let creation = create_auto_board_array(board_fixture_with_top_line_mm(), None, false).unwrap();
+
+    assert!(creation.copper_balance.is_none());
+    Ipc2581::parse(&creation.xml).unwrap();
+}
+
+/// Two-sided fiducials and their mask openings must reserve area on both
+/// surface copper layers alike. That is a property of the balancing regions,
+/// so it is read off them directly rather than through a full solve.
 #[test]
 fn automatic_balancing_regions_scope_panel_fiducials_to_both_surface_copper_layers() {
     let input = large_board_fixture_mm();
     let ipc = Ipc2581::parse(input).unwrap();
-    let (options, validation_mode, panelization) = auto_board_array_options(&ipc, None).unwrap();
+    // The smallest sheet the board fits: fiducial scoping does not depend on
+    // how much panel surrounds it.
+    let sheet = Some(AutoSheetSize::A6);
+    let (options, validation_mode, panelization) = auto_board_array_options(&ipc, sheet).unwrap();
     let spec = build_board_array_spec(&ipc, &options, validation_mode, panelization).unwrap();
     let provisional_xml = write_board_array_xml(input, &spec).unwrap();
     let provisional = Ipc2581::parse(&provisional_xml).unwrap();
-    let balance = generate_automatic_board_array_copper_balance(&provisional).unwrap();
-    let top = balance
-        .layers
-        .iter()
-        .find(|layer| layer.layer_name == "TOP")
-        .unwrap();
-    let bottom = balance
-        .layers
-        .iter()
-        .find(|layer| layer.layer_name == "BOTTOM")
-        .unwrap();
+    let layout = geometry::extract_layout(&provisional).unwrap();
+    let score_lines = geometry::board_array_vscore_lines(&provisional).unwrap();
+    let fabrication_profile =
+        geometry::board_array_fabrication_profile(&provisional, &layout, &score_lines).unwrap();
+    let support_layers = extract_array_support_layers(&provisional).unwrap();
+    let copper_layers = crate::layers::copper_layers(provisional.ecad().unwrap());
+    let collection = collect_board_array_balancing_input(
+        &layout,
+        &fabrication_profile,
+        &copper_layers,
+        support_layers
+            .iter()
+            .map(|source| BoardArraySupportDocument::new(&source.document, source.policy)),
+    )
+    .unwrap();
 
+    let safe_area = |name: &str| {
+        let layer = copper_layers
+            .iter()
+            .find(|layer| provisional.resolve(layer.name) == name)
+            .unwrap();
+        let input = collection.input_for_layer(layer.name);
+        board_array_balancing_region(&input, BalancingRegionOptions::default())
+            .unwrap()
+            .safe_region
+            .area()
+    };
+
+    let top = safe_area("TOP");
+    let bottom = safe_area("BOTTOM");
     assert!(
-        (bottom.result.usable.area() - top.result.usable.area()).abs() <= 1e-6,
-        "two-sided fiducials and mask openings should reserve equal surface-copper area: top {:.6} mm², bottom {:.6} mm²",
-        top.result.usable.area(),
-        bottom.result.usable.area(),
+        (bottom - top).abs() <= 1e-6,
+        "two-sided fiducials and mask openings should reserve equal surface-copper area: top {top:.6} mm², bottom {bottom:.6} mm²",
     );
 }
 
@@ -572,7 +618,7 @@ fn created_board_array_vcuts_flow_to_svg_and_gerber() {
     assert!(viewbox.1 + viewbox.3 > 100.0);
     assert_eq!(geometry::board_array_vscore_lines(&ipc).unwrap().len(), 24);
 
-    let package = build_manufacturing_package(&ipc, View::ArrayFlattened).unwrap();
+    let package = build_manufacturing_package(&ipc, ArtworkScope::ArrayFlattened).unwrap();
 
     let vcut = package
         .files
@@ -585,7 +631,7 @@ fn created_board_array_vcuts_flow_to_svg_and_gerber() {
     assert!(!vcut.contents.contains("G36*"));
     assert!(vcut.contents.matches("D01*").count() > 24);
 
-    let board_package = build_manufacturing_package(&ipc, View::Board).unwrap();
+    let board_package = build_manufacturing_package(&ipc, ArtworkScope::Board).unwrap();
     assert!(
         board_package
             .files
@@ -623,7 +669,7 @@ fn created_board_array_profile_gerber_derives_vscore_reliefs() {
     );
     assert!(fabrication_profile.assembly_panel_outlines.is_empty());
 
-    let package = build_manufacturing_package(&ipc, View::ArrayFlattened).unwrap();
+    let package = build_manufacturing_package(&ipc, ArtworkScope::ArrayFlattened).unwrap();
     let vcut = package
         .files
         .iter()
@@ -674,7 +720,7 @@ fn board_array_creation_drops_source_board_outline_layer_features() {
     assert!(!xml.contains(r#"<LayerFeature layerRef="Edge.Cuts">"#));
 
     let ipc = Ipc2581::parse(&xml).unwrap();
-    let package = build_manufacturing_package(&ipc, View::ArrayFlattened).unwrap();
+    let package = build_manufacturing_package(&ipc, ArtworkScope::ArrayFlattened).unwrap();
     assert!(
         package
             .files
@@ -693,7 +739,7 @@ fn board_array_creation_drops_source_board_outline_layer_features() {
 fn board_array_creation_preserves_board_target_geometry() {
     let input = board_fixture_with_top_line_mm();
     let before_ipc = Ipc2581::parse(input).unwrap();
-    let before = geometry::extract_layer_for_view(&before_ipc, "TOP", View::Board).unwrap();
+    let before = geometry::extract_layer_for_view(&before_ipc, "TOP", ArtworkScope::Board).unwrap();
 
     let xml = create_board_array_xml(
         input,
@@ -706,7 +752,7 @@ fn board_array_creation_preserves_board_target_geometry() {
     )
     .unwrap();
     let after_ipc = Ipc2581::parse(&xml).unwrap();
-    let after = geometry::extract_layer_for_view(&after_ipc, "TOP", View::Board).unwrap();
+    let after = geometry::extract_layer_for_view(&after_ipc, "TOP", ArtworkScope::Board).unwrap();
 
     assert_eq!(before.features.len(), after.features.len());
     assert_eq!(before.arena.paths.len(), after.arena.paths.len());
@@ -795,14 +841,16 @@ fn generated_array_geometry_writes_fiducials_and_nonplated_holes() {
     assert!(xml.contains(r#"x="20" y="20""#));
 
     let parsed = Ipc2581::parse(&xml).unwrap();
-    let top = geometry::extract_layer_for_view(&parsed, "TOP", View::ArrayFlattened).unwrap();
+    let top =
+        geometry::extract_layer_for_view(&parsed, "TOP", ArtworkScope::ArrayFlattened).unwrap();
     assert!(top.features.iter().any(|feature| {
         feature.intent.role == FeatureRole::Fiducial
             && feature.fiducial_kind == FiducialKind::Global
     }));
 
     let drill =
-        geometry::extract_layer_for_view(&parsed, "Array_Drill", View::ArrayFlattened).unwrap();
+        geometry::extract_layer_for_view(&parsed, "Array_Drill", ArtworkScope::ArrayFlattened)
+            .unwrap();
     assert_eq!(drill.features.len(), 1);
     assert_eq!(drill.features[0].kind, FeatureKind::Hole);
     assert_eq!(drill.features[0].bucket, FeatureBucket::Cutout);
@@ -811,7 +859,7 @@ fn generated_array_geometry_writes_fiducials_and_nonplated_holes() {
     assert_eq!(drill.features[0].intent.operation, FeatureOperation::Drill);
     assert_eq!(drill.features[0].intent.plating, PlatingKind::NonPlated);
 
-    let package = build_manufacturing_package(&parsed, View::ArrayFlattened).unwrap();
+    let package = build_manufacturing_package(&parsed, ArtworkScope::ArrayFlattened).unwrap();
     let top = package
         .files
         .iter()
@@ -848,7 +896,7 @@ fn generated_array_geometry_writes_fiducials_and_nonplated_holes() {
 }
 
 #[test]
-fn explicit_copper_balance_region_round_trips_as_positive_panel_geometry() {
+fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
     let input = board_fixture_with_top_line_mm();
     let ipc = Ipc2581::parse(input).unwrap();
     let options = BoardArrayCreateOptions {
@@ -877,6 +925,7 @@ fn explicit_copper_balance_region_round_trips_as_positive_panel_geometry() {
     let layers = [SpatialCopperBalanceLayerRequest {
         safe_region: &safe_region,
         existing_copper: &existing,
+        density_domain: &safe_region,
         target_density: 0.70,
         stack_weight_mm2: 0.0,
     }];
@@ -889,38 +938,50 @@ fn explicit_copper_balance_region_round_trips_as_positive_panel_geometry() {
         },
     )
     .unwrap()
+    .layers
     .pop()
     .unwrap();
     let features = balance_features(&balance).unwrap();
-    spec.generated_geometry.add_layer_feature(
-        GeneratedFeatureScope::Array,
-        "TOP",
-        Polarity::Positive,
-        features,
-    );
+    let void_count = features.instances.len();
+    spec.generated_geometry
+        .add_balance_layer(GeneratedFeatureScope::Array, "TOP", features);
     assert!(matches!(
         balance.solution.mode,
         DenseCopperBalanceMode::Perforated { .. }
     ));
+    assert!(void_count > 0);
 
     let xml = write_board_array_xml(input, &spec).unwrap();
-    assert!(!xml.contains(r#"<Set polarity="NEGATIVE">"#));
+    assert!(xml.contains(r#"<Set polarity="NEGATIVE">"#));
 
     let parsed = Ipc2581::parse(&xml).unwrap();
     assert!(xml.matches("<Contour>").count() > 0);
+    assert!(xml.matches("<EntryUser").count() > 0);
+    assert!(xml.matches("<Location ").count() >= void_count);
+    assert!(xml.matches("<UserPrimitiveRef").count() < void_count);
 
-    let top = geometry::extract_layer_for_view(&parsed, "TOP", View::ArrayFlattened).unwrap();
-    let paths = top
-        .features
-        .iter()
-        .filter(|feature| {
-            feature.source_step_kind == LayoutStepKind::Panel
-                && feature.kind == FeatureKind::Primitive
-        })
-        .flat_map(|feature| feature.paths.slice(&top.arena.paths))
-        .collect::<Vec<_>>();
-    let round_trip =
-        ContourSet::from_painted_paths(&top.arena, paths.iter().copied(), tol::REGION_MM);
+    let mut top =
+        geometry::extract_layer_for_view(&parsed, "TOP", ArtworkScope::ArrayFlattened).unwrap();
+    assert!(
+        !top.feature_placement_groups.is_empty(),
+        "shared IPC Locations should remain a placement group"
+    );
+    pcb_ir::dialects::ipc::process::expand_feature_placement_groups(&mut top);
+    let balance_paths = |polarity: pcb_ir::geom::Polarity| {
+        let paths = top
+            .features
+            .iter()
+            .filter(|feature| {
+                feature.source_step_kind == LayoutStepKind::Panel
+                    && feature.kind == FeatureKind::Primitive
+                    && feature.polarity == polarity
+            })
+            .flat_map(|feature| feature.paths.slice(&top.arena.paths))
+            .collect::<Vec<_>>();
+        ContourSet::from_painted_paths(&top.arena, paths, tol::REGION_MM)
+    };
+    let round_trip = balance_paths(pcb_ir::geom::Polarity::Dark)
+        .difference(&balance_paths(pcb_ir::geom::Polarity::Clear));
 
     assert!(!round_trip.is_empty());
     assert!(
@@ -931,7 +992,7 @@ fn explicit_copper_balance_region_round_trips_as_positive_panel_geometry() {
         balance.solution.generated_area_mm2
     );
 
-    let package = build_manufacturing_package(&parsed, View::ArrayFlattened).unwrap();
+    let package = build_manufacturing_package(&parsed, ArtworkScope::ArrayFlattened).unwrap();
     let top_gerber = package
         .files
         .iter()
@@ -939,6 +1000,30 @@ fn explicit_copper_balance_region_round_trips_as_positive_panel_geometry() {
         .unwrap();
     assert!(top_gerber.contents.contains("G36*"));
     assert!(top_gerber.contents.contains("G37*"));
+    // Manufacturing Gerbers expand array hierarchy for broad CAM compatibility.
+    assert!(!top_gerber.contents.contains("%ABD"));
+    assert!(top_gerber.contents.contains("%LPC*%"));
+
+    // The composed Gerber image must match the composed IPC image.
+    let ipc_copper = crate::copper_balance::composed_copper_image(&parsed, "TOP").unwrap();
+    let gerber = gerberx2::GerberX2::parse(&top_gerber.contents).unwrap();
+    let mask =
+        pcb_ir::dialects::artwork::compose_to_mask(&gerberx2::geometry::extract_document(&gerber));
+    let mut rings = Vec::new();
+    for layer in &mask.layers {
+        for shape in mask.shapes(layer) {
+            rings.extend(pcb_ir::geom::region::rings_from_contours(
+                &mask.arena.path_contours(shape),
+            ));
+        }
+    }
+    let gerber_copper = ContourSet::new(rings, pcb_ir::geom::FillRule::NonZero, tol::REGION_MM);
+    assert!(
+        (gerber_copper.area() - ipc_copper.area()).abs() <= ipc_copper.area() * 1e-3,
+        "Gerber area {}, IPC area {}",
+        gerber_copper.area(),
+        ipc_copper.area()
+    );
 }
 
 #[test]
@@ -980,7 +1065,7 @@ fn board_array_creation_adds_default_tooling_at_single_column_min_width() {
         vec![(23.5, 67.5), (46.5, 67.5), (27.5, 2.5), (42.5, 2.5)],
     );
 
-    let package = build_manufacturing_package(&ipc, View::ArrayFlattened).unwrap();
+    let package = build_manufacturing_package(&ipc, ArtworkScope::ArrayFlattened).unwrap();
     assert_fiducial_gerbers(&package, "Global");
 }
 
@@ -1187,7 +1272,7 @@ fn board_array_creation_adds_board_cell_fiducials_on_top_bottom_margins() {
         &[(3.0, 38.0), (37.0, 38.0), (7.0, 2.0), (33.0, 2.0)],
     );
 
-    let top = geometry::extract_layer_for_view(&ipc, "TOP", View::ArrayFlattened).unwrap();
+    let top = geometry::extract_layer_for_view(&ipc, "TOP", ArtworkScope::ArrayFlattened).unwrap();
     assert_eq!(
         top.features
             .iter()
@@ -1196,7 +1281,7 @@ fn board_array_creation_adds_board_cell_fiducials_on_top_bottom_margins() {
         8
     );
 
-    let package = build_manufacturing_package(&ipc, View::ArrayFlattened).unwrap();
+    let package = build_manufacturing_package(&ipc, ArtworkScope::ArrayFlattened).unwrap();
     assert_fiducial_gerbers(&package, "Local");
 }
 

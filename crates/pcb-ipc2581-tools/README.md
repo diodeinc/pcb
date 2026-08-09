@@ -20,9 +20,14 @@ alias provides the same commands.
 
 Run `pcb ipc2581 <command> --help` for arguments and output options.
 
-The mathematical and geometric strategy for automatically balancing board
-arrays is documented in
-[`docs/board-array-copper-balancing.md`](docs/board-array-copper-balancing.md).
+Board-array creation balances copper by default; pass `--no-copper-balance`
+to disable it. Fabrication-panel creation leaves copper unchanged by default;
+pass `--copper-balance` to enable balancing. Both commands accept the inverse
+flag as an explicit override, and reject using both flags together.
+
+The mathematical and geometric strategy for automatic copper balancing — both
+the board-array and fabrication-panel passes — is documented in
+[`docs/copper-balancing.md`](docs/copper-balancing.md).
 
 `edit bom` modifies the input file when `--output` is omitted. Specify an output
 path when the source document must remain unchanged.
@@ -55,14 +60,14 @@ the top and bottom of every stock panel. This gives the following packing areas:
 | 21 by 24 in | 19 by 20 in |
 
 Use `--edge-margin` with one to four CSS-shorthand values to override the
-process margins in millimeters. Use `--panel-gap` to override the default 5 mm
+process margins in millimeters. Use `--panel-gap` to override the default 7.62 mm
 gap between assembly panels:
 
 ```bash
 pcb ipc2581 fab-panel create \
   --panel-size 18x24 \
   --edge-margin 50.8 25.4 \
-  --panel-gap 5 \
+  --panel-gap 7.62 \
   --output fabrication-panel.xml \
   assembly-a.xml assembly-b.xml
 ```

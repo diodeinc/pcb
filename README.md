@@ -36,6 +36,10 @@ the native environment.
 `pcb` manages `pcbc`, the standard library, and bundled sidecars such as
 `pcb-rectify` as one versioned toolchain.
 
+Workspace commands use the toolchain selected by `pcb-version`. `pcb auth`
+instead uses the latest stable toolchain; an explicit `+<toolchain>` override
+still wins. `pcb self` and `pcb toolchain` run directly in the launcher.
+
 ```bash
 pcb toolchain show                 # Show the active and latest matching versions
 pcb toolchain show --offline       # Use installed and cached data only
@@ -58,6 +62,9 @@ cd pcb
 cargo build -p pcb -p pcbc
 ./install.sh --local
 ```
+
+Repository maintenance scripts are run by their explicit path, such as
+`./bin/embed-readme --check README.md`; no shell environment activation is needed.
 
 ## Quick start
 

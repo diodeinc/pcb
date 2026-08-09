@@ -886,6 +886,31 @@ fn generate_gerbers(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
         .run()
         .context("Failed to generate gerber files")?;
 
+    // KiCad's default Gerber layer set has changed across releases. Export
+    // fabrication drawings explicitly in isolation so its job file cannot
+    // replace the primary manufacturing job file.
+    let fab_gerbers_dir = manufacturing_dir.join("fab_gerbers_temp");
+    fs::create_dir_all(&fab_gerbers_dir)?;
+    let fab_export_result = (|| -> Result<()> {
+        KiCadCliBuilder::new()
+            .command("pcb")
+            .subcommand("export")
+            .subcommand("gerbers")
+            .arg("--output")
+            .arg(fab_gerbers_dir.to_string_lossy())
+            .arg("--layers")
+            .arg("F.Fab,B.Fab")
+            .arg("--use-drill-file-origin")
+            .arg(kicad_pcb_path.to_string_lossy())
+            .run()
+            .context("Failed to generate fabrication drawing gerbers")?;
+        copy_assembly_drawing_gerbers(&fab_gerbers_dir, &gerbers_dir)?;
+        Ok(())
+    })();
+    let fab_cleanup_result = fs::remove_dir_all(&fab_gerbers_dir);
+    fab_export_result?;
+    fab_cleanup_result?;
+
     // Generate drill files (separate PTH/NPTH) with PDF map(s)
     KiCadCliBuilder::new()
         .command("pcb")
@@ -939,6 +964,80 @@ fn generate_gerbers(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     fs::remove_dir_all(&gerbers_dir)?;
 
     Ok(())
+}
+
+fn copy_assembly_drawing_gerbers(source_dir: &Path, destination_dir: &Path) -> Result<usize> {
+    let mut copied = 0;
+    for entry in fs::read_dir(source_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_file() || path.extension().and_then(|value| value.to_str()) != Some("gbr") {
+            continue;
+        }
+        let contents = fs::read_to_string(&path)?;
+        if !contents.contains("%TF.FileFunction,AssemblyDrawing,") {
+            continue;
+        }
+        fs::copy(&path, destination_dir.join(entry.file_name()))?;
+        copied += 1;
+    }
+    merge_assembly_drawing_job_attributes(source_dir, destination_dir)?;
+    Ok(copied)
+}
+
+fn merge_assembly_drawing_job_attributes(source_dir: &Path, destination_dir: &Path) -> Result<()> {
+    let Some(source_job) = find_gerber_job_file(source_dir)? else {
+        return Ok(());
+    };
+    let Some(destination_job) = find_gerber_job_file(destination_dir)? else {
+        return Ok(());
+    };
+    let source: serde_json::Value = serde_json::from_slice(&fs::read(&source_job)?)?;
+    let mut destination: serde_json::Value = serde_json::from_slice(&fs::read(&destination_job)?)?;
+    let source_files = source
+        .get("FilesAttributes")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|entry| {
+            entry
+                .get("FileFunction")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|function| function.starts_with("AssemblyDrawing,"))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let destination_files = destination
+        .get_mut("FilesAttributes")
+        .and_then(serde_json::Value::as_array_mut)
+        .context("primary Gerber job file has no FilesAttributes array")?;
+    for source_entry in source_files {
+        let source_path = source_entry.get("Path").and_then(serde_json::Value::as_str);
+        if let Some(existing) = destination_files
+            .iter_mut()
+            .find(|entry| entry.get("Path").and_then(serde_json::Value::as_str) == source_path)
+        {
+            *existing = source_entry;
+        } else {
+            destination_files.push(source_entry);
+        }
+    }
+    let mut serialized = serde_json::to_string_pretty(&destination)?;
+    serialized.push('\n');
+    fs::write(destination_job, serialized)?;
+    Ok(())
+}
+
+fn find_gerber_job_file(directory: &Path) -> Result<Option<PathBuf>> {
+    for entry in fs::read_dir(directory)? {
+        let path = entry?.path();
+        if path.is_file()
+            && path.extension().and_then(|extension| extension.to_str()) == Some("gbrjob")
+        {
+            return Ok(Some(path));
+        }
+    }
+    Ok(None)
 }
 
 /// Generate pick-and-place file
@@ -1223,7 +1322,7 @@ fn run_kicad_drc(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
 
     // Collect diagnostics from layout sync check (run on staged sources/layout).
     let Some(layout_result) =
-        pcb_layout::process_layout(&staged_schematic, false, true, &mut diagnostics)?
+        pcb_layout::process_layout(&staged_schematic, true, &mut diagnostics)?
     else {
         anyhow::bail!("No layout directory for DRC checks");
     };
@@ -1368,6 +1467,52 @@ mod tests {
         assert!(names.contains(&"src/Feign.zen".to_string()));
         assert!(names.iter().all(|name| !should_skip_release_zip_path(name)));
 
+        Ok(())
+    }
+
+    #[test]
+    fn copies_only_explicit_assembly_drawing_gerbers() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let source = temp_dir.path().join("source");
+        let destination = temp_dir.path().join("destination");
+        fs::create_dir_all(&source)?;
+        fs::create_dir_all(&destination)?;
+        fs::write(
+            source.join("layout-F_Fab.gbr"),
+            "%TF.FileFunction,AssemblyDrawing,Top*%\nM02*\n",
+        )?;
+        fs::write(
+            source.join("layout-F_Cu.gtl"),
+            "%TF.FileFunction,Copper,L1,Top*%\nM02*\n",
+        )?;
+        fs::write(
+            source.join("layout-job.gbrjob"),
+            r#"{
+  "FilesAttributes": [
+    {"Path":"layout-F_Fab.gbr","FileFunction":"AssemblyDrawing,Top","FilePolarity":"Positive"}
+  ]
+}"#,
+        )?;
+        fs::write(
+            destination.join("layout-job.gbrjob"),
+            r#"{
+  "FilesAttributes": [
+    {"Path":"layout-F_Cu.gtl","FileFunction":"Copper,L1,Top","FilePolarity":"Positive"}
+  ]
+}"#,
+        )?;
+
+        assert_eq!(copy_assembly_drawing_gerbers(&source, &destination)?, 1);
+
+        assert!(destination.join("layout-F_Fab.gbr").is_file());
+        assert!(!destination.join("layout-F_Cu.gtl").exists());
+        let job: serde_json::Value =
+            serde_json::from_slice(&fs::read(destination.join("layout-job.gbrjob"))?)?;
+        let files = job["FilesAttributes"].as_array().unwrap();
+        assert_eq!(files.len(), 2);
+        assert!(files.iter().any(|entry| {
+            entry["FileFunction"] == "AssemblyDrawing,Top" && entry["Path"] == "layout-F_Fab.gbr"
+        }));
         Ok(())
     }
 }

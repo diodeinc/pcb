@@ -357,17 +357,7 @@ def DefaultBoardConfig(
         CopperWeight("2oz"): BASE_PREDEFINED_SIZES_2OZ,
     }.get(outer_copper_weight)
 
-    if stackup == None:
-        print("Unsupported default stackup for layers: " + str(layers))
-        return None
-    if netclasses == None:
-        print("Unsupported default netclasses for layers: " + str(layers))
-        return None
-    if constraints == None:
-        print("Unsupported default constraints for copper weight: " + outer_copper_weight.value)
-        return None
-    if predefined_sizes == None:
-        print("Unsupported predefined sizes for copper weight: " + outer_copper_weight.value)
+    if stackup == None or netclasses == None or constraints == None or predefined_sizes == None:
         return None
 
     return BoardConfig(
@@ -485,8 +475,8 @@ DEFAULT_NETCLASS = NetClass(
     name="Default",
     clearance=0.16,
     track_width=0.16,  # Matches 2oz netclass
-    via_diameter=0.5,  # Standard via size (5.3:1 aspect ratio on 1.6mm board)
-    via_drill=0.3,  # Standard drill size
+    via_diameter=0.45,
+    via_drill=0.2,
     diff_pair_width=0.2,  # Reasonable diff pair width
     diff_pair_gap=0.2,  # Reasonable diff pair gap
 )
@@ -935,7 +925,7 @@ BASE_CONSTRAINTS = Constraints(
         minimum_track_width=0.09,  # Min track width (1oz)
         minimum_via_diameter=0.25,  # Min via diameter (0.25mm)
         copper_to_hole_clearance=0.2,  # Inner layer via hole to copper clearance
-        copper_to_edge_clearance=0.3,  # Reasonable edge clearance
+        copper_to_edge_clearance=0.4,
     ),
     holes=Holes(
         minimum_through_hole=0.15,  # Min via hole size
@@ -966,7 +956,7 @@ BASE_CONSTRAINTS_2OZ = Constraints(
         minimum_track_width=0.16,  # Min track width (2oz copper)
         minimum_via_diameter=0.25,  # Same via diameter
         copper_to_hole_clearance=0.2,  # Same hole clearance
-        copper_to_edge_clearance=0.3,  # Same edge clearance
+        copper_to_edge_clearance=0.4,
     ),
     holes=Holes(
         minimum_through_hole=0.15,  # Same hole size

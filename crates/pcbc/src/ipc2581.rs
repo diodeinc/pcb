@@ -92,9 +92,12 @@ enum Commands {
         /// IPC-2581 XML file to export from
         #[arg(value_hint = clap::ValueHint::FilePath)]
         file: PathBuf,
-        /// Layout target to export
-        #[arg(long, default_value = "board")]
+        /// What to export: the canonical board, or the file's root step with every repeat materialized.
+        #[arg(long, default_value = "board-array")]
         layout_target: LayoutTarget,
+        /// Also draw nested assembly-panel boundaries, not just the fabrication outlines.
+        #[arg(long)]
+        nested_outlines: bool,
         /// Output DXF file path
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
         output: PathBuf,
@@ -113,33 +116,39 @@ enum Commands {
         /// Render format. Auto infers SVG/PNG from the output extension or uses terminal graphics.
         #[arg(short, long, default_value = "auto")]
         format: RenderFormat,
-        /// Layout target to render
-        #[arg(long, default_value = "layout")]
+        /// What to render: the canonical board, or the file's root step with every repeat materialized.
+        #[arg(long, default_value = "board-array")]
         layout_target: LayoutTarget,
-        /// Flatten the layer into a single Gerber-style mask before rendering.
-        #[arg(long)]
-        flat: bool,
     },
     /// Check exported Gerber geometry for manufacturability slivers
     Dfm {
         /// IPC-2581 XML file to check
         #[arg(value_hint = clap::ValueHint::FilePath)]
         file: PathBuf,
-        /// Layout target to check. Supports board or board-array.
-        #[arg(long, default_value = "board")]
-        layout_target: GerberLayoutTarget,
+        /// What to check: the canonical board, or the file's root step with every repeat materialized.
+        #[arg(long, default_value = "board-array")]
+        layout_target: LayoutTarget,
         /// Minimum feature and gap width in millimeters
         #[arg(long, default_value_t = 0.09)]
         min_width_mm: f64,
+    },
+    /// Estimate panel bow and twist from the through-stack copper distribution
+    Warp {
+        /// IPC-2581 XML file to analyze
+        #[arg(value_hint = clap::ValueHint::FilePath)]
+        file: PathBuf,
+        /// Write a field report, with the copper and deflection maps, here
+        #[arg(long, value_hint = clap::ValueHint::FilePath)]
+        report: Option<PathBuf>,
     },
     /// Export IPC-2581 fabrication layers as manufacturing files
     Gerber {
         /// IPC-2581 XML file to export from
         #[arg(value_hint = clap::ValueHint::FilePath)]
         file: PathBuf,
-        /// Layout target to export. Manufacturing export supports board or board-array.
-        #[arg(long, default_value = "board")]
-        layout_target: GerberLayoutTarget,
+        /// What to export: the canonical board, or the file's root step with every repeat materialized.
+        #[arg(long, default_value = "board-array")]
+        layout_target: LayoutTarget,
         /// Output directory, or a .zip file for an archived manufacturing package
         #[arg(short, long, value_hint = clap::ValueHint::AnyPath)]
         output: PathBuf,
@@ -188,6 +197,28 @@ enum EditCommands {
     },
 }
 
+#[derive(Args, Debug, Clone, Copy, Default)]
+struct CopperBalanceArgs {
+    /// Enable automatic copper balancing.
+    #[arg(long, conflicts_with = "no_copper_balance")]
+    copper_balance: bool,
+    /// Disable automatic copper balancing.
+    #[arg(long, conflicts_with = "copper_balance")]
+    no_copper_balance: bool,
+}
+
+impl CopperBalanceArgs {
+    fn resolve(self, default: bool) -> bool {
+        if self.copper_balance {
+            true
+        } else if self.no_copper_balance {
+            false
+        } else {
+            default
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum BoardArrayCommands {
     /// Create a rectangular board array. Generated array size must be 70-297 mm per side.
@@ -213,6 +244,8 @@ enum BoardArrayCommands {
         /// Edge rail in millimeters. Defaults to 5. Uses CSS shorthand: all | vertical horizontal | top horizontal bottom | top right bottom left.
         #[arg(long, num_args = 1..=4, value_name = "RAIL")]
         edge_rail: Vec<f64>,
+        #[command(flatten)]
+        copper_balance: CopperBalanceArgs,
         /// Output IPC-2581 XML file, or '-' for stdout
         #[arg(short, long, value_hint = clap::ValueHint::AnyPath)]
         output: PathBuf,
@@ -237,9 +270,11 @@ enum FabPanelCommands {
         /// Edge margin in millimeters. Defaults to 50.8 vertical and 25.4 horizontal. Uses CSS shorthand: all | vertical horizontal | top horizontal bottom | top right bottom left.
         #[arg(long, num_args = 1..=4, value_name = "MARGIN")]
         edge_margin: Vec<f64>,
-        /// Gap between assembly panels in millimeters. Defaults to 5.
+        /// Gap between assembly panels in millimeters. Defaults to 7.62.
         #[arg(long, value_name = "GAP")]
         panel_gap: Option<f64>,
+        #[command(flatten)]
+        copper_balance: CopperBalanceArgs,
         /// Output IPC-2581 XML file, or '-' for stdout
         #[arg(short, long, value_hint = clap::ValueHint::AnyPath)]
         output: PathBuf,
@@ -265,22 +300,6 @@ impl FabPanelSize {
             Self::Inches16x18 => commands::fab_panel::FabPanelSpec::INCHES_16_X_18,
             Self::Inches18x24 => commands::fab_panel::FabPanelSpec::INCHES_18_X_24,
             Self::Inches21x24 => commands::fab_panel::FabPanelSpec::INCHES_21_X_24,
-        }
-    }
-}
-
-#[derive(ValueEnum, Debug, Clone, Copy)]
-enum GerberLayoutTarget {
-    Board,
-    #[value(name = "board-array", alias = "panel")]
-    BoardArray,
-}
-
-impl From<GerberLayoutTarget> for pcb_ir::dialects::ipc::View {
-    fn from(target: GerberLayoutTarget) -> Self {
-        match target {
-            GerberLayoutTarget::Board => Self::Board,
-            GerberLayoutTarget::BoardArray => Self::ArrayFlattened,
         }
     }
 }
@@ -344,8 +363,10 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                 rows,
                 board_margin,
                 edge_rail,
+                copper_balance,
                 output,
             } => {
+                let copper_balance = copper_balance.resolve(true);
                 if auto || sheet.is_some() {
                     if columns.is_some()
                         || rows.is_some()
@@ -356,7 +377,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                             "--auto/--sheet cannot be combined with manual board array options"
                         );
                     }
-                    commands::board_array::execute_auto(&input, &output, sheet)
+                    commands::board_array::execute_auto(&input, &output, sheet, copper_balance)
                 } else {
                     let board_margin_mm = if board_margin.is_empty() {
                         commands::board_array::BoardMarginMm::all(5.0)
@@ -380,6 +401,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                             board_margin_mm,
                             edge_rail_mm,
                         },
+                        copper_balance,
                     )
                 }
             }
@@ -390,6 +412,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                 panel_size,
                 edge_margin,
                 panel_gap,
+                copper_balance,
                 output,
             } => {
                 let mut spec = panel_size.map(FabPanelSize::spec).unwrap_or_default();
@@ -402,7 +425,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                 if let Some(panel_gap) = panel_gap {
                     spec.panel_gap_mm = panel_gap;
                 }
-                commands::fab_panel::execute(&inputs, &output, spec)
+                commands::fab_panel::execute(&inputs, &output, spec, copper_balance.resolve(false))
             }
         },
         Commands::View {
@@ -418,12 +441,14 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
         Commands::Outline {
             file,
             layout_target,
+            nested_outlines,
             output,
         } => commands::outline::execute(
             &file,
             &commands::outline::OutlineOptions {
                 output,
                 layout_target,
+                nested_outlines,
             },
         ),
         Commands::Render {
@@ -432,7 +457,6 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
             output,
             format,
             layout_target,
-            flat,
         } => commands::render::execute(
             &file,
             &commands::render::RenderOptions {
@@ -440,14 +464,14 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                 output,
                 format,
                 layout_target,
-                flat,
             },
         ),
         Commands::Dfm {
             file,
             layout_target,
             min_width_mm,
-        } => commands::dfm::execute(&file, layout_target.into(), min_width_mm),
+        } => commands::dfm::execute(&file, layout_target.artwork_scope(), min_width_mm),
+        Commands::Warp { file, report } => commands::warp::execute(&file, report.as_deref()),
         Commands::Gerber {
             file,
             layout_target,
@@ -458,7 +482,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                 &file,
                 &manufacturing::ManufacturingExportOptions {
                     output: output.clone(),
-                    view: layout_target.into(),
+                    view: layout_target.artwork_scope(),
                     relief_debug_dir: debug_reliefs,
                 },
             )?;

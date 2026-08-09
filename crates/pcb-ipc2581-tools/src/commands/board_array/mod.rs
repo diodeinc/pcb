@@ -6,6 +6,8 @@ use super::board_array_auto::{
     AutoBoardArrayPlan, AutoSheetSize, TargetSizeMm, auto_board_array_plan,
     auto_board_array_plan_for_sheet,
 };
+use crate::copper_balance::CopperBalanceReport;
+use crate::generated::GeneratedLayerFeature;
 use crate::geometry;
 use crate::ipc2581::Ipc2581;
 use crate::utils::file as file_utils;
@@ -55,7 +57,6 @@ const KICAD_VCUT_LABEL_GLYPHS: [&str; 5] = [
     "JZLFXF RR[RF",
 ];
 const TOOLING_HOLE_LAYER_BASE_NAME: &str = "Board_Array_Drill";
-const GENERATED_HOLE_NAME_PREFIX: &str = "array_tooling_hole";
 const FIDUCIAL_COPPER_DIAMETER_MM: f64 = 1.0;
 const FIDUCIAL_MASK_OPENING_DIAMETER_MM: f64 = 2.0;
 const TOOLING_HOLE_DIAMETER_MM: f64 = 2.0;
@@ -182,11 +183,11 @@ pub struct BoardArrayCreateOptions {
     pub edge_rail_mm: BoardMarginMm,
 }
 
-/// Generated board-array IPC plus compact per-layer copper-balance accounting.
+/// Generated board-array IPC plus optional per-layer copper-balance accounting.
 #[derive(Debug, Clone)]
 pub struct BoardArrayCreation {
     pub xml: String,
-    pub copper_balance: balance::AutomaticBoardArrayCopperBalanceReport,
+    pub copper_balance: Option<CopperBalanceReport>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -291,7 +292,8 @@ impl BoardArrayPanelizationMode {
 #[derive(Debug, Clone, Default)]
 struct BoardArrayGeneratedGeometry {
     layers: Vec<GeneratedLayer>,
-    layer_features: Vec<GeneratedLayerFeature>,
+    layer_features: Vec<(GeneratedFeatureScope, GeneratedLayerFeature)>,
+    user_entries: Vec<crate::copper_balance::BalanceVoidTemplate>,
 }
 
 impl BoardArrayGeneratedGeometry {
@@ -317,20 +319,53 @@ impl BoardArrayGeneratedGeometry {
         spec_refs: Vec<String>,
         features: Vec<SetFeature>,
     ) {
-        self.layer_features.push(GeneratedLayerFeature {
+        self.layer_features.push((
             scope,
-            layer_name: layer_name.into(),
-            polarity,
-            spec_refs,
-            features,
-        });
+            GeneratedLayerFeature {
+                layer_name: layer_name.into(),
+                polarity,
+                spec_refs,
+                features,
+                instance_refs: Vec::new(),
+            },
+        ));
+    }
+
+    /// Attach one balanced layer: its positive plane set, its negative
+    /// instance set, and the shared templates the instances reference.
+    fn add_balance_layer(
+        &mut self,
+        scope: GeneratedFeatureScope,
+        layer_name: &str,
+        sets: crate::copper_balance::BalanceFeatureSets,
+    ) {
+        self.add_layer_feature(scope, layer_name, Polarity::Positive, sets.positive);
+        self.layer_features.push((
+            scope,
+            GeneratedLayerFeature {
+                layer_name: layer_name.to_string(),
+                polarity: Polarity::Negative,
+                spec_refs: Vec::new(),
+                features: Vec::new(),
+                instance_refs: sets.instances,
+            },
+        ));
+        for template in sets.templates {
+            if !self
+                .user_entries
+                .iter()
+                .any(|entry| entry.id == template.id)
+            {
+                self.user_entries.push(template);
+            }
+        }
     }
 
     fn referenced_layer_names(&self) -> impl Iterator<Item = &str> {
         self.layers.iter().map(|layer| layer.name.as_str()).chain(
             self.layer_features
                 .iter()
-                .map(|layer_feature| layer_feature.layer_name.as_str()),
+                .map(|(_, layer_feature)| layer_feature.layer_name.as_str()),
         )
     }
 }
@@ -359,15 +394,6 @@ impl GeneratedLayer {
     }
 }
 
-#[derive(Debug, Clone)]
-struct GeneratedLayerFeature {
-    scope: GeneratedFeatureScope,
-    layer_name: String,
-    polarity: Polarity,
-    spec_refs: Vec<String>,
-    features: Vec<SetFeature>,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GeneratedFeatureScope {
     Array,
@@ -382,25 +408,37 @@ struct VcutLine {
     end_y_mm: f64,
 }
 
-pub fn execute(input: &Path, output: &Path, options: &BoardArrayCreateOptions) -> Result<()> {
+pub fn execute(
+    input: &Path,
+    output: &Path,
+    options: &BoardArrayCreateOptions,
+    balance_copper: bool,
+) -> Result<()> {
     let content = file_utils::load_ipc_file(input)?;
-    let creation = create_board_array(&content, options)?;
-    print_copper_balance_summary(&creation.copper_balance);
+    let creation = create_board_array(&content, options, balance_copper)?;
+    print_copper_balance_summary(creation.copper_balance.as_ref());
     write_board_array_output(output, &creation.xml)?;
     Ok(())
 }
 
-pub fn execute_auto(input: &Path, output: &Path, sheet: Option<AutoSheetSize>) -> Result<()> {
+pub fn execute_auto(
+    input: &Path,
+    output: &Path,
+    sheet: Option<AutoSheetSize>,
+    balance_copper: bool,
+) -> Result<()> {
     let content = file_utils::load_ipc_file(input)?;
-    let creation = create_auto_board_array(&content, sheet)?;
-    print_copper_balance_summary(&creation.copper_balance);
+    let creation = create_auto_board_array(&content, sheet, balance_copper)?;
+    print_copper_balance_summary(creation.copper_balance.as_ref());
     write_board_array_output(output, &creation.xml)?;
     Ok(())
 }
 
-fn print_copper_balance_summary(report: &balance::AutomaticBoardArrayCopperBalanceReport) {
-    for line in report.summary_lines() {
-        eprintln!("  {line}");
+fn print_copper_balance_summary(report: Option<&CopperBalanceReport>) {
+    if let Some(report) = report {
+        for line in report.summary_lines() {
+            eprintln!("  {line}");
+        }
     }
 }
 
@@ -420,6 +458,7 @@ fn write_board_array_output(output: &Path, content: &str) -> Result<()> {
 pub fn create_board_array(
     xml: &str,
     options: &BoardArrayCreateOptions,
+    balance_copper: bool,
 ) -> Result<BoardArrayCreation> {
     let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
     let spec = build_board_array_spec(
@@ -432,12 +471,16 @@ pub fn create_board_array(
             sheet_target_mm: None,
         },
     )?;
-    write_balanced_board_array_xml(xml, spec)
+    write_board_array_creation(xml, spec, balance_copper)
 }
 
 #[cfg(test)]
+/// Panelize without balancing copper, for the cases that are about the array
+/// itself. Balancing costs the panel's whole area, so the cases that are about
+/// it ask for it.
+#[cfg(test)]
 fn create_board_array_xml(xml: &str, options: &BoardArrayCreateOptions) -> Result<String> {
-    Ok(create_board_array(xml, options)?.xml)
+    Ok(create_board_array(xml, options, false)?.xml)
 }
 
 #[cfg(test)]
@@ -449,11 +492,12 @@ fn create_auto_board_array_xml(xml: &str) -> Result<String> {
 pub fn create_auto_board_array(
     xml: &str,
     sheet: Option<AutoSheetSize>,
+    balance_copper: bool,
 ) -> Result<BoardArrayCreation> {
     let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
     let (options, validation_mode, panelization) = auto_board_array_options(&ipc, sheet)?;
     let spec = build_board_array_spec(&ipc, &options, validation_mode, panelization)?;
-    write_balanced_board_array_xml(xml, spec)
+    write_board_array_creation(xml, spec, balance_copper)
 }
 
 #[cfg(test)]
@@ -461,7 +505,7 @@ fn create_auto_board_array_xml_with_sheet(
     xml: &str,
     sheet: Option<AutoSheetSize>,
 ) -> Result<String> {
-    Ok(create_auto_board_array(xml, sheet)?.xml)
+    Ok(create_auto_board_array(xml, sheet, false)?.xml)
 }
 
 fn auto_board_array_options(
@@ -545,11 +589,12 @@ fn board_courtyard_bbox(ipc: &Ipc2581) -> Result<BBox> {
         .filter(|layer| layer.layer_function == LayerFunction::Courtyard)
     {
         let layer_name = ipc.resolve(layer.name);
-        let doc =
-            geometry::extract_layer_for_view(ipc, layer_name, pcb_ir::dialects::ipc::View::Board)
-                .with_context(|| {
-                format!("failed to extract IPC-2581 courtyard layer '{layer_name}'")
-            })?;
+        let doc = geometry::extract_layer_for_view(
+            ipc,
+            layer_name,
+            pcb_ir::dialects::ipc::ArtworkScope::Board,
+        )
+        .with_context(|| format!("failed to extract IPC-2581 courtyard layer '{layer_name}'"))?;
         for feature in doc
             .features
             .iter()
@@ -592,10 +637,18 @@ fn write_board_array_xml(xml: &str, spec: &BoardArraySpec) -> Result<String> {
     Ok(xml)
 }
 
-fn write_balanced_board_array_xml(
+fn write_board_array_creation(
     xml: &str,
     mut spec: BoardArraySpec,
+    balance_copper: bool,
 ) -> Result<BoardArrayCreation> {
+    if !balance_copper {
+        return Ok(BoardArrayCreation {
+            xml: write_board_array_xml(xml, &spec)?,
+            copper_balance: None,
+        });
+    }
+
     // The provisional array only feeds safe-region discovery; parsing it below
     // already validates it, so skip the cosmetic reformat pass.
     let provisional_xml = board_array_edited_xml(xml, &spec)?;
@@ -605,20 +658,16 @@ fn write_balanced_board_array_xml(
     let copper_balance = balance.report();
 
     for layer in balance.layers {
-        if layer.features.is_empty() {
-            continue;
-        }
-        spec.generated_geometry.add_layer_feature(
+        spec.generated_geometry.add_balance_layer(
             GeneratedFeatureScope::Array,
-            layer.layer_name,
-            Polarity::Positive,
+            &layer.layer_name,
             layer.features,
         );
     }
 
     Ok(BoardArrayCreation {
         xml: write_board_array_xml(xml, &spec)?,
-        copper_balance,
+        copper_balance: Some(copper_balance),
     })
 }
 

@@ -11,8 +11,14 @@ use crate::dialects::ipc::layout::{
 use crate::geom::{Affine2, BBox};
 
 /// Which geometry a layer extraction materializes.
+///
+/// Every scope materializes a well-defined image: there is no scope that
+/// silently leaves nested `StepRepeat` content out of a layer it claims to
+/// describe. The symbolic layout graph is not a scope — it carries no layer
+/// artwork at all, and is reached through [`ProfileSet::LayoutBoundaries`]
+/// over an extracted layout document instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum View {
+pub enum ArtworkScope {
     /// Canonical board-step geometry only.
     Board,
     /// Root array-step geometry only, with no repeated child board materialization.
@@ -21,18 +27,15 @@ pub enum View {
     ArraySupport,
     /// Root array-step geometry plus repeated child board/sub-array geometry in array coordinates.
     ArrayFlattened,
-    /// Root-step geometry plus the symbolic layout graph, without repeated feature materialization.
-    LayoutSymbolic,
 }
 
-impl View {
+impl ArtworkScope {
     pub fn profile_set(self) -> ProfileSet {
         match self {
             Self::Board => ProfileSet::BoardOutlines,
             Self::ArrayLocal => ProfileSet::RootOnly,
             Self::ArraySupport => ProfileSet::RootOnly,
             Self::ArrayFlattened => ProfileSet::FabricationOutlines,
-            Self::LayoutSymbolic => ProfileSet::LayoutBoundaries,
         }
     }
 }

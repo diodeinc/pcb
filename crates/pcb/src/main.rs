@@ -166,11 +166,7 @@ fn run() -> Result<()> {
     }
 
     let override_request = take_cli_override(&mut args)?;
-    let selection = select_toolchain(
-        override_request,
-        is_migrate_command(&args),
-        is_help_request(&args),
-    )?;
+    let selection = select_toolchain(override_request, &args, is_help_request(&args))?;
     exec_toolchain(&selection.binary, &args)
 }
 
@@ -190,6 +186,12 @@ fn is_shim_command(args: &[OsString]) -> bool {
 
 fn is_migrate_command(args: &[OsString]) -> bool {
     matches!(first_command_arg(args), Some("migrate" | "m"))
+}
+
+// These commands ignore workspace pins but retain the normal latest-toolchain
+// fallback. `migrate` is separate because it requires the current latest.
+fn is_toolchain_independent_command(args: &[OsString]) -> bool {
+    matches!(first_command_arg(args), Some("auth"))
 }
 
 fn first_command_arg(args: &[OsString]) -> Option<&str> {
@@ -274,14 +276,15 @@ fn parse_request(raw: &str) -> Result<ToolchainRequest> {
 
 fn select_toolchain(
     override_request: Option<ToolchainRequest>,
-    migrate_command: bool,
+    args: &[OsString],
     prefer_local: bool,
 ) -> Result<ResolvedToolchain> {
+    let migrate_command = is_migrate_command(args);
     let (request, allow_latest_fallback) = if let Some(request) = override_request {
         let allow_latest_fallback =
             should_allow_latest_fallback(&request, migrate_command, prefer_local);
         (request, allow_latest_fallback)
-    } else if migrate_command {
+    } else if migrate_command || is_toolchain_independent_command(args) {
         let request = ToolchainRequest::Latest;
         let allow_latest_fallback =
             should_allow_latest_fallback(&request, migrate_command, prefer_local);
@@ -2114,6 +2117,15 @@ mod tests {
             "migrate"
         ])));
         assert!(!is_migrate_command(&args(&["build"])));
+    }
+
+    #[test]
+    fn auth_is_toolchain_independent() {
+        assert!(is_toolchain_independent_command(&args(&["auth"])));
+        assert!(is_toolchain_independent_command(&args(&[
+            "-d", "auth", "git", "get"
+        ])));
+        assert!(!is_toolchain_independent_command(&args(&["build"])));
     }
 
     #[test]

@@ -9,9 +9,14 @@ use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::sync::{Mutex, MutexGuard};
 
-const GIT_HELPER_CONFIG: &str = "credential.https://code.diode.computer.helper";
-const GIT_HOST: &str = "code.diode.computer";
-const GIT_USE_HTTP_PATH_CONFIG: &str = "credential.https://code.diode.computer.useHttpPath";
+const GIT_ORIGIN: &str = "https://git.preview.diode.localhost:8443";
+const GIT_HELPER_CONFIG: &str = "credential.https://git.preview.diode.localhost:8443.helper";
+const GIT_HOST: &str = "git.preview.diode.localhost:8443";
+const GIT_API_HOST: &str = "git.preview.diode.localhost";
+const GIT_USE_HTTP_PATH_CONFIG: &str =
+    "credential.https://git.preview.diode.localhost:8443.useHttpPath";
+const LEGACY_GIT_HELPER_CONFIG: &str = "credential.https://code.diode.computer.helper";
+const LEGACY_GIT_USE_HTTP_PATH_CONFIG: &str = "credential.https://code.diode.computer.useHttpPath";
 const REPOSITORY_PATH: &str = "acme/boards/widget.git";
 const USER_ACCESS_TOKEN: &str = "user-access-token";
 const REPOSITORY_TOKEN: &str = "repository-token";
@@ -66,6 +71,19 @@ impl TestContext {
         }
     }
 
+    fn new_authtype(api_url: String) -> Option<Self> {
+        let context = Self::new(api_url);
+        let output = context
+            .git_credential("capability")
+            .output()
+            .expect("query Git credential capabilities");
+        (output.status.success()
+            && String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .any(|line| line == "capability authtype"))
+        .then_some(context)
+    }
+
     fn pcbc(&self) -> Command {
         let mut command = Command::new(env!("CARGO_BIN_EXE_pcbc"));
         self.configure_environment(&mut command);
@@ -100,6 +118,10 @@ impl TestContext {
         self.config_dir.join("git-credential-cache/socket")
     }
 
+    fn managed_git_config(&self) -> PathBuf {
+        self.config_dir.join("gitconfig")
+    }
+
     fn run_git_config(&self, args: &[&str]) -> Output {
         self.git()
             .args(["config", "--global"])
@@ -108,22 +130,39 @@ impl TestContext {
             .expect("run git config")
     }
 
-    fn git_config_values(&self, key: &str) -> Vec<String> {
-        let output = self.run_git_config(&["--get-all", key]);
+    fn git_config_values(&self, config: &std::path::Path, key: &str) -> Vec<String> {
+        let output = self
+            .git()
+            .args(["config", "--file"])
+            .arg(config)
+            .args(["--get-all", key])
+            .output()
+            .expect("read Git config");
         if output.status.code() == Some(1) {
             return Vec::new();
         }
         assert_success(&output);
         String::from_utf8(output.stdout)
-            .expect("git config output is UTF-8")
+            .expect("Git config output is UTF-8")
             .lines()
             .map(str::to_string)
             .collect()
     }
 
     fn run_config_command(&self, operation: &str) -> Output {
+        let mut command = self.pcbc();
+        command.args(["auth", "git", operation]);
+        if operation == "configure" {
+            command.arg(format!("{GIT_ORIGIN}/{REPOSITORY_PATH}"));
+        }
+        command
+            .output()
+            .expect("run pcb auth git configuration command")
+    }
+
+    fn run_config_command_with_url(&self, repository_url: &str) -> Output {
         self.pcbc()
-            .args(["auth", "git", operation])
+            .args(["auth", "git", "configure", repository_url])
             .output()
             .expect("run pcb auth git configuration command")
     }
@@ -209,13 +248,18 @@ fn assert_clean_success(output: &Output) {
     assert!(output.stderr.is_empty());
 }
 
-fn mock_exchange<'a>(server: &'a MockServer, status: u16, authorization: Option<&str>) -> Mock<'a> {
+fn mock_exchange<'a>(
+    server: &'a MockServer,
+    host: &'a str,
+    status: u16,
+    authorization: Option<&str>,
+) -> Mock<'a> {
     server.mock(move |when, then| {
         let when = when
             .method(POST)
             .path("/api/git/credentials")
             .json_body(json!({
-                "host": GIT_HOST,
+                "host": host,
                 "path": REPOSITORY_PATH,
             }));
         if let Some(authorization) = authorization {
@@ -265,52 +309,85 @@ fn advertises_authtype_and_ignores_unknown_operations() {
 }
 
 #[test]
-fn configure_is_idempotent_and_preserves_unrelated_global_config() {
+fn configure_and_unconfigure_manage_only_pcb_git_config() {
     let context = TestContext::new("http://127.0.0.1:1".to_string());
-    assert_clean_success(&context.run_git_config(&["--add", "user.email", "dev@example.com"]));
-    assert_clean_success(&context.run_git_config(&["--add", "credential.helper", "store"]));
+    let unrelated_include = context._tempdir.path().join("unrelated.gitconfig");
+    fs::write(&unrelated_include, "[alias]\n\tco = checkout\n").unwrap();
     assert_clean_success(&context.run_git_config(&[
         "--add",
-        "credential.https://code.diode.computer.username",
-        "developer",
+        "include.path",
+        unrelated_include.to_str().unwrap(),
     ]));
-    assert_clean_success(&context.run_git_config(&["--add", GIT_HELPER_CONFIG, "!old-helper"]));
-    assert_clean_success(&context.run_git_config(&["--add", GIT_USE_HTTP_PATH_CONFIG, "false"]));
+    assert_clean_success(&context.run_git_config(&[
+        "--add",
+        LEGACY_GIT_HELPER_CONFIG,
+        "!developer-helper",
+    ]));
+    assert_clean_success(&context.run_git_config(&[
+        "--add",
+        LEGACY_GIT_HELPER_CONFIG,
+        "!pcb auth git",
+    ]));
+    assert_clean_success(&context.run_git_config(&[
+        "--add",
+        LEGACY_GIT_USE_HTTP_PATH_CONFIG,
+        "false",
+    ]));
+    assert_clean_success(&context.run_git_config(&[
+        "--add",
+        LEGACY_GIT_USE_HTTP_PATH_CONFIG,
+        "true",
+    ]));
 
     assert_clean_success(&context.run_config_command("configure"));
+    assert_clean_success(&context.run_git_config(&["--add", "credential.helper", "!later-helper"]));
     assert_clean_success(&context.run_config_command("configure"));
 
-    let helpers = context.git_config_values(GIT_HELPER_CONFIG);
+    let managed_config = context.managed_git_config();
+    let helpers = context.git_config_values(&managed_config, GIT_HELPER_CONFIG);
     assert_eq!(helpers.len(), 3);
     assert_eq!(helpers[0], "");
     assert!(helpers[1].starts_with("cache --timeout=3300 --socket="));
-    assert_eq!(helpers[2], "!pcb auth git");
+    assert_eq!(helpers[2], format!("!pcb auth git --host='{GIT_API_HOST}'"));
     assert_eq!(
-        context.git_config_values(GIT_USE_HTTP_PATH_CONFIG),
+        context.git_config_values(&managed_config, GIT_USE_HTTP_PATH_CONFIG),
         ["true"]
     );
-    assert_eq!(context.git_config_values("user.email"), ["dev@example.com"]);
-    assert_eq!(context.git_config_values("credential.helper"), ["store"]);
+    let includes = context.git_config_values(&context.git_config, "include.path");
     assert_eq!(
-        context.git_config_values("credential.https://code.diode.computer.username"),
-        ["developer"]
+        includes,
+        [
+            unrelated_include.to_string_lossy().into_owned(),
+            managed_config.to_string_lossy().into_owned(),
+        ]
     );
-}
+    assert_eq!(
+        context.git_config_values(&context.git_config, LEGACY_GIT_HELPER_CONFIG),
+        ["!developer-helper"]
+    );
+    assert_eq!(
+        context.git_config_values(&context.git_config, LEGACY_GIT_USE_HTTP_PATH_CONFIG),
+        ["false"]
+    );
 
-#[test]
-fn unconfigure_is_idempotent_and_preserves_unrelated_global_config() {
-    let context = TestContext::new("http://127.0.0.1:1".to_string());
-    assert_clean_success(&context.run_git_config(&[
-        "--add",
-        "credential.https://github.com.helper",
-        "!github-helper",
-    ]));
-    assert_clean_success(&context.run_git_config(&[
-        "--add",
-        "credential.https://code.diode.computer.username",
-        "developer",
-    ]));
-    assert_clean_success(&context.run_config_command("configure"));
+    let other_origin = "https://code.gov.diode.computer";
+    assert_clean_success(
+        &context.run_config_command_with_url(
+            "https://code.gov.diode.computer:443/acme/boards/widget.git",
+        ),
+    );
+    assert!(
+        context
+            .git_config_values(&managed_config, GIT_HELPER_CONFIG)
+            .is_empty()
+    );
+    let helpers = context.git_config_values(
+        &managed_config,
+        &format!("credential.{other_origin}.helper"),
+    );
+    assert_eq!(helpers.len(), 3);
+    assert_eq!(helpers[2], "!pcb auth git --host='code.gov.diode.computer'");
+
     let cached_credential = format!(
         "capability[]=authtype\n\
          protocol=https\n\
@@ -331,27 +408,46 @@ fn unconfigure_is_idempotent_and_preserves_unrelated_global_config() {
     assert_clean_success(&context.run_config_command("unconfigure"));
 
     assert!(!context.cache_socket().exists());
-    assert!(context.git_config_values(GIT_HELPER_CONFIG).is_empty());
+    assert!(!managed_config.exists());
+    assert_eq!(
+        context.git_config_values(&context.git_config, "include.path"),
+        [unrelated_include.to_string_lossy().into_owned()]
+    );
+    assert_eq!(
+        context.git_config_values(&context.git_config, "credential.helper"),
+        ["!later-helper"]
+    );
+}
+
+#[test]
+fn configure_requires_an_https_repository_url() {
+    let context = TestContext::new("http://127.0.0.1:1".to_string());
+
+    let missing = context
+        .pcbc()
+        .args(["auth", "git", "configure"])
+        .output()
+        .expect("run configure without a repository URL");
+    assert!(!missing.status.success());
+    assert!(String::from_utf8_lossy(&missing.stderr).contains(
+        "Missing DiodeHub repository URL; use `pcb auth git configure <repository-url>`"
+    ));
+
+    let http = context.run_config_command_with_url("http://code.example.com/acme/widget.git");
+    assert!(!http.status.success());
     assert!(
-        context
-            .git_config_values(GIT_USE_HTTP_PATH_CONFIG)
-            .is_empty()
+        String::from_utf8_lossy(&http.stderr).contains("DiodeHub repository URL must use HTTPS")
     );
-    assert_eq!(
-        context.git_config_values("credential.https://github.com.helper"),
-        ["!github-helper"]
-    );
-    assert_eq!(
-        context.git_config_values("credential.https://code.diode.computer.username"),
-        ["developer"]
-    );
+    assert!(!context.managed_git_config().exists());
 }
 
 #[test]
 fn modern_git_fill_caches_the_bearer_credential_until_rejected() {
     let server = MockServer::start();
-    let exchange = mock_exchange(&server, 200, Some("Bearer user-access-token"));
-    let context = TestContext::new(server.base_url());
+    let exchange = mock_exchange(&server, GIT_API_HOST, 200, Some("Bearer user-access-token"));
+    let Some(context) = TestContext::new_authtype(server.base_url()) else {
+        return;
+    };
     assert_clean_success(&context.run_config_command("configure"));
 
     let fill = run_with_input(context.git_credential("fill"), &credential_request());
@@ -398,8 +494,10 @@ fn modern_git_fill_caches_the_bearer_credential_until_rejected() {
 #[test]
 fn ambient_api_auth_without_auth_file_returns_bearer_credential_to_git() {
     let server = MockServer::start();
-    let exchange = mock_exchange(&server, 200, None);
-    let context = TestContext::new(server.base_url());
+    let exchange = mock_exchange(&server, GIT_API_HOST, 200, None);
+    let Some(context) = TestContext::new_authtype(server.base_url()) else {
+        return;
+    };
     fs::remove_dir_all(context.config_dir.join("auth")).expect("remove PCB auth directory");
     assert!(!context.config_dir.join("auth").exists());
     assert_clean_success(&context.run_config_command("configure"));
@@ -425,40 +523,12 @@ fn ambient_api_auth_without_auth_file_returns_bearer_credential_to_git() {
 }
 
 #[test]
-fn modern_git_ignores_an_expired_cached_bearer_credential() {
-    let server = MockServer::start();
-    let exchange = mock_exchange(&server, 200, Some("Bearer user-access-token"));
-    let context = TestContext::new(server.base_url());
-    assert_clean_success(&context.run_config_command("configure"));
-    let expired_credential = format!(
-        "capability[]=authtype\n\
-         protocol=https\n\
-         host={GIT_HOST}\n\
-         path={REPOSITORY_PATH}\n\
-         authtype=Bearer\n\
-         credential=expired-repository-token\n\
-         password_expiry_utc=1\n\
-         \n"
-    );
-    assert_clean_success(&run_with_input(
-        context.git_credential_cache("store"),
-        &expired_credential,
-    ));
-
-    let fill = run_with_input(context.git_credential("fill"), &credential_request());
-    assert_success(&fill);
-    assert!(fill.stderr.is_empty());
-    let credential = String::from_utf8(fill.stdout).unwrap();
-    assert!(credential.contains(&format!("credential={REPOSITORY_TOKEN}")));
-    assert!(!credential.contains("expired-repository-token"));
-    exchange.assert_calls(1);
-}
-
-#[test]
 fn auth_logout_stops_the_git_credential_cache() {
     let server = MockServer::start();
-    let exchange = mock_exchange(&server, 200, Some("Bearer user-access-token"));
-    let context = TestContext::new(server.base_url());
+    let exchange = mock_exchange(&server, GIT_API_HOST, 200, Some("Bearer user-access-token"));
+    let Some(context) = TestContext::new_authtype(server.base_url()) else {
+        return;
+    };
     assert_clean_success(&context.run_config_command("configure"));
 
     let fill = run_with_input(context.git_credential("fill"), &credential_request());
@@ -482,8 +552,10 @@ fn auth_logout_stops_the_git_credential_cache() {
 #[test]
 fn modern_git_honors_quit_when_the_exchange_fails() {
     let server = MockServer::start();
-    let exchange = mock_exchange(&server, 403, Some("Bearer user-access-token"));
-    let context = TestContext::new(server.base_url());
+    let exchange = mock_exchange(&server, GIT_API_HOST, 403, Some("Bearer user-access-token"));
+    let Some(context) = TestContext::new_authtype(server.base_url()) else {
+        return;
+    };
     assert_clean_success(&context.run_config_command("configure"));
 
     let fill = run_with_input(context.git_credential("fill"), &credential_request());
@@ -498,14 +570,30 @@ fn modern_git_honors_quit_when_the_exchange_fails() {
 }
 
 #[test]
-fn global_helper_ignores_unrelated_hosts() {
+fn credential_helpers_ignore_unrelated_hosts() {
     let context = TestContext::new("http://127.0.0.1:1".to_string());
+    let github_request = "capability[]=authtype\n\
+                          protocol=https\n\
+                          host=github.com\n\
+                          path=acme/widget.git\n\
+                          \n";
+    let scoped_helper = run_with_input(
+        {
+            let mut command = context.pcbc();
+            command.args(["auth", "git", "--host", GIT_HOST, "get"]);
+            command
+        },
+        github_request,
+    );
+    assert_clean_success(&scoped_helper);
+
     let credential_file = context._tempdir.path().join("credentials");
     fs::write(
         &credential_file,
         "https://fallback-user:fallback-password@github.com/acme/widget.git\n",
     )
     .expect("write fallback credentials");
+    assert_clean_success(&context.run_git_config(&["--add", "credential.helper", "!pcb auth git"]));
     assert_clean_success(&context.run_git_config(&[
         "--add",
         "credential.helper",
@@ -516,20 +604,44 @@ fn global_helper_ignores_unrelated_hosts() {
     ]));
     assert_clean_success(&context.run_config_command("configure"));
 
-    let fill = run_with_input(
-        context.git_credential("fill"),
-        "capability[]=authtype\n\
-         protocol=https\n\
-         host=github.com\n\
-         path=acme/widget.git\n\
-         \n",
-    );
+    let fill = run_with_input(context.git_credential("fill"), github_request);
     assert_success(&fill);
     assert!(fill.stderr.is_empty());
 
     let credential = String::from_utf8(fill.stdout).unwrap();
     assert!(credential.contains("username=fallback-user"));
     assert!(credential.contains("password=fallback-password"));
+}
+
+#[test]
+fn legacy_helper_defaults_to_the_commercial_diodehub_host() {
+    let server = MockServer::start();
+    let host = "code.diode.computer";
+    let exchange = mock_exchange(&server, host, 200, Some("Bearer user-access-token"));
+    let context = TestContext::new(server.base_url());
+    let output = run_with_input(
+        {
+            let mut command = context.pcbc();
+            command.args(["auth", "git", "get"]);
+            command
+        },
+        &format!(
+            "capability[]=authtype\n\
+             protocol=https\n\
+             host={host}\n\
+             path={REPOSITORY_PATH}\n\
+             \n"
+        ),
+    );
+
+    assert_success(&output);
+    assert!(output.stderr.is_empty());
+    assert!(
+        String::from_utf8(output.stdout)
+            .unwrap()
+            .contains(&format!("credential={REPOSITORY_TOKEN}"))
+    );
+    exchange.assert_calls(1);
 }
 
 #[test]

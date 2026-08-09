@@ -20,13 +20,25 @@ pub fn to_terminal<LayerMeta>(
     doc: &mask::Document<LayerMeta>,
     options: &RenderOptions,
 ) -> Result<(), String> {
-    let png = crate::render::png(
-        doc,
-        &RenderOptions {
-            layers: options.layers.clone(),
-            size: SizeConstraint::MaxDimension(terminal_max_dimension_px()),
-        },
-    )?;
+    write_terminal_png(crate::render::png(doc, &terminal_options(options))?)
+}
+
+/// Render artwork layers as an inline terminal image.
+pub fn artwork_to_terminal<LayerMeta: Clone, ObjectMeta: Clone>(
+    doc: &crate::dialects::artwork::Document<LayerMeta, ObjectMeta>,
+    options: &RenderOptions,
+) -> Result<(), String> {
+    write_terminal_png(crate::render::artwork_png(doc, &terminal_options(options))?)
+}
+
+fn terminal_options(options: &RenderOptions) -> RenderOptions {
+    RenderOptions {
+        layers: options.layers.clone(),
+        size: SizeConstraint::MaxDimension(terminal_max_dimension_px()),
+    }
+}
+
+fn write_terminal_png(png: Vec<u8>) -> Result<(), String> {
     if !io::stdout().is_terminal() {
         return Err(
             "stdout is not an interactive terminal; pass an SVG or PNG output path".to_string(),

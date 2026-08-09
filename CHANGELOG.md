@@ -8,6 +8,75 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- KiCad Python scripts no longer inject package-specific module paths.
+
+### Fixed
+
+- KiCad imports now preserve stackups with more than ten copper layers.
+
+## [0.4.26] - 2026-08-08
+
+### Fixed
+
+- Inner copper Gerbers now use KiCad's layer numbering (`In1_Cu`, `In2_Cu`, ...).
+- Exported Gerbers declare `%TF.FilePolarity,Positive`.
+- Drill tool diameters snap to 1 µm, cleaning up float dust from EDA exports, and the tool table is sorted by diameter.
+- Pads with rounded or custom shapes now export as shared Gerber aperture flashes instead of repeated regions, shrinking mask and paste layers.
+- Rounded-rectangle pads export as compact parameterized macro apertures, and hexagon and octagon pads as polygon apertures.
+- Gerber output no longer repeats object attributes on every object.
+
+## [0.4.25] - 2026-08-07
+
+### Fixed
+
+- Gerber manufacturing exports now expand panel instances for compatibility with CAM systems that do not support aperture blocks.
+
+## [0.4.24] - 2026-08-07
+
+### Added
+
+- `ipc2581 warp` estimates panel bow and twist against the IPC-6012 limit, with an optional HTML report.
+
+### Changed
+
+- Board arrays default to copper balancing; fabrication panels default to no balancing. Both can be overridden.
+- Default board configurations now keep copper at least 0.4 mm from the board edge.
+- The default 1 oz board netclass now uses a 0.45 mm via diameter with a 0.20 mm drill.
+- Removed `pcb layout --temp`; layouts are now always generated in their configured directory.
+
+### Fixed
+
+- `ipc2581 render` now draws the copper inside repeated boards on a board array or fabrication panel.
+
+## [0.4.23] - 2026-08-05
+
+### Added
+
+- `fab-panel create` now automatically balances copper in the gutters between placed assembly panels.
+
+### Changed
+
+- Gerber exports for copper-balanced panels are much smaller.
+
+### Fixed
+
+- Pad shapes with padstack offsets now land at the correct position on rotated pads across all IPC-2581 outputs.
+
+## [0.4.22] - 2026-08-04
+
+### Changed
+
+- `pcb doc` now renders Markdown list items as styled bullets instead of literal hyphens.
+- Removed API authentication via AWS credentials.
+
+### Fixed
+
+- Gerber exports now include F.Fab/B.Fab drawings and preserve patterned IPC strokes.
+
+## [0.4.21] - 2026-08-04
+
 ### Added
 
 - Added `pcb route --engine freerouting` to auto-route boards locally via FreeRouting.
@@ -15,8 +84,13 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- `pcb auth git configure` now accepts a DiodeHub repository URL and scopes Git credentials to its exact HTTPS origin.
 - Panasonic house resistor matches now use the current Panasonic Industry manufacturer name.
 - The TDK MPZ house ferrite bead now uses the current TDK manufacturer name.
+
+### Fixed
+
+- `pcb auth` now uses the latest stable managed toolchain instead of a workspace's pinned toolchain.
 
 ## [0.4.20] - 2026-08-03
 
@@ -1466,7 +1540,13 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.20...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.26...HEAD
+[0.4.26]: https://github.com/diodeinc/pcb/compare/v0.4.25...v0.4.26
+[0.4.25]: https://github.com/diodeinc/pcb/compare/v0.4.24...v0.4.25
+[0.4.24]: https://github.com/diodeinc/pcb/compare/v0.4.23...v0.4.24
+[0.4.23]: https://github.com/diodeinc/pcb/compare/v0.4.22...v0.4.23
+[0.4.22]: https://github.com/diodeinc/pcb/compare/v0.4.21...v0.4.22
+[0.4.21]: https://github.com/diodeinc/pcb/compare/v0.4.20...v0.4.21
 [0.4.20]: https://github.com/diodeinc/pcb/compare/v0.4.19...v0.4.20
 [0.4.19]: https://github.com/diodeinc/pcb/compare/v0.4.18...v0.4.19
 [0.4.18]: https://github.com/diodeinc/pcb/compare/v0.4.17...v0.4.18

@@ -17,8 +17,26 @@ pub fn render_layer_svg(
     include_profiles: bool,
     profile_set: ProfileSet,
 ) -> String {
-    let mask = layer_mask(geometry, include_profiles, profile_set);
-    pcb_ir::render::svg(&mask, &pcb_ir::render::RenderOptions::default())
+    let artwork = layer_artwork(geometry, include_profiles, profile_set);
+    pcb_ir::render::artwork_svg(&artwork, &pcb_ir::render::RenderOptions::default())
+}
+
+pub fn render_layer_png(
+    geometry: &GeometryDocument,
+    include_profiles: bool,
+    profile_set: ProfileSet,
+) -> Result<Vec<u8>, String> {
+    let artwork = layer_artwork(geometry, include_profiles, profile_set);
+    pcb_ir::render::artwork_png(&artwork, &pcb_ir::render::RenderOptions::default())
+}
+
+pub fn render_layer_terminal(
+    geometry: &GeometryDocument,
+    include_profiles: bool,
+    profile_set: ProfileSet,
+) -> Result<(), String> {
+    let artwork = layer_artwork(geometry, include_profiles, profile_set);
+    pcb_ir::render::artwork_to_terminal(&artwork, &pcb_ir::render::RenderOptions::default())
 }
 
 fn layer_has_content(geometry: &GeometryDocument) -> bool {
@@ -30,34 +48,32 @@ fn layer_has_content(geometry: &GeometryDocument) -> bool {
 }
 
 pub fn layer_has_native_content(geometry: &GeometryDocument) -> bool {
-    let Some(layer) = geometry.layers.first() else {
+    let Some(mut native) = native_layer_document(geometry) else {
         return false;
     };
-
-    let source_layer_ref = layer.source_layer_ref;
-    let features = layer
-        .features
-        .slice(&geometry.features)
-        .iter()
-        .filter(|feature| feature.source_layer_ref == Some(source_layer_ref))
-        .cloned()
-        .collect::<Vec<_>>();
-    if features.is_empty() {
-        return false;
-    }
-
-    let mut native = geometry.clone();
-    native.layers[0].features = Span::new(0, features.len() as u32);
-    native.features = features;
     pcb_ir::dialects::ipc::process::compose_for_rendering(&mut native);
     layer_has_content(&native)
 }
 
-pub fn layer_mask(
+/// Restrict a single-layer document to the features native to its source
+/// layer, dropping borrowed features. Returns `None` when nothing is native.
+pub fn native_layer_document(geometry: &GeometryDocument) -> Option<GeometryDocument> {
+    let layer = geometry.layers.first()?;
+    let source_layer_ref = layer.source_layer_ref;
+    let mut native = geometry.clone();
+    pcb_ir::dialects::ipc::process::retain_features(&mut native, |feature| {
+        feature.source_layer_ref == Some(source_layer_ref)
+    });
+    (!native.features.is_empty()).then_some(native)
+}
+
+/// Lower a single-layer geometry document to artwork, with the display
+/// profile outlines a viewer expects overlaid.
+pub fn layer_artwork(
     geometry: &GeometryDocument,
     include_profiles: bool,
     profile_set: ProfileSet,
-) -> mask::Document<LayerFunction> {
+) -> ArtworkDocument {
     let layer = &geometry.layers[0];
     let mut artwork = pcb_ir::dialects::ipc::lower_layer_to_artwork(
         geometry,
@@ -68,7 +84,19 @@ pub fn layer_mask(
     if include_profiles {
         append_display_profiles(&mut artwork, geometry, profile_set, layer.layer_function);
     }
-    pcb_ir::dialects::artwork::compose_to_mask(&artwork)
+    artwork
+}
+
+pub fn layer_mask(
+    geometry: &GeometryDocument,
+    include_profiles: bool,
+    profile_set: ProfileSet,
+) -> mask::Document<LayerFunction> {
+    pcb_ir::dialects::artwork::compose_to_mask(&layer_artwork(
+        geometry,
+        include_profiles,
+        profile_set,
+    ))
 }
 
 fn append_display_profiles(

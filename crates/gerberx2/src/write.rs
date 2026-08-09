@@ -6,7 +6,7 @@ use pcb_ir::geom::Polarity;
 ///
 /// Attribute names should include the leading X2 dot, for example
 /// `.FileFunction`, `.AperFunction`, `.N`, `.C`, or `.P`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct AttributeValue {
     pub name: String,
     pub fields: Vec<String>,
@@ -171,7 +171,26 @@ pub enum WriterMacroExpression {
 pub struct WriterObject {
     pub kind: ObjectKind,
     pub polarity: Polarity,
+    /// Gerber aperture load transformation active for this object.
+    pub aperture_transform: WriterApertureTransform,
     pub attributes: Vec<AttributeValue>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WriterApertureTransform {
+    pub mirroring: Mirroring,
+    pub rotation_degrees: f64,
+    pub scaling: f64,
+}
+
+impl Default for WriterApertureTransform {
+    fn default() -> Self {
+        Self {
+            mirroring: Mirroring::None,
+            rotation_degrees: 0.0,
+            scaling: 1.0,
+        }
+    }
 }
 
 impl WriterObject {
@@ -179,6 +198,7 @@ impl WriterObject {
         Self {
             kind,
             polarity: Polarity::Dark,
+            aperture_transform: WriterApertureTransform::default(),
             attributes: Vec::new(),
         }
     }
@@ -232,6 +252,8 @@ struct Writer<'a> {
     current_aperture: Option<i32>,
     current_polarity: Polarity,
     current_plot_mode: Option<PlotMode>,
+    current_aperture_transform: WriterApertureTransform,
+    current_object_attributes: Vec<AttributeValue>,
 }
 
 impl<'a> Writer<'a> {
@@ -242,6 +264,8 @@ impl<'a> Writer<'a> {
             current_aperture: None,
             current_polarity: Polarity::Dark,
             current_plot_mode: None,
+            current_aperture_transform: WriterApertureTransform::default(),
+            current_object_attributes: Vec::new(),
         }
     }
 
@@ -265,7 +289,10 @@ impl<'a> Writer<'a> {
             }
             self.write_aperture(aperture)?;
             if !aperture.attributes.is_empty() {
+                // %TD clears the whole attribute dictionary, including any
+                // object attributes a block aperture's contents left behind.
                 self.output.push_str("%TD*%\n");
+                self.current_object_attributes.clear();
             }
         }
 
@@ -442,27 +469,17 @@ impl<'a> Writer<'a> {
 
     fn write_block_aperture(&mut self, code: i32, objects: &[WriterObject]) -> Result<()> {
         self.output.push_str(&format!("%ABD{code}*%\n"));
-        let saved_aperture = self.current_aperture;
-        let saved_polarity = self.current_polarity;
-        let saved_plot_mode = self.current_plot_mode;
-        self.current_aperture = None;
-        self.current_polarity = Polarity::Dark;
-        self.current_plot_mode = None;
         for object in objects {
             self.write_object(object)?;
         }
         self.output.push_str("%AB*%\n");
-        self.current_aperture = saved_aperture;
-        self.current_polarity = saved_polarity;
-        self.current_plot_mode = saved_plot_mode;
         Ok(())
     }
 
     fn write_object(&mut self, object: &WriterObject) -> Result<()> {
+        self.set_aperture_transform(object.aperture_transform)?;
         self.set_polarity(object.polarity);
-        for attr in &object.attributes {
-            self.write_attribute("TO", attr)?;
-        }
+        self.set_object_attributes(&object.attributes)?;
 
         match &object.kind {
             ObjectKind::Draw {
@@ -501,8 +518,69 @@ impl<'a> Writer<'a> {
             }
         }
 
-        if !object.attributes.is_empty() {
+        Ok(())
+    }
+
+    /// Bring the object attribute dictionary to exactly `attributes`. X2
+    /// attributes are file state, so consecutive objects sharing a value pay
+    /// nothing; a same-name attribute re-emits to override, and a dropped
+    /// name resets the dictionary before the survivors are re-emitted.
+    fn set_object_attributes(&mut self, attributes: &[AttributeValue]) -> Result<()> {
+        if self.current_object_attributes == attributes {
+            return Ok(());
+        }
+        let dropped = self.current_object_attributes.iter().any(|current| {
+            !attributes
+                .iter()
+                .any(|attribute| attribute.name == current.name)
+        });
+        if dropped {
             self.output.push_str("%TD*%\n");
+            self.current_object_attributes.clear();
+        }
+        for attribute in attributes {
+            if !self.current_object_attributes.contains(attribute) {
+                self.write_attribute("TO", attribute)?;
+            }
+        }
+        self.current_object_attributes = attributes.to_vec();
+        Ok(())
+    }
+
+    fn set_aperture_transform(&mut self, transform: WriterApertureTransform) -> Result<()> {
+        if !transform.rotation_degrees.is_finite() {
+            return Err(GerberError::InvalidNumber(format!(
+                "non-finite aperture rotation {}",
+                transform.rotation_degrees
+            )));
+        }
+        if !transform.scaling.is_finite() || transform.scaling <= 0.0 {
+            return Err(GerberError::InvalidNumber(format!(
+                "invalid aperture scaling {}",
+                transform.scaling
+            )));
+        }
+        if self.current_aperture_transform.mirroring != transform.mirroring {
+            let value = match transform.mirroring {
+                Mirroring::None => "N",
+                Mirroring::X => "X",
+                Mirroring::Y => "Y",
+                Mirroring::XY => "XY",
+            };
+            self.output.push_str(&format!("%LM{value}*%\n"));
+            self.current_aperture_transform.mirroring = transform.mirroring;
+        }
+        if self.current_aperture_transform.rotation_degrees != transform.rotation_degrees {
+            self.output.push_str("%LR");
+            self.write_decimal(transform.rotation_degrees);
+            self.output.push_str("*%\n");
+            self.current_aperture_transform.rotation_degrees = transform.rotation_degrees;
+        }
+        if self.current_aperture_transform.scaling != transform.scaling {
+            self.output.push_str("%LS");
+            self.write_decimal(transform.scaling);
+            self.output.push_str("*%\n");
+            self.current_aperture_transform.scaling = transform.scaling;
         }
         Ok(())
     }
@@ -739,5 +817,43 @@ mod tests {
 
         let err = write_layer(&layer).unwrap_err().to_string();
         assert!(err.contains("field separators"), "{err}");
+    }
+
+    #[test]
+    fn object_attributes_persist_across_objects() {
+        let flash = |x: f64, attributes: Vec<AttributeValue>| WriterObject {
+            kind: ObjectKind::Flash {
+                at: Point { x, y: 0.0 },
+                aperture: 10,
+            },
+            polarity: Polarity::Dark,
+            aperture_transform: WriterApertureTransform::default(),
+            attributes,
+        };
+        let net = |name: &str| AttributeValue::new(".N", [name]);
+        let layer = GerberLayer {
+            apertures: vec![WriterAperture {
+                code: 10,
+                template: WriterApertureTemplate::Circle {
+                    diameter: 1.0,
+                    hole_diameter: None,
+                },
+                attributes: Vec::new(),
+            }],
+            objects: vec![
+                flash(0.0, vec![net("GND")]),
+                flash(1.0, vec![net("GND")]),
+                flash(2.0, vec![net("V3V3")]),
+                flash(3.0, Vec::new()),
+            ],
+            ..GerberLayer::default()
+        };
+
+        let output = write_layer(&layer).unwrap();
+        // The repeated net rides existing state, the changed net overrides in
+        // place, and only dropping attributes resets the dictionary.
+        assert_eq!(output.matches("%TO.N,GND*%").count(), 1);
+        assert_eq!(output.matches("%TO.N,V3V3*%").count(), 1);
+        assert_eq!(output.matches("%TD*%").count(), 1);
     }
 }

@@ -1,5 +1,5 @@
-//! Integration tests for the sandbox data-plane client: minting sandbox
-//! access tokens from the API and using them against the orchestrator data
+//! Integration tests for the sandbox data-plane client: minting renewable
+//! connections from the API and using them against the orchestrator data
 //! plane (fs read/write/list, job-shaped exec, CAS locks).
 
 use std::sync::Once;
@@ -19,12 +19,14 @@ fn client_for(server: &MockServer) -> SandboxClient {
         .expect("create sandbox client")
 }
 
-/// Mint mock pointing the data plane back at the mock server itself.
-fn mock_mint<'a>(server: &'a MockServer, token: &str) -> Mock<'a> {
+/// Mint mock pointing the sandbox endpoint back at the mock server itself.
+fn mock_mint<'a>(server: &'a MockServer, header_value: &str) -> Mock<'a> {
     let body = serde_json::json!({
-        "token": token,
+        "http": {
+            "endpoint": format!("{}/sandboxes/sbx_1", server.base_url()),
+            "headers": { "x-sandbox-connection": header_value },
+        },
         "expiresAt": 4102444800u64,
-        "dataPlaneUrl": server.base_url(),
     });
     server.mock(move |when, then| {
         when.method(POST).path("/api/sandboxes/sbx_1/access-token");
@@ -88,14 +90,14 @@ fn mock_exec<'a>(
 }
 
 #[test]
-fn reads_files_with_minted_token_and_caches_it() {
+fn applies_arbitrary_headers_and_mints_for_each_request() {
     let server = MockServer::start();
     let mint = mock_mint(&server, "minted-token");
     let read = server.mock(|when, then| {
         when.method(GET)
             .path("/sandboxes/sbx_1/fs/read")
             .query_param("path", "/home/sandbox/main.zen")
-            .header("authorization", "Bearer minted-token");
+            .header("x-sandbox-connection", "minted-token");
         then.status(200).body("zen-content");
     });
 
@@ -106,29 +108,116 @@ fn reads_files_with_minted_token_and_caches_it() {
     }
 
     read.assert_calls(2);
-    mint.assert_calls(1);
+    mint.assert_calls(2);
 }
 
 #[test]
-fn re_mints_once_when_data_plane_rejects_the_token() {
+fn does_not_replay_when_data_plane_rejects_a_mutation() {
     let server = MockServer::start();
     let mint = mock_mint(&server, "rejected-token");
-    let read = server.mock(|when, then| {
-        when.method(GET).path("/sandboxes/sbx_1/fs/read");
-        then.status(401);
+    let write = server.mock(|when, then| {
+        when.method(PUT).path("/sandboxes/sbx_1/fs/write");
+        then.status(403);
     });
 
     let client = client_for(&server);
     let err = client
-        .read_file(SANDBOX, "/home/sandbox/main.zen")
+        .write_file(SANDBOX, "/home/sandbox/main.zen", b"content")
         .unwrap_err();
 
     assert!(
-        format!("{err:#}").contains("401"),
+        format!("{err:#}").contains("403"),
         "unexpected error: {err:#}"
     );
-    read.assert_calls(2); // the original request plus exactly one retry
-    mint.assert_calls(2); // re-minted before the retry
+    write.assert_calls(1);
+    mint.assert_calls(1);
+}
+
+#[test]
+fn does_not_forward_connection_headers_to_redirects() {
+    let api = MockServer::start();
+    let data_plane = MockServer::start();
+    let redirect_target = MockServer::start();
+    let mint = api.mock(|when, then| {
+        when.method(POST).path("/api/sandboxes/sbx_1/access-token");
+        then.status(200).json_body(serde_json::json!({
+            "http": {
+                "endpoint": format!("{}/sandbox", data_plane.base_url()),
+                "headers": { "x-sandbox-connection": "secret" },
+            },
+        }));
+    });
+    let redirect_url = format!("{}/stolen", redirect_target.base_url());
+    let redirect = data_plane.mock(move |when, then| {
+        when.method(PUT).path("/sandbox/fs/write");
+        then.status(307).header("Location", redirect_url);
+    });
+    let target = redirect_target.mock(|when, then| {
+        when.method(PUT).path("/stolen");
+        then.status(200);
+    });
+
+    let client = client_for(&api);
+    let err = client
+        .write_file(SANDBOX, "/home/sandbox/main.zen", b"content")
+        .unwrap_err();
+
+    assert!(
+        format!("{err:#}").contains("307"),
+        "unexpected error: {err:#}"
+    );
+    mint.assert_calls(1);
+    redirect.assert_calls(1);
+    target.assert_calls(0);
+}
+
+#[test]
+fn uses_each_fresh_endpoint_and_its_headers_together() {
+    let api = MockServer::start();
+    let first_data_plane = MockServer::start();
+    let second_data_plane = MockServer::start();
+    let mut first_mint = api.mock(|when, then| {
+        when.method(POST).path("/api/sandboxes/sbx_1/access-token");
+        then.status(200).json_body(serde_json::json!({
+            "http": {
+                "endpoint": format!("{}/first/sandbox-base?route=first%2Fvalue", first_data_plane.base_url()),
+                "headers": { "x-connection": "first" },
+            },
+        }));
+    });
+    let first_read = first_data_plane.mock(|when, then| {
+        when.method(GET)
+            .path("/first/sandbox-base/fs/read")
+            .query_param("route", "first/value")
+            .query_param("path", "/file")
+            .header("x-connection", "first");
+        then.status(200).body("first");
+    });
+
+    let client = client_for(&api);
+    assert_eq!(client.read_file(SANDBOX, "/file").unwrap(), b"first");
+    first_read.assert();
+    first_mint.delete();
+
+    let second_mint = api.mock(|when, then| {
+        when.method(POST).path("/api/sandboxes/sbx_1/access-token");
+        then.status(200).json_body(serde_json::json!({
+            "http": {
+                "endpoint": format!("{}/second/different-base", second_data_plane.base_url()),
+                "headers": { "x-connection": "second" },
+            },
+        }));
+    });
+    let second_read = second_data_plane.mock(|when, then| {
+        when.method(GET)
+            .path("/second/different-base/fs/read")
+            .header("x-connection", "second");
+        then.status(200).body("second");
+    });
+
+    assert_eq!(client.read_file(SANDBOX, "/file").unwrap(), b"second");
+    second_mint.assert();
+    second_read.assert();
 }
 
 #[test]

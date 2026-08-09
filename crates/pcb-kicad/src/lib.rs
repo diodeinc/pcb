@@ -23,75 +23,70 @@ fn expand_home(path: &str) -> String {
     )
 }
 
-fn env_or_path(env_var: &str, default: &str) -> String {
-    expand_home(&std::env::var(env_var).unwrap_or_else(|_| default.to_string()))
+struct PlatformDefaults {
+    python_interpreter: &'static [&'static str],
+    kicad_cli: &'static [&'static str],
+    kicad_cli_command: &'static str,
+    pcbnew: &'static [&'static str],
 }
 
-fn command_exists_on_path(command: &str) -> bool {
-    std::env::var_os("PATH")
-        .is_some_and(|paths| std::env::split_paths(&paths).any(|path| path.join(command).exists()))
+struct KiCadInstallation {
+    python_interpreter: String,
+    python_site_packages: Option<String>,
+    kicad_cli: String,
+    pcbnew: String,
 }
 
-fn env_or_command_or_path(env_var: &str, command: &str, default: &str) -> String {
+impl KiCadInstallation {
+    fn discover() -> Self {
+        let defaults = platform_defaults();
+        Self {
+            python_interpreter: discover_path(
+                "KICAD_PYTHON_INTERPRETER",
+                None,
+                defaults.python_interpreter,
+            ),
+            // Native KiCad interpreters already include pcbnew in their import path.
+            python_site_packages: std::env::var("KICAD_PYTHON_SITE_PACKAGES")
+                .ok()
+                .map(|path| expand_home(&path)),
+            kicad_cli: discover_path(
+                "KICAD_CLI",
+                Some(defaults.kicad_cli_command),
+                defaults.kicad_cli,
+            ),
+            pcbnew: discover_path("KICAD_PCBNEW", None, defaults.pcbnew),
+        }
+    }
+
+    fn python_path(&self, extra_paths: Vec<String>) -> Result<String> {
+        let mut paths = extra_paths;
+        paths.extend(self.python_site_packages.iter().cloned());
+        Ok(std::env::join_paths(paths)
+            .context("Failed to construct PYTHONPATH")?
+            .to_string_lossy()
+            .into_owned())
+    }
+}
+
+fn discover_path(env_var: &str, command: Option<&str>, candidates: &[&str]) -> String {
     if let Ok(path) = std::env::var(env_var) {
         return expand_home(&path);
     }
 
-    if command_exists_on_path(command) {
-        command.to_string()
-    } else {
-        expand_home(default)
+    if let Some(command) = command
+        && std::env::var_os("PATH").is_some_and(|paths| {
+            std::env::split_paths(&paths).any(|path| path.join(command).exists())
+        })
+    {
+        return command.to_string();
     }
-}
 
-#[cfg(target_os = "windows")]
-fn first_existing_path(candidates: &[&str]) -> String {
     candidates
         .iter()
         .map(|path| expand_home(path))
         .find(|path| Path::new(path).exists())
         .unwrap_or_else(|| expand_home(candidates[0]))
-}
-
-#[cfg(target_os = "windows")]
-fn env_or_first_existing_path(env_var: &str, candidates: &[&str]) -> String {
-    std::env::var(env_var)
-        .map(|path| expand_home(&path))
-        .unwrap_or_else(|_| first_existing_path(candidates))
-}
-
-#[cfg(target_os = "windows")]
-fn env_or_command_or_first_existing_path(
-    env_var: &str,
-    command: &str,
-    candidates: &[&str],
-) -> String {
-    if let Ok(path) = std::env::var(env_var) {
-        return expand_home(&path);
-    }
-
-    if command_exists_on_path(command) {
-        command.to_string()
-    } else {
-        first_existing_path(candidates)
-    }
-}
-
-fn require_tool_path(
-    path: String,
-    tool_name: &str,
-    env_var: &str,
-    install_hint: &str,
-) -> Result<String> {
-    if Path::new(&path).exists() {
-        Ok(path)
-    } else {
-        Err(anyhow!(
-            "{tool_name} not found at expected location: {path}\n\
-             {install_hint}\n\
-             If {tool_name} is in a non-standard location, set the {env_var} environment variable."
-        ))
-    }
 }
 
 fn pcbnew_app_bundle_path(pcbnew_path: &str) -> Result<String> {
@@ -114,178 +109,45 @@ fn pcbnew_app_bundle_path(pcbnew_path: &str) -> Result<String> {
 }
 
 #[cfg(target_os = "macos")]
-mod paths {
-    pub(crate) fn python_interpreter() -> String {
-        super::env_or_path(
-            "KICAD_PYTHON_INTERPRETER",
+fn platform_defaults() -> PlatformDefaults {
+    PlatformDefaults {
+        python_interpreter: &[
             "/Applications/KiCad/KiCad.app/Contents/Frameworks/Python.framework/Versions/Current/bin/python3",
-        )
-    }
-
-    pub(crate) fn python_site_packages() -> String {
-        super::env_or_path(
-            "KICAD_PYTHON_SITE_PACKAGES",
-            "/Applications/KiCad/KiCad.app/Contents/Frameworks/Python.framework/Versions/Current/lib/python3.9/site-packages",
-        )
-    }
-
-    pub(crate) fn venv_site_packages() -> String {
-        dirs::home_dir()
-            .unwrap_or_default()
-            .join(".diode")
-            .join("venv")
-            .join("lib")
-            .join("python3.12")
-            .join("site-packages")
-            .to_string_lossy()
-            .to_string()
-    }
-
-    pub(crate) fn kicad_cli() -> String {
-        super::env_or_command_or_path(
-            "KICAD_CLI",
-            "kicad-cli",
-            "/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli",
-        )
-    }
-
-    pub(crate) fn pcbnew() -> String {
-        super::env_or_path(
-            "KICAD_PCBNEW",
+        ],
+        kicad_cli: &["/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli"],
+        kicad_cli_command: "kicad-cli",
+        pcbnew: &[
             "/Applications/KiCad/KiCad.app/Contents/Applications/pcbnew.app/Contents/MacOS/pcbnew",
-        )
+        ],
     }
 }
 
 #[cfg(target_os = "windows")]
-mod paths {
-    pub(crate) fn python_interpreter() -> String {
-        super::env_or_first_existing_path(
-            "KICAD_PYTHON_INTERPRETER",
-            &[
-                r"C:\Program Files\KiCad\10.0\bin\python.exe",
-                r"C:\Program Files\KiCad\9.0\bin\python.exe",
-            ],
-        )
-    }
-
-    pub(crate) fn python_site_packages() -> String {
-        super::env_or_first_existing_path(
-            "KICAD_PYTHON_SITE_PACKAGES",
-            &[
-                r"~\Documents\KiCad\10.0\3rdparty\Python311\site-packages",
-                r"~\Documents\KiCad\9.0\3rdparty\Python311\site-packages",
-            ],
-        )
-    }
-
-    pub(crate) fn venv_site_packages() -> String {
-        dirs::home_dir()
-            .unwrap_or_default()
-            .join(".diode")
-            .join("venv")
-            .join("Lib")
-            .join("site-packages")
-            .to_string_lossy()
-            .to_string()
-    }
-
-    pub(crate) fn kicad_cli() -> String {
-        super::env_or_command_or_first_existing_path(
-            "KICAD_CLI",
-            "kicad-cli.exe",
-            &[
-                r"C:\Program Files\KiCad\10.0\bin\kicad-cli.exe",
-                r"C:\Program Files\KiCad\9.0\bin\kicad-cli.exe",
-            ],
-        )
-    }
-
-    pub(crate) fn pcbnew() -> String {
-        super::env_or_first_existing_path(
-            "KICAD_PCBNEW",
-            &[
-                r"C:\Program Files\KiCad\10.0\bin\pcbnew.exe",
-                r"C:\Program Files\KiCad\9.0\bin\pcbnew.exe",
-            ],
-        )
+fn platform_defaults() -> PlatformDefaults {
+    PlatformDefaults {
+        python_interpreter: &[
+            r"C:\Program Files\KiCad\10.0\bin\python.exe",
+            r"C:\Program Files\KiCad\9.0\bin\python.exe",
+        ],
+        kicad_cli: &[
+            r"C:\Program Files\KiCad\10.0\bin\kicad-cli.exe",
+            r"C:\Program Files\KiCad\9.0\bin\kicad-cli.exe",
+        ],
+        kicad_cli_command: "kicad-cli.exe",
+        pcbnew: &[
+            r"C:\Program Files\KiCad\10.0\bin\pcbnew.exe",
+            r"C:\Program Files\KiCad\9.0\bin\pcbnew.exe",
+        ],
     }
 }
 
 #[cfg(target_os = "linux")]
-mod paths {
-    pub(crate) fn python_interpreter() -> String {
-        super::env_or_path("KICAD_PYTHON_INTERPRETER", "/usr/bin/python3")
-    }
-
-    pub(crate) fn python_site_packages() -> String {
-        super::env_or_path(
-            "KICAD_PYTHON_SITE_PACKAGES",
-            "/usr/lib/python3/dist-packages",
-        )
-    }
-
-    pub(crate) fn venv_site_packages() -> String {
-        dirs::home_dir()
-            .unwrap_or_default()
-            .join(".diode")
-            .join("venv")
-            .join("lib")
-            .join("python3.12")
-            .join("site-packages")
-            .to_string_lossy()
-            .to_string()
-    }
-
-    pub(crate) fn kicad_cli() -> String {
-        super::env_or_command_or_path("KICAD_CLI", "kicad-cli", "/usr/bin/kicad-cli")
-    }
-
-    pub(crate) fn pcbnew() -> String {
-        super::env_or_path("KICAD_PCBNEW", "/usr/bin/pcbnew")
-    }
-}
-
-/// Check if KiCad is installed and return a helpful error if not
-fn check_kicad_installed() -> Result<String> {
-    let kicad_path = paths::kicad_cli();
-
-    // Try to run kicad-cli --version to verify it's executable
-    match Command::new(&kicad_path).arg("--version").output() {
-        Ok(output) if output.status.success() => Ok(kicad_path),
-        Ok(_) => Err(anyhow!(
-            "KiCad CLI found but failed to execute. Please check your KiCad installation."
-        )),
-        Err(e) => Err(anyhow!(
-            "Failed to execute KiCad CLI at {}: {}\n\
-             Please ensure KiCad is properly installed and accessible.",
-            kicad_path,
-            e
-        )),
-    }
-}
-
-/// Check if KiCad Python is available and return a helpful error if not
-fn check_kicad_python() -> Result<()> {
-    let python_path = require_tool_path(
-        paths::python_interpreter(),
-        "KiCad Python interpreter",
-        "KICAD_PYTHON_INTERPRETER",
-        "Please ensure KiCad is installed with Python support.",
-    )?;
-
-    // Try to run python --version to verify it's executable
-    match Command::new(&python_path).arg("--version").output() {
-        Ok(output) if output.status.success() => Ok(()),
-        Ok(_) => Err(anyhow!(
-            "KiCad Python found but failed to execute. Please check your KiCad installation."
-        )),
-        Err(e) => Err(anyhow!(
-            "Failed to execute KiCad Python at {}: {}\n\
-             Please ensure KiCad is properly installed with Python support.",
-            python_path,
-            e
-        )),
+fn platform_defaults() -> PlatformDefaults {
+    PlatformDefaults {
+        python_interpreter: &["/usr/bin/python3"],
+        kicad_cli: &["/usr/bin/kicad-cli"],
+        kicad_cli_command: "kicad-cli",
+        pcbnew: &["/usr/bin/pcbnew"],
     }
 }
 
@@ -430,12 +292,15 @@ fn require_pcbnew_launch(pcb_path: &Path) -> Result<String> {
         anyhow::bail!("PCB file not found: {}", pcb_path.display());
     }
 
-    require_tool_path(
-        paths::pcbnew(),
-        "KiCad PCB Editor",
-        "KICAD_PCBNEW",
-        "Please ensure KiCad is installed.",
-    )
+    let pcbnew = KiCadInstallation::discover().pcbnew;
+    if !Path::new(&pcbnew).exists() {
+        anyhow::bail!(
+            "KiCad PCB Editor not found at expected location: {pcbnew}\n\
+             Please ensure KiCad is installed.\n\
+             If KiCad PCB Editor is in a non-standard location, set the KICAD_PCBNEW environment variable."
+        );
+    }
+    Ok(pcbnew)
 }
 
 fn spawn_pcbnew_command(mut cmd: Command, pcbnew_path: &str, pcb_path: &Path) -> Result<Child> {
@@ -549,35 +414,28 @@ impl KiCadCliBuilder {
 
     /// Execute the KiCad CLI command
     pub fn run(self) -> Result<()> {
-        // Check if KiCad is installed before trying to run
-        let kicad_cli = check_kicad_installed()?;
+        let kicad_cli = KiCadInstallation::discover().kicad_cli;
+        let mut cmd = CommandRunner::new(&kicad_cli);
 
-        let args_refs: Vec<&str> = self.args.iter().map(|s| s.as_str()).collect();
-
-        // Build command with environment variables
-        let mut cmd = CommandRunner::new(kicad_cli);
-
-        // Add all arguments
-        for arg in &args_refs {
-            cmd = cmd.arg(*arg);
+        for arg in &self.args {
+            cmd = cmd.arg(arg);
         }
 
         if let Some(dir) = &self.current_dir {
             cmd = cmd.current_dir(dir);
         }
 
-        // Add environment variables
         for (key, value) in self.env_vars {
             cmd = cmd.env(key, value);
         }
 
-        // Add log file if provided
         if let Some(log_file) = self.log_file {
             cmd = cmd.log_file(log_file);
         }
 
-        // Run the command
-        let output = cmd.run().context("Failed to execute kicad-cli")?;
+        let output = cmd
+            .run()
+            .with_context(|| format!("Failed to execute KiCad CLI at {kicad_cli}"))?;
 
         if !output.success {
             if !self.suppress_error_output {
@@ -591,30 +449,23 @@ impl KiCadCliBuilder {
 
     /// Execute the KiCad CLI command and return the output
     pub fn output(self) -> Result<std::process::Output> {
-        // Check if KiCad is installed before trying to run
-        let kicad_cli = check_kicad_installed()?;
+        let kicad_cli = KiCadInstallation::discover().kicad_cli;
+        let mut cmd = std::process::Command::new(&kicad_cli);
 
-        let args_refs: Vec<&str> = self.args.iter().map(|s| s.as_str()).collect();
-
-        // Build command with environment variables
-        let mut cmd = std::process::Command::new(kicad_cli);
-
-        // Add all arguments
-        for arg in &args_refs {
-            cmd.arg(*arg);
+        for arg in &self.args {
+            cmd.arg(arg);
         }
 
         if let Some(dir) = &self.current_dir {
             cmd.current_dir(dir);
         }
 
-        // Add environment variables
         for (key, value) in self.env_vars {
             cmd.env(key, value);
         }
 
-        // Execute and return output
-        cmd.output().context("Failed to execute kicad-cli")
+        cmd.output()
+            .with_context(|| format!("Failed to execute KiCad CLI at {kicad_cli}"))
     }
 }
 
@@ -784,8 +635,6 @@ impl PythonScriptBuilder {
 
     /// Execute the script in the KiCad Python environment
     pub fn run(self) -> Result<()> {
-        check_kicad_python()?;
-
         // Create a temporary file for the script
         let mut temp_file =
             NamedTempFile::new().context("Failed to create temporary file for Python script")?;
@@ -799,41 +648,28 @@ impl PythonScriptBuilder {
             .to_str()
             .ok_or_else(|| anyhow!("Failed to convert temporary file path to string"))?;
 
-        // Set up PYTHONPATH
-        #[cfg(target_os = "windows")]
-        let path_separator = ";";
-        #[cfg(not(target_os = "windows"))]
-        let path_separator = ":";
+        let installation = KiCadInstallation::discover();
+        let python_path = installation.python_path(self.extra_python_paths)?;
+        let python_interpreter = installation.python_interpreter;
+        let mut cmd = CommandRunner::new(&python_interpreter).arg(temp_file_path);
 
-        // Build PYTHONPATH: extra paths first, then system paths
-        let mut python_path_parts = self.extra_python_paths;
-        python_path_parts.push(paths::python_site_packages());
-        python_path_parts.push(paths::venv_site_packages());
-        let python_path = python_path_parts.join(path_separator);
-
-        // Build the command
-        let mut cmd = CommandRunner::new(paths::python_interpreter()).arg(temp_file_path);
-
-        // Add script arguments
         for arg in &self.args {
             cmd = cmd.arg(arg);
         }
 
-        // Set PYTHONPATH
         cmd = cmd.env("PYTHONPATH", python_path);
 
-        // Add custom environment variables
         for (key, value) in self.env_vars {
             cmd = cmd.env(key, value);
         }
 
-        // Add log file if provided
         if let Some(log_file) = self.log_file {
             cmd = cmd.log_file(log_file);
         }
 
-        // Run the command
-        let output = cmd.run().context("Failed to execute Python script")?;
+        let output = cmd
+            .run()
+            .with_context(|| format!("Failed to execute KiCad Python at {python_interpreter}"))?;
 
         if !output.success {
             std::io::stderr().write_all(&output.raw_output)?;

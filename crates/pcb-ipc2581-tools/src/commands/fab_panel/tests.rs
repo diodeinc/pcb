@@ -1,6 +1,8 @@
 use ipc2581::edit::Doc;
-use pcb_ir::dialects::ipc::{View, root_step};
-use pcb_ir::geom::BBox;
+use pcb_ir::dialects::ipc::{ArtworkScope, root_step};
+use pcb_ir::geom::{BBox, ContourSet, tol};
+
+use crate::copper_balance::{CopperBalanceMode, composed_copper_image};
 
 use super::*;
 
@@ -282,7 +284,8 @@ fn exports_separate_nominal_panel_outlines_and_board_cutouts() {
     let expected_cutout_bbox =
         contour_bbox(profile.material_removal.iter()).expand(profile_stroke_radius);
     let package =
-        crate::manufacturing::build_manufacturing_package(&parsed, View::ArrayFlattened).unwrap();
+        crate::manufacturing::build_manufacturing_package(&parsed, ArtworkScope::ArrayFlattened)
+            .unwrap();
     for (filename, expected_bbox) in [
         ("Fab_Panel_Outline.gm1", expected_fab_bbox),
         ("Assembly_Panel_Outlines.gm1", expected_assembly_bbox),
@@ -457,7 +460,7 @@ fn creates_supported_standard_fabrication_panel_sizes() {
         (FabPanelSpec::INCHES_18_X_24, 406.4, 508.0),
         (FabPanelSpec::INCHES_21_X_24, 482.6, 508.0),
     ] {
-        let generated = create_fab_panel_xml_with_spec(&sources, &[0], spec).unwrap();
+        let generated = create_fab_panel(&sources, &[0], spec, false).unwrap().xml;
         Ipc2581::validate(&generated).unwrap();
         let parsed = Ipc2581::parse(&generated).unwrap();
         let layout = geometry::extract_layout(&parsed).unwrap();
@@ -483,7 +486,7 @@ fn writes_default_process_margin_and_usable_area_metadata() {
         r#"<NonstandardAttribute name="diode.fab_panel.edge_margin_right_mm" type="DOUBLE" value="25.4"/>"#,
         r#"<NonstandardAttribute name="diode.fab_panel.edge_margin_bottom_mm" type="DOUBLE" value="50.8"/>"#,
         r#"<NonstandardAttribute name="diode.fab_panel.edge_margin_left_mm" type="DOUBLE" value="25.4"/>"#,
-        r#"<NonstandardAttribute name="diode.fab_panel.gap_mm" type="DOUBLE" value="5"/>"#,
+        r#"<NonstandardAttribute name="diode.fab_panel.gap_mm" type="DOUBLE" value="7.62"/>"#,
     ] {
         assert!(generated.contains(metadata), "missing {metadata}");
     }
@@ -497,8 +500,9 @@ fn applies_asymmetric_process_margin_and_gap_overrides() {
         panel_gap_mm: 7.0,
         ..FabPanelSpec::INCHES_12_X_18
     };
-    let generated =
-        create_fab_panel_xml_with_spec(&[assembly_panel_xml(100.0, 80.0)], &[0], spec).unwrap();
+    let generated = create_fab_panel(&[assembly_panel_xml(100.0, 80.0)], &[0], spec, false)
+        .unwrap()
+        .xml;
     let parsed = Ipc2581::parse(&generated).unwrap();
     let layout = geometry::extract_layout(&parsed).unwrap();
     let instance = layout
@@ -532,13 +536,13 @@ fn accepts_subtool_spacing_and_rejects_invalid_fabrication_panel_domains() {
         panel_gap_mm: 0.5,
         ..FabPanelSpec::INCHES_18_X_24
     };
-    create_fab_panel_xml_with_spec(&sources, &[0], subtool_spacing).unwrap();
+    create_fab_panel(&sources, &[0], subtool_spacing, false).unwrap();
 
     let negative_margin = FabPanelSpec {
         edge_margin_mm: EdgeInsetsMm::new(50.8, 25.4, 50.8, -0.5),
         ..FabPanelSpec::INCHES_18_X_24
     };
-    let error = create_fab_panel_xml_with_spec(&sources, &[0], negative_margin).unwrap_err();
+    let error = create_fab_panel(&sources, &[0], negative_margin, false).unwrap_err();
     assert!(
         error
             .to_string()
@@ -549,7 +553,7 @@ fn accepts_subtool_spacing_and_rejects_invalid_fabrication_panel_domains() {
         panel_gap_mm: -0.5,
         ..FabPanelSpec::INCHES_18_X_24
     };
-    let error = create_fab_panel_xml_with_spec(&sources, &[0], negative_gap).unwrap_err();
+    let error = create_fab_panel(&sources, &[0], negative_gap, false).unwrap_err();
     assert!(
         error
             .to_string()
@@ -560,7 +564,7 @@ fn accepts_subtool_spacing_and_rejects_invalid_fabrication_panel_domains() {
         edge_margin_mm: EdgeInsetsMm::new(50.8, 250.0, 50.8, 250.0),
         ..FabPanelSpec::INCHES_18_X_24
     };
-    let error = create_fab_panel_xml_with_spec(&sources, &[0], no_usable_width).unwrap_err();
+    let error = create_fab_panel(&sources, &[0], no_usable_width, false).unwrap_err();
     assert!(
         error
             .to_string()
@@ -598,8 +602,9 @@ fn strips_non_manufacturing_data_and_preserves_manufacturing_exports() {
 
     Ipc2581::validate(&generated).expect("fabrication panel should validate against IPC-2581C");
     let parsed = Ipc2581::parse(&generated).expect("fabrication panel should parse");
-    let package = crate::manufacturing::build_manufacturing_package(&parsed, View::ArrayFlattened)
-        .expect("fabrication panel should export manufacturing files");
+    let package =
+        crate::manufacturing::build_manufacturing_package(&parsed, ArtworkScope::ArrayFlattened)
+            .expect("fabrication panel should export manufacturing files");
     assert!(package.files.iter().any(|file| file.filename == "F_Cu.gtl"));
     assert!(package.files.iter().any(|file| file.filename == "PTH.drl"));
     assert!(
@@ -678,4 +683,157 @@ fn rejects_a_board_instead_of_an_assembly_panel() {
     );
     let error = create_fab_panel_xml(&[board], &[0]).unwrap_err();
     assert!(error.to_string().contains("expected a board array"));
+}
+
+/// A compact stock so balance tests solve quickly: 66 x 116 mm usable. The
+/// spatial solve costs the gutter area, and everything these tests assert --
+/// rotation, target aggregation, clearances, bare margins -- is scale-free.
+const BALANCE_SPEC: FabPanelSpec = FabPanelSpec {
+    width_mm: 90.0,
+    height_mm: 140.0,
+    edge_margin_mm: EdgeInsetsMm::all(12.0),
+    panel_gap_mm: 5.0,
+};
+
+/// An assembly panel whose left half carries solid copper, inset 1 mm so the
+/// copper stays strictly inside the rounded panel outline.
+fn dense_assembly_panel_xml(width_mm: f64, height_mm: f64) -> String {
+    let copper_max_x = width_mm / 2.0;
+    let copper_max_y = height_mm - 1.0;
+    let sparse = assembly_panel_xml(width_mm, height_mm);
+    let dense = sparse.replace(
+        &format!(
+            r#"<Line startX="0" startY="0" endX="{width_mm}" endY="0">
+                <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
+              </Line>"#
+        ),
+        &format!(
+            r#"<Contour>
+                <Polygon>
+                  <PolyBegin x="1" y="1"/>
+                  <PolyStepSegment x="{copper_max_x}" y="1"/>
+                  <PolyStepSegment x="{copper_max_x}" y="{copper_max_y}"/>
+                  <PolyStepSegment x="1" y="{copper_max_y}"/>
+                  <PolyStepSegment x="1" y="1"/>
+                </Polygon>
+              </Contour>"#
+        ),
+    );
+    assert!(dense.contains("<Contour>"), "copper fixture replace failed");
+    dense
+}
+
+#[test]
+fn balances_gutters_at_the_assembly_panel_density_and_leaves_margins_bare() {
+    let sources = vec![
+        dense_assembly_panel_xml(90.0, 40.0),
+        dense_assembly_panel_xml(25.0, 20.0),
+    ];
+    let creation = create_fab_panel(&sources, &[0, 1], BALANCE_SPEC, true).unwrap();
+
+    let report = creation.copper_balance.as_ref().unwrap();
+    assert!(report.stack_weights_available);
+    assert_eq!(report.layers.len(), 1);
+    let layer = &report.layers[0];
+    assert_eq!(layer.layer_name, "TOP");
+    assert_eq!(layer.mode, CopperBalanceMode::Perforated);
+    assert!(layer.void_count > 0);
+    assert!((0.4..0.55).contains(&layer.target_density));
+    assert!(
+        layer.residual_error <= 5e-3,
+        "gutter fill should reach the panel density: target {:.4}, achieved {:.4}",
+        layer.target_density,
+        layer.achieved_density
+    );
+    assert_eq!(
+        creation
+            .xml
+            .matches(r#"<LayerFeature layerRef="TOP">"#)
+            .count(),
+        4,
+        "both sources plus the fab step's positive and negative balance sets should carry TOP copper"
+    );
+
+    Ipc2581::validate(&creation.xml).unwrap();
+    let parsed = Ipc2581::parse(&creation.xml).unwrap();
+    let layout = geometry::extract_layout(&parsed).unwrap();
+    // The 90 mm panel exceeds the 66 mm usable width, so packing must
+    // rotate it; balancing has to respect the rotated footprint.
+    assert!(
+        layout
+            .layout
+            .instances
+            .iter()
+            .filter(|instance| instance.parent_instance.is_none())
+            .any(|instance| (instance.bbox.width() - 40.0).abs() < 1e-6
+                && (instance.bbox.height() - 90.0).abs() < 1e-6)
+    );
+
+    let profile = geometry::board_array_fabrication_profile(&parsed, &layout, &[]).unwrap();
+    let panel_contours = profile
+        .assembly_panel_outlines
+        .iter()
+        .flatten()
+        .cloned()
+        .collect::<Vec<_>>();
+    let footprints = ContourSet::from_filled_contours(&panel_contours, tol::REGION_MM);
+    let usable = ContourSet::rectangle(BALANCE_SPEC.usable_bbox().unwrap(), tol::REGION_MM);
+    let copper = composed_copper_image(&parsed, "TOP").unwrap();
+    let gutter_copper = copper.difference(&footprints);
+
+    assert!(
+        copper.difference(&usable).area() <= 1e-6,
+        "process margins must stay bare"
+    );
+    assert!(
+        gutter_copper.area() > 800.0,
+        "expected substantial generated gutter copper, got {:.1} mm²",
+        gutter_copper.area()
+    );
+    assert!(
+        gutter_copper
+            .intersection(&footprints.disk_dilate(0.4))
+            .area()
+            <= 1e-6,
+        "generated copper must keep clearance from the placed panels"
+    );
+    assert!(
+        gutter_copper.difference(&usable.disk_erode(0.4)).area() <= 1e-6,
+        "generated copper must keep clearance from the usable-area boundary"
+    );
+}
+
+#[test]
+fn fab_panel_creation_skips_copper_balancing_unless_enabled() {
+    let sources = vec![dense_assembly_panel_xml(30.0, 25.0)];
+    let creation = create_fab_panel(&sources, &[0], BALANCE_SPEC, false).unwrap();
+
+    assert!(creation.copper_balance.is_none());
+    assert_eq!(
+        creation
+            .xml
+            .matches(r#"<LayerFeature layerRef="TOP">"#)
+            .count(),
+        1,
+        "disabled balancing should retain only the source panel's copper"
+    );
+    Ipc2581::validate(&creation.xml).unwrap();
+}
+
+#[test]
+fn single_panel_filling_the_usable_area_generates_no_fill() {
+    let sources = vec![dense_assembly_panel_xml(66.0, 116.0)];
+    let creation = create_fab_panel(&sources, &[0], BALANCE_SPEC, true).unwrap();
+
+    let layer = &creation.copper_balance.unwrap().layers[0];
+    assert_eq!(layer.mode, CopperBalanceMode::None);
+    assert_eq!(layer.generated_area_mm2, 0.0);
+    assert_eq!(
+        creation
+            .xml
+            .matches(r#"<LayerFeature layerRef="TOP">"#)
+            .count(),
+        1,
+        "a fully covered usable area leaves no room for balance copper"
+    );
 }

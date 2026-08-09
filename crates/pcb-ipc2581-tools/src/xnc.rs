@@ -39,7 +39,7 @@
 //! - Plating is a file-level attribute, so plated and non-plated holes are
 //!   emitted as separate XNC files rather than mixed in one file.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use anyhow::{Result, bail};
 use gerberx2::sanitize_attribute_field;
@@ -218,15 +218,35 @@ impl XncBuilder {
     }
 
     pub fn finish(self) -> XncDocument {
+        let mut tools = self.tools;
+        let mut objects = self.objects;
+        tools.sort_by(|a, b| a.diameter.total_cmp(&b.diameter));
+        let renumbered: HashMap<u8, u8> = tools
+            .iter()
+            .enumerate()
+            .map(|(index, tool)| (tool.number, index as u8 + 1))
+            .collect();
+        for (index, tool) in tools.iter_mut().enumerate() {
+            tool.number = index as u8 + 1;
+        }
+        for object in &mut objects {
+            let (XncObject::Drill { tool, .. }
+            | XncObject::Slot { tool, .. }
+            | XncObject::Route { tool, .. }) = object;
+            *tool = renumbered[tool];
+        }
         XncDocument {
             unit: self.unit,
             file_attributes: self.file_attributes,
-            tools: self.tools,
-            objects: self.objects,
+            tools,
+            objects,
         }
     }
 
     fn tool(&mut self, diameter: f64, attributes: Vec<XncAttribute>) -> Result<u8> {
+        // Snap to 1 µm: real tools are never finer, and EDA exports carry
+        // nanometer float dust (a 1.0 mm slot arriving as 0.999998 mm).
+        let diameter = (diameter * 1_000.0).round() / 1_000.0;
         validate_positive("tool diameter", diameter)?;
         let key = XncToolKey {
             diameter_nm: quantize_mm(diameter),
@@ -529,6 +549,35 @@ fn format_decimal(value: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tools_snap_to_micrometers_and_sort_by_diameter() {
+        let mut builder = XncBuilder::new(XncUnit::Metric, vec![]);
+        // Float dust from EDA unit conversion snaps to the intended tool,
+        // merging with an exact duplicate, and the table sorts by diameter.
+        builder
+            .add_drill(0.999998, Point::new(1.0, 1.0), vec![], vec![])
+            .unwrap();
+        builder
+            .add_drill(0.3, Point::new(2.0, 2.0), vec![], vec![])
+            .unwrap();
+        builder
+            .add_drill(1.0, Point::new(3.0, 3.0), vec![], vec![])
+            .unwrap();
+
+        let document = builder.finish();
+        assert_eq!(
+            document
+                .tools
+                .iter()
+                .map(|tool| (tool.number, tool.diameter))
+                .collect::<Vec<_>>(),
+            vec![(1, 0.3), (2, 1.0)]
+        );
+        let output = write_xnc(&document).unwrap();
+        assert!(output.contains("T01C0.3\n"));
+        assert!(output.contains("T02C1.0\n"));
+    }
 
     #[test]
     fn emits_decimal_metric_drill_slot_and_route_xnc() {

@@ -17,7 +17,9 @@ use crate::dialects::ipc::document::Layer;
 use crate::dialects::ipc::feature::{Feature, FeatureBucket, FeatureIntent, FeatureKind};
 use crate::geom::path::ContourBuf;
 use crate::geom::region::{self, Ring};
-use crate::geom::{BBox, ContourSet, FillRule, Paint, PaintKind, Path, Polarity, Span, tol};
+use crate::geom::{
+    Affine2, BBox, ContourSet, FillRule, Paint, PaintKind, Path, Polarity, Span, tol,
+};
 
 /// Run only structure-preserving cleanup passes.
 ///
@@ -37,10 +39,13 @@ where
 
 /// Resolve IPC-specific paint semantics while preserving native artwork shapes.
 ///
-/// IPC feature-set voids, negative polarity, and layer cutouts are semantic
-/// operators on source features, not generic ordered artwork objects. Resolve
-/// those before lowering to source-independent artwork, but do not outline
-/// strokes or flatten unrelated positive features.
+/// IPC feature-set voids and layer cutouts are semantic operators on source
+/// features, not generic ordered artwork objects. Resolve those before
+/// lowering to source-independent artwork, but do not outline strokes or
+/// flatten unrelated positive features. Negative-polarity features stay
+/// native: ordered artwork carries per-object polarity with exactly IPC's
+/// sequential paint semantics, so resolving them here would only flatten
+/// repeated clear instances into unshareable boundary geometry.
 pub fn normalize_for_artwork<S, L>(doc: &mut Document<S, L>)
 where
     S: Copy + Eq + Hash,
@@ -48,7 +53,6 @@ where
 {
     normalize_preserving(doc);
     resolve_set_voids(doc);
-    resolve_negative_polarity(doc);
     subtract_layer_cutouts(doc);
     compact(doc);
     normalize_bounds(doc);
@@ -58,18 +62,20 @@ where
 ///
 /// This is intentionally destructive: it outlines strokes, applies boolean
 /// union/difference, resolves voids, and may convert arcs into polygon
-/// contours. Use it only when a target needs a final painted image.
+/// contours. Negative polarity stays native — mask composition paints
+/// polarity runs sequentially. Use it only when a target needs a final
+/// painted image.
 pub fn compose_for_rendering<S, L>(doc: &mut Document<S, L>)
 where
     S: Copy + Eq + Hash,
     L: Clone,
 {
+    expand_feature_placement_groups(doc);
     normalize_preserving(doc);
     expand_stroked_paths_to_fills(doc);
     union_feature_filled_paths(doc);
     coalesce_related_trace_features(doc);
     resolve_set_voids(doc);
-    resolve_negative_polarity(doc);
     subtract_layer_cutouts(doc);
     compact(doc);
     normalize_bounds(doc);
@@ -167,7 +173,7 @@ pub fn normalize_bounds<S, L>(doc: &mut Document<S, L>) {
     }
 
     for feature_index in 0..doc.features.len() {
-        doc.features[feature_index].bbox = doc.arena.paths_bbox(doc.features[feature_index].paths);
+        doc.features[feature_index].bbox = doc.placed_paths_bbox(&doc.features[feature_index]);
     }
 
     for set_index in 0..doc.feature_sets.len() {
@@ -181,6 +187,189 @@ pub fn normalize_bounds<S, L>(doc: &mut Document<S, L>) {
             .iter()
             .fold(BBox::empty(), |bbox, feature| bbox.union(feature.bbox));
     }
+}
+
+/// Retain selected feature definitions while keeping every feature span and
+/// placement-group reference valid.
+///
+/// Placement groups are preserved when the predicate keeps or drops the
+/// complete local definition. A partially retained group is materialized
+/// first because its remaining members no longer represent the source's
+/// repeated ordered group.
+pub fn retain_features<S: Clone, L>(
+    doc: &mut Document<S, L>,
+    mut retain: impl FnMut(&Feature<S>) -> bool,
+) {
+    let mut retained = doc.features.iter().map(&mut retain).collect::<Vec<_>>();
+    let splits_group = doc.feature_placement_groups.iter().any(|group| {
+        let kept = group
+            .features
+            .indices()
+            .filter(|&index| retained[index as usize])
+            .count();
+        kept != 0 && kept != group.features.len()
+    });
+    if splits_group {
+        expand_feature_placement_groups(doc);
+        retained = doc.features.iter().map(&mut retain).collect();
+    }
+    if retained.iter().all(|&keep| keep) {
+        return;
+    }
+
+    let mut retained_prefix = Vec::with_capacity(retained.len() + 1);
+    retained_prefix.push(0_u32);
+    for &keep in &retained {
+        retained_prefix.push(retained_prefix.last().copied().unwrap() + u32::from(keep));
+    }
+    let remap_span = |span: Span| {
+        let start = retained_prefix[span.start as usize];
+        let end = retained_prefix[span.end() as usize];
+        Span::new(start, end - start)
+    };
+
+    for layer in &mut doc.layers {
+        layer.features = remap_span(layer.features);
+    }
+    for set in &mut doc.feature_sets {
+        set.features = remap_span(set.features);
+    }
+
+    let old_groups = std::mem::take(&mut doc.feature_placement_groups);
+    let old_placements = std::mem::take(&mut doc.feature_placements);
+    let mut group_mapping = vec![None; old_groups.len()];
+    for (old_id, group) in old_groups.into_iter().enumerate() {
+        if group.features.is_empty() || !retained[group.features.start as usize] {
+            continue;
+        }
+        debug_assert!(
+            group
+                .features
+                .indices()
+                .all(|index| retained[index as usize]),
+            "partially retained placement groups must be materialized"
+        );
+        let placement_start = doc.feature_placements.len() as u32;
+        doc.feature_placements
+            .extend_from_slice(group.placements.slice(&old_placements));
+        let new_id = doc.feature_placement_groups.len() as u32;
+        group_mapping[old_id] = Some(new_id);
+        doc.feature_placement_groups
+            .push(crate::dialects::ipc::feature::FeaturePlacementGroup {
+                placements: Span::new(
+                    placement_start,
+                    doc.feature_placements.len() as u32 - placement_start,
+                ),
+                features: remap_span(group.features),
+            });
+    }
+
+    doc.features = std::mem::take(&mut doc.features)
+        .into_iter()
+        .zip(retained)
+        .filter_map(|(mut feature, keep)| {
+            keep.then(|| {
+                feature.placement_group = feature
+                    .placement_group
+                    .map(|group| group_mapping[group as usize].expect("retained group is mapped"));
+                feature
+            })
+        })
+        .collect();
+    compact(doc);
+    normalize_bounds(doc);
+}
+
+/// Materialize shared IPC feature placement groups only for passes that need
+/// one independent feature image per occurrence. Structure-preserving
+/// pipelines and artwork lowering keep the groups compact.
+pub fn expand_feature_placement_groups<S: Clone, L>(doc: &mut Document<S, L>) {
+    if doc.feature_placement_groups.is_empty() {
+        return;
+    }
+
+    let mut old_features = std::mem::take(&mut doc.features)
+        .into_iter()
+        .map(Some)
+        .collect::<Vec<_>>();
+    let mut expanded = Vec::with_capacity(old_features.len());
+    let mut mapping = vec![Span::EMPTY; old_features.len()];
+
+    for feature_index in 0..old_features.len() {
+        let Some(feature) = old_features[feature_index].take() else {
+            continue;
+        };
+        let start = expanded.len() as u32;
+        if let Some(group_id) = feature.placement_group {
+            let group = doc.feature_placement_groups[group_id as usize];
+            debug_assert_eq!(feature_index as u32, group.features.start);
+            let mut members = Vec::with_capacity(group.features.len());
+            members.push(feature);
+            for member_index in group.features.indices().skip(1) {
+                members.push(
+                    old_features[member_index as usize]
+                        .take()
+                        .expect("placement group member is consumed once"),
+                );
+            }
+            for (instances, placement_index) in
+                std::iter::repeat_n(members, group.placements.len()).zip(group.placements.indices())
+            {
+                let placement = doc.feature_placements[placement_index as usize];
+                for mut instance in instances {
+                    materialize_feature_placement(doc, &mut instance, placement);
+                    expanded.push(instance);
+                }
+            }
+            let span = Span::new(start, expanded.len() as u32 - start);
+            for member_index in group.features.indices() {
+                mapping[member_index as usize] = span;
+            }
+        } else {
+            expanded.push(feature);
+            mapping[feature_index] = Span::single(start);
+        }
+    }
+
+    for layer in &mut doc.layers {
+        layer.features = expanded_span(layer.features, &mapping);
+    }
+    for set in &mut doc.feature_sets {
+        set.features = expanded_span(set.features, &mapping);
+    }
+    doc.features = expanded;
+    doc.feature_placement_groups.clear();
+    doc.feature_placements.clear();
+}
+
+fn materialize_feature_placement<S, L>(
+    doc: &mut Document<S, L>,
+    feature: &mut Feature<S>,
+    placement: Affine2,
+) {
+    let scale = placement.m00.hypot(placement.m10);
+    let path_start = doc.arena.paths.len() as u32;
+    for path_index in feature.paths.indices() {
+        let path = doc.arena.paths[path_index as usize];
+        let contours = doc.arena.transformed_contour_bufs(path.contours, placement);
+        doc.arena.push_path(path.paint.scaled(scale), contours);
+    }
+    let paths = Span::new(path_start, doc.arena.paths.len() as u32 - path_start);
+    feature.placement_group = None;
+    feature.transform = placement.concat(feature.transform);
+    feature.center = placement.transform_point(feature.center);
+    feature.paths = paths;
+    feature.stroke_width *= scale;
+    feature.bbox = doc.arena.paths_bbox(paths);
+}
+
+fn expanded_span(span: Span, mapping: &[Span]) -> Span {
+    if span.is_empty() {
+        return Span::EMPTY;
+    }
+    let first = mapping[span.start as usize];
+    let last = mapping[span.end() as usize - 1];
+    Span::new(first.start, last.end() - first.start)
 }
 
 /// Drop paths no longer referenced by any feature, profile, or cutout.
@@ -237,8 +426,8 @@ where
     L: Clone,
 {
     for layer_index in 0..doc.layers.len() {
-        let layer: Layer<S, L> = doc.layers[layer_index].clone();
-        if layer.features.is_empty() {
+        let features = doc.layers[layer_index].features;
+        if features.is_empty() {
             continue;
         }
 
@@ -260,8 +449,7 @@ where
             })
             .unwrap_or_default();
 
-        let feature_indices = layer.features.range().collect::<Vec<_>>();
-        for &feature_index in &feature_indices {
+        for feature_index in features.range() {
             clear_feature_paths(doc, feature_index);
         }
 
@@ -269,7 +457,7 @@ where
             continue;
         }
 
-        let mask_index = feature_indices[0];
+        let mask_index = features.start as usize;
         replace_feature_with_path(
             doc,
             mask_index,
@@ -284,6 +472,14 @@ where
         mask.polarity = Polarity::Dark;
         mask.net = None;
     }
+
+    // Composed masks are already in layer coordinates, so their source
+    // placement groups must not be applied again by later consumers.
+    for feature in &mut doc.features {
+        feature.placement_group = None;
+    }
+    doc.feature_placement_groups.clear();
+    doc.feature_placements.clear();
 
     compact(doc);
     normalize_bounds(doc);
@@ -473,6 +669,16 @@ where
     S: Clone,
     L: Clone,
 {
+    // Void subtraction images features in layer coordinates, so shared
+    // placement groups must be materialized before any void can cut.
+    if !doc.feature_placement_groups.is_empty()
+        && doc
+            .features
+            .iter()
+            .any(|feature| feature.flags.clears_previous_in_set)
+    {
+        expand_feature_placement_groups(doc);
+    }
     for layer_index in 0..doc.layers.len() {
         let layer = doc.layers[layer_index].clone();
         for mut feature_indices in layer_features_by_set(doc, &layer).into_values() {
@@ -488,8 +694,9 @@ where
                 if feature.flags.clears_previous_in_set {
                     let cutters = feature_filled_rings(doc, &doc.features[feature_index]);
                     if !cutters.is_empty() {
+                        let bounds = ring_bounds(&cutters);
                         for subject_index in previous.iter().copied() {
-                            subtract_rings_from_feature(doc, subject_index, &cutters);
+                            subtract_rings_from_feature(doc, subject_index, &cutters, &bounds);
                         }
                     }
                     clear_feature_paths(doc, feature_index);
@@ -518,54 +725,22 @@ fn layer_features_by_set<S, L>(
     features_by_set
 }
 
-/// Resolve negative (clear) polarity as a layer-wide subtraction.
-pub fn resolve_negative_polarity<S, L>(doc: &mut Document<S, L>)
-where
-    S: Clone,
-    L: Clone,
-{
-    for layer_index in 0..doc.layers.len() {
-        let layer = doc.layers[layer_index].clone();
-        let negative_features = layer
-            .features
-            .range()
-            .filter(|&feature_index| {
-                let feature = &doc.features[feature_index];
-                feature.bucket != FeatureBucket::Cutout
-                    && !feature.flags.clears_previous_in_set
-                    && feature.polarity == Polarity::Clear
-            })
-            .collect::<Vec<_>>();
-        let mut cutters = negative_features
-            .iter()
-            .flat_map(|&feature_index| feature_filled_rings(doc, &doc.features[feature_index]))
-            .collect::<Vec<_>>();
-        if cutters.is_empty() {
-            continue;
-        }
-        if cutters.len() > 1 {
-            cutters = region::simplify_rings(cutters, FillRule::NonZero);
-        }
-
-        for feature_index in layer.features.range() {
-            let feature = &doc.features[feature_index];
-            if feature.bucket != FeatureBucket::Cutout && feature.polarity == Polarity::Dark {
-                subtract_rings_from_feature(doc, feature_index, &cutters);
-            }
-        }
-
-        for feature_index in negative_features {
-            clear_feature_paths(doc, feature_index);
-        }
-    }
-}
-
 /// Subtract cutout features from every other feature on their layer.
 pub fn subtract_layer_cutouts<S, L>(doc: &mut Document<S, L>)
 where
     S: Clone,
     L: Clone,
 {
+    // Cutout subtraction images features in layer coordinates, so shared
+    // placement groups must be materialized before any cutout can cut.
+    if !doc.feature_placement_groups.is_empty()
+        && doc
+            .features
+            .iter()
+            .any(|feature| feature.bucket == FeatureBucket::Cutout)
+    {
+        expand_feature_placement_groups(doc);
+    }
     for layer_index in 0..doc.layers.len() {
         let layer = doc.layers[layer_index].clone();
         let cutouts = layer_cutout_sets(doc, &layer);
@@ -593,7 +768,8 @@ where
                 continue;
             }
 
-            subtract_rings_from_feature(doc, feature_index, &cutters);
+            let bounds = ring_bounds(&cutters);
+            subtract_rings_from_feature(doc, feature_index, &cutters, &bounds);
         }
     }
 }
@@ -638,6 +814,14 @@ pub fn split_primitive_feature_path_runs<S: Clone, L>(
             feature.paths.end(),
             kind,
         );
+    }
+
+    // A fragment of a dictionary entry is not the entry: only a feature
+    // carrying the entry's entire geometry keeps its primitive identity.
+    if features.len() != 1 || features[0].paths != feature.paths {
+        for fragment in &mut features {
+            fragment.primitive_ref = None;
+        }
     }
 
     Ok(features)
@@ -697,17 +881,52 @@ fn clear_feature_paths<S, L>(doc: &mut Document<S, L>, feature_index: usize) {
     feature.primitive_ref = None;
 }
 
+fn ring_bounds(rings: &[Ring]) -> Vec<BBox> {
+    rings
+        .iter()
+        .map(|ring| rings_bbox(std::slice::from_ref(ring)))
+        .collect()
+}
+
+fn rings_bbox(rings: &[Ring]) -> BBox {
+    rings
+        .iter()
+        .flat_map(|ring| ring.iter())
+        .fold(BBox::empty(), |bbox, &[x, y]| {
+            bbox.union(BBox::new(
+                crate::geom::Point::new(x, y),
+                crate::geom::Point::new(x, y),
+            ))
+        })
+}
+
 fn subtract_rings_from_feature<S, L>(
     doc: &mut Document<S, L>,
     feature_index: usize,
     cutters: &[Ring],
+    cutter_bounds: &[BBox],
 ) {
     let subject = feature_filled_rings(doc, &doc.features[feature_index]);
     if subject.is_empty() {
         return;
     }
 
-    let contours = region::rings_to_contours(region::difference_rings(subject, cutters.to_vec()));
+    // Only cutters that can reach this feature participate; most features on
+    // a layer are nowhere near any of them, and dense generated cutter sets
+    // (balance void lattices) would otherwise make every subtraction sweep
+    // the whole set.
+    let subject_bounds = rings_bbox(&subject);
+    let near = cutters
+        .iter()
+        .zip(cutter_bounds)
+        .filter(|(_, bounds)| bounds.intersects(subject_bounds))
+        .map(|(ring, _)| ring.clone())
+        .collect::<Vec<_>>();
+    if near.is_empty() {
+        return;
+    }
+
+    let contours = region::rings_to_contours(region::difference_rings(subject, near));
     if contours.is_empty() {
         clear_feature_paths(doc, feature_index);
         return;
@@ -805,7 +1024,8 @@ fn feature_set_bbox<S, L>(doc: &Document<S, L>, set_index: usize) -> BBox {
 mod tests {
     use super::*;
     use crate::dialects::ipc::feature::{
-        FeatureDomain, FeatureMaterial, FeatureOperation, FeatureRole, SourceRef,
+        FeatureDomain, FeatureMaterial, FeatureOperation, FeaturePlacementGroup, FeatureRole,
+        FeatureSet, PrimitiveRef, SourceRef,
     };
     use crate::dialects::ipc::validate::validate_artwork_ready;
     use crate::geom::path::PathCmd;
@@ -961,7 +1181,7 @@ mod tests {
     }
 
     #[test]
-    fn resolves_negative_polarity_as_layer_subtraction() {
+    fn compose_keeps_clear_polarity_native() {
         let mut doc = TestDoc::new();
         doc.push_path(
             Paint::Fill {
@@ -987,14 +1207,28 @@ mod tests {
 
         compose_for_rendering(&mut doc);
 
-        let feature = &doc.features[0];
-        let path = &doc.arena.paths[feature.paths.start as usize];
-        assert_eq!(feature.paths.len(), 1);
-        assert!(path.contours.len() > 1);
-        assert_eq!(path.bbox.min, Point::new(0.0, 0.0));
-        assert_eq!(path.bbox.max, Point::new(4.0, 4.0));
-        assert_eq!(doc.features[1].paths.len(), 0);
-        assert!(doc.features[1].bbox.is_empty());
+        // Both features keep their native geometry and polarity; the
+        // sequential paint fold applies the subtraction at composition.
+        assert_eq!(doc.features[0].paths.len(), 1);
+        assert_eq!(doc.features[0].polarity, Polarity::Dark);
+        assert_eq!(doc.features[1].paths.len(), 1);
+        assert_eq!(doc.features[1].polarity, Polarity::Clear);
+
+        let artwork = crate::dialects::ipc::lower_layer_to_artwork(
+            &doc,
+            0,
+            crate::dialects::LayerRole::Copper,
+            crate::dialects::Side::Top,
+        );
+        let mask = crate::dialects::artwork::compose_to_mask(&artwork);
+        let shape = mask.layers[0].shapes.slice(&mask.arena.paths)[0];
+        let image = crate::geom::region::ContourSet::from_contours(
+            &mask.arena.path_contours(&shape),
+            FillRule::NonZero,
+            crate::geom::tol::REGION_MM,
+        );
+        assert!((image.area() - 12.0).abs() < 1e-6);
+        assert!(!image.contains_point(Point::new(2.0, 2.0)));
     }
 
     #[test]
@@ -1089,7 +1323,7 @@ mod tests {
     }
 
     #[test]
-    fn artwork_ready_validation_rejects_unresolved_negative_polarity() {
+    fn artwork_ready_validation_accepts_clear_polarity() {
         let mut doc = TestDoc::new();
         doc.push_path(
             Paint::Fill {
@@ -1102,9 +1336,7 @@ mod tests {
             ..Feature::new(FeatureKind::Polygon, Polarity::Clear)
         });
 
-        let error = validate_artwork_ready(&doc).unwrap_err();
-
-        assert!(error.to_string().contains("unresolved negative polarity"));
+        validate_artwork_ready(&doc).unwrap();
     }
 
     #[test]
@@ -1265,6 +1497,47 @@ mod tests {
     }
 
     #[test]
+    fn flattening_consumes_feature_placement_groups() {
+        let mut doc = TestDoc::new();
+        doc.push_path(
+            Paint::Fill {
+                rule: FillRule::NonZero,
+            },
+            [rect_contour(0.0, 0.0, 1.0, 1.0)],
+        );
+        let mut feature = Feature::new(FeatureKind::Polygon, Polarity::Dark);
+        feature.paths = Span::single(0);
+        feature.placement_group = Some(0);
+        doc.features.push(feature);
+        doc.feature_placements.extend([
+            Affine2::translation(Point::new(10.0, 0.0)),
+            Affine2::translation(Point::new(20.0, 0.0)),
+        ]);
+        doc.feature_placement_groups.push(FeaturePlacementGroup {
+            placements: Span::new(0, 2),
+            features: Span::single(0),
+        });
+        doc.layers.push(test_layer(Span::single(0)));
+
+        flatten_layers_to_masks(&mut doc);
+
+        assert!(doc.feature_placement_groups.is_empty());
+        assert!(doc.feature_placements.is_empty());
+        assert_eq!(doc.features[0].placement_group, None);
+        assert_eq!(doc.layers[0].bbox.min, Point::new(10.0, 0.0));
+        assert_eq!(doc.layers[0].bbox.max, Point::new(21.0, 1.0));
+        let path = &doc.arena.paths[doc.features[0].paths.start as usize];
+        let image = ContourSet::from_contours(
+            &doc.arena.path_contours(path),
+            FillRule::NonZero,
+            tol::REGION_MM,
+        );
+        assert!(image.contains_point(Point::new(10.5, 0.5)));
+        assert!(image.contains_point(Point::new(20.5, 0.5)));
+        assert!(!image.contains_point(Point::new(30.5, 0.5)));
+    }
+
+    #[test]
     fn compact_reclaims_orphaned_paths() {
         let mut doc = TestDoc::new();
         doc.push_path(
@@ -1285,16 +1558,101 @@ mod tests {
         );
         doc.features.push(Feature {
             paths: Span::new(1, 1),
+            flags: crate::dialects::ipc::FeatureFlags {
+                clears_previous_in_set: true,
+                ..Default::default()
+            },
             ..Feature::new(FeatureKind::Polygon, Polarity::Clear)
         });
         doc.layers.push(test_layer(Span::new(0, 2)));
 
         compose_for_rendering(&mut doc);
 
-        // The negative feature and the pre-subtraction positive path are gone.
+        // The set void and the pre-subtraction positive path are gone.
         assert_eq!(doc.arena.paths.len(), 1);
         assert_eq!(doc.features[0].paths, Span::new(0, 1));
         doc.arena.validate("compacted").unwrap();
+    }
+
+    #[test]
+    fn retaining_features_remaps_placement_and_owner_spans() {
+        let mut doc = TestDoc::new();
+        for (x0, x1) in [(0.0, 1.0), (0.0, 1.0), (2.0, 3.0)] {
+            doc.push_path(
+                Paint::Fill {
+                    rule: FillRule::NonZero,
+                },
+                [rect_contour(x0, 0.0, x1, 1.0)],
+            );
+        }
+        let mut borrowed = Feature::new(FeatureKind::Polygon, Polarity::Dark);
+        borrowed.paths = Span::single(0);
+        borrowed.source_layer_ref = Some(200);
+        doc.features.push(borrowed);
+        for path in [1, 2] {
+            let mut member = Feature::new(FeatureKind::Polygon, Polarity::Dark);
+            member.paths = Span::single(path);
+            member.source_layer_ref = Some(100);
+            member.placement_group = Some(0);
+            doc.features.push(member);
+        }
+        doc.feature_placements.extend([
+            Affine2::translation(Point::new(10.0, 0.0)),
+            Affine2::translation(Point::new(20.0, 0.0)),
+        ]);
+        doc.feature_placement_groups.push(FeaturePlacementGroup {
+            placements: Span::new(0, 2),
+            features: Span::new(1, 2),
+        });
+        doc.feature_sets.push(FeatureSet {
+            layer: 0,
+            source_set_index: 0,
+            source_geometry_ref: None,
+            net: None,
+            polarity: Polarity::Dark,
+            spec_refs: Span::EMPTY,
+            features: Span::single(0),
+            bbox: BBox::empty(),
+        });
+        doc.feature_sets.push(FeatureSet {
+            layer: 0,
+            source_set_index: 1,
+            source_geometry_ref: None,
+            net: None,
+            polarity: Polarity::Dark,
+            spec_refs: Span::EMPTY,
+            features: Span::new(1, 2),
+            bbox: BBox::empty(),
+        });
+        doc.layers.push(test_layer(Span::new(0, 3)));
+
+        retain_features(&mut doc, |feature| feature.source_layer_ref == Some(100));
+
+        assert_eq!(doc.features.len(), 2);
+        assert_eq!(doc.layers[0].features, Span::new(0, 2));
+        assert_eq!(doc.feature_sets[0].features, Span::EMPTY);
+        assert_eq!(doc.feature_sets[1].features, Span::new(0, 2));
+        assert_eq!(doc.feature_placement_groups.len(), 1);
+        assert_eq!(doc.feature_placement_groups[0].features, Span::new(0, 2));
+        assert!(
+            doc.features
+                .iter()
+                .all(|feature| feature.placement_group == Some(0))
+        );
+
+        expand_feature_placement_groups(&mut doc);
+
+        assert_eq!(doc.features.len(), 4);
+        assert_eq!(doc.layers[0].features, Span::new(0, 4));
+        assert_eq!(doc.feature_sets[1].features, Span::new(0, 4));
+        assert!(doc.feature_placement_groups.is_empty());
+        assert_eq!(
+            doc.features
+                .iter()
+                .map(|feature| feature.bbox.min.x)
+                .collect::<Vec<_>>(),
+            [10.0, 12.0, 20.0, 22.0]
+        );
     }
 
     fn test_layer(features: Span) -> Layer<u32, ()> {
@@ -1326,5 +1684,41 @@ mod tests {
             PathCmd::line_to(Point::new(x0, y1)),
             PathCmd::close(),
         ])
+    }
+
+    #[test]
+    fn split_path_runs_keep_primitive_identity_only_for_whole_entries() {
+        let mut doc = TestDoc::new();
+        doc.push_path(
+            Paint::Fill {
+                rule: FillRule::NonZero,
+            },
+            [rect_contour(0.0, 0.0, 1.0, 1.0)],
+        );
+        doc.push_path(
+            Paint::Stroke(StrokeStyle::new(0.2, LineCap::Round)),
+            [ContourBuf::new(vec![
+                PathCmd::move_to(Point::new(0.0, 2.0)),
+                PathCmd::line_to(Point::new(1.0, 2.0)),
+            ])],
+        );
+
+        let mut feature = Feature::new(FeatureKind::Primitive, Polarity::Dark);
+        feature.primitive_ref = Some(PrimitiveRef::User(7));
+        feature.paths = Span::new(0, 2);
+
+        let fragments = split_primitive_feature_path_runs(&doc, feature.clone()).unwrap();
+        assert_eq!(fragments.len(), 2);
+        assert!(
+            fragments
+                .iter()
+                .all(|fragment| fragment.primitive_ref.is_none()),
+            "fragments must not claim the dictionary entry's identity"
+        );
+
+        feature.paths = Span::new(0, 1);
+        let whole = split_primitive_feature_path_runs(&doc, feature).unwrap();
+        assert_eq!(whole.len(), 1);
+        assert_eq!(whole[0].primitive_ref, Some(PrimitiveRef::User(7)));
     }
 }

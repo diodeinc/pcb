@@ -1,14 +1,14 @@
 use anyhow::{Context, Result};
 use ipc2581::Ipc2581;
 use ipc2581::types::LayerFunction;
-use pcb_ir::dialects::ipc::View;
+use pcb_ir::dialects::ipc::ArtworkScope;
 use pcb_ir::dialects::nc;
 
 use crate::geometry;
 use crate::manufacturing::{ManufacturingFile, ManufacturingFileKind};
 use crate::xnc::{XncAttribute, XncBuilder, XncUnit, write_xnc};
 
-pub fn build_xnc_drill_files(ipc: &Ipc2581, view: View) -> Result<Vec<ManufacturingFile>> {
+pub fn build_xnc_drill_files(ipc: &Ipc2581, view: ArtworkScope) -> Result<Vec<ManufacturingFile>> {
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
     let copper_layers = copper_layer_refs(&ecad.cad_data.layers);
     let mut nc = nc::Document::new();

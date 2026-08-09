@@ -185,17 +185,22 @@ pub fn vscore_lines_for<Symbol: PartialEq, LayerFunction>(
         .iter()
         .filter(|feature| is_vcut_operation_feature(doc, feature))
     {
-        for path in feature.paths.slice(&doc.arena.paths) {
-            if path.paint.kind() != PaintKind::Stroke {
-                continue;
-            }
-            let line_start = lines.len();
-            for contour in doc.arena.contours(path.contours) {
-                append_contour_line_segments(doc.arena.cmds(*contour), &mut lines);
-            }
-            if feature.stroke_width > 0.0 {
+        for &placement in doc.placements_for_feature(feature) {
+            for path in feature.paths.slice(&doc.arena.paths) {
+                if path.paint.kind() != PaintKind::Stroke {
+                    continue;
+                }
+                let line_start = lines.len();
+                for contour in doc.arena.contours(path.contours) {
+                    append_contour_line_segments(doc.arena.cmds(*contour), &mut lines);
+                }
+                let scale = placement.m00.hypot(placement.m10);
                 for line in &mut lines[line_start..] {
-                    line.width = feature.stroke_width;
+                    line.start = placement.transform_point(line.start);
+                    line.end = placement.transform_point(line.end);
+                    if feature.stroke_width > 0.0 {
+                        line.width = feature.stroke_width * scale;
+                    }
                 }
             }
         }
@@ -634,6 +639,11 @@ fn rectangle_payload(bbox: BBox) -> ContourBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dialects::ipc::{
+        Feature, FeatureDomain, FeatureKind, FeaturePlacementGroup, FeatureRole, FeatureSet, Spec,
+        SpecItem, SpecRef,
+    };
+    use crate::geom::{Affine2, LineCap, Paint, Polarity, Span, StrokeStyle};
     fn path(cmds: Vec<PathCmd>) -> Vec<ContourBuf> {
         vec![ContourBuf::new(cmds)]
     }
@@ -682,6 +692,65 @@ mod tests {
         assert_eq!(output.debug.entries.len(), 1);
         assert!(output.debug.entries[0].dead_space_pockets.is_empty());
         assert!(output.debug.entries[0].legal_tool_centers.is_empty());
+    }
+
+    #[test]
+    fn vscore_lines_apply_shared_feature_placements() {
+        let mut doc = Document::<u32, ()>::new();
+        let path = doc.push_path(
+            Paint::Stroke(StrokeStyle::new(0.1, LineCap::Round)),
+            [ContourBuf::new(vec![
+                PathCmd::move_to(Point::new(0.0, 0.0)),
+                PathCmd::line_to(Point::new(1.0, 0.0)),
+            ])],
+        );
+        doc.spec_items.push(SpecItem {
+            element: 1,
+            kind: SpecItemKind::VCut,
+            item_type: None,
+            comment: None,
+            properties: Span::EMPTY,
+        });
+        doc.specs.push(Spec {
+            name: 10,
+            items: Span::single(0),
+        });
+        doc.spec_refs.push(SpecRef { spec: 10 });
+        doc.feature_sets.push(FeatureSet {
+            layer: 0,
+            source_set_index: 0,
+            source_geometry_ref: None,
+            net: None,
+            polarity: Polarity::Dark,
+            spec_refs: Span::single(0),
+            features: Span::single(0),
+            bbox: BBox::empty(),
+        });
+        let mut feature = Feature::new(FeatureKind::Trace, Polarity::Dark);
+        feature.paths = Span::single(path);
+        feature.set = Some(0);
+        feature.stroke_width = 0.1;
+        feature.intent.domain = FeatureDomain::VCut;
+        feature.intent.role = FeatureRole::ArraySeparation;
+        feature.placement_group = Some(0);
+        doc.features.push(feature);
+        doc.feature_placements.extend([
+            Affine2::translation(Point::new(10.0, 2.0)),
+            Affine2::translation(Point::new(20.0, 3.0)),
+        ]);
+        doc.feature_placement_groups.push(FeaturePlacementGroup {
+            placements: Span::new(0, 2),
+            features: Span::single(0),
+        });
+
+        let lines = vscore_lines_for(&doc);
+
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].start, Point::new(10.0, 2.0));
+        assert_eq!(lines[0].end, Point::new(11.0, 2.0));
+        assert_eq!(lines[1].start, Point::new(20.0, 3.0));
+        assert_eq!(lines[1].end, Point::new(21.0, 3.0));
+        assert!(lines.iter().all(|line| (line.width - 0.1).abs() <= 1e-9));
     }
 
     #[test]

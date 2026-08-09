@@ -15,7 +15,7 @@ If you are already operating inside a registry checkout or remote librarian sess
 
 - Do not invent datasheet facts, pin mappings, footprints, passive values, limits, sourceability, or application topology. Find evidence or ask.
 - Do not build reusable circuitry on untrusted symbols, footprints, or pin maps. Curate artifacts against the manufacturer datasheet first.
-- Do not manually create scratch footprints or synthetic 3D models without explicit user confirmation. “Add a footprint/model” means find, verify, and embed trusted artifacts first; if none are available or they conflict, stop and ask.
+- Do not manually create scratch footprints or synthetic 3D models without explicit user confirmation. “Add a footprint/model” means find, verify, and embed trusted artifacts first. When no provider or library footprint exists for the part, generate one from the manufacturer datasheet with the `kicad-footprint` skill; if the datasheet cannot establish the geometry, stop and ask.
 - Do not add new packages under `reference/`; that tree is deprecated. A component's reference design belongs inside the component package. Prefer one `.zen` file per reference design: instantiate `Component()` directly in that file with its support circuitry, not through a separate primitive-only local wrapper. Use `modules/` for higher-level reusable functional blocks and subsystem schematics that are not simply one component's reference design.
 - Treat registry packages as public integration contracts. If existing consumers must change Zener, layout, or assumptions to adopt the new version, it is breaking; obvious examples include `io()`/`config()`/entrypoint changes and substantial layout changes. Note the migration and mark the commit accordingly.
 
@@ -54,9 +54,10 @@ A typical flow:
 4. Fetch or import ECAD artifacts.
 5. Clean the symbols against the datasheet.
 6. Represent each functional variant symbol without duplicating order-code variants.
-7. Clean the footprint and embedded STEP against the datasheet.
-8. Ensure the footprint has an embedded STEP: find and embed any referenced local model, otherwise download a matching model and embed it with `pcb embed-step`.
-9. Write the primitive API, reference circuitry, or selector logic.
+7. Validate the footprint candidate against the datasheet before curating it further.
+8. Clean the footprint and embedded STEP against the datasheet.
+9. Ensure the footprint has an embedded STEP: find and embed any referenced local model, otherwise download a matching model and embed it with `pcb embed-step`.
+10. Write the primitive API, reference circuitry, or selector logic.
 
 Treat this as the default direction, not a rigid script. Focused patches may only touch one stage.
 
@@ -203,7 +204,25 @@ curl -fL "$(jq -er '.cse.step_url' "$assets_json")" \
 
 Treat downloaded artifacts as inputs to curation, not finished registry content. Verify the symbol, pins, footprint, package, datasheet, sourcing fields, and model against manufacturer evidence. Set the symbol's `Datasheet` property, embed the verified STEP, author the package `.zen` and README, and complete the build, BOM, formatting, and sourceability checks below.
 
-If trusted footprint or STEP artifacts are unavailable, report what you checked and ask before creating scratch geometry. After approved scratch work, label it as scratch/generated, cite the evidence used, render/verify it, and call out the risk in the README and completion report.
+When no provider or library footprint exists for the part, generate one from the manufacturer datasheet with the `kicad-footprint` skill. Copy its workspace deliverables into the package directory: `candidate.kicad_mod` becomes `<footprint>.kicad_mod`, and `generator-input.yaml` becomes `<footprint>.yaml` beside it — same stem, same directory. The YAML carries the provenance and the generator version, and it is what makes the footprint editable at the source rather than by patching S-expressions.
+
+### Footprint Validation
+
+Validate every footprint candidate against the manufacturer datasheet before curating it. A provider offering it for this MPN is not evidence that it matches the part, and neither is resemblance to another footprint.
+
+Resolve the part first — manufacturer, exact MPN including orderable suffix, package variant, and drawing code. A document is authoritative for a part only when its publisher is the part's manufacturer, or when a manufacturer document establishes a second source. A matching MPN string is not enough: commodity part numbers such as `FS8205A` and `DW01A` are used by several manufacturers, and a third-party datasheet cannot establish the geometry of a part it does not cover.
+
+Prefer the manufacturer land pattern for the exact variant, then the package drawing, then an explicitly associated JEDEC or other standard, then a documented IPC-7351 derivation from cited package limits. Only an explicit land pattern supports calling a footprint datasheet-exact; a package drawing alone supports a verified IPC derivation.
+
+Write down the required geometry before opening the candidate, then read its pads, holes, and slots and state the values you measured. Deriving the requirement from the artifact produces agreement rather than validation. KiCad's y axis points down, so a pad at negative y sits *above* the origin — check the sign before concluding anything about pin 1 or handedness.
+
+The footprint either passes or it does not. It passes when every requirement the evidence establishes is satisfied; differences in silkscreen, courtyard, text, metadata, or the 3D model do not fail it.
+
+On a pass, record the evidence on the footprint itself, in the two standard fields KiCad maintains and imported footprints leave empty. Set `Datasheet` to the document that established the geometry — usually the same part datasheet used for the symbol, since one document typically carries the pinout, the package drawing, and the land pattern, so use the same URL in both; point it at a separate document only when a separate one established the geometry, such as a standalone manufacturer package drawing or an associated JEDEC outline. Set `Description` to the package, the basis, and the fact that it passed — for example `SOT-23-5 (TI DBV0005A); validated against manufacturer land pattern`, or `16-lead LFCSP CP-16-27; IPC-7351 derivation from package drawing, validated`. Keep it to one line: this field appears in KiCad's footprint chooser, so it should read as a description that happens to carry the basis, not as a changelog.
+
+On a failure, report what you checked and ask. Say whether the evidence contradicts the footprint or was insufficient to establish what the footprint must be, since that decides whether the next step is another source, a generated footprint, or better evidence. Do not substitute a generated footprint for one that failed validation without asking.
+
+If a trusted STEP model is unavailable, report what you checked and ask before creating scratch geometry. After approved scratch work, label it as scratch/generated, cite the evidence used, render/verify it, and call out the risk in the README and completion report.
 
 Upgrade imported KiCad files before editing. Keep one verified model transform before embedding because `pcb embed-step` rewrites every model reference.
 
@@ -226,11 +245,14 @@ components/<Manufacturer>/<NAME>/
 ├── <reference-design>.zen       # optional additional reference designs
 ├── <NAME>.kicad_sym
 ├── <NAME or footprint>.kicad_mod
+├── <NAME or footprint>.yaml     # generator input; same stem as the .kicad_mod; only for a generated footprint
 ├── pcb.toml
 └── README.md
 ```
 
-Include a real `.kicad_mod`; note whether it is datasheet-exact, KiCad-stock-derived, vendor-derived, or intentionally adjusted.
+Include a real `.kicad_mod`. Note in its `Description` field whether it is datasheet-exact, KiCad-stock-derived, vendor-derived, or intentionally adjusted; footprint facts belong on the footprint.
+
+A generated footprint also carries its `kicad-footprint` generator input beside it, renamed from the skill's workspace `generator-input.yaml` to share the footprint's stem (`Foo.kicad_mod` → `Foo.yaml` in the same package directory). Keep it: the geometry cannot be recovered from the footprint file, because several generator families and several sets of declared dimensions produce identical lands, and the file does not distinguish a declared value from a generator default. Without the input, the next change to that footprint means re-deriving it from the datasheet or editing copper by hand. Downloaded and stock footprints have no generator input and do not gain one.
 
 Every top-level `.zen` file in a directory containing `pcb.toml` is a public package entrypoint. Each should therefore represent a coherent primitive component or reusable subschematic/reference design with a complete public API. A package may contain multiple entrypoints when one curated part/family has multiple useful datasheet-backed application circuits; avoid thin local wrappers that only re-export another `.zen`.
 
@@ -258,7 +280,7 @@ The `.zen` docstring is the design document. It should explain:
 - exact IC/physical package or family and selector behavior
 - operating envelope, interfaces, configs, and assumptions
 - included support circuitry vs integrator-owned circuitry
-- evidence for important choices, footprint notes, and sourceability compromises
+- evidence for important choices and sourceability compromises
 
 Capture the facts that drive the circuit:
 
@@ -320,7 +342,7 @@ pcb fmt components/<Manufacturer>/<NAME>
 Before finishing a component package, check the expected completion points:
 
 - high-quality symbol, following `kicad-symbol`
-- accurate footprint against trusted package data
+- accurate footprint against trusted package data, with its `Datasheet` and `Description` recording the validated evidence and basis
 - embedded STEP model in the footprint
 - component `.zen` with clean public `io()`s and appropriate interfaces
 - reference circuitry in the component `.zen` when warranted

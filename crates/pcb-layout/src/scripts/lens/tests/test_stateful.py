@@ -16,34 +16,37 @@ Run with: pytest -v test_stateful.py
 Requires: hypothesis>=6.0
 """
 
-from hypothesis import settings, note
+from __future__ import annotations
+
+from typing import ClassVar
+
+from hypothesis import note, settings
 from hypothesis import strategies as st
 from hypothesis.stateful import (
-    RuleBasedStateMachine,
-    rule,
-    invariant,
-    initialize,
     Bundle,
+    RuleBasedStateMachine,
+    initialize,
+    invariant,
+    rule,
 )
 
+from ..changeset import build_sync_changeset
+from ..lens import adapt_complement
 from ..types import (
+    BoardComplement,
+    BoardView,
     EntityId,
-    Position,
-    FootprintView,
     FootprintComplement,
+    FootprintView,
     GroupView,
     NetView,
-    BoardView,
-    BoardComplement,
+    Position,
 )
-from ..lens import adapt_complement
-from ..changeset import build_sync_changeset
 from .strategies import (
-    entity_path_strategy,
     FPID_POOL,
     VALUE_POOL,
+    entity_path_strategy,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Common Helpers
@@ -58,9 +61,9 @@ def derive_groups_from_footprints(footprints: dict) -> dict:
     not just direct children.
     """
     groups = {}
-    fp_paths = {fp_id.path for fp_id in footprints.keys()}
+    fp_paths = {fp_id.path for fp_id in footprints}
 
-    for fp_id in footprints.keys():
+    for fp_id in footprints:
         parent = fp_id.path.parent()
         while parent and parent.segments:
             # Skip if this parent path equals a footprint path (NoLeafGroups)
@@ -73,7 +76,7 @@ def derive_groups_from_footprints(footprints: dict) -> dict:
                 # Members are all descendant footprints (not just direct children)
                 member_ids = [
                     other_id
-                    for other_id in footprints.keys()
+                    for other_id in footprints
                     if parent.is_ancestor_of(other_id.path)
                 ]
                 # Only create group if it has at least 2 members (skip wrappers)
@@ -369,7 +372,7 @@ class PadNetSourceMachine(RuleBasedStateMachine):
     - Adding new connections is reflected in view
     """
 
-    NET_POOL = ["VCC", "GND", "SDA", "SCL", "NET1", "NET2"]
+    NET_POOL: ClassVar[list] = ["VCC", "GND", "SDA", "SCL", "NET1", "NET2"]
 
     def __init__(self):
         super().__init__()
@@ -468,7 +471,7 @@ class PadNetSourceMachine(RuleBasedStateMachine):
         )
 
         # Verify all footprints have complements
-        for entity_id in new_view.footprints.keys():
+        for entity_id in new_view.footprints:
             assert entity_id in new_complement.footprints
 
         self.complements = dict(new_complement.footprints)

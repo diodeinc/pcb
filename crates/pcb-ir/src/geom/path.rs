@@ -2,8 +2,9 @@ use kurbo::{BezPath, Cap, Join, PathEl, Stroke, StrokeOpts};
 
 use crate::geom::arc::Arc;
 use crate::geom::bbox::BBox;
+use crate::geom::pattern::{StrokePatternMark, stroke_pattern_marks};
 use crate::geom::point::Point;
-use crate::geom::style::{LineCap, LineJoin};
+use crate::geom::style::{LineCap, LineJoin, LinePattern};
 use crate::geom::tol;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -88,7 +89,7 @@ impl PathCmd {
 ///
 /// This is the detached form of an arena [`crate::geom::Contour`] record, used
 /// to move contours between documents and geometry passes.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ContourBuf {
     pub bbox: BBox,
     pub cmds: Vec<PathCmd>,
@@ -363,6 +364,7 @@ pub struct StrokeToFillStyle {
     pub width: f64,
     pub line_cap: LineCap,
     pub line_join: LineJoin,
+    pub pattern: LinePattern,
 }
 
 impl StrokeToFillStyle {
@@ -371,13 +373,19 @@ impl StrokeToFillStyle {
             width,
             line_cap,
             line_join,
+            pattern: LinePattern::Solid,
         }
     }
 }
 
 impl From<crate::geom::style::StrokeStyle> for StrokeToFillStyle {
     fn from(stroke: crate::geom::style::StrokeStyle) -> Self {
-        Self::new(stroke.width, stroke.cap, stroke.join)
+        Self {
+            width: stroke.width,
+            line_cap: stroke.cap,
+            line_join: stroke.join,
+            pattern: stroke.pattern,
+        }
     }
 }
 
@@ -393,6 +401,47 @@ pub fn stroke_to_fill(
     if style.width <= 0.0 {
         return None;
     }
+
+    if matches!(style.pattern, LinePattern::Solid | LinePattern::Erase) {
+        return solid_stroke_to_fill(contours, style);
+    }
+
+    let solid_style = StrokeToFillStyle {
+        pattern: LinePattern::Solid,
+        ..style
+    };
+    let mut out = Vec::new();
+    for contour in contours {
+        let segments = contour.segments().collect::<Vec<_>>();
+        for mark in stroke_pattern_marks(&segments, style.pattern, style.width) {
+            match mark {
+                StrokePatternMark::Dash(segments) => {
+                    let Some(contour) = contour_from_segments(&segments) else {
+                        continue;
+                    };
+                    if let Some(mut contours) = solid_stroke_to_fill(&[contour], solid_style) {
+                        out.append(&mut contours);
+                    }
+                }
+                StrokePatternMark::Dot(at) => {
+                    let Some(dot) = crate::geom::shapes::circle(style.width) else {
+                        continue;
+                    };
+                    out.push(transform_cmds(
+                        dot.cmds,
+                        crate::geom::Affine2::translation(at),
+                    ));
+                }
+            }
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+fn solid_stroke_to_fill(
+    contours: &[ContourBuf],
+    style: StrokeToFillStyle,
+) -> Option<Vec<ContourBuf>> {
     let source = contours_to_kurbo(contours);
     if source.elements().is_empty() {
         return None;
@@ -418,6 +467,29 @@ pub fn stroke_to_fill(
         }
     }
     (!out.is_empty()).then_some(out)
+}
+
+fn contour_from_segments(segments: &[Segment]) -> Option<ContourBuf> {
+    let first = segments.first()?;
+    let mut current = first.start();
+    let mut cmds = vec![PathCmd::move_to(current)];
+    for segment in segments {
+        if current != segment.start() {
+            current = segment.start();
+            cmds.push(PathCmd::move_to(current));
+        }
+        match *segment {
+            Segment::Line { end, .. } => cmds.push(PathCmd::line_to(end)),
+            Segment::Arc(arc) => {
+                cmds.push(PathCmd::arc_to(arc.end, arc.center, arc.clockwise));
+            }
+            Segment::Cubic { c1, c2, end, .. } => {
+                cmds.push(PathCmd::cubic_to(c1, c2, end));
+            }
+        }
+        current = segment.end();
+    }
+    Some(ContourBuf::new(cmds))
 }
 
 pub(crate) fn contours_to_kurbo(contours: &[ContourBuf]) -> BezPath {
@@ -610,6 +682,26 @@ mod tests {
                 .cmds
                 .last()
                 .is_some_and(|cmd| cmd.op == PathOp::Close)
+        }));
+    }
+
+    #[test]
+    fn stroke_to_fill_expands_phantom_pattern_with_dot_flashes() {
+        let source = vec![line_contour(Point::new(0.0, 0.0), Point::new(20.0, 0.0))];
+        let mut style = StrokeToFillStyle::new(1.0, LineCap::Round, LineJoin::Round);
+        style.pattern = LinePattern::Phantom;
+
+        let fill = stroke_to_fill(&source, style).expect("pattern should expand to fill geometry");
+        let bboxes = fill.iter().map(|contour| contour.bbox).collect::<Vec<_>>();
+
+        assert_eq!(fill.len(), 4);
+        assert!(
+            bboxes.iter().any(|bbox| {
+                (bbox.min.x - 8.0).abs() <= 1e-9 && (bbox.max.x - 9.0).abs() <= 1e-9
+            })
+        );
+        assert!(bboxes.iter().any(|bbox| {
+            (bbox.min.x - 11.0).abs() <= 1e-9 && (bbox.max.x - 12.0).abs() <= 1e-9
         }));
     }
 
