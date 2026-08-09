@@ -4,10 +4,8 @@ use assert_fs::prelude::*;
 use pcb_layout::process_layout;
 use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::Diagnostics;
-use serial_test::serial;
 
-mod helpers;
-use helpers::*;
+use crate::helpers::*;
 
 /// Test that FPID changes (footprint type changes) result in the footprint being replaced
 /// with the new geometry.
@@ -23,7 +21,6 @@ use helpers::*;
 /// - Resets field positions (new geometry may be different size)
 #[cfg(not(target_os = "windows"))]
 #[test]
-#[serial]
 fn test_fpid_change_replaces_footprint_geometry() -> Result<()> {
     // Create a temp directory and copy the test resources
     let temp = TempDir::new()?.into_persistent();
@@ -158,7 +155,6 @@ fn test_fpid_change_replaces_footprint_geometry() -> Result<()> {
 /// Test that FPID change preserves the footprint position.
 #[cfg(not(target_os = "windows"))]
 #[test]
-#[serial]
 fn test_fpid_change_preserves_position() -> Result<()> {
     // Create a temp directory and copy the test resources
     let temp = TempDir::new()?.into_persistent();

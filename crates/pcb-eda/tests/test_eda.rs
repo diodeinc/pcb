@@ -1,9 +1,26 @@
-mod test_utils;
-
-use test_utils::setup_symbol;
-
 use pcb_eda::{Part, Symbol, SymbolLibrary};
 use std::collections::{BTreeSet, HashMap};
+use std::fs;
+use std::path::Path;
+
+fn setup_symbol(name: &str) -> Symbol {
+    let name_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/resources/kicad")
+        .join(name);
+    let lib_path = fs::read_dir(&name_dir)
+        .expect("Failed to read component directory")
+        .filter_map(Result::ok)
+        .find(|entry| {
+            entry
+                .path()
+                .extension()
+                .is_some_and(|ext| ext == "kicad_sym")
+        })
+        .map(|entry| entry.path())
+        .unwrap_or_else(|| panic!("Could not find .kicad_sym file for {name}"));
+
+    Symbol::from_file(&lib_path).unwrap()
+}
 
 fn test_symbol_property(symbol_name: &str, property: impl Fn(&Symbol) -> String, expected: &str) {
     let symbol = setup_symbol(symbol_name);

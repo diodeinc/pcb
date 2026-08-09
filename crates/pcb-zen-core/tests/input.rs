@@ -1,6 +1,3 @@
-#[macro_use]
-mod common;
-
 use crate::common::{InMemoryFileProvider, eval_zen, stdlib_test_files, test_resolution};
 use pcb_zen_core::lang::error::CategorizedDiagnostic;
 use pcb_zen_core::lang::io_direction::IoDirection;
@@ -1086,7 +1083,9 @@ fn errors_for_unspecified_non_generic_bom_component() {
         .collect::<Vec<_>>()
         .join("\n");
 
-    insta::assert_snapshot!(output);
+    insta::with_settings!({ prepend_module_to_snapshot => false }, {
+        insta::assert_snapshot!("input__errors_for_unspecified_non_generic_bom_component", output);
+    });
 }
 
 #[test]

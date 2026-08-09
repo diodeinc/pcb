@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 use common::TestProject;
 
 // TODO: Debug why the path filtering doesn't work on Windows for this specific test.

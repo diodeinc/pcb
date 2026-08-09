@@ -4231,7 +4231,6 @@ name = "pcb-eda"
 version = "0.4.26"
 dependencies = [
  "anyhow",
- "env_logger",
  "pcb-sexpr",
  "regex",
  "serde",
@@ -4334,13 +4333,10 @@ dependencies = [
  "rust_decimal",
  "serde",
  "serde_json",
- "serial_test",
  "starlark",
  "tempfile",
  "thiserror 2.0.19",
  "uuid",
- "walkdir",
- "zip",
 ]
 
 [[package]]

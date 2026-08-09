@@ -4,7 +4,7 @@
 //! it should be resolved via URL arithmetic and the package dependency system rather
 //! than being rejected outright.
 
-mod common;
+use crate::common;
 
 use common::InMemoryFileProvider;
 use pcb_zen_core::config::DependencyTable;

@@ -10,6 +10,11 @@ documentation = "https://docs.rs/starlark"
 categories = ["parser-implementations", "development-tools"]
 keywords = ["starlark", "skylark", "language", "interpreter"]
 license = "Apache-2.0"
+autotests = false
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
 
 [dependencies]
 dupe = { workspace = true }
@@ -55,7 +60,6 @@ termtree = { workspace = true }
 path = "src/lib.rs"
 
 [dev-dependencies]
-tempfile = { workspace = true }
 insta = { workspace = true }
 serial_test = { workspace = true }
 regex = { workspace = true }

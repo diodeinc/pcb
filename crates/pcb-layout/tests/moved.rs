@@ -3,10 +3,8 @@ use assert_fs::TempDir;
 use assert_fs::prelude::*;
 use pcb_layout::process_layout;
 use pcb_zen_core::{DefaultFileProvider, Diagnostics};
-use serial_test::serial;
 
-mod helpers;
-use helpers::*;
+use crate::helpers::*;
 
 /// Test that moved() renames are applied correctly and preserve position.
 ///
@@ -17,7 +15,6 @@ use helpers::*;
 /// 4. Verifies position is preserved
 #[cfg(not(target_os = "windows"))]
 #[test]
-#[serial]
 fn test_moved_renames_path_and_preserves_position() -> Result<()> {
     let temp = TempDir::new()?.into_persistent();
     let resource_path = get_resource_path("moved");

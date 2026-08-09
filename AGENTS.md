@@ -9,7 +9,8 @@
 
 ## Development Workflow
 
-- `cargo test -p <crate>` — run tests for one crate.
+- `cargo nextest run -p <crate>` — run tests for one crate.
+- `cargo test --doc -p <crate>` — run doctests, which nextest does not run.
 - `cargo fmt` — format Rust code.
 - `uv run pytest crates/pcb-layout/src/scripts/lens/tests/ -v` — run the Python layout-lens tests when changing `crates/pcb-layout/src/scripts/lens/`.
 
@@ -47,6 +48,6 @@ Never run `cargo insta accept` without explicit user approval.
 
 ## Verification
 
-- Run the narrowest relevant check first: usually `cargo test -p <crate>`, a focused `cargo run -p pcbc -- ...` command, or the layout-lens pytest command above.
+- Run the narrowest relevant check first: usually `cargo nextest run -p <crate>`, a focused `cargo run -p pcbc -- ...` command, or the layout-lens pytest command above.
 - Do not run full-workspace checks after every small edit.
 - If snapshot tests change, call that out and leave snapshot acceptance to the user.

@@ -1,7 +1,7 @@
 use pcb_zen_core::lang::error::CategorizedDiagnostic;
 use pcb_zen_core::{DiagnosticsPass, SortPass};
 
-mod common;
+use crate::common;
 
 fn eval_ok(source: &str) -> pcb_zen_core::WithDiagnostics<pcb_zen_core::lang::eval::EvalOutput> {
     let mut result = common::eval_zen(vec![("test.zen".to_string(), source.to_string())]);

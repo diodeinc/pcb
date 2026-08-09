@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 use common::TestProject;
 
 /// Test that nets created in a parent module and passed to a child module

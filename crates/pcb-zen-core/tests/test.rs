@@ -1,5 +1,4 @@
-#[macro_use]
-mod common;
+use crate::common;
 
 snapshot_eval!(net_passing, {
     "MyComponent.zen" => r#"

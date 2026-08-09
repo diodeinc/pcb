@@ -468,7 +468,14 @@ macro_rules! snapshot_eval {
                 .replace_all(&output, r#""net_id": Number(<ID>)"#)
                 .to_string();
 
-            insta::assert_snapshot!(output);
+            let module = module_path!()
+                .rsplit("::")
+                .next()
+                .expect("snapshot test must have a module");
+            let snapshot_name = format!("{module}__{}", stringify!($name));
+            insta::with_settings!({ prepend_module_to_snapshot => false }, {
+                insta::assert_snapshot!(snapshot_name, output);
+            });
         }
     };
 }
@@ -515,7 +522,14 @@ macro_rules! snapshot_netlist_eval {
                 );
             }
 
-            insta::assert_snapshot!(output);
+            let module = module_path!()
+                .rsplit("::")
+                .next()
+                .expect("snapshot test must have a module");
+            let snapshot_name = format!("{module}__{}", stringify!($name));
+            insta::with_settings!({ prepend_module_to_snapshot => false }, {
+                insta::assert_snapshot!(snapshot_name, output);
+            });
         }
     };
 }

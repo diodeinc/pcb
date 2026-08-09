@@ -1,6 +1,3 @@
-#[macro_use]
-mod common;
-
 snapshot_netlist_eval!(part_not_overwritten_by_prop, {
     "test.zen" => r#"
 P1 = Net()

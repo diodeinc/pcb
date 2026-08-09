@@ -1,6 +1,6 @@
 use pcb_zen_core::{DiagnosticsPass, SortPass};
 
-mod common;
+use crate::common;
 
 fn eval_to_schematic(
     files: std::collections::HashMap<String, String>,

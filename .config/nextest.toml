@@ -5,3 +5,14 @@
 fail-fast = false
 failure-output = "immediate-final"
 status-level = "skip"
+
+# Start the longest tests first.
+[[profile.default.overrides]]
+filter = '''
+test(test_publish_board_full) |
+test(test_publish_board_simple_workspace) |
+test(test_testcase1_full) |
+test(test_testcase1_fabrication) |
+test(automatic_balancing_regions_scope_panel_fiducials)
+'''
+priority = 100

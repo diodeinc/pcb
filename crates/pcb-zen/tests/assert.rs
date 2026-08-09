@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 use common::TestProject;
 
 /// Error case – evaluating `error()` should propagate the message.

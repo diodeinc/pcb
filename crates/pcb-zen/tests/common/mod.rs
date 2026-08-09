@@ -223,8 +223,12 @@ macro_rules! star_snapshot {
 
         insta::with_settings!({
             filters => filters,
+            prepend_module_to_snapshot => false,
         }, {
-            insta::assert_snapshot!(snapshot_output);
+            insta::assert_snapshot!(
+                $crate::insta_snapshot_name!(),
+                snapshot_output,
+            );
         });
     }};
 }

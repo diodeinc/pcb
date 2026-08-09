@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 use common::TestProject;
 
 use pcb_sim::gen_sim;
@@ -72,8 +72,9 @@ macro_rules! sim_snapshot {
 
         insta::with_settings!({
             filters => filters,
+            prepend_module_to_snapshot => false,
         }, {
-            insta::assert_snapshot!(result);
+            insta::assert_snapshot!(crate::insta_snapshot_name!(), result);
         });
     }};
 }

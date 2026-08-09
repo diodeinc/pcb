@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 use common::TestProject;
 
 use pcb_sch::{AttributeValue, InstanceKind, bom::Alternative};

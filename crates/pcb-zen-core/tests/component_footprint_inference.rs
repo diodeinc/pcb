@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 
 use common::InMemoryFileProvider;
 use pcb_zen_core::EvalContext;

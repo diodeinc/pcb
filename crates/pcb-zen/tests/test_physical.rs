@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 use common::TestProject;
 use insta::assert_snapshot;
 
@@ -63,5 +63,7 @@ Component(
     let output = result.output.unwrap();
     let stdout = output.print_output.join("\n");
 
-    assert_snapshot!(stdout);
+    insta::with_settings!({ prepend_module_to_snapshot => false }, {
+        assert_snapshot!(crate::insta_snapshot_name!(), stdout);
+    });
 }

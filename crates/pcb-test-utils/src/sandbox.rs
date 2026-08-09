@@ -58,9 +58,16 @@ struct RepoRewrite {
 /// Macro to create a snapshot assertion with a clean interface
 #[macro_export]
 macro_rules! assert_snapshot {
-    ($name:expr, $content:expr) => {
-        insta::assert_snapshot!($name, $content)
-    };
+    ($name:expr, $content:expr) => {{
+        let module_path = module_path!();
+        let module = module_path
+            .strip_prefix("integration::")
+            .unwrap_or(module_path);
+        let snapshot_name = format!("{}__{}", module.replace("::", "__"), $name);
+        insta::with_settings!({ prepend_module_to_snapshot => false }, {
+            insta::assert_snapshot!(snapshot_name, $content);
+        });
+    }};
 }
 
 pub struct Sandbox {

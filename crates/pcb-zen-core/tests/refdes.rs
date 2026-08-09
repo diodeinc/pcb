@@ -1,5 +1,4 @@
-#[macro_use]
-mod common;
+use crate::common;
 
 use pcb_sch::InstanceKind;
 use std::collections::HashMap;

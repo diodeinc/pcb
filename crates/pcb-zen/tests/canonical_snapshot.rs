@@ -54,15 +54,20 @@ macro_rules! canonical_snapshot {
     ($dir:expr) => {{
         let entries = list_canonical_tar_entries($dir.root(), None).unwrap();
         let content_hash = compute_content_hash_from_dir($dir.root()).unwrap();
-        insta::assert_snapshot!(format!(
-            "entries:\n{}\n\nhash: {}",
-            if entries.is_empty() {
-                "(none)".to_string()
-            } else {
-                entries.join("\n")
-            },
-            content_hash
-        ));
+        insta::with_settings!({ prepend_module_to_snapshot => false }, {
+            insta::assert_snapshot!(
+                crate::insta_snapshot_name!(),
+                format!(
+                    "entries:\n{}\n\nhash: {}",
+                    if entries.is_empty() {
+                        "(none)".to_string()
+                    } else {
+                        entries.join("\n")
+                    },
+                    content_hash
+                ),
+            );
+        });
     }};
 }
 
@@ -89,14 +94,16 @@ description = "An example package"
 "#,
     );
 
-    insta::assert_snapshot!(format!(
-        "simple: {simple}
+    insta::with_settings!({ prepend_module_to_snapshot => false }, {
+        insta::assert_snapshot!(crate::insta_snapshot_name!(), format!(
+            "simple: {simple}
 empty: {empty}
 no_newline: {no_newline}
 extra_spaces: {extra_spaces}
 with_newline: {with_newline}
 full: {full}"
-    ));
+        ));
+    });
 }
 
 #[test]
@@ -232,7 +239,9 @@ fn deterministic_hashing() {
         "should not have leading ./"
     );
 
-    insta::assert_snapshot!(hash1);
+    insta::with_settings!({ prepend_module_to_snapshot => false }, {
+        insta::assert_snapshot!(crate::insta_snapshot_name!(), hash1);
+    });
 }
 
 #[test]
@@ -375,7 +384,9 @@ fn single_file_hashing() {
     );
 
     // Snapshot the hashes for stability
-    insta::assert_snapshot!(format!(
-        "test.txt: {hash1}\nother.txt: {hash2}\nsame_content_a.txt: {hash_a}\nsame_content_b.txt: {hash_b}"
-    ));
+    insta::with_settings!({ prepend_module_to_snapshot => false }, {
+        insta::assert_snapshot!(crate::insta_snapshot_name!(), format!(
+            "test.txt: {hash1}\nother.txt: {hash2}\nsame_content_a.txt: {hash_a}\nsame_content_b.txt: {hash_b}"
+        ));
+    });
 }
