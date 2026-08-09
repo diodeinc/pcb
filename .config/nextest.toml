@@ -1,25 +1,18 @@
 # Nextest configuration
 # https://nexte.st/docs/configuration/reference/
 
-nextest-version = "0.9.91"
-
 [profile.ci]
 fail-fast = false
 failure-output = "immediate-final"
 status-level = "skip"
 
-# Start the few longest tests first so they do not extend the end of the run.
+# Start the longest tests first.
 [[profile.default.overrides]]
 filter = '''
-package(pcbc) & (
-    test(release::test_publish_board_full) |
-    test(tag::test_publish_board_simple_workspace)
-)
-| package(ipc2581) & (
-    test(testcases::test_testcase1_full) |
-    test(testcases::test_testcase1_fabrication)
-)
-| package(pcb-ipc2581-tools) &
-    test(automatic_balancing_regions_scope_panel_fiducials)
+test(test_publish_board_full) |
+test(test_publish_board_simple_workspace) |
+test(test_testcase1_full) |
+test(test_testcase1_fabrication) |
+test(automatic_balancing_regions_scope_panel_fiducials)
 '''
 priority = 100
