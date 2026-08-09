@@ -357,17 +357,7 @@ def DefaultBoardConfig(
         CopperWeight("2oz"): BASE_PREDEFINED_SIZES_2OZ,
     }.get(outer_copper_weight)
 
-    if stackup == None:
-        print("Unsupported default stackup for layers: " + str(layers))
-        return None
-    if netclasses == None:
-        print("Unsupported default netclasses for layers: " + str(layers))
-        return None
-    if constraints == None:
-        print("Unsupported default constraints for copper weight: " + outer_copper_weight.value)
-        return None
-    if predefined_sizes == None:
-        print("Unsupported predefined sizes for copper weight: " + outer_copper_weight.value)
+    if stackup == None or netclasses == None or constraints == None or predefined_sizes == None:
         return None
 
     return BoardConfig(
