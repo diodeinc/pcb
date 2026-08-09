@@ -1,0 +1,700 @@
+//! Comparison of independently reduced Zener and KiCad connectivity graphs.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use pcb_sch::Schematic;
+
+use crate::{
+    SchDocument, SymbolSlotKey,
+    connectivity::{
+        ComponentIdentity, ComponentOrigin, ConnectionGroup, ConnectionOrigin, ConnectivityGraph,
+        IslandRef, SymbolLocation, Terminal,
+    },
+};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ComponentPlacement {
+    Missing,
+    Placed(SymbolLocation),
+    Duplicate(Vec<SymbolLocation>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ComponentAnalysis {
+    pub slot: SymbolSlotKey,
+    pub placement: ComponentPlacement,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetAnalysis {
+    pub name: String,
+    pub expected_terminals: Vec<Terminal>,
+    pub missing_terminals: Vec<Terminal>,
+    pub islands: Vec<IslandRef>,
+    pub connected_islands: Vec<Vec<IslandRef>>,
+}
+
+impl NetAnalysis {
+    pub fn is_disconnected(&self) -> bool {
+        self.connected_islands.len() > 1 || !self.missing_terminals.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SchematicIssue {
+    MissingSymbol {
+        slot: SymbolSlotKey,
+    },
+    DuplicateSymbol {
+        slot: SymbolSlotKey,
+        locations: Vec<SymbolLocation>,
+    },
+    MismatchedSymbolId {
+        slot: SymbolSlotKey,
+        location: SymbolLocation,
+        expected_symbol_id: String,
+    },
+    UnexpectedSymbol {
+        slot: SymbolSlotKey,
+        locations: Vec<SymbolLocation>,
+    },
+    UnboundSymbol {
+        location: SymbolLocation,
+    },
+    DisconnectedNet {
+        net_name: String,
+        islands: Vec<IslandRef>,
+        missing_terminals: Vec<Terminal>,
+    },
+    UnexpectedNet {
+        net_name: String,
+        islands: Vec<IslandRef>,
+    },
+    UnexpectedConnection {
+        islands: Vec<IslandRef>,
+        terminals: Vec<Terminal>,
+    },
+    Shorted {
+        islands: Vec<IslandRef>,
+        net_names: BTreeSet<String>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct ConnectivityAnalysis {
+    pub components: BTreeMap<SymbolSlotKey, ComponentAnalysis>,
+    pub nets: BTreeMap<String, NetAnalysis>,
+    issues: Vec<SchematicIssue>,
+}
+
+impl ConnectivityAnalysis {
+    pub fn issues(&self) -> &[SchematicIssue] {
+        &self.issues
+    }
+
+    pub fn is_equivalent(&self) -> bool {
+        self.issues.is_empty()
+    }
+}
+
+/// Reduce both sources independently, then compare their connectivity graphs.
+pub fn analyze_schematic(
+    document: &SchDocument,
+    netlist: &Schematic,
+) -> anyhow::Result<ConnectivityAnalysis> {
+    Ok(analyze_connectivity(
+        &ConnectivityGraph::from_zener(netlist)?,
+        &ConnectivityGraph::from_kicad(document)?,
+    ))
+}
+
+/// Compare an expected logical graph with an observed physical graph.
+pub fn analyze_connectivity(
+    expected: &ConnectivityGraph,
+    observed: &ConnectivityGraph,
+) -> ConnectivityAnalysis {
+    let components = analyze_components(expected, observed);
+    let nets = analyze_nets(expected, observed);
+    let issues = collect_issues(expected, observed, &components, &nets);
+    ConnectivityAnalysis {
+        components,
+        nets,
+        issues,
+    }
+}
+
+fn analyze_components(
+    expected: &ConnectivityGraph,
+    observed: &ConnectivityGraph,
+) -> BTreeMap<SymbolSlotKey, ComponentAnalysis> {
+    let expected_slots = expected_component_slots(expected);
+    let observed_locations = observed_component_locations(observed);
+    expected_slots
+        .into_iter()
+        .map(|slot| {
+            let locations = observed_locations.get(&slot).cloned().unwrap_or_default();
+            let placement = match locations.as_slice() {
+                [] => ComponentPlacement::Missing,
+                [location] => ComponentPlacement::Placed(location.clone()),
+                _ => ComponentPlacement::Duplicate(locations),
+            };
+            (slot.clone(), ComponentAnalysis { slot, placement })
+        })
+        .collect()
+}
+
+fn expected_component_slots(graph: &ConnectivityGraph) -> BTreeSet<SymbolSlotKey> {
+    graph
+        .components
+        .iter()
+        .filter(|component| component.origin == ComponentOrigin::Zener)
+        .filter_map(|component| component.managed_slot.clone())
+        .collect()
+}
+
+fn observed_component_locations(
+    graph: &ConnectivityGraph,
+) -> BTreeMap<SymbolSlotKey, Vec<SymbolLocation>> {
+    let mut locations = BTreeMap::<SymbolSlotKey, Vec<SymbolLocation>>::new();
+    for component in &graph.components {
+        let ComponentOrigin::KiCad(location) = &component.origin else {
+            continue;
+        };
+        let Some(slot) = &component.managed_slot else {
+            continue;
+        };
+        locations
+            .entry(slot.clone())
+            .or_default()
+            .push(location.clone());
+    }
+    for found in locations.values_mut() {
+        found.sort();
+    }
+    locations
+}
+
+fn analyze_nets(
+    expected: &ConnectivityGraph,
+    observed: &ConnectivityGraph,
+) -> BTreeMap<String, NetAnalysis> {
+    expected
+        .groups
+        .iter()
+        .filter_map(|expected_group| {
+            let name = logical_name(expected_group)?;
+            let matching_groups = observed
+                .groups
+                .iter()
+                .filter(|observed_group| groups_match(expected_group, observed_group))
+                .collect::<Vec<_>>();
+            let missing_terminals = expected_group
+                .terminals
+                .iter()
+                .filter(|expected_terminal| {
+                    !matching_groups.iter().any(|observed_group| {
+                        observed_group.terminals.iter().any(|observed_terminal| {
+                            terminals_match(expected_terminal, observed_terminal)
+                        })
+                    })
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            let connected_islands = matching_groups
+                .iter()
+                .map(|group| kicad_islands(group))
+                .filter(|islands| !islands.is_empty())
+                .collect::<Vec<_>>();
+            let islands = connected_islands.iter().flatten().cloned().collect();
+            Some((
+                name.to_string(),
+                NetAnalysis {
+                    name: name.to_string(),
+                    expected_terminals: expected_group.terminals.iter().cloned().collect(),
+                    missing_terminals,
+                    islands,
+                    connected_islands,
+                },
+            ))
+        })
+        .collect()
+}
+
+fn groups_match(expected: &ConnectionGroup, observed: &ConnectionGroup) -> bool {
+    !expected.names.is_disjoint(&observed.names)
+        || expected.terminals.iter().any(|expected_terminal| {
+            observed
+                .terminals
+                .iter()
+                .any(|observed_terminal| terminals_match(expected_terminal, observed_terminal))
+        })
+}
+
+fn terminals_match(expected: &Terminal, observed: &Terminal) -> bool {
+    match (expected, observed) {
+        (
+            Terminal::ComponentPin {
+                component: expected_component,
+                pin_name: expected_name,
+                pin_numbers: expected_numbers,
+            },
+            Terminal::ComponentPin {
+                component: observed_component,
+                pin_name: observed_name,
+                pin_numbers: observed_numbers,
+            },
+        ) => {
+            matches!(
+                (expected_component, observed_component),
+                (
+                    ComponentIdentity::ManagedPath(expected_path),
+                    ComponentIdentity::ManagedPath(observed_path),
+                ) if expected_path == observed_path
+            ) && ((!expected_name.is_empty()
+                && !observed_name.is_empty()
+                && expected_name == observed_name)
+                || !expected_numbers.is_disjoint(observed_numbers))
+        }
+        (
+            Terminal::InterfacePort { name: expected },
+            Terminal::InterfacePort { name: observed },
+        ) => expected == observed,
+        _ => false,
+    }
+}
+
+fn collect_issues(
+    expected: &ConnectivityGraph,
+    observed: &ConnectivityGraph,
+    components: &BTreeMap<SymbolSlotKey, ComponentAnalysis>,
+    nets: &BTreeMap<String, NetAnalysis>,
+) -> Vec<SchematicIssue> {
+    let mut issues = Vec::new();
+    collect_component_issues(expected, observed, components, &mut issues);
+    collect_connection_issues(expected, observed, nets, &mut issues);
+    issues
+}
+
+fn collect_component_issues(
+    expected: &ConnectivityGraph,
+    observed: &ConnectivityGraph,
+    components: &BTreeMap<SymbolSlotKey, ComponentAnalysis>,
+    issues: &mut Vec<SchematicIssue>,
+) {
+    for component in components.values() {
+        match &component.placement {
+            ComponentPlacement::Missing => issues.push(SchematicIssue::MissingSymbol {
+                slot: component.slot.clone(),
+            }),
+            ComponentPlacement::Duplicate(locations) => {
+                issues.push(SchematicIssue::DuplicateSymbol {
+                    slot: component.slot.clone(),
+                    locations: locations.clone(),
+                })
+            }
+            ComponentPlacement::Placed(_) => {}
+        }
+    }
+
+    let expected_slots = expected_component_slots(expected);
+    let observed_locations = observed_component_locations(observed);
+    for (slot, locations) in observed_locations {
+        if !expected_slots.contains(&slot) {
+            issues.push(SchematicIssue::UnexpectedSymbol { slot, locations });
+            continue;
+        }
+        let expected_symbol_id = slot.symbol_id();
+        for location in locations {
+            if location.symbol_id != expected_symbol_id {
+                issues.push(SchematicIssue::MismatchedSymbolId {
+                    slot: slot.clone(),
+                    location,
+                    expected_symbol_id: expected_symbol_id.clone(),
+                });
+            }
+        }
+    }
+
+    for component in &observed.components {
+        if component.managed_slot.is_none()
+            && let ComponentOrigin::KiCad(location) = &component.origin
+        {
+            issues.push(SchematicIssue::UnboundSymbol {
+                location: location.clone(),
+            });
+        }
+    }
+}
+
+fn collect_connection_issues(
+    expected: &ConnectivityGraph,
+    observed: &ConnectivityGraph,
+    nets: &BTreeMap<String, NetAnalysis>,
+    issues: &mut Vec<SchematicIssue>,
+) {
+    for observed_group in &observed.groups {
+        let matching_expected = expected
+            .groups
+            .iter()
+            .filter(|expected_group| groups_match(expected_group, observed_group))
+            .collect::<Vec<_>>();
+        let matching_names = matching_expected
+            .iter()
+            .filter_map(|group| logical_name(group).map(str::to_string))
+            .collect::<BTreeSet<_>>();
+        if matching_names.len() > 1 {
+            issues.push(SchematicIssue::Shorted {
+                islands: kicad_islands(observed_group),
+                net_names: matching_names,
+            });
+        }
+
+        for name in &observed_group.names {
+            let accepted = matching_expected.iter().any(|group| {
+                group.names.contains(name)
+                    || group.terminals.iter().any(|terminal| {
+                        matches!(
+                            terminal,
+                            Terminal::InterfacePort { name: port_name } if port_name == name
+                        )
+                    })
+            });
+            if !accepted {
+                issues.push(SchematicIssue::UnexpectedNet {
+                    net_name: name.clone(),
+                    islands: kicad_islands(observed_group),
+                });
+            }
+        }
+
+        let unexpected_terminals = observed_group
+            .terminals
+            .iter()
+            .filter(|observed_terminal| {
+                !matching_expected.iter().any(|expected_group| {
+                    expected_group.terminals.iter().any(|expected_terminal| {
+                        terminals_match(expected_terminal, observed_terminal)
+                    })
+                })
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if !unexpected_terminals.is_empty() {
+            issues.push(SchematicIssue::UnexpectedConnection {
+                islands: kicad_islands(observed_group),
+                terminals: unexpected_terminals,
+            });
+        }
+    }
+
+    for net in nets.values().filter(|net| net.is_disconnected()) {
+        issues.push(SchematicIssue::DisconnectedNet {
+            net_name: net.name.clone(),
+            islands: net.islands.clone(),
+            missing_terminals: net.missing_terminals.clone(),
+        });
+    }
+}
+
+fn kicad_islands(group: &ConnectionGroup) -> Vec<IslandRef> {
+    group
+        .origins
+        .iter()
+        .filter_map(|origin| match origin {
+            ConnectionOrigin::KiCadIsland(island) => Some(island.clone()),
+            ConnectionOrigin::ZenerNet { .. } => None,
+        })
+        .collect()
+}
+
+fn logical_name(group: &ConnectionGroup) -> Option<&str> {
+    group.origins.iter().find_map(|origin| match origin {
+        ConnectionOrigin::ZenerNet { name } => Some(name.as_str()),
+        ConnectionOrigin::KiCadIsland(_) => None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::BTreeMap, path::Path};
+
+    use pcb_sch::{AttributeValue, Instance, InstanceRef, ModuleRef, Net};
+
+    use super::*;
+    use crate::{
+        Label, LabelKind, LabelShape, Point, Rotation, SchItem, SchPage, Symbol, SymbolDefinition,
+        SymbolField,
+    };
+
+    #[test]
+    fn reports_missing_component_slot() {
+        let module = ModuleRef::from_path(Path::new("/tmp/root.zen"), "root");
+        let mut netlist = Schematic::new();
+        netlist.add_instance(
+            InstanceRef::new(module.clone(), vec!["U1".to_string()]),
+            Instance::component(module),
+        );
+        let document = document_with_pages(vec![SchPage::new("page")]);
+
+        let analysis = analyze_schematic(&document, &netlist).unwrap();
+
+        assert!(matches!(
+            analysis.issues(),
+            [SchematicIssue::MissingSymbol { slot }] if slot.component_path() == "U1"
+        ));
+    }
+
+    #[test]
+    fn distinguishes_local_and_global_cross_page_connectivity() {
+        let netlist = netlist_with_nets(&["N1", "GND"]);
+        let mut pages = Vec::new();
+        for index in 0..2 {
+            let mut page = SchPage::new(format!("page-{index}"));
+            page.items.push(SchItem::Label(Label::new(
+                format!("local-{index}"),
+                "N1",
+                Point::new(index as f64, 0.0),
+            )));
+            let mut global = Label::new(
+                format!("global-{index}"),
+                "GND",
+                Point::new(index as f64, 10.0),
+            );
+            global.kind = LabelKind::Global {
+                shape: LabelShape::Bidirectional,
+            };
+            page.items.push(SchItem::Label(global));
+            pages.push(page);
+        }
+
+        let analysis = analyze_schematic(&document_with_pages(pages), &netlist).unwrap();
+
+        assert!(analysis.nets["N1"].is_disconnected());
+        assert!(!analysis.nets["GND"].is_disconnected());
+    }
+
+    #[test]
+    fn reports_shorts_and_unexpected_nets() {
+        let netlist = netlist_with_nets(&["N1", "N2"]);
+        let mut page = SchPage::new("page");
+        page.items.extend([
+            SchItem::Label(Label::new("a", "N1", Point::new(0.0, 0.0))),
+            SchItem::Label(Label::new("b", "N2", Point::new(0.0, 0.0))),
+            SchItem::Label(Label::new("c", "EXTRA", Point::new(10.0, 0.0))),
+        ]);
+
+        let analysis = analyze_schematic(&document_with_pages(vec![page]), &netlist).unwrap();
+
+        assert!(
+            analysis
+                .issues()
+                .iter()
+                .any(|issue| matches!(issue, SchematicIssue::Shorted { .. }))
+        );
+        assert!(analysis.issues().iter().any(
+            |issue| matches!(issue, SchematicIssue::UnexpectedNet { net_name, .. } if net_name == "EXTRA")
+        ));
+    }
+
+    #[test]
+    fn reports_an_extra_terminal_on_an_otherwise_matching_net() {
+        let terminal = |path: &str| Terminal::ComponentPin {
+            component: ComponentIdentity::ManagedPath(path.to_string()),
+            pin_name: "1".to_string(),
+            pin_numbers: BTreeSet::from(["1".to_string()]),
+        };
+        let expected = ConnectivityGraph {
+            components: Vec::new(),
+            groups: vec![ConnectionGroup {
+                names: BTreeSet::from(["N".to_string()]),
+                terminals: BTreeSet::from([terminal("U1")]),
+                origins: BTreeSet::from([ConnectionOrigin::ZenerNet {
+                    name: "N".to_string(),
+                }]),
+            }],
+        };
+        let extra = terminal("U2");
+        let observed = ConnectivityGraph {
+            components: Vec::new(),
+            groups: vec![ConnectionGroup {
+                names: BTreeSet::from(["N".to_string()]),
+                terminals: BTreeSet::from([terminal("U1"), extra.clone()]),
+                origins: BTreeSet::from([ConnectionOrigin::KiCadIsland(IslandRef {
+                    page_id: "page".to_string(),
+                    index: 0,
+                })]),
+            }],
+        };
+
+        let analysis = analyze_connectivity(&expected, &observed);
+
+        assert!(matches!(
+            analysis.issues(),
+            [SchematicIssue::UnexpectedConnection { terminals, .. }] if terminals == &[extra]
+        ));
+    }
+
+    #[test]
+    fn component_pins_match_names_to_names_or_numbers_to_numbers() {
+        let terminal = |name: &str, number: &str| Terminal::ComponentPin {
+            component: ComponentIdentity::ManagedPath("U1".to_string()),
+            pin_name: name.to_string(),
+            pin_numbers: BTreeSet::from([number.to_string()]),
+        };
+
+        assert!(terminals_match(&terminal("A", "1"), &terminal("A", "2")));
+        assert!(terminals_match(&terminal("A", "1"), &terminal("B", "1")));
+        assert!(!terminals_match(&terminal("A", "1"), &terminal("1", "2")));
+    }
+
+    #[test]
+    fn equivalent_project_has_no_issues() {
+        let netlist = netlist_with_nets(&["N1"]);
+        let mut page = SchPage::new("page");
+        page.items.push(SchItem::Label(Label::new(
+            "label",
+            "N1",
+            Point::new(0.0, 0.0),
+        )));
+
+        let analysis = analyze_schematic(&document_with_pages(vec![page]), &netlist).unwrap();
+
+        assert!(analysis.is_equivalent(), "{:?}", analysis.issues());
+    }
+
+    #[test]
+    fn root_interface_ports_map_to_their_shared_realized_net() {
+        let mut netlist = netlist_with_nets(&["REALIZED_SIG"]);
+        netlist.nets.get_mut("REALIZED_SIG").unwrap().id = 42;
+        add_root_signature_io(&mut netlist, "SIG", "REALIZED_SIG", 42);
+        add_root_signature_io(&mut netlist, "ALIAS", "REALIZED_SIG", 42);
+        let mut page = SchPage::new("page");
+        for (id, name) in [("port", "SIG"), ("alias", "ALIAS")] {
+            let mut label = Label::new(id, name, Point::new(0.0, 0.0));
+            label.kind = LabelKind::Hierarchical {
+                shape: LabelShape::Bidirectional,
+            };
+            page.items.push(SchItem::Label(label));
+        }
+
+        let analysis = analyze_schematic(&document_with_pages(vec![page]), &netlist).unwrap();
+
+        assert!(analysis.is_equivalent(), "{:?}", analysis.issues());
+    }
+
+    #[test]
+    fn invalid_root_signature_net_reference_is_an_error() {
+        let mut netlist = netlist_with_nets(&["N"]);
+        add_root_signature_io(&mut netlist, "SIG", "N", 42);
+
+        let error = analyze_schematic(&document_with_pages(vec![SchPage::new("page")]), &netlist)
+            .unwrap_err();
+
+        assert!(error.to_string().contains("references unknown net id 42"));
+    }
+
+    #[test]
+    fn power_symbols_connect_globally_across_pages() {
+        let netlist = netlist_with_nets(&["GND"]);
+        let definition = SymbolDefinition::from_kicad_symbol_sexpr(
+            r#"(symbol "power:GND"
+              (power global)
+              (symbol "GND_1_1"
+                (pin power_in line (at 0 0 0) (length 2.54)
+                  (name "GND") (number "1"))))"#,
+        )
+        .unwrap();
+        let mut document = document_with_pages(vec![SchPage::new("a"), SchPage::new("b")]);
+        for (index, page) in document.pages.iter_mut().enumerate() {
+            page.library
+                .definitions
+                .insert(definition.lib_id.clone(), definition.clone());
+            page.items.push(SchItem::Symbol(power_symbol(
+                format!("power-{index}"),
+                Point::new(index as f64, 0.0),
+            )));
+        }
+
+        let analysis = analyze_schematic(&document, &netlist).unwrap();
+
+        assert!(analysis.is_equivalent(), "{:?}", analysis.issues());
+        assert_eq!(analysis.nets["GND"].connected_islands.len(), 1);
+    }
+
+    fn document_with_pages(pages: Vec<SchPage>) -> SchDocument {
+        let root_page_ids = pages.iter().map(|page| page.id.clone()).collect();
+        SchDocument {
+            pages,
+            root_page_ids,
+        }
+    }
+
+    fn netlist_with_nets(names: &[&str]) -> Schematic {
+        let mut netlist = Schematic::new();
+        for (id, name) in names.iter().enumerate() {
+            netlist.add_net(Net {
+                kind: "Net".to_string(),
+                id: id as u64,
+                name: (*name).to_string(),
+                ports: Vec::new(),
+                properties: Default::default(),
+            });
+        }
+        netlist
+    }
+
+    fn add_root_signature_io(netlist: &mut Schematic, io_name: &str, net_name: &str, id: u64) {
+        let parameter = serde_json::json!({
+            "name": io_name,
+            "is_config": false,
+            "value": { "Net": { "id": id, "name": net_name, "properties": {} } },
+            "default_value": { "Net": { "id": id, "name": io_name, "properties": {} } }
+        });
+        if let Some(root_ref) = netlist.root_ref.clone() {
+            let root = netlist.instances.get_mut(&root_ref).unwrap();
+            let Some(AttributeValue::Json(signature)) = root.attributes.get_mut("__signature")
+            else {
+                panic!("root signature");
+            };
+            signature["parameters"]
+                .as_array_mut()
+                .unwrap()
+                .push(parameter);
+            return;
+        }
+
+        let module = ModuleRef::from_path(Path::new("/tmp/root.zen"), "root");
+        let root_ref = InstanceRef::new(module.clone(), Vec::new());
+        let mut root = Instance::module(module);
+        root.attributes.insert(
+            "__signature".to_string(),
+            AttributeValue::Json(serde_json::json!({
+                "parameters": [parameter]
+            })),
+        );
+        netlist.root_ref = Some(root_ref.clone());
+        netlist.add_instance(root_ref, root);
+    }
+
+    fn power_symbol(id: String, at: Point) -> Symbol {
+        Symbol {
+            id,
+            lib_id: "power:GND".to_string(),
+            unit: 1,
+            body_style: 1,
+            at,
+            rotation: Rotation::Deg0,
+            mirror: None,
+            fields_autoplaced: false,
+            fields: BTreeMap::from([
+                (
+                    "Reference".to_string(),
+                    SymbolField::new("Reference", "#PWR", at),
+                ),
+                ("Value".to_string(), SymbolField::new("Value", "GND", at)),
+            ]),
+            pins: Vec::new(),
+            unsupported: Vec::new(),
+        }
+    }
+}

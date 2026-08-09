@@ -1,0 +1,162 @@
+---
+source: crates/pcb-kicad-sch/tests/analysis_flow.rs
+expression: analysis
+---
+ConnectivityAnalysis {
+    components: {
+        SymbolSlotKey {
+            component_path: "R1.R",
+            unit: 1,
+        }: ComponentAnalysis {
+            slot: SymbolSlotKey {
+                component_path: "R1.R",
+                unit: 1,
+            },
+            placement: Placed(
+                SymbolLocation {
+                    page_id: "67ba23f6-8b58-5596-9d28-7774b90e1e12",
+                    symbol_id: "d527c2b8-3606-5386-bbed-5a45ed7b31a6",
+                },
+            ),
+        },
+        SymbolSlotKey {
+            component_path: "R2.R",
+            unit: 1,
+        }: ComponentAnalysis {
+            slot: SymbolSlotKey {
+                component_path: "R2.R",
+                unit: 1,
+            },
+            placement: Placed(
+                SymbolLocation {
+                    page_id: "67ba23f6-8b58-5596-9d28-7774b90e1e12",
+                    symbol_id: "cda8dfca-6e8a-59fd-87a2-5ff0162348de",
+                },
+            ),
+        },
+    },
+    nets: {
+        "LEFT": NetAnalysis {
+            name: "LEFT",
+            expected_terminals: [
+                ComponentPin {
+                    component: ManagedPath(
+                        "R1.R",
+                    ),
+                    pin_name: "1",
+                    pin_numbers: {
+                        "1",
+                    },
+                },
+            ],
+            missing_terminals: [],
+            islands: [
+                IslandRef {
+                    page_id: "67ba23f6-8b58-5596-9d28-7774b90e1e12",
+                    index: 0,
+                },
+            ],
+            connected_islands: [
+                [
+                    IslandRef {
+                        page_id: "67ba23f6-8b58-5596-9d28-7774b90e1e12",
+                        index: 0,
+                    },
+                ],
+            ],
+        },
+        "MID": NetAnalysis {
+            name: "MID",
+            expected_terminals: [
+                ComponentPin {
+                    component: ManagedPath(
+                        "R1.R",
+                    ),
+                    pin_name: "2",
+                    pin_numbers: {
+                        "2",
+                    },
+                },
+                ComponentPin {
+                    component: ManagedPath(
+                        "R2.R",
+                    ),
+                    pin_name: "1",
+                    pin_numbers: {
+                        "1",
+                    },
+                },
+            ],
+            missing_terminals: [],
+            islands: [
+                IslandRef {
+                    page_id: "67ba23f6-8b58-5596-9d28-7774b90e1e12",
+                    index: 1,
+                },
+                IslandRef {
+                    page_id: "67ba23f6-8b58-5596-9d28-7774b90e1e12",
+                    index: 3,
+                },
+            ],
+            connected_islands: [
+                [
+                    IslandRef {
+                        page_id: "67ba23f6-8b58-5596-9d28-7774b90e1e12",
+                        index: 1,
+                    },
+                ],
+                [
+                    IslandRef {
+                        page_id: "67ba23f6-8b58-5596-9d28-7774b90e1e12",
+                        index: 3,
+                    },
+                ],
+            ],
+        },
+        "RIGHT": NetAnalysis {
+            name: "RIGHT",
+            expected_terminals: [
+                ComponentPin {
+                    component: ManagedPath(
+                        "R2.R",
+                    ),
+                    pin_name: "2",
+                    pin_numbers: {
+                        "2",
+                    },
+                },
+            ],
+            missing_terminals: [],
+            islands: [
+                IslandRef {
+                    page_id: "67ba23f6-8b58-5596-9d28-7774b90e1e12",
+                    index: 2,
+                },
+            ],
+            connected_islands: [
+                [
+                    IslandRef {
+                        page_id: "67ba23f6-8b58-5596-9d28-7774b90e1e12",
+                        index: 2,
+                    },
+                ],
+            ],
+        },
+    },
+    issues: [
+        DisconnectedNet {
+            net_name: "MID",
+            islands: [
+                IslandRef {
+                    page_id: "67ba23f6-8b58-5596-9d28-7774b90e1e12",
+                    index: 1,
+                },
+                IslandRef {
+                    page_id: "67ba23f6-8b58-5596-9d28-7774b90e1e12",
+                    index: 3,
+                },
+            ],
+            missing_terminals: [],
+        },
+    ],
+}
