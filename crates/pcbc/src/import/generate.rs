@@ -8,7 +8,6 @@ use self::schematic_comments::{
 };
 use super::*;
 use anyhow::{Context, Result};
-use log::debug;
 use pcb_component_gen as component_gen;
 use pcb_sexpr::Sexpr;
 use pcb_sexpr::find_child_list;
@@ -158,41 +157,36 @@ struct ImportedBoardZenArgs<'a> {
 }
 
 fn write_imported_board_zen(args: ImportedBoardZenArgs<'_>) -> Result<()> {
-    let mut copper_layers = 4;
-    let mut stackup = None;
-    let mut design_rules = None;
+    let (copper_layers, stackup, design_rules) =
+        if let Some(layout_kicad_pcb) = args.layout_kicad_pcb {
+            let pcb_text = fs::read_to_string(layout_kicad_pcb).with_context(|| {
+                format!(
+                    "Failed to read KiCad PCB for stackup extraction: {}",
+                    layout_kicad_pcb.display()
+                )
+            })?;
+            let (copper_layers, stackup) = try_extract_stackup(&pcb_text, layout_kicad_pcb)?;
+            let design_rules = args.layout_kicad_pro.and_then(|layout_kicad_pro| {
+                pcb_layout::extract_design_rules_from_kicad_pro(layout_kicad_pro)
+                    .ok()
+                    .flatten()
+            });
 
-    if let Some(layout_kicad_pcb) = args.layout_kicad_pcb {
-        let pcb_text = fs::read_to_string(layout_kicad_pcb).with_context(|| {
-            format!(
-                "Failed to read KiCad PCB for stackup extraction: {}",
-                layout_kicad_pcb.display()
-            )
-        })?;
-        match try_extract_stackup(&pcb_text, layout_kicad_pcb) {
-            Ok((layers, extracted_stackup)) => {
-                copper_layers = layers;
-                stackup = extracted_stackup;
-            }
-            Err(e) => debug!("{e:#}"),
-        }
-        if let Some(layout_kicad_pro) = args.layout_kicad_pro {
-            design_rules = pcb_layout::extract_design_rules_from_kicad_pro(layout_kicad_pro)
-                .ok()
-                .flatten();
-        }
+            prepatch_imported_layout_kicad_pcb(LayoutPrepatchArgs {
+                layout_kicad_pcb,
+                pcb_text: &pcb_text,
+                components: args.components,
+                refdes_instance_names: args.refdes_instance_names,
+                net_ident_by_kicad_name: &args.net_decls.zener_name_by_kicad_name,
+                generated_components: args.component_modules,
+                sheet_modules: args.sheet_modules,
+            })
+            .context("Failed to pre-patch imported KiCad PCB for sync hooks")?;
 
-        prepatch_imported_layout_kicad_pcb(LayoutPrepatchArgs {
-            layout_kicad_pcb,
-            pcb_text: &pcb_text,
-            components: args.components,
-            refdes_instance_names: args.refdes_instance_names,
-            net_ident_by_kicad_name: &args.net_decls.zener_name_by_kicad_name,
-            generated_components: args.component_modules,
-            sheet_modules: args.sheet_modules,
-        })
-        .context("Failed to pre-patch imported KiCad PCB for sync hooks")?;
-    }
+            (copper_layers, stackup, design_rules)
+        } else {
+            (4, None, None)
+        };
 
     let root_sheet = KiCadSheetPath::root();
     let root_plan = args
@@ -502,40 +496,34 @@ fn try_extract_stackup(
     pcb_text: &str,
     layout_kicad_pcb: &Path,
 ) -> Result<(usize, Option<zen_stackup::Stackup>)> {
-    let fallback_layers = infer_copper_layers_from_layers_section(pcb_text)?;
-
-    let stackup = match zen_stackup::Stackup::from_kicad_pcb(pcb_text) {
-        Ok(Some(s)) => s,
-        Ok(None) => {
-            return Ok((fallback_layers, None));
-        }
-        Err(e) => {
-            debug!(
-                "Skipping stackup extraction (failed to parse stackup from {}): {}",
-                layout_kicad_pcb.display(),
-                e
-            );
-            return Ok((fallback_layers, None));
-        }
-    };
-
-    let Some(layers) = stackup.layers.as_deref() else {
-        return Ok((fallback_layers, None));
-    };
-    if layers.is_empty() {
-        return Ok((fallback_layers, None));
-    }
-
-    let copper_layers = stackup.copper_layer_count();
-    if !matches!(copper_layers, 2 | 4 | 6 | 8 | 10) {
-        debug!(
-            "Skipping stackup extraction (unexpected copper layer count {copper_layers} in {}); using layer count inferred from (layers ...) section ({fallback_layers}).",
+    let source_copper_layers = infer_copper_layers_from_layers_section(pcb_text)?;
+    let Some(stackup) = zen_stackup::Stackup::from_kicad_pcb(pcb_text).with_context(|| {
+        format!(
+            "Failed to parse stackup from {}",
+            layout_kicad_pcb.display()
+        )
+    })?
+    else {
+        anyhow::ensure!(
+            matches!(source_copper_layers, 2 | 4 | 6 | 8 | 10),
+            "KiCad PCB {} has {source_copper_layers} copper layers but no explicit stackup; Zener has no default stackup for that layer count, so configure a stackup in KiCad before importing",
             layout_kicad_pcb.display()
         );
-        return Ok((fallback_layers, None));
-    }
+        return Ok((source_copper_layers, None));
+    };
 
-    Ok((copper_layers, Some(stackup)))
+    stackup
+        .validate()
+        .with_context(|| format!("Invalid stackup in {}", layout_kicad_pcb.display()))?;
+
+    let stackup_copper_layers = stackup.copper_layer_count();
+    anyhow::ensure!(
+        stackup_copper_layers == source_copper_layers,
+        "KiCad PCB {} declares {source_copper_layers} copper layers in its layers section but its stackup contains {stackup_copper_layers}",
+        layout_kicad_pcb.display()
+    );
+
+    Ok((source_copper_layers, Some(stackup)))
 }
 
 fn infer_copper_layers_from_layers_section(pcb_text: &str) -> Result<usize> {
@@ -559,18 +547,63 @@ fn infer_copper_layers_from_layers_section(pcb_text: &str) -> Result<usize> {
         }
     }
 
-    let count = copper_layer_names.len();
-    if !matches!(count, 2 | 4 | 6 | 8 | 10) {
-        anyhow::bail!(
-            "Unsupported copper layer count inferred from KiCad (layers ...) section: {count}"
-        );
-    }
-    Ok(count)
+    Ok(copper_layer_names.len())
 }
 
 #[cfg(test)]
-mod stackup_fallback_tests {
+mod stackup_tests {
     use super::*;
+
+    fn twelve_layer_pcb(with_stackup: bool) -> String {
+        let copper_layers = [
+            "F.Cu", "In1.Cu", "In2.Cu", "In3.Cu", "In4.Cu", "In5.Cu", "In6.Cu", "In7.Cu", "In8.Cu",
+            "In9.Cu", "In10.Cu", "B.Cu",
+        ];
+        let mut pcb = String::from("(kicad_pcb\n  (layers\n");
+        for (index, name) in copper_layers.iter().enumerate() {
+            pcb.push_str(&format!("    ({index} \"{name}\" signal)\n"));
+        }
+        pcb.push_str("  )\n  (setup\n");
+        if with_stackup {
+            pcb.push_str("    (stackup\n");
+            for (index, name) in copper_layers.iter().enumerate() {
+                pcb.push_str(&format!(
+                    "      (layer \"{name}\" (type \"copper\") (thickness 0.035))\n"
+                ));
+                if index + 1 < copper_layers.len() {
+                    pcb.push_str(&format!(
+                        "      (layer \"dielectric {}\" (type \"core\") (thickness 0.1) (material \"FR4\"))\n",
+                        index + 1
+                    ));
+                }
+            }
+            pcb.push_str("    )\n");
+        }
+        pcb.push_str("  )\n)\n");
+        pcb
+    }
+
+    #[test]
+    fn extracts_valid_twelve_layer_stackup() {
+        let (layers, stackup) =
+            try_extract_stackup(&twelve_layer_pcb(true), Path::new("twelve-layer.kicad_pcb"))
+                .unwrap();
+
+        assert_eq!(layers, 12);
+        assert_eq!(stackup.unwrap().copper_layer_count(), 12);
+    }
+
+    #[test]
+    fn unsupported_default_layer_count_requires_explicit_stackup() {
+        let error = try_extract_stackup(
+            &twelve_layer_pcb(false),
+            Path::new("twelve-layer.kicad_pcb"),
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(error.contains("12 copper layers but no explicit stackup"));
+    }
 
     #[test]
     fn layer_count_falls_back_to_layers_section_when_stackup_missing() {
@@ -583,6 +616,7 @@ mod stackup_fallback_tests {
             (2 "B.Cu" mixed)
             (9 "F.Adhes" user "F.Adhesive")
           )
+          (setup)
         )
         "#;
 
