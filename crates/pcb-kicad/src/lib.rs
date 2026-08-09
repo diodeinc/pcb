@@ -59,19 +59,13 @@ impl KiCadInstallation {
         }
     }
 
-    fn python_path(&self, extra_paths: Vec<String>) -> Result<Option<String>> {
+    fn python_path(&self, extra_paths: Vec<String>) -> Result<String> {
         let mut paths = extra_paths;
         paths.extend(self.python_site_packages.iter().cloned());
-        if paths.is_empty() {
-            return Ok(None);
-        }
-
-        Ok(Some(
-            std::env::join_paths(paths)
-                .context("Failed to construct PYTHONPATH")?
-                .to_string_lossy()
-                .into_owned(),
-        ))
+        Ok(std::env::join_paths(paths)
+            .context("Failed to construct PYTHONPATH")?
+            .to_string_lossy()
+            .into_owned())
     }
 }
 
@@ -663,9 +657,7 @@ impl PythonScriptBuilder {
             cmd = cmd.arg(arg);
         }
 
-        if let Some(python_path) = python_path {
-            cmd = cmd.env("PYTHONPATH", python_path);
-        }
+        cmd = cmd.env("PYTHONPATH", python_path);
 
         for (key, value) in self.env_vars {
             cmd = cmd.env(key, value);
