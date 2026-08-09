@@ -1,5 +1,6 @@
 #![cfg(not(target_os = "windows"))]
 
+use pcb_test_utils::assert_snapshot;
 use pcb_test_utils::sandbox::Sandbox;
 use std::process::Output;
 
@@ -142,5 +143,5 @@ fn test_pcb_doc_shows_allowed_values_for_config() {
     );
 
     let stdout = sb.sanitize_output(&String::from_utf8_lossy(&output.stdout));
-    insta::assert_snapshot!("doc_allowed_values", stdout);
+    assert_snapshot!("doc_allowed_values", stdout);
 }

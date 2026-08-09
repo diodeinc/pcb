@@ -1,5 +1,4 @@
-#[macro_use]
-mod common;
+use crate::common;
 
 // Test basic file resolution
 snapshot_eval!(file_resolves_relative_path, {

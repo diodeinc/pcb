@@ -1,6 +1,3 @@
-#[macro_use]
-mod common;
-
 snapshot_eval!(model_parsing, {
     "r.lib" => r#"
 .SUBCKT my_resistor p n PARAMS: RVAL=1k

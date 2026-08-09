@@ -6,6 +6,11 @@ repository = { workspace = true }
 homepage = { workspace = true }
 authors = { workspace = true }
 description = "PCB layout generation and management"
+autotests = false
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
 
 [dependencies]
 anyhow = { workspace = true }
@@ -27,10 +32,7 @@ include_dir = "0.7.4"
 [dev-dependencies]
 assert_fs = { workspace = true }
 insta = { workspace = true }
-serial_test = { workspace = true }
 paste = { workspace = true }
-walkdir = { workspace = true }
-zip = { workspace = true }
 serde_json = { workspace = true }
 pcb-zen = { workspace = true }
 regex = { workspace = true }

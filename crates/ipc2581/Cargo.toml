@@ -9,6 +9,11 @@ description = "IPC-2581 XML parser, typed data model, and XSD validation for PCB
 license = "MIT OR Apache-2.0"
 keywords = ["pcb", "ipc-2581", "parser", "eda"]
 categories = ["parsing", "hardware-support"]
+autotests = false
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
 
 [dependencies]
 hex = { workspace = true }

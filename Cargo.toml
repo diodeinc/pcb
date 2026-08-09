@@ -178,6 +178,13 @@ opt-level = 2
 opt-level = 2
 [profile.dev.package.i_key_sort]
 opt-level = 2
+[profile.dev.package.ipc2581]
+opt-level = 2
+
+# Test binaries are short-lived and do not need the full debug information that
+# made this workspace's integration-test artifacts hundreds of megabytes each.
+[profile.test]
+debug = 0
 
 [profile.dist]
 inherits = "release"
@@ -185,4 +192,3 @@ lto = "fat"           # Maximum link-time optimization
 codegen-units = 1     # Better optimization
 strip = "symbols"     # Strip symbols from published binaries
 panic = "abort"       # Published binaries should not carry unwinding machinery.
-

@@ -1,6 +1,3 @@
-#[macro_use]
-mod common;
-
 snapshot_eval!(enum_property_conversion, {
     "test.zen" => r#"
         Level = enum("LOW", "HIGH", "TRISTATE")

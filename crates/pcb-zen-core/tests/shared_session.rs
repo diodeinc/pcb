@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 
 use common::{InMemoryFileProvider, stdlib_test_files_at, test_resolution_at};
 use pcb_zen_core::lang::eval::EvalSession;

@@ -1,5 +1,4 @@
-#[macro_use]
-mod common;
+use crate::common;
 
 use std::collections::HashMap;
 

@@ -1,6 +1,3 @@
-#[macro_use]
-mod common;
-
 // Error case – evaluating `error()` should propagate the message.
 snapshot_eval!(error_function_should_error, {
     "test.zen" => r#"

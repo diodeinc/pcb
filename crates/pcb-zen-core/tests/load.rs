@@ -1,6 +1,3 @@
-#[macro_use]
-mod common;
-
 use crate::common::eval_zen;
 
 fn warning_bodies(

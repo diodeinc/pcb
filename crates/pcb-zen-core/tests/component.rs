@@ -1,5 +1,4 @@
-#[macro_use]
-mod common;
+use crate::common;
 
 use pcb_zen_core::DiagnosticsPass;
 use pcb_zen_core::SortPass;

@@ -4,10 +4,36 @@ use assert_fs::prelude::*;
 use pcb_layout::process_layout;
 use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::Diagnostics;
-use serial_test::serial;
 
-mod helpers;
-use helpers::*;
+use crate::helpers::*;
+
+macro_rules! assert_file_snapshot {
+    ($name:expr, $file:expr) => {{
+        let content = std::fs::read_to_string($file)?;
+        assert_test_snapshot!($name, content);
+    }};
+}
+
+fn netclass_patterns_snapshot(path: impl AsRef<std::path::Path>) -> Result<String> {
+    let json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path)?)?;
+    let patterns = json
+        .get("net_settings")
+        .and_then(|settings| settings.get("netclass_patterns"))
+        .ok_or_else(|| anyhow::anyhow!("netclass_patterns not found in .kicad_pro file"))?;
+    let mut patterns: Vec<serde_json::Value> = serde_json::from_value(patterns.clone())?;
+    patterns.sort_by(|a, b| {
+        let a = a
+            .get("pattern")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        let b = b
+            .get("pattern")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        a.cmp(b)
+    });
+    Ok(serde_json::to_string_pretty(&patterns)?)
+}
 
 macro_rules! layout_test {
     ($name:expr, $board_name:expr) => {
@@ -17,7 +43,6 @@ macro_rules! layout_test {
         paste::paste! {
             #[cfg(not(target_os = "windows"))]
             #[test]
-            #[serial]
             fn [<test_layout_generation_with_ $name:snake>]() -> Result<()> {
                 // Create a temp directory and copy the test resources
                 let temp = TempDir::new()?.into_persistent();
@@ -71,9 +96,10 @@ macro_rules! layout_test {
                 if $snapshot_kicad_pro {
                     let kicad_pro_path = result.pcb_file.with_extension("kicad_pro");
                     assert!(kicad_pro_path.exists(), "kicad_pro file should exist");
-                    assert_netclass_patterns_snapshot!(
+                    let content = netclass_patterns_snapshot(kicad_pro_path)?;
+                    assert_test_snapshot!(
                         format!("{}.netclass_patterns.json", $name),
-                        kicad_pro_path
+                        content
                     );
                 }
 
