@@ -84,7 +84,7 @@ pub fn build_gerber_x2_files_with_options(
         let spec = GerberArtworkSpec {
             role: plan.role,
             side: ir_side(source_layer.side),
-            meta: layer_attributes(plan.file_function.clone(), part),
+            meta: layer_attributes(plan.file_function.clone(), part, plan.role),
             view,
         };
         let artwork = if view == ArtworkScope::ArrayFlattened {
@@ -326,9 +326,9 @@ fn layer_output(
             vec!["Profile".into(), "NP".into()],
         ),
         GerberLayerRole::Vcut => fabrication_line_layer_output("V_Cut.gbr", &["Vcut"], side),
-        GerberLayerRole::Score => {
-            fabrication_line_layer_output("Score.gbr", &["Other", "Score"], side)
-        }
+        // Gerber calls the scored-line data function `Vcut`; the specification
+        // explicitly treats scoring as the same fabrication operation.
+        GerberLayerRole::Score => fabrication_line_layer_output("Score.gbr", &["Vcut"], side),
     }
 }
 
@@ -374,10 +374,11 @@ fn fabrication_line_layer_output(
     match side {
         Some(IpcSide::Top) => file_function.push("Top".to_string()),
         Some(IpcSide::Bottom) => file_function.push("Bot".to_string()),
-        Some(IpcSide::Both) | Some(IpcSide::All) | Some(IpcSide::None) => {
-            file_function.push("Top/Bot".to_string())
-        }
-        _ => {}
+        Some(IpcSide::Both)
+        | Some(IpcSide::All)
+        | Some(IpcSide::None)
+        | Some(IpcSide::Internal)
+        | None => {}
     }
     (filename.to_string(), file_function)
 }
@@ -386,6 +387,7 @@ fn fabrication_line_layer_output(
 enum GerberPart {
     Single,
     Array,
+    FabricationPanel,
 }
 
 impl GerberPart {
@@ -393,6 +395,7 @@ impl GerberPart {
         match self {
             Self::Single => "Single",
             Self::Array => "Array",
+            Self::FabricationPanel => "FabricationPanel",
         }
     }
 }
@@ -406,21 +409,37 @@ fn primary_step(ipc: &Ipc2581) -> Result<&Step> {
 fn gerber_part_for_ipc_view(ipc: &Ipc2581, view: ArtworkScope) -> Result<GerberPart> {
     let step = primary_step(ipc)?;
     Ok(
-        if view != ArtworkScope::Board && geometry::is_panel_step(step) {
-            GerberPart::Array
-        } else {
+        if view == ArtworkScope::Board || !geometry::is_panel_step(step) {
             GerberPart::Single
+        } else if ipc.resolve(step.name) == crate::steps::FAB_PANEL_STEP_NAME {
+            GerberPart::FabricationPanel
+        } else {
+            GerberPart::Array
         },
     )
 }
 
-fn layer_attributes(file_function: Vec<String>, part: GerberPart) -> LayerAttributes {
+fn layer_attributes(
+    file_function: Vec<String>,
+    part: GerberPart,
+    role: GerberLayerRole,
+) -> LayerAttributes {
     LayerAttributes {
         file_function,
         part: Some(vec![part.as_str().to_string()]),
-        // Every exported layer is a positive image; clears stay inside the
-        // file as %LPC state rather than flipping the file polarity.
-        file_polarity: Some("Positive".to_string()),
+        // Solder mask artwork represents openings (absence of mask); all
+        // other exported physical images represent the material itself.
+        file_polarity: Some(
+            if role == GerberLayerRole::Soldermask {
+                "Negative"
+            } else {
+                "Positive"
+            }
+            .to_string(),
+        ),
+        // Every manufacturing layer is emitted in the source IPC coordinate
+        // system, without per-file shifts or bottom-side mirroring.
+        same_coordinates: Some(Vec::new()),
     }
 }
 
@@ -470,7 +489,12 @@ fn artwork_from_ipc_layer(
         bbox: layer.bbox,
         meta: spec.meta,
     };
-    let mut lowering = GerberLowering { ipc, doc };
+    let mut lowering = GerberLowering {
+        ipc,
+        doc,
+        role: spec.role,
+        side: spec.side,
+    };
     let mut artwork = lower_layer_to_artwork_with(doc, layer_index, header, &mut lowering);
 
     if spec.role == GerberLayerRole::Profile
@@ -520,6 +544,8 @@ fn hierarchical_artwork_from_ipc_layer(
         layers: &ecad.cad_data.layers,
         source_layer,
         layer_name,
+        role: spec.role,
+        side: spec.side,
     };
     let mut blocks = HashMap::from([(root.name, None)]);
     let objects = build_step_artwork_objects(&context, root, &mut artwork, &mut blocks)?;
@@ -539,6 +565,8 @@ struct HierarchicalArtworkContext<'a> {
     layers: &'a [Layer],
     source_layer: &'a Layer,
     layer_name: &'a str,
+    role: GerberLayerRole,
+    side: IrSide,
 }
 
 fn build_step_artwork_block(
@@ -616,6 +644,8 @@ fn build_step_artwork_objects(
     let mut lowering = GerberLowering {
         ipc: context.ipc,
         doc: &local,
+        role: context.role,
+        side: context.side,
     };
     let mut objects = lower_layer_to_artwork_objects_with(&local, 0, artwork, &mut lowering);
     objects.extend(
@@ -645,6 +675,8 @@ fn build_step_artwork_objects(
 struct GerberLowering<'a> {
     ipc: &'a Ipc2581,
     doc: &'a IpcGeometryDocument,
+    role: GerberLayerRole,
+    side: IrSide,
 }
 
 impl ArtworkLowering<ipc2581::Symbol, ObjectAttributes> for GerberLowering<'_> {
@@ -681,11 +713,16 @@ impl ArtworkLowering<ipc2581::Symbol, ObjectAttributes> for GerberLowering<'_> {
     fn object_meta(
         &mut self,
         feature: &Feature<ipc2581::Symbol>,
-        kind: ArtworkObjectKind,
+        _kind: ArtworkObjectKind,
     ) -> ObjectAttributes {
-        let aperture_function =
-            (kind != ArtworkObjectKind::Region).then(|| aperture_function(feature));
-        object_attributes(self.ipc, self.doc, feature, aperture_function)
+        object_attributes(
+            self.ipc,
+            self.doc,
+            feature,
+            self.role,
+            self.side,
+            aperture_function(feature, self.role, self.side),
+        )
     }
 }
 
@@ -711,6 +748,7 @@ fn synthetic_profile_gerber_file(
         meta: layer_attributes(
             vec!["Profile".to_string(), "NP".to_string()],
             gerber_part_for_ipc_view(ipc, view)?,
+            GerberLayerRole::Profile,
         ),
     });
     append_profile_occurrences(
@@ -754,6 +792,7 @@ fn board_array_profile_gerber_files(
             "Board Array Profile",
             "Board_Array_Profile.gm1",
             contour_groups,
+            GerberPart::Array,
         )?
         .into_iter()
         .collect());
@@ -764,16 +803,19 @@ fn board_array_profile_gerber_files(
             "Fab Panel Outline",
             "Fab_Panel_Outline.gm1",
             profile.array_outlines,
+            GerberPart::FabricationPanel,
         )?,
         profile_gerber_file(
             "Assembly Panel Outlines",
             "Assembly_Panel_Outlines.gm1",
             profile.assembly_panel_outlines,
+            GerberPart::FabricationPanel,
         )?,
         profile_gerber_file(
             "Board Cutouts",
             "Board_Cutouts.gm1",
             vec![profile.material_removal],
+            GerberPart::FabricationPanel,
         )?,
     ]
     .into_iter()
@@ -785,6 +827,7 @@ fn profile_gerber_file(
     layer_name: &str,
     filename: &str,
     contour_groups: Vec<Vec<ContourBuf>>,
+    part: GerberPart,
 ) -> Result<Option<GerberX2File>> {
     let mut artwork = GerberArtwork::new();
     let artwork_layer = artwork.push_layer(pcb_ir::dialects::artwork::Layer {
@@ -795,7 +838,8 @@ fn profile_gerber_file(
         bbox: BBox::empty(),
         meta: layer_attributes(
             vec!["Profile".to_string(), "NP".to_string()],
-            GerberPart::Array,
+            part,
+            GerberLayerRole::Profile,
         ),
     });
     let style = ProfileGerberStyle::default();
@@ -1374,57 +1418,104 @@ fn object_attributes(
     ipc: &Ipc2581,
     doc: &IpcGeometryDocument,
     feature: &Feature<ipc2581::Symbol>,
+    role: GerberLayerRole,
+    side: IrSide,
     aperture_function: Option<Vec<String>>,
 ) -> ObjectAttributes {
     let pin_ref = feature.pin_refs.slice(&doc.pin_refs).first();
+    let carries_netlist = role == GerberLayerRole::Copper;
+    let carries_pins = carries_netlist && matches!(side, IrSide::Top | IrSide::Bottom);
     ObjectAttributes {
         aperture_function,
-        net: feature.net.map(|symbol| ipc.resolve(symbol).to_string()),
+        net: if carries_netlist {
+            feature.net.map(|symbol| ipc.resolve(symbol).to_string())
+        } else {
+            None
+        },
         component: pin_ref
             .and_then(|pin_ref| pin_ref.component_ref)
             .map(|symbol| ipc.resolve(symbol).to_string()),
-        pin: pin_ref.map(|pin_ref| ipc.resolve(pin_ref.pin).to_string()),
+        pin: if carries_pins {
+            pin_ref.map(|pin_ref| ipc.resolve(pin_ref.pin).to_string())
+        } else {
+            None
+        },
     }
 }
 
-fn aperture_function(feature: &Feature<ipc2581::Symbol>) -> Vec<String> {
+fn aperture_function(
+    feature: &Feature<ipc2581::Symbol>,
+    role: GerberLayerRole,
+    side: IrSide,
+) -> Option<Vec<String>> {
+    match role {
+        GerberLayerRole::Soldermask | GerberLayerRole::Paste | GerberLayerRole::Legend => {
+            return Some(vec!["Material".to_string()]);
+        }
+        GerberLayerRole::AssemblyDrawing | GerberLayerRole::FabricationDrawing => return None,
+        GerberLayerRole::Profile => return Some(vec!["Profile".to_string()]),
+        GerberLayerRole::Vcut => {
+            return Some(vec!["Other".to_string(), "Vcut".to_string()]);
+        }
+        GerberLayerRole::Score => {
+            return Some(vec!["Other".to_string(), "Score".to_string()]);
+        }
+        GerberLayerRole::Copper => {}
+    }
+
     match feature.intent.operation {
-        FeatureOperation::Drill => return vec!["Other".to_string(), "Drill".to_string()],
+        FeatureOperation::Drill => {
+            return Some(vec!["Other".to_string(), "Drill".to_string()]);
+        }
         FeatureOperation::Score if feature.is_vcut() => {
-            return vec!["Other".to_string(), "Vcut".to_string()];
+            return Some(vec!["Other".to_string(), "Vcut".to_string()]);
         }
         FeatureOperation::Score if feature.is_score() => {
-            return vec!["Other".to_string(), "Score".to_string()];
+            return Some(vec!["Other".to_string(), "Score".to_string()]);
         }
-        FeatureOperation::Route | FeatureOperation::Profile => return vec!["Profile".to_string()],
+        FeatureOperation::Route | FeatureOperation::Profile => {
+            return Some(vec!["Profile".to_string()]);
+        }
         _ => {}
     }
 
     match feature.intent.role {
-        _ if feature.is_fiducial() => return fiducial_aperture_function(feature),
+        _ if feature.is_fiducial() => return Some(fiducial_aperture_function(feature)),
         FeatureRole::Pad => {
             return match feature.intent.plating {
-                PlatingKind::Plated => vec!["ComponentPad".to_string()],
-                PlatingKind::Via => vec!["ViaPad".to_string()],
-                _ => vec!["SMDPad".to_string()],
+                PlatingKind::Plated => Some(vec!["ComponentPad".to_string()]),
+                PlatingKind::Via | PlatingKind::ViaCapped => Some(vec!["ViaPad".to_string()]),
+                _ if matches!(side, IrSide::Top | IrSide::Bottom) => {
+                    Some(vec!["SMDPad".to_string(), "CuDef".to_string()])
+                }
+                _ if !feature.pin_refs.is_empty() => Some(vec!["ComponentPad".to_string()]),
+                _ => Some(vec!["OtherPad".to_string(), "InnerLayerPad".to_string()]),
             };
         }
-        FeatureRole::Via => return vec!["ViaPad".to_string()],
-        FeatureRole::Conductor => return vec!["Conductor".to_string()],
-        FeatureRole::Hole | FeatureRole::Slot | FeatureRole::Cutout => {
-            return vec!["Other".to_string()];
+        FeatureRole::Via => return Some(vec!["ViaPad".to_string()]),
+        FeatureRole::Conductor => return Some(vec!["Conductor".to_string()]),
+        FeatureRole::Hole => {
+            return Some(vec!["Other".to_string(), "Hole".to_string()]);
+        }
+        FeatureRole::Slot => {
+            return Some(vec!["Other".to_string(), "Slot".to_string()]);
+        }
+        FeatureRole::Cutout => {
+            return Some(vec!["Other".to_string(), "Cutout".to_string()]);
         }
         FeatureRole::ArraySeparation if feature.is_vcut() => {
-            return vec!["Other".to_string(), "Vcut".to_string()];
+            return Some(vec!["Other".to_string(), "Vcut".to_string()]);
         }
         FeatureRole::ArraySeparation if feature.is_score() => {
-            return vec!["Other".to_string(), "Score".to_string()];
+            return Some(vec!["Other".to_string(), "Score".to_string()]);
         }
-        FeatureRole::Route | FeatureRole::BoardOutline => return vec!["Profile".to_string()],
+        FeatureRole::Route | FeatureRole::BoardOutline => {
+            return Some(vec!["Profile".to_string()]);
+        }
         _ => {}
     }
 
-    match feature.intent.domain {
+    Some(match feature.intent.domain {
         FeatureDomain::Copper => vec!["Conductor".to_string()],
         FeatureDomain::Drill => vec!["Other".to_string(), "Drill".to_string()],
         FeatureDomain::Rout | FeatureDomain::Profile => vec!["Profile".to_string()],
@@ -1435,8 +1526,10 @@ fn aperture_function(feature: &Feature<ipc2581::Symbol>) -> Vec<String> {
         | FeatureDomain::Legend
         | FeatureDomain::Mechanical
         | FeatureDomain::Other
-        | FeatureDomain::Unknown => vec!["Other".to_string()],
-    }
+        | FeatureDomain::Unknown => {
+            vec!["OtherCopper".to_string(), "Unclassified".to_string()]
+        }
+    })
 }
 
 fn fiducial_aperture_function(feature: &Feature<ipc2581::Symbol>) -> Vec<String> {
@@ -1446,7 +1539,7 @@ fn fiducial_aperture_function(feature: &Feature<ipc2581::Symbol>) -> Vec<String>
         FiducialKind::Global => "Global",
         FiducialKind::Panel | FiducialKind::GoodPanel => "Panel",
         FiducialKind::BadBoard => {
-            return vec!["Other".to_string(), "BadBoardMark".to_string()];
+            return vec!["OtherPad".to_string(), "BadBoardMark".to_string()];
         }
     };
     vec!["FiducialPad".to_string(), kind.to_string()]
@@ -2196,10 +2289,13 @@ mod tests {
             .unwrap();
         assert!(copper.contents.contains("%TF.FileFunction,Copper,L1,Top*%"));
         assert!(copper.contents.contains("%TF.Part,Single*%"));
-        assert!(copper.contents.contains("%TA.AperFunction,SMDPad*%"));
+        assert!(copper.contents.contains("%TF.FilePolarity,Positive*%"));
+        assert!(copper.contents.contains("%TF.SameCoordinates*%"));
+        assert!(copper.contents.contains("%TA.AperFunction,SMDPad,CuDef*%"));
         assert!(copper.contents.contains("%TO.C,U1*%"));
         assert!(copper.contents.contains("%TO.P,U1,1*%"));
         assert!(copper.contents.contains("%TO.N,N1*%"));
+
         let parsed = gerberx2::GerberX2::parse(&copper.contents).unwrap();
         assert!(
             parsed
@@ -2216,6 +2312,87 @@ mod tests {
             .unwrap();
         assert!(panel_target_copper.contents.contains("%TF.Part,Single*%"));
         assert!(!panel_target_copper.contents.contains("%TF.Part,Array*%"));
+    }
+
+    #[test]
+    fn mask_and_paste_use_specification_correct_attributes() {
+        let ipc = ipc::Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <LayerRef name="F.Mask"/>
+    <LayerRef name="F.Paste"/>
+    <DictionaryStandard units="MILLIMETER">
+      <EntryStandard id="pad"><Circle diameter="1"/></EntryStandard>
+    </DictionaryStandard>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="F.Mask" layerFunction="SOLDERMASK" side="TOP" polarity="POSITIVE"/>
+      <Layer name="F.Paste" layerFunction="SOLDERPASTE" side="TOP" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <PadStackDef name="padstack">
+          <PadstackPadDef layerRef="F.Mask" padUse="REGULAR">
+            <StandardPrimitiveRef id="pad"/>
+          </PadstackPadDef>
+          <PadstackPadDef layerRef="F.Paste" padUse="REGULAR">
+            <StandardPrimitiveRef id="pad"/>
+          </PadstackPadDef>
+        </PadStackDef>
+        <LayerFeature layerRef="F.Mask">
+          <Set net="N1">
+            <Pad padstackDefRef="padstack">
+              <Location x="2" y="3"/>
+              <StandardPrimitiveRef id="pad"/>
+              <PinRef componentRef="U1" pin="1"/>
+            </Pad>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="F.Paste">
+          <Set net="N1">
+            <Pad padstackDefRef="padstack">
+              <Location x="2" y="3"/>
+              <StandardPrimitiveRef id="pad"/>
+              <PinRef componentRef="U1" pin="1"/>
+            </Pad>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+        let files = build_gerber_x2_files(&ipc, ArtworkScope::Board).unwrap();
+
+        let mask = files
+            .iter()
+            .find(|file| file.filename == "F_Mask.gts")
+            .unwrap();
+        assert!(mask.contents.contains("%TF.FilePolarity,Negative*%"));
+        assert!(mask.contents.contains("%TF.SameCoordinates*%"));
+        assert!(mask.contents.contains("%TA.AperFunction,Material*%"));
+        assert!(mask.contents.contains("%TO.C,U1*%"));
+        assert!(!mask.contents.contains("SMDPad"));
+        assert!(!mask.contents.contains("%TO.P,"));
+        assert!(!mask.contents.contains("%TO.N,"));
+        gerberx2::GerberX2::parse(&mask.contents).unwrap();
+
+        let paste = files
+            .iter()
+            .find(|file| file.filename == "F_Paste.gtp")
+            .unwrap();
+        assert!(paste.contents.contains("%TF.FilePolarity,Positive*%"));
+        assert!(paste.contents.contains("%TF.SameCoordinates*%"));
+        assert!(paste.contents.contains("%TA.AperFunction,Material*%"));
+        assert!(paste.contents.contains("%TO.C,U1*%"));
+        assert!(!paste.contents.contains("SMDPad"));
+        assert!(!paste.contents.contains("%TO.P,"));
+        assert!(!paste.contents.contains("%TO.N,"));
+        gerberx2::GerberX2::parse(&paste.contents).unwrap();
     }
 
     #[test]
@@ -2859,7 +3036,7 @@ mod tests {
             .iter()
             .find(|file| file.filename == "V_Cut.gbr")
             .unwrap();
-        assert!(vcut.contents.contains("%TF.FileFunction,Vcut,Top/Bot*%"));
+        assert!(vcut.contents.contains("%TF.FileFunction,Vcut*%"));
         assert!(vcut.contents.contains("%TF.Part,Array*%"));
         assert!(vcut.contents.contains("%TA.AperFunction,Other,Vcut*%"));
 
@@ -2867,14 +3044,9 @@ mod tests {
             .iter()
             .find(|file| file.filename == "Score.gbr")
             .unwrap();
-        assert!(
-            score
-                .contents
-                .contains("%TF.FileFunction,Other,Score,Top/Bot*%")
-        );
+        assert!(score.contents.contains("%TF.FileFunction,Vcut*%"));
         assert!(score.contents.contains("%TF.Part,Array*%"));
         assert!(score.contents.contains("%TA.AperFunction,Other,Score*%"));
-        assert!(!score.contents.contains("Vcut"));
     }
 
     #[test]

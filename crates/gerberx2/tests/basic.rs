@@ -46,6 +46,7 @@ fn writes_idiomatic_x2_layer_from_object_ir() {
         file_attributes: vec![
             AttributeValue::new(".FileFunction", ["Copper", "L1", "Top"]),
             AttributeValue::new(".Part", ["Single"]),
+            AttributeValue::new(".SameCoordinates", std::iter::empty::<&str>()),
         ],
         apertures: vec![
             WriterAperture {
@@ -76,6 +77,7 @@ fn writes_idiomatic_x2_layer_from_object_ir() {
             },
             polarity: Polarity::Dark,
             aperture_transform: WriterApertureTransform::default(),
+            aperture_attributes: Vec::new(),
             attributes: vec![
                 AttributeValue::new(".N", ["GND"]),
                 AttributeValue::new(".C", ["U1"]),
@@ -94,35 +96,42 @@ fn writes_idiomatic_x2_layer_from_object_ir() {
             clockwise: false,
             aperture: 10,
         }),
-        WriterObject::dark(ObjectKind::Region {
-            contours: vec![Contour {
-                segments: vec![
-                    ContourSegment::Line {
-                        start: Point { x: 0.0, y: 0.0 },
-                        end: Point { x: 1.0, y: 0.0 },
-                    },
-                    ContourSegment::Line {
-                        start: Point { x: 1.0, y: 0.0 },
-                        end: Point { x: 1.0, y: 1.0 },
-                    },
-                    ContourSegment::Line {
-                        start: Point { x: 1.0, y: 1.0 },
-                        end: Point { x: 0.0, y: 0.0 },
-                    },
-                ],
-            }],
-        }),
+        WriterObject {
+            kind: ObjectKind::Region {
+                contours: vec![Contour {
+                    segments: vec![
+                        ContourSegment::Line {
+                            start: Point { x: 0.0, y: 0.0 },
+                            end: Point { x: 1.0, y: 0.0 },
+                        },
+                        ContourSegment::Line {
+                            start: Point { x: 1.0, y: 0.0 },
+                            end: Point { x: 1.0, y: 1.0 },
+                        },
+                        ContourSegment::Line {
+                            start: Point { x: 1.0, y: 1.0 },
+                            end: Point { x: 0.0, y: 0.0 },
+                        },
+                    ],
+                }],
+            },
+            polarity: Polarity::Dark,
+            aperture_transform: WriterApertureTransform::default(),
+            aperture_attributes: vec![AttributeValue::new(".AperFunction", ["Conductor"])],
+            attributes: Vec::new(),
+        },
     ];
 
     let output = gerberx2::write_layer(&layer).unwrap();
     assert_external_parser_accepts(&output);
     assert!(output.contains("%TF.FileFunction,Copper,L1,Top*%"));
+    assert!(output.contains("%TF.SameCoordinates*%"));
     assert!(output.contains("%TA.AperFunction,SMDPad,CuDef*%"));
     assert!(output.contains("%TO.N,GND*%"));
-    assert!(output.contains("G36*"));
+    assert!(output.contains("%TA.AperFunction,Conductor*%\nG36*"));
 
     let parsed = GerberX2::parse(&output).unwrap();
-    assert_eq!(parsed.file_attributes().len(), 2);
+    assert_eq!(parsed.file_attributes().len(), 3);
     assert_eq!(parsed.aperture_definitions().len(), 2);
     assert_eq!(parsed.objects().len(), 4);
     assert!(matches!(
@@ -137,6 +146,12 @@ fn writes_idiomatic_x2_layer_from_object_ir() {
         }
     ));
     assert_eq!(parsed.objects()[0].object_attributes.len(), 3);
+    assert!(
+        parsed.objects()[3]
+            .aperture_attributes
+            .iter()
+            .any(|attribute| parsed.resolve(attribute.name) == ".AperFunction")
+    );
 }
 
 #[test]
@@ -195,6 +210,7 @@ fn writes_macro_and_block_apertures_without_flattening() {
                         },
                         polarity: Polarity::Clear,
                         aperture_transform: WriterApertureTransform::default(),
+                        aperture_attributes: Vec::new(),
                         attributes: Vec::new(),
                     }],
                 },
