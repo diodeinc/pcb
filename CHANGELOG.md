@@ -11,12 +11,12 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - KiCad Python scripts no longer inject package-specific module paths.
-- IPC-2581 Gerber exports now default to a JLCPCB-compatible dialect legalized through artwork IR; use `--dialect standard` for unrestricted Gerber output.
+- IPC-2581 Gerber exports now default to the JLCPCB dialect.
 
 ### Fixed
 
 - KiCad imports now preserve stackups with more than ten copper layers.
-- Gerber exports now emit specification-correct polarity, alignment, part, aperture, and object attributes.
+- Gerber X2 fabrication attributes now follow the specification.
 
 ## [0.4.26] - 2026-08-08
 
