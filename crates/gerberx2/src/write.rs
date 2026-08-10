@@ -530,9 +530,6 @@ impl<'a> Writer<'a> {
         Ok(())
     }
 
-    /// Bring both X2 attribute dictionaries to the requested state. Regions
-    /// receive aperture attributes from the live `TA` dictionary; ordinary
-    /// flashes and strokes carry them on their aperture definitions instead.
     fn set_attributes(
         &mut self,
         aperture_attributes: &[AttributeValue],

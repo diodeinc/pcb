@@ -1665,9 +1665,6 @@ mod tests {
 
     #[test]
     fn catalogue_pads_flash_through_shared_apertures() {
-        // Rounded rectangles remain shared flashes in both dialects. Standard
-        // Gerber uses the compact parameterized macro; the default JLCPCB
-        // dialect legalizes it to deduplicated code-4 contour apertures.
         let ipc = ipc::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
