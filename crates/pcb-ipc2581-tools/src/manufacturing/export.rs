@@ -15,6 +15,7 @@ pub struct ManufacturingExportOptions {
     pub output: PathBuf,
     pub view: ArtworkScope,
     pub relief_debug_dir: Option<PathBuf>,
+    pub gerber_dialect: gerber::GerberDialect,
 }
 
 #[derive(Debug, Clone)]
@@ -48,26 +49,33 @@ pub fn build_manufacturing_package(
     ipc: &Ipc2581,
     view: ArtworkScope,
 ) -> Result<ManufacturingPackage> {
-    build_manufacturing_package_inner(ipc, view, None)
+    build_manufacturing_package_inner(ipc, view, None, gerber::GerberDialect::Jlcpcb)
 }
 
 pub fn build_manufacturing_package_with_options(
     ipc: &Ipc2581,
     options: &ManufacturingExportOptions,
 ) -> Result<ManufacturingPackage> {
-    build_manufacturing_package_inner(ipc, options.view, options.relief_debug_dir.as_deref())
+    build_manufacturing_package_inner(
+        ipc,
+        options.view,
+        options.relief_debug_dir.as_deref(),
+        options.gerber_dialect,
+    )
 }
 
 fn build_manufacturing_package_inner(
     ipc: &Ipc2581,
     view: ArtworkScope,
     relief_debug_dir: Option<&Path>,
+    gerber_dialect: gerber::GerberDialect,
 ) -> Result<ManufacturingPackage> {
     let mut files = gerber::build_gerber_x2_files_with_options(
         ipc,
         view,
         &gerber::GerberExportOptions {
             relief_debug_dir: relief_debug_dir.map(Path::to_path_buf),
+            dialect: gerber_dialect,
         },
     )?
     .into_iter()

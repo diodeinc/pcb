@@ -155,7 +155,19 @@ fn resolve_fields(gerber: &crate::GerberX2, attribute: &crate::types::Attribute)
 }
 
 pub fn lower_artwork_layer(layer: &ArtworkDocument) -> Result<GerberLayer> {
-    let layer = pcb_ir::dialects::artwork::expand_instances(layer);
+    lower_artwork_layer_with_dialect(layer, crate::GerberDialect::Standard)
+}
+
+/// Lower artwork through the target Gerber dialect's IR legalization pass.
+pub fn lower_artwork_layer_with_dialect(
+    layer: &ArtworkDocument,
+    dialect: crate::GerberDialect,
+) -> Result<GerberLayer> {
+    let mut layer = pcb_ir::dialects::artwork::expand_instances(layer);
+    pcb_ir::dialects::artwork::legalize::legalize_for_target(
+        &mut layer,
+        dialect.artwork_capabilities(),
+    );
     let mut apertures = ApertureTable::default();
     let mut plan = GerberPlan::default();
     let layer_attributes = layer
@@ -1066,6 +1078,79 @@ mod tests {
         });
 
         assert!(attributes.is_empty());
+    }
+
+    #[test]
+    fn jlc_dialect_bakes_off_origin_aperture_rotation() {
+        let mut artwork = ArtworkDocument::new();
+        let aperture = artwork.push_aperture(Aperture::solid(ApertureShape::Contour {
+            // Deliberately asymmetric and off-origin, matching the class of
+            // custom aperture affected by JLC-002.
+            outline: ContourBuf::new(vec![
+                PathCmd::move_to(Point::new(1.0, 0.0)),
+                PathCmd::line_to(Point::new(2.0, 0.0)),
+                PathCmd::line_to(Point::new(1.0, 0.5)),
+                PathCmd::close(),
+            ]),
+            fill_rule: FillRule::NonZero,
+        }));
+        let layer = artwork.push_layer(IrArtworkDocument {
+            name: "B.Cu".to_string(),
+            role: LayerRole::Copper,
+            side: Side::Bottom,
+            objects: Span::EMPTY,
+            bbox: BBox::empty(),
+            meta: LayerAttributes {
+                file_function: vec!["Copper".to_string(), "L2".to_string(), "Bot".to_string()],
+                part: Some(vec!["Single".to_string()]),
+                file_polarity: Some("Positive".to_string()),
+                same_coordinates: Some(Vec::new()),
+            },
+        });
+        artwork.push_object(
+            layer,
+            ArtworkObject {
+                polarity: Polarity::Dark,
+                order: PaintOrder::default(),
+                geometry: ArtworkGeometry::Flash {
+                    aperture,
+                    transform: Affine2::placement(Point::new(10.0, 20.0), 90.0, Mirror::NONE, 1.0),
+                },
+                bbox: BBox::empty(),
+                meta: ObjectAttributes {
+                    aperture_function: Some(vec!["SMDPad".to_string(), "CuDef".to_string()]),
+                    ..ObjectAttributes::default()
+                },
+            },
+        );
+        pcb_ir::dialects::artwork::normalize_bounds(&mut artwork);
+
+        let standard = crate::write_layer(
+            &lower_artwork_layer_with_dialect(&artwork, crate::GerberDialect::Standard).unwrap(),
+        )
+        .unwrap();
+        let jlc = crate::write_layer(
+            &lower_artwork_layer_with_dialect(&artwork, crate::GerberDialect::Jlcpcb).unwrap(),
+        )
+        .unwrap();
+
+        assert!(standard.contains("%LR90*%"));
+        assert!(!jlc.contains("%LR"));
+        assert!(!jlc.contains("%LM"));
+        assert!(!jlc.contains("%LS"));
+        assert_eq!(jlc.matches("D03*").count(), 1);
+
+        let standard = crate::GerberX2::parse(&standard).unwrap();
+        let jlc = crate::GerberX2::parse(&jlc).unwrap();
+        let report = pcb_ir::dialects::artwork::compare::compare_documents(
+            &crate::geometry::extract_document(&standard),
+            &crate::geometry::extract_document(&jlc),
+            pcb_ir::dialects::artwork::compare::CompareTolerance {
+                bbox_mm: 1e-6,
+                area_mm2: 1e-6,
+            },
+        );
+        assert!(report.is_match(), "{:#?}", report.mismatches);
     }
 
     #[test]
