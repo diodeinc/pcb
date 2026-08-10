@@ -49,7 +49,7 @@ pub fn build_manufacturing_package(
     ipc: &Ipc2581,
     view: ArtworkScope,
 ) -> Result<ManufacturingPackage> {
-    build_manufacturing_package_inner(ipc, view, None, gerber::GerberDialect::Jlcpcb)
+    build_manufacturing_package_inner(ipc, view, None, gerber::GerberDialect::default())
 }
 
 pub fn build_manufacturing_package_with_options(

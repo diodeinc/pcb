@@ -11,7 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - KiCad Python scripts no longer inject package-specific module paths.
-- IPC-2581 Gerber exports now default to the JLCPCB dialect.
+- Gerber exports now default to the JLCPCB dialect.
 
 ### Fixed
 

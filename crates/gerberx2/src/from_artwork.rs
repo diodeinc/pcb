@@ -155,7 +155,7 @@ fn resolve_fields(gerber: &crate::GerberX2, attribute: &crate::types::Attribute)
 }
 
 pub fn lower_artwork_layer(layer: &ArtworkDocument) -> Result<GerberLayer> {
-    lower_artwork_layer_with_dialect(layer, crate::GerberDialect::Standard)
+    lower_artwork_layer_with_dialect(layer, crate::GerberDialect::default())
 }
 
 /// Lower artwork through the target Gerber dialect's IR legalization pass.
@@ -1081,7 +1081,7 @@ mod tests {
     }
 
     #[test]
-    fn jlc_dialect_bakes_off_origin_aperture_rotation() {
+    fn default_dialect_bakes_off_origin_aperture_rotation() {
         let mut artwork = ArtworkDocument::new();
         let aperture = artwork.push_aperture(Aperture::solid(ApertureShape::Contour {
             // Deliberately asymmetric and off-origin, matching the class of
@@ -1129,10 +1129,7 @@ mod tests {
             &lower_artwork_layer_with_dialect(&artwork, crate::GerberDialect::Standard).unwrap(),
         )
         .unwrap();
-        let jlc = crate::write_layer(
-            &lower_artwork_layer_with_dialect(&artwork, crate::GerberDialect::Jlcpcb).unwrap(),
-        )
-        .unwrap();
+        let jlc = crate::write_layer(&lower_artwork_layer(&artwork).unwrap()).unwrap();
 
         assert!(standard.contains("%LR90*%"));
         assert!(!jlc.contains("%LR"));
