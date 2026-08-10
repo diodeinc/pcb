@@ -1084,8 +1084,6 @@ mod tests {
     fn default_dialect_bakes_off_origin_aperture_rotation() {
         let mut artwork = ArtworkDocument::new();
         let aperture = artwork.push_aperture(Aperture::solid(ApertureShape::Contour {
-            // Deliberately asymmetric and off-origin, matching the class of
-            // custom aperture affected by JLC-002.
             outline: ContourBuf::new(vec![
                 PathCmd::move_to(Point::new(1.0, 0.0)),
                 PathCmd::line_to(Point::new(2.0, 0.0)),

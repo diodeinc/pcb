@@ -5,7 +5,7 @@ mod parse;
 pub mod types;
 pub mod write;
 
-pub use dialect::{GerberDialect, GerberImporterBug, JLCPCB_IMPORTER_BUGS};
+pub use dialect::GerberDialect;
 pub use pcb_intern::{Interner, Symbol};
 pub use types::*;
 pub use write::{

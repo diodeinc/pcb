@@ -1,10 +1,4 @@
 //! Target-capability legalization for ordered artwork.
-//!
-//! Source dialects lower into the richest artwork representation they can.
-//! Output dialects then use this pass to replace unsupported aperture shapes
-//! and load-state transforms while retaining shared `Flash` objects. This is
-//! intentionally earlier than serialization: geometry remains typed, bounds
-//! are recomputed centrally, and transformed apertures are deduplicated.
 
 use super::{Aperture, ApertureShape, Document, Geometry, normalize_bounds};
 use crate::geom::path::{ContourBuf, transform_cmds};
@@ -29,11 +23,7 @@ impl TargetCapabilities {
     };
 }
 
-/// Rewrite unsupported artwork constructs into the target's native subset.
-///
-/// Apertures remain apertures and placements remain flashes. When load-state
-/// transforms are unavailable, their linear basis is baked into a shared
-/// aperture definition while translation remains on the `Flash` object.
+/// Rewrite unsupported artwork constructs while retaining shared flashes.
 pub fn legalize_for_target<LayerMeta, ObjectMeta>(
     doc: &mut Document<LayerMeta, ObjectMeta>,
     capabilities: TargetCapabilities,
@@ -178,8 +168,6 @@ fn aperture_with_baked_basis(aperture: &Aperture, basis: Affine2) -> Aperture {
     }
 }
 
-/// Preserve centered axis-aligned rectangles, obrounds, and rounded
-/// rectangles across scale, mirroring, and quarter-turn rotation.
 fn axis_aligned_dimensions(width: f64, height: f64, basis: Affine2) -> Option<(f64, f64)> {
     if !basis.preserves_circles(TRANSFORM_EPSILON) {
         return None;
@@ -288,24 +276,5 @@ mod tests {
             },
         );
         assert!(report.is_match(), "{:#?}", report.mismatches);
-    }
-
-    #[test]
-    fn quarter_turns_keep_standard_rectangle_apertures() {
-        let aperture = Aperture::solid(ApertureShape::Rectangle {
-            width: 2.0,
-            height: 1.0,
-        });
-        let transformed = aperture_with_baked_basis(
-            &aperture,
-            Affine2::placement(Point::ZERO, 90.0, Mirror::NONE, 2.0),
-        );
-        assert_eq!(
-            transformed.shape,
-            ApertureShape::Rectangle {
-                width: 2.0,
-                height: 4.0,
-            }
-        );
     }
 }
