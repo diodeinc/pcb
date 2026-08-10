@@ -1,0 +1,311 @@
+//! Target-capability legalization for ordered artwork.
+//!
+//! Source dialects lower into the richest artwork representation they can.
+//! Output dialects then use this pass to replace unsupported aperture shapes
+//! and load-state transforms while retaining shared `Flash` objects. This is
+//! intentionally earlier than serialization: geometry remains typed, bounds
+//! are recomputed centrally, and transformed apertures are deduplicated.
+
+use super::{Aperture, ApertureShape, Document, Geometry, normalize_bounds};
+use crate::geom::path::{ContourBuf, transform_cmds};
+use crate::geom::{Affine2, Point};
+
+const TRANSFORM_EPSILON: f64 = 1e-9;
+
+/// Native aperture features accepted by an artwork output target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TargetCapabilities {
+    /// The target can encode [`ApertureShape::RoundRect`] directly.
+    pub round_rect_apertures: bool,
+    /// The target can apply a flash's linear transform at placement time.
+    pub aperture_transforms: bool,
+}
+
+impl TargetCapabilities {
+    /// Preserve every aperture shape and transform carried by artwork IR.
+    pub const NATIVE: Self = Self {
+        round_rect_apertures: true,
+        aperture_transforms: true,
+    };
+}
+
+/// Rewrite unsupported artwork constructs into the target's native subset.
+///
+/// Apertures remain apertures and placements remain flashes. When load-state
+/// transforms are unavailable, their linear basis is baked into a shared
+/// aperture definition while translation remains on the `Flash` object.
+pub fn legalize_for_target<LayerMeta, ObjectMeta>(
+    doc: &mut Document<LayerMeta, ObjectMeta>,
+    capabilities: TargetCapabilities,
+) {
+    if capabilities == TargetCapabilities::NATIVE {
+        return;
+    }
+
+    if !capabilities.round_rect_apertures {
+        replace_round_rect_apertures(doc);
+    }
+    if !capabilities.aperture_transforms {
+        bake_flash_transforms(doc);
+    }
+    normalize_bounds(doc);
+}
+
+fn replace_round_rect_apertures<LayerMeta, ObjectMeta>(doc: &mut Document<LayerMeta, ObjectMeta>) {
+    for aperture in &mut doc.apertures {
+        if matches!(aperture.shape, ApertureShape::RoundRect { .. }) {
+            *aperture = contour_aperture(aperture, Affine2::IDENTITY);
+        }
+    }
+}
+
+fn bake_flash_transforms<LayerMeta, ObjectMeta>(doc: &mut Document<LayerMeta, ObjectMeta>) {
+    for object_index in 0..doc.objects.len() {
+        let geometry = doc.objects[object_index].geometry;
+        doc.objects[object_index].geometry = legalize_flash_geometry(doc, geometry);
+    }
+    for block_index in 0..doc.blocks.len() {
+        for object_index in 0..doc.blocks[block_index].objects.len() {
+            let geometry = doc.blocks[block_index].objects[object_index].geometry;
+            let geometry = legalize_flash_geometry(doc, geometry);
+            doc.blocks[block_index].objects[object_index].geometry = geometry;
+        }
+    }
+}
+
+fn legalize_flash_geometry<LayerMeta, ObjectMeta>(
+    doc: &mut Document<LayerMeta, ObjectMeta>,
+    geometry: Geometry,
+) -> Geometry {
+    let Geometry::Flash {
+        aperture,
+        transform,
+    } = geometry
+    else {
+        return geometry;
+    };
+    if transform.is_translation() {
+        return geometry;
+    }
+    let Some(source) = doc.apertures.get(aperture as usize).cloned() else {
+        doc.warn(format!(
+            "Skipping target legalization for flash with missing aperture {aperture}"
+        ));
+        return geometry;
+    };
+
+    let basis = Affine2 {
+        m02: 0.0,
+        m12: 0.0,
+        ..transform
+    };
+    let aperture = doc.push_aperture(aperture_with_baked_basis(&source, basis));
+    Geometry::Flash {
+        aperture,
+        transform: Affine2::translation(Point::new(transform.m02, transform.m12)),
+    }
+}
+
+fn aperture_with_baked_basis(aperture: &Aperture, basis: Affine2) -> Aperture {
+    let similarity = basis.preserves_circles(TRANSFORM_EPSILON);
+    let scale = basis.m00.hypot(basis.m10);
+    let scaled_hole = || aperture.hole_diameter * scale;
+
+    match &aperture.shape {
+        ApertureShape::Circle { diameter } if similarity => Aperture {
+            shape: ApertureShape::Circle {
+                diameter: diameter * scale,
+            },
+            hole_diameter: scaled_hole(),
+        },
+        ApertureShape::Rectangle { width, height } => {
+            if let Some((width, height)) = axis_aligned_dimensions(*width, *height, basis) {
+                Aperture {
+                    shape: ApertureShape::Rectangle { width, height },
+                    hole_diameter: scaled_hole(),
+                }
+            } else {
+                contour_aperture(aperture, basis)
+            }
+        }
+        ApertureShape::Obround { width, height } => {
+            if let Some((width, height)) = axis_aligned_dimensions(*width, *height, basis) {
+                Aperture {
+                    shape: ApertureShape::Obround { width, height },
+                    hole_diameter: scaled_hole(),
+                }
+            } else {
+                contour_aperture(aperture, basis)
+            }
+        }
+        ApertureShape::Polygon {
+            diameter,
+            vertices,
+            rotation_degrees,
+        } if similarity => {
+            let radians = rotation_degrees.to_radians();
+            let first_vertex = basis.transform_vector(Point::new(radians.cos(), radians.sin()));
+            Aperture {
+                shape: ApertureShape::Polygon {
+                    diameter: diameter * scale,
+                    vertices: *vertices,
+                    rotation_degrees: first_vertex.y.atan2(first_vertex.x).to_degrees(),
+                },
+                hole_diameter: scaled_hole(),
+            }
+        }
+        ApertureShape::RoundRect {
+            width,
+            height,
+            radius,
+        } => {
+            if let Some((width, height)) = axis_aligned_dimensions(*width, *height, basis) {
+                Aperture {
+                    shape: ApertureShape::RoundRect {
+                        width,
+                        height,
+                        radius: radius * scale,
+                    },
+                    hole_diameter: scaled_hole(),
+                }
+            } else {
+                contour_aperture(aperture, basis)
+            }
+        }
+        ApertureShape::Contour { .. }
+        | ApertureShape::Circle { .. }
+        | ApertureShape::Polygon { .. } => contour_aperture(aperture, basis),
+    }
+}
+
+/// Preserve centered axis-aligned rectangles, obrounds, and rounded
+/// rectangles across scale, mirroring, and quarter-turn rotation.
+fn axis_aligned_dimensions(width: f64, height: f64, basis: Affine2) -> Option<(f64, f64)> {
+    if !basis.preserves_circles(TRANSFORM_EPSILON) {
+        return None;
+    }
+    let scale = basis.m00.hypot(basis.m10);
+    let epsilon = TRANSFORM_EPSILON * scale.max(1.0);
+    if basis.m01.abs() <= epsilon && basis.m10.abs() <= epsilon {
+        Some((width * scale, height * scale))
+    } else if basis.m00.abs() <= epsilon && basis.m11.abs() <= epsilon {
+        Some((height * scale, width * scale))
+    } else {
+        None
+    }
+}
+
+fn contour_aperture(aperture: &Aperture, basis: Affine2) -> Aperture {
+    let fill_rule = aperture.fill_rule();
+    let cmds = aperture
+        .contours()
+        .into_iter()
+        .flat_map(|contour| transform_cmds(contour.cmds, basis).cmds)
+        .collect();
+    Aperture::solid(ApertureShape::Contour {
+        outline: ContourBuf::new(cmds),
+        fill_rule,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dialects::artwork::compare::{CompareTolerance, compare_documents};
+    use crate::dialects::artwork::{Layer, Object};
+    use crate::dialects::{LayerRole, Side};
+    use crate::geom::{BBox, Mirror, Polarity, Span};
+
+    fn round_rect_document() -> Document<Vec<String>, ()> {
+        let mut doc = Document::new();
+        let aperture = doc.push_aperture(Aperture::solid(ApertureShape::RoundRect {
+            width: 2.0,
+            height: 1.0,
+            radius: 0.2,
+        }));
+        let layer = doc.push_layer(Layer {
+            name: "F.Cu".to_string(),
+            role: LayerRole::Copper,
+            side: Side::Top,
+            objects: Span::EMPTY,
+            bbox: BBox::empty(),
+            meta: vec!["Copper".to_string(), "L1".to_string(), "Top".to_string()],
+        });
+        for center in [Point::new(10.0, 20.0), Point::new(20.0, 20.0)] {
+            doc.push_object(
+                layer,
+                Object::new(
+                    Polarity::Dark,
+                    Geometry::Flash {
+                        aperture,
+                        transform: Affine2::placement(center, 45.0, Mirror::NONE, 1.0),
+                    },
+                ),
+            );
+        }
+        normalize_bounds(&mut doc);
+        doc
+    }
+
+    #[test]
+    fn legalizes_shapes_and_transforms_without_flattening_flashes() {
+        let reference = round_rect_document();
+        let mut candidate = reference.clone();
+        legalize_for_target(
+            &mut candidate,
+            TargetCapabilities {
+                round_rect_apertures: false,
+                aperture_transforms: false,
+            },
+        );
+
+        assert!(
+            candidate
+                .apertures
+                .iter()
+                .all(|aperture| !matches!(aperture.shape, ApertureShape::RoundRect { .. }))
+        );
+        assert!(candidate.objects.iter().all(|object| matches!(
+            object.geometry,
+            Geometry::Flash { transform, .. } if transform.is_translation()
+        )));
+        let first = candidate.objects[0].geometry;
+        let second = candidate.objects[1].geometry;
+        assert!(matches!(
+            (first, second),
+            (
+                Geometry::Flash { aperture: first, .. },
+                Geometry::Flash { aperture: second, .. }
+            ) if first == second
+        ));
+
+        let report = compare_documents(
+            &reference,
+            &candidate,
+            CompareTolerance {
+                bbox_mm: 1e-6,
+                area_mm2: 1e-6,
+            },
+        );
+        assert!(report.is_match(), "{:#?}", report.mismatches);
+    }
+
+    #[test]
+    fn quarter_turns_keep_standard_rectangle_apertures() {
+        let aperture = Aperture::solid(ApertureShape::Rectangle {
+            width: 2.0,
+            height: 1.0,
+        });
+        let transformed = aperture_with_baked_basis(
+            &aperture,
+            Affine2::placement(Point::ZERO, 90.0, Mirror::NONE, 2.0),
+        );
+        assert_eq!(
+            transformed.shape,
+            ApertureShape::Rectangle {
+                width: 2.0,
+                height: 4.0,
+            }
+        );
+    }
+}

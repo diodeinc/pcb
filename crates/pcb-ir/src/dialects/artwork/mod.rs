@@ -7,6 +7,7 @@
 //! dark/clear paint operations.
 
 pub mod compare;
+pub mod legalize;
 
 use crate::dialects::mask;
 use crate::dialects::{LayerRole, Side};
