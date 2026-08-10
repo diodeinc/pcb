@@ -7,9 +7,9 @@ use pcb_ir::dialects::artwork::legalize::TargetCapabilities;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum GerberDialect {
     /// Full Gerber output following the Ucamco specification.
-    #[default]
     Standard,
     /// Standards-compliant subset accepted reliably by JLCPCB.
+    #[default]
     Jlcpcb,
 }
 

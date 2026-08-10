@@ -49,7 +49,7 @@ impl Default for GerberExportOptions {
     fn default() -> Self {
         Self {
             relief_debug_dir: None,
-            dialect: GerberDialect::Jlcpcb,
+            dialect: GerberDialect::default(),
         }
     }
 }
