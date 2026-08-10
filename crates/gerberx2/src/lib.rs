@@ -1,11 +1,9 @@
-pub mod dialect;
 pub mod from_artwork;
 pub mod geometry;
 mod parse;
 pub mod types;
 pub mod write;
 
-pub use dialect::GerberDialect;
 pub use pcb_intern::{Interner, Symbol};
 pub use types::*;
 pub use write::{

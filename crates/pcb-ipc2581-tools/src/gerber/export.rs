@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use gerberx2::{GerberDialect, GerberLayer, write_layer};
+use gerberx2::{GerberLayer, write_layer};
 use ipc2581::Ipc2581;
 use ipc2581::types::{
     FillProperty, LayerFunction, Side as IpcSide, StandardPrimitive,
@@ -12,7 +12,7 @@ use ipc2581::types::{
 };
 
 use crate::geometry;
-use gerberx2::from_artwork::lower_artwork_layer_with_dialect;
+use gerberx2::from_artwork::lower_artwork_layer;
 use gerberx2::from_artwork::{ArtworkDocument as GerberArtwork, LayerAttributes, ObjectAttributes};
 use pcb_ir::dialects::artwork::{
     Aperture, ApertureShape, Geometry as ArtworkGeometry, Object as ArtworkObject, PaintOrder,
@@ -42,7 +42,6 @@ pub struct GerberX2File {
 #[derive(Debug, Clone, Default)]
 pub struct GerberExportOptions {
     pub relief_debug_dir: Option<PathBuf>,
-    pub dialect: GerberDialect,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -104,7 +103,7 @@ pub fn build_gerber_x2_files_with_options(
         {
             continue;
         }
-        let layer = lower_artwork_layer_with_dialect(&artwork, options.dialect)?;
+        let layer = lower_artwork_layer(&artwork)?;
         if plan.role == GerberLayerRole::Profile && layer.objects.is_empty() {
             continue;
         }
@@ -119,11 +118,8 @@ pub fn build_gerber_x2_files_with_options(
         files.extend(board_array_profile_gerber_files(
             ipc,
             options.relief_debug_dir.as_deref(),
-            options.dialect,
         )?);
-    } else if !has_profile_plan
-        && let Some(file) = synthetic_profile_gerber_file(ipc, view, options.dialect)?
-    {
+    } else if !has_profile_plan && let Some(file) = synthetic_profile_gerber_file(ipc, view)? {
         files.push(file);
     }
 
@@ -740,7 +736,6 @@ struct GerberArtworkSpec {
 fn synthetic_profile_gerber_file(
     ipc: &Ipc2581,
     view: ArtworkScope,
-    dialect: GerberDialect,
 ) -> Result<Option<GerberX2File>> {
     let doc = geometry::extract_layout(ipc)?;
     let mut artwork = GerberArtwork::new();
@@ -767,7 +762,7 @@ fn synthetic_profile_gerber_file(
         return Ok(None);
     }
 
-    let layer = lower_artwork_layer_with_dialect(&artwork, dialect)?;
+    let layer = lower_artwork_layer(&artwork)?;
     let contents = write_layer(&layer)?;
     Ok(Some(GerberX2File {
         filename: "Edge_Cuts.gm1".to_string(),
@@ -779,7 +774,6 @@ fn synthetic_profile_gerber_file(
 fn board_array_profile_gerber_files(
     ipc: &Ipc2581,
     relief_debug_dir: Option<&Path>,
-    dialect: GerberDialect,
 ) -> Result<Vec<GerberX2File>> {
     let doc = geometry::extract_layout(ipc)?;
     let score_lines = geometry::board_array_vscore_lines(ipc)?;
@@ -799,7 +793,6 @@ fn board_array_profile_gerber_files(
             "Board_Array_Profile.gm1",
             contour_groups,
             GerberPart::Array,
-            dialect,
         )?
         .into_iter()
         .collect());
@@ -811,21 +804,18 @@ fn board_array_profile_gerber_files(
             "Fab_Panel_Outline.gm1",
             profile.array_outlines,
             GerberPart::FabricationPanel,
-            dialect,
         )?,
         profile_gerber_file(
             "Assembly Panel Outlines",
             "Assembly_Panel_Outlines.gm1",
             profile.assembly_panel_outlines,
             GerberPart::FabricationPanel,
-            dialect,
         )?,
         profile_gerber_file(
             "Board Cutouts",
             "Board_Cutouts.gm1",
             vec![profile.material_removal],
             GerberPart::FabricationPanel,
-            dialect,
         )?,
     ]
     .into_iter()
@@ -838,7 +828,6 @@ fn profile_gerber_file(
     filename: &str,
     contour_groups: Vec<Vec<ContourBuf>>,
     part: GerberPart,
-    dialect: GerberDialect,
 ) -> Result<Option<GerberX2File>> {
     let mut artwork = GerberArtwork::new();
     let artwork_layer = artwork.push_layer(pcb_ir::dialects::artwork::Layer {
@@ -864,7 +853,7 @@ fn profile_gerber_file(
         return Ok(None);
     }
 
-    let layer = lower_artwork_layer_with_dialect(&artwork, dialect)?;
+    let layer = lower_artwork_layer(&artwork)?;
     let contents = write_layer(&layer)?;
     Ok(Some(GerberX2File {
         filename: filename.to_string(),
@@ -1738,39 +1727,7 @@ mod tests {
         assert!(!copper.contents.contains("%LR"));
         assert!(copper.contents.lines().any(|line| line.starts_with("4,")));
 
-        let standard_files = build_gerber_x2_files_with_options(
-            &ipc,
-            ArtworkScope::Board,
-            &GerberExportOptions {
-                dialect: GerberDialect::Standard,
-                ..GerberExportOptions::default()
-            },
-        )
-        .unwrap();
-        let standard_copper = standard_files
-            .iter()
-            .find(|file| file.filename == "F_Cu.gtl")
-            .unwrap();
-        assert!(standard_copper.contents.contains("%AMRoundedRect*"));
-        assert!(
-            standard_copper
-                .contents
-                .lines()
-                .any(|line| line.starts_with("21,"))
-        );
-        assert!(standard_copper.contents.contains("%LR45*%"));
-
         let parsed = gerberx2::GerberX2::parse(&copper.contents).unwrap();
-        let standard_parsed = gerberx2::GerberX2::parse(&standard_copper.contents).unwrap();
-        let report = pcb_ir::dialects::artwork::compare::compare_documents(
-            &gerberx2::geometry::extract_document(&standard_parsed),
-            &gerberx2::geometry::extract_document(&parsed),
-            pcb_ir::dialects::artwork::compare::CompareTolerance {
-                bbox_mm: 1e-6,
-                area_mm2: 1e-6,
-            },
-        );
-        assert!(report.is_match(), "{:#?}", report.mismatches);
         let mask = pcb_ir::dialects::artwork::compose_to_mask(
             &gerberx2::geometry::extract_document(&parsed),
         );
@@ -2769,7 +2726,6 @@ mod tests {
                 output: output_zip.clone(),
                 view: ArtworkScope::Board,
                 relief_debug_dir: None,
-                gerber_dialect: GerberDialect::Jlcpcb,
             },
         )
         .unwrap();

@@ -1,4 +1,4 @@
-//! Target-capability legalization for ordered artwork.
+//! Gerber importer legalization for ordered artwork.
 
 use super::{Aperture, ApertureShape, Document, Geometry, normalize_bounds};
 use crate::geom::path::{ContourBuf, transform_cmds};
@@ -6,38 +6,13 @@ use crate::geom::{Affine2, Point};
 
 const TRANSFORM_EPSILON: f64 = 1e-9;
 
-/// Native aperture features accepted by an artwork output target.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TargetCapabilities {
-    /// The target can encode [`ApertureShape::RoundRect`] directly.
-    pub round_rect_apertures: bool,
-    /// The target can apply a flash's linear transform at placement time.
-    pub aperture_transforms: bool,
-}
-
-impl TargetCapabilities {
-    /// Preserve every aperture shape and transform carried by artwork IR.
-    pub const NATIVE: Self = Self {
-        round_rect_apertures: true,
-        aperture_transforms: true,
-    };
-}
-
-/// Rewrite unsupported artwork constructs while retaining shared flashes.
-pub fn legalize_for_target<LayerMeta, ObjectMeta>(
-    doc: &mut Document<LayerMeta, ObjectMeta>,
-    capabilities: TargetCapabilities,
-) {
-    if capabilities == TargetCapabilities::NATIVE {
-        return;
-    }
-
-    if !capabilities.round_rect_apertures {
-        replace_round_rect_apertures(doc);
-    }
-    if !capabilities.aperture_transforms {
-        bake_flash_transforms(doc);
-    }
+/// Rewrite artwork for JLCPCB's Gerber importer while retaining shared flashes.
+///
+/// JLCPCB renders primitive 21 rounded rectangles oversized and shifts
+/// off-origin custom apertures using `%LR`.
+pub fn legalize_for_jlcpcb<LayerMeta, ObjectMeta>(doc: &mut Document<LayerMeta, ObjectMeta>) {
+    replace_round_rect_apertures(doc);
+    bake_flash_transforms(doc);
     normalize_bounds(doc);
 }
 
@@ -239,13 +214,7 @@ mod tests {
     fn legalizes_shapes_and_transforms_without_flattening_flashes() {
         let reference = round_rect_document();
         let mut candidate = reference.clone();
-        legalize_for_target(
-            &mut candidate,
-            TargetCapabilities {
-                round_rect_apertures: false,
-                aperture_transforms: false,
-            },
-        );
+        legalize_for_jlcpcb(&mut candidate);
 
         assert!(
             candidate
