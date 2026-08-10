@@ -155,19 +155,8 @@ fn resolve_fields(gerber: &crate::GerberX2, attribute: &crate::types::Attribute)
 }
 
 pub fn lower_artwork_layer(layer: &ArtworkDocument) -> Result<GerberLayer> {
-    lower_artwork_layer_with_dialect(layer, crate::GerberDialect::default())
-}
-
-/// Lower artwork through the target Gerber dialect's IR legalization pass.
-pub fn lower_artwork_layer_with_dialect(
-    layer: &ArtworkDocument,
-    dialect: crate::GerberDialect,
-) -> Result<GerberLayer> {
     let mut layer = pcb_ir::dialects::artwork::expand_instances(layer);
-    pcb_ir::dialects::artwork::legalize::legalize_for_target(
-        &mut layer,
-        dialect.artwork_capabilities(),
-    );
+    pcb_ir::dialects::artwork::legalize::legalize_for_jlcpcb(&mut layer);
     let mut apertures = ApertureTable::default();
     let mut plan = GerberPlan::default();
     let layer_attributes = layer
@@ -1081,7 +1070,7 @@ mod tests {
     }
 
     #[test]
-    fn default_dialect_bakes_off_origin_aperture_rotation() {
+    fn lowering_bakes_off_origin_aperture_rotation() {
         let mut artwork = ArtworkDocument::new();
         let aperture = artwork.push_aperture(Aperture::solid(ApertureShape::Contour {
             outline: ContourBuf::new(vec![
@@ -1123,29 +1112,13 @@ mod tests {
         );
         pcb_ir::dialects::artwork::normalize_bounds(&mut artwork);
 
-        let standard = crate::write_layer(
-            &lower_artwork_layer_with_dialect(&artwork, crate::GerberDialect::Standard).unwrap(),
-        )
-        .unwrap();
-        let jlc = crate::write_layer(&lower_artwork_layer(&artwork).unwrap()).unwrap();
+        let gerber = crate::write_layer(&lower_artwork_layer(&artwork).unwrap()).unwrap();
 
-        assert!(standard.contains("%LR90*%"));
-        assert!(!jlc.contains("%LR"));
-        assert!(!jlc.contains("%LM"));
-        assert!(!jlc.contains("%LS"));
-        assert_eq!(jlc.matches("D03*").count(), 1);
-
-        let standard = crate::GerberX2::parse(&standard).unwrap();
-        let jlc = crate::GerberX2::parse(&jlc).unwrap();
-        let report = pcb_ir::dialects::artwork::compare::compare_documents(
-            &crate::geometry::extract_document(&standard),
-            &crate::geometry::extract_document(&jlc),
-            pcb_ir::dialects::artwork::compare::CompareTolerance {
-                bbox_mm: 1e-6,
-                area_mm2: 1e-6,
-            },
-        );
-        assert!(report.is_match(), "{:#?}", report.mismatches);
+        assert!(!gerber.contains("%LR"));
+        assert!(!gerber.contains("%LM"));
+        assert!(!gerber.contains("%LS"));
+        assert_eq!(gerber.matches("D03*").count(), 1);
+        crate::GerberX2::parse(&gerber).unwrap();
     }
 
     #[test]

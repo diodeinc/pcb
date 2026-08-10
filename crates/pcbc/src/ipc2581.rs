@@ -5,21 +5,6 @@ use pcb_ipc2581_tools::{
     LayoutTarget, OutputFormat, RenderFormat, UnitFormat, ViewMode, commands, manufacturing, utils,
 };
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum GerberDialectArg {
-    Standard,
-    Jlcpcb,
-}
-
-impl From<GerberDialectArg> for pcb_ipc2581_tools::gerber::GerberDialect {
-    fn from(value: GerberDialectArg) -> Self {
-        match value {
-            GerberDialectArg::Standard => Self::Standard,
-            GerberDialectArg::Jlcpcb => Self::Jlcpcb,
-        }
-    }
-}
-
 #[derive(Args)]
 pub struct Ipc2581Args {
     #[command(subcommand)]
@@ -167,9 +152,6 @@ enum Commands {
         /// Output directory, or a .zip file for an archived manufacturing package
         #[arg(short, long, value_hint = clap::ValueHint::AnyPath)]
         output: PathBuf,
-        /// Gerber consumer dialect. JLCPCB avoids confirmed importer defects.
-        #[arg(long, value_enum, default_value = "jlcpcb")]
-        dialect: GerberDialectArg,
         /// Write V-score relief debug SVGs to this directory.
         #[arg(long, hide = true, value_hint = clap::ValueHint::DirPath)]
         debug_reliefs: Option<PathBuf>,
@@ -494,7 +476,6 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
             file,
             layout_target,
             output,
-            dialect,
             debug_reliefs,
         } => {
             let package = manufacturing::execute_file_with_options(
@@ -503,7 +484,6 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                     output: output.clone(),
                     view: layout_target.artwork_scope(),
                     relief_debug_dir: debug_reliefs,
-                    gerber_dialect: dialect.into(),
                 },
             )?;
             println!(
