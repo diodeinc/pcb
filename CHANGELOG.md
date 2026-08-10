@@ -15,6 +15,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - KiCad imports now preserve stackups with more than ten copper layers.
+- Gerber exports now emit specification-correct polarity, alignment, part, aperture, and object attributes.
 
 ## [0.4.26] - 2026-08-08
 

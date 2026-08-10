@@ -297,7 +297,7 @@ fn exports_separate_nominal_panel_outlines_and_board_cutouts() {
             .find(|file| file.filename == filename)
             .unwrap_or_else(|| panic!("missing {filename}"));
         assert!(file.contents.contains("%TF.FileFunction,Profile,NP*%"));
-        assert!(file.contents.contains("%TF.Part,Array*%"));
+        assert!(file.contents.contains("%TF.Part,FabricationPanel*%"));
         assert!(file.contents.contains("%TA.AperFunction,Profile*%"));
         assert!(file.contents.contains("%ADD10C,0.05*%"));
         assert!(!file.contents.contains("C,1*%"));

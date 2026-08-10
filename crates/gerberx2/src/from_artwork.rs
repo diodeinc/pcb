@@ -24,6 +24,7 @@ pub struct LayerAttributes {
     pub file_function: Vec<String>,
     pub part: Option<Vec<String>>,
     pub file_polarity: Option<String>,
+    pub same_coordinates: Option<Vec<String>>,
 }
 
 /// Gerber X2 object attributes carried as artwork object metadata.
@@ -89,6 +90,7 @@ pub fn annotate_for_export(
                     part: file_attribute_fields(gerber, ".Part"),
                     file_polarity: file_attribute_fields(gerber, ".FilePolarity")
                         .and_then(|fields| fields.into_iter().next()),
+                    same_coordinates: file_attribute_fields(gerber, ".SameCoordinates"),
                 },
             })
             .collect(),
@@ -184,6 +186,7 @@ fn lower_artwork_object(
     apertures: &mut ApertureTable,
 ) -> Result<Vec<WriterObject>> {
     let attributes = lower_object_attributes(&object.meta);
+    let aperture_attributes = lower_aperture_attributes(&object.meta);
     let mut objects = Vec::new();
     match object.geometry {
         ArtworkGeometry::Region { path } => {
@@ -191,6 +194,7 @@ fn lower_artwork_object(
                 layer,
                 path,
                 object.polarity,
+                &aperture_attributes,
                 &attributes,
             )?);
         }
@@ -220,6 +224,7 @@ fn lower_artwork_object(
                                 kind: lower_stroke_segment(segment, aperture),
                                 polarity: object.polarity,
                                 aperture_transform: WriterApertureTransform::default(),
+                                aperture_attributes: Vec::new(),
                                 attributes: attributes.clone(),
                             }));
                         }
@@ -230,6 +235,7 @@ fn lower_artwork_object(
                             },
                             polarity: object.polarity,
                             aperture_transform: WriterApertureTransform::default(),
+                            aperture_attributes: Vec::new(),
                             attributes: attributes.clone(),
                         }),
                     }
@@ -284,6 +290,7 @@ fn lower_artwork_object(
                 kind: ObjectKind::Flash { at, aperture },
                 polarity: object.polarity,
                 aperture_transform,
+                aperture_attributes: Vec::new(),
                 attributes,
             });
         }
@@ -801,6 +808,12 @@ fn lower_layer_attributes(attributes: &LayerAttributes) -> Vec<AttributeValue> {
             [file_polarity.clone()],
         ));
     }
+    if let Some(same_coordinates) = &attributes.same_coordinates {
+        values.push(AttributeValue::new(
+            ".SameCoordinates",
+            same_coordinates.iter().cloned(),
+        ));
+    }
     values
 }
 
@@ -808,6 +821,7 @@ fn lower_region_objects(
     layer: &ArtworkDocument,
     path_index: u32,
     polarity: Polarity,
+    aperture_attributes: &[AttributeValue],
     attributes: &[AttributeValue],
 ) -> Result<Vec<WriterObject>> {
     let artwork_path = &layer.arena.paths[path_index as usize];
@@ -822,6 +836,7 @@ fn lower_region_objects(
             },
             polarity,
             aperture_transform: WriterApertureTransform::default(),
+            aperture_attributes: aperture_attributes.to_vec(),
             attributes: attributes.to_vec(),
         })
         .collect())
@@ -924,6 +939,18 @@ fn lower_object_attributes(attributes: &ObjectAttributes) -> Vec<AttributeValue>
         values.push(AttributeValue::new(".N", [sanitize_attribute_field(net)]));
     }
     values
+}
+
+fn lower_aperture_attributes(attributes: &ObjectAttributes) -> Vec<AttributeValue> {
+    attributes
+        .aperture_function
+        .as_ref()
+        .map_or_else(Vec::new, |function| {
+            vec![AttributeValue::new(
+                ".AperFunction",
+                function.iter().cloned(),
+            )]
+        })
 }
 
 fn lower_point(point: Point) -> GerberPoint {

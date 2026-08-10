@@ -625,7 +625,7 @@ fn created_board_array_vcuts_flow_to_svg_and_gerber() {
         .iter()
         .find(|file| file.filename == "V_Cut.gbr")
         .unwrap();
-    assert!(vcut.contents.contains("%TF.FileFunction,Vcut,Top/Bot*%"));
+    assert!(vcut.contents.contains("%TF.FileFunction,Vcut*%"));
     assert!(vcut.contents.contains("%TF.Part,Array*%"));
     assert!(vcut.contents.contains("%TA.AperFunction,Other,Vcut*%"));
     assert!(!vcut.contents.contains("G36*"));
@@ -880,10 +880,8 @@ fn generated_array_geometry_writes_fiducials_and_nonplated_holes() {
         top.contents
             .contains("%TA.AperFunction,FiducialPad,Global*%")
     );
-    assert!(
-        mask.contents
-            .contains("%TA.AperFunction,FiducialPad,Global*%")
-    );
+    assert!(mask.contents.contains("%TA.AperFunction,Material*%"));
+    assert!(!mask.contents.contains("%TA.AperFunction,FiducialPad"));
     assert!(drill.contents.contains("; #@! TF.FileFunction,NonPlated"));
     assert!(
         drill
@@ -1751,7 +1749,7 @@ fn assert_two_sided_fiducials(
 
 fn assert_fiducial_gerbers(package: &ManufacturingPackage, kind: &str) {
     let attribute = format!("%TA.AperFunction,FiducialPad,{kind}*%");
-    for filename in ["F_Cu.gtl", "F_Mask.gts", "B_Cu.gbl", "B_Mask.gbs"] {
+    for filename in ["F_Cu.gtl", "B_Cu.gbl"] {
         let file = package
             .files
             .iter()
@@ -1761,6 +1759,15 @@ fn assert_fiducial_gerbers(package: &ManufacturingPackage, kind: &str) {
             file.contents.contains(&attribute),
             "{filename} is missing {kind} fiducial metadata"
         );
+    }
+    for filename in ["F_Mask.gts", "B_Mask.gbs"] {
+        let file = package
+            .files
+            .iter()
+            .find(|file| file.filename == filename)
+            .unwrap();
+        assert!(file.contents.contains("%TA.AperFunction,Material*%"));
+        assert!(!file.contents.contains("%TA.AperFunction,FiducialPad"));
     }
 }
 
