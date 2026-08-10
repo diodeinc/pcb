@@ -39,19 +39,10 @@ pub struct GerberX2File {
     pub contents: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct GerberExportOptions {
     pub relief_debug_dir: Option<PathBuf>,
     pub dialect: GerberDialect,
-}
-
-impl Default for GerberExportOptions {
-    fn default() -> Self {
-        Self {
-            relief_debug_dir: None,
-            dialect: GerberDialect::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
