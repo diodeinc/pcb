@@ -475,8 +475,7 @@ fn sync_layout_down(
         match prompt_restore_recovery(status, &session)? {
             Some(RecoveryChoice::Restore) => recovered_session = Some(session),
             Some(RecoveryChoice::Discard) => mark_recoverable_sessions_prompt_seen(&cache_root),
-            Some(RecoveryChoice::Cancel) => return Ok(None),
-            None => {}
+            Some(RecoveryChoice::Cancel) | None => return Ok(None),
         }
     }
 
