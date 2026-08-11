@@ -26,7 +26,7 @@ pub(super) fn reduce(netlist: &Schematic) -> Result<ConnectivityGraph> {
         .into_iter()
         .filter_map(|net| {
             let name = net.name.as_str();
-            if name.is_empty() {
+            if net.kind == "NotConnected" || name.is_empty() {
                 return None;
             }
             let mut terminals = net
@@ -52,6 +52,16 @@ pub(super) fn reduce(netlist: &Schematic) -> Result<ConnectivityGraph> {
         .collect();
 
     Ok(ConnectivityGraph { components, groups })
+}
+
+pub(super) fn not_connected_terminals(netlist: &Schematic) -> BTreeSet<Terminal> {
+    netlist
+        .nets
+        .values()
+        .filter(|net| net.kind == "NotConnected")
+        .flat_map(|net| &net.ports)
+        .filter_map(|port| component_terminal(netlist, port))
+        .collect()
 }
 
 fn component_terminal(netlist: &Schematic, port: &InstanceRef) -> Option<Terminal> {

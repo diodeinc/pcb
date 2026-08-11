@@ -9,7 +9,8 @@ use crate::{
     SchDocument, SchItem, SymbolSlotKey,
     connectivity::{
         ComponentIdentity, ComponentOrigin, ConnectionGroup, ConnectionOrigin, ConnectivityGraph,
-        IslandRef, SymbolLocation, Terminal, reduce_visible_with_provenance,
+        ConnectivityItemRef, IslandProvenance, IslandRef, KiCadConnectivity, SymbolLocation,
+        Terminal, not_connected_terminals, reduce_visible_with_provenance,
     },
     symbol,
 };
@@ -106,8 +107,52 @@ pub fn analyze_schematic(
 ) -> anyhow::Result<ConnectivityAnalysis> {
     Ok(analyze_connectivity(
         &expected_reconcilable_connectivity(document, netlist)?,
-        &reduce_visible_with_provenance(document)?.graph,
+        &observed_reconcilable_connectivity(document, netlist)?.graph,
     ))
+}
+
+pub(crate) fn observed_reconcilable_connectivity(
+    document: &SchDocument,
+    netlist: &Schematic,
+) -> anyhow::Result<KiCadConnectivity> {
+    let mut observed = reduce_visible_with_provenance(document)?;
+    let not_connected = not_connected_terminals(netlist);
+    let islands = &observed.islands;
+    observed
+        .graph
+        .groups
+        .retain(|group| !is_open_not_connected_group(group, islands, &not_connected));
+    Ok(observed)
+}
+
+fn is_open_not_connected_group(
+    group: &ConnectionGroup,
+    islands: &BTreeMap<IslandRef, IslandProvenance>,
+    not_connected: &BTreeSet<Terminal>,
+) -> bool {
+    if !group.names.is_empty() || group.terminals.len() != 1 {
+        return false;
+    }
+    let terminal = group.terminals.first().expect("checked one terminal");
+    if !not_connected
+        .iter()
+        .any(|candidate| terminals_match(candidate, terminal))
+    {
+        return false;
+    }
+    let mut origins = group.origins.iter();
+    let Some(ConnectionOrigin::KiCadIsland(island)) = origins.next() else {
+        return false;
+    };
+    if origins.next().is_some() {
+        return false;
+    }
+    islands.get(island).is_some_and(|provenance| {
+        provenance
+            .items
+            .iter()
+            .all(|item| matches!(item, ConnectivityItemRef::NoConnect { .. }))
+    })
 }
 
 pub(crate) fn expected_reconcilable_connectivity(
@@ -610,6 +655,46 @@ mod tests {
         assert!(terminals_match(&terminal("A", "1"), &terminal("A", "2")));
         assert!(terminals_match(&terminal("A", "1"), &terminal("B", "1")));
         assert!(!terminals_match(&terminal("A", "1"), &terminal("1", "2")));
+    }
+
+    #[test]
+    fn not_connected_terminal_rejects_an_attached_wire() {
+        let terminal = Terminal::ComponentPin {
+            component: ComponentIdentity::ManagedPath("U1".to_string()),
+            pin_name: "NC".to_string(),
+            pin_numbers: BTreeSet::from(["1".to_string()]),
+        };
+        let island = IslandRef {
+            page_id: "page".to_string(),
+            index: 0,
+        };
+        let group = ConnectionGroup {
+            names: BTreeSet::new(),
+            terminals: BTreeSet::from([terminal.clone()]),
+            origins: BTreeSet::from([ConnectionOrigin::KiCadIsland(island.clone())]),
+        };
+        let mut islands = BTreeMap::from([(island, IslandProvenance::default())]);
+        let not_connected = BTreeSet::from([terminal]);
+
+        assert!(is_open_not_connected_group(
+            &group,
+            &islands,
+            &not_connected
+        ));
+        islands
+            .values_mut()
+            .next()
+            .unwrap()
+            .items
+            .insert(ConnectivityItemRef::Wire {
+                page_id: "page".to_string(),
+                id: "wire".to_string(),
+            });
+        assert!(!is_open_not_connected_group(
+            &group,
+            &islands,
+            &not_connected
+        ));
     }
 
     #[test]

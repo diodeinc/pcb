@@ -9,12 +9,9 @@ use crate::{
     SchDocument, SchItem, SchPage,
     analysis::{
         SchematicIssue, analyze_connectivity, expected_reconcilable_connectivity, logical_name,
-        terminals_match,
+        observed_reconcilable_connectivity, terminals_match,
     },
-    connectivity::{
-        ConnectivityGraph, ConnectivityItemRef, IslandProvenance, Terminal,
-        reduce_visible_with_provenance,
-    },
+    connectivity::{ConnectivityGraph, ConnectivityItemRef, IslandProvenance, Terminal},
 };
 
 /// A deterministic, UUID-addressed connectivity repair decision.
@@ -55,14 +52,14 @@ pub(crate) fn plan_connectivity_repair_with(
     initialize_all_nets: bool,
 ) -> Result<ConnectivityRepairPlan> {
     let expected = expected_reconcilable_connectivity(document, netlist)?;
-    let observed = reduce_visible_with_provenance(document)?;
+    let observed = observed_reconcilable_connectivity(document, netlist)?;
     let analysis = analyze_connectivity(&expected, &observed.graph);
     let mut removals = BTreeSet::new();
     let mut reconnect_nets = if initialize_all_nets {
         netlist
             .nets
             .values()
-            .filter(|net| !net.name.is_empty())
+            .filter(|net| net.kind != "NotConnected" && !net.name.is_empty())
             .map(|net| net.name.clone())
             .collect()
     } else {
@@ -120,7 +117,7 @@ pub(crate) fn plan_connectivity_repair_with(
     remove_items(&mut simulated, &removals)?;
 
     loop {
-        let current_observed = reduce_visible_with_provenance(&simulated)?;
+        let current_observed = observed_reconcilable_connectivity(&simulated, netlist)?;
         let current_analysis = analyze_connectivity(&expected, &current_observed.graph);
         let current_problems = repair_problems(current_analysis.issues());
         let Some(issue) = current_analysis.issues().iter().find(|issue| {
@@ -137,7 +134,7 @@ pub(crate) fn plan_connectivity_repair_with(
         for candidate in candidates {
             let mut next = simulated.clone();
             remove_items(&mut next, &BTreeSet::from([candidate.clone()]))?;
-            let next_observed = reduce_visible_with_provenance(&next)?;
+            let next_observed = observed_reconcilable_connectivity(&next, netlist)?;
             let next_analysis = analyze_connectivity(&expected, &next_observed.graph);
             let next_problems = repair_problems(next_analysis.issues());
             if next_problems.is_subset(&current_problems)
@@ -165,7 +162,7 @@ pub(crate) fn plan_connectivity_repair_with(
 
     let after_removal = analyze_connectivity(
         &expected,
-        &reduce_visible_with_provenance(&simulated)?.graph,
+        &observed_reconcilable_connectivity(&simulated, netlist)?.graph,
     );
     for issue in after_removal.issues() {
         match issue {
