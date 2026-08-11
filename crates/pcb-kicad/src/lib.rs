@@ -253,6 +253,10 @@ pub struct PcbnewSession {
 }
 
 impl PcbnewSession {
+    pub fn id(&self) -> u32 {
+        self.child.id()
+    }
+
     pub fn try_wait(&mut self) -> Result<Option<std::process::ExitStatus>> {
         self.child
             .try_wait()
