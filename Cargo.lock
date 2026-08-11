@@ -4318,6 +4318,7 @@ name = "pcb-kicad-sch"
 version = "0.4.28"
 dependencies = [
  "anyhow",
+ "atomicwrites",
  "insta",
  "pcb-sch",
  "pcb-sexpr",
@@ -4589,6 +4590,7 @@ dependencies = [
  "pcb-ipc2581-tools",
  "pcb-ir",
  "pcb-kicad",
+ "pcb-kicad-sch",
  "pcb-layout",
  "pcb-sch",
  "pcb-sexpr",

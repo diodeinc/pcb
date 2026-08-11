@@ -692,28 +692,43 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
 
     // Use build function with offline mode but allow warnings
     // Suspend spinner during build to allow diagnostics to render properly
-    let (has_errors, has_warnings, schematic) = spinner.suspend(|| {
+    let (has_errors, has_warnings, has_schematic_warnings, schematic) = spinner.suspend(|| {
         let mut has_errors = false;
         let mut has_warnings = false;
 
         // Export diagnostics to JSON for release artifacts
-        let mut passes = crate::build::create_diagnostics_passes(&[], &[]);
+        let mut passes = crate::build::create_diagnostics_passes(&info.suppress, &[]);
         passes.push(Box::new(pcb_zen_core::JsonExportPass::new(
             info.staging_dir.join("diagnostics.json"),
             zen_file_rel.display().to_string(),
         )));
 
-        let schematic = crate::build::build(
+        let result = crate::build::BuildEvalState::new(staged_resolution).build(
             &staged_zen_path,
             Default::default(),
             passes,
             false, // don't deny warnings - we'll prompt user instead
             &mut has_errors,
             &mut has_warnings,
-            staged_resolution,
         );
-        (has_errors, has_warnings, schematic)
+        let has_schematic_warnings =
+            crate::schematic_diagnostics::has_unsuppressed_schematic_diagnostics(
+                &result.diagnostics,
+            );
+        (
+            has_errors,
+            has_warnings,
+            has_schematic_warnings,
+            result.schematic,
+        )
     });
+
+    if has_schematic_warnings {
+        anyhow::bail!(
+            "Linked KiCad schematic is not equivalent. Run `pcb apply schematic {}` before publishing.",
+            info.zen_path.display()
+        );
+    }
 
     if has_errors
         && !confirm_continue_on_error(

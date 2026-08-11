@@ -1,5 +1,7 @@
 """Minimal schematic-analysis regression design."""
 
+Project(name="Simple", path="kicad", layout=False)
+
 Resistor = Module("@stdlib/generics/Resistor.zen")
 
 LEFT = Net("LEFT")

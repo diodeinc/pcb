@@ -837,6 +837,12 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
             if let Some(path) = sym.source_uri() {
                 properties.insert("symbol_path".to_string(), heap.alloc_str(path).to_value());
             }
+            if let Some(version) = sym.source_format_version() {
+                properties.insert(
+                    pcb_sch::ATTR_SYMBOL_FORMAT_VERSION.to_string(),
+                    heap.alloc(version),
+                );
+            }
             if let Some(raw_sexp) = sym.raw_sexp() {
                 properties.insert(
                     "__symbol_value".to_string(),

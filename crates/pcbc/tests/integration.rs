@@ -1,3 +1,4 @@
+mod apply;
 mod auth_git;
 mod bom;
 mod build;

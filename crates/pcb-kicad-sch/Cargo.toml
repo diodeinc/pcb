@@ -9,6 +9,7 @@ description = "KiCad schematic project model and netlist analysis"
 
 [dependencies]
 anyhow = { workspace = true }
+atomicwrites = { workspace = true }
 pcb-sch = { workspace = true }
 pcb-sexpr = { workspace = true, features = ["serde"] }
 serde = { workspace = true }
