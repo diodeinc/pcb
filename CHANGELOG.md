@@ -13,6 +13,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Gerber exports regularize filled contours to a 1 µm grid, emit the resulting geometry directly without inferred arc reconstruction, and preserve regular board grids with standard step-repeat.
 - Gerber exports bake aperture transforms into aperture geometry instead of load transform commands.
 - Explicit IPC feature semantics keep pads and full copper-balance cells as reusable flashes, while clipped cells and other copper artwork export as regions; generated balance objects retain the `CopperBalancing` aperture function.
+- Gerber exports coalesce compatible step-repeat blocks and omit unchanged modal coordinate axes for smaller, faster-to-import files.
 
 ## [0.4.27] - 2026-08-10
 

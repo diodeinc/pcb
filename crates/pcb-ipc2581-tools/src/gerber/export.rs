@@ -2921,7 +2921,8 @@ mod tests {
             "the three panel placements each retain one board grid"
         );
         assert!(!top.contents.contains("%ABD"));
-        assert_eq!(top.contents.matches("%SRX2Y1I14J0*%").count(), 3);
+        assert_eq!(top.contents.matches("%SRX2Y1I14J0*%").count(), 1);
+        assert_eq!(top.contents.matches("%SR*%").count(), 1);
         assert!(!top.contents.contains("%SRX3Y1I30J0*%"));
         assert!(!top.contents.contains("%LM"));
         assert!(!top.contents.contains("%LR"));
