@@ -13,6 +13,7 @@ Usage: pcbc <COMMAND>
 Commands:
   auth        Manage authentication
   build       Build PCB projects
+  apply       Apply a Zener design to its linked KiCad project
   test        Run tests in .zen files
   migrate     Migrate PCB projects
   mod         Manage package dependency manifests
