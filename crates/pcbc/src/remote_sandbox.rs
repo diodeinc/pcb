@@ -162,6 +162,8 @@ struct SyncSessionManifest {
     layout_file: PathBuf,
     state: SyncSessionState,
     stop_reason: Option<RecoverableStopReason>,
+    #[serde(default)]
+    editor_pid: Option<u32>,
     prompt_seen: bool,
     started_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
@@ -206,7 +208,6 @@ fn open_layout_and_sync(
                 local.pcb_file.display()
             )
         })?;
-    sync_session.mark_active()?;
     let running = install_shutdown_flag()?;
     status.set_message(format!("Opening {}...", local.pcb_file.display()));
     let watcher = LocalLayoutWatcher::new(&local.local_layout_dir)?;
@@ -217,6 +218,7 @@ fn open_layout_and_sync(
             return Err(err);
         }
     };
+    sync_session.mark_active(session.id())?;
     status.set_message(format!(
         "Watching {} for KiCad changes...",
         local.local_layout_dir.display()
@@ -694,6 +696,7 @@ impl SyncSession {
                 layout_file,
                 state: SyncSessionState::Active,
                 stop_reason: None,
+                editor_pid: None,
                 prompt_seen: false,
                 started_at: now,
                 updated_at: now,
@@ -715,9 +718,10 @@ impl SyncSession {
         })
     }
 
-    fn mark_active(&mut self) -> Result<()> {
+    fn mark_active(&mut self, editor_pid: u32) -> Result<()> {
         self.manifest.state = SyncSessionState::Active;
         self.manifest.stop_reason = None;
+        self.manifest.editor_pid = Some(editor_pid);
         self.manifest.updated_at = Utc::now();
         self.save()
     }
@@ -725,6 +729,7 @@ impl SyncSession {
     fn mark_complete(&mut self) -> Result<()> {
         self.manifest.state = SyncSessionState::Complete;
         self.manifest.stop_reason = None;
+        self.manifest.editor_pid = None;
         self.manifest.prompt_seen = true;
         self.manifest.updated_at = Utc::now();
         self.save()
@@ -769,6 +774,16 @@ fn latest_recoverable_session(cache_root: &Path) -> Result<Option<SyncSession>> 
         };
         if !is_recovery_candidate(&session.manifest) {
             continue;
+        }
+        if session
+            .manifest
+            .editor_pid
+            .is_some_and(editor_process_is_running)
+        {
+            bail!(
+                "KiCad is still open for {}. Close that KiCad window before opening this board again.",
+                session.manifest.layout_file.display()
+            );
         }
         if latest
             .as_ref()
@@ -857,6 +872,42 @@ fn is_recovery_candidate(manifest: &SyncSessionManifest) -> bool {
         SyncSessionState::Active | SyncSessionState::Recoverable
     ) && !manifest.prompt_seen
         && manifest.layout_file.is_file()
+}
+
+#[cfg(unix)]
+fn editor_process_is_running(pid: u32) -> bool {
+    std::process::Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+#[cfg(windows)]
+fn editor_process_is_running(pid: u32) -> bool {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let mut command = std::process::Command::new("tasklist.exe");
+    command.creation_flags(CREATE_NO_WINDOW).args([
+        "/FI",
+        &format!("PID eq {pid}"),
+        "/FO",
+        "CSV",
+        "/NH",
+    ]);
+    command.output().is_ok_and(|output| {
+        output.status.success()
+            && String::from_utf8_lossy(&output.stdout)
+                .split(',')
+                .any(|field| field.trim_matches([' ', '\r', '\n', '"']) == pid.to_string())
+    })
+}
+
+#[cfg(not(any(unix, windows)))]
+fn editor_process_is_running(_pid: u32) -> bool {
+    false
 }
 
 fn prune_old_layout_sessions(cache_root: &Path, retention: Duration) -> Result<()> {
@@ -987,4 +1038,41 @@ fn shell_command(args: &[String]) -> String {
 
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn refuses_recovery_while_tracked_editor_is_running() {
+        let cache = tempfile::tempdir().unwrap();
+        let local_layout_dir = cache.path().join("session");
+        fs::create_dir(&local_layout_dir).unwrap();
+        let layout_file = local_layout_dir.join("layout.kicad_pcb");
+        fs::write(&layout_file, "").unwrap();
+        let now = Utc::now();
+        let manifest = SyncSessionManifest {
+            version: 1,
+            uri: "diode://api.diode.computer/sandboxes/test/fs/read?path=%2Flayout.kicad_pcb"
+                .to_string(),
+            remote_layout_dir: "/".to_string(),
+            local_layout_dir: local_layout_dir.clone(),
+            layout_file,
+            state: SyncSessionState::Recoverable,
+            stop_reason: Some(RecoverableStopReason::SyncFailed),
+            editor_pid: Some(std::process::id()),
+            prompt_seen: false,
+            started_at: now,
+            updated_at: now,
+        };
+        fs::write(
+            local_layout_dir.join(SESSION_MANIFEST),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let error = latest_recoverable_session(cache.path()).unwrap_err();
+        assert!(error.to_string().contains("KiCad is still open"));
+    }
 }
