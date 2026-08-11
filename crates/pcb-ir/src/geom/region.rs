@@ -78,10 +78,9 @@ pub fn simplify_shapes(rings: Vec<Ring>, fill_rule: FillRule) -> Vec<Shape> {
 ///
 /// The fixed-scale integer overlay resolves crossings, removes coincident
 /// vertices and merges collinear edges while snapping every result vertex to
-/// `grid`. Components no larger than one grid cell cannot be represented
-/// robustly and are discarded.
+/// `grid`. Geometry that collapses during coordinate quantization is not
+/// representable on that output grid.
 pub fn simplify_shapes_on_grid(rings: Vec<Ring>, fill_rule: FillRule, grid: f64) -> Vec<Shape> {
-    let min_area = grid * grid;
     let rings = rings
         .into_iter()
         .map(|ring| {
@@ -103,16 +102,6 @@ pub fn simplify_shapes_on_grid(rings: Vec<Ring>, fill_rule: FillRule, grid: f64)
                         .collect::<Ring>()
                 })
                 .collect::<Shape>()
-        })
-        .filter_map(|mut shape| {
-            if shape
-                .first()
-                .is_none_or(|outer| ring_signed_area(outer).abs() <= min_area)
-            {
-                return None;
-            }
-            shape.retain(|ring| ring_signed_area(ring).abs() > min_area);
-            Some(shape)
         })
         .collect()
 }
@@ -798,28 +787,17 @@ impl ContourSet {
         rings_to_contours(self.rings.clone())
     }
 
-    /// Convert to closed contours, re-fitting maximal circular arcs over the
-    /// flattened boundaries. Arcs from source outlines and disk-swept tool
-    /// paths that the boolean pipeline tessellated come back as `ArcTo`
-    /// segments, within the shared chord tolerance of the polyline form.
-    pub fn to_contours_with_arcs(&self) -> Vec<ContourBuf> {
-        self.rings
-            .iter()
-            .map(|ring| crate::geom::arcfit::ring_to_contour_with_arcs(ring, tol::FLATTEN_MM))
-            .collect()
-    }
-
     /// Convert each connected component to one positive contour.
     ///
     /// Hole rings are connected to their outer ring with zero-width bridges,
     /// allowing formats without compound-polygon holes to carry the same
     /// local positive geometry without layer-wide clear features.
-    pub fn to_bridged_contours_with_arcs(&self) -> Vec<ContourBuf> {
+    pub fn to_bridged_contours(&self) -> Vec<ContourBuf> {
         simplify_shapes(self.rings.clone(), FillRule::NonZero)
             .into_iter()
             .map(crate::geom::bridge::bridge_shape)
             .filter(|ring| ring.len() >= 3)
-            .map(|ring| crate::geom::arcfit::ring_to_contour_with_arcs(&ring, tol::FLATTEN_MM))
+            .filter_map(ring_to_contour)
             .collect()
     }
 
@@ -1659,16 +1637,10 @@ mod tests {
         let hole = ContourSet::from_filled_contours(&[circle], tol::REGION_MM);
         let region = outer.difference(&hole);
 
-        let contours = region.to_bridged_contours_with_arcs();
+        let contours = region.to_bridged_contours();
         let round_trip = ContourSet::from_contours(&contours, FillRule::NonZero, tol::REGION_MM);
 
         assert_eq!(contours.len(), 1);
-        assert!(
-            contours[0]
-                .cmds
-                .iter()
-                .any(|cmd| cmd.op == crate::geom::PathOp::ArcTo)
-        );
         assert!(
             (round_trip.area() - region.area()).abs() <= 0.01,
             "bridged area {}, source area {}",
@@ -1717,13 +1689,6 @@ mod tests {
         assert!((opened.bbox.max.x - 10.0).abs() <= 1e-9);
         assert!((opened.bbox.max.y - 10.0).abs() <= 1e-9);
         assert!((opened.area() - (99.0 + std::f64::consts::PI / 4.0)).abs() <= 2e-2);
-        assert!(
-            opened
-                .to_contours_with_arcs()
-                .iter()
-                .flat_map(|contour| &contour.cmds)
-                .any(|cmd| cmd.op == crate::geom::PathOp::ArcTo)
-        );
     }
 
     #[test]

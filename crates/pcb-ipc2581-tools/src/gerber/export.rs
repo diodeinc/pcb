@@ -13,7 +13,9 @@ use ipc2581::types::{
 
 use crate::geometry;
 use gerberx2::from_artwork::lower_artwork_layer;
-use gerberx2::from_artwork::{ArtworkDocument as GerberArtwork, LayerAttributes, ObjectAttributes};
+use gerberx2::from_artwork::{
+    ArtworkDocument as GerberArtwork, CopperFeatureKind, LayerAttributes, ObjectAttributes,
+};
 use pcb_ir::dialects::artwork::{
     Aperture, ApertureShape, Geometry as ArtworkGeometry, GridRepeat, Object as ArtworkObject,
     PaintOrder, PaintStage,
@@ -1441,7 +1443,20 @@ fn object_attributes(
     let carries_pins = carries_netlist && matches!(side, IrSide::Top | IrSide::Bottom);
     ObjectAttributes {
         aperture_function,
-        copper_balance: feature.flags.copper_balance,
+        copper_feature: (role == GerberLayerRole::Copper).then(|| {
+            feature.flags.copper_balance.map_or_else(
+                || match feature.bucket {
+                    FeatureBucket::Smd
+                    | FeatureBucket::Pth
+                    | FeatureBucket::Via
+                    | FeatureBucket::Fiducial => CopperFeatureKind::Pad,
+                    FeatureBucket::Trace | FeatureBucket::Fill | FeatureBucket::Cutout => {
+                        CopperFeatureKind::Artwork
+                    }
+                },
+                CopperFeatureKind::Balance,
+            )
+        }),
         net: if carries_netlist {
             feature.net.map(|symbol| ipc.resolve(symbol).to_string())
         } else {

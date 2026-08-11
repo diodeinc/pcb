@@ -20,15 +20,33 @@ use pcb_ir::geom::copper_balance::{
     SpatialCopperBalanceLayerRequest, SpatialCopperBalanceRequest, StackMomentField,
     generate_spatial_dense_copper_balance, rounded_hexagonal_void,
 };
-use pcb_ir::geom::region::simplify_shapes;
+use pcb_ir::geom::region::{rings_to_contours, simplify_shapes};
 use pcb_ir::geom::{ContourBuf, ContourSet, FillRule, PathOp, Point, tol};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::geometry;
 use crate::ipc2581::Ipc2581;
+use pcb_ir::dialects::ipc::CopperBalanceKind;
 
 pub(crate) const COPPER_BALANCE_ATTRIBUTE_NAME: &str = "diode.copper_balance";
+
+pub(crate) fn copper_balance_attribute_value(kind: CopperBalanceKind) -> &'static str {
+    match kind {
+        CopperBalanceKind::Plane => "plane",
+        CopperBalanceKind::FullVoid => "full_void",
+        CopperBalanceKind::ClippedVoid => "clipped_void",
+    }
+}
+
+pub(crate) fn parse_copper_balance_attribute(value: &str) -> Result<CopperBalanceKind> {
+    match value {
+        "plane" => Ok(CopperBalanceKind::Plane),
+        "full_void" => Ok(CopperBalanceKind::FullVoid),
+        "clipped_void" => Ok(CopperBalanceKind::ClippedVoid),
+        _ => bail!("unknown diode.copper_balance value '{value}'"),
+    }
+}
 
 /// Maximum violation area tolerated when certifying a balancing region.
 pub const CERTIFICATE_AREA_TOLERANCE_MM2: f64 = 1e-4;
@@ -408,7 +426,7 @@ fn void_instances(
 
     let mut partial_templates = HashMap::<String, String>::new();
     for shape in partial_shapes {
-        let (contour, origin) = local_partial_void_template(&shape)?;
+        let (contour, origin) = local_partial_void_template(shape)?;
         let key = serialized_contour_key(&contour);
         let id = if let Some(id) = partial_templates.get(&key) {
             id.clone()
@@ -431,20 +449,15 @@ fn void_instances(
     Ok((templates, full_instances, clipped_instances))
 }
 
-fn local_partial_void_template(shape: &pcb_ir::geom::region::Shape) -> Result<(IpcContour, Point)> {
-    let outer = shape
-        .first()
+fn local_partial_void_template(shape: pcb_ir::geom::region::Shape) -> Result<(IpcContour, Point)> {
+    let mut contours = rings_to_contours(shape).into_iter();
+    let outer = contours
+        .next()
         .context("generated partial copper void has no outer boundary")?;
-    let outer = pcb_ir::geom::arcfit::ring_to_contour_with_arcs(outer, tol::FLATTEN_MM);
     let origin = outer.bbox.min;
     let polygon = ipc_polygon_from_contour(&localized_template_contour(&outer, origin))?;
-    let cutouts = shape
-        .iter()
-        .skip(1)
-        .map(|ring| {
-            let contour = pcb_ir::geom::arcfit::ring_to_contour_with_arcs(ring, tol::FLATTEN_MM);
-            ipc_polygon_from_contour(&localized_template_contour(&contour, origin))
-        })
+    let cutouts = contours
+        .map(|contour| ipc_polygon_from_contour(&localized_template_contour(&contour, origin)))
         .collect::<Result<Vec<_>>>()?;
     Ok((IpcContour { polygon, cutouts }, origin))
 }
@@ -523,12 +536,11 @@ fn ipc_contour_features(result: &DenseCopperBalanceResult) -> Result<Vec<SetFeat
     simplify_shapes(result.usable.rings.clone(), FillRule::NonZero)
         .into_iter()
         .map(|shape| {
-            let outer = pcb_ir::geom::arcfit::ring_to_contour_with_arcs(&shape[0], tol::FLATTEN_MM);
-            let cutouts = shape
-                .iter()
-                .skip(1)
-                .map(|ring| pcb_ir::geom::arcfit::ring_to_contour_with_arcs(ring, tol::FLATTEN_MM))
-                .collect::<Vec<_>>();
+            let mut contours = rings_to_contours(shape).into_iter();
+            let outer = contours
+                .next()
+                .context("generated copper balance plane has no outer boundary")?;
+            let cutouts = contours.collect::<Vec<_>>();
             ipc_contour_feature(&outer, &cutouts)
         })
         .collect()

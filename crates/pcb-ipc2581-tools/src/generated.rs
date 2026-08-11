@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 
 use crate::copper_balance::{
     BalanceVoidInstance, BalanceVoidTemplate, COPPER_BALANCE_ATTRIBUTE_NAME,
+    copper_balance_attribute_value,
 };
 use pcb_ir::dialects::ipc::CopperBalanceKind;
 
@@ -67,11 +68,7 @@ pub(crate) fn write_generated_layer_feature(
         &[("polarity", write::polarity_attr(layer_feature.polarity))],
     );
     if let Some(kind) = layer_feature.copper_balance {
-        let value = match kind {
-            CopperBalanceKind::Plane => "plane",
-            CopperBalanceKind::FullVoid => "full_void",
-            CopperBalanceKind::ClippedVoid => "clipped_void",
-        };
+        let value = copper_balance_attribute_value(kind);
         writer.empty_element(
             "NonstandardAttribute",
             &[

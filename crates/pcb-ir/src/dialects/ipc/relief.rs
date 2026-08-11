@@ -165,7 +165,7 @@ fn vscore_route_reliefs_inner(
         relief_contours.extend(boundary_relief.geometry.material_removal.rings);
     }
     let relief_region = ContourSet::new(relief_contours, FillRule::NonZero, input.tolerance_mm);
-    let relief_payloads = relief_region.to_contours_with_arcs();
+    let relief_payloads = relief_region.to_contours();
     if include_debug {
         debug.merged_relief_contours = relief_payloads.clone();
     }
@@ -942,13 +942,14 @@ mod tests {
         assert!(relief_bbox.min.y < pocket_bbox.min.y);
         assert!(relief_bbox.max.x > pocket_bbox.max.x);
         assert!(relief_bbox.max.y > pocket_bbox.max.y);
-        // Tool-sweep fillets come out as arcs, not tessellation.
+        // Boolean output remains the authoritative polygon instead of
+        // guessing which line runs might have come from source arcs.
         assert!(
             relief_contours
                 .iter()
                 .flat_map(|contour| &contour.cmds)
-                .any(|cmd| cmd.op == PathOp::ArcTo),
-            "route relief boundary should contain arcs"
+                .all(|cmd| cmd.op != PathOp::ArcTo),
+            "route relief boundary must not contain reconstructed arcs"
         );
     }
 

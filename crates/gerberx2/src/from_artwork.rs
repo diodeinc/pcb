@@ -13,7 +13,6 @@ use crate::{
     WriterApertureTransform, WriterMacroExpression, WriterMacroPrimitive, WriterObject,
     sanitize_attribute_field,
 };
-use pcb_ir::dialects::LayerRole;
 use pcb_ir::dialects::artwork::{Aperture, ApertureShape, Geometry as ArtworkGeometry, PaintStage};
 use pcb_ir::dialects::ipc::CopperBalanceKind;
 use pcb_ir::geom::path::{self as geom_path, ContourBuf, PathCmd};
@@ -32,10 +31,27 @@ pub struct LayerAttributes {
 }
 
 /// Gerber X2 object attributes carried as artwork object metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CopperFeatureKind {
+    Pad,
+    Artwork,
+    Balance(CopperBalanceKind),
+}
+
+impl CopperFeatureKind {
+    fn lower_flash_as_region(self) -> bool {
+        matches!(
+            self,
+            Self::Artwork
+                | Self::Balance(CopperBalanceKind::Plane | CopperBalanceKind::ClippedVoid)
+        )
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ObjectAttributes {
     pub aperture_function: Option<Vec<String>>,
-    pub copper_balance: Option<CopperBalanceKind>,
+    pub copper_feature: Option<CopperFeatureKind>,
     pub net: Option<String>,
     pub component: Option<String>,
     pub pin: Option<String>,
@@ -48,8 +64,8 @@ pub type ArtworkDocument = pcb_ir::dialects::artwork::Document<LayerAttributes, 
 ///
 /// This is the normalize pipeline: extract the parsed layer into artwork,
 /// carry its X2 attributes across, and lower it back to idiomatic Gerber.
-/// Standard-aperture flashes survive as flashes; block instances are expanded,
-/// while macro flashes and shaped draws are flattened to regions.
+/// Source flashes survive as flashes unless explicit copper feature semantics
+/// require region output; block instances are expanded.
 pub fn normalize_layer(gerber: &crate::GerberX2) -> Result<String> {
     let annotated = annotate_for_export(gerber, crate::geometry::extract_document(gerber));
     crate::write_layer(&lower_artwork_layer(&annotated)?)
@@ -132,7 +148,7 @@ fn object_attributes(
         .and_then(|fields| fields.into_iter().next());
     ObjectAttributes {
         aperture_function: attribute_fields(gerber, &meta.aperture_attributes, ".AperFunction"),
-        copper_balance: None,
+        copper_feature: None,
         net: attribute_fields(gerber, &meta.object_attributes, ".N")
             .and_then(|fields| fields.into_iter().next()),
         component,
@@ -277,24 +293,23 @@ fn gerber_step_repeat(
     mut base: Affine2,
     grid: pcb_ir::dialects::artwork::GridRepeat,
 ) -> Option<(Affine2, crate::StepRepeat)> {
-    const AXIS_EPSILON: f64 = 1e-9;
-
     let mut x_repeats = 1;
     let mut y_repeats = 1;
     let mut x_step = 0.0;
     let mut y_step = 0.0;
     let mut shift = Point::ZERO;
     for (count, step) in [(grid.x_count, grid.x_step), (grid.y_count, grid.y_step)] {
-        if count <= 1 || (step.x.abs() <= AXIS_EPSILON && step.y.abs() <= AXIS_EPSILON) {
+        let step = Point::new(gerber_coordinate(step.x), gerber_coordinate(step.y));
+        if count <= 1 || step == Point::ZERO {
             continue;
         }
-        if step.y.abs() <= AXIS_EPSILON && x_repeats == 1 {
+        if step.y == 0.0 && x_repeats == 1 {
             x_repeats = count as i32;
             x_step = step.x.abs();
             if step.x < 0.0 {
                 shift.x += (count - 1) as f64 * step.x;
             }
-        } else if step.x.abs() <= AXIS_EPSILON && y_repeats == 1 {
+        } else if step.x == 0.0 && y_repeats == 1 {
             y_repeats = count as i32;
             y_step = step.y.abs();
             if step.y < 0.0 {
@@ -326,10 +341,6 @@ fn lower_artwork_object(
 ) -> Result<Vec<WriterObject>> {
     let attributes = lower_object_attributes(&object.meta);
     let aperture_attributes = lower_aperture_attributes(&object.meta);
-    let is_copper = layer
-        .layers
-        .first()
-        .is_some_and(|layer| layer.role == LayerRole::Copper);
     let mut objects = Vec::new();
     match object.geometry {
         ArtworkGeometry::Region { path } => {
@@ -344,12 +355,7 @@ fn lower_artwork_object(
         }
         ArtworkGeometry::Stroke { path } => {
             let artwork_path = &layer.arena.paths[path as usize];
-            let default_function = vec!["Conductor".to_string()];
-            let aperture_function = object
-                .meta
-                .aperture_function
-                .as_deref()
-                .unwrap_or(default_function.as_slice());
+            let aperture_function = object.meta.aperture_function.as_deref().unwrap_or_default();
             let region_aperture_attributes = lower_aperture_function(aperture_function);
             let stroke = artwork_path.stroke().ok_or_else(|| {
                 GerberError::InvalidStructure(
@@ -380,9 +386,10 @@ fn lower_artwork_object(
                             }));
                         }
                         StrokePatternMark::Dot(at) => {
-                            if is_copper
-                                && !is_pad_function(aperture_function)
-                                && object.meta.copper_balance != Some(CopperBalanceKind::FullVoid)
+                            if object
+                                .meta
+                                .copper_feature
+                                .is_some_and(CopperFeatureKind::lower_flash_as_region)
                             {
                                 objects.extend(lower_aperture_as_regions(
                                     &Aperture::circle(stroke_width),
@@ -437,16 +444,12 @@ fn lower_artwork_object(
                 );
                 transform = Affine2::translation(Point::new(transform.m02, transform.m12));
             }
-            let default_function = vec!["Conductor".to_string()];
-            let aperture_function = object
-                .meta
-                .aperture_function
-                .as_deref()
-                .unwrap_or(default_function.as_slice());
+            let aperture_function = object.meta.aperture_function.as_deref().unwrap_or_default();
             let region_aperture_attributes = lower_aperture_function(aperture_function);
-            if is_copper
-                && !is_pad_function(aperture_function)
-                && object.meta.copper_balance != Some(CopperBalanceKind::FullVoid)
+            if object
+                .meta
+                .copper_feature
+                .is_some_and(CopperFeatureKind::lower_flash_as_region)
             {
                 return lower_aperture_as_regions(
                     &artwork_aperture,
@@ -474,12 +477,6 @@ fn lower_artwork_object(
         }
     }
     Ok(objects)
-}
-
-fn is_pad_function(aperture_function: &[String]) -> bool {
-    aperture_function
-        .first()
-        .is_some_and(|function| function.ends_with("Pad"))
 }
 
 fn lower_stroke_segment(segment: Segment, aperture: i32) -> ObjectKind {
@@ -813,13 +810,11 @@ impl ApertureTable {
     /// One code-4 outline primitive per ring: material rings expose, hole
     /// rings (negative winding) erase what earlier primitives painted.
     fn outline_macro(&mut self, rings: &[Ring], function: &[String]) -> Result<i32> {
-        self.outline_macro_with_attributes(
-            rings,
-            vec![AttributeValue::new(
-                ".AperFunction",
-                function.iter().cloned(),
-            )],
-        )
+        let attributes = (!function.is_empty())
+            .then(|| AttributeValue::new(".AperFunction", function.iter().cloned()))
+            .into_iter()
+            .collect();
+        self.outline_macro_with_attributes(rings, attributes)
     }
 
     fn outline_macro_with_attributes(
@@ -888,10 +883,10 @@ impl ApertureTable {
         self.apertures.push(WriterAperture {
             code,
             template,
-            attributes: vec![AttributeValue::new(
-                ".AperFunction",
-                function.iter().cloned(),
-            )],
+            attributes: (!function.is_empty())
+                .then(|| AttributeValue::new(".AperFunction", function.iter().cloned()))
+                .into_iter()
+                .collect(),
         });
         Ok(code)
     }
@@ -1117,8 +1112,7 @@ fn region_shape_contour(shape: Vec<Ring>) -> Option<Result<Contour>> {
     if merged.len() < 3 {
         return None;
     }
-    let payload =
-        pcb_ir::geom::arcfit::ring_to_contour_with_arcs(&merged, pcb_ir::geom::tol::FLATTEN_MM);
+    let payload = region::rings_to_contours(vec![merged]).pop()?;
     Some(lower_region_contour(&payload))
 }
 
@@ -1179,10 +1173,10 @@ fn lower_aperture_attributes(attributes: &ObjectAttributes) -> Vec<AttributeValu
 }
 
 fn lower_aperture_function(function: &[String]) -> Vec<AttributeValue> {
-    vec![AttributeValue::new(
-        ".AperFunction",
-        function.iter().cloned(),
-    )]
+    (!function.is_empty())
+        .then(|| AttributeValue::new(".AperFunction", function.iter().cloned()))
+        .into_iter()
+        .collect()
 }
 
 fn lower_point(point: Point) -> GerberPoint {
@@ -1194,6 +1188,10 @@ fn lower_point(point: Point) -> GerberPoint {
 
 fn quantize_mm(value: f64) -> i64 {
     (value * 1_000_000.0).round() as i64
+}
+
+fn gerber_coordinate(value: f64) -> f64 {
+    quantize_mm(value) as f64 / 1_000_000.0
 }
 
 fn quantize_hole(hole_diameter: Option<f64>) -> i64 {
@@ -1222,7 +1220,7 @@ mod tests {
     fn sanitizes_net_names_for_gerber_attribute_fields() {
         let attributes = lower_object_attributes(&ObjectAttributes {
             aperture_function: None,
-            copper_balance: None,
+            copper_feature: None,
             net: Some("PWR_RST*,A%B".to_string()),
             component: None,
             pin: None,
@@ -1236,7 +1234,7 @@ mod tests {
     fn lowers_pin_attribute_with_component_context() {
         let attributes = lower_object_attributes(&ObjectAttributes {
             aperture_function: None,
-            copper_balance: None,
+            copper_feature: None,
             net: None,
             component: Some("U1".to_string()),
             pin: Some("1".to_string()),
@@ -1252,7 +1250,7 @@ mod tests {
     fn skips_pin_attribute_without_component_context() {
         let attributes = lower_object_attributes(&ObjectAttributes {
             aperture_function: None,
-            copper_balance: None,
+            copper_feature: None,
             net: None,
             component: None,
             pin: Some("1".to_string()),
@@ -1435,7 +1433,7 @@ mod tests {
     }
 
     #[test]
-    fn nested_clear_arc_regions_expand_without_aperture_blocks() {
+    fn nested_clear_regions_expand_without_aperture_blocks() {
         let mut artwork = ArtworkDocument::new();
         let layer = artwork.push_layer(IrArtworkDocument {
             name: "F.Cu".to_string(),
@@ -1495,18 +1493,15 @@ mod tests {
         );
 
         let gerber = lower_artwork_layer(&artwork).expect("lower repeated clear arcs");
-        assert!(
-            gerber.objects.iter().any(|object| {
-                matches!(
-                    &object.kind,
-                    ObjectKind::Region { contours }
-                        if contours.iter().any(|contour| contour.segments.iter().any(
-                            |segment| matches!(segment, ContourSegment::Arc { .. })
-                        ))
-                )
-            }),
-            "expanded circular cutouts should retain arcs"
-        );
+        assert!(gerber.objects.iter().all(|object| {
+            matches!(
+                &object.kind,
+                ObjectKind::Region { contours }
+                    if contours.iter().all(|contour| contour.segments.iter().all(
+                        |segment| matches!(segment, ContourSegment::Line { .. })
+                    ))
+            )
+        }));
 
         let contents = crate::write_layer(&gerber).expect("write repeated clear arcs");
         assert!(!contents.contains("%ABD"));
@@ -1788,7 +1783,11 @@ mod tests {
                     min: Point::new(20.0, 5.0),
                     max: Point::new(30.0, 15.0),
                 },
-                meta: ObjectAttributes::default(),
+                meta: ObjectAttributes {
+                    aperture_function: Some(vec!["Conductor".to_string()]),
+                    copper_feature: Some(CopperFeatureKind::Artwork),
+                    ..ObjectAttributes::default()
+                },
             },
         );
 
@@ -1836,7 +1835,7 @@ mod tests {
                 bbox: BBox::empty(),
                 meta: ObjectAttributes {
                     aperture_function: Some(vec!["CopperBalancing".to_string()]),
-                    copper_balance: Some(CopperBalanceKind::FullVoid),
+                    copper_feature: Some(CopperFeatureKind::Balance(CopperBalanceKind::FullVoid)),
                     ..ObjectAttributes::default()
                 },
             },

@@ -709,7 +709,7 @@ fn compose_board_array_fabrication_profile(
             purpose: input.purpose,
             array_outlines: input.array_outlines,
             assembly_panel_outlines: input.assembly_panel_outlines,
-            material_removal: material_removal.to_contours_with_arcs(),
+            material_removal: material_removal.to_contours(),
         },
         relief_debug,
     ))
