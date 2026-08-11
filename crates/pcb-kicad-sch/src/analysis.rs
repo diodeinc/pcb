@@ -474,8 +474,8 @@ fn kicad_islands(group: &ConnectionGroup) -> Vec<IslandRef> {
 
 pub(crate) fn logical_name(group: &ConnectionGroup) -> Option<&str> {
     group.origins.iter().find_map(|origin| match origin {
-        ConnectionOrigin::ZenerNet { name } => Some(name.as_str()),
-        ConnectionOrigin::KiCadIsland(_) => None,
+        ConnectionOrigin::ZenerNet { name } if !name.is_empty() => Some(name.as_str()),
+        ConnectionOrigin::ZenerNet { .. } | ConnectionOrigin::KiCadIsland(_) => None,
     })
 }
 
@@ -507,6 +507,72 @@ mod tests {
             analysis.issues(),
             [SchematicIssue::MissingSymbol { slot }] if slot.component_path() == "U1"
         ));
+    }
+
+    #[test]
+    fn empty_named_not_connected_pin_is_equivalent_when_unconnected() {
+        let module = ModuleRef::from_path(Path::new("/tmp/root.zen"), "root");
+        let mut netlist = Schematic::new();
+        let mut component = Instance::component(module.clone());
+        component.reference_designator = Some("U1".to_string());
+        netlist.add_instance(
+            InstanceRef::new(module.clone(), vec!["U1".to_string()]),
+            component,
+        );
+        let pin_ref = InstanceRef::new(module.clone(), vec!["U1".to_string(), "NC".to_string()]);
+        let mut pin = Instance::port(module);
+        pin.attributes.insert(
+            "pads".to_string(),
+            AttributeValue::Array(vec![AttributeValue::String("1".to_string())]),
+        );
+        netlist.add_instance(pin_ref.clone(), pin);
+        netlist.add_net(Net {
+            kind: "NotConnected".to_string(),
+            id: 1,
+            name: String::new(),
+            ports: vec![pin_ref],
+            properties: Default::default(),
+        });
+
+        let definition = SymbolDefinition::from_kicad_symbol_sexpr(
+            r#"(symbol "Test:NC"
+              (symbol "NC_1_1"
+                (pin no_connect line (at 0 0 0) (length 2.54)
+                  (name "NC") (number "1"))))"#,
+        )
+        .unwrap();
+        let at = Point::new(0.0, 0.0);
+        let slot = SymbolSlotKey::new("U1", 1).unwrap();
+        let mut page = SchPage::new("page");
+        page.library
+            .definitions
+            .insert(definition.lib_id.clone(), definition.clone());
+        page.items.push(SchItem::Symbol(Symbol {
+            id: slot.symbol_id(),
+            lib_id: definition.lib_id.clone(),
+            unit: 1,
+            body_style: 1,
+            at,
+            rotation: Rotation::Deg0,
+            mirror: None,
+            fields_autoplaced: true,
+            fields: BTreeMap::from([
+                (
+                    "Reference".to_string(),
+                    SymbolField::new("Reference", "U1", at),
+                ),
+                ("Value".to_string(), SymbolField::new("Value", "NC", at)),
+                (
+                    "Path".to_string(),
+                    SymbolField::new("Path", "U1", at).with_hidden(true),
+                ),
+            ]),
+            pins: Vec::new(),
+            unsupported: Vec::new(),
+        }));
+
+        let analysis = analyze_schematic(&document_with_pages(vec![page]), &netlist).unwrap();
+        assert!(analysis.is_equivalent(), "{:?}", analysis.issues());
     }
 
     #[test]

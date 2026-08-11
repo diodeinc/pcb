@@ -26,14 +26,26 @@ pub(super) fn reduce(netlist: &Schematic) -> Result<ConnectivityGraph> {
         .into_iter()
         .filter_map(|net| {
             let name = net.name.as_str();
-            if name.is_empty() {
-                return None;
-            }
             let mut terminals = net
                 .ports
                 .iter()
                 .filter_map(|port| component_terminal(netlist, port))
                 .collect::<BTreeSet<_>>();
+            // Open/NotConnected nets keep an empty name and must not drive labels,
+            // but their terminals still need to be present so visible KiCad NC pins
+            // are not reported as unexpected connections.
+            if name.is_empty() {
+                if terminals.is_empty() {
+                    return None;
+                }
+                return Some(ConnectionGroup {
+                    names: BTreeSet::new(),
+                    terminals,
+                    origins: BTreeSet::from([ConnectionOrigin::ZenerNet {
+                        name: String::new(),
+                    }]),
+                });
+            }
             if let Some(ports) = interface_ports.get(name) {
                 terminals.extend(
                     ports

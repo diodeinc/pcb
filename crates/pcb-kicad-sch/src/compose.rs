@@ -566,7 +566,6 @@ fn build_component_symbol(
         match fields.get_mut(&next.name) {
             Some(existing) => {
                 existing.value = next.value;
-                existing.hidden = next.hidden;
             }
             None => {
                 fields.insert(next.name.clone(), next);
