@@ -361,6 +361,7 @@ fn create_fab_panel(
                     GeneratedLayerFeature {
                         layer_name: layer.layer_name.clone(),
                         polarity: Polarity::Positive,
+                        copper_balancing: true,
                         spec_refs: Vec::new(),
                         features: layer.features.positive,
                         instance_refs: Vec::new(),
@@ -368,6 +369,7 @@ fn create_fab_panel(
                     GeneratedLayerFeature {
                         layer_name: layer.layer_name,
                         polarity: Polarity::Negative,
+                        copper_balancing: true,
                         spec_refs: Vec::new(),
                         features: Vec::new(),
                         instance_refs: layer.features.instances,

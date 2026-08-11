@@ -753,6 +753,15 @@ fn balances_gutters_at_the_assembly_panel_density_and_leaves_margins_bare() {
         4,
         "both sources plus the fab step's positive and negative balance sets should carry TOP copper"
     );
+    assert_eq!(
+        creation
+            .xml
+            .matches(
+                r#"<NonstandardAttribute name="diode.copper_balance" type="BOOLEAN" value="true"/>"#
+            )
+            .count(),
+        2
+    );
 
     Ipc2581::validate(&creation.xml).unwrap();
     let parsed = Ipc2581::parse(&creation.xml).unwrap();

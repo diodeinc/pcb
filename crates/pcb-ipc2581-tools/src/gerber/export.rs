@@ -1463,6 +1463,10 @@ fn aperture_function(
         GerberLayerRole::Copper => {}
     }
 
+    if feature.flags.copper_balancing {
+        return Some(vec!["CopperBalancing".to_string()]);
+    }
+
     match feature.intent.operation {
         FeatureOperation::Drill => {
             return Some(vec!["Other".to_string(), "Drill".to_string()]);

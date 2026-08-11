@@ -951,6 +951,13 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
 
     let xml = write_board_array_xml(input, &spec).unwrap();
     assert!(xml.contains(r#"<Set polarity="NEGATIVE">"#));
+    assert_eq!(
+        xml.matches(
+            r#"<NonstandardAttribute name="diode.copper_balance" type="BOOLEAN" value="true"/>"#
+        )
+        .count(),
+        2
+    );
 
     let parsed = Ipc2581::parse(&xml).unwrap();
     assert!(xml.matches("<Contour>").count() > 0);
@@ -965,6 +972,12 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
         "shared IPC Locations should remain a placement group"
     );
     pcb_ir::dialects::ipc::process::expand_feature_placement_groups(&mut top);
+    assert!(
+        top.features
+            .iter()
+            .filter(|feature| feature.source_step_kind == LayoutStepKind::Panel)
+            .all(|feature| feature.flags.copper_balancing)
+    );
     let balance_paths = |polarity: pcb_ir::geom::Polarity| {
         let paths = top
             .features
@@ -998,6 +1011,11 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
         .unwrap();
     assert!(top_gerber.contents.contains("G36*"));
     assert!(top_gerber.contents.contains("G37*"));
+    assert!(
+        top_gerber
+            .contents
+            .contains("%TA.AperFunction,CopperBalancing*%")
+    );
     // Manufacturing Gerbers expand array hierarchy for broad CAM compatibility.
     assert!(!top_gerber.contents.contains("%ABD"));
     assert!(top_gerber.contents.contains("%LPC*%"));

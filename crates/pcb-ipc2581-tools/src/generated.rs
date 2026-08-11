@@ -11,7 +11,9 @@ use ipc2581::types::{
 use ipc2581::write;
 use std::collections::BTreeMap;
 
-use crate::copper_balance::{BalanceVoidInstance, BalanceVoidTemplate};
+use crate::copper_balance::{
+    BalanceVoidInstance, BalanceVoidTemplate, COPPER_BALANCE_ATTRIBUTE_NAME,
+};
 
 /// Only board-array tooling generates named holes today; the prefix stays
 /// stable so re-panelization produces identical names.
@@ -23,6 +25,8 @@ const GENERATED_HOLE_NAME_PREFIX: &str = "array_tooling_hole";
 pub(crate) struct GeneratedLayerFeature {
     pub layer_name: String,
     pub polarity: Polarity,
+    /// This set is generated copper balancing, including clear-pattern voids.
+    pub copper_balancing: bool,
     pub spec_refs: Vec<String>,
     pub features: Vec<SetFeature>,
     /// Flashed dictionary-instance references, emitted after `features`.
@@ -61,6 +65,16 @@ pub(crate) fn write_generated_layer_feature(
         "Set",
         &[("polarity", write::polarity_attr(layer_feature.polarity))],
     );
+    if layer_feature.copper_balancing {
+        writer.empty_element(
+            "NonstandardAttribute",
+            &[
+                ("name", COPPER_BALANCE_ATTRIBUTE_NAME),
+                ("type", "BOOLEAN"),
+                ("value", "true"),
+            ],
+        );
+    }
     for spec_ref in &layer_feature.spec_refs {
         write::spec_ref(writer, spec_ref);
     }

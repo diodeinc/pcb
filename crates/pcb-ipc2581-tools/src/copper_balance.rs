@@ -28,6 +28,8 @@ use sha2::{Digest, Sha256};
 use crate::geometry;
 use crate::ipc2581::Ipc2581;
 
+pub(crate) const COPPER_BALANCE_ATTRIBUTE_NAME: &str = "diode.copper_balance";
+
 /// Maximum violation area tolerated when certifying a balancing region.
 pub const CERTIFICATE_AREA_TOLERANCE_MM2: f64 = 1e-4;
 

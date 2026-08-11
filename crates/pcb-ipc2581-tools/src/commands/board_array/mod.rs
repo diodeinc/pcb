@@ -324,6 +324,7 @@ impl BoardArrayGeneratedGeometry {
             GeneratedLayerFeature {
                 layer_name: layer_name.into(),
                 polarity,
+                copper_balancing: false,
                 spec_refs,
                 features,
                 instance_refs: Vec::new(),
@@ -339,12 +340,23 @@ impl BoardArrayGeneratedGeometry {
         layer_name: &str,
         sets: crate::copper_balance::BalanceFeatureSets,
     ) {
-        self.add_layer_feature(scope, layer_name, Polarity::Positive, sets.positive);
+        self.layer_features.push((
+            scope,
+            GeneratedLayerFeature {
+                layer_name: layer_name.to_string(),
+                polarity: Polarity::Positive,
+                copper_balancing: true,
+                spec_refs: Vec::new(),
+                features: sets.positive,
+                instance_refs: Vec::new(),
+            },
+        ));
         self.layer_features.push((
             scope,
             GeneratedLayerFeature {
                 layer_name: layer_name.to_string(),
                 polarity: Polarity::Negative,
+                copper_balancing: true,
                 spec_refs: Vec::new(),
                 features: Vec::new(),
                 instance_refs: sets.instances,
