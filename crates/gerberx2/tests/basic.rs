@@ -1,6 +1,6 @@
 use gerberx2::{
     ApertureTemplate, AttributeValue, Command, Contour, ContourSegment, GerberLayer, GerberX2,
-    ObjectKind, PathCommand, Point, Unit, WriterAperture, WriterApertureMacro,
+    ObjectKind, PathCommand, Point, StepRepeat, Unit, WriterAperture, WriterApertureMacro,
     WriterApertureTemplate, WriterApertureTransform, WriterMacroExpression, WriterMacroPrimitive,
     WriterObject,
 };
@@ -76,6 +76,7 @@ fn writes_idiomatic_x2_layer_from_object_ir() {
                 aperture: 11,
             },
             polarity: Polarity::Dark,
+            repeat: None,
             aperture_transform: WriterApertureTransform::default(),
             aperture_attributes: Vec::new(),
             attributes: vec![
@@ -116,6 +117,7 @@ fn writes_idiomatic_x2_layer_from_object_ir() {
                 }],
             },
             polarity: Polarity::Dark,
+            repeat: None,
             aperture_transform: WriterApertureTransform::default(),
             aperture_attributes: vec![AttributeValue::new(".AperFunction", ["Conductor"])],
             attributes: Vec::new(),
@@ -152,6 +154,183 @@ fn writes_idiomatic_x2_layer_from_object_ir() {
             .iter()
             .any(|attribute| parsed.resolve(attribute.name) == ".AperFunction")
     );
+}
+
+#[test]
+fn writes_standard_step_repeat() {
+    let layer = GerberLayer {
+        apertures: vec![WriterAperture {
+            code: 10,
+            template: WriterApertureTemplate::Circle {
+                diameter: 1.0,
+                hole_diameter: None,
+            },
+            attributes: Vec::new(),
+        }],
+        objects: vec![WriterObject {
+            kind: ObjectKind::Flash {
+                at: Point { x: 2.0, y: 3.0 },
+                aperture: 10,
+            },
+            polarity: Polarity::Dark,
+            repeat: Some(StepRepeat {
+                x_repeats: 3,
+                y_repeats: 2,
+                x_step: 10.0,
+                y_step: 20.0,
+            }),
+            aperture_transform: WriterApertureTransform::default(),
+            aperture_attributes: Vec::new(),
+            attributes: Vec::new(),
+        }],
+        ..GerberLayer::default()
+    };
+
+    let output = gerberx2::write_layer(&layer).unwrap();
+    assert_external_parser_accepts(&output);
+    assert!(output.contains("%SRX3Y2I10J20*%"));
+    assert!(output.contains("%SR*%"));
+    assert_eq!(GerberX2::parse(&output).unwrap().objects().len(), 6);
+}
+
+#[test]
+fn coalesces_compatible_step_repeats() {
+    let repeat = StepRepeat {
+        x_repeats: 3,
+        y_repeats: 1,
+        x_step: 10.0,
+        y_step: 0.0,
+    };
+    let repeated_flash = |x: f64, y: f64, attributes: Vec<AttributeValue>| WriterObject {
+        kind: ObjectKind::Flash {
+            at: Point { x, y },
+            aperture: 10,
+        },
+        polarity: Polarity::Dark,
+        repeat: Some(repeat),
+        aperture_transform: WriterApertureTransform::default(),
+        aperture_attributes: Vec::new(),
+        attributes,
+    };
+    let layer = GerberLayer {
+        apertures: vec![WriterAperture {
+            code: 10,
+            template: WriterApertureTemplate::Circle {
+                diameter: 1.0,
+                hole_diameter: None,
+            },
+            attributes: Vec::new(),
+        }],
+        objects: vec![
+            repeated_flash(2.0, 3.0, Vec::new()),
+            repeated_flash(2.0, 4.0, vec![AttributeValue::new(".N", ["GND"])]),
+            WriterObject::dark(ObjectKind::Flash {
+                at: Point { x: 2.0, y: 4.0 },
+                aperture: 10,
+            }),
+        ],
+        ..GerberLayer::default()
+    };
+
+    let output = gerberx2::write_layer(&layer).unwrap();
+    assert_external_parser_accepts(&output);
+    assert_eq!(output.matches("%SRX3Y1I10J0*%").count(), 1);
+    assert_eq!(output.matches("%SR*%").count(), 1);
+    assert!(output.contains(
+        "X2000000Y3000000D03*\n%TO.N,GND*%\nY4000000D03*\n%SR*%\n%TD*%\nX2000000Y4000000D03*"
+    ));
+    assert_eq!(GerberX2::parse(&output).unwrap().objects().len(), 7);
+}
+
+#[test]
+fn preserves_polarity_order_across_step_repeats() {
+    let repeat = StepRepeat {
+        x_repeats: 2,
+        y_repeats: 1,
+        x_step: 10.0,
+        y_step: 0.0,
+    };
+    let repeated_flash = |x: f64, polarity: Polarity| WriterObject {
+        kind: ObjectKind::Flash {
+            at: Point { x, y: 0.0 },
+            aperture: 10,
+        },
+        polarity,
+        repeat: Some(repeat),
+        aperture_transform: WriterApertureTransform::default(),
+        aperture_attributes: Vec::new(),
+        attributes: Vec::new(),
+    };
+    let layer = GerberLayer {
+        apertures: vec![WriterAperture {
+            code: 10,
+            template: WriterApertureTemplate::Circle {
+                diameter: 4.0,
+                hole_diameter: None,
+            },
+            attributes: Vec::new(),
+        }],
+        objects: vec![
+            repeated_flash(0.0, Polarity::Dark),
+            repeated_flash(8.0, Polarity::Clear),
+        ],
+        ..GerberLayer::default()
+    };
+
+    let output = gerberx2::write_layer(&layer).unwrap();
+    assert_external_parser_accepts(&output);
+    assert_eq!(output.matches("%SRX2Y1I10J0*%").count(), 2);
+
+    let objects = GerberX2::parse(&output).unwrap().objects().to_vec();
+    assert_eq!(objects.len(), 4);
+    assert_eq!(
+        objects
+            .iter()
+            .map(|object| object.polarity)
+            .collect::<Vec<_>>(),
+        [
+            Polarity::Dark,
+            Polarity::Dark,
+            Polarity::Clear,
+            Polarity::Clear,
+        ]
+    );
+}
+
+#[test]
+fn writes_modal_coordinates_with_explicit_operations() {
+    let flash = |x: f64, y: f64| {
+        WriterObject::dark(ObjectKind::Flash {
+            at: Point { x, y },
+            aperture: 10,
+        })
+    };
+    let layer = GerberLayer {
+        apertures: vec![WriterAperture {
+            code: 10,
+            template: WriterApertureTemplate::Circle {
+                diameter: 1.0,
+                hole_diameter: None,
+            },
+            attributes: Vec::new(),
+        }],
+        objects: vec![
+            flash(1.0, 2.0),
+            flash(1.0, 3.0),
+            flash(4.0, 3.0),
+            flash(4.0, 3.0),
+        ],
+        ..GerberLayer::default()
+    };
+
+    let output = gerberx2::write_layer(&layer).unwrap();
+    assert_external_parser_accepts(&output);
+    assert!(output.contains("X1000000Y2000000D03*\nY3000000D03*\nX4000000D03*\nX4000000D03*"));
+
+    let objects = GerberX2::parse(&output).unwrap().objects().to_vec();
+    assert_eq!(objects.len(), 4);
+    assert!(matches!(objects[1].kind, ObjectKind::Flash { at, .. } if at.x == 1.0 && at.y == 3.0));
+    assert!(matches!(objects[2].kind, ObjectKind::Flash { at, .. } if at.x == 4.0 && at.y == 3.0));
 }
 
 #[test]
@@ -209,6 +388,7 @@ fn writes_macro_and_block_apertures_without_flattening() {
                             aperture: 10,
                         },
                         polarity: Polarity::Clear,
+                        repeat: None,
                         aperture_transform: WriterApertureTransform::default(),
                         aperture_attributes: Vec::new(),
                         attributes: Vec::new(),

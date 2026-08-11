@@ -64,14 +64,15 @@ fn legalize_flash_geometry<LayerMeta, ObjectMeta>(
         m12: 0.0,
         ..transform
     };
-    let aperture = doc.push_aperture(aperture_with_baked_basis(&source, basis));
+    let aperture = doc.push_aperture(bake_aperture_basis(&source, basis));
     Geometry::Flash {
         aperture,
         transform: Affine2::translation(Point::new(transform.m02, transform.m12)),
     }
 }
 
-fn aperture_with_baked_basis(aperture: &Aperture, basis: Affine2) -> Aperture {
+/// Apply a translation-free affine basis directly to an aperture definition.
+pub fn bake_aperture_basis(aperture: &Aperture, basis: Affine2) -> Aperture {
     let similarity = basis.preserves_circles(TRANSFORM_EPSILON);
     let scale = basis.m00.hypot(basis.m10);
     let scaled_hole = || aperture.hole_diameter * scale;
@@ -137,9 +138,26 @@ fn aperture_with_baked_basis(aperture: &Aperture, basis: Affine2) -> Aperture {
                 contour_aperture(aperture, basis)
             }
         }
+        ApertureShape::RoundedHex {
+            radius,
+            corner_radius,
+            rotation_degrees,
+        } if similarity => {
+            let radians = rotation_degrees.to_radians();
+            let first_vertex = basis.transform_vector(Point::new(radians.cos(), radians.sin()));
+            Aperture {
+                shape: ApertureShape::RoundedHex {
+                    radius: radius * scale,
+                    corner_radius: corner_radius * scale,
+                    rotation_degrees: first_vertex.y.atan2(first_vertex.x).to_degrees(),
+                },
+                hole_diameter: scaled_hole(),
+            }
+        }
         ApertureShape::Contour { .. }
         | ApertureShape::Circle { .. }
-        | ApertureShape::Polygon { .. } => contour_aperture(aperture, basis),
+        | ApertureShape::Polygon { .. }
+        | ApertureShape::RoundedHex { .. } => contour_aperture(aperture, basis),
     }
 }
 

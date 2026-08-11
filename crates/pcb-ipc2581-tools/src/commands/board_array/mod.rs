@@ -324,33 +324,26 @@ impl BoardArrayGeneratedGeometry {
             GeneratedLayerFeature {
                 layer_name: layer_name.into(),
                 polarity,
+                copper_balance: None,
                 spec_refs,
                 features,
-                instance_refs: Vec::new(),
+                void_set: None,
             },
         ));
     }
 
-    /// Attach one balanced layer: its positive plane set, its negative
-    /// instance set, and the shared templates the instances reference.
+    /// Attach one balanced layer: its ordered generated feature sets and the
+    /// shared templates the void sets reference.
     fn add_balance_layer(
         &mut self,
         scope: GeneratedFeatureScope,
         layer_name: &str,
         sets: crate::copper_balance::BalanceFeatureSets,
     ) {
-        self.add_layer_feature(scope, layer_name, Polarity::Positive, sets.positive);
-        self.layer_features.push((
-            scope,
-            GeneratedLayerFeature {
-                layer_name: layer_name.to_string(),
-                polarity: Polarity::Negative,
-                spec_refs: Vec::new(),
-                features: Vec::new(),
-                instance_refs: sets.instances,
-            },
-        ));
-        for template in sets.templates {
+        let (templates, features) = sets.into_layer_features(layer_name);
+        self.layer_features
+            .extend(features.into_iter().map(|feature| (scope, feature)));
+        for template in templates {
             if !self
                 .user_entries
                 .iter()

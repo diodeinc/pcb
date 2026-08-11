@@ -171,6 +171,7 @@ pub enum WriterMacroExpression {
 pub struct WriterObject {
     pub kind: ObjectKind,
     pub polarity: Polarity,
+    pub repeat: Option<StepRepeat>,
     /// Gerber aperture load transformation active for this object.
     pub aperture_transform: WriterApertureTransform,
     /// Aperture attributes attached directly to a region object.
@@ -200,6 +201,7 @@ impl WriterObject {
         Self {
             kind,
             polarity: Polarity::Dark,
+            repeat: None,
             aperture_transform: WriterApertureTransform::default(),
             aperture_attributes: Vec::new(),
             attributes: Vec::new(),
@@ -255,6 +257,8 @@ struct Writer<'a> {
     current_aperture: Option<i32>,
     current_polarity: Polarity,
     current_plot_mode: Option<PlotMode>,
+    current_repeat: Option<StepRepeat>,
+    current_coordinates: Option<(String, String)>,
     current_aperture_transform: WriterApertureTransform,
     current_aperture_attributes: Vec<AttributeValue>,
     current_object_attributes: Vec<AttributeValue>,
@@ -268,6 +272,8 @@ impl<'a> Writer<'a> {
             current_aperture: None,
             current_polarity: Polarity::Dark,
             current_plot_mode: None,
+            current_repeat: None,
+            current_coordinates: None,
             current_aperture_transform: WriterApertureTransform::default(),
             current_aperture_attributes: Vec::new(),
             current_object_attributes: Vec::new(),
@@ -305,9 +311,7 @@ impl<'a> Writer<'a> {
             }
         }
 
-        for object in &self.layer.objects {
-            self.write_object(object)?;
-        }
+        self.write_objects(&self.layer.objects)?;
 
         self.output.push_str("M02*\n");
         Ok(())
@@ -478,17 +482,32 @@ impl<'a> Writer<'a> {
 
     fn write_block_aperture(&mut self, code: i32, objects: &[WriterObject]) -> Result<()> {
         self.output.push_str(&format!("%ABD{code}*%\n"));
+        self.reset_coordinates();
+        self.write_objects(objects)?;
+        self.output.push_str("%AB*%\n");
+        self.reset_coordinates();
+        Ok(())
+    }
+
+    fn write_objects(&mut self, objects: &[WriterObject]) -> Result<()> {
         for object in objects {
             self.write_object(object)?;
         }
-        self.output.push_str("%AB*%\n");
+        self.close_step_repeat();
         Ok(())
     }
 
     fn write_object(&mut self, object: &WriterObject) -> Result<()> {
+        if self.current_repeat != object.repeat
+            || (self.current_repeat.is_some() && self.current_polarity != object.polarity)
+        {
+            self.close_step_repeat();
+        }
+
         self.set_aperture_transform(object.aperture_transform)?;
         self.set_polarity(object.polarity);
         self.set_attributes(&object.aperture_attributes, &object.attributes)?;
+        self.open_step_repeat(object.repeat)?;
 
         match &object.kind {
             ObjectKind::Draw {
@@ -528,6 +547,46 @@ impl<'a> Writer<'a> {
         }
 
         Ok(())
+    }
+
+    fn open_step_repeat(&mut self, repeat: Option<StepRepeat>) -> Result<()> {
+        let Some(repeat) = repeat else {
+            return Ok(());
+        };
+        if self.current_repeat == Some(repeat) {
+            return Ok(());
+        }
+        if repeat.x_repeats <= 0
+            || repeat.y_repeats <= 0
+            || repeat.x_step < 0.0
+            || repeat.y_step < 0.0
+            || !repeat.x_step.is_finite()
+            || !repeat.y_step.is_finite()
+        {
+            return Err(GerberError::InvalidStructure(
+                "Gerber step-repeat requires positive counts and finite non-negative steps"
+                    .to_string(),
+            ));
+        }
+        self.output.push_str("%SRX");
+        self.output.push_str(&repeat.x_repeats.to_string());
+        self.output.push('Y');
+        self.output.push_str(&repeat.y_repeats.to_string());
+        self.output.push('I');
+        self.write_decimal(repeat.x_step);
+        self.output.push('J');
+        self.write_decimal(repeat.y_step);
+        self.output.push_str("*%\n");
+        self.current_repeat = Some(repeat);
+        self.reset_coordinates();
+        Ok(())
+    }
+
+    fn close_step_repeat(&mut self) {
+        if self.current_repeat.take().is_some() {
+            self.output.push_str("%SR*%\n");
+            self.reset_coordinates();
+        }
     }
 
     fn set_attributes(
@@ -692,10 +751,29 @@ impl<'a> Writer<'a> {
     }
 
     fn write_point(&mut self, point: Point) {
-        self.output.push('X');
-        self.output.push_str(&self.coordinate(point.x, true));
-        self.output.push('Y');
-        self.output.push_str(&self.coordinate(point.y, false));
+        let x = self.coordinate(point.x, true);
+        let y = self.coordinate(point.y, false);
+        let (x_changed, y_changed) = self
+            .current_coordinates
+            .as_ref()
+            .map(|(current_x, current_y)| (current_x != &x, current_y != &y))
+            .unwrap_or((true, true));
+
+        // X and Y are modal. Keep one axis explicit for same-point operations
+        // to avoid relying on coordinate-free D codes in older CAM software.
+        if x_changed || !y_changed {
+            self.output.push('X');
+            self.output.push_str(&x);
+        }
+        if y_changed {
+            self.output.push('Y');
+            self.output.push_str(&y);
+        }
+        self.current_coordinates = Some((x, y));
+    }
+
+    fn reset_coordinates(&mut self) {
+        self.current_coordinates = None;
     }
 
     fn coordinate(&self, value: f64, x_axis: bool) -> String {
@@ -850,6 +928,7 @@ mod tests {
                 aperture: 10,
             },
             polarity: Polarity::Dark,
+            repeat: None,
             aperture_transform: WriterApertureTransform::default(),
             aperture_attributes: Vec::new(),
             attributes,

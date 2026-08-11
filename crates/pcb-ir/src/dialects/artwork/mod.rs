@@ -172,12 +172,18 @@ fn geometry_ref_error<LayerMeta, ObjectMeta>(
         {
             Some(format!("references missing path {path}"))
         }
-        Geometry::Instance { block, .. } if block as usize >= doc.blocks.len() => {
+        Geometry::Instance { block, .. } | Geometry::GridInstance { block, .. }
+            if block as usize >= doc.blocks.len() =>
+        {
             Some(format!("references missing block {block}"))
         }
-        Geometry::Instance { block, .. } if block as usize >= block_limit => Some(format!(
-            "references block {block}; reusable blocks must reference earlier blocks"
-        )),
+        Geometry::Instance { block, .. } | Geometry::GridInstance { block, .. }
+            if block as usize >= block_limit =>
+        {
+            Some(format!(
+                "references block {block}; reusable blocks must reference earlier blocks"
+            ))
+        }
         _ => None,
     }
 }
@@ -251,6 +257,47 @@ pub struct PaintOrder {
     pub stage: PaintStage,
 }
 
+/// A regular two-axis repetition of one reusable artwork block.
+///
+/// Step vectors are expressed in the instance's parent coordinate system.
+/// Keeping them as vectors allows outer panel placements to rotate the grid
+/// without expanding its members.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GridRepeat {
+    pub x_count: u32,
+    pub y_count: u32,
+    pub x_step: Point,
+    pub y_step: Point,
+}
+
+impl GridRepeat {
+    /// Translation of occurrence `(ix, iy)` relative to the grid's base
+    /// placement.
+    pub fn offset(self, ix: u32, iy: u32) -> Point {
+        Point::new(
+            ix as f64 * self.x_step.x + iy as f64 * self.y_step.x,
+            ix as f64 * self.x_step.y + iy as f64 * self.y_step.y,
+        )
+    }
+
+    /// Translations of every occurrence, x-fastest.
+    pub fn offsets(self) -> impl Iterator<Item = Point> {
+        (0..self.y_count).flat_map(move |iy| (0..self.x_count).map(move |ix| self.offset(ix, iy)))
+    }
+
+    /// Bounds of one occurrence's `base` bounds repeated across the grid.
+    pub fn bbox(self, base: BBox) -> BBox {
+        let x = self.x_count.saturating_sub(1);
+        let y = self.y_count.saturating_sub(1);
+        [(0, 0), (x, 0), (0, y), (x, y)]
+            .into_iter()
+            .map(|(ix, iy)| self.offset(ix, iy))
+            .fold(BBox::empty(), |bbox, offset| {
+                bbox.union(BBox::new(base.min + offset, base.max + offset))
+            })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Geometry {
     /// A standard aperture stamped under a placement transform.
@@ -261,12 +308,18 @@ pub enum Geometry {
     Region { path: u32 },
     /// A reusable ordered sub-image placed under an affine transform.
     Instance { block: u32, transform: Affine2 },
+    /// A reusable ordered sub-image placed on a regular grid.
+    GridInstance {
+        block: u32,
+        transform: Affine2,
+        repeat: GridRepeat,
+    },
 }
 
 impl Geometry {
     pub fn path(self) -> Option<u32> {
         match self {
-            Self::Flash { .. } | Self::Instance { .. } => None,
+            Self::Flash { .. } | Self::Instance { .. } | Self::GridInstance { .. } => None,
             Self::Stroke { path } | Self::Region { path } => Some(path),
         }
     }
@@ -307,6 +360,13 @@ pub enum ApertureShape {
         height: f64,
         radius: f64,
     },
+    /// Regular hexagon with circularly rounded corners. `radius` is the
+    /// center-to-vertex radius before rounding.
+    RoundedHex {
+        radius: f64,
+        corner_radius: f64,
+        rotation_degrees: f64,
+    },
     /// An arbitrary origin-local filled contour, shared by every flash of
     /// this aperture, painted under its source path's fill rule. This is
     /// how repeated dictionary instances stay instances all the way to the
@@ -346,6 +406,11 @@ impl Aperture {
                 height,
                 radius,
             } => shapes::rounded_rect(*width, *height, *radius, shapes::ALL_CORNERS, true),
+            ApertureShape::RoundedHex {
+                radius,
+                corner_radius,
+                rotation_degrees,
+            } => shapes::rounded_hexagon(*radius, *corner_radius, *rotation_degrees),
             ApertureShape::Contour { outline, .. } => return vec![outline.clone()],
         };
         let mut contours: Vec<ContourBuf> = outer.into_iter().collect();
@@ -377,6 +442,12 @@ impl Aperture {
             ApertureShape::Polygon { diameter, .. } => {
                 BBox::from_point(Point::ZERO).expand(diameter / 2.0)
             }
+            ApertureShape::RoundedHex {
+                radius,
+                corner_radius,
+                rotation_degrees,
+            } => shapes::rounded_hexagon(*radius, *corner_radius, *rotation_degrees)
+                .map_or_else(BBox::empty, |contour| contour.bbox),
             ApertureShape::Contour { outline, .. } => outline.bbox,
         }
     }
@@ -582,7 +653,10 @@ fn object_image_rings<LayerMeta, ObjectMeta>(
                 )
             })
             .unwrap_or_default(),
-        Geometry::Flash { .. } | Geometry::Stroke { .. } | Geometry::Instance { .. } => Vec::new(),
+        Geometry::Flash { .. }
+        | Geometry::Stroke { .. }
+        | Geometry::Instance { .. }
+        | Geometry::GridInstance { .. } => Vec::new(),
     }
 }
 
@@ -616,6 +690,15 @@ fn geometry_bbox<LayerMeta, ObjectMeta>(
             .get(block as usize)
             .map(|block| block.bbox.transformed(transform))
             .unwrap_or_else(BBox::empty),
+        Geometry::GridInstance {
+            block,
+            transform,
+            repeat,
+        } => doc
+            .blocks
+            .get(block as usize)
+            .map(|block| repeat.bbox(block.bbox.transformed(transform)))
+            .unwrap_or_else(BBox::empty),
     }
 }
 
@@ -627,10 +710,45 @@ fn geometry_bbox<LayerMeta, ObjectMeta>(
 pub fn expand_instances<LayerMeta: Clone, ObjectMeta: Clone>(
     doc: &Document<LayerMeta, ObjectMeta>,
 ) -> Document<LayerMeta, ObjectMeta> {
+    expand_instances_with_grid_policy(doc, false)
+}
+
+/// Materialize ordinary hierarchy while preserving explicit regular grids.
+///
+/// The result contains no ordinary instances anywhere: nested grids
+/// materialize until each retained grid references a primitive-only block,
+/// with outer transforms composed into its base placement, step vectors,
+/// and block contents.
+pub fn expand_instances_preserving_grids<LayerMeta: Clone, ObjectMeta: Clone>(
+    doc: &Document<LayerMeta, ObjectMeta>,
+) -> Document<LayerMeta, ObjectMeta> {
+    expand_instances_with_grid_policy(doc, true)
+}
+
+fn expand_instances_with_grid_policy<LayerMeta: Clone, ObjectMeta: Clone>(
+    doc: &Document<LayerMeta, ObjectMeta>,
+    preserve_grids: bool,
+) -> Document<LayerMeta, ObjectMeta> {
     let mut out = Document::new();
     out.apertures = doc.apertures.clone();
     out.arena = doc.arena.clone();
     out.diagnostics = doc.diagnostics.clone();
+    let mut block_contains_grid = Vec::with_capacity(doc.blocks.len());
+    for block in &doc.blocks {
+        block_contains_grid.push(block.objects.iter().any(|object| {
+            match object.geometry {
+                Geometry::GridInstance { .. } => true,
+                Geometry::Instance { block, .. } => block_contains_grid
+                    .get(block as usize)
+                    .copied()
+                    .unwrap_or(false),
+                _ => false,
+            }
+        }));
+    }
+    if preserve_grids {
+        flatten_leaf_blocks(doc, &mut out, &block_contains_grid);
+    }
 
     for layer in &doc.layers {
         out.push_layer(Layer {
@@ -650,8 +768,12 @@ pub fn expand_instances<LayerMeta: Clone, ObjectMeta: Clone>(
                 &mut out,
                 layer_index as u32,
                 object,
-                Affine2::IDENTITY,
-                Polarity::Dark,
+                InstanceExpansion {
+                    transform: Affine2::IDENTITY,
+                    polarity: Polarity::Dark,
+                    preserve_grids,
+                    block_contains_grid: &block_contains_grid,
+                },
                 doc.blocks.len(),
             );
         }
@@ -660,16 +782,108 @@ pub fn expand_instances<LayerMeta: Clone, ObjectMeta: Clone>(
     out
 }
 
+/// Rebuild every grid-free block as primitive-only geometry so retained
+/// grids never require a hierarchy walk in consumers. Blocks containing
+/// grids are copied verbatim; expansion never retains a grid of them.
+fn flatten_leaf_blocks<LayerMeta, ObjectMeta: Clone>(
+    doc: &Document<LayerMeta, ObjectMeta>,
+    out: &mut Document<LayerMeta, ObjectMeta>,
+    block_contains_grid: &[bool],
+) {
+    for (index, block) in doc.blocks.iter().enumerate() {
+        let id = out.push_block();
+        for object in &block.objects {
+            match object.geometry {
+                Geometry::Instance {
+                    block: child,
+                    transform,
+                } if !block_contains_grid[index] => {
+                    if child as usize >= index {
+                        out.warn(format!(
+                            "Skipping artwork instance of non-earlier block {child}"
+                        ));
+                        continue;
+                    }
+                    let children = out.blocks[child as usize].objects.clone();
+                    for child_object in children {
+                        let geometry =
+                            transform_primitive_geometry(out, child_object.geometry, transform);
+                        out.push_block_object(
+                            id,
+                            Object {
+                                polarity: object.polarity.compose(child_object.polarity),
+                                order: child_object.order,
+                                geometry,
+                                bbox: BBox::empty(),
+                                meta: child_object.meta,
+                            },
+                        );
+                    }
+                }
+                _ => {
+                    out.push_block_object(id, object.clone());
+                }
+            }
+        }
+    }
+}
+
+/// Apply `transform` to primitive geometry within one document, copying
+/// transformed paths into its arena.
+fn transform_primitive_geometry<LayerMeta, ObjectMeta>(
+    doc: &mut Document<LayerMeta, ObjectMeta>,
+    geometry: Geometry,
+    transform: Affine2,
+) -> Geometry {
+    match geometry {
+        Geometry::Flash {
+            aperture,
+            transform: flash,
+        } => Geometry::Flash {
+            aperture,
+            transform: transform.concat(flash),
+        },
+        Geometry::Stroke { path } | Geometry::Region { path } => {
+            let path = if transform.is_identity() {
+                path
+            } else {
+                let source_path = doc.arena.path(path);
+                let paint = source_path.paint.scaled(transform.m00.hypot(transform.m10));
+                let contours = doc
+                    .arena
+                    .transformed_contour_bufs(source_path.contours, transform);
+                doc.push_path(paint, contours)
+            };
+            match geometry {
+                Geometry::Stroke { .. } => Geometry::Stroke { path },
+                Geometry::Region { .. } => Geometry::Region { path },
+                _ => unreachable!(),
+            }
+        }
+        Geometry::Instance { .. } | Geometry::GridInstance { .. } => {
+            unreachable!("flattened blocks contain only primitive geometry")
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct InstanceExpansion<'a> {
+    transform: Affine2,
+    polarity: Polarity,
+    preserve_grids: bool,
+    block_contains_grid: &'a [bool],
+}
+
 fn expand_object_into_layer<LayerMeta, ObjectMeta: Clone>(
     source: &Document<LayerMeta, ObjectMeta>,
     target: &mut Document<LayerMeta, ObjectMeta>,
     layer: u32,
     object: &Object<ObjectMeta>,
-    transform: Affine2,
-    polarity: Polarity,
+    expansion: InstanceExpansion<'_>,
     block_limit: usize,
 ) {
-    let polarity = polarity.compose(object.polarity);
+    let transform = expansion.transform;
+    let polarity = expansion.polarity.compose(object.polarity);
     if let Geometry::Instance {
         block,
         transform: placement,
@@ -694,43 +908,91 @@ fn expand_object_into_layer<LayerMeta, ObjectMeta: Clone>(
                 target,
                 layer,
                 child,
-                transform,
-                polarity,
+                InstanceExpansion {
+                    transform,
+                    polarity,
+                    ..expansion
+                },
                 block as usize,
             );
         }
         return;
     }
 
-    let geometry = match object.geometry {
-        Geometry::Flash {
-            aperture,
-            transform: flash,
-        } => Geometry::Flash {
-            aperture,
-            transform: transform.concat(flash),
-        },
-        Geometry::Stroke { path } | Geometry::Region { path } => {
-            let path = if transform.is_identity() {
-                path
-            } else {
-                let source_path = source.arena.path(path);
-                let scale = transform.m00.hypot(transform.m10);
-                target.push_path(
-                    source_path.paint.scaled(scale),
-                    source
-                        .arena
-                        .transformed_contour_bufs(source_path.contours, transform),
-                )
+    if let Geometry::GridInstance {
+        block,
+        transform: placement,
+        repeat,
+    } = object.geometry
+    {
+        let Some(block_definition) = source.blocks.get(block as usize) else {
+            target.warn(format!(
+                "Skipping artwork grid instance of missing block {block}"
+            ));
+            return;
+        };
+        if block as usize >= block_limit {
+            target.warn(format!(
+                "Skipping artwork grid instance of non-earlier block {block}"
+            ));
+            return;
+        }
+        if expansion.preserve_grids
+            && !expansion
+                .block_contains_grid
+                .get(block as usize)
+                .copied()
+                .unwrap_or(false)
+        {
+            target.push_object(
+                layer,
+                Object {
+                    polarity,
+                    order: object.order,
+                    geometry: Geometry::GridInstance {
+                        block,
+                        transform: transform.concat(placement),
+                        repeat: GridRepeat {
+                            x_count: repeat.x_count,
+                            y_count: repeat.y_count,
+                            x_step: transform.transform_vector(repeat.x_step),
+                            y_step: transform.transform_vector(repeat.y_step),
+                        },
+                    },
+                    bbox: BBox::empty(),
+                    meta: object.meta.clone(),
+                },
+            );
+            return;
+        }
+        for offset in repeat.offsets() {
+            let placement = Affine2 {
+                m02: placement.m02 + offset.x,
+                m12: placement.m12 + offset.y,
+                ..placement
             };
-            match object.geometry {
-                Geometry::Stroke { .. } => Geometry::Stroke { path },
-                Geometry::Region { .. } => Geometry::Region { path },
-                _ => unreachable!(),
+            let occurrence = transform.concat(placement);
+            for child in &block_definition.objects {
+                expand_object_into_layer(
+                    source,
+                    target,
+                    layer,
+                    child,
+                    InstanceExpansion {
+                        transform: occurrence,
+                        polarity,
+                        ..expansion
+                    },
+                    block as usize,
+                );
             }
         }
-        Geometry::Instance { .. } => unreachable!(),
-    };
+        return;
+    }
+
+    // The target arena starts as a clone of the source arena, so source path
+    // indices resolve identically in the target.
+    let geometry = transform_primitive_geometry(target, object.geometry, transform);
     target.push_object(
         layer,
         Object {

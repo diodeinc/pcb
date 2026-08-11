@@ -940,7 +940,11 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
     .pop()
     .unwrap();
     let features = balance_features(&balance).unwrap();
-    let void_count = features.instances.len();
+    let void_count = features
+        .void_sets
+        .iter()
+        .map(|set| set.sites.len())
+        .sum::<usize>();
     spec.generated_geometry
         .add_balance_layer(GeneratedFeatureScope::Array, "TOP", features);
     assert!(matches!(
@@ -951,6 +955,11 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
 
     let xml = write_board_array_xml(input, &spec).unwrap();
     assert!(xml.contains(r#"<Set polarity="NEGATIVE">"#));
+    for kind in ["plane", "full_void", "boundary_web"] {
+        assert!(xml.contains(&format!(
+            r#"<NonstandardAttribute name="diode.copper_balance" type="STRING" value="{kind}"/>"#
+        )));
+    }
 
     let parsed = Ipc2581::parse(&xml).unwrap();
     assert!(xml.matches("<Contour>").count() > 0);
@@ -965,21 +974,32 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
         "shared IPC Locations should remain a placement group"
     );
     pcb_ir::dialects::ipc::process::expand_feature_placement_groups(&mut top);
-    let balance_paths = |polarity: pcb_ir::geom::Polarity| {
+    assert!(
+        top.features
+            .iter()
+            .filter(|feature| feature.source_step_kind == LayoutStepKind::Panel)
+            .all(|feature| feature.flags.copper_balance.is_some())
+    );
+    let balance_paths = |kind: pcb_ir::dialects::ipc::CopperBalanceKind| {
         let paths = top
             .features
             .iter()
             .filter(|feature| {
                 feature.source_step_kind == LayoutStepKind::Panel
                     && feature.kind == FeatureKind::Primitive
-                    && feature.polarity == polarity
+                    && feature.flags.copper_balance == Some(kind)
             })
             .flat_map(|feature| feature.paths.slice(&top.arena.paths))
             .collect::<Vec<_>>();
         ContourSet::from_painted_paths(&top.arena, paths, tol::REGION_MM)
     };
-    let round_trip = balance_paths(pcb_ir::geom::Polarity::Dark)
-        .difference(&balance_paths(pcb_ir::geom::Polarity::Clear));
+    let round_trip = balance_paths(pcb_ir::dialects::ipc::CopperBalanceKind::Plane)
+        .difference(&balance_paths(
+            pcb_ir::dialects::ipc::CopperBalanceKind::FullVoid,
+        ))
+        .union(&balance_paths(
+            pcb_ir::dialects::ipc::CopperBalanceKind::BoundaryWeb,
+        ));
 
     assert!(!round_trip.is_empty());
     assert!(
@@ -998,6 +1018,13 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
         .unwrap();
     assert!(top_gerber.contents.contains("G36*"));
     assert!(top_gerber.contents.contains("G37*"));
+    assert!(top_gerber.contents.contains("%AMREPEAT"));
+    assert!(top_gerber.contents.contains("%SRX"));
+    assert!(
+        top_gerber
+            .contents
+            .contains("%TA.AperFunction,CopperBalancing*%")
+    );
     // Manufacturing Gerbers expand array hierarchy for broad CAM compatibility.
     assert!(!top_gerber.contents.contains("%ABD"));
     assert!(top_gerber.contents.contains("%LPC*%"));

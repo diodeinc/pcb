@@ -17,16 +17,49 @@ use ipc2581::types::{
 use pcb_ir::dialects::ipc::ArtworkScope;
 use pcb_ir::geom::copper_balance::{
     DenseCopperBalanceMode, DenseCopperBalanceProfile, DenseCopperBalanceResult,
+    DenseCopperLattice, DenseCopperLatticeSite, ROUNDED_HEXAGON_CORNER_RADIUS_RATIO,
     SpatialCopperBalanceLayerRequest, SpatialCopperBalanceRequest, StackMomentField,
     generate_spatial_dense_copper_balance, rounded_hexagonal_void,
 };
-use pcb_ir::geom::region::simplify_shapes;
-use pcb_ir::geom::{ContourBuf, ContourSet, FillRule, PathOp, Point, tol};
+use pcb_ir::geom::path::ContourBuf;
+use pcb_ir::geom::region::{rings_to_contours, simplify_shapes};
+use pcb_ir::geom::{ContourSet, FillRule, PathOp, tol};
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 
 use crate::geometry;
 use crate::ipc2581::Ipc2581;
+use pcb_ir::dialects::ipc::CopperBalanceKind;
+
+pub(crate) const COPPER_BALANCE_ATTRIBUTE_NAME: &str = "diode.copper_balance";
+pub(crate) const COPPER_BALANCE_LATTICE_ATTRIBUTE_NAME: &str = "diode.copper_balance_lattice";
+pub(crate) const COPPER_BALANCE_LATTICE_ORIGIN_X_ATTRIBUTE_NAME: &str =
+    "diode.copper_balance_lattice_origin_x_mm";
+pub(crate) const COPPER_BALANCE_LATTICE_ORIGIN_Y_ATTRIBUTE_NAME: &str =
+    "diode.copper_balance_lattice_origin_y_mm";
+pub(crate) const COPPER_BALANCE_LATTICE_PITCH_ATTRIBUTE_NAME: &str =
+    "diode.copper_balance_lattice_pitch_mm";
+pub(crate) const COPPER_BALANCE_VOID_RADIUS_ATTRIBUTE_NAME: &str =
+    "diode.copper_balance_void_radius_mm";
+pub(crate) const COPPER_BALANCE_VOID_CORNER_RADIUS_ATTRIBUTE_NAME: &str =
+    "diode.copper_balance_void_corner_radius_mm";
+pub(crate) const COPPER_BALANCE_LATTICE_VALUE: &str = "staggered-hex-v1";
+
+pub(crate) fn copper_balance_attribute_value(kind: CopperBalanceKind) -> &'static str {
+    match kind {
+        CopperBalanceKind::Plane => "plane",
+        CopperBalanceKind::FullVoid => "full_void",
+        CopperBalanceKind::BoundaryWeb => "boundary_web",
+    }
+}
+
+pub(crate) fn parse_copper_balance_attribute(value: &str) -> Result<CopperBalanceKind> {
+    match value {
+        "plane" => Ok(CopperBalanceKind::Plane),
+        "full_void" => Ok(CopperBalanceKind::FullVoid),
+        "boundary_web" => Ok(CopperBalanceKind::BoundaryWeb),
+        _ => bail!("unknown diode.copper_balance value '{value}'"),
+    }
+}
 
 /// Maximum violation area tolerated when certifying a balancing region.
 pub const CERTIFICATE_AREA_TOLERANCE_MM2: f64 = 1e-4;
@@ -58,29 +91,84 @@ pub struct BalanceVoidTemplate {
     pub contour: IpcContour,
 }
 
-/// One translated instance of a [`BalanceVoidTemplate`].
+/// One radius class of exact rounded-hex voids on the declared lattice.
 #[derive(Debug, Clone)]
-pub struct BalanceVoidInstance {
+pub struct BalanceVoidSet {
     pub template: String,
-    pub x: f64,
-    pub y: f64,
+    pub radius_mm: f64,
+    pub corner_radius_mm: f64,
+    pub lattice: DenseCopperLattice,
+    pub sites: Vec<DenseCopperLatticeSite>,
 }
 
 /// Generated IPC features for one balanced layer, split by polarity.
 ///
-/// The perforated plane is a positive set covering the whole usable region,
-/// while full and clipped voids are negative dictionary-instance references.
-/// Repeated shapes share templates, so each occurrence costs only a location.
+/// The perforated plane covers the whole usable region, every void is a full
+/// negative dictionary-instance reference, and the boundary web restores the
+/// portion edge voids must not remove. Repeated shapes share templates, so
+/// each occurrence costs only a location.
 #[derive(Debug, Clone, Default)]
 pub struct BalanceFeatureSets {
-    pub positive: Vec<SetFeature>,
+    pub plane: Vec<SetFeature>,
+    pub boundary_web: Vec<SetFeature>,
     pub templates: Vec<BalanceVoidTemplate>,
-    pub instances: Vec<BalanceVoidInstance>,
+    pub void_sets: Vec<BalanceVoidSet>,
 }
 
 impl BalanceFeatureSets {
     pub fn is_empty(&self) -> bool {
-        self.positive.is_empty() && self.instances.is_empty()
+        self.plane.is_empty() && self.boundary_web.is_empty() && self.void_sets.is_empty()
+    }
+
+    /// Lower one balanced layer to its ordered generated feature sets — the
+    /// positive plane, one negative set per rounded-hex radius class, and the
+    /// positive boundary web — plus the dictionary templates the void sets
+    /// reference.
+    pub(crate) fn into_layer_features(
+        self,
+        layer_name: &str,
+    ) -> (
+        Vec<BalanceVoidTemplate>,
+        Vec<crate::generated::GeneratedLayerFeature>,
+    ) {
+        use crate::generated::GeneratedLayerFeature;
+        use ipc2581::types::ecad::Polarity;
+
+        let Self {
+            plane,
+            boundary_web,
+            templates,
+            void_sets,
+        } = self;
+        let balance_features = |polarity, kind, features, void_set| GeneratedLayerFeature {
+            layer_name: layer_name.to_string(),
+            polarity,
+            copper_balance: Some(kind),
+            spec_refs: Vec::new(),
+            features,
+            void_set,
+        };
+        let mut features = vec![balance_features(
+            Polarity::Positive,
+            CopperBalanceKind::Plane,
+            plane,
+            None,
+        )];
+        features.extend(void_sets.into_iter().map(|void_set| {
+            balance_features(
+                Polarity::Negative,
+                CopperBalanceKind::FullVoid,
+                Vec::new(),
+                Some(void_set),
+            )
+        }));
+        features.push(balance_features(
+            Polarity::Positive,
+            CopperBalanceKind::BoundaryWeb,
+            boundary_web,
+            None,
+        ));
+        (templates, features)
     }
 }
 
@@ -352,103 +440,57 @@ pub fn balance_features(result: &DenseCopperBalanceResult) -> Result<BalanceFeat
     match result.solution.mode {
         DenseCopperBalanceMode::None => Ok(BalanceFeatureSets::default()),
         DenseCopperBalanceMode::Solid => Ok(BalanceFeatureSets {
-            positive: ipc_contour_features(result)?,
+            plane: ipc_region_features(&result.usable)?,
             ..BalanceFeatureSets::default()
         }),
         DenseCopperBalanceMode::Perforated { .. } => {
-            let (templates, instances) = void_instances(result)?;
+            let (templates, void_sets) = void_sets(result)?;
             Ok(BalanceFeatureSets {
-                positive: ipc_contour_features(result)?,
+                plane: ipc_region_features(&result.usable)?,
+                boundary_web: ipc_region_features(&result.boundary_web())?,
                 templates,
-                instances,
+                void_sets,
             })
         }
     }
 }
 
-/// One shared template per distinct full or clipped void shape plus one
-/// translated instance reference per occurrence.
-fn void_instances(
+/// One dictionary template and one declared-lattice site set per exact radius.
+fn void_sets(
     result: &DenseCopperBalanceResult,
-) -> Result<(Vec<BalanceVoidTemplate>, Vec<BalanceVoidInstance>)> {
-    let mut templates: Vec<BalanceVoidTemplate> = Vec::new();
-    let partial_shapes = simplify_shapes(result.partial_voids.rings.clone(), FillRule::NonZero);
-    let mut instances = Vec::with_capacity(result.full_voids.len() + partial_shapes.len());
-
-    for void in &result.full_voids {
-        let id = format!("balance_hex_{}nm", (void.radius_mm * 1e6).round() as i64);
-        if !templates.iter().any(|template| template.id == id) {
-            let contour = rounded_hexagonal_void(void.radius_mm)
-                .context("generated copper balance has an invalid rounded-hex void radius")?;
-            templates.push(BalanceVoidTemplate {
-                id: id.clone(),
-                contour: IpcContour {
-                    polygon: ipc_polygon_from_contour(&contour)?,
-                    cutouts: Vec::new(),
-                },
-            });
-        }
-        instances.push(BalanceVoidInstance {
-            template: id,
-            x: void.center.x,
-            y: void.center.y,
-        });
+) -> Result<(Vec<BalanceVoidTemplate>, Vec<BalanceVoidSet>)> {
+    let mut sites_by_radius = std::collections::BTreeMap::<i64, Vec<DenseCopperLatticeSite>>::new();
+    for void in result.full_voids.iter().chain(&result.edge_voids) {
+        sites_by_radius
+            .entry((void.radius_mm * 1e6).round() as i64)
+            .or_default()
+            .push(void.site);
     }
 
-    let mut partial_templates = HashMap::<String, String>::new();
-    for shape in partial_shapes {
-        let (contour, origin) = local_partial_void_template(&shape)?;
-        let key = serialized_contour_key(&contour);
-        let id = if let Some(id) = partial_templates.get(&key) {
-            id.clone()
-        } else {
-            let digest = Sha256::digest(key.as_bytes());
-            let id = format!("balance_partial_{}", hex::encode(&digest[..8]));
-            partial_templates.insert(key, id.clone());
-            templates.push(BalanceVoidTemplate {
-                id: id.clone(),
-                contour,
-            });
-            id
-        };
-        instances.push(BalanceVoidInstance {
+    let mut templates = Vec::with_capacity(sites_by_radius.len());
+    let mut sets = Vec::with_capacity(sites_by_radius.len());
+    for (radius_nm, mut sites) in sites_by_radius {
+        sites.sort_by_key(|site| (site.column, site.row));
+        let radius_mm = radius_nm as f64 / 1e6;
+        let id = format!("balance_hex_{radius_nm}nm");
+        let contour = rounded_hexagonal_void(radius_mm)
+            .context("generated copper balance has an invalid rounded-hex void radius")?;
+        templates.push(BalanceVoidTemplate {
+            id: id.clone(),
+            contour: IpcContour {
+                polygon: ipc_polygon_from_contour(&contour)?,
+                cutouts: Vec::new(),
+            },
+        });
+        sets.push(BalanceVoidSet {
             template: id,
-            x: origin.x,
-            y: origin.y,
+            radius_mm,
+            corner_radius_mm: radius_mm * ROUNDED_HEXAGON_CORNER_RADIUS_RATIO,
+            lattice: result.lattice,
+            sites,
         });
     }
-    Ok((templates, instances))
-}
-
-fn local_partial_void_template(shape: &pcb_ir::geom::region::Shape) -> Result<(IpcContour, Point)> {
-    let outer = shape
-        .first()
-        .context("generated partial copper void has no outer boundary")?;
-    let outer = pcb_ir::geom::arcfit::ring_to_contour_with_arcs(outer, tol::FLATTEN_MM);
-    let origin = outer.bbox.min;
-    let polygon = ipc_polygon_from_contour(&localized_template_contour(&outer, origin))?;
-    let cutouts = shape
-        .iter()
-        .skip(1)
-        .map(|ring| {
-            let contour = pcb_ir::geom::arcfit::ring_to_contour_with_arcs(ring, tol::FLATTEN_MM);
-            ipc_polygon_from_contour(&localized_template_contour(&contour, origin))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    Ok((IpcContour { polygon, cutouts }, origin))
-}
-
-fn localized_template_contour(contour: &ContourBuf, origin: Point) -> ContourBuf {
-    pcb_ir::geom::path::transform_cmds(
-        contour.cmds.iter().copied(),
-        pcb_ir::geom::Affine2::translation(Point::new(-origin.x, -origin.y)),
-    )
-}
-
-fn serialized_contour_key(contour: &IpcContour) -> String {
-    let mut writer = ipc2581::XmlWriter::new();
-    ipc2581::write::contour(&mut writer, ipc2581::types::Units::Millimeter, contour);
-    writer.into_string()
+    Ok((templates, sets))
 }
 
 /// Extract one layer's flattened, composed copper image.
@@ -505,19 +547,17 @@ pub fn physical_copper_stack_weights(ipc: &Ipc2581) -> Option<HashMap<String, f6
     })
 }
 
-/// The positive plane covers the usable region. Full and clipped voids are
-/// emitted separately as negative dictionary instances so neither IPC-2581
-/// nor Gerber has to repeat their contours inline.
-fn ipc_contour_features(result: &DenseCopperBalanceResult) -> Result<Vec<SetFeature>> {
-    simplify_shapes(result.usable.rings.clone(), FillRule::NonZero)
+/// Convert one positive plane or boundary-web region to IPC contours. Voids
+/// are emitted separately as negative dictionary instances.
+fn ipc_region_features(region: &ContourSet) -> Result<Vec<SetFeature>> {
+    simplify_shapes(region.rings.clone(), FillRule::NonZero)
         .into_iter()
         .map(|shape| {
-            let outer = pcb_ir::geom::arcfit::ring_to_contour_with_arcs(&shape[0], tol::FLATTEN_MM);
-            let cutouts = shape
-                .iter()
-                .skip(1)
-                .map(|ring| pcb_ir::geom::arcfit::ring_to_contour_with_arcs(ring, tol::FLATTEN_MM))
-                .collect::<Vec<_>>();
+            let mut contours = rings_to_contours(shape).into_iter();
+            let outer = contours
+                .next()
+                .context("generated copper balance plane has no outer boundary")?;
+            let cutouts = contours.collect::<Vec<_>>();
             ipc_contour_feature(&outer, &cutouts)
         })
         .collect()
@@ -634,7 +674,7 @@ mod tests {
         );
         assert!(result.solution.generated_area_mm2 > 0.0);
         assert!(!result.full_voids.is_empty());
-        assert!(!result.partial_voids.is_empty());
+        assert!(!result.edge_voids.is_empty());
         let contour = |feature: &SetFeature| match feature {
             SetFeature::UserPrimitive(feature) => {
                 let UserPrimitive::UserSpecial(user_special) = &feature.primitive;
@@ -649,7 +689,7 @@ mod tests {
         // The positive plane stays the usable region; every generated void is
         // a separate negative dictionary instance.
         let positive_contours = features
-            .positive
+            .plane
             .iter()
             .map(|feature| contour(feature).expect("positive balance feature is a contour"))
             .collect::<Vec<_>>();
@@ -661,17 +701,30 @@ mod tests {
             0
         );
 
-        assert_eq!(features.instances.len(), result.void_count());
-        for (instance, void) in features.instances.iter().zip(&result.full_voids) {
-            assert_eq!((instance.x, instance.y), (void.center.x, void.center.y));
-            assert!(
-                features
-                    .templates
+        assert!(!features.boundary_web.is_empty());
+        assert_eq!(
+            features
+                .void_sets
+                .iter()
+                .map(|set| set.sites.len())
+                .sum::<usize>(),
+            result.void_count()
+        );
+        assert!(features.void_sets.iter().all(|set| {
+            features
+                .templates
+                .iter()
+                .any(|template| template.id == set.template)
+        }));
+        assert!(
+            features.templates.len()
+                < features
+                    .void_sets
                     .iter()
-                    .any(|template| template.id == instance.template)
-            );
-        }
-        assert!(features.templates.len() < features.instances.len());
+                    .map(|set| set.sites.len())
+                    .sum::<usize>()
+        );
+        assert!(features.templates.len() <= DenseCopperBalanceProfile::V1.void_area_levels);
         assert!(
             features
                 .templates
@@ -686,65 +739,6 @@ mod tests {
                         .any(|step| matches!(step, PolyStep::Curve(_)))
                 })
         );
-    }
-
-    #[test]
-    fn partial_template_ids_do_not_alias_across_layers() {
-        let panel = ContourSet::rectangle(
-            BBox::new(Point::new(0.0, 0.0), Point::new(20.0, 10.0)),
-            tol::REGION_MM,
-        );
-        let inset = ContourSet::rectangle(
-            BBox::new(Point::new(1.0, 0.5), Point::new(19.0, 9.5)),
-            tol::REGION_MM,
-        );
-        let existing = ContourSet::empty(tol::REGION_MM);
-        let layers = [
-            SpatialCopperBalanceLayerRequest {
-                safe_region: &panel,
-                existing_copper: &existing,
-                density_domain: &panel,
-                target_density: 0.75,
-                stack_weight_mm2: 0.0,
-            },
-            SpatialCopperBalanceLayerRequest {
-                safe_region: &inset,
-                existing_copper: &existing,
-                density_domain: &inset,
-                target_density: 0.75,
-                stack_weight_mm2: 0.0,
-            },
-        ];
-        let results = generate_spatial_dense_copper_balance(
-            DenseCopperBalanceProfile::V1,
-            SpatialCopperBalanceRequest {
-                panel_region: &panel,
-                lattice_origin: Point::new(10.0, 5.0),
-                layers: &layers,
-            },
-        )
-        .unwrap()
-        .layers;
-
-        let mut contours_by_id = HashMap::new();
-        let mut partial_template_count = 0;
-        for result in results {
-            let features = balance_features(&result).unwrap();
-            let partial_templates = features
-                .templates
-                .iter()
-                .filter(|template| template.id.starts_with("balance_partial_"));
-            for template in partial_templates {
-                partial_template_count += 1;
-                let key = serialized_contour_key(&template.contour);
-                if let Some(existing) = contours_by_id.insert(template.id.clone(), key.clone()) {
-                    assert_eq!(existing, key, "one template id must name one contour");
-                }
-            }
-        }
-
-        assert!(partial_template_count > 1);
-        assert!(contours_by_id.len() > 1);
     }
 
     #[test]

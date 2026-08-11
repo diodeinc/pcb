@@ -5,13 +5,12 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use ipc2581::Ipc2581;
 use ipc2581::edit::{Doc, Node};
-use ipc2581::types::{Spec, Units, ecad::Polarity};
+use ipc2581::types::{Spec, Units};
 use pcb_ir::dialects::ipc::{LayoutStepKind, root_step};
 use pcb_ir::geom::{BBox, Point};
 
 use super::EdgeInsetsMm;
 use crate::copper_balance::CopperBalanceReport;
-use crate::generated::GeneratedLayerFeature;
 use crate::geometry;
 use crate::utils::file as file_utils;
 
@@ -348,7 +347,9 @@ fn create_fab_panel(
             .layers
             .into_iter()
             .flat_map(|layer| {
-                for template in layer.features.templates {
+                let (layer_templates, features) =
+                    layer.features.into_layer_features(&layer.layer_name);
+                for template in layer_templates {
                     if !templates.iter().any(
                         |entry: &crate::copper_balance::BalanceVoidTemplate| {
                             entry.id == template.id
@@ -357,22 +358,7 @@ fn create_fab_panel(
                         templates.push(template);
                     }
                 }
-                [
-                    GeneratedLayerFeature {
-                        layer_name: layer.layer_name.clone(),
-                        polarity: Polarity::Positive,
-                        spec_refs: Vec::new(),
-                        features: layer.features.positive,
-                        instance_refs: Vec::new(),
-                    },
-                    GeneratedLayerFeature {
-                        layer_name: layer.layer_name,
-                        polarity: Polarity::Negative,
-                        spec_refs: Vec::new(),
-                        features: Vec::new(),
-                        instance_refs: layer.features.instances,
-                    },
-                ]
+                features
             })
             .collect::<Vec<_>>();
         (features, Some(report))

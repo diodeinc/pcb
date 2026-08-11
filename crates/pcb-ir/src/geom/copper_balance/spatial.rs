@@ -6,7 +6,8 @@ use std::collections::HashMap;
 use super::lattice::{ROUNDED_HEXAGON_AREA_FACTOR, lattice_index};
 use super::{
     DenseCopperBalanceMode, DenseCopperBalanceProfile, DenseCopperBalanceResult,
-    DenseCopperBalanceSolution, DenseCopperVoid, NUMERIC_EPSILON, SpatialCopperBalanceLayerRequest,
+    DenseCopperBalanceSolution, DenseCopperLatticeSite, DenseCopperVoid, NUMERIC_EPSILON,
+    SpatialCopperBalanceLayerRequest,
 };
 use crate::geom::{ContourSet, Point};
 
@@ -239,27 +240,21 @@ pub(super) fn project_box_sum(values: &[f64], lower: f64, upper: f64, target: f6
 }
 
 pub(super) fn spatial_result_from_squared_radii(
-    centers: &[Point],
+    sites: &[DenseCopperLatticeSite],
     squared_radii: &[f64],
     baseline: DenseCopperBalanceResult,
     layer: SpatialCopperBalanceLayerRequest<'_>,
     density_domain_area_mm2: f64,
     profile: DenseCopperBalanceProfile,
 ) -> DenseCopperBalanceResult {
-    // Snap the continuous radius field to the fabrication step so the voids
-    // form a small set of repeated templates; round-to-nearest keeps the
-    // aggregate area error stochastic and far below the solve tolerance.
-    let quantize = |radius_squared: f64| {
-        ((radius_squared.sqrt() / profile.void_radius_step_mm).round()
-            * profile.void_radius_step_mm)
-            .clamp(profile.min_void_radius_mm, profile.max_void_radius_mm)
-    };
-    let full_voids = centers
+    // Quantize squared radius directly: rounded-hex area is proportional to
+    // this variable, so uniform levels represent uniform area increments.
+    let full_voids = sites
         .iter()
         .zip(squared_radii)
-        .map(|(center, radius_squared)| DenseCopperVoid {
-            center: *center,
-            radius_mm: quantize(*radius_squared),
+        .map(|(site, radius_squared)| DenseCopperVoid {
+            site: *site,
+            radius_mm: profile.quantize_void_radius(radius_squared.sqrt()),
         })
         .collect::<Vec<_>>();
     let full_void_area_mm2 = ROUNDED_HEXAGON_AREA_FACTOR
@@ -267,8 +262,8 @@ pub(super) fn spatial_result_from_squared_radii(
             .iter()
             .map(|void| void.radius_mm * void.radius_mm)
             .sum::<f64>();
-    let partial_voids = baseline.partial_voids;
-    let void_area_mm2 = full_void_area_mm2 + partial_voids.area();
+    let clipped_edge_void_area_mm2 = baseline.clipped_edge_voids().area();
+    let void_area_mm2 = full_void_area_mm2 + clipped_edge_void_area_mm2;
     let generated_area_mm2 = (baseline.usable.area() - void_area_mm2).max(0.0);
     let achieved_density =
         (layer.existing_copper.area() + generated_area_mm2) / density_domain_area_mm2;
@@ -291,9 +286,11 @@ pub(super) fn spatial_result_from_squared_radii(
     };
     DenseCopperBalanceResult {
         solution,
+        lattice: baseline.lattice,
         usable: baseline.usable,
+        voidable: baseline.voidable,
         full_voids,
-        partial_voids,
+        edge_voids: baseline.edge_voids,
     }
 }
 

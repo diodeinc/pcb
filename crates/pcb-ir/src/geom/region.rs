@@ -15,9 +15,12 @@ use boostvoronoi::prelude::{
 };
 use boostvoronoi::utils::visual_utils::SimpleAffine;
 use i_overlay::core::fill_rule::FillRule as OverlayFillRule;
+use i_overlay::core::overlay::IntOverlayOptions;
 use i_overlay::core::overlay_rule::OverlayRule;
+use i_overlay::core::simplify::Simplify;
 use i_overlay::float::simplify::SimplifyShape;
 use i_overlay::float::single::SingleFloatOverlay;
+use i_overlay::i_float::int::point::IntPoint;
 use i_overlay::mesh::outline::offset::OutlineOffset;
 use i_overlay::mesh::style::{LineJoin as OutlineLineJoin, OutlineStyle};
 
@@ -69,6 +72,38 @@ pub fn simplify_rings(rings: Vec<Ring>, fill_rule: FillRule) -> Vec<Ring> {
 /// outer ring followed by its holes, wound opposite.
 pub fn simplify_shapes(rings: Vec<Ring>, fill_rule: FillRule) -> Vec<Shape> {
     rings.simplify_shape(overlay_fill_rule(fill_rule))
+}
+
+/// Regularize filled rings on an exact output grid.
+///
+/// The fixed-scale integer overlay resolves crossings, removes coincident
+/// vertices and merges collinear edges while snapping every result vertex to
+/// `grid`. Geometry that collapses during coordinate quantization is not
+/// representable on that output grid.
+pub fn simplify_shapes_on_grid(rings: Vec<Ring>, fill_rule: FillRule, grid: f64) -> Vec<Shape> {
+    let rings = rings
+        .into_iter()
+        .map(|ring| {
+            ring.into_iter()
+                .map(|[x, y]| IntPoint::new((x / grid).round() as i64, (y / grid).round() as i64))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    rings
+        .as_slice()
+        .simplify(overlay_fill_rule(fill_rule), IntOverlayOptions::default())
+        .into_iter()
+        .map(|shape| {
+            shape
+                .into_iter()
+                .map(|ring| {
+                    ring.into_iter()
+                        .map(|point| [point.x as f64 * grid, point.y as f64 * grid])
+                        .collect::<Ring>()
+                })
+                .collect::<Shape>()
+        })
+        .collect()
 }
 
 pub fn union_rings(rings: Vec<Ring>, fill_rule: FillRule) -> Vec<Ring> {
@@ -752,28 +787,17 @@ impl ContourSet {
         rings_to_contours(self.rings.clone())
     }
 
-    /// Convert to closed contours, re-fitting maximal circular arcs over the
-    /// flattened boundaries. Arcs from source outlines and disk-swept tool
-    /// paths that the boolean pipeline tessellated come back as `ArcTo`
-    /// segments, within the shared chord tolerance of the polyline form.
-    pub fn to_contours_with_arcs(&self) -> Vec<ContourBuf> {
-        self.rings
-            .iter()
-            .map(|ring| crate::geom::arcfit::ring_to_contour_with_arcs(ring, tol::FLATTEN_MM))
-            .collect()
-    }
-
     /// Convert each connected component to one positive contour.
     ///
     /// Hole rings are connected to their outer ring with zero-width bridges,
     /// allowing formats without compound-polygon holes to carry the same
     /// local positive geometry without layer-wide clear features.
-    pub fn to_bridged_contours_with_arcs(&self) -> Vec<ContourBuf> {
+    pub fn to_bridged_contours(&self) -> Vec<ContourBuf> {
         simplify_shapes(self.rings.clone(), FillRule::NonZero)
             .into_iter()
             .map(crate::geom::bridge::bridge_shape)
             .filter(|ring| ring.len() >= 3)
-            .map(|ring| crate::geom::arcfit::ring_to_contour_with_arcs(&ring, tol::FLATTEN_MM))
+            .filter_map(ring_to_contour)
             .collect()
     }
 
@@ -1465,6 +1489,45 @@ mod tests {
     use super::*;
     use crate::geom::shapes;
 
+    #[test]
+    fn fixed_grid_regularization_removes_sub_grid_geometry() {
+        let shapes = simplify_shapes_on_grid(
+            vec![
+                vec![
+                    [0.0004, 0.0004],
+                    [1.0004, 0.0004],
+                    [1.00049, 0.00049],
+                    [1.0004, 1.0004],
+                    [0.0004, 1.0004],
+                ],
+                vec![
+                    [2.0001, 0.0],
+                    [2.0004, 0.0],
+                    [2.0004, 0.0003],
+                    [2.0001, 0.0003],
+                ],
+            ],
+            FillRule::NonZero,
+            0.001,
+        );
+
+        assert_eq!(shapes.len(), 1);
+        assert!((rings_area(&shapes[0]) - 1.0).abs() < 1e-9);
+        for ring in &shapes[0] {
+            for point in ring {
+                assert!((point[0] * 1000.0 - (point[0] * 1000.0).round()).abs() < 1e-9);
+                assert!((point[1] * 1000.0 - (point[1] * 1000.0).round()).abs() < 1e-9);
+            }
+            for (start, end) in ring
+                .iter()
+                .zip(ring.iter().cycle().skip(1))
+                .take(ring.len())
+            {
+                assert!((start[0] - end[0]).hypot(start[1] - end[1]) >= 0.001);
+            }
+        }
+    }
+
     /// Partial cells are the whole point: a sampled estimate would round each
     /// of these to nothing or to everything.
     #[test]
@@ -1574,16 +1637,10 @@ mod tests {
         let hole = ContourSet::from_filled_contours(&[circle], tol::REGION_MM);
         let region = outer.difference(&hole);
 
-        let contours = region.to_bridged_contours_with_arcs();
+        let contours = region.to_bridged_contours();
         let round_trip = ContourSet::from_contours(&contours, FillRule::NonZero, tol::REGION_MM);
 
         assert_eq!(contours.len(), 1);
-        assert!(
-            contours[0]
-                .cmds
-                .iter()
-                .any(|cmd| cmd.op == crate::geom::PathOp::ArcTo)
-        );
         assert!(
             (round_trip.area() - region.area()).abs() <= 0.01,
             "bridged area {}, source area {}",
@@ -1632,13 +1689,6 @@ mod tests {
         assert!((opened.bbox.max.x - 10.0).abs() <= 1e-9);
         assert!((opened.bbox.max.y - 10.0).abs() <= 1e-9);
         assert!((opened.area() - (99.0 + std::f64::consts::PI / 4.0)).abs() <= 2e-2);
-        assert!(
-            opened
-                .to_contours_with_arcs()
-                .iter()
-                .flat_map(|contour| &contour.cmds)
-                .any(|cmd| cmd.op == crate::geom::PathOp::ArcTo)
-        );
     }
 
     #[test]

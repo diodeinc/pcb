@@ -8,6 +8,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- Gerber exports emit simpler, more CAM-compatible copper geometry.
+- Copper-balancing voids export as compact shared-aperture flashes.
+
 ## [0.4.27] - 2026-08-10
 
 ### Changed
