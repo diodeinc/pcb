@@ -13,6 +13,7 @@ use crate::{
     WriterApertureTransform, WriterMacroExpression, WriterMacroPrimitive, WriterObject,
     sanitize_attribute_field,
 };
+use pcb_ir::dialects::LayerRole;
 use pcb_ir::dialects::artwork::{Aperture, ApertureShape, Geometry as ArtworkGeometry, PaintStage};
 use pcb_ir::geom::path::{self as geom_path, ContourBuf, PathCmd};
 use pcb_ir::geom::region::{self, Ring};
@@ -188,6 +189,10 @@ fn lower_artwork_object(
 ) -> Result<Vec<WriterObject>> {
     let attributes = lower_object_attributes(&object.meta);
     let aperture_attributes = lower_aperture_attributes(&object.meta);
+    let is_copper = layer
+        .layers
+        .first()
+        .is_some_and(|layer| layer.role == LayerRole::Copper);
     let mut objects = Vec::new();
     match object.geometry {
         ArtworkGeometry::Region { path } => {
@@ -207,6 +212,7 @@ fn lower_artwork_object(
                 .aperture_function
                 .as_deref()
                 .unwrap_or(default_function.as_slice());
+            let region_aperture_attributes = lower_aperture_function(aperture_function);
             let stroke = artwork_path.stroke().ok_or_else(|| {
                 GerberError::InvalidStructure(
                     "artwork stroke geometry references a path without stroke paint".to_string(),
@@ -229,16 +235,28 @@ fn lower_artwork_object(
                                 attributes: attributes.clone(),
                             }));
                         }
-                        StrokePatternMark::Dot(at) => objects.push(WriterObject {
-                            kind: ObjectKind::Flash {
-                                at: lower_point(at),
-                                aperture,
-                            },
-                            polarity: object.polarity,
-                            aperture_transform: WriterApertureTransform::default(),
-                            aperture_attributes: Vec::new(),
-                            attributes: attributes.clone(),
-                        }),
+                        StrokePatternMark::Dot(at) => {
+                            if is_copper && !is_pad_function(aperture_function) {
+                                objects.extend(lower_aperture_as_regions(
+                                    &Aperture::circle(stroke_width),
+                                    Affine2::translation(at),
+                                    object.polarity,
+                                    &region_aperture_attributes,
+                                    &attributes,
+                                )?);
+                            } else {
+                                objects.push(WriterObject {
+                                    kind: ObjectKind::Flash {
+                                        at: lower_point(at),
+                                        aperture,
+                                    },
+                                    polarity: object.polarity,
+                                    aperture_transform: WriterApertureTransform::default(),
+                                    aperture_attributes: Vec::new(),
+                                    attributes: attributes.clone(),
+                                });
+                            }
+                        }
                     }
                 }
             }
@@ -285,6 +303,16 @@ fn lower_artwork_object(
                 .aperture_function
                 .as_deref()
                 .unwrap_or(default_function.as_slice());
+            let region_aperture_attributes = lower_aperture_function(aperture_function);
+            if is_copper && !is_pad_function(aperture_function) {
+                return lower_aperture_as_regions(
+                    &artwork_aperture,
+                    transform,
+                    object.polarity,
+                    &region_aperture_attributes,
+                    &attributes,
+                );
+            }
             let aperture = apertures.artwork_aperture(artwork_aperture, aperture_function)?;
             let (at, aperture_transform) = lower_aperture_placement(transform)?;
             objects.push(WriterObject {
@@ -298,6 +326,12 @@ fn lower_artwork_object(
         ArtworkGeometry::Instance { .. } => unreachable!("artwork instances are expanded above"),
     }
     Ok(objects)
+}
+
+fn is_pad_function(aperture_function: &[String]) -> bool {
+    aperture_function
+        .first()
+        .is_some_and(|function| function.ends_with("Pad"))
 }
 
 fn lower_stroke_segment(segment: Segment, aperture: i32) -> ObjectKind {
@@ -829,7 +863,42 @@ fn lower_region_objects(
     let payloads = layer.arena.path_contours(artwork_path);
     let fill_rule = artwork_path.fill_rule().unwrap_or(FillRule::NonZero);
     let contours = lower_region_image_contours(&payloads, fill_rule)?;
-    Ok(contours
+    Ok(writer_region_objects(
+        contours,
+        polarity,
+        aperture_attributes,
+        attributes,
+    ))
+}
+
+fn lower_aperture_as_regions(
+    aperture: &Aperture,
+    transform: Affine2,
+    polarity: Polarity,
+    aperture_attributes: &[AttributeValue],
+    attributes: &[AttributeValue],
+) -> Result<Vec<WriterObject>> {
+    let payloads = aperture
+        .contours()
+        .into_iter()
+        .map(|contour| geom_path::transform_cmds(contour.cmds, transform))
+        .collect::<Vec<_>>();
+    let contours = lower_region_image_contours(&payloads, aperture.fill_rule())?;
+    Ok(writer_region_objects(
+        contours,
+        polarity,
+        aperture_attributes,
+        attributes,
+    ))
+}
+
+fn writer_region_objects(
+    contours: Vec<Contour>,
+    polarity: Polarity,
+    aperture_attributes: &[AttributeValue],
+    attributes: &[AttributeValue],
+) -> Vec<WriterObject> {
+    contours
         .into_iter()
         .map(|contour| WriterObject {
             kind: ObjectKind::Region {
@@ -840,7 +909,7 @@ fn lower_region_objects(
             aperture_attributes: aperture_attributes.to_vec(),
             attributes: attributes.to_vec(),
         })
-        .collect())
+        .collect()
 }
 
 fn lower_region_image_contours(
@@ -946,12 +1015,14 @@ fn lower_aperture_attributes(attributes: &ObjectAttributes) -> Vec<AttributeValu
     attributes
         .aperture_function
         .as_ref()
-        .map_or_else(Vec::new, |function| {
-            vec![AttributeValue::new(
-                ".AperFunction",
-                function.iter().cloned(),
-            )]
-        })
+        .map_or_else(Vec::new, |function| lower_aperture_function(function))
+}
+
+fn lower_aperture_function(function: &[String]) -> Vec<AttributeValue> {
+    vec![AttributeValue::new(
+        ".AperFunction",
+        function.iter().cloned(),
+    )]
 }
 
 fn lower_point(point: Point) -> GerberPoint {
@@ -1351,7 +1422,10 @@ mod tests {
                     transform: Affine2::translation(Point::new(2.0, 3.0)),
                 },
                 bbox: BBox::empty(),
-                meta: ObjectAttributes::default(),
+                meta: ObjectAttributes {
+                    aperture_function: Some(vec!["AntiPad".to_string()]),
+                    ..ObjectAttributes::default()
+                },
             },
         );
         let layer = artwork.push_layer(IrArtworkDocument {
@@ -1537,7 +1611,7 @@ mod tests {
     }
 
     #[test]
-    fn contour_aperture_macros_keep_hole_rings() {
+    fn non_pad_copper_contours_lower_to_regions() {
         let mut artwork = ArtworkDocument::new();
         let layer_id = artwork.push_layer(IrArtworkDocument {
             name: "F.Cu".to_string(),
@@ -1601,7 +1675,9 @@ mod tests {
         let contents = crate::write_layer(&gerber).expect("write Gerber");
         assert_external_parser_accepts(&contents);
         assert_eq!(contents.matches("%ABD").count(), 0);
-        assert_eq!(contents.matches("%AM").count(), 1);
+        assert_eq!(contents.matches("%AM").count(), 0);
+        assert_eq!(contents.matches("G36*").count(), 1);
+        assert!(contents.contains("%TA.AperFunction,Conductor*%"));
         let parsed = crate::GerberX2::parse(&contents).expect("parse Gerber");
         let geometry = crate::geometry::extract_document(&parsed);
         let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry);

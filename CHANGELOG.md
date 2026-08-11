@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- Non-pad copper aperture placements now export as Gerber regions, reserving flashes for pads.
+
 ## [0.4.27] - 2026-08-10
 
 ### Changed
