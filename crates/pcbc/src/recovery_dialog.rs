@@ -115,7 +115,13 @@ mod platform {
                 parse_choice(&choice)
             }
         } else if output.status.code() == Some(1) {
-            Ok(RecoveryChoice::Cancel)
+            // Zenity returns 1 for both Cancel/ESC (empty stdout) and --extra-button
+            // (button label on stdout).
+            if choice.trim().is_empty() {
+                Ok(RecoveryChoice::Cancel)
+            } else {
+                parse_choice(&choice)
+            }
         } else {
             bail!(
                 "zenity recovery dialog failed: {}",
