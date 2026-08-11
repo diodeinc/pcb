@@ -14,7 +14,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
-- Browser-launched KiCad recovery now asks whether to restore the local backup or open the current sandbox version.
+- Added cross-platform `diode://` links that open sandbox layouts in KiCad with live sync and native recovery prompts.
 - The interposer mate constellation is S13: uniform 2×3 blocks with corner mate-detect loops.
 
 ## [0.4.37] - 2026-08-26
@@ -218,14 +218,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - Added AEC-Q200-qualified Vishay D/CRCW e3 parts as 0402 generic resistor matches through 10 MΩ.
-- The `pcb` installer and self-updater now manage a cross-platform `diode://` launcher for opening sandbox layouts directly in KiCad.
-
-### Fixed
-
-- Launcher installation and updates now remain recoverable when release artifacts or desktop registration are unavailable.
-- Browser-launched KiCad opens now report failures, retain a bounded diagnostic log, and reject untrusted API hosts.
-- Remote sandbox layouts now open in the KiCad PCB Editor on Linux and Windows.
-- Interrupted remote sandbox syncs now leave KiCad open so unsaved edits are preserved.
 
 ### Changed
 

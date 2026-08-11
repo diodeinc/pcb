@@ -2064,7 +2064,7 @@ fn install_shim_launcher(latest: &LatestRelease) -> Result<()> {
     }
 
     let status = Command::new(&installed_launcher)
-        .arg("--install")
+        .args(["--install", "--toolchain", "latest"])
         .status()
         .with_context(|| {
             format!(

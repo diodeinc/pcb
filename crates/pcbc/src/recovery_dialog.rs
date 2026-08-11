@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, bail};
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Local};
+use std::fs;
 use std::path::Path;
 use std::process::Command;
 
@@ -12,8 +13,17 @@ pub enum RecoveryChoice {
     Cancel,
 }
 
-pub fn choose(layout_file: &Path, updated_at: DateTime<Utc>) -> Result<RecoveryChoice> {
-    let message = recovery_message(layout_file, updated_at.with_timezone(&Local));
+pub fn choose(layout_file: &Path) -> Result<RecoveryChoice> {
+    let modified = fs::metadata(layout_file)
+        .with_context(|| format!("failed to inspect recovery file {}", layout_file.display()))?
+        .modified()
+        .with_context(|| {
+            format!(
+                "failed to read recovery file modification time {}",
+                layout_file.display()
+            )
+        })?;
+    let message = recovery_message(layout_file, DateTime::<Local>::from(modified));
     platform::show(&message)
 }
 
@@ -41,6 +51,24 @@ fn parse_choice(value: &str) -> Result<RecoveryChoice> {
         "Cancel" => Ok(RecoveryChoice::Cancel),
         value => bail!("recovery dialog returned an unexpected choice: {value:?}"),
     }
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn parse_zenity_choice(
+    status_success: bool,
+    status_code: Option<i32>,
+    stdout: &str,
+) -> Result<RecoveryChoice> {
+    if !stdout.trim().is_empty() {
+        return parse_choice(stdout);
+    }
+    if status_success {
+        return Ok(RecoveryChoice::Restore);
+    }
+    if status_code == Some(1) {
+        return Ok(RecoveryChoice::Cancel);
+    }
+    bail!("zenity recovery dialog failed with exit code {status_code:?}")
 }
 
 #[cfg(target_os = "macos")]
@@ -107,21 +135,17 @@ mod platform {
             .arg(message)
             .output()
             .context("failed to run zenity")?;
-        let choice = String::from_utf8_lossy(&output.stdout);
-        if output.status.success() {
-            if choice.trim().is_empty() {
-                Ok(RecoveryChoice::Restore)
-            } else {
-                parse_choice(&choice)
-            }
-        } else if output.status.code() == Some(1) {
-            Ok(RecoveryChoice::Cancel)
-        } else {
-            bail!(
+        parse_zenity_choice(
+            output.status.success(),
+            output.status.code(),
+            &String::from_utf8_lossy(&output.stdout),
+        )
+        .with_context(|| {
+            format!(
                 "zenity recovery dialog failed: {}",
                 String::from_utf8_lossy(&output.stderr).trim()
             )
-        }
+        })
     }
 
     fn show_kdialog(message: &str) -> Result<RecoveryChoice> {
@@ -218,5 +242,21 @@ mod tests {
         assert_eq!(parse_choice("No\r\n").unwrap(), RecoveryChoice::Discard);
         assert_eq!(parse_choice("Cancel").unwrap(), RecoveryChoice::Cancel);
         assert!(parse_choice("Maybe").is_err());
+    }
+
+    #[test]
+    fn parses_zenity_extra_button_before_exit_code() {
+        assert_eq!(
+            parse_zenity_choice(false, Some(1), "Open Sandbox Version\n").unwrap(),
+            RecoveryChoice::Discard
+        );
+        assert_eq!(
+            parse_zenity_choice(false, Some(1), "").unwrap(),
+            RecoveryChoice::Cancel
+        );
+        assert_eq!(
+            parse_zenity_choice(true, Some(0), "").unwrap(),
+            RecoveryChoice::Restore
+        );
     }
 }
