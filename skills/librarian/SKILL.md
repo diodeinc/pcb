@@ -224,7 +224,7 @@ On a failure, report what you checked and ask. Say whether the evidence contradi
 
 If a trusted STEP model is unavailable, report what you checked and ask before creating scratch geometry. After approved scratch work, label it as scratch/generated, cite the evidence used, render/verify it, and call out the risk in the README and completion report.
 
-Upgrade imported KiCad files before editing. Keep one verified model transform before embedding because `pcb embed-step` rewrites every model reference.
+Upgrade downloaded or imported KiCad files before editing. Keep one verified model transform before embedding because `pcb embed-step` rewrites every model reference.
 
 ```bash
 kicad-cli sym upgrade <symbol.kicad_sym>
