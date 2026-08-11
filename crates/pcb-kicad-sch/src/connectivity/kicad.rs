@@ -17,8 +17,66 @@ use crate::{
 const SCH_IU_PER_MM: f64 = 10_000.0;
 
 pub(super) fn reduce(document: &SchDocument) -> Result<ConnectivityGraph> {
+    // Standalone KiCad analysis includes hidden pins so it remains faithful to
+    // KiCad's implicit hidden-power-pin behavior.
+    Ok(reduce_with_pin_visibility(document, true)?.graph)
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct KiCadConnectivity {
+    pub(crate) graph: ConnectivityGraph,
+    pub(crate) islands: BTreeMap<IslandRef, IslandProvenance>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct IslandProvenance {
+    pub(crate) items: BTreeSet<ConnectivityItemRef>,
+    pub(crate) named_drivers: BTreeMap<String, BTreeSet<ConnectivityItemRef>>,
+    pub(crate) names: BTreeSet<String>,
+    pub(crate) terminals: BTreeSet<Terminal>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ConnectivityItemRef {
+    Symbol {
+        page_id: String,
+        id: String,
+    },
+    Wire {
+        page_id: String,
+        id: String,
+    },
+    Junction {
+        page_id: String,
+        id: String,
+    },
+    NoConnect {
+        page_id: String,
+        id: String,
+    },
+    Label {
+        page_id: String,
+        id: String,
+    },
+    SheetPin {
+        page_id: String,
+        sheet_id: String,
+        pin_id: String,
+    },
+}
+
+pub(crate) fn reduce_visible_with_provenance(document: &SchDocument) -> Result<KiCadConnectivity> {
+    // Reconciliation never creates connections to hidden pins.
+    reduce_with_pin_visibility(document, false)
+}
+
+fn reduce_with_pin_visibility(
+    document: &SchDocument,
+    include_hidden_pins: bool,
+) -> Result<KiCadConnectivity> {
     let mut components = Vec::new();
     let mut groups = Vec::new();
+    let mut islands = BTreeMap::new();
     let instances = page_instances(document)?;
     let instance_counts = instances
         .iter()
@@ -36,14 +94,21 @@ pub(super) fn reduce(document: &SchDocument) -> Result<ConnectivityGraph> {
             &instance,
             instance_counts[instance.page.id.as_str()] > 1,
             definitions,
+            include_hidden_pins,
         )?;
         components.extend(reduced.components);
+        for group in &reduced.groups {
+            islands.insert(group.island.clone(), group.provenance.clone());
+        }
         groups.extend(reduced.groups);
     }
     components.sort();
-    Ok(ConnectivityGraph {
-        components,
-        groups: merge_scoped_groups(groups),
+    Ok(KiCadConnectivity {
+        graph: ConnectivityGraph {
+            components,
+            groups: merge_scoped_groups(groups),
+        },
+        islands,
     })
 }
 
@@ -201,6 +266,7 @@ fn reduce_page(
     instance: &PageInstance<'_>,
     repeated_page: bool,
     symbol_definitions: &mut BTreeMap<String, symbol::ParsedSymbolDefinition>,
+    include_hidden_pins: bool,
 ) -> Result<ReducedPage> {
     let page = instance.page;
     let mut components = Vec::new();
@@ -224,8 +290,11 @@ fn reduce_page(
                     repeated_page,
                     placed,
                     definition,
-                    &mut components,
-                    &mut connectables,
+                    include_hidden_pins,
+                    &mut SymbolConnectivity {
+                        components: &mut components,
+                        connectables: &mut connectables,
+                    },
                 )?;
             }
             SchItem::Wire(wire) => connectables.push(Connectable {
@@ -237,9 +306,13 @@ fn reduce_page(
                 terminal: None,
                 hierarchy: None,
                 internal_links: BTreeSet::new(),
+                source: Some(ConnectivityItemRef::Wire {
+                    page_id: page.id.clone(),
+                    id: wire.id.clone(),
+                }),
             }),
             SchItem::Label(label) => {
-                collect_label(label, instance.id == page.id, &mut connectables)?
+                collect_label(&page.id, label, instance.id == page.id, &mut connectables)?
             }
             SchItem::Junction(junction) => connectables.push(Connectable {
                 geometry: Geometry::Point {
@@ -250,6 +323,10 @@ fn reduce_page(
                 terminal: None,
                 hierarchy: None,
                 internal_links: BTreeSet::new(),
+                source: Some(ConnectivityItemRef::Junction {
+                    page_id: page.id.clone(),
+                    id: junction.id.clone(),
+                }),
             }),
             SchItem::NoConnect(no_connect) => connectables.push(Connectable {
                 geometry: Geometry::Point {
@@ -260,6 +337,10 @@ fn reduce_page(
                 terminal: None,
                 hierarchy: None,
                 internal_links: BTreeSet::new(),
+                source: Some(ConnectivityItemRef::NoConnect {
+                    page_id: page.id.clone(),
+                    id: no_connect.id.clone(),
+                }),
             }),
             SchItem::Sheet(sheet) => {
                 let child_id = instance.child_ids.get(&sheet.id).with_context(|| {
@@ -287,6 +368,11 @@ fn reduce_page(
                             name,
                         }),
                         internal_links: BTreeSet::new(),
+                        source: Some(ConnectivityItemRef::SheetPin {
+                            page_id: page.id.clone(),
+                            sheet_id: sheet.id.clone(),
+                            pin_id: pin.id.clone(),
+                        }),
                     });
                 }
             }
@@ -343,8 +429,8 @@ fn collect_symbol(
     repeated_page: bool,
     placed: &Symbol,
     definition: &symbol::ParsedSymbolDefinition,
-    components: &mut Vec<ComponentNode>,
-    connectables: &mut Vec<Connectable>,
+    include_hidden_pins: bool,
+    output: &mut SymbolConnectivity<'_>,
 ) -> Result<()> {
     let pins = definition.placed_pins(placed).with_context(|| {
         format!(
@@ -358,8 +444,12 @@ fn collect_symbol(
             .filter(|value| !value.is_empty())
             .with_context(|| format!("power symbol {} has no Value", placed.id))?;
         let net_name = static_net_text("power symbol value", net_name)?;
-        for pin in pins.into_iter().filter(|pin| pin.is_power_input()) {
-            connectables.push(Connectable {
+        for pin in pins
+            .into_iter()
+            .filter(|pin| include_hidden_pins || !pin.hidden)
+            .filter(|pin| pin.is_power_input())
+        {
+            output.connectables.push(Connectable {
                 geometry: Geometry::Point {
                     at: pin.point.into(),
                     segment_interior_tolerance: None,
@@ -376,6 +466,10 @@ fn collect_symbol(
                 terminal: None,
                 hierarchy: None,
                 internal_links: BTreeSet::new(),
+                source: Some(ConnectivityItemRef::Symbol {
+                    page_id: page.id.clone(),
+                    id: placed.id.clone(),
+                }),
             });
         }
         return Ok(());
@@ -394,7 +488,7 @@ fn collect_symbol(
         page_id: page_instance_id.to_string(),
         symbol_id: placed.id.clone(),
     };
-    components.push(ComponentNode {
+    output.components.push(ComponentNode {
         managed_slot: slot,
         origin: ComponentOrigin::KiCad(location.clone()),
     });
@@ -405,9 +499,12 @@ fn collect_symbol(
     );
     let duplicate_numbers = definition.duplicate_pin_numbers_are_jumpers();
     let jumper_groups = definition.jumper_pin_groups();
-    for pin in pins {
+    for pin in pins
+        .into_iter()
+        .filter(|pin| include_hidden_pins || !pin.hidden)
+    {
         let pin_name = static_net_text("symbol pin name", &pin.name)?;
-        connectables.push(Connectable {
+        output.connectables.push(Connectable {
             geometry: Geometry::Point {
                 at: pin.point.into(),
                 segment_interior_tolerance: None,
@@ -430,12 +527,19 @@ fn collect_symbol(
                 duplicate_numbers,
                 jumper_groups,
             ),
+            source: None,
         });
     }
     Ok(())
 }
 
+struct SymbolConnectivity<'a> {
+    components: &'a mut Vec<ComponentNode>,
+    connectables: &'a mut Vec<Connectable>,
+}
+
 fn collect_label(
+    page_id: &str,
     label: &Label,
     expose_hierarchical_terminal: bool,
     connectables: &mut Vec<Connectable>,
@@ -450,6 +554,10 @@ fn collect_label(
             terminal: None,
             hierarchy: None,
             internal_links: BTreeSet::new(),
+            source: Some(ConnectivityItemRef::Label {
+                page_id: page_id.to_string(),
+                id: label.id.clone(),
+            }),
         });
         return Ok(());
     }
@@ -484,6 +592,10 @@ fn collect_label(
         hierarchy: matches!(label.kind, LabelKind::Hierarchical { .. })
             .then(|| HierarchyEndpoint::Parent { name }),
         internal_links: BTreeSet::new(),
+        source: Some(ConnectivityItemRef::Label {
+            page_id: page_id.to_string(),
+            id: label.id.clone(),
+        }),
     });
     Ok(())
 }
@@ -563,6 +675,7 @@ struct Connectable {
     terminal: Option<Terminal>,
     hierarchy: Option<HierarchyEndpoint>,
     internal_links: BTreeSet<String>,
+    source: Option<ConnectivityItemRef>,
 }
 
 #[derive(Debug, Clone)]
@@ -749,10 +862,21 @@ fn connection_groups(
             let mut terminals = BTreeSet::new();
             let mut hierarchical_ports = BTreeSet::new();
             let mut child_pins = BTreeSet::new();
+            let mut provenance = IslandProvenance::default();
             for item in items {
+                if let Some(source) = &item.source {
+                    provenance.items.insert(source.clone());
+                }
                 if let Some(driver) = item.driver {
                     if driver.role == DriverNameRole::NetName {
                         names.insert(driver.name.clone());
+                        if let Some(source) = &item.source {
+                            provenance
+                                .named_drivers
+                                .entry(driver.name.clone())
+                                .or_default()
+                                .insert(source.clone());
+                        }
                     }
                     if driver.kind == DriverKind::Global {
                         global_names.insert(driver.name);
@@ -776,7 +900,15 @@ fn connection_groups(
             {
                 return None;
             }
+            provenance.names = names.clone();
+            provenance.terminals = terminals.clone();
+            let island = IslandRef {
+                page_id: page_instance_id.to_string(),
+                index,
+            };
             Some(ScopedConnectionGroup {
+                island: island.clone(),
+                provenance,
                 global_names,
                 page_instance_id: page_instance_id.to_string(),
                 hierarchical_ports,
@@ -784,10 +916,7 @@ fn connection_groups(
                 group: ConnectionGroup {
                     names,
                     terminals,
-                    origins: BTreeSet::from([ConnectionOrigin::KiCadIsland(IslandRef {
-                        page_id: page_instance_id.to_string(),
-                        index,
-                    })]),
+                    origins: BTreeSet::from([ConnectionOrigin::KiCadIsland(island)]),
                 },
             })
         })
@@ -795,6 +924,8 @@ fn connection_groups(
 }
 
 struct ScopedConnectionGroup {
+    island: IslandRef,
+    provenance: IslandProvenance,
     group: ConnectionGroup,
     global_names: BTreeSet<String>,
     page_instance_id: String,

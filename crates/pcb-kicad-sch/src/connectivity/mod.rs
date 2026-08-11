@@ -8,6 +8,9 @@ mod kicad;
 mod raw;
 mod zener;
 
+pub use kicad::ConnectivityItemRef;
+pub(crate) use kicad::{IslandProvenance, reduce_visible_with_provenance};
+
 pub use raw::{
     ComponentIdentity, ComponentNode, ComponentOrigin, ConnectionGroup, ConnectionOrigin,
     ConnectivityGraph, IslandRef, SymbolLocation, Terminal,

@@ -63,6 +63,7 @@ fn layout_json_output_is_parseable() {
         .expect("layout command failed");
     let json: Value = serde_json::from_slice(&output.stdout).expect("stdout should be valid JSON");
     assert_eq!(json["sourceFile"], "board.zen");
+    assert_eq!(json["action"], "created");
     assert!(
         json["pcbFile"]
             .as_str()

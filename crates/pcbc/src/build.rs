@@ -23,6 +23,7 @@ pub(crate) struct BuildEvalState {
     session: pcb_zen_core::lang::eval::EvalSession,
     file_provider: Arc<DefaultFileProvider>,
     resolution: Arc<ResolutionResult>,
+    analyze_linked_schematic: bool,
 }
 
 pub(crate) struct BuildResult {
@@ -41,7 +42,13 @@ impl BuildEvalState {
             session: pcb_zen_core::lang::eval::EvalSession::default(),
             file_provider,
             resolution: Arc::new(resolution),
+            analyze_linked_schematic: true,
         }
+    }
+
+    pub(crate) fn without_linked_schematic_analysis(mut self) -> Self {
+        self.analyze_linked_schematic = false;
+        self
     }
 
     fn eval(
@@ -109,6 +116,14 @@ impl BuildEvalState {
             }
             schematic_result.output
         });
+
+        if self.analyze_linked_schematic
+            && let Some(schematic) = &schematic
+        {
+            diagnostics.diagnostics.extend(
+                crate::schematic_diagnostics::linked_schematic_diagnostics(schematic, zen_path),
+            );
+        }
 
         if diagnostics.diagnostics.is_empty() && schematic.is_none() {
             spinner.set_message(format!("{file_name}: No output generated"));

@@ -1027,6 +1027,10 @@ fn build_workspace(workspace: &WorkspaceInfo, suppress: &[String]) -> Result<()>
             &mut has_errors,
             &mut has_warnings,
         );
+        if crate::schematic_diagnostics::has_unsuppressed_schematic_diagnostics(&result.diagnostics)
+        {
+            has_errors = true;
+        }
         if let Some(schematic) = result.schematic {
             crate::build::print_build_success(&file_name, &schematic);
         }

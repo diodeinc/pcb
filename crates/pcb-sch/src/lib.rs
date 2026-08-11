@@ -42,6 +42,17 @@ pub const ATTR_LAYOUT_PATH: &str = "layout_path";
 /// with a module or instance. Used with `AttributeValue::String`.
 pub const ATTR_SCHEMATIC_PATH: &str = "schematic_path";
 
+/// Attribute key that stores the display name used for a generated KiCad schematic.
+/// Used with `AttributeValue::String`.
+pub const ATTR_SCHEMATIC_NAME: &str = "schematic_name";
+
+/// Internal attribute recording the source KiCad symbol-library format version.
+/// Used with `AttributeValue::Number`.
+pub const ATTR_SYMBOL_FORMAT_VERSION: &str = "__symbol_format_version";
+
+/// Default basename used when creating a shared KiCad project.
+pub const KICAD_PROJECT_BASENAME: &str = "layout";
+
 /// Attribute key that stores a list of layout hint expressions (e.g. placement
 /// constraints). Used with `AttributeValue::Array` where each element is an
 /// `AttributeValue::String`.

@@ -11,14 +11,16 @@ Hint = struct(
 )
 
 
-def Layout(
+def Project(
     name: str,
     path: str | None = None,
     hints: list | None = None,
     modifiers: list | None = None,
     bom_profile=assign_house_parts,
+    schematic: bool = True,
+    layout: bool = True,
 ) -> None:
-    """Helper function to create a layout object"""
+    """Register a KiCad project for this module."""
 
     # Only register at root
     if len(builtin.current_module_path()) == 0:
@@ -30,11 +32,36 @@ def Layout(
         if bom_profile:
             builtin.add_component_modifier(bom_profile)
 
-    if path:
-        builtin.add_property("layout_path", Path(path, allow_not_exist=True))
-    builtin.add_property("layout_name", name)
-    if hints:
-        builtin.add_property("layout_hints", hints)
+    if layout:
+        if path:
+            builtin.add_property("layout_path", Path(path, allow_not_exist=True))
+        builtin.add_property("layout_name", name)
+        if hints:
+            builtin.add_property("layout_hints", hints)
+
+    if schematic:
+        if path:
+            builtin.add_property("schematic_path", Path(path, allow_not_exist=True))
+        builtin.add_property("schematic_name", name)
+
+
+def Layout(
+    name: str,
+    path: str | None = None,
+    hints: list | None = None,
+    modifiers: list | None = None,
+    bom_profile=assign_house_parts,
+) -> None:
+    """Register a layout-only KiCad project. Prefer Project()."""
+
+    Project(
+        name=name,
+        path=path,
+        hints=hints,
+        modifiers=modifiers,
+        bom_profile=bom_profile,
+        schematic=False,
+    )
 
 
 def Simulation(

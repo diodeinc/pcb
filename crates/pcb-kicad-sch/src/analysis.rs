@@ -2,14 +2,16 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use anyhow::Context;
 use pcb_sch::Schematic;
 
 use crate::{
-    SchDocument, SymbolSlotKey,
+    SchDocument, SchItem, SymbolSlotKey,
     connectivity::{
         ComponentIdentity, ComponentOrigin, ConnectionGroup, ConnectionOrigin, ConnectivityGraph,
-        IslandRef, SymbolLocation, Terminal,
+        IslandRef, SymbolLocation, Terminal, reduce_visible_with_provenance,
     },
+    symbol,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,9 +105,72 @@ pub fn analyze_schematic(
     netlist: &Schematic,
 ) -> anyhow::Result<ConnectivityAnalysis> {
     Ok(analyze_connectivity(
-        &ConnectivityGraph::from_zener(netlist)?,
-        &ConnectivityGraph::from_kicad(document)?,
+        &expected_reconcilable_connectivity(document, netlist)?,
+        &reduce_visible_with_provenance(document)?.graph,
     ))
+}
+
+pub(crate) fn expected_reconcilable_connectivity(
+    document: &SchDocument,
+    netlist: &Schematic,
+) -> anyhow::Result<ConnectivityGraph> {
+    let (visible, hidden) = managed_terminals_by_visibility(document)?;
+    let mut graph = ConnectivityGraph::from_zener(netlist)?;
+    graph.groups.retain_mut(|group| {
+        let original_len = group.terminals.len();
+        group.terminals.retain(|terminal| {
+            visible
+                .iter()
+                .any(|candidate| terminals_match(terminal, candidate))
+                || !hidden
+                    .iter()
+                    .any(|ignored| terminals_match(terminal, ignored))
+        });
+        original_len == 0 || !group.terminals.is_empty()
+    });
+    Ok(graph)
+}
+
+fn managed_terminals_by_visibility(
+    document: &SchDocument,
+) -> anyhow::Result<(Vec<Terminal>, Vec<Terminal>)> {
+    let mut visible = Vec::new();
+    let mut hidden = Vec::new();
+    for page in &document.pages {
+        for placed in page.items.iter().filter_map(|item| match item {
+            SchItem::Symbol(symbol) => Some(symbol),
+            _ => None,
+        }) {
+            let Some(component_path) = placed.field_value("Path").filter(|path| !path.is_empty())
+            else {
+                continue;
+            };
+            let definition = page
+                .library
+                .definitions
+                .get(&placed.lib_id)
+                .with_context(|| {
+                    format!(
+                        "managed symbol {} has no cached definition {}",
+                        placed.id, placed.lib_id
+                    )
+                })?;
+            let parsed = symbol::ParsedSymbolDefinition::parse(definition)?;
+            for pin in parsed.placed_pins(placed)? {
+                let terminal = Terminal::ComponentPin {
+                    component: ComponentIdentity::ManagedPath(component_path.to_string()),
+                    pin_name: pin.name,
+                    pin_numbers: pin.numbers,
+                };
+                if pin.hidden {
+                    hidden.push(terminal);
+                } else {
+                    visible.push(terminal);
+                }
+            }
+        }
+    }
+    Ok((visible, hidden))
 }
 
 /// Compare an expected logical graph with an observed physical graph.
@@ -230,7 +295,7 @@ fn groups_match(expected: &ConnectionGroup, observed: &ConnectionGroup) -> bool 
         })
 }
 
-fn terminals_match(expected: &Terminal, observed: &Terminal) -> bool {
+pub(crate) fn terminals_match(expected: &Terminal, observed: &Terminal) -> bool {
     match (expected, observed) {
         (
             Terminal::ComponentPin {
@@ -407,7 +472,7 @@ fn kicad_islands(group: &ConnectionGroup) -> Vec<IslandRef> {
         .collect()
 }
 
-fn logical_name(group: &ConnectionGroup) -> Option<&str> {
+pub(crate) fn logical_name(group: &ConnectionGroup) -> Option<&str> {
     group.origins.iter().find_map(|origin| match origin {
         ConnectionOrigin::ZenerNet { name } => Some(name.as_str()),
         ConnectionOrigin::KiCadIsland(_) => None,

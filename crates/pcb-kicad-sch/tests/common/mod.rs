@@ -58,6 +58,10 @@ impl AnalysisFixture {
         &self.project.document
     }
 
+    pub fn netlist(&self) -> &pcb_sch::Schematic {
+        &self.netlist
+    }
+
     /// Remove a semantic KiCad item by UUID and return it.
     ///
     /// This is the smallest useful fixture-editing API: tests start with a real

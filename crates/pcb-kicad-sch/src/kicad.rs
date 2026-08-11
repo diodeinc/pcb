@@ -89,12 +89,38 @@ impl SymbolDefinition {
     /// S-expression or a wrapper containing one.
     pub fn from_kicad_symbol_sexpr(content: &str) -> Result<Self> {
         let root = parse(content).map_err(|err| anyhow!("failed to parse KiCad symbol: {err}"))?;
-        symbol_definition_from_sexpr(&root)
-            .ok_or_else(|| anyhow!("expected KiCad symbol definition"))
+        let definition = symbol_definition_from_sexpr(&root)
+            .ok_or_else(|| anyhow!("expected KiCad symbol definition"))?;
+        validate_symbol_graphics_for_kicad_10(&definition.sexpr).with_context(|| {
+            format!(
+                "symbol '{}' is not compatible with KiCad 10",
+                definition.lib_id
+            )
+        })?;
+        Ok(definition)
     }
 
     pub fn to_kicad_symbol_library_sexpr(&self) -> String {
         format!("(kicad_symbol_lib {})", format_sexpr(&self.sexpr, 0).trim())
+    }
+
+    pub(crate) fn default_fields(&self) -> Result<BTreeMap<String, SymbolField>> {
+        let items = SexprList::from_sexpr(&self.sexpr)
+            .with_context(|| format!("symbol '{}' definition is not a list", self.lib_id))?;
+        let mut fields = BTreeMap::new();
+        for child in items.children_from(2) {
+            let Some(property) = SexprList::from_sexpr(child) else {
+                continue;
+            };
+            if property.tag() != Some("property") {
+                continue;
+            }
+            let field = parse_property(property)?;
+            if fields.insert(field.name.clone(), field).is_some() {
+                bail!("symbol '{}' has duplicate property names", self.lib_id);
+            }
+        }
+        Ok(fields)
     }
 }
 
@@ -1090,6 +1116,36 @@ fn normalize_internal_metadata_properties(sexpr: &mut Sexpr) {
     }
 }
 
+fn validate_symbol_graphics_for_kicad_10(sexpr: &Sexpr) -> Result<()> {
+    let Some(items) = sexpr.as_list() else {
+        return Ok(());
+    };
+
+    if list_tag(items) == Some("fill") {
+        for item in &items[1..] {
+            let Some(type_items) = item.as_list() else {
+                continue;
+            };
+            if list_tag(type_items) != Some("type") {
+                continue;
+            }
+            match type_items.get(1).context("fill type is missing")?.as_sym() {
+                Some(
+                    "none" | "outline" | "hatch" | "reverse_hatch" | "cross_hatch" | "color"
+                    | "background",
+                ) => {}
+                Some(value) => bail!("unsupported KiCad 10 fill type '{value}'"),
+                None => bail!("fill type must be an unquoted symbol"),
+            }
+        }
+    }
+
+    for item in items {
+        validate_symbol_graphics_for_kicad_10(item)?;
+    }
+    Ok(())
+}
+
 fn property_name(items: &[Sexpr]) -> Option<&str> {
     let mut cursor = 1;
     if items.get(cursor).and_then(Sexpr::as_atom) == Some("private") {
@@ -1843,6 +1899,24 @@ mod tests {
         .expect("parse wrapped symbol definition");
 
         assert_eq!(definition.lib_id, "Device:R");
+    }
+
+    #[test]
+    fn rejects_non_kicad_10_symbol_fill_types() {
+        let error = SymbolDefinition::from_kicad_symbol_sexpr(
+            r#"(symbol "Device:D"
+              (polyline
+                (stroke (width 0.254) (type solid))
+                (fill (type solid))))"#,
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("unsupported KiCad 10 fill type 'solid'"));
+
+        let error = SymbolDefinition::from_kicad_symbol_sexpr(
+            r#"(symbol "Device:D" (polyline (fill (type invented))))"#,
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("unsupported KiCad 10 fill type 'invented'"));
     }
 
     #[test]

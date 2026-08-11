@@ -829,7 +829,7 @@ pub mod utils {
         }
     }
 
-    pub const DEFAULT_KICAD_BASENAME: &str = "layout";
+    pub const DEFAULT_KICAD_BASENAME: &str = pcb_sch::KICAD_PROJECT_BASENAME;
 
     #[derive(Debug, Clone)]
     pub struct KiCadLayoutFiles {
