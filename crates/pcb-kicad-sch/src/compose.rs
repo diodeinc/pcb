@@ -225,7 +225,7 @@ fn pack_generated_symbols(
     let all_nets = netlist
         .nets
         .values()
-        .filter(|net| !net.name.is_empty())
+        .filter(|net| net.kind != "NotConnected" && !net.name.is_empty())
         .map(|net| net.name.clone())
         .collect();
     let targets = connectivity_targets(netlist, placed, &all_nets)?;
@@ -566,7 +566,6 @@ fn build_component_symbol(
         match fields.get_mut(&next.name) {
             Some(existing) => {
                 existing.value = next.value;
-                existing.hidden = next.hidden;
             }
             None => {
                 fields.insert(next.name.clone(), next);
@@ -759,7 +758,7 @@ fn refresh_generated_presentation(
     let all_nets = netlist
         .nets
         .values()
-        .filter(|net| !net.name.is_empty())
+        .filter(|net| net.kind != "NotConnected" && !net.name.is_empty())
         .map(|net| net.name.clone())
         .collect();
     add_connectivity_labels(
@@ -987,7 +986,7 @@ fn connectivity_targets(
     let mut nets = netlist
         .nets
         .values()
-        .filter(|net| !net.name.is_empty())
+        .filter(|net| net.kind != "NotConnected" && !net.name.is_empty())
         .collect::<Vec<_>>();
     nets.sort_by(|a, b| a.name.cmp(&b.name));
     for net in &nets {

@@ -191,6 +191,8 @@ fn preserves_user_symbol_geometry_while_refreshing_owned_labels() {
     }
     symbol.fields.get_mut("Reference").unwrap().at.y -= 5.08;
     symbol.fields.get_mut("Value").unwrap().at.y += 7.62;
+    symbol.fields.get_mut("Reference").unwrap().hidden = true;
+    symbol.fields.get_mut("Value").unwrap().hidden = true;
     let expected_at = symbol.at;
     let expected_reference_at = symbol.field("Reference").unwrap().at;
     let expected_value_at = symbol.field("Value").unwrap().at;
@@ -228,6 +230,8 @@ fn preserves_user_symbol_geometry_while_refreshing_owned_labels() {
     assert_eq!(symbol.at, expected_at);
     assert_eq!(symbol.field("Reference").unwrap().at, expected_reference_at);
     assert_eq!(symbol.field("Value").unwrap().at, expected_value_at);
+    assert!(symbol.field("Reference").unwrap().hidden);
+    assert!(symbol.field("Value").unwrap().hidden);
     let label = repaired.document.pages[0]
         .items
         .iter()
@@ -237,6 +241,29 @@ fn preserves_user_symbol_geometry_while_refreshing_owned_labels() {
         })
         .unwrap();
     assert_eq!(label.spin, expected_spin);
+}
+
+#[test]
+fn accepts_an_isolated_not_connected_pin() {
+    let workspace = tempfile::tempdir().unwrap();
+    let project_dir = workspace.path().join("hardware");
+    let mut netlist = linked_fixture(&project_dir);
+    let mut not_connected = netlist.nets.remove("RIGHT").unwrap();
+    not_connected.kind = "NotConnected".to_string();
+    not_connected.name.clear();
+    netlist.nets.insert(String::new(), not_connected);
+
+    apply_linked_schematic(&netlist).unwrap().unwrap();
+
+    let project = KicadProject::load(project_dir).unwrap();
+    let analysis = analyze_schematic(&project.document, &netlist).unwrap();
+    assert!(analysis.is_equivalent(), "{:?}", analysis.issues());
+    assert!(
+        !project.document.pages[0]
+            .items
+            .iter()
+            .any(|item| matches!(item, SchItem::Label(label) if label.text == "RIGHT"))
+    );
 }
 
 #[test]
