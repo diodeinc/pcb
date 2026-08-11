@@ -3,14 +3,9 @@ use reqwest::blocking::Client;
 use serde::Deserialize;
 use std::{collections::HashMap, time::Duration};
 
-use pcb_sch::bom::availability::{
-    HardToSourceReason, NUM_BOARDS, is_small_generic_passive, tier_for_stock,
-};
-use pcb_sch::bom::{Availability, AvailabilitySummary, Offer};
+use pcb_sch::bom::{Availability, AvailabilitySummary, BOARD_QUANTITY, Offer};
 
 use crate::WorkspaceContext;
-
-const PRICING_BATCH_CHUNK_SIZE: usize = 10;
 
 /// Price break structure
 #[derive(Debug, Clone, Deserialize)]
@@ -48,7 +43,6 @@ struct ComponentOffer {
     distributor_part_id: Option<String>,
     mpn: Option<String>,
     manufacturer: Option<String>,
-    moq: Option<i32>,
     #[serde(rename = "priceBreaks")]
     price_breaks: Option<Vec<PriceBreak>>,
     #[serde(rename = "stockAvailable")]
@@ -79,22 +73,6 @@ impl ComponentOffer {
             part_id: self.distributor_part_id.clone(),
         }
     }
-}
-
-fn offer_passes_moq_affordability(offer: &ComponentOffer, target_qty: i32) -> bool {
-    let moq = offer.moq.unwrap_or(1);
-    moq <= target_qty || offer.unit_price_at_qty(moq).unwrap_or(f64::MAX) * moq as f64 <= 100.0
-}
-
-fn hard_to_source_reason_for_offers(
-    offers: &[&ComponentOffer],
-    target_qty: i32,
-) -> Option<HardToSourceReason> {
-    let _ = offers.first()?;
-    offers
-        .iter()
-        .all(|offer| !offer_passes_moq_affordability(offer, target_qty))
-        .then_some(HardToSourceReason::UnaffordableMoq)
 }
 
 /// Design BOM entry structure from the API
@@ -139,45 +117,6 @@ struct MatchBomResponse {
     offers: HashMap<String, ComponentOffer>,
 }
 
-/// Compare offers within the same tier: prefer lower price, then higher stock
-#[inline]
-fn within_tier_cmp(a: &ComponentOffer, b: &ComponentOffer, qty: i32) -> std::cmp::Ordering {
-    use std::cmp::Ordering::*;
-
-    let price_a = a.unit_price_at_qty(qty * NUM_BOARDS);
-    let price_b = b.unit_price_at_qty(qty * NUM_BOARDS);
-
-    match (price_a, price_b) {
-        (Some(pa), Some(pb)) => pa
-            .partial_cmp(&pb)
-            .unwrap_or(Equal)
-            .then_with(|| b.stock_available.cmp(&a.stock_available)),
-        (None, None) => b.stock_available.cmp(&a.stock_available),
-        (Some(_), None) => Less,
-        (None, Some(_)) => Greater,
-    }
-}
-
-/// Select the best offer: Plenty > Limited > None tier, then lowest price within tier.
-/// Single-pass, allocation-free selection using iterator comparator.
-fn select_best_offer<'a>(
-    offers: impl Iterator<Item = &'a ComponentOffer>,
-    qty: i32,
-    is_small_passive: bool,
-) -> Option<&'a ComponentOffer> {
-    offers.min_by(|a, b| {
-        let stock_a = a.stock_available.unwrap_or(0);
-        let stock_b = b.stock_available.unwrap_or(0);
-        let tier_a = tier_for_stock(stock_a, qty, is_small_passive);
-        let tier_b = tier_for_stock(stock_b, qty, is_small_passive);
-
-        tier_a
-            .rank()
-            .cmp(&tier_b.rank())
-            .then_with(|| within_tier_cmp(a, b, qty))
-    })
-}
-
 /// Calculate alt stock from offers, deduplicating by (distributor, mpn).
 fn calculate_alt_stock(
     offers: &[&ComponentOffer],
@@ -210,19 +149,7 @@ fn build_availability_summary(
     offer: &ComponentOffer,
     alt_stock: i32,
     target_qty: i32,
-    include_internal_fields: bool,
-    hard_to_source_reason: Option<HardToSourceReason>,
 ) -> AvailabilitySummary {
-    if !include_internal_fields {
-        return AvailabilitySummary {
-            price: offer.unit_price_at_qty(target_qty),
-            stock: offer.stock_available.unwrap_or_default(),
-            alt_stock,
-            hard_to_source_reason,
-            ..Default::default()
-        };
-    }
-
     let lcsc_part_ids = match (offer.distributor.as_deref(), &offer.distributor_part_id) {
         (Some("lcsc"), Some(id)) => {
             let id = if id.starts_with('C') {
@@ -243,7 +170,6 @@ fn build_availability_summary(
         price: offer.unit_price_at_qty(target_qty),
         stock: offer.stock_available.unwrap_or_default(),
         alt_stock,
-        hard_to_source_reason,
         price_breaks: offer
             .price_breaks
             .as_ref()
@@ -252,6 +178,23 @@ fn build_availability_summary(
         mpn: offer.mpn.clone().filter(|s| !s.is_empty()),
         manufacturer: offer.manufacturer.clone().filter(|s| !s.is_empty()),
     }
+}
+
+fn summarize_region<'a>(
+    offers: &[&'a ComponentOffer],
+    geography: Geography,
+    target_qty: i32,
+    alt_stock_price_qty: i32,
+) -> (Vec<&'a ComponentOffer>, Option<AvailabilitySummary>) {
+    let regional: Vec<_> = offers
+        .iter()
+        .copied()
+        .filter(|offer| offer.geography == geography)
+        .collect();
+    let selected = regional.first().copied();
+    let alt_stock = calculate_alt_stock(&regional, selected, alt_stock_price_qty);
+    let summary = selected.map(|offer| build_availability_summary(offer, alt_stock, target_qty));
+    (regional, summary)
 }
 
 /// Call the BOM match API and return parsed response
@@ -267,7 +210,12 @@ fn call_bom_match_api(
     let client = Client::builder()
         .timeout(Duration::from_secs(timeout_secs))
         .build()?;
-    let request_body = bom_match_request_body(bom_entries);
+    let request_body = serde_json::json!({
+        "designBom": bom_entries,
+        "format": "normalized",
+        "boardQuantity": BOARD_QUANTITY,
+        "regions": ["US", "GLOBAL"],
+    });
 
     let response = crate::auth::apply_bearer_auth(client.post(&url), auth_token)
         .json(&request_body)
@@ -288,13 +236,6 @@ fn call_bom_match_api(
 fn bom_match_url(api_base_url: &str, strict: bool) -> String {
     let suffix = if strict { "?strict=true" } else { "" };
     format!("{api_base_url}/api/boms/match{suffix}")
-}
-
-fn bom_match_request_body(bom_entries: &[serde_json::Value]) -> serde_json::Value {
-    serde_json::json!({
-        "designBom": bom_entries,
-        "format": "normalized",
-    })
 }
 
 /// Fetch BOM matching results from the API and populate availability data
@@ -322,20 +263,15 @@ pub fn fetch_and_populate_availability_with_context(
         let Some(path) = bom_line.design_entry.path.as_deref() else {
             continue;
         };
-        let Some(bom_entry) = bom.entries.get(path) else {
+        if !bom.entries.contains_key(path) {
             continue;
-        };
+        }
 
         let qty = bom
             .designators
             .iter()
             .filter(|(p, _)| p.as_str() == path)
             .count() as i32;
-        let is_small_passive = is_small_generic_passive(
-            bom_entry.generic_data.as_ref(),
-            bom_entry.package.as_deref(),
-        );
-
         // Resolve offer IDs to actual offers from the deduplicated offers map
         let resolved_offers: Vec<&ComponentOffer> = bom_line
             .offer_ids
@@ -343,24 +279,11 @@ pub fn fetch_and_populate_availability_with_context(
             .filter_map(|id| match_response.offers.get(id))
             .collect();
 
-        let target_qty = qty * NUM_BOARDS;
+        let target_qty = qty * BOARD_QUANTITY;
 
-        // Process each geography
-        let process_geo = |geo: Geography| {
-            let offers: Vec<_> = resolved_offers
-                .iter()
-                .copied()
-                .filter(|o| o.geography == geo)
-                .collect();
-            let best = select_best_offer(offers.iter().copied(), qty, is_small_passive);
-            let alt = calculate_alt_stock(&offers, best, qty);
-            let hard_to_source_reason = hard_to_source_reason_for_offers(&offers, target_qty);
-            (offers, best, alt, hard_to_source_reason)
-        };
-
-        let (us_offers, best_us, us_alt, us_hard_to_source_reason) = process_geo(Geography::Us);
-        let (global_offers, best_global, global_alt, global_hard_to_source_reason) =
-            process_geo(Geography::Global);
+        let (us_offers, us) = summarize_region(&resolved_offers, Geography::Us, target_qty, qty);
+        let (global_offers, global) =
+            summarize_region(&resolved_offers, Geography::Global, target_qty, qty);
 
         // Build offers for JSON output
         let all_offers: Vec<_> = us_offers
@@ -372,24 +295,8 @@ pub fn fetch_and_populate_availability_with_context(
         bom.availability.insert(
             path.to_string(),
             Availability {
-                us: best_us.map(|o| {
-                    build_availability_summary(
-                        o,
-                        us_alt,
-                        target_qty,
-                        true,
-                        us_hard_to_source_reason,
-                    )
-                }),
-                global: best_global.map(|o| {
-                    build_availability_summary(
-                        o,
-                        global_alt,
-                        target_qty,
-                        true,
-                        global_hard_to_source_reason,
-                    )
-                }),
+                us,
+                global,
                 no_match: bom_line_no_match(&bom_line),
                 offers: all_offers,
             },
@@ -404,6 +311,32 @@ pub fn fetch_and_populate_availability_with_context(
 pub struct ComponentKey {
     pub mpn: String,
     pub manufacturer: Option<String>,
+}
+
+fn component_part_json(component: &ComponentKey) -> serde_json::Value {
+    let mut part = serde_json::json!({ "mpn": component.mpn });
+    if let Some(manufacturer) = &component.manufacturer {
+        part["manufacturer"] = serde_json::json!(manufacturer);
+    }
+    part
+}
+
+fn component_bom_entry(index: usize, component: &ComponentKey) -> serde_json::Value {
+    let mut entry = component_part_json(component);
+    entry["path"] = serde_json::json!(format!("component_{index}"));
+    entry["designator"] = serde_json::json!(format!("X{index}"));
+    entry
+}
+
+fn grouped_component_bom_entry(
+    index: usize,
+    components: &[ComponentKey],
+) -> Option<serde_json::Value> {
+    let (primary, alternatives) = components.split_first()?;
+    let mut entry = component_bom_entry(index, primary);
+    entry["alternatives"] =
+        serde_json::Value::Array(alternatives.iter().map(component_part_json).collect());
+    Some(entry)
 }
 
 /// Format a price value for display (always 2 decimal places)
@@ -431,55 +364,15 @@ pub fn fetch_pricing_batch(
     auth_token: Option<&str>,
     components: &[ComponentKey],
 ) -> Result<Vec<Availability>> {
-    fetch_pricing_in_chunks(components, |chunk| {
-        fetch_pricing_batch_once(auth_token, chunk)
-    })
+    fetch_pricing_batch_once(auth_token, components)
 }
 
-/// Fetch pricing for grouped alternate components, combining all offers per group.
+/// Fetch pricing for grouped alternate components as one planned BOM line per group.
 pub fn fetch_pricing_grouped_batch(
     auth_token: Option<&str>,
     groups: &[Vec<ComponentKey>],
 ) -> Result<Vec<Availability>> {
-    fetch_pricing_in_chunks(groups, |chunk| {
-        fetch_pricing_grouped_batch_once(auth_token, chunk)
-    })
-}
-
-fn fetch_pricing_in_chunks<T: Clone>(
-    items: &[T],
-    fetch_chunk: impl Fn(&[T]) -> Result<Vec<Availability>>,
-) -> Result<Vec<Availability>> {
-    if items.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let mut results = vec![Availability::default(); items.len()];
-    for (offset, chunk) in items.chunks(PRICING_BATCH_CHUNK_SIZE).enumerate() {
-        let start = offset * PRICING_BATCH_CHUNK_SIZE;
-        let chunk_results = match fetch_chunk(chunk) {
-            Ok(chunk_results) => chunk_results,
-            Err(_) if chunk.len() > 1 => chunk
-                .iter()
-                .map(|item| {
-                    fetch_chunk(std::slice::from_ref(item))
-                        .unwrap_or_else(|_| vec![Availability::default()])
-                        .into_iter()
-                        .next()
-                        .unwrap_or_default()
-                })
-                .collect(),
-            Err(err) => return Err(err),
-        };
-
-        for (idx, availability) in chunk_results.into_iter().enumerate() {
-            if let Some(slot) = results.get_mut(start + idx) {
-                *slot = availability;
-            }
-        }
-    }
-
-    Ok(results)
+    fetch_pricing_grouped_batch_once(auth_token, groups)
 }
 
 fn fetch_pricing_grouped_batch_once(
@@ -490,71 +383,43 @@ fn fetch_pricing_grouped_batch_once(
         return Ok(Vec::new());
     }
 
-    let mut flat_components = Vec::new();
-    let mut component_to_group = Vec::new();
-    for (group_idx, group) in groups.iter().enumerate() {
-        for component in group {
-            flat_components.push(component.clone());
-            component_to_group.push(group_idx);
-        }
-    }
+    let bom_entries: Vec<_> = groups
+        .iter()
+        .enumerate()
+        .filter_map(|(index, group)| grouped_component_bom_entry(index, group))
+        .collect();
 
-    if flat_components.is_empty() {
+    if bom_entries.is_empty() {
         return Ok(vec![Availability::default(); groups.len()]);
     }
 
-    let bom_entries: Vec<_> = flat_components
-        .iter()
-        .enumerate()
-        .map(|(i, c)| {
-            let mut entry = serde_json::json!({
-                "path": format!("component_{}", i),
-                "designator": format!("X{}", i),
-                "mpn": c.mpn,
-            });
-            if let Some(ref mfr) = c.manufacturer {
-                entry["manufacturer"] = serde_json::json!(mfr);
-            }
-            entry
-        })
-        .collect();
-
     let ctx = WorkspaceContext::from_cwd().unwrap_or_default();
     let match_response = call_bom_match_api(&ctx, auth_token, &bom_entries, 30, false)?;
-    let mut grouped_offers: Vec<Vec<&ComponentOffer>> = vec![Vec::new(); groups.len()];
-    let mut grouped_no_match = vec![false; groups.len()];
+    let mut results = vec![Availability::default(); groups.len()];
 
     for bom_line in &match_response.results {
         let Some(path) = bom_line.design_entry.path.as_deref() else {
             continue;
         };
-        let Some(component_idx) = path
+        let Some(group_idx) = path
             .strip_prefix("component_")
             .and_then(|s| s.parse::<usize>().ok())
         else {
             continue;
         };
-        let Some(&group_idx) = component_to_group.get(component_idx) else {
+        let Some(slot) = results.get_mut(group_idx) else {
             continue;
         };
 
-        let resolved_offers: Vec<_> = bom_line
+        let offers: Vec<_> = bom_line
             .offer_ids
             .iter()
             .filter_map(|id| match_response.offers.get(id))
             .collect();
-        grouped_no_match[group_idx] |= bom_line_no_match(bom_line);
-        grouped_offers[group_idx].extend(resolved_offers);
+        *slot = build_search_availability(&offers, bom_line_no_match(bom_line));
     }
 
-    Ok(grouped_offers
-        .into_iter()
-        .enumerate()
-        .map(|(idx, offers)| {
-            let no_match = grouped_no_match[idx] && offers.is_empty();
-            build_search_availability(&offers, no_match)
-        })
-        .collect())
+    Ok(results)
 }
 
 fn fetch_pricing_batch_once(
@@ -569,17 +434,7 @@ fn fetch_pricing_batch_once(
     let bom_entries: Vec<_> = components
         .iter()
         .enumerate()
-        .map(|(i, c)| {
-            let mut entry = serde_json::json!({
-                "path": format!("component_{}", i),
-                "designator": format!("X{}", i),
-                "mpn": c.mpn,
-            });
-            if let Some(ref mfr) = c.manufacturer {
-                entry["manufacturer"] = serde_json::json!(mfr);
-            }
-            entry
-        })
+        .map(|(index, component)| component_bom_entry(index, component))
         .collect();
 
     let ctx = WorkspaceContext::from_cwd().unwrap_or_default();
@@ -614,20 +469,12 @@ fn fetch_pricing_batch_once(
 }
 
 fn build_search_availability(offers: &[&ComponentOffer], no_match: bool) -> Availability {
-    let summary_for = |geo: Geography| {
-        let filtered: Vec<_> = offers
-            .iter()
-            .copied()
-            .filter(|offer| offer.geography == geo)
-            .collect();
-        let best = select_best_offer(filtered.iter().copied(), 1, false);
-        let alt = calculate_alt_stock(&filtered, best, 1);
-        best.map(|offer| build_availability_summary(offer, alt, 1, false, None))
-    };
+    let (_, us) = summarize_region(offers, Geography::Us, 1, 1);
+    let (_, global) = summarize_region(offers, Geography::Global, 1, 1);
 
     Availability {
-        us: summary_for(Geography::Us),
-        global: summary_for(Geography::Global),
+        us,
+        global,
         no_match,
         offers: offers
             .iter()
@@ -641,7 +488,7 @@ fn build_search_availability(offers: &[&ComponentOffer], no_match: bool) -> Avai
 mod tests {
     use super::*;
 
-    fn offer(id: &str, moq: Option<i32>, breaks: &[(i32, f64)]) -> ComponentOffer {
+    fn offer(id: &str, breaks: &[(i32, f64)]) -> ComponentOffer {
         ComponentOffer {
             id: id.to_string(),
             geography: Geography::Us,
@@ -649,7 +496,6 @@ mod tests {
             distributor_part_id: Some(id.to_string()),
             mpn: Some("TEST-MPN".to_string()),
             manufacturer: Some("Test Manufacturer".to_string()),
-            moq,
             price_breaks: Some(
                 breaks
                     .iter()
@@ -720,7 +566,7 @@ mod tests {
 
     #[test]
     fn uk_offers_are_ignored() {
-        let mut uk_offer = offer("uk-offer", Some(1), &[(1, 1.0)]);
+        let mut uk_offer = offer("uk-offer", &[(1, 1.0)]);
         uk_offer.geography = Geography::Uk;
 
         let availability = build_search_availability(&[&uk_offer], false);
@@ -740,53 +586,22 @@ mod tests {
     }
 
     #[test]
-    fn affordable_moq_passes() {
-        let offer = offer("affordable", Some(1000), &[(1000, 0.05)]);
-        assert!(offer_passes_moq_affordability(&offer, 20));
-    }
+    fn first_api_ranked_regional_offer_wins() {
+        let response: MatchBomResponse =
+            serde_json::from_str(include_str!("../tests/fixtures/bom_match_api_order.json"))
+                .unwrap();
+        let line = &response.results[0];
+        let offers: Vec<_> = line
+            .offer_ids
+            .iter()
+            .filter_map(|id| response.offers.get(id))
+            .collect();
 
-    #[test]
-    fn expensive_moq_fails() {
-        let offer = offer("expensive", Some(1000), &[(1000, 0.124)]);
-        assert!(!offer_passes_moq_affordability(&offer, 20));
-    }
+        let availability = build_search_availability(&offers, false);
 
-    #[test]
-    fn mixed_offers_do_not_flag_hard_to_source() {
-        let expensive_best = offer("expensive", Some(1000), &[(1000, 0.124)]);
-        let affordable_alt = offer("affordable", Some(1000), &[(1000, 0.09)]);
-
-        let offers = vec![&expensive_best, &affordable_alt];
-
-        assert_eq!(hard_to_source_reason_for_offers(&offers, 20), None);
-    }
-
-    #[test]
-    fn all_unaffordable_offers_flag_hard_to_source() {
-        let expensive_a = offer("expensive-a", Some(1000), &[(1000, 0.124)]);
-        let expensive_b = offer("expensive-b", Some(1000), &[(1000, 0.132)]);
-
-        let offers = vec![&expensive_a, &expensive_b];
-
-        assert_eq!(
-            hard_to_source_reason_for_offers(&offers, 20),
-            Some(HardToSourceReason::UnaffordableMoq)
-        );
-    }
-
-    #[test]
-    fn bom_match_request_body_omits_strict_by_default() {
-        let entries = vec![serde_json::json!({
-            "path": "root.U1",
-            "designator": "U1",
-            "mpn": "ABC123",
-        })];
-
-        let body = bom_match_request_body(&entries);
-
-        assert_eq!(body["format"], "normalized");
-        assert_eq!(body["designBom"], serde_json::Value::Array(entries));
-        assert!(body.get("strict").is_none());
+        assert_eq!(availability.us.as_ref().unwrap().stock, 5);
+        assert_eq!(availability.us.as_ref().unwrap().price, Some(10.0));
+        assert_eq!(availability.offers[0].part_id.as_deref(), Some("API-FIRST"));
     }
 
     #[test]

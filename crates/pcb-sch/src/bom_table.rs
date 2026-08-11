@@ -6,10 +6,8 @@ use terminal_hyperlink::Hyperlink as _;
 use urlencoding::encode as urlencode;
 
 use crate::bom::AvailabilitySummary;
-use crate::bom::availability::{
-    HardToSourceReason, NUM_BOARDS, Tier, is_small_generic_passive, tier_for_stock,
-};
-use crate::bom::{Bom, GenericComponent};
+use crate::bom::Bom;
+use crate::bom::availability::BOARD_QUANTITY;
 
 const NO_MATCH_LABEL: &str = "No match (unknown part)";
 
@@ -101,45 +99,34 @@ fn summary_row(
     ]
 }
 
-/// Map availability tier to table cell color
-fn color_for_tier(tier: Tier) -> Color {
-    match tier {
-        Tier::Insufficient => Color::Red,
-        Tier::Limited => Color::Yellow,
-        Tier::Plenty => Color::Green,
-    }
-}
-
 /// Apply styling to a cell based on component flags
-fn styled_cell(content: impl ToString, is_dnp: bool, is_house: bool, tier: Option<Tier>) -> Cell {
+fn styled_cell(content: impl ToString, is_dnp: bool, is_house: bool) -> Cell {
     let cell = Cell::new(content);
-    match (is_dnp, is_house, tier) {
-        (true, _, _) => cell.fg(Color::DarkGrey),
-        (false, true, _) => cell.fg(Color::Blue),
-        (false, false, Some(t)) => cell.fg(color_for_tier(t)),
-        (false, false, None) => cell,
+    match (is_dnp, is_house) {
+        (true, _) => cell.fg(Color::DarkGrey),
+        (false, true) => cell.fg(Color::Blue),
+        (false, false) => cell,
     }
 }
 
-/// Map a sourcing status to its display color, including states outside stock tiers.
-fn color_for_status(is_dnp: bool, no_match: bool, tier: Tier) -> Color {
+/// Map response states to display colors without recreating sourcing policy.
+fn color_for_status(is_dnp: bool, no_match: bool) -> Option<Color> {
     if is_dnp {
-        Color::DarkGrey
+        Some(Color::DarkGrey)
     } else if no_match {
-        Color::Magenta
+        Some(Color::Magenta)
     } else {
-        color_for_tier(tier)
+        None
     }
 }
 
-/// Apply styling to a sourcing-status cell, including states outside stock tiers.
-fn styled_status_cell(content: impl ToString, is_dnp: bool, no_match: bool, tier: Tier) -> Cell {
-    Cell::new(content).fg(color_for_status(is_dnp, no_match, tier))
-}
-
-/// Check if MPN and manufacturer are both present
-fn has_complete_part_info(mpn: &str, manufacturer: &str) -> bool {
-    !mpn.is_empty() && !manufacturer.is_empty()
+/// Apply styling to response-state cells.
+fn styled_status_cell(content: impl ToString, is_dnp: bool, no_match: bool) -> Cell {
+    let cell = Cell::new(content);
+    match color_for_status(is_dnp, no_match) {
+        Some(color) => cell.fg(color),
+        None => cell,
+    }
 }
 
 /// Calculate unit price at a given quantity using price breaks
@@ -177,35 +164,24 @@ struct RegionDisplayData {
     alt_stock: i32,
     price_single: Option<f64>,
     price_boards: Option<f64>,
-    tier: Tier,
-    hard_to_source_reason: Option<HardToSourceReason>,
     lcsc_ids: Vec<(String, String)>,
     mpn: Option<String>,
     manufacturer: Option<String>,
 }
 
 impl RegionDisplayData {
-    fn from_region_avail(
-        avail: Option<&AvailabilitySummary>,
-        qty: usize,
-        is_small_passive: bool,
-    ) -> Self {
+    fn from_region_avail(avail: Option<&AvailabilitySummary>, qty: usize) -> Self {
         let Some(a) = avail else {
             return Self::default();
         };
 
-        let tier = if a.hard_to_source_reason.is_some() {
-            Tier::Insufficient
-        } else {
-            tier_for_stock(a.stock, qty as i32, is_small_passive)
-        };
         let (price_single, price_boards) = match &a.price_breaks {
             Some(breaks) => {
                 let unit_single = unit_price_from_breaks(breaks, qty as i32);
-                let unit_boards = unit_price_from_breaks(breaks, (qty as i32) * NUM_BOARDS);
+                let unit_boards = unit_price_from_breaks(breaks, (qty as i32) * BOARD_QUANTITY);
                 (
                     unit_single.map(|p| p * qty as f64),
-                    unit_boards.map(|p| p * (qty as i32 * NUM_BOARDS) as f64),
+                    unit_boards.map(|p| p * (qty as i32 * BOARD_QUANTITY) as f64),
                 )
             }
             None => (None, None),
@@ -216,8 +192,6 @@ impl RegionDisplayData {
             alt_stock: a.alt_stock,
             price_single,
             price_boards,
-            tier,
-            hard_to_source_reason: a.hard_to_source_reason,
             lcsc_ids: a.lcsc_part_ids.clone(),
             mpn: a.mpn.clone(),
             manufacturer: a.manufacturer.clone(),
@@ -276,29 +250,34 @@ impl Bom {
         legend_table.load_preset(comfy_table::presets::NOTHING);
         legend_table.set_content_arrangement(comfy_table::ContentArrangement::Disabled);
 
-        legend_table.add_row(vec![
-            Cell::new("■").fg(Color::Green),
-            Cell::new("Plenty available / easy to source"),
-            Cell::new("  "),
-            Cell::new("■").fg(Color::Blue),
-            Cell::new("House component"),
-        ]);
-        legend_table.add_row(vec![
-            Cell::new("■").fg(Color::Yellow),
-            Cell::new("Limited inventory / harder to source"),
-            Cell::new("  "),
-            Cell::new("■").fg(Color::DarkGrey),
-            Cell::new("DNP (Do Not Populate)"),
-        ]);
         if has_availability {
             legend_table.add_row(vec![
-                Cell::new("■").fg(Color::Red),
-                Cell::new("Insufficient stock / hard to source"),
+                Cell::new("■").fg(Color::Blue),
+                Cell::new("House component"),
                 Cell::new("  "),
+                Cell::new("■").fg(Color::DarkGrey),
+                Cell::new("DNP (Do Not Populate)"),
+            ]);
+            legend_table.add_row(vec![
                 Cell::new("■").fg(Color::Magenta),
                 Cell::new(NO_MATCH_LABEL),
             ]);
         } else {
+            // Keep the established offline legend, where no live sourcing data is rendered.
+            legend_table.add_row(vec![
+                Cell::new("■").fg(Color::Green),
+                Cell::new("Plenty available / easy to source"),
+                Cell::new("  "),
+                Cell::new("■").fg(Color::Blue),
+                Cell::new("House component"),
+            ]);
+            legend_table.add_row(vec![
+                Cell::new("■").fg(Color::Yellow),
+                Cell::new("Limited inventory / harder to source"),
+                Cell::new("  "),
+                Cell::new("■").fg(Color::DarkGrey),
+                Cell::new("DNP (Do Not Populate)"),
+            ]);
             legend_table.add_row(vec![
                 Cell::new("■").fg(Color::Red),
                 Cell::new("Insufficient stock / hard to source"),
@@ -308,12 +287,8 @@ impl Bom {
         writeln!(writer, "{legend_table}")?;
 
         // Track summary stats (only used when has_availability)
-        let mut plenty_count = 0;
-        let mut plenty_qty = 0;
-        let mut limited_count = 0;
-        let mut limited_qty = 0;
-        let mut hard_count = 0;
-        let mut hard_qty = 0;
+        let mut matched_count = 0;
+        let mut matched_qty = 0;
         let mut no_match_count = 0;
         let mut no_match_qty = 0;
         let mut dnp_count = 0;
@@ -419,28 +394,14 @@ impl Bom {
                 .map(|(p, _)| p)
                 .collect();
 
-            // Get generic_data and package for sourcing status
-            let generic_data = entry
-                .get("generic_data")
-                .and_then(|gd| serde_json::from_value::<GenericComponent>(gd.clone()).ok());
-
-            let package = entry.get("package").and_then(|p| p.as_str());
-            let is_small_passive = is_small_generic_passive(generic_data.as_ref(), package);
-
             // Get per-region availability from first matching path
             let avail = paths.iter().find_map(|path| self.availability.get(*path));
             let no_match = avail.is_some_and(|a| a.no_match);
 
-            let us_data = RegionDisplayData::from_region_avail(
-                avail.and_then(|a| a.us.as_ref()),
-                qty,
-                is_small_passive,
-            );
-            let global_data = RegionDisplayData::from_region_avail(
-                avail.and_then(|a| a.global.as_ref()),
-                qty,
-                is_small_passive,
-            );
+            let us_data =
+                RegionDisplayData::from_region_avail(avail.and_then(|a| a.us.as_ref()), qty);
+            let global_data =
+                RegionDisplayData::from_region_avail(avail.and_then(|a| a.global.as_ref()), qty);
 
             // Use US offer data for MPN/Manufacturer autofill
             let avail_mpn = us_data.mpn.clone();
@@ -451,27 +412,6 @@ impl Bom {
             let (manufacturer, is_manufacturer_autofilled) =
                 autofill_from_availability(original_manufacturer, &avail_manufacturer);
 
-            // Designator tier:
-            // - Red: any region is explicitly hard to source due to MOQ affordability
-            // - Green: both regions Plenty AND has MPN/manufacturer
-            // - Red: both regions Insufficient
-            // - Yellow: everything else
-            let hard_to_source = us_data.hard_to_source_reason.is_some()
-                || global_data.hard_to_source_reason.is_some();
-
-            let designator_tier = if hard_to_source
-                || (us_data.tier == Tier::Insufficient && global_data.tier == Tier::Insufficient)
-            {
-                Tier::Insufficient
-            } else if us_data.tier == Tier::Plenty
-                && global_data.tier == Tier::Plenty
-                && has_complete_part_info(original_mpn, original_manufacturer)
-            {
-                Tier::Plenty
-            } else {
-                Tier::Limited
-            };
-
             // Track summary stats
             if has_availability {
                 if is_dnp {
@@ -481,20 +421,8 @@ impl Bom {
                     no_match_count += 1;
                     no_match_qty += qty;
                 } else {
-                    match designator_tier {
-                        Tier::Plenty => {
-                            plenty_count += 1;
-                            plenty_qty += qty;
-                        }
-                        Tier::Limited => {
-                            limited_count += 1;
-                            limited_qty += qty;
-                        }
-                        Tier::Insufficient => {
-                            hard_count += 1;
-                            hard_qty += qty;
-                        }
-                    }
+                    matched_count += 1;
+                    matched_qty += qty;
 
                     // Track house vs non-house (excluding DNP)
                     if is_house_part {
@@ -508,11 +436,11 @@ impl Bom {
             }
 
             // Create qty and designators cells
-            let qty_cell = styled_cell(format!("{:>4}", qty), is_dnp, false, None);
+            let qty_cell = styled_cell(format!("{:>4}", qty), is_dnp, false);
             let designators_cell = (if has_availability {
-                styled_status_cell(designators.as_str(), is_dnp, no_match, designator_tier)
+                styled_status_cell(designators.as_str(), is_dnp, no_match)
             } else {
-                styled_cell(designators.as_str(), is_dnp, false, None)
+                styled_cell(designators.as_str(), is_dnp, false)
             })
             .set_delimiter(',');
 
@@ -529,39 +457,28 @@ impl Bom {
                 );
                 style_if_autofilled(&link, is_mpn_autofilled)
             };
-            let mpn_cell = styled_cell(mpn_display, is_dnp, is_house_part, None);
+            let mpn_cell = styled_cell(mpn_display, is_dnp, is_house_part);
 
             // Manufacturer: style if auto-filled
             let manufacturer_cell = styled_cell(
                 style_if_autofilled(manufacturer, is_manufacturer_autofilled),
                 is_dnp,
                 false,
-                None,
             );
-            let package_cell = styled_cell(
-                entry["package"].as_str().unwrap_or_default(),
-                is_dnp,
-                false,
-                None,
-            );
-            let description_cell = styled_cell(description, is_dnp, false, None);
+            let package_cell =
+                styled_cell(entry["package"].as_str().unwrap_or_default(), is_dnp, false);
+            let description_cell = styled_cell(description, is_dnp, false);
 
             // Build row
             let mut row = vec![qty_cell];
 
             // Add stock columns (US and Global)
             if has_availability {
-                row.push(styled_status_cell(
-                    us_data.format_stock(),
-                    is_dnp,
-                    no_match,
-                    us_data.tier,
-                ));
+                row.push(styled_status_cell(us_data.format_stock(), is_dnp, no_match));
                 row.push(styled_status_cell(
                     global_data.format_stock(),
                     is_dnp,
                     no_match,
-                    global_data.tier,
                 ));
             }
 
@@ -591,8 +508,8 @@ impl Bom {
 
             // Add price columns (US and Global)
             if has_availability {
-                row.push(styled_cell(us_data.format_price(), is_dnp, false, None));
-                row.push(styled_cell(global_data.format_price(), is_dnp, false, None));
+                row.push(styled_cell(us_data.format_price(), is_dnp, false));
+                row.push(styled_cell(global_data.format_price(), is_dnp, false));
             }
 
             row.push(description_cell);
@@ -613,8 +530,8 @@ impl Bom {
             headers.push("LCSC");
         }
 
-        let price_us_header = format!("Price US ({}x)", NUM_BOARDS);
-        let price_global_header = format!("Price Global ({}x)", NUM_BOARDS);
+        let price_us_header = format!("Price US ({}x)", BOARD_QUANTITY);
+        let price_global_header = format!("Price Global ({}x)", BOARD_QUANTITY);
         if has_availability {
             headers.push(&price_us_header);
             headers.push(&price_global_header);
@@ -678,32 +595,15 @@ impl Bom {
             let mut summary_table = Table::new();
             configure_summary_table(&mut summary_table);
 
-            let total_count =
-                plenty_count + limited_count + hard_count + no_match_count + dnp_count;
-            let total_with_dnp = plenty_qty + limited_qty + hard_qty + no_match_qty + dnp_qty;
+            let total_count = matched_count + no_match_count + dnp_count;
+            let total_with_dnp = matched_qty + no_match_qty + dnp_qty;
 
             summary_table.add_row(summary_row(
-                Color::Green,
-                "Plenty available / easy to source",
-                plenty_count,
+                Color::White,
+                "Matched / planner-ranked",
+                matched_count,
                 total_count,
-                plenty_qty,
-                total_with_dnp,
-            ));
-            summary_table.add_row(summary_row(
-                Color::Yellow,
-                "Limited inventory / harder to source",
-                limited_count,
-                total_count,
-                limited_qty,
-                total_with_dnp,
-            ));
-            summary_table.add_row(summary_row(
-                Color::Red,
-                "Insufficient stock / hard to source",
-                hard_count,
-                total_count,
-                hard_qty,
+                matched_qty,
                 total_with_dnp,
             ));
             summary_table.add_row(summary_row(
@@ -767,31 +667,8 @@ mod tests {
     use crate::bom::{Availability, BomEntry};
 
     #[test]
-    fn hard_to_source_availability_forces_red_tier() {
-        let avail = AvailabilitySummary {
-            stock: 78_000,
-            hard_to_source_reason: Some(HardToSourceReason::UnaffordableMoq),
-            price_breaks: Some(vec![(1000, 0.124)]),
-            ..Default::default()
-        };
-
-        let region = RegionDisplayData::from_region_avail(Some(&avail), 1, false);
-
-        assert_eq!(region.tier, Tier::Insufficient);
-        assert_eq!(
-            region.hard_to_source_reason,
-            Some(HardToSourceReason::UnaffordableMoq)
-        );
-        assert_eq!(region.stock, 78_000);
-        assert_eq!(region.price_single, Some(0.124));
-    }
-
-    #[test]
-    fn no_match_status_color_overrides_insufficient_tier() {
-        assert_eq!(
-            color_for_status(false, true, Tier::Insufficient),
-            Color::Magenta
-        );
+    fn no_match_status_is_magenta() {
+        assert_eq!(color_for_status(false, true), Some(Color::Magenta));
     }
 
     #[test]

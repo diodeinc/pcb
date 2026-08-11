@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- BOM sourcing now uses the API's deterministic offer order for five-board builds.
+
 ## [0.4.28] - 2026-08-11
 
 ### Changed
