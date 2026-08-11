@@ -171,7 +171,6 @@ pub enum WriterMacroExpression {
 pub struct WriterObject {
     pub kind: ObjectKind,
     pub polarity: Polarity,
-    /// Optional regular repetition of this graphical object.
     pub repeat: Option<StepRepeat>,
     /// Gerber aperture load transformation active for this object.
     pub aperture_transform: WriterApertureTransform,

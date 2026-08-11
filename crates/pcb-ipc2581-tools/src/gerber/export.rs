@@ -1444,9 +1444,7 @@ fn object_attributes(
     let pin_ref = feature.pin_refs.slice(&doc.pin_refs).first();
     let carries_netlist = role == GerberLayerRole::Copper;
     let carries_pins = carries_netlist && matches!(side, IrSide::Top | IrSide::Bottom);
-    // Pad-like copper and full balance voids keep their flashes; all other
-    // copper semantics lower flashed occurrences to regions so they never
-    // masquerade as pads.
+    // Only pad-like copper and full balance voids may image as flashes.
     let keeps_flashes = match feature.flags.copper_balance {
         Some(kind) => kind == CopperBalanceKind::FullVoid,
         None => matches!(

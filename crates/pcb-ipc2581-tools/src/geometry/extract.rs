@@ -1129,12 +1129,9 @@ fn extract_feature_placement_group(
     Ok(features)
 }
 
-/// Validate a full_void set's structure against its declared lattice
-/// metadata: one shared contour flashed by an identity-Xform placement
-/// group whose locations are distinct declared-lattice sites.
-///
-/// The placements themselves stay the single source of occurrence truth;
-/// they lower to explicit flashes downstream.
+/// Validate a full_void set against its declared lattice metadata: one
+/// shared contour flashed by an identity-Xform placement group whose
+/// locations are distinct on-lattice sites.
 fn validate_copper_balance_structure(
     metadata: Option<CopperBalanceMetadata>,
     set_feature: &SetFeature,

@@ -33,9 +33,8 @@ pub struct LayerAttributes {
 #[derive(Debug, Clone, Default)]
 pub struct ObjectAttributes {
     pub aperture_function: Option<Vec<String>>,
-    /// Lower flashed occurrences of this object as `G36` regions instead of
-    /// aperture flashes. Set by exporters for copper whose semantics must not
-    /// masquerade as pads; pad-like copper keeps its flashes.
+    /// Lower flashed occurrences as `G36` regions so non-pad copper never
+    /// masquerades as pads.
     pub lower_flashes_to_regions: bool,
     pub net: Option<String>,
     pub component: Option<String>,
@@ -172,16 +171,35 @@ pub fn lower_artwork_layer(layer: &ArtworkDocument) -> Result<GerberLayer> {
         .map(|layer| layer.meta.clone())
         .unwrap_or_default();
 
+    // Expansion leaves only primitives and grids of primitive-only blocks.
     for object in &layer.objects {
-        lower_artwork_object_tree(
-            &layer,
-            object,
-            Affine2::IDENTITY,
-            Polarity::Dark,
-            None,
-            &mut apertures,
-            &mut plan,
-        )?;
+        match object.geometry {
+            ArtworkGeometry::GridInstance {
+                block,
+                transform,
+                repeat,
+            } => {
+                lower_grid_objects(
+                    &layer,
+                    block,
+                    transform,
+                    repeat,
+                    object.polarity,
+                    &mut apertures,
+                    &mut plan,
+                )?;
+            }
+            _ => {
+                let objects = lower_artwork_object(
+                    &layer,
+                    object,
+                    Affine2::IDENTITY,
+                    object.polarity,
+                    &mut apertures,
+                )?;
+                plan.push_group(object.order.stage, object.polarity, objects);
+            }
+        }
     }
     let objects = plan.into_ordered_objects();
 
@@ -195,82 +213,48 @@ pub fn lower_artwork_layer(layer: &ArtworkDocument) -> Result<GerberLayer> {
     })
 }
 
-fn lower_artwork_object_tree(
+fn lower_grid_objects(
     layer: &ArtworkDocument,
-    object: &pcb_ir::dialects::artwork::Object<ObjectAttributes>,
-    transform: Affine2,
-    parent_polarity: Polarity,
+    block: u32,
+    placement: Affine2,
+    grid: pcb_ir::dialects::artwork::GridRepeat,
+    polarity: Polarity,
+    apertures: &mut ApertureTable,
+    plan: &mut GerberPlan,
+) -> Result<()> {
+    if let Some((base, step_repeat)) = gerber_step_repeat(placement, grid) {
+        let repeat =
+            (step_repeat.x_repeats > 1 || step_repeat.y_repeats > 1).then_some(step_repeat);
+        lower_grid_occurrence(layer, block, base, polarity, repeat, apertures, plan)
+    } else {
+        for offset in grid.offsets() {
+            let occurrence = Affine2 {
+                m02: placement.m02 + offset.x,
+                m12: placement.m12 + offset.y,
+                ..placement
+            };
+            lower_grid_occurrence(layer, block, occurrence, polarity, None, apertures, plan)?;
+        }
+        Ok(())
+    }
+}
+
+fn lower_grid_occurrence(
+    layer: &ArtworkDocument,
+    block: u32,
+    base: Affine2,
+    polarity: Polarity,
     repeat: Option<crate::StepRepeat>,
     apertures: &mut ApertureTable,
     plan: &mut GerberPlan,
 ) -> Result<()> {
-    let polarity = parent_polarity.compose(object.polarity);
-    match object.geometry {
-        ArtworkGeometry::Instance {
-            block,
-            transform: placement,
-        } => {
-            for child in &layer.blocks[block as usize].objects {
-                lower_artwork_object_tree(
-                    layer,
-                    child,
-                    transform.concat(placement),
-                    polarity,
-                    repeat,
-                    apertures,
-                    plan,
-                )?;
-            }
+    for child in &layer.blocks[block as usize].objects {
+        let child_polarity = polarity.compose(child.polarity);
+        let mut objects = lower_artwork_object(layer, child, base, child_polarity, apertures)?;
+        for object in &mut objects {
+            object.repeat = repeat;
         }
-        ArtworkGeometry::GridInstance {
-            block,
-            transform: placement,
-            repeat: grid,
-        } => {
-            let base = transform.concat(placement);
-            let grid = pcb_ir::dialects::artwork::GridRepeat {
-                x_count: grid.x_count,
-                y_count: grid.y_count,
-                x_step: transform.transform_vector(grid.x_step),
-                y_step: transform.transform_vector(grid.y_step),
-            };
-            // Gerber step-repeat blocks cannot nest, so a grid reached under
-            // an already-active repeat must expand its occurrences instead.
-            let step_repeat = if repeat.is_none() {
-                gerber_step_repeat(base, grid)
-            } else {
-                None
-            };
-            if let Some((base, step_repeat)) = step_repeat {
-                let repeat =
-                    (step_repeat.x_repeats > 1 || step_repeat.y_repeats > 1).then_some(step_repeat);
-                for child in &layer.blocks[block as usize].objects {
-                    lower_artwork_object_tree(
-                        layer, child, base, polarity, repeat, apertures, plan,
-                    )?;
-                }
-            } else {
-                for offset in grid.offsets() {
-                    let occurrence = Affine2 {
-                        m02: base.m02 + offset.x,
-                        m12: base.m12 + offset.y,
-                        ..base
-                    };
-                    for child in &layer.blocks[block as usize].objects {
-                        lower_artwork_object_tree(
-                            layer, child, occurrence, polarity, repeat, apertures, plan,
-                        )?;
-                    }
-                }
-            }
-        }
-        _ => {
-            let mut objects = lower_artwork_object(layer, object, transform, polarity, apertures)?;
-            for object in &mut objects {
-                object.repeat = repeat;
-            }
-            plan.push_group(object.order.stage, polarity, objects);
-        }
+        plan.push_group(child.order.stage, child_polarity, objects);
     }
     Ok(())
 }
@@ -279,6 +263,10 @@ fn gerber_step_repeat(
     mut base: Affine2,
     grid: pcb_ir::dialects::artwork::GridRepeat,
 ) -> Option<(Affine2, crate::StepRepeat)> {
+    // A zero-count axis means no occurrences at all; expansion emits nothing.
+    if grid.x_count == 0 || grid.y_count == 0 {
+        return None;
+    }
     let mut x_repeats = 1;
     let mut y_repeats = 1;
     let mut x_step = 0.0;
@@ -452,7 +440,7 @@ fn lower_artwork_object(
             });
         }
         ArtworkGeometry::Instance { .. } | ArtworkGeometry::GridInstance { .. } => {
-            unreachable!("artwork instances are lowered by the hierarchy walker")
+            unreachable!("instance expansion leaves only primitive geometry")
         }
     }
     Ok(objects)
@@ -791,10 +779,9 @@ impl ApertureTable {
                         "cannot export a Gerber rounded-hex aperture with a hole".to_string(),
                     ));
                 }
-                // Legacy CAM importers evaluate parameterized compound
-                // macros per flash. Flatten the exact shape once into a
-                // concrete single-primitive outline shared by every flash of
-                // this level and orientation.
+                // Flatten the exact shape once into a concrete one-primitive
+                // outline; legacy CAM importers evaluate compound macros per
+                // flash.
                 let outline =
                     pcb_ir::geom::shapes::rounded_hexagon(radius, corner_radius, rotation_degrees)
                         .ok_or_else(|| {
@@ -1014,20 +1001,14 @@ fn lower_region_objects(
     attributes: &[AttributeValue],
 ) -> Result<Vec<WriterObject>> {
     let artwork_path = &layer.arena.paths[path_index as usize];
-    let payloads = layer
-        .arena
-        .path_contours(artwork_path)
-        .into_iter()
-        .map(|contour| geom_path::transform_cmds(contour.cmds, transform))
-        .collect::<Vec<_>>();
-    let fill_rule = artwork_path.fill_rule().unwrap_or(FillRule::NonZero);
-    let contours = lower_region_image_contours(&payloads, fill_rule)?;
-    Ok(writer_region_objects(
-        contours,
+    lower_contours_as_regions(
+        layer.arena.path_contours(artwork_path),
+        artwork_path.fill_rule().unwrap_or(FillRule::NonZero),
+        transform,
         polarity,
         aperture_attributes,
         attributes,
-    ))
+    )
 }
 
 fn lower_aperture_as_regions(
@@ -1037,27 +1018,29 @@ fn lower_aperture_as_regions(
     aperture_attributes: &[AttributeValue],
     attributes: &[AttributeValue],
 ) -> Result<Vec<WriterObject>> {
-    let payloads = aperture
-        .contours()
-        .into_iter()
-        .map(|contour| geom_path::transform_cmds(contour.cmds, transform))
-        .collect::<Vec<_>>();
-    let contours = lower_region_image_contours(&payloads, aperture.fill_rule())?;
-    Ok(writer_region_objects(
-        contours,
+    lower_contours_as_regions(
+        aperture.contours(),
+        aperture.fill_rule(),
+        transform,
         polarity,
         aperture_attributes,
         attributes,
-    ))
+    )
 }
 
-fn writer_region_objects(
-    contours: Vec<Contour>,
+fn lower_contours_as_regions(
+    contours: impl IntoIterator<Item = ContourBuf>,
+    fill_rule: FillRule,
+    transform: Affine2,
     polarity: Polarity,
     aperture_attributes: &[AttributeValue],
     attributes: &[AttributeValue],
-) -> Vec<WriterObject> {
-    contours
+) -> Result<Vec<WriterObject>> {
+    let payloads = contours
+        .into_iter()
+        .map(|contour| geom_path::transform_cmds(contour.cmds, transform))
+        .collect::<Vec<_>>();
+    Ok(lower_region_image_contours(&payloads, fill_rule)?
         .into_iter()
         .map(|contour| WriterObject {
             kind: ObjectKind::Region {
@@ -1069,7 +1052,7 @@ fn writer_region_objects(
             aperture_attributes: aperture_attributes.to_vec(),
             attributes: attributes.to_vec(),
         })
-        .collect()
+        .collect())
 }
 
 fn lower_region_image_contours(
@@ -1873,6 +1856,50 @@ mod tests {
             (actual_area - expected_area).abs() < 3e-3,
             "rounded-hex macro area {actual_area}, expected {expected_area}"
         );
+    }
+
+    #[test]
+    fn zero_count_grids_emit_nothing() {
+        let mut artwork = ArtworkDocument::new();
+        let layer_id = artwork.push_layer(IrArtworkDocument {
+            name: "F.Cu".to_string(),
+            role: LayerRole::Copper,
+            side: Side::Top,
+            objects: Span::EMPTY,
+            bbox: BBox::empty(),
+            meta: LayerAttributes::default(),
+        });
+        let block = artwork.push_block();
+        let aperture = artwork.push_aperture(Aperture::circle(1.0));
+        artwork.push_block_object(
+            block,
+            ArtworkObject::new(
+                Polarity::Dark,
+                ArtworkGeometry::Flash {
+                    aperture,
+                    transform: Affine2::IDENTITY,
+                },
+            ),
+        );
+        artwork.push_object(
+            layer_id,
+            ArtworkObject::new(
+                Polarity::Dark,
+                ArtworkGeometry::GridInstance {
+                    block,
+                    transform: Affine2::IDENTITY,
+                    repeat: pcb_ir::dialects::artwork::GridRepeat {
+                        x_count: 0,
+                        y_count: 3,
+                        x_step: Point::new(5.0, 0.0),
+                        y_step: Point::new(0.0, 5.0),
+                    },
+                },
+            ),
+        );
+
+        let gerber = lower_artwork_layer(&artwork).expect("lower empty grid");
+        assert!(gerber.objects.is_empty());
     }
 
     #[test]

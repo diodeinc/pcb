@@ -715,10 +715,10 @@ pub fn expand_instances<LayerMeta: Clone, ObjectMeta: Clone>(
 
 /// Materialize ordinary hierarchy while preserving explicit regular grids.
 ///
-/// The result contains no ordinary instances. Nested grids materialize until
-/// each retained grid references a block without another grid. Retained grids
-/// use the same topologically ordered source blocks, with outer transforms
-/// composed into their base placement and step vectors.
+/// The result contains no ordinary instances anywhere: nested grids
+/// materialize until each retained grid references a primitive-only block,
+/// with outer transforms composed into its base placement, step vectors,
+/// and block contents.
 pub fn expand_instances_preserving_grids<LayerMeta: Clone, ObjectMeta: Clone>(
     doc: &Document<LayerMeta, ObjectMeta>,
 ) -> Document<LayerMeta, ObjectMeta> {
@@ -731,9 +731,6 @@ fn expand_instances_with_grid_policy<LayerMeta: Clone, ObjectMeta: Clone>(
 ) -> Document<LayerMeta, ObjectMeta> {
     let mut out = Document::new();
     out.apertures = doc.apertures.clone();
-    if preserve_grids {
-        out.blocks = doc.blocks.clone();
-    }
     out.arena = doc.arena.clone();
     out.diagnostics = doc.diagnostics.clone();
     let mut block_contains_grid = Vec::with_capacity(doc.blocks.len());
@@ -748,6 +745,9 @@ fn expand_instances_with_grid_policy<LayerMeta: Clone, ObjectMeta: Clone>(
                 _ => false,
             }
         }));
+    }
+    if preserve_grids {
+        flatten_leaf_blocks(doc, &mut out, &block_contains_grid);
     }
 
     for layer in &doc.layers {
@@ -780,6 +780,90 @@ fn expand_instances_with_grid_policy<LayerMeta: Clone, ObjectMeta: Clone>(
     }
     normalize_bounds(&mut out);
     out
+}
+
+/// Rebuild every grid-free block as primitive-only geometry so retained
+/// grids never require a hierarchy walk in consumers. Blocks containing
+/// grids are copied verbatim; expansion never retains a grid of them.
+fn flatten_leaf_blocks<LayerMeta, ObjectMeta: Clone>(
+    doc: &Document<LayerMeta, ObjectMeta>,
+    out: &mut Document<LayerMeta, ObjectMeta>,
+    block_contains_grid: &[bool],
+) {
+    for (index, block) in doc.blocks.iter().enumerate() {
+        let id = out.push_block();
+        for object in &block.objects {
+            match object.geometry {
+                Geometry::Instance {
+                    block: child,
+                    transform,
+                } if !block_contains_grid[index] => {
+                    if child as usize >= index {
+                        out.warn(format!(
+                            "Skipping artwork instance of non-earlier block {child}"
+                        ));
+                        continue;
+                    }
+                    let children = out.blocks[child as usize].objects.clone();
+                    for child_object in children {
+                        let geometry =
+                            transform_primitive_geometry(out, child_object.geometry, transform);
+                        out.push_block_object(
+                            id,
+                            Object {
+                                polarity: object.polarity.compose(child_object.polarity),
+                                order: child_object.order,
+                                geometry,
+                                bbox: BBox::empty(),
+                                meta: child_object.meta,
+                            },
+                        );
+                    }
+                }
+                _ => {
+                    out.push_block_object(id, object.clone());
+                }
+            }
+        }
+    }
+}
+
+/// Apply `transform` to primitive geometry within one document, copying
+/// transformed paths into its arena.
+fn transform_primitive_geometry<LayerMeta, ObjectMeta>(
+    doc: &mut Document<LayerMeta, ObjectMeta>,
+    geometry: Geometry,
+    transform: Affine2,
+) -> Geometry {
+    match geometry {
+        Geometry::Flash {
+            aperture,
+            transform: flash,
+        } => Geometry::Flash {
+            aperture,
+            transform: transform.concat(flash),
+        },
+        Geometry::Stroke { path } | Geometry::Region { path } => {
+            let path = if transform.is_identity() {
+                path
+            } else {
+                let source_path = doc.arena.path(path);
+                let paint = source_path.paint.scaled(transform.m00.hypot(transform.m10));
+                let contours = doc
+                    .arena
+                    .transformed_contour_bufs(source_path.contours, transform);
+                doc.push_path(paint, contours)
+            };
+            match geometry {
+                Geometry::Stroke { .. } => Geometry::Stroke { path },
+                Geometry::Region { .. } => Geometry::Region { path },
+                _ => unreachable!(),
+            }
+        }
+        Geometry::Instance { .. } | Geometry::GridInstance { .. } => {
+            unreachable!("flattened blocks contain only primitive geometry")
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -906,35 +990,9 @@ fn expand_object_into_layer<LayerMeta, ObjectMeta: Clone>(
         return;
     }
 
-    let geometry = match object.geometry {
-        Geometry::Flash {
-            aperture,
-            transform: flash,
-        } => Geometry::Flash {
-            aperture,
-            transform: transform.concat(flash),
-        },
-        Geometry::Stroke { path } | Geometry::Region { path } => {
-            let path = if transform.is_identity() {
-                path
-            } else {
-                let source_path = source.arena.path(path);
-                let scale = transform.m00.hypot(transform.m10);
-                target.push_path(
-                    source_path.paint.scaled(scale),
-                    source
-                        .arena
-                        .transformed_contour_bufs(source_path.contours, transform),
-                )
-            };
-            match object.geometry {
-                Geometry::Stroke { .. } => Geometry::Stroke { path },
-                Geometry::Region { .. } => Geometry::Region { path },
-                _ => unreachable!(),
-            }
-        }
-        Geometry::Instance { .. } | Geometry::GridInstance { .. } => unreachable!(),
-    };
+    // The target arena starts as a clone of the source arena, so source path
+    // indices resolve identically in the target.
+    let geometry = transform_primitive_geometry(target, object.geometry, transform);
     target.push_object(
         layer,
         Object {
