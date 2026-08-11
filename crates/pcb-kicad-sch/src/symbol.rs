@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{Context, Result, anyhow, bail};
 use pcb_sexpr::Sexpr;
 
-use crate::{MirrorAxis, Point, Rotation, Symbol, SymbolDefinition};
+use crate::{LabelSpin, MirrorAxis, Point, Rotation, Symbol, SymbolDefinition};
 
 const MAX_EXPANDED_STACKED_PIN_NUMBERS: usize = 4096;
 
@@ -13,6 +13,8 @@ pub(crate) struct SymbolPin {
     pub number: String,
     pub numbers: BTreeSet<String>,
     pub point: Point,
+    pub body_point: Point,
+    pub outward_spin: LabelSpin,
     pub electrical_type: String,
     pub hidden: bool,
     alternates: BTreeMap<String, String>,
@@ -25,6 +27,10 @@ impl SymbolPin {
 
     pub fn is_power_input(&self) -> bool {
         self.electrical_type == "power_in"
+    }
+
+    pub fn supports_alternate(&self, name: &str) -> bool {
+        self.alternates.contains_key(name)
     }
 }
 
@@ -180,6 +186,9 @@ impl ParsedSymbolDefinition {
                 // unlike schematic-page coordinates.
                 pin.point.y = -pin.point.y;
                 pin.point = transform_point(pin.point, symbol);
+                pin.body_point.y = -pin.body_point.y;
+                pin.body_point = transform_point(pin.body_point, symbol);
+                pin.outward_spin = transform_spin(pin.outward_spin, symbol);
                 Ok(pin)
             })
             .collect::<Result<Vec<_>>>()?;
@@ -227,6 +236,23 @@ fn parse_pin(items: &[Sexpr]) -> Result<SymbolPin> {
         number(at.get(1).context("symbol pin missing x")?).context("invalid symbol pin x")?,
         number(at.get(2).context("symbol pin missing y")?).context("invalid symbol pin y")?,
     );
+    let rotation_degrees = number(at.get(3).context("symbol pin missing rotation")?)
+        .context("invalid symbol pin rotation")?;
+    if rotation_degrees.fract() != 0.0 {
+        bail!("symbol pin rotation must be a whole number of degrees");
+    }
+    let rotation = Rotation::from_degrees(rotation_degrees as i64)
+        .context("symbol pin rotation must be a multiple of 90 degrees")?;
+    let length = child_list(items, "length")
+        .and_then(|items| items.get(1))
+        .and_then(number)
+        .context("symbol pin missing or invalid length")?;
+    let body_point = match rotation {
+        Rotation::Deg0 => Point::new(point.x + length, point.y),
+        Rotation::Deg90 => Point::new(point.x, point.y + length),
+        Rotation::Deg180 => Point::new(point.x - length, point.y),
+        Rotation::Deg270 => Point::new(point.x, point.y - length),
+    };
     let name = child_list(items, "name")
         .and_then(|list| list.get(1))
         .and_then(Sexpr::as_atom)
@@ -266,6 +292,8 @@ fn parse_pin(items: &[Sexpr]) -> Result<SymbolPin> {
         number,
         numbers,
         point,
+        body_point,
+        outward_spin: pin_outward_spin(rotation),
         electrical_type,
         hidden,
         alternates,
@@ -460,7 +488,7 @@ fn matches_body_style(section: u32, selected: u32) -> bool {
     section == 0 || section == selected
 }
 
-fn transform_point(mut point: Point, symbol: &Symbol) -> Point {
+pub(crate) fn transform_point(mut point: Point, symbol: &Symbol) -> Point {
     // KiCad composes the symbol matrix as rotation * mirror, so the mirror is
     // applied to the library-local point before the rotation.
     point = match symbol.mirror {
@@ -475,6 +503,42 @@ fn transform_point(mut point: Point, symbol: &Symbol) -> Point {
         Rotation::Deg270 => Point::new(-point.y, point.x),
     };
     Point::new(symbol.at.x + point.x, symbol.at.y + point.y)
+}
+
+fn pin_outward_spin(rotation: Rotation) -> LabelSpin {
+    match rotation {
+        Rotation::Deg0 => LabelSpin::Left,
+        Rotation::Deg90 => LabelSpin::Bottom,
+        Rotation::Deg180 => LabelSpin::Right,
+        Rotation::Deg270 => LabelSpin::Up,
+    }
+}
+
+fn transform_spin(spin: LabelSpin, symbol: &Symbol) -> LabelSpin {
+    let mut direction = match spin {
+        LabelSpin::Left => Point::new(-1.0, 0.0),
+        LabelSpin::Up => Point::new(0.0, -1.0),
+        LabelSpin::Right => Point::new(1.0, 0.0),
+        LabelSpin::Bottom => Point::new(0.0, 1.0),
+    };
+    direction = match symbol.mirror {
+        None => direction,
+        Some(MirrorAxis::X) => Point::new(direction.x, -direction.y),
+        Some(MirrorAxis::Y) => Point::new(-direction.x, direction.y),
+    };
+    direction = match symbol.rotation {
+        Rotation::Deg0 => direction,
+        Rotation::Deg90 => Point::new(direction.y, -direction.x),
+        Rotation::Deg180 => Point::new(-direction.x, -direction.y),
+        Rotation::Deg270 => Point::new(-direction.y, direction.x),
+    };
+    match (direction.x as i8, direction.y as i8) {
+        (-1, 0) => LabelSpin::Left,
+        (0, -1) => LabelSpin::Up,
+        (1, 0) => LabelSpin::Right,
+        (0, 1) => LabelSpin::Bottom,
+        _ => unreachable!("cardinal pin direction must remain cardinal"),
+    }
 }
 
 #[cfg(test)]
@@ -519,6 +583,8 @@ mod tests {
                 number: "2".into(),
                 numbers: BTreeSet::from(["2".into()]),
                 point: Point::new(10.0, 17.46),
+                body_point: Point::new(10.0, 14.92),
+                outward_spin: LabelSpin::Bottom,
                 electrical_type: "input".into(),
                 hidden: false,
                 alternates: BTreeMap::new(),
