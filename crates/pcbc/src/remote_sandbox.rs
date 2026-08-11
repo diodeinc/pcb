@@ -473,9 +473,10 @@ fn sync_layout_down(
         && let Some(session) = latest_recoverable_session(&cache_root)?
     {
         match prompt_restore_recovery(status, &session)? {
-            RecoveryChoice::Restore => recovered_session = Some(session),
-            RecoveryChoice::Discard => mark_recoverable_sessions_prompt_seen(&cache_root),
-            RecoveryChoice::Cancel => return Ok(None),
+            Some(RecoveryChoice::Restore) => recovered_session = Some(session),
+            Some(RecoveryChoice::Discard) => mark_recoverable_sessions_prompt_seen(&cache_root),
+            Some(RecoveryChoice::Cancel) => return Ok(None),
+            None => {}
         }
     }
 
@@ -778,17 +779,18 @@ fn latest_recoverable_session(cache_root: &Path) -> Result<Option<SyncSession>> 
 fn prompt_restore_recovery(
     status: &pcb_ui::Spinner,
     session: &SyncSession,
-) -> Result<RecoveryChoice> {
+) -> Result<Option<RecoveryChoice>> {
     if !crate::tty::is_interactive() {
         if std::env::var_os(URL_LAUNCHER_ENV).is_some() {
             return status.suspend(|| {
-                crate::recovery_dialog::choose(
-                    &session.manifest.layout_file,
-                    session.manifest.updated_at,
-                )
+                crate::recovery_dialog::choose(&session.manifest.layout_file).map(Some)
             });
         }
-        return Ok(RecoveryChoice::Restore);
+        eprintln!(
+            "Found local recovery file for this remote layout at {}. Re-run interactively to restore it.",
+            session.manifest.layout_file.display()
+        );
+        return Ok(None);
     }
     let prompt = format!(
         "Restore previous local KiCad recovery file from {}?",
@@ -800,11 +802,11 @@ fn prompt_restore_recovery(
             .prompt()
             .unwrap_or(false)
     };
-    Ok(if status.suspend(ask) {
+    Ok(Some(if status.suspend(ask) {
         RecoveryChoice::Restore
     } else {
         RecoveryChoice::Discard
-    })
+    }))
 }
 
 fn mark_recoverable_sessions_prompt_seen(cache_root: &Path) {

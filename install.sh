@@ -56,7 +56,8 @@ EOF
 }
 
 register_url_launcher() {
-  if ! "$install_dir/pcb-launcher" --install; then
+  launcher_toolchain="$1"
+  if ! "$install_dir/pcb-launcher" --install --toolchain "$launcher_toolchain"; then
     echo "Warning: installed pcb, but could not register the Diode URL launcher; see $HOME/.pcb/pcb-launcher.log" >&2
   fi
 }
@@ -100,7 +101,7 @@ install_local() {
 
   add_install_dir_to_path
   if [ -n "$launcher_installed" ]; then
-    register_url_launcher
+    register_url_launcher local
   fi
 
   echo "Installed local pcb to $install_dir/pcb"
@@ -210,7 +211,7 @@ fi
 
 add_install_dir_to_path
 if [ -n "$launcher_downloaded" ]; then
-  register_url_launcher
+  register_url_launcher latest
 fi
 
 echo "Installed pcb to $install_dir/pcb"

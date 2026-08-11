@@ -122,7 +122,7 @@ try {
         # pcb-launcher uses the Windows GUI subsystem, so invoke it through a
         # process handle to wait for registration and read the correct exit code.
         try {
-            $launcherInstall = Start-Process -FilePath $installedLauncher -ArgumentList "--install" -Wait -PassThru
+            $launcherInstall = Start-Process -FilePath $installedLauncher -ArgumentList "--install --toolchain latest" -Wait -PassThru
             if ($launcherInstall.ExitCode -ne 0) {
                 Write-Warning "Installed pcb, but could not register the Diode URL launcher. See $HOME\.pcb\pcb-launcher.log for details"
             }

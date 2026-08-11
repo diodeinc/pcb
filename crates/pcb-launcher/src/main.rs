@@ -7,8 +7,45 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use url::Url;
 
-const PCB_TOOLCHAIN: &str = "+latest";
 const LAUNCHER_LOG_MAX_BYTES: u64 = 1024 * 1024;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LauncherToolchain {
+    Latest,
+    Local,
+}
+
+impl LauncherToolchain {
+    fn parse(value: &str) -> Result<Self> {
+        match value {
+            "latest" => Ok(Self::Latest),
+            "local" => Ok(Self::Local),
+            _ => bail!("expected launcher toolchain `latest` or `local`"),
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Latest => "latest",
+            Self::Local => "local",
+        }
+    }
+
+    fn override_arg(self) -> &'static str {
+        match self {
+            Self::Latest => "+latest",
+            Self::Local => "+local",
+        }
+    }
+}
+
+enum LauncherCommand {
+    Install(LauncherToolchain),
+    Open {
+        toolchain: LauncherToolchain,
+        uri: String,
+    },
+}
 
 fn main() {
     if let Some(result) = run_from_args() {
@@ -30,33 +67,55 @@ fn main() {
 }
 
 fn run_from_args() -> Option<Result<()>> {
-    let mut args = std::env::args_os();
-    let _program = args.next();
-    let first = args.next()?;
-    if args.next().is_some() {
-        return Some(Err(anyhow::anyhow!(
-            "expected --install or exactly one diode:// sandbox file URI"
-        )));
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    if args.is_empty() {
+        return None;
     }
-    if first == "--install" {
-        let result = install_protocol_handler();
-        if let Err(error) = &result {
-            append_launcher_error(error);
+    Some(
+        parse_launcher_args(&args).and_then(|command| match command {
+            LauncherCommand::Install(toolchain) => {
+                let result = install_protocol_handler(toolchain);
+                if let Err(error) = &result {
+                    append_launcher_error(error);
+                }
+                result
+            }
+            LauncherCommand::Open { toolchain, uri } => launch_pcb(&uri, toolchain),
+        }),
+    )
+}
+
+fn parse_launcher_args(args: &[std::ffi::OsString]) -> Result<LauncherCommand> {
+    let values: Vec<_> = args.iter().map(|arg| arg.to_string_lossy()).collect();
+    match values.as_slice() {
+        [install] if install == "--install" => {
+            Ok(LauncherCommand::Install(LauncherToolchain::Latest))
         }
-        Some(result)
-    } else {
-        Some(launch_pcb(first.to_string_lossy().as_ref()))
+        [install, option, toolchain] if install == "--install" && option == "--toolchain" => Ok(
+            LauncherCommand::Install(LauncherToolchain::parse(toolchain)?),
+        ),
+        [option, toolchain, uri] if option == "--toolchain" => Ok(LauncherCommand::Open {
+            toolchain: LauncherToolchain::parse(toolchain)?,
+            uri: uri.to_string(),
+        }),
+        [uri] => Ok(LauncherCommand::Open {
+            toolchain: LauncherToolchain::Latest,
+            uri: uri.to_string(),
+        }),
+        _ => bail!(
+            "expected --install [--toolchain latest|local] or [--toolchain latest|local] <diode URI>"
+        ),
     }
 }
 
-fn install_protocol_handler() -> Result<()> {
+fn install_protocol_handler(toolchain: LauncherToolchain) -> Result<()> {
     let launcher = std::env::current_exe().context("failed to locate pcb-launcher")?;
     let pcb = sibling_pcb_executable()?;
-    platform::install(&launcher, &pcb)
+    platform::install(&launcher, &pcb, toolchain)
 }
 
-fn launch_pcb(uri: &str) -> Result<()> {
-    let result = launch_pcb_inner(uri);
+fn launch_pcb(uri: &str, toolchain: LauncherToolchain) -> Result<()> {
+    let result = launch_pcb_inner(uri, toolchain);
     if let Err(error) = &result {
         report_launch_error(error);
     }
@@ -69,10 +128,10 @@ fn report_launch_error(error: &anyhow::Error) {
 }
 
 #[cfg(target_os = "macos")]
-fn spawn_uri_worker(uri: &str) -> Result<()> {
+fn spawn_uri_worker(uri: &str, toolchain: LauncherToolchain) -> Result<()> {
     let launcher = std::env::current_exe().context("failed to locate pcb-launcher")?;
     Command::new(&launcher)
-        .arg(uri)
+        .args(["--toolchain", toolchain.name(), uri])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -81,7 +140,7 @@ fn spawn_uri_worker(uri: &str) -> Result<()> {
     Ok(())
 }
 
-fn launch_pcb_inner(uri: &str) -> Result<()> {
+fn launch_pcb_inner(uri: &str, toolchain: LauncherToolchain) -> Result<()> {
     validate_uri(uri)?;
     let pcb = sibling_pcb_executable()?;
     let mut log = open_launcher_log()?;
@@ -96,7 +155,7 @@ fn launch_pcb_inner(uri: &str) -> Result<()> {
         .context("failed to clone the launcher log handle")?;
     let mut command = Command::new(&pcb);
     command
-        .arg(PCB_TOOLCHAIN)
+        .arg(toolchain.override_arg())
         .arg("open")
         .arg(uri)
         .env("PCB_URL_LAUNCHER", "1")
@@ -292,6 +351,19 @@ fn sibling_pcb_executable() -> Result<PathBuf> {
     Ok(pcb)
 }
 
+#[cfg(target_os = "macos")]
+fn bundled_launcher_toolchain() -> Result<LauncherToolchain> {
+    let launcher = std::env::current_exe().context("failed to locate pcb-launcher")?;
+    let contents = launcher
+        .parent()
+        .and_then(Path::parent)
+        .context("bundled pcb-launcher has no Contents directory")?;
+    let path = contents.join("Resources/pcb-toolchain");
+    let value =
+        fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
+    LauncherToolchain::parse(value.trim())
+}
+
 #[cfg(any(target_os = "linux", test))]
 fn escape_desktop_exec_path(path: &Path) -> String {
     path.to_string_lossy()
@@ -349,7 +421,7 @@ mod platform {
         }
     }
 
-    pub fn install(launcher: &Path, pcb: &Path) -> Result<()> {
+    pub fn install(launcher: &Path, pcb: &Path, toolchain: LauncherToolchain) -> Result<()> {
         let home = dirs::home_dir().context("could not locate the home directory")?;
         let applications = home.join("Applications");
         fs::create_dir_all(&applications)
@@ -380,6 +452,8 @@ mod platform {
             fs::canonicalize(pcb).context("failed to resolve the installed pcb executable")?;
         fs::write(resources.join("pcb-path"), pcb.as_os_str().as_bytes())
             .context("failed to store the installed pcb path")?;
+        fs::write(resources.join("pcb-toolchain"), toolchain.name())
+            .context("failed to store the launcher toolchain")?;
         fs::write(contents.join("Info.plist"), INFO_PLIST)
             .context("failed to write the macOS launcher Info.plist")?;
 
@@ -463,7 +537,7 @@ mod platform {
     use super::*;
     use std::fs;
 
-    pub fn install(launcher: &Path, _pcb: &Path) -> Result<()> {
+    pub fn install(launcher: &Path, _pcb: &Path, toolchain: LauncherToolchain) -> Result<()> {
         let data_home = std::env::var_os("XDG_DATA_HOME")
             .map(PathBuf::from)
             .or_else(|| dirs::home_dir().map(|home| home.join(".local/share")))
@@ -473,7 +547,8 @@ mod platform {
             .with_context(|| format!("failed to create {}", applications.display()))?;
         let escaped = escape_desktop_exec_path(launcher);
         let desktop = format!(
-            "[Desktop Entry]\nType=Application\nName=Diode PCB Launcher\nNoDisplay=true\nTerminal=false\nExec=\"{escaped}\" %u\nMimeType=x-scheme-handler/diode;\n"
+            "[Desktop Entry]\nType=Application\nName=Diode PCB Launcher\nNoDisplay=true\nTerminal=false\nExec=\"{escaped}\" --toolchain {} %u\nMimeType=x-scheme-handler/diode;\n",
+            toolchain.name()
         );
         fs::write(applications.join("diode-pcb-launcher.desktop"), desktop)
             .context("failed to write the Linux desktop entry")?;
@@ -533,8 +608,12 @@ mod platform {
 
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
-    pub fn install(launcher: &Path, _pcb: &Path) -> Result<()> {
-        let command = format!("\"{}\" \"%1\"", launcher.display());
+    pub fn install(launcher: &Path, _pcb: &Path, toolchain: LauncherToolchain) -> Result<()> {
+        let command = format!(
+            "\"{}\" --toolchain {} \"%1\"",
+            launcher.display(),
+            toolchain.name()
+        );
         reg_add(
             r"HKCU\Software\Classes\diode",
             None,
@@ -601,9 +680,17 @@ mod macos {
             #[unsafe(method(application:openURLs:))]
             fn application_open_urls(&self, application: &NSApplication, urls: &NSArray<NSURL>) {
                 RECEIVED_URL.store(true, Ordering::Release);
+                let toolchain = match super::bundled_launcher_toolchain() {
+                    Ok(toolchain) => toolchain,
+                    Err(error) => {
+                        super::report_launch_error(&error);
+                        application.terminate(None);
+                        return;
+                    }
+                };
                 for url in urls {
                     if let Some(value) = url.absoluteString()
-                        && let Err(error) = super::spawn_uri_worker(&value.to_string())
+                        && let Err(error) = super::spawn_uri_worker(&value.to_string(), toolchain)
                     {
                         super::report_launch_error(&error);
                         eprintln!("Failed to open in KiCad: {error:#}");
@@ -643,7 +730,11 @@ mod macos {
 
 #[cfg(test)]
 mod tests {
-    use super::{escape_desktop_exec_path, is_trusted_api_host, validate_uri};
+    use super::{
+        LauncherCommand, LauncherToolchain, escape_desktop_exec_path, is_trusted_api_host,
+        parse_launcher_args, validate_uri,
+    };
+    use std::ffi::OsString;
     use std::path::Path;
 
     #[test]
@@ -703,6 +794,32 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn parses_explicit_install_and_open_toolchains() {
+        let install = [
+            OsString::from("--install"),
+            OsString::from("--toolchain"),
+            OsString::from("local"),
+        ];
+        assert!(matches!(
+            parse_launcher_args(&install).unwrap(),
+            LauncherCommand::Install(LauncherToolchain::Local)
+        ));
+
+        let open = [
+            OsString::from("--toolchain"),
+            OsString::from("latest"),
+            OsString::from("diode://api.diode.computer/sandboxes/s/fs/read?path=%2Fa"),
+        ];
+        assert!(matches!(
+            parse_launcher_args(&open).unwrap(),
+            LauncherCommand::Open {
+                toolchain: LauncherToolchain::Latest,
+                ..
+            }
+        ));
     }
 
     #[test]
