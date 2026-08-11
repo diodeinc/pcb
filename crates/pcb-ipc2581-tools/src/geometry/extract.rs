@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use anyhow::{Context, Result, bail};
 use ipc2581::types::{
@@ -208,31 +208,166 @@ fn push_spec_refs(doc: &mut GeometryDocument, spec_refs: &[Symbol]) -> Span {
     Span::new(start, doc.spec_refs.len() as u32 - start)
 }
 
-fn set_copper_balance_kind(
+#[derive(Debug, Clone, Copy)]
+struct CopperBalanceMetadata {
+    kind: pcb_ir::dialects::ipc::CopperBalanceKind,
+    void: Option<CopperBalanceVoidMetadata>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CopperBalanceVoidMetadata {
+    lattice_origin: Point,
+    lattice_pitch_mm: f64,
+    radius_mm: f64,
+    corner_radius_mm: f64,
+}
+
+fn set_copper_balance_metadata(
     ipc: &Ipc2581,
     set: &ipc2581::types::FeatureSet,
-) -> Result<Option<pcb_ir::dialects::ipc::CopperBalanceKind>> {
-    let mut attributes = set.nonstandard_attributes.iter().filter(|attribute| {
-        ipc.resolve(attribute.name) == crate::copper_balance::COPPER_BALANCE_ATTRIBUTE_NAME
-    });
+) -> Result<Option<CopperBalanceMetadata>> {
+    use crate::copper_balance::{
+        COPPER_BALANCE_ATTRIBUTE_NAME, COPPER_BALANCE_LATTICE_ATTRIBUTE_NAME,
+        COPPER_BALANCE_LATTICE_ORIGIN_X_ATTRIBUTE_NAME,
+        COPPER_BALANCE_LATTICE_ORIGIN_Y_ATTRIBUTE_NAME,
+        COPPER_BALANCE_LATTICE_PITCH_ATTRIBUTE_NAME, COPPER_BALANCE_LATTICE_VALUE,
+        COPPER_BALANCE_VOID_CORNER_RADIUS_ATTRIBUTE_NAME,
+        COPPER_BALANCE_VOID_RADIUS_ATTRIBUTE_NAME,
+    };
+
+    let kind = nonstandard_attribute(ipc, set, COPPER_BALANCE_ATTRIBUTE_NAME, "STRING")?;
+    let auxiliary_attributes = [
+        (COPPER_BALANCE_LATTICE_ATTRIBUTE_NAME, "STRING"),
+        (COPPER_BALANCE_LATTICE_ORIGIN_X_ATTRIBUTE_NAME, "DOUBLE"),
+        (COPPER_BALANCE_LATTICE_ORIGIN_Y_ATTRIBUTE_NAME, "DOUBLE"),
+        (COPPER_BALANCE_LATTICE_PITCH_ATTRIBUTE_NAME, "DOUBLE"),
+        (COPPER_BALANCE_VOID_RADIUS_ATTRIBUTE_NAME, "DOUBLE"),
+        (COPPER_BALANCE_VOID_CORNER_RADIUS_ATTRIBUTE_NAME, "DOUBLE"),
+    ];
+    let Some(kind) = kind else {
+        if auxiliary_attributes.iter().any(|(name, _)| {
+            set.nonstandard_attributes
+                .iter()
+                .any(|attribute| ipc.resolve(attribute.name) == *name)
+        }) {
+            bail!("copper-balance lattice metadata requires diode.copper_balance");
+        }
+        return Ok(None);
+    };
+    let kind = crate::copper_balance::parse_copper_balance_attribute(kind)?;
+    let void = if kind == pcb_ir::dialects::ipc::CopperBalanceKind::FullVoid {
+        let lattice = required_nonstandard_attribute(
+            ipc,
+            set,
+            COPPER_BALANCE_LATTICE_ATTRIBUTE_NAME,
+            "STRING",
+        )?;
+        if lattice != COPPER_BALANCE_LATTICE_VALUE {
+            bail!("unsupported copper-balance lattice '{lattice}'");
+        }
+        let metadata = CopperBalanceVoidMetadata {
+            lattice_origin: Point::new(
+                required_double_attribute(
+                    ipc,
+                    set,
+                    COPPER_BALANCE_LATTICE_ORIGIN_X_ATTRIBUTE_NAME,
+                )?,
+                required_double_attribute(
+                    ipc,
+                    set,
+                    COPPER_BALANCE_LATTICE_ORIGIN_Y_ATTRIBUTE_NAME,
+                )?,
+            ),
+            lattice_pitch_mm: required_double_attribute(
+                ipc,
+                set,
+                COPPER_BALANCE_LATTICE_PITCH_ATTRIBUTE_NAME,
+            )?,
+            radius_mm: required_double_attribute(
+                ipc,
+                set,
+                COPPER_BALANCE_VOID_RADIUS_ATTRIBUTE_NAME,
+            )?,
+            corner_radius_mm: required_double_attribute(
+                ipc,
+                set,
+                COPPER_BALANCE_VOID_CORNER_RADIUS_ATTRIBUTE_NAME,
+            )?,
+        };
+        if !metadata.lattice_origin.x.is_finite()
+            || !metadata.lattice_origin.y.is_finite()
+            || !metadata.lattice_pitch_mm.is_finite()
+            || metadata.lattice_pitch_mm <= 0.0
+            || !metadata.radius_mm.is_finite()
+            || metadata.radius_mm <= 0.0
+            || !metadata.corner_radius_mm.is_finite()
+            || metadata.corner_radius_mm <= 0.0
+        {
+            bail!("copper-balance lattice and rounded-hex dimensions must be finite and positive");
+        }
+        pcb_ir::geom::shapes::rounded_hexagon(metadata.radius_mm, metadata.corner_radius_mm, 0.0)
+            .context("copper-balance rounded-hex dimensions are invalid")?;
+        Some(metadata)
+    } else {
+        for (name, attribute_type) in auxiliary_attributes {
+            if nonstandard_attribute(ipc, set, name, attribute_type)?.is_some() {
+                bail!("copper-balance {kind:?} set must not carry lattice metadata");
+            }
+        }
+        None
+    };
+    Ok(Some(CopperBalanceMetadata { kind, void }))
+}
+
+fn required_double_attribute(
+    ipc: &Ipc2581,
+    set: &ipc2581::types::FeatureSet,
+    name: &str,
+) -> Result<f64> {
+    let value = required_nonstandard_attribute(ipc, set, name, "DOUBLE")?;
+    value
+        .parse::<f64>()
+        .with_context(|| format!("{name} has invalid DOUBLE value '{value}'"))
+}
+
+fn required_nonstandard_attribute<'a>(
+    ipc: &'a Ipc2581,
+    set: &'a ipc2581::types::FeatureSet,
+    name: &str,
+    expected_type: &str,
+) -> Result<&'a str> {
+    nonstandard_attribute(ipc, set, name, expected_type)?
+        .with_context(|| format!("copper-balance set is missing {name}"))
+}
+
+fn nonstandard_attribute<'a>(
+    ipc: &'a Ipc2581,
+    set: &'a ipc2581::types::FeatureSet,
+    name: &str,
+    expected_type: &str,
+) -> Result<Option<&'a str>> {
+    let mut attributes = set
+        .nonstandard_attributes
+        .iter()
+        .filter(|attribute| ipc.resolve(attribute.name) == name);
     let Some(attribute) = attributes.next() else {
         return Ok(None);
     };
     if attributes.next().is_some() {
-        bail!("diode.copper_balance attribute occurs more than once");
+        bail!("{name} attribute occurs more than once");
     }
     let attr_type = attribute
         .attr_type
         .map(|attr_type| ipc.resolve(attr_type))
-        .context("diode.copper_balance attribute has no type")?;
-    if attr_type != "STRING" {
-        bail!("diode.copper_balance attribute must have type STRING, got '{attr_type}'");
+        .with_context(|| format!("{name} attribute has no type"))?;
+    if attr_type != expected_type {
+        bail!("{name} attribute must have type {expected_type}, got '{attr_type}'");
     }
-    let value = attribute
+    attribute
         .value
         .map(|value| ipc.resolve(value))
-        .context("diode.copper_balance attribute has no value")?;
-    crate::copper_balance::parse_copper_balance_attribute(value).map(Some)
+        .with_context(|| format!("{name} attribute has no value"))
+        .map(Some)
 }
 
 fn push_feature_set_record(
@@ -261,13 +396,19 @@ fn push_extracted_feature(
     doc: &mut GeometryDocument,
     set_id: u32,
     source_layer_ref: Symbol,
-    copper_balance: Option<pcb_ir::dialects::ipc::CopperBalanceKind>,
+    copper_balance: Option<CopperBalanceMetadata>,
     mut feature: GeometryFeature,
     layer_bbox: &mut BBox,
 ) {
     feature.source_layer_ref = Some(source_layer_ref);
     feature.set = Some(set_id);
-    feature.flags.copper_balance = copper_balance;
+    feature.flags.copper_balance = copper_balance.map(|metadata| metadata.kind);
+    feature.flags.copper_balance_void = copper_balance.and_then(|metadata| {
+        metadata.void.map(|void| CopperBalanceVoid {
+            radius_mm: void.radius_mm,
+            corner_radius_mm: void.corner_radius_mm,
+        })
+    });
     let bbox = feature.bbox;
     *layer_bbox = layer_bbox.union(bbox);
     let set = &mut doc.feature_sets[set_id as usize];
@@ -761,7 +902,12 @@ pub(crate) fn extract_step_layer_local(
     {
         for (set_index, set) in layer_feature.sets.iter().enumerate() {
             let polarity = set.polarity.map(map_polarity).unwrap_or(layer_polarity);
-            let copper_balance = set_copper_balance_kind(ipc, set)?;
+            let copper_balance = set_copper_balance_metadata(ipc, set)?;
+            if copper_balance.is_some_and(|metadata| metadata.void.is_some())
+                && set.features.len() != 1
+            {
+                bail!("copper-balance full_void set must contain exactly one feature group");
+            }
             let set_id =
                 push_feature_set_record(&mut doc, layer_index, set_index as u32, set, polarity);
 
@@ -779,6 +925,7 @@ pub(crate) fn extract_step_layer_local(
                     set_feature,
                     &mut doc,
                 )?;
+                validate_copper_balance_structure(copper_balance, set_feature, &features, &doc)?;
 
                 for mut feature in features {
                     feature.source_step_ref = Some(step.name);
@@ -809,7 +956,7 @@ pub(crate) fn extract_step_layer_local(
 
         for (set_index, set) in layer_feature.sets.iter().enumerate() {
             let polarity = set.polarity.map(map_polarity).unwrap_or(layer_polarity);
-            let copper_balance = set_copper_balance_kind(ipc, set)?;
+            let copper_balance = set_copper_balance_metadata(ipc, set)?;
             let mut emitted = Vec::new();
 
             if is_drill_layer && source_layer.name == layer.name {
@@ -980,6 +1127,87 @@ fn extract_feature_placement_group(
     doc.feature_placement_groups[group_id as usize].features =
         Span::new(feature_start, features.len() as u32);
     Ok(features)
+}
+
+/// Validate a full_void set's structure against its declared lattice
+/// metadata: one shared contour flashed by an identity-Xform placement
+/// group whose locations are distinct declared-lattice sites.
+///
+/// The placements themselves stay the single source of occurrence truth;
+/// they lower to explicit flashes downstream.
+fn validate_copper_balance_structure(
+    metadata: Option<CopperBalanceMetadata>,
+    set_feature: &SetFeature,
+    features: &[GeometryFeature],
+    doc: &GeometryDocument,
+) -> Result<()> {
+    let Some(void) = metadata.and_then(|metadata| metadata.void) else {
+        return Ok(());
+    };
+    let SetFeature::PlacementGroup(source_group) = set_feature else {
+        bail!("copper-balance full_void set must contain one placement group");
+    };
+    if source_group.xform != Some(Xform::default()) {
+        bail!("copper-balance lattice placement group must carry an identity Xform");
+    }
+    let [feature] = features else {
+        bail!("copper-balance lattice placement group must contain one feature");
+    };
+    let group_id = feature
+        .placement_group
+        .context("copper-balance void feature has no placement group")?;
+    let group = doc.feature_placement_groups[group_id as usize];
+    if group.placements.len() != source_group.locations.len() {
+        bail!("copper-balance lattice locations did not produce matching placements");
+    }
+    validate_copper_balance_void_shape(doc, feature, void)?;
+
+    let lattice = pcb_ir::geom::copper_balance::DenseCopperLattice {
+        origin: void.lattice_origin,
+        pitch_mm: void.lattice_pitch_mm,
+    };
+    let mut sites = BTreeSet::new();
+    for location in &source_group.locations {
+        let point = Point::new(location.x, location.y);
+        let (site, center) = lattice.nearest_site(point);
+        if point.distance_to(center) > LATTICE_COORDINATE_TOLERANCE_MM {
+            bail!(
+                "copper-balance void location ({}, {}) is not on its declared lattice",
+                point.x,
+                point.y
+            );
+        }
+        if !sites.insert((site.column, site.row)) {
+            bail!("copper-balance lattice contains a duplicate site");
+        }
+    }
+    Ok(())
+}
+
+const LATTICE_COORDINATE_TOLERANCE_MM: f64 = 5e-5;
+
+fn validate_copper_balance_void_shape(
+    doc: &GeometryDocument,
+    feature: &GeometryFeature,
+    metadata: CopperBalanceVoidMetadata,
+) -> Result<()> {
+    let actual = pcb_ir::dialects::ipc::contour_flash_aperture(doc, feature)
+        .context("copper-balance void is not one filled rigid contour")?;
+    let pcb_ir::dialects::artwork::ApertureShape::Contour { outline, fill_rule } = actual else {
+        bail!("copper-balance void did not lower to a contour aperture");
+    };
+    let expected =
+        pcb_ir::geom::shapes::rounded_hexagon(metadata.radius_mm, metadata.corner_radius_mm, 0.0)
+            .context("copper-balance rounded-hex dimensions are invalid")?;
+    let actual = ContourSet::from_contours(&[outline], fill_rule, 1e-5);
+    let expected = ContourSet::from_contours(&[expected], FillRule::NonZero, 1e-5);
+    let mismatch = actual.difference(&expected).area() + expected.difference(&actual).area();
+    if mismatch > 1e-5 {
+        bail!(
+            "copper-balance void contour disagrees with its rounded-hex metadata by {mismatch} mm^2"
+        );
+    }
+    Ok(())
 }
 
 pub(crate) fn step_repeat_transform(repeat: &StepRepeat, ix: u32, iy: u32) -> Affine2 {

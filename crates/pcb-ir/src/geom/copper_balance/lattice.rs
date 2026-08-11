@@ -3,20 +3,26 @@
 
 use std::f64::consts::PI;
 
-use super::{DenseCopperBalanceProfile, SQRT_3};
+use super::{
+    DenseCopperBalanceProfile, DenseCopperLattice, DenseCopperLatticeSite, DenseCopperVoid, SQRT_3,
+};
 use crate::geom::path::transform_cmds;
-use crate::geom::{Affine2, BBox, ContourBuf, ContourSet, FillRule, PathCmd, Point, tol};
+use crate::geom::shapes;
+use crate::geom::{Affine2, BBox, ContourBuf, ContourSet, FillRule, Point, tol};
 
-const HEXAGON_CORNER_RADIUS_RATIO: f64 = 0.15;
+pub const ROUNDED_HEXAGON_CORNER_RADIUS_RATIO: f64 = 0.15;
 // A sharp regular hexagon has area 3√3 R² / 2. Rounding each 120° corner
 // inward by fillet radius kR removes (2√3 - π)k²R² across all six corners.
 pub(super) const ROUNDED_HEXAGON_AREA_FACTOR: f64 = 3.0 * SQRT_3 / 2.0
-    - (2.0 * SQRT_3 - PI) * HEXAGON_CORNER_RADIUS_RATIO * HEXAGON_CORNER_RADIUS_RATIO;
+    - (2.0 * SQRT_3 - PI)
+        * ROUNDED_HEXAGON_CORNER_RADIUS_RATIO
+        * ROUNDED_HEXAGON_CORNER_RADIUS_RATIO;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(super) struct LatticeCandidates {
-    pub(super) full_centers: Vec<Point>,
-    pub(super) edge_candidates: Vec<(Point, f64)>,
+    pub(super) lattice: DenseCopperLattice,
+    pub(super) full_sites: Vec<DenseCopperLatticeSite>,
+    pub(super) edge_candidates: Vec<(DenseCopperLatticeSite, f64)>,
 }
 
 impl LatticeCandidates {
@@ -25,8 +31,16 @@ impl LatticeCandidates {
         origin: Point,
         profile: DenseCopperBalanceProfile,
     ) -> Self {
+        let lattice = DenseCopperLattice {
+            origin,
+            pitch_mm: profile.pitch_mm,
+        };
         if voidable.is_empty() {
-            return Self::default();
+            return Self {
+                lattice,
+                full_sites: Vec::new(),
+                edge_candidates: Vec::new(),
+            };
         }
 
         let candidate_region = voidable.disk_dilate(profile.max_void_radius_mm);
@@ -35,28 +49,50 @@ impl LatticeCandidates {
             .filter(|center| candidate_region.contains_point(*center))
             .collect::<Vec<_>>();
         let fully_contained = fully_contained_hexagons(voidable, &centers, profile);
-        let mut full_centers = Vec::new();
+        let mut full_sites = Vec::new();
         let mut edge_centers = Vec::new();
         for (center, full) in centers.into_iter().zip(fully_contained) {
             if full {
-                full_centers.push(center);
+                let (column, row) = lattice_index(center, origin, profile);
+                full_sites.push(DenseCopperLatticeSite { column, row });
             } else {
                 edge_centers.push(center);
             }
         }
-        let edge_candidates = minimum_partial_candidates(voidable, &edge_centers, profile);
+        let edge_candidates = minimum_partial_candidates(voidable, &edge_centers, profile)
+            .into_iter()
+            .map(|(center, radius)| {
+                let (column, row) = lattice_index(center, origin, profile);
+                (DenseCopperLatticeSite { column, row }, radius)
+            })
+            .collect();
         Self {
-            full_centers,
+            lattice,
+            full_sites,
             edge_candidates,
         }
     }
 
     pub(super) fn is_empty(&self) -> bool {
-        self.full_centers.is_empty() && self.edge_candidates.is_empty()
+        self.full_sites.is_empty() && self.edge_candidates.is_empty()
     }
 
     fn full_void_area(&self, radius: f64) -> f64 {
-        self.full_centers.len() as f64 * ROUNDED_HEXAGON_AREA_FACTOR * radius.powi(2)
+        self.full_sites.len() as f64 * ROUNDED_HEXAGON_AREA_FACTOR * radius.powi(2)
+    }
+
+    pub(super) fn edge_voids(
+        &self,
+        radius: f64,
+        profile: DenseCopperBalanceProfile,
+    ) -> Vec<DenseCopperVoid> {
+        self.edge_candidates
+            .iter()
+            .map(|(site, activation_radius)| DenseCopperVoid {
+                site: *site,
+                radius_mm: profile.quantize_void_radius_up(radius.max(*activation_radius)),
+            })
+            .collect()
     }
 
     pub(super) fn partial_voids(
@@ -66,9 +102,9 @@ impl LatticeCandidates {
         profile: DenseCopperBalanceProfile,
     ) -> ContourSet {
         let candidates = self
-            .edge_candidates
-            .iter()
-            .map(|(center, activation_radius)| (*center, radius.max(*activation_radius)))
+            .edge_voids(radius, profile)
+            .into_iter()
+            .map(|void| (self.lattice.center(void.site), void.radius_mm))
             .collect::<Vec<_>>();
         clipped_voids_containing_minimum_disk(voidable, &candidates, profile)
     }
@@ -324,42 +360,19 @@ pub(super) fn hexagon_set_with_radii(candidates: &[(Point, f64)], tolerance: f64
 
 /// One slightly rounded, flat-top regular hexagonal void centered at zero.
 pub fn rounded_hexagonal_void(radius: f64) -> Option<ContourBuf> {
-    if !radius.is_finite() || radius <= 0.0 {
-        return None;
-    }
+    shapes::rounded_hexagon(radius, radius * ROUNDED_HEXAGON_CORNER_RADIUS_RATIO, 0.0)
+}
 
-    let corner_radius = radius * HEXAGON_CORNER_RADIUS_RATIO;
-    let tangent_distance = corner_radius / SQRT_3;
-    let center_inset = 2.0 * corner_radius / SQRT_3;
-    let vertices = (0..6)
-        .map(|index| {
-            let angle = index as f64 * PI / 3.0;
-            Point::new(radius * angle.cos(), radius * angle.sin())
-        })
+pub(super) fn void_set(
+    voids: &[DenseCopperVoid],
+    lattice: DenseCopperLattice,
+    tolerance: f64,
+) -> ContourSet {
+    let candidates = voids
+        .iter()
+        .map(|void| (lattice.center(void.site), void.radius_mm))
         .collect::<Vec<_>>();
-
-    let corner = |index: usize| {
-        let previous = vertices[(index + 5) % 6];
-        let vertex = vertices[index];
-        let next = vertices[(index + 1) % 6];
-        let incoming = vertex + (previous - vertex) * (tangent_distance / radius);
-        let outgoing = vertex + (next - vertex) * (tangent_distance / radius);
-        let center = vertex * ((radius - center_inset) / radius);
-        (incoming, outgoing, center)
-    };
-
-    let (first_incoming, _, _) = corner(0);
-    let mut commands = Vec::with_capacity(14);
-    commands.push(PathCmd::move_to(first_incoming));
-    for index in 0..6 {
-        let (incoming, outgoing, center) = corner(index);
-        if index > 0 {
-            commands.push(PathCmd::line_to(incoming));
-        }
-        commands.push(PathCmd::arc_to(outgoing, center, false));
-    }
-    commands.push(PathCmd::close());
-    Some(ContourBuf::new(commands))
+    hexagon_set_with_radii(&candidates, tolerance)
 }
 
 pub(super) fn lattice_index(
@@ -444,7 +457,8 @@ mod tests {
         assert_eq!(arcs.len(), 6);
         for arc in arcs {
             assert!(
-                (arc.p0.distance_to(arc.p1) - radius * HEXAGON_CORNER_RADIUS_RATIO).abs() <= 1e-12
+                (arc.p0.distance_to(arc.p1) - radius * ROUNDED_HEXAGON_CORNER_RADIUS_RATIO).abs()
+                    <= 1e-12
             );
         }
 

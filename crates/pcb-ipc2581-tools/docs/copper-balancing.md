@@ -167,8 +167,10 @@ safe geometry, void sites, radius constraints, or copper area. A
 constant-radius pattern is what falls out when the measured fields are
 symmetric — it is not a separate mode.
 
-Converged radii snap to the fabrication step `void_radius_step_mm`, so the
-voids form a small set of repeated templates rather than thousands of unique
+Converged radii snap to 20 uniformly spaced void-area levels. Interior sites
+use the nearest level; an admitted boundary site rounds upward so it cannot
+lose the minimum disk that made it manufacturable. The whole layer therefore
+uses at most 20 exact rounded-hex templates rather than thousands of unique
 shapes.
 
 ## Fill geometry
@@ -177,9 +179,11 @@ Perforated copper uses a common triangular lattice of slightly rounded
 hexagonal voids; the corner radius is a fixed fraction `k = 0.15` of hexagon
 radius, which is what makes void area exactly quadratic in radius. The lattice
 pitch and maximum radius together guarantee the minimum copper web between any
-neighboring radius pair; clipping preserves a copper web at the safe-region
-boundary, and clipped edge voids too small to contain the minimum disk are
-rejected.
+neighboring radius pair. Edge candidates too small to contain the minimum disk
+are rejected. Output clears every admitted site with the same full rounded-hex
+template, then restores `usable - voidable` as one positive boundary web. This
+is exactly the clipped geometry used by the solve, while keeping the repeated
+voids as flashes.
 
 ## Pass-specific inputs
 
@@ -202,8 +206,8 @@ gutter lattice originates at the usable region's minimum corner and is not
 phase-aligned with the immutable source panels' lattices; none is needed for
 determinism. Balancing runs on an explicit flag: the panel is generated
 provisionally, the provisional document supplies composed copper images and
-outlines, and the final document carries the generated copper as positive
-`LayerFeature` contours.
+outlines, and the final document carries an ordered plane, rounded-hex void,
+and boundary-web image.
 
 ## Knobs
 
@@ -221,7 +225,7 @@ chosen from process rules of thumb, not tuning.
 | `max_void_radius_mm` | 0.65 | Largest void; with the pitch, guarantees the inter-void web. | Sparsest expressible fill (larger voids → lower minimum density). |
 | `min_copper_web_mm` | 0.20 | Minimum copper between neighboring voids. | Process rule; not a tuning knob. |
 | `boundary_web_mm` | 0.20 | Copper web preserved at the safe-region boundary. | Process rule; not a tuning knob. |
-| `void_radius_step_mm` | 0.005 | Fabrication step converged radii snap to. | Template count against fill precision; solving below the etch step is waste. |
+| `void_area_levels` | 20 | Uniform squared-radius levels shared by every rounded-hex void. | Template count against fill-area precision. |
 
 Related constants outside the profile, with the same posture:
 
@@ -249,5 +253,6 @@ fill fields + safe geometry -> rounded-hex void contours
 ```
 
 The IPC-2581 adapters extract stackup and copper geometry, invoke the core,
-serialize contours, and report metrics. Electroplating simulation, laminate
-anisotropy, and changes inside a board footprint are out of scope.
+serialize the plane, declared lattice, and boundary web, and report metrics.
+Electroplating simulation, laminate anisotropy, and changes inside a board
+footprint are out of scope.

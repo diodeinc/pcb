@@ -1,6 +1,13 @@
 //! Serialization of generated IPC-2581 layer features, shared by the
 //! board-array and fab-panel panelizers.
 
+use crate::copper_balance::{
+    BalanceVoidSet, BalanceVoidTemplate, COPPER_BALANCE_ATTRIBUTE_NAME,
+    COPPER_BALANCE_LATTICE_ATTRIBUTE_NAME, COPPER_BALANCE_LATTICE_ORIGIN_X_ATTRIBUTE_NAME,
+    COPPER_BALANCE_LATTICE_ORIGIN_Y_ATTRIBUTE_NAME, COPPER_BALANCE_LATTICE_PITCH_ATTRIBUTE_NAME,
+    COPPER_BALANCE_LATTICE_VALUE, COPPER_BALANCE_VOID_CORNER_RADIUS_ATTRIBUTE_NAME,
+    COPPER_BALANCE_VOID_RADIUS_ATTRIBUTE_NAME, copper_balance_attribute_value,
+};
 use anyhow::{Result, bail};
 use ipc2581::XmlWriter;
 use ipc2581::types::{
@@ -9,12 +16,6 @@ use ipc2581::types::{
     primitives::{UserPrimitive, UserShapeType},
 };
 use ipc2581::write;
-use std::collections::BTreeMap;
-
-use crate::copper_balance::{
-    BalanceVoidInstance, BalanceVoidTemplate, COPPER_BALANCE_ATTRIBUTE_NAME,
-    copper_balance_attribute_value,
-};
 use pcb_ir::dialects::ipc::CopperBalanceKind;
 
 /// Only board-array tooling generates named holes today; the prefix stays
@@ -31,8 +32,8 @@ pub(crate) struct GeneratedLayerFeature {
     pub copper_balance: Option<CopperBalanceKind>,
     pub spec_refs: Vec<String>,
     pub features: Vec<SetFeature>,
-    /// Flashed dictionary-instance references, emitted after `features`.
-    pub instance_refs: Vec<BalanceVoidInstance>,
+    /// One exact rounded-hex radius class on its declared lattice.
+    pub void_set: Option<BalanceVoidSet>,
 }
 
 /// Sequential names for generated holes, unique within one Step.
@@ -55,7 +56,7 @@ pub(crate) fn write_generated_layer_feature(
     layer_feature: &GeneratedLayerFeature,
     names: &mut GeneratedNameState,
 ) -> Result<()> {
-    if layer_feature.features.is_empty() && layer_feature.instance_refs.is_empty() {
+    if layer_feature.features.is_empty() && layer_feature.void_set.is_none() {
         return Ok(());
     }
 
@@ -78,28 +79,71 @@ pub(crate) fn write_generated_layer_feature(
             ],
         );
     }
+    if let Some(void_set) = &layer_feature.void_set {
+        write_nonstandard_attribute(
+            writer,
+            COPPER_BALANCE_LATTICE_ATTRIBUTE_NAME,
+            "STRING",
+            COPPER_BALANCE_LATTICE_VALUE,
+        );
+        for (name, value) in [
+            (
+                COPPER_BALANCE_LATTICE_ORIGIN_X_ATTRIBUTE_NAME,
+                void_set.lattice.origin.x,
+            ),
+            (
+                COPPER_BALANCE_LATTICE_ORIGIN_Y_ATTRIBUTE_NAME,
+                void_set.lattice.origin.y,
+            ),
+            (
+                COPPER_BALANCE_LATTICE_PITCH_ATTRIBUTE_NAME,
+                void_set.lattice.pitch_mm,
+            ),
+            (
+                COPPER_BALANCE_VOID_RADIUS_ATTRIBUTE_NAME,
+                void_set.radius_mm,
+            ),
+            (
+                COPPER_BALANCE_VOID_CORNER_RADIUS_ATTRIBUTE_NAME,
+                void_set.corner_radius_mm,
+            ),
+        ] {
+            let value = write::fmt_units(value, Units::Millimeter);
+            write_nonstandard_attribute(writer, name, "DOUBLE", &value);
+        }
+    }
     for spec_ref in &layer_feature.spec_refs {
         write::spec_ref(writer, spec_ref);
     }
     write_set_features(writer, units, &layer_feature.features, names)?;
-    let mut instances_by_template = BTreeMap::<&str, Vec<&BalanceVoidInstance>>::new();
-    for instance in &layer_feature.instance_refs {
-        instances_by_template
-            .entry(instance.template.as_str())
-            .or_default()
-            .push(instance);
-    }
-    for (template, instances) in instances_by_template {
+    if let Some(void_set) = &layer_feature.void_set {
         writer.start_element("Features", &[]);
-        for instance in instances {
-            write::location(writer, "Location", instance.x, instance.y, units);
+        // Keep even a one-site radius class as an explicit placement group;
+        // the identity Xform is the IPC marker that distinguishes shared
+        // local geometry from a translated singleton primitive.
+        writer.empty_element("Xform", &[("rotation", "0")]);
+        for site in &void_set.sites {
+            let center = void_set.lattice.center(*site);
+            write::location(writer, "Location", center.x, center.y, units);
         }
-        writer.empty_element("UserPrimitiveRef", &[("id", template)]);
+        writer.empty_element("UserPrimitiveRef", &[("id", void_set.template.as_str())]);
         writer.end_element("Features");
     }
     writer.end_element("Set");
     writer.end_element("LayerFeature");
     Ok(())
+}
+
+fn write_nonstandard_attribute(
+    writer: &mut XmlWriter,
+    name: &str,
+    attribute_type: &str,
+    value: &str,
+) {
+    writer.empty_element(
+        "NonstandardAttribute",
+        &[("name", name), ("type", attribute_type), ("value", value)],
+    );
 }
 
 fn write_set_features(

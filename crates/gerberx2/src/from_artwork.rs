@@ -14,7 +14,6 @@ use crate::{
     sanitize_attribute_field,
 };
 use pcb_ir::dialects::artwork::{Aperture, ApertureShape, Geometry as ArtworkGeometry, PaintStage};
-use pcb_ir::dialects::ipc::CopperBalanceKind;
 use pcb_ir::geom::path::{self as geom_path, ContourBuf, PathCmd};
 use pcb_ir::geom::region::{self, Ring};
 use pcb_ir::geom::{Affine2, FillRule, Point, Polarity, Segment, StrokePatternMark};
@@ -31,27 +30,13 @@ pub struct LayerAttributes {
 }
 
 /// Gerber X2 object attributes carried as artwork object metadata.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CopperFeatureKind {
-    Pad,
-    Artwork,
-    Balance(CopperBalanceKind),
-}
-
-impl CopperFeatureKind {
-    fn lower_flash_as_region(self) -> bool {
-        matches!(
-            self,
-            Self::Artwork
-                | Self::Balance(CopperBalanceKind::Plane | CopperBalanceKind::ClippedVoid)
-        )
-    }
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct ObjectAttributes {
     pub aperture_function: Option<Vec<String>>,
-    pub copper_feature: Option<CopperFeatureKind>,
+    /// Lower flashed occurrences of this object as `G36` regions instead of
+    /// aperture flashes. Set by exporters for copper whose semantics must not
+    /// masquerade as pads; pad-like copper keeps its flashes.
+    pub lower_flashes_to_regions: bool,
     pub net: Option<String>,
     pub component: Option<String>,
     pub pin: Option<String>,
@@ -148,7 +133,7 @@ fn object_attributes(
         .and_then(|fields| fields.into_iter().next());
     ObjectAttributes {
         aperture_function: attribute_fields(gerber, &meta.aperture_attributes, ".AperFunction"),
-        copper_feature: None,
+        lower_flashes_to_regions: false,
         net: attribute_fields(gerber, &meta.object_attributes, ".N")
             .and_then(|fields| fields.into_iter().next()),
         component,
@@ -249,7 +234,14 @@ fn lower_artwork_object_tree(
                 x_step: transform.transform_vector(grid.x_step),
                 y_step: transform.transform_vector(grid.y_step),
             };
-            if let Some((base, step_repeat)) = gerber_step_repeat(base, grid) {
+            // Gerber step-repeat blocks cannot nest, so a grid reached under
+            // an already-active repeat must expand its occurrences instead.
+            let step_repeat = if repeat.is_none() {
+                gerber_step_repeat(base, grid)
+            } else {
+                None
+            };
+            if let Some((base, step_repeat)) = step_repeat {
                 let repeat =
                     (step_repeat.x_repeats > 1 || step_repeat.y_repeats > 1).then_some(step_repeat);
                 for child in &layer.blocks[block as usize].objects {
@@ -258,22 +250,16 @@ fn lower_artwork_object_tree(
                     )?;
                 }
             } else {
-                for iy in 0..grid.y_count {
-                    for ix in 0..grid.x_count {
-                        let offset = Point::new(
-                            ix as f64 * grid.x_step.x + iy as f64 * grid.y_step.x,
-                            ix as f64 * grid.x_step.y + iy as f64 * grid.y_step.y,
-                        );
-                        let occurrence = Affine2 {
-                            m02: base.m02 + offset.x,
-                            m12: base.m12 + offset.y,
-                            ..base
-                        };
-                        for child in &layer.blocks[block as usize].objects {
-                            lower_artwork_object_tree(
-                                layer, child, occurrence, polarity, repeat, apertures, plan,
-                            )?;
-                        }
+                for offset in grid.offsets() {
+                    let occurrence = Affine2 {
+                        m02: base.m02 + offset.x,
+                        m12: base.m12 + offset.y,
+                        ..base
+                    };
+                    for child in &layer.blocks[block as usize].objects {
+                        lower_artwork_object_tree(
+                            layer, child, occurrence, polarity, repeat, apertures, plan,
+                        )?;
                     }
                 }
             }
@@ -300,6 +286,8 @@ fn gerber_step_repeat(
     let mut shift = Point::ZERO;
     for (count, step) in [(grid.x_count, grid.x_step), (grid.y_count, grid.y_step)] {
         let step = Point::new(gerber_coordinate(step.x), gerber_coordinate(step.y));
+        // A zero-step axis collapses to one occurrence: repeated stamps at
+        // the same location are image-idempotent in either polarity.
         if count <= 1 || step == Point::ZERO {
             continue;
         }
@@ -386,11 +374,7 @@ fn lower_artwork_object(
                             }));
                         }
                         StrokePatternMark::Dot(at) => {
-                            if object
-                                .meta
-                                .copper_feature
-                                .is_some_and(CopperFeatureKind::lower_flash_as_region)
-                            {
+                            if object.meta.lower_flashes_to_regions {
                                 objects.extend(lower_aperture_as_regions(
                                     &Aperture::circle(stroke_width),
                                     Affine2::translation(at),
@@ -420,7 +404,7 @@ fn lower_artwork_object(
             aperture,
             transform: placement,
         } => {
-            let transform = transform.concat(placement);
+            let mut transform = transform.concat(placement);
             let mut artwork_aperture =
                 layer
                     .apertures
@@ -431,7 +415,6 @@ fn lower_artwork_object(
                             "artwork flash references missing aperture {aperture}"
                         ))
                     })?;
-            let mut transform = transform;
             if !transform.is_translation() {
                 let basis = Affine2 {
                     m02: 0.0,
@@ -446,11 +429,7 @@ fn lower_artwork_object(
             }
             let aperture_function = object.meta.aperture_function.as_deref().unwrap_or_default();
             let region_aperture_attributes = lower_aperture_function(aperture_function);
-            if object
-                .meta
-                .copper_feature
-                .is_some_and(CopperFeatureKind::lower_flash_as_region)
-            {
+            if object.meta.lower_flashes_to_regions {
                 return lower_aperture_as_regions(
                     &artwork_aperture,
                     transform,
@@ -799,6 +778,36 @@ impl ApertureTable {
                         name: ROUNDRECT_MACRO_NAME.to_string(),
                         parameters: vec![width, height, radius],
                     },
+                    function,
+                )
+            }
+            ApertureShape::RoundedHex {
+                radius,
+                corner_radius,
+                rotation_degrees,
+            } => {
+                if hole_diameter.is_some() {
+                    return Err(GerberError::InvalidStructure(
+                        "cannot export a Gerber rounded-hex aperture with a hole".to_string(),
+                    ));
+                }
+                // Legacy CAM importers evaluate parameterized compound
+                // macros per flash. Flatten the exact shape once into a
+                // concrete single-primitive outline shared by every flash of
+                // this level and orientation.
+                let outline =
+                    pcb_ir::geom::shapes::rounded_hexagon(radius, corner_radius, rotation_degrees)
+                        .ok_or_else(|| {
+                            GerberError::InvalidStructure(format!(
+                                "cannot export invalid rounded-hex aperture r {radius}, corner r \
+                                 {corner_radius}, rotation {rotation_degrees}"
+                            ))
+                        })?;
+                self.artwork_aperture(
+                    Aperture::solid(ApertureShape::Contour {
+                        outline,
+                        fill_rule: FillRule::NonZero,
+                    }),
                     function,
                 )
             }
@@ -1220,7 +1229,7 @@ mod tests {
     fn sanitizes_net_names_for_gerber_attribute_fields() {
         let attributes = lower_object_attributes(&ObjectAttributes {
             aperture_function: None,
-            copper_feature: None,
+            lower_flashes_to_regions: false,
             net: Some("PWR_RST*,A%B".to_string()),
             component: None,
             pin: None,
@@ -1234,7 +1243,7 @@ mod tests {
     fn lowers_pin_attribute_with_component_context() {
         let attributes = lower_object_attributes(&ObjectAttributes {
             aperture_function: None,
-            copper_feature: None,
+            lower_flashes_to_regions: false,
             net: None,
             component: Some("U1".to_string()),
             pin: Some("1".to_string()),
@@ -1250,7 +1259,7 @@ mod tests {
     fn skips_pin_attribute_without_component_context() {
         let attributes = lower_object_attributes(&ObjectAttributes {
             aperture_function: None,
-            copper_feature: None,
+            lower_flashes_to_regions: false,
             net: None,
             component: None,
             pin: Some("1".to_string()),
@@ -1785,7 +1794,7 @@ mod tests {
                 },
                 meta: ObjectAttributes {
                     aperture_function: Some(vec!["Conductor".to_string()]),
-                    copper_feature: Some(CopperFeatureKind::Artwork),
+                    lower_flashes_to_regions: true,
                     ..ObjectAttributes::default()
                 },
             },
@@ -1819,14 +1828,15 @@ mod tests {
             bbox: BBox::empty(),
             meta: LayerAttributes::default(),
         });
-        let aperture = artwork.push_aperture(Aperture::solid(ApertureShape::Contour {
-            outline: rect_payload(-1.0, -1.0, 1.0, 1.0),
-            fill_rule: FillRule::NonZero,
+        let aperture = artwork.push_aperture(Aperture::solid(ApertureShape::RoundedHex {
+            radius: 1.0,
+            corner_radius: 0.15,
+            rotation_degrees: 0.0,
         }));
         artwork.push_object(
             layer_id,
             ArtworkObject {
-                polarity: Polarity::Clear,
+                polarity: Polarity::Dark,
                 order: Default::default(),
                 geometry: ArtworkGeometry::Flash {
                     aperture,
@@ -1835,15 +1845,34 @@ mod tests {
                 bbox: BBox::empty(),
                 meta: ObjectAttributes {
                     aperture_function: Some(vec!["CopperBalancing".to_string()]),
-                    copper_feature: Some(CopperFeatureKind::Balance(CopperBalanceKind::FullVoid)),
+                    lower_flashes_to_regions: false,
                     ..ObjectAttributes::default()
                 },
             },
         );
 
         let gerber = lower_artwork_layer(&artwork).expect("lower balance cell");
+        // The exact rounded hex flattens once into a concrete one-primitive
+        // outline macro; legacy CAM importers never evaluate compound
+        // parameterized macros per flash.
         assert_eq!(gerber.aperture_macros.len(), 1);
+        assert_eq!(gerber.aperture_macros[0].primitives.len(), 1);
+        assert!(matches!(
+            &gerber.aperture_macros[0].primitives[0],
+            WriterMacroPrimitive::Shape { code: 4, .. }
+        ));
         assert!(matches!(gerber.objects[0].kind, ObjectKind::Flash { .. }));
+        let contents = crate::write_layer(&gerber).expect("write balance cell");
+        assert_external_parser_accepts(&contents);
+        let parsed = crate::GerberX2::parse(&contents).expect("parse balance cell");
+        let geometry = crate::geometry::extract_document(&parsed);
+        let actual_area = pcb_ir::dialects::artwork::compare::summarize(&geometry).area_mm2;
+        let expected_area = 3.0 * 3.0_f64.sqrt() / 2.0
+            - (2.0 * 3.0_f64.sqrt() - std::f64::consts::PI) * 0.15_f64.powi(2);
+        assert!(
+            (actual_area - expected_area).abs() < 3e-3,
+            "rounded-hex macro area {actual_area}, expected {expected_area}"
+        );
     }
 
     #[test]

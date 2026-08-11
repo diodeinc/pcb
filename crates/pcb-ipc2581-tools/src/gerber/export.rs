@@ -13,17 +13,15 @@ use ipc2581::types::{
 
 use crate::geometry;
 use gerberx2::from_artwork::lower_artwork_layer;
-use gerberx2::from_artwork::{
-    ArtworkDocument as GerberArtwork, CopperFeatureKind, LayerAttributes, ObjectAttributes,
-};
+use gerberx2::from_artwork::{ArtworkDocument as GerberArtwork, LayerAttributes, ObjectAttributes};
 use pcb_ir::dialects::artwork::{
     Aperture, ApertureShape, Geometry as ArtworkGeometry, GridRepeat, Object as ArtworkObject,
     PaintOrder, PaintStage,
 };
 use pcb_ir::dialects::ipc::{
-    ArtworkLowering, ArtworkObjectKind, ArtworkScope, Feature, FeatureBucket, FeatureDomain,
-    FeatureOperation, FeatureRole, FiducialKind, LayoutPurpose, PlatingKind, PrimitiveRef,
-    ProfileSet, lower_layer_to_artwork_objects_with, lower_layer_to_artwork_with,
+    ArtworkLowering, ArtworkObjectKind, ArtworkScope, CopperBalanceKind, Feature, FeatureBucket,
+    FeatureDomain, FeatureOperation, FeatureRole, FiducialKind, LayoutPurpose, PlatingKind,
+    PrimitiveRef, ProfileSet, lower_layer_to_artwork_objects_with, lower_layer_to_artwork_with,
     profile_occurrences_for, relief,
 };
 use pcb_ir::dialects::{LayerRole, Side as IrSide};
@@ -669,17 +667,13 @@ fn build_step_artwork_objects(
                 },
             ));
         } else {
-            for iy in 0..repeat.ny {
-                for ix in 0..repeat.nx {
-                    objects.push(ArtworkObject::new(
-                        Polarity::Dark,
-                        ArtworkGeometry::Instance {
-                            block: child,
-                            transform: geometry::step_repeat_transform(repeat, ix, iy),
-                        },
-                    ));
-                }
-            }
+            objects.push(ArtworkObject::new(
+                Polarity::Dark,
+                ArtworkGeometry::Instance {
+                    block: child,
+                    transform: geometry::step_repeat_transform(repeat, 0, 0),
+                },
+            ));
         }
     }
     Ok(objects)
@@ -700,6 +694,15 @@ impl ArtworkLowering<ipc2581::Symbol, ObjectAttributes> for GerberLowering<'_> {
         &mut self,
         feature: &Feature<ipc2581::Symbol>,
     ) -> Option<(Aperture, Affine2, BBox)> {
+        if let Some(void) = feature.flags.copper_balance_void {
+            let aperture = Aperture::solid(ApertureShape::RoundedHex {
+                radius: void.radius_mm,
+                corner_radius: void.corner_radius_mm,
+                rotation_degrees: 0.0,
+            });
+            let bbox = aperture.bbox().transformed(feature.transform);
+            return Some((aperture, feature.transform, bbox));
+        }
         standard_flash_aperture(self.ipc, self.doc, feature)
     }
 
@@ -1441,22 +1444,19 @@ fn object_attributes(
     let pin_ref = feature.pin_refs.slice(&doc.pin_refs).first();
     let carries_netlist = role == GerberLayerRole::Copper;
     let carries_pins = carries_netlist && matches!(side, IrSide::Top | IrSide::Bottom);
+    // Pad-like copper and full balance voids keep their flashes; all other
+    // copper semantics lower flashed occurrences to regions so they never
+    // masquerade as pads.
+    let keeps_flashes = match feature.flags.copper_balance {
+        Some(kind) => kind == CopperBalanceKind::FullVoid,
+        None => matches!(
+            feature.bucket,
+            FeatureBucket::Smd | FeatureBucket::Pth | FeatureBucket::Via | FeatureBucket::Fiducial
+        ),
+    };
     ObjectAttributes {
         aperture_function,
-        copper_feature: (role == GerberLayerRole::Copper).then(|| {
-            feature.flags.copper_balance.map_or_else(
-                || match feature.bucket {
-                    FeatureBucket::Smd
-                    | FeatureBucket::Pth
-                    | FeatureBucket::Via
-                    | FeatureBucket::Fiducial => CopperFeatureKind::Pad,
-                    FeatureBucket::Trace | FeatureBucket::Fill | FeatureBucket::Cutout => {
-                        CopperFeatureKind::Artwork
-                    }
-                },
-                CopperFeatureKind::Balance,
-            )
-        }),
+        lower_flashes_to_regions: role == GerberLayerRole::Copper && !keeps_flashes,
         net: if carries_netlist {
             feature.net.map(|symbol| ipc.resolve(symbol).to_string())
         } else {

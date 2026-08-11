@@ -270,6 +270,34 @@ pub struct GridRepeat {
     pub y_step: Point,
 }
 
+impl GridRepeat {
+    /// Translation of occurrence `(ix, iy)` relative to the grid's base
+    /// placement.
+    pub fn offset(self, ix: u32, iy: u32) -> Point {
+        Point::new(
+            ix as f64 * self.x_step.x + iy as f64 * self.y_step.x,
+            ix as f64 * self.x_step.y + iy as f64 * self.y_step.y,
+        )
+    }
+
+    /// Translations of every occurrence, x-fastest.
+    pub fn offsets(self) -> impl Iterator<Item = Point> {
+        (0..self.y_count).flat_map(move |iy| (0..self.x_count).map(move |ix| self.offset(ix, iy)))
+    }
+
+    /// Bounds of one occurrence's `base` bounds repeated across the grid.
+    pub fn bbox(self, base: BBox) -> BBox {
+        let x = self.x_count.saturating_sub(1);
+        let y = self.y_count.saturating_sub(1);
+        [(0, 0), (x, 0), (0, y), (x, y)]
+            .into_iter()
+            .map(|(ix, iy)| self.offset(ix, iy))
+            .fold(BBox::empty(), |bbox, offset| {
+                bbox.union(BBox::new(base.min + offset, base.max + offset))
+            })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Geometry {
     /// A standard aperture stamped under a placement transform.
@@ -332,6 +360,13 @@ pub enum ApertureShape {
         height: f64,
         radius: f64,
     },
+    /// Regular hexagon with circularly rounded corners. `radius` is the
+    /// center-to-vertex radius before rounding.
+    RoundedHex {
+        radius: f64,
+        corner_radius: f64,
+        rotation_degrees: f64,
+    },
     /// An arbitrary origin-local filled contour, shared by every flash of
     /// this aperture, painted under its source path's fill rule. This is
     /// how repeated dictionary instances stay instances all the way to the
@@ -371,6 +406,11 @@ impl Aperture {
                 height,
                 radius,
             } => shapes::rounded_rect(*width, *height, *radius, shapes::ALL_CORNERS, true),
+            ApertureShape::RoundedHex {
+                radius,
+                corner_radius,
+                rotation_degrees,
+            } => shapes::rounded_hexagon(*radius, *corner_radius, *rotation_degrees),
             ApertureShape::Contour { outline, .. } => return vec![outline.clone()],
         };
         let mut contours: Vec<ContourBuf> = outer.into_iter().collect();
@@ -402,6 +442,12 @@ impl Aperture {
             ApertureShape::Polygon { diameter, .. } => {
                 BBox::from_point(Point::ZERO).expand(diameter / 2.0)
             }
+            ApertureShape::RoundedHex {
+                radius,
+                corner_radius,
+                rotation_degrees,
+            } => shapes::rounded_hexagon(*radius, *corner_radius, *rotation_degrees)
+                .map_or_else(BBox::empty, |contour| contour.bbox),
             ApertureShape::Contour { outline, .. } => outline.bbox,
         }
     }
@@ -651,22 +697,7 @@ fn geometry_bbox<LayerMeta, ObjectMeta>(
         } => doc
             .blocks
             .get(block as usize)
-            .map(|block| {
-                let base = block.bbox.transformed(transform);
-                let x = repeat.x_count.saturating_sub(1) as f64;
-                let y = repeat.y_count.saturating_sub(1) as f64;
-                [(0.0, 0.0), (x, 0.0), (0.0, y), (x, y)]
-                    .into_iter()
-                    .map(|(ix, iy)| {
-                        Point::new(
-                            ix * repeat.x_step.x + iy * repeat.y_step.x,
-                            ix * repeat.x_step.y + iy * repeat.y_step.y,
-                        )
-                    })
-                    .fold(BBox::empty(), |bbox, offset| {
-                        bbox.union(BBox::new(base.min + offset, base.max + offset))
-                    })
-            })
+            .map(|block| repeat.bbox(block.bbox.transformed(transform)))
             .unwrap_or_else(BBox::empty),
     }
 }
@@ -850,32 +881,26 @@ fn expand_object_into_layer<LayerMeta, ObjectMeta: Clone>(
             );
             return;
         }
-        for iy in 0..repeat.y_count {
-            for ix in 0..repeat.x_count {
-                let offset = Point::new(
-                    ix as f64 * repeat.x_step.x + iy as f64 * repeat.y_step.x,
-                    ix as f64 * repeat.x_step.y + iy as f64 * repeat.y_step.y,
+        for offset in repeat.offsets() {
+            let placement = Affine2 {
+                m02: placement.m02 + offset.x,
+                m12: placement.m12 + offset.y,
+                ..placement
+            };
+            let occurrence = transform.concat(placement);
+            for child in &block_definition.objects {
+                expand_object_into_layer(
+                    source,
+                    target,
+                    layer,
+                    child,
+                    InstanceExpansion {
+                        transform: occurrence,
+                        polarity,
+                        ..expansion
+                    },
+                    block as usize,
                 );
-                let placement = Affine2 {
-                    m02: placement.m02 + offset.x,
-                    m12: placement.m12 + offset.y,
-                    ..placement
-                };
-                let occurrence = transform.concat(placement);
-                for child in &block_definition.objects {
-                    expand_object_into_layer(
-                        source,
-                        target,
-                        layer,
-                        child,
-                        InstanceExpansion {
-                            transform: occurrence,
-                            polarity,
-                            ..expansion
-                        },
-                        block as usize,
-                    );
-                }
             }
         }
         return;

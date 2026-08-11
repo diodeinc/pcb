@@ -16,6 +16,7 @@
 
 use crate::geom::path::{ContourBuf, PathCmd};
 use crate::geom::point::Point;
+use std::f64::consts::PI;
 
 /// Cubic Bezier circle approximation constant.
 const KAPPA: f64 = 0.552_284_749_830_793_6;
@@ -365,6 +366,61 @@ pub fn regular_polygon(
         })
         .collect();
     closed_polygon(points)
+}
+
+/// A regular hexagon with circular corner fillets.
+///
+/// `radius` is the sharp hexagon's circumradius. `corner_radius` is measured
+/// from each fillet center to its tangent points on the adjacent sides.
+pub fn rounded_hexagon(
+    radius: f64,
+    corner_radius: f64,
+    rotation_degrees: f64,
+) -> Option<ContourBuf> {
+    const SQRT_3: f64 = 1.732_050_807_568_877_2;
+
+    if !radius.is_finite()
+        || !corner_radius.is_finite()
+        || !rotation_degrees.is_finite()
+        || radius <= 0.0
+        || corner_radius <= 0.0
+        || corner_radius >= radius * SQRT_3 / 2.0
+    {
+        return None;
+    }
+
+    let tangent_distance = corner_radius / SQRT_3;
+    let center_inset = 2.0 * corner_radius / SQRT_3;
+    let rotation = rotation_degrees.to_radians();
+    let vertices = (0..6)
+        .map(|index| {
+            let angle = rotation + index as f64 * PI / 3.0;
+            Point::new(radius * angle.cos(), radius * angle.sin())
+        })
+        .collect::<Vec<_>>();
+
+    let corner = |index: usize| {
+        let previous = vertices[(index + 5) % 6];
+        let vertex = vertices[index];
+        let next = vertices[(index + 1) % 6];
+        let incoming = vertex + (previous - vertex) * (tangent_distance / radius);
+        let outgoing = vertex + (next - vertex) * (tangent_distance / radius);
+        let center = vertex * ((radius - center_inset) / radius);
+        (incoming, outgoing, center)
+    };
+
+    let (first_incoming, _, _) = corner(0);
+    let mut commands = Vec::with_capacity(14);
+    commands.push(PathCmd::move_to(first_incoming));
+    for index in 0..6 {
+        let (incoming, outgoing, center) = corner(index);
+        if index > 0 {
+            commands.push(PathCmd::line_to(incoming));
+        }
+        commands.push(PathCmd::arc_to(outgoing, center, false));
+    }
+    commands.push(PathCmd::close());
+    Some(ContourBuf::new(commands))
 }
 
 /// A closed polygon through the given points.

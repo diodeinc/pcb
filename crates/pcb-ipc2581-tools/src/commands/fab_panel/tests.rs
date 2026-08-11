@@ -745,15 +745,15 @@ fn balances_gutters_at_the_assembly_panel_density_and_leaves_margins_bare() {
         layer.target_density,
         layer.achieved_density
     );
-    assert_eq!(
+    assert!(
         creation
             .xml
             .matches(r#"<LayerFeature layerRef="TOP">"#)
-            .count(),
-        5,
-        "both sources plus the fab step's three semantic balance sets should carry TOP copper"
+            .count()
+            > 4,
+        "both sources, the plane, radius classes, and boundary web should carry TOP copper"
     );
-    for kind in ["plane", "full_void", "clipped_void"] {
+    for kind in ["plane", "full_void", "boundary_web"] {
         assert!(creation.xml.contains(&format!(
             r#"<NonstandardAttribute name="diode.copper_balance" type="STRING" value="{kind}"/>"#
         )));
