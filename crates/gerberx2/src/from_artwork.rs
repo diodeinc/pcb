@@ -8,16 +8,19 @@
 use std::collections::HashMap;
 
 use crate::{
-    AttributeValue, Contour, ContourSegment, GerberError, GerberLayer, Mirroring, ObjectKind,
+    AttributeValue, Contour, ContourSegment, GerberError, GerberLayer, ObjectKind,
     Point as GerberPoint, Result, WriterAperture, WriterApertureMacro, WriterApertureTemplate,
     WriterApertureTransform, WriterMacroExpression, WriterMacroPrimitive, WriterObject,
     sanitize_attribute_field,
 };
 use pcb_ir::dialects::LayerRole;
 use pcb_ir::dialects::artwork::{Aperture, ApertureShape, Geometry as ArtworkGeometry, PaintStage};
+use pcb_ir::dialects::ipc::CopperBalanceKind;
 use pcb_ir::geom::path::{self as geom_path, ContourBuf, PathCmd};
 use pcb_ir::geom::region::{self, Ring};
 use pcb_ir::geom::{Affine2, FillRule, Point, Polarity, Segment, StrokePatternMark};
+
+const GERBER_GEOMETRY_GRID_MM: f64 = 0.001;
 
 /// Gerber file-level attributes carried as artwork layer metadata.
 #[derive(Debug, Clone, Default)]
@@ -32,6 +35,7 @@ pub struct LayerAttributes {
 #[derive(Debug, Clone, Default)]
 pub struct ObjectAttributes {
     pub aperture_function: Option<Vec<String>>,
+    pub copper_balance: Option<CopperBalanceKind>,
     pub net: Option<String>,
     pub component: Option<String>,
     pub pin: Option<String>,
@@ -128,6 +132,7 @@ fn object_attributes(
         .and_then(|fields| fields.into_iter().next());
     ObjectAttributes {
         aperture_function: attribute_fields(gerber, &meta.aperture_attributes, ".AperFunction"),
+        copper_balance: None,
         net: attribute_fields(gerber, &meta.object_attributes, ".N")
             .and_then(|fields| fields.into_iter().next()),
         component,
@@ -156,7 +161,7 @@ fn resolve_fields(gerber: &crate::GerberX2, attribute: &crate::types::Attribute)
 }
 
 pub fn lower_artwork_layer(layer: &ArtworkDocument) -> Result<GerberLayer> {
-    let mut layer = pcb_ir::dialects::artwork::expand_instances(layer);
+    let mut layer = pcb_ir::dialects::artwork::expand_instances_preserving_grids(layer);
     pcb_ir::dialects::artwork::legalize::legalize_for_jlcpcb(&mut layer);
     let mut apertures = ApertureTable::default();
     let mut plan = GerberPlan::default();
@@ -167,8 +172,15 @@ pub fn lower_artwork_layer(layer: &ArtworkDocument) -> Result<GerberLayer> {
         .unwrap_or_default();
 
     for object in &layer.objects {
-        let objects = lower_artwork_object(&layer, object, &mut apertures)?;
-        plan.push_group(object.order.stage, object.polarity, objects);
+        lower_artwork_object_tree(
+            &layer,
+            object,
+            Affine2::IDENTITY,
+            Polarity::Dark,
+            None,
+            &mut apertures,
+            &mut plan,
+        )?;
     }
     let objects = plan.into_ordered_objects();
 
@@ -182,9 +194,134 @@ pub fn lower_artwork_layer(layer: &ArtworkDocument) -> Result<GerberLayer> {
     })
 }
 
+fn lower_artwork_object_tree(
+    layer: &ArtworkDocument,
+    object: &pcb_ir::dialects::artwork::Object<ObjectAttributes>,
+    transform: Affine2,
+    parent_polarity: Polarity,
+    repeat: Option<crate::StepRepeat>,
+    apertures: &mut ApertureTable,
+    plan: &mut GerberPlan,
+) -> Result<()> {
+    let polarity = parent_polarity.compose(object.polarity);
+    match object.geometry {
+        ArtworkGeometry::Instance {
+            block,
+            transform: placement,
+        } => {
+            for child in &layer.blocks[block as usize].objects {
+                lower_artwork_object_tree(
+                    layer,
+                    child,
+                    transform.concat(placement),
+                    polarity,
+                    repeat,
+                    apertures,
+                    plan,
+                )?;
+            }
+        }
+        ArtworkGeometry::GridInstance {
+            block,
+            transform: placement,
+            repeat: grid,
+        } => {
+            let base = transform.concat(placement);
+            let grid = pcb_ir::dialects::artwork::GridRepeat {
+                x_count: grid.x_count,
+                y_count: grid.y_count,
+                x_step: transform.transform_vector(grid.x_step),
+                y_step: transform.transform_vector(grid.y_step),
+            };
+            if let Some((base, step_repeat)) = gerber_step_repeat(base, grid) {
+                let repeat =
+                    (step_repeat.x_repeats > 1 || step_repeat.y_repeats > 1).then_some(step_repeat);
+                for child in &layer.blocks[block as usize].objects {
+                    lower_artwork_object_tree(
+                        layer, child, base, polarity, repeat, apertures, plan,
+                    )?;
+                }
+            } else {
+                for iy in 0..grid.y_count {
+                    for ix in 0..grid.x_count {
+                        let offset = Point::new(
+                            ix as f64 * grid.x_step.x + iy as f64 * grid.y_step.x,
+                            ix as f64 * grid.x_step.y + iy as f64 * grid.y_step.y,
+                        );
+                        let occurrence = Affine2 {
+                            m02: base.m02 + offset.x,
+                            m12: base.m12 + offset.y,
+                            ..base
+                        };
+                        for child in &layer.blocks[block as usize].objects {
+                            lower_artwork_object_tree(
+                                layer, child, occurrence, polarity, repeat, apertures, plan,
+                            )?;
+                        }
+                    }
+                }
+            }
+        }
+        _ => {
+            let mut objects = lower_artwork_object(layer, object, transform, polarity, apertures)?;
+            for object in &mut objects {
+                object.repeat = repeat;
+            }
+            plan.push_group(object.order.stage, polarity, objects);
+        }
+    }
+    Ok(())
+}
+
+fn gerber_step_repeat(
+    mut base: Affine2,
+    grid: pcb_ir::dialects::artwork::GridRepeat,
+) -> Option<(Affine2, crate::StepRepeat)> {
+    const AXIS_EPSILON: f64 = 1e-9;
+
+    let mut x_repeats = 1;
+    let mut y_repeats = 1;
+    let mut x_step = 0.0;
+    let mut y_step = 0.0;
+    let mut shift = Point::ZERO;
+    for (count, step) in [(grid.x_count, grid.x_step), (grid.y_count, grid.y_step)] {
+        if count <= 1 || (step.x.abs() <= AXIS_EPSILON && step.y.abs() <= AXIS_EPSILON) {
+            continue;
+        }
+        if step.y.abs() <= AXIS_EPSILON && x_repeats == 1 {
+            x_repeats = count as i32;
+            x_step = step.x.abs();
+            if step.x < 0.0 {
+                shift.x += (count - 1) as f64 * step.x;
+            }
+        } else if step.x.abs() <= AXIS_EPSILON && y_repeats == 1 {
+            y_repeats = count as i32;
+            y_step = step.y.abs();
+            if step.y < 0.0 {
+                shift.y += (count - 1) as f64 * step.y;
+            }
+        } else {
+            return None;
+        }
+    }
+    base.m02 += shift.x;
+    base.m12 += shift.y;
+    Some((
+        base,
+        crate::StepRepeat {
+            x_repeats,
+            y_repeats,
+            x_step,
+            y_step,
+        },
+    ))
+}
+
 fn lower_artwork_object(
     layer: &ArtworkDocument,
     object: &pcb_ir::dialects::artwork::Object<ObjectAttributes>,
+    transform: Affine2,
+    polarity: Polarity,
     apertures: &mut ApertureTable,
 ) -> Result<Vec<WriterObject>> {
     let attributes = lower_object_attributes(&object.meta);
@@ -199,7 +336,8 @@ fn lower_artwork_object(
             objects.extend(lower_region_objects(
                 layer,
                 path,
-                object.polarity,
+                transform,
+                polarity,
                 &aperture_attributes,
                 &attributes,
             )?);
@@ -218,9 +356,14 @@ fn lower_artwork_object(
                     "artwork stroke geometry references a path without stroke paint".to_string(),
                 )
             })?;
-            let stroke_width = stroke.width;
+            let stroke_width = stroke.width * transform.m00.hypot(transform.m10);
             let aperture = apertures.circle(stroke_width, aperture_function)?;
-            for contour in layer.arena.path_contours(artwork_path) {
+            for contour in layer
+                .arena
+                .path_contours(artwork_path)
+                .into_iter()
+                .map(|contour| geom_path::transform_cmds(contour.cmds, transform))
+            {
                 let segments = contour_segments(&contour.cmds);
                 for mark in
                     pcb_ir::geom::stroke_pattern_marks(&segments, stroke.pattern, stroke_width)
@@ -229,18 +372,22 @@ fn lower_artwork_object(
                         StrokePatternMark::Dash(segments) => {
                             objects.extend(segments.into_iter().map(|segment| WriterObject {
                                 kind: lower_stroke_segment(segment, aperture),
-                                polarity: object.polarity,
+                                polarity,
+                                repeat: None,
                                 aperture_transform: WriterApertureTransform::default(),
                                 aperture_attributes: Vec::new(),
                                 attributes: attributes.clone(),
                             }));
                         }
                         StrokePatternMark::Dot(at) => {
-                            if is_copper && !is_pad_function(aperture_function) {
+                            if is_copper
+                                && !is_pad_function(aperture_function)
+                                && object.meta.copper_balance != Some(CopperBalanceKind::FullVoid)
+                            {
                                 objects.extend(lower_aperture_as_regions(
                                     &Aperture::circle(stroke_width),
                                     Affine2::translation(at),
-                                    object.polarity,
+                                    polarity,
                                     &region_aperture_attributes,
                                     &attributes,
                                 )?);
@@ -250,7 +397,8 @@ fn lower_artwork_object(
                                         at: lower_point(at),
                                         aperture,
                                     },
-                                    polarity: object.polarity,
+                                    polarity,
+                                    repeat: None,
                                     aperture_transform: WriterApertureTransform::default(),
                                     aperture_attributes: Vec::new(),
                                     attributes: attributes.clone(),
@@ -263,8 +411,9 @@ fn lower_artwork_object(
         }
         ArtworkGeometry::Flash {
             aperture,
-            transform,
+            transform: placement,
         } => {
+            let transform = transform.concat(placement);
             let mut artwork_aperture =
                 layer
                     .apertures
@@ -276,25 +425,16 @@ fn lower_artwork_object(
                         ))
                     })?;
             let mut transform = transform;
-            if !transform.preserves_circles(1e-9) {
-                // Similarity transforms lower to Gerber load state below;
-                // contour apertures absorb any remaining non-similarity
-                // basis by transforming their outline, and the aperture
-                // table dedups per transformed shape.
-                let ApertureShape::Contour { outline, fill_rule } = &artwork_aperture.shape else {
-                    return Err(GerberError::InvalidStructure(
-                        "cannot lower a non-similarity artwork flash to Gerber".to_string(),
-                    ));
-                };
+            if !transform.is_translation() {
                 let basis = Affine2 {
                     m02: 0.0,
                     m12: 0.0,
                     ..transform
                 };
-                artwork_aperture = Aperture::solid(ApertureShape::Contour {
-                    outline: geom_path::transform_cmds(outline.cmds.iter().copied(), basis),
-                    fill_rule: *fill_rule,
-                });
+                artwork_aperture = pcb_ir::dialects::artwork::legalize::bake_aperture_basis(
+                    &artwork_aperture,
+                    basis,
+                );
                 transform = Affine2::translation(Point::new(transform.m02, transform.m12));
             }
             let default_function = vec!["Conductor".to_string()];
@@ -304,26 +444,34 @@ fn lower_artwork_object(
                 .as_deref()
                 .unwrap_or(default_function.as_slice());
             let region_aperture_attributes = lower_aperture_function(aperture_function);
-            if is_copper && !is_pad_function(aperture_function) {
+            if is_copper
+                && !is_pad_function(aperture_function)
+                && object.meta.copper_balance != Some(CopperBalanceKind::FullVoid)
+            {
                 return lower_aperture_as_regions(
                     &artwork_aperture,
                     transform,
-                    object.polarity,
+                    polarity,
                     &region_aperture_attributes,
                     &attributes,
                 );
             }
             let aperture = apertures.artwork_aperture(artwork_aperture, aperture_function)?;
-            let (at, aperture_transform) = lower_aperture_placement(transform)?;
             objects.push(WriterObject {
-                kind: ObjectKind::Flash { at, aperture },
-                polarity: object.polarity,
-                aperture_transform,
+                kind: ObjectKind::Flash {
+                    at: lower_point(Point::new(transform.m02, transform.m12)),
+                    aperture,
+                },
+                polarity,
+                repeat: None,
+                aperture_transform: WriterApertureTransform::default(),
                 aperture_attributes: Vec::new(),
                 attributes,
             });
         }
-        ArtworkGeometry::Instance { .. } => unreachable!("artwork instances are expanded above"),
+        ArtworkGeometry::Instance { .. } | ArtworkGeometry::GridInstance { .. } => {
+            unreachable!("artwork instances are lowered by the hierarchy walker")
+        }
     }
     Ok(objects)
 }
@@ -508,9 +656,10 @@ impl ApertureTable {
                 // rule so winding is canonical: each shape is an outer ring
                 // followed by its holes, wound opposite. Larger shapes paint
                 // first so an island inside a hole survives the hole's erase.
-                let mut shapes = region::simplify_shapes(
+                let mut shapes = region::simplify_shapes_on_grid(
                     region::rings_from_contours(std::slice::from_ref(&outline)),
                     fill_rule,
+                    GERBER_GEOMETRY_GRID_MM,
                 );
                 shapes.sort_by(|a, b| {
                     let area = |shape: &region::Shape| {
@@ -855,12 +1004,18 @@ fn lower_layer_attributes(attributes: &LayerAttributes) -> Vec<AttributeValue> {
 fn lower_region_objects(
     layer: &ArtworkDocument,
     path_index: u32,
+    transform: Affine2,
     polarity: Polarity,
     aperture_attributes: &[AttributeValue],
     attributes: &[AttributeValue],
 ) -> Result<Vec<WriterObject>> {
     let artwork_path = &layer.arena.paths[path_index as usize];
-    let payloads = layer.arena.path_contours(artwork_path);
+    let payloads = layer
+        .arena
+        .path_contours(artwork_path)
+        .into_iter()
+        .map(|contour| geom_path::transform_cmds(contour.cmds, transform))
+        .collect::<Vec<_>>();
     let fill_rule = artwork_path.fill_rule().unwrap_or(FillRule::NonZero);
     let contours = lower_region_image_contours(&payloads, fill_rule)?;
     Ok(writer_region_objects(
@@ -905,6 +1060,7 @@ fn writer_region_objects(
                 contours: vec![contour],
             },
             polarity,
+            repeat: None,
             aperture_transform: WriterApertureTransform::default(),
             aperture_attributes: aperture_attributes.to_vec(),
             attributes: attributes.to_vec(),
@@ -917,11 +1073,7 @@ fn lower_region_image_contours(
     fill_rule: FillRule,
 ) -> Result<Vec<Contour>> {
     let rings = region::rings_from_contours(payloads);
-    if payloads.len() == 1 && rings.len() == 1 {
-        return Ok(vec![lower_region_contour(&payloads[0])?]);
-    }
-
-    region::simplify_shapes(rings, fill_rule)
+    region::simplify_shapes_on_grid(rings, fill_rule, GERBER_GEOMETRY_GRID_MM)
         .into_iter()
         .filter_map(region_shape_contour)
         .collect::<Result<Vec<_>>>()
@@ -957,8 +1109,16 @@ fn lower_region_contour(contour: &ContourBuf) -> Result<Contour> {
 }
 
 fn region_shape_contour(shape: Vec<Ring>) -> Option<Result<Contour>> {
-    let merged = pcb_ir::geom::bridge::bridge_shape(shape);
-    let payload = region::rings_to_contours(vec![merged]).into_iter().next()?;
+    let mut merged = pcb_ir::geom::bridge::bridge_shape(shape);
+    merged.dedup();
+    if merged.first() == merged.last() {
+        merged.pop();
+    }
+    if merged.len() < 3 {
+        return None;
+    }
+    let payload =
+        pcb_ir::geom::arcfit::ring_to_contour_with_arcs(&merged, pcb_ir::geom::tol::FLATTEN_MM);
     Some(lower_region_contour(&payload))
 }
 
@@ -1032,48 +1192,6 @@ fn lower_point(point: Point) -> GerberPoint {
     }
 }
 
-fn lower_aperture_placement(
-    transform: pcb_ir::geom::Affine2,
-) -> Result<(GerberPoint, WriterApertureTransform)> {
-    const EPSILON: f64 = 1e-9;
-    if !transform.preserves_circles(EPSILON) {
-        return Err(GerberError::InvalidStructure(
-            "cannot lower a non-similarity artwork transform to Gerber aperture load state"
-                .to_string(),
-        ));
-    }
-    let scaling = transform.m00.hypot(transform.m10);
-    if !scaling.is_finite() || scaling <= EPSILON {
-        return Err(GerberError::InvalidStructure(format!(
-            "cannot lower artwork transform with scale {scaling} to Gerber"
-        )));
-    }
-    let mirroring = if transform.determinant() < 0.0 {
-        Mirroring::X
-    } else {
-        Mirroring::None
-    };
-    let signed_scale = if mirroring == Mirroring::X {
-        -scaling
-    } else {
-        scaling
-    };
-    let rotation_degrees = (transform.m10 / signed_scale)
-        .atan2(transform.m00 / signed_scale)
-        .to_degrees();
-    Ok((
-        GerberPoint {
-            x: transform.m02,
-            y: transform.m12,
-        },
-        WriterApertureTransform {
-            mirroring,
-            rotation_degrees,
-            scaling,
-        },
-    ))
-}
-
 fn quantize_mm(value: f64) -> i64 {
     (value * 1_000_000.0).round() as i64
 }
@@ -1104,6 +1222,7 @@ mod tests {
     fn sanitizes_net_names_for_gerber_attribute_fields() {
         let attributes = lower_object_attributes(&ObjectAttributes {
             aperture_function: None,
+            copper_balance: None,
             net: Some("PWR_RST*,A%B".to_string()),
             component: None,
             pin: None,
@@ -1117,6 +1236,7 @@ mod tests {
     fn lowers_pin_attribute_with_component_context() {
         let attributes = lower_object_attributes(&ObjectAttributes {
             aperture_function: None,
+            copper_balance: None,
             net: None,
             component: Some("U1".to_string()),
             pin: Some("1".to_string()),
@@ -1132,6 +1252,7 @@ mod tests {
     fn skips_pin_attribute_without_component_context() {
         let attributes = lower_object_attributes(&ObjectAttributes {
             aperture_function: None,
+            copper_balance: None,
             net: None,
             component: None,
             pin: Some("1".to_string()),
@@ -1404,7 +1525,7 @@ mod tests {
         let actual = image(&pcb_ir::dialects::artwork::compose_to_mask(&geometry));
         let symmetric_difference =
             expected.difference(&actual).area() + actual.difference(&expected).area();
-        assert!(symmetric_difference < 1e-6, "{symmetric_difference}");
+        assert!(symmetric_difference < 0.01, "{symmetric_difference}");
     }
 
     #[test]
@@ -1686,6 +1807,44 @@ mod tests {
             "the hole ring must survive inside the aperture macro: {}",
             summary.area_mm2
         );
+    }
+
+    #[test]
+    fn full_copper_balance_cells_remain_shared_flashes() {
+        let mut artwork = ArtworkDocument::new();
+        let layer_id = artwork.push_layer(IrArtworkDocument {
+            name: "F.Cu".to_string(),
+            role: LayerRole::Copper,
+            side: Side::Top,
+            objects: Span::EMPTY,
+            bbox: BBox::empty(),
+            meta: LayerAttributes::default(),
+        });
+        let aperture = artwork.push_aperture(Aperture::solid(ApertureShape::Contour {
+            outline: rect_payload(-1.0, -1.0, 1.0, 1.0),
+            fill_rule: FillRule::NonZero,
+        }));
+        artwork.push_object(
+            layer_id,
+            ArtworkObject {
+                polarity: Polarity::Clear,
+                order: Default::default(),
+                geometry: ArtworkGeometry::Flash {
+                    aperture,
+                    transform: Affine2::translation(Point::new(4.0, 5.0)),
+                },
+                bbox: BBox::empty(),
+                meta: ObjectAttributes {
+                    aperture_function: Some(vec!["CopperBalancing".to_string()]),
+                    copper_balance: Some(CopperBalanceKind::FullVoid),
+                    ..ObjectAttributes::default()
+                },
+            },
+        );
+
+        let gerber = lower_artwork_layer(&artwork).expect("lower balance cell");
+        assert_eq!(gerber.aperture_macros.len(), 1);
+        assert!(matches!(gerber.objects[0].kind, ObjectKind::Flash { .. }));
     }
 
     #[test]

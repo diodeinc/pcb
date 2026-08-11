@@ -77,12 +77,15 @@ pub struct BalanceVoidInstance {
 pub struct BalanceFeatureSets {
     pub positive: Vec<SetFeature>,
     pub templates: Vec<BalanceVoidTemplate>,
-    pub instances: Vec<BalanceVoidInstance>,
+    pub full_instances: Vec<BalanceVoidInstance>,
+    pub clipped_instances: Vec<BalanceVoidInstance>,
 }
 
 impl BalanceFeatureSets {
     pub fn is_empty(&self) -> bool {
-        self.positive.is_empty() && self.instances.is_empty()
+        self.positive.is_empty()
+            && self.full_instances.is_empty()
+            && self.clipped_instances.is_empty()
     }
 }
 
@@ -358,11 +361,12 @@ pub fn balance_features(result: &DenseCopperBalanceResult) -> Result<BalanceFeat
             ..BalanceFeatureSets::default()
         }),
         DenseCopperBalanceMode::Perforated { .. } => {
-            let (templates, instances) = void_instances(result)?;
+            let (templates, full_instances, clipped_instances) = void_instances(result)?;
             Ok(BalanceFeatureSets {
                 positive: ipc_contour_features(result)?,
                 templates,
-                instances,
+                full_instances,
+                clipped_instances,
             })
         }
     }
@@ -372,10 +376,15 @@ pub fn balance_features(result: &DenseCopperBalanceResult) -> Result<BalanceFeat
 /// translated instance reference per occurrence.
 fn void_instances(
     result: &DenseCopperBalanceResult,
-) -> Result<(Vec<BalanceVoidTemplate>, Vec<BalanceVoidInstance>)> {
+) -> Result<(
+    Vec<BalanceVoidTemplate>,
+    Vec<BalanceVoidInstance>,
+    Vec<BalanceVoidInstance>,
+)> {
     let mut templates: Vec<BalanceVoidTemplate> = Vec::new();
     let partial_shapes = simplify_shapes(result.partial_voids.rings.clone(), FillRule::NonZero);
-    let mut instances = Vec::with_capacity(result.full_voids.len() + partial_shapes.len());
+    let mut full_instances = Vec::with_capacity(result.full_voids.len());
+    let mut clipped_instances = Vec::with_capacity(partial_shapes.len());
 
     for void in &result.full_voids {
         let id = format!("balance_hex_{}nm", (void.radius_mm * 1e6).round() as i64);
@@ -390,7 +399,7 @@ fn void_instances(
                 },
             });
         }
-        instances.push(BalanceVoidInstance {
+        full_instances.push(BalanceVoidInstance {
             template: id,
             x: void.center.x,
             y: void.center.y,
@@ -413,13 +422,13 @@ fn void_instances(
             });
             id
         };
-        instances.push(BalanceVoidInstance {
+        clipped_instances.push(BalanceVoidInstance {
             template: id,
             x: origin.x,
             y: origin.y,
         });
     }
-    Ok((templates, instances))
+    Ok((templates, full_instances, clipped_instances))
 }
 
 fn local_partial_void_template(shape: &pcb_ir::geom::region::Shape) -> Result<(IpcContour, Point)> {
@@ -663,8 +672,11 @@ mod tests {
             0
         );
 
-        assert_eq!(features.instances.len(), result.void_count());
-        for (instance, void) in features.instances.iter().zip(&result.full_voids) {
+        assert_eq!(
+            features.full_instances.len() + features.clipped_instances.len(),
+            result.void_count()
+        );
+        for (instance, void) in features.full_instances.iter().zip(&result.full_voids) {
             assert_eq!((instance.x, instance.y), (void.center.x, void.center.y));
             assert!(
                 features
@@ -673,7 +685,10 @@ mod tests {
                     .any(|template| template.id == instance.template)
             );
         }
-        assert!(features.templates.len() < features.instances.len());
+        assert!(
+            features.templates.len()
+                < features.full_instances.len() + features.clipped_instances.len()
+        );
         assert!(
             features
                 .templates

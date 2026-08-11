@@ -324,7 +324,7 @@ impl BoardArrayGeneratedGeometry {
             GeneratedLayerFeature {
                 layer_name: layer_name.into(),
                 polarity,
-                copper_balancing: false,
+                copper_balance: None,
                 spec_refs,
                 features,
                 instance_refs: Vec::new(),
@@ -345,7 +345,7 @@ impl BoardArrayGeneratedGeometry {
             GeneratedLayerFeature {
                 layer_name: layer_name.to_string(),
                 polarity: Polarity::Positive,
-                copper_balancing: true,
+                copper_balance: Some(pcb_ir::dialects::ipc::CopperBalanceKind::Plane),
                 spec_refs: Vec::new(),
                 features: sets.positive,
                 instance_refs: Vec::new(),
@@ -356,10 +356,21 @@ impl BoardArrayGeneratedGeometry {
             GeneratedLayerFeature {
                 layer_name: layer_name.to_string(),
                 polarity: Polarity::Negative,
-                copper_balancing: true,
+                copper_balance: Some(pcb_ir::dialects::ipc::CopperBalanceKind::FullVoid),
                 spec_refs: Vec::new(),
                 features: Vec::new(),
-                instance_refs: sets.instances,
+                instance_refs: sets.full_instances,
+            },
+        ));
+        self.layer_features.push((
+            scope,
+            GeneratedLayerFeature {
+                layer_name: layer_name.to_string(),
+                polarity: Polarity::Negative,
+                copper_balance: Some(pcb_ir::dialects::ipc::CopperBalanceKind::ClippedVoid),
+                spec_refs: Vec::new(),
+                features: Vec::new(),
+                instance_refs: sets.clipped_instances,
             },
         ));
         for template in sets.templates {

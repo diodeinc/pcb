@@ -1,6 +1,6 @@
 use gerberx2::{
     ApertureTemplate, AttributeValue, Command, Contour, ContourSegment, GerberLayer, GerberX2,
-    ObjectKind, PathCommand, Point, Unit, WriterAperture, WriterApertureMacro,
+    ObjectKind, PathCommand, Point, StepRepeat, Unit, WriterAperture, WriterApertureMacro,
     WriterApertureTemplate, WriterApertureTransform, WriterMacroExpression, WriterMacroPrimitive,
     WriterObject,
 };
@@ -76,6 +76,7 @@ fn writes_idiomatic_x2_layer_from_object_ir() {
                 aperture: 11,
             },
             polarity: Polarity::Dark,
+            repeat: None,
             aperture_transform: WriterApertureTransform::default(),
             aperture_attributes: Vec::new(),
             attributes: vec![
@@ -116,6 +117,7 @@ fn writes_idiomatic_x2_layer_from_object_ir() {
                 }],
             },
             polarity: Polarity::Dark,
+            repeat: None,
             aperture_transform: WriterApertureTransform::default(),
             aperture_attributes: vec![AttributeValue::new(".AperFunction", ["Conductor"])],
             attributes: Vec::new(),
@@ -152,6 +154,43 @@ fn writes_idiomatic_x2_layer_from_object_ir() {
             .iter()
             .any(|attribute| parsed.resolve(attribute.name) == ".AperFunction")
     );
+}
+
+#[test]
+fn writes_standard_step_repeat() {
+    let layer = GerberLayer {
+        apertures: vec![WriterAperture {
+            code: 10,
+            template: WriterApertureTemplate::Circle {
+                diameter: 1.0,
+                hole_diameter: None,
+            },
+            attributes: Vec::new(),
+        }],
+        objects: vec![WriterObject {
+            kind: ObjectKind::Flash {
+                at: Point { x: 2.0, y: 3.0 },
+                aperture: 10,
+            },
+            polarity: Polarity::Dark,
+            repeat: Some(StepRepeat {
+                x_repeats: 3,
+                y_repeats: 2,
+                x_step: 10.0,
+                y_step: 20.0,
+            }),
+            aperture_transform: WriterApertureTransform::default(),
+            aperture_attributes: Vec::new(),
+            attributes: Vec::new(),
+        }],
+        ..GerberLayer::default()
+    };
+
+    let output = gerberx2::write_layer(&layer).unwrap();
+    assert_external_parser_accepts(&output);
+    assert!(output.contains("%SRX3Y2I10J20*%"));
+    assert!(output.contains("%SR*%"));
+    assert_eq!(GerberX2::parse(&output).unwrap().objects().len(), 6);
 }
 
 #[test]
@@ -209,6 +248,7 @@ fn writes_macro_and_block_apertures_without_flattening() {
                             aperture: 10,
                         },
                         polarity: Polarity::Clear,
+                        repeat: None,
                         aperture_transform: WriterApertureTransform::default(),
                         aperture_attributes: Vec::new(),
                         attributes: Vec::new(),

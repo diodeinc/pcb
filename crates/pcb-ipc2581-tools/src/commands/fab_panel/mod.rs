@@ -361,18 +361,26 @@ fn create_fab_panel(
                     GeneratedLayerFeature {
                         layer_name: layer.layer_name.clone(),
                         polarity: Polarity::Positive,
-                        copper_balancing: true,
+                        copper_balance: Some(pcb_ir::dialects::ipc::CopperBalanceKind::Plane),
                         spec_refs: Vec::new(),
                         features: layer.features.positive,
                         instance_refs: Vec::new(),
                     },
                     GeneratedLayerFeature {
-                        layer_name: layer.layer_name,
+                        layer_name: layer.layer_name.clone(),
                         polarity: Polarity::Negative,
-                        copper_balancing: true,
+                        copper_balance: Some(pcb_ir::dialects::ipc::CopperBalanceKind::FullVoid),
                         spec_refs: Vec::new(),
                         features: Vec::new(),
-                        instance_refs: layer.features.instances,
+                        instance_refs: layer.features.full_instances,
+                    },
+                    GeneratedLayerFeature {
+                        layer_name: layer.layer_name,
+                        polarity: Polarity::Negative,
+                        copper_balance: Some(pcb_ir::dialects::ipc::CopperBalanceKind::ClippedVoid),
+                        spec_refs: Vec::new(),
+                        features: Vec::new(),
+                        instance_refs: layer.features.clipped_instances,
                     },
                 ]
             })

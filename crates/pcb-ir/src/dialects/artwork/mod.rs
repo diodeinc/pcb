@@ -172,12 +172,18 @@ fn geometry_ref_error<LayerMeta, ObjectMeta>(
         {
             Some(format!("references missing path {path}"))
         }
-        Geometry::Instance { block, .. } if block as usize >= doc.blocks.len() => {
+        Geometry::Instance { block, .. } | Geometry::GridInstance { block, .. }
+            if block as usize >= doc.blocks.len() =>
+        {
             Some(format!("references missing block {block}"))
         }
-        Geometry::Instance { block, .. } if block as usize >= block_limit => Some(format!(
-            "references block {block}; reusable blocks must reference earlier blocks"
-        )),
+        Geometry::Instance { block, .. } | Geometry::GridInstance { block, .. }
+            if block as usize >= block_limit =>
+        {
+            Some(format!(
+                "references block {block}; reusable blocks must reference earlier blocks"
+            ))
+        }
         _ => None,
     }
 }
@@ -251,6 +257,19 @@ pub struct PaintOrder {
     pub stage: PaintStage,
 }
 
+/// A regular two-axis repetition of one reusable artwork block.
+///
+/// Step vectors are expressed in the instance's parent coordinate system.
+/// Keeping them as vectors allows outer panel placements to rotate the grid
+/// without expanding its members.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GridRepeat {
+    pub x_count: u32,
+    pub y_count: u32,
+    pub x_step: Point,
+    pub y_step: Point,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Geometry {
     /// A standard aperture stamped under a placement transform.
@@ -261,12 +280,18 @@ pub enum Geometry {
     Region { path: u32 },
     /// A reusable ordered sub-image placed under an affine transform.
     Instance { block: u32, transform: Affine2 },
+    /// A reusable ordered sub-image placed on a regular grid.
+    GridInstance {
+        block: u32,
+        transform: Affine2,
+        repeat: GridRepeat,
+    },
 }
 
 impl Geometry {
     pub fn path(self) -> Option<u32> {
         match self {
-            Self::Flash { .. } | Self::Instance { .. } => None,
+            Self::Flash { .. } | Self::Instance { .. } | Self::GridInstance { .. } => None,
             Self::Stroke { path } | Self::Region { path } => Some(path),
         }
     }
@@ -582,7 +607,10 @@ fn object_image_rings<LayerMeta, ObjectMeta>(
                 )
             })
             .unwrap_or_default(),
-        Geometry::Flash { .. } | Geometry::Stroke { .. } | Geometry::Instance { .. } => Vec::new(),
+        Geometry::Flash { .. }
+        | Geometry::Stroke { .. }
+        | Geometry::Instance { .. }
+        | Geometry::GridInstance { .. } => Vec::new(),
     }
 }
 
@@ -616,6 +644,30 @@ fn geometry_bbox<LayerMeta, ObjectMeta>(
             .get(block as usize)
             .map(|block| block.bbox.transformed(transform))
             .unwrap_or_else(BBox::empty),
+        Geometry::GridInstance {
+            block,
+            transform,
+            repeat,
+        } => doc
+            .blocks
+            .get(block as usize)
+            .map(|block| {
+                let base = block.bbox.transformed(transform);
+                let x = repeat.x_count.saturating_sub(1) as f64;
+                let y = repeat.y_count.saturating_sub(1) as f64;
+                [(0.0, 0.0), (x, 0.0), (0.0, y), (x, y)]
+                    .into_iter()
+                    .map(|(ix, iy)| {
+                        Point::new(
+                            ix * repeat.x_step.x + iy * repeat.y_step.x,
+                            ix * repeat.x_step.y + iy * repeat.y_step.y,
+                        )
+                    })
+                    .fold(BBox::empty(), |bbox, offset| {
+                        bbox.union(BBox::new(base.min + offset, base.max + offset))
+                    })
+            })
+            .unwrap_or_else(BBox::empty),
     }
 }
 
@@ -627,10 +679,45 @@ fn geometry_bbox<LayerMeta, ObjectMeta>(
 pub fn expand_instances<LayerMeta: Clone, ObjectMeta: Clone>(
     doc: &Document<LayerMeta, ObjectMeta>,
 ) -> Document<LayerMeta, ObjectMeta> {
+    expand_instances_with_grid_policy(doc, false)
+}
+
+/// Materialize ordinary hierarchy while preserving explicit regular grids.
+///
+/// The result contains no ordinary instances. Nested grids materialize until
+/// each retained grid references a block without another grid. Retained grids
+/// use the same topologically ordered source blocks, with outer transforms
+/// composed into their base placement and step vectors.
+pub fn expand_instances_preserving_grids<LayerMeta: Clone, ObjectMeta: Clone>(
+    doc: &Document<LayerMeta, ObjectMeta>,
+) -> Document<LayerMeta, ObjectMeta> {
+    expand_instances_with_grid_policy(doc, true)
+}
+
+fn expand_instances_with_grid_policy<LayerMeta: Clone, ObjectMeta: Clone>(
+    doc: &Document<LayerMeta, ObjectMeta>,
+    preserve_grids: bool,
+) -> Document<LayerMeta, ObjectMeta> {
     let mut out = Document::new();
     out.apertures = doc.apertures.clone();
+    if preserve_grids {
+        out.blocks = doc.blocks.clone();
+    }
     out.arena = doc.arena.clone();
     out.diagnostics = doc.diagnostics.clone();
+    let mut block_contains_grid = Vec::with_capacity(doc.blocks.len());
+    for block in &doc.blocks {
+        block_contains_grid.push(block.objects.iter().any(|object| {
+            match object.geometry {
+                Geometry::GridInstance { .. } => true,
+                Geometry::Instance { block, .. } => block_contains_grid
+                    .get(block as usize)
+                    .copied()
+                    .unwrap_or(false),
+                _ => false,
+            }
+        }));
+    }
 
     for layer in &doc.layers {
         out.push_layer(Layer {
@@ -650,8 +737,12 @@ pub fn expand_instances<LayerMeta: Clone, ObjectMeta: Clone>(
                 &mut out,
                 layer_index as u32,
                 object,
-                Affine2::IDENTITY,
-                Polarity::Dark,
+                InstanceExpansion {
+                    transform: Affine2::IDENTITY,
+                    polarity: Polarity::Dark,
+                    preserve_grids,
+                    block_contains_grid: &block_contains_grid,
+                },
                 doc.blocks.len(),
             );
         }
@@ -660,16 +751,24 @@ pub fn expand_instances<LayerMeta: Clone, ObjectMeta: Clone>(
     out
 }
 
+#[derive(Clone, Copy)]
+struct InstanceExpansion<'a> {
+    transform: Affine2,
+    polarity: Polarity,
+    preserve_grids: bool,
+    block_contains_grid: &'a [bool],
+}
+
 fn expand_object_into_layer<LayerMeta, ObjectMeta: Clone>(
     source: &Document<LayerMeta, ObjectMeta>,
     target: &mut Document<LayerMeta, ObjectMeta>,
     layer: u32,
     object: &Object<ObjectMeta>,
-    transform: Affine2,
-    polarity: Polarity,
+    expansion: InstanceExpansion<'_>,
     block_limit: usize,
 ) {
-    let polarity = polarity.compose(object.polarity);
+    let transform = expansion.transform;
+    let polarity = expansion.polarity.compose(object.polarity);
     if let Geometry::Instance {
         block,
         transform: placement,
@@ -694,10 +793,90 @@ fn expand_object_into_layer<LayerMeta, ObjectMeta: Clone>(
                 target,
                 layer,
                 child,
-                transform,
-                polarity,
+                InstanceExpansion {
+                    transform,
+                    polarity,
+                    ..expansion
+                },
                 block as usize,
             );
+        }
+        return;
+    }
+
+    if let Geometry::GridInstance {
+        block,
+        transform: placement,
+        repeat,
+    } = object.geometry
+    {
+        let Some(block_definition) = source.blocks.get(block as usize) else {
+            target.warn(format!(
+                "Skipping artwork grid instance of missing block {block}"
+            ));
+            return;
+        };
+        if block as usize >= block_limit {
+            target.warn(format!(
+                "Skipping artwork grid instance of non-earlier block {block}"
+            ));
+            return;
+        }
+        if expansion.preserve_grids
+            && !expansion
+                .block_contains_grid
+                .get(block as usize)
+                .copied()
+                .unwrap_or(false)
+        {
+            target.push_object(
+                layer,
+                Object {
+                    polarity,
+                    order: object.order,
+                    geometry: Geometry::GridInstance {
+                        block,
+                        transform: transform.concat(placement),
+                        repeat: GridRepeat {
+                            x_count: repeat.x_count,
+                            y_count: repeat.y_count,
+                            x_step: transform.transform_vector(repeat.x_step),
+                            y_step: transform.transform_vector(repeat.y_step),
+                        },
+                    },
+                    bbox: BBox::empty(),
+                    meta: object.meta.clone(),
+                },
+            );
+            return;
+        }
+        for iy in 0..repeat.y_count {
+            for ix in 0..repeat.x_count {
+                let offset = Point::new(
+                    ix as f64 * repeat.x_step.x + iy as f64 * repeat.y_step.x,
+                    ix as f64 * repeat.x_step.y + iy as f64 * repeat.y_step.y,
+                );
+                let placement = Affine2 {
+                    m02: placement.m02 + offset.x,
+                    m12: placement.m12 + offset.y,
+                    ..placement
+                };
+                let occurrence = transform.concat(placement);
+                for child in &block_definition.objects {
+                    expand_object_into_layer(
+                        source,
+                        target,
+                        layer,
+                        child,
+                        InstanceExpansion {
+                            transform: occurrence,
+                            polarity,
+                            ..expansion
+                        },
+                        block as usize,
+                    );
+                }
+            }
         }
         return;
     }
@@ -729,7 +908,7 @@ fn expand_object_into_layer<LayerMeta, ObjectMeta: Clone>(
                 _ => unreachable!(),
             }
         }
-        Geometry::Instance { .. } => unreachable!(),
+        Geometry::Instance { .. } | Geometry::GridInstance { .. } => unreachable!(),
     };
     target.push_object(
         layer,

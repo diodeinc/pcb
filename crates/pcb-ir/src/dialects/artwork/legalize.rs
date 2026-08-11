@@ -64,14 +64,15 @@ fn legalize_flash_geometry<LayerMeta, ObjectMeta>(
         m12: 0.0,
         ..transform
     };
-    let aperture = doc.push_aperture(aperture_with_baked_basis(&source, basis));
+    let aperture = doc.push_aperture(bake_aperture_basis(&source, basis));
     Geometry::Flash {
         aperture,
         transform: Affine2::translation(Point::new(transform.m02, transform.m12)),
     }
 }
 
-fn aperture_with_baked_basis(aperture: &Aperture, basis: Affine2) -> Aperture {
+/// Apply a translation-free affine basis directly to an aperture definition.
+pub fn bake_aperture_basis(aperture: &Aperture, basis: Affine2) -> Aperture {
     let similarity = basis.preserves_circles(TRANSFORM_EPSILON);
     let scale = basis.m00.hypot(basis.m10);
     let scaled_hole = || aperture.hole_diameter * scale;

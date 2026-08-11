@@ -10,8 +10,9 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
-- Non-pad copper aperture placements now export as Gerber regions, reserving flashes for pads.
-- Generated copper balancing now exports with the Gerber `CopperBalancing` aperture function.
+- Gerber exports regularize filled contours to a 1 µm grid and preserve regular board grids with standard step-repeat.
+- Gerber exports bake aperture transforms into aperture geometry instead of load transform commands.
+- Full copper-balance cells remain reusable flashes, while clipped cells and other non-pad copper export as regions with the `CopperBalancing` aperture function.
 
 ## [0.4.27] - 2026-08-10
 

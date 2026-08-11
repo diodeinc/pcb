@@ -208,13 +208,24 @@ fn push_spec_refs(doc: &mut GeometryDocument, spec_refs: &[Symbol]) -> Span {
     Span::new(start, doc.spec_refs.len() as u32 - start)
 }
 
-fn is_copper_balancing_set(ipc: &Ipc2581, set: &ipc2581::types::FeatureSet) -> bool {
-    set.nonstandard_attributes.iter().any(|attribute| {
-        ipc.resolve(attribute.name) == crate::copper_balance::COPPER_BALANCE_ATTRIBUTE_NAME
-            && attribute
-                .value
-                .is_some_and(|value| ipc.resolve(value).eq_ignore_ascii_case("true"))
-    })
+fn copper_balance_kind(
+    ipc: &Ipc2581,
+    set: &ipc2581::types::FeatureSet,
+) -> Option<pcb_ir::dialects::ipc::CopperBalanceKind> {
+    let value = set
+        .nonstandard_attributes
+        .iter()
+        .find(|attribute| {
+            ipc.resolve(attribute.name) == crate::copper_balance::COPPER_BALANCE_ATTRIBUTE_NAME
+        })?
+        .value
+        .map(|value| ipc.resolve(value))?;
+    match value {
+        "plane" => Some(pcb_ir::dialects::ipc::CopperBalanceKind::Plane),
+        "full_void" => Some(pcb_ir::dialects::ipc::CopperBalanceKind::FullVoid),
+        "clipped_void" => Some(pcb_ir::dialects::ipc::CopperBalanceKind::ClippedVoid),
+        _ => None,
+    }
 }
 
 fn push_feature_set_record(
@@ -243,13 +254,13 @@ fn push_extracted_feature(
     doc: &mut GeometryDocument,
     set_id: u32,
     source_layer_ref: Symbol,
-    copper_balancing: bool,
+    copper_balance: Option<pcb_ir::dialects::ipc::CopperBalanceKind>,
     mut feature: GeometryFeature,
     layer_bbox: &mut BBox,
 ) {
     feature.source_layer_ref = Some(source_layer_ref);
     feature.set = Some(set_id);
-    feature.flags.copper_balancing |= copper_balancing;
+    feature.flags.copper_balance = copper_balance;
     let bbox = feature.bbox;
     *layer_bbox = layer_bbox.union(bbox);
     let set = &mut doc.feature_sets[set_id as usize];
@@ -743,7 +754,7 @@ pub(crate) fn extract_step_layer_local(
     {
         for (set_index, set) in layer_feature.sets.iter().enumerate() {
             let polarity = set.polarity.map(map_polarity).unwrap_or(layer_polarity);
-            let copper_balancing = is_copper_balancing_set(ipc, set);
+            let copper_balance = copper_balance_kind(ipc, set);
             let set_id =
                 push_feature_set_record(&mut doc, layer_index, set_index as u32, set, polarity);
 
@@ -770,7 +781,7 @@ pub(crate) fn extract_step_layer_local(
                         &mut doc,
                         set_id,
                         layer_feature.layer_ref,
-                        copper_balancing,
+                        copper_balance,
                         feature,
                         &mut layer_bbox,
                     );
@@ -791,7 +802,7 @@ pub(crate) fn extract_step_layer_local(
 
         for (set_index, set) in layer_feature.sets.iter().enumerate() {
             let polarity = set.polarity.map(map_polarity).unwrap_or(layer_polarity);
-            let copper_balancing = is_copper_balancing_set(ipc, set);
+            let copper_balance = copper_balance_kind(ipc, set);
             let mut emitted = Vec::new();
 
             if is_drill_layer && source_layer.name == layer.name {
@@ -842,7 +853,7 @@ pub(crate) fn extract_step_layer_local(
                         &mut doc,
                         set_id,
                         layer_feature.layer_ref,
-                        copper_balancing,
+                        copper_balance,
                         feature,
                         &mut layer_bbox,
                     );

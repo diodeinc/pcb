@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 use crate::copper_balance::{
     BalanceVoidInstance, BalanceVoidTemplate, COPPER_BALANCE_ATTRIBUTE_NAME,
 };
+use pcb_ir::dialects::ipc::CopperBalanceKind;
 
 /// Only board-array tooling generates named holes today; the prefix stays
 /// stable so re-panelization produces identical names.
@@ -25,8 +26,8 @@ const GENERATED_HOLE_NAME_PREFIX: &str = "array_tooling_hole";
 pub(crate) struct GeneratedLayerFeature {
     pub layer_name: String,
     pub polarity: Polarity,
-    /// This set is generated copper balancing, including clear-pattern voids.
-    pub copper_balancing: bool,
+    /// Semantic role of this generated copper-balance set.
+    pub copper_balance: Option<CopperBalanceKind>,
     pub spec_refs: Vec<String>,
     pub features: Vec<SetFeature>,
     /// Flashed dictionary-instance references, emitted after `features`.
@@ -65,13 +66,18 @@ pub(crate) fn write_generated_layer_feature(
         "Set",
         &[("polarity", write::polarity_attr(layer_feature.polarity))],
     );
-    if layer_feature.copper_balancing {
+    if let Some(kind) = layer_feature.copper_balance {
+        let value = match kind {
+            CopperBalanceKind::Plane => "plane",
+            CopperBalanceKind::FullVoid => "full_void",
+            CopperBalanceKind::ClippedVoid => "clipped_void",
+        };
         writer.empty_element(
             "NonstandardAttribute",
             &[
                 ("name", COPPER_BALANCE_ATTRIBUTE_NAME),
-                ("type", "BOOLEAN"),
-                ("value", "true"),
+                ("type", "STRING"),
+                ("value", value),
             ],
         );
     }

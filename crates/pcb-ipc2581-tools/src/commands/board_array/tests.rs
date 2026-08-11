@@ -940,7 +940,7 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
     .pop()
     .unwrap();
     let features = balance_features(&balance).unwrap();
-    let void_count = features.instances.len();
+    let void_count = features.full_instances.len() + features.clipped_instances.len();
     spec.generated_geometry
         .add_balance_layer(GeneratedFeatureScope::Array, "TOP", features);
     assert!(matches!(
@@ -951,13 +951,11 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
 
     let xml = write_board_array_xml(input, &spec).unwrap();
     assert!(xml.contains(r#"<Set polarity="NEGATIVE">"#));
-    assert_eq!(
-        xml.matches(
-            r#"<NonstandardAttribute name="diode.copper_balance" type="BOOLEAN" value="true"/>"#
-        )
-        .count(),
-        2
-    );
+    for kind in ["plane", "full_void", "clipped_void"] {
+        assert!(xml.contains(&format!(
+            r#"<NonstandardAttribute name="diode.copper_balance" type="STRING" value="{kind}"/>"#
+        )));
+    }
 
     let parsed = Ipc2581::parse(&xml).unwrap();
     assert!(xml.matches("<Contour>").count() > 0);
@@ -976,7 +974,7 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
         top.features
             .iter()
             .filter(|feature| feature.source_step_kind == LayoutStepKind::Panel)
-            .all(|feature| feature.flags.copper_balancing)
+            .all(|feature| feature.flags.copper_balance.is_some())
     );
     let balance_paths = |polarity: pcb_ir::geom::Polarity| {
         let paths = top

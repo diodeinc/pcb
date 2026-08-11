@@ -15,8 +15,8 @@ use crate::geometry;
 use gerberx2::from_artwork::lower_artwork_layer;
 use gerberx2::from_artwork::{ArtworkDocument as GerberArtwork, LayerAttributes, ObjectAttributes};
 use pcb_ir::dialects::artwork::{
-    Aperture, ApertureShape, Geometry as ArtworkGeometry, Object as ArtworkObject, PaintOrder,
-    PaintStage,
+    Aperture, ApertureShape, Geometry as ArtworkGeometry, GridRepeat, Object as ArtworkObject,
+    PaintOrder, PaintStage,
 };
 use pcb_ir::dialects::ipc::{
     ArtworkLowering, ArtworkObjectKind, ArtworkScope, Feature, FeatureBucket, FeatureDomain,
@@ -648,24 +648,38 @@ fn build_step_artwork_objects(
         side: context.side,
     };
     let mut objects = lower_layer_to_artwork_objects_with(&local, 0, artwork, &mut lowering);
-    objects.extend(
-        children
-            .into_iter()
-            .filter(|&(child, _)| !artwork.blocks[child as usize].objects.is_empty())
-            .flat_map(|(child, repeat)| {
-                (0..repeat.ny).flat_map(move |iy| {
-                    (0..repeat.nx).map(move |ix| {
-                        ArtworkObject::new(
-                            Polarity::Dark,
-                            ArtworkGeometry::Instance {
-                                block: child,
-                                transform: geometry::step_repeat_transform(repeat, ix, iy),
-                            },
-                        )
-                    })
-                })
-            }),
-    );
+    for (child, repeat) in children {
+        if artwork.blocks[child as usize].objects.is_empty() || repeat.nx == 0 || repeat.ny == 0 {
+            continue;
+        }
+        if repeat.nx > 1 || repeat.ny > 1 {
+            objects.push(ArtworkObject::new(
+                Polarity::Dark,
+                ArtworkGeometry::GridInstance {
+                    block: child,
+                    transform: geometry::step_repeat_transform(repeat, 0, 0),
+                    repeat: GridRepeat {
+                        x_count: repeat.nx,
+                        y_count: repeat.ny,
+                        x_step: Point::new(repeat.dx, 0.0),
+                        y_step: Point::new(0.0, repeat.dy),
+                    },
+                },
+            ));
+        } else {
+            for iy in 0..repeat.ny {
+                for ix in 0..repeat.nx {
+                    objects.push(ArtworkObject::new(
+                        Polarity::Dark,
+                        ArtworkGeometry::Instance {
+                            block: child,
+                            transform: geometry::step_repeat_transform(repeat, ix, iy),
+                        },
+                    ));
+                }
+            }
+        }
+    }
     Ok(objects)
 }
 
@@ -1427,6 +1441,7 @@ fn object_attributes(
     let carries_pins = carries_netlist && matches!(side, IrSide::Top | IrSide::Bottom);
     ObjectAttributes {
         aperture_function,
+        copper_balance: feature.flags.copper_balance,
         net: if carries_netlist {
             feature.net.map(|symbol| ipc.resolve(symbol).to_string())
         } else {
@@ -1463,7 +1478,7 @@ fn aperture_function(
         GerberLayerRole::Copper => {}
     }
 
-    if feature.flags.copper_balancing {
+    if feature.flags.copper_balance.is_some() {
         return Some(vec!["CopperBalancing".to_string()]);
     }
 
@@ -2147,6 +2162,7 @@ mod tests {
             .unwrap();
         assert!(array_fab.contents.contains("%TF.Part,Array*%"));
         assert!(!array_fab.contents.contains("%ABD"));
+        assert!(array_fab.contents.contains("%SRX2Y1I30J0*%"));
         let parsed = gerberx2::GerberX2::parse(&array_fab.contents).unwrap();
         assert_eq!(parsed.objects().len(), 8);
         let artwork = gerberx2::geometry::extract_document(&parsed);
@@ -2822,7 +2838,7 @@ mod tests {
     }
 
     #[test]
-    fn gerber_expands_nested_panel_repeats() {
+    fn gerber_preserves_leaf_board_repeats_without_nesting() {
         let ipc = ipc::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -2831,7 +2847,7 @@ mod tests {
     <StepRef name="fab"/>
     <LayerRef name="TOP"/>
     <DictionaryStandard units="MILLIMETER">
-      <EntryStandard id="pad"><Circle diameter="1"/></EntryStandard>
+      <EntryStandard id="pad"><RectCenter width="2" height="1"/></EntryStandard>
     </DictionaryStandard>
   </Content>
   <Ecad>
@@ -2867,7 +2883,7 @@ mod tests {
             <PolyStepSegment x="28" y="0"/>
           </Polygon>
         </Profile>
-        <StepRepeat stepRef="board" x="4" y="6" nx="2" ny="1" dx="14" dy="0"/>
+        <StepRepeat stepRef="board" x="4" y="6" nx="2" ny="1" dx="14" dy="0" angle="90"/>
       </Step>
       <Step name="fab" type="PALLET">
         <StepRepeat stepRef="panel" x="0" y="0" nx="3" ny="1" dx="30" dy="0"/>
@@ -2886,10 +2902,15 @@ mod tests {
         assert!(top.contents.contains("%TF.Part,Array*%"));
         assert_eq!(
             top.layer.objects.len(),
-            6,
-            "three assembly panels containing two boards each are expanded inline"
+            3,
+            "the three panel placements each retain one board grid"
         );
         assert!(!top.contents.contains("%ABD"));
+        assert_eq!(top.contents.matches("%SRX2Y1I14J0*%").count(), 3);
+        assert!(!top.contents.contains("%SRX3Y1I30J0*%"));
+        assert!(!top.contents.contains("%LM"));
+        assert!(!top.contents.contains("%LR"));
+        assert!(!top.contents.contains("%LS"));
         let parsed = gerberx2::GerberX2::parse(&top.contents).unwrap();
         assert_eq!(parsed.objects().len(), 6);
         let artwork = gerberx2::geometry::extract_document(&parsed);

@@ -171,6 +171,8 @@ pub enum WriterMacroExpression {
 pub struct WriterObject {
     pub kind: ObjectKind,
     pub polarity: Polarity,
+    /// Optional regular repetition of this graphical object.
+    pub repeat: Option<StepRepeat>,
     /// Gerber aperture load transformation active for this object.
     pub aperture_transform: WriterApertureTransform,
     /// Aperture attributes attached directly to a region object.
@@ -200,6 +202,7 @@ impl WriterObject {
         Self {
             kind,
             polarity: Polarity::Dark,
+            repeat: None,
             aperture_transform: WriterApertureTransform::default(),
             aperture_attributes: Vec::new(),
             attributes: Vec::new(),
@@ -490,6 +493,30 @@ impl<'a> Writer<'a> {
         self.set_polarity(object.polarity);
         self.set_attributes(&object.aperture_attributes, &object.attributes)?;
 
+        if let Some(repeat) = object.repeat {
+            if repeat.x_repeats <= 0
+                || repeat.y_repeats <= 0
+                || repeat.x_step < 0.0
+                || repeat.y_step < 0.0
+                || !repeat.x_step.is_finite()
+                || !repeat.y_step.is_finite()
+            {
+                return Err(GerberError::InvalidStructure(
+                    "Gerber step-repeat requires positive counts and finite non-negative steps"
+                        .to_string(),
+                ));
+            }
+            self.output.push_str("%SRX");
+            self.output.push_str(&repeat.x_repeats.to_string());
+            self.output.push('Y');
+            self.output.push_str(&repeat.y_repeats.to_string());
+            self.output.push('I');
+            self.write_decimal(repeat.x_step);
+            self.output.push('J');
+            self.write_decimal(repeat.y_step);
+            self.output.push_str("*%\n");
+        }
+
         match &object.kind {
             ObjectKind::Draw {
                 start,
@@ -525,6 +552,10 @@ impl<'a> Writer<'a> {
             ObjectKind::Region { contours } => {
                 self.write_region(contours)?;
             }
+        }
+
+        if object.repeat.is_some() {
+            self.output.push_str("%SR*%\n");
         }
 
         Ok(())
@@ -850,6 +881,7 @@ mod tests {
                 aperture: 10,
             },
             polarity: Polarity::Dark,
+            repeat: None,
             aperture_transform: WriterApertureTransform::default(),
             aperture_attributes: Vec::new(),
             attributes,

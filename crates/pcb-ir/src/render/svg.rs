@@ -211,7 +211,7 @@ fn write_artwork_object<LayerMeta, ObjectMeta>(
             )
             .unwrap();
         }
-        Geometry::Instance { .. } => {
+        Geometry::Instance { .. } | Geometry::GridInstance { .. } => {
             unreachable!("artwork instances are expanded before SVG rendering")
         }
     }

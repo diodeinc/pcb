@@ -750,18 +750,14 @@ fn balances_gutters_at_the_assembly_panel_density_and_leaves_margins_bare() {
             .xml
             .matches(r#"<LayerFeature layerRef="TOP">"#)
             .count(),
-        4,
-        "both sources plus the fab step's positive and negative balance sets should carry TOP copper"
+        5,
+        "both sources plus the fab step's three semantic balance sets should carry TOP copper"
     );
-    assert_eq!(
-        creation
-            .xml
-            .matches(
-                r#"<NonstandardAttribute name="diode.copper_balance" type="BOOLEAN" value="true"/>"#
-            )
-            .count(),
-        2
-    );
+    for kind in ["plane", "full_void", "clipped_void"] {
+        assert!(creation.xml.contains(&format!(
+            r#"<NonstandardAttribute name="diode.copper_balance" type="STRING" value="{kind}"/>"#
+        )));
+    }
 
     Ipc2581::validate(&creation.xml).unwrap();
     let parsed = Ipc2581::parse(&creation.xml).unwrap();

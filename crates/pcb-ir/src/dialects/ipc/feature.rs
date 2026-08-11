@@ -345,13 +345,20 @@ pub enum FiducialKind {
     GoodPanel,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CopperBalanceKind {
+    Plane,
+    FullVoid,
+    ClippedVoid,
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FeatureFlags {
     pub expanded_padstack: bool,
     pub lowered_to_paths: bool,
     pub clears_previous_in_set: bool,
     /// Generated copper balancing inherited from the source IPC feature set.
-    pub copper_balancing: bool,
+    pub copper_balance: Option<CopperBalanceKind>,
 }
 
 /// Position of a feature within its source feature set, for stable ordering.

@@ -15,9 +15,12 @@ use boostvoronoi::prelude::{
 };
 use boostvoronoi::utils::visual_utils::SimpleAffine;
 use i_overlay::core::fill_rule::FillRule as OverlayFillRule;
+use i_overlay::core::overlay::IntOverlayOptions;
 use i_overlay::core::overlay_rule::OverlayRule;
+use i_overlay::core::simplify::Simplify;
 use i_overlay::float::simplify::SimplifyShape;
 use i_overlay::float::single::SingleFloatOverlay;
+use i_overlay::i_float::int::point::IntPoint;
 use i_overlay::mesh::outline::offset::OutlineOffset;
 use i_overlay::mesh::style::{LineJoin as OutlineLineJoin, OutlineStyle};
 
@@ -69,6 +72,49 @@ pub fn simplify_rings(rings: Vec<Ring>, fill_rule: FillRule) -> Vec<Ring> {
 /// outer ring followed by its holes, wound opposite.
 pub fn simplify_shapes(rings: Vec<Ring>, fill_rule: FillRule) -> Vec<Shape> {
     rings.simplify_shape(overlay_fill_rule(fill_rule))
+}
+
+/// Regularize filled rings on an exact output grid.
+///
+/// The fixed-scale integer overlay resolves crossings, removes coincident
+/// vertices and merges collinear edges while snapping every result vertex to
+/// `grid`. Components no larger than one grid cell cannot be represented
+/// robustly and are discarded.
+pub fn simplify_shapes_on_grid(rings: Vec<Ring>, fill_rule: FillRule, grid: f64) -> Vec<Shape> {
+    let min_area = grid * grid;
+    let rings = rings
+        .into_iter()
+        .map(|ring| {
+            ring.into_iter()
+                .map(|[x, y]| IntPoint::new((x / grid).round() as i64, (y / grid).round() as i64))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    rings
+        .as_slice()
+        .simplify(overlay_fill_rule(fill_rule), IntOverlayOptions::default())
+        .into_iter()
+        .map(|shape| {
+            shape
+                .into_iter()
+                .map(|ring| {
+                    ring.into_iter()
+                        .map(|point| [point.x as f64 * grid, point.y as f64 * grid])
+                        .collect::<Ring>()
+                })
+                .collect::<Shape>()
+        })
+        .filter_map(|mut shape| {
+            if shape
+                .first()
+                .is_none_or(|outer| ring_signed_area(outer).abs() <= min_area)
+            {
+                return None;
+            }
+            shape.retain(|ring| ring_signed_area(ring).abs() > min_area);
+            Some(shape)
+        })
+        .collect()
 }
 
 pub fn union_rings(rings: Vec<Ring>, fill_rule: FillRule) -> Vec<Ring> {
@@ -1464,6 +1510,45 @@ fn segment_bbox(start: Point, end: Point) -> BBox {
 mod tests {
     use super::*;
     use crate::geom::shapes;
+
+    #[test]
+    fn fixed_grid_regularization_removes_sub_grid_geometry() {
+        let shapes = simplify_shapes_on_grid(
+            vec![
+                vec![
+                    [0.0004, 0.0004],
+                    [1.0004, 0.0004],
+                    [1.00049, 0.00049],
+                    [1.0004, 1.0004],
+                    [0.0004, 1.0004],
+                ],
+                vec![
+                    [2.0001, 0.0],
+                    [2.0004, 0.0],
+                    [2.0004, 0.0003],
+                    [2.0001, 0.0003],
+                ],
+            ],
+            FillRule::NonZero,
+            0.001,
+        );
+
+        assert_eq!(shapes.len(), 1);
+        assert!((rings_area(&shapes[0]) - 1.0).abs() < 1e-9);
+        for ring in &shapes[0] {
+            for point in ring {
+                assert!((point[0] * 1000.0 - (point[0] * 1000.0).round()).abs() < 1e-9);
+                assert!((point[1] * 1000.0 - (point[1] * 1000.0).round()).abs() < 1e-9);
+            }
+            for (start, end) in ring
+                .iter()
+                .zip(ring.iter().cycle().skip(1))
+                .take(ring.len())
+            {
+                assert!((start[0] - end[0]).hypot(start[1] - end[1]) >= 0.001);
+            }
+        }
+    }
 
     /// Partial cells are the whole point: a sampled estimate would round each
     /// of these to nothing or to everything.
