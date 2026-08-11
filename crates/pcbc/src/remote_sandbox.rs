@@ -718,6 +718,10 @@ impl SyncSession {
         self.manifest.state = SyncSessionState::Active;
         self.manifest.stop_reason = None;
         self.manifest.editor_pid = Some(editor_pid);
+        // Restore marks prompt_seen before editing continues; clear it so an
+        // unclean exit leaves this live session as a recovery candidate and
+        // keeps the running-editor guard armed.
+        self.manifest.prompt_seen = false;
         self.manifest.updated_at = Utc::now();
         self.save()
     }
@@ -1067,6 +1071,42 @@ mod tests {
             serde_json::to_vec(&manifest).unwrap(),
         )
         .unwrap();
+
+        let error = latest_recoverable_session(cache.path()).unwrap_err();
+        assert!(error.to_string().contains("KiCad is still open"));
+    }
+
+    #[test]
+    fn mark_active_rearms_editor_guard_after_restore() {
+        let cache = tempfile::tempdir().unwrap();
+        let local_layout_dir = cache.path().join("session");
+        fs::create_dir(&local_layout_dir).unwrap();
+        let layout_file = local_layout_dir.join("layout.kicad_pcb");
+        fs::write(&layout_file, "").unwrap();
+        let now = Utc::now();
+        let manifest = SyncSessionManifest {
+            version: 1,
+            uri: "diode://api.diode.computer/sandboxes/test/fs/read?path=%2Flayout.kicad_pcb"
+                .to_string(),
+            remote_layout_dir: "/".to_string(),
+            local_layout_dir: local_layout_dir.clone(),
+            layout_file,
+            state: SyncSessionState::Active,
+            stop_reason: None,
+            editor_pid: None,
+            // Restore sets prompt_seen before the editor is relaunched.
+            prompt_seen: true,
+            started_at: now,
+            updated_at: now,
+        };
+        fs::write(
+            local_layout_dir.join(SESSION_MANIFEST),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let mut session = SyncSession::load(local_layout_dir).unwrap();
+        session.mark_active(std::process::id()).unwrap();
 
         let error = latest_recoverable_session(cache.path()).unwrap_err();
         assert!(error.to_string().contains("KiCad is still open"));
