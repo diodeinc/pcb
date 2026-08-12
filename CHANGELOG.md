@@ -11,6 +11,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - BOM sourcing now uses the API's deterministic offer order for five-board builds.
+- Board arrays place rail fiducials and tooling holes on the other rail pair when the preferred pair does not fit.
+- Auto board arrays error out when rail fiducials and tooling holes cannot fit.
 
 ## [0.4.28] - 2026-08-11
 
