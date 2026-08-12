@@ -772,18 +772,19 @@ fn latest_recoverable_session(cache_root: &Path) -> Result<Option<SyncSession>> 
         let Ok(session) = SyncSession::load(entry.path()) else {
             continue;
         };
-        if !is_recovery_candidate(&session.manifest) {
-            continue;
-        }
-        if session
-            .manifest
-            .editor_pid
-            .is_some_and(editor_process_is_running)
+        if session.manifest.state == SyncSessionState::Active
+            && session
+                .manifest
+                .editor_pid
+                .is_some_and(editor_process_is_running)
         {
             bail!(
                 "KiCad is still open for {}. Close that KiCad window before opening this board again.",
                 session.manifest.layout_file.display()
             );
+        }
+        if !is_recovery_candidate(&session.manifest) {
+            continue;
         }
         if latest
             .as_ref()
@@ -1045,7 +1046,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn refuses_recovery_while_tracked_editor_is_running() {
+    fn refuses_open_for_restored_session_while_tracked_editor_is_running() {
         let cache = tempfile::tempdir().unwrap();
         let local_layout_dir = cache.path().join("session");
         fs::create_dir(&local_layout_dir).unwrap();
@@ -1059,10 +1060,10 @@ mod tests {
             remote_layout_dir: "/".to_string(),
             local_layout_dir: local_layout_dir.clone(),
             layout_file,
-            state: SyncSessionState::Recoverable,
-            stop_reason: Some(RecoverableStopReason::SyncFailed),
+            state: SyncSessionState::Active,
+            stop_reason: None,
             editor_pid: Some(std::process::id()),
-            prompt_seen: false,
+            prompt_seen: true,
             started_at: now,
             updated_at: now,
         };
