@@ -786,24 +786,32 @@ fn build_board_array_spec(
         array_width,
         array_height,
     );
+    let tooling_spec = BoardArrayToolingSpec {
+        columns,
+        rows,
+        board_width_mm: board_width,
+        board_height_mm: board_height,
+        margin_x_mm: margin_x,
+        margin_y_mm: margin_y,
+        pitch_x_mm: pitch_x,
+        pitch_y_mm: pitch_y,
+        array_width_mm: array_width,
+        array_height_mm: array_height,
+    };
+    if validation_mode != BoardArrayValidationMode::Manual
+        && board_array_tooling_orientation(&tooling_spec).is_none()
+    {
+        bail!(
+            "auto board array cannot fit rail fiducials and tooling holes on either rail pair; \
+             panelize manually to skip rail tooling"
+        );
+    }
     add_board_array_tooling(
         &mut generated_geometry,
         ipc,
         ecad,
         &mut used_layer_names,
-        BoardArrayToolingSpec {
-            orientation: board_array_tooling_orientation(array_width, array_height),
-            columns,
-            rows,
-            board_width_mm: board_width,
-            board_height_mm: board_height,
-            margin_x_mm: margin_x,
-            margin_y_mm: margin_y,
-            pitch_x_mm: pitch_x,
-            pitch_y_mm: pitch_y,
-            array_width_mm: array_width,
-            array_height_mm: array_height,
-        },
+        tooling_spec,
     )?;
     add_board_cell_fiducials(
         &mut generated_geometry,

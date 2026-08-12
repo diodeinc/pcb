@@ -3,7 +3,6 @@
 use super::*;
 
 pub(super) struct BoardArrayToolingSpec {
-    pub(super) orientation: BoardArrayToolingOrientation,
     pub(super) columns: u32,
     pub(super) rows: u32,
     pub(super) board_width_mm: f64,
@@ -22,15 +21,47 @@ pub(super) enum BoardArrayToolingOrientation {
     LeftRight,
 }
 
+/// Pick the rail pair for board array tooling.
+///
+/// Eligibility is checked per orientation: the board span along the rail
+/// direction must satisfy the single- or multi-board minimum. Prefer the
+/// shorter pair of rails (left/right for landscape arrays), then fall back
+/// to the other eligible pair.
 pub(super) fn board_array_tooling_orientation(
-    array_width_mm: f64,
-    array_height_mm: f64,
-) -> BoardArrayToolingOrientation {
-    if array_width_mm > array_height_mm {
-        BoardArrayToolingOrientation::LeftRight
+    spec: &BoardArrayToolingSpec,
+) -> Option<BoardArrayToolingOrientation> {
+    let top_bottom =
+        board_array_tooling_span_eligible(spec, BoardArrayToolingOrientation::TopBottom);
+    let left_right =
+        board_array_tooling_span_eligible(spec, BoardArrayToolingOrientation::LeftRight);
+
+    if spec.array_width_mm > spec.array_height_mm {
+        if left_right {
+            Some(BoardArrayToolingOrientation::LeftRight)
+        } else {
+            top_bottom.then_some(BoardArrayToolingOrientation::TopBottom)
+        }
+    } else if top_bottom {
+        Some(BoardArrayToolingOrientation::TopBottom)
     } else {
-        BoardArrayToolingOrientation::TopBottom
+        left_right.then_some(BoardArrayToolingOrientation::LeftRight)
     }
+}
+
+fn board_array_tooling_span_eligible(
+    spec: &BoardArrayToolingSpec,
+    orientation: BoardArrayToolingOrientation,
+) -> bool {
+    let (span_count, board_span) = match orientation {
+        BoardArrayToolingOrientation::TopBottom => (spec.columns, spec.board_width_mm),
+        BoardArrayToolingOrientation::LeftRight => (spec.rows, spec.board_height_mm),
+    };
+    let min_span = if span_count == 1 {
+        SINGLE_BOARD_TOOLING_MIN_SPAN_MM
+    } else {
+        MULTI_BOARD_TOOLING_MIN_SPAN_MM
+    };
+    board_span + EPSILON >= min_span
 }
 
 pub(super) fn add_board_array_tooling(
@@ -40,23 +71,14 @@ pub(super) fn add_board_array_tooling(
     used_layer_names: &mut HashSet<String>,
     spec: BoardArrayToolingSpec,
 ) -> Result<()> {
-    let (span_count, board_span) = match spec.orientation {
-        BoardArrayToolingOrientation::TopBottom => (spec.columns, spec.board_width_mm),
-        BoardArrayToolingOrientation::LeftRight => (spec.rows, spec.board_height_mm),
-    };
-    let min_span = if span_count == 1 {
-        SINGLE_BOARD_TOOLING_MIN_SPAN_MM
-    } else {
-        MULTI_BOARD_TOOLING_MIN_SPAN_MM
-    };
-    if board_span + EPSILON < min_span {
+    let Some(orientation) = board_array_tooling_orientation(&spec) else {
         return Ok(());
-    }
+    };
 
     let tooling_hole_layer_name =
         ensure_tooling_hole_layer_name(generated_geometry, used_layer_names);
 
-    let fiducials = board_array_tooling_fiducials(&spec);
+    let fiducials = board_array_tooling_fiducials(&spec, orientation);
     add_two_sided_fiducials(
         generated_geometry,
         ipc,
@@ -70,7 +92,10 @@ pub(super) fn add_board_array_tooling(
         GeneratedFeatureScope::Array,
         tooling_hole_layer_name,
         Polarity::Positive,
-        round_nonplated_hole_features(board_array_tooling_holes(&spec), TOOLING_HOLE_DIAMETER_MM),
+        round_nonplated_hole_features(
+            board_array_tooling_holes(&spec, orientation),
+            TOOLING_HOLE_DIAMETER_MM,
+        ),
     );
     Ok(())
 }
@@ -146,7 +171,8 @@ fn add_two_sided_fiducials(
     Ok(())
 }
 
-/// Place board array tooling on the shorter pair of array rails.
+/// Place board array tooling on the rail pair chosen by
+/// [`board_array_tooling_orientation`].
 ///
 /// The generated board array uses a rectangular profile with the lower-left
 /// array corner at (0, 0). Fiducials and tooling holes live in the outer 5 mm
@@ -166,18 +192,26 @@ fn add_two_sided_fiducials(
 /// Rail-depth rules:
 /// - tooling hole centers are 2.5 mm from the array edge;
 /// - fiducial centers are 3.85 mm from the array edge.
-pub(super) fn board_array_tooling_fiducials(spec: &BoardArrayToolingSpec) -> [(f64, f64); 4] {
+pub(super) fn board_array_tooling_fiducials(
+    spec: &BoardArrayToolingSpec,
+    orientation: BoardArrayToolingOrientation,
+) -> [(f64, f64); 4] {
     board_array_tooling_points(
         spec,
+        orientation,
         FIDUCIAL_EDGE_OFFSET_MM,
         PRIMARY_FIDUCIAL_SPAN_INSET_MM,
         SECONDARY_FIDUCIAL_SPAN_INSET_MM,
     )
 }
 
-pub(super) fn board_array_tooling_holes(spec: &BoardArrayToolingSpec) -> [(f64, f64); 4] {
+pub(super) fn board_array_tooling_holes(
+    spec: &BoardArrayToolingSpec,
+    orientation: BoardArrayToolingOrientation,
+) -> [(f64, f64); 4] {
     board_array_tooling_points(
         spec,
+        orientation,
         TOOLING_HOLE_EDGE_OFFSET_MM,
         PRIMARY_TOOLING_HOLE_SPAN_INSET_MM,
         SECONDARY_TOOLING_HOLE_SPAN_INSET_MM,
@@ -186,11 +220,12 @@ pub(super) fn board_array_tooling_holes(spec: &BoardArrayToolingSpec) -> [(f64, 
 
 pub(super) fn board_array_tooling_points(
     spec: &BoardArrayToolingSpec,
+    orientation: BoardArrayToolingOrientation,
     rail_depth_mm: f64,
     primary_span_inset_mm: f64,
     secondary_span_inset_mm: f64,
 ) -> [(f64, f64); 4] {
-    match spec.orientation {
+    match orientation {
         BoardArrayToolingOrientation::TopBottom => {
             let left_edge = spec.margin_x_mm;
             let right_edge = spec.margin_x_mm

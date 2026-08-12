@@ -143,13 +143,13 @@ fn creates_rounded_panel_step_from_board_bbox() {
 
 #[test]
 fn generated_board_array_has_a_certified_safe_balancing_region() {
-    let input = board_fixture_mm();
-    let source = Ipc2581::parse(input).unwrap();
+    let input = board_fixture_with_mask_bbox_mm(12.0, 10.0);
+    let source = Ipc2581::parse(&input).unwrap();
     let (options, validation_mode, panelization) = auto_board_array_options(&source, None).unwrap();
     let spec = build_board_array_spec(&source, &options, validation_mode, panelization).unwrap();
     // Safe-region discovery runs on the completed but not-yet-balanced array;
     // otherwise the generated balance copper becomes its own obstacle.
-    let xml = write_board_array_xml(input, &spec).unwrap();
+    let xml = write_board_array_xml(&input, &spec).unwrap();
     let ipc = Ipc2581::parse(&xml).unwrap();
     let layout = geometry::extract_layout(&ipc).unwrap();
     let score_lines = geometry::board_array_vscore_lines(&ipc).unwrap();
@@ -192,18 +192,7 @@ fn generated_board_array_has_a_certified_safe_balancing_region() {
 /// A two-copper-layer board with copper only on TOP, on the smallest sheet:
 /// balancing costs the panel's area, and nothing here asks how many boards fit.
 fn two_layer_board_xml() -> String {
-    board_fixture_with_top_line_mm()
-        .replace(
-            r#"<LayerRef name="TOP"/>"#,
-            r#"<LayerRef name="TOP"/>
-<LayerRef name="BOTTOM"/>"#,
-        )
-        .replace(
-            r#"<Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>"#,
-            r#"<Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
-  <Layer name="BOTTOM" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>"#,
-        )
-        .replace(r#"lineWidth="0.2""#, r#"lineWidth="4""#)
+    board_fixture_with_top_line_mm().replace(r#"lineWidth="0.2""#, r#"lineWidth="4""#)
 }
 
 #[test]
@@ -293,7 +282,17 @@ fn board_array_creation_accepts_no_source_copper_layers() {
         r#"<Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>"#,
         r#"<Layer name="TOP" layerFunction="SOLDERMASK" side="TOP" polarity="POSITIVE"/>"#,
     );
-    let creation = create_auto_board_array(&input, None, true).unwrap();
+    let creation = create_board_array(
+        &input,
+        &BoardArrayCreateOptions {
+            columns: 2,
+            rows: 2,
+            board_margin_mm: board_margin(10.0, 10.0),
+            edge_rail_mm: BoardMarginMm::all(20.0),
+        },
+        true,
+    )
+    .unwrap();
 
     assert!(creation.copper_balance.unwrap().layers.is_empty());
 }
@@ -402,10 +401,10 @@ fn generated_board_array_xml_validates_with_existing_history_and_callouts() {
 
 #[test]
 fn auto_create_projects_board_to_a7_array() {
-    let xml = create_auto_board_array_xml(board_fixture_mm()).unwrap();
+    let xml = create_auto_board_array_xml(&board_fixture_with_mask_bbox_mm(12.0, 10.0)).unwrap();
 
     assert!(xml.contains(
-        r#"<StepRepeat stepRef="board_cell" x="12.5" y="7" nx="4" ny="3" dx="20" dy="20" angle="0.00" mirror="false"/>"#
+        r#"<StepRepeat stepRef="board_cell" x="8.5" y="7" nx="4" ny="3" dx="22" dy="20" angle="0.00" mirror="false"/>"#
     ));
     assert!(xml.contains(
         r#"<NonstandardAttribute name="diode.panelize.mode" type="STRING" value="auto"/>"#
@@ -420,7 +419,7 @@ fn auto_create_projects_board_to_a7_array() {
         r#"<NonstandardAttribute name="diode.panelize.sheet_height_mm" type="DOUBLE" value="74"/>"#
     ));
     assert!(xml.contains(
-        r#"<NonstandardAttribute name="diode.panelize.edge_rail_left_mm" type="DOUBLE" value="12.5"/>"#
+        r#"<NonstandardAttribute name="diode.panelize.edge_rail_left_mm" type="DOUBLE" value="8.5"/>"#
     ));
     assert!(xml.contains(
         r#"<NonstandardAttribute name="diode.panelize.edge_rail_top_mm" type="DOUBLE" value="7"/>"#
@@ -436,11 +435,14 @@ fn auto_create_projects_board_to_a7_array() {
 
 #[test]
 fn auto_create_projects_board_to_requested_a5_array() {
-    let xml = create_auto_board_array_xml_with_sheet(board_fixture_mm(), Some(AutoSheetSize::A5))
-        .unwrap();
+    let xml = create_auto_board_array_xml_with_sheet(
+        &board_fixture_with_mask_bbox_mm(12.0, 10.0),
+        Some(AutoSheetSize::A5),
+    )
+    .unwrap();
 
     assert!(xml.contains(
-        r#"<StepRepeat stepRef="board_cell" x="5" y="14" nx="10" ny="6" dx="20" dy="20" angle="0.00" mirror="false"/>"#
+        r#"<StepRepeat stepRef="board_cell" x="8" y="5" nx="6" ny="10" dx="22" dy="20" angle="0.00" mirror="false"/>"#
     ));
     assert!(xml.contains(
         r#"<NonstandardAttribute name="diode.panelize.mode" type="STRING" value="auto_sheet"/>"#
@@ -449,17 +451,17 @@ fn auto_create_projects_board_to_requested_a5_array() {
         r#"<NonstandardAttribute name="diode.panelize.sheet" type="STRING" value="A5"/>"#
     ));
     assert!(xml.contains(
-        r#"<NonstandardAttribute name="diode.panelize.sheet_width_mm" type="DOUBLE" value="210"/>"#
+        r#"<NonstandardAttribute name="diode.panelize.sheet_width_mm" type="DOUBLE" value="148"/>"#
     ));
     assert!(xml.contains(
-        r#"<NonstandardAttribute name="diode.panelize.sheet_height_mm" type="DOUBLE" value="148"/>"#
+        r#"<NonstandardAttribute name="diode.panelize.sheet_height_mm" type="DOUBLE" value="210"/>"#
     ));
 
     let ipc = Ipc2581::parse(&xml).unwrap();
     let layout = geometry::extract_layout(&ipc).unwrap();
     let (_, panel_step) = pcb_ir::dialects::ipc::root_panel_step(&layout).unwrap();
     assert_point_close(panel_step.bbox.min, Point::new(0.0, 0.0));
-    assert_point_close(panel_step.bbox.max, Point::new(210.0, 148.0));
+    assert_point_close(panel_step.bbox.max, Point::new(148.0, 210.0));
     assert_eq!(pcb_ir::dialects::ipc::board_instance_count(&layout), 60);
 }
 
@@ -474,7 +476,7 @@ fn auto_create_derives_board_margin_from_courtyard_overhang() {
         margin,
         BoardMarginMm {
             top: 7.0,
-            right: 8.0,
+            right: 6.0,
             bottom: 6.0,
             left: 7.0,
         }
@@ -500,7 +502,7 @@ fn auto_create_allows_large_computed_board_margins() {
         margin,
         BoardMarginMm {
             top: 5.0,
-            right: 26.0,
+            right: 24.0,
             bottom: 5.0,
             left: 5.0,
         }
@@ -977,7 +979,8 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
     assert!(
         top.features
             .iter()
-            .filter(|feature| feature.source_step_kind == LayoutStepKind::Panel)
+            .filter(|feature| feature.source_step_kind == LayoutStepKind::Panel
+                && !feature.is_fiducial())
             .all(|feature| feature.flags.copper_balance.is_some())
     );
     let balance_paths = |kind: pcb_ir::dialects::ipc::CopperBalanceKind| {
@@ -1222,7 +1225,7 @@ fn board_array_creation_places_array_tooling_on_left_right_for_landscape_arrays(
 }
 
 #[test]
-fn board_array_creation_skips_default_tooling_when_board_width_is_too_small() {
+fn board_array_tooling_falls_back_to_the_other_rail_pair() {
     let input = board_fixture_with_mask_bbox_mm(11.99, 40.0);
     let xml = create_board_array_xml(
         &input,
@@ -1236,37 +1239,62 @@ fn board_array_creation_skips_default_tooling_when_board_width_is_too_small() {
     .unwrap();
 
     let ipc = Ipc2581::parse(&xml).unwrap();
-    let ecad = ipc.ecad().unwrap();
-    assert!(
-        ecad.cad_data
-            .layers
-            .iter()
-            .any(|layer| ipc.resolve(layer.name) == TOOLING_HOLE_LAYER_BASE_NAME)
-    );
-
     let step = array_step(&ipc);
+    let top_fiducials = fiducials_on_layer(&ipc, step, "TOP");
     let tooling_holes = holes_on_layer(&ipc, step, TOOLING_HOLE_LAYER_BASE_NAME);
+    let rail_holes = holes_with_diameter(&tooling_holes, TOOLING_HOLE_DIAMETER_MM);
+
+    assert_points_close(
+        fiducial_points(&top_fiducials),
+        vec![(3.85, 52.0), (3.85, 28.0), (67.13, 48.0), (67.13, 32.0)],
+    );
+    assert_points_close(
+        hole_points(&rail_holes),
+        vec![(2.5, 57.5), (2.5, 22.5), (68.48, 53.5), (68.48, 26.5)],
+    );
+}
+
+#[test]
+fn auto_create_errors_when_rail_tooling_cannot_fit() {
+    let input = board_fixture_with_mask_bbox_mm(10.0, 10.0);
+    let error = create_auto_board_array_xml(&input).unwrap_err();
+    assert!(
+        format!("{error:#}").contains("cannot fit rail fiducials and tooling holes"),
+        "{error:#}"
+    );
+}
+
+#[test]
+fn board_array_tooling_skips_when_no_rail_pair_fits() {
+    let input = board_fixture_with_mask_bbox_mm(11.99, 27.99);
+    let xml = create_board_array_xml(
+        &input,
+        &BoardArrayCreateOptions {
+            columns: 2,
+            rows: 1,
+            board_margin_mm: board_margin(5.0, 0.0),
+            edge_rail_mm: edge_rail(18.5, 21.5),
+        },
+    )
+    .unwrap();
+
+    let ipc = Ipc2581::parse(&xml).unwrap();
+    let step = array_step(&ipc);
     let fiducial_count = step
         .layer_features
         .iter()
         .flat_map(|layer_feature| &layer_feature.sets)
         .flat_map(|set| set.fiducials())
         .count();
-    let hole_count = step
-        .layer_features
-        .iter()
-        .flat_map(|layer_feature| &layer_feature.sets)
-        .flat_map(|set| set.holes())
-        .count();
+    let tooling_holes = holes_on_layer(&ipc, step, TOOLING_HOLE_LAYER_BASE_NAME);
 
     assert_eq!(fiducial_count, 0);
-    assert_eq!(hole_count, 4);
     assert!(
         tooling_holes
             .iter()
             .all(|hole| close(hole.diameter, CORNER_TOOLING_HOLE_DIAMETER_MM))
     );
-    assert_corner_holes(&tooling_holes, 70.98, 80.0);
+    assert_corner_holes(&tooling_holes, 70.98, 70.99);
 }
 
 #[test]
@@ -1996,14 +2024,17 @@ fn board_fixture_with_courtyard_overhang_mm() -> &'static str {
 <CadHeader units="MILLIMETER"/>
 <CadData>
   <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+  <Layer name="F.Mask" layerFunction="SOLDERMASK" side="TOP" polarity="POSITIVE"/>
+  <Layer name="BOTTOM" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>
+  <Layer name="B.Mask" layerFunction="SOLDERMASK" side="BOTTOM" polarity="POSITIVE"/>
   <Layer name="F.Courtyard" layerFunction="COURTYARD" side="TOP" polarity="POSITIVE"/>
   <Step name="board" type="BOARD">
     <Datum x="0" y="0"/>
     <Profile>
       <Polygon>
         <PolyBegin x="0" y="0"/>
-        <PolyStepSegment x="10" y="0"/>
-        <PolyStepSegment x="10" y="10"/>
+        <PolyStepSegment x="12" y="0"/>
+        <PolyStepSegment x="12" y="10"/>
         <PolyStepSegment x="0" y="10"/>
         <PolyStepSegment x="0" y="0"/>
       </Polygon>
@@ -2040,14 +2071,17 @@ fn board_fixture_with_large_courtyard_overhang_mm() -> &'static str {
 <CadHeader units="MILLIMETER"/>
 <CadData>
   <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+  <Layer name="F.Mask" layerFunction="SOLDERMASK" side="TOP" polarity="POSITIVE"/>
+  <Layer name="BOTTOM" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>
+  <Layer name="B.Mask" layerFunction="SOLDERMASK" side="BOTTOM" polarity="POSITIVE"/>
   <Layer name="F.Courtyard" layerFunction="COURTYARD" side="TOP" polarity="POSITIVE"/>
   <Step name="board" type="BOARD">
     <Datum x="0" y="0"/>
     <Profile>
       <Polygon>
         <PolyBegin x="0" y="0"/>
-        <PolyStepSegment x="10" y="0"/>
-        <PolyStepSegment x="10" y="10"/>
+        <PolyStepSegment x="12" y="0"/>
+        <PolyStepSegment x="12" y="10"/>
         <PolyStepSegment x="0" y="10"/>
         <PolyStepSegment x="0" y="0"/>
       </Polygon>
@@ -2113,13 +2147,16 @@ fn board_fixture_with_top_line_mm() -> &'static str {
 <CadHeader units="MILLIMETER"/>
 <CadData>
   <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+  <Layer name="F.Mask" layerFunction="SOLDERMASK" side="TOP" polarity="POSITIVE"/>
+  <Layer name="BOTTOM" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>
+  <Layer name="B.Mask" layerFunction="SOLDERMASK" side="BOTTOM" polarity="POSITIVE"/>
   <Step name="board" type="BOARD">
     <Datum x="0" y="0"/>
     <Profile>
       <Polygon>
         <PolyBegin x="-2" y="-3"/>
-        <PolyStepSegment x="8" y="-3"/>
-        <PolyStepSegment x="8" y="7"/>
+        <PolyStepSegment x="10" y="-3"/>
+        <PolyStepSegment x="10" y="7"/>
         <PolyStepSegment x="-2" y="7"/>
         <PolyStepSegment x="-2" y="-3"/>
       </Polygon>
