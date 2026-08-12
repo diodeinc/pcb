@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- Added cross-platform `diode://` links that open sandbox layouts in KiCad with live sync and native recovery prompts.
+
 ## [0.4.28] - 2026-08-11
 
 ### Changed
