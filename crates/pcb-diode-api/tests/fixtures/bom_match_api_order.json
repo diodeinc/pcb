@@ -1,0 +1,46 @@
+{
+  "results": [
+    {
+      "designEntry": {
+        "path": "root.U1"
+      },
+      "offerIds": [
+        "api-first",
+        "old-rust-policy-first"
+      ],
+      "match": "MATCH_EXACT"
+    }
+  ],
+  "offers": {
+    "api-first": {
+      "id": "api-first",
+      "geography": "US",
+      "distributor": "Planner Choice",
+      "distributorPartId": "API-FIRST",
+      "mpn": "TEST-MPN",
+      "manufacturer": "Test Manufacturer",
+      "priceBreaks": [
+        {
+          "qty": 1,
+          "price": 10.0
+        }
+      ],
+      "stockAvailable": 5
+    },
+    "old-rust-policy-first": {
+      "id": "old-rust-policy-first",
+      "geography": "US",
+      "distributor": "Local Policy Choice",
+      "distributorPartId": "OLD-RUST-FIRST",
+      "mpn": "TEST-MPN",
+      "manufacturer": "Test Manufacturer",
+      "priceBreaks": [
+        {
+          "qty": 1,
+          "price": 0.1
+        }
+      ],
+      "stockAvailable": 500
+    }
+  }
+}
