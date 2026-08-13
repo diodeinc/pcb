@@ -258,7 +258,7 @@ jobs:
           body-includes: "<!-- pcb-build-perf -->"
 
       - name: Create or update comment
-        if: steps.perf_comment.outputs.has_changes == 'true'
+        if: steps.perf_comment.outputs.has_changes == 'true' && github.event.pull_request.head.repo.full_name == github.repository
         uses: peter-evans/create-or-update-comment@v5
         with:
           issue-number: ${{ github.event.pull_request.number }}
@@ -267,7 +267,7 @@ jobs:
           edit-mode: replace
 
       - name: Delete stale comment
-        if: steps.perf_comment.outputs.has_changes == 'false' && steps.find_comment.outputs.comment-id != ''
+        if: steps.perf_comment.outputs.has_changes == 'false' && steps.find_comment.outputs.comment-id != '' && github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/github-script@v8
         with:
           script: |
