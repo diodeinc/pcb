@@ -1,0 +1,9 @@
+{
+  "name": "pcb",
+  "user": "root",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": "."
+  },
+  "install": "bash .cursor/install.sh"
+}
