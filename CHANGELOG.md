@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- BOM generation no longer panics when truncating UTF-8 component descriptions.
+
 ## [0.4.30] - 2026-08-14
 
 ### Fixed
