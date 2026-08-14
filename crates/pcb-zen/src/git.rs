@@ -883,8 +883,8 @@ pub fn format_ssh_url(module_path: &str) -> String {
 
 /// Split a module path into `(repo_url, subpath)`.
 ///
-/// Repositories are 3 or 4 path segments. When both prefixes could exist, the
-/// longest existing git remote wins. A locally cached source checkout counts
+/// Repositories are 3 or 4 path segments. Probe the longer prefix first and
+/// keep the first remote that exists. A locally cached source checkout counts
 /// as existing and skips the network.
 pub fn split_repo_and_subpath(module_path: &str) -> anyhow::Result<(String, String)> {
     if let Some(resolved) = RESOLVED_REPOS
@@ -906,18 +906,22 @@ pub fn split_repo_and_subpath(module_path: &str) -> anyhow::Result<(String, Stri
 
 fn resolve_repo_and_subpath(module_path: &str) -> anyhow::Result<(String, String)> {
     for (repo_url, subpath) in repo_prefixes(module_path) {
-        if subpath.is_empty() || repo_exists(&repo_url)? {
+        if repo_exists(&repo_url)? {
             return Ok((repo_url, subpath));
         }
     }
     Ok((module_path.to_string(), String::new()))
 }
 
-pub(crate) fn repo_prefixes(module_path: &str) -> impl Iterator<Item = (String, String)> + '_ {
+pub(crate) fn repo_prefixes(module_path: &str) -> Vec<(String, String)> {
     let parts: Vec<&str> = module_path.split('/').collect();
-    [4usize, 3].into_iter().filter_map(move |n| {
-        (parts.len() >= n).then(|| (parts[..n].join("/"), parts[n..].join("/")))
-    })
+    let mut prefixes = Vec::new();
+    for n in [4usize, 3] {
+        if parts.len() >= n {
+            prefixes.push((parts[..n].join("/"), parts[n..].join("/")));
+        }
+    }
+    prefixes
 }
 
 fn repo_exists(repo_url: &str) -> anyhow::Result<bool> {
@@ -927,18 +931,27 @@ fn repo_exists(repo_url: &str) -> anyhow::Result<bool> {
     {
         return Ok(true);
     }
-    match with_remote_fallback(repo_url, |url, interactive| {
-        ls_remote(url, "HEAD", interactive).map(|_| ())
-    }) {
+
+    let https_url = format!("https://{}.git", repo_url);
+    match ls_remote(&https_url, "HEAD", false) {
         Ok(_) => Ok(true),
         Err(err) if is_missing_remote(&err) => Ok(false),
-        Err(err) => Err(err),
+        Err(https_err) => {
+            let ssh_url = format_ssh_url(repo_url);
+            match ls_remote(&ssh_url, "HEAD", true) {
+                Ok(_) => Ok(true),
+                Err(err) if is_missing_remote(&err) => Ok(false),
+                Err(_) => Err(https_err),
+            }
+        }
     }
 }
 
 fn is_missing_remote(err: &anyhow::Error) -> bool {
     let msg = err.to_string().to_ascii_lowercase();
-    msg.contains("not found") || msg.contains("does not exist")
+    msg.contains("not found")
+        || msg.contains("does not exist")
+        || msg.contains("does not appear to be a git repository")
 }
 
 fn with_remote_fallback<T>(
@@ -1193,5 +1206,47 @@ mod tests {
         assert!(args.iter().any(|arg| {
             arg == "credential.https://code.diode.computer.helper=!pcb auth git --host='code.diode.computer'"
         }));
+    }
+
+    #[test]
+    fn repo_prefixes_are_four_then_three_segments() {
+        assert_eq!(
+            repo_prefixes("code.diode.computer/spring/registry/components/TDK/ICM"),
+            [
+                (
+                    "code.diode.computer/spring/registry/components".into(),
+                    "TDK/ICM".into()
+                ),
+                (
+                    "code.diode.computer/spring/registry".into(),
+                    "components/TDK/ICM".into()
+                ),
+            ]
+        );
+        assert_eq!(
+            repo_prefixes("github.com/user/repo/pkg"),
+            [
+                ("github.com/user/repo/pkg".into(), "".into()),
+                ("github.com/user/repo".into(), "pkg".into()),
+            ]
+        );
+        assert_eq!(
+            repo_prefixes("github.com/user/repo"),
+            [("github.com/user/repo".into(), "".into())]
+        );
+    }
+
+    #[test]
+    fn missing_remote_matches_git_not_found_errors() {
+        assert!(is_missing_remote(&anyhow::anyhow!(
+            "fatal: repository 'https://github.com/user/repo/pkg.git/' not found"
+        )));
+        assert!(is_missing_remote(&anyhow::anyhow!(
+            "fatal: '/tmp/repo.git//pkg.git' does not appear to be a git repository"
+        )));
+        assert!(!is_missing_remote(&anyhow::anyhow!(
+            "Could not read from remote repository."
+        )));
+        assert!(!is_missing_remote(&anyhow::anyhow!("Connection timed out")));
     }
 }

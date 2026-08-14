@@ -384,7 +384,7 @@ pub fn ensure_source_repo(repo_url: &str) -> Result<PathBuf> {
 pub fn source_repo_dir(repo_url: &str) -> Result<PathBuf> {
     let home =
         dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
-    Ok(home.join(".pcb/src").join(repo_url))
+    Ok(home.join(".pcb/src").join(repo_url.replace('/', "--")))
 }
 
 #[cfg(test)]
@@ -399,6 +399,16 @@ mod tests {
         let pool = Pool::builder().max_size(4).build(manager).unwrap();
         pool.get().unwrap().execute_batch(schema).unwrap();
         CacheIndex { pool }
+    }
+
+    #[test]
+    fn source_repo_dir_flattens_path_segments() -> Result<()> {
+        let dir = source_repo_dir("code.diode.computer/diode/registry/intel")?;
+        assert_eq!(
+            dir.file_name().and_then(|name| name.to_str()),
+            Some("code.diode.computer--diode--registry--intel")
+        );
+        Ok(())
     }
 
     #[test]
