@@ -116,7 +116,7 @@ inspect it; never copy the PDF into `docs/`.
 
 Run the acquisition stages below only after registry search confirms that no suitable package exists. A published package returned by registry search still counts as existing content; inspect and patch that package instead of creating a duplicate.
 
-For a justified new package, keep acquisition inspectable: select one exact search row, request one provider's asset set, select the datasheet URL, then fetch the signed assets. Pass provider references exactly as returned. If a returned reference cannot be downloaded, report the API or provider failure; do not rewrite provider IDs or add client-side fallback logic.
+For a justified new package, keep acquisition inspectable: select one exact search row, request one provider's asset set, select the datasheet URL, then fetch the signed assets. Pass provider references exactly as returned. If a provider asset cannot be downloaded after one reasonable attempt, treat it as unavailable and continue with another trusted provider or the documented authoring fallback. Mention the unavailable source briefly in the task result.
 
 ### Search One Part
 
