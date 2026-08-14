@@ -66,12 +66,10 @@ class FragmentData:
     The apply phase loads the fragment board fresh to duplicate items.
 
     Fields:
-    - group_complement: Routing/graphics with fragment-local net names
     - footprint_complements: Positions keyed by reference and path
     - pad_net_map: Maps (fp_path, pad_name) -> fragment_net_name for net remapping
     """
 
-    group_complement: GroupComplement
     footprint_complements: dict[str, FootprintComplement]
     pad_net_map: dict[tuple[str, str], str] = field(default_factory=dict)
 

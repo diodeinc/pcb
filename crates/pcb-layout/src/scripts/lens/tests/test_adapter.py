@@ -7,6 +7,9 @@ without requiring actual KiCad objects.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+from unittest.mock import Mock
+
 from .. import kicad_adapter
 from ..lens import (
     FragmentData,
@@ -14,10 +17,12 @@ from ..lens import (
     build_fragment_net_remap,
 )
 from ..types import (
+    BoardView,
     EntityId,
     EntityPath,
     FootprintComplement,
     GroupComplement,
+    GroupView,
     Position,
     TrackComplement,
     ViaComplement,
@@ -80,6 +85,111 @@ class TestApplyPadAssignment:
         assert pads[1].net is net_info
         assert pads[0].pin_type is None
         assert pads[1].pin_type is None
+
+
+class _MockGroup:
+    def __init__(self, name: str):
+        self._name = name
+
+    def GetName(self) -> str:
+        return self._name
+
+
+class _MockGroupedItem:
+    def __init__(self, group: _MockGroup | None):
+        self._group = group
+
+    def GetParentGroup(self) -> _MockGroup | None:
+        return self._group
+
+
+class TestFragmentTargetGroup:
+    def test_restores_relative_nested_group(self):
+        root = _MockGroup("PORT0")
+        nested = _MockGroup("PORT0.U_RCB")
+
+        result = kicad_adapter._fragment_target_group(
+            _MockGroupedItem(_MockGroup("U_RCB")),
+            "PORT0",
+            root,
+            {"PORT0": root, "PORT0.U_RCB": nested},
+        )
+
+        assert result is nested
+
+    def test_keeps_ungrouped_items_in_root_group(self):
+        root = _MockGroup("PORT0")
+
+        result = kicad_adapter._fragment_target_group(
+            _MockGroupedItem(None), "PORT0", root, {"PORT0": root}
+        )
+
+        assert result is root
+
+    def test_missing_nested_group_falls_back_to_root(self):
+        root = _MockGroup("PORT0")
+
+        result = kicad_adapter._fragment_target_group(
+            _MockGroupedItem(_MockGroup("MANUAL")),
+            "PORT0",
+            root,
+            {"PORT0": root},
+        )
+
+        assert result is root
+
+    def test_fragment_copy_adds_track_to_its_nested_group(self, monkeypatch, tmp_path):
+        layout_file = tmp_path / "layout.kicad_pcb"
+        layout_file.touch()
+        monkeypatch.setattr(
+            kicad_adapter, "_discover_kicad_pcb_file", lambda _layout_dir: layout_file
+        )
+
+        source_group = Mock()
+        source_group.GetName.return_value = "U_RCB"
+        source_track = Mock()
+        source_track.GetParentGroup.return_value = source_group
+        source_track.GetClass.return_value = "PCB_TRACK"
+        source_track.GetNet.return_value = None
+
+        copied_track = Mock()
+        copied_track.GetStart.return_value = SimpleNamespace(x=1, y=2)
+        copied_track.GetEnd.return_value = SimpleNamespace(x=3, y=4)
+        copied_track.GetWidth.return_value = 5
+        copied_track.GetLayer.return_value = 0
+
+        fragment_board = Mock()
+        fragment_board.GetTracks.return_value = [source_track]
+        fragment_board.Zones.return_value = []
+        fragment_board.GetDrawings.return_value = []
+        fragment_board.GetLayerName.return_value = "F.Cu"
+
+        pcbnew = Mock()
+        pcbnew.LoadBoard.return_value = fragment_board
+        pcbnew.BOARD_ITEM.Duplicate.return_value = copied_track
+        pcbnew.FOOTPRINT = type("MockFootprint", (), {})
+
+        root = Mock()
+        nested = Mock()
+        target_board = Mock()
+        entity_id = EntityId.from_string("PORT0")
+
+        kicad_adapter._apply_fragment_routing(
+            root,
+            {"PORT0": root, "PORT0.U_RCB": nested},
+            GroupView(entity_id=entity_id, member_ids=(), layout_path="package://test"),
+            entity_id,
+            FragmentData(footprint_complements={}),
+            BoardView(),
+            target_board,
+            pcbnew,
+            kicad_adapter.OpLog(),
+            {"test": str(tmp_path)},
+        )
+
+        target_board.Add.assert_called_once_with(copied_track)
+        nested.AddItem.assert_called_once_with(copied_track)
+        root.AddItem.assert_not_called()
 
 
 class TestBuildFragmentNetRemap:
@@ -240,56 +350,20 @@ class TestFragmentData:
     def test_has_required_fields(self):
         """FragmentData should have all required fields."""
         cache = FragmentData(
-            group_complement=GroupComplement(),
             footprint_complements={"R1": default_footprint_complement()},
             pad_net_map={("R1", "1"): "VCC"},
         )
 
-        assert cache.group_complement is not None
         assert "R1" in cache.footprint_complements
         assert ("R1", "1") in cache.pad_net_map
 
     def test_default_pad_net_map(self):
         """pad_net_map should default to empty dict."""
         cache = FragmentData(
-            group_complement=GroupComplement(),
             footprint_complements={},
         )
 
         assert cache.pad_net_map == {}
-
-    def test_stores_routing_in_group_complement(self):
-        """Routing data should be stored in GroupComplement dataclasses."""
-        gc = GroupComplement(
-            tracks=(
-                TrackComplement(
-                    uuid="t1",
-                    start=Position(0, 0),
-                    end=Position(1000, 0),
-                    width=200,
-                    layer="F.Cu",
-                    net_name="VCC",
-                ),
-            ),
-            vias=(
-                ViaComplement(
-                    uuid="v1",
-                    position=Position(500, 0),
-                    diameter=800,
-                    drill=400,
-                    net_name="VCC",
-                ),
-            ),
-        )
-
-        cache = FragmentData(
-            group_complement=gc,
-            footprint_complements={},
-        )
-
-        assert len(cache.group_complement.tracks) == 1
-        assert len(cache.group_complement.vias) == 1
-        assert cache.group_complement.tracks[0].net_name == "VCC"
 
 
 class TestGroupComplementRouting:
