@@ -20,6 +20,7 @@ use pcb_zen_core::{DefaultFileProvider, EvalContext, EvalOutput};
 use serde_json::Value as JsonValue;
 use starlark::collections::SmallMap;
 
+pub use git::split_repo_and_subpath;
 pub use package_resolver::resolve_workspace_dependencies;
 pub use pcb_zen_core::file_extensions;
 pub use pcb_zen_core::{Diagnostic, Diagnostics, WithDiagnostics};

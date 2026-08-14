@@ -519,40 +519,6 @@ pub fn extract_inline_manifest(zen_content: &str) -> Option<String> {
     None
 }
 
-/// Split a module path into (repo_url, subpath) for github.com repos
-///
-/// Examples:
-/// - "github.com/user/repo" -> ("github.com/user/repo", "")
-/// - "github.com/user/repo/pkg" -> ("github.com/user/repo", "pkg")
-/// - "github.com/user/repo/a/b/c" -> ("github.com/user/repo", "a/b/c")
-pub fn split_repo_and_subpath(module_path: &str) -> (&str, &str) {
-    let diode_registry = crate::package_url::CANONICAL_REGISTRY_REPOSITORY;
-    if module_path == diode_registry {
-        return (module_path, "");
-    }
-    if module_path.starts_with(diode_registry)
-        && module_path
-            .as_bytes()
-            .get(diode_registry.len())
-            .is_some_and(|separator| *separator == b'/')
-    {
-        return (
-            &module_path[..diode_registry.len()],
-            &module_path[diode_registry.len() + 1..],
-        );
-    }
-
-    let parts: Vec<&str> = module_path.split('/').collect();
-    if parts.is_empty() {
-        return (module_path, "");
-    }
-    if parts[0] == "github.com" && parts.len() > 3 {
-        let boundary = parts[..3].join("/").len();
-        return (&module_path[..boundary], &module_path[boundary + 1..]);
-    }
-    (module_path, "")
-}
-
 /// Find the workspace root by walking up from `start`.
 ///
 /// Resolution order:
@@ -1116,30 +1082,5 @@ load("@stdlib/foo.zen", "Bar")
             .unwrap()
             .expect_err("legacy [packages] should not parse");
         assert!(err.to_string().contains("unknown field `packages`"));
-    }
-
-    #[test]
-    fn test_split_repo_and_subpath() {
-        assert_eq!(
-            split_repo_and_subpath("github.com/user/repo"),
-            ("github.com/user/repo", "")
-        );
-        assert_eq!(
-            split_repo_and_subpath("github.com/user/repo/pkg"),
-            ("github.com/user/repo", "pkg")
-        );
-        assert_eq!(
-            split_repo_and_subpath("github.com/user/repo/a/b/c"),
-            ("github.com/user/repo", "a/b/c")
-        );
-        assert_eq!(
-            split_repo_and_subpath("code.diode.computer/diode/registry/components/Foo"),
-            ("code.diode.computer/diode/registry", "components/Foo")
-        );
-        // Non-github repos return full path as repo_url
-        assert_eq!(
-            split_repo_and_subpath("gitlab.com/group/project/pkg"),
-            ("gitlab.com/group/project/pkg", "")
-        );
     }
 }

@@ -172,19 +172,23 @@ fn resolve_remote_package(
     requested_module_path: &str,
     requested_version: Option<&Version>,
 ) -> Result<(String, String, Option<String>)> {
-    let (repo_url, _) = pcb_zen_core::config::split_repo_and_subpath(requested_module_path);
-    let all_versions = pcb_zen::tags::get_all_versions_for_repo(repo_url)
+    let (repo_url, requested_path) = pcb_zen::split_repo_and_subpath(requested_module_path)?;
+    let all_versions = pcb_zen::tags::get_all_versions_for_repo(&repo_url)
         .with_context(|| format!("Failed to fetch versions from {repo_url}"))?;
-    resolve_remote_package_from_versions(requested_module_path, requested_version, &all_versions)
+    resolve_remote_package_from_versions(
+        &repo_url,
+        &requested_path,
+        requested_version,
+        &all_versions,
+    )
 }
 
 fn resolve_remote_package_from_versions(
-    requested_module_path: &str,
+    repo_url: &str,
+    requested_path: &str,
     requested_version: Option<&Version>,
     all_versions: &BTreeMap<String, Vec<Version>>,
 ) -> Result<(String, String, Option<String>)> {
-    let (repo_url, requested_path) =
-        pcb_zen_core::config::split_repo_and_subpath(requested_module_path);
     let (canonical_pkg_path, versions_for_pkg) =
         find_versioned_package(all_versions, requested_path, repo_url)?;
 
@@ -626,7 +630,8 @@ mod tests {
             vec![Version::new(1, 0, 0), Version::new(2, 0, 0)],
         )]);
         let (module_path, version, filter) = resolve_remote_package_from_versions(
-            "github.com/acme/components/SimpleResistor/SimpleResistor.zen",
+            "github.com/acme/components",
+            "SimpleResistor/SimpleResistor.zen",
             None,
             &all_versions,
         )
@@ -644,7 +649,8 @@ mod tests {
             vec![Version::new(1, 0, 0), Version::new(2, 0, 0)],
         )]);
         let err = resolve_remote_package_from_versions(
-            "github.com/acme/components/SimpleResistor",
+            "github.com/acme/components",
+            "SimpleResistor",
             Some(&Version::new(3, 0, 0)),
             &all_versions,
         )
@@ -660,7 +666,8 @@ mod tests {
             vec![Version::new(1, 0, 0), Version::new(2, 0, 0)],
         )]);
         let (module_path, version, filter) = resolve_remote_package_from_versions(
-            "github.com/acme/repo/file.zen",
+            "github.com/acme/repo",
+            "file.zen",
             None,
             &all_versions,
         )

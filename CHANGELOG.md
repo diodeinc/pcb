@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- Nested DiodeHub packages resolve from their owning git repository.
+
 ## [0.4.29] - 2026-08-12
 
 ### Changed
