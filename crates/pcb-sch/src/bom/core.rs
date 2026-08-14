@@ -14,12 +14,12 @@ pub struct Bom {
     pub availability: HashMap<String, super::availability::Availability>, // path -> availability data
 }
 
-/// Trim and truncate description to 100 chars max
-fn trim_description(s: Option<String>) -> Option<String> {
+/// Trim surrounding whitespace and truncate descriptions to 100 characters.
+pub fn trim_description(s: Option<String>) -> Option<String> {
     s.map(|s| {
         let trimmed = s.trim();
-        if trimmed.len() > 100 {
-            format!("{} ...", &trimmed[..96])
+        if trimmed.chars().count() > 100 {
+            format!("{} ...", trimmed.chars().take(96).collect::<String>())
         } else {
             trimmed.to_string()
         }
@@ -794,6 +794,29 @@ mod tests {
             internal_connectivity: Default::default(),
             symbol_positions: HashMap::new(),
         }
+    }
+
+    #[test]
+    fn trim_description_preserves_utf8_at_the_truncation_boundary() {
+        let description = format!("{}Ω{}", "a".repeat(95), "b".repeat(10));
+
+        assert_eq!(
+            trim_description(Some(description)),
+            Some(format!("{}Ω ...", "a".repeat(95)))
+        );
+    }
+
+    #[test]
+    fn trim_description_limits_unicode_characters() {
+        let exactly_100 = "Ω".repeat(100);
+        assert_eq!(
+            trim_description(Some(exactly_100.clone())),
+            Some(exactly_100)
+        );
+
+        let truncated = trim_description(Some("Ω".repeat(101))).unwrap();
+        assert_eq!(truncated, format!("{} ...", "Ω".repeat(96)));
+        assert_eq!(truncated.chars().count(), 100);
     }
 
     #[test]

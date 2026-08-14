@@ -4,25 +4,13 @@ use std::path::Path;
 
 use anyhow::Context;
 use anyhow::Result;
-use pcb_sch::bom::{Bom, BomEntry, Capacitor, GenericComponent, Resistor};
+use pcb_sch::bom::{
+    Alternative, Bom, BomEntry, Capacitor, GenericComponent, Resistor, trim_description,
+};
 
 use crate::OutputFormat;
 use crate::accessors::{CharacteristicsData, IpcAccessor};
 use crate::utils::file as file_utils;
-use pcb_sch::bom::Alternative;
-
-/// Trim and truncate description to 100 chars max
-fn trim_description(s: Option<String>) -> Option<String> {
-    s.map(|s| {
-        let trimmed = s.trim();
-        if trimmed.len() > 100 {
-            format!("{} ...", &trimmed[..96])
-        } else {
-            trimmed.to_string()
-        }
-    })
-    .filter(|s| !s.is_empty())
-}
 
 /// Build GenericComponent from extracted characteristics
 /// Reuses the same logic as detect_generic_component in pcb-sch
