@@ -172,7 +172,7 @@ fn resolve_remote_package(
     requested_module_path: &str,
     requested_version: Option<&Version>,
 ) -> Result<(String, String, Option<String>)> {
-    let (repo_url, requested_path) = pcb_zen::git::split_repo_and_subpath(requested_module_path)?;
+    let (repo_url, requested_path) = pcb_zen::split_repo_and_subpath(requested_module_path)?;
     let all_versions = pcb_zen::tags::get_all_versions_for_repo(&repo_url)
         .with_context(|| format!("Failed to fetch versions from {repo_url}"))?;
     resolve_remote_package_from_versions(

@@ -10,7 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
-- Remote package resolution now selects the longest existing 3- or 4-segment git prefix, so nested packages in noncanonical DiodeHub registries resolve to their owning repository.
+- Nested DiodeHub packages resolve from their owning git repository.
 
 ## [0.4.29] - 2026-08-12
 

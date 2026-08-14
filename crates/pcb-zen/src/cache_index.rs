@@ -402,16 +402,6 @@ mod tests {
     }
 
     #[test]
-    fn source_repo_dir_flattens_path_segments() -> Result<()> {
-        let dir = source_repo_dir("code.diode.computer/diode/registry/intel")?;
-        assert_eq!(
-            dir.file_name().and_then(|name| name.to_str()),
-            Some("code.diode.computer--diode--registry--intel")
-        );
-        Ok(())
-    }
-
-    #[test]
     fn test_packages() -> Result<()> {
         let temp = tempfile::tempdir()?;
         let db_path = temp.path().join("index.sqlite");

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, bail};
-use pcb_zen::tags;
+use pcb_zen::{split_repo_and_subpath, tags};
 use pcb_zen_core::config::{DependencySpec, PcbToml};
 use semver::Version;
 
@@ -113,7 +113,7 @@ fn resolve_requested_version(
 }
 
 pub(crate) fn available_versions_for_module(module_path: &str) -> Result<Vec<Version>> {
-    let (repo_url, subpath) = pcb_zen::git::split_repo_and_subpath(module_path)?;
+    let (repo_url, subpath) = split_repo_and_subpath(module_path)?;
     let all_versions = tags::get_all_versions_for_repo(&repo_url)
         .with_context(|| format!("Failed to fetch versions from {}", repo_url))?;
     let versions = all_versions

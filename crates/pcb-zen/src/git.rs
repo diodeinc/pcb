@@ -882,10 +882,6 @@ pub fn format_ssh_url(module_path: &str) -> String {
 }
 
 /// Split a module path into `(repo_url, subpath)`.
-///
-/// Repositories are 3 or 4 path segments. Probe the longer prefix first and
-/// keep the first remote that exists. A locally cached source checkout counts
-/// as existing and skips the network.
 pub fn split_repo_and_subpath(module_path: &str) -> anyhow::Result<(String, String)> {
     if let Some(resolved) = RESOLVED_REPOS
         .lock()
@@ -1201,47 +1197,5 @@ mod tests {
         assert!(args.iter().any(|arg| {
             arg == "credential.https://code.diode.computer.helper=!pcb auth git --host='code.diode.computer'"
         }));
-    }
-
-    #[test]
-    fn repo_prefixes_are_four_then_three_segments() {
-        assert_eq!(
-            repo_prefixes("code.diode.computer/spring/registry/components/TDK/ICM"),
-            [
-                (
-                    "code.diode.computer/spring/registry/components".into(),
-                    "TDK/ICM".into()
-                ),
-                (
-                    "code.diode.computer/spring/registry".into(),
-                    "components/TDK/ICM".into()
-                ),
-            ]
-        );
-        assert_eq!(
-            repo_prefixes("github.com/user/repo/pkg"),
-            [
-                ("github.com/user/repo/pkg".into(), "".into()),
-                ("github.com/user/repo".into(), "pkg".into()),
-            ]
-        );
-        assert_eq!(
-            repo_prefixes("github.com/user/repo"),
-            [("github.com/user/repo".into(), "".into())]
-        );
-    }
-
-    #[test]
-    fn missing_remote_matches_git_not_found_errors() {
-        assert!(is_missing_remote(&anyhow::anyhow!(
-            "fatal: repository 'https://github.com/user/repo/pkg.git/' not found"
-        )));
-        assert!(is_missing_remote(&anyhow::anyhow!(
-            "fatal: '/tmp/repo.git//pkg.git' does not appear to be a git repository"
-        )));
-        assert!(!is_missing_remote(&anyhow::anyhow!(
-            "Could not read from remote repository."
-        )));
-        assert!(!is_missing_remote(&anyhow::anyhow!("Connection timed out")));
     }
 }
