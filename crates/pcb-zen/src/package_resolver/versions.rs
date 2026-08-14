@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use crate::git;
 use crate::tags;
 use anyhow::{Result, bail};
-use pcb_zen_core::config::{DependencyDetail, DependencySpec, split_repo_and_subpath};
+use pcb_zen_core::config::{DependencyDetail, DependencySpec};
 use pcb_zen_core::initial_package_version;
 use semver::Version;
 
@@ -68,8 +68,8 @@ impl SpecVersionResolver {
     }
 
     fn generate_pseudo_version(&mut self, module_path: &str, commit: &str) -> Result<Version> {
-        let (repo_url, subpath) = split_repo_and_subpath(module_path);
-        let source_dir = self.ensure_source_repo(repo_url)?;
+        let (repo_url, subpath) = git::split_repo_and_subpath(module_path)?;
+        let source_dir = self.ensure_source_repo(&repo_url)?;
         let commit_full = git::rev_parse(&source_dir, commit).ok_or_else(|| {
             anyhow::anyhow!(
                 "Failed to resolve rev '{}' in {}",
@@ -80,7 +80,7 @@ impl SpecVersionResolver {
         let timestamp = git::show_commit_timestamp(&source_dir, &commit_full)
             .ok_or_else(|| anyhow::anyhow!("Failed to read timestamp for {}", commit_full))?;
         let base_version = self
-            .latest_tagged_version(repo_url, subpath, &source_dir)
+            .latest_tagged_version(&repo_url, &subpath, &source_dir)
             .unwrap_or_else(initial_package_version);
         let dt = jiff::Timestamp::from_second(timestamp)?;
         let pseudo = format!(

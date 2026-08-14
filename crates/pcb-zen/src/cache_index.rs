@@ -3,7 +3,6 @@
 use anyhow::{Context, Result};
 use pcb_ui::Spinner;
 use pcb_zen_core::FileProvider;
-use pcb_zen_core::config::split_repo_and_subpath;
 use pcb_zen_core::stdlib::native::{copy_source, discover_source, source_matches_target};
 use r2d2::{Pool, PooledConnection};
 use r2d2_sqlite::SqliteConnectionManager;
@@ -134,28 +133,34 @@ impl CacheIndex {
     // Remote packages (discovered from git tags)
 
     fn find_remote_package_cached(&self, file_url: &str) -> Option<RemotePackage> {
-        let (repo_url, subpath) = split_repo_and_subpath(file_url);
-        let without_file = subpath.rsplit_once('/')?.0;
-
         let conn = self.conn();
-        let mut path = without_file;
-        while !path.is_empty() {
-            if let Some(version) = conn
-                .query_row(
-                    "SELECT latest_version FROM remote_packages WHERE repo_url = ?1 AND package_path = ?2",
-                    params![repo_url, path],
-                    |row| row.get::<_, String>(0),
-                )
-                .optional()
-                .ok()
-                .flatten()
-            {
-                return Some(RemotePackage {
-                    module_path: format!("{}/{}", repo_url, path),
-                    version,
-                });
+        for (repo_url, subpath) in git::repo_prefixes(file_url) {
+            let Some((path, _)) = subpath.rsplit_once('/') else {
+                continue;
+            };
+            let mut path = path.to_string();
+            while !path.is_empty() {
+                if let Some(version) = conn
+                    .query_row(
+                        "SELECT latest_version FROM remote_packages WHERE repo_url = ?1 AND package_path = ?2",
+                        params![repo_url, path],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .optional()
+                    .ok()
+                    .flatten()
+                {
+                    return Some(RemotePackage {
+                        module_path: format!("{}/{}", repo_url, path),
+                        version,
+                    });
+                }
+                path = path
+                    .rsplit_once('/')
+                    .map(|(p, _)| p)
+                    .unwrap_or("")
+                    .to_string();
             }
-            path = path.rsplit_once('/').map(|(p, _)| p).unwrap_or("");
         }
         None
     }
@@ -165,12 +170,12 @@ impl CacheIndex {
             return Ok(Some(result));
         }
 
-        let (repo_url, subpath) = split_repo_and_subpath(file_url);
+        let (repo_url, subpath) = git::split_repo_and_subpath(file_url)?;
         if subpath.is_empty() {
             return Ok(None);
         }
 
-        self.discover_remote_packages(repo_url)?;
+        self.discover_remote_packages(&repo_url)?;
         Ok(self.find_remote_package_cached(file_url))
     }
 
@@ -461,6 +466,14 @@ mod tests {
                 "0.3.0"
             ],
         )?;
+        conn.execute(
+            "INSERT INTO remote_packages VALUES (?1, ?2, ?3)",
+            params![
+                "code.diode.computer/diode/registry/intel",
+                "components/Foo",
+                "0.4.0"
+            ],
+        )?;
         drop(conn);
 
         let dep = index
@@ -489,6 +502,15 @@ mod tests {
             "code.diode.computer/diode/registry/components/JST"
         );
         assert_eq!(dep.version, "0.3.0");
+
+        let dep = index
+            .find_remote_package("code.diode.computer/diode/registry/intel/components/Foo/Foo.zen")?
+            .unwrap();
+        assert_eq!(
+            dep.module_path,
+            "code.diode.computer/diode/registry/intel/components/Foo"
+        );
+        assert_eq!(dep.version, "0.4.0");
 
         // Verify cache miss without triggering remote discovery/network.
         assert!(

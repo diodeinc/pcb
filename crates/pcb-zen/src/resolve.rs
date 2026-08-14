@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use globset::{Glob, GlobSetBuilder};
-use pcb_zen_core::config::{ManifestPart, split_repo_and_subpath};
+use pcb_zen_core::config::ManifestPart;
 use pcb_zen_core::resolution::{FrozenResolutionMap, ResolutionResult, build_package_roots};
 use semver::Version;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -427,8 +427,8 @@ fn verify_tag_hashes(
     content_hash: &str,
     manifest_hash: &str,
 ) -> Result<()> {
-    let (repo_url, subpath) = split_repo_and_subpath(module_path);
-    let source_dir = source_repo_dir(repo_url)?;
+    let (repo_url, subpath) = git::split_repo_and_subpath(module_path)?;
+    let source_dir = source_repo_dir(&repo_url)?;
     let tag_name = if subpath.is_empty() {
         format!("v{}", version)
     } else {
@@ -551,7 +551,7 @@ pub fn ensure_sparse_checkout(
     version_str: &str,
 ) -> Result<PathBuf> {
     let marker = "pcb.toml";
-    let (repo_url, subpath) = split_repo_and_subpath(module_path);
+    let (repo_url, subpath) = git::split_repo_and_subpath(module_path)?;
 
     populate_cache(checkout_dir, marker, |dest| {
         let is_pseudo_version = version_str.contains("-0.");
@@ -570,7 +570,7 @@ pub fn ensure_sparse_checkout(
             }
         };
 
-        fetch_via_git(dest, repo_url, &ref_spec, subpath, is_pseudo_version)
+        fetch_via_git(dest, &repo_url, &ref_spec, &subpath, is_pseudo_version)
             .with_context(|| format!("Failed to fetch {} via git sparse checkout", module_path))?;
         Ok(())
     })

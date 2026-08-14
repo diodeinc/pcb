@@ -146,6 +146,8 @@ load("github.com/myorg/components/capacitor.zen", "Capacitor")
 
 The path identifies the package owner and source repository without a central
 namespace. A file's imports also state which packages its source requires.
+Remote package commands treat the first three or four path segments as the git
+repository, and they use the longest prefix that exists.
 
 Import paths omit versions. The `pcb.toml` manifest declares which version of
 each package to use:

@@ -6,10 +6,10 @@ use jiff::{
     Timestamp,
     tz::{Offset, TimeZone},
 };
-use pcb_zen_core::config::split_repo_and_subpath;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{LazyLock, Mutex};
 use tar::Archive;
 use tempfile::Builder;
 use url::Url;
@@ -23,6 +23,9 @@ const DIODEHUB_CREDENTIAL_USE_HTTP_PATH_CONFIG: &str =
 const PCB_GIT_CONFIG_FILE: &str = "gitconfig";
 const PCB_GIT_CONFIG_INCLUDE: &str = "include.path";
 const GIT_CONFIG_NOT_FOUND: i32 = 5;
+
+static RESOLVED_REPOS: LazyLock<Mutex<HashMap<String, (String, String)>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 #[derive(Debug, Clone)]
 pub struct TagMetadata {
@@ -878,6 +881,66 @@ pub fn format_ssh_url(module_path: &str) -> String {
     }
 }
 
+/// Split a module path into `(repo_url, subpath)`.
+///
+/// Repositories are 3 or 4 path segments. When both prefixes could exist, the
+/// longest existing git remote wins. A locally cached source checkout counts
+/// as existing and skips the network.
+pub fn split_repo_and_subpath(module_path: &str) -> anyhow::Result<(String, String)> {
+    if let Some(resolved) = RESOLVED_REPOS
+        .lock()
+        .expect("repo resolution cache mutex poisoned")
+        .get(module_path)
+        .cloned()
+    {
+        return Ok(resolved);
+    }
+
+    let resolved = resolve_repo_and_subpath(module_path)?;
+    RESOLVED_REPOS
+        .lock()
+        .expect("repo resolution cache mutex poisoned")
+        .insert(module_path.to_string(), resolved.clone());
+    Ok(resolved)
+}
+
+fn resolve_repo_and_subpath(module_path: &str) -> anyhow::Result<(String, String)> {
+    for (repo_url, subpath) in repo_prefixes(module_path) {
+        if subpath.is_empty() || repo_exists(&repo_url)? {
+            return Ok((repo_url, subpath));
+        }
+    }
+    Ok((module_path.to_string(), String::new()))
+}
+
+pub(crate) fn repo_prefixes(module_path: &str) -> impl Iterator<Item = (String, String)> + '_ {
+    let parts: Vec<&str> = module_path.split('/').collect();
+    [4usize, 3].into_iter().filter_map(move |n| {
+        (parts.len() >= n).then(|| (parts[..n].join("/"), parts[n..].join("/")))
+    })
+}
+
+fn repo_exists(repo_url: &str) -> anyhow::Result<bool> {
+    if crate::cache_index::source_repo_dir(repo_url)?
+        .join(".git")
+        .exists()
+    {
+        return Ok(true);
+    }
+    match with_remote_fallback(repo_url, |url, interactive| {
+        ls_remote(url, "HEAD", interactive).map(|_| ())
+    }) {
+        Ok(_) => Ok(true),
+        Err(err) if is_missing_remote(&err) => Ok(false),
+        Err(err) => Err(err),
+    }
+}
+
+fn is_missing_remote(err: &anyhow::Error) -> bool {
+    let msg = err.to_string().to_ascii_lowercase();
+    msg.contains("not found") || msg.contains("does not exist")
+}
+
 fn with_remote_fallback<T>(
     repo_url: &str,
     mut operation: impl FnMut(&str, bool) -> anyhow::Result<T>,
@@ -913,8 +976,8 @@ pub fn ls_remote_with_fallback(
     module_path: &str,
     refspec: &str,
 ) -> anyhow::Result<(String, String)> {
-    let (repo_url, _) = split_repo_and_subpath(module_path);
-    let (commit, url) = with_remote_fallback(repo_url, |url, interactive| {
+    let (repo_url, _) = split_repo_and_subpath(module_path)?;
+    let (commit, url) = with_remote_fallback(&repo_url, |url, interactive| {
         ls_remote(url, refspec, interactive)
     })
     .with_context(|| format!("Failed to ls-remote {} for {}", refspec, module_path))?;
