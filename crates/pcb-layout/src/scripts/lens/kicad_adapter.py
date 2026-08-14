@@ -38,13 +38,8 @@ from .types import (
     EntityId,
     FootprintComplement,
     FootprintView,
-    GraphicComplement,
-    GroupComplement,
     GroupView,
     Position,
-    TrackComplement,
-    ViaComplement,
-    ZoneComplement,
     default_footprint_complement,
 )
 
@@ -1008,8 +1003,26 @@ def apply_changeset(
     return oplog
 
 
+def _fragment_target_group(
+    source_item: Any,
+    root_group_name: str,
+    root_group: Any,
+    groups_by_name: dict[str, Any],
+) -> Any:
+    """Map a fragment item's relative group to its instantiated board group."""
+    source_group = source_item.GetParentGroup()
+    relative_group_name = source_group.GetName() if source_group else ""
+    target_group_name = (
+        f"{root_group_name}.{relative_group_name}"
+        if relative_group_name
+        else root_group_name
+    )
+    return groups_by_name.get(target_group_name, root_group)
+
+
 def _apply_fragment_routing(
     group: Any,
+    groups_by_name: dict[str, Any],
     group_view: GroupView,
     entity_id: EntityId,
     fragment_data: FragmentDataType,
@@ -1029,10 +1042,6 @@ def _apply_fragment_routing(
         move_delta: (dx, dy) offset to apply to duplicated items (from group move)
     """
     if not group_view.layout_path:
-        return
-
-    group_complement = fragment_data.group_complement
-    if group_complement.is_empty:
         return
 
     group_name = str(entity_id.path)
@@ -1067,31 +1076,6 @@ def _apply_fragment_routing(
 
     valid_nets = set(board_view.nets.keys()) | {""}
 
-    # Build UUID lookup tables from the fragment board
-    fragment_tracks: dict[str, Any] = {}
-    fragment_vias: dict[str, Any] = {}
-    for track in fragment_board.GetTracks():
-        item_uuid = str(track.m_Uuid.AsString())
-        if "VIA" in track.GetClass().upper():
-            fragment_vias[item_uuid] = track
-        else:
-            fragment_tracks[item_uuid] = track
-
-    fragment_zones: dict[str, Any] = {}
-    for zone in fragment_board.Zones():
-        fragment_zones[str(zone.m_Uuid.AsString())] = zone
-
-    fragment_graphics: dict[str, Any] = {}
-    for drawing in fragment_board.GetDrawings():
-        parent = drawing.GetParent()
-        if (
-            parent
-            and hasattr(pcbnew, "FOOTPRINT")
-            and isinstance(parent, pcbnew.FOOTPRINT)
-        ):
-            continue
-        fragment_graphics[str(drawing.m_Uuid.AsString())] = drawing
-
     def _set_net(item: Any, fragment_net_name: str) -> None:
         """Set net on item, remapping from fragment net to board net."""
         if not fragment_net_name:
@@ -1112,79 +1096,85 @@ def _apply_fragment_routing(
     offset = pcbnew.VECTOR2I(move_delta[0], move_delta[1])
 
     def _dup_and_add(src: Any, net_name: str = "") -> Any:
-        """Duplicate item, offset it, set net, and add to board+group."""
+        """Duplicate item, offset it, set net, and restore its relative group."""
         item = pcbnew.BOARD_ITEM.Duplicate(src)
         if net_name:
             _set_net(item, net_name)
         kicad_board.Add(item)
         item.Move(offset)
-        group.AddItem(item)
+        _fragment_target_group(src, group_name, group, groups_by_name).AddItem(item)
         return item
 
-    # Duplicate tracks
+    def _dup_connected(src: Any) -> tuple[Any, str]:
+        source_net = src.GetNet()
+        source_net_name = source_net.GetNetname() if source_net else ""
+        return (
+            _dup_and_add(src, source_net_name),
+            net_remap.get(source_net_name, source_net_name),
+        )
+
+    source_routing = list(fragment_board.GetTracks())
+
     tracks_created = 0
-    for track_comp in group_complement.tracks:
-        src = fragment_tracks.get(track_comp.uuid)
-        if src:
-            track = _dup_and_add(src, track_comp.net_name)
-            start = track.GetStart()
-            end = track.GetEnd()
-            width = track.GetWidth() if hasattr(track, "GetWidth") else 0
-            remapped_net = net_remap.get(track_comp.net_name, track_comp.net_name)
-            oplog.frag_track(
-                group_name,
-                remapped_net or "(no-net)",
-                fragment_board.GetLayerName(track.GetLayer()),
-                start.x,
-                start.y,
-                end.x,
-                end.y,
-                width=width,
-            )
-            tracks_created += 1
+    for source_track in (
+        item for item in source_routing if "VIA" not in item.GetClass().upper()
+    ):
+        track, remapped_net = _dup_connected(source_track)
+        start = track.GetStart()
+        end = track.GetEnd()
+        width = track.GetWidth() if hasattr(track, "GetWidth") else 0
+        oplog.frag_track(
+            group_name,
+            remapped_net or "(no-net)",
+            fragment_board.GetLayerName(track.GetLayer()),
+            start.x,
+            start.y,
+            end.x,
+            end.y,
+            width=width,
+        )
+        tracks_created += 1
 
-    # Duplicate vias
     vias_created = 0
-    for via_comp in group_complement.vias:
-        src = fragment_vias.get(via_comp.uuid)
-        if src:
-            via = _dup_and_add(src, via_comp.net_name)
-            pos = via.GetPosition()
-            drill = via.GetDrill() if hasattr(via, "GetDrill") else 0
-            remapped_net = net_remap.get(via_comp.net_name, via_comp.net_name)
-            oplog.frag_via(
-                group_name, remapped_net or "(no-net)", pos.x, pos.y, drill=drill
-            )
-            vias_created += 1
+    for source_via in (
+        item for item in source_routing if "VIA" in item.GetClass().upper()
+    ):
+        via, remapped_net = _dup_connected(source_via)
+        pos = via.GetPosition()
+        drill = via.GetDrill() if hasattr(via, "GetDrill") else 0
+        oplog.frag_via(
+            group_name, remapped_net or "(no-net)", pos.x, pos.y, drill=drill
+        )
+        vias_created += 1
 
-    # Duplicate zones
     zones_created = 0
-    for zone_comp in group_complement.zones:
-        src = fragment_zones.get(zone_comp.uuid)
-        if src:
-            zone = _dup_and_add(src, zone_comp.net_name)
-            zone.SetAssignedPriority(zone_comp.priority + FRAGMENT_ZONE_PRIORITY_BIAS)
-            remapped_net = net_remap.get(zone_comp.net_name, zone_comp.net_name)
-            oplog.frag_zone(
-                group_name,
-                remapped_net or "(no-net)",
-                fragment_board.GetLayerName(zone.GetLayer()),
-                zone.GetZoneName() or "",
-            )
-            zones_created += 1
+    for source_zone in fragment_board.Zones():
+        source_net = source_zone.GetNet()
+        source_net_name = source_net.GetNetname() if source_net else ""
+        zone = _dup_and_add(source_zone, source_net_name)
+        zone.SetAssignedPriority(
+            source_zone.GetAssignedPriority() + FRAGMENT_ZONE_PRIORITY_BIAS
+        )
+        remapped_net = net_remap.get(source_net_name, source_net_name)
+        oplog.frag_zone(
+            group_name,
+            remapped_net or "(no-net)",
+            fragment_board.GetLayerName(zone.GetLayer()),
+            zone.GetZoneName() or "",
+        )
+        zones_created += 1
 
-    # Duplicate graphics
     graphics_created = 0
-    for gr_comp in group_complement.graphics:
-        src = fragment_graphics.get(gr_comp.uuid)
-        if src:
-            graphic = _dup_and_add(src)
-            oplog.frag_graphic(
-                group_name,
-                graphic.GetClass(),
-                fragment_board.GetLayerName(graphic.GetLayer()),
-            )
-            graphics_created += 1
+    for source_graphic in fragment_board.GetDrawings():
+        if isinstance(source_graphic.GetParent(), pcbnew.FOOTPRINT):
+            continue
+        graphic = _dup_and_add(source_graphic)
+        oplog.frag_graphic(
+            group_name,
+            graphic.GetClass(),
+            fragment_board.GetLayerName(graphic.GetLayer()),
+        )
+        graphics_created += 1
 
     if tracks_created or vias_created or zones_created or graphics_created:
         logger.info(
@@ -1484,6 +1474,7 @@ def _run_hierarchical_placement(
         if gv and group:
             _apply_fragment_routing(
                 group,
+                groups_by_name,
                 gv,
                 gid,
                 fragment_data,
@@ -1711,100 +1702,7 @@ def load_layout_fragment_with_footprints(
                 fp_key = path_str if path_str else reference
                 pad_net_map[(fp_key, pad_name)] = net.GetNetname()
 
-    tracks: list[TrackComplement] = []
-    vias: list[ViaComplement] = []
-
-    for track in layout_board.GetTracks():
-        item_class = track.GetClass().upper()
-        net = track.GetNet()
-        net_name = net.GetNetname() if net else ""
-        item_uuid = str(track.m_Uuid.AsString())
-
-        if "VIA" in item_class:
-            pos = track.GetPosition()
-            vias.append(
-                ViaComplement(
-                    uuid=item_uuid,
-                    position=Position(x=pos.x, y=pos.y),
-                    diameter=track.GetWidth(pcbnew.F_Cu),
-                    drill=track.GetDrill(),
-                    via_type="through",
-                    net_name=net_name,
-                )
-            )
-        else:
-            start = track.GetStart()
-            end = track.GetEnd()
-            tracks.append(
-                TrackComplement(
-                    uuid=item_uuid,
-                    start=Position(x=start.x, y=start.y),
-                    end=Position(x=end.x, y=end.y),
-                    width=track.GetWidth(),
-                    layer=layout_board.GetLayerName(track.GetLayer()),
-                    net_name=net_name,
-                )
-            )
-
-    zones: list[ZoneComplement] = []
-    for zone in layout_board.Zones():
-        item_uuid = str(zone.m_Uuid.AsString())
-        net = zone.GetNet()
-        net_name = net.GetNetname() if net else ""
-
-        positions = extract_zone_outline_positions(zone)
-
-        zones.append(
-            ZoneComplement(
-                uuid=item_uuid,
-                name=zone.GetZoneName() or "",
-                outline=tuple(positions),
-                layer=layout_board.GetLayerName(zone.GetLayer()),
-                priority=zone.GetAssignedPriority(),
-                net_name=net_name,
-            )
-        )
-
-    graphics: list[GraphicComplement] = []
-    for drawing in layout_board.GetDrawings():
-        parent = drawing.GetParent()
-        if (
-            parent
-            and hasattr(pcbnew, "FOOTPRINT")
-            and isinstance(parent, pcbnew.FOOTPRINT)
-        ):
-            continue
-
-        item_uuid = str(drawing.m_Uuid.AsString())
-        graphic_type = drawing.GetClass()
-        layer = layout_board.GetLayerName(drawing.GetLayer())
-
-        geometry: dict[str, Any] = {}
-        if hasattr(drawing, "GetStart"):
-            start = drawing.GetStart()
-            geometry["start"] = {"x": start.x, "y": start.y}
-        if hasattr(drawing, "GetEnd"):
-            end = drawing.GetEnd()
-            geometry["end"] = {"x": end.x, "y": end.y}
-
-        graphics.append(
-            GraphicComplement(
-                uuid=item_uuid,
-                graphic_type=graphic_type,
-                layer=layer,
-                geometry=geometry,
-            )
-        )
-
-    group_complement = GroupComplement(
-        tracks=tuple(tracks),
-        vias=tuple(vias),
-        zones=tuple(zones),
-        graphics=tuple(graphics),
-    )
-
     return FragmentData(
-        group_complement=group_complement,
         footprint_complements=footprint_complements,
         pad_net_map=pad_net_map,
     )

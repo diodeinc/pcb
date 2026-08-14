@@ -18,7 +18,6 @@ from ..types import (
     EntityId,
     FootprintComplement,
     FootprintView,
-    GroupComplement,
     GroupView,
     Position,
 )
@@ -183,28 +182,11 @@ class TestLayoutFragmentInAdaptComplement:
 class TestFragmentDataDataClass:
     """Tests for FragmentData dataclass."""
 
-    def test_cache_stores_group_complement(self):
-        """Cache stores the group complement for tracks/vias/zones."""
-        group_comp = GroupComplement(
-            tracks=(),
-            vias=(),
-            zones=(),
-            graphics=(),
-        )
-
-        cache = FragmentData(
-            group_complement=group_comp,
-            footprint_complements={},
-        )
-
-        assert cache.group_complement == group_comp
-
     def test_cache_stores_footprint_complements(self):
         """Cache stores footprint complements by reference/path."""
         fp_comp = make_footprint_complement(x=1000, y=2000)
 
         cache = FragmentData(
-            group_complement=GroupComplement(),
             footprint_complements={"R1": fp_comp, "Path.C1": fp_comp},
         )
 
