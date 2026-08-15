@@ -16,8 +16,8 @@ use pcb_kicad_sch::{
 
 mod project;
 
-use project::files_with_extension;
 pub use project::{KicadProject, schematic_project_path};
+use project::{files_with_extension, project_schematic_path};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -124,7 +124,7 @@ fn apply_existing(project: KicadProject, netlist: &Schematic) -> Result<Schemati
             .file_name
             .as_deref()
             .with_context(|| format!("schematic page '{}' has no filename", page.id))?;
-        let path = project.directory.join(file_name);
+        let path = project_schematic_path(&project.directory, &project.directory, file_name)?;
         if existing_page_ids.contains(page.id.as_str()) {
             let source = fs::read_to_string(&path)
                 .with_context(|| format!("failed to read {}", path.display()))?;
@@ -204,7 +204,11 @@ fn initialize_project(project_file: PathBuf, netlist: &Schematic) -> Result<Sche
         .context("schematic project path has no parent directory")?
         .to_path_buf();
     let schematic_name = schematic_name(netlist, &project_file)?;
-    let root_schematic = directory.join(format!("{schematic_name}.kicad_sch"));
+    let root_schematic = project_schematic_path(
+        &directory,
+        &directory,
+        format!("{schematic_name}.kicad_sch"),
+    )?;
     if root_schematic.exists() {
         bail!(
             "refusing to replace existing KiCad schematic {}",
@@ -337,10 +341,10 @@ fn project_has_single_missing_root(project_file: &Path) -> Result<bool> {
             let Some(file_name) = file_name else {
                 return Ok(false);
             };
-            project_file
+            let directory = project_file
                 .parent()
-                .context("KiCad project file has no parent directory")?
-                .join(file_name)
+                .context("KiCad project file has no parent directory")?;
+            project_schematic_path(directory, directory, file_name)?
         }
         _ => return Ok(false),
     };
@@ -415,12 +419,7 @@ fn desired_file_paths(directory: &Path, document: &SchDocument) -> Result<Vec<Pa
                 .file_name
                 .as_deref()
                 .with_context(|| format!("schematic page '{}' has no filename", page.id))?;
-            let path = Path::new(file_name);
-            Ok(if path.is_absolute() {
-                path.to_path_buf()
-            } else {
-                directory.join(path)
-            })
+            project_schematic_path(directory, directory, file_name)
         })
         .collect()
 }
