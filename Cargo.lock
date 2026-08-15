@@ -4318,7 +4318,6 @@ name = "pcb-kicad-sch"
 version = "0.4.30"
 dependencies = [
  "anyhow",
- "atomicwrites",
  "insta",
  "pcb-sch",
  "pcb-sexpr",
@@ -4562,6 +4561,7 @@ name = "pcbc"
 version = "0.4.30"
 dependencies = [
  "anyhow",
+ "atomicwrites",
  "chrono",
  "clap",
  "colored",

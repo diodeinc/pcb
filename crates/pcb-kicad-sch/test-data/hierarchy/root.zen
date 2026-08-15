@@ -1,0 +1,12 @@
+"""Two configured instances of one linked schematic module."""
+
+Project(name="Hierarchy", path="kicad", layout=False)
+
+Filter = Module("filter.zen")
+
+SOURCE = Net("SOURCE")
+MID = Net("MID")
+SINK = Net("SINK")
+
+Filter(name="FILTER_A", resistance="1kohms", INPUT=SOURCE, OUTPUT=MID)
+Filter(name="FILTER_B", resistance="2kohms", INPUT=MID, OUTPUT=SINK)

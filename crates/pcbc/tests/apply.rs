@@ -2,8 +2,9 @@
 
 use std::fs;
 
-use pcb_kicad_sch::{KicadProject, SchItem};
+use pcb_kicad_sch::SchItem;
 use pcb_test_utils::sandbox::Sandbox;
+use pcbc::kicad_schematic::KicadProject;
 
 const BOARD_ZEN: &str = r#"
 Project(name="ApplyTest", path="hardware", layout=False, bom_profile=None)

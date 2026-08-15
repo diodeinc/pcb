@@ -1,13 +1,14 @@
-mod common;
+use super::schematic_apply_common as common;
 
 use std::fs;
 
 use pcb_kicad_sch::{
-    KicadProject, Label, LabelKind, LabelShape, LabelSpin, PinInstance, Point, SchItem,
-    SymbolDefinition, Wire, analysis::analyze_schematic, apply::apply_linked_schematic,
+    Label, LabelKind, LabelShape, LabelSpin, PinInstance, Point, SchItem, SymbolDefinition, Wire,
+    analysis::analyze_schematic,
 };
 use pcb_sch::{ATTR_SCHEMATIC_PATH, ATTR_SYMBOL_FORMAT_VERSION, AttributeValue};
 use pcb_sexpr::Sexpr;
+use pcbc::kicad_schematic::{KicadProject, apply_linked_schematic};
 
 const CONNECTION_GRID_MM: f64 = 1.27;
 
@@ -22,13 +23,26 @@ fn assert_on_connection_grid(point: Point) {
 }
 
 fn linked_fixture(path: &std::path::Path) -> pcb_sch::Schematic {
-    let fixture = common::AnalysisFixture::load("analysis", "simple.zen", "kicad");
-    let mut netlist = fixture.netlist().clone();
+    let mut netlist = common::compile_fixture("analysis", "simple.zen");
     let root = netlist.root_ref.clone().unwrap();
     let package_root = path.parent().unwrap();
     netlist
         .package_roots
         .insert("apply-test".to_string(), package_root.to_path_buf());
+    netlist.instances.get_mut(&root).unwrap().attributes.insert(
+        ATTR_SCHEMATIC_PATH.to_string(),
+        AttributeValue::String("package://apply-test/hardware".to_string()),
+    );
+    netlist
+}
+
+fn linked_hierarchy_fixture(path: &std::path::Path) -> pcb_sch::Schematic {
+    let mut netlist = common::compile_fixture("hierarchy", "root.zen");
+    let root = netlist.root_ref.clone().unwrap();
+    netlist.package_roots.insert(
+        "apply-test".to_string(),
+        path.parent().unwrap().to_path_buf(),
+    );
     netlist.instances.get_mut(&root).unwrap().attributes.insert(
         ATTR_SCHEMATIC_PATH.to_string(),
         AttributeValue::String("package://apply-test/hardware".to_string()),
@@ -143,6 +157,177 @@ fn creates_a_verified_project_and_then_makes_no_changes() {
     assert!(!project.document.pages[0].items.iter().any(
         |item| matches!(item, SchItem::Label(label) if matches!(label.kind, LabelKind::Global { .. }))
     ));
+}
+
+#[test]
+fn initializes_each_linked_module_instance_as_its_own_child_sheet() {
+    let workspace = tempfile::tempdir().unwrap();
+    let project_dir = workspace.path().join("hardware");
+    let netlist = linked_hierarchy_fixture(&project_dir);
+
+    let created = apply_linked_schematic(&netlist).unwrap().unwrap();
+
+    assert_eq!(
+        created
+            .schematic_files
+            .iter()
+            .map(|path| path.file_name().unwrap().to_str().unwrap())
+            .collect::<Vec<_>>(),
+        [
+            "Hierarchy.kicad_sch",
+            "FILTER_A.kicad_sch",
+            "FILTER_B.kicad_sch"
+        ]
+    );
+    let project = KicadProject::load(&created.project_file).unwrap();
+    let root = project
+        .document
+        .pages
+        .iter()
+        .find(|page| page.file_name.as_deref() == Some("Hierarchy.kicad_sch"))
+        .unwrap();
+    assert_eq!(
+        root.items
+            .iter()
+            .filter_map(|item| match item {
+                SchItem::Sheet(sheet) => Some(sheet.file_name()),
+                _ => None,
+            })
+            .collect::<Vec<_>>(),
+        ["FILTER_A.kicad_sch", "FILTER_B.kicad_sch"]
+    );
+    for (file_name, component_path) in [
+        ("FILTER_A.kicad_sch", "FILTER_A.R1"),
+        ("FILTER_B.kicad_sch", "FILTER_B.R1"),
+    ] {
+        let page = project
+            .document
+            .pages
+            .iter()
+            .find(|page| page.file_name.as_deref() == Some(file_name))
+            .unwrap();
+        assert!(page.items.iter().any(|item| {
+            matches!(item, SchItem::Symbol(symbol) if symbol.field_value("Path").is_some_and(|path| path.starts_with(component_path)))
+        }));
+    }
+    assert!(
+        analyze_schematic(&project.document, &netlist)
+            .unwrap()
+            .is_equivalent()
+    );
+
+    let before = created
+        .schematic_files
+        .iter()
+        .map(|path| (path.clone(), fs::read(path).unwrap()))
+        .collect::<Vec<_>>();
+    let unchanged = apply_linked_schematic(&netlist).unwrap().unwrap();
+    assert!(!unchanged.changed);
+    for (path, source) in before {
+        assert_eq!(fs::read(path).unwrap(), source);
+    }
+
+    // Hierarchy aliases are KiCad organization, not reconciliation metadata.
+    // Change them to an equivalent non-generated convention and verify that
+    // apply does not restore our initial naming policy.
+    let mut edited = KicadProject::load(&created.project_file).unwrap();
+    let mut aliases_by_file = std::collections::BTreeMap::new();
+    for page in &mut edited.document.pages {
+        for sheet in page.items.iter_mut().filter_map(|item| match item {
+            SchItem::Sheet(sheet) => Some(sheet),
+            _ => None,
+        }) {
+            let aliases = sheet
+                .pins
+                .iter_mut()
+                .map(|pin| {
+                    let old = pin.name.clone();
+                    pin.name = format!("CUSTOM_{old}");
+                    (old, pin.name.clone())
+                })
+                .collect::<std::collections::BTreeMap<_, _>>();
+            aliases_by_file.insert(sheet.file_name().to_string(), aliases);
+        }
+    }
+    for page in &mut edited.document.pages {
+        let Some(aliases) = page
+            .file_name
+            .as_deref()
+            .and_then(|file| aliases_by_file.get(file))
+        else {
+            continue;
+        };
+        for label in page.items.iter_mut().filter_map(|item| match item {
+            SchItem::Label(label) if matches!(label.kind, LabelKind::Hierarchical { .. }) => {
+                Some(label)
+            }
+            _ => None,
+        }) {
+            if let Some(alias) = aliases.get(&label.text) {
+                label.text = alias.clone();
+            }
+        }
+    }
+    assert!(
+        analyze_schematic(&edited.document, &netlist)
+            .unwrap()
+            .is_equivalent()
+    );
+    for file in edited.document.to_kicad_sch_files() {
+        fs::write(edited.directory.join(file.file_name.unwrap()), file.content).unwrap();
+    }
+    let before = created
+        .schematic_files
+        .iter()
+        .map(|path| (path.clone(), fs::read(path).unwrap()))
+        .collect::<Vec<_>>();
+
+    let unchanged = apply_linked_schematic(&netlist).unwrap().unwrap();
+
+    assert!(!unchanged.changed);
+    for (path, source) in before {
+        assert_eq!(fs::read(path).unwrap(), source);
+    }
+}
+
+#[test]
+fn adds_an_uninitialized_linked_module_to_an_existing_project() {
+    let workspace = tempfile::tempdir().unwrap();
+    let project_dir = workspace.path().join("hardware");
+    let netlist = linked_hierarchy_fixture(&project_dir);
+    let created = apply_linked_schematic(&netlist).unwrap().unwrap();
+    let missing_file = project_dir.join("FILTER_B.kicad_sch");
+
+    let mut incomplete = KicadProject::load(&created.project_file).unwrap();
+    incomplete
+        .document
+        .pages
+        .retain(|page| page.file_name.as_deref() != Some("FILTER_B.kicad_sch"));
+    for page in &mut incomplete.document.pages {
+        page.items.retain(|item| {
+            !matches!(item, SchItem::Sheet(sheet) if sheet.file_name() == "FILTER_B.kicad_sch")
+        });
+    }
+    for file in incomplete.document.to_kicad_sch_files() {
+        fs::write(
+            incomplete.directory.join(file.file_name.unwrap()),
+            file.content,
+        )
+        .unwrap();
+    }
+    fs::remove_file(&missing_file).unwrap();
+
+    let repaired = apply_linked_schematic(&netlist).unwrap().unwrap();
+
+    assert!(repaired.changed);
+    assert!(!repaired.created);
+    assert!(missing_file.is_file());
+    let reloaded = KicadProject::load(&repaired.project_file).unwrap();
+    assert!(
+        analyze_schematic(&reloaded.document, &netlist)
+            .unwrap()
+            .is_equivalent()
+    );
 }
 
 #[test]
@@ -272,7 +457,7 @@ fn accepts_an_isolated_not_connected_pin() {
 }
 
 #[test]
-fn keeps_one_generated_label_per_wired_island() {
+fn preserves_equivalent_user_connectivity_without_normalizing_labels() {
     let workspace = tempfile::tempdir().unwrap();
     let project_dir = workspace.path().join("hardware");
     let netlist = linked_fixture(&project_dir);
@@ -323,7 +508,7 @@ fn keeps_one_generated_label_per_wired_island() {
                     if label.text == "MID" && matches!(label.kind, LabelKind::Local)
             ))
             .count(),
-        1
+        2
     );
     let analysis = analyze_schematic(&repaired.document, &netlist).unwrap();
     assert!(analysis.is_equivalent(), "{:?}", analysis.issues());
@@ -532,8 +717,7 @@ fn repairs_component_identity_without_rebuilding_connectivity() {
     let workspace = tempfile::tempdir().unwrap();
     let project_dir = workspace.path().join("hardware");
     fs::create_dir(&project_dir).unwrap();
-    let fixture_dir =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("test-data/analysis/kicad");
+    let fixture_dir = common::test_data_dir().join("analysis/kicad");
     for name in ["simple.kicad_pro", "simple.kicad_sch"] {
         fs::copy(fixture_dir.join(name), project_dir.join(name)).unwrap();
     }
@@ -585,8 +769,7 @@ fn repairs_a_disconnected_net_without_removing_remaining_wires() {
     let workspace = tempfile::tempdir().unwrap();
     let project_dir = workspace.path().join("hardware");
     fs::create_dir(&project_dir).unwrap();
-    let fixture_dir =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("test-data/analysis/kicad");
+    let fixture_dir = common::test_data_dir().join("analysis/kicad");
     for name in ["simple.kicad_pro", "simple.kicad_sch"] {
         fs::copy(fixture_dir.join(name), project_dir.join(name)).unwrap();
     }

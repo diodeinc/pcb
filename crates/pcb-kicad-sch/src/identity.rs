@@ -57,7 +57,11 @@ where
     (!path.is_empty()).then_some(path)
 }
 
-pub(crate) fn normalize_path(path: &Path) -> PathBuf {
+/// Normalize `.` and `..` components without consulting the filesystem.
+///
+/// Project adapters use this when resolving sheet filenames so their page
+/// names match the pure hierarchy analysis.
+pub fn normalize_schematic_path(path: &Path) -> PathBuf {
     let mut normalized = PathBuf::new();
     for component in path.components() {
         match component {

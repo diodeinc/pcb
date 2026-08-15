@@ -124,12 +124,15 @@ impl KicadBuilder {
                 unsupported: Vec::new(),
             })
             .collect();
-        self.push(SchItem::Sheet(Sheet {
+        self.push(SchItem::Sheet(Box::new(Sheet {
             id,
+            at: None,
+            size: None,
+            name: None,
             file: SymbolField::new("Sheetfile", file_name, Point::default()),
             pins,
             unsupported: Vec::new(),
-        }));
+        })));
         self
     }
 

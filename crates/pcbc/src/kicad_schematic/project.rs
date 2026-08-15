@@ -9,7 +9,7 @@ use pcb_sch::{AttributeValue, Schematic};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::{SchDocument, SchItem, identity::normalize_path, parse_kicad_sch_page};
+use pcb_kicad_sch::{SchDocument, SchItem, normalize_schematic_path, parse_kicad_sch_page};
 
 /// A KiCad schematic project loaded from one project directory.
 #[derive(Debug, Clone)]
@@ -74,7 +74,7 @@ fn load_schematic_hierarchy(
     let mut root_by_path = std::collections::BTreeMap::new();
     let mut seen = BTreeSet::new();
     for root in roots {
-        let path = normalize_path(&root.path);
+        let path = normalize_schematic_path(&root.path);
         if !seen.insert(path.clone()) {
             bail!(
                 "top-level schematic {} is listed more than once",
@@ -96,7 +96,7 @@ fn load_schematic_hierarchy(
         let relative = relative.to_string_lossy().replace('\\', "/");
         let mut page = parse_kicad_sch_page(Some(&relative), &content)
             .with_context(|| format!("failed to parse {}", path.display()))?;
-        if let Some(root_id) = root_by_path.get(&normalize_path(&path)) {
+        if let Some(root_id) = root_by_path.get(&normalize_schematic_path(&path)) {
             if let Some(root_id) = root_id {
                 page.id = (*root_id).to_string();
             }
@@ -107,7 +107,7 @@ fn load_schematic_hierarchy(
             SchItem::Sheet(sheet) => Some(sheet),
             _ => None,
         }) {
-            let child = normalize_path(&parent.join(sheet.file_name()));
+            let child = normalize_schematic_path(&parent.join(sheet.file_name()));
             if !child.is_file() {
                 bail!(
                     "sheet {} references missing schematic {}",
@@ -157,7 +157,7 @@ fn project_root_schematics(directory: &Path, project_file: &Path) -> Result<Vec<
                 .with_context(|| {
                     format!("schematic.top_level_sheets[{index}].filename must be a string")
                 })?;
-            let path = normalize_path(&directory.join(file_name));
+            let path = normalize_schematic_path(&directory.join(file_name));
             if !path.is_file() {
                 bail!("top-level schematic {} does not exist", path.display());
             }

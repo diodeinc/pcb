@@ -11,14 +11,15 @@ use super::{
 };
 use crate::{
     Label, LabelKind, Point, SchDocument, SchItem, SchPage, Symbol, SymbolSlotKey,
-    identity::normalize_path,
+    identity::normalize_schematic_path,
     symbol::{self, PowerScope},
 };
 
 const SCH_IU_PER_MM: f64 = 10_000.0;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PinVisibility {
+/// Controls whether invisible KiCad symbol pins participate in reduction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PinVisibility {
     IncludeHidden,
     VisibleOnly,
 }
@@ -29,18 +30,20 @@ impl PinVisibility {
     }
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct KiCadConnectivity {
-    pub(crate) graph: ConnectivityGraph,
-    pub(crate) islands: BTreeMap<IslandRef, IslandProvenance>,
+/// KiCad connectivity plus the physical items that formed each island.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PhysicalConnectivity {
+    pub graph: ConnectivityGraph,
+    pub islands: BTreeMap<IslandRef, PhysicalIsland>,
 }
 
-#[derive(Debug, Clone, Default)]
-pub(crate) struct IslandProvenance {
-    pub(crate) items: BTreeSet<ConnectivityItemRef>,
-    pub(crate) named_drivers: BTreeMap<String, BTreeSet<ConnectivityItemRef>>,
-    pub(crate) names: BTreeSet<String>,
-    pub(crate) terminals: BTreeSet<Terminal>,
+/// Physical provenance for one connected KiCad geometry island.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PhysicalIsland {
+    pub items: BTreeSet<ConnectivityItemRef>,
+    pub named_drivers: BTreeMap<String, BTreeSet<ConnectivityItemRef>>,
+    pub names: BTreeSet<String>,
+    pub terminals: BTreeSet<Terminal>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -75,7 +78,7 @@ pub enum ConnectivityItemRef {
 pub(crate) fn reduce_with_provenance(
     document: &SchDocument,
     pin_visibility: PinVisibility,
-) -> Result<KiCadConnectivity> {
+) -> Result<PhysicalConnectivity> {
     let mut components = Vec::new();
     let mut groups = Vec::new();
     let mut islands = BTreeMap::new();
@@ -105,7 +108,7 @@ pub(crate) fn reduce_with_provenance(
         groups.extend(reduced.groups);
     }
     components.sort();
-    Ok(KiCadConnectivity {
+    Ok(PhysicalConnectivity {
         graph: ConnectivityGraph {
             components,
             groups: merge_scoped_groups(groups),
@@ -218,7 +221,7 @@ fn collect_page_instances<'a>(
 }
 
 fn normalize_file_name(name: &str) -> String {
-    normalize_path(Path::new(name))
+    normalize_schematic_path(Path::new(name))
         .to_string_lossy()
         .replace('\\', "/")
 }
@@ -235,7 +238,9 @@ fn resolve_file_name(parent: &SchPage, child: &str) -> String {
             .unwrap_or_else(|| Path::new(""))
             .join(child)
     };
-    normalize_path(&path).to_string_lossy().replace('\\', "/")
+    normalize_schematic_path(&path)
+        .to_string_lossy()
+        .replace('\\', "/")
 }
 
 struct ReducedPage {
@@ -843,7 +848,7 @@ fn connection_groups(
             let mut terminals = BTreeSet::new();
             let mut hierarchical_ports = BTreeSet::new();
             let mut child_pins = BTreeSet::new();
-            let mut provenance = IslandProvenance::default();
+            let mut provenance = PhysicalIsland::default();
             for item in items {
                 if let Some(source) = &item.source {
                     provenance.items.insert(source.clone());
@@ -906,7 +911,7 @@ fn connection_groups(
 
 struct ScopedConnectionGroup {
     island: IslandRef,
-    provenance: IslandProvenance,
+    provenance: PhysicalIsland,
     group: ConnectionGroup,
     global_names: BTreeSet<String>,
     page_instance_id: String,

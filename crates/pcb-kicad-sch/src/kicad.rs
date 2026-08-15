@@ -178,7 +178,7 @@ fn parse_kicad_sch_root(file_name: Option<&str>, root: &Sexpr) -> Result<SchPage
                 items.push(SchItem::Label(parse_label(list)?));
             }
             Some("sheet") => {
-                items.push(SchItem::Sheet(parse_sheet(list)?));
+                items.push(SchItem::Sheet(Box::new(parse_sheet(list)?)));
             }
             Some("sheet_instances") => {
                 items.push(SchItem::Unsupported(child.clone()));
@@ -461,6 +461,9 @@ fn parse_no_connect(items: SexprList<'_>) -> Result<NoConnect> {
 
 fn parse_sheet(items: SexprList<'_>) -> Result<Sheet> {
     let mut id = None;
+    let mut at = None;
+    let mut size = None;
+    let mut name = None;
     let mut file = None;
     let mut pins = Vec::new();
     let mut unsupported = Vec::new();
@@ -471,7 +474,12 @@ fn parse_sheet(items: SexprList<'_>) -> Result<Sheet> {
             continue;
         };
         match list.tag() {
+            Some("at") => at = Some(parse_xy(list)?),
+            Some("size") => size = Some(parse_xy(list)?),
             Some("uuid") => id = list.string(1),
+            Some("property") if list.string(1).as_deref() == Some("Sheetname") => {
+                name = Some(parse_property(list)?);
+            }
             Some("property") if list.string(1).as_deref() == Some("Sheetfile") => {
                 file = Some(parse_property(list)?);
             }
@@ -484,6 +492,9 @@ fn parse_sheet(items: SexprList<'_>) -> Result<Sheet> {
 
     Ok(Sheet {
         id: id.context("sheet missing uuid")?,
+        at,
+        size,
+        name,
         file: file.context("sheet missing Sheetfile property")?,
         pins,
         unsupported,
@@ -884,7 +895,22 @@ fn no_connect_to_sexpr(no_connect: &NoConnect) -> Sexpr {
 
 fn sheet_to_sexpr(sheet: &Sheet) -> Sexpr {
     let mut items = vec![Sexpr::symbol("sheet")];
+    if let Some(at) = sheet.at {
+        items.push(Sexpr::list(vec![
+            Sexpr::symbol("at"),
+            Sexpr::float(at.x),
+            Sexpr::float(at.y),
+        ]));
+    }
+    if let Some(size) = sheet.size {
+        items.push(Sexpr::list(vec![
+            Sexpr::symbol("size"),
+            Sexpr::float(size.x),
+            Sexpr::float(size.y),
+        ]));
+    }
     items.extend(sheet.unsupported.iter().cloned());
+    items.extend(sheet.name.iter().map(field_to_sexpr));
     items.push(field_to_sexpr(&sheet.file));
     items.extend(sheet.pins.iter().map(sheet_pin_to_sexpr));
     items.push(Sexpr::list(vec![

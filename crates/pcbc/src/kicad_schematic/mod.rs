@@ -10,10 +10,14 @@ use pcb_sch::{ATTR_SCHEMATIC_NAME, AttributeValue, KICAD_PROJECT_BASENAME, Schem
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::{
-    KicadProject, SchDocument, analysis::analyze_schematic, compose::reconcile_document,
-    patch::patch_page_source, project::files_with_extension, schematic_project_path,
+use pcb_kicad_sch::{
+    SchDocument, analysis::analyze_schematic, patch_page_source, reconcile::plan_reconciliation,
 };
+
+mod project;
+
+use project::files_with_extension;
+pub use project::{KicadProject, schematic_project_path};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -35,7 +39,6 @@ pub fn apply_linked_schematic(netlist: &Schematic) -> Result<Option<SchematicApp
     let Some(path) = schematic_project_path(netlist)? else {
         return Ok(None);
     };
-    crate::component_slots::validate_symbol_library_versions(netlist)?;
     match project_state(&path)? {
         ProjectState::Complete(project) => apply_existing(project, netlist).map(Some),
         ProjectState::Uninitialized(project_file) | ProjectState::Missing(project_file) => {
@@ -93,20 +96,62 @@ fn apply_existing(project: KicadProject, netlist: &Schematic) -> Result<Schemati
         .file_name()
         .and_then(|name| name.to_str())
         .context("linked KiCad project has no UTF-8 root schematic filename")?;
-    let desired = reconcile_document(Some(&project.document), netlist, root_file_name)?;
-    verify_document(&desired, netlist, "planned schematic")?;
+    let plan = plan_reconciliation(Some(&project.document), netlist, root_file_name)?;
+    let desired = plan.apply(Some(&project.document))?;
+
+    // Semantic equality is the no-op boundary. Do not run a parsed KiCad file
+    // through our serializer merely because its valid item ordering or
+    // formatting differs from generated output.
+    if plan.is_empty() {
+        return Ok(SchematicApplyResult {
+            project_file: project.project_file,
+            root_schematic,
+            schematic_files: project.schematic_files,
+            changed: false,
+            created: false,
+        });
+    }
 
     let mut writes = Vec::new();
+    let existing_page_ids = project
+        .document
+        .pages
+        .iter()
+        .map(|page| page.id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
     for page in &desired.pages {
         let file_name = page
             .file_name
             .as_deref()
             .with_context(|| format!("schematic page '{}' has no filename", page.id))?;
         let path = project.directory.join(file_name);
-        let source = fs::read_to_string(&path)
-            .with_context(|| format!("failed to read {}", path.display()))?;
-        if let Some(next) = patch_page_source(&source, page)? {
-            writes.push(PendingWrite { path, source, next });
+        if existing_page_ids.contains(page.id.as_str()) {
+            let source = fs::read_to_string(&path)
+                .with_context(|| format!("failed to read {}", path.display()))?;
+            if let Some(next) = patch_page_source(&source, page)? {
+                writes.push(PendingWrite {
+                    path,
+                    source: Some(source),
+                    next,
+                });
+            }
+        } else {
+            if path.exists() {
+                bail!(
+                    "refusing to replace unrelated KiCad schematic {}",
+                    path.display()
+                );
+            }
+            let next = SchDocument {
+                pages: vec![page.clone()],
+                root_page_ids: vec![page.id.clone()],
+            }
+            .to_kicad_sch()?;
+            writes.push(PendingWrite {
+                path,
+                source: None,
+                next,
+            });
         }
     }
     if writes.is_empty() {
@@ -141,7 +186,7 @@ fn apply_existing(project: KicadProject, netlist: &Schematic) -> Result<Schemati
     Ok(SchematicApplyResult {
         project_file: project.project_file,
         root_schematic,
-        schematic_files: project.schematic_files,
+        schematic_files: desired_file_paths(&project.directory, &desired)?,
         changed: true,
         created: false,
     })
@@ -149,7 +194,7 @@ fn apply_existing(project: KicadProject, netlist: &Schematic) -> Result<Schemati
 
 struct PendingWrite {
     path: PathBuf,
-    source: String,
+    source: Option<String>,
     next: String,
 }
 
@@ -166,15 +211,21 @@ fn initialize_project(project_file: PathBuf, netlist: &Schematic) -> Result<Sche
             root_schematic.display()
         );
     }
-    fs::create_dir_all(&directory)
-        .with_context(|| format!("failed to create {}", directory.display()))?;
     let file_name = root_schematic
         .file_name()
         .and_then(|name| name.to_str())
         .context("generated schematic filename is not UTF-8")?;
-    let document = reconcile_document(None, netlist, file_name)?;
-    verify_document(&document, netlist, "generated schematic")?;
-    let schematic_source = document.to_kicad_sch()?;
+    let plan = plan_reconciliation(None, netlist, file_name)?;
+    let document = plan.apply(None)?;
+    let schematic_files = desired_file_paths(&directory, &document)?;
+    for path in &schematic_files {
+        if path.exists() {
+            bail!(
+                "refusing to replace existing KiCad schematic {}",
+                path.display()
+            );
+        }
+    }
     let original_project = project_file
         .exists()
         .then(|| {
@@ -190,12 +241,18 @@ fn initialize_project(project_file: PathBuf, netlist: &Schematic) -> Result<Sche
         file_name,
     )?;
 
+    fs::create_dir_all(&directory)
+        .with_context(|| format!("failed to create {}", directory.display()))?;
     write_atomically(&project_file, &project_source)?;
-    let result = write_atomically(&root_schematic, &schematic_source)
+    let result = document
+        .to_kicad_sch_files()
+        .into_iter()
+        .zip(&schematic_files)
+        .try_for_each(|(file, path)| write_atomically(path, &file.content))
         .and_then(|_| verify_project(&project_file, netlist));
     if let Err(error) = result {
         if let Err(rollback) =
-            rollback_initialization(&project_file, original_project.as_deref(), &root_schematic)
+            rollback_initialization(&project_file, original_project.as_deref(), &schematic_files)
         {
             return Err(error.context(format!(
                 "failed to create verified KiCad schematic project and rollback also failed: {rollback:#}"
@@ -209,7 +266,7 @@ fn initialize_project(project_file: PathBuf, netlist: &Schematic) -> Result<Sche
     Ok(SchematicApplyResult {
         project_file,
         root_schematic: root_schematic.clone(),
-        schematic_files: vec![root_schematic],
+        schematic_files,
         changed: true,
         created: true,
     })
@@ -256,7 +313,7 @@ fn project_with_root_schematic(source: &str, name: &str, file_name: &str) -> Res
         json!([{
             "filename": file_name,
             "name": name,
-            "uuid": crate::root_page_id(),
+            "uuid": pcb_kicad_sch::root_page_id(),
         }]),
     );
     let mut source = serde_json::to_string_pretty(&project)?;
@@ -308,8 +365,12 @@ fn verify_project(project_file: &Path, netlist: &Schematic) -> Result<()> {
 
 fn restore_sources(writes: &[PendingWrite]) -> Result<()> {
     let mut failures = Vec::new();
-    for write in writes {
-        if let Err(error) = write_atomically(&write.path, &write.source) {
+    for write in writes.iter().rev() {
+        let result = match &write.source {
+            Some(source) => write_atomically(&write.path, source),
+            None => remove_file_if_present(&write.path),
+        };
+        if let Err(error) = result {
             failures.push(format!("{}: {error:#}", write.path.display()));
         }
     }
@@ -323,11 +384,13 @@ fn restore_sources(writes: &[PendingWrite]) -> Result<()> {
 fn rollback_initialization(
     project_file: &Path,
     original_project: Option<&str>,
-    root_schematic: &Path,
+    schematic_files: &[PathBuf],
 ) -> Result<()> {
     let mut failures = Vec::new();
-    if let Err(error) = remove_file_if_present(root_schematic) {
-        failures.push(format!("{}: {error:#}", root_schematic.display()));
+    for schematic in schematic_files.iter().rev() {
+        if let Err(error) = remove_file_if_present(schematic) {
+            failures.push(format!("{}: {error:#}", schematic.display()));
+        }
     }
     let project_result = match original_project {
         Some(original) => write_atomically(project_file, original),
@@ -341,6 +404,25 @@ fn rollback_initialization(
     } else {
         bail!("failed to restore {}", failures.join("; "))
     }
+}
+
+fn desired_file_paths(directory: &Path, document: &SchDocument) -> Result<Vec<PathBuf>> {
+    document
+        .pages
+        .iter()
+        .map(|page| {
+            let file_name = page
+                .file_name
+                .as_deref()
+                .with_context(|| format!("schematic page '{}' has no filename", page.id))?;
+            let path = Path::new(file_name);
+            Ok(if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                directory.join(path)
+            })
+        })
+        .collect()
 }
 
 fn remove_file_if_present(path: &Path) -> Result<()> {

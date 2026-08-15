@@ -5,11 +5,10 @@ edition = { workspace = true }
 repository = { workspace = true }
 homepage = { workspace = true }
 authors = { workspace = true }
-description = "KiCad schematic project model and netlist analysis"
+description = "Pure KiCad schematic document model and connectivity analysis"
 
 [dependencies]
 anyhow = { workspace = true }
-atomicwrites = { workspace = true }
 pcb-sch = { workspace = true }
 pcb-sexpr = { workspace = true, features = ["serde"] }
 serde = { workspace = true }

@@ -3,22 +3,22 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, bail};
-use pcb_sch::{AttributeValue, Schematic};
+use pcb_sch::{AttributeValue, InstanceRef, Schematic};
 use serde_json::Value;
 
-pub(crate) fn ports_by_net(netlist: &Schematic) -> Result<BTreeMap<String, BTreeSet<String>>> {
-    let Some(root) = netlist
-        .root_ref
-        .as_ref()
-        .and_then(|root| netlist.instances.get(root))
-    else {
-        return Ok(BTreeMap::new());
-    };
-    let Some(AttributeValue::Json(signature)) = root.attributes.get("__signature") else {
+pub(crate) fn ports_by_net(
+    netlist: &Schematic,
+    module_ref: &InstanceRef,
+) -> Result<BTreeMap<String, BTreeSet<String>>> {
+    let module = netlist
+        .instances
+        .get(module_ref)
+        .with_context(|| format!("module instance '{module_ref}' is absent from the netlist"))?;
+    let Some(AttributeValue::Json(signature)) = module.attributes.get("__signature") else {
         return Ok(BTreeMap::new());
     };
     let Some(parameters) = signature.get("parameters").and_then(Value::as_array) else {
-        bail!("root __signature.parameters must be an array");
+        bail!("module '{module_ref}' __signature.parameters must be an array");
     };
 
     let mut net_name_by_id = BTreeMap::new();
@@ -36,17 +36,21 @@ pub(crate) fn ports_by_net(netlist: &Schematic) -> Result<BTreeMap<String, BTree
         let is_config = parameter
             .get("is_config")
             .and_then(Value::as_bool)
-            .context("root signature parameter is_config must be a boolean")?;
+            .with_context(|| {
+                format!("module '{module_ref}' signature parameter is_config must be a boolean")
+            })?;
         if is_config {
             continue;
         }
         let io_name = parameter
             .get("name")
             .and_then(Value::as_str)
-            .context("root signature parameter name must be a string")?;
-        let value = parameter
-            .get("value")
-            .with_context(|| format!("root signature io {io_name} has no value"))?;
+            .with_context(|| {
+                format!("module '{module_ref}' signature parameter name must be a string")
+            })?;
+        let value = parameter.get("value").with_context(|| {
+            format!("module '{module_ref}' signature io {io_name} has no value")
+        })?;
         collect_ports(
             value,
             parameter.get("default_value"),
@@ -183,7 +187,7 @@ mod tests {
         );
         let mut netlist = Schematic::new();
         netlist.root_ref = Some(root_ref.clone());
-        netlist.add_instance(root_ref, root);
+        netlist.add_instance(root_ref.clone(), root);
         netlist.add_net(Net {
             kind: "Net".to_string(),
             id: 7,
@@ -192,7 +196,7 @@ mod tests {
             properties: Default::default(),
         });
 
-        let ports = ports_by_net(&netlist).unwrap();
+        let ports = ports_by_net(&netlist, &root_ref).unwrap();
 
         assert_eq!(
             ports["CSI_A_CLK_P"],

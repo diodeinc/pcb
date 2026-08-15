@@ -121,12 +121,12 @@ struct FieldLayout {
     height: f64,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct Bounds {
-    pub(crate) min_x: f64,
-    pub(crate) min_y: f64,
-    pub(crate) max_x: f64,
-    pub(crate) max_y: f64,
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Bounds {
+    pub min_x: f64,
+    pub min_y: f64,
+    pub max_x: f64,
+    pub max_y: f64,
 }
 
 impl Bounds {
@@ -157,11 +157,11 @@ impl Bounds {
         self.include(Point::new(other.max_x, other.max_y));
     }
 
-    pub(crate) fn width(self) -> f64 {
+    pub fn width(self) -> f64 {
         self.max_x - self.min_x
     }
 
-    pub(crate) fn height(self) -> f64 {
+    pub fn height(self) -> f64 {
         self.max_y - self.min_y
     }
 
@@ -215,6 +215,12 @@ pub(crate) fn symbol_visual_bounds(
         }
     }
     Ok(bounds)
+}
+
+impl Symbol {
+    pub fn visual_bounds(&self, definition: &SymbolDefinition) -> Result<Option<Bounds>> {
+        symbol_visual_bounds(self, definition)
+    }
 }
 
 fn text_bounds(
@@ -387,7 +393,7 @@ fn transform_local(mut point: Point, placed: &Symbol) -> Point {
     symbol::transform_point(point, placed)
 }
 
-fn visible_pin_bounds(pins: &[symbol::SymbolPin]) -> Option<Bounds> {
+fn visible_pin_bounds(pins: &[symbol::PlacedPin]) -> Option<Bounds> {
     Bounds::from_points(
         pins.iter()
             .filter(|pin| !pin.hidden)
@@ -395,7 +401,7 @@ fn visible_pin_bounds(pins: &[symbol::SymbolPin]) -> Option<Bounds> {
     )
 }
 
-fn visible_pin_side_occupancy(pins: &[symbol::SymbolPin]) -> [SideOccupancy; 4] {
+fn visible_pin_side_occupancy(pins: &[symbol::PlacedPin]) -> [SideOccupancy; 4] {
     let mut occupancy = [SideOccupancy::default(); 4];
     for pin in pins.iter().filter(|pin| !pin.hidden) {
         let side = side_from_spin(pin.outward_spin);
