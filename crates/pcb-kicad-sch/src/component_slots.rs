@@ -1,7 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use anyhow::{Context, Result, bail};
-use pcb_sch::{ATTR_SYMBOL_FORMAT_VERSION, AttributeValue, Instance, InstanceKind, Schematic};
+use pcb_sch::{
+    ATTR_SYMBOL_FORMAT_VERSION, AttributeValue, Instance, InstanceKind, InstanceRef, Schematic,
+};
 
 use crate::{SymbolDefinition, SymbolSlotKey, canonical_component_path, symbol};
 
@@ -31,10 +33,11 @@ fn validate_symbol_library_version(
     owner: &str,
     attributes: &HashMap<String, AttributeValue>,
 ) -> Result<()> {
-    match attributes.get(SYMBOL_PATH_ATTR) {
-        None => return Ok(()),
-        Some(AttributeValue::String(_)) => {}
-        Some(_) => bail!("{owner} attribute {SYMBOL_PATH_ATTR} must be a string"),
+    let has_symbol_value =
+        validate_optional_string_attribute(owner, attributes, SYMBOL_VALUE_ATTR)?;
+    let has_symbol_path = validate_optional_string_attribute(owner, attributes, SYMBOL_PATH_ATTR)?;
+    if !has_symbol_value && !has_symbol_path {
+        return Ok(());
     }
     let version = match attributes.get(ATTR_SYMBOL_FORMAT_VERSION) {
         Some(AttributeValue::Number(version))
@@ -57,6 +60,18 @@ fn validate_symbol_library_version(
     Ok(())
 }
 
+fn validate_optional_string_attribute(
+    owner: &str,
+    attributes: &HashMap<String, AttributeValue>,
+    key: &str,
+) -> Result<bool> {
+    match attributes.get(key) {
+        None => Ok(false),
+        Some(AttributeValue::String(_)) => Ok(true),
+        Some(_) => bail!("{owner} attribute {key} must be a string"),
+    }
+}
+
 pub(crate) fn component_symbol_slots(netlist: &Schematic) -> Result<Vec<SymbolSlotKey>> {
     let mut slots = Vec::new();
     for (instance_ref, instance) in &netlist.instances {
@@ -71,7 +86,25 @@ pub(crate) fn component_symbol_slots(netlist: &Schematic) -> Result<Vec<SymbolSl
             slots.push(slot);
         }
     }
+    slots.sort();
     Ok(slots)
+}
+
+pub(crate) fn port_pad_numbers(netlist: &Schematic, port: &InstanceRef) -> BTreeSet<String> {
+    let Some(instance) = netlist.instances.get(port) else {
+        return BTreeSet::new();
+    };
+    let Some(AttributeValue::Array(values)) = instance.attributes.get("pads") else {
+        return BTreeSet::new();
+    };
+    values
+        .iter()
+        .filter_map(|value| match value {
+            AttributeValue::String(value) | AttributeValue::Port(value) => Some(value.clone()),
+            AttributeValue::Number(value) => Some(value.to_string()),
+            _ => None,
+        })
+        .collect()
 }
 
 fn component_unit_indices(netlist: &Schematic, instance: &Instance) -> Result<Vec<u32>> {

@@ -76,6 +76,20 @@ pub enum SchItem {
     Unsupported(Sexpr),
 }
 
+impl SchItem {
+    pub(crate) fn id(&self) -> Option<&str> {
+        match self {
+            Self::Symbol(item) => Some(&item.id),
+            Self::Wire(item) => Some(&item.id),
+            Self::Junction(item) => Some(&item.id),
+            Self::NoConnect(item) => Some(&item.id),
+            Self::Label(item) => Some(&item.id),
+            Self::Sheet(item) => Some(&item.id),
+            Self::Unsupported(_) => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Sheet {
     pub id: Id,

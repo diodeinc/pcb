@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use crate::{
     config_input::CONFIG_ARG_HELP,
-    layout::{self, LayoutArgs, LayoutCommandResult, LayoutOutputFormat, PreparedDesign},
+    layout::{self, LayoutArgs, LayoutCommandResult, LayoutOutputFormat},
 };
 
 #[derive(Serialize)]
@@ -93,7 +93,7 @@ pub fn execute(args: ApplyArgs) -> Result<()> {
         Some(ApplyCommand::Schematic(args)) => {
             let layout_args = schematic_layout_args(&args);
             let design = layout::prepare_design_for_apply(&layout_args)?;
-            let result = apply_schematic(&design)?;
+            let result = apply_linked_schematic(&design.schematic)?;
             print_schematic_result(result.as_ref(), args.format, &design.file_name)?;
             if !args.no_open
                 && let Some(result) = &result
@@ -122,7 +122,7 @@ pub fn execute(args: ApplyArgs) -> Result<()> {
                 );
             }
             let design = layout::prepare_design_for_apply(&layout_args)?;
-            let schematic = apply_schematic(&design)?;
+            let schematic = apply_linked_schematic(&design.schematic)?;
             let layout = layout::apply_prepared(&layout_args, design)?;
             let project_to_open = if args.no_open || args.check {
                 None
@@ -149,10 +149,6 @@ fn schematic_layout_args(args: &SchematicArgs) -> LayoutArgs {
         no_sync: false,
         format: args.format,
     }
-}
-
-fn apply_schematic(design: &PreparedDesign) -> Result<Option<SchematicApplyResult>> {
-    apply_linked_schematic(&design.schematic)
 }
 
 fn print_schematic_result(

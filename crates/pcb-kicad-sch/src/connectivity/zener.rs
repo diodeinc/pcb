@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use anyhow::Result;
-use pcb_sch::{AttributeValue, InstanceRef, Schematic};
+use pcb_sch::{InstanceRef, Schematic};
 
 use super::{
     ComponentIdentity, ComponentNode, ComponentOrigin, ConnectionGroup, ConnectionOrigin,
@@ -20,15 +20,12 @@ pub(super) fn reduce(netlist: &Schematic) -> Result<ConnectivityGraph> {
     components.sort();
 
     let interface_ports = root_interface::ports_by_net(netlist)?;
-    let mut nets = netlist.nets.values().collect::<Vec<_>>();
+    let mut nets = named_connected_nets(netlist).collect::<Vec<_>>();
     nets.sort_by(|a, b| a.name.cmp(&b.name));
     let groups = nets
         .into_iter()
-        .filter_map(|net| {
+        .map(|net| {
             let name = net.name.as_str();
-            if net.kind == "NotConnected" || name.is_empty() {
-                return None;
-            }
             let mut terminals = net
                 .ports
                 .iter()
@@ -41,20 +38,20 @@ pub(super) fn reduce(netlist: &Schematic) -> Result<ConnectivityGraph> {
                         .map(|port| Terminal::InterfacePort { name: port.clone() }),
                 );
             }
-            Some(ConnectionGroup {
+            ConnectionGroup {
                 names: BTreeSet::from([name.to_string()]),
                 terminals,
                 origins: BTreeSet::from([ConnectionOrigin::ZenerNet {
                     name: name.to_string(),
                 }]),
-            })
+            }
         })
         .collect();
 
     Ok(ConnectivityGraph { components, groups })
 }
 
-pub(super) fn not_connected_terminals(netlist: &Schematic) -> BTreeSet<Terminal> {
+pub(crate) fn not_connected_terminals(netlist: &Schematic) -> BTreeSet<Terminal> {
     netlist
         .nets
         .values()
@@ -64,10 +61,17 @@ pub(super) fn not_connected_terminals(netlist: &Schematic) -> BTreeSet<Terminal>
         .collect()
 }
 
+pub(crate) fn named_connected_nets(netlist: &Schematic) -> impl Iterator<Item = &pcb_sch::Net> {
+    netlist
+        .nets
+        .values()
+        .filter(|net| net.kind != "NotConnected" && !net.name.is_empty())
+}
+
 fn component_terminal(netlist: &Schematic, port: &InstanceRef) -> Option<Terminal> {
     let (component_ref, pin_name) = netlist.component_ref_and_pin_for_port(port)?;
     let component_path = crate::canonical_component_path(&component_ref.instance_path)?;
-    let pin_numbers = pads_for_port(netlist, port)
+    let pin_numbers = component_slots::port_pad_numbers(netlist, port)
         .into_iter()
         .filter(|number| !number.is_empty())
         .collect();
@@ -76,21 +80,4 @@ fn component_terminal(netlist: &Schematic, port: &InstanceRef) -> Option<Termina
         pin_name,
         pin_numbers,
     })
-}
-
-fn pads_for_port(netlist: &Schematic, port: &InstanceRef) -> Vec<String> {
-    let Some(instance) = netlist.instances.get(port) else {
-        return Vec::new();
-    };
-    let Some(AttributeValue::Array(values)) = instance.attributes.get("pads") else {
-        return Vec::new();
-    };
-    values
-        .iter()
-        .filter_map(|value| match value {
-            AttributeValue::String(value) | AttributeValue::Port(value) => Some(value.clone()),
-            AttributeValue::Number(value) => Some(value.to_string()),
-            _ => None,
-        })
-        .collect()
 }

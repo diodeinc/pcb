@@ -155,6 +155,11 @@ fn rejects_pre_kicad_10_symbol_libraries() {
         .values_mut()
         .find(|instance| instance.kind == pcb_sch::InstanceKind::Component)
         .expect("component");
+    assert!(matches!(
+        component.attributes.get("__symbol_value"),
+        Some(AttributeValue::String(_))
+    ));
+    component.attributes.remove("symbol_path");
     component.attributes.insert(
         ATTR_SYMBOL_FORMAT_VERSION.to_string(),
         AttributeValue::Number(20211014.0),

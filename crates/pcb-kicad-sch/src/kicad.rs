@@ -18,12 +18,6 @@ pub const KICAD_SCH_VERSION: i64 = 20260306;
 pub const GENERATOR: &str = "diode";
 pub const GENERATOR_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-fn format_sexpr(value: &Sexpr, _indent: usize) -> String {
-    format_tree(value, FormatMode::Normal)
-        .trim_end()
-        .to_string()
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct KicadSchSource<'a> {
     pub file_name: Option<&'a str>,
@@ -101,7 +95,10 @@ impl SymbolDefinition {
     }
 
     pub fn to_kicad_symbol_library_sexpr(&self) -> String {
-        format!("(kicad_symbol_lib {})", format_sexpr(&self.sexpr, 0).trim())
+        format!(
+            "(kicad_symbol_lib {})",
+            format_tree(&self.sexpr, FormatMode::Normal).trim()
+        )
     }
 
     pub(crate) fn default_fields(&self) -> Result<BTreeMap<String, SymbolField>> {
@@ -225,7 +222,10 @@ fn format_kicad_sch_page(page: &SchPage) -> String {
 
     root.extend(page.items.iter().map(|item| item_to_sexpr(item, page)));
 
-    format!("{}\n", format_sexpr(&Sexpr::list(root), 0))
+    format!(
+        "{}\n",
+        format_tree(&Sexpr::list(root), FormatMode::Normal).trim_end()
+    )
 }
 
 fn parse_lib_symbols(items: SexprList<'_>) -> Result<SymbolLibrary> {

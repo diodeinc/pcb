@@ -9,7 +9,10 @@ mod raw;
 mod zener;
 
 pub use kicad::ConnectivityItemRef;
-pub(crate) use kicad::{IslandProvenance, KiCadConnectivity, reduce_visible_with_provenance};
+pub(crate) use kicad::{
+    IslandProvenance, KiCadConnectivity, PinVisibility, reduce_with_provenance,
+};
+pub(crate) use zener::{named_connected_nets, not_connected_terminals};
 
 pub use raw::{
     ComponentIdentity, ComponentNode, ComponentOrigin, ConnectionGroup, ConnectionOrigin,
@@ -26,10 +29,8 @@ impl ConnectivityGraph {
     }
 
     pub fn from_kicad(document: &SchDocument) -> anyhow::Result<Self> {
-        kicad::reduce(document)
+        // Standalone analysis includes hidden pins to match KiCad's implicit
+        // hidden-power-pin connectivity. Reconciliation uses visible pins only.
+        Ok(reduce_with_provenance(document, PinVisibility::IncludeHidden)?.graph)
     }
-}
-
-pub(crate) fn not_connected_terminals(netlist: &Schematic) -> std::collections::BTreeSet<Terminal> {
-    zener::not_connected_terminals(netlist)
 }

@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    path::{Component, Path, PathBuf},
+    path::Path,
 };
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -11,15 +11,22 @@ use super::{
 };
 use crate::{
     Label, LabelKind, Point, SchDocument, SchItem, SchPage, Symbol, SymbolSlotKey,
+    identity::normalize_path,
     symbol::{self, PowerScope},
 };
 
 const SCH_IU_PER_MM: f64 = 10_000.0;
 
-pub(super) fn reduce(document: &SchDocument) -> Result<ConnectivityGraph> {
-    // Standalone KiCad analysis includes hidden pins so it remains faithful to
-    // KiCad's implicit hidden-power-pin behavior.
-    Ok(reduce_with_pin_visibility(document, true)?.graph)
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PinVisibility {
+    IncludeHidden,
+    VisibleOnly,
+}
+
+impl PinVisibility {
+    fn includes(self, hidden: bool) -> bool {
+        self == Self::IncludeHidden || !hidden
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -65,14 +72,9 @@ pub enum ConnectivityItemRef {
     },
 }
 
-pub(crate) fn reduce_visible_with_provenance(document: &SchDocument) -> Result<KiCadConnectivity> {
-    // Reconciliation never creates connections to hidden pins.
-    reduce_with_pin_visibility(document, false)
-}
-
-fn reduce_with_pin_visibility(
+pub(crate) fn reduce_with_provenance(
     document: &SchDocument,
-    include_hidden_pins: bool,
+    pin_visibility: PinVisibility,
 ) -> Result<KiCadConnectivity> {
     let mut components = Vec::new();
     let mut groups = Vec::new();
@@ -94,7 +96,7 @@ fn reduce_with_pin_visibility(
             &instance,
             instance_counts[instance.page.id.as_str()] > 1,
             definitions,
-            include_hidden_pins,
+            pin_visibility,
         )?;
         components.extend(reduced.components);
         for group in &reduced.groups {
@@ -236,27 +238,6 @@ fn resolve_file_name(parent: &SchPage, child: &str) -> String {
     normalize_path(&path).to_string_lossy().replace('\\', "/")
 }
 
-fn normalize_path(path: &Path) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if matches!(
-                    normalized.components().next_back(),
-                    Some(Component::Normal(_))
-                ) {
-                    normalized.pop();
-                } else if !path.is_absolute() {
-                    normalized.push("..");
-                }
-            }
-            other => normalized.push(other.as_os_str()),
-        }
-    }
-    normalized
-}
-
 struct ReducedPage {
     components: Vec<ComponentNode>,
     groups: Vec<ScopedConnectionGroup>,
@@ -266,7 +247,7 @@ fn reduce_page(
     instance: &PageInstance<'_>,
     repeated_page: bool,
     symbol_definitions: &mut BTreeMap<String, symbol::ParsedSymbolDefinition>,
-    include_hidden_pins: bool,
+    pin_visibility: PinVisibility,
 ) -> Result<ReducedPage> {
     let page = instance.page;
     let mut components = Vec::new();
@@ -290,7 +271,7 @@ fn reduce_page(
                     repeated_page,
                     placed,
                     definition,
-                    include_hidden_pins,
+                    pin_visibility,
                     &mut SymbolConnectivity {
                         components: &mut components,
                         connectables: &mut connectables,
@@ -429,7 +410,7 @@ fn collect_symbol(
     repeated_page: bool,
     placed: &Symbol,
     definition: &symbol::ParsedSymbolDefinition,
-    include_hidden_pins: bool,
+    pin_visibility: PinVisibility,
     output: &mut SymbolConnectivity<'_>,
 ) -> Result<()> {
     let pins = definition.placed_pins(placed).with_context(|| {
@@ -446,7 +427,7 @@ fn collect_symbol(
         let net_name = static_net_text("power symbol value", net_name)?;
         for pin in pins
             .into_iter()
-            .filter(|pin| include_hidden_pins || !pin.hidden)
+            .filter(|pin| pin_visibility.includes(pin.hidden))
             .filter(|pin| pin.is_power_input())
         {
             output.connectables.push(Connectable {
@@ -501,7 +482,7 @@ fn collect_symbol(
     let jumper_groups = definition.jumper_pin_groups();
     for pin in pins
         .into_iter()
-        .filter(|pin| include_hidden_pins || !pin.hidden)
+        .filter(|pin| pin_visibility.includes(pin.hidden))
     {
         let pin_name = static_net_text("symbol pin name", &pin.name)?;
         output.connectables.push(Connectable {
@@ -969,9 +950,7 @@ fn merge_scoped_groups(groups: Vec<ScopedConnectionGroup>) -> Vec<ConnectionGrou
     }
     let mut merged = BTreeMap::<usize, ConnectionGroup>::new();
     for (index, group) in groups.into_iter().enumerate() {
-        let entry = merged
-            .entry(union_find.find(index))
-            .or_insert_with(empty_connection_group);
+        let entry = merged.entry(union_find.find(index)).or_default();
         entry.names.extend(group.group.names);
         entry.terminals.extend(group.group.terminals);
         entry.origins.extend(group.group.origins);
@@ -980,14 +959,6 @@ fn merge_scoped_groups(groups: Vec<ScopedConnectionGroup>) -> Vec<ConnectionGrou
         .into_values()
         .filter(|group| !group.names.is_empty() || !group.terminals.is_empty())
         .collect()
-}
-
-fn empty_connection_group() -> ConnectionGroup {
-    ConnectionGroup {
-        names: BTreeSet::new(),
-        terminals: BTreeSet::new(),
-        origins: BTreeSet::new(),
-    }
 }
 
 struct UnionFind {
