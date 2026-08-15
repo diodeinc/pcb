@@ -72,16 +72,25 @@ pub(crate) fn reconcile_document(
         .cloned()
         .collect::<BTreeSet<_>>();
 
-    let existing_component_pages = selected_existing
-        .iter()
-        .map(|(slot, location)| (slot.component_path().to_string(), location.page_index))
-        .collect();
+    // Hierarchy ownership comes from every managed symbol in the document,
+    // including symbols that no longer exist in the target netlist. A stale
+    // symbol still proves that its module already has a schematic page.
+    let existing_component_pages = existing_slots.iter().fold(
+        BTreeMap::<String, BTreeSet<usize>>::new(),
+        |mut pages, (slot, candidates)| {
+            pages
+                .entry(slot.component_path().to_string())
+                .or_default()
+                .extend(candidates.iter().map(|candidate| candidate.page_index));
+            pages
+        },
+    );
     let hierarchy = hierarchy::plan(
         linked_modules(netlist)?,
         existing_component_pages,
         default_page,
         document.pages.len(),
-    );
+    )?;
     materialize_hierarchy(&mut document, netlist, &hierarchy)?;
 
     clear_projected_libraries(&mut document);
@@ -102,20 +111,16 @@ pub(crate) fn reconcile_document(
                     slot.component_path()
                 )
             })?;
-        let (page_index, previous) = selected_existing
-            .get(slot)
-            .map(|location| {
-                (
-                    location.page_index,
-                    Some(&existing_slots[slot][location.candidate_index].symbol),
-                )
-            })
-            .unwrap_or_else(|| {
-                (
-                    hierarchy.page_for_new_component(slot.component_path()),
-                    None,
-                )
-            });
+        let (page_index, previous) = match selected_existing.get(slot) {
+            Some(location) => (
+                location.page_index,
+                Some(&existing_slots[slot][location.candidate_index].symbol),
+            ),
+            None => (
+                hierarchy.page_for_new_component(slot.component_path())?,
+                None,
+            ),
+        };
         let at = previous.map(|symbol| symbol.at).unwrap_or_default();
         let rotation = previous.map(|symbol| symbol.rotation).unwrap_or_default();
         let mirror = previous.and_then(|symbol| symbol.mirror);

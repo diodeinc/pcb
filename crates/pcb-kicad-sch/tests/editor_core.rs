@@ -58,3 +58,49 @@ fn editor_core_plans_applies_analyzes_and_reopens_in_memory() {
     assert!(preserved.is_empty(), "{:#?}", preserved.edits());
     assert_eq!(preserved.apply(Some(&reorganized)).unwrap(), reorganized);
 }
+
+#[test]
+fn replacing_a_modules_only_component_reuses_its_existing_sheet() {
+    let netlist = common::compile_fixture("hierarchy", "root.zen");
+    let document = plan_reconciliation(None, &netlist, "Hierarchy.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    let mut stale = document.clone();
+    let filter_a_page = stale
+        .pages
+        .iter()
+        .position(|page| page.file_name.as_deref() == Some("FILTER_A.kicad_sch"))
+        .unwrap();
+    let symbol = stale.pages[filter_a_page]
+        .items
+        .iter_mut()
+        .find_map(|item| match item {
+            SchItem::Symbol(symbol) if symbol.field_value("Path").is_some() => Some(symbol),
+            _ => None,
+        })
+        .unwrap();
+    let original_path = symbol.field_value("Path").unwrap().to_string();
+    symbol.fields.get_mut("Path").unwrap().value = "FILTER_A.REMOVED".to_string();
+
+    let repaired = plan_reconciliation(Some(&stale), &netlist, "Hierarchy.kicad_sch")
+        .unwrap()
+        .apply(Some(&stale))
+        .unwrap();
+
+    assert_eq!(repaired.pages.len(), document.pages.len());
+    assert_eq!(
+        repaired
+            .pages
+            .iter()
+            .flat_map(|page| &page.items)
+            .filter(|item| {
+                matches!(item, SchItem::Sheet(sheet) if sheet.file_name() == "FILTER_A.kicad_sch")
+            })
+            .count(),
+        1
+    );
+    assert!(repaired.pages[filter_a_page].items.iter().any(|item| {
+        matches!(item, SchItem::Symbol(symbol) if symbol.field_value("Path") == Some(original_path.as_str()))
+    }));
+}
