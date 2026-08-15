@@ -1,8 +1,10 @@
 mod common;
 
 use pcb_kicad_sch::{
-    Point, SchDocument, SchItem, Symbol, SymbolDefinition,
+    Label, Point, SchDocument, SchItem, Symbol, SymbolDefinition, SymbolSlotKey,
+    analysis::analyze_schematic,
     connectivity::{ConnectivityItemRef, PhysicalConnectivity, PinVisibility},
+    deterministic_uuid,
     reconcile::plan_reconciliation,
     repair::{ConnectivityRepairPlan, plan_connectivity_repair},
 };
@@ -145,6 +147,87 @@ fn initializes_and_semantically_adopts_net_symbols() {
 }
 
 #[test]
+fn preserves_an_equivalent_label_instead_of_preferring_a_net_symbol() {
+    let (netlist, mut document) = net_symbol_fixture();
+    let ground_index = document.pages[0]
+        .items
+        .iter()
+        .position(|item| {
+            matches!(item, SchItem::Symbol(symbol) if symbol.field_value("Value") == Some("GROUND"))
+        })
+        .unwrap();
+    let SchItem::Symbol(ground) = document.pages[0].items.remove(ground_index) else {
+        unreachable!("selected a symbol")
+    };
+    let definition = document.pages[0]
+        .library
+        .definitions
+        .remove(&ground.lib_id)
+        .unwrap();
+    let ground_pin = definition
+        .placed_pins(&ground)
+        .unwrap()
+        .into_iter()
+        .find(|pin| pin.is_power_input())
+        .unwrap();
+    let (slot, pin_number) = managed_pin_at(&document, ground_pin.point);
+    let label_id = deterministic_uuid(format!(
+        "zener:net-label:GROUND:{}:{pin_number}",
+        slot.symbol_id()
+    ));
+    document.pages[0].items.push(SchItem::Label(Label::new(
+        label_id,
+        "GROUND",
+        ground_pin.point,
+    )));
+    assert!(
+        analyze_schematic(&document, &netlist)
+            .unwrap()
+            .is_equivalent()
+    );
+
+    let preserved = plan_reconciliation(Some(&document), &netlist, "NetSymbols.kicad_sch").unwrap();
+
+    assert!(preserved.is_empty(), "{:#?}", preserved.edits());
+    assert_eq!(preserved.apply(Some(&document)).unwrap(), document);
+}
+
+#[test]
+fn moved_net_symbol_does_not_block_a_missing_driver() {
+    let (netlist, mut document) = net_symbol_fixture();
+    let original = net_symbol(&document, "GROUND").clone();
+    let moved_at = Point::new(original.at.x + 100.0, original.at.y);
+    move_symbol(net_symbol_mut(&mut document, "GROUND"), moved_at);
+
+    let plan = plan_reconciliation(Some(&document), &netlist, "NetSymbols.kicad_sch").unwrap();
+    let repaired = plan.apply(Some(&document)).unwrap();
+    let grounds = repaired.pages[0]
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            SchItem::Symbol(symbol) if symbol.field_value("Value") == Some("GROUND") => {
+                Some(symbol)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(grounds.len(), 2);
+    assert!(
+        grounds
+            .iter()
+            .any(|symbol| symbol.id == original.id && symbol.at == moved_at)
+    );
+    assert!(
+        grounds
+            .iter()
+            .any(|symbol| symbol.id != original.id && symbol.at == original.at)
+    );
+    let unchanged = plan_reconciliation(Some(&repaired), &netlist, "NetSymbols.kicad_sch").unwrap();
+    assert!(unchanged.is_empty(), "{:#?}", unchanged.edits());
+}
+
+#[test]
 fn preserves_non_naming_power_symbols() {
     let (netlist, mut document) = net_symbol_fixture();
     let mut power_flag = net_symbol(&document, "GROUND").clone();
@@ -265,6 +348,29 @@ fn move_symbol(symbol: &mut Symbol, at: Point) {
         field.at.x += dx;
         field.at.y += dy;
     }
+}
+
+fn managed_pin_at(document: &SchDocument, point: Point) -> (SymbolSlotKey, String) {
+    document.pages[0]
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            SchItem::Symbol(symbol) => Some(symbol),
+            _ => None,
+        })
+        .filter_map(|symbol| {
+            let path = symbol.field_value("Path")?;
+            let slot = SymbolSlotKey::new(path, symbol.unit)?;
+            let definition = &document.pages[0].library.definitions[&symbol.lib_id];
+            definition
+                .placed_pins(symbol)
+                .ok()?
+                .into_iter()
+                .find(|pin| pin.point == point)
+                .map(|pin| (slot, pin.number))
+        })
+        .next()
+        .unwrap_or_else(|| panic!("missing managed pin at {point:?}"))
 }
 
 fn assert_only_symbol_removal(plan: &ConnectivityRepairPlan, id: &str) {

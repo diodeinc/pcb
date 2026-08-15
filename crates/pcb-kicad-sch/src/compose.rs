@@ -11,8 +11,7 @@ use crate::{
     analysis::{analyze_schematic, terminals_match},
     component_slots,
     connectivity::{
-        ComponentIdentity, ConnectivityItemRef, PinVisibility, Terminal, named_connected_nets,
-        reduce_with_provenance,
+        ComponentIdentity, PinVisibility, Terminal, named_connected_nets, reduce_with_provenance,
     },
     deterministic_uuid, field_autoplace, hierarchy, net_symbols,
     repair::{RepairScope, plan_connectivity_repair_with, remove_items},
@@ -1021,30 +1020,22 @@ impl PinTarget {
         }
     }
 
-    fn label_id(&self, net_name: &str) -> String {
-        deterministic_uuid(format!(
+    fn label_key(&self, net_name: &str) -> String {
+        format!(
             "zener:net-label:{net_name}:{}:{}",
             self.slot.symbol_id(),
             self.number
-        ))
+        )
     }
 
-    fn legacy_label_id(&self, net_name: &str) -> String {
-        deterministic_uuid(format!(
-            "zener:global-label:{net_name}:{}:{}",
-            self.slot.symbol_id(),
-            self.number
-        ))
-    }
-
-    fn net_symbol_id(&self, net_name: &str) -> String {
-        deterministic_uuid(format!(
+    fn net_symbol_key(&self, net_name: &str) -> String {
+        format!(
             "zener:net-symbol:{net_name}:{}:{}:{:.4}:{:.4}",
             self.slot.symbol_id(),
             self.number,
             self.point.x,
             self.point.y
-        ))
+        )
     }
 }
 
@@ -1195,7 +1186,9 @@ fn add_connectivity_drivers(
     update: ConnectivityUpdate,
 ) -> Result<()> {
     let anchors_by_net = connectivity_targets(netlist, placed, target_nets)?;
-    sync_net_drivers(document, &anchors_by_net, net_symbol_specs, update)?;
+    if update == ConnectivityUpdate::InsertMissing {
+        sync_net_drivers(document, &anchors_by_net, net_symbol_specs)?;
+    }
 
     let interface_ports = match &netlist.root_ref {
         Some(root) => root_interface::ports_by_net(netlist, root)?,
@@ -1283,26 +1276,13 @@ fn sync_net_drivers(
     document: &mut SchDocument,
     targets_by_net: &BTreeMap<String, Vec<PinTarget>>,
     net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
-    update: ConnectivityUpdate,
 ) -> Result<()> {
-    // Adopt any exact existing power symbol or user label. For an unnamed
-    // island, create the Zener net's preferred power symbol or a local label.
-    let generated_ids = targets_by_net
-        .iter()
-        .flat_map(|(net_name, targets)| {
-            targets.iter().flat_map(move |target| {
-                [target.label_id(net_name), target.legacy_label_id(net_name)]
-            })
-        })
-        .collect::<BTreeSet<_>>();
+    // Adopt any exact existing power symbol or label. For an unnamed island,
+    // add the Zener net's preferred power symbol or a local label without
+    // treating a deterministic UUID as ownership of an existing item.
     let observed = reduce_with_provenance(document, PinVisibility::VisibleOnly)?;
 
     for (net_name, targets) in targets_by_net {
-        for target in targets.iter().filter(|target| target.hidden) {
-            remove_label_by_id(document, &target.label_id(net_name));
-            remove_label_by_id(document, &target.legacy_label_id(net_name));
-        }
-
         let mut targets_by_island = BTreeMap::<_, Vec<usize>>::new();
         for (target_index, target) in targets.iter().enumerate() {
             if target.hidden {
@@ -1336,51 +1316,29 @@ fn sync_net_drivers(
 
         for (island, target_indices) in targets_by_island {
             let provenance = &observed.islands[&island];
-            let has_user_driver = provenance
+            let has_driver = provenance
                 .named_drivers
                 .get(net_name)
-                .is_some_and(|drivers| {
-                    drivers.iter().any(|driver| match driver {
-                        ConnectivityItemRef::Label { id, .. } => !generated_ids.contains(id),
-                        _ => true,
-                    })
-                });
+                .is_some_and(|drivers| !drivers.is_empty());
+            if has_driver {
+                continue;
+            }
             let canonical = *target_indices
                 .iter()
                 .min_by_key(|index| (&targets[**index].slot, &targets[**index].number))
                 .expect("a terminal island has a target");
-            let had_generated_label = target_indices.iter().any(|index| {
-                let target = &targets[*index];
-                contains_id(document, &target.label_id(net_name))
-                    || contains_id(document, &target.legacy_label_id(net_name))
-            });
-
-            for target_index in target_indices {
-                let target = &targets[target_index];
-                if has_user_driver || target_index != canonical {
-                    remove_label_by_id(document, &target.label_id(net_name));
-                }
-                remove_label_by_id(document, &target.legacy_label_id(net_name));
-            }
-
-            if !has_user_driver
-                && (update == ConnectivityUpdate::InsertMissing || had_generated_label)
-            {
-                let target = &targets[canonical];
-                if let Some(spec) = net_symbol_specs.get(net_name) {
-                    remove_label_by_id(document, &target.label_id(net_name));
-                    let symbol = build_net_symbol(
-                        spec,
-                        net_name,
-                        target.net_symbol_id(net_name),
-                        target.point,
-                    )?;
-                    insert_net_symbol(document, target.page_index, symbol, &spec.definition)?;
-                } else {
-                    let mut label = Label::new(target.label_id(net_name), net_name, target.point);
-                    label.spin = target.spin;
-                    upsert_label(document, target.page_index, label)?;
-                }
+            let target = &targets[canonical];
+            if let Some(spec) = net_symbol_specs.get(net_name) {
+                let id = available_deterministic_id(document, &target.net_symbol_key(net_name));
+                let symbol = build_net_symbol(spec, net_name, id, target.point)?;
+                insert_net_symbol(document, target.page_index, symbol, &spec.definition)?;
+            } else {
+                let id = available_deterministic_id(document, &target.label_key(net_name));
+                let mut label = Label::new(id, net_name, target.point);
+                label.spin = target.spin;
+                document.pages[target.page_index]
+                    .items
+                    .push(SchItem::Label(label));
             }
         }
     }
@@ -1558,6 +1516,19 @@ fn contains_id(document: &SchDocument, id: &str) -> bool {
         .pages
         .iter()
         .any(|page| page.items.iter().any(|item| item.id() == Some(id)))
+}
+
+fn available_deterministic_id(document: &SchDocument, key: &str) -> String {
+    (0_u64..)
+        .map(|index| {
+            deterministic_uuid(if index == 0 {
+                key.to_string()
+            } else {
+                format!("{key}:{index}")
+            })
+        })
+        .find(|id| !contains_id(document, id))
+        .expect("a finite schematic cannot exhaust deterministic UUIDs")
 }
 
 fn remove_label_by_id(document: &mut SchDocument, id: &str) {
