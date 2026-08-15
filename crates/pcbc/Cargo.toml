@@ -23,6 +23,7 @@ path = "tests/integration.rs"
 
 [dependencies]
 anyhow = { workspace = true }
+atomicwrites = { workspace = true }
 clap = { workspace = true }
 glam = { workspace = true }
 pcb-zen-core = { workspace = true, features = ["table"] }

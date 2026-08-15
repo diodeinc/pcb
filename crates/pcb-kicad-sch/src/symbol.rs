@@ -7,8 +7,9 @@ use crate::{LabelSpin, MirrorAxis, Point, Rotation, Symbol, SymbolDefinition};
 
 const MAX_EXPANDED_STACKED_PIN_NUMBERS: usize = 4096;
 
+/// A symbol-definition pin transformed into placed schematic coordinates.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct SymbolPin {
+pub struct PlacedPin {
     pub name: String,
     pub number: String,
     pub numbers: BTreeSet<String>,
@@ -20,7 +21,7 @@ pub(crate) struct SymbolPin {
     alternates: BTreeMap<String, String>,
 }
 
-impl SymbolPin {
+impl PlacedPin {
     pub fn is_hidden_power_input(&self) -> bool {
         self.hidden && self.electrical_type == "power_in"
     }
@@ -44,7 +45,7 @@ pub(crate) enum PowerScope {
 struct SymbolSection {
     unit: u32,
     body_style: u32,
-    pins: Vec<SymbolPin>,
+    pins: Vec<PlacedPin>,
 }
 
 #[derive(Debug, Clone)]
@@ -122,7 +123,7 @@ impl ParsedSymbolDefinition {
         &self.jumper_pin_groups
     }
 
-    pub fn placed_pins(&self, symbol: &Symbol) -> Result<Vec<SymbolPin>> {
+    pub fn placed_pins(&self, symbol: &Symbol) -> Result<Vec<PlacedPin>> {
         let mut pins = self
             .sections
             .iter()
@@ -197,6 +198,16 @@ impl ParsedSymbolDefinition {
     }
 }
 
+impl SymbolDefinition {
+    pub fn placed_pins(&self, symbol: &Symbol) -> Result<Vec<PlacedPin>> {
+        ParsedSymbolDefinition::parse(self)?.placed_pins(symbol)
+    }
+
+    pub fn unit_indices(&self) -> Result<Vec<u32>> {
+        Ok(ParsedSymbolDefinition::parse(self)?.unit_indices().to_vec())
+    }
+}
+
 fn parse_power_scope(items: &[Sexpr], lib_id: &str) -> Result<Option<PowerScope>> {
     let Some(power) = child_list(items, "power") else {
         return Ok(None);
@@ -212,7 +223,7 @@ fn parse_power_scope(items: &[Sexpr], lib_id: &str) -> Result<Option<PowerScope>
     }
 }
 
-fn parse_pins(items: &[Sexpr]) -> Result<Vec<SymbolPin>> {
+fn parse_pins(items: &[Sexpr]) -> Result<Vec<PlacedPin>> {
     let mut pins = Vec::new();
     for items in items.iter().filter_map(Sexpr::as_list) {
         if items.first().and_then(Sexpr::as_sym) != Some("pin") {
@@ -223,7 +234,7 @@ fn parse_pins(items: &[Sexpr]) -> Result<Vec<SymbolPin>> {
     Ok(pins)
 }
 
-fn parse_pin(items: &[Sexpr]) -> Result<SymbolPin> {
+fn parse_pin(items: &[Sexpr]) -> Result<PlacedPin> {
     let electrical_type = items
         .get(1)
         .and_then(Sexpr::as_atom)
@@ -287,7 +298,7 @@ fn parse_pin(items: &[Sexpr]) -> Result<SymbolPin> {
             bail!("pin {number} has duplicate alternate {name}");
         }
     }
-    Ok(SymbolPin {
+    Ok(PlacedPin {
         name,
         number,
         numbers,
@@ -578,7 +589,7 @@ mod tests {
         };
         assert_eq!(
             definition.placed_pins(&symbol).unwrap(),
-            vec![SymbolPin {
+            vec![PlacedPin {
                 name: "B".into(),
                 number: "2".into(),
                 numbers: BTreeSet::from(["2".into()]),

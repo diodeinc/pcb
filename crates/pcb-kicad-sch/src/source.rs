@@ -3,9 +3,14 @@ use std::collections::BTreeMap;
 use anyhow::{Context, Result, bail};
 use pcb_sexpr::{PatchSet, Sexpr, formatter::FormatMode};
 
-use crate::{SchDocument, SchPage};
+use crate::{LabelKind, SchDocument, SchItem, SchPage, SymbolLibrary, parse_kicad_sch_page};
 
-pub(crate) fn patch_page_source(source: &str, desired_page: &SchPage) -> Result<Option<String>> {
+/// Patch one parsed page into its original KiCad source.
+///
+/// Unchanged semantic items and unsupported source sections retain their
+/// original text. The function performs no I/O and returns `None` when the
+/// desired page is semantically unchanged.
+pub fn patch_page_source(source: &str, desired_page: &SchPage) -> Result<Option<String>> {
     let desired_source = SchDocument {
         pages: vec![desired_page.clone()],
         root_page_ids: vec![desired_page.id.clone()],
@@ -16,18 +21,26 @@ pub(crate) fn patch_page_source(source: &str, desired_page: &SchPage) -> Result<
         pcb_sexpr::parse(&desired_source).context("failed to parse desired schematic")?;
     let source_nodes = managed_nodes(&source_root)?;
     let desired_nodes = managed_nodes(&desired_root)?;
+    let source_page = parse_kicad_sch_page(desired_page.file_name.as_deref(), source)?;
+    let source_values = managed_values(&source_page);
+    let desired_values = managed_values(desired_page);
     let mut patches = PatchSet::new();
 
     for (key, source_node) in &source_nodes {
-        match desired_nodes.get(key) {
-            Some(desired_node) if *source_node != *desired_node => patches.replace_raw(
-                source_node.span,
-                pcb_sexpr::formatter::format_tree(desired_node, FormatMode::Normal)
-                    .trim()
-                    .to_string(),
-            ),
-            Some(_) => {}
-            None => patches.replace_raw(source_node.span, String::new()),
+        match (desired_nodes.get(key), desired_values.get(key)) {
+            (Some(desired_node), Some(desired_value))
+                if source_values.get(key) != Some(desired_value) =>
+            {
+                patches.replace_raw(
+                    source_node.span,
+                    pcb_sexpr::formatter::format_tree(desired_node, FormatMode::Normal)
+                        .trim()
+                        .to_string(),
+                )
+            }
+            (Some(_), Some(_)) => {}
+            (None, None) => patches.replace_raw(source_node.span, String::new()),
+            _ => bail!("managed schematic identity '{key}' has inconsistent semantic data"),
         }
     }
 
@@ -62,6 +75,40 @@ pub(crate) fn patch_page_source(source: &str, desired_page: &SchPage) -> Result<
     String::from_utf8(patched)
         .context("patched schematic is not UTF-8")
         .map(Some)
+}
+
+#[derive(PartialEq)]
+enum ManagedValue<'a> {
+    Library(&'a SymbolLibrary),
+    Item(&'a SchItem),
+}
+
+fn managed_values(page: &SchPage) -> BTreeMap<String, ManagedValue<'_>> {
+    let mut values = BTreeMap::from([(
+        "lib_symbols".to_string(),
+        ManagedValue::Library(&page.library),
+    )]);
+    for item in &page.items {
+        let Some(id) = item.id() else {
+            continue;
+        };
+        let tag = match item {
+            SchItem::Symbol(_) => "symbol",
+            SchItem::Wire(_) => "wire",
+            SchItem::Junction(_) => "junction",
+            SchItem::NoConnect(_) => "no_connect",
+            SchItem::Label(label) => match label.kind {
+                LabelKind::Local => "label",
+                LabelKind::Global { .. } => "global_label",
+                LabelKind::Hierarchical { .. } => "hierarchical_label",
+                LabelKind::Directive { .. } => "netclass_flag",
+            },
+            SchItem::Sheet(_) => "sheet",
+            SchItem::Unsupported(_) => continue,
+        };
+        values.insert(format!("{tag}:{id}"), ManagedValue::Item(item));
+    }
+    values
 }
 
 fn trailing_section_start(root: &Sexpr) -> Result<Option<usize>> {
@@ -107,6 +154,7 @@ fn managed_node_key(node: &Sexpr) -> Option<String> {
             | "label"
             | "global_label"
             | "hierarchical_label"
+            | "netclass_flag"
             | "directive_label"
             | "sheet"
     ) {
@@ -145,10 +193,16 @@ mod tests {
             shape: LabelShape::Bidirectional,
         };
         page.items.push(SchItem::Label(label));
+        let mut directive = Label::new("directive", "", Point::new(30.0, 20.0));
+        directive.kind = LabelKind::Directive {
+            shape: LabelShape::Round,
+        };
+        page.items.push(SchItem::Label(directive));
 
         let patched = patch_page_source(&source, &page).unwrap().unwrap();
         assert!(patched.contains("preserve me"));
         assert!(patched.contains("global_label \"N1\""));
+        assert!(patched.contains("netclass_flag \"\""));
         assert!(patched.contains(
             "  (text \"preserve me\" (at 10 10 0) (effects (font (size 1 1))) (uuid \"note\"))"
         ));

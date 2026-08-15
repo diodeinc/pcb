@@ -71,13 +71,16 @@ pub enum SchItem {
     Junction(Junction),
     NoConnect(NoConnect),
     Label(Label),
-    Sheet(Sheet),
+    Sheet(Box<Sheet>),
     /// A KiCad top-level item that this crate does not interpret.
     Unsupported(Sexpr),
 }
 
 impl SchItem {
-    pub(crate) fn id(&self) -> Option<&str> {
+    /// Return the KiCad UUID for a typed item.
+    ///
+    /// Unsupported items remain opaque and do not expose a typed identity.
+    pub fn id(&self) -> Option<&str> {
         match self {
             Self::Symbol(item) => Some(&item.id),
             Self::Wire(item) => Some(&item.id),
@@ -93,6 +96,9 @@ impl SchItem {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Sheet {
     pub id: Id,
+    pub at: Option<Point>,
+    pub size: Option<Point>,
+    pub name: Option<SymbolField>,
     pub file: SymbolField,
     pub pins: Vec<SheetPin>,
     /// Direct child expressions not represented by the semantic fields above.
@@ -102,6 +108,12 @@ pub struct Sheet {
 impl Sheet {
     pub fn file_name(&self) -> &str {
         &self.file.value
+    }
+
+    pub fn bounds(&self) -> Option<(Point, Point)> {
+        let at = self.at?;
+        let size = self.size?;
+        Some((at, Point::new(at.x + size.x, at.y + size.y)))
     }
 }
 

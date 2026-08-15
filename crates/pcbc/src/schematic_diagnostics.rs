@@ -1,13 +1,10 @@
 use std::path::Path;
 
-use pcb_kicad_sch::{
-    KicadProject,
-    analysis::{SchematicIssue, analyze_schematic},
-    schematic_project_path,
-};
+use pcb_kicad_sch::analysis::{SchematicIssue, analyze_schematic};
 use pcb_sch::Schematic;
 use pcb_zen_core::Diagnostic;
 use pcb_zen_core::lang::error::CategorizedDiagnostic;
+use pcbc::kicad_schematic::{KicadProject, schematic_project_path};
 use starlark::errors::EvalSeverity;
 
 pub(crate) fn linked_schematic_diagnostics(

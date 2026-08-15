@@ -9,7 +9,7 @@ use crate::{
     SchDocument, SchItem, SymbolSlotKey,
     connectivity::{
         ComponentIdentity, ComponentOrigin, ConnectionGroup, ConnectionOrigin, ConnectivityGraph,
-        ConnectivityItemRef, IslandProvenance, IslandRef, KiCadConnectivity, PinVisibility,
+        ConnectivityItemRef, IslandRef, PhysicalConnectivity, PhysicalIsland, PinVisibility,
         SymbolLocation, Terminal, not_connected_terminals, reduce_with_provenance,
     },
     symbol,
@@ -83,7 +83,7 @@ pub enum SchematicIssue {
     },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectivityAnalysis {
     pub components: BTreeMap<SymbolSlotKey, ComponentAnalysis>,
     pub nets: BTreeMap<String, NetAnalysis>,
@@ -114,7 +114,7 @@ pub fn analyze_schematic(
 pub(crate) fn observed_reconcilable_connectivity(
     document: &SchDocument,
     netlist: &Schematic,
-) -> anyhow::Result<KiCadConnectivity> {
+) -> anyhow::Result<PhysicalConnectivity> {
     let mut observed = reduce_with_provenance(document, PinVisibility::VisibleOnly)?;
     let not_connected = not_connected_terminals(netlist);
     let islands = &observed.islands;
@@ -127,7 +127,7 @@ pub(crate) fn observed_reconcilable_connectivity(
 
 fn is_open_not_connected_group(
     group: &ConnectionGroup,
-    islands: &BTreeMap<IslandRef, IslandProvenance>,
+    islands: &BTreeMap<IslandRef, PhysicalIsland>,
     not_connected: &BTreeSet<Terminal>,
 ) -> bool {
     if !group.names.is_empty() || group.terminals.len() != 1 {
@@ -673,7 +673,7 @@ mod tests {
             terminals: BTreeSet::from([terminal.clone()]),
             origins: BTreeSet::from([ConnectionOrigin::KiCadIsland(island.clone())]),
         };
-        let mut islands = BTreeMap::from([(island, IslandProvenance::default())]);
+        let mut islands = BTreeMap::from([(island, PhysicalIsland::default())]);
         let not_connected = BTreeSet::from([terminal]);
 
         assert!(is_open_not_connected_group(

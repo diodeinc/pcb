@@ -13,6 +13,8 @@ mod netlist;
 mod part;
 mod path;
 mod release;
+mod schematic_apply_common;
+mod schematic_apply_flow;
 mod simple;
 mod sync;
 mod tag;

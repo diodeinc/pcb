@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Result;
 use pcb_sch::{InstanceRef, Schematic};
@@ -19,7 +19,10 @@ pub(super) fn reduce(netlist: &Schematic) -> Result<ConnectivityGraph> {
         .collect::<Vec<_>>();
     components.sort();
 
-    let interface_ports = root_interface::ports_by_net(netlist)?;
+    let interface_ports = match &netlist.root_ref {
+        Some(root) => root_interface::ports_by_net(netlist, root)?,
+        None => BTreeMap::new(),
+    };
     let mut nets = named_connected_nets(netlist).collect::<Vec<_>>();
     nets.sort_by(|a, b| a.name.cmp(&b.name));
     let groups = nets

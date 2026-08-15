@@ -8,10 +8,8 @@ mod kicad;
 mod raw;
 mod zener;
 
-pub use kicad::ConnectivityItemRef;
-pub(crate) use kicad::{
-    IslandProvenance, KiCadConnectivity, PinVisibility, reduce_with_provenance,
-};
+pub(crate) use kicad::reduce_with_provenance;
+pub use kicad::{ConnectivityItemRef, PhysicalConnectivity, PhysicalIsland, PinVisibility};
 pub(crate) use zener::{named_connected_nets, not_connected_terminals};
 
 pub use raw::{
@@ -32,5 +30,14 @@ impl ConnectivityGraph {
         // Standalone analysis includes hidden pins to match KiCad's implicit
         // hidden-power-pin connectivity. Reconciliation uses visible pins only.
         Ok(reduce_with_provenance(document, PinVisibility::IncludeHidden)?.graph)
+    }
+}
+
+impl PhysicalConnectivity {
+    pub fn from_kicad(
+        document: &SchDocument,
+        pin_visibility: PinVisibility,
+    ) -> anyhow::Result<Self> {
+        reduce_with_provenance(document, pin_visibility)
     }
 }

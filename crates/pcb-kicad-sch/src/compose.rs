@@ -1,19 +1,20 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, bail};
-use pcb_sch::{Instance, InstanceKind, Schematic};
+use pcb_sch::{ATTR_SCHEMATIC_PATH, Instance, InstanceKind, Schematic};
+use pcb_sexpr::Sexpr;
 
 use crate::{
     CONNECTION_GRID_MM, GEOMETRY_EPS_MM, Label, LabelKind, LabelShape, LabelSpin, Paper, Point,
-    Rotation, SchDocument, SchItem, SchPage, Symbol, SymbolDefinition, SymbolField, SymbolSlotKey,
-    Wire,
+    Rotation, SchDocument, SchItem, SchPage, Sheet, SheetPin, Symbol, SymbolDefinition,
+    SymbolField, SymbolSlotKey, Wire,
     analysis::{analyze_schematic, terminals_match},
     component_slots,
     connectivity::{
         ComponentIdentity, ConnectivityItemRef, PinVisibility, Terminal, named_connected_nets,
         reduce_with_provenance,
     },
-    deterministic_uuid, field_autoplace,
+    deterministic_uuid, field_autoplace, hierarchy,
     repair::{RepairScope, plan_connectivity_repair_with, remove_items},
     root_interface, root_page_id, symbol,
 };
@@ -26,12 +27,19 @@ const PACKING_MARGIN_CELLS: i32 = 5;
 const PACKING_CLEARANCE_CELLS: i32 = 2;
 const LABEL_SHAPE_LENGTH_MM: f64 = 2.54;
 const ESTIMATED_LABEL_WIDTH_EM: f64 = 0.8;
+const SHEET_PIN_SPACING_MM: f64 = 5.08;
+const SHEET_MIN_WIDTH_MM: f64 = 50.8;
+const SHEET_MIN_HEIGHT_MM: f64 = 20.32;
 
 pub(crate) fn reconcile_document(
     existing: Option<&SchDocument>,
     netlist: &Schematic,
     root_file_name: &str,
 ) -> Result<SchDocument> {
+    // The generated document is not a canonical representation. Any existing
+    // KiCad organization is valid when its connectivity matches the netlist;
+    // managed symbol identities are the only reconciliation metadata we may
+    // rely on. See ../DESIGN.md.
     let creating = existing.is_none();
     let mut document = existing.cloned().unwrap_or_else(|| SchDocument {
         pages: vec![SchPage {
@@ -64,9 +72,22 @@ pub(crate) fn reconcile_document(
         .cloned()
         .collect::<BTreeSet<_>>();
 
-    clear_projected_symbols(&mut document);
+    let existing_component_pages = selected_existing
+        .iter()
+        .map(|(slot, location)| (slot.component_path().to_string(), location.page_index))
+        .collect();
+    let hierarchy = hierarchy::plan(
+        linked_modules(netlist)?,
+        existing_component_pages,
+        default_page,
+        document.pages.len(),
+    );
+    materialize_hierarchy(&mut document, netlist, &hierarchy)?;
+
+    clear_projected_libraries(&mut document);
 
     let mut placed = BTreeMap::new();
+    let mut retained_symbol_locations = BTreeSet::new();
     for slot in &slots {
         let instance = instances.get(slot.component_path()).with_context(|| {
             format!(
@@ -89,7 +110,12 @@ pub(crate) fn reconcile_document(
                     Some(&existing_slots[slot][location.candidate_index].symbol),
                 )
             })
-            .unwrap_or((default_page, None));
+            .unwrap_or_else(|| {
+                (
+                    hierarchy.page_for_new_component(slot.component_path()),
+                    None,
+                )
+            });
         let at = previous.map(|symbol| symbol.at).unwrap_or_default();
         let rotation = previous.map(|symbol| symbol.rotation).unwrap_or_default();
         let mirror = previous.and_then(|symbol| symbol.mirror);
@@ -110,7 +136,17 @@ pub(crate) fn reconcile_document(
                     .insert(definition.lib_id.clone(), definition.clone());
             }
         }
-        page.items.push(SchItem::Symbol(symbol.clone()));
+        let item_index = selected_existing
+            .get(slot)
+            .map(|location| existing_slots[slot][location.candidate_index].item_index)
+            .unwrap_or_else(|| {
+                page.items.push(SchItem::Symbol(symbol.clone()));
+                page.items.len() - 1
+            });
+        if selected_existing.contains_key(slot) {
+            page.items[item_index] = SchItem::Symbol(symbol.clone());
+        }
+        retained_symbol_locations.insert((page_index, item_index));
         placed.insert(
             slot.clone(),
             PlacedSymbol {
@@ -120,8 +156,22 @@ pub(crate) fn reconcile_document(
             },
         );
     }
+    retain_projected_symbols(&mut document, &retained_symbol_locations);
 
     pack_generated_symbols(&mut document, netlist, &mut placed, &relocatable_slots)?;
+
+    // Generated labels, wires, and hierarchy are an initialization policy,
+    // not managed reconciliation state. If the projected symbols already form
+    // the expected connectivity, preserve every KiCad-authored electrical item
+    // exactly as found regardless of whether its UUID was once generated here.
+    if !creating
+        && hierarchy.sheets.is_empty()
+        && analyze_schematic(&document, netlist)?.is_equivalent()
+    {
+        return Ok(document);
+    }
+
+    add_hierarchy_connectivity(&mut document, netlist, &placed, &hierarchy)?;
 
     refresh_generated_presentation(&mut document, netlist, &placed, default_page)?;
 
@@ -141,17 +191,31 @@ pub(crate) fn reconcile_document(
 /// Symbols and their cached definitions are a complete projection of the
 /// Zener netlist. Existing symbols contribute reusable placement only; they do
 /// not survive independently in the desired document.
-fn clear_projected_symbols(document: &mut SchDocument) {
+fn clear_projected_libraries(document: &mut SchDocument) {
     for page in &mut document.pages {
-        page.items
-            .retain(|item| !matches!(item, SchItem::Symbol(_)));
         page.library.definitions.clear();
+    }
+}
+
+fn retain_projected_symbols(document: &mut SchDocument, retained: &BTreeSet<(usize, usize)>) {
+    for (page_index, page) in document.pages.iter_mut().enumerate() {
+        page.items = page
+            .items
+            .drain(..)
+            .enumerate()
+            .filter_map(|(item_index, item)| {
+                (!matches!(item, SchItem::Symbol(_))
+                    || retained.contains(&(page_index, item_index)))
+                .then_some(item)
+            })
+            .collect();
     }
 }
 
 #[derive(Clone)]
 struct ExistingSymbol {
     page_index: usize,
+    item_index: usize,
     symbol: Symbol,
 }
 
@@ -164,10 +228,15 @@ struct ExistingSelection {
 fn existing_slot_locations(document: &SchDocument) -> BTreeMap<SymbolSlotKey, Vec<ExistingSymbol>> {
     let mut locations = BTreeMap::<SymbolSlotKey, Vec<ExistingSymbol>>::new();
     for (page_index, page) in document.pages.iter().enumerate() {
-        for symbol in page.items.iter().filter_map(|item| match item {
-            SchItem::Symbol(symbol) => Some(symbol),
-            _ => None,
-        }) {
+        for (item_index, symbol) in
+            page.items
+                .iter()
+                .enumerate()
+                .filter_map(|(index, item)| match item {
+                    SchItem::Symbol(symbol) => Some((index, symbol)),
+                    _ => None,
+                })
+        {
             let Some(path) = symbol.field_value("Path") else {
                 continue;
             };
@@ -176,6 +245,7 @@ fn existing_slot_locations(document: &SchDocument) -> BTreeMap<SymbolSlotKey, Ve
             };
             locations.entry(slot).or_default().push(ExistingSymbol {
                 page_index,
+                item_index,
                 symbol: symbol.clone(),
             });
         }
@@ -219,6 +289,153 @@ fn component_instances(netlist: &Schematic) -> Result<BTreeMap<String, &Instance
     Ok(result)
 }
 
+fn linked_modules(netlist: &Schematic) -> Result<Vec<hierarchy::LinkedModule>> {
+    let component_paths = netlist
+        .instances
+        .iter()
+        .filter(|(_, instance)| instance.kind == InstanceKind::Component)
+        .filter_map(|(instance_ref, _)| {
+            crate::canonical_component_path(&instance_ref.instance_path)
+        })
+        .collect::<Vec<_>>();
+    let mut modules = Vec::new();
+    for (instance_ref, instance) in &netlist.instances {
+        if instance.kind != InstanceKind::Module
+            || !instance.attributes.contains_key(ATTR_SCHEMATIC_PATH)
+            || netlist.root_ref.as_ref() == Some(instance_ref)
+        {
+            continue;
+        }
+        let path = crate::canonical_component_path(&instance_ref.instance_path)
+            .context("linked module instance has no canonical path")?;
+        if !component_paths.iter().any(|component_path| {
+            component_path
+                .strip_prefix(&path)
+                .is_some_and(|suffix| suffix.starts_with('.'))
+        }) {
+            continue;
+        }
+        if path.contains(['/', '\\']) || path.chars().any(char::is_control) {
+            bail!("linked module path '{path}' cannot be used as a KiCad schematic filename");
+        }
+        modules.push(hierarchy::LinkedModule {
+            path,
+            instance_ref: instance_ref.clone(),
+        });
+    }
+    Ok(modules)
+}
+
+fn materialize_hierarchy(
+    document: &mut SchDocument,
+    netlist: &Schematic,
+    plan: &hierarchy::HierarchyPlan,
+) -> Result<()> {
+    for sheet_plan in &plan.sheets {
+        if document.pages.len() != sheet_plan.child_page {
+            bail!("hierarchy planner produced a non-contiguous child page index");
+        }
+        let ports = module_ports(netlist, &sheet_plan.instance_ref)?;
+        let height = SHEET_MIN_HEIGHT_MM.max((ports.len() as f64 + 1.0) * SHEET_PIN_SPACING_MM);
+        let size = Point::new(SHEET_MIN_WIDTH_MM, height);
+        let at = place_sheet(document, sheet_plan.parent_page, size)?;
+        let name = sheet_plan
+            .module_path
+            .rsplit('.')
+            .next()
+            .expect("canonical module path is non-empty");
+        let pins = ports
+            .iter()
+            .enumerate()
+            .map(|(index, (_, port_name))| SheetPin {
+                id: deterministic_uuid(format!(
+                    "zener:module-sheet-pin:{}:{port_name}",
+                    sheet_plan.module_path
+                )),
+                name: port_name.clone(),
+                at: Point::new(at.x, at.y + (index as f64 + 1.0) * SHEET_PIN_SPACING_MM),
+                rotation: Rotation::Deg180,
+                shape: LabelShape::Bidirectional,
+                unsupported: Vec::new(),
+            })
+            .collect();
+        let mut name_field = SymbolField::new("Sheetname", name, at);
+        name_field.at.y -= 0.7112;
+        let mut file_field = SymbolField::new("Sheetfile", &sheet_plan.file_name, at);
+        file_field.at.y += height + 0.7112;
+        let sheet = Sheet {
+            id: hierarchy::sheet_id(&sheet_plan.module_path),
+            at: Some(at),
+            size: Some(size),
+            name: Some(name_field),
+            file: file_field,
+            pins,
+            unsupported: generated_sheet_style(),
+        };
+        document.pages[sheet_plan.parent_page]
+            .items
+            .push(SchItem::Sheet(Box::new(sheet)));
+
+        let mut child = SchPage::new(hierarchy::page_id(&sheet_plan.module_path));
+        child.file_name = Some(sheet_plan.file_name.clone());
+        child.paper = document.pages[sheet_plan.parent_page].paper.clone();
+        document.pages.push(child);
+    }
+    Ok(())
+}
+
+fn generated_sheet_style() -> Vec<Sexpr> {
+    vec![
+        Sexpr::list(vec![Sexpr::symbol("exclude_from_sim"), Sexpr::symbol("no")]),
+        Sexpr::list(vec![Sexpr::symbol("in_bom"), Sexpr::symbol("yes")]),
+        Sexpr::list(vec![Sexpr::symbol("on_board"), Sexpr::symbol("yes")]),
+        Sexpr::list(vec![Sexpr::symbol("dnp"), Sexpr::symbol("no")]),
+        Sexpr::list(vec![
+            Sexpr::symbol("stroke"),
+            Sexpr::list(vec![Sexpr::symbol("width"), Sexpr::float(0.1524)]),
+            Sexpr::list(vec![Sexpr::symbol("type"), Sexpr::symbol("solid")]),
+        ]),
+        Sexpr::list(vec![
+            Sexpr::symbol("fill"),
+            Sexpr::list(vec![
+                Sexpr::symbol("color"),
+                Sexpr::int(0),
+                Sexpr::int(0),
+                Sexpr::int(0),
+                Sexpr::int(0),
+            ]),
+        ]),
+    ]
+}
+
+fn module_ports(
+    netlist: &Schematic,
+    module_ref: &pcb_sch::InstanceRef,
+) -> Result<Vec<(String, String)>> {
+    Ok(root_interface::ports_by_net(netlist, module_ref)?
+        .into_iter()
+        .flat_map(|(net_name, port_names)| {
+            port_names
+                .into_iter()
+                .map(move |port_name| (net_name.clone(), port_name))
+        })
+        .collect())
+}
+
+fn place_sheet(document: &SchDocument, page_index: usize, size: Point) -> Result<Point> {
+    let page = document
+        .pages
+        .get(page_index)
+        .context("planned sheet parent page is absent")?;
+    let mut packer = GridPacker::for_page(&page.paper)?;
+    occupy_page_items(&mut packer, page)?;
+    let relative = GridRect::from_bounds(
+        field_autoplace::Bounds::from_points([Point::default(), size])
+            .expect("sheet size defines bounds"),
+    );
+    Ok(packer.place(relative).to_point())
+}
+
 fn pack_generated_symbols(
     document: &mut SchDocument,
     netlist: &Schematic,
@@ -247,24 +464,7 @@ fn pack_generated_symbols(
             continue;
         }
         let mut packer = GridPacker::for_page(&document.pages[page_index].paper)?;
-        for item in &document.pages[page_index].items {
-            let SchItem::Symbol(symbol) = item else {
-                continue;
-            };
-            if relocatable.iter().any(|slot| slot.symbol_id() == symbol.id) {
-                continue;
-            }
-            let Some(definition) = document.pages[page_index]
-                .library
-                .definitions
-                .get(&symbol.lib_id)
-            else {
-                continue;
-            };
-            if let Some(bounds) = field_autoplace::symbol_visual_bounds(symbol, definition)? {
-                packer.occupy(GridRect::from_bounds(bounds));
-            }
-        }
+        occupy_page_items_except(&mut packer, &document.pages[page_index], &relocatable)?;
 
         let mut items = relocatable
             .into_iter()
@@ -282,6 +482,42 @@ fn pack_generated_symbols(
         for (slot, relative_bounds) in items {
             let anchor = packer.place(relative_bounds);
             move_placed_symbol(document, placed, &slot, anchor.to_point())?;
+        }
+    }
+    Ok(())
+}
+
+fn occupy_page_items(packer: &mut GridPacker, page: &SchPage) -> Result<()> {
+    occupy_page_items_except(packer, page, &BTreeSet::new())
+}
+
+fn occupy_page_items_except(
+    packer: &mut GridPacker,
+    page: &SchPage,
+    excluded_slots: &BTreeSet<SymbolSlotKey>,
+) -> Result<()> {
+    for item in &page.items {
+        match item {
+            SchItem::Symbol(symbol)
+                if !excluded_slots
+                    .iter()
+                    .any(|slot| slot.symbol_id() == symbol.id) =>
+            {
+                let Some(definition) = page.library.definitions.get(&symbol.lib_id) else {
+                    continue;
+                };
+                if let Some(bounds) = field_autoplace::symbol_visual_bounds(symbol, definition)? {
+                    packer.occupy(GridRect::from_bounds(bounds));
+                }
+            }
+            SchItem::Sheet(sheet) => {
+                if let Some((min, max)) = sheet.bounds() {
+                    let bounds = field_autoplace::Bounds::from_points([min, max])
+                        .expect("sheet bounds have two corners");
+                    packer.occupy(GridRect::from_bounds(bounds));
+                }
+            }
+            _ => {}
         }
     }
     Ok(())
@@ -790,6 +1026,93 @@ fn repair_connectivity(
     )
 }
 
+fn add_hierarchy_connectivity(
+    document: &mut SchDocument,
+    netlist: &Schematic,
+    placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
+    plan: &hierarchy::HierarchyPlan,
+) -> Result<()> {
+    if plan.sheets.is_empty() {
+        return Ok(());
+    }
+    let all_nets = named_connected_nets(netlist)
+        .map(|net| net.name.clone())
+        .collect();
+    let targets = connectivity_targets(netlist, placed, &all_nets)?;
+
+    for sheet_plan in &plan.sheets {
+        let ports = module_ports(netlist, &sheet_plan.instance_ref)?;
+        let child_anchors =
+            interface_anchors(document, placed, &targets, sheet_plan.child_page, &ports)?;
+        let sheet = document.pages[sheet_plan.parent_page]
+            .items
+            .iter()
+            .find_map(|item| match item {
+                SchItem::Sheet(sheet)
+                    if sheet.id == hierarchy::sheet_id(&sheet_plan.module_path) =>
+                {
+                    Some(sheet)
+                }
+                _ => None,
+            })
+            .context("materialized hierarchy sheet is absent from its parent page")?;
+        let parent_anchors = sheet.pins.iter().map(|pin| pin.at).collect::<Vec<_>>();
+
+        for (((net_name, port_name), (child_net, child_port)), parent_pin) in
+            ports.into_iter().zip(child_anchors).zip(parent_anchors)
+        {
+            let key = format!("{}:{port_name}", sheet_plan.module_path);
+            let parent_net = Point::new(parent_pin.x - INTERFACE_STUB_LENGTH_MM, parent_pin.y);
+            let mut parent_label = Label::new(
+                deterministic_uuid(format!("zener:module-parent-net:{key}:{net_name}")),
+                &net_name,
+                parent_net,
+            );
+            parent_label.spin = LabelSpin::Left;
+            upsert_label(document, sheet_plan.parent_page, parent_label)?;
+            upsert_wire(
+                document,
+                sheet_plan.parent_page,
+                Wire {
+                    id: deterministic_uuid(format!("zener:module-parent-link:{key}")),
+                    a: parent_net,
+                    b: parent_pin,
+                    unsupported: Vec::new(),
+                },
+            )?;
+
+            let mut child_net_label = Label::new(
+                deterministic_uuid(format!("zener:module-child-net:{key}:{net_name}")),
+                &net_name,
+                child_net,
+            );
+            child_net_label.spin = LabelSpin::Left;
+            upsert_label(document, sheet_plan.child_page, child_net_label)?;
+            upsert_wire(
+                document,
+                sheet_plan.child_page,
+                Wire {
+                    id: deterministic_uuid(format!("zener:module-child-link:{key}")),
+                    a: child_net,
+                    b: child_port,
+                    unsupported: Vec::new(),
+                },
+            )?;
+            let mut child_label = Label::new(
+                deterministic_uuid(format!("zener:module-child-port:{key}")),
+                port_name,
+                child_port,
+            );
+            child_label.kind = LabelKind::Hierarchical {
+                shape: LabelShape::Bidirectional,
+            };
+            child_label.spin = LabelSpin::Right;
+            upsert_label(document, sheet_plan.child_page, child_label)?;
+        }
+    }
+    Ok(())
+}
+
 fn add_connectivity_labels(
     document: &mut SchDocument,
     netlist: &Schematic,
@@ -801,15 +1124,18 @@ fn add_connectivity_labels(
     let anchors_by_net = connectivity_targets(netlist, placed, target_nets)?;
     sync_net_labels(document, &anchors_by_net, update)?;
 
-    let interface_ports = root_interface::ports_by_net(netlist)?
-        .into_iter()
-        .filter(|(net_name, _)| target_nets.contains(net_name))
-        .flat_map(|(net_name, port_names)| {
-            port_names
-                .into_iter()
-                .map(move |port_name| (net_name.clone(), port_name))
-        })
-        .collect::<Vec<_>>();
+    let interface_ports = match &netlist.root_ref {
+        Some(root) => root_interface::ports_by_net(netlist, root)?,
+        None => BTreeMap::new(),
+    }
+    .into_iter()
+    .filter(|(net_name, _)| target_nets.contains(net_name))
+    .flat_map(|(net_name, port_names)| {
+        port_names
+            .into_iter()
+            .map(move |port_name| (net_name.clone(), port_name))
+    })
+    .collect::<Vec<_>>();
     if update == ConnectivityUpdate::ExistingOnly
         && !interface_ports.iter().any(|(net_name, port_name)| {
             [
@@ -1018,31 +1344,14 @@ fn interface_anchors(
         return Ok(Vec::new());
     }
     let mut packer = GridPacker::for_page(&document.pages[root_page].paper)?;
-    for placed in placed
+    occupy_page_items(&mut packer, &document.pages[root_page])?;
+    for item in placed
         .values()
         .filter(|placed| placed.page_index == root_page)
     {
-        let bounds = component_envelope(placed, anchors_by_net)?
-            .translated(placed.symbol.at.x, placed.symbol.at.y);
-        packer.occupy(GridRect::from_bounds(bounds));
-    }
-    for item in &document.pages[root_page].items {
-        let SchItem::Symbol(symbol) = item else {
-            continue;
-        };
-        if symbol.field_value("Path").is_some() {
-            continue;
-        }
-        let Some(definition) = document.pages[root_page]
-            .library
-            .definitions
-            .get(&symbol.lib_id)
-        else {
-            continue;
-        };
-        if let Some(bounds) = field_autoplace::symbol_visual_bounds(symbol, definition)? {
-            packer.occupy(GridRect::from_bounds(bounds));
-        }
+        let envelope = component_envelope(item, anchors_by_net)?
+            .translated(item.symbol.at.x, item.symbol.at.y);
+        packer.occupy(GridRect::from_bounds(envelope));
     }
 
     let label_height = crate::TextEffects::default().font_size.y.abs();

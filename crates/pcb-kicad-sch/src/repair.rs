@@ -12,7 +12,7 @@ use crate::{
         observed_reconcilable_connectivity, terminals_match,
     },
     connectivity::{
-        ConnectivityGraph, ConnectivityItemRef, IslandProvenance, Terminal, named_connected_nets,
+        ConnectivityGraph, ConnectivityItemRef, PhysicalIsland, Terminal, named_connected_nets,
     },
 };
 
@@ -240,7 +240,7 @@ fn repair_problems(issues: &[SchematicIssue]) -> BTreeSet<RepairProblem> {
 fn repair_candidates(
     issue: &SchematicIssue,
     expected: &ConnectivityGraph,
-    islands: &std::collections::BTreeMap<crate::connectivity::IslandRef, IslandProvenance>,
+    islands: &std::collections::BTreeMap<crate::connectivity::IslandRef, PhysicalIsland>,
 ) -> BTreeSet<ConnectivityItemRef> {
     let issue_islands = match issue {
         SchematicIssue::Shorted { islands, .. }
@@ -260,7 +260,7 @@ fn repair_candidates(
 fn repair_island(
     issue: &SchematicIssue,
     expected: &ConnectivityGraph,
-    island: &IslandProvenance,
+    island: &PhysicalIsland,
 ) -> bool {
     match issue {
         SchematicIssue::Shorted { net_names, .. } => expected_names_for_island(expected, island)
@@ -346,7 +346,7 @@ fn describe_terminal(document: &SchDocument, terminal: &Terminal) -> String {
 
 fn expected_names_for_island(
     expected: &ConnectivityGraph,
-    island: &IslandProvenance,
+    island: &PhysicalIsland,
 ) -> BTreeSet<String> {
     expected
         .groups
@@ -526,11 +526,11 @@ mod tests {
         }
     }
 
-    fn provenance(terminals: &[&str], item: ConnectivityItemRef) -> IslandProvenance {
-        IslandProvenance {
+    fn provenance(terminals: &[&str], item: ConnectivityItemRef) -> PhysicalIsland {
+        PhysicalIsland {
             items: BTreeSet::from([item]),
             terminals: terminals.iter().map(|name| terminal(name)).collect(),
-            ..IslandProvenance::default()
+            ..PhysicalIsland::default()
         }
     }
 

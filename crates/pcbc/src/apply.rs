@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
 use colored::Colorize;
-use pcb_kicad_sch::apply::{SchematicApplyResult, apply_linked_schematic};
+use pcbc::kicad_schematic::{SchematicApplyResult, apply_linked_schematic};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
