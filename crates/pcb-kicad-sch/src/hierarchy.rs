@@ -1,5 +1,6 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
+use anyhow::{Context, Result, bail};
 use pcb_sch::InstanceRef;
 
 use crate::deterministic_uuid;
@@ -23,48 +24,62 @@ pub(crate) struct PlannedSheet {
 pub(crate) struct HierarchyPlan {
     pub sheets: Vec<PlannedSheet>,
     root_page: usize,
-    existing_component_pages: BTreeMap<String, usize>,
+    existing_module_pages: BTreeMap<String, BTreeSet<usize>>,
     linked_modules: Vec<LinkedModule>,
 }
 
 impl HierarchyPlan {
-    pub fn page_for_new_component(&self, component_path: &str) -> usize {
+    pub fn page_for_new_component(&self, component_path: &str) -> Result<usize> {
         if let Some(sheet) = self
             .sheets
             .iter()
             .rev()
             .find(|sheet| is_descendant(component_path, &sheet.module_path))
         {
-            return sheet.child_page;
+            return Ok(sheet.child_page);
         }
 
-        self.linked_modules
+        let Some(module) = self
+            .linked_modules
             .iter()
             .rev()
             .find(|module| is_descendant(component_path, &module.path))
-            .and_then(|module| self.representative_page(&module.path))
-            .unwrap_or(self.root_page)
-    }
+        else {
+            return Ok(self.root_page);
+        };
 
-    fn representative_page(&self, module_path: &str) -> Option<usize> {
-        self.existing_component_pages
-            .iter()
-            .find(|(component_path, _)| is_descendant(component_path, module_path))
-            .map(|(_, page)| *page)
+        required_module_page(&self.existing_module_pages, &module.path)
     }
 }
 
 pub(crate) fn plan(
     mut linked_modules: Vec<LinkedModule>,
-    existing_component_pages: BTreeMap<String, usize>,
+    existing_component_pages: BTreeMap<String, BTreeSet<usize>>,
     root_page: usize,
     first_new_page: usize,
-) -> HierarchyPlan {
+) -> Result<HierarchyPlan> {
     linked_modules.sort_by(|left, right| {
         path_depth(&left.path)
             .cmp(&path_depth(&right.path))
             .then_with(|| left.path.cmp(&right.path))
     });
+
+    // Assign each existing component to its closest linked module. A component
+    // inside a nested linked child is evidence for the child page, not for the
+    // page that owns the parent module's direct contents.
+    let existing_module_pages = existing_component_pages
+        .iter()
+        .filter_map(|(component_path, pages)| {
+            owning_module(component_path, &linked_modules)
+                .map(|module| (module.path.clone(), pages))
+        })
+        .fold(
+            BTreeMap::<String, BTreeSet<usize>>::new(),
+            |mut modules, (module, pages)| {
+                modules.entry(module).or_default().extend(pages);
+                modules
+            },
+        );
 
     let mut sheets = Vec::<PlannedSheet>::new();
     for module in &linked_modules {
@@ -81,20 +96,13 @@ pub(crate) fn plan(
                 candidate.path != module.path && is_descendant(&module.path, &candidate.path)
             })
             .max_by_key(|candidate| path_depth(&candidate.path));
-        let parent_page = parent_module
-            .and_then(|parent| {
-                sheets
-                    .iter()
-                    .find(|sheet| sheet.module_path == parent.path)
-                    .map(|sheet| sheet.child_page)
-                    .or_else(|| {
-                        existing_component_pages
-                            .iter()
-                            .find(|(path, _)| is_descendant(path, &parent.path))
-                            .map(|(_, page)| *page)
-                    })
-            })
-            .unwrap_or(root_page);
+        let parent_page = match parent_module {
+            Some(parent) => match sheets.iter().find(|sheet| sheet.module_path == parent.path) {
+                Some(sheet) => sheet.child_page,
+                None => required_module_page(&existing_module_pages, &parent.path)?,
+            },
+            None => root_page,
+        };
         let child_page = first_new_page + sheets.len();
         sheets.push(PlannedSheet {
             module_path: module.path.clone(),
@@ -105,12 +113,50 @@ pub(crate) fn plan(
         });
     }
 
-    HierarchyPlan {
+    Ok(HierarchyPlan {
         sheets,
         root_page,
-        existing_component_pages,
+        existing_module_pages,
         linked_modules,
+    })
+}
+
+fn unique_module_page(
+    module_pages: &BTreeMap<String, BTreeSet<usize>>,
+    module_path: &str,
+) -> Result<Option<usize>> {
+    let Some(pages) = module_pages.get(module_path) else {
+        return Ok(None);
+    };
+    let mut pages = pages.iter().copied();
+    let page = pages.next();
+    if pages.next().is_some() {
+        bail!(
+            "linked module '{module_path}' has managed symbols on multiple schematic pages; cannot choose a page for new content"
+        );
     }
+    Ok(page)
+}
+
+fn required_module_page(
+    module_pages: &BTreeMap<String, BTreeSet<usize>>,
+    module_path: &str,
+) -> Result<usize> {
+    unique_module_page(module_pages, module_path)?.with_context(|| {
+        format!(
+            "linked module '{module_path}' has no page identified by a directly owned managed symbol; cannot choose a page for new content"
+        )
+    })
+}
+
+fn owning_module<'a>(
+    component_path: &str,
+    linked_modules: &'a [LinkedModule],
+) -> Option<&'a LinkedModule> {
+    linked_modules
+        .iter()
+        .filter(|module| is_descendant(component_path, &module.path))
+        .max_by_key(|module| path_depth(&module.path))
 }
 
 pub(crate) fn page_id(module_path: &str) -> String {
@@ -150,6 +196,16 @@ mod tests {
         }
     }
 
+    fn component_pages(entries: &[(&str, usize)]) -> BTreeMap<String, BTreeSet<usize>> {
+        entries.iter().fold(
+            BTreeMap::<String, BTreeSet<usize>>::new(),
+            |mut pages, (path, page)| {
+                pages.entry((*path).to_string()).or_default().insert(*page);
+                pages
+            },
+        )
+    }
+
     #[test]
     fn plans_one_page_per_uninitialized_instance() {
         let plan = plan(
@@ -157,7 +213,8 @@ mod tests {
             BTreeMap::new(),
             0,
             1,
-        );
+        )
+        .unwrap();
 
         assert_eq!(
             plan.sheets
@@ -169,23 +226,89 @@ mod tests {
                 (&"POWER_B".to_string(), 0, 2)
             ]
         );
-        assert_eq!(plan.page_for_new_component("POWER_A.R1"), 1);
-        assert_eq!(plan.page_for_new_component("POWER_B.R1"), 2);
+        assert_eq!(plan.page_for_new_component("POWER_A.R1").unwrap(), 1);
+        assert_eq!(plan.page_for_new_component("POWER_B.R1").unwrap(), 2);
     }
 
     #[test]
     fn preserves_initialized_structure_and_nests_only_new_pages() {
         let plan = plan(
             vec![module("A"), module("A.NEW"), module("EXISTING")],
-            BTreeMap::from([("A.R1".to_string(), 4), ("EXISTING.R1".to_string(), 7)]),
+            component_pages(&[("A.R1", 4), ("EXISTING.R1", 7)]),
             0,
             8,
-        );
+        )
+        .unwrap();
 
         assert_eq!(plan.sheets.len(), 1);
         assert_eq!(plan.sheets[0].module_path, "A.NEW");
         assert_eq!(plan.sheets[0].parent_page, 4);
         assert_eq!(plan.sheets[0].child_page, 8);
-        assert_eq!(plan.page_for_new_component("EXISTING.R2"), 7);
+        assert_eq!(plan.page_for_new_component("EXISTING.R2").unwrap(), 7);
+    }
+
+    #[test]
+    fn nested_components_do_not_select_the_parent_module_page() {
+        let plan = plan(
+            vec![module("A"), module("A.CHILD"), module("A.NEW")],
+            component_pages(&[("A.CHILD.R1", 4), ("A.R1", 7)]),
+            0,
+            8,
+        )
+        .unwrap();
+
+        assert_eq!(plan.sheets.len(), 1);
+        assert_eq!(plan.sheets[0].module_path, "A.NEW");
+        assert_eq!(plan.sheets[0].parent_page, 7);
+        assert_eq!(plan.page_for_new_component("A.R2").unwrap(), 7);
+        assert_eq!(plan.page_for_new_component("A.CHILD.R2").unwrap(), 4);
+    }
+
+    #[test]
+    fn stale_component_still_marks_its_module_initialized() {
+        let plan = plan(
+            vec![module("A")],
+            component_pages(&[("A.REMOVED", 3)]),
+            0,
+            4,
+        )
+        .unwrap();
+
+        assert!(plan.sheets.is_empty());
+        assert_eq!(plan.page_for_new_component("A.REPLACEMENT").unwrap(), 3);
+    }
+
+    #[test]
+    fn rejects_missing_or_ambiguous_module_page_for_new_content() {
+        let ambiguous = plan(
+            vec![module("A")],
+            component_pages(&[("A.R1", 2), ("A.R2", 3)]),
+            0,
+            4,
+        )
+        .unwrap();
+
+        assert_eq!(
+            ambiguous
+                .page_for_new_component("A.R3")
+                .unwrap_err()
+                .to_string(),
+            "linked module 'A' has managed symbols on multiple schematic pages; cannot choose a page for new content"
+        );
+
+        let missing = plan(
+            vec![module("A"), module("A.CHILD")],
+            component_pages(&[("A.CHILD.R1", 2)]),
+            0,
+            3,
+        )
+        .unwrap();
+        assert_eq!(
+            missing
+                .page_for_new_component("A.R1")
+                .unwrap_err()
+                .to_string(),
+            "linked module 'A' has no page identified by a directly owned managed symbol; cannot choose a page for new content"
+        );
     }
 }
