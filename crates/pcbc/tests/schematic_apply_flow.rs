@@ -393,7 +393,7 @@ fn rejects_pre_kicad_10_symbol_libraries() {
 }
 
 #[test]
-fn preserves_user_symbol_geometry_while_refreshing_owned_labels() {
+fn preserves_user_symbol_and_equivalent_label_geometry() {
     let workspace = tempfile::tempdir().unwrap();
     let project_dir = workspace.path().join("hardware");
     let netlist = linked_fixture(&project_dir);
@@ -427,13 +427,13 @@ fn preserves_user_symbol_geometry_while_refreshing_owned_labels() {
             SchItem::Label(label) if matches!(label.kind, LabelKind::Local) => Some(label),
             _ => None,
         })
-        .expect("generated label");
+        .expect("equivalent label");
     let label_id = label.id.clone();
-    let expected_spin = label.spin;
-    label.spin = match expected_spin {
+    label.spin = match label.spin {
         LabelSpin::Left => LabelSpin::Right,
         _ => LabelSpin::Left,
     };
+    let expected_spin = label.spin;
     fs::write(
         &project.schematic_files[0],
         project.document.to_kicad_sch().unwrap(),
