@@ -16,6 +16,7 @@ mod hierarchy;
 pub mod identity;
 pub mod kicad;
 pub mod model;
+mod net_symbols;
 pub mod reconcile;
 pub mod repair;
 mod root_interface;

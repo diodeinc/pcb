@@ -7,8 +7,8 @@ use pcb_sch::{
 
 use crate::{SymbolDefinition, SymbolSlotKey, canonical_component_path, symbol};
 
-const SYMBOL_VALUE_ATTR: &str = "__symbol_value";
-const SYMBOL_PATH_ATTR: &str = "symbol_path";
+pub(crate) const SYMBOL_VALUE_ATTR: &str = "__symbol_value";
+pub(crate) const SYMBOL_PATH_ATTR: &str = "symbol_path";
 const KICAD_10_SYMBOL_LIB_VERSION: i32 = 20251024;
 
 pub(crate) fn validate_symbol_library_versions(netlist: &Schematic) -> Result<()> {
@@ -29,7 +29,7 @@ pub(crate) fn validate_symbol_library_versions(netlist: &Schematic) -> Result<()
     Ok(())
 }
 
-fn validate_symbol_library_version(
+pub(crate) fn validate_symbol_library_version(
     owner: &str,
     attributes: &HashMap<String, AttributeValue>,
 ) -> Result<()> {
@@ -120,9 +120,17 @@ pub(crate) fn component_symbol_definition(
     netlist: &Schematic,
     instance: &Instance,
 ) -> Result<Option<SymbolDefinition>> {
-    let raw = if let Some(raw) = attribute_string(instance, SYMBOL_VALUE_ATTR)? {
+    symbol_definition(netlist, "component", &instance.attributes)
+}
+
+pub(crate) fn symbol_definition(
+    netlist: &Schematic,
+    owner: &str,
+    attributes: &HashMap<String, AttributeValue>,
+) -> Result<Option<SymbolDefinition>> {
+    let raw = if let Some(raw) = string_attribute(owner, attributes, SYMBOL_VALUE_ATTR)? {
         Some(raw.to_string())
-    } else if let Some(path) = attribute_string(instance, SYMBOL_PATH_ATTR)? {
+    } else if let Some(path) = string_attribute(owner, attributes, SYMBOL_PATH_ATTR)? {
         Some(
             netlist
                 .symbols
@@ -135,15 +143,23 @@ pub(crate) fn component_symbol_definition(
     };
     raw.map(|raw| {
         SymbolDefinition::from_kicad_symbol_sexpr(&raw)
-            .context("failed to parse component symbol definition")
+            .with_context(|| format!("failed to parse {owner} symbol definition"))
     })
     .transpose()
 }
 
 pub(crate) fn attribute_string<'a>(instance: &'a Instance, key: &str) -> Result<Option<&'a str>> {
-    match instance.attributes.get(key) {
+    string_attribute("component", &instance.attributes, key)
+}
+
+fn string_attribute<'a>(
+    owner: &str,
+    attributes: &'a HashMap<String, AttributeValue>,
+    key: &str,
+) -> Result<Option<&'a str>> {
+    match attributes.get(key) {
         None => Ok(None),
         Some(AttributeValue::String(value)) => Ok(Some(value)),
-        Some(_) => bail!("component attribute {key} must be a string"),
+        Some(_) => bail!("{owner} attribute {key} must be a string"),
     }
 }

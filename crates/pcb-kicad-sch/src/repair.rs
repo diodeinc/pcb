@@ -44,9 +44,9 @@ impl ConnectivityRepairPlan {
 
 /// Plan the smallest supported unambiguous repair for an existing schematic.
 ///
-/// Unexpected net names have an exact label-driver repair. A physical short
-/// must have one uniquely proven wire or junction removal; more destructive or
-/// multi-item choices are reported instead of guessed.
+/// Unexpected net names have an exact label or power-symbol driver repair. A
+/// short must have one uniquely proven driver, wire, or junction removal; more
+/// destructive or multi-item choices are reported instead of guessed.
 pub fn plan_connectivity_repair(
     document: &SchDocument,
     netlist: &Schematic,
@@ -81,13 +81,20 @@ pub(crate) fn plan_connectivity_repair_with(
                 for island in islands {
                     if let Some(provenance) = observed.islands.get(island) {
                         if let Some(items) = provenance.named_drivers.get(net_name) {
-                            drivers.extend(items.iter().filter(|item| item.is_label()).cloned());
+                            drivers.extend(
+                                items
+                                    .iter()
+                                    .filter(|item| item.is_removable_name_driver())
+                                    .cloned(),
+                            );
                         }
                         reconnect_nets.extend(expected_names_for_island(&expected, provenance));
                     }
                 }
                 if drivers.is_empty() {
-                    bail!("unexpected KiCad net '{net_name}' is not driven by a removable label");
+                    bail!(
+                        "unexpected KiCad net '{net_name}' is not driven by a removable label or power symbol"
+                    );
                 }
                 removals.extend(drivers);
             }
@@ -247,14 +254,31 @@ fn repair_candidates(
         | SchematicIssue::UnexpectedConnection { islands, .. } => islands,
         _ => return BTreeSet::new(),
     };
-    issue_islands
+    let mut candidates = BTreeSet::new();
+    for island in issue_islands
         .iter()
         .filter_map(|island| islands.get(island))
         .filter(|island| repair_island(issue, expected, island))
-        .flat_map(|island| island.items.iter())
-        .filter(|item| item.is_physical_connector())
-        .cloned()
-        .collect()
+    {
+        candidates.extend(
+            island
+                .items
+                .iter()
+                .filter(|item| item.is_physical_connector())
+                .cloned(),
+        );
+        if matches!(issue, SchematicIssue::Shorted { .. }) {
+            candidates.extend(
+                island
+                    .named_drivers
+                    .values()
+                    .flatten()
+                    .filter(|item| item.is_symbol())
+                    .cloned(),
+            );
+        }
+    }
+    candidates
 }
 
 fn repair_island(
@@ -287,7 +311,7 @@ fn unrepairable_issue(document: &SchDocument, issue: &SchematicIssue) -> anyhow:
             )
         }
         SchematicIssue::Shorted { net_names, .. } => anyhow::anyhow!(
-            "KiCad shorts nets {} but no single wire or junction removal repairs the short",
+            "KiCad shorts nets {} but no single power symbol, wire, or junction removal repairs the short",
             net_names.iter().cloned().collect::<Vec<_>>().join(", ")
         ),
         _ => anyhow::anyhow!("KiCad connectivity issue cannot be repaired: {issue:?}"),
@@ -452,8 +476,12 @@ fn item_matches(page_id: &str, item: &SchItem, item_ref: &ConnectivityItemRef) -
 }
 
 impl ConnectivityItemRef {
-    fn is_label(&self) -> bool {
-        matches!(self, Self::Label { .. })
+    fn is_removable_name_driver(&self) -> bool {
+        matches!(self, Self::Label { .. } | Self::Symbol { .. })
+    }
+
+    fn is_symbol(&self) -> bool {
+        matches!(self, Self::Symbol { .. })
     }
 
     fn is_physical_connector(&self) -> bool {

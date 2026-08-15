@@ -16,6 +16,12 @@ the netlist changes, the repair planner can use the managed symbol identities
 to make the smallest repair needed to restore equivalence. It must not treat
 tool-generated geometry or hierarchy as a canonical form.
 
+KiCad power symbols are adopted by their exact effective net name and
+connectivity. They do not require Zener identity metadata or a particular
+library definition. A net symbol specified by Zener is the preferred way to
+create a missing name driver; it is not a canonical representation imposed on
+an existing equivalent schematic.
+
 Generation can use a prescriptive layout to produce a useful initial project.
 In particular, a newly materialized module instance can receive its own child
 sheet and `.kicad_sch` file. This is an initialization policy only. After the

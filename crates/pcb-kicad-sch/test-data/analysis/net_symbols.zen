@@ -1,0 +1,12 @@
+"""Net-symbol reconciliation regression design."""
+
+Project(name="NetSymbols", path="kicad", layout=False)
+
+Resistor = Module("@stdlib/generics/Resistor.zen")
+
+GROUND = io(Ground("GROUND"))
+SIGNAL = Net("SIGNAL")
+
+Resistor(name="R1", value="1kohms", package="0402", P1=GROUND, P2=SIGNAL)
+
+# pcb:sch R1.R x=50.0000 y=50.0000 rot=0
