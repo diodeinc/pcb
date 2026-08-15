@@ -15,6 +15,7 @@ use crate::{
 const FIELD_ROW_SPACING_MM: f64 = 2.54;
 const HPADDING_MM: f64 = 0.635;
 const VPADDING_MM: f64 = 0.381;
+const ESTIMATED_TEXT_WIDTH_EM: f64 = 0.6;
 
 pub(crate) fn autoplace_symbol_fields(
     symbol: &mut Symbol,
@@ -27,7 +28,7 @@ pub(crate) fn autoplace_symbol_fields(
     let parsed = symbol::ParsedSymbolDefinition::parse(definition)?;
     let pins = parsed.placed_pins(symbol)?;
     let Some(body_bounds) =
-        symbol_body_bounds(definition, symbol).or_else(|| symbol_pin_bounds(&pins, false))
+        symbol_body_bounds(definition, symbol).or_else(|| visible_pin_bounds(&pins))
     else {
         return Ok(false);
     };
@@ -36,7 +37,7 @@ pub(crate) fn autoplace_symbol_fields(
         return Ok(false);
     }
 
-    let occupancy = pin_side_occupancy(&pins, false);
+    let occupancy = visible_pin_side_occupancy(&pins);
     let selection = choose_side(
         symbol,
         parsed.power_scope().is_some(),
@@ -202,7 +203,9 @@ pub(crate) fn symbol_visual_bounds(
         let field_bounds = text_bounds(
             field.at,
             field.rotation_deg,
-            field.value.chars().count().max(1) as f64 * field.effects.font_size.x.abs() * 0.6,
+            field.value.chars().count().max(1) as f64
+                * field.effects.font_size.x.abs()
+                * ESTIMATED_TEXT_WIDTH_EM,
             field.effects.font_size.y.abs(),
             field.justify.unwrap_or(FieldJustify::centered()),
         );
@@ -257,7 +260,8 @@ fn movable_field_layouts(symbol: &Symbol) -> Vec<FieldLayout> {
         .filter(|field| !field.hidden && !field.do_not_autoplace && !field.value.trim().is_empty())
         .map(|field| {
             let font = field.effects.font_size;
-            let width = field.value.chars().count().max(1) as f64 * font.x.abs() * 0.6;
+            let width =
+                field.value.chars().count().max(1) as f64 * font.x.abs() * ESTIMATED_TEXT_WIDTH_EM;
             FieldLayout {
                 name: field.name.clone(),
                 width: width.max(font.x.abs()),
@@ -383,17 +387,17 @@ fn transform_local(mut point: Point, placed: &Symbol) -> Point {
     symbol::transform_point(point, placed)
 }
 
-fn symbol_pin_bounds(pins: &[symbol::SymbolPin], include_hidden: bool) -> Option<Bounds> {
+fn visible_pin_bounds(pins: &[symbol::SymbolPin]) -> Option<Bounds> {
     Bounds::from_points(
         pins.iter()
-            .filter(|pin| !pin.hidden || include_hidden)
+            .filter(|pin| !pin.hidden)
             .flat_map(|pin| [pin.point, pin.body_point]),
     )
 }
 
-fn pin_side_occupancy(pins: &[symbol::SymbolPin], include_hidden: bool) -> [SideOccupancy; 4] {
+fn visible_pin_side_occupancy(pins: &[symbol::SymbolPin]) -> [SideOccupancy; 4] {
     let mut occupancy = [SideOccupancy::default(); 4];
-    for pin in pins.iter().filter(|pin| !pin.hidden || include_hidden) {
+    for pin in pins.iter().filter(|pin| !pin.hidden) {
         let side = side_from_spin(pin.outward_spin);
         let bounds = Bounds::from_points([pin.point, pin.body_point]).expect("two pin points");
         let slot = &mut occupancy[side_index(side)];

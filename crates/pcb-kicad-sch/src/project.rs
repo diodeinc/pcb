@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeSet,
     fs,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
 };
 
 use anyhow::{Context, Result, bail};
@@ -9,7 +9,7 @@ use pcb_sch::{AttributeValue, Schematic};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::{SchDocument, SchItem, parse_kicad_sch_page};
+use crate::{SchDocument, SchItem, identity::normalize_path, parse_kicad_sch_page};
 
 /// A KiCad schematic project loaded from one project directory.
 #[derive(Debug, Clone)]
@@ -193,27 +193,6 @@ fn legacy_project_root(project_file: &Path) -> Result<Vec<ProjectRoot>> {
     }])
 }
 
-fn normalize_path(path: &Path) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if matches!(
-                    normalized.components().next_back(),
-                    Some(Component::Normal(_))
-                ) {
-                    normalized.pop();
-                } else if !path.is_absolute() {
-                    normalized.push("..");
-                }
-            }
-            other => normalized.push(other.as_os_str()),
-        }
-    }
-    normalized
-}
-
 /// Resolve the root module's `schematic_path` property, if present.
 pub fn schematic_project_path(netlist: &Schematic) -> Result<Option<PathBuf>> {
     let Some(root) = netlist
@@ -232,7 +211,7 @@ pub fn schematic_project_path(netlist: &Schematic) -> Result<Option<PathBuf>> {
     netlist.resolve_package_uri(path).map(Some)
 }
 
-fn files_with_extension(directory: &Path, extension: &str) -> Result<Vec<PathBuf>> {
+pub(crate) fn files_with_extension(directory: &Path, extension: &str) -> Result<Vec<PathBuf>> {
     let entries = fs::read_dir(directory)
         .with_context(|| format!("failed to read {}", directory.display()))?;
     let mut files = Vec::new();

@@ -11,7 +11,9 @@ use crate::{
         SchematicIssue, analyze_connectivity, expected_reconcilable_connectivity, logical_name,
         observed_reconcilable_connectivity, terminals_match,
     },
-    connectivity::{ConnectivityGraph, ConnectivityItemRef, IslandProvenance, Terminal},
+    connectivity::{
+        ConnectivityGraph, ConnectivityItemRef, IslandProvenance, Terminal, named_connected_nets,
+    },
 };
 
 /// A deterministic, UUID-addressed connectivity repair decision.
@@ -22,6 +24,12 @@ use crate::{
 pub struct ConnectivityRepairPlan {
     removals: BTreeSet<ConnectivityItemRef>,
     reconnect_nets: BTreeSet<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RepairScope {
+    ExistingIssues,
+    InitializeAllNets,
 }
 
 impl ConnectivityRepairPlan {
@@ -43,23 +51,20 @@ pub fn plan_connectivity_repair(
     document: &SchDocument,
     netlist: &Schematic,
 ) -> Result<ConnectivityRepairPlan> {
-    plan_connectivity_repair_with(document, netlist, false)
+    plan_connectivity_repair_with(document, netlist, RepairScope::ExistingIssues)
 }
 
 pub(crate) fn plan_connectivity_repair_with(
     document: &SchDocument,
     netlist: &Schematic,
-    initialize_all_nets: bool,
+    scope: RepairScope,
 ) -> Result<ConnectivityRepairPlan> {
     let expected = expected_reconcilable_connectivity(document, netlist)?;
     let observed = observed_reconcilable_connectivity(document, netlist)?;
     let analysis = analyze_connectivity(&expected, &observed.graph);
     let mut removals = BTreeSet::new();
-    let mut reconnect_nets = if initialize_all_nets {
-        netlist
-            .nets
-            .values()
-            .filter(|net| net.kind != "NotConnected" && !net.name.is_empty())
+    let mut reconnect_nets = if scope == RepairScope::InitializeAllNets {
+        named_connected_nets(netlist)
             .map(|net| net.name.clone())
             .collect()
     } else {

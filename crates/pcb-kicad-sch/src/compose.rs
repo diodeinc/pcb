@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, bail};
-use pcb_sch::{AttributeValue, Instance, InstanceKind, InstanceRef, Schematic};
+use pcb_sch::{Instance, InstanceKind, Schematic};
 
 use crate::{
     CONNECTION_GRID_MM, GEOMETRY_EPS_MM, Label, LabelKind, LabelShape, LabelSpin, Paper, Point,
@@ -10,10 +10,11 @@ use crate::{
     analysis::{analyze_schematic, terminals_match},
     component_slots,
     connectivity::{
-        ComponentIdentity, ConnectivityItemRef, Terminal, reduce_visible_with_provenance,
+        ComponentIdentity, ConnectivityItemRef, PinVisibility, Terminal, named_connected_nets,
+        reduce_with_provenance,
     },
     deterministic_uuid, field_autoplace,
-    repair::{plan_connectivity_repair_with, remove_items},
+    repair::{RepairScope, plan_connectivity_repair_with, remove_items},
     root_interface, root_page_id, symbol,
 };
 
@@ -24,7 +25,7 @@ const DEFAULT_TITLE_BLOCK_HEIGHT_MM: f64 = 34.0;
 const PACKING_MARGIN_CELLS: i32 = 5;
 const PACKING_CLEARANCE_CELLS: i32 = 2;
 const LABEL_SHAPE_LENGTH_MM: f64 = 2.54;
-const TEXT_WIDTH_EM: f64 = 0.8;
+const ESTIMATED_LABEL_WIDTH_EM: f64 = 0.8;
 
 pub(crate) fn reconcile_document(
     existing: Option<&SchDocument>,
@@ -128,7 +129,12 @@ pub(crate) fn reconcile_document(
         return Ok(document);
     }
 
-    repair_connectivity(&mut document, netlist, &placed, default_page, creating)?;
+    let repair_scope = if creating {
+        RepairScope::InitializeAllNets
+    } else {
+        RepairScope::ExistingIssues
+    };
+    repair_connectivity(&mut document, netlist, &placed, default_page, repair_scope)?;
     Ok(document)
 }
 
@@ -222,10 +228,7 @@ fn pack_generated_symbols(
     if relocatable_slots.is_empty() {
         return Ok(());
     }
-    let all_nets = netlist
-        .nets
-        .values()
-        .filter(|net| net.kind != "NotConnected" && !net.name.is_empty())
+    let all_nets = named_connected_nets(netlist)
         .map(|net| net.name.clone())
         .collect();
     let targets = connectivity_targets(netlist, placed, &all_nets)?;
@@ -488,7 +491,7 @@ fn component_envelope(
 
 fn net_label_bounds(net_name: &str, target: &PinTarget) -> field_autoplace::Bounds {
     let text_height = crate::TextEffects::default().font_size.y.abs();
-    let length = text_visual_length(net_name);
+    let length = estimated_label_width(net_name);
     let half_height = text_height * 0.5;
     let (min, max) = match target.spin {
         LabelSpin::Left => (
@@ -755,10 +758,7 @@ fn refresh_generated_presentation(
     placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
     root_page: usize,
 ) -> Result<()> {
-    let all_nets = netlist
-        .nets
-        .values()
-        .filter(|net| net.kind != "NotConnected" && !net.name.is_empty())
+    let all_nets = named_connected_nets(netlist)
         .map(|net| net.name.clone())
         .collect();
     add_connectivity_labels(
@@ -776,9 +776,9 @@ fn repair_connectivity(
     netlist: &Schematic,
     placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
     root_page: usize,
-    initialize_all_nets: bool,
+    scope: RepairScope,
 ) -> Result<()> {
-    let plan = plan_connectivity_repair_with(document, netlist, initialize_all_nets)?;
+    let plan = plan_connectivity_repair_with(document, netlist, scope)?;
     remove_items(document, plan.removals())?;
     add_connectivity_labels(
         document,
@@ -896,7 +896,7 @@ fn sync_net_labels(
             })
         })
         .collect::<BTreeSet<_>>();
-    let observed = reduce_visible_with_provenance(document)?;
+    let observed = reduce_with_provenance(document, PinVisibility::VisibleOnly)?;
 
     for (net_name, targets) in targets_by_net {
         for target in targets.iter().filter(|target| target.hidden) {
@@ -983,11 +983,7 @@ fn connectivity_targets(
     target_nets: &BTreeSet<String>,
 ) -> Result<BTreeMap<String, Vec<PinTarget>>> {
     let mut anchors_by_net = BTreeMap::<String, Vec<PinTarget>>::new();
-    let mut nets = netlist
-        .nets
-        .values()
-        .filter(|net| net.kind != "NotConnected" && !net.name.is_empty())
-        .collect::<Vec<_>>();
+    let mut nets = named_connected_nets(netlist).collect::<Vec<_>>();
     nets.sort_by(|a, b| a.name.cmp(&b.name));
     for net in &nets {
         if !target_nets.contains(&net.name) {
@@ -1000,7 +996,7 @@ fn connectivity_targets(
             };
             let component_path = crate::canonical_component_path(&component_ref.instance_path)
                 .context("net terminal component has no canonical path")?;
-            let pin_numbers = pads_for_port(netlist, port);
+            let pin_numbers = component_slots::port_pad_numbers(netlist, port);
             let targets = resolve_pin_targets(placed, &component_path, &pin_name, &pin_numbers)?;
             anchors_by_net
                 .entry(net.name.clone())
@@ -1052,8 +1048,8 @@ fn interface_anchors(
     let label_height = crate::TextEffects::default().font_size.y.abs();
     let mut result = Vec::with_capacity(ports.len());
     for (net_name, port_name) in ports {
-        let net_label_width = text_visual_length(net_name);
-        let hierarchical_width = shaped_label_visual_length(port_name);
+        let net_label_width = estimated_label_width(net_name);
+        let hierarchical_width = estimated_shaped_label_width(port_name);
         let relative = GridRect::from_bounds(
             field_autoplace::Bounds::from_points([
                 Point::new(-net_label_width, -label_height * 0.5),
@@ -1076,13 +1072,13 @@ fn interface_anchors(
     Ok(result)
 }
 
-fn text_visual_length(text: &str) -> f64 {
+fn estimated_label_width(text: &str) -> f64 {
     let font_height = crate::TextEffects::default().font_size.y.abs();
-    text.chars().count().max(1) as f64 * font_height * TEXT_WIDTH_EM
+    text.chars().count().max(1) as f64 * font_height * ESTIMATED_LABEL_WIDTH_EM
 }
 
-fn shaped_label_visual_length(text: &str) -> f64 {
-    text_visual_length(text) + LABEL_SHAPE_LENGTH_MM
+fn estimated_shaped_label_width(text: &str) -> f64 {
+    estimated_label_width(text) + LABEL_SHAPE_LENGTH_MM
 }
 
 fn paper_dimensions(paper: &Paper) -> Result<(f64, f64)> {
@@ -1115,17 +1111,10 @@ fn paper_dimensions(paper: &Paper) -> Result<(f64, f64)> {
 }
 
 fn contains_id(document: &SchDocument, id: &str) -> bool {
-    document.pages.iter().any(|page| {
-        page.items.iter().any(|item| match item {
-            SchItem::Symbol(item) => item.id == id,
-            SchItem::Wire(item) => item.id == id,
-            SchItem::Junction(item) => item.id == id,
-            SchItem::NoConnect(item) => item.id == id,
-            SchItem::Label(item) => item.id == id,
-            SchItem::Sheet(item) => item.id == id,
-            SchItem::Unsupported(_) => false,
-        })
-    })
+    document
+        .pages
+        .iter()
+        .any(|page| page.items.iter().any(|item| item.id() == Some(id)))
 }
 
 fn remove_label_by_id(document: &mut SchDocument, id: &str) {
@@ -1139,26 +1128,8 @@ fn upsert_label(document: &mut SchDocument, page_index: usize, label: Label) -> 
     let mut found = Vec::new();
     for (found_page, page) in document.pages.iter().enumerate() {
         for (item_index, item) in page.items.iter().enumerate() {
-            match item {
-                SchItem::Label(existing) if existing.id == label.id => {
-                    found.push((found_page, item_index, true))
-                }
-                SchItem::Symbol(symbol) if symbol.id == label.id => {
-                    found.push((found_page, item_index, false))
-                }
-                SchItem::Wire(wire) if wire.id == label.id => {
-                    found.push((found_page, item_index, false))
-                }
-                SchItem::Junction(junction) if junction.id == label.id => {
-                    found.push((found_page, item_index, false))
-                }
-                SchItem::NoConnect(no_connect) if no_connect.id == label.id => {
-                    found.push((found_page, item_index, false))
-                }
-                SchItem::Sheet(sheet) if sheet.id == label.id => {
-                    found.push((found_page, item_index, false))
-                }
-                _ => {}
+            if item.id() == Some(label.id.as_str()) {
+                found.push((found_page, item_index, matches!(item, SchItem::Label(_))));
             }
         }
     }
@@ -1207,17 +1178,8 @@ fn upsert_wire(document: &mut SchDocument, page_index: usize, wire: Wire) -> Res
     let mut found = Vec::new();
     for (found_page, page) in document.pages.iter().enumerate() {
         for (item_index, item) in page.items.iter().enumerate() {
-            let (id, is_wire) = match item {
-                SchItem::Symbol(item) => (&item.id, false),
-                SchItem::Wire(item) => (&item.id, true),
-                SchItem::Junction(item) => (&item.id, false),
-                SchItem::NoConnect(item) => (&item.id, false),
-                SchItem::Label(item) => (&item.id, false),
-                SchItem::Sheet(item) => (&item.id, false),
-                SchItem::Unsupported(_) => continue,
-            };
-            if id == &wire.id {
-                found.push((found_page, item_index, is_wire));
+            if item.id() == Some(wire.id.as_str()) {
+                found.push((found_page, item_index, matches!(item, SchItem::Wire(_))));
             }
         }
     }
@@ -1252,23 +1214,6 @@ fn upsert_wire(document: &mut SchDocument, page_index: usize, wire: Wire) -> Res
     }
     document.pages[page_index].items.push(SchItem::Wire(wire));
     Ok(())
-}
-
-fn pads_for_port(netlist: &Schematic, port: &InstanceRef) -> BTreeSet<String> {
-    let Some(instance) = netlist.instances.get(port) else {
-        return BTreeSet::new();
-    };
-    let Some(AttributeValue::Array(values)) = instance.attributes.get("pads") else {
-        return BTreeSet::new();
-    };
-    values
-        .iter()
-        .filter_map(|value| match value {
-            AttributeValue::String(value) | AttributeValue::Port(value) => Some(value.clone()),
-            AttributeValue::Number(value) => Some(value.to_string()),
-            _ => None,
-        })
-        .collect()
 }
 
 fn resolve_pin_targets(

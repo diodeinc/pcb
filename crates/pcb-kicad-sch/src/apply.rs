@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use crate::{
     KicadProject, SchDocument, analysis::analyze_schematic, compose::reconcile_document,
-    patch::patch_page_source, schematic_project_path,
+    patch::patch_page_source, project::files_with_extension, schematic_project_path,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -38,11 +38,8 @@ pub fn apply_linked_schematic(netlist: &Schematic) -> Result<Option<SchematicApp
     crate::component_slots::validate_symbol_library_versions(netlist)?;
     match project_state(&path)? {
         ProjectState::Complete(project) => apply_existing(project, netlist).map(Some),
-        ProjectState::Uninitialized(project_file) => {
-            initialize_project(project_file, false, netlist).map(Some)
-        }
-        ProjectState::Missing(project_file) => {
-            initialize_project(project_file, true, netlist).map(Some)
+        ProjectState::Uninitialized(project_file) | ProjectState::Missing(project_file) => {
+            initialize_project(project_file, netlist).map(Some)
         }
     }
 }
@@ -156,11 +153,7 @@ struct PendingWrite {
     next: String,
 }
 
-fn initialize_project(
-    project_file: PathBuf,
-    create_project_file: bool,
-    netlist: &Schematic,
-) -> Result<SchematicApplyResult> {
+fn initialize_project(project_file: PathBuf, netlist: &Schematic) -> Result<SchematicApplyResult> {
     let directory = project_file
         .parent()
         .context("schematic project path has no parent directory")?
@@ -182,14 +175,13 @@ fn initialize_project(
     let document = reconcile_document(None, netlist, file_name)?;
     verify_document(&document, netlist, "generated schematic")?;
     let schematic_source = document.to_kicad_sch()?;
-    let original_project = if create_project_file {
-        None
-    } else {
-        Some(
+    let original_project = project_file
+        .exists()
+        .then(|| {
             fs::read_to_string(&project_file)
-                .with_context(|| format!("failed to read {}", project_file.display()))?,
-        )
-    };
+                .with_context(|| format!("failed to read {}", project_file.display()))
+        })
+        .transpose()?;
     let project_source = project_with_root_schematic(
         original_project
             .as_deref()
@@ -296,22 +288,6 @@ fn project_has_single_missing_root(project_file: &Path) -> Result<bool> {
         _ => return Ok(false),
     };
     Ok(!root.is_file())
-}
-
-fn files_with_extension(directory: &Path, extension: &str) -> Result<Vec<PathBuf>> {
-    let mut files = Vec::new();
-    for entry in fs::read_dir(directory)
-        .with_context(|| format!("failed to read {}", directory.display()))?
-    {
-        let path = entry
-            .with_context(|| format!("failed to read an entry in {}", directory.display()))?
-            .path();
-        if path.extension().and_then(|found| found.to_str()) == Some(extension) {
-            files.push(path);
-        }
-    }
-    files.sort();
-    Ok(files)
 }
 
 fn verify_document(document: &SchDocument, netlist: &Schematic, description: &str) -> Result<()> {

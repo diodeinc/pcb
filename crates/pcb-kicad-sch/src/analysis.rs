@@ -9,8 +9,8 @@ use crate::{
     SchDocument, SchItem, SymbolSlotKey,
     connectivity::{
         ComponentIdentity, ComponentOrigin, ConnectionGroup, ConnectionOrigin, ConnectivityGraph,
-        ConnectivityItemRef, IslandProvenance, IslandRef, KiCadConnectivity, SymbolLocation,
-        Terminal, not_connected_terminals, reduce_visible_with_provenance,
+        ConnectivityItemRef, IslandProvenance, IslandRef, KiCadConnectivity, PinVisibility,
+        SymbolLocation, Terminal, not_connected_terminals, reduce_with_provenance,
     },
     symbol,
 };
@@ -115,7 +115,7 @@ pub(crate) fn observed_reconcilable_connectivity(
     document: &SchDocument,
     netlist: &Schematic,
 ) -> anyhow::Result<KiCadConnectivity> {
-    let mut observed = reduce_visible_with_provenance(document)?;
+    let mut observed = reduce_with_provenance(document, PinVisibility::VisibleOnly)?;
     let not_connected = not_connected_terminals(netlist);
     let islands = &observed.islands;
     observed

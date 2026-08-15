@@ -38,7 +38,7 @@ pub enum ComponentIdentity {
     KiCadSymbol(SymbolLocation),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ConnectionGroup {
     /// Logical labels and power-symbol names that identify this connection.
     /// KiCad sheet-pin and hierarchical-label aliases are topology only and

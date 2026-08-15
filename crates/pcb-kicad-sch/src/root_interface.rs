@@ -21,11 +21,16 @@ pub(crate) fn ports_by_net(netlist: &Schematic) -> Result<BTreeMap<String, BTree
         bail!("root __signature.parameters must be an array");
     };
 
-    let net_name_by_id = netlist
-        .nets
-        .values()
-        .map(|net| (net.id as i64, net.name.clone()))
-        .collect::<BTreeMap<_, _>>();
+    let mut net_name_by_id = BTreeMap::new();
+    for net in netlist.nets.values() {
+        if let Some(previous) = net_name_by_id.insert(net.id as i64, net.name.clone()) {
+            bail!(
+                "nets '{previous}' and '{}' have the same id {}",
+                net.name,
+                net.id
+            );
+        }
+    }
     let mut ports = BTreeMap::new();
     for parameter in parameters {
         let is_config = parameter
@@ -48,10 +53,16 @@ pub(crate) fn ports_by_net(netlist: &Schematic) -> Result<BTreeMap<String, BTree
             io_name,
             &net_name_by_id,
             &mut ports,
-            true,
+            ElectricalRequirement::Required,
         )?;
     }
     Ok(ports)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ElectricalRequirement {
+    Required,
+    Optional,
 }
 
 fn collect_ports(
@@ -60,7 +71,7 @@ fn collect_ports(
     io_name: &str,
     net_name_by_id: &BTreeMap<i64, String>,
     ports: &mut BTreeMap<String, BTreeSet<String>>,
-    require_electrical_value: bool,
+    requirement: ElectricalRequirement,
 ) -> Result<()> {
     if let Some(net) = value.get("Net").and_then(Value::as_object) {
         let Some(id) = net.get("id").and_then(Value::as_i64) else {
@@ -89,7 +100,7 @@ fn collect_ports(
         .and_then(|value| value.get("fields"))
         .and_then(Value::as_object)
     else {
-        if require_electrical_value {
+        if requirement == ElectricalRequirement::Required {
             bail!("root signature io {io_name} is neither a Net nor an Interface");
         }
         return Ok(());
@@ -110,7 +121,7 @@ fn collect_ports(
             &nested_name,
             net_name_by_id,
             ports,
-            false,
+            ElectricalRequirement::Optional,
         )?;
     }
     Ok(())
