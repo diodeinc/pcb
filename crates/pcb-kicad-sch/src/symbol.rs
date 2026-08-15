@@ -111,6 +111,19 @@ impl ParsedSymbolDefinition {
         self.power_scope
     }
 
+    pub fn power_input_units(&self) -> Vec<u32> {
+        self.unit_indices
+            .iter()
+            .copied()
+            .filter(|unit| {
+                self.sections.iter().any(|section| {
+                    matches_unit(section.unit, *unit)
+                        && section.pins.iter().any(PlacedPin::is_power_input)
+                })
+            })
+            .collect()
+    }
+
     pub fn unit_indices(&self) -> &[u32] {
         &self.unit_indices
     }

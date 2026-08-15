@@ -14,7 +14,7 @@ use crate::{
         ComponentIdentity, ConnectivityItemRef, PinVisibility, Terminal, named_connected_nets,
         reduce_with_provenance,
     },
-    deterministic_uuid, field_autoplace, hierarchy,
+    deterministic_uuid, field_autoplace, hierarchy, net_symbols,
     repair::{RepairScope, plan_connectivity_repair_with, remove_items},
     root_interface, root_page_id, symbol,
 };
@@ -60,6 +60,7 @@ pub(crate) fn reconcile_document(
     let existing_slots = existing_slot_locations(&document);
     let instances = component_instances(netlist)?;
     let slots = component_slots::component_symbol_slots(netlist)?;
+    let net_symbol_specs = net_symbols::specs(netlist)?;
     let mut selected_existing = BTreeMap::new();
     for slot in &slots {
         if let Some(location) = select_existing_symbol(slot, existing_slots.get(slot)) {
@@ -93,10 +94,11 @@ pub(crate) fn reconcile_document(
     )?;
     materialize_hierarchy(&mut document, netlist, &hierarchy)?;
 
-    clear_projected_libraries(&mut document);
+    let retained_power_symbols = power_symbol_locations(&document)?;
+    retain_power_symbol_definitions(&mut document, &retained_power_symbols);
 
     let mut placed = BTreeMap::new();
-    let mut retained_symbol_locations = BTreeSet::new();
+    let mut retained_symbol_locations = retained_power_symbols;
     for slot in &slots {
         let instance = instances.get(slot.component_path()).with_context(|| {
             format!(
@@ -178,7 +180,13 @@ pub(crate) fn reconcile_document(
 
     add_hierarchy_connectivity(&mut document, netlist, &placed, &hierarchy)?;
 
-    refresh_generated_presentation(&mut document, netlist, &placed, default_page)?;
+    refresh_generated_presentation(
+        &mut document,
+        netlist,
+        &placed,
+        &net_symbol_specs,
+        default_page,
+    )?;
 
     if !creating && analyze_schematic(&document, netlist)?.is_equivalent() {
         return Ok(document);
@@ -189,16 +197,59 @@ pub(crate) fn reconcile_document(
     } else {
         RepairScope::ExistingIssues
     };
-    repair_connectivity(&mut document, netlist, &placed, default_page, repair_scope)?;
+    repair_connectivity(
+        &mut document,
+        netlist,
+        &placed,
+        &net_symbol_specs,
+        default_page,
+        repair_scope,
+    )?;
     Ok(document)
 }
 
-/// Symbols and their cached definitions are a complete projection of the
-/// Zener netlist. Existing symbols contribute reusable placement only; they do
-/// not survive independently in the desired document.
-fn clear_projected_libraries(document: &mut SchDocument) {
-    for page in &mut document.pages {
-        page.library.definitions.clear();
+/// Component symbols are projected from Zener. Explicit KiCad power symbols
+/// are semantic net-name drivers, so they remain available for connectivity
+/// analysis and minimally destructive repair.
+fn power_symbol_locations(document: &SchDocument) -> Result<BTreeSet<(usize, usize)>> {
+    let mut locations = BTreeSet::new();
+    for (page_index, page) in document.pages.iter().enumerate() {
+        for (item_index, item) in page.items.iter().enumerate() {
+            let SchItem::Symbol(symbol) = item else {
+                continue;
+            };
+            let Some(definition) = page.library.definitions.get(&symbol.lib_id) else {
+                continue;
+            };
+            if symbol::ParsedSymbolDefinition::parse(definition)?
+                .power_scope()
+                .is_some()
+            {
+                locations.insert((page_index, item_index));
+            }
+        }
+    }
+    Ok(locations)
+}
+
+fn retain_power_symbol_definitions(
+    document: &mut SchDocument,
+    retained_symbols: &BTreeSet<(usize, usize)>,
+) {
+    for (page_index, page) in document.pages.iter_mut().enumerate() {
+        let retained_definitions = page
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(item_index, _)| retained_symbols.contains(&(page_index, *item_index)))
+            .filter_map(|(_, item)| match item {
+                SchItem::Symbol(symbol) => Some(symbol.lib_id.clone()),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        page.library
+            .definitions
+            .retain(|lib_id, _| retained_definitions.contains(lib_id));
     }
 }
 
@@ -985,6 +1036,16 @@ impl PinTarget {
             self.number
         ))
     }
+
+    fn net_symbol_id(&self, net_name: &str) -> String {
+        deterministic_uuid(format!(
+            "zener:net-symbol:{net_name}:{}:{}:{:.4}:{:.4}",
+            self.slot.symbol_id(),
+            self.number,
+            self.point.x,
+            self.point.y
+        ))
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -997,15 +1058,17 @@ fn refresh_generated_presentation(
     document: &mut SchDocument,
     netlist: &Schematic,
     placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
+    net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
     root_page: usize,
 ) -> Result<()> {
     let all_nets = named_connected_nets(netlist)
         .map(|net| net.name.clone())
         .collect();
-    add_connectivity_labels(
+    add_connectivity_drivers(
         document,
         netlist,
         placed,
+        net_symbol_specs,
         root_page,
         &all_nets,
         ConnectivityUpdate::ExistingOnly,
@@ -1016,19 +1079,23 @@ fn repair_connectivity(
     document: &mut SchDocument,
     netlist: &Schematic,
     placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
+    net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
     root_page: usize,
     scope: RepairScope,
 ) -> Result<()> {
     let plan = plan_connectivity_repair_with(document, netlist, scope)?;
     remove_items(document, plan.removals())?;
-    add_connectivity_labels(
+    add_connectivity_drivers(
         document,
         netlist,
         placed,
+        net_symbol_specs,
         root_page,
         plan.reconnect_nets(),
         ConnectivityUpdate::InsertMissing,
-    )
+    )?;
+    prune_unused_symbol_definitions(document);
+    Ok(())
 }
 
 fn add_hierarchy_connectivity(
@@ -1118,16 +1185,17 @@ fn add_hierarchy_connectivity(
     Ok(())
 }
 
-fn add_connectivity_labels(
+fn add_connectivity_drivers(
     document: &mut SchDocument,
     netlist: &Schematic,
     placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
+    net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
     root_page: usize,
     target_nets: &BTreeSet<String>,
     update: ConnectivityUpdate,
 ) -> Result<()> {
     let anchors_by_net = connectivity_targets(netlist, placed, target_nets)?;
-    sync_net_labels(document, &anchors_by_net, update)?;
+    sync_net_drivers(document, &anchors_by_net, net_symbol_specs, update)?;
 
     let interface_ports = match &netlist.root_ref {
         Some(root) => root_interface::ports_by_net(netlist, root)?,
@@ -1211,14 +1279,14 @@ fn add_connectivity_labels(
     Ok(())
 }
 
-fn sync_net_labels(
+fn sync_net_drivers(
     document: &mut SchDocument,
     targets_by_net: &BTreeMap<String, Vec<PinTarget>>,
+    net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
     update: ConnectivityUpdate,
 ) -> Result<()> {
-    // Local labels connect physical islands only within their sheet instance.
-    // Keep one tool-owned label per otherwise unnamed island and leave user
-    // drivers in control when one is already present.
+    // Adopt any exact existing power symbol or user label. For an unnamed
+    // island, create the Zener net's preferred power symbol or a local label.
     let generated_ids = targets_by_net
         .iter()
         .flat_map(|(net_name, targets)| {
@@ -1299,13 +1367,74 @@ fn sync_net_labels(
                 && (update == ConnectivityUpdate::InsertMissing || had_generated_label)
             {
                 let target = &targets[canonical];
-                let mut label = Label::new(target.label_id(net_name), net_name, target.point);
-                label.spin = target.spin;
-                upsert_label(document, target.page_index, label)?;
+                if let Some(spec) = net_symbol_specs.get(net_name) {
+                    remove_label_by_id(document, &target.label_id(net_name));
+                    let symbol = build_net_symbol(
+                        spec,
+                        net_name,
+                        target.net_symbol_id(net_name),
+                        target.point,
+                    )?;
+                    insert_net_symbol(document, target.page_index, symbol, &spec.definition)?;
+                } else {
+                    let mut label = Label::new(target.label_id(net_name), net_name, target.point);
+                    label.spin = target.spin;
+                    upsert_label(document, target.page_index, label)?;
+                }
             }
         }
     }
+
     Ok(())
+}
+
+fn build_net_symbol(
+    spec: &net_symbols::NetSymbolSpec,
+    net_name: &str,
+    id: String,
+    connection_point: Point,
+) -> Result<Symbol> {
+    let mut fields = spec.definition.default_fields()?;
+    let reference = format!(
+        "#PWR{}",
+        id.chars().filter(|c| *c != '-').collect::<String>()
+    );
+    fields
+        .entry("Reference".to_string())
+        .or_insert_with(|| SymbolField::new("Reference", &reference, Point::default()))
+        .value = reference.clone();
+    fields
+        .entry("Value".to_string())
+        .or_insert_with(|| SymbolField::new("Value", net_name, Point::default()))
+        .value = net_name.to_string();
+    for field in fields.values_mut() {
+        field.at = Point::default();
+    }
+
+    let mut symbol = Symbol {
+        id,
+        lib_id: spec.definition.lib_id.clone(),
+        unit: spec.unit,
+        body_style: 1,
+        at: Point::default(),
+        rotation: Rotation::default(),
+        mirror: None,
+        fields_autoplaced: true,
+        fields,
+        pins: Vec::new(),
+        unsupported: Vec::new(),
+    };
+    reconcile_pin_instances(&mut symbol, &spec.definition, &[])?;
+    symbol.at = Point::new(
+        connection_point.x - spec.pin_offset.x,
+        connection_point.y - spec.pin_offset.y,
+    );
+    for field in symbol.fields.values_mut() {
+        field.at = symbol.at;
+    }
+    field_autoplace::apply_definition_field_styles(&mut symbol, &spec.definition)?;
+    field_autoplace::autoplace_symbol_fields(&mut symbol, &spec.definition)?;
+    Ok(symbol)
 }
 
 fn connectivity_targets(
@@ -1486,6 +1615,52 @@ fn upsert_label(document: &mut SchDocument, page_index: usize, label: Label) -> 
     }
     document.pages[page_index].items.push(SchItem::Label(label));
     Ok(())
+}
+
+fn insert_net_symbol(
+    document: &mut SchDocument,
+    page_index: usize,
+    symbol: Symbol,
+    definition: &SymbolDefinition,
+) -> Result<()> {
+    if contains_id(document, &symbol.id) {
+        bail!(
+            "generated net symbol UUID '{}' is already used by another schematic item",
+            symbol.id
+        );
+    }
+    let page = &mut document.pages[page_index];
+    match page.library.definitions.get(&definition.lib_id) {
+        Some(existing) if existing != definition => bail!(
+            "page '{}' already has a different definition for net symbol '{}'",
+            page.id,
+            definition.lib_id
+        ),
+        Some(_) => {}
+        None => {
+            page.library
+                .definitions
+                .insert(definition.lib_id.clone(), definition.clone());
+        }
+    }
+    page.items.push(SchItem::Symbol(symbol));
+    Ok(())
+}
+
+fn prune_unused_symbol_definitions(document: &mut SchDocument) {
+    for page in &mut document.pages {
+        let used = page
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                SchItem::Symbol(symbol) => Some(symbol.lib_id.as_str()),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        page.library
+            .definitions
+            .retain(|lib_id, _| used.contains(lib_id.as_str()));
+    }
 }
 
 fn upsert_wire(document: &mut SchDocument, page_index: usize, wire: Wire) -> Result<()> {

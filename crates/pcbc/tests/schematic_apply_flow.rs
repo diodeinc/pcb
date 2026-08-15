@@ -23,7 +23,11 @@ fn assert_on_connection_grid(point: Point) {
 }
 
 fn linked_fixture(path: &std::path::Path) -> pcb_sch::Schematic {
-    let mut netlist = common::compile_fixture("analysis", "simple.zen");
+    linked_fixture_from(path, "simple.zen")
+}
+
+fn linked_fixture_from(path: &std::path::Path, entrypoint: &str) -> pcb_sch::Schematic {
+    let mut netlist = common::compile_fixture("analysis", entrypoint);
     let root = netlist.root_ref.clone().unwrap();
     let package_root = path.parent().unwrap();
     netlist
@@ -157,6 +161,36 @@ fn creates_a_verified_project_and_then_makes_no_changes() {
     assert!(!project.document.pages[0].items.iter().any(
         |item| matches!(item, SchItem::Label(label) if matches!(label.kind, LabelKind::Global { .. }))
     ));
+}
+
+#[test]
+fn creates_and_reloads_requested_net_symbols() {
+    let workspace = tempfile::tempdir().unwrap();
+    let project_dir = workspace.path().join("hardware");
+    let netlist = linked_fixture_from(&project_dir, "net_symbols.zen");
+
+    apply_linked_schematic(&netlist).unwrap().unwrap();
+
+    let project = KicadProject::load(&project_dir).unwrap();
+    assert!(project.document.pages[0].items.iter().any(|item| {
+        matches!(item, SchItem::Symbol(symbol)
+            if symbol.field_value("Path").is_none()
+                && symbol.field_value("Value") == Some("GROUND"))
+    }));
+    assert!(
+        !project.document.pages[0]
+            .items
+            .iter()
+            .any(|item| matches!(item, SchItem::Label(label) if label.text == "GROUND"))
+    );
+    assert!(
+        analyze_schematic(&project.document, &netlist)
+            .unwrap()
+            .is_equivalent()
+    );
+
+    let unchanged = apply_linked_schematic(&netlist).unwrap().unwrap();
+    assert!(!unchanged.changed);
 }
 
 #[test]
