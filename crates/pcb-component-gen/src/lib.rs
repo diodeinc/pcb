@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::Result;
 use deunicode::deunicode;
 use minijinja::{Environment, UndefinedBehavior};
 use pcb_eda::{Pin, Symbol};
@@ -148,7 +148,7 @@ pub fn generated_signal_io_names(symbol: &Symbol) -> BTreeMap<String, String> {
             .push(pin);
     }
 
-    signals
+    let base_names: Vec<(String, String)> = signals
         .into_iter()
         .filter_map(|(signal_name, pins)| {
             (!pins_are_only_no_connect(pins)).then(|| {
@@ -156,49 +156,34 @@ pub fn generated_signal_io_names(symbol: &Symbol) -> BTreeMap<String, String> {
                 (signal_name, sanitized_name)
             })
         })
-        .collect()
-}
-
-/// Check that no two distinct signal names sanitize to the same Starlark identifier.
-///
-/// When two pin names collide (e.g. `~CS` and `!CS` both become `N_CS`) the generated
-/// `.zen` file would declare the same `io()` variable twice, which is a Starlark error.
-/// Catching this here gives a clear, actionable message at generation time instead of a
-/// cryptic build failure after the file has already been written to disk.
-fn check_pin_name_collisions(signal_io_names: &BTreeMap<String, String>) -> Result<()> {
-    // Invert the map: sanitized name → list of original signal names that produced it.
-    let mut by_sanitized: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-    for (original, sanitized) in signal_io_names {
-        by_sanitized
-            .entry(sanitized.as_str())
-            .or_default()
-            .push(original.as_str());
-    }
-
-    let collisions: Vec<_> = by_sanitized
-        .into_iter()
-        .filter(|(_, originals)| originals.len() > 1)
         .collect();
 
-    if collisions.is_empty() {
-        return Ok(());
+    uniquify_sanitized_names(base_names)
+}
+
+/// Ensure every sanitized Starlark identifier is unique.
+///
+/// When two distinct signal names sanitize to the same identifier (e.g. `~CS` and `!CS`
+/// both becoming `N_CS`), giving them the same `io()` variable would silently map two
+/// different physical pins onto one net. Instead of failing, later collisions get a
+/// numeric suffix (`N_CS`, `N_CS_2`, `N_CS_3`, ...), assigned in deterministic
+/// (signal name) order.
+fn uniquify_sanitized_names(base_names: Vec<(String, String)>) -> BTreeMap<String, String> {
+    let mut seen_counts: BTreeMap<String, usize> = BTreeMap::new();
+    let mut result = BTreeMap::new();
+
+    for (signal_name, sanitized_name) in base_names {
+        let count = seen_counts.entry(sanitized_name.clone()).or_insert(0);
+        *count += 1;
+        let final_name = if *count == 1 {
+            sanitized_name
+        } else {
+            format!("{sanitized_name}_{count}")
+        };
+        result.insert(signal_name, final_name);
     }
 
-    let details = collisions
-        .iter()
-        .map(|(sanitized, originals)| {
-            let mut sorted = originals.to_vec();
-            sorted.sort();
-            format!("  '{}' ← {}", sanitized, sorted.join(", "))
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    bail!(
-        "pin name collision: multiple pins sanitize to the same Starlark identifier:\n{}\n\
-        Rename the conflicting pins in the KiCad symbol to make them distinct.",
-        details
-    );
+    result
 }
 
 pub fn generate_component_zen(args: GenerateComponentZenArgs<'_>) -> Result<String> {
@@ -220,12 +205,6 @@ fn generate_component_zen_inner(
 ) -> Result<String> {
     let component_name = sanitize_mpn_for_path(args.component_name);
     let signal_io_names = generated_signal_io_names(args.symbol);
-
-    // Detect collisions before rendering so the user gets a clear error rather than
-    // a broken .zen file that fails later during `pcb build`.
-    if explicit_pins.is_none() {
-        check_pin_name_collisions(&signal_io_names)?;
-    }
 
     let pin_groups_vec: Vec<_> = match explicit_pins {
         Some(pins) => pins
@@ -637,6 +616,51 @@ mod tests {
     }
 
     #[test]
+    fn colliding_pin_names_get_uniquified() {
+        // ~CS and !CS both sanitize to N_CS — should not collapse onto one net.
+        let symbol = pcb_eda::Symbol {
+            name: "X".to_string(),
+            pins: vec![
+                pcb_eda::Pin {
+                    name: "~CS".to_string(),
+                    number: "1".to_string(),
+                    ..Default::default()
+                },
+                pcb_eda::Pin {
+                    name: "!CS".to_string(),
+                    number: "2".to_string(),
+                    ..Default::default()
+                },
+                pcb_eda::Pin {
+                    name: "VCC".to_string(),
+                    number: "3".to_string(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let zen = generate_component_zen(GenerateComponentZenArgs {
+            component_name: "MPN1",
+            symbol: &symbol,
+            symbol_filename: "MPN1.kicad_sym",
+            generated_by: "pcb import",
+            include_skip_bom: false,
+            include_skip_pos: false,
+            skip_bom_default: false,
+            skip_pos_default: false,
+        })
+        .unwrap();
+
+        // "!CS" sorts before "~CS" in a BTreeMap, so it claims the base name first.
+        assert!(zen.contains("N_CS = io(Net)"));
+        assert!(zen.contains("N_CS_2 = io(Net)"));
+        assert!(zen.contains("\"!CS\": N_CS"));
+        assert!(zen.contains("\"~CS\": N_CS_2"));
+        assert!(zen.contains("VCC = io(Net)"));
+    }
+
+    #[test]
     fn skips_no_connect_pins_entirely() {
         let symbol = pcb_eda::Symbol {
             name: "X".to_string(),
@@ -679,147 +703,5 @@ mod tests {
         assert!(zen.contains("\"VCC\": VCC"));
         assert!(!zen.contains("NC = io(Net)"));
         assert!(!zen.contains("\"NC\": NC"));
-    }
-
-    #[test]
-    fn collision_tilde_and_bang_prefix_errors() {
-        // ~CS and !CS both sanitize to N_CS — should be caught before any file is written.
-        let symbol = pcb_eda::Symbol {
-            name: "X".to_string(),
-            pins: vec![
-                pcb_eda::Pin {
-                    name: "~CS".to_string(),
-                    number: "1".to_string(),
-                    ..Default::default()
-                },
-                pcb_eda::Pin {
-                    name: "!CS".to_string(),
-                    number: "2".to_string(),
-                    ..Default::default()
-                },
-                pcb_eda::Pin {
-                    name: "VCC".to_string(),
-                    number: "3".to_string(),
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        };
-
-        let err = generate_component_zen(GenerateComponentZenArgs {
-            component_name: "MPN1",
-            symbol: &symbol,
-            symbol_filename: "MPN1.kicad_sym",
-            generated_by: "pcb import",
-            include_skip_bom: false,
-            include_skip_pos: false,
-            skip_bom_default: false,
-            skip_pos_default: false,
-        })
-        .unwrap_err();
-
-        let msg = err.to_string();
-        assert!(
-            msg.contains("pin name collision"),
-            "unexpected error: {msg}"
-        );
-        assert!(
-            msg.contains("N_CS"),
-            "expected colliding identifier in error: {msg}"
-        );
-        assert!(
-            msg.contains("~CS"),
-            "expected original pin name in error: {msg}"
-        );
-        assert!(
-            msg.contains("!CS"),
-            "expected original pin name in error: {msg}"
-        );
-        assert!(msg.contains("Rename"), "expected fix hint in error: {msg}");
-    }
-
-    #[test]
-    fn collision_distinct_signals_same_sanitized_name_errors() {
-        // ENABLE and enable both sanitize to ENABLE — case collision.
-        let symbol = pcb_eda::Symbol {
-            name: "X".to_string(),
-            pins: vec![
-                pcb_eda::Pin {
-                    name: "ENABLE".to_string(),
-                    number: "1".to_string(),
-                    ..Default::default()
-                },
-                pcb_eda::Pin {
-                    name: "enable".to_string(),
-                    number: "2".to_string(),
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        };
-
-        let err = generate_component_zen(GenerateComponentZenArgs {
-            component_name: "MPN1",
-            symbol: &symbol,
-            symbol_filename: "MPN1.kicad_sym",
-            generated_by: "pcb import",
-            include_skip_bom: false,
-            include_skip_pos: false,
-            skip_bom_default: false,
-            skip_pos_default: false,
-        })
-        .unwrap_err();
-
-        let msg = err.to_string();
-        assert!(
-            msg.contains("pin name collision"),
-            "unexpected error: {msg}"
-        );
-        assert!(
-            msg.contains("ENABLE"),
-            "expected colliding identifier in error: {msg}"
-        );
-    }
-
-    #[test]
-    fn no_collision_passes_through() {
-        // Sanity check: a normal symbol with distinct sanitized names should still work fine.
-        let symbol = pcb_eda::Symbol {
-            name: "X".to_string(),
-            pins: vec![
-                pcb_eda::Pin {
-                    name: "~CS".to_string(),
-                    number: "1".to_string(),
-                    ..Default::default()
-                },
-                pcb_eda::Pin {
-                    name: "VCC".to_string(),
-                    number: "2".to_string(),
-                    ..Default::default()
-                },
-                pcb_eda::Pin {
-                    name: "GND".to_string(),
-                    number: "3".to_string(),
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        };
-
-        let zen = generate_component_zen(GenerateComponentZenArgs {
-            component_name: "MPN1",
-            symbol: &symbol,
-            symbol_filename: "MPN1.kicad_sym",
-            generated_by: "pcb import",
-            include_skip_bom: false,
-            include_skip_pos: false,
-            skip_bom_default: false,
-            skip_pos_default: false,
-        })
-        .unwrap();
-
-        assert!(zen.contains("N_CS = io(Net)"));
-        assert!(zen.contains("VCC = io(Net)"));
-        assert!(zen.contains("GND = io(Net)"));
     }
 }
