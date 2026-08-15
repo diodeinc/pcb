@@ -56,6 +56,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Pads with rounded or custom shapes now export as shared Gerber aperture flashes instead of repeated regions, shrinking mask and paste layers.
 - Rounded-rectangle pads export as compact parameterized macro apertures, and hexagon and octagon pads as polygon apertures.
 - Gerber output no longer repeats object attributes on every object.
+- Distinct KiCad signal names that sanitize to the same Starlark identifier are now uniquified (`N_CS`, `N_CS_2`, …) instead of silently merging onto one net.
 
 ## [0.4.25] - 2026-08-07
 
