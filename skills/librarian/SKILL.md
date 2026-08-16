@@ -320,6 +320,8 @@ Use comments for evidence and judgment only: datasheet section/table/equation re
 
 ## Verification
 
+Zener package changes publish automatically after merging to `main`.
+
 Build after each major block. If package imports or dependencies changed, run `pcb sync` first:
 
 ```bash

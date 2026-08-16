@@ -30,6 +30,10 @@ RemoteBlock = Module("github.com/org/repo/modules/RemoteBlock.zen")
 
 An instantiation passes `name=...`, its public `io()` and `config()` inputs, and optional properties such as `dnp`, `properties`, or `schematic`.
 
+`name` establishes instance-path identity, not a fixed reference designator. Refdes-like names are only annotation hints; exact source-reference preservation is not supported.
+
+Use refdes-like names only when the user explicitly asks. In that case, set `prefix=` on the underlying `Component()` to match the refdes prefix.
+
 `Component()` creates a physical part from `name`, `symbol`, and `pins`. The selected symbol is the authority for its footprint, part identity, datasheet, and pins. Keep those properties correct in `.kicad_sym` rather than repeating them in Zener. Omit true `no_connect` pins; they are wired to `NotConnected()` automatically.
 
 Use `Symbol(library, name=...)` for multi-symbol libraries. Use `Part(mpn=..., manufacturer=...)` only when the symbol does not already provide part identity.
