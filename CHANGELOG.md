@@ -12,6 +12,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - BOM generation no longer panics when truncating UTF-8 component descriptions.
 - Nested modules retain group ownership for copied routing and graphics during layout synchronization.
+- Distinct KiCad signal names that sanitize to the same Starlark identifier are now uniquified instead of silently merging onto one net.
 
 ## [0.4.30] - 2026-08-14
 

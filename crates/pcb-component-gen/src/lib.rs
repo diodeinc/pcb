@@ -148,12 +148,22 @@ pub fn generated_signal_io_names(symbol: &Symbol) -> BTreeMap<String, String> {
             .push(pin);
     }
 
+    // Distinct signal names can sanitize to the same identifier (e.g. `~CS` and `!CS`
+    // both become `N_CS`). Track assigned names so a suffix like `N_CS_2` cannot collide
+    // with another signal's natural sanitized name.
+    let mut used = BTreeSet::new();
     signals
         .into_iter()
         .filter_map(|(signal_name, pins)| {
             (!pins_are_only_no_connect(pins)).then(|| {
-                let sanitized_name = sanitize_pin_name(&signal_name);
-                (signal_name, sanitized_name)
+                let base = sanitize_pin_name(&signal_name);
+                let mut name = base.clone();
+                let mut n = 2;
+                while !used.insert(name.clone()) {
+                    name = format!("{base}_{n}");
+                    n += 1;
+                }
+                (signal_name, name)
             })
         })
         .collect()
@@ -586,6 +596,85 @@ mod tests {
         assert!(!zen.contains("B = io(Net)"));
         assert!(!zen.contains("\"B\": B"));
         assert!(zen.contains("C = io(Net)"));
+    }
+
+    #[test]
+    fn colliding_pin_names_get_uniquified() {
+        // ~CS and !CS both sanitize to N_CS — should not collapse onto one net.
+        let symbol = pcb_eda::Symbol {
+            name: "X".to_string(),
+            pins: vec![
+                pcb_eda::Pin {
+                    name: "~CS".to_string(),
+                    number: "1".to_string(),
+                    ..Default::default()
+                },
+                pcb_eda::Pin {
+                    name: "!CS".to_string(),
+                    number: "2".to_string(),
+                    ..Default::default()
+                },
+                pcb_eda::Pin {
+                    name: "VCC".to_string(),
+                    number: "3".to_string(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let zen = generate_component_zen(GenerateComponentZenArgs {
+            component_name: "MPN1",
+            symbol: &symbol,
+            symbol_filename: "MPN1.kicad_sym",
+            generated_by: "pcb import",
+            include_skip_bom: false,
+            include_skip_pos: false,
+            skip_bom_default: false,
+            skip_pos_default: false,
+        })
+        .unwrap();
+
+        // "!CS" sorts before "~CS" in a BTreeMap, so it claims the base name first.
+        assert!(zen.contains("N_CS = io(Net)"));
+        assert!(zen.contains("N_CS_2 = io(Net)"));
+        assert!(zen.contains("\"!CS\": N_CS"));
+        assert!(zen.contains("\"~CS\": N_CS_2"));
+        assert!(zen.contains("VCC = io(Net)"));
+    }
+
+    #[test]
+    fn uniquify_skips_suffixes_that_already_exist() {
+        // `!CS`/`~CS` both sanitize to `N_CS`. The naive `_2` suffix would collide
+        // with a pin that already sanitizes to `N_CS_2`.
+        let symbol = pcb_eda::Symbol {
+            name: "X".to_string(),
+            pins: vec![
+                pcb_eda::Pin {
+                    name: "~CS".to_string(),
+                    number: "1".to_string(),
+                    ..Default::default()
+                },
+                pcb_eda::Pin {
+                    name: "!CS".to_string(),
+                    number: "2".to_string(),
+                    ..Default::default()
+                },
+                pcb_eda::Pin {
+                    name: "N_CS_2".to_string(),
+                    number: "3".to_string(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let names = generated_signal_io_names(&symbol);
+        let unique: BTreeSet<_> = names.values().collect();
+        assert_eq!(unique.len(), names.len());
+        assert_eq!(names.get("!CS").map(String::as_str), Some("N_CS"));
+        assert_eq!(names.get("N_CS_2").map(String::as_str), Some("N_CS_2"));
+        assert_eq!(names.get("~CS").map(String::as_str), Some("N_CS_3"));
     }
 
     #[test]
