@@ -148,42 +148,25 @@ pub fn generated_signal_io_names(symbol: &Symbol) -> BTreeMap<String, String> {
             .push(pin);
     }
 
-    let base_names: Vec<(String, String)> = signals
+    // Distinct signal names can sanitize to the same identifier (e.g. `~CS` and `!CS`
+    // both become `N_CS`). Track assigned names so a suffix like `N_CS_2` cannot collide
+    // with another signal's natural sanitized name.
+    let mut used = BTreeSet::new();
+    signals
         .into_iter()
         .filter_map(|(signal_name, pins)| {
             (!pins_are_only_no_connect(pins)).then(|| {
-                let sanitized_name = sanitize_pin_name(&signal_name);
-                (signal_name, sanitized_name)
+                let base = sanitize_pin_name(&signal_name);
+                let mut name = base.clone();
+                let mut n = 2;
+                while !used.insert(name.clone()) {
+                    name = format!("{base}_{n}");
+                    n += 1;
+                }
+                (signal_name, name)
             })
         })
-        .collect();
-
-    uniquify_sanitized_names(base_names)
-}
-
-/// Ensure every sanitized Starlark identifier is unique.
-///
-/// When two distinct signal names sanitize to the same identifier (e.g. `~CS` and `!CS`
-/// both becoming `N_CS`), giving them the same `io()` variable would silently map two
-/// different physical pins onto one net. Instead of failing, later collisions get a
-/// numeric suffix (`N_CS`, `N_CS_2`, `N_CS_3`, ...), assigned in deterministic
-/// (signal name) order.
-fn uniquify_sanitized_names(base_names: Vec<(String, String)>) -> BTreeMap<String, String> {
-    let mut seen_counts: BTreeMap<String, usize> = BTreeMap::new();
-    let mut result = BTreeMap::new();
-
-    for (signal_name, sanitized_name) in base_names {
-        let count = seen_counts.entry(sanitized_name.clone()).or_insert(0);
-        *count += 1;
-        let final_name = if *count == 1 {
-            sanitized_name
-        } else {
-            format!("{sanitized_name}_{count}")
-        };
-        result.insert(signal_name, final_name);
-    }
-
-    result
+        .collect()
 }
 
 pub fn generate_component_zen(args: GenerateComponentZenArgs<'_>) -> Result<String> {
@@ -658,6 +641,40 @@ mod tests {
         assert!(zen.contains("\"!CS\": N_CS"));
         assert!(zen.contains("\"~CS\": N_CS_2"));
         assert!(zen.contains("VCC = io(Net)"));
+    }
+
+    #[test]
+    fn uniquify_skips_suffixes_that_already_exist() {
+        // `!CS`/`~CS` both sanitize to `N_CS`. The naive `_2` suffix would collide
+        // with a pin that already sanitizes to `N_CS_2`.
+        let symbol = pcb_eda::Symbol {
+            name: "X".to_string(),
+            pins: vec![
+                pcb_eda::Pin {
+                    name: "~CS".to_string(),
+                    number: "1".to_string(),
+                    ..Default::default()
+                },
+                pcb_eda::Pin {
+                    name: "!CS".to_string(),
+                    number: "2".to_string(),
+                    ..Default::default()
+                },
+                pcb_eda::Pin {
+                    name: "N_CS_2".to_string(),
+                    number: "3".to_string(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+
+        let names = generated_signal_io_names(&symbol);
+        let unique: BTreeSet<_> = names.values().collect();
+        assert_eq!(unique.len(), names.len());
+        assert_eq!(names.get("!CS").map(String::as_str), Some("N_CS"));
+        assert_eq!(names.get("N_CS_2").map(String::as_str), Some("N_CS_2"));
+        assert_eq!(names.get("~CS").map(String::as_str), Some("N_CS_3"));
     }
 
     #[test]
