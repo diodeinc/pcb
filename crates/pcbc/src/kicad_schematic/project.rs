@@ -377,14 +377,14 @@ mod tests {
         fs::write(directory.join("demo.kicad_pro"), "{}").unwrap();
         fs::write(
             directory.join("demo.kicad_sch"),
-            schematic_with_child("root", outside.to_str().unwrap()),
+            schematic_with_child("root", "../outside.kicad_sch"),
         )
         .unwrap();
         fs::write(&outside, schematic("outside")).unwrap();
 
         let error = KicadProject::load(&directory).unwrap_err();
 
-        assert!(error.to_string().contains("is not relative"));
+        assert!(error.to_string().contains("escapes project directory"));
     }
 
     #[cfg(unix)]
