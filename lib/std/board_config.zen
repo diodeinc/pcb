@@ -929,7 +929,7 @@ BASE_CONSTRAINTS = Constraints(
     ),
     holes=Holes(
         minimum_through_hole=0.15,  # Min via hole size
-        hole_to_hole_clearance=0.2,  # Via hole-to-hole spacing
+        hole_to_hole_clearance=0.3,  # Via hole-to-hole spacing
     ),
     uvias=Uvias(
         minimum_uvia_diameter=0.15,  # Micro via diameter (if supported)
@@ -960,7 +960,7 @@ BASE_CONSTRAINTS_2OZ = Constraints(
     ),
     holes=Holes(
         minimum_through_hole=0.15,  # Same hole size
-        hole_to_hole_clearance=0.2,  # Same hole spacing
+        hole_to_hole_clearance=0.3,  # Same hole spacing
     ),
     uvias=Uvias(
         minimum_uvia_diameter=0.15,

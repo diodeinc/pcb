@@ -12,6 +12,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `pcb layout --sync-footprints` reloads footprint definitions from source.
 
+### Changed
+
+- Default hole-to-hole clearance is now 0.3 mm.
+
 ### Fixed
 
 - Board-array rail fiducials now distinguish top and bottom surfaces.
