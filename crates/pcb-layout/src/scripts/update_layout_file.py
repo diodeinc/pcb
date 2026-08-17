@@ -506,12 +506,14 @@ class ImportNetlist(Step):
         board: pcbnew.BOARD,
         board_path: Path,
         netlist: JsonNetlistParser,
+        sync_footprints: bool = False,
     ):
         self.state = state
         self.board = board
         self.board_path = Path(board_path)
         self.netlist = netlist
         self.package_roots = netlist.package_roots
+        self.sync_footprints = sync_footprints
         self.footprint_lib_map: dict[str, str] = {}
 
     def _setup_env(self):
@@ -602,6 +604,7 @@ class ImportNetlist(Step):
             board_path=self.board_path,
             footprint_lib_map=self.footprint_lib_map,
             package_roots=self.package_roots,
+            sync_footprints=self.sync_footprints,
         )
 
         # Transfer diagnostics
@@ -613,9 +616,9 @@ class ImportNetlist(Step):
 
         # Log summary
         changeset = result.changeset
-        added_count = len(changeset.added_footprints)
-        removed_count = len(changeset.removed_footprints)
-        logger.info(f"Lens sync complete: +{added_count} -{removed_count} footprints")
+        logger.info(
+            f"Lens sync complete: {changeset.footprint_change_summary} footprints"
+        )
 
 
 ####################################################################################################
@@ -935,6 +938,11 @@ def main():
         metavar="file",
         help="""Output file for storing sync diagnostics JSON.""",
     )
+    parser.add_argument(
+        "--sync-footprints",
+        action="store_true",
+        help="""Reload managed footprint definitions from source; preserve placement and routing.""",
+    )
     args = parser.parse_args()
 
     logger.setLevel(logging.DEBUG)
@@ -967,7 +975,13 @@ def main():
         ]
     else:
         steps = [
-            ImportNetlist(state, board, args.output, netlist),
+            ImportNetlist(
+                state,
+                board,
+                args.output,
+                netlist,
+                sync_footprints=args.sync_footprints,
+            ),
             FinalizeBoard(state, board, snapshot_path, diagnostics_path),
         ]
 

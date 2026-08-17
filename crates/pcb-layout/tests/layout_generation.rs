@@ -1,7 +1,7 @@
 use anyhow::Result;
 use assert_fs::TempDir;
 use assert_fs::prelude::*;
-use pcb_layout::process_layout;
+use pcb_layout::{LayoutOptions, process_layout};
 use pcb_zen_core::DefaultFileProvider;
 use pcb_zen_core::Diagnostics;
 
@@ -71,7 +71,7 @@ macro_rules! layout_test {
 
                 // Process the layout
                 let mut diagnostics = Diagnostics::default();
-                let result = process_layout(&schematic, false, &mut diagnostics)?.unwrap();
+                let result = process_layout(&schematic, LayoutOptions::default(), &mut diagnostics)?.unwrap();
 
                 // Verify the layout was created
                 assert!(result.pcb_file.exists(), "PCB file should exist");

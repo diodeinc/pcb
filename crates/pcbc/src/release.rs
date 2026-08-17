@@ -1321,8 +1321,14 @@ fn run_kicad_drc(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
         .with_context(|| format!("Failed to parse {}", netlist_json_path.display()))?;
 
     // Collect diagnostics from layout sync check (run on staged sources/layout).
-    let Some(layout_result) =
-        pcb_layout::process_layout(&staged_schematic, true, &mut diagnostics)?
+    let Some(layout_result) = pcb_layout::process_layout(
+        &staged_schematic,
+        pcb_layout::LayoutOptions {
+            check: true,
+            ..Default::default()
+        },
+        &mut diagnostics,
+    )?
     else {
         anyhow::bail!("No layout directory for DRC checks");
     };

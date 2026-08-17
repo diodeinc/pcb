@@ -408,6 +408,21 @@ class SyncChangeset:
         return changes
 
     @property
+    def refreshed_footprints(self) -> set[EntityId]:
+        """Footprints replaced from source without an identity change."""
+        return self.added_footprints & self.removed_footprints.keys()
+
+    @property
+    def footprint_change_summary(self) -> str:
+        """Format structural additions, removals, and same-identity refreshes."""
+        refreshed = self.refreshed_footprints
+        summary = (
+            f"+{len(self.added_footprints - refreshed)} "
+            f"-{len(self.removed_footprints.keys() - refreshed)}"
+        )
+        return f"{summary} ~{len(refreshed)}" if refreshed else summary
+
+    @property
     def group_changes(self) -> list[GroupChange]:
         changes: list[GroupChange] = []
         for eid in sorted(self.added_groups, key=lambda e: str(e.path)):
@@ -524,10 +539,12 @@ def build_sync_changeset(
     new_view: BoardView,
     new_complement: BoardComplement,
     old_complement: BoardComplement | None = None,
+    sync_footprints: bool = False,
 ) -> SyncChangeset:
     """Build a SyncChangeset by diffing new and old complements.
 
     Derives what was added/removed by comparing the keys of the complements.
+    Forced refreshes reuse the existing remove-plus-add replacement operation.
     """
     old_fps = old_complement.footprints if old_complement else {}
     old_groups = old_complement.groups if old_complement else {}
@@ -535,8 +552,9 @@ def build_sync_changeset(
     # Compute tracking by diffing complement keys
     new_fp_ids = set(new_complement.footprints.keys())
     old_fp_ids = set(old_fps.keys())
-    added_footprints = new_fp_ids - old_fp_ids
-    removed_fp_ids = old_fp_ids - new_fp_ids
+    refreshed_fp_ids = new_fp_ids & old_fp_ids if sync_footprints else set()
+    added_footprints = (new_fp_ids - old_fp_ids) | refreshed_fp_ids
+    removed_fp_ids = (old_fp_ids - new_fp_ids) | refreshed_fp_ids
 
     new_group_ids = set(new_complement.groups.keys())
     old_group_ids = set(old_groups.keys())

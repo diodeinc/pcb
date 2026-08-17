@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `pcb layout --sync-footprints` reloads footprint definitions from source.
+
 ### Fixed
 
 - BOM generation no longer panics when truncating UTF-8 component descriptions.

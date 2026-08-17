@@ -1,6 +1,6 @@
 use anyhow::{Result, bail};
 use clap::Args;
-use pcb_layout::{process_layout, utils as layout_utils};
+use pcb_layout::{LayoutOptions, process_layout, utils as layout_utils};
 use pcb_sch::Schematic;
 use pcb_ui::prelude::*;
 use serde::Serialize;
@@ -41,6 +41,10 @@ pub struct LayoutArgs {
     /// Resolve existing layout files without updating them
     #[arg(long = "no-sync", conflicts_with = "check")]
     pub no_sync: bool,
+
+    /// Reload managed footprint definitions from source; preserve placement and routing
+    #[arg(long, conflicts_with_all = ["check", "no_sync"])]
+    pub sync_footprints: bool,
 
     /// Output format
     #[arg(short = 'f', long, value_enum, default_value_t = LayoutOutputFormat::Human)]
@@ -133,7 +137,14 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
     };
     let spinner = Spinner::builder(spinner_msg).hidden(hide_progress).start();
     let mut diagnostics = pcb_zen_core::Diagnostics::default();
-    let result = process_layout(&schematic, args.check, &mut diagnostics)?;
+    let result = process_layout(
+        &schematic,
+        LayoutOptions {
+            check: args.check,
+            sync_footprints: args.sync_footprints,
+        },
+        &mut diagnostics,
+    )?;
     spinner.finish();
 
     let Some(layout_result) = result else {

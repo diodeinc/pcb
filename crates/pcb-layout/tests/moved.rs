@@ -1,7 +1,7 @@
 use anyhow::Result;
 use assert_fs::TempDir;
 use assert_fs::prelude::*;
-use pcb_layout::process_layout;
+use pcb_layout::{LayoutOptions, process_layout};
 use pcb_zen_core::{DefaultFileProvider, Diagnostics};
 
 use crate::helpers::*;
@@ -37,7 +37,12 @@ fn test_moved_renames_path_and_preserves_position() -> Result<()> {
     let schematic = output.expect("Zen evaluation should produce a schematic");
 
     let mut layout_diagnostics = Diagnostics::default();
-    let result = process_layout(&schematic, false, &mut layout_diagnostics)?.unwrap();
+    let result = process_layout(
+        &schematic,
+        LayoutOptions::default(),
+        &mut layout_diagnostics,
+    )?
+    .unwrap();
     assert!(
         result.pcb_file.exists(),
         "PCB file should exist after initial sync"
@@ -82,7 +87,12 @@ fn test_moved_renames_path_and_preserves_position() -> Result<()> {
     );
 
     let mut layout_diagnostics2 = Diagnostics::default();
-    let result2 = process_layout(&schematic2, false, &mut layout_diagnostics2)?.unwrap();
+    let result2 = process_layout(
+        &schematic2,
+        LayoutOptions::default(),
+        &mut layout_diagnostics2,
+    )?
+    .unwrap();
     assert!(
         result2.pcb_file.exists(),
         "PCB file should exist after rename sync"
