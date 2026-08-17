@@ -18,7 +18,7 @@ pub mod kicad;
 pub mod model;
 mod net_symbols;
 pub mod reconcile;
-pub mod repair;
+mod repair;
 mod root_interface;
 mod source;
 mod symbol;

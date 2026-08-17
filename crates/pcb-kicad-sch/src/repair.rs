@@ -1,6 +1,6 @@
 //! Pure planning for KiCad connectivity repairs.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Result, bail};
 use pcb_sch::Schematic;
@@ -8,11 +8,13 @@ use pcb_sch::Schematic;
 use crate::{
     SchDocument, SchItem, SchPage,
     analysis::{
-        SchematicIssue, analyze_connectivity, expected_reconcilable_connectivity, logical_name,
+        ConnectivityInspection, SchematicIssue, SchematicIssueKey, analyze_connectivity,
+        expected_reconcilable_connectivity, issue_context, logical_name,
         observed_reconcilable_connectivity, terminals_match,
     },
     connectivity::{
-        ConnectivityGraph, ConnectivityItemRef, PhysicalIsland, Terminal, named_connected_nets,
+        ComponentIdentity, ConnectivityGraph, ConnectivityItemRef, PhysicalIsland, SymbolLocation,
+        Terminal,
     },
 };
 
@@ -21,58 +23,43 @@ use crate::{
 /// Planning does not mutate the input document. Callers can inspect the plan,
 /// apply it to a clone, and verify the result before persisting any changes.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConnectivityRepairPlan {
-    removals: BTreeSet<ConnectivityItemRef>,
-    reconnect_nets: BTreeSet<String>,
+pub(crate) struct ConnectivityRepairPlan {
+    pub(crate) removals: BTreeSet<ConnectivityItemRef>,
+    pub(crate) relocate_symbols: BTreeSet<SymbolLocation>,
+    pub(crate) reconnect_nets: BTreeSet<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RepairScope {
-    ExistingIssues,
-    InitializeAllNets,
-}
-
-impl ConnectivityRepairPlan {
-    pub fn removals(&self) -> &BTreeSet<ConnectivityItemRef> {
-        &self.removals
-    }
-
-    pub fn reconnect_nets(&self) -> &BTreeSet<String> {
-        &self.reconnect_nets
-    }
-}
-
-/// Plan the smallest supported unambiguous repair for an existing schematic.
-///
-/// Unexpected net names have an exact label or power-symbol driver repair. A
-/// short must have one uniquely proven driver, wire, or junction removal; more
-/// destructive or multi-item choices are reported instead of guessed.
-pub fn plan_connectivity_repair(
+pub(crate) fn plan_connectivity_repair(
     document: &SchDocument,
     netlist: &Schematic,
-) -> Result<ConnectivityRepairPlan> {
-    plan_connectivity_repair_with(document, netlist, RepairScope::ExistingIssues)
-}
-
-pub(crate) fn plan_connectivity_repair_with(
-    document: &SchDocument,
-    netlist: &Schematic,
-    scope: RepairScope,
+    inspection: &ConnectivityInspection,
+    selected_keys: &BTreeSet<SchematicIssueKey>,
 ) -> Result<ConnectivityRepairPlan> {
     let expected = expected_reconcilable_connectivity(document, netlist)?;
-    let observed = observed_reconcilable_connectivity(document, netlist)?;
-    let analysis = analyze_connectivity(&expected, &observed.graph);
+    let observed = &inspection.physical;
     let mut removals = BTreeSet::new();
-    let mut reconnect_nets = if scope == RepairScope::InitializeAllNets {
-        named_connected_nets(netlist)
-            .map(|net| net.name.clone())
-            .collect()
-    } else {
-        BTreeSet::new()
-    };
+    let mut relocate_symbols = BTreeSet::new();
+    let selected = inspection
+        .issues
+        .iter()
+        .filter(|issue| selected_keys.contains(&issue.key))
+        .collect::<Vec<_>>();
+    if selected.len() != selected_keys.len() {
+        let found = selected
+            .iter()
+            .map(|issue| issue.key.clone())
+            .collect::<BTreeSet<_>>();
+        let missing = selected_keys.difference(&found).collect::<Vec<_>>();
+        bail!("schematic issues are not present: {missing:?}");
+    }
+    let selected_items = selected
+        .iter()
+        .flat_map(|issue| issue.items.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    let mut reconnect_nets = BTreeSet::new();
 
-    for issue in analysis.issues() {
-        match issue {
+    for context in &selected {
+        match &context.issue {
             SchematicIssue::DisconnectedNet { net_name, .. } => {
                 reconnect_nets.insert(net_name.clone());
             }
@@ -117,9 +104,7 @@ pub(crate) fn plan_connectivity_repair_with(
             | SchematicIssue::MissingSymbol { .. }
             | SchematicIssue::DuplicateSymbol { .. }
             | SchematicIssue::MismatchedSymbolId { .. }
-            | SchematicIssue::UnexpectedSymbol { .. } => {
-                bail!("component reconciliation did not resolve schematic issue: {issue:?}")
-            }
+            | SchematicIssue::UnexpectedSymbol { .. } => {}
         }
     }
 
@@ -131,12 +116,17 @@ pub(crate) fn plan_connectivity_repair_with(
     loop {
         let current_observed = observed_reconcilable_connectivity(&simulated, netlist)?;
         let current_analysis = analyze_connectivity(&expected, &current_observed.graph);
-        let current_problems = repair_problems(current_analysis.issues());
+        let current_problems = repair_problem_counts(current_analysis.issues());
         let Some(issue) = current_analysis.issues().iter().find(|issue| {
-            matches!(
+            if !matches!(
                 issue,
                 SchematicIssue::Shorted { .. } | SchematicIssue::UnexpectedConnection { .. }
-            )
+            ) {
+                return false;
+            }
+            let context = issue_context((*issue).clone(), &current_observed.islands);
+            selected.iter().any(|selected| &selected.issue == *issue)
+                || !context.items.is_disjoint(&selected_items)
         }) else {
             break;
         };
@@ -148,59 +138,133 @@ pub(crate) fn plan_connectivity_repair_with(
             remove_items(&mut next, &BTreeSet::from([candidate.clone()]))?;
             let next_observed = observed_reconcilable_connectivity(&next, netlist)?;
             let next_analysis = analyze_connectivity(&expected, &next_observed.graph);
-            let next_problems = repair_problems(next_analysis.issues());
-            if next_problems.is_subset(&current_problems)
-                && next_problems.len() < current_problems.len()
-            {
+            let next_problems = repair_problem_counts(next_analysis.issues());
+            if strictly_reduces_problems(&current_problems, &next_problems) {
                 valid.push(candidate);
             }
         }
 
-        let candidate = match valid.as_slice() {
-            [candidate] => candidate.clone(),
-            [] => return Err(unrepairable_issue(document, issue)),
-            _ => bail!(
-                "KiCad connectivity has multiple equally minimal repairs: {}; no changes were planned",
-                valid
-                    .iter()
-                    .map(|item| format!("{item:?}"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-        };
-        remove_items(&mut simulated, &BTreeSet::from([candidate.clone()]))?;
-        removals.insert(candidate);
-    }
-
-    let after_removal = analyze_connectivity(
-        &expected,
-        &observed_reconcilable_connectivity(&simulated, netlist)?.graph,
-    );
-    for issue in after_removal.issues() {
-        match issue {
-            SchematicIssue::DisconnectedNet { net_name, .. } => {
-                reconnect_nets.insert(net_name.clone());
-            }
-            SchematicIssue::UnexpectedNet { net_name, .. } => {
-                bail!("removing unexpected net drivers left unexpected KiCad net '{net_name}'")
-            }
-            SchematicIssue::Shorted { .. } | SchematicIssue::UnexpectedConnection { .. } => {
-                unreachable!("repair loop exits only after physical connectivity issues are gone")
-            }
-            SchematicIssue::UnboundSymbol { .. }
-            | SchematicIssue::MissingSymbol { .. }
-            | SchematicIssue::DuplicateSymbol { .. }
-            | SchematicIssue::MismatchedSymbolId { .. }
-            | SchematicIssue::UnexpectedSymbol { .. } => {
-                bail!("component reconciliation did not resolve schematic issue: {issue:?}")
-            }
+        if let [candidate] = valid.as_slice() {
+            remove_items(&mut simulated, &BTreeSet::from([candidate.clone()]))?;
+            removals.insert(candidate.clone());
+            continue;
         }
+
+        let fallback = repair_region_items(issue, &expected, &current_observed.islands);
+        if fallback.is_empty() {
+            let locations = relocation_candidates(document, issue, &current_observed.islands);
+            if locations.is_empty() {
+                return Err(unrepairable_issue(document, issue));
+            }
+            for location in locations {
+                if relocate_symbols.insert(location.clone()) {
+                    remove_items(
+                        &mut simulated,
+                        &BTreeSet::from([ConnectivityItemRef::Symbol {
+                            page_id: location.page_id,
+                            id: location.symbol_id,
+                        }]),
+                    )?;
+                }
+            }
+            continue;
+        }
+        remove_items(&mut simulated, &fallback)?;
+        removals.extend(fallback);
     }
 
     Ok(ConnectivityRepairPlan {
         removals,
+        relocate_symbols,
         reconnect_nets,
     })
+}
+
+fn relocation_candidates(
+    document: &SchDocument,
+    issue: &SchematicIssue,
+    islands: &std::collections::BTreeMap<crate::connectivity::IslandRef, PhysicalIsland>,
+) -> BTreeSet<SymbolLocation> {
+    let mut candidates = BTreeSet::new();
+    let issue_islands = match issue {
+        SchematicIssue::Shorted { islands, .. }
+        | SchematicIssue::UnexpectedConnection { islands, .. } => islands,
+        _ => return BTreeSet::new(),
+    };
+    for island in issue_islands
+        .iter()
+        .filter_map(|island| islands.get(island))
+    {
+        for terminal in &island.terminals {
+            collect_terminal_symbols(document, terminal, &mut candidates);
+        }
+    }
+    candidates
+}
+
+fn collect_terminal_symbols(
+    document: &SchDocument,
+    terminal: &Terminal,
+    candidates: &mut BTreeSet<SymbolLocation>,
+) {
+    let Terminal::ComponentPin { component, .. } = terminal else {
+        return;
+    };
+    match component {
+        ComponentIdentity::KiCadSymbol(location) => {
+            candidates.insert(location.clone());
+        }
+        ComponentIdentity::ManagedPath(path) => {
+            for page in &document.pages {
+                for symbol in page.items.iter().filter_map(|item| match item {
+                    SchItem::Symbol(symbol) => Some(symbol),
+                    _ => None,
+                }) {
+                    if symbol.field_value("Path") == Some(path) {
+                        candidates.insert(SymbolLocation {
+                            page_id: page.id.clone(),
+                            symbol_id: symbol.id.clone(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn repair_region_items(
+    issue: &SchematicIssue,
+    expected: &ConnectivityGraph,
+    islands: &std::collections::BTreeMap<crate::connectivity::IslandRef, PhysicalIsland>,
+) -> BTreeSet<ConnectivityItemRef> {
+    let issue_islands = match issue {
+        SchematicIssue::Shorted { islands, .. }
+        | SchematicIssue::UnexpectedConnection { islands, .. } => islands,
+        _ => return BTreeSet::new(),
+    };
+    let mut removals = BTreeSet::new();
+    for island in issue_islands
+        .iter()
+        .filter_map(|island| islands.get(island))
+        .filter(|island| repair_island(issue, expected, island))
+    {
+        removals.extend(
+            island
+                .items
+                .iter()
+                .filter(|item| item.is_physical_connector())
+                .cloned(),
+        );
+        removals.extend(
+            island
+                .named_drivers
+                .values()
+                .flatten()
+                .filter(|item| item.is_removable_name_driver())
+                .cloned(),
+        );
+    }
+    removals
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -210,28 +274,31 @@ enum RepairProblem {
     UnexpectedConnection(Terminal),
 }
 
-fn repair_problems(issues: &[SchematicIssue]) -> BTreeSet<RepairProblem> {
-    let mut result = BTreeSet::new();
+fn repair_problem_counts(issues: &[SchematicIssue]) -> BTreeMap<RepairProblem, usize> {
+    let mut result = BTreeMap::new();
     for issue in issues {
         match issue {
             SchematicIssue::UnexpectedNet { net_name, .. } => {
-                result.insert(RepairProblem::UnexpectedNet(net_name.clone()));
+                *result
+                    .entry(RepairProblem::UnexpectedNet(net_name.clone()))
+                    .or_default() += 1;
             }
             SchematicIssue::Shorted { net_names, .. } => {
                 let names = net_names.iter().collect::<Vec<_>>();
                 for (index, left) in names.iter().enumerate() {
                     for right in &names[index + 1..] {
-                        result.insert(RepairProblem::Shorted((*left).clone(), (*right).clone()));
+                        *result
+                            .entry(RepairProblem::Shorted((*left).clone(), (*right).clone()))
+                            .or_default() += 1;
                     }
                 }
             }
             SchematicIssue::UnexpectedConnection { terminals, .. } => {
-                result.extend(
-                    terminals
-                        .iter()
-                        .cloned()
-                        .map(RepairProblem::UnexpectedConnection),
-                );
+                for terminal in terminals {
+                    *result
+                        .entry(RepairProblem::UnexpectedConnection(terminal.clone()))
+                        .or_default() += 1;
+                }
             }
             SchematicIssue::DisconnectedNet { .. }
             | SchematicIssue::UnboundSymbol { .. }
@@ -242,6 +309,16 @@ fn repair_problems(issues: &[SchematicIssue]) -> BTreeSet<RepairProblem> {
         }
     }
     result
+}
+
+fn strictly_reduces_problems(
+    before: &BTreeMap<RepairProblem, usize>,
+    after: &BTreeMap<RepairProblem, usize>,
+) -> bool {
+    after
+        .iter()
+        .all(|(problem, count)| count <= before.get(problem).unwrap_or(&0))
+        && after.values().sum::<usize>() < before.values().sum()
 }
 
 fn repair_candidates(

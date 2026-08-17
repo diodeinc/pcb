@@ -1,10 +1,11 @@
 use super::schematic_apply_common as common;
 
-use std::fs;
+use std::{collections::BTreeSet, fs};
 
 use pcb_kicad_sch::{
     Label, LabelKind, LabelShape, LabelSpin, PinInstance, Point, SchItem, SymbolDefinition, Wire,
-    analysis::analyze_schematic,
+    analysis::{SchematicIssue, inspect_schematic},
+    reconcile::plan_repairs,
 };
 use pcb_sch::{ATTR_SCHEMATIC_PATH, ATTR_SYMBOL_FORMAT_VERSION, AttributeValue};
 use pcb_sexpr::Sexpr;
@@ -120,7 +121,9 @@ fn creates_a_verified_project_and_then_makes_no_changes() {
     assert_eq!(fs::read(&unchanged.schematic_files[0]).unwrap(), source);
 
     let project = KicadProject::load(project_dir).unwrap();
-    let analysis = analyze_schematic(&project.document, &netlist).unwrap();
+    let analysis = inspect_schematic(&project.document, &netlist)
+        .unwrap()
+        .analysis;
     assert!(analysis.is_equivalent(), "{:?}", analysis.issues());
 
     let managed_symbols = project.document.pages[0]
@@ -184,8 +187,9 @@ fn creates_and_reloads_requested_net_symbols() {
             .any(|item| matches!(item, SchItem::Label(label) if label.text == "GROUND"))
     );
     assert!(
-        analyze_schematic(&project.document, &netlist)
+        inspect_schematic(&project.document, &netlist)
             .unwrap()
+            .analysis
             .is_equivalent()
     );
 
@@ -245,8 +249,9 @@ fn initializes_each_linked_module_instance_as_its_own_child_sheet() {
         }));
     }
     assert!(
-        analyze_schematic(&project.document, &netlist)
+        inspect_schematic(&project.document, &netlist)
             .unwrap()
+            .analysis
             .is_equivalent()
     );
 
@@ -303,8 +308,9 @@ fn initializes_each_linked_module_instance_as_its_own_child_sheet() {
         }
     }
     assert!(
-        analyze_schematic(&edited.document, &netlist)
+        inspect_schematic(&edited.document, &netlist)
             .unwrap()
+            .analysis
             .is_equivalent()
     );
     for file in edited.document.to_kicad_sch_files() {
@@ -358,8 +364,9 @@ fn adds_an_uninitialized_linked_module_to_an_existing_project() {
     assert!(missing_file.is_file());
     let reloaded = KicadProject::load(&repaired.project_file).unwrap();
     assert!(
-        analyze_schematic(&reloaded.document, &netlist)
+        inspect_schematic(&reloaded.document, &netlist)
             .unwrap()
+            .analysis
             .is_equivalent()
     );
 }
@@ -480,7 +487,9 @@ fn accepts_an_isolated_not_connected_pin() {
     apply_linked_schematic(&netlist).unwrap().unwrap();
 
     let project = KicadProject::load(project_dir).unwrap();
-    let analysis = analyze_schematic(&project.document, &netlist).unwrap();
+    let analysis = inspect_schematic(&project.document, &netlist)
+        .unwrap()
+        .analysis;
     assert!(analysis.is_equivalent(), "{:?}", analysis.issues());
     assert!(
         !project.document.pages[0]
@@ -544,7 +553,9 @@ fn preserves_equivalent_user_connectivity_without_normalizing_labels() {
             .count(),
         2
     );
-    let analysis = analyze_schematic(&repaired.document, &netlist).unwrap();
+    let analysis = inspect_schematic(&repaired.document, &netlist)
+        .unwrap()
+        .analysis;
     assert!(analysis.is_equivalent(), "{:?}", analysis.issues());
 }
 
@@ -581,7 +592,9 @@ fn omits_hidden_pins_from_generated_connectivity() {
             .iter()
             .any(|item| matches!(item, SchItem::Label(label) if label.text == "LEFT"))
     );
-    let analysis = analyze_schematic(&project.document, &netlist).unwrap();
+    let analysis = inspect_schematic(&project.document, &netlist)
+        .unwrap()
+        .analysis;
     assert!(analysis.is_equivalent(), "{:?}", analysis.issues());
 }
 
@@ -637,8 +650,9 @@ fn projects_the_exact_symbol_and_library_definition_set() {
             .contains_key("Test:Unused")
     );
     assert!(
-        analyze_schematic(&repaired.document, &netlist)
+        inspect_schematic(&repaired.document, &netlist)
             .unwrap()
+            .analysis
             .is_equivalent()
     );
 }
@@ -742,7 +756,9 @@ fn initializes_the_missing_schematic_in_an_existing_layout_project() {
         "Simple.kicad_sch"
     );
     let project = KicadProject::load(&created.project_file).unwrap();
-    let analysis = analyze_schematic(&project.document, &netlist).unwrap();
+    let analysis = inspect_schematic(&project.document, &netlist)
+        .unwrap()
+        .analysis;
     assert!(analysis.is_equivalent(), "{:?}", analysis.issues());
 }
 
@@ -810,7 +826,9 @@ fn repairs_component_identity_without_rebuilding_connectivity() {
     assert!(applied.changed);
     assert!(!applied.created);
     let repaired = KicadProject::load(project_dir).unwrap();
-    let analysis = analyze_schematic(&repaired.document, &netlist).unwrap();
+    let analysis = inspect_schematic(&repaired.document, &netlist)
+        .unwrap()
+        .analysis;
     assert!(analysis.is_equivalent(), "{:?}", analysis.issues());
     let repaired_wire_ids = repaired.document.pages[0]
         .items
@@ -864,7 +882,9 @@ fn repairs_a_disconnected_net_without_removing_remaining_wires() {
         })
         .collect::<Vec<_>>();
     assert_eq!(repaired_wire_ids, remaining_wire_ids);
-    let analysis = analyze_schematic(&repaired.document, &netlist).unwrap();
+    let analysis = inspect_schematic(&repaired.document, &netlist)
+        .unwrap()
+        .analysis;
     assert!(analysis.is_equivalent(), "{:?}", analysis.issues());
 }
 
@@ -917,7 +937,9 @@ fn removes_only_the_driver_of_an_unexpected_net() {
         })
         .collect::<Vec<_>>();
     assert_eq!(repaired_label_ids, original_label_ids);
-    let analysis = analyze_schematic(&repaired.document, &netlist).unwrap();
+    let analysis = inspect_schematic(&repaired.document, &netlist)
+        .unwrap()
+        .analysis;
     assert!(analysis.is_equivalent(), "{:?}", analysis.issues());
 }
 
@@ -979,8 +1001,77 @@ fn removes_a_short_without_rebuilding_unaffected_nets() {
         })
         .collect::<Vec<_>>();
     assert_eq!(repaired_label_ids, original_label_ids);
-    let analysis = analyze_schematic(&repaired.document, &netlist).unwrap();
+    let analysis = inspect_schematic(&repaired.document, &netlist)
+        .unwrap()
+        .analysis;
     assert!(analysis.is_equivalent(), "{:?}", analysis.issues());
+}
+
+#[test]
+fn ambiguous_short_uses_the_same_repair_as_the_shared_issue_planner() {
+    let workspace = tempfile::tempdir().unwrap();
+    let project_dir = workspace.path().join("hardware");
+    let netlist = linked_fixture(&project_dir);
+    apply_linked_schematic(&netlist).unwrap().unwrap();
+
+    let mut project = KicadProject::load(&project_dir).unwrap();
+    let label_point = |name: &str| {
+        project.document.pages[0]
+            .items
+            .iter()
+            .find_map(|item| match item {
+                SchItem::Label(label) if label.text == name => Some(label.at),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("generated {name} label"))
+    };
+    let left = label_point("LEFT");
+    let mid = label_point("MID");
+    let bend = Point::new(left.x + 12.7, left.y + 12.7);
+    for (id, a, b) in [("ambiguous-a", left, bend), ("ambiguous-b", bend, mid)] {
+        project.document.pages[0].items.push(SchItem::Wire(Wire {
+            id: id.to_string(),
+            a,
+            b,
+            unsupported: Vec::new(),
+        }));
+    }
+
+    let inspection = inspect_schematic(&project.document, &netlist).unwrap();
+    let short = inspection
+        .issues
+        .iter()
+        .find(|issue| matches!(issue.issue, SchematicIssue::Shorted { .. }))
+        .expect("ambiguous short");
+    let expected = plan_repairs(
+        &project.document,
+        &netlist,
+        &inspection,
+        BTreeSet::from([short.key.clone()]),
+    )
+    .unwrap()
+    .apply(Some(&project.document))
+    .unwrap();
+    fs::write(
+        &project.schematic_files[0],
+        project.document.to_kicad_sch().unwrap(),
+    )
+    .unwrap();
+
+    apply_linked_schematic(&netlist).unwrap().unwrap();
+
+    let repaired = KicadProject::load(project_dir).unwrap();
+    assert_eq!(repaired.document.root_page_ids, expected.root_page_ids);
+    assert_eq!(repaired.document.pages.len(), expected.pages.len());
+    for (repaired, expected) in repaired.document.pages.iter().zip(&expected.pages) {
+        assert_eq!(repaired.id, expected.id);
+        assert_eq!(repaired.file_name, expected.file_name);
+        let mut repaired_items = repaired.items.iter().collect::<Vec<_>>();
+        let mut expected_items = expected.items.iter().collect::<Vec<_>>();
+        repaired_items.sort_by_key(|item| item.id());
+        expected_items.sort_by_key(|item| item.id());
+        assert_eq!(repaired_items, expected_items);
+    }
 }
 
 #[test]
@@ -1033,8 +1124,9 @@ fn refreshes_placed_pin_instances_from_the_netlist_symbol_definition() {
             .any(|pin| { pin.number == preserved_pin.number && pin.id == preserved_pin.id })
     );
     assert!(
-        analyze_schematic(&repaired.document, &netlist)
+        inspect_schematic(&repaired.document, &netlist)
             .unwrap()
+            .analysis
             .is_equivalent()
     );
 }
