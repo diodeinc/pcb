@@ -1,0 +1,51 @@
+"""
+Type: Board (pin-capability model demo)
+Description: Small dev board around the STM32G030 example module. The board
+asks for capabilities (a debug UART, a SPI bus, one LED, one button, one
+analog input) and never names a pin: `pin_solve` inside the MCU module
+assigns instances and pins, and the solved `pin_assignment` / `swap_classes`
+land on the MCU instance as properties.
+"""
+
+load("@stdlib/pinmux.zen", "at")
+load("@stdlib/interfaces.zen", "Uart", "Spi", "Swd")
+
+Mcu = Module("./STM32G030.zen")
+Resistor = Module("@stdlib/generics/Resistor.zen")
+Capacitor = Module("@stdlib/generics/Capacitor.zen")
+Led = Module("@stdlib/generics/Led.zen")
+
+VDD = Power("VDD_3V3", voltage = "3.3V")
+GND = Ground("GND")
+
+# Declaring the logic level on the bus nets is what arms the MCU's
+# logic-level check: a 5V UART here fails the build against VDD=3.3V.
+DEBUG = Uart("DEBUG", TX = Net("DEBUG_TX", voltage = "3.3V"), RX = Net("DEBUG_RX", voltage = "3.3V"))
+FLASH = Spi("FLASH")
+SWD = Swd("SWD")
+LED_CTRL = Net("LED_CTRL")
+LED_K = Net("LED_K")
+VBAT_SENSE = Net("VBAT_SENSE")
+
+Mcu(
+    name = "MCU1",
+    VDD = VDD,
+    VSS = GND,
+    SWD = SWD,
+    # Every capability is a dict of DESIGN roles: "DEBUG", "FLASH", "LED" are
+    # labels this board chooses, in whatever number it needs — the module only
+    # knows Uart/Spi/GpioPin/AdcIn. at() pins a role to a physical pad (hard:
+    # build error if missing or taken; the pad also leaves the swap classes) —
+    # on this package pads are shared, so the constraint names the pad, not a
+    # port. Drop at() to let the solver choose.
+    uart = {"DEBUG": DEBUG},
+    spi = {"FLASH": FLASH},
+    gpio = {"LED": at(LED_CTRL, "PB0/PB1/PB2/PA8")},
+    adc = {"VBAT": VBAT_SENSE},
+)
+
+Capacitor(name = "C1", value = "100nF", package = "0402", P1 = VDD, P2 = GND)
+Resistor(name = "R1", value = "1kohm", package = "0402", P1 = LED_CTRL, P2 = LED_K)
+Led(name = "D1", package = "0402", color = "green", A = LED_K, K = GND)
+
+Board(name = "McuPinCapability", layers = 2, layout_path = "layout/McuPinCapability")

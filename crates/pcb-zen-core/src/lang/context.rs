@@ -64,6 +64,14 @@ pub(crate) struct FrozenPendingChild {
     pub(crate) call_stack: CallStack,
 }
 
+/// What one solved `pin_request` took, plus the pad namespace it took it from.
+#[derive(Debug, Clone)]
+pub(crate) struct PinClaim {
+    pub(crate) instance: String,
+    pub(crate) pins: Vec<String>,
+    pub(crate) scope: String,
+}
+
 #[derive(Debug, Trace, ProvidesStaticType, Allocative, Serialize)]
 #[repr(C)]
 pub struct ContextValue<'v> {
@@ -74,12 +82,45 @@ pub struct ContextValue<'v> {
     /// contexts we leave this `false` so that io()/config() placeholders behave
     /// permissively and synthesize defaults instead of failing.
     strict_io_config: bool,
+    /// Names of required io()/config() inputs that were not provided, recorded
+    /// during this module's evaluation; not preserved across freeze.
     missing_inputs: RefCell<Vec<String>>,
     #[allocative(skip)]
     diagnostics: RefCell<Vec<crate::Diagnostic>>,
     #[allocative(skip)]
     #[serde(skip)]
     pending_children: RefCell<Vec<PendingChild<'v>>>,
+    /// Instance and pins each solved request claimed, keyed by request name:
+    /// pin/instance exclusivity spans every pin_solve of the module, and a
+    /// re-solved request releases its own claims.
+    #[allocative(skip)]
+    #[serde(skip)]
+    pin_claims: RefCell<std::collections::HashMap<(String, String), PinClaim>>,
+    /// Requests served by the `if_connected` gate, for the post-eval check.
+    #[allocative(skip)]
+    #[serde(skip)]
+    if_connected_served: RefCell<std::collections::HashSet<String>>,
+    /// Every pad a part exposes, per part scope. Kept whole rather than net
+    /// of the claims: a re-solve releases pads, and what is free is only
+    /// known when `pin_map` asks.
+    #[allocative(skip)]
+    #[serde(skip)]
+    exposed_pads: RefCell<std::collections::HashMap<String, Vec<String>>>,
+    /// Open net each unclaimed pad was tied to, per `(part scope, pin)`, so
+    /// two `pin_map` calls for one part hand back the same net.
+    #[allocative(skip)]
+    #[serde(skip)]
+    tied_off: RefCell<SmallMap<(String, String), Value<'v>>>,
+    /// Truthiness each `unless` axis had for a part, so a design says once
+    /// whether a gated peripheral is there.
+    #[allocative(skip)]
+    #[serde(skip)]
+    config_axes: RefCell<std::collections::HashMap<(String, String), bool>>,
+    /// Net (id, name) each physical pin has been mapped to by `pin_map`,
+    /// keyed by `(part scope, pin)`: two components may share pin names.
+    #[allocative(skip)]
+    #[serde(skip)]
+    mapped_pins: RefCell<std::collections::HashMap<(String, String), (u64, String)>>,
 }
 
 #[derive(Debug, Trace, ProvidesStaticType, Allocative, Serialize)]
@@ -165,6 +206,12 @@ impl<'v> ContextValue<'v> {
             missing_inputs: RefCell::new(Vec::new()),
             diagnostics: RefCell::new(Vec::new()),
             pending_children: RefCell::new(Vec::new()),
+            pin_claims: RefCell::new(std::collections::HashMap::new()),
+            if_connected_served: RefCell::new(std::collections::HashSet::new()),
+            exposed_pads: RefCell::new(std::collections::HashMap::new()),
+            tied_off: RefCell::new(SmallMap::new()),
+            config_axes: RefCell::new(std::collections::HashMap::new()),
+            mapped_pins: RefCell::new(std::collections::HashMap::new()),
         }
     }
 
@@ -191,6 +238,127 @@ impl<'v> ContextValue<'v> {
 
     pub(crate) fn add_missing_input(&self, name: String) {
         self.missing_inputs.borrow_mut().push(name);
+    }
+
+    /// Record what `req` took. A name identifies one request per part, so a
+    /// solve that places it elsewhere among `table`'s parts supersedes the
+    /// earlier placement while another component's like-named request stands.
+    pub(crate) fn record_pin_claim(&self, req: &str, claim: PinClaim, table: &[String]) {
+        let mut claims = self.pin_claims.borrow_mut();
+        claims.retain(|(scope, name), _| name != req || !table.contains(scope));
+        claims.insert((claim.scope.clone(), req.to_owned()), claim);
+    }
+
+    /// Which part's pad namespace a solved request belongs to, when one name
+    /// answers for one part only.
+    pub(crate) fn pin_claim_scope(&self, req: &str) -> Option<String> {
+        let claims = self.pin_claims.borrow();
+        let mut found = claims.iter().filter(|((_, name), _)| name == req);
+        let (_, claim) = found.next()?;
+        found.next().is_none().then(|| claim.scope.clone())
+    }
+
+    /// Claims other than the ones `except` re-solves on `table`'s own parts:
+    /// pin names only mean something inside the part that owns them.
+    pub(crate) fn pin_claims_excluding(
+        &self,
+        except: &std::collections::HashSet<String>,
+        table: &[String],
+    ) -> Vec<PinClaim> {
+        self.pin_claims
+            .borrow()
+            .iter()
+            .filter(|((scope, name), _)| !(except.contains(name) && table.contains(scope)))
+            .map(|(_, c)| c.clone())
+            .collect()
+    }
+
+    /// Net a pad was already mapped to, within one part: a superseded solve's
+    /// assignment must not re-map a pad to a second net.
+    pub(crate) fn pin_map_net(&self, scope: &str, pin: &str) -> Option<(u64, String)> {
+        self.mapped_pins
+            .borrow()
+            .get(&(scope.to_owned(), pin.to_owned()))
+            .cloned()
+    }
+
+    /// Requests `if_connected` served because the caller supplied an input of
+    /// that name, checked against the finished signature once it is complete.
+    pub(crate) fn record_if_connected(&self, name: &str) {
+        self.if_connected_served
+            .borrow_mut()
+            .insert(name.to_owned());
+    }
+
+    pub(crate) fn if_connected_served(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.if_connected_served.borrow().iter().cloned().collect();
+        v.sort();
+        v
+    }
+
+    pub(crate) fn record_exposed_pads(&self, scope: String, pads: Vec<String>) {
+        self.exposed_pads.borrow_mut().insert(scope, pads);
+    }
+
+    /// Every part scope a `pin_solve` has run over in this module, sorted.
+    pub(crate) fn exposed_pad_scopes(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.exposed_pads.borrow().keys().cloned().collect();
+        v.sort();
+        v
+    }
+
+    pub(crate) fn exposed_pads(&self, scope: &str) -> Vec<String> {
+        self.exposed_pads
+            .borrow()
+            .get(scope)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Pads a live claim holds in `scope`. A superseded solve's pads are not
+    /// among them, so they are free to be tied off again.
+    pub(crate) fn claimed_pins(&self, scope: &str) -> std::collections::HashSet<String> {
+        self.pin_claims
+            .borrow()
+            .values()
+            .filter(|c| c.scope == scope)
+            .flat_map(|c| c.pins.iter().cloned())
+            .collect()
+    }
+
+    /// Axes this part has already settled, whatever table named them.
+    pub(crate) fn config_axes_for(&self, scope: &str) -> Vec<String> {
+        self.config_axes
+            .borrow()
+            .keys()
+            .filter(|(s, _)| s == scope)
+            .map(|(_, axis)| axis.clone())
+            .collect()
+    }
+
+    /// Record what `axis` meant for `scope`, returning what it meant before.
+    pub(crate) fn record_config_axis(&self, scope: &str, axis: &str, on: bool) -> Option<bool> {
+        self.config_axes
+            .borrow_mut()
+            .insert((scope.to_owned(), axis.to_owned()), on)
+    }
+
+    /// The open net a pad was already tied to, if this module tied it.
+    pub(crate) fn tied_off_net(&self, scope: &str, pin: &str) -> Option<Value<'v>> {
+        self.tied_off
+            .borrow()
+            .get(&(scope.to_owned(), pin.to_owned()))
+            .copied()
+    }
+
+    pub(crate) fn record_tie_off(&self, scope: &str, pin: &str, net: Value<'v>) {
+        self.tied_off
+            .borrow_mut()
+            .insert((scope.to_owned(), pin.to_owned()), net);
+    }
+
+    pub(crate) fn record_pin_map(&self, scope: String, pin: String, net: (u64, String)) {
+        self.mapped_pins.borrow_mut().insert((scope, pin), net);
     }
 
     pub(crate) fn add_diagnostic<D: Into<crate::Diagnostic>>(&self, diag: D) {

@@ -1,0 +1,15 @@
+"""Pin-capability model: declare what a multi-function component's pins can do
+and solve the instance x pin assignment at elaboration.
+
+Not in the prelude — load what you use:
+
+    load("@stdlib/pinmux.zen", "peripheral", "pin", "pin_request", "pin_solve", "pin_map")
+"""
+
+at = builtin.pinmux.at
+pin = builtin.pinmux.pin
+peripheral = builtin.pinmux.peripheral
+pool = builtin.pinmux.pool
+pin_request = builtin.pinmux.pin_request
+pin_solve = builtin.pinmux.pin_solve
+pin_map = builtin.pinmux.pin_map
