@@ -2,6 +2,8 @@
 
 use super::*;
 
+type FiducialPoints = [(f64, f64); 4];
+
 pub(super) struct BoardArrayToolingSpec {
     pub(super) columns: u32,
     pub(super) rows: u32,
@@ -154,8 +156,8 @@ fn add_two_sided_fiducials(
     ecad: &ipc2581::types::Ecad,
     scope: GeneratedFeatureScope,
     kind: IpcFiducialKind,
-    top_points: [(f64, f64); 4],
-    bottom_points: [(f64, f64); 4],
+    top_points: FiducialPoints,
+    bottom_points: FiducialPoints,
 ) -> Result<()> {
     let layers = crate::layers::two_sided_surface_layers(ecad)?;
     for (layer, diameter_mm, points) in [
@@ -212,7 +214,7 @@ fn add_two_sided_fiducials(
 pub(super) fn board_array_tooling_fiducials(
     spec: &BoardArrayToolingSpec,
     orientation: BoardArrayToolingOrientation,
-) -> ([(f64, f64); 4], [(f64, f64); 4]) {
+) -> (FiducialPoints, FiducialPoints) {
     (
         board_array_tooling_points(
             spec,
@@ -234,7 +236,7 @@ pub(super) fn board_array_tooling_fiducials(
 pub(super) fn board_array_tooling_holes(
     spec: &BoardArrayToolingSpec,
     orientation: BoardArrayToolingOrientation,
-) -> [(f64, f64); 4] {
+) -> FiducialPoints {
     board_array_tooling_points(
         spec,
         orientation,
@@ -250,7 +252,7 @@ pub(super) fn board_array_tooling_points(
     rail_depth_mm: f64,
     primary_span_inset_mm: f64,
     secondary_span_inset_mm: f64,
-) -> [(f64, f64); 4] {
+) -> FiducialPoints {
     match orientation {
         BoardArrayToolingOrientation::TopBottom => {
             let left_edge = spec.margin_x_mm;
@@ -287,7 +289,7 @@ pub(super) fn board_array_tooling_points(
 pub(super) fn board_array_corner_tooling_holes(
     array_width_mm: f64,
     array_height_mm: f64,
-) -> [(f64, f64); 4] {
+) -> FiducialPoints {
     let inset = ARRAY_CORNER_TOOLING_HOLE_INSET_MM;
     [
         (inset, inset),
@@ -312,7 +314,7 @@ pub(super) enum BoardCellFiducialOrientation {
 /// measured from the board bbox; offsets into the margin are measured from the
 /// board-cell outer edge. The primary side is top/left and uses a 3 mm span
 /// inset; the opposite side uses 7 mm.
-pub(super) fn board_cell_fiducials(spec: &BoardCellFiducialSpec) -> Option<[(f64, f64); 4]> {
+pub(super) fn board_cell_fiducials(spec: &BoardCellFiducialSpec) -> Option<FiducialPoints> {
     let orientation = board_cell_fiducial_orientation(spec)?;
     let board_left = spec.board_margin.left;
     let board_right = spec.board_margin.left + spec.board_width_mm;
