@@ -83,6 +83,7 @@ pub fn execute_open(uri: SandboxFileUri, args: OpenArgs) -> Result<()> {
             check: false,
             suppress: Vec::new(),
             no_sync: true,
+            sync_footprints: false,
             format: LayoutOutputFormat::Human,
         };
         status.set_message("Running pcb layout in sandbox...");
@@ -398,6 +399,9 @@ fn run_remote_layout(
     }
     if args.check {
         command.push("--check".to_string());
+    }
+    if args.sync_footprints {
+        command.push("--sync-footprints".to_string());
     }
     for config in &args.config {
         command.push("--config".to_string());

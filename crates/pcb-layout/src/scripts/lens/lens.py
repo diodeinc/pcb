@@ -791,6 +791,7 @@ def run_lens_sync(
     board_path: Path,
     footprint_lib_map: dict[str, str],
     package_roots: dict[str, str],
+    sync_footprints: bool = False,
 ) -> SyncResult:
     """Run the lens-based sync pipeline.
 
@@ -840,11 +841,10 @@ def run_lens_sync(
         new_view=new_view,
         new_complement=new_complement,
         old_complement=old_complement,
+        sync_footprints=sync_footprints,
     )
 
-    logger.info(
-        f"Changes: +{len(changeset.added_footprints)} -{len(changeset.removed_footprints)} footprints"
-    )
+    logger.info(f"Changes: {changeset.footprint_change_summary} footprints")
 
     # Log NEW state (after lens computation)
     log_lens_state("NEW", new_view, new_complement, logger)

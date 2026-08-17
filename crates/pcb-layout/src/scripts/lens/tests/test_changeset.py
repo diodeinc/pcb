@@ -241,3 +241,26 @@ class TestBuildSyncChangeset:
         assert r1_id in changeset.added_footprints
         assert changeset.view == new_view
         assert r1_id in changeset.complement.footprints
+
+    def test_force_sync_replaces_existing_footprints(self):
+        footprint = make_footprint_view("R1")
+        complement = FootprintComplement(
+            position=Position(x=1000, y=2000),
+            orientation=135.0,
+            layer="B.Cu",
+            locked=True,
+        )
+
+        changeset = build_sync_changeset(
+            new_view=BoardView(footprints={footprint.entity_id: footprint}),
+            new_complement=BoardComplement(
+                footprints={footprint.entity_id: complement}
+            ),
+            old_complement=BoardComplement(
+                footprints={footprint.entity_id: complement}
+            ),
+            sync_footprints=True,
+        )
+
+        assert changeset.added_footprints == {footprint.entity_id}
+        assert changeset.removed_footprints == {footprint.entity_id: complement}

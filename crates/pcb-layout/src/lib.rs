@@ -52,6 +52,15 @@ pub struct LayoutResult {
     pub created: bool, // true if new, false if updated
 }
 
+/// Options controlling layout checking and generation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LayoutOptions {
+    /// Check the existing layout without modifying it.
+    pub check: bool,
+    /// Reload managed footprint definitions even when their FPIDs are unchanged.
+    pub sync_footprints: bool,
+}
+
 impl LayoutResult {
     /// Path to show in diagnostics/output.
     pub fn display_pcb_file(&self) -> &Path {
@@ -374,9 +383,13 @@ fn extract_dir_recursive(dir: &Dir, target: &Path) -> AnyhowResult<()> {
 }
 
 /// Run the Python layout sync script
-fn run_sync_script(paths: &LayoutPaths, lens_python_path: &Path) -> anyhow::Result<()> {
+fn run_sync_script(
+    paths: &LayoutPaths,
+    lens_python_path: &Path,
+    sync_footprints: bool,
+) -> anyhow::Result<()> {
     let script = include_str!("scripts/update_layout_file.py");
-    let builder = PythonScriptBuilder::new(script)
+    let mut builder = PythonScriptBuilder::new(script)
         .python_path(lens_python_path.to_str().unwrap())
         .arg("-j")
         .arg(paths.json_netlist.to_str().unwrap())
@@ -386,6 +399,10 @@ fn run_sync_script(paths: &LayoutPaths, lens_python_path: &Path) -> anyhow::Resu
         .arg(paths.snapshot.to_str().unwrap())
         .arg("--diagnostics")
         .arg(paths.diagnostics.to_str().unwrap());
+
+    if sync_footprints {
+        builder = builder.arg("--sync-footprints");
+    }
 
     let log_file = fs::OpenOptions::new()
         .create(true)
@@ -457,21 +474,21 @@ pub fn check_layout_sync(
 
 /// Process a schematic and generate/update its layout files
 ///
-/// When `check_mode` is false (normal mode):
+/// When `options.check` is false (normal mode):
 /// 1. Extract the layout path from the schematic's root instance attributes
 /// 2. Create the layout directory if it doesn't exist
 /// 3. Generate/update the netlist file
 /// 4. Write the footprint library table
 /// 5. Create or update the KiCad PCB file
 ///
-/// When `check_mode` is true:
+/// When `options.check` is true:
 /// - Runs the pure semantic layout sync check without mutating layout files
 pub fn process_layout(
     schematic: &Schematic,
-    check_mode: bool,
+    options: LayoutOptions,
     diagnostics: &mut pcb_zen_core::Diagnostics,
 ) -> Result<Option<LayoutResult>, LayoutError> {
-    if check_mode {
+    if options.check {
         return check_layout_sync(schematic, diagnostics);
     }
 
@@ -562,7 +579,7 @@ pub fn process_layout(
         extract_lens_module(paths.temp_dir.path()).context("Failed to extract lens module")?;
 
     // Run the Python sync script
-    run_sync_script(&paths, &lens_python_path)?;
+    run_sync_script(&paths, &lens_python_path, options.sync_footprints)?;
 
     let layout_name = utils::extract_layout_name(schematic);
     let netclass_assignments = board_config

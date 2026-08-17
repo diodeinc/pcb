@@ -42,6 +42,12 @@ A footprint ID change is a removal followed by an addition. The new footprint
 inherits the previous position when possible. Zener `moved()` declarations are
 resolved before the Python synchronizer runs.
 
+By default, a footprint with the same hierarchical path and footprint ID keeps
+its existing KiCad geometry. Run `pcb layout <FILE> --sync-footprints` to reload
+all managed footprints from their source libraries while preserving board
+placement and routing. All replacements are loaded before lens mutations begin,
+so a missing source footprint cannot leave a partially refreshed board.
+
 ## Synchronization process
 
 The synchronizer applies a changeset in this order:

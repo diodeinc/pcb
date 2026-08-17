@@ -5,7 +5,7 @@ Bridges abstract lens types and the concrete pcbnew API.
 
 This module implements the consolidated apply_changeset function that handles:
 1. Deletions (GR-REMOVE with contents, then FP-REMOVE)
-2. Additions (FP-ADD, GR-ADD with fragment content)
+2. Materialization (FP-ADD, including same-identity replacements, then GR-ADD)
 3. View updates for existing footprints
 4. Group membership rebuild
 5. Pad-to-net assignments (creates nets on-demand)
@@ -336,36 +336,6 @@ def _build_footprints_index(kicad_board: Any) -> dict[EntityId, Any]:
         if entity_id:
             idx[entity_id] = fp
     return idx
-
-
-def _build_pad_net_map(
-    entity_id: EntityId,
-    view: BoardView,
-    kicad_board: Any,
-) -> dict[str, Any]:
-    """Build a mapping from pad/pin name to KiCad NETINFO for a footprint.
-
-    Looks up net assignments from SOURCE (BoardView.nets) rather than copying
-    from existing pads, ensuring SOURCE-authoritative connectivity.
-
-    Args:
-        entity_id: The footprint's entity ID
-        view: The BoardView containing SOURCE net definitions
-        kicad_board: KiCad board to look up NETINFO objects
-
-    Returns:
-        Dict mapping pin_name -> NETINFO object (or None if net not found)
-    """
-    pad_net_map: dict[str, Any] = {}
-
-    for net_view in view.nets.values():
-        for conn_entity_id, pin_name in net_view.connections:
-            if conn_entity_id == entity_id:
-                net_info = kicad_board.FindNet(net_view.name)
-                if net_info:
-                    pad_net_map[pin_name] = net_info
-
-    return pad_net_map
 
 
 def _apply_pad_assignment(
@@ -754,6 +724,20 @@ def apply_changeset(
     view = changeset.view
     layout_dir = board_path.parent if board_path else None
 
+    # Load every footprint before applying lens mutations, so a missing source
+    # cannot leave a partially replaced set of footprints.
+    materialized_footprints: dict[EntityId, Any] = {}
+    for entity_id in sorted(changeset.added_footprints, key=lambda e: str(e.path)):
+        materialized_footprints[entity_id] = _create_footprint(
+            view.footprints[entity_id],
+            default_footprint_complement(),
+            kicad_board,
+            pcbnew,
+            footprint_lib_map,
+            package_roots=package_roots,
+            layout_dir=layout_dir,
+        )
+
     for fp in list(kicad_board.GetFootprints()):
         path_field = get_footprint_field(fp, "Path")
         path_str = path_field.GetText() if path_field else ""
@@ -821,50 +805,32 @@ def apply_changeset(
             logger.info(f"Removed footprint: {entity_id}")
 
     # ==========================================================================
-    # Phase 2: Additions (footprints and groups)
+    # Phase 2: Materialization (footprints and groups)
     # ==========================================================================
 
-    # 2a. FP-ADD - create footprints at origin (0,0)
+    # 2a. FP-ADD - install preloaded footprints at origin (0,0)
     # All new footprints start at origin; HierPlace will position them
-    # (including applying fragment positions if the fragment loads successfully)
+    # (including position inheritance and fragment placement).
     for entity_id in sorted(changeset.added_footprints, key=lambda e: str(e.path)):
         fp_view = view.footprints[entity_id]
-        fp_complement = default_footprint_complement()
+        fp = materialized_footprints[entity_id]
+        kicad_board.Add(fp)
+        fps_by_entity_id[entity_id] = fp
 
-        try:
-            fp = _create_footprint(
-                fp_view,
-                fp_complement,
-                kicad_board,
-                pcbnew,
-                footprint_lib_map,
-                package_roots=package_roots,
-                layout_dir=layout_dir,
-            )
-            if fp:
-                # Assign pad nets from SOURCE (BoardView.nets)
-                pad_net_map = _build_pad_net_map(entity_id, view, kicad_board)
-                for pad_name, net_info in pad_net_map.items():
-                    _apply_pad_assignment(fp, pad_name, net_info)
-
-                kicad_board.Add(fp)
-                fps_by_entity_id[entity_id] = fp
-                pos = fp.GetPosition()
-                layer_name = kicad_board.GetLayerName(fp.GetLayer())
-                pad_count = len(list(fp.Pads()))
-                oplog.fp_add(
-                    str(entity_id.path),
-                    fp_view.reference,
-                    fp_view.fpid,
-                    fp_view.value,
-                    pos.x,
-                    pos.y,
-                    layer=layer_name,
-                    pad_count=pad_count,
-                )
-                logger.info(f"Added footprint: {entity_id}")
-        except Exception as e:  # noqa: BLE001 - one bad footprint must not abort the whole sync
-            logger.error(f"Failed to add footprint {entity_id}: {e}")
+        pos = fp.GetPosition()
+        layer_name = kicad_board.GetLayerName(fp.GetLayer())
+        pad_count = len(list(fp.Pads()))
+        oplog.fp_add(
+            str(entity_id.path),
+            fp_view.reference,
+            fp_view.fpid,
+            fp_view.value,
+            pos.x,
+            pos.y,
+            layer=layer_name,
+            pad_count=pad_count,
+        )
+        logger.info(f"Added footprint: {entity_id}")
 
     # 2b. GR-ADD - create groups (routing applied in Phase 6 after membership rebuild)
     for entity_id in sorted(changeset.added_groups, key=lambda e: str(e.path)):
@@ -1242,10 +1208,10 @@ def _apply_position_inheritance(
     pcbnew: Any,
     oplog: OpLog,
 ) -> tuple[int, set[EntityId]]:
-    """Apply position inheritance for FPID changes.
+    """Apply position inheritance for footprint replacements.
 
-    When a footprint's FPID changes, it appears as removed (old fpid) + added (new fpid)
-    with the same path. We inherit position from the removed complement.
+    FPID changes and explicit source refreshes both appear as remove + add operations
+    with the same path. We inherit placement from the removed complement.
 
     Returns (placed_count, inherited_footprint_ids).
     """
@@ -1442,9 +1408,7 @@ def _run_hierarchical_placement(
     sizes = _collect_item_sizes(
         changeset, fps_by_entity_id, groups_by_name, pcbnew, plan, exclude
     )
-    existing_bbox = _compute_existing_bbox(
-        kicad_board, set(changeset.added_footprints), pcbnew
-    )
+    existing_bbox = _compute_existing_bbox(kicad_board, newly_added, pcbnew)
     layout = _compute_hierarchical_layout(
         tree, sizes, set(changeset.added_groups), set(plan.loaded.keys()), existing_bbox
     )
@@ -1599,10 +1563,14 @@ def _create_footprint(
 
     lib_uri = footprint_lib_map[fp_lib]
     lib_uri = lib_uri.replace("\\\\?\\", "")  # Windows path fix
+    load_error = f"Failed to load footprint '{fp_name}' from library '{fp_lib}'"
 
-    fp = pcbnew.FootprintLoad(lib_uri, fp_name)
+    try:
+        fp = pcbnew.FootprintLoad(lib_uri, fp_name)
+    except Exception as error:
+        raise ValueError(load_error) from error
     if fp is None:
-        raise ValueError(f"Footprint '{fp_name}' not found in library '{fp_lib}'")
+        raise ValueError(load_error)
 
     fp.SetParent(board)
     fp.SetFPIDAsString(view.fpid)
