@@ -26,10 +26,12 @@ jobs:
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install Rust
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
         with:
           components: rustfmt, clippy
           cache-bin: false
@@ -64,7 +66,7 @@ jobs:
     steps:
       - name: Cache APT packages (Ubuntu)
         if: matrix.config.name == 'Ubuntu'
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /tmp/apt-cache/archives
           key: apt-${{ runner.os }}-${{ runner.arch }}-debian-trixie-${{ env.KICAD_VERSION }}-ca-certificates-curl-build-essential-pkg-config
@@ -79,12 +81,14 @@ jobs:
           apt-get -o Dir::Cache::archives="$apt_cache_dir/" update
           apt-get -o Dir::Cache::archives="$apt_cache_dir/" install -y --no-install-recommends ca-certificates curl build-essential pkg-config
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Cache KiCad (macOS)
         if: contains(matrix.config.name, 'macOS')
         id: cache-kicad-mac
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /Applications/KiCad
           key: ${{ runner.os }}-kicad-${{ env.KICAD_VERSION }}
@@ -100,7 +104,7 @@ jobs:
       - name: Cache KiCad (Windows)
         if: matrix.config.name == 'Windows'
         id: cache-kicad-windows
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: C:\Program Files\KiCad\10.0
           key: ${{ runner.os }}-kicad-${{ env.KICAD_VERSION }}
@@ -134,19 +138,21 @@ jobs:
 
       - name: Install Rust (Windows)
         if: runner.os == 'Windows'
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
         with:
           rustflags: ""
           cache-bin: false
 
       - name: Install Rust
         if: runner.os != 'Windows'
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
         with:
           cache-bin: false
 
       - name: Install nextest
-        uses: taiki-e/install-action@nextest
+        uses: taiki-e/install-action@b6b84cf49ebfe0176417bdce007c624f0db37f20 # v2.86.2
+        with:
+          tool: nextest
 
       - name: Test All (Workspace)
         env:
@@ -168,8 +174,10 @@ jobs:
       run:
         working-directory: crates/pcb-layout/src/scripts
     steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v8.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
       - run: uv sync --locked
         working-directory: .
       - run: uv run --locked ty check
@@ -182,7 +190,9 @@ jobs:
     name: Check README Sync
     runs-on: blacksmith-2vcpu-ubuntu-2404
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Check README sync
         run: bin/embed-readme --check README.md

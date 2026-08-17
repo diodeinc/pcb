@@ -38,7 +38,7 @@ jobs:
     steps:
       - name: Cache APT packages (Ubuntu)
         if: matrix.config.name == 'Ubuntu'
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /tmp/apt-cache/archives
           key: apt-${{ runner.os }}-${{ runner.arch }}-debian-trixie-${{ env.KICAD_VERSION }}-ca-certificates-curl-build-essential-pkg-config
@@ -53,12 +53,14 @@ jobs:
           apt-get -o Dir::Cache::archives="$apt_cache_dir/" update
           apt-get -o Dir::Cache::archives="$apt_cache_dir/" install -y --no-install-recommends ca-certificates curl build-essential pkg-config
 
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Cache KiCad (macOS)
         if: matrix.config.name == 'macOS'
         id: cache-kicad-mac
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /Applications/KiCad
           key: ${{ runner.os }}-kicad-${{ env.KICAD_VERSION }}
@@ -72,7 +74,7 @@ jobs:
           brew install --cask kicad
 
       - name: Install Rust
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
         with:
           cache-bin: false
 
@@ -107,11 +109,12 @@ jobs:
 
       - name: Checkout kicad-test-fixtures
         if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: diodeinc/kicad-test-fixtures
           token: ${{ secrets.DIODE_ROBOT_TOKEN }}
           path: kicad-test-fixtures
+          persist-credentials: false
 
       - name: Test pcb import (E2E)
         if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
