@@ -1079,6 +1079,7 @@ fn board_array_creation_adds_default_tooling_at_single_column_min_width() {
         step,
         IpcFiducialKind::Global,
         &[(29.0, 66.15), (41.0, 66.15), (33.0, 3.85), (37.0, 3.85)],
+        &[(30.0, 66.15), (40.0, 66.15), (32.0, 3.85), (38.0, 3.85)],
     );
     assert_eq!(corner_holes.len(), 4);
     assert_eq!(rail_holes.len(), 4);
@@ -1322,6 +1323,7 @@ fn board_array_creation_adds_board_cell_fiducials_on_top_bottom_margins() {
         &ipc,
         cell,
         IpcFiducialKind::Local,
+        &[(3.0, 38.0), (37.0, 38.0), (7.0, 2.0), (33.0, 2.0)],
         &[(3.0, 38.0), (37.0, 38.0), (7.0, 2.0), (33.0, 2.0)],
     );
 
@@ -1782,13 +1784,26 @@ fn assert_two_sided_fiducials(
     ipc: &Ipc2581,
     step: &ipc2581::types::ecad::Step,
     kind: IpcFiducialKind,
-    expected_points: &[(f64, f64)],
+    expected_top_points: &[(f64, f64)],
+    expected_bottom_points: &[(f64, f64)],
 ) {
-    for (layer_name, diameter_mm) in [
-        ("TOP", FIDUCIAL_COPPER_DIAMETER_MM),
-        ("F.Mask", FIDUCIAL_MASK_OPENING_DIAMETER_MM),
-        ("BOTTOM", FIDUCIAL_COPPER_DIAMETER_MM),
-        ("B.Mask", FIDUCIAL_MASK_OPENING_DIAMETER_MM),
+    for (layer_name, diameter_mm, expected_points) in [
+        ("TOP", FIDUCIAL_COPPER_DIAMETER_MM, expected_top_points),
+        (
+            "F.Mask",
+            FIDUCIAL_MASK_OPENING_DIAMETER_MM,
+            expected_top_points,
+        ),
+        (
+            "BOTTOM",
+            FIDUCIAL_COPPER_DIAMETER_MM,
+            expected_bottom_points,
+        ),
+        (
+            "B.Mask",
+            FIDUCIAL_MASK_OPENING_DIAMETER_MM,
+            expected_bottom_points,
+        ),
     ] {
         let fiducials = fiducials_on_layer(ipc, step, layer_name);
         assert_eq!(fiducials.len(), expected_points.len());

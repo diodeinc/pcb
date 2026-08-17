@@ -78,14 +78,15 @@ pub(super) fn add_board_array_tooling(
     let tooling_hole_layer_name =
         ensure_tooling_hole_layer_name(generated_geometry, used_layer_names);
 
-    let fiducials = board_array_tooling_fiducials(&spec, orientation);
+    let (top_fiducials, bottom_fiducials) = board_array_tooling_fiducials(&spec, orientation);
     add_two_sided_fiducials(
         generated_geometry,
         ipc,
         ecad,
         GeneratedFeatureScope::Array,
         IpcFiducialKind::Global,
-        fiducials,
+        top_fiducials,
+        bottom_fiducials,
     )
     .context("cannot add global board-array fiducials")?;
     generated_geometry.add_layer_feature(
@@ -142,6 +143,7 @@ pub(super) fn add_board_cell_fiducials(
         GeneratedFeatureScope::BoardCell,
         IpcFiducialKind::Local,
         fiducials,
+        fiducials,
     )
     .context("cannot add local board-cell fiducials")
 }
@@ -152,14 +154,27 @@ fn add_two_sided_fiducials(
     ecad: &ipc2581::types::Ecad,
     scope: GeneratedFeatureScope,
     kind: IpcFiducialKind,
-    points: [(f64, f64); 4],
+    top_points: [(f64, f64); 4],
+    bottom_points: [(f64, f64); 4],
 ) -> Result<()> {
     let layers = crate::layers::two_sided_surface_layers(ecad)?;
-    for (layer, diameter_mm) in [
-        (layers.top_copper, FIDUCIAL_COPPER_DIAMETER_MM),
-        (layers.top_soldermask, FIDUCIAL_MASK_OPENING_DIAMETER_MM),
-        (layers.bottom_copper, FIDUCIAL_COPPER_DIAMETER_MM),
-        (layers.bottom_soldermask, FIDUCIAL_MASK_OPENING_DIAMETER_MM),
+    for (layer, diameter_mm, points) in [
+        (layers.top_copper, FIDUCIAL_COPPER_DIAMETER_MM, top_points),
+        (
+            layers.top_soldermask,
+            FIDUCIAL_MASK_OPENING_DIAMETER_MM,
+            top_points,
+        ),
+        (
+            layers.bottom_copper,
+            FIDUCIAL_COPPER_DIAMETER_MM,
+            bottom_points,
+        ),
+        (
+            layers.bottom_soldermask,
+            FIDUCIAL_MASK_OPENING_DIAMETER_MM,
+            bottom_points,
+        ),
     ] {
         generated_geometry.add_layer_feature(
             scope,
@@ -186,8 +201,10 @@ fn add_two_sided_fiducials(
 ///   deepest fiducial inset from each side plus 4 mm center spacing;
 /// - multiple boards in the tooling axis require at least 12 mm board span,
 ///   because each side's pair sits over a different outer board;
-/// - primary rail centers use 2.5 mm tooling and 8 mm fiducial span insets;
-/// - secondary rail centers use 6.5 mm tooling and 12 mm fiducial span insets.
+/// - primary rail centers use 2.5 mm tooling, 8 mm top-fiducial, and 9 mm
+///   bottom-fiducial span insets;
+/// - secondary rail centers use 6.5 mm tooling, 12 mm top-fiducial, and 11 mm
+///   bottom-fiducial span insets.
 ///
 /// Rail-depth rules:
 /// - tooling hole centers are 2.5 mm from the array edge;
@@ -195,13 +212,22 @@ fn add_two_sided_fiducials(
 pub(super) fn board_array_tooling_fiducials(
     spec: &BoardArrayToolingSpec,
     orientation: BoardArrayToolingOrientation,
-) -> [(f64, f64); 4] {
-    board_array_tooling_points(
-        spec,
-        orientation,
-        FIDUCIAL_EDGE_OFFSET_MM,
-        PRIMARY_FIDUCIAL_SPAN_INSET_MM,
-        SECONDARY_FIDUCIAL_SPAN_INSET_MM,
+) -> ([(f64, f64); 4], [(f64, f64); 4]) {
+    (
+        board_array_tooling_points(
+            spec,
+            orientation,
+            FIDUCIAL_EDGE_OFFSET_MM,
+            PRIMARY_FIDUCIAL_SPAN_INSET_MM,
+            SECONDARY_FIDUCIAL_SPAN_INSET_MM,
+        ),
+        board_array_tooling_points(
+            spec,
+            orientation,
+            FIDUCIAL_EDGE_OFFSET_MM,
+            BOTTOM_PRIMARY_FIDUCIAL_SPAN_INSET_MM,
+            BOTTOM_SECONDARY_FIDUCIAL_SPAN_INSET_MM,
+        ),
     )
 }
 
