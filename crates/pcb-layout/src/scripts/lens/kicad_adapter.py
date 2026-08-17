@@ -1408,9 +1408,7 @@ def _run_hierarchical_placement(
     sizes = _collect_item_sizes(
         changeset, fps_by_entity_id, groups_by_name, pcbnew, plan, exclude
     )
-    existing_bbox = _compute_existing_bbox(
-        kicad_board, set(changeset.added_footprints), pcbnew
-    )
+    existing_bbox = _compute_existing_bbox(kicad_board, newly_added, pcbnew)
     layout = _compute_hierarchical_layout(
         tree, sizes, set(changeset.added_groups), set(plan.loaded.keys()), existing_bbox
     )
