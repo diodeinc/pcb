@@ -954,10 +954,7 @@ impl GridPacker {
         let max_anchor_x = self.usable.max_x - relative.max_x;
         let max_anchor_y = self.usable.max_y - relative.max_y;
         if max_anchor_x < min_anchor_x || max_anchor_y < min_anchor_y {
-            let anchor = GridPoint {
-                x: min_anchor_x,
-                y: min_anchor_y,
-            };
+            let anchor = self.centered_anchor(relative);
             self.occupy(relative.translated(anchor));
             return anchor;
         }
@@ -968,18 +965,38 @@ impl GridPacker {
                 let anchor = GridPoint { x, y };
                 let candidate = relative.translated(anchor);
                 let overlap = self.occupied_cells(candidate, &occupied);
-                if overlap == 0 {
-                    self.occupy(candidate);
-                    return anchor;
-                }
-                if best.is_none_or(|(best_overlap, _)| overlap < best_overlap) {
-                    best = Some((overlap, anchor));
+                let rank = (overlap, self.distance_from_center_squared(candidate), y, x);
+                if best.is_none_or(|(best_rank, _)| rank < best_rank) {
+                    best = Some((rank, anchor));
                 }
             }
         }
         let anchor = best.expect("a non-empty anchor range has a candidate").1;
         self.occupy(relative.translated(anchor));
         anchor
+    }
+
+    fn centered_anchor(&self, relative: GridRect) -> GridPoint {
+        let x2 = i64::from(self.usable.min_x) + i64::from(self.usable.max_x)
+            - i64::from(relative.min_x)
+            - i64::from(relative.max_x);
+        let y2 = i64::from(self.usable.min_y) + i64::from(self.usable.max_y)
+            - i64::from(relative.min_y)
+            - i64::from(relative.max_y);
+        GridPoint {
+            x: x2.div_euclid(2) as i32,
+            y: y2.div_euclid(2) as i32,
+        }
+    }
+
+    fn distance_from_center_squared(&self, rect: GridRect) -> i64 {
+        let dx = i64::from(rect.min_x) + i64::from(rect.max_x)
+            - i64::from(self.usable.min_x)
+            - i64::from(self.usable.max_x);
+        let dy = i64::from(rect.min_y) + i64::from(rect.max_y)
+            - i64::from(self.usable.min_y)
+            - i64::from(self.usable.max_y);
+        dx * dx + dy * dy
     }
 
     fn occupancy_prefix(&self) -> Vec<u32> {
@@ -1996,5 +2013,28 @@ fn resolve_pin_targets(
             component_path,
             pin_name
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn grid_packer_prefers_the_page_center() {
+        let mut packer = GridPacker::for_page(&Paper::default()).unwrap();
+        let relative = GridRect {
+            min_x: -2,
+            min_y: -2,
+            max_x: 2,
+            max_y: 2,
+        };
+
+        let placed = relative.translated(packer.place(relative));
+
+        let center_dx = placed.min_x + placed.max_x - packer.usable.min_x - packer.usable.max_x;
+        let center_dy = placed.min_y + placed.max_y - packer.usable.min_y - packer.usable.max_y;
+        assert!(center_dx.abs() <= 1);
+        assert!(center_dy.abs() <= 1);
     }
 }
