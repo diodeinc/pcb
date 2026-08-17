@@ -9,26 +9,29 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   bump:
     runs-on: blacksmith-16vcpu-ubuntu-2404
+    env:
+      VERSION: ${{ inputs.version }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           token: ${{ secrets.DIODE_ROBOT_TOKEN }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Validate version format
         run: |
-          if ! echo "${{ inputs.version }}" | grep -qE '^pcb/v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?(\+[a-zA-Z0-9.-]+)?$'; then
+          if ! printf '%s\n' "$VERSION" | grep -qE '^pcb/v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?(\+[a-zA-Z0-9.-]+)?$'; then
             echo "Invalid pcb shim version format. Use pcb/v0.1.1"
             exit 1
           fi
 
-          if git rev-parse "${{ inputs.version }}" >/dev/null 2>&1; then
-            echo "Tag ${{ inputs.version }} already exists"
+          if git rev-parse "$VERSION" >/dev/null 2>&1; then
+            echo "Tag $VERSION already exists"
             exit 1
           fi
 
@@ -38,13 +41,12 @@ jobs:
           git config user.email "info@diode.run"
 
       - name: Install Rust
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
         with:
           cache-bin: false
 
       - name: Update pcb shim version
         run: |
-          VERSION="${{ inputs.version }}"
           CARGO_VERSION="${VERSION#pcb/v}"
           sed -i "0,/^version = /{s/^version = \".*\"/version = \"${CARGO_VERSION}\"/}" crates/pcb/Cargo.toml
 
@@ -56,17 +58,17 @@ jobs:
       - name: Update Cargo.lock
         run: cargo check
 
-      - name: Commit and push
+      - name: Commit, push, and tag
+        env:
+          GH_TOKEN: ${{ secrets.DIODE_ROBOT_TOKEN }}
         run: |
+          gh auth setup-git
           git add crates/pcb/Cargo.toml Cargo.lock
           if git diff --cached --quiet; then
             echo "No changes to commit (version already set)"
           else
-            git commit -m "Release ${{ inputs.version }}"
+            git commit -m "Release $VERSION"
             git push origin main
           fi
-
-      - name: Create and push tag
-        run: |
-          git tag ${{ inputs.version }}
-          git push origin ${{ inputs.version }}
+          git tag "$VERSION"
+          git push origin "$VERSION"
