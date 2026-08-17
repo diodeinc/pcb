@@ -2,11 +2,10 @@ mod common;
 
 use pcb_kicad_sch::{
     Label, Point, SchDocument, SchItem, Symbol, SymbolDefinition, SymbolSlotKey,
-    analysis::analyze_schematic,
-    connectivity::{ConnectivityItemRef, PhysicalConnectivity, PinVisibility},
+    analysis::inspect_schematic,
+    connectivity::{PhysicalConnectivity, PinVisibility},
     deterministic_uuid,
     reconcile::plan_reconciliation,
-    repair::{ConnectivityRepairPlan, plan_connectivity_repair},
 };
 use pcb_sch::Schematic;
 
@@ -16,7 +15,7 @@ fn editor_core_plans_applies_analyzes_and_reopens_in_memory() {
     let plan = plan_reconciliation(None, &netlist, "Editor.kicad_sch").unwrap();
 
     assert!(!plan.is_empty());
-    assert!(plan.analysis_after().is_equivalent());
+    assert!(plan.inspection_after().analysis.is_equivalent());
     let document = plan.apply(None).unwrap();
     let physical = PhysicalConnectivity::from_kicad(&document, PinVisibility::VisibleOnly).unwrap();
     assert!(!physical.graph.components.is_empty());
@@ -181,8 +180,9 @@ fn preserves_an_equivalent_label_instead_of_preferring_a_net_symbol() {
         ground_pin.point,
     )));
     assert!(
-        analyze_schematic(&document, &netlist)
+        inspect_schematic(&document, &netlist)
             .unwrap()
+            .analysis
             .is_equivalent()
     );
 
@@ -256,7 +256,7 @@ fn preserves_non_naming_power_symbols() {
 }
 
 #[test]
-fn pure_repair_removes_only_an_unmatched_net_symbol() {
+fn reconciliation_removes_only_an_unmatched_net_symbol() {
     let (netlist, document) = net_symbol_fixture();
     let mut with_stray = document.clone();
     let mut stray = net_symbol(&with_stray, "GROUND").clone();
@@ -268,8 +268,6 @@ fn pure_repair_removes_only_an_unmatched_net_symbol() {
     stray.fields.get_mut("Value").unwrap().value = "STRAY".to_string();
     with_stray.pages[0].items.push(SchItem::Symbol(stray));
 
-    let repair = plan_connectivity_repair(&with_stray, &netlist).unwrap();
-    assert_only_symbol_removal(&repair, "00000000-0000-0000-0000-000000000099");
     assert_eq!(
         with_stray.pages[0].items.len(),
         document.pages[0].items.len() + 1
@@ -283,7 +281,7 @@ fn pure_repair_removes_only_an_unmatched_net_symbol() {
 }
 
 #[test]
-fn pure_repair_removes_a_matching_net_symbol_from_the_wrong_island() {
+fn reconciliation_removes_a_matching_net_symbol_from_the_wrong_island() {
     let (netlist, document) = net_symbol_fixture();
     let mut shorted = document.clone();
     let signal_at = shorted.pages[0]
@@ -298,9 +296,6 @@ fn pure_repair_removes_a_matching_net_symbol_from_the_wrong_island() {
     misplaced.id = "00000000-0000-0000-0000-000000000098".to_string();
     move_symbol(&mut misplaced, signal_at);
     shorted.pages[0].items.push(SchItem::Symbol(misplaced));
-
-    let repair = plan_connectivity_repair(&shorted, &netlist).unwrap();
-    assert_only_symbol_removal(&repair, "00000000-0000-0000-0000-000000000098");
 
     let repaired = plan_reconciliation(Some(&shorted), &netlist, "NetSymbols.kicad_sch")
         .unwrap()
@@ -371,12 +366,4 @@ fn managed_pin_at(document: &SchDocument, point: Point) -> (SymbolSlotKey, Strin
         })
         .next()
         .unwrap_or_else(|| panic!("missing managed pin at {point:?}"))
-}
-
-fn assert_only_symbol_removal(plan: &ConnectivityRepairPlan, id: &str) {
-    assert_eq!(plan.removals().len(), 1);
-    assert!(matches!(
-        plan.removals().iter().next(),
-        Some(ConnectivityItemRef::Symbol { id: removed, .. }) if removed == id
-    ));
 }

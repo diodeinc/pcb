@@ -1,0 +1,405 @@
+mod common;
+
+use std::collections::BTreeSet;
+
+use pcb_kicad_sch::{
+    Point, SchDocument, SchItem, Symbol, Wire,
+    analysis::{SchematicIssue, inspect_schematic},
+    reconcile::{InitialInspection, plan_reconciliation, plan_repairs},
+};
+
+const CONNECTION_GRID_MM: f64 = 1.27;
+
+#[test]
+fn singleton_primary_issue_and_complete_issue_set_produce_the_same_repair() {
+    let netlist = common::compile_fixture("analysis", "simple.zen");
+    let baseline = plan_reconciliation(None, &netlist, "simple.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+
+    for (name, mutate) in [
+        ("missing", remove_first_managed as fn(&mut SchDocument)),
+        ("duplicate", duplicate_first_managed),
+        ("mismatched-id", mismatch_first_managed_id),
+        ("unexpected-managed", add_unexpected_managed),
+        ("unbound", add_unbound_symbol),
+        ("disconnected-net", disconnect_first_named_island),
+        ("unexpected-net", add_unexpected_net),
+        ("short", add_short),
+    ] {
+        let mut document = baseline.clone();
+        mutate(&mut document);
+        let inspection = inspect_schematic(&document, &netlist).unwrap();
+        let key = inspection
+            .issues
+            .iter()
+            .find(|issue| issue_kind(&issue.issue) == name)
+            .unwrap_or_else(|| panic!("{name} fixture has no issue"))
+            .key
+            .clone();
+        let plan = plan_repairs(
+            &document,
+            &netlist,
+            &inspection,
+            BTreeSet::from([key.clone()]),
+        )
+        .unwrap_or_else(|error| panic!("failed to plan selected {name}: {error:#}"));
+        let selected = plan.apply(Some(&document)).unwrap();
+        let complete = plan_reconciliation(Some(&document), &netlist, "simple.kicad_sch")
+            .unwrap_or_else(|error| panic!("failed to plan complete {name}: {error:#}"))
+            .apply(Some(&document))
+            .unwrap();
+        assert_eq!(selected, complete, "{name} repair policy details diverged");
+    }
+}
+
+fn issue_kind(issue: &SchematicIssue) -> &'static str {
+    match issue {
+        SchematicIssue::MissingSymbol { .. } => "missing",
+        SchematicIssue::DuplicateSymbol { .. } => "duplicate",
+        SchematicIssue::MismatchedSymbolId { .. } => "mismatched-id",
+        SchematicIssue::UnexpectedSymbol { .. } => "unexpected-managed",
+        SchematicIssue::UnboundSymbol { .. } => "unbound",
+        SchematicIssue::DisconnectedNet { .. } => "disconnected-net",
+        SchematicIssue::UnexpectedNet { .. } => "unexpected-net",
+        SchematicIssue::Shorted { .. } => "short",
+        SchematicIssue::UnexpectedConnection { .. } => "unexpected-connection",
+    }
+}
+
+#[test]
+fn selected_issue_repair_preserves_an_unrelated_existing_issue() {
+    let netlist = common::compile_fixture("analysis", "simple.zen");
+    let mut document = plan_reconciliation(None, &netlist, "simple.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    duplicate_first_managed(&mut document);
+    add_unexpected_net(&mut document);
+    let inspection = inspect_schematic(&document, &netlist).unwrap();
+    let duplicate = inspection
+        .issues
+        .iter()
+        .find(|issue| matches!(issue.issue, SchematicIssue::DuplicateSymbol { .. }))
+        .unwrap();
+    let unexpected = inspection
+        .issues
+        .iter()
+        .find(|issue| matches!(issue.issue, SchematicIssue::UnexpectedNet { .. }))
+        .unwrap();
+
+    let repaired = plan_repairs(
+        &document,
+        &netlist,
+        &inspection,
+        BTreeSet::from([duplicate.key.clone()]),
+    )
+    .unwrap()
+    .apply(Some(&document))
+    .unwrap();
+    let after = inspect_schematic(&repaired, &netlist).unwrap();
+
+    assert!(after.issues.iter().any(|issue| issue.key == unexpected.key));
+    assert!(
+        repaired.pages[0]
+            .items
+            .iter()
+            .any(|item| matches!(item, SchItem::Label(label) if label.id == "unexpected-net"))
+    );
+
+    let selected_all = plan_repairs(
+        &document,
+        &netlist,
+        &inspection,
+        BTreeSet::from([duplicate.key.clone(), unexpected.key.clone()]),
+    )
+    .unwrap()
+    .apply(Some(&document))
+    .unwrap();
+    let complete = plan_reconciliation(Some(&document), &netlist, "simple.kicad_sch")
+        .unwrap()
+        .apply(Some(&document))
+        .unwrap();
+    assert_eq!(selected_all, complete);
+}
+
+#[test]
+fn complete_reconciliation_recovers_from_invalid_initial_analysis() {
+    let netlist = common::compile_fixture("analysis", "simple.zen");
+    let mut document = plan_reconciliation(None, &netlist, "simple.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    document.pages[0].library.definitions.clear();
+
+    let plan = plan_reconciliation(Some(&document), &netlist, "simple.kicad_sch").unwrap();
+    assert!(matches!(
+        plan.initial_inspection(),
+        InitialInspection::Invalid { .. }
+    ));
+}
+
+#[test]
+fn directly_overlapping_component_pins_relocate_the_affected_symbols() {
+    let netlist = common::compile_fixture("analysis", "simple.zen");
+    let mut document = plan_reconciliation(None, &netlist, "simple.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    let target = pin_point(&document, "R1.R", "1");
+    let source = pin_point(&document, "R2.R", "1");
+    let symbol = managed_symbol_mut(&mut document, "R2.R");
+    let new_at = Point::new(
+        symbol.at.x + target.x - source.x,
+        symbol.at.y + target.y - source.y,
+    );
+    move_symbol(symbol, new_at);
+    let moved_id = symbol.id.clone();
+    let inspection = inspect_schematic(&document, &netlist).unwrap();
+    let issue = inspection
+        .issues
+        .iter()
+        .find(|issue| {
+            matches!(
+                issue.issue,
+                SchematicIssue::Shorted { .. } | SchematicIssue::UnexpectedConnection { .. }
+            ) && !issue.items.iter().any(|item| {
+                matches!(
+                    item,
+                    pcb_kicad_sch::connectivity::ConnectivityItemRef::Wire { .. }
+                        | pcb_kicad_sch::connectivity::ConnectivityItemRef::Junction { .. }
+                )
+            })
+        })
+        .unwrap_or_else(|| panic!("missing direct-pin issue: {:#?}", inspection.issues));
+
+    let plan = plan_repairs(
+        &document,
+        &netlist,
+        &inspection,
+        BTreeSet::from([issue.key.clone()]),
+    )
+    .unwrap();
+    let repaired = plan.apply(Some(&document)).unwrap();
+
+    let relocated = repaired
+        .pages
+        .iter()
+        .flat_map(|page| &page.items)
+        .find_map(|item| match item {
+            SchItem::Symbol(symbol) if symbol.id == moved_id => Some(symbol),
+            _ => None,
+        })
+        .expect("relocated symbol remains present");
+    assert_ne!(relocated.at, new_at);
+    for coordinate in [relocated.at.x, relocated.at.y] {
+        let grid_units = coordinate / CONNECTION_GRID_MM;
+        assert!((grid_units - grid_units.round()).abs() < 1.0e-9);
+    }
+    assert_eq!(
+        plan_repairs(
+            &document,
+            &netlist,
+            &inspection,
+            BTreeSet::from([issue.key.clone()]),
+        )
+        .unwrap()
+        .apply(Some(&document))
+        .unwrap(),
+        repaired
+    );
+}
+
+#[test]
+fn repairs_an_unexpected_terminal_connection_without_removing_the_symbol() {
+    let fixture = common::AnalysisFixture::load("analysis", "simple.zen", "kicad");
+    let mut document = fixture.kicad_document().clone();
+    let mut unbound = managed_symbols(&document).next().unwrap().clone();
+    unbound.id = "unbound-extra".to_string();
+    unbound.fields.remove("Path");
+    let moved_at = Point::new(unbound.at.x + 25.4, unbound.at.y);
+    move_symbol(&mut unbound, moved_at);
+    let definition = &document.pages[0].library.definitions[&unbound.lib_id];
+    let pin = definition.placed_pins(&unbound).unwrap()[0].point;
+    document.pages[0].items.push(SchItem::Symbol(unbound));
+    document.pages[0].items.push(SchItem::Wire(Wire {
+        id: "unexpected-terminal-wire".to_string(),
+        a: Point::new(207.01, 146.05),
+        b: pin,
+        unsupported: Vec::new(),
+    }));
+
+    let inspection = inspect_schematic(&document, fixture.netlist()).unwrap();
+    let issue = inspection
+        .issues
+        .iter()
+        .find(|issue| matches!(issue.issue, SchematicIssue::UnexpectedConnection { .. }))
+        .unwrap();
+    assert!(
+        issue.items.iter().any(
+            |item| matches!(item, pcb_kicad_sch::connectivity::ConnectivityItemRef::Wire { id, .. } if id == "unexpected-terminal-wire")
+        ),
+        "{issue:#?}"
+    );
+    let plan = plan_repairs(
+        &document,
+        fixture.netlist(),
+        &inspection,
+        BTreeSet::from([issue.key.clone()]),
+    )
+    .unwrap();
+    let repaired = plan.apply(Some(&document)).unwrap();
+
+    assert!(
+        repaired.pages[0]
+            .items
+            .iter()
+            .any(|item| matches!(item, SchItem::Symbol(symbol) if symbol.id == "unbound-extra"))
+    );
+    assert!(
+        !repaired.pages[0].items.iter().any(
+            |item| matches!(item, SchItem::Wire(wire) if wire.id == "unexpected-terminal-wire")
+        )
+    );
+}
+
+fn managed_symbols(document: &SchDocument) -> impl Iterator<Item = &Symbol> {
+    document
+        .pages
+        .iter()
+        .flat_map(|page| &page.items)
+        .filter_map(|item| match item {
+            SchItem::Symbol(symbol) if symbol.field_value("Path").is_some() => Some(symbol),
+            _ => None,
+        })
+}
+
+fn first_managed_mut(document: &mut SchDocument) -> &mut Symbol {
+    document
+        .pages
+        .iter_mut()
+        .flat_map(|page| &mut page.items)
+        .find_map(|item| match item {
+            SchItem::Symbol(symbol) if symbol.field_value("Path").is_some() => Some(symbol),
+            _ => None,
+        })
+        .unwrap()
+}
+
+fn managed_symbol_mut<'a>(document: &'a mut SchDocument, path: &str) -> &'a mut Symbol {
+    document
+        .pages
+        .iter_mut()
+        .flat_map(|page| &mut page.items)
+        .find_map(|item| match item {
+            SchItem::Symbol(symbol) if symbol.field_value("Path") == Some(path) => Some(symbol),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("missing managed symbol {path}"))
+}
+
+fn pin_point(document: &SchDocument, path: &str, number: &str) -> Point {
+    for page in &document.pages {
+        let Some(symbol) = page.items.iter().find_map(|item| match item {
+            SchItem::Symbol(symbol) if symbol.field_value("Path") == Some(path) => Some(symbol),
+            _ => None,
+        }) else {
+            continue;
+        };
+        return page.library.definitions[&symbol.lib_id]
+            .placed_pins(symbol)
+            .unwrap()
+            .into_iter()
+            .find(|pin| pin.number == number)
+            .unwrap_or_else(|| panic!("missing {path} pin {number}"))
+            .point;
+    }
+    panic!("missing managed symbol {path}")
+}
+
+fn remove_first_managed(document: &mut SchDocument) {
+    let id = managed_symbols(document).next().unwrap().id.clone();
+    document.pages[0]
+        .items
+        .retain(|item| item.id() != Some(id.as_str()));
+}
+
+fn duplicate_first_managed(document: &mut SchDocument) {
+    let mut duplicate = managed_symbols(document).next().unwrap().clone();
+    duplicate.id = "duplicate-managed".to_string();
+    document.pages[0].items.push(SchItem::Symbol(duplicate));
+}
+
+fn mismatch_first_managed_id(document: &mut SchDocument) {
+    first_managed_mut(document).id = "mismatched-managed".to_string();
+}
+
+fn add_unexpected_managed(document: &mut SchDocument) {
+    let mut unexpected = managed_symbols(document).next().unwrap().clone();
+    unexpected.id = "unexpected-managed".to_string();
+    unexpected.fields.get_mut("Path").unwrap().value = "STALE.R".to_string();
+    document.pages[0].items.push(SchItem::Symbol(unexpected));
+}
+
+fn add_unbound_symbol(document: &mut SchDocument) {
+    let mut unbound = managed_symbols(document).next().unwrap().clone();
+    unbound.id = "unbound-symbol".to_string();
+    unbound.fields.remove("Path");
+    let moved_at = Point::new(unbound.at.x + 50.8, unbound.at.y);
+    move_symbol(&mut unbound, moved_at);
+    document.pages[0].items.push(SchItem::Symbol(unbound));
+}
+
+fn disconnect_first_named_island(document: &mut SchDocument) {
+    let id = document.pages[0]
+        .items
+        .iter()
+        .find_map(|item| match item {
+            SchItem::Label(label) if label.text == "MID" => Some(label.id.clone()),
+            _ => None,
+        })
+        .expect("generated MID label");
+    document.pages[0]
+        .items
+        .retain(|item| item.id() != Some(id.as_str()));
+}
+
+fn add_unexpected_net(document: &mut SchDocument) {
+    document.pages[0]
+        .items
+        .push(SchItem::Label(pcb_kicad_sch::Label::new(
+            "unexpected-net",
+            "EXTRA",
+            Point::new(100.0, 100.0),
+        )));
+}
+
+fn add_short(document: &mut SchDocument) {
+    let point = |name: &str| {
+        document.pages[0]
+            .items
+            .iter()
+            .find_map(|item| match item {
+                SchItem::Label(label) if label.text == name => Some(label.at),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("generated {name} label"))
+    };
+    let left = point("LEFT");
+    let mid = point("MID");
+    document.pages[0].items.push(SchItem::Wire(Wire {
+        id: "short".to_string(),
+        a: left,
+        b: mid,
+        unsupported: Vec::new(),
+    }));
+}
+
+fn move_symbol(symbol: &mut Symbol, at: Point) {
+    let delta = Point::new(at.x - symbol.at.x, at.y - symbol.at.y);
+    symbol.at = at;
+    for field in symbol.fields.values_mut() {
+        field.at = Point::new(field.at.x + delta.x, field.at.y + delta.y);
+    }
+}

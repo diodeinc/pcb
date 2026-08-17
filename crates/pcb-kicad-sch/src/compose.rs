@@ -8,13 +8,14 @@ use crate::{
     CONNECTION_GRID_MM, GEOMETRY_EPS_MM, Label, LabelKind, LabelShape, LabelSpin, Paper, Point,
     Rotation, SchDocument, SchItem, SchPage, Sheet, SheetPin, Symbol, SymbolDefinition,
     SymbolField, SymbolSlotKey, Wire,
-    analysis::{analyze_schematic, terminals_match},
+    analysis::{ConnectivityInspection, SchematicIssue, SchematicIssueKey, terminals_match},
     component_slots,
     connectivity::{
-        ComponentIdentity, PinVisibility, Terminal, named_connected_nets, reduce_with_provenance,
+        ComponentIdentity, PinVisibility, SymbolLocation, Terminal, named_connected_nets,
+        reduce_with_provenance,
     },
     deterministic_uuid, field_autoplace, hierarchy, net_symbols,
-    repair::{RepairScope, plan_connectivity_repair_with, remove_items},
+    repair::{ConnectivityRepairPlan, plan_connectivity_repair, remove_items},
     root_interface, root_page_id, symbol,
 };
 
@@ -33,20 +34,35 @@ const SHEET_MIN_HEIGHT_MM: f64 = 20.32;
 pub(crate) fn reconcile_document(
     existing: Option<&SchDocument>,
     netlist: &Schematic,
-    root_file_name: &str,
+    root_file_name: Option<&str>,
+    issue_selection: Option<&BTreeSet<SchematicIssueKey>>,
+    inspection_before: Option<&ConnectivityInspection>,
 ) -> Result<SchDocument> {
+    if issue_selection.is_some_and(BTreeSet::is_empty) {
+        return existing
+            .cloned()
+            .context("repairing selected issues requires an existing document");
+    }
+    let complete = issue_selection.is_none();
     // The generated document is not a canonical representation. Any existing
     // KiCad organization is valid when its connectivity matches the netlist;
     // managed symbol identities are the only reconciliation metadata we may
     // rely on. See ../DESIGN.md.
     let creating = existing.is_none();
-    let mut document = existing.cloned().unwrap_or_else(|| SchDocument {
-        pages: vec![SchPage {
-            file_name: Some(root_file_name.to_string()),
-            ..SchPage::new(root_page_id())
-        }],
-        root_page_ids: vec![root_page_id()],
-    });
+    let mut document = match existing {
+        Some(existing) => existing.clone(),
+        None => SchDocument {
+            pages: vec![SchPage {
+                file_name: Some(
+                    root_file_name
+                        .context("initializing a schematic requires a root filename")?
+                        .to_string(),
+                ),
+                ..SchPage::new(root_page_id())
+            }],
+            root_page_ids: vec![root_page_id()],
+        },
+    };
     if document.pages.is_empty() {
         bail!("KiCad schematic project has no pages");
     }
@@ -57,16 +73,23 @@ pub(crate) fn reconcile_document(
         .context("KiCad schematic project has no loaded root page")?;
 
     let existing_slots = existing_slot_locations(&document);
+    let expected_slots = component_slots::component_symbol_slots(netlist)?
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let RepairTargets {
+        project_slots,
+        remove_slots,
+        remove_locations,
+        connectivity: selected_connectivity,
+    } = repair_targets(issue_selection, inspection_before, &expected_slots)?;
     let instances = component_instances(netlist)?;
-    let slots = component_slots::component_symbol_slots(netlist)?;
-    let net_symbol_specs = net_symbols::specs(netlist)?;
     let mut selected_existing = BTreeMap::new();
-    for slot in &slots {
-        if let Some(location) = select_existing_symbol(slot, existing_slots.get(slot)) {
-            selected_existing.insert(slot.clone(), location);
+    for slot in &project_slots {
+        if let Some(symbol) = select_existing_symbol(slot, existing_slots.get(slot)) {
+            selected_existing.insert(slot.clone(), symbol);
         }
     }
-    let relocatable_slots = slots
+    let relocatable_slots = project_slots
         .iter()
         .filter(|slot| !selected_existing.contains_key(*slot))
         .cloned()
@@ -85,135 +108,382 @@ pub(crate) fn reconcile_document(
             pages
         },
     );
+    let linked_modules = linked_modules(netlist)?;
+    let linked_modules = if complete {
+        linked_modules
+    } else {
+        linked_modules
+            .into_iter()
+            .filter(|module| {
+                project_slots.iter().any(|slot| {
+                    slot.component_path()
+                        .strip_prefix(&module.path)
+                        .is_some_and(|suffix| suffix.starts_with('.'))
+                })
+            })
+            .collect()
+    };
     let hierarchy = hierarchy::plan(
-        linked_modules(netlist)?,
+        linked_modules,
         existing_component_pages,
         default_page,
         document.pages.len(),
     )?;
     materialize_hierarchy(&mut document, netlist, &hierarchy)?;
 
-    let retained_power_symbols = power_symbol_locations(&document)?;
-    retain_power_symbol_definitions(&mut document, &retained_power_symbols);
+    let retained_power_symbols = if complete {
+        power_symbol_locations(&document)?
+    } else {
+        BTreeSet::new()
+    };
+    for slot in &remove_slots {
+        remove_component_slot(&mut document, slot);
+    }
+    for location in &remove_locations {
+        remove_symbol_location(&mut document, location);
+    }
+    for slot in &project_slots {
+        project_component_slot(
+            &mut document,
+            netlist,
+            &instances,
+            slot,
+            selected_existing.get(slot),
+            &hierarchy,
+        )?;
+    }
+    if complete {
+        retain_expected_and_power_symbols(&mut document, &expected_slots, &retained_power_symbols);
+    }
 
-    let mut placed = BTreeMap::new();
-    let mut retained_symbol_locations = retained_power_symbols;
-    for slot in &slots {
-        let instance = instances.get(slot.component_path()).with_context(|| {
+    let mut placed = placed_symbols_from_document(&document, &expected_slots)?;
+    pack_generated_symbols(&mut document, netlist, &mut placed, &relocatable_slots)?;
+
+    add_hierarchy_connectivity(&mut document, netlist, &placed, &hierarchy)?;
+
+    let current = crate::analysis::inspect_schematic(&document, netlist)?;
+    let repair_keys = if complete {
+        current
+            .issues
+            .iter()
+            .map(|issue| issue.key.clone())
+            .collect::<BTreeSet<_>>()
+    } else {
+        let before_keys = inspection_before
+            .into_iter()
+            .flat_map(|inspection| &inspection.issues)
+            .map(|issue| issue.key.clone())
+            .collect::<BTreeSet<_>>();
+        let projected_disconnects = inspection_before
+            .into_iter()
+            .flat_map(|inspection| &inspection.issues)
+            .map(|issue| {
+                disconnected_from_projected_symbol(&issue.issue, &project_slots, &placed)
+                    .map(|related| related.then(|| issue.key.clone()))
+            })
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .collect::<BTreeSet<_>>();
+        current
+            .issues
+            .iter()
+            .filter(|issue| {
+                selected_connectivity.contains(&issue.key)
+                    || projected_disconnects.contains(&issue.key)
+                    || (!project_slots.is_empty()
+                        && !before_keys.contains(&issue.key)
+                        && is_connectivity_issue(&issue.issue))
+            })
+            .map(|issue| issue.key.clone())
+            .collect::<BTreeSet<_>>()
+    };
+    if creating || !repair_keys.is_empty() {
+        let mut plan = plan_connectivity_repair(&document, netlist, &current, &repair_keys)?;
+        if creating {
+            plan.reconnect_nets
+                .extend(named_connected_nets(netlist).map(|net| net.name.clone()));
+        }
+        apply_connectivity_repair(&mut document, netlist, &mut placed, default_page, plan)?;
+    }
+
+    prune_unused_symbol_definitions(&mut document);
+    Ok(document)
+}
+
+fn is_connectivity_issue(issue: &SchematicIssue) -> bool {
+    matches!(
+        issue,
+        SchematicIssue::DisconnectedNet { .. }
+            | SchematicIssue::UnexpectedNet { .. }
+            | SchematicIssue::UnexpectedConnection { .. }
+            | SchematicIssue::Shorted { .. }
+    )
+}
+
+fn disconnected_from_projected_symbol(
+    issue: &SchematicIssue,
+    project_slots: &BTreeSet<SymbolSlotKey>,
+    placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
+) -> Result<bool> {
+    let SchematicIssue::DisconnectedNet {
+        missing_terminals, ..
+    } = issue
+    else {
+        return Ok(false);
+    };
+    for terminal in missing_terminals {
+        let Terminal::ComponentPin {
+            component: ComponentIdentity::ManagedPath(path),
+            ..
+        } = terminal
+        else {
+            continue;
+        };
+        for slot in project_slots
+            .iter()
+            .filter(|slot| slot.component_path() == path)
+        {
+            let Some(symbol) = placed.get(slot) else {
+                continue;
+            };
+            for pin in symbol.definition.placed_pins(&symbol.symbol)? {
+                if pin.hidden {
+                    continue;
+                }
+                let projected = Terminal::ComponentPin {
+                    component: ComponentIdentity::ManagedPath(path.clone()),
+                    pin_name: pin.name,
+                    pin_numbers: pin.numbers,
+                };
+                if terminals_match(terminal, &projected) {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
+struct RepairTargets {
+    project_slots: BTreeSet<SymbolSlotKey>,
+    remove_slots: BTreeSet<SymbolSlotKey>,
+    remove_locations: BTreeSet<SymbolLocation>,
+    connectivity: BTreeSet<SchematicIssueKey>,
+}
+
+fn repair_targets(
+    issue_selection: Option<&BTreeSet<SchematicIssueKey>>,
+    inspection: Option<&ConnectivityInspection>,
+    expected_slots: &BTreeSet<SymbolSlotKey>,
+) -> Result<RepairTargets> {
+    let mut project_slots = if issue_selection.is_none() {
+        expected_slots.clone()
+    } else {
+        BTreeSet::new()
+    };
+    let mut remove_slots = BTreeSet::new();
+    let mut remove_locations = BTreeSet::new();
+    let mut selected_connectivity = BTreeSet::new();
+    if let Some(inspection) = inspection {
+        let selected = match issue_selection {
+            Some(keys) => keys
+                .iter()
+                .map(|key| {
+                    inspection
+                        .issues
+                        .iter()
+                        .find(|issue| &issue.key == key)
+                        .with_context(|| format!("schematic issue {key:?} is not present"))
+                })
+                .collect::<Result<Vec<_>>>()?,
+            None => inspection.issues.iter().collect(),
+        };
+        for context in selected {
+            match &context.issue {
+                SchematicIssue::MissingSymbol { slot }
+                | SchematicIssue::DuplicateSymbol { slot, .. }
+                | SchematicIssue::MismatchedSymbolId { slot, .. } => {
+                    project_slots.insert(slot.clone());
+                }
+                SchematicIssue::UnexpectedSymbol { slot, .. } => {
+                    remove_slots.insert(slot.clone());
+                }
+                SchematicIssue::UnboundSymbol { location } => {
+                    remove_locations.insert(location.clone());
+                }
+                SchematicIssue::DisconnectedNet { .. }
+                | SchematicIssue::UnexpectedNet { .. }
+                | SchematicIssue::UnexpectedConnection { .. }
+                | SchematicIssue::Shorted { .. } => {
+                    selected_connectivity.insert(context.key.clone());
+                }
+            }
+        }
+    } else if issue_selection.is_some() {
+        bail!("repairing selected issues requires a valid inspection");
+    }
+    Ok(RepairTargets {
+        project_slots,
+        remove_slots,
+        remove_locations,
+        connectivity: selected_connectivity,
+    })
+}
+
+fn project_component_slot(
+    document: &mut SchDocument,
+    netlist: &Schematic,
+    instances: &BTreeMap<String, &Instance>,
+    slot: &SymbolSlotKey,
+    selected: Option<&ExistingSymbol>,
+    hierarchy: &hierarchy::HierarchyPlan,
+) -> Result<()> {
+    let instance = instances.get(slot.component_path()).with_context(|| {
+        format!(
+            "component '{}' is absent from the netlist",
+            slot.component_path()
+        )
+    })?;
+    let definition = component_slots::component_symbol_definition(netlist, instance)?
+        .with_context(|| {
             format!(
-                "component '{}' is absent from the netlist",
+                "component '{}' has no KiCad symbol definition",
                 slot.component_path()
             )
         })?;
-        let definition = component_slots::component_symbol_definition(netlist, instance)?
+    let page_index = if let Some(selected) = selected {
+        selected.page_index
+    } else {
+        hierarchy.page_for_new_component(slot.component_path())?
+    };
+
+    if document.pages.iter().any(|page| {
+        page.items.iter().any(|item| {
+            item.id() == Some(slot.symbol_id().as_str())
+                && !matches!(item, SchItem::Symbol(symbol) if symbol.field_value("Path") == Some(slot.component_path()) && symbol.unit == slot.unit())
+        })
+    }) {
+        bail!(
+            "managed symbol UUID '{}' is already used by another schematic item",
+            slot.symbol_id()
+        );
+    }
+
+    let previous = selected.map(|selected| &selected.symbol);
+    let at = previous.map(|symbol| symbol.at).unwrap_or_default();
+    let rotation = previous.map(|symbol| symbol.rotation).unwrap_or_default();
+    let mirror = previous.and_then(|symbol| symbol.mirror);
+    let symbol =
+        build_component_symbol(instance, slot, &definition, at, rotation, mirror, previous)?;
+    document.pages[page_index]
+        .library
+        .definitions
+        .insert(definition.lib_id.clone(), definition);
+    if let Some(selected) = selected {
+        let selected_page_id = document.pages[selected.page_index].id.clone();
+        let mut replacement = Some(symbol);
+        for page in &mut document.pages {
+            page.items.retain_mut(|item| {
+                let matches_slot = matches!(
+                    item,
+                    SchItem::Symbol(symbol)
+                        if symbol.field_value("Path") == Some(slot.component_path())
+                            && symbol.unit == slot.unit()
+                );
+                if !matches_slot {
+                    return true;
+                }
+                if replacement.is_some()
+                    && page.id == selected_page_id
+                    && item.id() == Some(selected.symbol.id.as_str())
+                {
+                    *item = SchItem::Symbol(replacement.take().expect("checked replacement"));
+                    true
+                } else {
+                    false
+                }
+            });
+        }
+        if replacement.is_some() {
+            bail!("selected managed symbol '{}' is absent", selected.symbol.id);
+        }
+    } else {
+        document.pages[page_index]
+            .items
+            .push(SchItem::Symbol(symbol));
+    }
+    Ok(())
+}
+
+fn remove_component_slot(document: &mut SchDocument, slot: &SymbolSlotKey) {
+    for page in &mut document.pages {
+        page.items.retain(|item| {
+            !matches!(
+                item,
+                SchItem::Symbol(symbol)
+                    if symbol.field_value("Path") == Some(slot.component_path())
+                        && symbol.unit == slot.unit()
+            )
+        });
+    }
+}
+
+fn remove_symbol_location(document: &mut SchDocument, location: &SymbolLocation) {
+    if let Some(page) = document
+        .pages
+        .iter_mut()
+        .find(|page| page.id == location.page_id)
+    {
+        page.items.retain(
+            |item| !matches!(item, SchItem::Symbol(symbol) if symbol.id == location.symbol_id),
+        );
+    }
+}
+
+fn placed_symbols_from_document(
+    document: &SchDocument,
+    expected_slots: &BTreeSet<SymbolSlotKey>,
+) -> Result<BTreeMap<SymbolSlotKey, PlacedSymbol>> {
+    let locations = existing_slot_locations(document);
+    let mut placed = BTreeMap::new();
+    for slot in expected_slots {
+        let Some(candidates) = locations.get(slot) else {
+            continue;
+        };
+        let [candidate] = candidates.as_slice() else {
+            continue;
+        };
+        let definition = document.pages[candidate.page_index]
+            .library
+            .definitions
+            .get(&candidate.symbol.lib_id)
             .with_context(|| {
                 format!(
-                    "component '{}' has no KiCad symbol definition",
-                    slot.component_path()
+                    "managed symbol {} has no cached definition {}",
+                    candidate.symbol.id, candidate.symbol.lib_id
                 )
-            })?;
-        let (page_index, previous) = match selected_existing.get(slot) {
-            Some(location) => (
-                location.page_index,
-                Some(&existing_slots[slot][location.candidate_index].symbol),
-            ),
-            None => (
-                hierarchy.page_for_new_component(slot.component_path())?,
-                None,
-            ),
-        };
-        let at = previous.map(|symbol| symbol.at).unwrap_or_default();
-        let rotation = previous.map(|symbol| symbol.rotation).unwrap_or_default();
-        let mirror = previous.and_then(|symbol| symbol.mirror);
-        let symbol =
-            build_component_symbol(instance, slot, &definition, at, rotation, mirror, previous)?;
-
-        let page = &mut document.pages[page_index];
-        match page.library.definitions.get(&definition.lib_id) {
-            Some(found) if found != &definition => bail!(
-                "page '{}' has conflicting definitions for library symbol '{}'",
-                page.id,
-                definition.lib_id
-            ),
-            Some(_) => {}
-            None => {
-                page.library
-                    .definitions
-                    .insert(definition.lib_id.clone(), definition.clone());
-            }
-        }
-        let item_index = selected_existing
-            .get(slot)
-            .map(|location| existing_slots[slot][location.candidate_index].item_index)
-            .unwrap_or_else(|| {
-                page.items.push(SchItem::Symbol(symbol.clone()));
-                page.items.len() - 1
-            });
-        if selected_existing.contains_key(slot) {
-            page.items[item_index] = SchItem::Symbol(symbol.clone());
-        }
-        retained_symbol_locations.insert((page_index, item_index));
+            })?
+            .clone();
         placed.insert(
             slot.clone(),
             PlacedSymbol {
-                page_index,
-                symbol,
+                page_index: candidate.page_index,
+                symbol: candidate.symbol.clone(),
                 definition,
             },
         );
     }
-    retain_projected_symbols(&mut document, &retained_symbol_locations);
-
-    pack_generated_symbols(&mut document, netlist, &mut placed, &relocatable_slots)?;
-
-    // Generated labels, wires, and hierarchy are an initialization policy,
-    // not managed reconciliation state. If the projected symbols already form
-    // the expected connectivity, preserve every KiCad-authored electrical item
-    // exactly as found regardless of whether its UUID was once generated here.
-    if !creating
-        && hierarchy.sheets.is_empty()
-        && analyze_schematic(&document, netlist)?.is_equivalent()
-    {
-        return Ok(document);
-    }
-
-    add_hierarchy_connectivity(&mut document, netlist, &placed, &hierarchy)?;
-
-    refresh_generated_presentation(
-        &mut document,
-        netlist,
-        &placed,
-        &net_symbol_specs,
-        default_page,
-    )?;
-
-    if !creating && analyze_schematic(&document, netlist)?.is_equivalent() {
-        return Ok(document);
-    }
-
-    let repair_scope = if creating {
-        RepairScope::InitializeAllNets
-    } else {
-        RepairScope::ExistingIssues
-    };
-    repair_connectivity(
-        &mut document,
-        netlist,
-        &placed,
-        &net_symbol_specs,
-        default_page,
-        repair_scope,
-    )?;
-    Ok(document)
+    Ok(placed)
 }
 
 /// Component symbols are projected from Zener. Explicit KiCad power symbols
 /// are semantic net-name drivers, so they remain available for connectivity
 /// analysis and minimally destructive repair.
-fn power_symbol_locations(document: &SchDocument) -> Result<BTreeSet<(usize, usize)>> {
+fn power_symbol_locations(document: &SchDocument) -> Result<BTreeSet<SymbolLocation>> {
     let mut locations = BTreeSet::new();
-    for (page_index, page) in document.pages.iter().enumerate() {
-        for (item_index, item) in page.items.iter().enumerate() {
+    for page in &document.pages {
+        for item in &page.items {
             let SchItem::Symbol(symbol) = item else {
                 continue;
             };
@@ -224,74 +494,57 @@ fn power_symbol_locations(document: &SchDocument) -> Result<BTreeSet<(usize, usi
                 .power_scope()
                 .is_some()
             {
-                locations.insert((page_index, item_index));
+                locations.insert(SymbolLocation {
+                    page_id: page.id.clone(),
+                    symbol_id: symbol.id.clone(),
+                });
             }
         }
     }
     Ok(locations)
 }
 
-fn retain_power_symbol_definitions(
+fn retain_expected_and_power_symbols(
     document: &mut SchDocument,
-    retained_symbols: &BTreeSet<(usize, usize)>,
+    expected_slots: &BTreeSet<SymbolSlotKey>,
+    retained_power_symbols: &BTreeSet<SymbolLocation>,
 ) {
-    for (page_index, page) in document.pages.iter_mut().enumerate() {
-        let retained_definitions = page
-            .items
-            .iter()
-            .enumerate()
-            .filter(|(item_index, _)| retained_symbols.contains(&(page_index, *item_index)))
-            .filter_map(|(_, item)| match item {
-                SchItem::Symbol(symbol) => Some(symbol.lib_id.clone()),
-                _ => None,
-            })
-            .collect::<BTreeSet<_>>();
-        page.library
-            .definitions
-            .retain(|lib_id, _| retained_definitions.contains(lib_id));
-    }
-}
-
-fn retain_projected_symbols(document: &mut SchDocument, retained: &BTreeSet<(usize, usize)>) {
-    for (page_index, page) in document.pages.iter_mut().enumerate() {
-        page.items = page
-            .items
-            .drain(..)
-            .enumerate()
-            .filter_map(|(item_index, item)| {
-                (!matches!(item, SchItem::Symbol(_))
-                    || retained.contains(&(page_index, item_index)))
-                .then_some(item)
-            })
-            .collect();
+    for page in &mut document.pages {
+        let page_id = page.id.clone();
+        page.items.retain(|item| {
+            let SchItem::Symbol(symbol) = item else {
+                return true;
+            };
+            if retained_power_symbols.contains(&SymbolLocation {
+                page_id: page_id.clone(),
+                symbol_id: symbol.id.clone(),
+            }) {
+                return true;
+            }
+            let Some(slot) = symbol
+                .field_value("Path")
+                .and_then(|path| SymbolSlotKey::new(path, symbol.unit))
+            else {
+                return false;
+            };
+            expected_slots.contains(&slot) && symbol.id == slot.symbol_id()
+        });
     }
 }
 
 #[derive(Clone)]
 struct ExistingSymbol {
     page_index: usize,
-    item_index: usize,
     symbol: Symbol,
-}
-
-#[derive(Clone, Copy)]
-struct ExistingSelection {
-    page_index: usize,
-    candidate_index: usize,
 }
 
 fn existing_slot_locations(document: &SchDocument) -> BTreeMap<SymbolSlotKey, Vec<ExistingSymbol>> {
     let mut locations = BTreeMap::<SymbolSlotKey, Vec<ExistingSymbol>>::new();
     for (page_index, page) in document.pages.iter().enumerate() {
-        for (item_index, symbol) in
-            page.items
-                .iter()
-                .enumerate()
-                .filter_map(|(index, item)| match item {
-                    SchItem::Symbol(symbol) => Some((index, symbol)),
-                    _ => None,
-                })
-        {
+        for symbol in page.items.iter().filter_map(|item| match item {
+            SchItem::Symbol(symbol) => Some(symbol),
+            _ => None,
+        }) {
             let Some(path) = symbol.field_value("Path") else {
                 continue;
             };
@@ -300,7 +553,6 @@ fn existing_slot_locations(document: &SchDocument) -> BTreeMap<SymbolSlotKey, Ve
             };
             locations.entry(slot).or_default().push(ExistingSymbol {
                 page_index,
-                item_index,
                 symbol: symbol.clone(),
             });
         }
@@ -311,22 +563,13 @@ fn existing_slot_locations(document: &SchDocument) -> BTreeMap<SymbolSlotKey, Ve
 fn select_existing_symbol(
     slot: &SymbolSlotKey,
     candidates: Option<&Vec<ExistingSymbol>>,
-) -> Option<ExistingSelection> {
+) -> Option<ExistingSymbol> {
     let candidates = candidates?;
-    let exact = candidates
+    candidates
         .iter()
-        .enumerate()
-        .filter(|(_, candidate)| candidate.symbol.id == slot.symbol_id())
-        .collect::<Vec<_>>();
-    let (candidate_index, candidate) = match exact.as_slice() {
-        [(index, candidate)] => (*index, *candidate),
-        [] if candidates.len() == 1 => (0, &candidates[0]),
-        _ => return None,
-    };
-    Some(ExistingSelection {
-        page_index: candidate.page_index,
-        candidate_index,
-    })
+        .find(|candidate| candidate.symbol.id == slot.symbol_id())
+        .or_else(|| candidates.first())
+        .cloned()
 }
 
 fn component_instances(netlist: &Schematic) -> Result<BTreeMap<String, &Instance>> {
@@ -572,10 +815,27 @@ fn occupy_page_items_except(
                     packer.occupy(GridRect::from_bounds(bounds));
                 }
             }
-            _ => {}
+            SchItem::Label(label) => packer.occupy(point_rect(label.at)),
+            SchItem::Wire(wire) => {
+                let bounds = field_autoplace::Bounds::from_points([wire.a, wire.b])
+                    .expect("wire has two endpoints");
+                packer.occupy(GridRect::from_bounds(bounds));
+            }
+            SchItem::Junction(junction) => packer.occupy(point_rect(junction.at)),
+            SchItem::NoConnect(no_connect) => packer.occupy(point_rect(no_connect.at)),
+            SchItem::Symbol(_) | SchItem::Unsupported(_) => {}
         }
     }
     Ok(())
+}
+
+fn point_rect(point: Point) -> GridRect {
+    GridRect {
+        min_x: grid_floor(point.x),
+        min_y: grid_floor(point.y),
+        max_x: grid_ceil(point.x).max(grid_floor(point.x) + 1),
+        max_y: grid_ceil(point.y).max(grid_floor(point.y) + 1),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1039,53 +1299,93 @@ impl PinTarget {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ConnectivityUpdate {
-    InsertMissing,
-    ExistingOnly,
-}
-
-fn refresh_generated_presentation(
+fn apply_connectivity_repair(
     document: &mut SchDocument,
     netlist: &Schematic,
-    placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
-    net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
+    placed: &mut BTreeMap<SymbolSlotKey, PlacedSymbol>,
     root_page: usize,
+    plan: ConnectivityRepairPlan,
 ) -> Result<()> {
-    let all_nets = named_connected_nets(netlist)
-        .map(|net| net.name.clone())
-        .collect();
+    remove_items(document, &plan.removals)?;
+    for location in &plan.relocate_symbols {
+        relocate_symbol(document, placed, location)?;
+    }
+    let net_symbol_specs = net_symbols::specs(netlist)?;
     add_connectivity_drivers(
         document,
         netlist,
         placed,
-        net_symbol_specs,
+        &net_symbol_specs,
         root_page,
-        &all_nets,
-        ConnectivityUpdate::ExistingOnly,
-    )
-}
-
-fn repair_connectivity(
-    document: &mut SchDocument,
-    netlist: &Schematic,
-    placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
-    net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
-    root_page: usize,
-    scope: RepairScope,
-) -> Result<()> {
-    let plan = plan_connectivity_repair_with(document, netlist, scope)?;
-    remove_items(document, plan.removals())?;
-    add_connectivity_drivers(
-        document,
-        netlist,
-        placed,
-        net_symbol_specs,
-        root_page,
-        plan.reconnect_nets(),
-        ConnectivityUpdate::InsertMissing,
+        &plan.reconnect_nets,
     )?;
-    prune_unused_symbol_definitions(document);
+    Ok(())
+}
+
+fn relocate_symbol(
+    document: &mut SchDocument,
+    placed: &mut BTreeMap<SymbolSlotKey, PlacedSymbol>,
+    location: &SymbolLocation,
+) -> Result<()> {
+    let page_index = document
+        .pages
+        .iter()
+        .position(|page| page.id == location.page_id)
+        .with_context(|| format!("schematic page '{}' is absent", location.page_id))?;
+    let mut symbol = document.pages[page_index]
+        .items
+        .iter()
+        .find_map(|item| match item {
+            SchItem::Symbol(symbol) if symbol.id == location.symbol_id => Some(symbol.clone()),
+            _ => None,
+        })
+        .with_context(|| format!("schematic symbol '{}' is absent", location.symbol_id))?;
+    let definition = document.pages[page_index]
+        .library
+        .definitions
+        .get(&symbol.lib_id)
+        .with_context(|| {
+            format!(
+                "schematic symbol '{}' has no cached definition '{}'",
+                symbol.id, symbol.lib_id
+            )
+        })?;
+    let mut page_without_symbol = document.pages[page_index].clone();
+    page_without_symbol
+        .items
+        .retain(|item| !matches!(item, SchItem::Symbol(candidate) if candidate.id == symbol.id));
+    let mut packer = GridPacker::for_page(&page_without_symbol.paper)?;
+    occupy_page_items(&mut packer, &page_without_symbol)?;
+    let relative = GridRect::from_bounds(
+        field_autoplace::symbol_visual_bounds(&symbol, definition)?
+            .unwrap_or_else(|| {
+                field_autoplace::Bounds::from_points([symbol.at]).expect("one point defines bounds")
+            })
+            .translated(-symbol.at.x, -symbol.at.y),
+    );
+    let new_at = packer.place(relative).to_point();
+    let delta = Point::new(new_at.x - symbol.at.x, new_at.y - symbol.at.y);
+    symbol.at = new_at;
+    for field in symbol.fields.values_mut() {
+        field.at = Point::new(field.at.x + delta.x, field.at.y + delta.y);
+    }
+    let item = document.pages[page_index]
+        .items
+        .iter_mut()
+        .find(
+            |item| matches!(item, SchItem::Symbol(candidate) if candidate.id == location.symbol_id),
+        )
+        .expect("located symbol remains present");
+    *item = SchItem::Symbol(symbol.clone());
+
+    if let Some(slot) = symbol
+        .field_value("Path")
+        .and_then(|path| SymbolSlotKey::new(path, symbol.unit))
+        && let Some(placed) = placed.get_mut(&slot)
+    {
+        placed.symbol = symbol;
+        placed.page_index = page_index;
+    }
     Ok(())
 }
 
@@ -1183,12 +1483,9 @@ fn add_connectivity_drivers(
     net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
     root_page: usize,
     target_nets: &BTreeSet<String>,
-    update: ConnectivityUpdate,
 ) -> Result<()> {
     let anchors_by_net = connectivity_targets(netlist, placed, target_nets)?;
-    if update == ConnectivityUpdate::InsertMissing {
-        sync_net_drivers(document, &anchors_by_net, net_symbol_specs)?;
-    }
+    sync_net_drivers(document, &anchors_by_net, net_symbol_specs)?;
 
     let interface_ports = match &netlist.root_ref {
         Some(root) => root_interface::ports_by_net(netlist, root)?,
@@ -1202,20 +1499,6 @@ fn add_connectivity_drivers(
             .map(move |port_name| (net_name.clone(), port_name))
     })
     .collect::<Vec<_>>();
-    if update == ConnectivityUpdate::ExistingOnly
-        && !interface_ports.iter().any(|(net_name, port_name)| {
-            [
-                deterministic_uuid(format!("zener:interface-port:{port_name}")),
-                deterministic_uuid(format!("zener:interface-net:{net_name}:{port_name}")),
-                deterministic_uuid(format!("zener:interface-global:{net_name}:{port_name}")),
-                deterministic_uuid(format!("zener:interface-link:{net_name}:{port_name}")),
-            ]
-            .iter()
-            .any(|id| contains_id(document, id))
-        })
-    {
-        return Ok(());
-    }
     let interface_anchors = interface_anchors(
         document,
         placed,
@@ -1232,17 +1515,6 @@ fn add_connectivity_drivers(
         let legacy_global_id =
             deterministic_uuid(format!("zener:interface-global:{net_name}:{port_name}"));
         let wire_id = deterministic_uuid(format!("zener:interface-link:{net_name}:{port_name}"));
-        let migrate_existing = [
-            hierarchical_id.as_str(),
-            net_label_id.as_str(),
-            legacy_global_id.as_str(),
-            wire_id.as_str(),
-        ]
-        .into_iter()
-        .any(|id| contains_id(document, id));
-        if update == ConnectivityUpdate::ExistingOnly && !migrate_existing {
-            continue;
-        }
         let mut net_label = Label::new(net_label_id, &net_name, net_anchor);
         net_label.spin = LabelSpin::Left;
         upsert_label(document, root_page, net_label)?;

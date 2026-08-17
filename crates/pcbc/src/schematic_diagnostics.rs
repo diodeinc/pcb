@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use pcb_kicad_sch::analysis::{SchematicIssue, analyze_schematic};
+use pcb_kicad_sch::analysis::{SchematicIssue, inspect_schematic};
 use pcb_sch::Schematic;
 use pcb_zen_core::Diagnostic;
 use pcb_zen_core::lang::error::CategorizedDiagnostic;
@@ -20,8 +20,8 @@ pub(crate) fn linked_schematic_diagnostics(
         Ok(project) => project,
         Err(error) => return vec![project_diagnostic(source_path, error)],
     };
-    let analysis = match analyze_schematic(&project.document, schematic) {
-        Ok(analysis) => analysis,
+    let analysis = match inspect_schematic(&project.document, schematic) {
+        Ok(inspection) => inspection.analysis,
         Err(error) => return vec![project_diagnostic(source_path, error)],
     };
 

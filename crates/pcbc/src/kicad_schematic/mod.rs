@@ -11,7 +11,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use pcb_kicad_sch::{
-    SchDocument, analysis::analyze_schematic, patch_page_source, reconcile::plan_reconciliation,
+    SchDocument, analysis::inspect_schematic, patch_page_source, reconcile::plan_reconciliation,
 };
 
 mod project;
@@ -352,7 +352,7 @@ fn project_has_single_missing_root(project_file: &Path) -> Result<bool> {
 }
 
 fn verify_document(document: &SchDocument, netlist: &Schematic, description: &str) -> Result<()> {
-    let analysis = analyze_schematic(document, netlist)?;
+    let analysis = inspect_schematic(document, netlist)?.analysis;
     if !analysis.is_equivalent() {
         bail!(
             "{description} is not netlist-equivalent: {:#?}",
