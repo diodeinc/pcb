@@ -957,7 +957,7 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
 
     let xml = write_board_array_xml(input, &spec).unwrap();
     assert!(xml.contains(r#"<Set polarity="NEGATIVE">"#));
-    for kind in ["plane", "full_void", "boundary_web"] {
+    for kind in ["plane", "full_void", "edge_void", "boundary_web"] {
         assert!(xml.contains(&format!(
             r#"<NonstandardAttribute name="diode.copper_balance" type="STRING" value="{kind}"/>"#
         )));
@@ -999,6 +999,9 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
     let round_trip = balance_paths(pcb_ir::dialects::ipc::CopperBalanceKind::Plane)
         .difference(&balance_paths(
             pcb_ir::dialects::ipc::CopperBalanceKind::FullVoid,
+        ))
+        .difference(&balance_paths(
+            pcb_ir::dialects::ipc::CopperBalanceKind::EdgeVoid,
         ))
         .union(&balance_paths(
             pcb_ir::dialects::ipc::CopperBalanceKind::BoundaryWeb,

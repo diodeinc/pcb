@@ -262,7 +262,7 @@ pub(super) fn spatial_result_from_squared_radii(
             .iter()
             .map(|void| void.radius_mm * void.radius_mm)
             .sum::<f64>();
-    let clipped_edge_void_area_mm2 = baseline.clipped_edge_voids().area();
+    let clipped_edge_void_area_mm2 = baseline.edge_void_emission.area_mm2();
     let void_area_mm2 = full_void_area_mm2 + clipped_edge_void_area_mm2;
     let generated_area_mm2 = (baseline.usable.area() - void_area_mm2).max(0.0);
     let achieved_density =
@@ -291,6 +291,7 @@ pub(super) fn spatial_result_from_squared_radii(
         voidable: baseline.voidable,
         full_voids,
         edge_voids: baseline.edge_voids,
+        edge_void_emission: baseline.edge_void_emission,
     }
 }
 

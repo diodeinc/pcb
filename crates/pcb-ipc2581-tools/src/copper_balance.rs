@@ -17,9 +17,10 @@ use ipc2581::types::{
 use pcb_ir::dialects::ipc::ArtworkScope;
 use pcb_ir::geom::copper_balance::{
     DenseCopperBalanceMode, DenseCopperBalanceProfile, DenseCopperBalanceResult,
-    DenseCopperLattice, DenseCopperLatticeSite, ROUNDED_HEXAGON_CORNER_RADIUS_RATIO,
-    SpatialCopperBalanceLayerRequest, SpatialCopperBalanceRequest, StackMomentField,
-    generate_spatial_dense_copper_balance, rounded_hexagonal_void,
+    DenseCopperLattice, DenseCopperLatticeSite, DenseCopperVoid,
+    ROUNDED_HEXAGON_CORNER_RADIUS_RATIO, SpatialCopperBalanceLayerRequest,
+    SpatialCopperBalanceRequest, StackMomentField, generate_spatial_dense_copper_balance,
+    rounded_hexagonal_void,
 };
 use pcb_ir::geom::path::ContourBuf;
 use pcb_ir::geom::region::{rings_to_contours, simplify_shapes};
@@ -48,6 +49,7 @@ pub(crate) fn copper_balance_attribute_value(kind: CopperBalanceKind) -> &'stati
     match kind {
         CopperBalanceKind::Plane => "plane",
         CopperBalanceKind::FullVoid => "full_void",
+        CopperBalanceKind::EdgeVoid => "edge_void",
         CopperBalanceKind::BoundaryWeb => "boundary_web",
     }
 }
@@ -56,6 +58,7 @@ pub(crate) fn parse_copper_balance_attribute(value: &str) -> Result<CopperBalanc
     match value {
         "plane" => Ok(CopperBalanceKind::Plane),
         "full_void" => Ok(CopperBalanceKind::FullVoid),
+        "edge_void" => Ok(CopperBalanceKind::EdgeVoid),
         "boundary_web" => Ok(CopperBalanceKind::BoundaryWeb),
         _ => bail!("unknown diode.copper_balance value '{value}'"),
     }
@@ -101,23 +104,25 @@ pub struct BalanceVoidSet {
     pub sites: Vec<DenseCopperLatticeSite>,
 }
 
-/// Generated IPC features for one balanced layer, split by polarity.
-///
-/// The perforated plane covers the whole usable region, every void is a full
-/// negative dictionary-instance reference, and the boundary web restores the
-/// portion edge voids must not remove. Repeated shapes share templates, so
-/// each occurrence costs only a location.
+/// Generated IPC features for one balanced layer, split by polarity: the
+/// plane over the whole usable region, voids as shared-template lattice
+/// instances, crossing edge voids as pre-clipped contours, and the boundary
+/// web as the labeled copper band along the usable boundary.
 #[derive(Debug, Clone, Default)]
 pub struct BalanceFeatureSets {
     pub plane: Vec<SetFeature>,
     pub boundary_web: Vec<SetFeature>,
     pub templates: Vec<BalanceVoidTemplate>,
     pub void_sets: Vec<BalanceVoidSet>,
+    pub edge_voids: Vec<SetFeature>,
 }
 
 impl BalanceFeatureSets {
     pub fn is_empty(&self) -> bool {
-        self.plane.is_empty() && self.boundary_web.is_empty() && self.void_sets.is_empty()
+        self.plane.is_empty()
+            && self.boundary_web.is_empty()
+            && self.void_sets.is_empty()
+            && self.edge_voids.is_empty()
     }
 
     /// Lower one balanced layer to its ordered generated feature sets — the
@@ -139,6 +144,7 @@ impl BalanceFeatureSets {
             boundary_web,
             templates,
             void_sets,
+            edge_voids,
         } = self;
         let balance_features = |polarity, kind, features, void_set| GeneratedLayerFeature {
             layer_name: layer_name.to_string(),
@@ -148,26 +154,36 @@ impl BalanceFeatureSets {
             features,
             void_set,
         };
-        let mut features = vec![balance_features(
+        let has_edge_voids = !edge_voids.is_empty();
+        let features = std::iter::once(balance_features(
             Polarity::Positive,
             CopperBalanceKind::Plane,
             plane,
             None,
-        )];
-        features.extend(void_sets.into_iter().map(|void_set| {
+        ))
+        .chain(void_sets.into_iter().map(|void_set| {
             balance_features(
                 Polarity::Negative,
                 CopperBalanceKind::FullVoid,
                 Vec::new(),
                 Some(void_set),
             )
-        }));
-        features.push(balance_features(
+        }))
+        .chain(has_edge_voids.then(|| {
+            balance_features(
+                Polarity::Negative,
+                CopperBalanceKind::EdgeVoid,
+                edge_voids,
+                None,
+            )
+        }))
+        .chain(std::iter::once(balance_features(
             Polarity::Positive,
             CopperBalanceKind::BoundaryWeb,
             boundary_web,
             None,
-        ));
+        )))
+        .collect();
         (templates, features)
     }
 }
@@ -444,53 +460,61 @@ pub fn balance_features(result: &DenseCopperBalanceResult) -> Result<BalanceFeat
             ..BalanceFeatureSets::default()
         }),
         DenseCopperBalanceMode::Perforated { .. } => {
-            let (templates, void_sets) = void_sets(result)?;
+            let emission = &result.edge_void_emission;
+            let (templates, void_sets) = void_sets(result, &emission.instanced)?;
             Ok(BalanceFeatureSets {
                 plane: ipc_region_features(&result.usable)?,
-                boundary_web: ipc_region_features(&result.boundary_web())?,
+                // The plane covers the web exactly, so its decimation is free.
+                boundary_web: ipc_region_features(
+                    &result.boundary_web().decimate_inward(tol::FLATTEN_MM),
+                )?,
                 templates,
                 void_sets,
+                edge_voids: ipc_region_features(&emission.clipped)?,
             })
         }
     }
 }
 
-/// One dictionary template and one declared-lattice site set per exact radius.
+/// One dictionary template and one declared-lattice site set per exact
+/// radius, covering the interior voids and the instanced edge voids.
 fn void_sets(
     result: &DenseCopperBalanceResult,
+    instanced_edge_voids: &[DenseCopperVoid],
 ) -> Result<(Vec<BalanceVoidTemplate>, Vec<BalanceVoidSet>)> {
     let mut sites_by_radius = std::collections::BTreeMap::<i64, Vec<DenseCopperLatticeSite>>::new();
-    for void in result.full_voids.iter().chain(&result.edge_voids) {
+    for void in result.full_voids.iter().chain(instanced_edge_voids) {
         sites_by_radius
             .entry((void.radius_mm * 1e6).round() as i64)
             .or_default()
             .push(void.site);
     }
-
-    let mut templates = Vec::with_capacity(sites_by_radius.len());
-    let mut sets = Vec::with_capacity(sites_by_radius.len());
-    for (radius_nm, mut sites) in sites_by_radius {
-        sites.sort_by_key(|site| (site.column, site.row));
-        let radius_mm = radius_nm as f64 / 1e6;
-        let id = format!("balance_hex_{radius_nm}nm");
-        let contour = rounded_hexagonal_void(radius_mm)
-            .context("generated copper balance has an invalid rounded-hex void radius")?;
-        templates.push(BalanceVoidTemplate {
-            id: id.clone(),
-            contour: IpcContour {
-                polygon: ipc_polygon_from_contour(&contour)?,
-                cutouts: Vec::new(),
-            },
-        });
-        sets.push(BalanceVoidSet {
-            template: id,
-            radius_mm,
-            corner_radius_mm: radius_mm * ROUNDED_HEXAGON_CORNER_RADIUS_RATIO,
-            lattice: result.lattice,
-            sites,
-        });
-    }
-    Ok((templates, sets))
+    sites_by_radius
+        .into_iter()
+        .map(|(radius_nm, mut sites)| {
+            sites.sort_by_key(|site| (site.column, site.row));
+            let radius_mm = radius_nm as f64 / 1e6;
+            let id = format!("balance_hex_{radius_nm}nm");
+            let contour = rounded_hexagonal_void(radius_mm)
+                .context("generated copper balance has an invalid rounded-hex void radius")?;
+            let template = BalanceVoidTemplate {
+                id: id.clone(),
+                contour: IpcContour {
+                    polygon: ipc_polygon_from_contour(&contour)?,
+                    cutouts: Vec::new(),
+                },
+            };
+            let set = BalanceVoidSet {
+                template: id,
+                radius_mm,
+                corner_radius_mm: radius_mm * ROUNDED_HEXAGON_CORNER_RADIUS_RATIO,
+                lattice: result.lattice,
+                sites,
+            };
+            Ok((template, set))
+        })
+        .collect::<Result<Vec<_>>>()
+        .map(|pairs| pairs.into_iter().unzip())
 }
 
 /// Extract one layer's flattened, composed copper image.
@@ -702,14 +726,19 @@ mod tests {
         );
 
         assert!(!features.boundary_web.is_empty());
+        // Dictionary instances cover interior and contained edge voids;
+        // crossing voids become clipped contours inside the voidable region.
+        let emission = &result.edge_void_emission;
         assert_eq!(
             features
                 .void_sets
                 .iter()
                 .map(|set| set.sites.len())
                 .sum::<usize>(),
-            result.void_count()
+            result.full_voids.len() + emission.instanced.len()
         );
+        assert_eq!(features.edge_voids.is_empty(), emission.clipped.is_empty());
+        assert!(emission.clipped.difference(&result.voidable).area() < 1e-6);
         assert!(features.void_sets.iter().all(|set| {
             features
                 .templates
