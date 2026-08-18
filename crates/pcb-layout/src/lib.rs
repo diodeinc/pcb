@@ -255,7 +255,7 @@ fn render_patches(source: &str, patches: &pcb_sexpr::PatchSet) -> anyhow::Result
 struct EmbeddedFileRecord {
     name: String,
     file_type: String,
-    checksum: String,
+    checksum: Option<String>,
     span: pcb_sexpr::Span,
     has_data: bool,
 }
@@ -291,9 +291,7 @@ fn embedded_file_records(items: &[pcb_sexpr::Sexpr]) -> anyhow::Result<Vec<Embed
             let file_type = child_atom(file, "type")
                 .with_context(|| format!("Embedded file `{name}` is missing its type"))?
                 .to_string();
-            let checksum = child_atom(file, "checksum")
-                .with_context(|| format!("Embedded file `{name}` is missing its checksum"))?
-                .to_ascii_uppercase();
+            let checksum = child_atom(file, "checksum").map(str::to_ascii_uppercase);
 
             Ok(EmbeddedFileRecord {
                 name,
@@ -371,7 +369,13 @@ fn source_embedded_models(
                 })?
                 .to_string();
             let candidate = SourceEmbeddedModel {
-                checksum: file.checksum,
+                checksum: file.checksum.clone().with_context(|| {
+                    format!(
+                        "Embedded model `{}` with data is missing its checksum in {}",
+                        file.name,
+                        source_path.display()
+                    )
+                })?,
                 file_text,
                 source_path: source_path.clone(),
             };
@@ -471,18 +475,23 @@ fn refresh_board_embedded_models(pcb_path: &Path, schematic: &Schematic) -> anyh
             .collect();
 
         for (name, source_model) in &source_models {
-            if let Some(nested) = nested_by_name.get(name.as_str()) {
-                if nested.checksum != source_model.checksum {
-                    anyhow::bail!(
-                        "Cannot update embedded model `{name}` to checksum {} because unmanaged footprint `{reference}` still uses checksum {}",
-                        source_model.checksum,
-                        nested.checksum
-                    );
-                }
-            } else if unmanaged_footprint_reference(footprint, name)
+            if let Some(nested) = nested_by_name.get(name.as_str())
+                && let Some(nested_checksum) = &nested.checksum
+                && nested_checksum != &source_model.checksum
+            {
+                anyhow::bail!(
+                    "Cannot update embedded model `{name}` to checksum {} because unmanaged footprint `{reference}` still uses checksum {}",
+                    source_model.checksum,
+                    nested_checksum
+                );
+            }
+
+            if unmanaged_footprint_reference(footprint, name)
                 && board_files_by_name
                     .get(name.as_str())
-                    .is_some_and(|board_file| board_file.checksum != source_model.checksum)
+                    .is_some_and(|board_file| {
+                        board_file.checksum.as_deref() != Some(source_model.checksum.as_str())
+                    })
             {
                 anyhow::bail!(
                     "Cannot update embedded model `{name}` because unmanaged footprint `{reference}` still uses the board payload"
@@ -502,10 +511,11 @@ fn refresh_board_embedded_models(pcb_path: &Path, schematic: &Schematic) -> anyh
                 board_file.file_type
             );
         }
-        if board_file.checksum != source_model.checksum {
+        if board_file.checksum.as_deref() != Some(source_model.checksum.as_str()) {
             info!(
                 "Refreshing embedded model {name}: {} -> {}",
-                board_file.checksum, source_model.checksum
+                board_file.checksum.as_deref().unwrap_or("<missing>"),
+                source_model.checksum
             );
             patches.replace_raw(board_file.span, source_model.file_text);
         }
