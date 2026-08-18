@@ -1,0 +1,20 @@
+schema_version = 1
+
+[pdk]
+id = "example-fab-standard"
+name = "Example fabrication standard"
+revision = "1"
+
+[capabilities.drilling]
+minimum_via_hole_diameter = "0.2 mm"
+minimum_pth_hole_diameter = "0.2 mm"
+minimum_npth_hole_diameter = "0.2 mm"
+minimum_hole_to_hole_clearance = "10 mil"
+
+[capabilities.copper]
+minimum_via_annular_ring = "0.125 mm"
+minimum_pth_annular_ring = "0.125 mm"
+minimum_vscore_to_copper_clearance = "15 mil"
+
+[capabilities.panelization]
+minimum_board_array_spacing = "300 mil"

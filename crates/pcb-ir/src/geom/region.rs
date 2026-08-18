@@ -534,6 +534,17 @@ impl ContourSet {
         )
     }
 
+    /// Test many points against the same region in one sweep.
+    ///
+    /// This is substantially cheaper than repeated [`Self::contains_point`]
+    /// calls for geometry checks over thousands of drill locations.
+    pub fn contains_points_batch(&self, points: &[Point]) -> Vec<bool> {
+        self.contains_points(points)
+            .into_iter()
+            .map(|coverage| coverage > 0.0)
+            .collect()
+    }
+
     /// What fraction of each cell of a regular grid over `bounds` the region
     /// covers, row-major from the bottom-left cell.
     ///

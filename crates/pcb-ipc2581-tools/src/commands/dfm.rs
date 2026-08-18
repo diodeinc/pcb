@@ -1,115 +1,138 @@
-//! Manufacturability screening of exported Gerber geometry.
-//!
-//! Runs the normal Gerber export pipeline in memory, composes each layer's
-//! final filled image, and reports features and gaps narrower than the
-//! fabrication minimum — the slivers a manufacturer's DFM check would flag.
+//! PDK-driven manufacturability checks for IPC-2581 geometry.
 
-use std::path::Path;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use pcb_ir::dialects::ipc::ArtworkScope;
-use pcb_ir::geom::region::rings_from_contours;
-use pcb_ir::geom::{ContourSet, FillRule, dfm};
+use clap::ValueEnum;
+use sha2::{Digest, Sha256};
 
+use crate::LayoutTarget;
 use crate::ipc2581::Ipc2581;
 use crate::utils::file as file_utils;
 
-pub fn execute(file: &Path, view: ArtworkScope, min_width_mm: f64) -> Result<()> {
-    if !(min_width_mm.is_finite() && min_width_mm > 0.0) {
-        bail!("minimum width must be positive; got {min_width_mm}");
-    }
+mod checks;
+mod design;
+mod pdk;
+mod report;
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum DfmReportFormat {
+    Json,
+}
+
+#[derive(Debug)]
+pub struct CheckOptions {
+    pub pdk: PathBuf,
+    pub output: Option<PathBuf>,
+    pub format: DfmReportFormat,
+    pub layout_target: LayoutTarget,
+}
+
+pub fn execute_check(file: &Path, options: &CheckOptions) -> Result<()> {
+    let input_bytes = std::fs::read(file)
+        .with_context(|| format!("failed to read IPC-2581 file {}", file.display()))?;
+    let pdk_bytes = std::fs::read(&options.pdk)
+        .with_context(|| format!("failed to read PDK file {}", options.pdk.display()))?;
+    let pdk_source = std::str::from_utf8(&pdk_bytes)
+        .with_context(|| format!("PDK file {} is not UTF-8", options.pdk.display()))?;
+    let pdk = pdk::Pdk::parse(pdk_source)
+        .with_context(|| format!("failed to parse PDK file {}", options.pdk.display()))?;
+
     let content = file_utils::load_ipc_file(file)?;
-    let ipc = Ipc2581::parse(&content).context("Failed to parse IPC-2581 file")?;
-    let files = crate::gerber::build_gerber_x2_files(&ipc, view)?;
+    let ipc = Ipc2581::parse(&content).context("failed to parse IPC-2581 file")?;
+    let design = design::Design::extract(&ipc, &pdk, options.layout_target.artwork_scope())?;
+    let checked = checks::run(&design, &pdk);
 
-    let mut findings = 0usize;
-    for gerber_file in &files {
-        let Some(kind) = layer_kind(&gerber_file.layer) else {
-            continue;
-        };
-        let region = compose_layer(&gerber_file.contents)
-            .with_context(|| format!("failed to compose {}", gerber_file.filename))?;
-        let thin = dfm::thin_features(&region, min_width_mm);
-        let gaps = dfm::thin_gaps(&region, min_width_mm);
-        findings += thin.len() + gaps.len();
-        report_layer(&gerber_file.filename, kind, &thin, &gaps);
-    }
+    let summary = summarize(&checked);
+    let failed = summary.findings > 0;
+    let report = report::DfmReport {
+        schema_version: report::REPORT_SCHEMA_VERSION,
+        generated_at: chrono::Utc::now().to_rfc3339(),
+        verdict: if failed {
+            report::Verdict::Fail
+        } else {
+            report::Verdict::Pass
+        },
+        tool: report::ToolIdentity {
+            name: "pcb",
+            version: env!("CARGO_PKG_VERSION"),
+        },
+        input: report::FileIdentity {
+            path: file.display().to_string(),
+            sha256: sha256(&input_bytes),
+            size_bytes: input_bytes.len() as u64,
+        },
+        pdk: report::PdkIdentity::from_pdk(
+            &pdk,
+            options.pdk.display().to_string(),
+            sha256(&pdk_bytes),
+        ),
+        layout_target: match options.layout_target {
+            LayoutTarget::Board => "board",
+            LayoutTarget::BoardArray => "board_array",
+        },
+        coordinate_system: report::CoordinateSystem {
+            unit: "mm",
+            axes: "x_right_y_up",
+            origin: "ipc_2581_design",
+        },
+        summary,
+        rules: checked.rules,
+        findings: checked.findings,
+    };
 
-    if findings > 0 {
-        bail!("DFM check found {findings} feature(s) narrower than {min_width_mm} mm");
+    let rendered = match options.format {
+        DfmReportFormat::Json => serde_json::to_string_pretty(&report)?,
+    };
+    write_report(options.output.as_deref(), &rendered)?;
+
+    if failed {
+        bail!(
+            "DFM check failed with {} finding(s)",
+            report.summary.findings
+        );
     }
-    eprintln!("✓ No features or gaps narrower than {min_width_mm} mm");
+    eprintln!(
+        "✓ DFM check passed ({} configured rule(s))",
+        report.summary.rules_configured
+    );
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy)]
-enum LayerKind {
-    Copper,
-    Soldermask,
-    Paste,
+fn summarize(checked: &checks::Results) -> report::Summary {
+    report::Summary {
+        rules_configured: checked.rules.len(),
+        rules_passed: checked
+            .rules
+            .iter()
+            .filter(|rule| matches!(rule.status, report::RuleStatus::Pass))
+            .count(),
+        rules_failed: checked
+            .rules
+            .iter()
+            .filter(|rule| matches!(rule.status, report::RuleStatus::Fail))
+            .count(),
+        rules_skipped: checked
+            .rules
+            .iter()
+            .filter(|rule| matches!(rule.status, report::RuleStatus::Skipped))
+            .count(),
+        findings: checked.findings.len(),
+    }
 }
 
-impl LayerKind {
-    fn labels(self) -> (&'static str, &'static str) {
-        match self {
-            Self::Copper => ("copper sliver", "clearance sliver"),
-            Self::Soldermask => ("mask opening sliver", "mask web sliver"),
-            Self::Paste => ("paste sliver", "paste gap sliver"),
+fn write_report(output: Option<&Path>, report: &str) -> Result<()> {
+    match output {
+        Some(path) => std::fs::write(path, format!("{report}\n"))
+            .with_context(|| format!("failed to write DFM report to {}", path.display())),
+        None => {
+            let mut stdout = std::io::stdout().lock();
+            writeln!(stdout, "{report}").context("failed to write DFM report to stdout")
         }
     }
 }
 
-fn layer_kind(layer: &gerberx2::GerberLayer) -> Option<LayerKind> {
-    let function = layer
-        .file_attributes
-        .iter()
-        .find(|attribute| attribute.name == ".FileFunction")?
-        .fields
-        .first()?;
-    match function.as_str() {
-        "Copper" => Some(LayerKind::Copper),
-        "Soldermask" => Some(LayerKind::Soldermask),
-        "Paste" => Some(LayerKind::Paste),
-        _ => None,
-    }
-}
-
-/// Compose a written Gerber layer back into its final filled image.
-fn compose_layer(contents: &str) -> Result<ContourSet> {
-    let gerber = gerberx2::GerberX2::parse(contents)?;
-    let doc = gerberx2::geometry::extract_document(&gerber);
-    let mask = pcb_ir::dialects::artwork::compose_to_mask(&doc);
-    let mut rings = Vec::new();
-    for layer in &mask.layers {
-        for shape in mask.shapes(layer) {
-            rings.extend(rings_from_contours(&mask.arena.path_contours(shape)));
-        }
-    }
-    Ok(ContourSet::new(rings, FillRule::NonZero, 1e-4))
-}
-
-fn report_layer(filename: &str, kind: LayerKind, thin: &[dfm::ThinPiece], gaps: &[dfm::ThinPiece]) {
-    let (thin_label, gap_label) = kind.labels();
-    if thin.is_empty() && gaps.is_empty() {
-        eprintln!("{filename}: ok");
-        return;
-    }
-    eprintln!(
-        "{filename}: {} {thin_label}(s), {} {gap_label}(s)",
-        thin.len(),
-        gaps.len()
-    );
-    for (label, pieces) in [(thin_label, thin), (gap_label, gaps)] {
-        for piece in pieces {
-            eprintln!(
-                "  {label}: {:.3} mm wide, {:.2} mm long at [{:.3},{:.3}]..[{:.3},{:.3}]",
-                piece.width_mm,
-                piece.length_mm,
-                piece.bbox.min.x,
-                piece.bbox.min.y,
-                piece.bbox.max.x,
-                piece.bbox.max.y,
-            );
-        }
-    }
+fn sha256(bytes: &[u8]) -> String {
+    hex::encode(Sha256::digest(bytes))
 }

@@ -17,7 +17,7 @@ use pcb_ir::geom::{BBox, ContourBuf, ContourSet, Point, Polarity};
 pub use extract::{extract_layer, extract_layer_for_view, extract_layout};
 pub(crate) use extract::{extract_step_layer_local, is_panel_step, step_repeat_transform};
 
-type GeometryDocument =
+pub(crate) type GeometryDocument =
     pcb_ir::dialects::ipc::Document<ipc2581::Symbol, ipc2581::types::LayerFunction>;
 
 pub fn board_array_vscore_lines(ipc: &Ipc2581) -> Result<Vec<VScoreLine>> {

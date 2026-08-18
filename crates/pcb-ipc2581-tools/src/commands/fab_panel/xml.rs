@@ -121,6 +121,13 @@ fn should_namespace_attr(
         return true;
     }
 
+    // FeatureSet.geometry references a PadStackDef (or another source-local
+    // geometry definition). Keep it in the same namespace as Pad/@padstackDefRef
+    // so drill features retain their padstack identity after panel merging.
+    if element == "Set" && attr == "geometry" {
+        return true;
+    }
+
     match attr {
         "name" => matches!(
             element,
@@ -626,5 +633,26 @@ fn units_attr(units: Units) -> &'static str {
         Units::Inch => "INCH",
         Units::Micron => "MICRON",
         Units::Mils => "MILS",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_namespace_keeps_drill_geometry_linked_to_its_padstack() {
+        let source = r#"<IPC-2581>
+  <PadStackDef name="PADSTACK_10"/>
+  <Set geometry="PADSTACK_10">
+    <Pad padstackDefRef="PADSTACK_10"/>
+  </Set>
+</IPC-2581>"#;
+
+        let namespaced = namespace_source(source, "fab_3_", &HashSet::new()).unwrap();
+
+        assert!(namespaced.contains("<PadStackDef name=\"fab_3_PADSTACK_10\""));
+        assert!(namespaced.contains("<Set geometry=\"fab_3_PADSTACK_10\""));
+        assert!(namespaced.contains("padstackDefRef=\"fab_3_PADSTACK_10\""));
     }
 }

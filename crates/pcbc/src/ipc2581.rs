@@ -120,17 +120,10 @@ enum Commands {
         #[arg(long, default_value = "board-array")]
         layout_target: LayoutTarget,
     },
-    /// Check exported Gerber geometry for manufacturability slivers
+    /// Check IPC-2581 geometry against a fabrication process design kit
     Dfm {
-        /// IPC-2581 XML file to check
-        #[arg(value_hint = clap::ValueHint::FilePath)]
-        file: PathBuf,
-        /// What to check: the canonical board, or the file's root step with every repeat materialized.
-        #[arg(long, default_value = "board-array")]
-        layout_target: LayoutTarget,
-        /// Minimum feature and gap width in millimeters
-        #[arg(long, default_value_t = 0.09)]
-        min_width_mm: f64,
+        #[command(subcommand)]
+        command: DfmCommands,
     },
     /// Estimate panel bow and twist from the through-stack copper distribution
     Warp {
@@ -194,6 +187,28 @@ enum EditCommands {
         /// Deprecated output format option retained for rules clients
         #[arg(short = 'f', long, default_value = "text", hide = true)]
         format: OutputFormat,
+    },
+}
+
+#[derive(Subcommand)]
+enum DfmCommands {
+    /// Run PDK-derived DFM checks and emit a report
+    Check {
+        /// IPC-2581 XML file to check
+        #[arg(value_hint = clap::ValueHint::FilePath)]
+        file: PathBuf,
+        /// Fabrication process design kit (TOML)
+        #[arg(long, value_hint = clap::ValueHint::FilePath)]
+        pdk: PathBuf,
+        /// What to check: the canonical board, or the file's root step with every repeat materialized.
+        #[arg(long, default_value = "board-array")]
+        layout_target: LayoutTarget,
+        /// Report format
+        #[arg(long, default_value = "json")]
+        format: commands::dfm::DfmReportFormat,
+        /// Output report path. Omit to write JSON to stdout.
+        #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
+        output: Option<PathBuf>,
     },
 }
 
@@ -471,11 +486,23 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                 layout_target,
             },
         ),
-        Commands::Dfm {
-            file,
-            layout_target,
-            min_width_mm,
-        } => commands::dfm::execute(&file, layout_target.artwork_scope(), min_width_mm),
+        Commands::Dfm { command } => match command {
+            DfmCommands::Check {
+                file,
+                pdk,
+                layout_target,
+                format,
+                output,
+            } => commands::dfm::execute_check(
+                &file,
+                &commands::dfm::CheckOptions {
+                    pdk,
+                    output,
+                    format,
+                    layout_target,
+                },
+            ),
+        },
         Commands::Warp { file, report } => commands::warp::execute(&file, report.as_deref()),
         Commands::Gerber {
             file,

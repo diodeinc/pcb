@@ -18,6 +18,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- `pcb ipc dfm check` validates finished IPC-2581 geometry against a mixed-unit TOML fabrication PDK and emits machine-readable JSON findings with source lands and geometric witnesses.
 - `pcb layout --sync-footprints` reloads footprint definitions from source.
 - Fabrication panel generation can emit only the usable packing area with `--emit-usable-area`.
 
