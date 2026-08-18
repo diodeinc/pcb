@@ -381,10 +381,11 @@ pub struct DenseCopperBalanceResult {
     pub edge_void_emission: EdgeVoidEmission,
 }
 
-/// Edge voids resolved to their emitted form: hexes that fit inside the
-/// voidable region at their solved radius keep the compact lattice template
-/// form, and only genuinely crossing voids become one clipped, regularized
-/// region.
+/// Edge voids resolved to their emitted form: voids whose circumscribed
+/// disk fits inside the voidable region keep the compact lattice template
+/// form, and the rest become one clipped, regularized region. The disk is a
+/// conservative containment proxy — a fitting hex it misclassifies still
+/// emits its exact clip through the contour path, at a small size cost.
 #[derive(Debug, Clone)]
 pub struct EdgeVoidEmission {
     /// Edge voids emitted as ordinary lattice template instances.
