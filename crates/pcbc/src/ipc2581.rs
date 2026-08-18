@@ -273,6 +273,9 @@ enum FabPanelCommands {
         /// Gap between assembly panels in millimeters. Defaults to 7.62.
         #[arg(long, value_name = "GAP")]
         panel_gap: Option<f64>,
+        /// Emit only the usable packing area and rebase it to the origin.
+        #[arg(long)]
+        emit_usable_area: bool,
         #[command(flatten)]
         copper_balance: CopperBalanceArgs,
         /// Output IPC-2581 XML file, or '-' for stdout
@@ -412,6 +415,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                 panel_size,
                 edge_margin,
                 panel_gap,
+                emit_usable_area,
                 copper_balance,
                 output,
             } => {
@@ -425,6 +429,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                 if let Some(panel_gap) = panel_gap {
                     spec.panel_gap_mm = panel_gap;
                 }
+                spec.emit_usable_area = emit_usable_area;
                 commands::fab_panel::execute(&inputs, &output, spec, copper_balance.resolve(false))
             }
         },

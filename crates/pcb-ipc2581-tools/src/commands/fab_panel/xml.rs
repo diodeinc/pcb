@@ -468,8 +468,10 @@ fn write_fab_step(
     spec: FabPanelSpec,
 ) -> Result<()> {
     let usable = spec.usable_bbox()?;
+    let output = spec.output_bbox()?;
+    let output_usable = spec.output_usable_bbox()?;
     writer.start_element("Step", &[("name", FAB_PANEL_STEP_NAME), ("type", "PALLET")]);
-    write_metadata(writer, "diode.fab_panel.schema_version", "INTEGER", "2");
+    write_metadata(writer, "diode.fab_panel.schema_version", "INTEGER", "3");
     write_metadata(
         writer,
         "diode.fab_panel.width_mm",
@@ -493,6 +495,16 @@ fn write_fab_step(
         "diode.fab_panel.usable_height_mm",
         "DOUBLE",
         &ipc2581::write::fmt_num(usable.height()),
+    );
+    write_metadata(
+        writer,
+        "diode.fab_panel.output_region",
+        "STRING",
+        if spec.emit_usable_area {
+            "usable"
+        } else {
+            "stock"
+        },
     );
     for (name, value) in [
         (
@@ -531,23 +543,17 @@ fn write_fab_step(
     writer.start_element("Profile", &[]);
     writer.start_element("Polygon", &[]);
     ipc2581::write::location(writer, "PolyBegin", 0.0, 0.0, units);
-    ipc2581::write::location(writer, "PolyStepSegment", spec.width_mm(), 0.0, units);
-    ipc2581::write::location(
-        writer,
-        "PolyStepSegment",
-        spec.width_mm(),
-        spec.height_mm(),
-        units,
-    );
-    ipc2581::write::location(writer, "PolyStepSegment", 0.0, spec.height_mm(), units);
+    ipc2581::write::location(writer, "PolyStepSegment", output.max.x, 0.0, units);
+    ipc2581::write::location(writer, "PolyStepSegment", output.max.x, output.max.y, units);
+    ipc2581::write::location(writer, "PolyStepSegment", 0.0, output.max.y, units);
     writer.end_element("Polygon");
     writer.end_element("Profile");
 
     for placement in placements {
         let source_index = occurrences[placement.item_index];
         let source = &sources[source_index];
-        let target_x_mm = usable.min.x + f64::from(placement.x) / 1_000.0;
-        let target_y_mm = usable.min.y + f64::from(placement.y) / 1_000.0;
+        let target_x_mm = output_usable.min.x + f64::from(placement.x) / 1_000.0;
+        let target_y_mm = output_usable.min.y + f64::from(placement.y) / 1_000.0;
         let (x_mm, y_mm, angle) = if placement.rotated {
             (
                 target_x_mm + source.bbox.max.y,

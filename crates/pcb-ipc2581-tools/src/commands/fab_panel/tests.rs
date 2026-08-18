@@ -1,6 +1,6 @@
 use ipc2581::edit::Doc;
 use pcb_ir::dialects::ipc::{ArtworkScope, root_step};
-use pcb_ir::geom::{BBox, ContourSet, tol};
+use pcb_ir::geom::{BBox, ContourSet, Point, tol};
 
 use crate::copper_balance::{CopperBalanceMode, composed_copper_image};
 
@@ -479,7 +479,8 @@ fn writes_default_process_margin_and_usable_area_metadata() {
     let generated = create_fab_panel_xml(&[assembly_panel_xml(100.0, 80.0)], &[0]).unwrap();
 
     for metadata in [
-        r#"<NonstandardAttribute name="diode.fab_panel.schema_version" type="INTEGER" value="2"/>"#,
+        r#"<NonstandardAttribute name="diode.fab_panel.schema_version" type="INTEGER" value="3"/>"#,
+        r#"<NonstandardAttribute name="diode.fab_panel.output_region" type="STRING" value="stock"/>"#,
         r#"<NonstandardAttribute name="diode.fab_panel.usable_width_mm" type="DOUBLE" value="406.4"/>"#,
         r#"<NonstandardAttribute name="diode.fab_panel.usable_height_mm" type="DOUBLE" value="508"/>"#,
         r#"<NonstandardAttribute name="diode.fab_panel.edge_margin_top_mm" type="DOUBLE" value="50.8"/>"#,
@@ -491,6 +492,76 @@ fn writes_default_process_margin_and_usable_area_metadata() {
         assert!(generated.contains(metadata), "missing {metadata}");
     }
     assert!(!generated.contains("diode.fab_panel.edge_rail_mm"));
+}
+
+#[test]
+fn emits_usable_area_profile_rebased_to_origin() {
+    let stock_spec = FabPanelSpec {
+        edge_margin_mm: EdgeInsetsMm::all(25.4),
+        ..FabPanelSpec::INCHES_18_X_24
+    };
+    let emitted_spec = FabPanelSpec {
+        emit_usable_area: true,
+        ..stock_spec
+    };
+    let sources = [assembly_panel_xml(100.0, 80.0)];
+    let stock_xml = create_fab_panel(&sources, &[0], stock_spec, false)
+        .unwrap()
+        .xml;
+    let emitted_xml = create_fab_panel(&sources, &[0], emitted_spec, false)
+        .unwrap()
+        .xml;
+
+    let stock = Ipc2581::parse(&stock_xml).unwrap();
+    let stock_layout = geometry::extract_layout(&stock).unwrap();
+    let (_, stock_root) = root_step(&stock_layout).unwrap();
+    let stock_instance = stock_layout
+        .layout
+        .instances
+        .iter()
+        .find(|instance| instance.parent_instance.is_none())
+        .unwrap();
+
+    let emitted = Ipc2581::parse(&emitted_xml).unwrap();
+    let emitted_layout = geometry::extract_layout(&emitted).unwrap();
+    let (_, emitted_root) = root_step(&emitted_layout).unwrap();
+    let emitted_instance = emitted_layout
+        .layout
+        .instances
+        .iter()
+        .find(|instance| instance.parent_instance.is_none())
+        .unwrap();
+
+    assert!((stock_root.bbox.width() - 457.2).abs() < 1e-9);
+    assert!((stock_root.bbox.height() - 609.6).abs() < 1e-9);
+    assert!((emitted_root.bbox.width() - 406.4).abs() < 1e-9);
+    assert!((emitted_root.bbox.height() - 558.8).abs() < 1e-9);
+    assert!((stock_instance.bbox.min.x - emitted_instance.bbox.min.x - 25.4).abs() < 1e-9);
+    assert!((stock_instance.bbox.min.y - emitted_instance.bbox.min.y - 25.4).abs() < 1e-9);
+    assert!(emitted_xml.contains(
+        r#"<NonstandardAttribute name="diode.fab_panel.width_mm" type="DOUBLE" value="457.2"/>"#
+    ));
+    assert!(emitted_xml.contains(
+        r#"<NonstandardAttribute name="diode.fab_panel.height_mm" type="DOUBLE" value="609.6"/>"#
+    ));
+    assert!(emitted_xml.contains(
+        r#"<NonstandardAttribute name="diode.fab_panel.output_region" type="STRING" value="usable"/>"#
+    ));
+
+    let package =
+        crate::manufacturing::build_manufacturing_package(&emitted, ArtworkScope::ArrayFlattened)
+            .unwrap();
+    let outline = package
+        .files
+        .iter()
+        .find(|file| file.filename == "Fab_Panel_Outline.gm1")
+        .unwrap();
+    let parsed_gerber = gerberx2::GerberX2::parse(&outline.contents).unwrap();
+    let artwork = gerberx2::geometry::extract_document(&parsed_gerber);
+    assert_bbox_close(
+        artwork.layers[0].bbox,
+        BBox::new(Point::new(0.0, 0.0), Point::new(406.4, 558.8)).expand(0.025),
+    );
 }
 
 #[test]
@@ -693,6 +764,7 @@ const BALANCE_SPEC: FabPanelSpec = FabPanelSpec {
     height_mm: 140.0,
     edge_margin_mm: EdgeInsetsMm::all(12.0),
     panel_gap_mm: 5.0,
+    emit_usable_area: false,
 };
 
 /// An assembly panel whose left half carries solid copper, inset 1 mm so the
