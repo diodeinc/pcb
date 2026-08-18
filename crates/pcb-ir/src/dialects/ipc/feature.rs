@@ -349,6 +349,9 @@ pub enum FiducialKind {
 pub enum CopperBalanceKind {
     Plane,
     FullVoid,
+    /// A boundary void emitted as an explicit clipped contour rather than a
+    /// lattice hex instance.
+    EdgeVoid,
     BoundaryWeb,
 }
 

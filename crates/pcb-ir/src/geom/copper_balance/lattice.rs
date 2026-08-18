@@ -102,11 +102,9 @@ impl LatticeCandidates {
         profile: DenseCopperBalanceProfile,
     ) -> ContourSet {
         let candidates = self
-            .edge_voids(radius, profile)
-            .into_iter()
-            .map(|void| (self.lattice.center(void.site), void.radius_mm))
-            .collect::<Vec<_>>();
-        clipped_voids_containing_minimum_disk(voidable, &candidates, profile)
+            .lattice
+            .void_candidates(&self.edge_voids(radius, profile));
+        clipped_partial_voids(voidable, &candidates, profile)
     }
 
     pub(super) fn void_area(
@@ -243,7 +241,9 @@ fn accepted_candidate_mask(
     candidate_point_mask(candidates, &core_points, profile)
 }
 
-fn clipped_voids_containing_minimum_disk(
+/// The clipped partial-void geometry the solver accounts with: components of
+/// `hex ∩ voidable` that contain the minimum partial-void disk.
+pub(super) fn clipped_partial_voids(
     voidable: &ContourSet,
     candidates: &[(Point, f64)],
     profile: DenseCopperBalanceProfile,
@@ -258,6 +258,19 @@ fn clipped_voids_containing_minimum_disk(
         .flat_map(|component| component.rings)
         .collect();
     ContourSet::new(rings, FillRule::NonZero, voidable.tolerance)
+}
+
+/// The emitted form of the clipped partial voids: opened at the profile's
+/// regularization radius to shed near-tangent clip tails, then decimated
+/// inward to the arc-flattening tolerance.
+pub(super) fn emission_partial_voids(
+    voidable: &ContourSet,
+    candidates: &[(Point, f64)],
+    profile: DenseCopperBalanceProfile,
+) -> ContourSet {
+    clipped_partial_voids(voidable, candidates, profile)
+        .disk_open(profile.void_regularization_radius_mm())
+        .decimate_inward(tol::FLATTEN_MM)
 }
 
 fn minimum_disk_core_points(

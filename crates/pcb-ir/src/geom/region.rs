@@ -139,6 +139,72 @@ pub fn rings_bbox(rings: &[Ring]) -> BBox {
         })
 }
 
+/// Decimate rings so the region only shrinks: the result covers no point the
+/// source did not, and no source vertex ends farther than `deviation_mm`
+/// from the decimated boundary.
+pub fn decimate_rings_inward(rings: &[Ring], deviation_mm: f64) -> Vec<Ring> {
+    rings
+        .iter()
+        .map(|ring| decimate_ring_inward(ring, deviation_mm))
+        .collect()
+}
+
+fn decimate_ring_inward(ring: &Ring, deviation_mm: f64) -> Ring {
+    if ring.len() < 4 {
+        return ring.clone();
+    }
+    let point = |index: usize| {
+        let [x, y] = ring[index % ring.len()];
+        Point::new(x, y)
+    };
+    // Rings keep material on the left of travel, so a chord absorbs the
+    // vertices between its ends exactly when every one lies on the chord's
+    // right — the removed bulge is material — and within the deviation.
+    // Every chord re-checks its whole chain, so error cannot accumulate.
+    let chord_absorbs = |anchor: usize, end: usize| {
+        let start = point(anchor);
+        let chord = point(end) - start;
+        let length = chord.length();
+        if length <= f64::EPSILON {
+            return false;
+        }
+        (anchor + 1..end).all(|index| {
+            let offset = point(index) - start;
+            let cross = chord.x * offset.y - chord.y * offset.x;
+            cross <= 0.0 && -cross / length <= deviation_mm
+        })
+    };
+
+    let mut kept = vec![ring[0]];
+    let mut anchor = 0;
+    while anchor + 1 < ring.len() {
+        // Grow the chord greedily; `end == ring.len()` is the closing chord
+        // back to the first vertex, which absorbs the remaining tail.
+        let mut end = anchor + 1;
+        while end < ring.len() && chord_absorbs(anchor, end + 1) {
+            end += 1;
+        }
+        if end == ring.len() {
+            break;
+        }
+        kept.push(ring[end]);
+        anchor = end;
+    }
+    if kept.len() < 3 {
+        return ring.clone();
+    }
+    kept
+}
+
+/// The closed edge cycle of one ring, as start/end point pairs.
+pub fn ring_edges(ring: &Ring) -> impl Iterator<Item = (Point, Point)> + '_ {
+    ring.iter()
+        .copied()
+        .zip(ring.iter().copied().cycle().skip(1))
+        .take(ring.len())
+        .map(|([x0, y0], [x1, y1])| (Point::new(x0, y0), Point::new(x1, y1)))
+}
+
 /// Signed area of one ring (positive when counter-clockwise).
 pub fn ring_signed_area(ring: &Ring) -> f64 {
     if ring.len() < 3 {
@@ -456,6 +522,16 @@ impl ContourSet {
             first = last;
         }
         result
+    }
+
+    /// Decimate the region's boundary so it only shrinks; see
+    /// [`decimate_rings_inward`].
+    pub fn decimate_inward(&self, deviation_mm: f64) -> Self {
+        Self::new(
+            decimate_rings_inward(&self.rings, deviation_mm),
+            FillRule::NonZero,
+            self.tolerance,
+        )
     }
 
     /// What fraction of each cell of a regular grid over `bounds` the region
@@ -1488,6 +1564,50 @@ fn segment_bbox(start: Point, end: Point) -> BBox {
 mod tests {
     use super::*;
     use crate::geom::shapes;
+
+    #[test]
+    fn inward_decimation_only_shrinks_and_respects_deviation() {
+        let ring = ContourSet::from_contours(
+            &[shapes::circle(10.0).unwrap(), shapes::circle(6.0).unwrap()],
+            FillRule::EvenOdd,
+            tol::REGION_MM,
+        );
+        let deviation = 0.05;
+        let decimated = ring.decimate_inward(deviation);
+
+        // The outer boundary decimates; the convex hole cannot lose a vertex
+        // without growing the region, so it stays exact.
+        let ring_len = |set: &ContourSet, hole: bool| {
+            set.rings
+                .iter()
+                .find(|ring| (ring_signed_area(ring) < 0.0) == hole)
+                .expect("annulus ring")
+                .len()
+        };
+        assert_eq!(
+            ring_len(&decimated, true),
+            ring_len(&ring, true),
+            "hole ring must stay exact"
+        );
+        assert!(
+            ring_len(&decimated, false) * 2 < ring_len(&ring, false),
+            "outer ring kept {} of {} vertices",
+            ring_len(&decimated, false),
+            ring_len(&ring, false)
+        );
+
+        // The region only shrinks: nothing outside the source survives.
+        assert!(decimated.difference(&ring).area() < 1e-9);
+
+        // Area loss is bounded by the deviation times the boundary length.
+        let perimeter: f64 = ring
+            .rings
+            .iter()
+            .flat_map(ring_edges)
+            .map(|(start, end)| start.distance_to(end))
+            .sum();
+        assert!(ring.area() - decimated.area() <= deviation * perimeter);
+    }
 
     #[test]
     fn fixed_grid_regularization_removes_sub_grid_geometry() {

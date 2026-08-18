@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - `pcb bom` again colors planner-selected parts by green, yellow, and red sourceability tiers.
+- Copper balancing no longer emits sliver voids where boundary voids graze the fill boundary.
 
 ## [0.4.31] - 2026-08-18
 
