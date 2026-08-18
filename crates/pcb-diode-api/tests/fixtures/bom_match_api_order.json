@@ -5,18 +5,22 @@
         "path": "root.U1"
       },
       "offerIds": [
-        "api-first",
-        "old-rust-policy-first"
+        "selected-offer",
+        "alternate-offer"
       ],
+      "offerStockClasses": {
+        "selected-offer": "LIMITED",
+        "alternate-offer": "PLENTY"
+      },
       "match": "MATCH_EXACT"
     }
   ],
   "offers": {
-    "api-first": {
-      "id": "api-first",
+    "selected-offer": {
+      "id": "selected-offer",
       "geography": "US",
-      "distributor": "Planner Choice",
-      "distributorPartId": "API-FIRST",
+      "distributor": "Selected Distributor",
+      "distributorPartId": "SELECTED-OFFER",
       "mpn": "TEST-MPN",
       "manufacturer": "Test Manufacturer",
       "priceBreaks": [
@@ -27,11 +31,11 @@
       ],
       "stockAvailable": 5
     },
-    "old-rust-policy-first": {
-      "id": "old-rust-policy-first",
+    "alternate-offer": {
+      "id": "alternate-offer",
       "geography": "US",
-      "distributor": "Local Policy Choice",
-      "distributorPartId": "OLD-RUST-FIRST",
+      "distributor": "Alternate Distributor",
+      "distributorPartId": "ALTERNATE-OFFER",
       "mpn": "TEST-MPN",
       "manufacturer": "Test Manufacturer",
       "priceBreaks": [

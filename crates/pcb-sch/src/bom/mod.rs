@@ -5,4 +5,6 @@ mod core;
 pub use core::*;
 
 // Re-export availability types and sourcing quantity
-pub use availability::{Availability, AvailabilitySummary, BOARD_QUANTITY, Offer};
+pub use availability::{
+    Availability, AvailabilitySummary, BOARD_QUANTITY, Offer, SourcingStockClass,
+};

@@ -3,7 +3,7 @@ use reqwest::blocking::Client;
 use serde::Deserialize;
 use std::{collections::HashMap, time::Duration};
 
-use pcb_sch::bom::{Availability, AvailabilitySummary, BOARD_QUANTITY, Offer};
+use pcb_sch::bom::{Availability, AvailabilitySummary, BOARD_QUANTITY, Offer, SourcingStockClass};
 
 use crate::WorkspaceContext;
 
@@ -102,6 +102,8 @@ struct BomLine {
     design_entry: DesignBomEntry,
     #[serde(rename = "offerIds")]
     offer_ids: Vec<String>,
+    #[serde(rename = "offerStockClasses")]
+    offer_stock_classes: HashMap<String, SourcingStockClass>,
     #[serde(rename = "match", default)]
     match_status: Option<BomMatchStatus>,
 }
@@ -167,6 +169,7 @@ fn build_availability_summary(
     };
 
     AvailabilitySummary {
+        stock_class: SourcingStockClass::Unknown,
         price: offer.unit_price_at_qty(target_qty),
         stock: offer.stock_available.unwrap_or_default(),
         alt_stock,
@@ -281,9 +284,24 @@ pub fn fetch_and_populate_availability_with_context(
 
         let target_qty = qty * BOARD_QUANTITY;
 
-        let (us_offers, us) = summarize_region(&resolved_offers, Geography::Us, target_qty, qty);
-        let (global_offers, global) =
+        let (us_offers, mut us) =
+            summarize_region(&resolved_offers, Geography::Us, target_qty, qty);
+        let (global_offers, mut global) =
             summarize_region(&resolved_offers, Geography::Global, target_qty, qty);
+        for (summary, offers) in [(&mut us, &us_offers), (&mut global, &global_offers)] {
+            if let (Some(summary), Some(offer)) = (summary, offers.first()) {
+                summary.stock_class = bom_line
+                    .offer_stock_classes
+                    .get(&offer.id)
+                    .copied()
+                    .with_context(|| {
+                        format!(
+                            "BOM match response omitted the stock class for offer {}",
+                            offer.id
+                        )
+                    })?;
+            }
+        }
 
         // Build offers for JSON output
         let all_offers: Vec<_> = us_offers
@@ -516,6 +534,7 @@ mod tests {
                 path: Some("root.U1".to_string()),
             },
             offer_ids,
+            offer_stock_classes: HashMap::new(),
             match_status,
         }
     }
@@ -586,7 +605,7 @@ mod tests {
     }
 
     #[test]
-    fn first_api_ranked_regional_offer_wins() {
+    fn first_ranked_regional_offer_wins() {
         let response: MatchBomResponse =
             serde_json::from_str(include_str!("../tests/fixtures/bom_match_api_order.json"))
                 .unwrap();
@@ -601,7 +620,14 @@ mod tests {
 
         assert_eq!(availability.us.as_ref().unwrap().stock, 5);
         assert_eq!(availability.us.as_ref().unwrap().price, Some(10.0));
-        assert_eq!(availability.offers[0].part_id.as_deref(), Some("API-FIRST"));
+        assert_eq!(
+            availability.offers[0].part_id.as_deref(),
+            Some("SELECTED-OFFER")
+        );
+        assert_eq!(
+            line.offer_stock_classes["selected-offer"],
+            SourcingStockClass::Limited
+        );
     }
 
     #[test]
