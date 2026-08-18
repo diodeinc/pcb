@@ -4273,6 +4273,7 @@ dependencies = [
  "pcb-ir",
  "pcb-sch",
  "pcb-ui",
+ "rayon",
  "serde",
  "serde_json",
  "sha2 0.11.0",

@@ -43,6 +43,8 @@ pub struct Capabilities {
     #[serde(default)]
     pub copper: CopperCapabilities,
     #[serde(default)]
+    pub soldermask: SoldermaskCapabilities,
+    #[serde(default)]
     pub panelization: PanelizationCapabilities,
 }
 
@@ -50,33 +52,79 @@ pub struct Capabilities {
 #[serde(deny_unknown_fields)]
 pub struct DrillingCapabilities {
     #[serde(default)]
-    pub minimum_via_hole_diameter: Option<Length>,
+    pub minimum_via_hole_diameter: Option<Limit>,
     #[serde(default)]
-    pub minimum_pth_hole_diameter: Option<Length>,
+    pub minimum_pth_hole_diameter: Option<Limit>,
     #[serde(default)]
-    pub minimum_npth_hole_diameter: Option<Length>,
+    pub minimum_npth_hole_diameter: Option<Limit>,
     #[serde(default)]
-    pub minimum_hole_to_hole_clearance: Option<Length>,
+    pub minimum_slot_width: Option<Limit>,
+    #[serde(default)]
+    pub minimum_hole_to_hole_clearance: Option<Limit>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CopperCapabilities {
     #[serde(default)]
-    pub minimum_via_annular_ring: Option<Length>,
+    pub minimum_via_annular_ring: Option<Limit>,
     #[serde(default)]
-    pub minimum_pth_annular_ring: Option<Length>,
+    pub minimum_pth_annular_ring: Option<Limit>,
     #[serde(default)]
-    pub minimum_board_edge_clearance: Option<Length>,
+    pub minimum_feature_width: Option<Limit>,
     #[serde(default)]
-    pub minimum_vscore_to_copper_clearance: Option<Length>,
+    pub minimum_copper_clearance: Option<Limit>,
+    #[serde(default)]
+    pub minimum_board_edge_clearance: Option<Limit>,
+    #[serde(default)]
+    pub minimum_vscore_to_copper_clearance: Option<Limit>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SoldermaskCapabilities {
+    #[serde(default)]
+    pub minimum_web: Option<Limit>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PanelizationCapabilities {
     #[serde(default)]
-    pub minimum_board_array_spacing: Option<Length>,
+    pub minimum_board_array_spacing: Option<Limit>,
+}
+
+/// A capability's limit: a bare length is the binding minimum, and the table
+/// form adds a preferred tier the fab would rather see met.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(untagged)]
+pub enum Limit {
+    Minimum(Length),
+    Tiered(TieredLimit),
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TieredLimit {
+    pub minimum: Length,
+    #[serde(default)]
+    pub preferred: Option<Length>,
+}
+
+impl Limit {
+    pub fn minimum(&self) -> &Length {
+        match self {
+            Self::Minimum(length) => length,
+            Self::Tiered(tiered) => &tiered.minimum,
+        }
+    }
+
+    pub fn preferred(&self) -> Option<&Length> {
+        match self {
+            Self::Minimum(_) => None,
+            Self::Tiered(tiered) => tiered.preferred.as_ref(),
+        }
+    }
 }
 
 /// A dimensional PDK value with its source spelling retained for auditability.
@@ -109,7 +157,8 @@ impl Length {
         }
         let millimeters = match unit.to_ascii_lowercase().as_str() {
             "mm" => number,
-            "mil" | "mils" => number * 0.0254,
+            "mil" | "mils" => number * pcb_ir::geom::Unit::MM_PER_INCH / 1000.0,
+            "um" => number * 0.001,
             _ => return Err(Self::expected(value)),
         };
         Ok(Self {
@@ -119,7 +168,9 @@ impl Length {
     }
 
     fn expected(value: &str) -> String {
-        format!("length '{value}' must be a positive '<number> mm' or '<number> mil' value")
+        format!(
+            "length '{value}' must be a positive '<number> mm', '<number> mil', or '<number> um' value"
+        )
     }
 }
 
@@ -148,7 +199,7 @@ minimum_via_hole_diameter = "0.2 mm"
 minimum_hole_to_hole_clearance = "10 mil"
 
 [capabilities.copper]
-minimum_via_annular_ring = "0.125 mm"
+minimum_via_annular_ring = { minimum = "100 um", preferred = "0.125 mm" }
 minimum_vscore_to_copper_clearance = "15 mil"
 
 [capabilities.panelization]
@@ -156,7 +207,7 @@ minimum_board_array_spacing = "300 mil"
 "#;
 
     #[test]
-    fn parses_mixed_units_into_canonical_millimeters() {
+    fn parses_mixed_units_and_tiers_into_canonical_millimeters() {
         let pdk = Pdk::parse(MIXED_UNIT_PDK).unwrap();
         let drilling = &pdk.capabilities.drilling;
         assert_eq!(
@@ -164,6 +215,7 @@ minimum_board_array_spacing = "300 mil"
                 .minimum_via_hole_diameter
                 .as_ref()
                 .unwrap()
+                .minimum()
                 .millimeters(),
             0.2
         );
@@ -172,17 +224,27 @@ minimum_board_array_spacing = "300 mil"
                 .minimum_hole_to_hole_clearance
                 .as_ref()
                 .unwrap()
+                .minimum()
                 .millimeters()
                 - 0.254)
                 .abs()
                 < 1e-12
         );
+        let annular = pdk
+            .capabilities
+            .copper
+            .minimum_via_annular_ring
+            .as_ref()
+            .unwrap();
+        assert!((annular.minimum().millimeters() - 0.1).abs() < 1e-12);
+        assert_eq!(annular.preferred().unwrap().millimeters(), 0.125);
         assert!(
             (pdk.capabilities
                 .panelization
                 .minimum_board_array_spacing
                 .as_ref()
                 .unwrap()
+                .minimum()
                 .millimeters()
                 - 7.62)
                 .abs()
@@ -196,6 +258,12 @@ minimum_board_array_spacing = "300 mil"
         assert!(
             Pdk::parse(&MIXED_UNIT_PDK.replace("revision = \"1\"", "revision = \"1\"\ntyop = 1"))
                 .is_err()
+        );
+        assert!(
+            Pdk::parse(
+                &MIXED_UNIT_PDK.replace("preferred = \"0.125 mm\"", "prefered = \"0.125 mm\"")
+            )
+            .is_err()
         );
     }
 }

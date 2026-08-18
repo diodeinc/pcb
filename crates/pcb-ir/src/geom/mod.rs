@@ -9,6 +9,7 @@ mod bbox;
 pub mod bridge;
 pub mod copper_balance;
 pub mod dfm;
+pub mod dist;
 pub mod path;
 pub mod pattern;
 mod point;

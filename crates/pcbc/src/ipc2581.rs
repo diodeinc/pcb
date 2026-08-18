@@ -200,12 +200,12 @@ enum DfmCommands {
         /// Fabrication process design kit (TOML)
         #[arg(long, value_hint = clap::ValueHint::FilePath)]
         pdk: PathBuf,
+        /// Waiver file of accepted finding ids (TOML)
+        #[arg(long, value_hint = clap::ValueHint::FilePath)]
+        waivers: Option<PathBuf>,
         /// What to check: the canonical board, or the file's root step with every repeat materialized.
         #[arg(long, default_value = "board-array")]
         layout_target: LayoutTarget,
-        /// Report format
-        #[arg(long, default_value = "json")]
-        format: commands::dfm::DfmReportFormat,
         /// Output report path. Omit to write JSON to stdout.
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
         output: Option<PathBuf>,
@@ -490,15 +490,15 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
             DfmCommands::Check {
                 file,
                 pdk,
+                waivers,
                 layout_target,
-                format,
                 output,
             } => commands::dfm::execute_check(
                 &file,
                 &commands::dfm::CheckOptions {
                     pdk,
+                    waivers,
                     output,
-                    format,
                     layout_target,
                 },
             ),

@@ -8,17 +8,21 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `pcb ipc dfm check` validates IPC-2581 files against fabrication PDKs.
+
 ### Fixed
 
 - `pcb layout --sync-footprints` refreshes changed embedded 3D models even when their filenames stay the same.
 - `pcb bom` again colors planner-selected parts by green, yellow, and red sourceability tiers.
 - Copper balancing no longer emits sliver voids where boundary voids graze the fill boundary.
+- Pads whose padstack definition is missing now render from their inline primitives.
 
 ## [0.4.31] - 2026-08-18
 
 ### Added
 
-- `pcb ipc dfm check` validates finished IPC-2581 geometry against a mixed-unit TOML fabrication PDK and emits machine-readable JSON findings with source lands and geometric witnesses.
 - `pcb layout --sync-footprints` reloads footprint definitions from source.
 - Fabrication panel generation can emit only the usable packing area with `--emit-usable-area`.
 

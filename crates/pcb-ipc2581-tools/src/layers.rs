@@ -46,7 +46,8 @@ pub fn two_sided_surface_layers(
     }))
 }
 
-fn ir_side(side: Option<IpcSide>) -> Side {
+/// Map an IPC layer side to the IR side vocabulary.
+pub fn ir_side(side: Option<IpcSide>) -> Side {
     match side {
         Some(IpcSide::Top) => Side::Top,
         Some(IpcSide::Bottom) => Side::Bottom,

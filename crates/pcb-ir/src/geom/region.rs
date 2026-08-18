@@ -26,6 +26,7 @@ use i_overlay::mesh::style::{LineJoin as OutlineLineJoin, OutlineStyle};
 
 use crate::geom::affine::Affine2;
 use crate::geom::bbox::BBox;
+use crate::geom::dist;
 use crate::geom::path::{ContourBuf, PathCmd, contours_to_kurbo, stroke_to_fill, transform_cmds};
 use crate::geom::point::Point;
 use crate::geom::store::{Path, PathArena};
@@ -537,7 +538,9 @@ impl ContourSet {
     /// Test many points against the same region in one sweep.
     ///
     /// This is substantially cheaper than repeated [`Self::contains_point`]
-    /// calls for geometry checks over thousands of drill locations.
+    /// calls for geometry checks over thousands of drill locations. Unlike
+    /// `contains_point` it tests the strict interior by winding number:
+    /// points on or within tolerance of the boundary may land on either side.
     pub fn contains_points_batch(&self, points: &[Point]) -> Vec<bool> {
         self.contains_points(points)
             .into_iter()
@@ -1037,20 +1040,9 @@ fn ring_boundary_distance(ring: &Ring, point: Point) -> f64 {
         .map(|index| {
             let [x0, y0] = ring[index];
             let [x1, y1] = ring[(index + 1) % ring.len()];
-            point_segment_distance(point, Point::new(x0, y0), Point::new(x1, y1))
+            dist::point_segment(point, Point::new(x0, y0), Point::new(x1, y1)).0
         })
         .fold(f64::INFINITY, f64::min)
-}
-
-fn point_segment_distance(point: Point, start: Point, end: Point) -> f64 {
-    let segment = end - start;
-    let length_squared = segment.x * segment.x + segment.y * segment.y;
-    if length_squared == 0.0 {
-        return point.distance_to(start);
-    }
-    let offset = point - start;
-    let t = ((offset.x * segment.x + offset.y * segment.y) / length_squared).clamp(0.0, 1.0);
-    point.distance_to(start + segment * t)
 }
 
 const VORONOI_COORDINATES_PER_MM: f64 = 100_000.0;
@@ -1117,8 +1109,8 @@ fn two_sided_gap_residual(source: &ContourSet, residual: &ContourSet) -> Contour
                 .collect::<Vec<_>>();
             contacts.iter().enumerate().any(|(index, left)| {
                 contacts[index + 1..].iter().any(|right| {
-                    let separation =
-                        segment_separation(left.start, left.end, right.start, right.end);
+                    let (separation, _, _) =
+                        dist::segments(left.start, left.end, right.start, right.end);
                     // Contacts on distinct rings always face each other across
                     // void, whatever their relative angle. Same-ring pairs
                     // must additionally oppose so the rounded bite of one
@@ -1150,21 +1142,9 @@ fn region_boundary_within_distance(
             let other_start = Point::new(other_start_x, other_start_y);
             let other_end = Point::new(other_end_x, other_end_y);
             expanded.intersects(segment_bbox(other_start, other_end))
-                && segment_separation(start, end, other_start, other_end) <= distance
+                && dist::segments(start, end, other_start, other_end).0 <= distance
         })
     })
-}
-
-fn segment_separation(
-    left_start: Point,
-    left_end: Point,
-    right_start: Point,
-    right_end: Point,
-) -> f64 {
-    point_segment_distance(left_start, right_start, right_end)
-        .min(point_segment_distance(left_end, right_start, right_end))
-        .min(point_segment_distance(right_start, left_start, left_end))
-        .min(point_segment_distance(right_end, left_start, left_end))
 }
 
 fn boundary_tangents_oppose(
@@ -1550,10 +1530,8 @@ fn regions_within_distance(left: &ContourSet, right: &ContourSet, distance: f64)
                     if !left_bbox.intersects(segment_bbox(right_start, right_end)) {
                         continue;
                     }
-                    let separation = point_segment_distance(left_start, right_start, right_end)
-                        .min(point_segment_distance(left_end, right_start, right_end))
-                        .min(point_segment_distance(right_start, left_start, left_end))
-                        .min(point_segment_distance(right_end, left_start, left_end));
+                    let (separation, _, _) =
+                        dist::segments(left_start, left_end, right_start, right_end);
                     if separation <= threshold {
                         return true;
                     }

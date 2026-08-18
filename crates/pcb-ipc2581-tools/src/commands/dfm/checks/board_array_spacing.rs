@@ -1,0 +1,87 @@
+//! Minimum spacing between sibling board arrays on a fabrication panel.
+//!
+//! Each array is a filled region `Aᵢ ⊂ ℝ²`, the union of its transformed
+//! profile outlines. The measured quantity between two arrays is the
+//! Euclidean set distance
+//!
+//! ```text
+//! dist(Aᵢ, Aⱼ) = inf { ‖x − y‖ : x ∈ Aᵢ, y ∈ Aⱼ },
+//! ```
+//!
+//! which is `0` when the regions touch, overlap, or nest, and is otherwise
+//! attained between boundary points, so `dist(Aᵢ, Aⱼ) = dist(∂Aᵢ, ∂Aⱼ)`,
+//! the minimum over boundary segment pairs. Overlap and nesting are decided
+//! by testing each region's vertices against the other (winding number);
+//! partial overlap without vertex containment is caught by the
+//! boundary-crossing test inside the segment-pair distance.
+//!
+//! The check requires `dist(Aᵢ, Aⱼ) ≥ L` for every unordered pair of
+//! direct board-array instances of the panel's root step. A panel-kind
+//! child that places a single board is per-board packaging, not an array,
+//! and is excluded at extraction.
+
+use pcb_ir::geom::dfm::region_clearance;
+
+use crate::commands::dfm::design::BoardArray;
+use crate::commands::dfm::report::{Evidence, Finding, SourceLocator, Subject};
+use crate::commands::dfm::rules::Rule;
+
+use super::{ClearanceViolation, Context, violates_minimum};
+
+pub(super) fn evaluate(rule: &Rule, ctx: &Context) -> (usize, Vec<Finding>) {
+    let arrays = &ctx.design.board_arrays;
+    let limit = rule.limit.millimeters();
+    let mut checked = 0;
+    let mut findings = Vec::new();
+    for first_index in 0..arrays.len() {
+        let first = &arrays[first_index];
+        for second in &arrays[first_index + 1..] {
+            let Some(clearance) = region_clearance(&first.region, &second.region) else {
+                continue;
+            };
+            checked += 1;
+            if !violates_minimum(clearance.distance_mm, limit) {
+                continue;
+            }
+            findings.push(
+                ClearanceViolation {
+                    rule,
+                    title: "Board arrays are too close together",
+                    message: format!(
+                        "board-array outlines are {:.6} mm apart; the PDK requires at least {:.6} mm",
+                        clearance.distance_mm, limit
+                    ),
+                    witness_roles: ["first_board_array", "second_board_array"],
+                    clearance,
+                    layers: Vec::new(),
+                    subjects: vec![
+                        board_array_subject(first, "first"),
+                        board_array_subject(second, "second"),
+                    ],
+                    evidence: vec![
+                        Evidence::bounds("first_board_array", first.region.bbox),
+                        Evidence::bounds("second_board_array", second.region.bbox),
+                    ],
+                }
+                .into_finding(),
+            );
+        }
+    }
+    (checked, findings)
+}
+
+fn board_array_subject(array: &BoardArray, role: &'static str) -> Subject {
+    Subject {
+        role,
+        kind: "board_array_outline",
+        name: Some(array.name.clone()),
+        source: Some(SourceLocator {
+            step: Some(array.name.clone()),
+            layer: None,
+            set_index: None,
+            feature_index: None,
+            instance_index: Some(array.instance_index),
+        }),
+        ..Subject::default()
+    }
+}

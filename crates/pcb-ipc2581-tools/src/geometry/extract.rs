@@ -1676,15 +1676,14 @@ fn extract_pad(
         doc.warn("Skipping pad without y coordinate");
         return Ok(None);
     };
-    let Some(padstack) = context.padstacks.get(&padstack_ref).copied() else {
-        doc.warn(format!(
-            "Skipping pad referencing missing padstack '{}'",
-            context.ipc.resolve(padstack_ref)
-        ));
-        return Ok(None);
-    };
+    // A pad may carry its own primitive, so a padstack definition refines
+    // (hole plating, per-layer shapes) rather than gates.
+    let padstack = context.padstacks.get(&padstack_ref).copied();
 
-    let role = match padstack.hole_def.as_ref().map(|hole| hole.plating_status) {
+    let role = match padstack
+        .and_then(|padstack| padstack.hole_def.as_ref())
+        .map(|hole| hole.plating_status)
+    {
         Some(PlatingStatus::Via) => FeatureRole::Via,
         _ => FeatureRole::Pad,
     };
@@ -1692,7 +1691,7 @@ fn extract_pad(
     let Some(primitive_ref) = pad_primitive_ref(pad, padstack, layer_ref) else {
         doc.warn(format!(
             "Skipping padstack '{}' because it has no regular primitive for layer '{}'",
-            context.ipc.resolve(padstack.name),
+            context.ipc.resolve(padstack_ref),
             context.ipc.resolve(layer_ref)
         ));
         return Ok(None);
@@ -1705,7 +1704,7 @@ fn extract_pad(
             let Some(primitive) = context.standard_primitives.get(&primitive_ref).copied() else {
                 doc.warn(format!(
                     "Skipping padstack '{}' because primitive '{}' is missing",
-                    context.ipc.resolve(padstack.name),
+                    context.ipc.resolve(padstack_ref),
                     context.ipc.resolve(primitive_ref)
                 ));
                 return Ok(None);
@@ -1716,7 +1715,7 @@ fn extract_pad(
             let Some(primitive) = context.user_primitives.get(&primitive_ref).copied() else {
                 doc.warn(format!(
                     "Skipping padstack '{}' because user primitive '{}' is missing",
-                    context.ipc.resolve(padstack.name),
+                    context.ipc.resolve(padstack_ref),
                     context.ipc.resolve(primitive_ref)
                 ));
                 return Ok(None);
@@ -1748,8 +1747,7 @@ fn extract_pad(
     feature.padstack_ref = Some(padstack_ref);
     feature.primitive_ref = Some(primitive_ref);
     feature.intent.plating = padstack
-        .hole_def
-        .as_ref()
+        .and_then(|padstack| padstack.hole_def.as_ref())
         .map(|hole| plating_kind(hole.plating_status))
         .unwrap_or(PlatingKind::None);
     feature.flags.expanded_padstack = true;
@@ -1769,15 +1767,15 @@ fn extract_pad(
 
 fn pad_primitive_ref(
     pad: &ipc2581::types::Pad,
-    padstack: &ipc2581::types::PadStackDef,
+    padstack: Option<&ipc2581::types::PadStackDef>,
     layer_ref: Symbol,
 ) -> Option<PrimitiveRef<Symbol>> {
-    let pad_def = padstack
-        .pad_defs
+    let pad_defs = padstack.map_or(&[][..], |padstack| &padstack.pad_defs);
+    let pad_def = pad_defs
         .iter()
         .find(|pad_def| pad_def.layer_ref == layer_ref && pad_def.pad_use == PadUse::Regular)
         .or_else(|| {
-            padstack.pad_defs.iter().find(|pad_def| {
+            pad_defs.iter().find(|pad_def| {
                 pad_def.layer_ref == layer_ref && pad_def.pad_use == PadUse::Thermal
             })
         });

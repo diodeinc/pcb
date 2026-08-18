@@ -20,21 +20,37 @@ pub(crate) use extract::{extract_step_layer_local, is_panel_step, step_repeat_tr
 pub(crate) type GeometryDocument =
     pcb_ir::dialects::ipc::Document<ipc2581::Symbol, ipc2581::types::LayerFunction>;
 
-pub fn board_array_vscore_lines(ipc: &Ipc2581) -> Result<Vec<VScoreLine>> {
+/// V-score centerlines per scoring layer (`VCut` and `Score` functions) for
+/// the given artwork scope.
+pub fn vscore_lines(
+    ipc: &Ipc2581,
+    scope: ArtworkScope,
+) -> Result<Vec<(ipc2581::Symbol, LayerFunction, VScoreLine)>> {
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
     let mut lines = Vec::new();
-    for source_layer in ecad
-        .cad_data
-        .layers
-        .iter()
-        .filter(|layer| layer.layer_function == LayerFunction::VCut)
-    {
+    for source_layer in ecad.cad_data.layers.iter().filter(|layer| {
+        matches!(
+            layer.layer_function,
+            LayerFunction::VCut | LayerFunction::Score
+        )
+    }) {
         let layer_name = ipc.resolve(source_layer.name);
-        let doc = extract_layer_for_view(ipc, layer_name, ArtworkScope::ArrayFlattened)
-            .with_context(|| format!("failed to extract IPC-2581 V-cut layer '{layer_name}'"))?;
-        lines.extend(vscore_lines_for(&doc));
+        let doc = extract_layer_for_view(ipc, layer_name, scope)
+            .with_context(|| format!("failed to extract IPC-2581 V-score layer '{layer_name}'"))?;
+        lines.extend(
+            vscore_lines_for(&doc)
+                .into_iter()
+                .map(|line| (source_layer.name, source_layer.layer_function, line)),
+        );
     }
     Ok(lines)
+}
+
+pub fn board_array_vscore_lines(ipc: &Ipc2581) -> Result<Vec<VScoreLine>> {
+    Ok(vscore_lines(ipc, ArtworkScope::ArrayFlattened)?
+        .into_iter()
+        .map(|(_, _, line)| line)
+        .collect())
 }
 
 pub fn board_array_fabrication_profile(

@@ -2,6 +2,7 @@ use pcb_ir::geom::{BBox, Point};
 use serde::Serialize;
 
 use super::pdk::{Length, Pdk};
+use super::rules::Rule;
 
 pub const REPORT_SCHEMA_VERSION: u32 = 1;
 
@@ -15,9 +16,22 @@ pub struct DfmReport {
     pub pdk: PdkIdentity,
     pub layout_target: &'static str,
     pub coordinate_system: CoordinateSystem,
+    pub waivers: Option<WaiversApplied>,
     pub summary: Summary,
     pub rules: Vec<RuleResult>,
     pub findings: Vec<Finding>,
+}
+
+/// The waiver file applied to this run and what came of every entry.
+#[derive(Debug, Serialize)]
+pub struct WaiversApplied {
+    pub path: String,
+    pub sha256: String,
+    pub applied: usize,
+    /// Waived finding ids whose waiver has expired; they count as findings.
+    pub expired: Vec<String>,
+    /// Waiver entries naming no finding in this run — stale or mistyped.
+    pub unmatched: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -72,43 +86,69 @@ pub struct CoordinateSystem {
     pub origin: &'static str,
 }
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Serialize)]
 pub struct Summary {
     pub rules_configured: usize,
     pub rules_passed: usize,
+    pub rules_warned: usize,
     pub rules_failed: usize,
     pub rules_skipped: usize,
     pub findings: usize,
+    /// Unwaived error-severity findings; the verdict fails on these alone.
+    pub errors: usize,
+    /// Unwaived warning-severity findings.
+    pub warnings: usize,
+    pub waived: usize,
 }
 
 #[derive(Debug, Serialize)]
 pub struct RuleResult {
-    pub id: &'static str,
-    pub title: &'static str,
+    pub id: String,
+    pub title: String,
+    pub severity: Severity,
     pub status: RuleStatus,
     pub limit: RuleLimit,
-    pub checked_entities: usize,
+    /// What one `checked` unit is, e.g. `hole` or `copper_layer`.
+    pub subject: &'static str,
+    /// The quantity every finding of this rule measures; every rule requires
+    /// the measured value to be at least its limit.
+    pub quantity: &'static str,
+    /// How the quantity is measured.
+    pub method: &'static str,
+    /// Measurements evaluated against the limit.
+    pub checked: usize,
     pub finding_count: usize,
+    pub waived_count: usize,
     pub skip_reason: Option<String>,
 }
 
 impl RuleResult {
-    pub fn new(id: &'static str, title: &'static str, length: &Length) -> Self {
+    pub fn new(rule: &Rule) -> Self {
         Self {
-            id,
-            title,
+            id: rule.id.clone(),
+            title: rule.title.clone(),
+            severity: rule.severity,
             status: RuleStatus::Pass,
-            limit: RuleLimit::from_length(length),
-            checked_entities: 0,
+            limit: RuleLimit::from_length(&rule.limit),
+            subject: rule.kind.subject(),
+            quantity: rule.kind.quantity(),
+            method: rule.kind.method(),
+            checked: 0,
             finding_count: 0,
+            waived_count: 0,
             skip_reason: None,
         }
     }
 
-    pub fn finish(&mut self, finding_count: usize) {
+    /// Settle the rule's status from its finding counts: unwaived findings
+    /// carry the rule's severity, a fully waived or clean rule passes.
+    pub fn finish(&mut self, finding_count: usize, waived_count: usize) {
         self.finding_count = finding_count;
-        self.status = if finding_count == 0 {
+        self.waived_count = waived_count;
+        self.status = if finding_count == waived_count {
             RuleStatus::Pass
+        } else if self.severity == Severity::Warning {
+            RuleStatus::Warning
         } else {
             RuleStatus::Fail
         };
@@ -124,6 +164,7 @@ impl RuleResult {
 #[serde(rename_all = "snake_case")]
 pub enum RuleStatus {
     Pass,
+    Warning,
     Fail,
     Skipped,
 }
@@ -148,49 +189,41 @@ impl RuleLimit {
 #[derive(Debug, Serialize)]
 pub struct Finding {
     pub id: String,
-    pub rule_id: &'static str,
+    pub rule_id: String,
     pub severity: Severity,
+    pub waived: bool,
+    pub waiver_reason: Option<String>,
     pub title: String,
     pub message: String,
-    pub measurements: Vec<Measurement>,
+    pub measurement: Measurement,
     pub location: Location,
     pub layers: Vec<LayerRef>,
     pub subjects: Vec<Subject>,
     pub evidence: Vec<Evidence>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Severity {
     Error,
+    Warning,
 }
 
+/// The one measurement that gates a finding, in report millimeters. The
+/// quantity, method, and comparison live on the finding's rule.
 #[derive(Debug, Serialize)]
 pub struct Measurement {
-    pub quantity: &'static str,
-    pub actual: f64,
-    pub required: f64,
-    pub margin: f64,
-    pub unit: &'static str,
-    pub comparison: &'static str,
-    pub method: &'static str,
+    pub actual_mm: f64,
+    pub required_mm: f64,
+    pub margin_mm: f64,
 }
 
 impl Measurement {
-    pub fn minimum(
-        quantity: &'static str,
-        actual: f64,
-        required: f64,
-        method: &'static str,
-    ) -> Self {
+    pub fn minimum(actual_mm: f64, required_mm: f64) -> Self {
         Self {
-            quantity,
-            actual,
-            required,
-            margin: actual - required,
-            unit: "mm",
-            comparison: "actual >= required",
-            method,
+            actual_mm,
+            required_mm,
+            margin_mm: actual_mm - required_mm,
         }
     }
 }
@@ -251,22 +284,23 @@ impl From<BBox> for ReportBBox {
 pub struct LayerRef {
     pub name: String,
     pub function: String,
+    /// `top`, `inner`, or `bottom` where the file or stackup determines it.
+    pub side: Option<&'static str>,
 }
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct Subject {
     pub role: &'static str,
     pub kind: &'static str,
     pub name: Option<String>,
     pub reference_designator: Option<String>,
-    pub footprint: Option<String>,
     pub pin: Option<String>,
     pub net: Option<String>,
     pub padstack_ref: Option<String>,
     pub source: Option<SourceLocator>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct SourceLocator {
     pub step: Option<String>,
     pub layer: Option<String>,
@@ -275,7 +309,7 @@ pub struct SourceLocator {
     pub instance_index: Option<u32>,
 }
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct Evidence {
     pub role: &'static str,
     pub kind: &'static str,

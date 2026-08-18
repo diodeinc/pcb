@@ -9,12 +9,19 @@ revision = "1"
 minimum_via_hole_diameter = "0.2 mm"
 minimum_pth_hole_diameter = "0.2 mm"
 minimum_npth_hole_diameter = "0.2 mm"
+minimum_slot_width = "0.8 mm"
 minimum_hole_to_hole_clearance = "10 mil"
 
 [capabilities.copper]
-minimum_via_annular_ring = "0.125 mm"
+minimum_via_annular_ring = { minimum = "100 um", preferred = "0.125 mm" }
 minimum_pth_annular_ring = "0.125 mm"
+minimum_feature_width = "0.09 mm"
+minimum_copper_clearance = "0.09 mm"
+minimum_board_edge_clearance = "0.25 mm"
 minimum_vscore_to_copper_clearance = "15 mil"
+
+[capabilities.soldermask]
+minimum_web = "3 mil"
 
 [capabilities.panelization]
 minimum_board_array_spacing = "300 mil"

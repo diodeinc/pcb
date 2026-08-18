@@ -183,7 +183,7 @@ pub fn vscore_lines_for<Symbol: PartialEq, LayerFunction>(
     for feature in doc
         .features
         .iter()
-        .filter(|feature| is_vcut_operation_feature(doc, feature))
+        .filter(|feature| is_vcut_operation_feature(doc, feature) || feature.is_score())
     {
         for &placement in doc.placements_for_feature(feature) {
             for path in feature.paths.slice(&doc.arena.paths) {

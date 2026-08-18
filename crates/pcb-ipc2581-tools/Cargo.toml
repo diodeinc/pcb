@@ -23,6 +23,7 @@ pcb-ir = { workspace = true }
 pcb-sch = { workspace = true, features = ["table"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+rayon = { workspace = true }
 sha2 = { workspace = true }
 toml = { workspace = true }
 uppsala = { workspace = true }
