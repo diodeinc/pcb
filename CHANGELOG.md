@@ -13,8 +13,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - `pcb layout --sync-footprints` reloads footprint definitions from source.
-- Fabrication panel generation can emit only the usable packing area with
-  `--emit-usable-area`.
+- Fabrication panel generation can emit only the usable packing area with `--emit-usable-area`.
 
 ### Changed
 
