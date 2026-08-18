@@ -475,9 +475,11 @@ fn refresh_board_embedded_models(pcb_path: &Path, schematic: &Schematic) -> anyh
             .collect();
 
         for (name, source_model) in &source_models {
-            if let Some(nested) = nested_by_name.get(name.as_str())
-                && let Some(nested_checksum) = &nested.checksum
-                && nested_checksum != &source_model.checksum
+            let nested_checksum = nested_by_name
+                .get(name.as_str())
+                .and_then(|nested| nested.checksum.as_deref());
+            if let Some(nested_checksum) = nested_checksum
+                && nested_checksum != source_model.checksum
             {
                 anyhow::bail!(
                     "Cannot update embedded model `{name}` to checksum {} because unmanaged footprint `{reference}` still uses checksum {}",
@@ -486,7 +488,8 @@ fn refresh_board_embedded_models(pcb_path: &Path, schematic: &Schematic) -> anyh
                 );
             }
 
-            if unmanaged_footprint_reference(footprint, name)
+            if nested_checksum.is_none()
+                && unmanaged_footprint_reference(footprint, name)
                 && board_files_by_name
                     .get(name.as_str())
                     .is_some_and(|board_file| {
