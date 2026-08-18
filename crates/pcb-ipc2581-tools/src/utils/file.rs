@@ -4,6 +4,20 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 /// Load an IPC-2581 file, automatically decompressing if it's a .zst file
+/// The XML text of an already-read IPC file, decompressing by extension.
+pub fn ipc_text<'a>(path: &Path, bytes: &'a [u8]) -> Result<std::borrow::Cow<'a, str>> {
+    if path.extension().and_then(|s| s.to_str()) == Some("zst") {
+        let decoded = zstd::decode_all(bytes).context("Failed to decompress file")?;
+        Ok(std::borrow::Cow::Owned(
+            String::from_utf8(decoded).context("Decompressed file is not UTF-8")?,
+        ))
+    } else {
+        Ok(std::borrow::Cow::Borrowed(
+            std::str::from_utf8(bytes).with_context(|| format!("File is not UTF-8: {path:?}"))?,
+        ))
+    }
+}
+
 pub fn load_ipc_file(path: &Path) -> Result<String> {
     if path.extension().and_then(|s| s.to_str()) == Some("zst") {
         // Decompress zstd file

@@ -522,11 +522,18 @@ fn void_sets(
 /// Composition goes through the artwork mask fold so clear-polarity
 /// features subtract in paint order instead of being unioned as copper.
 pub fn composed_copper_image(ipc: &Ipc2581, layer_name: &str) -> Result<ContourSet> {
-    let mut document =
-        geometry::extract_layer_for_view(ipc, layer_name, ArtworkScope::ArrayFlattened)
-            .with_context(|| {
-                format!("failed to extract flattened IPC-2581 copper layer '{layer_name}'")
-            })?;
+    let document = geometry::extract_layer_for_view(ipc, layer_name, ArtworkScope::ArrayFlattened)
+        .with_context(|| format!("failed to extract IPC-2581 copper layer '{layer_name}'"))?;
+    Ok(composed_copper_image_from_document(document))
+}
+
+/// Compose an already extracted copper document into its final painted image.
+///
+/// Callers that also need source-feature identity can inspect or clone the
+/// structure-preserving document before handing it to this destructive fold.
+pub(crate) fn composed_copper_image_from_document(
+    mut document: geometry::GeometryDocument,
+) -> ContourSet {
     pcb_ir::dialects::ipc::process::compose_for_rendering(&mut document);
     let artwork = pcb_ir::dialects::ipc::lower_layer_to_artwork(
         &document,
@@ -543,7 +550,7 @@ pub fn composed_copper_image(ipc: &Ipc2581, layer_name: &str) -> Result<ContourS
             ));
         }
     }
-    Ok(ContourSet::new(rings, FillRule::NonZero, tol::REGION_MM))
+    ContourSet::new(rings, FillRule::NonZero, tol::REGION_MM)
 }
 
 /// Signed first-moment weight `t * z` per copper layer, arms measured from

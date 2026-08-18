@@ -11,7 +11,7 @@ alias provides the same commands.
 | `html` | Export an HTML board summary. |
 | `outline` | Export a KiCad-compatible DXF outline. |
 | `render` | Render one layer as terminal graphics, SVG, or PNG. |
-| `dfm` | Check generated Gerber geometry for narrow features. |
+| `dfm check` | Check IPC-2581 geometry against a fabrication PDK and emit JSON. |
 | `gerber` | Export fabrication layers and drill files. |
 | `view` | Export a filtered IPC-2581 function-mode document. |
 | `board-array create` | Create a rectangular board array. |
@@ -37,6 +37,21 @@ The projection removes BOM/AVL, package, placement, assembly, solder-paste,
 documentation, logical-net, and DFX data. It retains physical construction,
 manufacturing artwork, physical nets, panel repeats, and definitions referenced
 by the retained geometry.
+
+## DFM process design kits
+
+`dfm check` reads a strict, versioned TOML process design kit. Each length has
+its own `mm` or `mil` unit, and only configured capabilities become rules.
+
+```bash
+pcb ipc dfm check fabrication-panel.xml \
+  --pdk fab-process.toml \
+  --output dfm-report.json
+```
+
+See the [DFM format reference](docs/dfm.md) and
+[`examples/dfm-pdk.toml`](examples/dfm-pdk.toml) for the PDK and JSON report
+contracts.
 
 `fab-panel create` supports the common 12 by 18, 16 by 18, 18 by 24, and 21 by
 24 inch fabrication panel sizes through `--panel-size`. The default is 18 by 24

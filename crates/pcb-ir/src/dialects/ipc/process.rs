@@ -176,8 +176,21 @@ pub fn normalize_bounds<S, L>(doc: &mut Document<S, L>) {
         doc.features[feature_index].bbox = doc.placed_paths_bbox(&doc.features[feature_index]);
     }
 
-    for set_index in 0..doc.feature_sets.len() {
-        doc.feature_sets[set_index].bbox = feature_set_bbox(doc, set_index);
+    // One pass over the features, not one scan per set: flattened panels
+    // carry tens of thousands of sets and a per-set scan is quadratic.
+    let mut linked_bboxes = vec![BBox::empty(); doc.feature_sets.len()];
+    for feature in &doc.features {
+        if let Some(set_id) = feature.set {
+            let linked = &mut linked_bboxes[set_id as usize];
+            *linked = linked.union(feature.bbox);
+        }
+    }
+    for (set_index, linked_bbox) in linked_bboxes.into_iter().enumerate() {
+        doc.feature_sets[set_index].bbox = if linked_bbox.is_empty() {
+            feature_set_span_bbox(doc, set_index)
+        } else {
+            linked_bbox
+        };
     }
 
     for layer_index in 0..doc.layers.len() {
@@ -359,7 +372,11 @@ fn materialize_feature_placement<S, L>(
     feature.transform = placement.concat(feature.transform);
     feature.center = placement.transform_point(feature.center);
     feature.paths = paths;
+    // Absolute image sizes follow the placement; width/height/radius stay in
+    // the local frame consumers map through `transform`.
     feature.stroke_width *= scale;
+    feature.outer_diameter *= scale;
+    feature.inner_diameter *= scale;
     feature.bbox = doc.arena.paths_bbox(paths);
 }
 
@@ -995,18 +1012,8 @@ fn path_rings<S, L>(doc: &Document<S, L>, path: &Path) -> Vec<Ring> {
     region::rings_from_contours(&doc.arena.path_contours(path))
 }
 
-fn feature_set_bbox<S, L>(doc: &Document<S, L>, set_index: usize) -> BBox {
-    let set_id = set_index as u32;
-    let linked_bbox = doc
-        .features
-        .iter()
-        .filter(|feature| feature.set == Some(set_id))
-        .map(|feature| feature.bbox)
-        .fold(BBox::empty(), BBox::union);
-    if !linked_bbox.is_empty() {
-        return linked_bbox;
-    }
-
+/// Bounds of a set's own feature span, for sets with no linked features.
+fn feature_set_span_bbox<S, L>(doc: &Document<S, L>, set_index: usize) -> BBox {
     let set = &doc.feature_sets[set_index];
     let start = set.features.start as usize;
     let end = (set.features.end()).min(doc.features.len() as u32) as usize;
