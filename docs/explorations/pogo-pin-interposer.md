@@ -1,319 +1,165 @@
 # Automatic pogo-pin interposer generation
 
-Exploration notes. Nothing here is a commitment. The work is meant to
-be taken one subproblem at a time.
+Exploration notes. Nothing here is a commitment. Work is meant to go
+one subproblem at a time.
 
-This came out of looking at the demo boards, mockingbird-feather, and a
-sample of the broader diodehub corpus, then running small extract /
-classify / assign / sketch prototypes against real `.kicad_pcb` files.
+The first thing we are actually generating is the **interposer**. The
+base / tile electronics are a contract we design against, not this
+project’s first deliverable.
 
-## Why this exists
-
-Shop-floor bringup of these boards is a repeated ritual: locate the
-PCB, press spring probes onto test/debug lands, power up, flash over
-SWD (or SWIO), maybe talk USB or UART, run a self-test.
-
-Today that fixture is designed by hand. The idea is to generate the
-**per-SKU translator board** automatically:
+## Stack
 
 ```
-          DUT  (custom test pads / Tag-Connect / DNP header)
-                 ↕  pogo pins, custom XY, one copper side
-          INTERPOSER   ← this is what we generate
-                 ↕  fixed pad pattern
-          TEST MASTER  (reused: PSU, mux banks, debugger, sequencer)
+  assembly panel  (A5 / A6 / A7, ≤ 8 boards)
+  test pads on the bottom face
+          ↕  individual pogos, custom XY
+  INTERPOSER      outline = panel
+                  top: pogos + same tooling holes as the panel
+                  bot: A7 mate at the origin + A7 tooling
+          ↕  pogo arrays on the base, fixed pattern
+  BASE TILE       one A7 block
+                  1 board live at a time
 ```
 
-The interposer’s job is only to route a custom top-side pogo pattern
-onto a standard bottom-side pattern. The master is a separate, reused
-design. We do not have to invent it in order to start, but we do have
-to say what its pin/bank contract is, because that contract is the
-interposer’s routing target.
-
-## What makes this different from a normal board
-
-A normal layout has a sacred netlist. Pad A is net N; pad B is net N;
-you route them.
-
-The interposer does **not** start with that pairing:
-
-- Top XY is fixed by the DUT’s existing lands.
-- Bottom XY is fixed by the master’s grid.
-- Which top land owns which bottom pin is **chosen**.
-
-That freedom is real (a Tag-Connect SWDIO pad can legally attach to
-any unused pin of the debug bank) and bounded (GND cannot go to 5 V;
-SWDIO and SWCLK cannot be split across two mux trees). So this is not
-a normal autoroute, and it is also not a free crossbar.
-
-Working name for the problem:
-
-> colored, bank-constrained assignment
-> (contact → bank/channel)
-> followed by ordinary geometric routing of that matching.
-
-The assignment **is** the netlist we then route.
-
-## Scope for the first cut
-
-In:
-
-- Lands already designed as test/debug contacts: `TestPoint` pads,
-  Tag-Connect TC2030/TC2050 pad-only footprints, unpopulated debug
-  headers a pogo can sit on (mockingbird `J_SWD` FTSH-105).
-- One copper side of the DUT per fixture.
-- SWD/SWIO, rails, GND, reset, and USB only when those pads actually
-  exist.
-
-Out, for now:
-
-- Designing the test-master PCB itself.
-- Falling back to DNP part pads or random component pins.
-- Dual-side fixtures, flying probes, ICT program generation.
-- USB SuperSpeed / RF / controlled-impedance pogo work.
-
-## What the boards actually look like
-
-Parsed from layout, not from names. Seed set: Renfield, Demeter,
-Feign, Seward, Governor, amoeba, marlow, mockingbird-feather. Also
-walked a few dozen other diodehub boards.
-
-Recurring geometry:
-
-| Pattern | Typical pad | Pitch | Notes |
-|---|---|---|---|
-| `TestPoint_Pad_D1.0mm` | Ø 1.0 mm | n/a | Smallest common land |
-| `TestPoint_Pad_D1.5mm` | Ø 1.5 mm | n/a | marlow SWD + rails |
-| TC2030-IDC-NL 2×3 | Ø 0.79 mm | 1.27 mm | Modal debug land. 6 electrical + 3 NPTH |
-| FTSH-105 2×5 | 0.74 × 2.79 mm | 1.27 mm | DNP ARM 10-pin; pogo-able |
-
-Seed scoreboard:
-
-| Board | Side | Contacts worth hitting |
-|---|---|---|
-| Renfield | F.Cu | TC2030 SWD + VTREF + GND + UART + USB-CC + scope + extra GND |
-| Demeter | F.Cu | TC2030 + `TP_GND` |
-| Feign, Governor, amoeba | F.Cu | TC2030 only (amoeba reset is RP2040 `RUN`) |
-| Seward | F.Cu | TC2030 is the *probe* MCU; `J_TGT` is the *target* header |
-| marlow | **B.Cu** | Ø 1.5 mm `TP_SWDIO` / `TP_SWCLK` / `TP_3V3` / `TP_VBUS` / `TP_GND`. Front FTSH is the target |
-| mockingbird-feather | **B.Cu** | DNP FTSH-105 `J_SWD` (firmware already says pogo it) |
-
-Facts that later steps should not paper over:
-
-- Same-side is not “always front.”
-- Stdlib `Swd` is only `{SWDIO, SWCLK}`. VSENSE, NRST, SWO ride beside
-  it on the Tag-Connect module.
-- SWO is usually `NotConnected()`.
-- NRST is not always named NRST (`RUN`, `RST`).
-- Probe boards have two SWD worlds. When the probe is the DUT, ignore
-  the target header.
-- A complete same-side bringup set (SWD + rail + GND + USB + UART) is
-  rare. Renfield is the rich case. Most boards are Tag-Connect-only.
-- None of the eight seeds have USB D+/D− test pads. Renfield CC pads
-  are analog observation, not an enumerate pair.
-
-Broader corpus sketch (47 boards, 43 with contact footprints):
-TestPoint is common, Tag-Connect shows up often, mixed-side boards
-exist. Treat the eight seeds as the first test set, not the whole
-distribution.
-
-## Suggested vocabulary
-
-Keep this small. Rename later if a better established term appears.
-
-| Term | Meaning |
-|---|---|
-| DUT | Board under test |
-| Contact site | A DUT copper feature we are willing to pogo |
-| Role | Semantic class of the net (`GND`, `PWR_3V3`, `SWDIO`, …) |
-| Color | Electrical compatibility class (`ground`, `power:3v3`, `digital`, …) |
-| Bundle | Roles that must land on one master instrument (e.g. SWD) |
-| Bank | Master pins that share a mux / instrument port |
-| Channel | One pin inside a bank |
-| Affinity | Colors a bank is allowed to carry |
-| Assignment | contact → (bank, channel). This becomes the netlist |
-| Interposer | Generated translator PCB |
-| Test master | Reused sequencer / PSU / mux / programmer |
-| Same-side | Every chosen contact for one fixture sits on one copper face |
-
-## Subproblems
-
-These are different kinds of work. They can be tackled in order.
-They should not be collapsed into “write a script.”
-
-### 1. Inventory
-
-Which contact sites exist, on which side, carrying which nets, at
-what size and pitch?
-
-This is measurement. Failure mode: inventing pads, missing back-side
-sets, treating Seward’s target header as the DUT SWD.
-
-### 2. Extraction
-
-Smallest path from Zener + `.kicad_pcb` (+ IPC / pcb-ir later) to a
-contact record: ref, footprint, pad, XY, size, side, net, Zener kind
-if we have it.
-
-A first prototype just walked the `.kicad_pcb` S-expression. That was
-enough to recover every seed pad we cared about. KiCad’s IPC-2581
-export (10.0.5) was a poor contact API in the one trial: no logical
-nets in the file we got, and Y flipped. pcb-ir is a fabrication
-dialect, not a “find the Tag-Connect” API.
-
-Likely v1 extractor: parse `.kicad_pcb` for geometry and nets, then
-join a Zener netlist when we want `Power` / `Ground` / voltage.
-Filter on footprint family (`TestPoint_*`, `Tag-Connect_*`,
-`FTSH-105*`, plus explicit `J_SWD` / `TP_*` paths).
-
-### 3. Taxonomy and ranking
-
-Which nets are bringup roles, which pads are pogo-able, which one
-side do we actually hit?
-
-Classification can start coarse:
-
-- Zener net kind and interface when present (`Power`, `Ground`, `Swd`).
-- Footprint pin map (TC2030 pad 1 is VSENSE, pad 2 SWDIO, …).
-- Name heuristics as a last resort (`SWDIO`, `V3V3`, `GND`, `CC1`).
-
-Ranking is mechanical: pad diameter, mask opening, pitch, not under a
-populated body, not a stuffed connector, not an NPTH alignment hole.
-Then pick one side. Refuse to mix `F.Cu` and `B.Cu`. On probe boards,
-prefer the self-SWD lands when the probe is the DUT.
-
-A first classifier ran on the eight seeds. All of them had a same-side
-SWD+GND set. marlow’s SWD bundle is partial (no NRST). No seed had
-USB DP/DM lands.
-
-### 4. Assignment language
-
-This is the new intellectual object. Until it exists, a solver and a
-master pin map will silently disagree.
-
-What the language needs to say, and not much more:
-
-1. DUT contacts with roles (and the color each role inherits).
-2. Master banks with affinities and channel counts.
-3. Bundles that must share a bank.
-4. Hard rails (`GND` → ground, `VCC` → matching rail).
-5. Whether permutation inside a bank is free, or some channels are
-   reserved (e.g. a dedicated VTREF sense pin).
-
-Prior art that is useful as analogy, not as a drop-in:
-
-- ICT fixture CAD (CheckSum, Digitaltest, SPEA) is excellent at
-  *probe XY + wiring list* once the netlist is known. Their testers
-  already type resources (power vs multiplexed measure). They assume
-  the netlist is an input. We do not.
-- FPGA I/O banking is the right metaphor for “this bundle must sit in
-  one bank; pins inside the bank permute.”
-- Analog mux trees are why this is not a full crossbar.
-- Min-cost flow assigns pins well but cannot keep a bundle atomic.
-  SAT can. For the sizes we saw (≤12 contacts) greedy backtrack plus
-  a small permutation search is enough to try first.
-
-A tiny JSON shape (`diode.fixture/v0` or whatever we call it) is
-enough to start. Do not invent a compiler language until a few boards
-have been assigned by hand against that JSON.
-
-### 5. Interposer geometry
-
-Once assignment exists, this is mostly CAD:
-
-- DUT-facing features at the contact XY, after one stack transform
-  (Y-mirror iff the fixture side is `F.Cu`, so the interposer faces
-  the lands). Back-side contacts are identity.
-- 50 mil ICT probes in pressed receptacles for the 1.27 mm Tag-Connect
-  / FTSH pitch. SMT pogo strips do not have the stroke to clear a
-  USB-C.
-- A small **stamp** that covers the contact cluster, not necessarily
-  the whole DUT.
-- Tooling: Tag-Connect already ships three NPTH holes; reuse them
-  when the stamp is a TC2030. Otherwise board-outline + fiducials.
-- Bottom side is the frozen master grid, no second mirror.
-
-Some boards will be unfixturable with a given stamp (tall parts in
-the way, contacts on both sides, pitch tighter than the probe
-family). That should be a hard report, not a silent bad board.
-
-### 6. Test-master contract
-
-The master is not generated, but its banks *are* the other half of
-the matching. First-gen can be boring:
-
-- GND rails.
-- One 5 V source, one 3V3 sense (and/or VTREF on the debug bank).
-- One stuffed SWD instrument (CMSIS-DAP). A second, unstuffed, if we
-  ever want probe+target in one press.
-- A small digital bank behind jellybean analog muxes (not an FPGA).
-- USB-CC sense if we care; USB D+/D− only if we start seeing those
-  pads in the corpus.
-
-Whatever grid we pick should be written down as a pin map and then
-left alone. The prototypes used a 4×10 @ 2.54 mm sketch. That number
-is not sacred; the point is to freeze *a* contract before writing a
-router.
-
-## What the prototypes showed
-
-These were throwaways. Useful as existence proofs, not as code to
-keep.
-
-- Walking `.kicad_pcb` recovered 78 pads / 21 footprints on the eight
-  seeds, with XY that matched the layouts.
-- A role classifier produced a same-side fixture set for every seed.
-- A two-stage assigner (bundles → banks, then permute channels)
-  produced legal matchings for Renfield (11 contacts), marlow (5),
-  and mockingbird (7), and correctly rejected a 3-rail / 2-pin
-  negative case.
-- Sketching the chosen matching as Manhattan lines: marlow is
-  trivial; mockingbird is a small header; Renfield is messy because
-  USB-CC lives on the west lip and the legal USB-CC pins live on the
-  east of the grid. A geometrically prettier left-to-right zip had
-  fewer crossings **and was electrically illegal**.
-
-So assignment flexibility is doing electrical work. It is not a
-crossing optimizer. Geometry still has to finish the job (real
-routing, or a two-island stamp, or dropping optional contacts).
-
-## A simple sequence to try
-
-One subproblem at a time. Each step should leave an artifact we can
-look at on real boards before starting the next.
-
-1. **Contact extractor** on `.kicad_pcb` (+ optional Zener netlist).
-   Output: JSON of in-scope pads. Test: the eight seeds match what
-   we already counted by hand.
-2. **Classifier** that emits roles, colors, a chosen side, and a
-   recommended fixture set. Test: refuse mixed sides; ignore Seward
-   / marlow target headers when the probe is the DUT.
-3. **Assignment schema + one frozen master pin map.** Even a
-   handwritten JSON contract is enough. Test: Renfield SAT, 3-rail
-   negative UNSAT.
-4. **Geometry transform + unrouted interposer** as a `.kicad_pcb`
-   (top receptacle holes, bottom grid, nets = the assignment).
-   Start with Feign (Tag-Connect only). Then a back-side board
-   (mockingbird or marlow). Renfield last.
-5. **Route** with ordinary KiCad (or later our own router). Only
-   after a few unrouted boards exist and the matching looks right.
-6. **Master board** as its own project, against the same pin map.
-   Not a prerequisite for (1)–(4).
-
-Possible later, not now: DNP-part fallbacks, dual-side, SAT, IPC /
-pcb-ir as the contact API, a compiler subcommand, production nest
-and CAM.
-
-## Open questions
-
-- Exact master grid (count, pitch, which pins are reserved).
-- Whether VTREF is a dedicated sense pin or just another channel in
-  the debug bank.
-- How much user input we allow when the automatic set is incomplete
-  (no NRST, no rail, contacts on both sides).
-- Whether a “stamp” smaller than the DUT is acceptable for v1, or we
-  always outline the whole board.
-- How to represent this in Zener, if at all, versus a side-car JSON
-  plus a generated KiCad file.
-
-None of these need to be answered before step 1.
+The assembly panel may be larger than A7. The interposer is always the
+**same size as the panel**. All DUT contacts are brought into one A7
+region on the interposer bottom. That region is the reusable mate to
+the base tile.
+
+v1 is **1 tile**. Two tiles (16 boards) can come later. Same contract,
+repeated.
+
+## Tile contract (1 × A7)
+
+ISO A7 is 74 × 105 mm. The mate sits in the **origin corner** of the
+interposer. Leave a **5 mm margin** inside that rectangle for A7
+tooling holes. Pads / pogos may use everything inside the margin
+(64 × 95 mm if the A7 is 74 × 105). Orientation (which edge is X) is
+still open; we should try both and keep the one that escapes better.
+
+Electrical budget on the mate — think **pools**, not per-board pins:
+
+| Pool | Lands | On the base | Notes |
+|---|---:|---|---|
+| Low-speed | 48 | Crosspoint (ADG2128-class) down to **8** host lines | SWCLK, SWDIO, UART, I2C, GPIO, reset, … |
+| USB 2.0 HS | 8 pairs (16 pads, D+/D− only) | MAX4999-class mux | 480 Mbps |
+| GND | 16 | Common return | |
+| Vtarget | 16, in **8×2** banks | 8 switches on the base | DUT rail, 2 A per land |
+| VUSB | 8, in 8 banks | 8 switches | Always 5 V, 2 A per land |
+
+**104** electrical lands, plus tooling.
+
+Because the 48 LS pins are a fully switched fabric down to 8 host
+lines, the interposer does **not** have to know which land is SWDIO.
+Any DUT low-speed pad may attach to any of the 48. The base names
+them later. USB pairs and the power banks are the remaining colored
+constraints.
+
+v1 tests **one board at a time** per tile. 8 host LS lines is enough
+for one DUT (e.g. SWDIO+SWCLK+NRST+UART+…); it is not enough to flash
+eight boards in parallel. The mux walks the panel.
+
+Vtarget grouping on the mate: **8 banks of 2 lands**. A DUT’s power
+pads land on one bank. Unused banks stay unused (4 boards → 4 banks).
+Do not regroup 16 pins into 4×4 on the copper for a smaller panel.
+
+## Interposer rules
+
+- Outline = assembly panel (A5 / A6 / A7 now; A4 later).
+- Top tooling holes copy the panel. Bottom tooling holes are the A7
+  mate’s.
+- Top contacts are **individual** pogos. We do not control DUT pad
+  pitch, so arrays on top are a non-starter.
+- Bottom mate should prefer **even-count constellations** that match
+  multi-pin pogo arrays (2 / 4 / 6 / 8-wide blocks). The base is much
+  nicer to build if it is a handful of array connectors rather than
+  104 press-fit singles. Pattern is **not frozen** — generate several
+  strategies and score them on real panels.
+- Stackup target: **2-layer**, GND pours on both sides, stitched.
+  Power and signals are routed (no power planes: too many distinct
+  Vtarget/VUSB nets). Size power traces for **2 A per land**. Move to
+  4-layer only if USB or the A5 funnel cannot be made honest on 2.
+
+## Why the LS pool matters for routing
+
+A normal board has a sacred netlist. This one does not, for the 48
+LS lands.
+
+Assignment is:
+
+- LS DUT pad → any unused LS mate land (interchangeable).
+- USB D+/D− → one of the 8 HS pair slots (pair kept together,
+  polarity may or may not be swappable — assume not, until proven).
+- Each DUT’s Vtarget → one 2-pin bank.
+- Each DUT’s VUSB → one VUSB land.
+- GND → any GND land (likely all common through the pours).
+
+That is a much looser problem than “SWDIO must hit pin B7.” The
+expensive part is **geometry**: custom top XY on an A5/A6/A7 sheet,
+concentrated into the origin A7, on two layers, with 2 A power traces
+and 90 Ω-ish USB pairs.
+
+## What we already know about DUT contacts
+
+From the demo boards, mockingbird-feather, and a diodehub sample:
+
+- Modal debug land is Tag-Connect TC2030-IDC-NL (Ø 0.79 mm, 1.27 mm
+  pitch) or discrete `TestPoint` pads (Ø 1.0 / 1.5 mm). Some DNP
+  FTSH-105 headers are already documented as pogo-able.
+- v1 assumes every contact we care about is on **one face**, and that
+  face is the bottom of the panel in the fixture.
+- A complete SWD + rail + GND + USB set on that face is uncommon.
+  Allocate from the pools; do not require every role.
+
+Extraction can start as a `.kicad_pcb` walk (footprint family + net +
+side + XY), optionally joined to a Zener netlist for `Power` /
+`Ground` / voltage. IPC / pcb-ir is not the first contact API.
+
+## Subproblems (still sequential)
+
+1. **Contact inventory / extract** — pads we are willing to pogo on
+   the panel bottom.
+2. **Allocate pools** — which DUT nets consume which LS / USB /
+   Vtarget / VUSB / GND budget (≤ 8 boards, 1 tile).
+3. **A7 mate pattern** — several constellation strategies; score
+   escape and array-connector fit. Do not pick one on paper.
+4. **Assignment** — match top contacts onto a candidate pattern
+   (LS is a matching into an interchangeable set).
+5. **Route the interposer** — 2-layer, pours, 2 A power, USB pairs.
+6. **Emit** a real board (unrouted `.kicad_pcb` first).
+
+The base tile (ADG2128, MAX4999, switches, host) is a parallel
+hardware project against the same mate contract. It is not a
+prerequisite for (1)–(3).
+
+## Pattern evaluation (next interesting artifact)
+
+Bottom strategies to generate and run against real A5/A6/A7 panels
+with ≤ 8 boards, for example:
+
+- Functional blocks: one LS field (even-wide arrays) + 8 USB pair
+  slots + 8 Vtarget 2-pin arrays + 8 VUSB + GND arrays.
+- Board-shaped slots: 8 identical constellations (even if the LS
+  fabric is still a global pool). May waste space but makes the base
+  silk obvious.
+- Pitch families: 2.54 mm arrays vs 2.00 mm vs mixed (coarse power,
+  finer LS).
+- USB on the rim vs USB in a dedicated column (length, reference
+  pour, fewer crossings with the A5 funnel).
+
+Score each strategy on the same panels: routed / unrouted, via count,
+USB pair length and mismatch, min power-trace width, whether every
+land sits on a vendor 2×N array pitch, and how ugly A5→A7
+concentration is vs A7→A7 (identity).
+
+## Open
+
+- A7 at the origin: 74×105 or 105×74.
+- Exact panel tooling we copy on the top face (diameter, positions).
+- Whether USB polarity is reversible in the MAX4999 path.
+- Whether the 16 GND lands are one net or should stay as 8×2 for
+  array connectors even if poured together.
+- 4-layer only if 2-layer USB on A5 fails.
+
+None of these need to block writing an extractor or generating the
+first pattern family.
