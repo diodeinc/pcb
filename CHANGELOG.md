@@ -18,6 +18,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `pcb bom` again colors planner-selected parts by green, yellow, and red sourceability tiers.
 - Copper balancing no longer emits sliver voids where boundary voids graze the fill boundary.
 - Pads whose padstack definition is missing now render from their inline primitives.
+- Drilled hole and slot diameters now honor feature placement-group scaling.
 
 ## [0.4.31] - 2026-08-18
 

@@ -372,7 +372,11 @@ fn materialize_feature_placement<S, L>(
     feature.transform = placement.concat(feature.transform);
     feature.center = placement.transform_point(feature.center);
     feature.paths = paths;
+    // Absolute image sizes follow the placement; width/height/radius stay in
+    // the local frame consumers map through `transform`.
     feature.stroke_width *= scale;
+    feature.outer_diameter *= scale;
+    feature.inner_diameter *= scale;
     feature.bbox = doc.arena.paths_bbox(paths);
 }
 
