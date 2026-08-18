@@ -251,6 +251,186 @@ fn render_patches(source: &str, patches: &pcb_sexpr::PatchSet) -> anyhow::Result
     String::from_utf8(out).context("Patched PCB is not valid UTF-8")
 }
 
+#[derive(Debug, Clone)]
+struct EmbeddedFilePayload {
+    name: String,
+    file_type: String,
+    checksum: String,
+    span: pcb_sexpr::Span,
+}
+
+#[derive(Debug, Clone)]
+struct SourceEmbeddedModel {
+    checksum: String,
+    file_text: String,
+    source_path: PathBuf,
+}
+
+fn child_atom<'a>(items: &'a [pcb_sexpr::Sexpr], name: &str) -> Option<&'a str> {
+    pcb_sexpr::find_child_list(items, name)?.get(1)?.as_atom()
+}
+
+fn embedded_file_payloads(items: &[pcb_sexpr::Sexpr]) -> anyhow::Result<Vec<EmbeddedFilePayload>> {
+    let Some(embedded_files) = pcb_sexpr::find_child_list(items, "embedded_files") else {
+        return Ok(Vec::new());
+    };
+
+    embedded_files
+        .iter()
+        .skip(1)
+        .filter_map(|node| {
+            let file = node.as_list()?;
+            (file.first().and_then(pcb_sexpr::Sexpr::as_sym) == Some("file"))
+                .then_some((node, file))
+        })
+        .filter(|(_, file)| {
+            pcb_sexpr::find_child_list(file, "data").is_some_and(|data| data.len() > 1)
+        })
+        .map(|(node, file)| {
+            let name = child_atom(file, "name")
+                .with_context(|| "Embedded file is missing its name")?
+                .to_string();
+            let file_type = child_atom(file, "type")
+                .with_context(|| format!("Embedded file `{name}` is missing its type"))?
+                .to_string();
+            let checksum = child_atom(file, "checksum")
+                .with_context(|| {
+                    format!("Embedded file `{name}` with data is missing its checksum")
+                })?
+                .to_ascii_uppercase();
+
+            Ok(EmbeddedFilePayload {
+                name,
+                file_type,
+                checksum,
+                span: node.span,
+            })
+        })
+        .collect()
+}
+
+fn source_footprint_path(
+    footprint: &str,
+    package_roots: &BTreeMap<String, PathBuf>,
+) -> anyhow::Result<PathBuf> {
+    if footprint.starts_with(pcb_sch::PACKAGE_URI_PREFIX) {
+        pcb_sch::resolve_package_uri(footprint, package_roots)
+    } else {
+        Ok(PathBuf::from(footprint))
+    }
+}
+
+fn source_embedded_models(
+    schematic: &Schematic,
+) -> anyhow::Result<BTreeMap<String, SourceEmbeddedModel>> {
+    let mut models: BTreeMap<String, SourceEmbeddedModel> = BTreeMap::new();
+    let mut visited_sources = HashSet::new();
+
+    for instance in schematic.instances.values() {
+        if instance.kind != InstanceKind::Component {
+            continue;
+        }
+
+        let Some(AttributeValue::String(footprint)) = instance.attributes.get("footprint") else {
+            continue;
+        };
+        let source_path = source_footprint_path(footprint, &schematic.package_roots)
+            .with_context(|| format!("Failed to resolve footprint path `{footprint}`"))?;
+        if !visited_sources.insert(source_path.clone()) {
+            continue;
+        }
+        let source = fs::read_to_string(&source_path).with_context(|| {
+            format!("Failed to read source footprint {}", source_path.display())
+        })?;
+        pcb_sexpr::kicad::footprint::validate_footprint_source(&source)
+            .with_context(|| format!("Invalid source footprint {}", source_path.display()))?;
+        let root = pcb_sexpr::parse(&source).with_context(|| {
+            format!("Failed to parse source footprint {}", source_path.display())
+        })?;
+        let root_items = root
+            .as_list()
+            .with_context(|| format!("Source footprint {} is not a list", source_path.display()))?;
+
+        for file in embedded_file_payloads(root_items)? {
+            if file.file_type != "model" {
+                continue;
+            }
+
+            let file_text = source
+                .get(file.span.start..file.span.end)
+                .with_context(|| {
+                    format!(
+                        "Embedded model `{}` has an invalid source span in {}",
+                        file.name,
+                        source_path.display()
+                    )
+                })?
+                .to_string();
+            let candidate = SourceEmbeddedModel {
+                checksum: file.checksum,
+                file_text,
+                source_path: source_path.clone(),
+            };
+
+            if let Some(existing) = models.get(&file.name)
+                && existing.checksum != candidate.checksum
+            {
+                anyhow::bail!(
+                    "Cannot synchronize embedded model `{}`: source footprints {} and {} contain different payloads ({} and {})",
+                    file.name,
+                    existing.source_path.display(),
+                    candidate.source_path.display(),
+                    existing.checksum,
+                    candidate.checksum
+                );
+            }
+
+            models.entry(file.name).or_insert(candidate);
+        }
+    }
+
+    Ok(models)
+}
+
+/// Replace stale board-level model payloads before KiCad loads the board.
+///
+/// KiCad consolidates footprint payloads by filename and otherwise keeps the existing board entry,
+/// so `--sync-footprints` makes each source model authoritative for its filename.
+fn refresh_board_embedded_models(pcb_path: &Path, schematic: &Schematic) -> anyhow::Result<()> {
+    let source_models = source_embedded_models(schematic)?;
+    if source_models.is_empty() {
+        return Ok(());
+    }
+
+    let board_source = fs::read_to_string(pcb_path)
+        .with_context(|| format!("Failed to read PCB file: {}", pcb_path.display()))?;
+    let board = pcb_sexpr::parse(&board_source)
+        .with_context(|| format!("Failed to parse PCB file: {}", pcb_path.display()))?;
+    let board_items = board
+        .as_list()
+        .with_context(|| format!("PCB file {} is not a list", pcb_path.display()))?;
+
+    let mut patches = pcb_sexpr::PatchSet::new();
+    for board_file in embedded_file_payloads(board_items)? {
+        let Some(source_model) = source_models.get(&board_file.name) else {
+            continue;
+        };
+        if board_file.checksum != source_model.checksum {
+            info!(
+                "Refreshing embedded model {}: {} -> {}",
+                board_file.name, board_file.checksum, source_model.checksum
+            );
+            patches.replace_raw(board_file.span, source_model.file_text.clone());
+        }
+    }
+
+    if !patches.is_empty() {
+        apply_source_preserving_patches_to_file(pcb_path, &board_source, &patches)?;
+    }
+
+    Ok(())
+}
+
 /// Apply moved() path renames to a PCB file
 fn apply_moved_paths(
     pcb_path: &Path,
@@ -552,6 +732,10 @@ pub fn process_layout(
     );
 
     ensure_board_compatible_with_installed_kicad(&paths.pcb)?;
+
+    if pcb_exists && options.sync_footprints {
+        refresh_board_embedded_models(&paths.pcb, schematic)?;
+    }
 
     // Check for moved() paths that can't be applied to submodule layouts (always warn)
     for warning in check_submodule_moved_paths(schematic) {

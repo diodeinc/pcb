@@ -10,6 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- `pcb layout --sync-footprints` refreshes changed embedded 3D models even when their filenames stay the same.
 - `pcb bom` again colors planner-selected parts by green, yellow, and red sourceability tiers.
 - Copper balancing no longer emits sliver voids where boundary voids graze the fill boundary.
 

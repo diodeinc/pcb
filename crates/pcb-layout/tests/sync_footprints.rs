@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
 use assert_fs::TempDir;
 use assert_fs::prelude::*;
+use pcb_kicad::footprint::embed_step_in_footprint;
 use pcb_layout::{LayoutOptions, process_layout};
+use pcb_sexpr::kicad::footprint::embedded_file_checksum;
 use pcb_zen_core::{DefaultFileProvider, Diagnostics};
 
 use crate::helpers::*;
@@ -79,6 +81,14 @@ fn sync_footprints_reloads_same_fpid_models_and_preserves_board_state() -> Resul
     let (temp, resolution) = prepare_simple_workspace()?;
     let zen_file = temp.path().join("MyBoard.zen");
     let footprint_file = temp.path().join("eda/BMI270.kicad_mod");
+    let old_step = b"ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('old model'),'2;1');\nENDSEC;\nDATA;\nENDSEC;\nEND-ISO-10303-21;\n";
+    let new_step = b"ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('new model'),'2;1');\nENDSEC;\nDATA;\nENDSEC;\nEND-ISO-10303-21;\n";
+    let old_checksum = embedded_file_checksum(old_step);
+    let new_checksum = embedded_file_checksum(new_step);
+
+    let source = std::fs::read_to_string(&footprint_file)?;
+    let source = embed_step_in_footprint(source, old_step.to_vec(), "BMI270.step")?;
+    std::fs::write(&footprint_file, source)?;
 
     let schematic = evaluate_board(&zen_file, resolution.clone())?;
     let mut diagnostics = Diagnostics::default();
@@ -90,6 +100,7 @@ fn sync_footprints_reloads_same_fpid_models_and_preserves_board_state() -> Resul
     let initial_placement = placement_state(initial_ic1);
     let initial_board = std::fs::read_to_string(&initial.pcb_file)?;
     assert!(initial_board.contains("(xyz -90 0 0)"));
+    assert!(initial_board.contains(&old_checksum));
     add_test_track(&initial.pcb_file)?;
 
     let source = std::fs::read_to_string(&footprint_file)?;
@@ -98,6 +109,7 @@ fn sync_footprints_reloads_same_fpid_models_and_preserves_board_state() -> Resul
         source, updated_source,
         "test fixture model transform was not found"
     );
+    let updated_source = embed_step_in_footprint(updated_source, new_step.to_vec(), "BMI270.step")?;
     std::fs::write(&footprint_file, updated_source)?;
 
     let schematic = evaluate_board(&zen_file, resolution.clone())?;
@@ -107,12 +119,14 @@ fn sync_footprints_reloads_same_fpid_models_and_preserves_board_state() -> Resul
     let unchanged_board = std::fs::read_to_string(&unchanged.pcb_file)?;
     assert!(unchanged_board.contains("(xyz -90 0 0)"));
     assert!(!unchanged_board.contains("(xyz -45 0 0)"));
+    assert!(unchanged_board.contains(&old_checksum));
+    assert!(!unchanged_board.contains(&new_checksum));
     let unchanged_snapshot: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&unchanged.snapshot_file)?)?;
     let unchanged_tracks = unchanged_snapshot["tracks"].clone();
     assert_eq!(unchanged_tracks.as_array().map(Vec::len), Some(1));
 
-    let schematic = evaluate_board(&zen_file, resolution)?;
+    let schematic = evaluate_board(&zen_file, resolution.clone())?;
     let mut diagnostics = Diagnostics::default();
     let synced = process_layout(
         &schematic,
@@ -127,12 +141,22 @@ fn sync_footprints_reloads_same_fpid_models_and_preserves_board_state() -> Resul
     let synced_board = std::fs::read_to_string(&synced.pcb_file)?;
     assert!(synced_board.contains("(xyz -45 0 0)"));
     assert!(!synced_board.contains("(xyz -90 0 0)"));
+    assert!(synced_board.contains(&new_checksum));
+    assert!(!synced_board.contains(&old_checksum));
     let synced_snapshot: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&synced.snapshot_file)?)?;
     let synced_ic1 = footprint_snapshot(&synced_snapshot, "IC1")?;
     assert_eq!(placement_state(synced_ic1), initial_placement);
     assert_eq!(synced_ic1["pads"], initial_ic1["pads"]);
     assert_eq!(synced_snapshot["tracks"], unchanged_tracks);
+
+    let schematic = evaluate_board(&zen_file, resolution)?;
+    let mut diagnostics = Diagnostics::default();
+    let reloaded = process_layout(&schematic, LayoutOptions::default(), &mut diagnostics)?
+        .context("reloaded layout was not generated")?;
+    let reloaded_board = std::fs::read_to_string(&reloaded.pcb_file)?;
+    assert!(reloaded_board.contains(&new_checksum));
+    assert!(!reloaded_board.contains(&old_checksum));
 
     Ok(())
 }
