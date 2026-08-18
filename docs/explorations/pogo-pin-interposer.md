@@ -88,8 +88,8 @@ LS lands.
 Assignment is:
 
 - LS DUT pad → any unused LS mate land (interchangeable).
-- USB D+/D− → one of the 8 HS pair slots (pair kept together,
-  polarity may or may not be swappable — assume not, until proven).
+- USB D+/D− → one of the 8 HS pair slots (unsplittable ordered pair;
+  no polarity swap).
 - Each DUT’s Vtarget → one 2-pin bank.
 - Each DUT’s VUSB → one VUSB land.
 - GND → any GND land (likely all common through the pours).
@@ -111,22 +111,143 @@ From the demo boards, mockingbird-feather, and a diodehub sample:
 - A complete SWD + rail + GND + USB set on that face is uncommon.
   Allocate from the pools; do not require every role.
 
-Extraction can start as a `.kicad_pcb` walk (footprint family + net +
-side + XY), optionally joined to a Zener netlist for `Power` /
-`Ground` / voltage. IPC / pcb-ir is not the first contact API.
+Contacts come from the **DUT board IPC-2581**, not from Zener or a
+KiCad netlist — those are not in hand at array-create time. v1 finds
+TestPoint / Tag-Connect (and agreed debug headers) by a **standard
+footprint / component naming convention**. Bottom-side only.
+
+## Where it hooks in
+
+Do not parse a finished board-array XML and invent the interposer
+after the fact. `pcb ipc2581 board-array create` already has the DUT
+IPC and is about to compute placements, panel tooling, and fids.
+Generate the interposer in the same command (e.g. `--interposer`).
+Copy panel tooling / fids onto the interposer top; stamp A7 tooling
+on the bottom mate. The boards we must fixture are boards we just
+arrayed.
+
+## Problem breakdown
+
+1. **Contacts** — from the DUT IPC, bottom side, by naming
+   convention. Pad XY, size, net name if present, component/footprint
+   id.
+2. **Demands** — classify contacts into kinds and *bundle* USB into
+   ordered pairs. One demand per LS/GND/VUSB pad; one demand per USB
+   pair; one Vtarget demand per board (up to 2 pads into one bank).
+3. **Instantiate** — apply each array placement transform so demands
+   exist in panel coordinates (same step math the array already has).
+4. **Hall check** — per kind, \(|D_t| \le |S_t|\) and each demand
+   fits its slot shape. Fail closed if a panel wants 9 USB pairs or
+   3 Vtarget pads on one board.
+5. **Match** — inject demands into slots. Electrically this is just
+   typed injection. Geometrically it is min-cost matching, **USB
+   first, then power, then LS** (see below).
+6. **Emit + route** — interposer outline = panel; top pogos at
+   contact XY; bottom A7 constellation; nets = the assignment; then
+   autoroute. This should be an easy autoroute: two layers, pours,
+   fat power, a few USB pairs, and a large interchangeable LS set
+   that can absorb leftovers.
+
+The A7 constellation itself is still a family of strategies we
+score; it is not a prerequisite for writing (1)–(4).
+
+## Assignment: notation and representation
+
+This is **typed pin assignment** (EDA: pin swapping + differential
+pair assignment). Feasibility is **injection into interchangeability
+classes**. Quality is **min-cost bipartite matching** on a contracted
+graph. Joint crossings across kinds are a mild QAP; v1 does not
+solve that — it places kinds in priority order instead.
+
+### Sorts
+
+\[
+T = \{\mathrm{ls},\; \mathrm{gnd},\; \mathrm{vusb},\; \mathrm{vtarget},\; \mathrm{usb\_hs}\}
+\]
+
+For each kind \(t\), \(S_t\) is the set of **slots** on the mate and
+\(D_t\) is the set of **demands** from the panel. A feasible
+electrical assignment is an injection \(\alpha_t : D_t \hookrightarrow S_t\)
+per kind (pools are independent). Existence is Hall, and here it
+collapses to counting:
+
+\[
+|D_t| \le |S_t|
+\quad\text{and each demand fits in one slot.}
+\]
+
+### Slot shape
+
+A slot has pins and a symmetry group \(G_s\) — the legal ways to
+label those pins. That is the whole type system.
+
+| Kind | \(|S_t|\) | Shape | \(G_s\) | Meaning |
+|---|---:|---|---|---|
+| LS | 48 | unit | trivial | any demand ↔ any unused pin |
+| GND | 16 | unit | trivial | same; pour may make them one net |
+| VUSB | 8 | unit | trivial | one 5 V land per demand |
+| Vtarget | 8 | **unordered** 2-set | \(S_2\) | both pins swappable |
+| USB HS | 8 | **ordered** pair \((+,−)\) | \(\{e\}\) | no polarity swap; unsplittable |
+
+- **Unordered** (power bank): any bijection from the demand’s pads
+  onto the two lands is legal.
+- **Ordered** (USB): the demand is an oriented pair. \(D+\) lands on
+  the slot’s \(+\) pin.
+- **Unsplittable**: both members occupy the *same* slot. Never match
+  \(D+\) and \(D−\) as two LS pads.
+
+USB is contracted to a **supervertex** before matching. Power pads
+on one board are one Vtarget demand of size \(\le 2\).
+
+### Records
+
+```text
+Kind     = ls | gnd | vusb | vtarget | usb_hs
+Shape    = unit | unordered{n} | ordered[n]
+
+MatePin  = { id, xy }
+Slot     = { id, kind, shape, pins: [MatePin] }
+Contact  = { id, board, xy, net?, footprint }
+Demand   = { id, kind, board, members: [Contact] }  # USB: ordered
+Assign   = demand → slot
+         + member → pin                    # must lie in G_shape
+```
+
+Rules by construction, not by a constraint language: USB is born as
+one demand `(dp, dm)`; `Assign` is injective on slots; `member → pin`
+is a bijection onto the slot pins that \(G_{\mathrm{shape}}\)
+allows. The crosspoint does not appear in the interposer model — it
+is why `ls` is 48 unit slots in one class.
+
+### Matching order (preview)
+
+Autoroute is in the loop, but the assignment should make it easy.
+Place the picky, scarce, high-speed stuff first; let LS soak up
+whatever geometry remains.
+
+1. **USB** — fewest slots, polarity-preserving, impedance. Match
+   pair-demands to pair-slots (min-cost on the contracted graph).
+2. **Power** — Vtarget banks then VUSB (fat traces, 2 A, 8×2 / 8×1).
+   Unordered pin maps: pick the cheaper of the two.
+3. **Low-speed** — leftover unit slots, fully interchangeable.
+   Ordinary min-cost matching (or even nearest-unused).
+
+GND can sit with power or last; if it is one poured net, geometry
+is almost free.
+
+Do not start with a joint quadratic assignment across kinds. If a
+later scorer wants to swap two LS pins or two Vtarget banks after a
+failed route, that is a local improvement on this greedy order.
 
 ## Subproblems (still sequential)
 
-1. **Contact inventory / extract** — pads we are willing to pogo on
-   the panel bottom.
-2. **Allocate pools** — which DUT nets consume which LS / USB /
-   Vtarget / VUSB / GND budget (≤ 8 boards, 1 tile).
+1. **Naming convention + contact extract** from DUT IPC (bottom).
+2. **Demands** — classify and bundle.
 3. **A7 mate pattern** — several constellation strategies; score
-   escape and array-connector fit. Do not pick one on paper.
-4. **Assignment** — match top contacts onto a candidate pattern
-   (LS is a matching into an interchangeable set).
-5. **Route the interposer** — 2-layer, pours, 2 A power, USB pairs.
-6. **Emit** a real board (unrouted `.kicad_pcb` first).
+   escape and array-connector fit.
+4. **Match** — USB → power → LS, then emit nets.
+5. **Route** the 2-layer interposer (easy autoroute if 4 is decent).
+6. **Hook** `--interposer` (or similar) on board-array create.
 
 The base tile (ADG2128, MAX4999, switches, host) is a parallel
 hardware project against the same mate contract. It is not a
@@ -156,9 +277,10 @@ concentration is vs A7→A7 (identity).
 
 - A7 at the origin: 74×105 or 105×74.
 - Exact panel tooling we copy on the top face (diameter, positions).
-- Whether USB polarity is reversible in the MAX4999 path.
 - Whether the 16 GND lands are one net or should stay as 8×2 for
   array connectors even if poured together.
+- USB polarity is treated as fixed (\(G_s = \{e\}\)) unless the mux
+  path later proves otherwise.
 - 4-layer only if 2-layer USB on A5 fails.
 
 None of these need to block writing an extractor or generating the
