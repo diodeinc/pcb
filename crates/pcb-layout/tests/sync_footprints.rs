@@ -88,11 +88,6 @@ fn sync_footprints_reloads_same_fpid_models_and_preserves_board_state() -> Resul
 
     let source = std::fs::read_to_string(&footprint_file)?;
     let source = embed_step_in_footprint(source, old_step.to_vec(), "BMI270.step")?;
-    let source = source.replacen(
-        "(embedded_files",
-        "(embedded_files\n\t\t(file (name \"unused.step\") (type model))",
-        1,
-    );
     std::fs::write(&footprint_file, source)?;
 
     let schematic = evaluate_board(&zen_file, resolution.clone())?;

@@ -252,12 +252,11 @@ fn render_patches(source: &str, patches: &pcb_sexpr::PatchSet) -> anyhow::Result
 }
 
 #[derive(Debug, Clone)]
-struct EmbeddedFileRecord {
+struct EmbeddedFilePayload {
     name: String,
     file_type: String,
-    checksum: Option<String>,
+    checksum: String,
     span: pcb_sexpr::Span,
-    has_data: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -271,7 +270,7 @@ fn child_atom<'a>(items: &'a [pcb_sexpr::Sexpr], name: &str) -> Option<&'a str> 
     pcb_sexpr::find_child_list(items, name)?.get(1)?.as_atom()
 }
 
-fn embedded_file_records(items: &[pcb_sexpr::Sexpr]) -> anyhow::Result<Vec<EmbeddedFileRecord>> {
+fn embedded_file_payloads(items: &[pcb_sexpr::Sexpr]) -> anyhow::Result<Vec<EmbeddedFilePayload>> {
     let Some(embedded_files) = pcb_sexpr::find_child_list(items, "embedded_files") else {
         return Ok(Vec::new());
     };
@@ -284,6 +283,9 @@ fn embedded_file_records(items: &[pcb_sexpr::Sexpr]) -> anyhow::Result<Vec<Embed
             (file.first().and_then(pcb_sexpr::Sexpr::as_sym) == Some("file"))
                 .then_some((node, file))
         })
+        .filter(|(_, file)| {
+            pcb_sexpr::find_child_list(file, "data").is_some_and(|data| data.len() > 1)
+        })
         .map(|(node, file)| {
             let name = child_atom(file, "name")
                 .with_context(|| "Embedded file is missing its name")?
@@ -291,15 +293,17 @@ fn embedded_file_records(items: &[pcb_sexpr::Sexpr]) -> anyhow::Result<Vec<Embed
             let file_type = child_atom(file, "type")
                 .with_context(|| format!("Embedded file `{name}` is missing its type"))?
                 .to_string();
-            let checksum = child_atom(file, "checksum").map(str::to_ascii_uppercase);
+            let checksum = child_atom(file, "checksum")
+                .with_context(|| {
+                    format!("Embedded file `{name}` with data is missing its checksum")
+                })?
+                .to_ascii_uppercase();
 
-            Ok(EmbeddedFileRecord {
+            Ok(EmbeddedFilePayload {
                 name,
                 file_type,
                 checksum,
                 span: node.span,
-                has_data: pcb_sexpr::find_child_list(file, "data")
-                    .is_some_and(|data| data.len() > 1),
             })
         })
         .collect()
@@ -318,20 +322,14 @@ fn source_footprint_path(
 
 fn source_embedded_models(
     schematic: &Schematic,
-) -> anyhow::Result<(BTreeMap<String, SourceEmbeddedModel>, HashSet<String>)> {
+) -> anyhow::Result<BTreeMap<String, SourceEmbeddedModel>> {
     let mut models: BTreeMap<String, SourceEmbeddedModel> = BTreeMap::new();
-    let mut managed_kiid_paths = HashSet::new();
     let mut visited_sources = HashSet::new();
 
-    for (instance_ref, instance) in &schematic.instances {
+    for instance in schematic.instances.values() {
         if instance.kind != InstanceKind::Component {
             continue;
         }
-
-        let component_path = instance_ref.instance_path.join(".");
-        managed_kiid_paths.insert(pcb_sch::kicad_identity::footprint_kiid_path(
-            &component_path,
-        ));
 
         let Some(AttributeValue::String(footprint)) = instance.attributes.get("footprint") else {
             continue;
@@ -353,8 +351,8 @@ fn source_embedded_models(
             .as_list()
             .with_context(|| format!("Source footprint {} is not a list", source_path.display()))?;
 
-        for file in embedded_file_records(root_items)? {
-            if file.file_type != "model" || !file.has_data {
+        for file in embedded_file_payloads(root_items)? {
+            if file.file_type != "model" {
                 continue;
             }
 
@@ -369,13 +367,7 @@ fn source_embedded_models(
                 })?
                 .to_string();
             let candidate = SourceEmbeddedModel {
-                checksum: file.checksum.clone().with_context(|| {
-                    format!(
-                        "Embedded model `{}` with data is missing its checksum in {}",
-                        file.name,
-                        source_path.display()
-                    )
-                })?,
+                checksum: file.checksum,
                 file_text,
                 source_path: source_path.clone(),
             };
@@ -397,38 +389,15 @@ fn source_embedded_models(
         }
     }
 
-    Ok((models, managed_kiid_paths))
-}
-
-fn board_footprint_is_managed(
-    footprint: &[pcb_sexpr::Sexpr],
-    managed_kiid_paths: &HashSet<String>,
-) -> bool {
-    let properties = pcb_sexpr::kicad::schematic_properties(footprint);
-    if properties.get("Path").is_some_and(|path| !path.is_empty()) {
-        return true;
-    }
-
-    child_atom(footprint, "path").is_some_and(|path| managed_kiid_paths.contains(path))
-}
-
-fn unmanaged_footprint_reference(footprint: &[pcb_sexpr::Sexpr], name: &str) -> bool {
-    let link = format!("kicad-embed://{name}");
-    footprint.iter().skip(1).any(|node| {
-        let Some(model) = node.as_list() else {
-            return false;
-        };
-        model.first().and_then(pcb_sexpr::Sexpr::as_sym) == Some("model")
-            && model.get(1).and_then(pcb_sexpr::Sexpr::as_atom) == Some(link.as_str())
-    })
+    Ok(models)
 }
 
 /// Replace stale board-level model payloads before KiCad loads the board.
 ///
 /// KiCad consolidates footprint payloads by filename and otherwise keeps the existing board entry,
-/// so a freshly loaded footprint cannot replace same-named bytes during serialization.
+/// so `--sync-footprints` makes each source model authoritative for its filename.
 fn refresh_board_embedded_models(pcb_path: &Path, schematic: &Schematic) -> anyhow::Result<()> {
-    let (source_models, managed_kiid_paths) = source_embedded_models(schematic)?;
+    let source_models = source_embedded_models(schematic)?;
     if source_models.is_empty() {
         return Ok(());
     }
@@ -440,87 +409,18 @@ fn refresh_board_embedded_models(pcb_path: &Path, schematic: &Schematic) -> anyh
     let board_items = board
         .as_list()
         .with_context(|| format!("PCB file {} is not a list", pcb_path.display()))?;
-    let board_files = embedded_file_records(board_items)?;
-    let mut board_files_by_name: BTreeMap<&str, &EmbeddedFileRecord> = BTreeMap::new();
-
-    for file in &board_files {
-        if let Some(existing) = board_files_by_name.insert(&file.name, file)
-            && (existing.checksum != file.checksum || existing.file_type != file.file_type)
-        {
-            anyhow::bail!(
-                "Board contains conflicting embedded files named `{}`",
-                file.name
-            );
-        }
-    }
-
-    for node in board_items.iter().skip(1) {
-        let Some(footprint) = node.as_list() else {
-            continue;
-        };
-        if footprint.first().and_then(pcb_sexpr::Sexpr::as_sym) != Some("footprint")
-            || board_footprint_is_managed(footprint, &managed_kiid_paths)
-        {
-            continue;
-        }
-
-        let reference = pcb_sexpr::kicad::schematic_properties(footprint)
-            .get("Reference")
-            .cloned()
-            .unwrap_or_else(|| "<unmanaged footprint>".to_string());
-        let nested_files = embedded_file_records(footprint)?;
-        let nested_by_name: BTreeMap<&str, &EmbeddedFileRecord> = nested_files
-            .iter()
-            .map(|file| (file.name.as_str(), file))
-            .collect();
-
-        for (name, source_model) in &source_models {
-            let nested_checksum = nested_by_name
-                .get(name.as_str())
-                .and_then(|nested| nested.checksum.as_deref());
-            if let Some(nested_checksum) = nested_checksum
-                && nested_checksum != source_model.checksum
-            {
-                anyhow::bail!(
-                    "Cannot update embedded model `{name}` to checksum {} because unmanaged footprint `{reference}` still uses checksum {}",
-                    source_model.checksum,
-                    nested_checksum
-                );
-            }
-
-            if nested_checksum.is_none()
-                && unmanaged_footprint_reference(footprint, name)
-                && board_files_by_name
-                    .get(name.as_str())
-                    .is_some_and(|board_file| {
-                        board_file.checksum.as_deref() != Some(source_model.checksum.as_str())
-                    })
-            {
-                anyhow::bail!(
-                    "Cannot update embedded model `{name}` because unmanaged footprint `{reference}` still uses the board payload"
-                );
-            }
-        }
-    }
 
     let mut patches = pcb_sexpr::PatchSet::new();
-    for (name, source_model) in source_models {
-        let Some(board_file) = board_files_by_name.get(name.as_str()) else {
+    for board_file in embedded_file_payloads(board_items)? {
+        let Some(source_model) = source_models.get(&board_file.name) else {
             continue;
         };
-        if board_file.file_type != "model" {
-            anyhow::bail!(
-                "Cannot update embedded model `{name}` because the board contains a same-named embedded {}",
-                board_file.file_type
-            );
-        }
-        if board_file.checksum.as_deref() != Some(source_model.checksum.as_str()) {
+        if board_file.checksum != source_model.checksum {
             info!(
-                "Refreshing embedded model {name}: {} -> {}",
-                board_file.checksum.as_deref().unwrap_or("<missing>"),
-                source_model.checksum
+                "Refreshing embedded model {}: {} -> {}",
+                board_file.name, board_file.checksum, source_model.checksum
             );
-            patches.replace_raw(board_file.span, source_model.file_text);
+            patches.replace_raw(board_file.span, source_model.file_text.clone());
         }
     }
 
