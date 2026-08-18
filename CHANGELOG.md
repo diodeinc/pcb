@@ -11,6 +11,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - `pcb layout --sync-footprints` reloads footprint definitions from source.
+- Fabrication panel generation can emit only the usable packing area with
+  `--emit-usable-area`.
 
 ### Changed
 
@@ -18,6 +20,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- IPC-derived Gerbers no longer apply padstack shape offsets twice to rotated pads.
 - Board-array rail fiducials now distinguish top and bottom surfaces.
 - BOM generation no longer panics when truncating UTF-8 component descriptions.
 - Nested modules retain group ownership for copied routing and graphics during layout synchronization.

@@ -30,6 +30,7 @@ pub struct FabPanelSpec {
     height_mm: f64,
     pub edge_margin_mm: EdgeInsetsMm,
     pub panel_gap_mm: f64,
+    pub emit_usable_area: bool,
 }
 
 impl FabPanelSpec {
@@ -52,6 +53,7 @@ impl FabPanelSpec {
             height_mm: height * 25.4,
             edge_margin_mm: DEFAULT_EDGE_MARGIN_MM,
             panel_gap_mm: DEFAULT_PANEL_GAP_MM,
+            emit_usable_area: false,
         }
     }
 
@@ -95,6 +97,31 @@ impl FabPanelSpec {
             width: dimension_um(usable.width())?,
             height: dimension_um(usable.height())?,
         })
+    }
+
+    /// The profile represented by the generated IPC document.
+    fn output_bbox(self) -> Result<BBox> {
+        if self.emit_usable_area {
+            let usable = self.usable_bbox()?;
+            Ok(BBox::new(
+                Point::new(0.0, 0.0),
+                Point::new(usable.width(), usable.height()),
+            ))
+        } else {
+            Ok(BBox::new(
+                Point::new(0.0, 0.0),
+                Point::new(self.width_mm, self.height_mm),
+            ))
+        }
+    }
+
+    /// The usable packing domain expressed in generated-output coordinates.
+    fn output_usable_bbox(self) -> Result<BBox> {
+        if self.emit_usable_area {
+            self.output_bbox()
+        } else {
+            self.usable_bbox()
+        }
     }
 }
 
@@ -340,8 +367,10 @@ fn create_fab_panel(
     let (balance_features, copper_balance) = if balance_copper {
         let parsed = Ipc2581::parse(&provisional)
             .context("Failed to parse provisional IPC-2581 fabrication panel")?;
-        let balance =
-            balance::generate_automatic_fab_panel_copper_balance(&parsed, spec.usable_bbox()?)?;
+        let balance = balance::generate_automatic_fab_panel_copper_balance(
+            &parsed,
+            spec.output_usable_bbox()?,
+        )?;
         let report = balance.report();
         let features = balance
             .layers
