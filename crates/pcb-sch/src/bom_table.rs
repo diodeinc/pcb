@@ -5,9 +5,8 @@ use comfy_table::{Cell, Color, Table};
 use terminal_hyperlink::Hyperlink as _;
 use urlencoding::encode as urlencode;
 
-use crate::bom::AvailabilitySummary;
-use crate::bom::Bom;
 use crate::bom::availability::BOARD_QUANTITY;
+use crate::bom::{AvailabilitySummary, Bom, SourcingStockClass};
 
 const NO_MATCH_LABEL: &str = "No match (unknown part)";
 
@@ -109,23 +108,52 @@ fn styled_cell(content: impl ToString, is_dnp: bool, is_house: bool) -> Cell {
     }
 }
 
-/// Map response states to display colors without recreating sourcing policy.
-fn color_for_status(is_dnp: bool, no_match: bool) -> Option<Color> {
+/// Map the selected planner result to its presentation color.
+fn color_for_status(
+    is_dnp: bool,
+    no_match: bool,
+    sourceability: Option<SourcingStockClass>,
+) -> Option<Color> {
     if is_dnp {
         Some(Color::DarkGrey)
     } else if no_match {
         Some(Color::Magenta)
     } else {
-        None
+        sourceability.map(|sourceability| match sourceability {
+            SourcingStockClass::Plenty => Color::Green,
+            SourcingStockClass::Limited | SourcingStockClass::Unknown => Color::Yellow,
+            SourcingStockClass::Insufficient => Color::Red,
+        })
     }
 }
 
 /// Apply styling to response-state cells.
-fn styled_status_cell(content: impl ToString, is_dnp: bool, no_match: bool) -> Cell {
+fn styled_status_cell(
+    content: impl ToString,
+    is_dnp: bool,
+    no_match: bool,
+    sourceability: Option<SourcingStockClass>,
+) -> Cell {
     let cell = Cell::new(content);
-    match color_for_status(is_dnp, no_match) {
+    match color_for_status(is_dnp, no_match, sourceability) {
         Some(color) => cell.fg(color),
         None => cell,
+    }
+}
+
+fn line_sourceability(
+    us: Option<SourcingStockClass>,
+    global: Option<SourcingStockClass>,
+) -> Option<SourcingStockClass> {
+    match (us, global) {
+        (None, class) | (class, None) => class,
+        (Some(SourcingStockClass::Insufficient), Some(SourcingStockClass::Insufficient)) => {
+            Some(SourcingStockClass::Insufficient)
+        }
+        (Some(SourcingStockClass::Plenty), Some(SourcingStockClass::Plenty)) => {
+            Some(SourcingStockClass::Plenty)
+        }
+        _ => Some(SourcingStockClass::Limited),
     }
 }
 
@@ -164,6 +192,7 @@ struct RegionDisplayData {
     alt_stock: i32,
     price_single: Option<f64>,
     price_boards: Option<f64>,
+    sourceability: Option<SourcingStockClass>,
     lcsc_ids: Vec<(String, String)>,
     mpn: Option<String>,
     manufacturer: Option<String>,
@@ -192,6 +221,7 @@ impl RegionDisplayData {
             alt_stock: a.alt_stock,
             price_single,
             price_boards,
+            sourceability: Some(a.stock_class),
             lcsc_ids: a.lcsc_part_ids.clone(),
             mpn: a.mpn.clone(),
             manufacturer: a.manufacturer.clone(),
@@ -252,13 +282,23 @@ impl Bom {
 
         if has_availability {
             legend_table.add_row(vec![
+                Cell::new("■").fg(Color::Green),
+                Cell::new("Plenty available / easy to source"),
+                Cell::new("  "),
                 Cell::new("■").fg(Color::Blue),
                 Cell::new("House component"),
+            ]);
+            legend_table.add_row(vec![
+                Cell::new("■").fg(Color::Yellow),
+                Cell::new("Limited inventory / harder to source"),
                 Cell::new("  "),
                 Cell::new("■").fg(Color::DarkGrey),
                 Cell::new("DNP (Do Not Populate)"),
             ]);
             legend_table.add_row(vec![
+                Cell::new("■").fg(Color::Red),
+                Cell::new("Insufficient stock / hard to source"),
+                Cell::new("  "),
                 Cell::new("■").fg(Color::Magenta),
                 Cell::new(NO_MATCH_LABEL),
             ]);
@@ -412,6 +452,9 @@ impl Bom {
             let (manufacturer, is_manufacturer_autofilled) =
                 autofill_from_availability(original_manufacturer, &avail_manufacturer);
 
+            let line_sourceability =
+                line_sourceability(us_data.sourceability, global_data.sourceability);
+
             // Track summary stats
             if has_availability {
                 if is_dnp {
@@ -438,7 +481,7 @@ impl Bom {
             // Create qty and designators cells
             let qty_cell = styled_cell(format!("{:>4}", qty), is_dnp, false);
             let designators_cell = (if has_availability {
-                styled_status_cell(designators.as_str(), is_dnp, no_match)
+                styled_status_cell(designators.as_str(), is_dnp, no_match, line_sourceability)
             } else {
                 styled_cell(designators.as_str(), is_dnp, false)
             })
@@ -474,11 +517,17 @@ impl Bom {
 
             // Add stock columns (US and Global)
             if has_availability {
-                row.push(styled_status_cell(us_data.format_stock(), is_dnp, no_match));
+                row.push(styled_status_cell(
+                    us_data.format_stock(),
+                    is_dnp,
+                    no_match,
+                    us_data.sourceability,
+                ));
                 row.push(styled_status_cell(
                     global_data.format_stock(),
                     is_dnp,
                     no_match,
+                    global_data.sourceability,
                 ));
             }
 
@@ -668,7 +717,43 @@ mod tests {
 
     #[test]
     fn no_match_status_is_magenta() {
-        assert_eq!(color_for_status(false, true), Some(Color::Magenta));
+        assert_eq!(
+            color_for_status(false, true, Some(SourcingStockClass::Plenty)),
+            Some(Color::Magenta)
+        );
+    }
+
+    #[test]
+    fn api_stock_classes_map_to_sourceability_colors() {
+        assert_eq!(
+            color_for_status(false, false, Some(SourcingStockClass::Plenty)),
+            Some(Color::Green)
+        );
+        assert_eq!(
+            color_for_status(false, false, Some(SourcingStockClass::Limited)),
+            Some(Color::Yellow)
+        );
+        assert_eq!(
+            color_for_status(false, false, Some(SourcingStockClass::Insufficient)),
+            Some(Color::Red)
+        );
+        assert_eq!(
+            color_for_status(false, false, Some(SourcingStockClass::Unknown)),
+            Some(Color::Yellow)
+        );
+    }
+
+    #[test]
+    fn missing_region_is_uncolored_and_existing_region_drives_line() {
+        assert_eq!(color_for_status(false, false, None), None);
+        assert_eq!(
+            line_sourceability(Some(SourcingStockClass::Plenty), None),
+            Some(SourcingStockClass::Plenty)
+        );
+        assert_eq!(
+            line_sourceability(None, Some(SourcingStockClass::Insufficient)),
+            Some(SourcingStockClass::Insufficient)
+        );
     }
 
     #[test]

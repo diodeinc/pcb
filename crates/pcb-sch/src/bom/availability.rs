@@ -5,6 +5,17 @@ use serde::{Deserialize, Serialize};
 /// Board quantity sent to the sourcing planner and used for price presentation.
 pub const BOARD_QUANTITY: i32 = 5;
 
+/// Stock classification computed by the API sourcing planner.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum SourcingStockClass {
+    Plenty,
+    Limited,
+    Insufficient,
+    #[default]
+    Unknown,
+}
+
 /// Pricing and availability data for a component
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Availability {
@@ -25,6 +36,9 @@ pub struct Availability {
 /// Compact availability summary for a region
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct AvailabilitySummary {
+    /// API planner classification for the selected offer (internal only)
+    #[serde(skip, default)]
+    pub stock_class: SourcingStockClass,
     /// Unit price at target quantity
     pub price: Option<f64>,
     /// Stock available (best offer)
