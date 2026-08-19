@@ -9,7 +9,7 @@
 //! - WASM: only checks vendor/ (everything must be pre-vendored)
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, hash_map::Entry};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -664,9 +664,10 @@ struct PackageIndexes {
     /// Reverse of `workspace_package_roots`: package root path → coordinate,
     /// for `format_package_uri`.
     root_coords: HashMap<PathBuf, String>,
-    /// Package root path → root package URL, for resolution maps whose own
-    /// workspace package sits at that path, for `frozen_root_for_file`.
-    own_roots: HashMap<PathBuf, String>,
+    /// Package root path → canonical resolution root for direct evaluation.
+    /// Workspace roots select their own map; dependencies are included only
+    /// when every containing map gives them the same semantic scope.
+    file_roots: HashMap<PathBuf, String>,
     /// Workspace-relative package dir → package URL, for
     /// `workspace_package_url_for_path`.
     rel_dirs: HashMap<PathBuf, String>,
@@ -687,15 +688,38 @@ impl PackageIndexes {
             .map(|(coord, root)| (root.clone(), coord.clone()))
             .collect();
 
+        let mut inferred_roots: HashMap<PathBuf, Option<(String, PackageScopeKey)>> =
+            HashMap::new();
         let mut own_roots = HashMap::new();
         for (root_package, map) in resolution {
             for (root, package) in &map.packages {
+                let scope = PackageScopeKey::frozen(package);
+                match inferred_roots.entry(root.clone()) {
+                    Entry::Vacant(entry) => {
+                        entry.insert(Some((root_package.clone(), scope)));
+                    }
+                    Entry::Occupied(mut entry)
+                        if entry
+                            .get()
+                            .as_ref()
+                            .is_some_and(|(_, candidate)| candidate != &scope) =>
+                    {
+                        entry.insert(None);
+                    }
+                    Entry::Occupied(_) => {}
+                }
+
                 if matches!(&package.identity, FrozenPackageIdentity::Workspace(url) if url == root_package)
                 {
                     own_roots.insert(root.clone(), root_package.clone());
                 }
             }
         }
+        let mut file_roots = inferred_roots
+            .into_iter()
+            .filter_map(|(root, candidate)| candidate.map(|(root_package, _)| (root, root_package)))
+            .collect::<HashMap<_, _>>();
+        file_roots.extend(own_roots);
 
         let rel_dirs = workspace_info
             .packages
@@ -707,7 +731,7 @@ impl PackageIndexes {
             package_roots,
             workspace_package_roots,
             root_coords,
-            own_roots,
+            file_roots,
             rel_dirs,
         }
     }
@@ -755,23 +779,17 @@ impl ResolutionResult {
 
     /// Resolve the package-local dependency scope for a file.
     ///
-    /// When `active_root_package` is present, lookup is intentionally scoped to
-    /// that frozen root package. The same physical package root can appear in
-    /// multiple dependency environments, so callers must not use a global
-    /// file-to-scope lookup for frozen resolution.
+    /// Lookup is intentionally scoped to the active frozen root package. The
+    /// same physical package can have different dependency environments.
     pub(crate) fn package_scope_for_file<'a>(
         &'a self,
         file: &Path,
         active_root_package: Option<&str>,
     ) -> Option<ResolvedPackageScope<'a>> {
-        if let Some(root_package) = active_root_package {
-            return self
-                .frozen_root(root_package)
-                .and_then(|resolution| resolution.package_for_file(file))
-                .map(|(root, package)| ResolvedPackageScope::frozen(root, package));
-        }
-
-        None
+        let resolution = self.frozen_root(active_root_package?)?;
+        resolution
+            .package_for_file(file)
+            .map(|(root, package)| ResolvedPackageScope::frozen(root, package))
     }
 
     pub fn package_url_for_package_root(
@@ -914,29 +932,14 @@ impl ResolutionResult {
     }
 
     pub fn frozen_root_for_file(&self, file: &Path) -> Option<(&str, &FrozenResolutionMap)> {
-        // Stdlib files are owned by the synthetic stdlib package in every map,
-        // never by a map's own root package; they root at the stdlib
-        // resolution when one was requested (e.g. `pcb doc @stdlib`). Both
-        // `file` and the workspace root are canonical, so a prefix check works.
-        if file.starts_with(self.workspace_info.workspace_stdlib_dir()) {
-            return self
-                .resolution
-                .get_key_value(STDLIB_MODULE_PATH)
-                .map(|(root_package, resolution)| (root_package.as_str(), resolution));
-        }
-
-        // A resolution map is a candidate only when its own longest match for
-        // `file` is its root workspace package; the longest such root wins.
-        // Walk the file's ancestors (longest first) over the precomputed
-        // root-path index and verify each candidate against its map, which is
-        // equivalent to scanning every resolution map but O(path depth).
+        // Walk package roots from most to least specific. The index prefers a
+        // workspace package's own map and contains dependency roots only when
+        // their semantic scope is identical in every containing map.
         file.ancestors().find_map(|dir| {
-            let root_package = self.indexes.own_roots.get(dir)?;
+            let root_package = self.indexes.file_roots.get(dir)?;
             let resolution = self.resolution.get(root_package)?;
-            let (root, package) = resolution.package_for_file(file)?;
-            let is_own_root = root == dir
-                && matches!(&package.identity, FrozenPackageIdentity::Workspace(url) if url == root_package);
-            is_own_root.then_some((root_package.as_str(), resolution))
+            let (root, _) = resolution.package_for_file(file)?;
+            (root == dir).then_some((root_package.as_str(), resolution))
         })
     }
 
@@ -1135,7 +1138,7 @@ mod tests {
     }
 
     #[test]
-    fn frozen_scope_cache_key_is_package_local() {
+    fn frozen_scope_is_inferred_when_package_local() {
         let shared_root = PathBuf::from("/cache/github.com/acme/shared/1.0.0");
         let shared_package = FrozenPackage {
             identity: FrozenPackageIdentity::Remote {
@@ -1182,6 +1185,13 @@ mod tests {
         assert_eq!(
             resolution.load_cache_scope_key_for_file(&file, Some("github.com/acme/root-a"),),
             resolution.load_cache_scope_key_for_file(&file, Some("github.com/acme/root-b"),)
+        );
+        let (inferred_root, _) = resolution
+            .frozen_root_for_file(&file)
+            .expect("equivalent package scopes should have a canonical root");
+        assert_eq!(
+            resolution.load_cache_scope_key_for_file(&file, Some(inferred_root)),
+            resolution.load_cache_scope_key_for_file(&file, Some("github.com/acme/root-a"),)
         );
     }
 
@@ -1240,7 +1250,7 @@ mod tests {
     }
 
     #[test]
-    fn frozen_scope_requires_active_root_for_shared_package() {
+    fn frozen_root_is_not_inferred_for_ambiguous_shared_package() {
         let shared_root = PathBuf::from("/cache/github.com/acme/shared/1.0.0");
         let package_with_dep = |dep_root: &str| FrozenPackage {
             identity: FrozenPackageIdentity::Remote {
@@ -1286,9 +1296,10 @@ mod tests {
             HashMap::new(),
         );
 
-        assert_eq!(
-            resolution.load_cache_scope_key_for_file(&shared_root.join("lib.zen"), None),
-            None
+        assert!(
+            resolution
+                .frozen_root_for_file(&shared_root.join("lib.zen"))
+                .is_none()
         );
     }
 

@@ -395,8 +395,7 @@ impl LspEvalContext {
         let evaluated_content_hash = maybe_contents.as_deref().map(content_hash);
 
         let config = self.config_for(path_buf);
-        let mut ctx = EvalContext::from_session_and_config(Default::default(), config)
-            .set_source_path(path_buf.to_path_buf());
+        let mut ctx = EvalContext::from_session_and_config(Default::default(), config);
 
         if let Some(contents) = maybe_contents {
             ctx = ctx.set_source_contents(contents);
@@ -493,10 +492,14 @@ impl LspEvalContext {
         resolution
     }
 
-    /// Create a fresh EvalContextConfig for the given file.
+    /// Create a fresh EvalContextConfig rooted at the given file.
+    ///
+    /// All LSP operations share this path so navigation and evaluation use the
+    /// same package-local resolution scope.
     fn config_for(&self, file_path: &Path) -> EvalContextConfig {
         EvalContextConfig::new(self.file_provider.clone(), self.resolution_for(file_path))
             .set_eager(self.inner.is_eager())
+            .set_source_path(file_path.to_path_buf())
     }
 
     /// Create LSP-specific diagnostic passes
@@ -1148,11 +1151,9 @@ impl LspContext for LspEvalContext {
                                 );
 
                                 let eval_result = if let Some(contents) = maybe_contents {
-                                    ctx.set_source_path(path_buf.clone())
-                                        .set_source_contents(contents)
-                                        .eval()
+                                    ctx.set_source_contents(contents).eval()
                                 } else {
-                                    ctx.set_source_path(path_buf.clone()).eval()
+                                    ctx.eval()
                                 };
 
                                 eval_result
@@ -1559,7 +1560,7 @@ mod tests {
     }
 
     #[test]
-    fn lsp_loads_open_dependency_contents() -> anyhow::Result<()> {
+    fn lsp_uses_file_scope_for_navigation_and_evaluation() -> anyhow::Result<()> {
         let dir = tempfile::tempdir()?;
         let root = dir.path().canonicalize()?;
         let package_dir = root.join("pkg");
@@ -1579,6 +1580,31 @@ mod tests {
         let ctx = LspEvalContext::default();
         let main_url = LspUri::File(main_path.clone());
         let dep_url = LspUri::File(dep_path.clone());
+        let stdlib_path = root.join(".pcb/stdlib/interfaces.zen");
+        let stdlib_url = LspUri::File(stdlib_path.clone());
+
+        assert_eq!(
+            ctx.resolve_load("./dep.zen", &main_url, None)
+                .map_err(anyhow::Error::msg)?,
+            dep_url
+        );
+        assert_eq!(
+            ctx.resolve_load("@stdlib/interfaces.zen", &main_url, None)
+                .map_err(anyhow::Error::msg)?,
+            stdlib_url
+        );
+
+        let stdlib_result =
+            ctx.parse_file_with_contents(&stdlib_url, fs::read_to_string(stdlib_path)?);
+        assert!(
+            stdlib_result.ast.is_some(),
+            "expected a loaded stdlib file to use the same evaluable scope"
+        );
+        assert!(
+            stdlib_result.diagnostics.is_empty(),
+            "expected no stdlib diagnostics, got {:?}",
+            stdlib_result.diagnostics
+        );
 
         ctx.did_change_file_contents(&main_url, main_contents);
         ctx.did_change_file_contents(&dep_url, "def foo():\n    return 1\n");
