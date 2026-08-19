@@ -24,6 +24,11 @@ struct Args {
     /// Output directory for the HTML report and per-case SVGs.
     #[arg(long)]
     out: PathBuf,
+    /// Directory of real board-array panels ({board}_{sheet}.xml from
+    /// `pcbc ipc2581 board-array create`); when a panel exists for a case,
+    /// its placements, tooling, and fiducials replace the synthetic pack.
+    #[arg(long)]
+    panels: Option<PathBuf>,
 }
 
 fn find_boards(root: &Path) -> Vec<(String, PathBuf, PathBuf)> {
@@ -53,6 +58,7 @@ fn run_one(
     pcb: &Path,
     sheet: Sheet,
     strategy: PatternKind,
+    panels_dir: Option<&Path>,
     emit_dir: Option<&Path>,
 ) -> Result<CaseRow> {
     let zen_src = fs::read_to_string(zen)?;
@@ -89,13 +95,24 @@ fn run_one(
         bh = (my - origin[1]).max(10.0);
     }
     instantiate::localize(&mut local, origin);
-    let places = instantiate::pack(sheet, bw, bh, 8);
-    let contacts = instantiate::instantiate(&local, &places);
+
+    // Real generated panel when present; the synthetic pack otherwise.
+    let panel_xml = panels_dir
+        .map(|d| d.join(format!("{board_name}_{}.xml", sheet.name)))
+        .filter(|p| p.is_file());
+    let (places, sheet_w, sheet_h, inherited) = match &panel_xml {
+        Some(p) => {
+            let ap = pcb_interposer::arrayspec::parse_panel(p, origin)
+                .with_context(|| format!("parse {}", p.display()))?;
+            (ap.places, ap.sheet_w, ap.sheet_h, Some(ap.panel))
+        }
+        None => (instantiate::pack(sheet, bw, bh, 8), sheet.w, sheet.h, None),
+    };
     let n_local = local.len();
     let n_boards = places.len();
 
     let label = strategy.name().to_string();
-    if contacts.is_empty() {
+    if local.is_empty() {
         return Ok(CaseRow {
             board: board_name.into(),
             sheet: sheet.name.into(),
@@ -110,26 +127,48 @@ fn run_one(
     }
 
     // SMT pogo pads (top) never collide with mate lands (bottom); a net's
-    // single layer-change via is optional and sits in one of its own pads,
-    // so there is no suppression or board dropping any more.
-    let mut problem: Problem = bundle(contacts)?;
-    problem.panel = pcb_interposer::panel::panel_spec(sheet, &places, bw, bh);
-    let mut cents: BTreeMap<BoardId, (f64, f64, u32)> = BTreeMap::new();
-    for c in problem.contacts.values() {
-        let e = cents.entry(c.board).or_insert((0.0, 0.0, 0));
-        e.0 += c.xy[0];
-        e.1 += c.xy[1];
-        e.2 += 1;
-    }
-    let centroids: Vec<[f64; 2]> = cents
-        .values()
-        .map(|(x, y, n)| [x / *n as f64, y / *n as f64])
-        .collect();
-    let mut pattern = generate_pattern_at(strategy, PITCH_254, &centroids);
-    // The mate follows the ISO fold: rotated 90° on A6/A4-class sheets.
-    pcb_interposer::pattern::orient_pattern(&mut pattern, sheet.w, sheet.h);
-    attach_pattern(&mut problem, &pattern);
-    let hall_ok = hall(&problem).is_ok();
+    // single layer-change via is optional and sits in one of its own pads.
+    // Real packings can exceed the constellation's capacity — keep the
+    // largest board prefix whose demands still satisfy Hall; the rest of
+    // the panel waits for another fixture insertion.
+    let mut kept = n_boards;
+    let (problem, pattern, hall_ok) = loop {
+        // Spread the tested subset across the sheet: a clumped prefix puts
+        // every net far from half the perimeter constellation.
+        let pick: Vec<_> = (0..kept)
+            .map(|i| places[i * n_boards / kept].clone())
+            .collect();
+        let contacts = instantiate::instantiate(&local, &pick);
+        let mut problem: Problem = bundle(contacts)?;
+        problem.panel = match &inherited {
+            Some(spec) => {
+                let mut spec = spec.clone();
+                pcb_interposer::panel::add_a7_tile_tooling(&mut spec, sheet_w, sheet_h);
+                spec
+            }
+            None => pcb_interposer::panel::panel_spec(sheet, &places, bw, bh),
+        };
+        let mut cents: BTreeMap<BoardId, (f64, f64, u32)> = BTreeMap::new();
+        for c in problem.contacts.values() {
+            let e = cents.entry(c.board).or_insert((0.0, 0.0, 0));
+            e.0 += c.xy[0];
+            e.1 += c.xy[1];
+            e.2 += 1;
+        }
+        let centroids: Vec<[f64; 2]> = cents
+            .values()
+            .map(|(x, y, n)| [x / *n as f64, y / *n as f64])
+            .collect();
+        let mut pattern = generate_pattern_at(strategy, PITCH_254, &centroids);
+        // The mate follows the ISO fold: rotated 90° on A6/A4-class sheets.
+        pcb_interposer::pattern::orient_pattern(&mut pattern, sheet_w, sheet_h);
+        attach_pattern(&mut problem, &pattern);
+        let ok = hall(&problem).is_ok();
+        if ok || kept == 1 {
+            break (problem, pattern, ok);
+        }
+        kept -= 1;
+    };
     let asg: Assign = if hall_ok {
         assign(&problem)
     } else {
@@ -141,7 +180,7 @@ fn run_one(
         Vec::new()
     };
     let route = if hall_ok {
-        route_r5(sheet.w, sheet.h, &problem, &asg)
+        route_r5(sheet_w, sheet_h, &problem, &asg)
     } else {
         Default::default()
     };
@@ -152,7 +191,7 @@ fn run_one(
         let pcb_path = dir.join(format!("{stem}.kicad_pcb"));
         fs::write(
             &pcb_path,
-            pcb_interposer::emit::emit_kicad(sheet.w, sheet.h, &problem, &asg, &route),
+            pcb_interposer::emit::emit_kicad(sheet_w, sheet_h, &problem, &asg, &route),
         )?;
         fs::write(
             dir.join(format!("{stem}.kicad_pro")),
@@ -166,8 +205,8 @@ fn run_one(
     let board_rects: Vec<([f64; 2], f64, f64)> =
         places.iter().map(|p| (p.origin, bw, bh)).collect();
     let svg = viz::svg_panel(
-        sheet.w,
-        sheet.h,
+        sheet_w,
+        sheet_h,
         &problem,
         &pattern,
         &nets,
@@ -189,9 +228,10 @@ fn run_one(
         score,
         svg,
         note: format!(
-            "local TPs={n_local}  packed={n_boards}  zen ict={}  hall={}",
-            ict_map.len(),
-            if hall_ok { "ok" } else { "fail" },
+            "local TPs={n_local}  {src} boards={n_boards} testable={kept}  zen ict={n_ict}  hall={h}",
+            src = if panel_xml.is_some() { "panel" } else { "pack" },
+            n_ict = ict_map.len(),
+            h = if hall_ok { "ok" } else { "fail" },
         ),
     })
 }
@@ -231,7 +271,15 @@ fn main() -> Result<()> {
             for strat in PatternKind::eval() {
                 print!("  {name} {} {} ... ", sheet.name, strat.name());
                 let emit_dir = (strat == PatternKind::S11).then(|| args.out.join("boards"));
-                match run_one(name, zen, pcb, sheet, strat, emit_dir.as_deref()) {
+                match run_one(
+                    name,
+                    zen,
+                    pcb,
+                    sheet,
+                    strat,
+                    args.panels.as_deref(),
+                    emit_dir.as_deref(),
+                ) {
                     Ok(row) => {
                         println!(
                             "maze {}/{} usb {} pwr {} ls {} gnd {} boards {}/{} | vias {} bends {} sharp {} detour {:.2} UΔ {:.2} loose {} drc {} gap {:.2} | Q {:.1} | {}",

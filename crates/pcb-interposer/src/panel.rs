@@ -119,16 +119,31 @@ impl Rails {
     }
 }
 
+/// Add the folded A7 tile's corner tooling (the fixture's connector-plate
+/// registration) to a panel spec, then collapse exactly coincident holes —
+/// on the A7 sheet the tile and sheet tooling are the same four holes.
+pub fn add_a7_tile_tooling(spec: &mut PanelSpec, sheet_w: f64, sheet_h: f64) {
+    let (mw, mh) = mate_dims(sheet_w, sheet_h);
+    for xy in corner_holes([0.0, 0.0], mw, mh) {
+        spec.holes.push((xy, CORNER_TOOLING_DIA_MM));
+    }
+    let mut dedup: Vec<([f64; 2], f64)> = Vec::new();
+    for (xy, d) in spec.holes.drain(..) {
+        if !dedup
+            .iter()
+            .any(|(q, _)| (q[0] - xy[0]).abs() < EPS && (q[1] - xy[1]).abs() < EPS)
+        {
+            dedup.push((xy, d));
+        }
+    }
+    spec.holes = dedup;
+}
+
 /// Build the interposer sheet's panel features from its packing.
 pub fn panel_spec(sheet: Sheet, places: &[Placement], bw: f64, bh: f64) -> PanelSpec {
     let mut holes: Vec<([f64; 2], f64)> = Vec::new();
     // Assembly-panel corner tooling at the sheet corners.
     for xy in corner_holes([0.0, 0.0], sheet.w, sheet.h) {
-        holes.push((xy, CORNER_TOOLING_DIA_MM));
-    }
-    // The folded A7 tile's corner tooling (fixture connector plate).
-    let (mw, mh) = mate_dims(sheet.w, sheet.h);
-    for xy in corner_holes([0.0, 0.0], mw, mh) {
         holes.push((xy, CORNER_TOOLING_DIA_MM));
     }
 
@@ -157,21 +172,13 @@ pub fn panel_spec(sheet: Sheet, places: &[Placement], bw: f64, bh: f64) -> Panel
         fids_bottom.extend(rails.points(tb, FID_EDGE_MM, FID_SPAN_BOTTOM_MM));
     }
 
-    // Coincident holes (the A7 sheet's own corners) collapse to one.
-    let mut dedup: Vec<([f64; 2], f64)> = Vec::new();
-    for (xy, d) in holes {
-        if !dedup
-            .iter()
-            .any(|(q, _)| (q[0] - xy[0]).abs() < EPS && (q[1] - xy[1]).abs() < EPS)
-        {
-            dedup.push((xy, d));
-        }
-    }
-    PanelSpec {
-        holes: dedup,
+    let mut spec = PanelSpec {
+        holes,
         fids_top,
         fids_bottom,
-    }
+    };
+    add_a7_tile_tooling(&mut spec, sheet.w, sheet.h);
+    spec
 }
 
 #[cfg(test)]

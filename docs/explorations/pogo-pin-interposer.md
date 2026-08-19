@@ -1232,10 +1232,45 @@ clearances hold by construction). A sparse 12 mm stitching-via
 field (ring-searched per cell) does the bulk of the tying in
 the router itself.
 
+## Real board-array panels
+
+The synthetic `pack()` stand-in is now optional: `interposer-poc
+--panels <dir>` consumes real generated assembly panels
+(`kicad-cli pcb export ipc2581` → `pcbc ipc2581 board-array
+create --sheet a7|a6|a5`). `arrayspec.rs` reads the generator's
+fixed output shape — array profile, `board_cell` step-repeat
+grid, the board's in-cell offset, NPTH holes, global fiducials —
+and converts IPC's Y-up frame into the interposer's Y-down sheet
+frame (KiCad's IPC export maps `(x, y) → (x, −y)`). The panel's
+own tooling and fids are inherited verbatim (the emitted rail
+holes match the panel's to the micron); only the folded A7
+tile's corner tooling is added on top, with exact dedupe.
+
+Two facts this surfaced:
+
+- **Real packings exceed the constellation.** A real A5 packs
+  10–21 Sewards where the PoC packed 8. S11 carries kits for 8
+  boards, so the fixture tests up to 8 per insertion; the PoC
+  keeps the largest board subset whose demands satisfy Hall and
+  reports `testable=k` of `boards=N`. Per-sheet capacity on the
+  corpus: A7 fits every board the panel holds (2–4), A6 all but
+  one case (4–9 packed), A5 always caps at 8 (10–21 packed).
+  The real implementation must pick a policy: multiple fixture
+  insertions per panel, or a capacity-driven packing cap.
+- **Subset selection matters.** Testing the *first* 8 of 21
+  boards clumps every net into the bottom rows, far from half
+  the perimeter constellation — Seward-A5 dropped 3 nets that
+  way. Spreading the tested subset evenly across the sheet
+  routes 56/56.
+
+**Result: all 15 real-panel S11 interposers pass KiCad DRC with
+0 violations and 0 unconnected items**, S11 routing 100% of its
+nets on every case (1454/1455 overall; the single miss is S12's).
+
 ## Open
 
-- Hook `--interposer` on `board-array create` and re-score S11
-  on production packings.
+- Hook `--interposer` on `board-array create` properly (the PoC
+  reads pre-generated panel XML from a directory).
 - Land the mockingbird-feather fixture pads in the real repo
   (they live in a corpus copy today; the zen diff is in the
   Terminal-via section's corpus note).

@@ -1,5 +1,6 @@
 //! Fixture-interposer POC: extract → bundle → Hall → assign → pattern → route.
 
+pub mod arrayspec;
 pub mod assign;
 pub mod bundle;
 pub mod emit;
