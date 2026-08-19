@@ -68,14 +68,18 @@ Exit Code: 0
     "designator": "D1",
     "package": "0603",
     "value": "LED GREEN",
-    "description": "LED GREEN"
+    "description": "LED GREEN",
+    "component_type": "Led",
+    "color": "green"
   },
   {
     "path": "LED2.D1.LED",
     "designator": "D2",
     "package": "0603",
     "value": "LED RED",
-    "description": "LED RED"
+    "description": "LED RED",
+    "component_type": "Led",
+    "color": "red"
   },
   {
     "path": "LED1.R1.R",
@@ -124,7 +128,20 @@ Exit Code: 0
     "designator": "Y1",
     "package": "5032_2Pin",
     "value": "16MHz 18pF",
-    "description": "16MHz 18pF"
+    "description": "16MHz 18pF",
+    "component_type": "Crystal",
+    "frequency": {
+      "nominal": "16000000",
+      "min": "16000000",
+      "max": "16000000",
+      "unit": "Hertz"
+    },
+    "load_capacitance": {
+      "nominal": "0.000000000018",
+      "min": "0.000000000018",
+      "max": "0.000000000018",
+      "unit": "Farads"
+    }
   }
 ]
 --- STDERR ---

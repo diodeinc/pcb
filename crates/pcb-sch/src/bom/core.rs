@@ -173,8 +173,10 @@ pub struct UngroupedBomEntry {
 #[serde(tag = "component_type")]
 pub enum GenericComponent {
     Capacitor(Capacitor),
+    Crystal(Crystal),
     FerriteBead(FerriteBead),
     Inductor(Inductor),
+    Led(Led),
     Rectifier(Rectifier),
     Resistor(Resistor),
     Tvs(Tvs),
@@ -237,6 +239,8 @@ pub struct Resistor {
     pub resistance: PhysicalValue,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub voltage: Option<PhysicalValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub power: Option<PhysicalValue>,
 }
 
 impl Resistor {
@@ -253,8 +257,33 @@ impl Resistor {
             return false;
         }
 
+        // Check power: key power must be <= component power
+        if let (Some(key_power), Some(component_power)) = (&key.power, &self.power)
+            && key_power.nominal > component_power.nominal
+        {
+            return false;
+        }
+
         true
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Crystal {
+    pub frequency: PhysicalValue,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub load_capacitance: Option<PhysicalValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub esr: Option<PhysicalValue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Led {
+    pub color: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forward_voltage: Option<PhysicalValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forward_current: Option<PhysicalValue>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -780,6 +809,7 @@ fn resistor_meets_or_exceeds(a: &Resistor, b: &Resistor) -> bool {
 
     // A's voltage rating must meet or exceed B's (A has same or higher voltage rating)
     meets_or_exceeds(&a.voltage, &b.voltage, |va, vb| va.nominal >= vb.nominal)
+        && meets_or_exceeds(&a.power, &b.power, |pa, pb| pa.nominal >= pb.nominal)
 }
 
 /// Check if capacitor A meets or exceeds capacitor B's requirements
@@ -800,9 +830,11 @@ fn detect_generic_component(instance: &crate::Instance) -> Option<GenericCompone
         "resistor" => {
             if let Some(resistance) = instance.physical_attr(&["Resistance", "resistance"]) {
                 let voltage = instance.physical_attr(&["Voltage", "voltage"]);
+                let power = instance.physical_attr(&["Power", "power"]);
                 return Some(GenericComponent::Resistor(Resistor {
                     resistance,
                     voltage,
+                    power,
                 }));
             }
         }
@@ -836,12 +868,33 @@ fn detect_generic_component(instance: &crate::Instance) -> Option<GenericCompone
                 }));
             }
         }
+        "crystal" => {
+            if let Some(frequency) = instance.physical_attr(&["frequency", "Frequency"]) {
+                return Some(GenericComponent::Crystal(Crystal {
+                    frequency,
+                    load_capacitance: instance
+                        .physical_attr(&["load_capacitance", "Load_capacitance"]),
+                    esr: instance.physical_attr(&["esr", "ESR", "Esr"]),
+                }));
+            }
+        }
         "inductor" => {
             if let Some(inductance) = instance.physical_attr(&["inductance"]) {
                 return Some(GenericComponent::Inductor(Inductor {
                     inductance,
                     current: instance.physical_attr(&["current"]),
                     dcr: instance.physical_attr(&["dcr"]),
+                }));
+            }
+        }
+        "led" => {
+            if let Some(color) = instance.string_attr(&["color", "Color"]) {
+                return Some(GenericComponent::Led(Led {
+                    color,
+                    forward_voltage: instance
+                        .physical_attr(&["forward_voltage", "Forward_voltage"]),
+                    forward_current: instance
+                        .physical_attr(&["forward_current", "Forward_current"]),
                 }));
             }
         }
@@ -1043,6 +1096,7 @@ mod tests {
         let original_resistor = GenericComponent::Resistor(Resistor {
             resistance: PhysicalValue::new(1000.0, 0.05, PhysicalUnit::Ohms),
             voltage: None,
+            power: None,
         });
 
         let json = serde_json::to_string_pretty(&original_resistor).unwrap();
@@ -1056,12 +1110,14 @@ mod tests {
         let component_resistor = Resistor {
             resistance: PhysicalValue::new(1000.0, 0.05, PhysicalUnit::Ohms),
             voltage: None,
+            power: None,
         };
 
         // Key: 1kΩ ±1% - should match (key range [990,1010] fits within component [950,1050])
         let matching_key = Resistor {
             resistance: PhysicalValue::new(1000.0, 0.01, PhysicalUnit::Ohms),
             voltage: None,
+            power: None,
         };
         assert!(component_resistor.matches(&matching_key));
 
@@ -1069,6 +1125,7 @@ mod tests {
         let tighter_key = Resistor {
             resistance: PhysicalValue::new(1000.0, 0.005, PhysicalUnit::Ohms),
             voltage: None,
+            power: None,
         };
         assert!(component_resistor.matches(&tighter_key));
 
@@ -1076,6 +1133,7 @@ mod tests {
         let looser_key = Resistor {
             resistance: PhysicalValue::new(1000.0, 0.10, PhysicalUnit::Ohms),
             voltage: None,
+            power: None,
         };
         assert!(!component_resistor.matches(&looser_key));
 
@@ -1083,6 +1141,7 @@ mod tests {
         let different_value_key = Resistor {
             resistance: PhysicalValue::new(2000.0, 0.01, PhysicalUnit::Ohms),
             voltage: None,
+            power: None,
         };
         assert!(!component_resistor.matches(&different_value_key));
 
@@ -1090,10 +1149,12 @@ mod tests {
         let point_component = Resistor {
             resistance: PhysicalValue::new(1000.0, 0.0, PhysicalUnit::Ohms),
             voltage: None,
+            power: None,
         };
         let point_key = Resistor {
             resistance: PhysicalValue::new(1000.0, 0.0, PhysicalUnit::Ohms),
             voltage: None,
+            power: None,
         };
         assert!(point_component.matches(&point_key));
 
@@ -1106,12 +1167,14 @@ mod tests {
         let component_resistor = Resistor {
             resistance: PhysicalValue::new(1000.0, 0.01, PhysicalUnit::Ohms),
             voltage: Some(PhysicalValue::new(50.0, 0.0, PhysicalUnit::Volts)),
+            power: None,
         };
 
         // Key voltage (25V) <= component voltage (50V) - should match
         let lower_voltage_key = Resistor {
             resistance: PhysicalValue::new(1000.0, 0.01, PhysicalUnit::Ohms),
             voltage: Some(PhysicalValue::new(25.0, 0.0, PhysicalUnit::Volts)),
+            power: None,
         };
         assert!(component_resistor.matches(&lower_voltage_key));
 
@@ -1119,6 +1182,7 @@ mod tests {
         let higher_voltage_key = Resistor {
             resistance: PhysicalValue::new(1000.0, 0.01, PhysicalUnit::Ohms),
             voltage: Some(PhysicalValue::new(100.0, 0.0, PhysicalUnit::Volts)),
+            power: None,
         };
         assert!(!component_resistor.matches(&higher_voltage_key));
 
@@ -1126,12 +1190,29 @@ mod tests {
         let no_voltage_component = Resistor {
             resistance: PhysicalValue::new(1000.0, 0.01, PhysicalUnit::Ohms),
             voltage: None,
+            power: None,
         };
         let any_voltage_key = Resistor {
             resistance: PhysicalValue::new(1000.0, 0.01, PhysicalUnit::Ohms),
             voltage: Some(PhysicalValue::new(1000.0, 0.0, PhysicalUnit::Volts)),
+            power: None,
         };
         assert!(no_voltage_component.matches(&any_voltage_key));
+    }
+
+    #[test]
+    fn test_resistor_power_matching() {
+        let component = Resistor {
+            resistance: PhysicalValue::new(1000.0, 0.01, PhysicalUnit::Ohms),
+            voltage: None,
+            power: Some(PhysicalValue::new(0.25, 0.0, PhysicalUnit::Watts)),
+        };
+        let mut requirement = component.clone();
+        requirement.power = Some(PhysicalValue::new(0.125, 0.0, PhysicalUnit::Watts));
+        assert!(component.matches(&requirement));
+
+        requirement.power = Some(PhysicalValue::new(0.5, 0.0, PhysicalUnit::Watts));
+        assert!(!component.matches(&requirement));
     }
 
     #[test]
@@ -1309,6 +1390,7 @@ mod tests {
             generic_data: Some(GenericComponent::Resistor(Resistor {
                 resistance: PhysicalValue::new(10000.0, 0.0, PhysicalUnit::Ohms),
                 voltage: Some(PhysicalValue::new(100.0, 0.0, PhysicalUnit::Volts)),
+                power: None,
             })),
             dnp: false,
             alternatives: vec![],
@@ -1326,6 +1408,7 @@ mod tests {
             generic_data: Some(GenericComponent::Resistor(Resistor {
                 resistance: PhysicalValue::new(10000.0, 0.0, PhysicalUnit::Ohms),
                 voltage: None,
+                power: None,
             })),
             dnp: false,
             alternatives: vec![],
@@ -1681,6 +1764,7 @@ mod tests {
             generic_data: Some(GenericComponent::Resistor(Resistor {
                 resistance: PhysicalValue::new(50.0, 0.01, PhysicalUnit::Ohms),
                 voltage: None,
+                power: None,
             })),
             dnp: false,
             alternatives: vec![],
@@ -1698,6 +1782,7 @@ mod tests {
             generic_data: Some(GenericComponent::Resistor(Resistor {
                 resistance: PhysicalValue::new(52.0, 0.1, PhysicalUnit::Ohms),
                 voltage: None,
+                power: None,
             })),
             dnp: false,
             alternatives: vec![],

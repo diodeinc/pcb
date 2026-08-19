@@ -37,7 +37,9 @@ expression: sb.snapshot_dir(&staging_dir)
     "designator": "D1",
     "package": "0603",
     "value": "LED GREEN",
-    "description": "LED GREEN"
+    "description": "LED GREEN",
+    "component_type": "Led",
+    "color": "green"
   },
   {
     "path": "LED1.R1.R",
