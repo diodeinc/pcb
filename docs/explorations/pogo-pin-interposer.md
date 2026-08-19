@@ -144,123 +144,146 @@ arrayed.
 ## Problem breakdown
 
 1. **Contacts** — **done.** DUT IPC, bottom, `Ict` set. See above.
-2. **Demands** — map `Ict` to kinds and *bundle* USB into ordered
-   pairs. One demand per LS/GND/VUSB pad; one demand per USB pair;
-   one Vtarget demand per board (up to 2 pads into one bank).
-3. **Instantiate** — apply each array placement transform so demands
+2. **Demands** — map `Ict` to kinds and bundle USB / Vtarget.
+3. **Instantiate** — apply each array placement transform so contacts
    exist in panel coordinates (same step math the array already has).
-4. **Hall check** — per kind, \(|D_t| \le |S_t|\) and each demand
-   fits its slot shape. Fail closed if a panel wants 9 USB pairs or
-   3 Vtarget pads on one board.
-5. **Match** — inject demands into slots. Electrically this is just
-   typed injection. Geometrically it is min-cost matching, **USB
-   first, then power, then LS** (see below).
-6. **Emit + route** — interposer outline = panel; top pogos at
-   contact XY; bottom A7 constellation; nets = the assignment; then
-   autoroute. This should be an easy autoroute: two layers, pours,
-   fat power, a few USB pairs, and a large interchangeable LS set
-   that can absorb leftovers.
+4. **Hall check** — per kind, count only.
+5. **Match** — min-cost assignment per kind; emit two-pin nets.
+6. **Route** — 2-layer autoroute of those nets.
 
-The A7 constellation itself is still a family of strategies we
-score; it is not a prerequisite for writing (1)–(4).
+The A7 constellation *builds* slots; it is not a second matcher.
 
-## Assignment: notation and representation
+## Assignment — in-memory model
 
-This is **typed pin assignment** (EDA: pin swapping + differential
-pair assignment). Feasibility is **injection into interchangeability
-classes**. Quality is **min-cost bipartite matching** on a contracted
-graph. Joint crossings across kinds are a mild QAP; v1 does not
-solve that — it places kinds in priority order instead.
+This is the assignment problem (Kuhn–Munkres) on a **complete
+bipartite graph per kind**, after contacts have been bundled into
+demands. No SAT, no constraint language. Hall is a counting check.
+The router then sees only **two-pin nets**.
 
-### Sorts
+`Ict` is sequencer semantics. `Kind` is what matching sees. Several
+ict values collapse to `ls`.
+
+### Objects
+
+Four sets and two maps:
+
+```
+Contact   pogo site on the panel
+Demand    bundled contacts of one kind   (left vertex)
+Slot      bundled mate pins of one kind  (right vertex)
+MatePin   pad on the A7 mate
+
+α : Demand  ↪  Slot      injection, per kind
+β : Contact  →  MatePin  pin map inside that slot
+```
+
+They form a commuting square:
+
+```
+  Contact  ── β ──►  MatePin
+     │                  │
+  bundle              pins
+     ▼                  ▼
+  Demand   ── α ──►   Slot
+```
+
+`β` is `α` plus a choice in the slot’s symmetry group \(G_s\)
+(identity for unit and USB; \(S_2\) for a Vtarget bank).
+
+### Sorts and shapes
 
 \[
 T = \{\mathrm{ls},\; \mathrm{gnd},\; \mathrm{vusb},\; \mathrm{vtarget},\; \mathrm{usb\_hs}\}
 \]
 
-For each kind \(t\), \(S_t\) is the set of **slots** on the mate and
-\(D_t\) is the set of **demands** from the panel. A feasible
-electrical assignment is an injection \(\alpha_t : D_t \hookrightarrow S_t\)
-per kind (pools are independent). Existence is Hall, and here it
-collapses to counting:
+| Kind | From `ict` | \|slots\| | Shape | \(G_s\) |
+|---|---|---:|---|---|
+| LS | `swdio` `swclk` `nrst` `swo` `ls` | 48 | unit | \{e\} |
+| GND | `gnd` | 16 | unit | \{e\} |
+| VUSB | `vusb` | 8 | unit | \{e\} |
+| Vtarget | `vtarget` | 8 | unordered 2-set | \(S_2\) |
+| USB HS | `usb_dp`+`usb_dm` | 8 | ordered pair \((+,−)\) | \{e\} |
+
+Bundle (by construction):
+
+- unit kinds → one demand per contact
+- USB → one demand per board, members `[dp, dm]`, or fail if unpaired
+- Vtarget → one demand per board, 1 or 2 members (fail if 3+)
+
+### Hall (feasibility)
+
+Kinds are independent. For each \(t\):
 
 \[
 |D_t| \le |S_t|
-\quad\text{and each demand fits in one slot.}
+\quad\text{and}\quad
+\forall d \in D_t.\ |d| \le c(S_t)
 \]
 
-### Slot shape
+If that fails, the panel does not fit the tile. No matching algorithm.
 
-A slot has pins and a symmetry group \(G_s\) — the legal ways to
-label those pins. That is the whole type system.
+### Geometric matching (quality)
 
-| Kind | \(|S_t|\) | Shape | \(G_s\) | Meaning |
-|---|---:|---|---|---|
-| LS | 48 | unit | trivial | any demand ↔ any unused pin |
-| GND | 16 | unit | trivial | same; pour may make them one net |
-| VUSB | 8 | unit | trivial | one 5 V land per demand |
-| Vtarget | 8 | **unordered** 2-set | \(S_2\) | both pins swappable |
-| USB HS | 8 | **ordered** pair \((+,−)\) | \(\{e\}\) | no polarity swap; unsplittable |
+Slots of a kind are electrically identical and geometrically not.
+After Hall, pick \(\alpha_t\) as min-cost assignment on
+\(K_{D_t,S_t}\):
 
-- **Unordered** (power bank): any bijection from the demand’s pads
-  onto the two lands is legal.
-- **Ordered** (USB): the demand is an oriented pair. \(D+\) lands on
-  the slot’s \(+\) pin.
-- **Unsplittable**: both members occupy the *same* slot. Never match
-  \(D+\) and \(D−\) as two LS pads.
+\[
+\min_\alpha \sum_d c(d,\alpha(d))
+\]
 
-USB is contracted to a **supervertex** before matching. Power pads
-on one board are one Vtarget demand of size \(\le 2\).
+- unit: distance contact → pin
+- USB: \(\|p_{dp}-q_+\| + \|p_{dm}-q_-\|\) plus length mismatch;
+  polarity fixed
+- Vtarget: \(\min_{\sigma \in S_2} \sum_i \|p_i - q_{\sigma(i)}\|\)
 
-### Records
+Kuhn–Munkres / min-cost flow; \(n \le 48\). Slot sets are disjoint, so
+kind order does not change feasibility. Run **USB → Vtarget → VUSB →
+GND → LS** for a stable dump. Cross-kind crossings are QAP; out of
+v1. A failed route may later swap two LS pins.
+
+### State
 
 ```text
+Ict      = swdio | swclk | nrst | swo | gnd | vusb | vtarget
+         | usb_dp | usb_dm | ls
 Kind     = ls | gnd | vusb | vtarget | usb_hs
 Shape    = unit | unordered{n} | ordered[n]
 
+Contact  = { id, board, xy, ict }
+Demand   = { id, kind, board, members: [ContactId] }  # USB ordered
 MatePin  = { id, xy }
-Slot     = { id, kind, shape, pins: [MatePin] }
-Contact  = { id, board, xy, net?, footprint }
-Demand   = { id, kind, board, members: [Contact] }  # USB: ordered
-Assign   = demand → slot
-         + member → pin                    # must lie in G_shape
+Slot     = { id, kind, shape, pins: [MatePinId] }
+
+Problem  = { contacts, demands, pins, slots,
+             by_kind: Kind → {demands, slots} }
+
+Assign   = { α: DemandId → SlotId,           # injective per kind
+             β: ContactId → MatePinId }      # in G_s of α(bundle(c))
 ```
 
-Rules by construction, not by a constraint language: USB is born as
-one demand `(dp, dm)`; `Assign` is injective on slots; `member → pin`
-is a bijection onto the slot pins that \(G_{\mathrm{shape}}\)
-allows. The crosspoint does not appear in the interposer model — it
-is why `ls` is 48 unit slots in one class.
+Assert, do not search: USB is born as `(dp, dm)`; `α` injective on
+slots; `β` is a legal labeling of the assigned slot.
 
-### Matching order (preview)
+### From Assign to the router
 
-Autoroute is in the loop, but the assignment should make it easy.
-Place the picky, scarce, high-speed stuff first; let LS soak up
-whatever geometry remains.
+One **two-pin net** per `β` edge:
+`{ top_pogo(contact.xy), bottom_land(pin.xy) }`, plus a USB pair
+grouping for length match, plus GND pours.
 
-1. **USB** — fewest slots, polarity-preserving, impedance. Match
-   pair-demands to pair-slots (min-cost on the contracted graph).
-2. **Power** — Vtarget banks then VUSB (fat traces, 2 A, 8×2 / 8×1).
-   Unordered pin maps: pick the cheaper of the two.
-3. **Low-speed** — leftover unit slots, fully interchangeable.
-   Ordinary min-cost matching (or even nearest-unused).
+The assignment **is** the netlist. Autoroute does not choose partners.
 
-GND can sit with power or last; if it is one poured net, geometry
-is almost free.
-
-Do not start with a joint quadratic assignment across kinds. If a
-later scorer wants to swap two LS pins or two Vtarget banks after a
-failed route, that is a local improvement on this greedy order.
+The A7 constellation *builds* `Slot`/`MatePin`. Mux topology does
+not belong in this state.
 
 ## Subproblems (still sequential)
 
 1. **Contact extract** — **done** (`Ict` on Ø 1 mm `TestPoint` only).
-2. **Demands** — map `Ict` → kind / bundle.
+2. **Demands + Hall + match** — the model above.
 3. **A7 mate pattern** — several constellation strategies; score
    escape and array-connector fit.
-4. **Match** — USB → power → LS, then emit nets.
-5. **Route** the 2-layer interposer (easy autoroute if 4 is decent).
-6. **Hook** `--interposer` (or similar) on board-array create.
+4. **Route** the 2-layer interposer (easy if 2 is decent).
+5. **Hook** `--interposer` on board-array create.
 
 The base tile (ADG2128, MAX4999, switches, host) is a parallel
 hardware project against the same mate contract. It is not a
@@ -296,5 +319,5 @@ concentration is vs A7→A7 (identity).
   path later proves otherwise.
 - 4-layer only if 2-layer USB on A5 fails.
 
-None of these need to block writing an extractor or generating the
-first pattern family.
+None of these need to block implementing `Problem` / `hall` /
+`assign` against a toy slot set.
