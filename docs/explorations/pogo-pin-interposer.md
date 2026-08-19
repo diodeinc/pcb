@@ -99,22 +99,35 @@ expensive part is **geometry**: custom top XY on an A5/A6/A7 sheet,
 concentrated into the origin A7, on two layers, with 2 A power traces
 and 90 Ω-ish USB pairs.
 
-## What we already know about DUT contacts
+## Identifying contacts — **solved: `ict`**
 
-From the demo boards, mockingbird-feather, and a diodehub sample:
+Assume every pad we care about has an `ict` property. Do not scrape
+names, refs, or footprint strings for discovery.
 
-- Modal debug land is Tag-Connect TC2030-IDC-NL (Ø 0.79 mm, 1.27 mm
-  pitch) or discrete `TestPoint` pads (Ø 1.0 / 1.5 mm). Some DNP
-  FTSH-105 headers are already documented as pogo-able.
-- v1 assumes every contact we care about is on **one face**, and that
-  face is the bottom of the panel in the fixture.
-- A complete SWD + rail + GND + USB set on that face is uncommon.
-  Allocate from the pools; do not require every role.
+`TestPoint` takes optional `ict=…` (`allowed` list below). When set,
+it is copied onto the footprint. `TC2030-NL_SWD` will hardcode
+`ict="swd"`. Our IPC export (`pcb release` / `--bom-col-int-id Path`)
+emits it as a BOM characteristic **`Ict`**. Match that name
+case-insensitively.
 
-Contacts come from the **DUT board IPC-2581**, not from Zener or a
-KiCad netlist — those are not in hand at array-create time. v1 finds
-TestPoint / Tag-Connect (and agreed debug headers) by a **standard
-footprint / component naming convention**. Bottom-side only.
+| `ict` | Demand |
+|---|---|
+| `swd` | whole TC2030 land (pins 1–5 via the module map; drop NPTH / SWO-NC) |
+| `swdio` `swclk` `nrst` `swo` | discrete LS pads |
+| `gnd` | GND |
+| `vusb` | 5 V USB rail |
+| `vtarget` | DUT rail |
+| `usb_dp` `usb_dm` | USB HS pair (ordered, unsplittable) |
+| `ls` | other low-speed |
+
+Extractor: DUT IPC, bottom side, every component whose BOM `Ict` is
+set. Join `Component` (`part` = Path, `packageRef`, `layerRef`) to
+`BomItem` (`Ict`) to pads (`PinRef`). That is the contact list.
+Nothing else is in scope.
+
+Verified: `ict="gnd"` / `"vtarget"` on Seward `TestPoint`s survive
+layout as `(property "Ict" …)` and our Path-keyed IPC export as
+separate `BomItem`s with the matching `Ict` values.
 
 ## Where it hooks in
 
@@ -128,12 +141,11 @@ arrayed.
 
 ## Problem breakdown
 
-1. **Contacts** — from the DUT IPC, bottom side, by naming
-   convention. Pad XY, size, net name if present, component/footprint
-   id.
-2. **Demands** — classify contacts into kinds and *bundle* USB into
-   ordered pairs. One demand per LS/GND/VUSB pad; one demand per USB
-   pair; one Vtarget demand per board (up to 2 pads into one bank).
+1. **Contacts** — **done.** DUT IPC, bottom, `Ict` set. See above.
+2. **Demands** — map `Ict` to kinds and *bundle* USB into ordered
+   pairs. One demand per LS/GND/VUSB pad; one demand per USB pair;
+   one Vtarget demand per board (up to 2 pads into one bank);
+   `ict=swd` is one SWD bundle.
 3. **Instantiate** — apply each array placement transform so demands
    exist in panel coordinates (same step math the array already has).
 4. **Hall check** — per kind, \(|D_t| \le |S_t|\) and each demand
@@ -241,8 +253,8 @@ failed route, that is a local improvement on this greedy order.
 
 ## Subproblems (still sequential)
 
-1. **Naming convention + contact extract** from DUT IPC (bottom).
-2. **Demands** — classify and bundle.
+1. **Contact extract** — **done** (`ict` / `Ict` on our IPC export).
+2. **Demands** — map `Ict` → kind / bundle.
 3. **A7 mate pattern** — several constellation strategies; score
    escape and array-connector fit.
 4. **Match** — USB → power → LS, then emit nets.

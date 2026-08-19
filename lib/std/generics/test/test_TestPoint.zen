@@ -14,3 +14,10 @@ for variant in TestPoint.Variant.values():
         variant=variant,
         P1=Net(name + "_P1"),
     )
+
+TestPoint(
+    name="TP_ICT_GND",
+    variant="Pad_D1.0mm",
+    ict="gnd",
+    P1=Net("TP_ICT_GND_P1"),
+)

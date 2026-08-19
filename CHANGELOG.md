@@ -10,6 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- `TestPoint` accepts an optional `ict` config (`swd`, `swdio`, `swclk`, `nrst`, `swo`, `gnd`, `vusb`, `vtarget`, `usb_dp`, `usb_dm`, `ls`) that is copied onto the footprint when set.
 - `pcb ipc dfm check` validates IPC-2581 files against fabrication PDKs.
 
 ### Changed
