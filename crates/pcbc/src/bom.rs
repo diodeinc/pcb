@@ -65,15 +65,6 @@ impl std::fmt::Display for BomFormat {
     }
 }
 
-fn format_cache_age(age_seconds: Option<u64>) -> String {
-    match age_seconds {
-        None => "unknown age".to_string(),
-        Some(seconds) if seconds < 60 => format!("{seconds}s old"),
-        Some(seconds) if seconds < 60 * 60 => format!("{}m old", seconds / 60),
-        Some(seconds) => format!("{}h old", seconds / (60 * 60)),
-    }
-}
-
 #[derive(Args, Debug, Clone)]
 #[command(about = "Generate Bill of Materials (BOM) from PCB projects")]
 pub struct BomArgs {
@@ -146,26 +137,10 @@ pub fn execute(args: BomArgs) -> Result<()> {
     } else {
         format!("{file_name}: Fetching availability")
     });
-    let source = match pcb_diode_api::match_bom_with_context(&ctx, None, &mut bom, strict, mode) {
-        Ok(source) => Some(source),
-        Err(error) => {
-            log::warn!("Failed to fetch availability data: {error:#}");
-            None
-        }
-    };
-
-    match source {
-        Some(pcb_diode_api::BomMatchSource::StaleCache { age_seconds }) => {
-            spinner.warning(format!(
-                "{file_name}: Using stale cached availability ({})",
-                format_cache_age(age_seconds)
-            ))
-        }
-        Some(pcb_diode_api::BomMatchSource::Network)
-        | Some(pcb_diode_api::BomMatchSource::FreshCache { .. })
-        | Some(pcb_diode_api::BomMatchSource::OfflineCacheMiss)
-        | None => spinner.finish(),
+    if let Err(error) = pcb_diode_api::match_bom_with_context(&ctx, None, &mut bom, strict, mode) {
+        log::warn!("Failed to fetch availability data: {error:#}");
     }
+    spinner.finish();
 
     let mut writer = io::stdout().lock();
     match args.format {

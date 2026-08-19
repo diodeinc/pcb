@@ -14,7 +14,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
-- `pcb bom` caches API matches for ten minutes and reuses exact stale matches offline or after transient failures while retaining its local-BOM fallback on cache misses.
+- `pcb bom` caches API matches for ten minutes and reuses an exact stale match offline or when an online refresh fails.
 - `pcb bom` writes an API-selected compatible MPN into output without replacing explicit or modifier-assigned parts.
 
 ### Fixed

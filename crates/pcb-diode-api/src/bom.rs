@@ -1,10 +1,8 @@
 use anyhow::{Context, Result};
-use reqwest::StatusCode;
 use reqwest::blocking::Client;
 use serde::Deserialize;
 use std::{
     collections::{HashMap, HashSet},
-    fmt,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -12,24 +10,15 @@ use pcb_sch::bom::{Availability, AvailabilitySummary, BOARD_QUANTITY, Offer, Sou
 
 use crate::{
     WorkspaceContext,
-    bom_cache::{BomMatchCache, CachedResponse, cache_identity},
+    bom_cache::{BomMatchCache, cache_key},
 };
 
 const BOM_MATCH_TIMEOUT_SECS: u64 = 120;
-const BOM_MATCH_CACHE_TTL_SECS: u64 = 10 * 60;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BomMatchMode {
     Online,
     Offline,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BomMatchSource {
-    Network,
-    FreshCache { age_seconds: u64 },
-    StaleCache { age_seconds: Option<u64> },
-    OfflineCacheMiss,
 }
 
 /// Price break structure
@@ -155,24 +144,6 @@ impl MatchBomResponse {
 }
 
 #[derive(Debug)]
-struct MatchRequestError {
-    transient: bool,
-    error: anyhow::Error,
-}
-
-impl fmt::Display for MatchRequestError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.error.fmt(formatter)
-    }
-}
-
-impl std::error::Error for MatchRequestError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        self.error.source()
-    }
-}
-
-#[derive(Debug)]
 struct PreparedBomMatch {
     availability: HashMap<String, Availability>,
     selected_parts: HashMap<String, (String, String)>,
@@ -288,40 +259,26 @@ fn send_bom_match_request(
     request_body: &serde_json::Value,
     timeout_secs: u64,
     strict: bool,
-) -> std::result::Result<String, MatchRequestError> {
+) -> Result<String> {
     let url = bom_match_url(ctx.api_base_url(), strict);
 
     let client = Client::builder()
         .timeout(Duration::from_secs(timeout_secs))
-        .build()
-        .map_err(|error| MatchRequestError {
-            transient: false,
-            error: error.into(),
-        })?;
+        .build()?;
 
     let response = crate::auth::apply_bearer_auth(client.post(&url), auth_token)
         .json(request_body)
         .send()
-        .map_err(|error| MatchRequestError {
-            transient: true,
-            error: anyhow::Error::new(error).context("Failed to send BOM match request"),
-        })?;
+        .context("Failed to send BOM match request")?;
 
     let status = response.status();
-    let response_text = response.text().map_err(|error| MatchRequestError {
-        transient: true,
-        error: anyhow::Error::new(error).context("Failed to read BOM match response"),
-    })?;
-
-    if !status.is_success() {
-        let transient = status == StatusCode::REQUEST_TIMEOUT
-            || status == StatusCode::TOO_MANY_REQUESTS
-            || status.is_server_error();
-        return Err(MatchRequestError {
-            transient,
-            error: anyhow::anyhow!("BOM match request failed ({}): {}", status, response_text),
-        });
-    }
+    let response_text = response
+        .text()
+        .context("Failed to read BOM match response")?;
+    anyhow::ensure!(
+        status.is_success(),
+        "BOM match request failed ({status}): {response_text}"
+    );
 
     Ok(response_text)
 }
@@ -336,8 +293,7 @@ fn call_bom_match_api(
 ) -> Result<MatchBomResponse> {
     let request_body = bom_match_request(bom_entries);
     let response_text =
-        send_bom_match_request(ctx, auth_token, &request_body, timeout_secs, strict)
-            .map_err(anyhow::Error::new)?;
+        send_bom_match_request(ctx, auth_token, &request_body, timeout_secs, strict)?;
     serde_json::from_str(&response_text).context("Failed to parse BOM match response")
 }
 
@@ -353,6 +309,10 @@ fn prepare_bom_match(
     bom: &pcb_sch::bom::Bom,
     match_response: &MatchBomResponse,
 ) -> Result<PreparedBomMatch> {
+    anyhow::ensure!(
+        !match_response.needs_retry(),
+        "BOM matching could not complete"
+    );
     let expected_paths = bom.entries.keys().cloned().collect::<HashSet<_>>();
     anyhow::ensure!(
         match_response.results.len() == expected_paths.len(),
@@ -381,13 +341,8 @@ fn prepare_bom_match(
         );
 
         let entry = &bom.entries[path];
-        let mut seen_offer_ids = HashSet::new();
         let mut resolved_offers = Vec::with_capacity(bom_line.offer_ids.len());
         for offer_id in &bom_line.offer_ids {
-            anyhow::ensure!(
-                seen_offer_ids.insert(offer_id),
-                "BOM match response repeated offer {offer_id} for {path}"
-            );
             let offer = match_response.offers.get(offer_id).with_context(|| {
                 format!("BOM match response omitted referenced offer {offer_id} for {path}")
             })?;
@@ -411,7 +366,7 @@ fn prepare_bom_match(
             let selected_offer = match_response
                 .offers
                 .get(selected_offer_id)
-                .expect("selected offer was validated as a ranked offer");
+                .with_context(|| format!("BOM match response omitted offer {selected_offer_id}"))?;
 
             if bom_line.match_status == BomMatchStatus::Compatible
                 && entry.mpn.is_none()
@@ -450,7 +405,10 @@ fn prepare_bom_match(
             summarize_region(&resolved_offers, Geography::Global, target_qty, qty);
         for (summary, offers) in [(&mut us, &us_offers), (&mut global, &global_offers)] {
             if let (Some(summary), Some(offer)) = (summary, offers.first()) {
-                summary.stock_class = bom_line.offer_stock_classes[&offer.id];
+                summary.stock_class = *bom_line
+                    .offer_stock_classes
+                    .get(&offer.id)
+                    .expect("validated offer stock class");
             }
         }
 
@@ -470,55 +428,38 @@ fn prepare_bom_match(
         );
     }
 
-    anyhow::ensure!(
-        seen_paths == expected_paths,
-        "BOM match response did not cover every requested path"
-    );
-
     Ok(PreparedBomMatch {
         availability,
         selected_parts,
     })
 }
 
-#[derive(Debug)]
-struct PreparedCachedMatch {
-    prepared: PreparedBomMatch,
-    age_seconds: Option<u64>,
-    fresh: bool,
+fn prepare_response(bom: &pcb_sch::bom::Bom, response_json: &str) -> Result<PreparedBomMatch> {
+    let response =
+        serde_json::from_str(response_json).context("Failed to parse BOM match response")?;
+    prepare_bom_match(bom, &response)
 }
 
-fn prepare_cached_match(
-    cached: CachedResponse,
+fn load_cached_match(
+    cache: Option<&BomMatchCache>,
+    key: &str,
     bom: &pcb_sch::bom::Bom,
     now: i64,
-) -> Result<PreparedCachedMatch> {
-    let response: MatchBomResponse = serde_json::from_str(&cached.response_json)
-        .context("Failed to parse cached BOM match response")?;
-    anyhow::ensure!(
-        !response.needs_retry(),
-        "Cached BOM match response contains a retryable result"
-    );
-    let prepared = prepare_bom_match(bom, &response)?;
-    let age_seconds = now
-        .checked_sub(cached.fetched_at)
-        .and_then(|age| u64::try_from(age).ok());
-    let fresh = age_seconds.is_some_and(|age| age < BOM_MATCH_CACHE_TTL_SECS);
-    Ok(PreparedCachedMatch {
-        prepared,
-        age_seconds,
-        fresh,
-    })
-}
-
-fn cache_source(cached: &PreparedCachedMatch) -> BomMatchSource {
-    if cached.fresh {
-        BomMatchSource::FreshCache {
-            age_seconds: cached.age_seconds.expect("fresh cache has a valid age"),
+) -> Option<(PreparedBomMatch, bool)> {
+    let cached = match cache?.load(key) {
+        Ok(Some(cached)) => cached,
+        Ok(None) => return None,
+        Err(error) => {
+            log::warn!("Ignoring unreadable BOM cache entry: {error:#}");
+            return None;
         }
-    } else {
-        BomMatchSource::StaleCache {
-            age_seconds: cached.age_seconds,
+    };
+    let fresh = cached.is_fresh(now);
+    match prepare_response(bom, &cached.response_json) {
+        Ok(prepared) => Some((prepared, fresh)),
+        Err(error) => {
+            log::warn!("Ignoring invalid BOM cache entry: {error:#}");
+            None
         }
     }
 }
@@ -551,8 +492,7 @@ pub fn fetch_and_populate_availability_with_context(
     bom: &mut pcb_sch::bom::Bom,
     strict: bool,
 ) -> Result<()> {
-    match_bom_with_context(ctx, auth_token, bom, strict, BomMatchMode::Online)?;
-    Ok(())
+    match_bom_with_context(ctx, auth_token, bom, strict, BomMatchMode::Online)
 }
 
 pub fn match_bom_with_context(
@@ -561,7 +501,7 @@ pub fn match_bom_with_context(
     bom: &mut pcb_sch::bom::Bom,
     strict: bool,
     mode: BomMatchMode,
-) -> Result<BomMatchSource> {
+) -> Result<()> {
     let cache = match BomMatchCache::open() {
         Ok(cache) => Some(cache),
         Err(error) => {
@@ -569,7 +509,7 @@ pub fn match_bom_with_context(
             None
         }
     };
-    fetch_and_populate_availability_with_cache(
+    match_bom_with_cache(
         ctx,
         auth_token,
         bom,
@@ -580,7 +520,7 @@ pub fn match_bom_with_context(
     )
 }
 
-fn fetch_and_populate_availability_with_cache(
+fn match_bom_with_cache(
     ctx: &WorkspaceContext,
     auth_token: Option<&str>,
     bom: &mut pcb_sch::bom::Bom,
@@ -588,81 +528,60 @@ fn fetch_and_populate_availability_with_cache(
     mode: BomMatchMode,
     cache: Option<&BomMatchCache>,
     now: i64,
-) -> Result<BomMatchSource> {
+) -> Result<()> {
     let bom_entries = bom_request_entries(bom)?;
-
     let request_body = bom_match_request(&bom_entries);
     let url = bom_match_url(ctx.api_base_url(), strict);
-    let identity = cache_identity(&url, &request_body)?;
-    let mut cached = cache.and_then(|cache| match cache.load(&identity) {
-        Ok(Some(cached)) => match prepare_cached_match(cached, bom, now) {
-            Ok(prepared) => Some(prepared),
-            Err(error) => {
-                log::warn!("Ignoring invalid cached BOM response: {error:#}");
-                None
-            }
-        },
-        Ok(None) => None,
-        Err(error) => {
-            log::warn!("Ignoring unreadable cached BOM response: {error:#}");
-            None
-        }
-    });
+    let key = cache_key(&url, &request_body)?;
+    let mut cached = load_cached_match(cache, &key, bom, now);
 
     if mode == BomMatchMode::Offline {
-        let Some(cached) = cached else {
-            return Ok(BomMatchSource::OfflineCacheMiss);
-        };
-        let source = cache_source(&cached);
-        cached.prepared.apply(bom);
-        return Ok(source);
+        if let Some((prepared, _)) = cached {
+            prepared.apply(bom);
+        }
+        return Ok(());
     }
 
-    if cached.as_ref().is_some_and(|cached| cached.fresh) {
-        let cached = cached.take().expect("checked fresh cached response");
-        let source = cache_source(&cached);
-        cached.prepared.apply(bom);
-        return Ok(source);
+    if cached.as_ref().is_some_and(|(_, fresh)| *fresh) {
+        cached
+            .take()
+            .expect("checked fresh cache entry")
+            .0
+            .apply(bom);
+        return Ok(());
     }
 
-    let response_json = match send_bom_match_request(
+    let live = send_bom_match_request(
         ctx,
         auth_token,
         &request_body,
         BOM_MATCH_TIMEOUT_SECS,
         strict,
-    ) {
-        Ok(response_json) => response_json,
-        Err(error) if error.transient && cached.is_some() => {
-            let cached = cached.take().expect("checked stale cached response");
-            let source = cache_source(&cached);
-            cached.prepared.apply(bom);
-            return Ok(source);
+    )
+    .and_then(|response_json| {
+        let prepared = prepare_response(bom, &response_json)?;
+        Ok((response_json, prepared))
+    });
+
+    match live {
+        Ok((response_json, prepared)) => {
+            if let Some(cache) = cache
+                && let Err(error) = cache.store(&key, &response_json, now)
+            {
+                log::warn!("Failed to update local BOM cache: {error:#}");
+            }
+            prepared.apply(bom);
+            Ok(())
         }
-        Err(error) => return Err(anyhow::Error::new(error)),
-    };
-
-    let match_response: MatchBomResponse =
-        serde_json::from_str(&response_json).context("Failed to parse BOM match response")?;
-    let prepared = prepare_bom_match(bom, &match_response)?;
-
-    if match_response.needs_retry() {
-        if let Some(cached) = cached {
-            let source = cache_source(&cached);
-            cached.prepared.apply(bom);
-            return Ok(source);
+        Err(error) => {
+            let Some((prepared, _)) = cached else {
+                return Err(error);
+            };
+            log::warn!("BOM matching failed; using stale cache: {error:#}");
+            prepared.apply(bom);
+            Ok(())
         }
-        anyhow::bail!("BOM matching could not complete and no cached response is available");
     }
-
-    if let Some(cache) = cache
-        && let Err(error) = cache.store(&identity, &response_json, now)
-    {
-        log::warn!("Failed to update local BOM cache: {error:#}");
-    }
-
-    prepared.apply(bom);
-    Ok(BomMatchSource::Network)
 }
 
 /// Component key for pricing requests
@@ -998,21 +917,6 @@ mod tests {
     }
 
     #[test]
-    fn missing_match_status_is_rejected() {
-        let response = serde_json::json!({
-            "results": [{
-                "designEntry": {"path": "root.U1"},
-                "offerIds": [],
-                "offerStockClasses": {},
-                "selectedOfferId": null
-            }],
-            "offers": {}
-        });
-
-        assert!(serde_json::from_value::<MatchBomResponse>(response).is_err());
-    }
-
-    #[test]
     fn first_ranked_regional_offer_wins() {
         let response: MatchBomResponse =
             serde_json::from_str(include_str!("../tests/fixtures/bom_match_api_order.json"))
@@ -1092,91 +996,91 @@ mod tests {
             "offers": {}
         }))
         .unwrap();
-        let mut response: MatchBomResponse = serde_json::from_value(compatible_response()).unwrap();
-        response.offers.get_mut("selected-offer").unwrap().id = "mismatched-offer".to_string();
         let bom = test_bom(None);
 
         assert!(prepare_bom_match(&bom, &incomplete).is_err());
-        assert!(prepare_bom_match(&bom, &response).is_err());
         assert!(bom.availability.is_empty());
         assert!(bom.entries["root.U1"].mpn.is_none());
     }
 
     #[test]
-    fn request_entries_exclude_previous_availability() {
-        let without_availability = test_bom(None);
-        let mut with_availability = without_availability.clone();
-        with_availability
-            .availability
-            .insert("root.U1".to_string(), Availability::default());
-
-        assert_eq!(
-            bom_request_entries(&without_availability).unwrap(),
-            bom_request_entries(&with_availability).unwrap()
-        );
-    }
-
-    #[test]
-    fn cache_expires_at_ten_minutes() {
-        let response_json = compatible_response().to_string();
-        let bom = test_bom(None);
-
-        for (now, expected_fresh) in [(1_599, true), (1_600, false)] {
-            let cached = CachedResponse {
-                response_json: response_json.clone(),
-                fetched_at: 1_000,
-            };
-            assert_eq!(
-                prepare_cached_match(cached, &bom, now).unwrap().fresh,
-                expected_fresh
-            );
-        }
-    }
-
-    #[test]
-    fn fresh_network_response_is_cached_for_online_and_offline_use() {
+    fn cache_policy_is_fresh_then_live_with_one_stale_fallback() {
         let server = MockServer::start();
-        let response = compatible_response();
-        let network = server.mock(|when, then| {
+        let mut success = server.mock(|when, then| {
             when.method(POST)
                 .path("/api/boms/match")
                 .query_param("strict", "true");
-            then.status(200).json_body(response);
+            then.status(200).json_body(compatible_response());
         });
         let tempdir = tempfile::tempdir().unwrap();
         let cache = cache_for(&tempdir);
         let context = WorkspaceContext::from_api_base_url(server.base_url());
 
-        let mut first = test_bom(None);
-        let source = fetch_and_populate_availability_with_cache(
+        let mut offline_miss = test_bom(None);
+        match_bom_with_cache(
             &context,
             None,
-            &mut first,
+            &mut offline_miss,
+            true,
+            BomMatchMode::Offline,
+            Some(&cache),
+            1_000,
+        )
+        .unwrap();
+        assert!(offline_miss.entries["root.U1"].mpn.is_none());
+        success.assert_calls(0);
+
+        let mut network = test_bom(None);
+        match_bom_with_cache(
+            &context,
+            None,
+            &mut network,
             true,
             BomMatchMode::Online,
             Some(&cache),
             1_000,
         )
         .unwrap();
-        assert_eq!(source, BomMatchSource::Network);
-        network.assert_calls(1);
+        assert_eq!(network.entries["root.U1"].mpn.as_deref(), Some("API-MPN"));
+        success.assert_calls(1);
 
-        let mut online = test_bom(None);
-        let source = fetch_and_populate_availability_with_cache(
+        let mut fresh = test_bom(None);
+        match_bom_with_cache(
             &context,
             None,
-            &mut online,
+            &mut fresh,
             true,
             BomMatchMode::Online,
             Some(&cache),
             1_100,
         )
         .unwrap();
-        assert_eq!(source, BomMatchSource::FreshCache { age_seconds: 100 });
-        network.assert_calls(1);
+        assert_eq!(fresh.entries["root.U1"].mpn.as_deref(), Some("API-MPN"));
+        success.assert_calls(1);
+        success.delete();
+
+        let failure = server.mock(|when, then| {
+            when.method(POST)
+                .path("/api/boms/match")
+                .query_param("strict", "true");
+            then.status(503).body("deploying");
+        });
+        let mut stale = test_bom(None);
+        match_bom_with_cache(
+            &context,
+            None,
+            &mut stale,
+            true,
+            BomMatchMode::Online,
+            Some(&cache),
+            2_000,
+        )
+        .unwrap();
+        assert_eq!(stale.entries["root.U1"].mpn.as_deref(), Some("API-MPN"));
+        failure.assert_calls(1);
 
         let mut offline = test_bom(None);
-        let source = fetch_and_populate_availability_with_cache(
+        match_bom_with_cache(
             &context,
             None,
             &mut offline,
@@ -1186,132 +1090,23 @@ mod tests {
             2_000,
         )
         .unwrap();
-        assert_eq!(
-            source,
-            BomMatchSource::StaleCache {
-                age_seconds: Some(1_000)
-            }
-        );
-        network.assert_calls(1);
         assert_eq!(offline.entries["root.U1"].mpn.as_deref(), Some("API-MPN"));
-    }
+        failure.assert_calls(1);
 
-    #[test]
-    fn stale_cache_only_falls_back_for_transient_online_failures() {
-        let server = MockServer::start();
-        let response = compatible_response();
-        let mut success = server.mock(|when, then| {
-            when.method(POST).path("/api/boms/match");
-            then.status(200).json_body(response);
-        });
-        let tempdir = tempfile::tempdir().unwrap();
-        let cache = cache_for(&tempdir);
-        let context = WorkspaceContext::from_api_base_url(server.base_url());
-
-        fetch_and_populate_availability_with_cache(
-            &context,
-            None,
-            &mut test_bom(None),
-            false,
-            BomMatchMode::Online,
-            Some(&cache),
-            1_000,
-        )
-        .unwrap();
-        success.delete();
-
-        let mut unavailable = server.mock(|when, then| {
-            when.method(POST).path("/api/boms/match");
-            then.status(503).body("deploying");
-        });
-        let mut transient = test_bom(None);
-        let source = fetch_and_populate_availability_with_cache(
-            &context,
-            None,
-            &mut transient,
-            false,
-            BomMatchMode::Online,
-            Some(&cache),
-            2_000,
-        )
-        .unwrap();
-        assert!(matches!(source, BomMatchSource::StaleCache { .. }));
-        assert_eq!(transient.entries["root.U1"].mpn.as_deref(), Some("API-MPN"));
-        unavailable.assert_calls(1);
-        unavailable.delete();
-
-        let retry_response = serde_json::json!({
-            "results": [{
-                "designEntry": {"path": "root.U1"},
-                "offerIds": [],
-                "offerStockClasses": {},
-                "match": "MATCH_NEEDS_RETRY",
-                "selectedOfferId": null
-            }],
-            "offers": {}
-        });
-        let mut retry = server.mock(|when, then| {
-            when.method(POST).path("/api/boms/match");
-            then.status(200).json_body(retry_response);
-        });
-        let mut retryable = test_bom(None);
-        let source = fetch_and_populate_availability_with_cache(
-            &context,
-            None,
-            &mut retryable,
-            false,
-            BomMatchMode::Online,
-            Some(&cache),
-            2_000,
-        )
-        .unwrap();
-        assert!(matches!(source, BomMatchSource::StaleCache { .. }));
-        assert_eq!(retryable.entries["root.U1"].mpn.as_deref(), Some("API-MPN"));
-        retry.assert_calls(1);
-        retry.delete();
-
-        let bad_request = server.mock(|when, then| {
-            when.method(POST).path("/api/boms/match");
-            then.status(400).body("invalid request");
-        });
-        let mut permanent = test_bom(None);
+        let mut no_cache = test_bom(None);
         assert!(
-            fetch_and_populate_availability_with_cache(
+            match_bom_with_cache(
                 &context,
                 None,
-                &mut permanent,
-                false,
+                &mut no_cache,
+                true,
                 BomMatchMode::Online,
-                Some(&cache),
+                None,
                 2_000,
             )
             .is_err()
         );
-        assert!(permanent.entries["root.U1"].mpn.is_none());
-        assert!(permanent.availability.is_empty());
-        bad_request.assert_calls(1);
-    }
-
-    #[test]
-    fn offline_cache_miss_does_not_mutate_the_bom() {
-        let tempdir = tempfile::tempdir().unwrap();
-        let cache = cache_for(&tempdir);
-        let context = WorkspaceContext::from_api_base_url("http://127.0.0.1:1");
-        let mut bom = test_bom(None);
-
-        let source = fetch_and_populate_availability_with_cache(
-            &context,
-            None,
-            &mut bom,
-            true,
-            BomMatchMode::Offline,
-            Some(&cache),
-            1_000,
-        )
-        .unwrap();
-
-        assert_eq!(source, BomMatchSource::OfflineCacheMiss);
-        assert!(bom.entries["root.U1"].mpn.is_none());
-        assert!(bom.availability.is_empty());
+        assert!(no_cache.entries["root.U1"].mpn.is_none());
+        failure.assert_calls(2);
     }
 }

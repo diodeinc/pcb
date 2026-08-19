@@ -20,8 +20,8 @@ pub mod scan;
 
 pub use auth::{AuthArgs, AuthCommand, AuthTokens, execute as execute_auth, login, logout, status};
 pub use bom::{
-    BomMatchMode, BomMatchSource, fetch_and_populate_availability,
-    fetch_and_populate_availability_with_context, match_bom_with_context,
+    BomMatchMode, fetch_and_populate_availability, fetch_and_populate_availability_with_context,
+    match_bom_with_context,
 };
 pub use component::{
     AddComponentResult, ComponentDownloadResult, ComponentResult, ComponentSearchResult,
