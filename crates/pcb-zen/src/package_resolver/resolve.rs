@@ -521,16 +521,14 @@ mod tests {
     }
 
     #[test]
-    fn stdlib_file_has_no_root_without_stdlib_resolution() {
+    fn empty_resolution_has_no_stdlib_root() {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().canonicalize().unwrap();
         let stdlib = root.join(".pcb/stdlib");
         std::fs::create_dir_all(&stdlib).unwrap();
         let workspace = workspace_with_package(&root);
 
-        // A resolution set without a stdlib root (the build/LSP flows) must
-        // keep returning None for stdlib files rather than misattributing
-        // them to a workspace package.
+        // With no package maps at all, there is no scope to infer.
         let resolution =
             ResolutionResult::frozen(workspace, FrozenResolutionSet::default(), HashMap::new());
         assert!(
