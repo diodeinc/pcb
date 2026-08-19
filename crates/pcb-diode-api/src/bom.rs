@@ -340,7 +340,6 @@ fn prepare_bom_match(
             "BOM match response returned duplicate path: {path}"
         );
 
-        let entry = &bom.entries[path];
         let mut resolved_offers = Vec::with_capacity(bom_line.offer_ids.len());
         for offer_id in &bom_line.offer_ids {
             let offer = match_response.offers.get(offer_id).with_context(|| {
@@ -368,11 +367,7 @@ fn prepare_bom_match(
                 .get(selected_offer_id)
                 .with_context(|| format!("BOM match response omitted offer {selected_offer_id}"))?;
 
-            if bom_line.match_status == BomMatchStatus::Compatible
-                && entry.mpn.is_none()
-                && entry.alternatives.is_empty()
-                && entry.generic_data.is_some()
-            {
+            if bom_line.match_status == BomMatchStatus::Compatible {
                 let mpn = selected_offer
                     .mpn
                     .as_deref()
@@ -809,11 +804,11 @@ mod tests {
         }
     }
 
-    fn test_bom(mpn: Option<&str>) -> Bom {
+    fn test_bom() -> Bom {
         let entry = BomEntry {
-            mpn: mpn.map(str::to_string),
+            mpn: None,
             alternatives: Vec::new(),
-            manufacturer: mpn.map(|_| "Original Manufacturer".to_string()),
+            manufacturer: None,
             package: Some("0603".to_string()),
             value: Some("10kOhm".to_string()),
             description: None,
@@ -959,33 +954,15 @@ mod tests {
     }
 
     #[test]
-    fn selected_compatible_offer_populates_only_unassigned_generic_parts() {
+    fn selected_compatible_offer_populates_part_identity() {
         let response: MatchBomResponse = serde_json::from_value(compatible_response()).unwrap();
 
-        let mut generic_bom = test_bom(None);
-        prepare_bom_match(&generic_bom, &response)
-            .unwrap()
-            .apply(&mut generic_bom);
+        let mut bom = test_bom();
+        prepare_bom_match(&bom, &response).unwrap().apply(&mut bom);
+        assert_eq!(bom.entries["root.U1"].mpn.as_deref(), Some("API-MPN"));
         assert_eq!(
-            generic_bom.entries["root.U1"].mpn.as_deref(),
-            Some("API-MPN")
-        );
-        assert_eq!(
-            generic_bom.entries["root.U1"].manufacturer.as_deref(),
+            bom.entries["root.U1"].manufacturer.as_deref(),
             Some("API Manufacturer")
-        );
-
-        let mut explicit_bom = test_bom(Some("EXPLICIT-MPN"));
-        prepare_bom_match(&explicit_bom, &response)
-            .unwrap()
-            .apply(&mut explicit_bom);
-        assert_eq!(
-            explicit_bom.entries["root.U1"].mpn.as_deref(),
-            Some("EXPLICIT-MPN")
-        );
-        assert_eq!(
-            explicit_bom.entries["root.U1"].manufacturer.as_deref(),
-            Some("Original Manufacturer")
         );
     }
 
@@ -996,7 +973,7 @@ mod tests {
             "offers": {}
         }))
         .unwrap();
-        let bom = test_bom(None);
+        let bom = test_bom();
 
         assert!(prepare_bom_match(&bom, &incomplete).is_err());
         assert!(bom.availability.is_empty());
@@ -1016,7 +993,7 @@ mod tests {
         let cache = cache_for(&tempdir);
         let context = WorkspaceContext::from_api_base_url(server.base_url());
 
-        let mut offline_miss = test_bom(None);
+        let mut offline_miss = test_bom();
         match_bom_with_cache(
             &context,
             None,
@@ -1030,7 +1007,7 @@ mod tests {
         assert!(offline_miss.entries["root.U1"].mpn.is_none());
         success.assert_calls(0);
 
-        let mut network = test_bom(None);
+        let mut network = test_bom();
         match_bom_with_cache(
             &context,
             None,
@@ -1044,7 +1021,7 @@ mod tests {
         assert_eq!(network.entries["root.U1"].mpn.as_deref(), Some("API-MPN"));
         success.assert_calls(1);
 
-        let mut fresh = test_bom(None);
+        let mut fresh = test_bom();
         match_bom_with_cache(
             &context,
             None,
@@ -1065,7 +1042,7 @@ mod tests {
                 .query_param("strict", "true");
             then.status(503).body("deploying");
         });
-        let mut stale = test_bom(None);
+        let mut stale = test_bom();
         match_bom_with_cache(
             &context,
             None,
@@ -1079,7 +1056,7 @@ mod tests {
         assert_eq!(stale.entries["root.U1"].mpn.as_deref(), Some("API-MPN"));
         failure.assert_calls(1);
 
-        let mut offline = test_bom(None);
+        let mut offline = test_bom();
         match_bom_with_cache(
             &context,
             None,
@@ -1093,7 +1070,7 @@ mod tests {
         assert_eq!(offline.entries["root.U1"].mpn.as_deref(), Some("API-MPN"));
         failure.assert_calls(1);
 
-        let mut no_cache = test_bom(None);
+        let mut no_cache = test_bom();
         assert!(
             match_bom_with_cache(
                 &context,
