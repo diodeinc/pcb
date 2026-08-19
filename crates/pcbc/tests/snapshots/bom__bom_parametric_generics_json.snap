@@ -1,0 +1,150 @@
+---
+source: crates/pcbc/tests/bom.rs
+assertion_line: 264
+expression: output
+---
+Command: pcbc bom boards/ParametricGenerics.zen --offline -f json
+Exit Code: 0
+
+--- STDOUT ---
+[
+  {
+    "path": "D1.D",
+    "designator": "D1",
+    "package": "SOD-123",
+    "value": "1A 40V Schottky Rectifier",
+    "description": "1A 40V Schottky Rectifier",
+    "component_type": "Rectifier",
+    "technology": "Schottky",
+    "reverse_voltage": {
+      "nominal": "40",
+      "min": "40",
+      "max": "40",
+      "unit": "Volts"
+    },
+    "forward_current": {
+      "nominal": "1",
+      "min": "1",
+      "max": "1",
+      "unit": "Amperes"
+    },
+    "forward_voltage": {
+      "nominal": "0.500",
+      "min": "0.500",
+      "max": "0.500",
+      "unit": "Volts"
+    }
+  },
+  {
+    "path": "TVS1.D",
+    "designator": "D2",
+    "package": "DO-219AB",
+    "value": "5V TVS Diode 400W",
+    "description": "5V TVS Diode 400W",
+    "component_type": "Tvs",
+    "direction": "Unidirectional",
+    "reverse_standoff_voltage": {
+      "nominal": "5",
+      "min": "5",
+      "max": "5",
+      "unit": "Volts"
+    },
+    "reverse_clamping_voltage": {
+      "nominal": "9",
+      "min": "9",
+      "max": "9",
+      "unit": "Volts"
+    },
+    "peak_pulse_power": {
+      "nominal": "400",
+      "min": "400",
+      "max": "400",
+      "unit": "Watts"
+    },
+    "capacitance": {
+      "nominal": "0.000000000030",
+      "min": "0.000000000030",
+      "max": "0.000000000030",
+      "unit": "Farads"
+    }
+  },
+  {
+    "path": "Z1.D",
+    "designator": "D3",
+    "package": "SOD-123",
+    "value": "5.1V Zener 500mW",
+    "description": "5.1V Zener 500mW",
+    "component_type": "Zener",
+    "zener_voltage": {
+      "nominal": "5.1",
+      "min": "5.1",
+      "max": "5.1",
+      "unit": "Volts"
+    },
+    "power": {
+      "nominal": "0.500",
+      "min": "0.500",
+      "max": "0.500",
+      "unit": "Watts"
+    }
+  },
+  {
+    "path": "FB1.FB",
+    "designator": "FB1",
+    "package": "0603",
+    "value": "600 500mA 100MHz",
+    "description": "600 500mA 100MHz",
+    "component_type": "FerriteBead",
+    "impedance": {
+      "nominal": "600",
+      "min": "600",
+      "max": "600",
+      "unit": "Ohms"
+    },
+    "frequency": {
+      "nominal": "100000000",
+      "min": "100000000",
+      "max": "100000000",
+      "unit": "Hertz"
+    },
+    "current": {
+      "nominal": "0.500",
+      "min": "0.500",
+      "max": "0.500",
+      "unit": "Amperes"
+    },
+    "dcr": {
+      "nominal": "0.200",
+      "min": "0.200",
+      "max": "0.200",
+      "unit": "Ohms"
+    }
+  },
+  {
+    "path": "L1.L",
+    "designator": "L1",
+    "package": "0603",
+    "value": "4.7uH 1A",
+    "description": "4.7uH 1A",
+    "component_type": "Inductor",
+    "inductance": {
+      "nominal": "0.0000047",
+      "min": "0.0000047",
+      "max": "0.0000047",
+      "unit": "Henries"
+    },
+    "current": {
+      "nominal": "1",
+      "min": "1",
+      "max": "1",
+      "unit": "Amperes"
+    },
+    "dcr": {
+      "nominal": "0.120",
+      "min": "0.120",
+      "max": "0.120",
+      "unit": "Ohms"
+    }
+  }
+]
+--- STDERR ---

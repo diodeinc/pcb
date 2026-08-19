@@ -15,6 +15,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - `pcb bom` caches API matches for ten minutes and reuses an exact stale match offline or when an online refresh fails.
+- `pcb bom` sends structured parameters for inductors, ferrite beads, rectifiers, Zener diodes, and TVS diodes to the API matcher.
 - `pcb bom` writes the API-selected compatible MPN and manufacturer into output.
 
 ### Fixed

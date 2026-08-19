@@ -173,7 +173,12 @@ pub struct UngroupedBomEntry {
 #[serde(tag = "component_type")]
 pub enum GenericComponent {
     Capacitor(Capacitor),
+    FerriteBead(FerriteBead),
+    Inductor(Inductor),
+    Rectifier(Rectifier),
     Resistor(Resistor),
+    Tvs(Tvs),
+    Zener(Zener),
 }
 
 impl GenericComponent {
@@ -253,6 +258,54 @@ impl Resistor {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct FerriteBead {
+    pub impedance: PhysicalValue,
+    pub frequency: PhysicalValue,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current: Option<PhysicalValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dcr: Option<PhysicalValue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Inductor {
+    pub inductance: PhysicalValue,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current: Option<PhysicalValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dcr: Option<PhysicalValue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Rectifier {
+    pub technology: String,
+    pub reverse_voltage: PhysicalValue,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forward_current: Option<PhysicalValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forward_voltage: Option<PhysicalValue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Tvs {
+    pub direction: String,
+    pub reverse_standoff_voltage: PhysicalValue,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reverse_clamping_voltage: Option<PhysicalValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub peak_pulse_power: Option<PhysicalValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capacitance: Option<PhysicalValue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Zener {
+    pub zener_voltage: PhysicalValue,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub power: Option<PhysicalValue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Dielectric {
     C0G,
     NP0,
@@ -283,6 +336,10 @@ impl FromStr for Dielectric {
 }
 
 // BOM Matching API
+// Matching keys are short-lived BOM data. Keeping every generic component
+// inline preserves one consistent public representation and avoids arbitrary
+// heap allocation for only the larger component families.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum BomMatchingKey {
     Mpn(String),
@@ -763,6 +820,63 @@ fn detect_generic_component(instance: &crate::Instance) -> Option<GenericCompone
                     dielectric,
                     esr,
                     voltage,
+                }));
+            }
+        }
+        "ferrite_bead" => {
+            if let (Some(impedance), Some(frequency)) = (
+                instance.physical_attr(&["impedance"]),
+                instance.physical_attr(&["frequency"]),
+            ) {
+                return Some(GenericComponent::FerriteBead(FerriteBead {
+                    impedance,
+                    frequency,
+                    current: instance.physical_attr(&["current"]),
+                    dcr: instance.physical_attr(&["dcr"]),
+                }));
+            }
+        }
+        "inductor" => {
+            if let Some(inductance) = instance.physical_attr(&["inductance"]) {
+                return Some(GenericComponent::Inductor(Inductor {
+                    inductance,
+                    current: instance.physical_attr(&["current"]),
+                    dcr: instance.physical_attr(&["dcr"]),
+                }));
+            }
+        }
+        "rectifier" => {
+            if let (Some(technology), Some(reverse_voltage)) = (
+                instance.string_attr(&["technology"]),
+                instance.physical_attr(&["reverse_voltage"]),
+            ) {
+                return Some(GenericComponent::Rectifier(Rectifier {
+                    technology,
+                    reverse_voltage,
+                    forward_current: instance.physical_attr(&["forward_current"]),
+                    forward_voltage: instance.physical_attr(&["forward_voltage"]),
+                }));
+            }
+        }
+        "tvs" => {
+            if let (Some(direction), Some(reverse_standoff_voltage)) = (
+                instance.string_attr(&["direction"]),
+                instance.physical_attr(&["reverse_standoff_voltage"]),
+            ) {
+                return Some(GenericComponent::Tvs(Tvs {
+                    direction,
+                    reverse_standoff_voltage,
+                    reverse_clamping_voltage: instance.physical_attr(&["reverse_clamping_voltage"]),
+                    peak_pulse_power: instance.physical_attr(&["peak_pulse_power"]),
+                    capacitance: instance.physical_attr(&["capacitance"]),
+                }));
+            }
+        }
+        "zener" => {
+            if let Some(zener_voltage) = instance.physical_attr(&["zener_voltage"]) {
+                return Some(GenericComponent::Zener(Zener {
+                    zener_voltage,
+                    power: instance.physical_attr(&["power"]),
                 }));
             }
         }
