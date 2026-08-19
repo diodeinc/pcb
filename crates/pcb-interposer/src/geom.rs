@@ -235,17 +235,42 @@ pub fn offset_polyline(pts: &[P], d: f64) -> Vec<P> {
             let nm = normal(pts[n - 2], pts[n - 1]);
             out.push([pts[i][0] + d * nm[0], pts[i][1] + d * nm[1]]);
         } else {
+            let v1 = sub(pts[i], pts[i - 1]);
+            let v2 = sub(pts[i + 1], pts[i]);
             let n1 = normal(pts[i - 1], pts[i]);
             let n2 = normal(pts[i], pts[i + 1]);
-            let mut mx = n1[0] + n2[0];
-            let mut my = n1[1] + n2[1];
-            let ml = (mx * mx + my * my).sqrt().max(1e-12);
-            mx /= ml;
-            my /= ml;
-            // miter length = d / cos(theta/2); cos = m·n1
-            let cos_half = (mx * n1[0] + my * n1[1]).max(0.25);
-            let k = d / cos_half;
-            out.push([pts[i][0] + k * mx, pts[i][1] + k * my]);
+            let turn = v1[0] * v2[1] - v1[1] * v2[0];
+            // The offset must never leave the path's `|d|` envelope — the
+            // routed clearances are guaranteed only for that ribbon. Inner
+            // joins take the trim intersection of the two offset lines
+            // (perpendicular distance stays exactly |d|); outer joins take a
+            // bevel of the two exact-offset points (the chord only cuts
+            // inward). A scaled miter would spike outside the envelope at
+            // sharp corners.
+            let inner = (d > 0.0) == (turn > 0.0);
+            let a1 = [pts[i][0] + d * n1[0], pts[i][1] + d * n1[1]];
+            let a2 = [pts[i][0] + d * n2[0], pts[i][1] + d * n2[1]];
+            let mut trimmed = false;
+            if inner && turn.abs() > 1e-9 {
+                // Intersection of line(a1, dir v1) and line(a2, dir v2),
+                // used only while it stays near the corner — nearly straight
+                // joins would shoot it arbitrarily far along the lines.
+                let w = sub(a2, a1);
+                let t = (w[0] * v2[1] - w[1] * v2[0]) / turn;
+                let q = [a1[0] + t * v1[0], a1[1] + t * v1[1]];
+                if dist(q, pts[i]) <= 3.0 * d.abs() {
+                    out.push(q);
+                    trimmed = true;
+                }
+            }
+            if !trimmed {
+                // Bevel: both points sit at exactly |d|; on the inner side
+                // the small same-net overlap this leaves is harmless.
+                out.push(a1);
+                if dist(a1, a2) > 1e-9 {
+                    out.push(a2);
+                }
+            }
         }
     }
     out

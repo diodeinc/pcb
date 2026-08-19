@@ -78,6 +78,10 @@ pub fn via_feasible(problem: &Problem, kind: Kind, c_xy: P, p_xy: P) -> bool {
 /// Both rails of a pair leave their pads straight along the gateway normal
 /// by this much before converging (KiCad's "fan" distance).
 const PAIR_FAN: f64 = 0.9;
+/// The pair trunk leaves/enters its gateway anchor with a fixed straight
+/// lead along the snapped normal, so rail offsetting near the junction is
+/// a clean parallel translate instead of a cramped first grid step.
+const PAIR_LEAD: f64 = 1.2;
 /// Rail center-to-center spacing of the coupled pair.
 const RAIL_GAP: f64 = USB_W + USB_GAP;
 
@@ -98,6 +102,19 @@ fn pair_entry(pads: [P; 2], n: P) -> (P, [[P; 3]; 2]) {
         [pads[k], add_scaled(pads[k], n, PAIR_FAN), anchor]
     });
     (w, stubs)
+}
+
+/// A pair whose run is shorter than its own entry geometry routes as two
+/// plain traces: the gateways would interlock and force the trunk across
+/// its own entry stubs, and coupling over a couple of millimetres is
+/// electrically irrelevant.
+fn pair_direct(r: &Routable) -> bool {
+    let sd = |a: P, b: P| PAIR_FAN + ((dist(a, b) - RAIL_GAP) / 2.0).max(0.6);
+    dist(r.src, r.dst)
+        < sd(r.members[0].2, r.members[1].2)
+            + sd(r.members[0].3, r.members[1].3)
+            + 2.0 * PAIR_LEAD
+            + 1.0
 }
 
 /// Gateway of a USB pad pair: (midpoint, outward unit normal). Outward is
@@ -562,7 +579,7 @@ fn astar(
         if expanded > EXPAND_CAP {
             return None;
         }
-        if x == t.0 && y == t.1 && end_dir.is_none_or(|e| dir != NO_DIR && dir_delta(dir, e) <= 2) {
+        if x == t.0 && y == t.1 && end_dir.is_none_or(|e| dir != NO_DIR && dir_delta(dir, e) <= 1) {
             let mut path = Vec::new();
             let mut cur = u as u32;
             loop {
@@ -865,6 +882,9 @@ struct Solution {
     stubs: Option<Stubs>,
     vias: Vec<(P, f64)>,
     cost: i32,
+    /// Pair only: the rails terminate on each other's assigned lands (the
+    /// polarity untwist — DP/DM lands are interchangeable by reassignment).
+    swap_dst: bool,
 }
 
 type Stubs = [[[P; 3]; 2]; 2];
@@ -1004,138 +1024,227 @@ fn grid_pass(
 
     // Route one routable in the current context. Scores every candidate
     // (layers × pair waypoint variants) and returns the cheapest.
-    let route_one =
-        |maps: &Maps, search: &mut Search, registry: &Registry, r: &Routable| -> Option<Solution> {
-            let own_both: Vec<(P, u8)> = r
-                .members
-                .iter()
-                .flat_map(|(_, _, c, p)| [(*c, 0b11u8), (*p, 0b11u8)])
-                .collect();
-            let mut exempt = make_exempt(&own_both, r.class);
+    let route_one = |maps: &Maps,
+                     search: &mut Search,
+                     registry: &Registry,
+                     r: &Routable|
+     -> Option<Solution> {
+        let own_both: Vec<(P, u8)> = r
+            .members
+            .iter()
+            .flat_map(|(_, _, c, p)| [(*c, 0b11u8), (*p, 0b11u8)])
+            .collect();
+        let mut exempt = make_exempt(&own_both, r.class);
+        // The pair trunk never touches its own pads (the stubs do), so
+        // its A* gets a corridor-only exemption — own pads stay solid
+        // walls and the trunk can never cut back across its own entry.
+        let mut trunk_exempt = Exempt {
+            disks: Vec::new(),
+            deny: exempt.deny.clone(),
+        };
 
-            type Cand = (u8, P, P, Option<Stubs>);
-            let mut candidates: Vec<Cand> = Vec::new();
-            match r.class {
-                Class::Pair => {
-                    let u_s = unit(geom::sub(r.members[0].2, r.src));
-                    let u_d = unit(geom::sub(r.members[0].3, r.dst));
-                    let (_, n_d_out) = gateway(r.members[0].3, r.members[1].3, mate_center);
-                    // The pair may use its own reserved gateway, and — as a
-                    // fallback — the mirrored inward corridor through the band.
-                    for i in -6..=6i32 {
-                        let p = add_scaled(r.dst, n_d_out, GATEWAY_LEN * i as f64 / 6.0);
-                        exempt.disks.push((p, 1.0, 0b11));
+        // (layer, trunk ends a/b, A* ends one lead deeper, entry dirs,
+        // pair stubs, dst-land swap)
+        type Cand = (u8, P, P, P, P, Option<(u8, u8)>, Option<Stubs>, bool);
+        let mut candidates: Vec<Cand> = Vec::new();
+        match r.class {
+            Class::Pair if pair_direct(r) => {
+                // No ribbon candidates: the caller falls back to two
+                // direct traces (not reported as a loose pair).
+            }
+            Class::Pair => {
+                let u_s = unit(geom::sub(r.members[0].2, r.src));
+                let u_d = unit(geom::sub(r.members[0].3, r.dst));
+                let (_, n_d_out) = gateway(r.members[0].3, r.members[1].3, mate_center);
+                // The pair may use its own reserved gateway, and — as a
+                // fallback — the mirrored inward corridor through the band.
+                // Corridor half-width just over the trunk envelope: a
+                // wider exemption would let the trunk ride over its own
+                // lands' terminal vias.
+                for i in -12..=12i32 {
+                    let p = add_scaled(r.dst, n_d_out, GATEWAY_LEN * i as f64 / 12.0);
+                    exempt.disks.push((p, 0.6, 0b11));
+                    trunk_exempt.disks.push((p, 0.6, 0b11));
+                }
+                for layer in [TOP, BOT] {
+                    let ok = r.members.iter().all(|m| {
+                        via_legal(m, Class::Pair, layer)
+                            && registry.via_ok(Class::Pair, term_via_xy(m, layer))
+                    });
+                    if !ok {
+                        continue;
                     }
-                    for layer in [TOP, BOT] {
-                        let ok = r.members.iter().all(|m| {
-                            via_legal(m, Class::Pair, layer)
-                                && registry.via_ok(Class::Pair, term_via_xy(m, layer))
+                    for flip_d in [false, true] {
+                        let n_d = if flip_d {
+                            [-n_d_out[0], -n_d_out[1]]
+                        } else {
+                            n_d_out
+                        };
+                        // Side of DP at the dst end (travel direction
+                        // -n_d) when it lands on its own assigned pad.
+                        let side_d = cross([-n_d[0], -n_d[1]], u_d) > 0.0;
+                        let n_s_raw = perp(u_s);
+                        // Both departure directions are legal: a polarity
+                        // mismatch is untwisted by terminating each rail
+                        // on the peer's land, never by forcing the trunk
+                        // into a hairpin.
+                        for flip_s in [false, true] {
+                            let n_s = if flip_s {
+                                [-n_s_raw[0], -n_s_raw[1]]
+                            } else {
+                                n_s_raw
+                            };
+                            let side_s = cross(n_s, u_s) > 0.0;
+                            let swap = side_s != side_d;
+                            let dst = if swap {
+                                [r.members[1].3, r.members[0].3]
+                            } else {
+                                [r.members[0].3, r.members[1].3]
+                            };
+                            let (w_s, stubs_s) = pair_entry([r.members[0].2, r.members[1].2], n_s);
+                            let (w_d, stubs_d) = pair_entry(dst, n_d);
+                            let uv = |d: u8| -> P {
+                                let (dx, dy) = DIRS[d as usize];
+                                let l = ((dx * dx + dy * dy) as f64).sqrt();
+                                [dx as f64 / l, dy as f64 / l]
+                            };
+                            let ds = snap_dir(n_s);
+                            let a2 = add_scaled(w_s, uv(ds), PAIR_LEAD);
+                            let dd = snap_dir(n_d);
+                            let b2 = add_scaled(w_d, uv(dd), PAIR_LEAD);
+                            let de = snap_dir(unit(geom::sub(w_d, b2)));
+                            candidates.push((
+                                layer,
+                                w_s,
+                                w_d,
+                                a2,
+                                b2,
+                                Some((ds, de)),
+                                Some([stubs_s, stubs_d]),
+                                swap,
+                            ));
+                        }
+                    }
+                }
+            }
+            Class::Power | Class::Ls => {
+                for layer in [TOP, BOT] {
+                    if via_legal(&r.members[0], r.class, layer)
+                        && registry.via_ok(r.class, term_via_xy(&r.members[0], layer))
+                    {
+                        candidates.push((layer, r.src, r.dst, r.src, r.dst, None, None, false));
+                    }
+                }
+            }
+        }
+
+        let handicap = |layer: u8| -> i32 {
+            match r.class {
+                Class::Pair | Class::Power => {
+                    if layer == BOT {
+                        60
+                    } else {
+                        0
+                    }
+                }
+                Class::Ls => {
+                    let d = geom::sub(r.dst, r.src);
+                    let preferred = if d[0].abs() >= d[1].abs() { TOP } else { BOT };
+                    if layer == preferred { 0 } else { 150 }
+                }
+            }
+        };
+        let mut best: Option<Solution> = None;
+        for (layer, a, b, a2, b2, dirs, stubs, swap) in &candidates {
+            let (layer, a, b, a2, b2) = (*layer, *a, *b, *a2, *b2);
+            if let Some(stubs) = stubs {
+                // Pair entry stubs and trunk leads are fixed geometry:
+                // reject candidates that collide before spending an A*.
+                let clear_stubs = stubs.iter().all(|end| {
+                    end.iter().all(|st| {
+                        maps.seg_free(Class::Ls, layer, st[0], st[1], &exempt)
+                            && maps.seg_free(Class::Ls, layer, st[1], st[2], &exempt)
+                    })
+                }) && maps.seg_free(Class::Pair, layer, a, a2, &trunk_exempt)
+                    && maps.seg_free(Class::Pair, layer, b2, b, &trunk_exempt);
+                if !clear_stubs {
+                    continue;
+                }
+            }
+            let (d_start, d_end) = dirs
+                .map(|(x, y)| (Some(x), Some(y)))
+                .unwrap_or((None, None));
+            let ex = if stubs.is_some() {
+                &trunk_exempt
+            } else {
+                &exempt
+            };
+            if let Some((cells, cost)) = astar(
+                maps, search, r.class, layer, a2, b2, ex, d_start, d_end, false,
+            ) {
+                let eff = cost + handicap(layer);
+                if best.as_ref().is_none_or(|q| eff < q.cost) {
+                    let mut pts = collapse(&cells);
+                    if let Some(stubs) = stubs {
+                        // Fixed straight leads keep the junctions clean.
+                        pts.insert(0, a);
+                        pts.push(b);
+                        // The trunk's own stubs are not in the maps (they
+                        // commit together), so keep the ribbon envelope
+                        // off its own pad→knee copper explicitly.
+                        let need = Class::Pair.half() + Class::Pair.clear() + USB_W / 2.0 - 1e-9;
+                        let ok = stubs.iter().all(|end| {
+                            end.iter().all(|st| {
+                                pts.windows(2)
+                                    .all(|w| geom::dist_seg_seg(w[0], w[1], st[0], st[1]) >= need)
+                            })
                         });
                         if !ok {
                             continue;
                         }
-                        for flip_d in [false, true] {
-                            let n_d = if flip_d {
-                                [-n_d_out[0], -n_d_out[1]]
-                            } else {
-                                n_d_out
-                            };
-                            // Side of DP at the dst end (travel direction -n_d).
-                            let side_d = cross([-n_d[0], -n_d[1]], u_d) > 0.0;
-                            let n_s_raw = perp(u_s);
-                            // Source waypoint side keeps DP on the same side.
-                            let n_s = if (cross(n_s_raw, u_s) > 0.0) == side_d {
-                                n_s_raw
-                            } else {
-                                [-n_s_raw[0], -n_s_raw[1]]
-                            };
-                            let (w_s, stubs_s) = pair_entry([r.members[0].2, r.members[1].2], n_s);
-                            let (w_d, stubs_d) = pair_entry([r.members[0].3, r.members[1].3], n_d);
-                            candidates.push((layer, w_s, w_d, Some([stubs_s, stubs_d])));
-                        }
                     }
-                }
-                Class::Power | Class::Ls => {
-                    for layer in [TOP, BOT] {
-                        if via_legal(&r.members[0], r.class, layer)
-                            && registry.via_ok(r.class, term_via_xy(&r.members[0], layer))
-                        {
-                            candidates.push((layer, r.src, r.dst, None));
-                        }
-                    }
-                }
-            }
-
-            let handicap = |layer: u8| -> i32 {
-                match r.class {
-                    Class::Pair | Class::Power => {
-                        if layer == BOT {
-                            60
-                        } else {
-                            0
-                        }
-                    }
-                    Class::Ls => {
-                        let d = geom::sub(r.dst, r.src);
-                        let preferred = if d[0].abs() >= d[1].abs() { TOP } else { BOT };
-                        if layer == preferred { 0 } else { 150 }
-                    }
-                }
-            };
-            let mut best: Option<Solution> = None;
-            for (layer, src, dst, stubs) in &candidates {
-                let (layer, src, dst) = (*layer, *src, *dst);
-                let mut dirs = (None, None);
-                if let Some(stubs) = stubs {
-                    // Pair entry stubs are fixed geometry: reject candidates
-                    // whose stubs collide before spending an A* on them.
-                    let clear_stubs = stubs.iter().all(|end| {
-                        end.iter().all(|st| {
-                            maps.seg_free(Class::Ls, layer, st[0], st[1], &exempt)
-                                && maps.seg_free(Class::Ls, layer, st[1], st[2], &exempt)
-                        })
+                    let vias: Vec<(P, f64)> = if stubs.is_some() {
+                        (0..2)
+                            .map(|k| {
+                                // Rail k terminates on the effective
+                                // (possibly swapped) land.
+                                let j = if *swap { 1 - k } else { k };
+                                let m = (
+                                    r.members[k].0,
+                                    r.members[j].1,
+                                    r.members[k].2,
+                                    r.members[j].3,
+                                );
+                                (term_via_xy(&m, layer), r.class.via_pad_r())
+                            })
+                            .collect()
+                    } else {
+                        vec![(term_via_xy(&r.members[0], layer), r.class.via_pad_r())]
+                    };
+                    best = Some(Solution {
+                        layer,
+                        class: r.class,
+                        cells,
+                        pts,
+                        stubs: *stubs,
+                        vias,
+                        cost: eff,
+                        swap_dst: *swap,
                     });
-                    if !clear_stubs {
-                        continue;
-                    }
-                    dirs = (
-                        Some(snap_dir(unit(geom::sub(src, r.src)))),
-                        Some(snap_dir(unit(geom::sub(r.dst, dst)))),
-                    );
-                }
-                if let Some((cells, cost)) = astar(
-                    maps, search, r.class, layer, src, dst, &exempt, dirs.0, dirs.1, false,
-                ) {
-                    let eff = cost + handicap(layer);
-                    if best.as_ref().is_none_or(|b| eff < b.cost) {
-                        let pts = collapse(&cells);
-                        let vias: Vec<(P, f64)> = if stubs.is_some() {
-                            (0..2)
-                                .map(|k| (term_via_xy(&r.members[k], layer), r.class.via_pad_r()))
-                                .collect()
-                        } else {
-                            vec![(term_via_xy(&r.members[0], layer), r.class.via_pad_r())]
-                        };
-                        best = Some(Solution {
-                            layer,
-                            class: r.class,
-                            cells,
-                            pts,
-                            stubs: *stubs,
-                            vias,
-                            cost: eff,
-                        });
-                    }
                 }
             }
-            best
-        };
+        }
+        best
+    };
 
     let commit = |maps: &mut Maps, registry: &mut Registry, sol: &Solution| -> Vec<usize> {
         let mut ids = Vec::new();
         maps.bump_route(sol.class, sol.layer, &sol.cells, 1);
         ids.push(registry.add(sol.class.half(), sol.pts.clone()));
         if let Some(stubs) = &sol.stubs {
+            let n = sol.pts.len();
+            maps.bump_seg(sol.class, sol.pts[0], sol.pts[1], 1 << sol.layer, 1);
+            maps.bump_seg(sol.class, sol.pts[n - 2], sol.pts[n - 1], 1 << sol.layer, 1);
             for end in stubs {
                 for st in end {
                     maps.bump_seg(Class::Ls, st[0], st[1], 1 << sol.layer, 1);
@@ -1153,6 +1262,15 @@ fn grid_pass(
     let uncommit = |maps: &mut Maps, registry: &mut Registry, sol: &Solution, ids: &[usize]| {
         maps.bump_route(sol.class, sol.layer, &sol.cells, -1);
         if let Some(stubs) = &sol.stubs {
+            let n = sol.pts.len();
+            maps.bump_seg(sol.class, sol.pts[0], sol.pts[1], 1 << sol.layer, -1);
+            maps.bump_seg(
+                sol.class,
+                sol.pts[n - 2],
+                sol.pts[n - 1],
+                1 << sol.layer,
+                -1,
+            );
             for end in stubs {
                 for st in end {
                     maps.bump_seg(Class::Ls, st[0], st[1], 1 << sol.layer, -1);
@@ -1214,7 +1332,9 @@ fn grid_pass(
                     }
                 }
                 if got.len() == 2 {
-                    loose += 1;
+                    if !pair_direct(&r) {
+                        loose += 1;
+                    }
                     halves.extend(got);
                 } else {
                     set_reserved(&mut maps, &mut reserved, &r, ri, true);
@@ -1451,6 +1571,14 @@ fn grid_pass(
     for &ri in order {
         if let Some((sol, _)) = sols.get(&ri) {
             raw.push((ri, None, sol.layer, sol.pts.clone()));
+            if sol.swap_dst {
+                // Land-swap polarity untwist: make the assignment record
+                // what the copper actually does.
+                let m = &mut routables[ri].members;
+                let (a1, a3) = (m[0].1, m[0].3);
+                (m[0].1, m[0].3) = (m[1].1, m[1].3);
+                (m[1].1, m[1].3) = (a1, a3);
+            }
         }
     }
     for (ri, k, sol) in halves {
@@ -1482,7 +1610,7 @@ pub fn route_r5(sheet_w: f64, sheet_h: f64, problem: &Problem, assign: &Assign) 
     // Rip-up by reordering: greedy passes where previously failed nets are
     // promoted to the front of their class group. Keep the best attempt.
     let mut boost: std::collections::HashSet<u32> = Default::default();
-    let mut best: Option<(Vec<RawPath>, Vec<usize>, usize)> = None;
+    let mut best: Option<(Vec<RawPath>, Vec<usize>, usize, Vec<Routable>)> = None;
     for attempt in 0..5 {
         let mut order: Vec<usize> = (0..routables.len()).collect();
         order.sort_by(|&a, &b| {
@@ -1520,16 +1648,19 @@ pub fn route_r5(sheet_w: f64, sheet_h: f64, problem: &Problem, assign: &Assign) 
         let grew = boost.len() > before;
         let better = match &best {
             None => true,
-            Some((_, bf, bl)) => (n_failed, loose) < (bf.len(), *bl),
+            Some((_, bf, bl, _)) => (n_failed, loose) < (bf.len(), *bl),
         };
         if better {
-            best = Some((raw, failed, loose));
+            // Snapshot the members alongside the paths: later attempts keep
+            // reassigning and swapping lands, and the emitted geometry must
+            // agree with the member state it was routed against.
+            best = Some((raw, failed, loose, routables.clone()));
         }
         if n_failed == 0 || !grew {
             break;
         }
     }
-    let (raw, failed_ris, loose_pairs) = best.unwrap_or_default();
+    let (raw, failed_ris, loose_pairs, routables) = best.unwrap_or_default();
     out.loose_pairs = loose_pairs;
     for (ri, member, _, _) in &raw {
         if member.is_some() {
@@ -1550,6 +1681,210 @@ pub fn route_r5(sheet_w: f64, sheet_h: f64, problem: &Problem, assign: &Assign) 
                 width: r.class.width(),
             });
         }
+    }
+
+    // ---------------- GND stitching ----------------
+    // Every poured pogo needs a via into the bottom pour. Prefer the via in
+    // the pad itself; when something sits underneath (an unassigned land,
+    // someone's trace), walk outward for the nearest legal spot and add a
+    // short top stub to it.
+    {
+        let gnd_lands: std::collections::HashSet<crate::types::MatePinId> = problem
+            .slots
+            .values()
+            .filter(|sl| sl.kind == Kind::Gnd)
+            .flat_map(|sl| sl.pins.iter().copied())
+            .collect();
+        let gnd_contacts: std::collections::HashSet<ContactId> =
+            out.poured.iter().copied().collect();
+        // Fixed copper the stitch must respect.
+        let mut vias: Vec<P> = Vec::new();
+        for (ri, member, layer, _) in &raw {
+            let r = &routables[*ri];
+            let ks: Vec<usize> = match member {
+                Some(k) => vec![*k],
+                None => (0..r.members.len()).collect(),
+            };
+            for k in ks {
+                vias.push(term_via_xy(&r.members[k], *layer));
+            }
+        }
+        let mut traces: Vec<(u8, f64, Vec<P>)> = raw
+            .iter()
+            .map(|(ri, member, layer, pts)| {
+                let half = if member.is_some() {
+                    USB_W / 2.0
+                } else {
+                    routables[*ri].class.half()
+                };
+                (*layer, half, pts.clone())
+            })
+            .collect();
+        // Pair entry stubs are copper too — they reach well outside the
+        // trunk's coupled envelope.
+        for (ri, member, layer, pts) in &raw {
+            let r = &routables[*ri];
+            if member.is_some() || r.class != Class::Pair || pts.len() < 2 {
+                continue;
+            }
+            let n_s = unit(geom::sub(pts[0], r.src));
+            let n_d = unit(geom::sub(pts[pts.len() - 1], r.dst));
+            let (_, stubs_s) = pair_entry([r.members[0].2, r.members[1].2], n_s);
+            let (_, stubs_d) = pair_entry([r.members[0].3, r.members[1].3], n_d);
+            for end in [stubs_s, stubs_d] {
+                for st in end {
+                    traces.push((*layer, USB_W / 2.0, st.to_vec()));
+                }
+            }
+        }
+        let seg_min = |pts: &[P], xy: P| -> f64 {
+            pts.windows(2)
+                .map(|w| geom::dist_point_seg(xy, w[0], w[1]))
+                .fold(f64::INFINITY, f64::min)
+        };
+        let poured: Vec<ContactId> = out.poured.clone();
+        let mut stitches: Vec<(ContactId, Vec<P>, P)> = Vec::new();
+        for cid in poured {
+            let c = &problem.contacts[&cid];
+            let via_ok = |xy: P, stitches: &[(ContactId, Vec<P>, P)]| -> bool {
+                let m = EDGE_MARGIN + 0.3;
+                if xy[0] < m || xy[1] < m || xy[0] > sheet_w - m || xy[1] > sheet_h - m {
+                    return false;
+                }
+                // Foreign pads on either side (GND copper is the same net).
+                let ok_pads = problem
+                    .contacts
+                    .values()
+                    .all(|o| gnd_contacts.contains(&o.id) || dist(o.xy, xy) >= 1.05)
+                    && problem
+                        .pins
+                        .values()
+                        .all(|p| gnd_lands.contains(&p.id) || dist(p.xy, xy) >= 1.05);
+                let ok_traces = traces
+                    .iter()
+                    .all(|(_, half, pts)| seg_min(pts, xy) >= 0.3 + 0.25 + half);
+                let ok_vias = vias.iter().all(|v| dist(*v, xy) >= 0.85);
+                let ok_stitch = stitches.iter().all(|(_, _, v)| dist(*v, xy) >= 0.85);
+                ok_pads && ok_traces && ok_vias && ok_stitch
+            };
+            let stub_ok = |a: P, b: P, stitches: &[(ContactId, Vec<P>, P)]| -> bool {
+                let need_pad = 0.125 + 0.25 + 0.5;
+                let ok_pads = problem.contacts.values().all(|o| {
+                    o.id == cid
+                        || gnd_contacts.contains(&o.id)
+                        || geom::dist_point_seg(o.xy, a, b) >= need_pad
+                });
+                let ok_traces = traces.iter().all(|(layer, half, pts)| {
+                    *layer != TOP || {
+                        pts.windows(2)
+                            .all(|w| geom::dist_seg_seg(a, b, w[0], w[1]) >= 0.125 + 0.25 + half)
+                    }
+                });
+                let ok_stubs = stitches.iter().all(|(_, stub, _)| {
+                    stub.len() < 2 || geom::dist_seg_seg(a, b, stub[0], stub[1]) >= 0.5
+                });
+                ok_pads && ok_traces && ok_stubs
+            };
+            let mut found = None;
+            if via_ok(c.xy, &stitches) {
+                found = Some((Vec::new(), c.xy));
+            } else {
+                'search: for ring in 1..=14 {
+                    let rad = ring as f64 * 0.25;
+                    for k in 0..16 {
+                        let a = std::f64::consts::TAU * k as f64 / 16.0;
+                        let xy = [c.xy[0] + rad * a.cos(), c.xy[1] + rad * a.sin()];
+                        if via_ok(xy, &stitches) && stub_ok(c.xy, xy, &stitches) {
+                            found = Some((vec![c.xy, xy], xy));
+                            break 'search;
+                        }
+                    }
+                }
+            }
+            if let Some((stub, xy)) = found {
+                stitches.push((cid, stub, xy));
+            } else if std::env::var_os("INTERPOSER_DRC_DEBUG").is_some() {
+                eprintln!("GND stitch failed at ({:.1},{:.1})", c.xy[0], c.xy[1]);
+            }
+        }
+        out.gnd_stitches = stitches
+            .into_iter()
+            .map(|(c, stub, xy)| (c, stub, xy))
+            .collect();
+
+        // Every GND land also gets a via into the top pour: the bottom fill
+        // fragments around dense trace fields, and each fragment must reach
+        // the rest of the net through the other layer.
+        let mut land_stitches: Vec<(crate::types::MatePinId, Vec<P>, P)> = Vec::new();
+        for (pid, p) in &problem.pins {
+            if !gnd_lands.contains(pid) {
+                continue;
+            }
+            let via_ok = |xy: P, lst: &[(crate::types::MatePinId, Vec<P>, P)]| -> bool {
+                let m = EDGE_MARGIN + 0.3;
+                if xy[0] < m || xy[1] < m || xy[0] > sheet_w - m || xy[1] > sheet_h - m {
+                    return false;
+                }
+                let ok_pads = problem
+                    .contacts
+                    .values()
+                    .all(|o| gnd_contacts.contains(&o.id) || dist(o.xy, xy) >= 1.05)
+                    && problem
+                        .pins
+                        .values()
+                        .all(|q| gnd_lands.contains(&q.id) || dist(q.xy, xy) >= 1.05);
+                let ok_traces = traces
+                    .iter()
+                    .all(|(_, half, pts)| seg_min(pts, xy) >= 0.3 + 0.25 + half);
+                let ok_vias = vias.iter().all(|v| dist(*v, xy) >= 0.85);
+                let ok_stitch = out
+                    .gnd_stitches
+                    .iter()
+                    .all(|(_, _, v)| dist(*v, xy) >= 0.85)
+                    && lst.iter().all(|(_, _, v)| dist(*v, xy) >= 0.85);
+                ok_pads && ok_traces && ok_vias && ok_stitch
+            };
+            let stub_ok = |a: P, b: P, lst: &[(crate::types::MatePinId, Vec<P>, P)]| -> bool {
+                let need_pad = 0.125 + 0.25 + 0.5;
+                let ok_pads = problem.pins.values().all(|q| {
+                    q.id == *pid
+                        || gnd_lands.contains(&q.id)
+                        || geom::dist_point_seg(q.xy, a, b) >= need_pad
+                });
+                let ok_traces = traces.iter().all(|(layer, half, pts)| {
+                    *layer != BOT
+                        || pts
+                            .windows(2)
+                            .all(|w| geom::dist_seg_seg(a, b, w[0], w[1]) >= 0.125 + 0.25 + half)
+                });
+                let ok_stubs = lst.iter().all(|(_, stub, _)| {
+                    stub.len() < 2 || geom::dist_seg_seg(a, b, stub[0], stub[1]) >= 0.5
+                });
+                ok_pads && ok_traces && ok_stubs
+            };
+            let mut found = None;
+            if via_ok(p.xy, &land_stitches) {
+                found = Some((Vec::new(), p.xy));
+            } else {
+                'search: for ring in 1..=14 {
+                    let rad = ring as f64 * 0.25;
+                    for k in 0..16 {
+                        let a = std::f64::consts::TAU * k as f64 / 16.0;
+                        let xy = [p.xy[0] + rad * a.cos(), p.xy[1] + rad * a.sin()];
+                        if via_ok(xy, &land_stitches) && stub_ok(p.xy, xy, &land_stitches) {
+                            found = Some((vec![p.xy, xy], xy));
+                            break 'search;
+                        }
+                    }
+                }
+            }
+            if let Some((stub, xy)) = found {
+                land_stitches.push((*pid, stub, xy));
+            } else if std::env::var_os("INTERPOSER_DRC_DEBUG").is_some() {
+                eprintln!("GND land stitch failed at ({:.1},{:.1})", p.xy[0], p.xy[1]);
+            }
+        }
+        out.gnd_land_stitches = land_stitches;
     }
 
     // ---------------- smoothing world ----------------
@@ -1577,6 +1912,31 @@ pub fn route_r5(sheet_w: f64, sheet_h: f64, problem: &Problem, assign: &Assign) 
                 r.class.via_pad_r(),
                 0b11,
                 owner_of(r.id, *member),
+            ));
+        }
+    }
+    // GND stitches are fixed copper.
+    for (_, stub, xy) in &out.gnd_stitches {
+        world.add(Obstacle::disk(*xy, 0.3, 0b11, u32::MAX));
+        if stub.len() == 2 {
+            world.add(Obstacle::capsule(
+                stub[0],
+                stub[1],
+                0.125,
+                1 << TOP,
+                u32::MAX,
+            ));
+        }
+    }
+    for (_, stub, xy) in &out.gnd_land_stitches {
+        world.add(Obstacle::disk(*xy, 0.3, 0b11, u32::MAX));
+        if stub.len() == 2 {
+            world.add(Obstacle::capsule(
+                stub[0],
+                stub[1],
+                0.125,
+                1 << BOT,
+                u32::MAX,
             ));
         }
     }
@@ -1658,7 +2018,7 @@ pub fn route_r5(sheet_w: f64, sheet_h: f64, problem: &Problem, assign: &Assign) 
             // Pair trunks keep their first and last segments: the entry
             // stubs depend on the trunk's departure directions.
             let is_pair = member.is_none() && routables[*ri].class == Class::Pair;
-            let short = if is_pair && pts.len() >= 4 {
+            let mut short = if is_pair && pts.len() >= 4 {
                 let inner = shortcut_run(
                     &world,
                     &pts[1..pts.len() - 1],
@@ -1674,6 +2034,36 @@ pub fn route_r5(sheet_w: f64, sheet_h: f64, problem: &Problem, assign: &Assign) 
             } else {
                 shortcut_run(&world, &pts, half, clear, 1 << *layer, owner)
             };
+            // A* only ever turns ≤90°, which is what keeps the offset rails
+            // inside the trunk envelope and un-crossed. Shortcutting can
+            // manufacture sharper corners (even full reversals into the
+            // fixed leads) — and, because the trunk's own stubs share its
+            // owner, it can also slide the trunk over its own entry copper.
+            // A pair trunk that lost either invariant keeps its raw path.
+            if is_pair {
+                let r = &routables[*ri];
+                let turns_ok = |v: &[P]| {
+                    v.windows(3).all(|w| {
+                        let v1 = geom::sub(w[1], w[0]);
+                        let v2 = geom::sub(w[2], w[1]);
+                        v1[0] * v2[0] + v1[1] * v2[1] >= -1e-9
+                    })
+                };
+                let stubs_ok = |v: &[P]| {
+                    let n_s = unit(geom::sub(v[0], r.src));
+                    let n_d = unit(geom::sub(v[v.len() - 1], r.dst));
+                    let (_, ss) = pair_entry([r.members[0].2, r.members[1].2], n_s);
+                    let (_, sd) = pair_entry([r.members[0].3, r.members[1].3], n_d);
+                    let need = Class::Pair.half() + Class::Pair.clear() + USB_W / 2.0;
+                    ss.iter().chain(sd.iter()).all(|st| {
+                        v.windows(2)
+                            .all(|w| geom::dist_seg_seg(w[0], w[1], st[0], st[1]) >= need - 1e-9)
+                    })
+                };
+                if !turns_ok(&short) || !stubs_ok(&short) {
+                    short = pts.clone();
+                }
+            }
             add_net(&mut world, &mut net_obstacles, owner, half, *layer, &short);
             smoothed.insert((*ri, *member), short);
         }
@@ -1711,10 +2101,12 @@ pub fn route_r5(sheet_w: f64, sheet_h: f64, problem: &Problem, assign: &Assign) 
                 let off = RAIL_GAP / 2.0;
                 let left = geom::offset_polyline(&center, off);
                 let right = geom::offset_polyline(&center, -off);
-                // DP is on the left of travel iff its src pad is.
-                let d0 = unit(geom::sub(center[1], center[0]));
-                let to_dp = geom::sub(r.members[0].2, center[0]);
-                let dp_left = cross(d0, to_dp) > 0.0;
+                // DP is on the left of travel iff its src pad sits left of
+                // the gateway normal (the same side test the candidate
+                // selection used — never the snapped first grid segment,
+                // whose angle error can flip the sign).
+                let u_dp = unit(geom::sub(r.members[0].2, r.src));
+                let dp_left = cross(n_s, u_dp) > 0.0;
                 let (dp_line, dm_line) = if dp_left {
                     (left, right)
                 } else {

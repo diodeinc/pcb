@@ -53,6 +53,7 @@ fn run_one(
     pcb: &Path,
     sheet: Sheet,
     strategy: PatternKind,
+    emit_dir: Option<&Path>,
 ) -> Result<CaseRow> {
     let zen_src = fs::read_to_string(zen)?;
     let ict_map = parse_zen_ict_map(&zen_src);
@@ -143,6 +144,19 @@ fn run_one(
     } else {
         Default::default()
     };
+    // Emit the committed strategy as a real KiCad board for external DRC.
+    if let Some(dir) = emit_dir {
+        fs::create_dir_all(dir)?;
+        let stem = format!("{board_name}_{}", sheet.name);
+        fs::write(
+            dir.join(format!("{stem}.kicad_pcb")),
+            pcb_interposer::emit::emit_kicad(sheet.w, sheet.h, &problem, &asg, &route),
+        )?;
+        fs::write(
+            dir.join(format!("{stem}.kicad_pro")),
+            pcb_interposer::emit::emit_project(),
+        )?;
+    }
     let g0 = score_g0(&problem, &asg, &pattern, &nets);
     let mut score = score_g1(g0, &route, &nets);
     score.hall_ok = hall_ok;
@@ -190,7 +204,8 @@ fn main() -> Result<()> {
         for sheet in sheets {
             for strat in PatternKind::eval() {
                 print!("  {name} {} {} ... ", sheet.name, strat.name());
-                match run_one(name, zen, pcb, sheet, strat) {
+                let emit_dir = (strat == PatternKind::S11).then(|| args.out.join("boards"));
+                match run_one(name, zen, pcb, sheet, strat, emit_dir.as_deref()) {
                     Ok(row) => {
                         println!(
                             "maze {}/{} usb {} pwr {} ls {} gnd {} boards {}/{} | vias {} bends {} sharp {} detour {:.2} UΔ {:.2} loose {} drc {} gap {:.2} | Q {:.1} | {}",

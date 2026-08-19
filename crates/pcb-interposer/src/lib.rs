@@ -2,6 +2,7 @@
 
 pub mod assign;
 pub mod bundle;
+pub mod emit;
 pub mod extract;
 pub mod geom;
 pub mod hall;

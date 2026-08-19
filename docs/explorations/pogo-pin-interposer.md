@@ -1132,12 +1132,80 @@ end-to-end: extracted, 24 lands in the constellation, never
 routed — poured on the bottom, stitching vias deferred.
 Runtime ~1:45 for the 45-case corpus.
 
+## KiCad emission — 15/15 boards DRC-clean
+
+`emit.rs` writes each S11 case as a real `.kicad_pcb`
+(KiCad 10 format) plus a sibling `.kicad_pro`: sheet outline,
+NPTH tooling holes, SMT pogo pads (F.Cu) and mate lands
+(B.Cu) as one-pad footprints, per-net traces with their
+in-pad terminal vias (0.6/0.3 signal, 0.8/0.4 power), GND
+pours on **both faces**, and design rules + a USB netclass
+that legalizes the 0.15 mm intra-pair gap. The external
+check is `kicad-cli pcb drc --refill-zones --severity-error`
+(10.0.5), violations *and* unconnected items.
+
+GND became fully concrete here: every GND pogo takes a via
+into the bottom pour (in-pad when legal, else a ring-searched
+spot with a short top stub), and every GND land takes one
+into the **top** pour the same way — the bottom fill
+fragments around dense trace fields, and the top pour is the
+bridge that makes GND one net. Fill connectivity is what
+forced the second zone.
+
+The DRC loop then burned down a systematic list — each fix a
+structural invariant, not a tweak:
+
+- **Land binding**: a routed contact binds the land its trace
+  actually terminates on (grid endpoints are ≤0.15 mm off pad
+  centers, so match ≤0.3 mm at the far terminal only — pogos
+  can hover ~0.5 mm over a foreign land).
+- **Polarity untwist by land swap**: DP/DM lands are
+  interchangeable, so a side mismatch between the two gateway
+  ends swaps the members' dst lands instead of forcing the
+  trunk into a hairpin. Both source-normal signs became
+  candidates.
+- **Attempt snapshots**: the kept attempt's routables are
+  snapshotted with its paths — later attempts keep
+  reassigning lands, and emitted geometry must agree with the
+  members it was routed against.
+- **Offset joins**: `offset_polyline` grew inner-trim /
+  outer-bevel joins (trim clamped near the corner). The old
+  scaled miter spiked rails ~0.42 mm outside the modeled
+  0.275 mm envelope at sharp corners — the single biggest
+  source of KiCad-only shorts, invisible to the self-DRC
+  because the *model* was fine and the *geometry writer*
+  wasn't.
+- **≤90° trunk corners**: A* never turns more than 90°, and
+  that invariant is exactly what keeps offset rails inside
+  the envelope and un-crossed — so a smoothed pair trunk that
+  loses it (shortcuts can even manufacture a 180° reversal
+  into the fixed leads) reverts to its raw path.
+- **Trunk vs own entry copper**: a pair's stubs commit
+  together with its trunk, so neither the maps nor the world
+  ever made them mutual obstacles; the trunk could legally
+  ride along its own dst stub row. Candidate acceptance and
+  smoothing now keep the ribbon envelope off its own
+  pad→knee segments explicitly.
+- **Short pairs route direct**: when the run is shorter than
+  the entry geometry itself (≈7 mm), the gateways interlock —
+  those pairs route as two plain traces (not counted loose);
+  coupling over a couple of millimetres is electrically
+  irrelevant.
+- **Narrower gateway corridor** (0.6 mm half-width): the old
+  1.0 mm exemption let a trunk ride over its own lands'
+  terminal vias.
+- Pair-lead trunks: both rails leave each gateway anchor on a
+  fixed 1.2 mm straight lead along the snapped normal, so
+  offsetting near the junction is a clean parallel translate.
+
+**Result: all 15 emitted S11 panels (5 boards × A7/A6/A5)
+pass KiCad DRC with 0 violations and 0 unconnected items**,
+with S11 still at 288/288 boards and 1656/1656 nets across
+the eval. Sharp bends collapsed as a side effect (the ≤90°
+invariant): worst S11 case has 3.
+
 ## Open
 
-- Emit a real `.kicad_pcb` (outline, SMT pogo pads, in-pad
-  terminal vias, mate footprints, traces, GND zones) and run
-  KiCad DRC as the external check on the self-DRC.
-- GND stitching-via placement pass over the bottom pour.
 - Hook `--interposer` on `board-array create` and re-score S11
   on production packings.
 - Land the mockingbird-feather fixture pads in the real repo
@@ -1156,5 +1224,5 @@ electrically one poured net while remaining physically grouped
 in the 2×N connectors.
 
 `Problem` / `hall` / `assign` / `router` / patterns are
-implemented. The open list is artifact emission and the
-board-array hook.
+implemented, and emission is real and externally checked. The
+open list is the board-array hook.

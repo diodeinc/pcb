@@ -55,6 +55,12 @@ pub struct RouteResult {
     pub loose_pairs: usize,
     /// Contacts belonging to loose pairs (excluded from ribbon UΔ).
     pub loose_contacts: Vec<ContactId>,
+    /// GND stitching: per poured contact, an optional top stub from the pogo
+    /// pad and the via position dropping into the bottom pour.
+    pub gnd_stitches: Vec<(ContactId, Vec<[f64; 2]>, [f64; 2])>,
+    /// GND land stitching: per GND mate land, an optional bottom stub and
+    /// the via position joining the bottom fragment to the top pour.
+    pub gnd_land_stitches: Vec<(MatePinId, Vec<[f64; 2]>, [f64; 2])>,
 }
 
 impl RouteResult {
