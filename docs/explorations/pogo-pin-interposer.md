@@ -11,7 +11,7 @@ project’s first deliverable.
 
 ```
   assembly panel  (A5 / A6 / A7, ≤ 8 boards)
-  test pads on the bottom face
+  Ø 1 mm TestPoints (`ict` set) on the bottom face
           ↕  individual pogos, custom XY
   INTERPOSER      outline = panel
                   top: pogos + same tooling holes as the panel
@@ -99,35 +99,37 @@ expensive part is **geometry**: custom top XY on an A5/A6/A7 sheet,
 concentrated into the origin A7, on two layers, with 2 A power traces
 and 90 Ω-ish USB pairs.
 
-## Identifying contacts — **solved: `ict`**
+## Identifying contacts — **solved: `ict` on Ø 1 mm TestPoints**
 
-Assume every pad we care about has an `ict` property. Do not scrape
-names, refs, or footprint strings for discovery.
+v1 contacts are only **`TestPoint` `Pad_D1.0mm`** (the usual 1 mm
+circular pad) with `ict` set. No Tag-Connect, no FTSH, no other
+TestPoint variants.
 
-`TestPoint` takes optional `ict=…` (`allowed` list below). When set,
-it is copied onto the footprint. `TC2030-NL_SWD` will hardcode
-`ict="swd"`. Our IPC export (`pcb release` / `--bom-col-int-id Path`)
-emits it as a BOM characteristic **`Ict`**. Match that name
-case-insensitively.
+`TestPoint` takes optional `ict=…`. When set, it is copied onto the
+footprint. Our IPC export (`pcb release` / `--bom-col-int-id Path`)
+emits it as BOM **`Ict`**. Match case-insensitively.
+
+A contact is: bottom-side, `packageRef` is `TestPoint_Pad_D1.0mm`
+(ignore a KiCad `_N` suffix), and `Ict` is set.
 
 | `ict` | Demand |
 |---|---|
-| `swd` | whole TC2030 land (pins 1–5 via the module map; drop NPTH / SWO-NC) |
-| `swdio` `swclk` `nrst` `swo` | discrete LS pads |
+| `swdio` `swclk` `nrst` `swo` | discrete LS |
 | `gnd` | GND |
 | `vusb` | 5 V USB rail |
 | `vtarget` | DUT rail |
 | `usb_dp` `usb_dm` | USB HS pair (ordered, unsplittable) |
 | `ls` | other low-speed |
 
-Extractor: DUT IPC, bottom side, every component whose BOM `Ict` is
-set. Join `Component` (`part` = Path, `packageRef`, `layerRef`) to
-`BomItem` (`Ict`) to pads (`PinRef`). That is the contact list.
-Nothing else is in scope.
+`swd` (whole TC2030) is out of v1. Leave it in the `TestPoint`
+`allowed` list if already there; the extractor ignores it.
 
-Verified: `ict="gnd"` / `"vtarget"` on Seward `TestPoint`s survive
-layout as `(property "Ict" …)` and our Path-keyed IPC export as
-separate `BomItem`s with the matching `Ict` values.
+Join `Component` (`part` = Path, `packageRef`, `layerRef`) to
+`BomItem` (`Ict`) to the single pad (`PinRef` pin 1). That is the
+list. Nothing else.
+
+Verified on Seward: `ict="gnd"` / `"vtarget"` survive layout as
+`(property "Ict" …)` and our Path-keyed IPC as separate `BomItem`s.
 
 ## Where it hooks in
 
@@ -144,8 +146,7 @@ arrayed.
 1. **Contacts** — **done.** DUT IPC, bottom, `Ict` set. See above.
 2. **Demands** — map `Ict` to kinds and *bundle* USB into ordered
    pairs. One demand per LS/GND/VUSB pad; one demand per USB pair;
-   one Vtarget demand per board (up to 2 pads into one bank);
-   `ict=swd` is one SWD bundle.
+   one Vtarget demand per board (up to 2 pads into one bank).
 3. **Instantiate** — apply each array placement transform so demands
    exist in panel coordinates (same step math the array already has).
 4. **Hall check** — per kind, \(|D_t| \le |S_t|\) and each demand
@@ -253,7 +254,7 @@ failed route, that is a local improvement on this greedy order.
 
 ## Subproblems (still sequential)
 
-1. **Contact extract** — **done** (`ict` / `Ict` on our IPC export).
+1. **Contact extract** — **done** (`Ict` on Ø 1 mm `TestPoint` only).
 2. **Demands** — map `Ict` → kind / bundle.
 3. **A7 mate pattern** — several constellation strategies; score
    escape and array-connector fit.
