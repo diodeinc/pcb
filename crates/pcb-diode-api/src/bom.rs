@@ -816,6 +816,7 @@ mod tests {
             generic_data: Some(GenericComponent::Resistor(Resistor {
                 resistance: "10kOhm".parse().unwrap(),
                 voltage: None,
+                power: None,
             })),
             dnp: false,
             skip_bom: false,

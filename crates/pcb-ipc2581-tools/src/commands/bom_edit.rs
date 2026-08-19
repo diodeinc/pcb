@@ -252,6 +252,7 @@ fn extract_generic_component(
             GenericComponent::Resistor(Resistor {
                 resistance: value.parse().ok()?,
                 voltage: None,
+                power: None,
             }),
             package,
         )),

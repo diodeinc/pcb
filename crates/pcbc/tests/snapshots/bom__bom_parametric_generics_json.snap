@@ -1,6 +1,6 @@
 ---
 source: crates/pcbc/tests/bom.rs
-assertion_line: 264
+assertion_line: 272
 expression: output
 ---
 Command: pcbc bom boards/ParametricGenerics.zen --offline -f json
@@ -36,8 +36,29 @@ Exit Code: 0
     }
   },
   {
-    "path": "TVS1.D",
+    "path": "D2.LED",
     "designator": "D2",
+    "package": "0402",
+    "value": "LED RED 2V",
+    "description": "LED RED 2V",
+    "component_type": "Led",
+    "color": "red",
+    "forward_voltage": {
+      "nominal": "2",
+      "min": "2",
+      "max": "2",
+      "unit": "Volts"
+    },
+    "forward_current": {
+      "nominal": "0.020",
+      "min": "0.020",
+      "max": "0.020",
+      "unit": "Amperes"
+    }
+  },
+  {
+    "path": "TVS1.D",
+    "designator": "D3",
     "package": "DO-219AB",
     "value": "5V TVS Diode 400W",
     "description": "5V TVS Diode 400W",
@@ -70,7 +91,7 @@ Exit Code: 0
   },
   {
     "path": "Z1.D",
-    "designator": "D3",
+    "designator": "D4",
     "package": "SOD-123",
     "value": "5.1V Zener 500mW",
     "description": "5.1V Zener 500mW",
@@ -143,6 +164,52 @@ Exit Code: 0
       "nominal": "0.120",
       "min": "0.120",
       "max": "0.120",
+      "unit": "Ohms"
+    }
+  },
+  {
+    "path": "R1.R",
+    "designator": "R1",
+    "package": "0603",
+    "value": "10k 250mW",
+    "description": "10k 250mW",
+    "component_type": "Resistor",
+    "resistance": {
+      "nominal": "10000",
+      "min": "10000",
+      "max": "10000",
+      "unit": "Ohms"
+    },
+    "power": {
+      "nominal": "0.250",
+      "min": "0.250",
+      "max": "0.250",
+      "unit": "Watts"
+    }
+  },
+  {
+    "path": "Y1.Y",
+    "designator": "Y1",
+    "package": "3215_2Pin",
+    "value": "32.768kHz 12.5pF",
+    "description": "32.768kHz 12.5pF",
+    "component_type": "Crystal",
+    "frequency": {
+      "nominal": "32768.000",
+      "min": "32768.000",
+      "max": "32768.000",
+      "unit": "Hertz"
+    },
+    "load_capacitance": {
+      "nominal": "0.0000000000125",
+      "min": "0.0000000000125",
+      "max": "0.0000000000125",
+      "unit": "Farads"
+    },
+    "esr": {
+      "nominal": "70000",
+      "min": "70000",
+      "max": "70000",
       "unit": "Ohms"
     }
   }

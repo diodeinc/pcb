@@ -22,6 +22,7 @@ fn build_generic_component(data: &CharacteristicsData) -> Option<GenericComponen
             Some(GenericComponent::Resistor(Resistor {
                 resistance,
                 voltage,
+                power: None,
             }))
         }
         "capacitor" => {
