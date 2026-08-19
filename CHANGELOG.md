@@ -10,6 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- `pcb-interposer` POC crate: extract bottom-side Ø 1 mm `ict` TestPoints, angular Hall/match, S8/S9 edge-facing A7 constellations, and R4 2-layer HV A* (vias, USB pair bias, fat power) plus single-layer R1–R3.
 - `TestPoint` accepts an optional `ict` config (`swd`, `swdio`, `swclk`, `nrst`, `swo`, `gnd`, `vusb`, `vtarget`, `usb_dp`, `usb_dm`, `ls`) that is copied onto the footprint when set.
 - `pcb ipc dfm check` validates IPC-2581 files against fabrication PDKs.
 

@@ -46,6 +46,7 @@ pcb-test-utils = { path = "crates/pcb-test-utils" }
 pcb-sim = { path = "crates/pcb-sim" }
 pcb-diode-api = { path = "crates/pcb-diode-api" }
 pcb-ipc2581-tools = { path = "crates/pcb-ipc2581-tools" }
+pcb-interposer = { path = "crates/pcb-interposer" }
 pcb-docgen = { path = "crates/pcb-docgen" }
 
 anyhow = "1.0"

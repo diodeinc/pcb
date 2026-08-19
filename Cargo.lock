@@ -4254,6 +4254,19 @@ name = "pcb-intern"
 version = "0.1.0"
 
 [[package]]
+name = "pcb-interposer"
+version = "0.4.31"
+dependencies = [
+ "anyhow",
+ "clap",
+ "ipc2581",
+ "pcb-sexpr",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "pcb-ipc2581-tools"
 version = "0.4.31"
 dependencies = [
