@@ -52,6 +52,29 @@ Capacitor(name = "C4", value = "22pF", package = "0402", P1 = osc_xo, P2 = gnd)
 Resistor(name = "R1", value = "10kOhm", package = "0603", P1 = vcc_3v3, P2 = led_ctrl)
 "#;
 
+const PARAMETRIC_GENERICS_BOARD_ZEN: &str = r#"
+# ```pcb
+# [workspace]
+# pcb-version = "0.4"
+# ```
+
+FerriteBead = Module("@stdlib/generics/FerriteBead.zen")
+Inductor = Module("@stdlib/generics/Inductor.zen")
+Rectifier = Module("@stdlib/generics/Rectifier.zen")
+Tvs = Module("@stdlib/generics/Tvs.zen")
+Zener = Module("@stdlib/generics/Zener.zen")
+
+vcc = Power("VCC")
+gnd = Ground("GND")
+signal = Net("SIGNAL")
+
+Inductor(name = "L1", value = "4.7uH", package = "0603", current = "1A", dcr = "120mOhm", P1 = vcc, P2 = signal)
+FerriteBead(name = "FB1", value = "600Ohm", package = "0603", frequency = "100MHz", current = "500mA", dcr = "200mOhm", P1 = vcc, P2 = signal)
+Rectifier(name = "D1", package = "SOD-123", technology = "Schottky", reverse_voltage = "40V", forward_current = "1A", forward_voltage = "500mV", A = signal, K = gnd)
+Zener(name = "Z1", package = "SOD-123", zener_voltage = "5.1V", power = "500mW", A = signal, K = gnd)
+Tvs(name = "TVS1", package = "DO-219AB", direction = "Unidirectional", reverse_standoff_voltage = "5V", reverse_clamping_voltage = "9V", peak_pulse_power = "400W", capacitance = "30pF", A = gnd, K = signal)
+"#;
+
 const SIMPLE_RESISTOR_BOARD_ZEN: &str = r#"
 # ```pcb
 # [workspace]
@@ -217,6 +240,28 @@ fn test_bom_json_format() {
         .sync()
         .snapshot_run("pcbc", ["bom", "boards/TestBoard.zen", "-f", "json"]);
     assert_snapshot!("bom_json", output);
+}
+
+#[test]
+fn test_parametric_generics_json_format() {
+    let output = Sandbox::new()
+        .write("pcb.toml", WORKSPACE_TOML)
+        .write(
+            "boards/ParametricGenerics.zen",
+            PARAMETRIC_GENERICS_BOARD_ZEN,
+        )
+        .sync()
+        .snapshot_run(
+            "pcbc",
+            [
+                "bom",
+                "boards/ParametricGenerics.zen",
+                "--offline",
+                "-f",
+                "json",
+            ],
+        );
+    assert_snapshot!("bom_parametric_generics_json", output);
 }
 
 #[test]
