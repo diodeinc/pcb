@@ -1,11 +1,25 @@
 use anyhow::{Context, Result};
 use reqwest::blocking::Client;
 use serde::Deserialize;
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use pcb_sch::bom::{Availability, AvailabilitySummary, BOARD_QUANTITY, Offer, SourcingStockClass};
 
-use crate::WorkspaceContext;
+use crate::{
+    WorkspaceContext,
+    bom_cache::{BomMatchCache, cache_key},
+};
+
+const BOM_MATCH_TIMEOUT_SECS: u64 = 120;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BomMatchMode {
+    Online,
+    Offline,
+}
 
 /// Price break structure
 #[derive(Debug, Clone, Deserialize)]
@@ -104,12 +118,14 @@ struct BomLine {
     offer_ids: Vec<String>,
     #[serde(rename = "offerStockClasses")]
     offer_stock_classes: HashMap<String, SourcingStockClass>,
-    #[serde(rename = "match", default)]
-    match_status: Option<BomMatchStatus>,
+    #[serde(rename = "match")]
+    match_status: BomMatchStatus,
+    #[serde(rename = "selectedOfferId")]
+    selected_offer_id: Option<String>,
 }
 
 fn bom_line_no_match(bom_line: &BomLine) -> bool {
-    matches!(bom_line.match_status, Some(BomMatchStatus::Failed))
+    bom_line.match_status == BomMatchStatus::Failed
 }
 
 /// Response from /api/boms/match endpoint
@@ -117,6 +133,34 @@ fn bom_line_no_match(bom_line: &BomLine) -> bool {
 struct MatchBomResponse {
     results: Vec<BomLine>,
     offers: HashMap<String, ComponentOffer>,
+}
+
+impl MatchBomResponse {
+    fn needs_retry(&self) -> bool {
+        self.results
+            .iter()
+            .any(|line| line.match_status == BomMatchStatus::NeedsRetry)
+    }
+}
+
+#[derive(Debug)]
+struct PreparedBomMatch {
+    availability: HashMap<String, Availability>,
+    selected_parts: HashMap<String, (String, String)>,
+}
+
+impl PreparedBomMatch {
+    fn apply(self, bom: &mut pcb_sch::bom::Bom) {
+        for (path, (mpn, manufacturer)) in self.selected_parts {
+            let entry = bom
+                .entries
+                .get_mut(&path)
+                .expect("validated BOM selection path");
+            entry.mpn = Some(mpn);
+            entry.manufacturer = Some(manufacturer);
+        }
+        bom.availability = self.availability;
+    }
 }
 
 /// Calculate alt stock from offers, deduplicating by (distributor, mpn).
@@ -200,7 +244,46 @@ fn summarize_region<'a>(
     (regional, summary)
 }
 
-/// Call the BOM match API and return parsed response
+fn bom_match_request(bom_entries: &[serde_json::Value]) -> serde_json::Value {
+    serde_json::json!({
+        "designBom": bom_entries,
+        "format": "normalized",
+        "boardQuantity": BOARD_QUANTITY,
+        "regions": ["US", "GLOBAL"],
+    })
+}
+
+fn send_bom_match_request(
+    ctx: &WorkspaceContext,
+    auth_token: Option<&str>,
+    request_body: &serde_json::Value,
+    timeout_secs: u64,
+    strict: bool,
+) -> Result<String> {
+    let url = bom_match_url(ctx.api_base_url(), strict);
+
+    let client = Client::builder()
+        .timeout(Duration::from_secs(timeout_secs))
+        .build()?;
+
+    let response = crate::auth::apply_bearer_auth(client.post(&url), auth_token)
+        .json(request_body)
+        .send()
+        .context("Failed to send BOM match request")?;
+
+    let status = response.status();
+    let response_text = response
+        .text()
+        .context("Failed to read BOM match response")?;
+    anyhow::ensure!(
+        status.is_success(),
+        "BOM match request failed ({status}): {response_text}"
+    );
+
+    Ok(response_text)
+}
+
+/// Call the BOM match API and return a parsed response without using the CLI cache.
 fn call_bom_match_api(
     ctx: &WorkspaceContext,
     auth_token: Option<&str>,
@@ -208,37 +291,185 @@ fn call_bom_match_api(
     timeout_secs: u64,
     strict: bool,
 ) -> Result<MatchBomResponse> {
-    let url = bom_match_url(ctx.api_base_url(), strict);
-
-    let client = Client::builder()
-        .timeout(Duration::from_secs(timeout_secs))
-        .build()?;
-    let request_body = serde_json::json!({
-        "designBom": bom_entries,
-        "format": "normalized",
-        "boardQuantity": BOARD_QUANTITY,
-        "regions": ["US", "GLOBAL"],
-    });
-
-    let response = crate::auth::apply_bearer_auth(client.post(&url), auth_token)
-        .json(&request_body)
-        .send()
-        .context("Failed to send BOM match request")?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let error_text = response.text().unwrap_or_default();
-        anyhow::bail!("BOM match request failed ({}): {}", status, error_text);
-    }
-
-    response
-        .json()
-        .context("Failed to parse BOM match response")
+    let request_body = bom_match_request(bom_entries);
+    let response_text =
+        send_bom_match_request(ctx, auth_token, &request_body, timeout_secs, strict)?;
+    serde_json::from_str(&response_text).context("Failed to parse BOM match response")
 }
 
 fn bom_match_url(api_base_url: &str, strict: bool) -> String {
     let suffix = if strict { "?strict=true" } else { "" };
-    format!("{api_base_url}/api/boms/match{suffix}")
+    format!(
+        "{}/api/boms/match{suffix}",
+        api_base_url.trim_end_matches('/')
+    )
+}
+
+fn prepare_bom_match(
+    bom: &pcb_sch::bom::Bom,
+    match_response: &MatchBomResponse,
+) -> Result<PreparedBomMatch> {
+    anyhow::ensure!(
+        !match_response.needs_retry(),
+        "BOM matching could not complete"
+    );
+    let expected_paths = bom.entries.keys().cloned().collect::<HashSet<_>>();
+    anyhow::ensure!(
+        match_response.results.len() == expected_paths.len(),
+        "BOM match response returned {} results for {} requested paths",
+        match_response.results.len(),
+        expected_paths.len()
+    );
+
+    let mut seen_paths = HashSet::with_capacity(expected_paths.len());
+    let mut availability = HashMap::with_capacity(expected_paths.len());
+    let mut selected_parts = HashMap::new();
+
+    for bom_line in &match_response.results {
+        let path = bom_line
+            .design_entry
+            .path
+            .as_deref()
+            .context("BOM match response omitted a design entry path")?;
+        anyhow::ensure!(
+            expected_paths.contains(path),
+            "BOM match response returned an unknown path: {path}"
+        );
+        anyhow::ensure!(
+            seen_paths.insert(path.to_string()),
+            "BOM match response returned duplicate path: {path}"
+        );
+
+        let mut resolved_offers = Vec::with_capacity(bom_line.offer_ids.len());
+        for offer_id in &bom_line.offer_ids {
+            let offer = match_response.offers.get(offer_id).with_context(|| {
+                format!("BOM match response omitted referenced offer {offer_id} for {path}")
+            })?;
+            anyhow::ensure!(
+                offer.id == *offer_id,
+                "BOM match response keyed offer {offer_id} with mismatched ID {}",
+                offer.id
+            );
+            anyhow::ensure!(
+                bom_line.offer_stock_classes.contains_key(offer_id),
+                "BOM match response omitted the stock class for offer {offer_id}"
+            );
+            resolved_offers.push(offer);
+        }
+
+        if let Some(selected_offer_id) = &bom_line.selected_offer_id {
+            anyhow::ensure!(
+                bom_line.offer_ids.contains(selected_offer_id),
+                "BOM match response selected offer {selected_offer_id} outside the ranked offers for {path}"
+            );
+            let selected_offer = match_response
+                .offers
+                .get(selected_offer_id)
+                .with_context(|| format!("BOM match response omitted offer {selected_offer_id}"))?;
+
+            if bom_line.match_status == BomMatchStatus::Compatible {
+                let mpn = selected_offer
+                    .mpn
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .context("Selected compatible offer omitted its MPN")?;
+                let manufacturer = selected_offer
+                    .manufacturer
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .context("Selected compatible offer omitted its manufacturer")?;
+                selected_parts.insert(
+                    path.to_string(),
+                    (mpn.to_string(), manufacturer.to_string()),
+                );
+            }
+        }
+
+        let qty = bom
+            .designators
+            .iter()
+            .filter(|(candidate_path, _)| candidate_path.as_str() == path)
+            .count() as i32;
+        let target_qty = qty * BOARD_QUANTITY;
+
+        let (us_offers, mut us) =
+            summarize_region(&resolved_offers, Geography::Us, target_qty, qty);
+        let (global_offers, mut global) =
+            summarize_region(&resolved_offers, Geography::Global, target_qty, qty);
+        for (summary, offers) in [(&mut us, &us_offers), (&mut global, &global_offers)] {
+            if let (Some(summary), Some(offer)) = (summary, offers.first()) {
+                summary.stock_class = *bom_line
+                    .offer_stock_classes
+                    .get(&offer.id)
+                    .expect("validated offer stock class");
+            }
+        }
+
+        let all_offers = us_offers
+            .iter()
+            .chain(global_offers.iter())
+            .map(|offer| offer.to_offer(target_qty))
+            .collect();
+        availability.insert(
+            path.to_string(),
+            Availability {
+                us,
+                global,
+                no_match: bom_line_no_match(bom_line),
+                offers: all_offers,
+            },
+        );
+    }
+
+    Ok(PreparedBomMatch {
+        availability,
+        selected_parts,
+    })
+}
+
+fn prepare_response(bom: &pcb_sch::bom::Bom, response_json: &str) -> Result<PreparedBomMatch> {
+    let response =
+        serde_json::from_str(response_json).context("Failed to parse BOM match response")?;
+    prepare_bom_match(bom, &response)
+}
+
+fn load_cached_match(
+    cache: Option<&BomMatchCache>,
+    key: &str,
+    bom: &pcb_sch::bom::Bom,
+    now: i64,
+) -> Option<(PreparedBomMatch, bool)> {
+    let cached = match cache?.load(key) {
+        Ok(Some(cached)) => cached,
+        Ok(None) => return None,
+        Err(error) => {
+            log::warn!("Ignoring unreadable BOM cache entry: {error:#}");
+            return None;
+        }
+    };
+    let fresh = cached.is_fresh(now);
+    match prepare_response(bom, &cached.response_json) {
+        Ok(prepared) => Some((prepared, fresh)),
+        Err(error) => {
+            log::warn!("Ignoring invalid BOM cache entry: {error:#}");
+            None
+        }
+    }
+}
+
+fn unix_now() -> Result<i64> {
+    Ok(SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("System clock is before the Unix epoch")?
+        .as_secs() as i64)
+}
+
+fn bom_request_entries(bom: &pcb_sch::bom::Bom) -> Result<Vec<serde_json::Value>> {
+    let mut request_bom = bom.clone();
+    request_bom.availability.clear();
+    serde_json::from_str(&request_bom.ungrouped_json()).context("Failed to parse BOM JSON")
 }
 
 /// Fetch BOM matching results from the API and populate availability data
@@ -256,72 +487,97 @@ pub fn fetch_and_populate_availability_with_context(
     bom: &mut pcb_sch::bom::Bom,
     strict: bool,
 ) -> Result<()> {
-    let bom_json = bom.ungrouped_json();
-    let bom_entries: Vec<serde_json::Value> =
-        serde_json::from_str(&bom_json).context("Failed to parse BOM JSON")?;
+    match_bom_with_context(ctx, auth_token, bom, strict, BomMatchMode::Online)
+}
 
-    let match_response = call_bom_match_api(ctx, auth_token, &bom_entries, 120, strict)?;
-
-    for bom_line in match_response.results {
-        let Some(path) = bom_line.design_entry.path.as_deref() else {
-            continue;
-        };
-        if !bom.entries.contains_key(path) {
-            continue;
+pub fn match_bom_with_context(
+    ctx: &WorkspaceContext,
+    auth_token: Option<&str>,
+    bom: &mut pcb_sch::bom::Bom,
+    strict: bool,
+    mode: BomMatchMode,
+) -> Result<()> {
+    let cache = match BomMatchCache::open() {
+        Ok(cache) => Some(cache),
+        Err(error) => {
+            log::warn!("Failed to open local BOM cache: {error:#}");
+            None
         }
+    };
+    match_bom_with_cache(
+        ctx,
+        auth_token,
+        bom,
+        strict,
+        mode,
+        cache.as_ref(),
+        unix_now()?,
+    )
+}
 
-        let qty = bom
-            .designators
-            .iter()
-            .filter(|(p, _)| p.as_str() == path)
-            .count() as i32;
-        // Resolve offer IDs to actual offers from the deduplicated offers map
-        let resolved_offers: Vec<&ComponentOffer> = bom_line
-            .offer_ids
-            .iter()
-            .filter_map(|id| match_response.offers.get(id))
-            .collect();
+fn match_bom_with_cache(
+    ctx: &WorkspaceContext,
+    auth_token: Option<&str>,
+    bom: &mut pcb_sch::bom::Bom,
+    strict: bool,
+    mode: BomMatchMode,
+    cache: Option<&BomMatchCache>,
+    now: i64,
+) -> Result<()> {
+    let bom_entries = bom_request_entries(bom)?;
+    let request_body = bom_match_request(&bom_entries);
+    let url = bom_match_url(ctx.api_base_url(), strict);
+    let key = cache_key(&url, &request_body)?;
+    let mut cached = load_cached_match(cache, &key, bom, now);
 
-        let target_qty = qty * BOARD_QUANTITY;
-
-        let (us_offers, mut us) =
-            summarize_region(&resolved_offers, Geography::Us, target_qty, qty);
-        let (global_offers, mut global) =
-            summarize_region(&resolved_offers, Geography::Global, target_qty, qty);
-        for (summary, offers) in [(&mut us, &us_offers), (&mut global, &global_offers)] {
-            if let (Some(summary), Some(offer)) = (summary, offers.first()) {
-                summary.stock_class = bom_line
-                    .offer_stock_classes
-                    .get(&offer.id)
-                    .copied()
-                    .with_context(|| {
-                        format!(
-                            "BOM match response omitted the stock class for offer {}",
-                            offer.id
-                        )
-                    })?;
-            }
+    if mode == BomMatchMode::Offline {
+        if let Some((prepared, _)) = cached {
+            prepared.apply(bom);
         }
-
-        // Build offers for JSON output
-        let all_offers: Vec<_> = us_offers
-            .iter()
-            .chain(global_offers.iter())
-            .map(|o| o.to_offer(target_qty))
-            .collect();
-
-        bom.availability.insert(
-            path.to_string(),
-            Availability {
-                us,
-                global,
-                no_match: bom_line_no_match(&bom_line),
-                offers: all_offers,
-            },
-        );
+        return Ok(());
     }
 
-    Ok(())
+    if cached.as_ref().is_some_and(|(_, fresh)| *fresh) {
+        cached
+            .take()
+            .expect("checked fresh cache entry")
+            .0
+            .apply(bom);
+        return Ok(());
+    }
+
+    let live = send_bom_match_request(
+        ctx,
+        auth_token,
+        &request_body,
+        BOM_MATCH_TIMEOUT_SECS,
+        strict,
+    )
+    .and_then(|response_json| {
+        let prepared = prepare_response(bom, &response_json)?;
+        Ok((response_json, prepared))
+    });
+
+    match live {
+        Ok((response_json, prepared)) => {
+            let fetched_at = unix_now().unwrap_or(now);
+            if let Some(cache) = cache
+                && let Err(error) = cache.store(&key, &response_json, fetched_at)
+            {
+                log::warn!("Failed to update local BOM cache: {error:#}");
+            }
+            prepared.apply(bom);
+            Ok(())
+        }
+        Err(error) => {
+            let Some((prepared, _)) = cached else {
+                return Err(error);
+            };
+            log::warn!("BOM matching failed; using stale cache: {error:#}");
+            prepared.apply(bom);
+            Ok(())
+        }
+    }
 }
 
 /// Component key for pricing requests
@@ -504,6 +760,11 @@ fn build_search_availability(offers: &[&ComponentOffer], no_match: bool) -> Avai
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
+    use httpmock::{Method::POST, MockServer};
+    use pcb_sch::bom::{Bom, BomEntry, GenericComponent, Resistor};
+
     use super::*;
 
     fn offer(id: &str, breaks: &[(i32, f64)]) -> ComponentOffer {
@@ -528,21 +789,77 @@ mod tests {
         }
     }
 
-    fn bom_line(match_status: Option<BomMatchStatus>, offer_ids: Vec<String>) -> BomLine {
+    fn bom_line(match_status: BomMatchStatus, offer_ids: Vec<String>) -> BomLine {
+        let offer_stock_classes = offer_ids
+            .iter()
+            .map(|offer_id| (offer_id.clone(), SourcingStockClass::Unknown))
+            .collect();
         BomLine {
             design_entry: DesignBomEntry {
                 path: Some("root.U1".to_string()),
             },
             offer_ids,
-            offer_stock_classes: HashMap::new(),
+            offer_stock_classes,
             match_status,
+            selected_offer_id: None,
         }
+    }
+
+    fn test_bom() -> Bom {
+        let entry = BomEntry {
+            mpn: None,
+            alternatives: Vec::new(),
+            manufacturer: None,
+            package: Some("0603".to_string()),
+            value: Some("10kOhm".to_string()),
+            description: None,
+            generic_data: Some(GenericComponent::Resistor(Resistor {
+                resistance: "10kOhm".parse().unwrap(),
+                voltage: None,
+            })),
+            dnp: false,
+            skip_bom: false,
+            matcher: None,
+            properties: BTreeMap::new(),
+        };
+        Bom::new(
+            HashMap::from([("root.U1".to_string(), entry)]),
+            HashMap::from([("root.U1".to_string(), "U1".to_string())]),
+        )
+    }
+
+    fn compatible_response() -> serde_json::Value {
+        serde_json::json!({
+            "results": [{
+                "designEntry": {"path": "root.U1"},
+                "offerIds": ["selected-offer"],
+                "offerStockClasses": {"selected-offer": "PLENTY"},
+                "match": "MATCH_COMPATIBLE",
+                "selectedOfferId": "selected-offer"
+            }],
+            "offers": {
+                "selected-offer": {
+                    "id": "selected-offer",
+                    "geography": "US",
+                    "distributor": "testdist",
+                    "distributorPartId": "DIST-1",
+                    "mpn": "API-MPN",
+                    "manufacturer": "API Manufacturer",
+                    "priceBreaks": [{"qty": 1, "price": 0.25}],
+                    "stockAvailable": 100
+                }
+            }
+        })
+    }
+
+    fn cache_for(tempdir: &tempfile::TempDir) -> BomMatchCache {
+        BomMatchCache::open_at(tempdir.path().join("bom.sqlite")).unwrap()
     }
 
     #[test]
     fn match_status_controls_no_match_detection() {
         assert!(bom_line_no_match(&bom_line(
-            Some(BomMatchStatus::Failed),
+            BomMatchStatus::Failed,
             vec!["offer-1".to_string()]
         )));
 
@@ -552,7 +869,7 @@ mod tests {
             BomMatchStatus::Fuzzy,
             BomMatchStatus::NeedsRetry,
         ] {
-            assert!(!bom_line_no_match(&bom_line(Some(status), Vec::new())));
+            assert!(!bom_line_no_match(&bom_line(status, Vec::new())));
         }
     }
 
@@ -596,15 +913,6 @@ mod tests {
     }
 
     #[test]
-    fn missing_match_status_does_not_imply_no_match() {
-        assert!(!bom_line_no_match(&bom_line(None, Vec::new())));
-        assert!(!bom_line_no_match(&bom_line(
-            None,
-            vec!["offer-1".to_string()]
-        )));
-    }
-
-    #[test]
     fn first_ranked_regional_offer_wins() {
         let response: MatchBomResponse =
             serde_json::from_str(include_str!("../tests/fixtures/bom_match_api_order.json"))
@@ -640,5 +948,144 @@ mod tests {
             bom_match_url("https://api.diode.computer", true),
             "https://api.diode.computer/api/boms/match?strict=true"
         );
+        assert_eq!(
+            bom_match_url("https://api.diode.computer/", true),
+            "https://api.diode.computer/api/boms/match?strict=true"
+        );
+    }
+
+    #[test]
+    fn selected_compatible_offer_populates_part_identity() {
+        let response: MatchBomResponse = serde_json::from_value(compatible_response()).unwrap();
+
+        let mut bom = test_bom();
+        prepare_bom_match(&bom, &response).unwrap().apply(&mut bom);
+        assert_eq!(bom.entries["root.U1"].mpn.as_deref(), Some("API-MPN"));
+        assert_eq!(
+            bom.entries["root.U1"].manufacturer.as_deref(),
+            Some("API Manufacturer")
+        );
+    }
+
+    #[test]
+    fn response_validation_is_atomic() {
+        let incomplete: MatchBomResponse = serde_json::from_value(serde_json::json!({
+            "results": [],
+            "offers": {}
+        }))
+        .unwrap();
+        let bom = test_bom();
+
+        assert!(prepare_bom_match(&bom, &incomplete).is_err());
+        assert!(bom.availability.is_empty());
+        assert!(bom.entries["root.U1"].mpn.is_none());
+    }
+
+    #[test]
+    fn cache_policy_is_fresh_then_live_with_one_stale_fallback() {
+        let server = MockServer::start();
+        let mut success = server.mock(|when, then| {
+            when.method(POST)
+                .path("/api/boms/match")
+                .query_param("strict", "true");
+            then.status(200).json_body(compatible_response());
+        });
+        let tempdir = tempfile::tempdir().unwrap();
+        let cache = cache_for(&tempdir);
+        let context = WorkspaceContext::from_api_base_url(server.base_url());
+        let now = unix_now().unwrap();
+
+        let mut offline_miss = test_bom();
+        match_bom_with_cache(
+            &context,
+            None,
+            &mut offline_miss,
+            true,
+            BomMatchMode::Offline,
+            Some(&cache),
+            now,
+        )
+        .unwrap();
+        assert!(offline_miss.entries["root.U1"].mpn.is_none());
+        success.assert_calls(0);
+
+        let mut network = test_bom();
+        match_bom_with_cache(
+            &context,
+            None,
+            &mut network,
+            true,
+            BomMatchMode::Online,
+            Some(&cache),
+            now,
+        )
+        .unwrap();
+        assert_eq!(network.entries["root.U1"].mpn.as_deref(), Some("API-MPN"));
+        success.assert_calls(1);
+
+        let mut fresh = test_bom();
+        match_bom_with_cache(
+            &context,
+            None,
+            &mut fresh,
+            true,
+            BomMatchMode::Online,
+            Some(&cache),
+            now + 100,
+        )
+        .unwrap();
+        assert_eq!(fresh.entries["root.U1"].mpn.as_deref(), Some("API-MPN"));
+        success.assert_calls(1);
+        success.delete();
+
+        let failure = server.mock(|when, then| {
+            when.method(POST)
+                .path("/api/boms/match")
+                .query_param("strict", "true");
+            then.status(503).body("deploying");
+        });
+        let mut stale = test_bom();
+        match_bom_with_cache(
+            &context,
+            None,
+            &mut stale,
+            true,
+            BomMatchMode::Online,
+            Some(&cache),
+            now + 1_000,
+        )
+        .unwrap();
+        assert_eq!(stale.entries["root.U1"].mpn.as_deref(), Some("API-MPN"));
+        failure.assert_calls(1);
+
+        let mut offline = test_bom();
+        match_bom_with_cache(
+            &context,
+            None,
+            &mut offline,
+            true,
+            BomMatchMode::Offline,
+            Some(&cache),
+            now + 1_000,
+        )
+        .unwrap();
+        assert_eq!(offline.entries["root.U1"].mpn.as_deref(), Some("API-MPN"));
+        failure.assert_calls(1);
+
+        let mut no_cache = test_bom();
+        assert!(
+            match_bom_with_cache(
+                &context,
+                None,
+                &mut no_cache,
+                true,
+                BomMatchMode::Online,
+                None,
+                now + 1_000,
+            )
+            .is_err()
+        );
+        assert!(no_cache.entries["root.U1"].mpn.is_none());
+        failure.assert_calls(2);
     }
 }
