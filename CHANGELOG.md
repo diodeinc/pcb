@@ -12,6 +12,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `pcb ipc dfm check` validates IPC-2581 files against fabrication PDKs.
 
+### Changed
+
+- `pcb bom` caches API matches for ten minutes and reuses exact stale matches offline or after transient failures while retaining its local-BOM fallback on cache misses.
+- `pcb bom` writes an API-selected compatible MPN into output without replacing explicit or modifier-assigned parts.
+
 ### Fixed
 
 - LSP navigation now resolves loaded symbols in the same package scope as evaluation.

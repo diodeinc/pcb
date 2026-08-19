@@ -3,6 +3,7 @@ use rusqlite::auto_extension::{RawAutoExtension, register_auto_extension};
 
 pub mod auth;
 pub mod bom;
+mod bom_cache;
 pub mod component;
 mod component_api;
 pub mod datasheet;
@@ -18,7 +19,10 @@ pub mod sandbox;
 pub mod scan;
 
 pub use auth::{AuthArgs, AuthCommand, AuthTokens, execute as execute_auth, login, logout, status};
-pub use bom::{fetch_and_populate_availability, fetch_and_populate_availability_with_context};
+pub use bom::{
+    BomMatchMode, BomMatchSource, fetch_and_populate_availability,
+    fetch_and_populate_availability_with_context, match_bom_with_context,
+};
 pub use component::{
     AddComponentResult, ComponentDownloadResult, ComponentResult, ComponentSearchResult,
     ModelAvailability, SearchArgs, add_component_to_workspace, download_component,

@@ -65,6 +65,15 @@ impl std::fmt::Display for BomFormat {
     }
 }
 
+fn format_cache_age(age_seconds: Option<u64>) -> String {
+    match age_seconds {
+        None => "unknown age".to_string(),
+        Some(seconds) if seconds < 60 => format!("{seconds}s old"),
+        Some(seconds) if seconds < 60 * 60 => format!("{}m old", seconds / 60),
+        Some(seconds) => format!("{}h old", seconds / (60 * 60)),
+    }
+}
+
 #[derive(Args, Debug, Clone)]
 #[command(about = "Generate Bill of Materials (BOM) from PCB projects")]
 pub struct BomArgs {
@@ -126,27 +135,37 @@ pub fn execute(args: BomArgs) -> Result<()> {
     // Filter out components marked as skip_bom
     bom = bom.filter_excluded();
 
-    if !args.offline {
-        let ctx = pcb_diode_api::WorkspaceContext::from_path(&args.file);
-        match pcb_diode_api::auth::get_api_token_with_context(&ctx) {
-            Ok(token) => {
-                spinner.set_message(format!("{file_name}: Fetching availability"));
-                if let Err(e) = pcb_diode_api::fetch_and_populate_availability_with_context(
-                    &ctx,
-                    token.as_deref(),
-                    &mut bom,
-                    strict,
-                ) {
-                    log::warn!("Failed to fetch availability data: {}", e);
-                }
-            }
-            Err(_) => {
-                log::debug!("Not authenticated, skipping availability fetch");
-            }
+    let ctx = pcb_diode_api::WorkspaceContext::from_path(&args.file);
+    let mode = if args.offline {
+        pcb_diode_api::BomMatchMode::Offline
+    } else {
+        pcb_diode_api::BomMatchMode::Online
+    };
+    spinner.set_message(if args.offline {
+        format!("{file_name}: Loading cached availability")
+    } else {
+        format!("{file_name}: Fetching availability")
+    });
+    let source = match pcb_diode_api::match_bom_with_context(&ctx, None, &mut bom, strict, mode) {
+        Ok(source) => Some(source),
+        Err(error) => {
+            log::warn!("Failed to fetch availability data: {error:#}");
+            None
         }
-    }
+    };
 
-    spinner.finish();
+    match source {
+        Some(pcb_diode_api::BomMatchSource::StaleCache { age_seconds }) => {
+            spinner.warning(format!(
+                "{file_name}: Using stale cached availability ({})",
+                format_cache_age(age_seconds)
+            ))
+        }
+        Some(pcb_diode_api::BomMatchSource::Network)
+        | Some(pcb_diode_api::BomMatchSource::FreshCache { .. })
+        | Some(pcb_diode_api::BomMatchSource::OfflineCacheMiss)
+        | None => spinner.finish(),
+    }
 
     let mut writer = io::stdout().lock();
     match args.format {
