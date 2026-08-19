@@ -6,7 +6,8 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-const CACHE_VERSION: &[u8] = b"pcb-bom-match-v1";
+/// Bump when the cache schema or BOM match contract changes.
+const SCHEMA_VERSION: u32 = 1;
 const CACHE_TTL_SECS: i64 = 10 * 60;
 
 #[derive(Debug)]
@@ -48,7 +49,7 @@ impl BomMatchCache {
                 cache_key TEXT PRIMARY KEY,
                 response_json TEXT NOT NULL,
                 fetched_at INTEGER NOT NULL
-            ) WITHOUT ROWID;",
+            );",
         )?;
 
         Ok(Self { connection })
@@ -72,11 +73,8 @@ impl BomMatchCache {
 
     pub fn store(&self, key: &str, response_json: &str, fetched_at: i64) -> Result<()> {
         self.connection.execute(
-            "INSERT INTO responses (cache_key, response_json, fetched_at)
-             VALUES (?1, ?2, ?3)
-             ON CONFLICT(cache_key) DO UPDATE SET
-                response_json = excluded.response_json,
-                fetched_at = excluded.fetched_at",
+            "INSERT OR REPLACE INTO responses (cache_key, response_json, fetched_at)
+             VALUES (?1, ?2, ?3)",
             params![key, response_json, fetched_at],
         )?;
         Ok(())
@@ -85,8 +83,6 @@ impl BomMatchCache {
 
 pub(crate) fn cache_key(url: &str, request: &Value) -> Result<String> {
     let mut hasher = Sha256::new();
-    hasher.update(CACHE_VERSION);
-    hasher.update([0]);
     hasher.update(url.as_bytes());
     hasher.update([0]);
     hasher.update(serde_json::to_vec(request)?);
@@ -94,7 +90,7 @@ pub(crate) fn cache_key(url: &str, request: &Value) -> Result<String> {
 }
 
 fn cache_path() -> PathBuf {
-    pcb_zen::cache_index::cache_base().join("bom_match_v1.sqlite")
+    pcb_zen::cache_index::cache_base().join(format!("bom_match_v{SCHEMA_VERSION}.sqlite"))
 }
 
 #[cfg(test)]

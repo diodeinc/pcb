@@ -560,8 +560,9 @@ fn match_bom_with_cache(
 
     match live {
         Ok((response_json, prepared)) => {
+            let fetched_at = unix_now().unwrap_or(now);
             if let Some(cache) = cache
-                && let Err(error) = cache.store(&key, &response_json, now)
+                && let Err(error) = cache.store(&key, &response_json, fetched_at)
             {
                 log::warn!("Failed to update local BOM cache: {error:#}");
             }
@@ -992,6 +993,7 @@ mod tests {
         let tempdir = tempfile::tempdir().unwrap();
         let cache = cache_for(&tempdir);
         let context = WorkspaceContext::from_api_base_url(server.base_url());
+        let now = unix_now().unwrap();
 
         let mut offline_miss = test_bom();
         match_bom_with_cache(
@@ -1001,7 +1003,7 @@ mod tests {
             true,
             BomMatchMode::Offline,
             Some(&cache),
-            1_000,
+            now,
         )
         .unwrap();
         assert!(offline_miss.entries["root.U1"].mpn.is_none());
@@ -1015,7 +1017,7 @@ mod tests {
             true,
             BomMatchMode::Online,
             Some(&cache),
-            1_000,
+            now,
         )
         .unwrap();
         assert_eq!(network.entries["root.U1"].mpn.as_deref(), Some("API-MPN"));
@@ -1029,7 +1031,7 @@ mod tests {
             true,
             BomMatchMode::Online,
             Some(&cache),
-            1_100,
+            now + 100,
         )
         .unwrap();
         assert_eq!(fresh.entries["root.U1"].mpn.as_deref(), Some("API-MPN"));
@@ -1050,7 +1052,7 @@ mod tests {
             true,
             BomMatchMode::Online,
             Some(&cache),
-            2_000,
+            now + 1_000,
         )
         .unwrap();
         assert_eq!(stale.entries["root.U1"].mpn.as_deref(), Some("API-MPN"));
@@ -1064,7 +1066,7 @@ mod tests {
             true,
             BomMatchMode::Offline,
             Some(&cache),
-            2_000,
+            now + 1_000,
         )
         .unwrap();
         assert_eq!(offline.entries["root.U1"].mpn.as_deref(), Some("API-MPN"));
@@ -1079,7 +1081,7 @@ mod tests {
                 true,
                 BomMatchMode::Online,
                 None,
-                2_000,
+                now + 1_000,
             )
             .is_err()
         );
