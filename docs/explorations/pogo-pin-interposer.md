@@ -289,25 +289,128 @@ The base tile (ADG2128, MAX4999, switches, host) is a parallel
 hardware project against the same mate contract. It is not a
 prerequisite for (1)–(3).
 
-## Pattern evaluation (next interesting artifact)
+## Bottom pad patterns
 
-Bottom strategies to generate and run against real A5/A6/A7 panels
-with ≤ 8 boards, for example:
+104 lands, usable A7 interior 64 × 95 mm (5 mm tooling margin).
+Every land sits in a **4 / 6 / 8-pin** pogo array (2×2, 2×3, 2×4) at
+one pitch (try 2.54 mm first; 2.00 mm as a variant). No singleton
+pogos on the bottom.
 
-- Functional blocks: one LS field (even-wide arrays) + 8 USB pair
-  slots + 8 Vtarget 2-pin arrays + 8 VUSB + GND arrays.
-- Board-shaped slots: 8 identical constellations (even if the LS
-  fabric is still a global pool). May waste space but makes the base
-  silk obvious.
-- Pitch families: 2.54 mm arrays vs 2.00 mm vs mixed (coarse power,
-  finer LS).
-- USB on the rim vs USB in a dedicated column (length, reference
-  pour, fewer crossings with the A5 funnel).
+104 = 13×8 = 26×4 = 8×6 + 7×8. Those identities are the palettes.
 
-Score each strategy on the same panels: routed / unrouted, via count,
-USB pair length and mismatch, min power-trace width, whether every
-land sits on a vendor 2×N array pitch, and how ugly A5→A7
-concentration is vs A7→A7 (identity).
+The A7 constellation **builds** `Slot`/`MatePin`. Evaluation waits
+for the autorouter, but the generators and the score can be written
+now. G0 metrics (below) do not need a router.
+
+### Strategies
+
+**S1 — thirteen 8-pin blocks, by function.**
+6× LS (48) + 2× USB (16) + 2× Vtarget (16) + 1× VUSB (8) + 2× GND
+(16). Cleanest connector count. USB is four pairs per 8-pin (no
+dedicated GND in the pair). Place LS as a field, power in a row,
+USB in a row.
+
+**S2 — USB as 4-pin with GND reference.**
+8× (DP, DM, GND, GND) uses all 16 USB lands and all 16 GND lands.
+Then 6×8 LS, 2×8 Vtarget, 1×8 VUSB. Better 2-layer HS (local
+return). GND slots for matching are those USB-adjacent grounds
+(still one pour).
+
+**S3 — eight 6-pin board columns + LS field.**
+Per board: `(DP, DM, VT, VT, VUSB, GND)`. Uses 8 USB pairs, 8
+Vtarget banks, 8 VUSB, 8 GND. Remaining 48 LS + 8 GND → 6×8 LS and
+2×4 GND. Matches the electrical story (one power/USB/gnd kit per
+DUT, LS is a global pool).
+
+**S4 — eight 8-pin board columns + leftover LS.**
+Per board: S3’s six plus two LS. 16 LS sit “near” a board; the
+other 32 LS + 8 GND stay in shared 8-pin blocks. Assignment is
+still a global LS pool — the extra two pins are just closer to
+that board’s other nets.
+
+**S5 — funnel vs origin USB.**
+Same grouping as S1 or S3; only placement changes. **S5a:** USB
+arrays on the A7 edges that face the rest of the panel (where A5/A6
+traces enter). **S5b:** USB on the origin/outer edges (short on the
+base, longer on the interposer). Power next to USB; LS fills the
+core.
+
+**S6 — regular lattice, color later.**
+Pack as many 2×4 footprints as fit, pick 13 (or 26× 2×2), paint
+them USB / power / LS after the fact. Regular escape, dumb
+function. Control for “clever placement actually helped.”
+
+**S7 — pitch variant, not a new packing.**
+Replay S1 and S3 at 2.54 mm and 2.00 mm (and mixed: 2.54 power,
+2.00 USB). Same topology, different density.
+
+Do not invent more until these have numbers. Orientation of the A7
+(74×105 vs 105×74) is a boolean on every strategy, not its own
+family.
+
+### Eval corpus
+
+Same contact sets, every strategy:
+
+| Fixture | Why |
+|---|---|
+| A7, 1 board | identity, almost no funnel |
+| A6, 2–4 boards | medium |
+| A5, 8 boards | worst concentration into the origin A7 |
+
+Use real diodehub panels once they have Ø 1 mm `ict` TestPoints.
+Until then, synthetic contacts at real board XY are enough for G0.
+
+### Metrics
+
+Hard (any fail → disqualified, record the reason):
+
+- Hall holds for that panel
+- every land is in a 4/6/8 array at the strategy’s pitch
+- 5 mm A7 tooling margin kept
+- USB pair not split across arrays; polarity preserved
+- after route: 2-layer DRC clean, power width ≥ 2 A
+
+Soft (lower is better unless noted):
+
+| Symbol | What |
+|---|---|
+| \(V\) | via count |
+| \(L\) | total routed length (mm) |
+| \(L_\max\) | longest net (A5 funnel) |
+| \(U_\Delta\) | max USB pair length mismatch (mm) |
+| \(U\) | mean USB pair length |
+| \(P\) | mean Vtarget/VUSB length |
+| \(A\) | assignment cost \(\sum c(d,s)\) (mm, no router) |
+| \(N_\text{arr}\) | number of pogo arrays (base complexity) |
+| \(W\) | unused pins in those arrays |
+| \(X\) | estimated crossings (Manhattan, pre-route) |
+
+### Score
+
+Two gates. **G0** (now): hard packing + Hall + \(A, U_\Delta, L_\max, N_\text{arr}, X\)
+from the matcher and a Manhattan sketch. **G1** (when the router
+exists): hard DRC + the routed \(V, L, U, P\).
+
+Disqualified strategies rank last. Among survivors, min-max each
+soft metric across (strategy × panel), then
+
+\[
+\begin{aligned}
+S_0 &= 3\,\widehat{A} + 4\,\widehat{U_\Delta} + 2\,\widehat{L_\max}
+      + \widehat{N_\text{arr}} + \widehat{X} + 0.5\,\widehat{W} \\
+S_1 &= S_0 + 3\,\widehat{V} + 2\,\widehat{L} + 2\,\widehat{U} + \widehat{P}
+\end{aligned}
+\]
+
+Hats are \((x - x_{\min}) / (x_{\max}-x_{\min})\) on that corpus
+slice (0 if degenerate). Lower \(S\) wins. Weights put USB mismatch
+and vias above connector count; change them only if a winner is
+obviously wrong on inspection.
+
+Report the table, not just \(S\): a strategy that routes A7 and dies
+on A5 is not the winner. Pick the one with the best worst-panel
+\(S_1\), ties broken by fewer arrays.
 
 ## Open
 
