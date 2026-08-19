@@ -7,6 +7,7 @@ pub mod extract;
 pub mod geom;
 pub mod hall;
 pub mod instantiate;
+pub mod panel;
 pub mod pattern;
 pub mod route;
 pub mod router;

@@ -160,12 +160,26 @@ pub struct Slot {
     pub pins: Vec<MatePinId>,
 }
 
+/// Panel-level fixed features the interposer inherits from the assembly
+/// panel (plus the folded A7 tile's tooling): NPTH tooling holes and
+/// two-sided global fiducials. Fixed obstacles for routing, emitted as
+/// real footprints.
+#[derive(Debug, Clone, Default)]
+pub struct PanelSpec {
+    /// NPTH tooling holes: (center, drill diameter).
+    pub holes: Vec<([f64; 2], f64)>,
+    /// Global fiducial centers (Ø1 copper dot, Ø2 mask opening) per face.
+    pub fids_top: Vec<[f64; 2]>,
+    pub fids_bottom: Vec<[f64; 2]>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Problem {
     pub contacts: BTreeMap<ContactId, Contact>,
     pub demands: BTreeMap<DemandId, Demand>,
     pub pins: BTreeMap<MatePinId, MatePin>,
     pub slots: BTreeMap<SlotId, Slot>,
+    pub panel: PanelSpec,
 }
 
 impl Problem {

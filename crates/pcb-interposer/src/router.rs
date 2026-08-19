@@ -29,7 +29,8 @@ use crate::types::{Assign, BoardId, ContactId, Kind, MatePinId, Problem, dist};
 
 const PITCH: f64 = 0.2;
 const PAD_R: f64 = 0.5;
-const HOLE_R: f64 = 1.6;
+/// A fiducial blocks copper out to its Ø2 mask opening.
+const FID_KEEPOUT_R: f64 = 1.0;
 const EDGE_MARGIN: f64 = 0.5;
 /// Trace width / gap of one side of a USB pair.
 pub const USB_W: f64 = 0.2;
@@ -838,26 +839,6 @@ fn build_routables(problem: &Problem, assign: &Assign) -> (Vec<Routable>, Vec<Co
     (out, poured)
 }
 
-fn tooling_holes(w: f64, h: f64) -> Vec<P> {
-    let mut holes = vec![
-        // A7 mate tooling on the bottom mate, origin corner.
-        [2.5, 2.5],
-        [71.5, 2.5],
-        [2.5, 102.5],
-        [71.5, 102.5],
-    ];
-    if w > 80.0 || h > 110.0 {
-        // Panel tooling at the sheet corners for larger sheets.
-        holes.extend([
-            [3.0, 3.0],
-            [w - 3.0, 3.0],
-            [3.0, h - 3.0],
-            [w - 3.0, h - 3.0],
-        ]);
-    }
-    holes
-}
-
 /// One raw routed centerline: routable index, member index for a loosely
 /// routed pair half (None = whole routable), the layer, and the path.
 type RawPath = (usize, Option<usize>, u8, Vec<P>);
@@ -952,8 +933,17 @@ fn grid_pass(
             }
         }
     }
-    for hxy in tooling_holes(sheet_w, sheet_h) {
-        maps.stamp_disk_all(hxy, HOLE_R, 0b11);
+    // Panel tooling holes and fiducials are fixed features. A fiducial's
+    // keepout is its mask opening: copper inside the aperture would sit
+    // exposed next to the dot.
+    for (hxy, dia) in &problem.panel.holes {
+        maps.stamp_disk_all(*hxy, dia / 2.0, 0b11);
+    }
+    for fxy in &problem.panel.fids_top {
+        maps.stamp_disk_all(*fxy, FID_KEEPOUT_R, 1 << TOP);
+    }
+    for fxy in &problem.panel.fids_bottom {
+        maps.stamp_disk_all(*fxy, FID_KEEPOUT_R, 1 << BOT);
     }
     // Pogo pads are SMT on top; mate lands are SMT on bottom.
     for c in problem.contacts.values() {
@@ -1742,6 +1732,32 @@ pub fn route_r5(sheet_w: f64, sheet_h: f64, problem: &Problem, assign: &Assign) 
                 .map(|w| geom::dist_point_seg(xy, w[0], w[1]))
                 .fold(f64::INFINITY, f64::min)
         };
+        // Tooling holes and fiducials are fixed features every stitch must
+        // clear: via barrels stay off hole walls and outside fiducial mask
+        // openings; stubs likewise.
+        let panel = &problem.panel;
+        let fixed_via_ok = |xy: P| -> bool {
+            panel
+                .holes
+                .iter()
+                .all(|(h, d)| dist(*h, xy) >= d / 2.0 + 0.65)
+                && panel
+                    .fids_top
+                    .iter()
+                    .chain(panel.fids_bottom.iter())
+                    .all(|f| dist(*f, xy) >= FID_KEEPOUT_R + 0.55)
+        };
+        let fixed_stub_ok = |a: P, b: P| -> bool {
+            panel
+                .holes
+                .iter()
+                .all(|(h, d)| geom::dist_point_seg(*h, a, b) >= d / 2.0 + 0.4)
+                && panel
+                    .fids_top
+                    .iter()
+                    .chain(panel.fids_bottom.iter())
+                    .all(|f| geom::dist_point_seg(*f, a, b) >= FID_KEEPOUT_R + 0.4)
+        };
         let poured: Vec<ContactId> = out.poured.clone();
         let mut stitches: Vec<(ContactId, Vec<P>, P)> = Vec::new();
         for cid in poured {
@@ -1765,7 +1781,7 @@ pub fn route_r5(sheet_w: f64, sheet_h: f64, problem: &Problem, assign: &Assign) 
                     .all(|(_, half, pts)| seg_min(pts, xy) >= 0.3 + 0.25 + half);
                 let ok_vias = vias.iter().all(|v| dist(*v, xy) >= 0.85);
                 let ok_stitch = stitches.iter().all(|(_, _, v)| dist(*v, xy) >= 0.85);
-                ok_pads && ok_traces && ok_vias && ok_stitch
+                ok_pads && ok_traces && ok_vias && ok_stitch && fixed_via_ok(xy)
             };
             let stub_ok = |a: P, b: P, stitches: &[(ContactId, Vec<P>, P)]| -> bool {
                 let need_pad = 0.125 + 0.25 + 0.5;
@@ -1783,7 +1799,7 @@ pub fn route_r5(sheet_w: f64, sheet_h: f64, problem: &Problem, assign: &Assign) 
                 let ok_stubs = stitches.iter().all(|(_, stub, _)| {
                     stub.len() < 2 || geom::dist_seg_seg(a, b, stub[0], stub[1]) >= 0.5
                 });
-                ok_pads && ok_traces && ok_stubs
+                ok_pads && ok_traces && ok_stubs && fixed_stub_ok(a, b)
             };
             let mut found = None;
             if via_ok(c.xy, &stitches) {
@@ -1842,7 +1858,7 @@ pub fn route_r5(sheet_w: f64, sheet_h: f64, problem: &Problem, assign: &Assign) 
                     .iter()
                     .all(|(_, _, v)| dist(*v, xy) >= 0.85)
                     && lst.iter().all(|(_, _, v)| dist(*v, xy) >= 0.85);
-                ok_pads && ok_traces && ok_vias && ok_stitch
+                ok_pads && ok_traces && ok_vias && ok_stitch && fixed_via_ok(xy)
             };
             let stub_ok = |a: P, b: P, lst: &[(crate::types::MatePinId, Vec<P>, P)]| -> bool {
                 let need_pad = 0.125 + 0.25 + 0.5;
@@ -1860,7 +1876,7 @@ pub fn route_r5(sheet_w: f64, sheet_h: f64, problem: &Problem, assign: &Assign) 
                 let ok_stubs = lst.iter().all(|(_, stub, _)| {
                     stub.len() < 2 || geom::dist_seg_seg(a, b, stub[0], stub[1]) >= 0.5
                 });
-                ok_pads && ok_traces && ok_stubs
+                ok_pads && ok_traces && ok_stubs && fixed_stub_ok(a, b)
             };
             let mut found = None;
             if via_ok(p.xy, &land_stitches) {
@@ -1885,12 +1901,74 @@ pub fn route_r5(sheet_w: f64, sheet_h: f64, problem: &Problem, assign: &Assign) 
             }
         }
         out.gnd_land_stitches = land_stitches;
+
+        // Field stitching: a sparse via grid over the sheet ties the top
+        // and bottom pours into one net even when dense trace fields
+        // fragment them. A blocked grid point ring-searches its cell for
+        // the nearest legal spot, so every cell that has one gets a via —
+        // dense regions are exactly where the pours need the tie.
+        let mut field: Vec<P> = Vec::new();
+        let step = 12.0;
+        let ok_at = |xy: P, field: &[P]| -> bool {
+            let m = EDGE_MARGIN + 0.3;
+            xy[0] >= m
+                && xy[1] >= m
+                && xy[0] <= sheet_w - m
+                && xy[1] <= sheet_h - m
+                && problem.contacts.values().all(|o| dist(o.xy, xy) >= 1.05)
+                && problem.pins.values().all(|q| dist(q.xy, xy) >= 1.05)
+                && traces
+                    .iter()
+                    .all(|(_, half, pts)| seg_min(pts, xy) >= 0.3 + 0.25 + half)
+                && vias.iter().all(|v| dist(*v, xy) >= 0.85)
+                && out
+                    .gnd_stitches
+                    .iter()
+                    .all(|(_, _, v)| dist(*v, xy) >= 0.85)
+                && out
+                    .gnd_land_stitches
+                    .iter()
+                    .all(|(_, _, v)| dist(*v, xy) >= 0.85)
+                && field.iter().all(|v| dist(*v, xy) >= 0.85)
+                && fixed_via_ok(xy)
+        };
+        let mut y = 6.0;
+        while y < sheet_h - 6.0 + 1e-9 {
+            let mut x = 6.0;
+            while x < sheet_w - 6.0 + 1e-9 {
+                let c = [x, y];
+                if ok_at(c, &field) {
+                    field.push(c);
+                } else {
+                    'ring: for ring in 1..=11 {
+                        let rad = ring as f64 * 0.5;
+                        for k in 0..16 {
+                            let a = std::f64::consts::TAU * k as f64 / 16.0;
+                            let xy = [c[0] + rad * a.cos(), c[1] + rad * a.sin()];
+                            if ok_at(xy, &field) {
+                                field.push(xy);
+                                break 'ring;
+                            }
+                        }
+                    }
+                }
+                x += step;
+            }
+            y += step;
+        }
+        out.gnd_field_stitches = field;
     }
 
     // ---------------- smoothing world ----------------
     let mut world = World::new(sheet_w, sheet_h, EDGE_MARGIN);
-    for hxy in tooling_holes(sheet_w, sheet_h) {
-        world.add(Obstacle::disk(hxy, HOLE_R, 0b11, u32::MAX));
+    for (hxy, dia) in &problem.panel.holes {
+        world.add(Obstacle::disk(*hxy, dia / 2.0, 0b11, u32::MAX));
+    }
+    for fxy in &problem.panel.fids_top {
+        world.add(Obstacle::disk(*fxy, FID_KEEPOUT_R, 1 << TOP, u32::MAX));
+    }
+    for fxy in &problem.panel.fids_bottom {
+        world.add(Obstacle::disk(*fxy, FID_KEEPOUT_R, 1 << BOT, u32::MAX));
     }
     for c in problem.contacts.values() {
         world.add(Obstacle::disk(c.xy, PAD_R, 1 << TOP, u32::MAX));
@@ -1939,6 +2017,9 @@ pub fn route_r5(sheet_w: f64, sheet_h: f64, problem: &Problem, assign: &Assign) 
                 u32::MAX,
             ));
         }
+    }
+    for xy in &out.gnd_field_stitches {
+        world.add(Obstacle::disk(*xy, 0.3, 0b11, u32::MAX));
     }
     // Pair entry stubs are fixed copper: put each rail's stubs in the world
     // so every later clearance check sees them.

@@ -61,6 +61,9 @@ pub struct RouteResult {
     /// GND land stitching: per GND mate land, an optional bottom stub and
     /// the via position joining the bottom fragment to the top pour.
     pub gnd_land_stitches: Vec<(MatePinId, Vec<[f64; 2]>, [f64; 2])>,
+    /// Sparse GND stitching-via field over the open sheet, so the two pours
+    /// stay one net even where dense trace fields fragment them.
+    pub gnd_field_stitches: Vec<[f64; 2]>,
 }
 
 impl RouteResult {

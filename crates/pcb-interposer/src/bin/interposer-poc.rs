@@ -113,6 +113,7 @@ fn run_one(
     // single layer-change via is optional and sits in one of its own pads,
     // so there is no suppression or board dropping any more.
     let mut problem: Problem = bundle(contacts)?;
+    problem.panel = pcb_interposer::panel::panel_spec(sheet, &places, bw, bh);
     let mut cents: BTreeMap<BoardId, (f64, f64, u32)> = BTreeMap::new();
     for c in problem.contacts.values() {
         let e = cents.entry(c.board).or_insert((0.0, 0.0, 0));
@@ -148,14 +149,16 @@ fn run_one(
     if let Some(dir) = emit_dir {
         fs::create_dir_all(dir)?;
         let stem = format!("{board_name}_{}", sheet.name);
+        let pcb_path = dir.join(format!("{stem}.kicad_pcb"));
         fs::write(
-            dir.join(format!("{stem}.kicad_pcb")),
+            &pcb_path,
             pcb_interposer::emit::emit_kicad(sheet.w, sheet.h, &problem, &asg, &route),
         )?;
         fs::write(
             dir.join(format!("{stem}.kicad_pro")),
             pcb_interposer::emit::emit_project(),
         )?;
+        fill_zones(&pcb_path);
     }
     let g0 = score_g0(&problem, &asg, &pattern, &nets);
     let mut score = score_g1(g0, &route, &nets);
@@ -191,6 +194,29 @@ fn run_one(
             if hall_ok { "ok" } else { "fail" },
         ),
     })
+}
+
+/// Fill the emitted board's zones in place with KiCad's own filler, so the
+/// file opens with the pours already poured — and repair GND connectivity
+/// with bridging vias where the pours split (see fill_zones.py). Skipped
+/// when KiCad's bundled python isn't present.
+fn fill_zones(pcb: &Path) {
+    let py = Path::new(
+        "/Applications/KiCad/KiCad.app/Contents/Frameworks/Python.framework/Versions/Current/bin/python3",
+    );
+    if !py.exists() {
+        return;
+    }
+    let ok = std::process::Command::new(py)
+        .arg("-c")
+        .arg(include_str!("fill_zones.py"))
+        .arg(pcb)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !ok {
+        eprintln!("warning: zone fill failed for {}", pcb.display());
+    }
 }
 
 fn main() -> Result<()> {

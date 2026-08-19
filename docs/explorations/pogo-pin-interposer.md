@@ -1204,6 +1204,34 @@ with S11 still at 288/288 boards and 1656/1656 nets across
 the eval. Sharp bends collapsed as a side effect (the ≤90°
 invariant): worst S11 case has 3.
 
+## Panel tooling, fiducials, filled zones
+
+The ad-hoc hole scheme (which left near-overlapping holes on
+larger sheets) was replaced by `panel.rs`, which mirrors the
+board-array generator's spec exactly
+(`pcb-ipc2581-tools/…/board_array/tooling.rs`): the interposer
+inherits the **assembly panel's tooling** — Ø2.1 corner holes
+at 3.0 mm insets, Ø2.0 rail holes on the chosen rail pair
+(2.5 mm edge depth, 2.5/6.5 mm span insets), and the two-sided
+**global fiducials** (Ø1.0 copper / Ø2.0 mask, 3.85 mm edge,
+8/12 top and 9/11 bottom insets) — plus the **folded A7 tile's
+corner tooling** so the fixture's A7 connector plate registers
+on every sheet. Coincident holes dedupe exactly: on A7 the
+tile and sheet tooling are the same four holes; on A6/A5 the
+distinct tile holes stand alone (min hole spacing on the
+corpus: 4.5 mm). All of it lives on `Problem::panel` — one
+spec drives router obstacles, stitch keepouts, and emission.
+
+Emitted boards now ship with **zones filled** by KiCad's own
+filler (`fill_zones.py` under KiCad's bundled python), which
+also repairs GND connectivity: where dense trace fields split
+the pours into disconnected groups, it drops a bridging via
+inside the intersection of the split fragment with the main
+group's fill on the other layer (deflated 0.6 mm, so
+clearances hold by construction). A sparse 12 mm stitching-via
+field (ring-searched per cell) does the bulk of the tying in
+the router itself.
+
 ## Open
 
 - Hook `--interposer` on `board-array create` and re-score S11

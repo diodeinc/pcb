@@ -36,18 +36,53 @@ fn sanitize(name: &str) -> String {
         .collect()
 }
 
-/// The same tooling holes the router blocks out.
-pub fn tooling_holes(w: f64, h: f64) -> Vec<[f64; 2]> {
-    let mut holes = vec![[2.5, 2.5], [71.5, 2.5], [2.5, 102.5], [71.5, 102.5]];
-    if w > 80.0 || h > 110.0 {
-        holes.extend([
-            [3.0, 3.0],
-            [w - 3.0, 3.0],
-            [3.0, h - 3.0],
-            [w - 3.0, h - 3.0],
-        ]);
-    }
-    holes
+/// A global fiducial: Ø1 copper dot with a Ø2 mask opening. The pad-level
+/// clearance keeps zone copper outside the mask aperture so the aperture
+/// never bridges the dot with poured GND.
+fn fid_footprint(u: &mut Uuids, reference: &str, xy: [f64; 2], top: bool) -> String {
+    let (fp_layer, pad_layers) = if top {
+        ("F.Cu", "\"F.Cu\" \"F.Mask\"")
+    } else {
+        ("B.Cu", "\"B.Cu\" \"B.Mask\"")
+    };
+    format!(
+        "\t(footprint \"Interposer:Fiducial_1.0_2.0\"\n\
+         \t\t(layer \"{fp_layer}\")\n\
+         \t\t(uuid \"{u0}\")\n\
+         \t\t(at {x} {y})\n\
+         \t\t(property \"Reference\" \"{reference}\"\n\
+         \t\t\t(at 0 -1.8 0)\n\
+         \t\t\t(layer \"{silk}\")\n\
+         \t\t\t(hide yes)\n\
+         \t\t\t(uuid \"{u1}\")\n\
+         \t\t\t(effects (font (size 1 1) (thickness 0.15)))\n\
+         \t\t)\n\
+         \t\t(property \"Value\" \"\"\n\
+         \t\t\t(at 0 1.8 0)\n\
+         \t\t\t(layer \"{fab}\")\n\
+         \t\t\t(hide yes)\n\
+         \t\t\t(uuid \"{u2}\")\n\
+         \t\t\t(effects (font (size 1 1) (thickness 0.15)))\n\
+         \t\t)\n\
+         \t\t(attr smd exclude_from_pos_files exclude_from_bom)\n\
+         \t\t(pad \"\" smd circle\n\
+         \t\t\t(at 0 0)\n\
+         \t\t\t(size 1 1)\n\
+         \t\t\t(layers {pad_layers})\n\
+         \t\t\t(solder_mask_margin 0.5)\n\
+         \t\t\t(clearance 0.6)\n\
+         \t\t\t(uuid \"{u3}\")\n\
+         \t\t)\n\
+         \t)\n",
+        x = fmt(xy[0]),
+        y = fmt(xy[1]),
+        silk = if top { "F.SilkS" } else { "B.SilkS" },
+        fab = if top { "F.Fab" } else { "B.Fab" },
+        u0 = u.next(),
+        u1 = u.next(),
+        u2 = u.next(),
+        u3 = u.next(),
+    )
 }
 
 fn pad_footprint(
@@ -215,9 +250,16 @@ pub fn emit_kicad(
         u0 = u.next(),
     ));
 
-    // ---- tooling holes ----
-    for (i, hxy) in tooling_holes(sheet_w, sheet_h).iter().enumerate() {
-        s.push_str(&hole_footprint(&mut u, &format!("H{}", i + 1), *hxy, 3.2));
+    // ---- panel tooling holes and fiducials ----
+    for (i, (hxy, dia)) in problem.panel.holes.iter().enumerate() {
+        s.push_str(&hole_footprint(&mut u, &format!("H{}", i + 1), *hxy, *dia));
+    }
+    for (i, fxy) in problem.panel.fids_top.iter().enumerate() {
+        s.push_str(&fid_footprint(&mut u, &format!("FID{}", i + 1), *fxy, true));
+    }
+    for (i, fxy) in problem.panel.fids_bottom.iter().enumerate() {
+        let n = problem.panel.fids_top.len() + i + 1;
+        s.push_str(&fid_footprint(&mut u, &format!("FID{n}"), *fxy, false));
     }
 
     // ---- pogo pads (top) ----
@@ -357,6 +399,16 @@ pub fn emit_kicad(
                 u0 = u.next(),
             ));
         }
+        s.push_str(&format!(
+            "\t(via\n\t\t(at {x} {y})\n\t\t(size 0.6)\n\t\t(drill 0.3)\n\t\t(layers \"F.Cu\" \"B.Cu\")\n\t\t(net 1)\n\t\t(uuid \"{u0}\")\n\t)\n",
+            x = fmt(xy[0]),
+            y = fmt(xy[1]),
+            u0 = u.next(),
+        ));
+    }
+
+    // ---- GND field stitching: sparse via grid unifying the two pours ----
+    for xy in &route.gnd_field_stitches {
         s.push_str(&format!(
             "\t(via\n\t\t(at {x} {y})\n\t\t(size 0.6)\n\t\t(drill 0.3)\n\t\t(layers \"F.Cu\" \"B.Cu\")\n\t\t(net 1)\n\t\t(uuid \"{u0}\")\n\t)\n",
             x = fmt(xy[0]),
