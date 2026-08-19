@@ -271,10 +271,88 @@ One **two-pin net** per `β` edge:
 `{ top_pogo(contact.xy), bottom_land(pin.xy) }`, plus a USB pair
 grouping for length match, plus GND pours.
 
+Treat top pogos as **PTH**. They already exist on the bottom copper,
+so every net is two terminals on **one layer**. No via planning.
+This is single-layer detailed routing of two-pin nets. General
+single-layer multi-net routing is NP-complete; we do not need the
+general solver. Best-effort greedy is enough, and **dropping nets**
+is allowed (e.g. 6 of 8 boards escape).
+
 The assignment **is** the netlist. Autoroute does not choose partners.
 
 The A7 constellation *builds* `Slot`/`MatePin`. Mux topology does
 not belong in this state.
+
+## Single-layer autoroute (best-effort)
+
+Theory we actually use:
+
+- **Lee maze (1961) / A\*** — flood or heuristic search on a grid.
+  Optimal for *one* net; sequential over nets is the standard
+  greedy. Order matters (Kastner, every textbook).
+- **Pattern routing** (Kastner 2002) — try L then Z (one or two
+  bends) before maze. Fast, predictable, used as the first pass in
+  real tools.
+- **River / rubber-band** (Hsu; Maley; Cole & Siegel) — if the
+  sketch is **planar** (no two assigned segments cross), a single
+  layer always exists and can be thickened to width. Polynomial,
+  not a maze.
+- **Maximum planar subset** — drop a minimum (or cheapest) set of
+  nets so the remainder is planar, then river-route. Matches
+  “6 of 8 boards is fine.”
+- Line-probe (Hightower, Mikami–Tabuchi) is the gridless cousin of
+  maze. Skip unless a grid becomes painful.
+
+Do **not** start with negotiated congestion, SAT, or ML.
+
+Power traces are wide (2 A); USB is a pair with a mismatch budget;
+LS is whatever is left. Obstacles: board outline, A7 tooling, other
+pads, already-committed traces.
+
+### Three implementations to try
+
+**R1 — sequential A\* maze.**
+Grid the bottom (~0.1–0.25 mm, or half the minimum space). Paint
+pads, holes, keepouts blocked. Route nets in order USB pairs (as
+two nets, second sees the first), then Vtarget/VUSB (fatter
+clearance), then GND if not poured, then LS. A\* with
+Manhattan + bend penalty. If a net fails, leave it open and
+continue. One optional rip-up of the last *k* LS if a USB/power
+net fails.
+
+This is the baseline. A day of work. Good enough to score S1–S7
+on G1.
+
+**R2 — pattern then maze.**
+Same order as R1. For each net try an L, then a Z, accept if the
+corridor is empty; else A\*. Same fail-open policy. Usually much
+faster and less maze-spaghetti. Implement after R1 if the grid
+search is slow or ugly.
+
+**R3 — planarize, then river.**
+Draw the assignment as straight (or Manhattan) segments. Compute
+a **maximum-weight planar subset** (drop crossing nets, keep USB
+and power preferentially). River-route / rubber-band the rest on
+one layer. Guarantees the kept set is single-layer. Natural
+home for “only 6 of 8 boards.” Use when R1 leaves a mess of
+almost-crossing long nets, or as a *pre*-pass that tells the
+matcher which nets to drop before maze.
+
+R3 can also feed **assignment**: add a crossing penalty to
+\(c(d,s)\), or solve a planar matching for USB/power first. That
+is a later coupling, not v1.
+
+### Policy
+
+- Success = each *kept* net has a legal bottom trace; report
+  coverage (boards fully escaped, nets dropped, by kind).
+- Never fail the whole panel because one LS pad could not escape.
+- USB and power outrank LS when something must be dropped.
+- G1 metrics (\(V, L, U_\Delta, \ldots\)) still apply; \(V\) should
+  be ~0 (PTH is the only “via”).
+
+Ship R1 first. Keep R2/R3 as the next two knobs if coverage or
+aesthetics are bad.
 
 ## Subproblems (still sequential)
 
@@ -282,7 +360,7 @@ not belong in this state.
 2. **Demands + Hall + match** — the model above.
 3. **A7 mate pattern** — several constellation strategies; score
    escape and array-connector fit.
-4. **Route** the 2-layer interposer (easy if 2 is decent).
+4. **Route** — PTH → single-layer best-effort (R1 maze first).
 5. **Hook** `--interposer` on board-array create.
 
 The base tile (ADG2128, MAX4999, switches, host) is a parallel
@@ -369,7 +447,8 @@ Hard (any fail → disqualified, record the reason):
 - every land is in a 4/6/8 array at the strategy’s pitch
 - 5 mm A7 tooling margin kept
 - USB pair not split across arrays; polarity preserved
-- after route: 2-layer DRC clean, power width ≥ 2 A
+- after route: bottom-layer DRC clean, power width ≥ 2 A
+  (PTH pogos; no signal vias)
 
 Soft (lower is better unless noted):
 
