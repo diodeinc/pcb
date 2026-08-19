@@ -41,6 +41,7 @@ fn crossing_penalty(problem: &Problem, out: &Assign, did: DemandId, sid: SlotId)
 pub fn assign(problem: &Problem) -> Assign {
     let mut out = Assign::default();
     let mut total = 0.0;
+    let center = mate_center(problem);
     for kind in Kind::ALL {
         let demands = problem.demands_of(kind);
         let slots = problem.slots_of(kind);
@@ -51,8 +52,8 @@ pub fn assign(problem: &Problem) -> Assign {
         let mut cost = vec![vec![1_000_000_000i64; n]; n];
         for (i, did) in demands.iter().enumerate() {
             for (j, sid) in slots.iter().enumerate() {
-                let c =
-                    slot_cost(problem, *did, *sid) + crossing_penalty(problem, &out, *did, *sid);
+                let c = slot_cost(problem, center, *did, *sid)
+                    + crossing_penalty(problem, &out, *did, *sid);
                 cost[i][j] = (c * SCALE).round() as i64;
             }
         }
@@ -66,7 +67,7 @@ pub fn assign(problem: &Problem) -> Assign {
             }
             let sid = slots[j];
             out.demand_to_slot.insert(*did, sid);
-            total += slot_cost(problem, *did, sid);
+            total += slot_cost(problem, center, *did, sid);
             bind_pins(problem, *did, sid, &mut out);
         }
     }
@@ -74,12 +75,29 @@ pub fn assign(problem: &Problem) -> Assign {
     out
 }
 
-fn angle_of(p: [f64; 2]) -> f64 {
-    (p[1] - 52.5).atan2(p[0] - 37.0)
+/// Center of the mate region: the bounding-box center of all mate pins.
+/// Follows the pattern's folded orientation without extra plumbing.
+fn mate_center(problem: &Problem) -> [f64; 2] {
+    let (mut min, mut max) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+    for p in problem.pins.values() {
+        for k in 0..2 {
+            min[k] = min[k].min(p.xy[k]);
+            max[k] = max[k].max(p.xy[k]);
+        }
+    }
+    if min[0].is_finite() {
+        [(min[0] + max[0]) / 2.0, (min[1] + max[1]) / 2.0]
+    } else {
+        [37.0, 52.5]
+    }
 }
 
-fn ang_delta(a: [f64; 2], b: [f64; 2]) -> f64 {
-    let mut d = (angle_of(a) - angle_of(b)).abs();
+fn angle_of(center: [f64; 2], p: [f64; 2]) -> f64 {
+    (p[1] - center[1]).atan2(p[0] - center[0])
+}
+
+fn ang_delta(center: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
+    let mut d = (angle_of(center, a) - angle_of(center, b)).abs();
     if d > std::f64::consts::PI {
         d = 2.0 * std::f64::consts::PI - d;
     }
@@ -94,7 +112,7 @@ fn centroid(pts: &[[f64; 2]]) -> [f64; 2] {
     ]
 }
 
-fn slot_cost(problem: &Problem, did: DemandId, sid: SlotId) -> f64 {
+fn slot_cost(problem: &Problem, center: [f64; 2], did: DemandId, sid: SlotId) -> f64 {
     let demand = &problem.demands[&did];
     let slot = &problem.slots[&sid];
     let pin_xy: Vec<[f64; 2]> = slot.pins.iter().map(|p| problem.pins[p].xy).collect();
@@ -113,7 +131,7 @@ fn slot_cost(problem: &Problem, did: DemandId, sid: SlotId) -> f64 {
         return 10_000.0 + dist(cxy[0], pin_xy[0]);
     }
     // Angular term uses LS/USB interchangeability so the funnel does not cross.
-    let ang = 30.0 * ang_delta(centroid(&cxy), centroid(&pin_xy));
+    let ang = 30.0 * ang_delta(center, centroid(&cxy), centroid(&pin_xy));
     let geo = match slot.shape {
         Shape::Unit => dist(cxy[0], pin_xy[0]),
         Shape::Ordered { .. } => {

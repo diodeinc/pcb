@@ -123,7 +123,9 @@ fn run_one(
         .values()
         .map(|(x, y, n)| [x / *n as f64, y / *n as f64])
         .collect();
-    let pattern = generate_pattern_at(strategy, PITCH_254, &centroids);
+    let mut pattern = generate_pattern_at(strategy, PITCH_254, &centroids);
+    // The mate follows the ISO fold: rotated 90° on A6/A4-class sheets.
+    pcb_interposer::pattern::orient_pattern(&mut pattern, sheet.w, sheet.h);
     attach_pattern(&mut problem, &pattern);
     let hall_ok = hall(&problem).is_ok();
     let asg: Assign = if hall_ok {
@@ -144,6 +146,8 @@ fn run_one(
     let g0 = score_g0(&problem, &asg, &pattern, &nets);
     let mut score = score_g1(g0, &route, &nets);
     score.hall_ok = hall_ok;
+    let board_rects: Vec<([f64; 2], f64, f64)> =
+        places.iter().map(|p| (p.origin, bw, bh)).collect();
     let svg = viz::svg_panel(
         sheet.w,
         sheet.h,
@@ -151,6 +155,7 @@ fn run_one(
         &pattern,
         &nets,
         &route,
+        &board_rects,
         &format!(
             "{board_name} {} {label}  routed {}/{}  boards {}/{}",
             sheet.name,

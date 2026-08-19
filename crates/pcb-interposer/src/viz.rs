@@ -15,6 +15,7 @@ fn kind_color(k: crate::types::Kind) -> &'static str {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn svg_panel(
     sheet_w: f64,
     sheet_h: f64,
@@ -22,6 +23,7 @@ pub fn svg_panel(
     pattern: &Pattern,
     nets: &[TwoPinNet],
     route: &RouteResult,
+    boards: &[([f64; 2], f64, f64)],
     title: &str,
 ) -> String {
     let sx = 4.0;
@@ -38,11 +40,23 @@ pub fn svg_panel(
         w = sheet_w * sx,
         h = sheet_h * sx
     ));
+    // The A7 mate region in the sheet's folded orientation.
+    let (mw, mh) = crate::pattern::mate_dims(sheet_w, sheet_h);
     parts.push(format!(
         "<rect x=\"0\" y=\"0\" width=\"{w}\" height=\"{h}\" fill=\"none\" stroke=\"#16a34a\" stroke-dasharray=\"4 3\"/>",
-        w = crate::pattern::A7_W * sx,
-        h = crate::pattern::A7_H * sx
+        w = mw * sx,
+        h = mh * sx
     ));
+    // Board outlines, so the assembly panel is legible.
+    for (origin, bw, bh) in boards {
+        parts.push(format!(
+            "<rect x=\"{:.1}\" y=\"{:.1}\" width=\"{:.1}\" height=\"{:.1}\" fill=\"none\" stroke=\"#a8a29e\" stroke-width=\"0.8\"/>",
+            origin[0] * sx,
+            origin[1] * sx,
+            bw * sx,
+            bh * sx
+        ));
+    }
     parts.push(format!(
         r#"<text x="4" y="-8" font-family="ui-sans-serif,system-ui" font-size="12">{}</text>"#,
         esc(title)
@@ -117,6 +131,36 @@ pub fn svg_panel(
             "<circle cx=\"{:.1}\" cy=\"{:.1}\" r=\"1.8\" fill=\"#111\"/>",
             c.xy[0] * sx,
             c.xy[1] * sx
+        ));
+    }
+    // Pogo-array connector bodies (2×3 kits, 2×4 LS arrays) behind the lands.
+    let kind_of_pin: std::collections::HashMap<_, _> = pattern
+        .slots
+        .iter()
+        .flat_map(|s| s.pins.iter().map(move |p| (*p, s.kind)))
+        .collect();
+    let pin_xy: std::collections::HashMap<_, _> =
+        pattern.pins.iter().map(|p| (p.id, p.xy)).collect();
+    for arr in &pattern.arrays {
+        let (mut min, mut max) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+        for id in arr {
+            let xy = pin_xy[id];
+            for k in 0..2 {
+                min[k] = min[k].min(xy[k]);
+                max[k] = max[k].max(xy[k]);
+            }
+        }
+        let body = 1.6; // connector body overhang beyond pin centers (mm)
+        let is_kit = arr
+            .iter()
+            .any(|id| kind_of_pin.get(id) == Some(&crate::types::Kind::UsbHs));
+        let stroke = if is_kit { "#b45309" } else { "#0f766e" };
+        parts.push(format!(
+            "<rect x=\"{:.1}\" y=\"{:.1}\" width=\"{:.1}\" height=\"{:.1}\" rx=\"3\" fill=\"{stroke}\" fill-opacity=\"0.10\" stroke=\"{stroke}\" stroke-width=\"1.0\"/>",
+            (min[0] - body) * sx,
+            (min[1] - body) * sx,
+            (max[0] - min[0] + 2.0 * body) * sx,
+            (max[1] - min[1] + 2.0 * body) * sx,
         ));
     }
     for p in &pattern.pins {

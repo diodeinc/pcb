@@ -1013,26 +1013,148 @@ directness — Seward A6 96 → 196 bends) in exchange for **zero
 free vias, zero drops, and a fabrication-realistic pad
 model**. Everything else improved or held.
 
+### Fold-correct mate orientation, no length tuning
+
+Two corrections after review:
+
+- **The mate follows the ISO fold.** Each halving cuts the
+  sheet's long side, so the A7 descendant at the origin corner
+  alternates orientation: A7 → 74×105, **A6 → 105×74**,
+  A5 → 74×105 (`mate_dims`). Patterns are generated
+  canonically and rotated 90° into the folded footprint
+  (`orient_pattern`) — a proper rotation, never a mirror; the
+  mate is a rigid contract. Of the two fold-valid rotations we
+  commit to the one with the long band along the sheet-edge
+  strip: it scored strictly better than the "funnel-facing"
+  alternative (80/80 vs dropped nets), because boards cover
+  the whole sheet anyway and the quiet margin wins. Everything
+  that assumed a fixed 74×105 mate (gateway normals, the
+  matcher's angular term, the viz outline) now derives its
+  center from the folded region or the pins themselves.
+- **Length matching is deleted.** The rails are parallel by
+  construction, so residual intra-pair skew is a couple of
+  corner miters — measured at ≤ 0.65 mm untuned on the whole
+  corpus, far inside any USB 2.0 budget. The meander
+  machinery wasn't worth its copper or its code; UΔ is now a
+  reported number and a ranking tie-breaker only.
+
+**Connector formats are now a hard rule**: 2.54 mm pitch, and
+only **2×3** and **2×4** blocks — every eval constellation is
+exactly 8× 2×3 kits + 7× 2×4 LS arrays, and a test asserts
+both the formats and the pitch. `Pattern` now carries the
+per-connector pin groups (`arrays`, derived from adjacency),
+and the viz draws each connector body (amber = kit, teal = LS
+array) plus the board outlines, so an assembly panel reads as
+boards and connectors rather than floating test points.
+
+### Connector spacing — S11 wins (2026-08-19, cont.)
+
+S10's 3.2 mm pin-gap leaves ~zero housing-to-housing room, and
+a single L-band cannot give more (15 structures on ~147 mm of
+band). The generators were refactored into one engine (a
+structure list of the 15 kits/arrays + a band walker /
+site grid) and two roomy layouts added:
+
+- **S11 — perimeter ring**: double-row bands along **all four**
+  mate edges, **9 mm between connectors**.
+- **S12 — cluster grid**: 3×5 structure sites across the mate
+  interior, ≥ 11 mm streets in every direction.
+
+Getting these to route exposed the last via-legality bug: the
+old check probed the *dilated* grid maps and false-rejected
+via spots whenever a perfectly legal trace passed nearby (a
+0.4 mm-wide phantom band). It now checks exact distances
+against a committed-copper registry. That fix alone recovered
+several nets on every layout.
+
+| Strategy | Boards | Loose pairs | Worst-panel Q |
+|---|---|---|---|
+| **S11 perimeter, 9 mm** | **80/80** | **0** | **16.4** |
+| S10 L-band, 3.2 mm | 80/80 | 2 | 71.4 |
+| S12 grid, ≥11 mm | 79/80 | 1 | — |
+
+**S11 is the new committed constellation**: full corpus, zero
+loose pairs, zero DRC, one via-in-pad per net, real housing
+clearance, and the best worst-panel quality. Kits spread
+around the whole perimeter also suit the angular matcher.
+
+### Symmetric S11 + the multi-pass router (2026-08-19, cont.)
+
+Two more directives closed out the day: make S11 symmetric
+(extra lands are fine), and kill the remaining routing jank
+with a multi-pass architecture.
+
+**Symmetric S11.** Four structures on each of the four mate
+edges, every band mirror-ordered `[A K K A]` and centered:
+8 kits + 8 arrays with mirror and 180° placement symmetry.
+The sixteenth structure is a **spare all-GND 2×4** — eight
+extra pour-connected lands (112 total, 104 electrical) that
+buy the symmetry. Still only 2×3/2×4 blocks at 2.54 mm,
+asserted by test.
+
+**Multi-pass router.** The grid phase became commit/uncommit
+(dynamic maps are counters; committed copper lives in an
+exact registry) and runs:
+
+1. **Greedy** in class order, longest first, cheapest of both
+   layers per net.
+2. **Quality sweeps** (Freerouting-style): rip each net up,
+   worst cost first, reroute in the finished context, keep
+   strictly better only; ≤ 4 sweeps, stop when a sweep
+   accepts nothing. This is where unlucky-order detours
+   straighten.
+3. **Escalating rescue** for nets still failing, all atomic
+   with full revert: retry in freed space → **reassign** to
+   any free land of the same kind (LS/VUSB
+   interchangeability) → **peer swap** (exchange lands with a
+   routed same-kind net and reroute both — full-pool kinds) →
+   **shove** (cheapest soft path with occupied cells costed,
+   rip only the crossed nets, route, put them back).
+
+Plus: 0.2 mm grid (a 2 mm TP cluster leaves a 0.19 mm legal
+sliver a 0.4 mm grid never samples), KiCad turn-cost ratio
+(45° = one step, 90° = 3×), a 45° two-segment **bypass
+operator** in smoothing (collapses staircases a straight
+shortcut can't), and land via-reservations became dynamic
+with a lifecycle (reserved while unrouted, lapse at commit)
+so they never over-protect.
+
+**Corpus grew**: `mockingbird-feather` (Feather, CC3501E +
+on-board CMSIS-DAP probe, 50.8×22.9 mm) joined with 8
+injected ict pads — gnd, vtarget(V3V3), vusb(VBUS),
+usb_dp/dm (to the DAP probe), and the G0's swdio/swclk/nrst.
+
+**Result: 288/288 boards, 1656/1656 nets, 0 DRC, 0 loose
+pairs, 0 free vias** over 5 boards × A7/A6/A5 × 3 strategies;
+S11 ranks first (worst-panel Q 15.4). Sharp bends: 70 across
+all 15 S11 cases (six panels have zero). GND confirmed
+end-to-end: extracted, 24 lands in the constellation, never
+routed — poured on the bottom, stitching vias deferred.
+Runtime ~1:45 for the 45-case corpus.
+
 ## Open
 
-- A7 at the origin: 74×105 or 105×74. S10 was only scored in
-  74×105; the transpose is a cheap variant to try.
-- 2.00 mm pitch S10 variant (shorter band, denser kits).
+- Emit a real `.kicad_pcb` (outline, SMT pogo pads, in-pad
+  terminal vias, mate footprints, traces, GND zones) and run
+  KiCad DRC as the external check on the self-DRC.
+- GND stitching-via placement pass over the bottom pour.
+- Hook `--interposer` on `board-array create` and re-score S11
+  on production packings.
+- Land the mockingbird-feather fixture pads in the real repo
+  (they live in a corpus copy today; the zen diff is in the
+  Terminal-via section's corpus note).
 - Exact panel tooling we copy on the top face (diameter, positions).
-- Whether the 16 GND lands are one net or should stay as 8×2 for
-  array connectors even if poured together.
+- 2.00 mm pitch S11 variant if a denser mate is ever needed.
 - USB polarity is treated as fixed (\(G_s = \{e\}\)) unless the mux
   path later proves otherwise.
-- Loose-pair fallback is reported but not budgeted: decide how
-  many loose pairs a shippable fixture tolerates (likely 0 →
-  those boards drop instead).
-- Emit a real `.kicad_pcb` (outline, PTH pogos, mate
-  footprints, traces, vias, GND zones) and run KiCad DRC as
-  the external check on the self-DRC.
-- Hook `--interposer` on `board-array create` and re-score S10
-  on production packings; teach the packer to keep the mate
-  band clear of pogo drills where it can.
 - 4-layer remains unexplored — and now looks unnecessary.
 
-`Problem` / `hall` / `assign` / `router` are implemented. The
-open list is now artifact emission and the board-array hook.
+Resolved along the way: mate orientation is settled by the ISO
+fold rule (rotated on A6-class sheets); the loose-pair fallback
+still exists but fires zero times on the corpus; GND lands stay
+electrically one poured net while remaining physically grouped
+in the 2×N connectors.
+
+`Problem` / `hall` / `assign` / `router` / patterns are
+implemented. The open list is artifact emission and the
+board-array hook.

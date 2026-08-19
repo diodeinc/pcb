@@ -226,7 +226,8 @@ pub fn quality_score(s: &Score) -> f64 {
     1000.0 * (1.0 - frac)
         + 200.0 * s.drc_violations as f64
         + 30.0 * s.loose_pairs as f64
-        + 8.0 * s.u_delta_routed
+        // Pair skew is reported, not tuned; keep it a tie-breaker only.
+        + 1.0 * s.u_delta_routed
         + 25.0 * (s.detour - 1.0).max(0.0)
         + 12.0 * per_net(s.v_vias)
         + 6.0 * per_net(s.bends90)
