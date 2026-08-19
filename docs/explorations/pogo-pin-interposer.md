@@ -721,7 +721,12 @@ Per panel, S8+R4:
 Single-layer never generalized. 2-layer + edge kits is what
 moved the **count**. It did not move **quality**.
 
-## Handoff (results are not good enough)
+## Handoff (results are not good enough) — **superseded**
+
+Everything below in this section described the R4 state. The
+follow-up campaign (see **R5 + S10** at the end of this note)
+did items 2, 3, 4 and 7 of the list, replaced the router, and
+deleted R1–R4. Kept for the reasoning record.
 
 The next person should treat S8+R4 as a **connectivity
 existence proof**, not a layout. The interposer is still
@@ -809,19 +814,225 @@ Do not spend another cycle adding S6/S7 or another A\*
 variant. The connectivity experiment is done. The layout
 experiment has not started.
 
+## R5 + S10 campaign (2026-08-19)
+
+Second campaign. Goal: replace the maze with a router whose
+output looks like a board a person would sign off, handle USB
+as true diff pairs and power as real 2 A copper, and pick the
+bottom constellation we would actually commit to. R1–R4 and
+the S0/S1 score are **deleted**; `route.rs` keeps only the
+shared net/trace types.
+
+### The router (R5, `router.rs`)
+
+One engine, four stages. Design cross-checked against what is
+still SOTA-but-simple: PathFinder-family negotiation, KiCad
+PNS diff pairs, Freerouting pull-tight.
+
+1. **Octilinear A\*** on a 0.4 mm 2-layer grid with direction
+   in the state: step 10/14, 45° turn +6, 90° +30, >90°
+   forbidden, via +90 (and a via needs a free 3×3 on both
+   layers — a barrel is wider than a thin trace). Per-class
+   maps with real widths and clearances: LS 0.25/0.2 mm,
+   power 0.9 mm (2 A at 1 oz per IPC-2221) /0.25, USB ribbon
+   envelope 0.55/0.2. Static blockage (pads, holes, edge) is
+   exemptable near a net's own terminals — with deny disks so
+   a foreign pad inside the exemption keeps its blockage;
+   committed routes are never exemptable. That split is what
+   finally made "routed" mean "legal".
+2. **Rip-up by reordering.** Greedy passes; failed nets are
+   promoted to the front of their class next pass; keep the
+   best attempt (fewest failures, then loose pairs, then
+   vias). Converges in ≤ 3 passes on this corpus.
+3. **USB pairs as one centerline ribbon.** DP/DM collapse to
+   a single fat net; gateway waypoints hold the ribbon
+   perpendicular to both pad axes and pick the waypoint side
+   so polarity never twists; every kit's entry corridor is
+   pre-reserved so nobody parks across it; the fixed tails
+   are validated before the A\* runs. After smoothing, offset
+   ±(w+gap)/2 into two rails — parallel by construction —
+   then triangular bumps on the shorter rail (clearance-
+   checked, split into smaller bumps when tight) length-match
+   the pair. If no legal ribbon exists (pogo sitting on the
+   band), the pair falls back to two individual traces and is
+   counted in `loose_pairs`, never silently.
+4. **Gridless smoothing + self-DRC.** Line-of-sight
+   shortcutting per layer run against an exact capsule world
+   (two global rounds), so traces become a few long straight
+   segments; then every final segment is distance-checked
+   against everything else. `drc` and `min_gap` in the score
+   are measured, not assumed.
+
+### The constellation (S10 "ring")
+
+All 104 lands in a double-row band along the two funnel-facing
+A7 edges: 15 structures, alternating 8 six-pin kits
+(outer column DP DM VUSB, inner VT VT GND) and 7 2×4 LS
+arrays (8 of their inner pads are the remaining GND). No core
+to clog; every land is at most one pad deep from open copper.
+This is the S5a idea taken to its limit, and it beats S8/S9
+on every axis at once (vias, bends, detour, completion).
+
+### Physical conflicts, suppression, fail-open
+
+A pogo is a PTH drill through the interposer; a board sitting
+over the mate band puts drills onto lands. Slots whose lands
+sit within a per-kind radius of any pogo (LS 1.45 mm, USB
+1.4, power 1.65 — pad + clearance + trace half + grid slack)
+are **suppressed** before matching; the pins stay as routing
+obstacles. If suppression breaks Hall, the driver drops the
+board that kills the most lands and retries — the 6-of-8
+policy, now driven by real geometry instead of crossings.
+
+### Score (replaces S0/S1)
+
+`quality_score`, lower is better: 1000·(boards incomplete
+fraction) + 200·DRC + 30·loose pair + 8·UΔ + 25·(detour−1)
++ per-net via/bend terms. Completion gates; a failed net can
+never help a strategy win. Metrics now measured on final
+copper: vias, bends (>30°), sharp bends (>60°), detour
+(routed / Euclidean), routed pair mismatch UΔ, DRC count,
+min gap.
+
+### Results (tagged corpus × A7/A6/A5, S10+R5)
+
+| Board | A7 | A6 | A5 | notes |
+|---|---|---|---|---|
+| Renfield | 4/4 | 8/8 | 8/8 | 0 DRC everywhere |
+| Feign | 4/4 | 8/8 | 8/8 | |
+| Demeter | 5/5 | 7/7 | 8/8 | 0 sharp bends |
+| Seward (USB) | 4/4 | 7/8 | 7/8 | 1 board each physically on the band; 3+1 loose pairs |
+
+S10 aggregate: **78/80 boards, 100 % of kept nets, 0 DRC
+violations, min gap ≥ 0.2 mm, UΔ ≤ 0.10 mm on every ribbon
+pair**, detour 1.05–1.10, ~0.3 vias/net. Versus R4 on the
+same corpus: 1935 right-angle bends → 269 sharp bends (almost
+all USB pad breakouts), 1628 → 709 vias (S10 alone: 159),
+detour 1.23 → 1.08, and R4's numbers were on copper that was
+never legality-checked at all. S8/S9 under R5 lose one LS or
+board on several panels and never beat S10 on quality.
+
+The two lost Seward boards are not router failures: their
+pogo drills land on kit lands, so no fixed constellation can
+serve them at that panel position. That is a packing-level
+fact the board-array integration will have to own (keep the
+mate corner clear, or accept n−1 boards on dense panels).
+
+### What R5 changed about the earlier conclusions
+
+- "2-layer + vias is what moved the count" still holds, but
+  most S10 routes are near-planar: the ring removed the A7
+  mouth, and via counts fell 5–10×.
+- Sequential greedy is enough **when legality is honest and
+  ordering retries exist**; PathFinder-style soft negotiation
+  was designed but not needed at this scale.
+- The matcher's job grew: suppression means the constellation
+  adapts to each panel by *assignment*, not by moving copper.
+
+## Terminal-via revision (2026-08-19, later the same day)
+
+Three directives changed the physical model and paid off
+everywhere: **no free vias** (layer changes only *at* a net's
+own pads), **SMT pogo pads** (top copper, via optional — no
+drill through the interposer), and **do the diff-pair ends
+properly**.
+
+### The model
+
+Pogo pads are SMT on top; mate lands are SMT on bottom. Every
+net therefore crosses layers exactly once, through a via-in-pad
+at one of its own terminals: a **top run** dives at its mate
+land, a **bottom run** rises at its pogo pad. Nothing else
+drills the board. Consequences:
+
+- The router lost a dimension. No z in the A* state, no via
+  transitions, no via costs — each net is a **single-layer
+  2-D path** plus a layer choice. Both layers are searched
+  and the cheaper one wins, after a handicap: pairs and power
+  lean top (the bottom pour stays whole), LS follows an H/V
+  discipline (horizontal-dominant nets lean top, vertical
+  bottom) because without mid-route vias a long trace is a
+  *wall*, and crossing nets must land on opposite layers.
+- The pogo-drill-versus-land collision class **vanished**.
+  Suppression, per-kind conflict radii, and the fail-open
+  board drop are all deleted; Seward A6/A5 route 8/8.
+- Via legality is a real constraint with real teeth: a barrel
+  exists on both layers, so it must clear every foreign pad on
+  either side, committed copper (checked against the dynamic
+  maps in exactly the extra ring a barrel adds over a trace),
+  and earlier traces must not park on an assigned land's via
+  spot (those spots are statically reserved). The matcher
+  refuses via-locked pairings up front (`via_feasible` in the
+  assignment cost), which is LS interchangeability doing load
+  bearing work again.
+- The bottom is a near-solid GND pour with most signal on top
+  — microstrip over a return plane, which is what the USB
+  ribbons wanted anyway.
+
+### Diff pairs, done properly
+
+Read the actual KiCad PNS source (`pns_diff_pair.cpp`,
+`pns_meander.cpp`, `direction_45.cpp`) and took its geometry:
+
+- **Two-stage entry (DP_GATEWAY):** both rails leave their
+  pads straight along the pair-axis perpendicular by a fan
+  distance (0.9 mm), then one slanted segment each converges
+  the separation from the pad pitch down to the 0.35 mm rail
+  gap at anchors g/2 either side of the trunk waypoint. Every
+  corner is obtuse by construction; polarity still can't
+  twist. The stubs are validated before search, stamped after,
+  and live in the capsule world so no later net can cross a
+  taper (that was a real DRC leak in the first cut).
+- **Constrained trunk:** the A* seeds the entry direction and
+  restricts the arrival direction (KiCad's allowed-entry-angle
+  mask), so the trunk never kinks against the stubs; smoothing
+  pins the trunk's first and last segments for the same
+  reason. All waypoint variants are scored and the cheapest
+  wins — taking the first workable one produced hooked
+  approaches.
+- **Length matching as 45° chamfered trapezoids** (KiCad's
+  meander shape, amplitude solved from the needed extra
+  length), placed on the shorter rail away from the
+  centerline, clearance-checked, fewest-first to a 0.25 mm
+  target.
+
+### Results (S10, full corpus)
+
+**80/80 boards. 426/426 kept nets. 0 DRC violations. 0 free
+vias — one terminal via per net by construction.** Ribbon
+UΔ ≤ 0.25 mm except one crowded Seward A6 pair at 1.24 mm
+(the conservative spec budget); two Seward A5 pairs go loose
+because one rail can only via at its land while the other can
+only via at its pogo — a coupled ribbon cannot mix modes, and
+the loose fallback is the honest answer. Detour 1.04–1.19
+(Seward A6 1.29). Runtime ~40 s for the 36-case corpus.
+
+Trade recorded honestly: versus the PTH model the bend count
+rose (the H/V split and single-layer walls cost some
+directness — Seward A6 96 → 196 bends) in exchange for **zero
+free vias, zero drops, and a fabrication-realistic pad
+model**. Everything else improved or held.
+
 ## Open
 
-- A7 at the origin: 74×105 or 105×74.
+- A7 at the origin: 74×105 or 105×74. S10 was only scored in
+  74×105; the transpose is a cheap variant to try.
+- 2.00 mm pitch S10 variant (shorter band, denser kits).
 - Exact panel tooling we copy on the top face (diameter, positions).
 - Whether the 16 GND lands are one net or should stay as 8×2 for
   array connectors even if poured together.
 - USB polarity is treated as fixed (\(G_s = \{e\}\)) unless the mux
   path later proves otherwise.
-- 4-layer only if a *real* 2-layer layout (not R4 maze) cannot
-  hold USB or 2 A on A5. That experiment has not been run.
-- How to copy panel tooling onto the interposer top once
-  `--interposer` exists.
+- Loose-pair fallback is reported but not budgeted: decide how
+  many loose pairs a shippable fixture tolerates (likely 0 →
+  those boards drop instead).
+- Emit a real `.kicad_pcb` (outline, PTH pogos, mate
+  footprints, traces, vias, GND zones) and run KiCad DRC as
+  the external check on the self-DRC.
+- Hook `--interposer` on `board-array create` and re-score S10
+  on production packings; teach the packer to keep the mate
+  band clear of pogo drills where it can.
+- 4-layer remains unexplored — and now looks unnecessary.
 
-`Problem` / `hall` / `assign` are implemented. The open list
-is now layout quality and the board-array hook, not the
-matcher.
+`Problem` / `hall` / `assign` / `router` are implemented. The
+open list is now artifact emission and the board-array hook.

@@ -48,8 +48,9 @@ pub fn svg_panel(
         esc(title)
     ));
     let routed: std::collections::HashSet<_> = route.traces.iter().map(|t| t.contact).collect();
+    let poured: std::collections::HashSet<_> = route.poured.iter().copied().collect();
     for n in nets {
-        if routed.contains(&n.contact) {
+        if routed.contains(&n.contact) || poured.contains(&n.contact) {
             continue;
         }
         parts.push(format!(
@@ -79,8 +80,9 @@ pub fn svg_panel(
                 ""
             };
             let op = if z == 1 { "0.75" } else { "0.92" };
+            let sw = (t.width * sx).max(0.8);
             parts.push(format!(
-                "<polyline points=\"{pts}\" fill=\"none\" stroke=\"{}\" stroke-width=\"1.6\" stroke-linejoin=\"round\" stroke-linecap=\"round\" opacity=\"{op}\"{dash}/>",
+                "<polyline points=\"{pts}\" fill=\"none\" stroke=\"{}\" stroke-width=\"{sw:.2}\" stroke-linejoin=\"round\" stroke-linecap=\"round\" opacity=\"{op}\"{dash}/>",
                 kind_color(t.kind)
             ));
         };
@@ -99,6 +101,14 @@ pub fn svg_panel(
                 "<rect x=\"{:.1}\" y=\"{:.1}\" width=\"3.4\" height=\"3.4\" fill=\"#111\" stroke=\"#fbbf24\" stroke-width=\"0.8\"/>",
                 v[0] * sx - 1.7,
                 v[1] * sx - 1.7
+            ));
+        }
+        if let Some(v) = t.term_via {
+            // Terminal via-in-pad: a small annulus at the pad.
+            parts.push(format!(
+                "<circle cx=\"{:.1}\" cy=\"{:.1}\" r=\"1.9\" fill=\"#fff\" stroke=\"#111\" stroke-width=\"1.0\"/>",
+                v[0] * sx,
+                v[1] * sx
             ));
         }
     }
@@ -136,7 +146,7 @@ pub struct CaseRow {
     pub note: String,
 }
 
-pub fn html_report(rows: &[CaseRow], ranking: &[(String, f64, f64)]) -> String {
+pub fn html_report(rows: &[CaseRow], ranking: &[(String, f64)]) -> String {
     let mut html = String::from(
         r#"<!DOCTYPE html><html><head><meta charset="utf-8"><title>Interposer POC</title>
 <style>
@@ -149,7 +159,11 @@ h1{font-size:22px} h2{font-size:18px;margin-top:28px}
 .note{color:#555}
 </style></head><body>
 <h1>Pogo-pin interposer POC</h1>
-<p>PTH pogos. <b>R4</b> is 2-layer HV A* with vias (solid = bottom, dashed = top, yellow squares = vias). <b>S8/S9</b> put USB/power on the A7 edges facing the panel. Maze totals exclude poured GND. Success = fully escaped boards.</p>
+<p>PTH pogos, router <b>R5</b>: octilinear A* + gridless smoothing, true USB
+diff-pair ribbons (length-matched), 0.9&nbsp;mm 2&nbsp;A power, self-DRC
+(solid = bottom, dashed = top, yellow squares = vias). <b>S10</b> is the
+ring constellation on the funnel-facing A7 edges. Maze totals exclude poured
+GND. Success = fully escaped boards.</p>
 "#,
     );
     // Dashboard
@@ -213,8 +227,16 @@ h1{font-size:22px} h2{font-size:18px;margin-top:28px}
     }
     let mut rows_s: Vec<_> = by.into_iter().collect();
     rows_s.sort_by(|a, b| {
-        let pa = if a.1[1] == 0 { 0.0 } else { a.1[0] as f64 / a.1[1] as f64 };
-        let pb = if b.1[1] == 0 { 0.0 } else { b.1[0] as f64 / b.1[1] as f64 };
+        let pa = if a.1[1] == 0 {
+            0.0
+        } else {
+            a.1[0] as f64 / a.1[1] as f64
+        };
+        let pb = if b.1[1] == 0 {
+            0.0
+        } else {
+            b.1[0] as f64 / b.1[1] as f64
+        };
         pb.partial_cmp(&pa).unwrap_or(std::cmp::Ordering::Equal)
     });
     for (k, e) in rows_s {
@@ -230,15 +252,10 @@ h1{font-size:22px} h2{font-size:18px;margin-top:28px}
     }
     html.push_str("</table>");
     html.push_str(
-        "<h2>Strategy ranking (S0 / S1)</h2><table><tr><th>key</th><th>S0</th><th>S1</th></tr>",
+        "<h2>Strategy ranking (worst-panel quality Q, lower is better)</h2><table><tr><th>strategy</th><th>Q</th></tr>",
     );
-    for (k, s0, s1) in ranking {
-        html.push_str(&format!(
-            "<tr><td>{}</td><td>{:.3}</td><td>{:.3}</td></tr>",
-            esc(k),
-            s0,
-            s1
-        ));
+    for (k, q) in ranking {
+        html.push_str(&format!("<tr><td>{}</td><td>{:.1}</td></tr>", esc(k), q));
     }
     html.push_str("</table><h2>Best board coverage by panel</h2><table><tr><th>board</th><th>sheet</th><th>best</th><th>boards</th><th>maze</th><th>USB</th><th>power</th><th>LS</th><th>GND pour</th></tr>");
     let mut best_cov: std::collections::BTreeMap<(String, String), &CaseRow> =
@@ -278,8 +295,8 @@ h1{font-size:22px} h2{font-size:18px;margin-top:28px}
     }
     html.push_str("</table><h2>Cases</h2><table><tr>");
     for h in [
-        "board", "sheet", "S", "hall", "A", "X", "Lmax", "UΔ", "narr", "maze", "USB", "power",
-        "LS", "GND", "boards", "L",
+        "board", "sheet", "S", "hall", "maze", "USB", "power", "LS", "GND", "boards", "L", "vias",
+        "bends", "90°", "detour", "UΔ", "loose", "DRC", "gap",
     ] {
         html.push_str(&format!("<th>{h}</th>"));
     }
@@ -287,16 +304,11 @@ h1{font-size:22px} h2{font-size:18px;margin-top:28px}
     for r in rows {
         let s = &r.score;
         html.push_str(&format!(
-            "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{:.1}</td><td>{}</td><td>{:.1}</td><td>{:.2}</td><td>{}</td><td>{}/{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}/{}</td><td>{:.1}</td></tr>",
+            "<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}/{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}/{}</td><td>{:.0}</td><td>{}</td><td>{}</td><td>{}</td><td>{:.2}</td><td>{:.2}</td><td>{}</td><td>{}</td><td>{:.2}</td></tr>",
             esc(&r.board),
             esc(&r.sheet),
             esc(&r.strategy),
             if s.hall_ok { "ok" } else { "fail" },
-            s.a_mm,
-            s.x_cross,
-            s.l_max,
-            s.u_delta,
-            s.n_arr,
             s.nets_routed,
             s.nets_total,
             s.usb.fmt_maze(),
@@ -305,7 +317,15 @@ h1{font-size:22px} h2{font-size:18px;margin-top:28px}
             s.gnd.fmt_gnd(),
             s.boards_complete,
             s.boards_total,
-            s.l_routed
+            s.l_routed,
+            s.v_vias,
+            s.bends,
+            s.bends90,
+            s.detour,
+            s.u_delta_routed,
+            s.loose_pairs,
+            s.drc_violations,
+            s.min_gap_mm
         ));
     }
     html.push_str("</table>");

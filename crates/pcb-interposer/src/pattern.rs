@@ -16,6 +16,9 @@ pub enum PatternKind {
     S8,
     /// Per-board kits placed on the A7 perimeter in the boards' angular order.
     S9,
+    /// Ring: every land in a double-row band along the two funnel-facing A7
+    /// edges. No core to clog; every pad is at most one pad deep.
+    S10,
 }
 
 impl PatternKind {
@@ -26,16 +29,17 @@ impl PatternKind {
             Self::S3 => "S3",
             Self::S8 => "S8",
             Self::S9 => "S9",
+            Self::S10 => "S10",
         }
     }
 
-    pub fn all() -> [PatternKind; 5] {
-        [Self::S1, Self::S2, Self::S3, Self::S8, Self::S9]
+    pub fn all() -> [PatternKind; 6] {
+        [Self::S1, Self::S2, Self::S3, Self::S8, Self::S9, Self::S10]
     }
 
     /// Placement strategies we iterate for the high-coverage POC.
     pub fn eval() -> [PatternKind; 3] {
-        [Self::S8, Self::S9, Self::S2]
+        [Self::S10, Self::S8, Self::S9]
     }
 }
 
@@ -127,6 +131,152 @@ fn perimeter_sites() -> Vec<[f64; 2]> {
     s
 }
 
+/// The S10 ring: an L-shaped double-row band along the +X and +Y edges of
+/// the A7 (the sides facing the rest of the panel). Structures alternate
+/// K L K L … K: 8 six-pin kits (DP DM VUSB outer; VT VT GND inner) and
+/// 7 eight-pin LS arrays (outer column LS, inner column LS + one GND).
+fn generate_ring(pitch: f64) -> Pattern {
+    let mut next_pin = 0u32;
+    let mut next_slot = 0u32;
+    let mut pins = Vec::new();
+    let mut slots = Vec::new();
+    let mut n_arrays = 0usize;
+
+    // Band geometry. Outer row hugs the usable margin; inner row is one
+    // pitch toward the A7 interior.
+    let right_outer_x = A7_W - MARGIN - 1.5; // 67.5
+    let top_outer_y = A7_H - MARGIN - 2.5; // 97.5
+    // The top band stops well short of the right band's x span, so the right
+    // band may use the full height; the corner pocket stays empty.
+    let right_y = (MARGIN + 1.5, A7_H - MARGIN - 1.0); // walk +Y
+    let top_x = (MARGIN + 1.5, right_outer_x - pitch - 4.0); // walk +X
+    let gap = 3.2;
+
+    // Structure = list of rows along the walk; each row = (inner fn, outer fn).
+    #[derive(Clone, Copy, PartialEq)]
+    enum F {
+        Dp,
+        Dm,
+        Vusb,
+        Vt,
+        Gnd,
+        Ls,
+    }
+    let kit: [(F, F); 3] = [(F::Vt, F::Dp), (F::Vt, F::Dm), (F::Gnd, F::Vusb)];
+    let ls_arr = |extra_gnd: usize| -> Vec<(F, F)> {
+        (0..4)
+            .map(|r| {
+                let inner = if r == 3 && extra_gnd > 0 {
+                    F::Gnd
+                } else {
+                    F::Ls
+                };
+                let inner = if r == 2 && extra_gnd > 1 {
+                    F::Gnd
+                } else {
+                    inner
+                };
+                (inner, F::Ls)
+            })
+            .collect()
+    };
+
+    // 8 kits and 7 LS arrays, interleaved. One LS array carries two GND so
+    // the 16-land GND budget is met (8 kit + 8 array GND).
+    let mut structures: Vec<Vec<(F, F)>> = Vec::new();
+    for i in 0..15 {
+        if i % 2 == 0 {
+            structures.push(kit.to_vec());
+        } else {
+            structures.push(ls_arr(if i == 1 { 2 } else { 1 }));
+        }
+    }
+
+    let mut on_top_band = false;
+    let mut pos = right_y.0;
+    for rows in &structures {
+        let extent = (rows.len() - 1) as f64 * pitch;
+        if !on_top_band && pos + extent > right_y.1 {
+            on_top_band = true;
+            pos = top_x.0;
+        }
+        assert!(
+            !on_top_band || pos + extent <= top_x.1 + 1e-6,
+            "S10 band overflow at pitch {pitch}"
+        );
+        // Emit pins row-major (inner, outer per row) and collect by function.
+        let mut by_fn: std::collections::HashMap<u8, Vec<MatePinId>> = Default::default();
+        let fkey = |f: F| -> u8 {
+            match f {
+                F::Dp => 0,
+                F::Dm => 1,
+                F::Vusb => 2,
+                F::Vt => 3,
+                F::Gnd => 4,
+                F::Ls => 5,
+            }
+        };
+        for (r, (inner, outer)) in rows.iter().enumerate() {
+            for (f, is_outer) in [(*inner, false), (*outer, true)] {
+                let xy = if !on_top_band {
+                    let x = if is_outer {
+                        right_outer_x
+                    } else {
+                        right_outer_x - pitch
+                    };
+                    [x, pos + r as f64 * pitch]
+                } else {
+                    let y = if is_outer {
+                        top_outer_y
+                    } else {
+                        top_outer_y - pitch
+                    };
+                    [pos + r as f64 * pitch, y]
+                };
+                let id = MatePinId(next_pin);
+                next_pin += 1;
+                pins.push(MatePin { id, xy });
+                by_fn.entry(fkey(f)).or_default().push(id);
+            }
+        }
+        // Slots for this structure.
+        if let (Some(dp), Some(dm)) = (
+            by_fn.get(&0).and_then(|v| v.first()),
+            by_fn.get(&1).and_then(|v| v.first()),
+        ) {
+            push_ordered_pair(&mut slots, *dp, *dm, &mut next_slot);
+        }
+        if let Some([vt0, vt1]) = by_fn.get(&3).map(|v| v.as_slice()) {
+            push_vt_bank(&mut slots, *vt0, *vt1, &mut next_slot);
+        }
+        for (key, kind) in [(2u8, Kind::Vusb), (4, Kind::Gnd), (5, Kind::Ls)] {
+            if let Some(ids) = by_fn.get(&key) {
+                for id in ids {
+                    let sid = SlotId(next_slot);
+                    next_slot += 1;
+                    slots.push(Slot {
+                        id: sid,
+                        kind,
+                        shape: Shape::Unit,
+                        pins: vec![*id],
+                    });
+                }
+            }
+        }
+        n_arrays += 1;
+        pos += extent + gap;
+    }
+
+    Pattern {
+        kind: PatternKind::S10,
+        pitch,
+        pins,
+        slots,
+        n_arrays,
+        unused_pins: 0,
+    }
+}
+
 /// S8/S9: edge-facing USB+power kits, wide-street LS field.
 pub fn generate_pattern_at(kind: PatternKind, pitch: f64, centroids: &[[f64; 2]]) -> Pattern {
     if !matches!(kind, PatternKind::S8 | PatternKind::S9) {
@@ -211,6 +361,9 @@ pub fn generate_pattern_at(kind: PatternKind, pitch: f64, centroids: &[[f64; 2]]
 }
 
 pub fn generate_pattern(kind: PatternKind, pitch: f64) -> Pattern {
+    if kind == PatternKind::S10 {
+        return generate_ring(pitch);
+    }
     let mut next_pin = 0u32;
     let mut next_slot = 0u32;
     let mut pins = Vec::new();
@@ -350,6 +503,7 @@ pub fn generate_pattern(kind: PatternKind, pitch: f64) -> Pattern {
             // Filled by generate_pattern_at — fallback to edge-facing S8.
             return generate_pattern_at(kind, pitch, &[]);
         }
+        PatternKind::S10 => unreachable!(),
     }
 
     let unused = 0; // generators emit exactly the 104-land budget when filled

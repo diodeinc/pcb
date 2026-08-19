@@ -1,4 +1,5 @@
-//! End-to-end interposer POC driver.
+//! End-to-end interposer POC driver: extract → pack → bundle → suppress →
+//! Hall (fail-open board drop) → assign → route (R5) → score → report.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -9,11 +10,10 @@ use clap::Parser;
 use pcb_interposer::extract::{board_bbox_from_kicad, extract_kicad_path, parse_zen_ict_map};
 use pcb_interposer::instantiate::{self, Sheet};
 use pcb_interposer::pattern::{PITCH_254, PatternKind, attach_pattern, generate_pattern_at};
-use pcb_interposer::route::{RouterKind, nets_from_assign, route};
-use pcb_interposer::score::{rank_s1, score_g0, score_g1};
+use pcb_interposer::score::quality_score;
 use pcb_interposer::types::{Assign, BoardId, Problem};
 use pcb_interposer::viz::{self, CaseRow};
-use pcb_interposer::{assign, bundle, hall};
+use pcb_interposer::{assign, bundle, hall, nets_from_assign, route_r5, score_g0, score_g1};
 
 #[derive(Parser, Debug)]
 #[command(name = "interposer-poc")]
@@ -53,7 +53,6 @@ fn run_one(
     pcb: &Path,
     sheet: Sheet,
     strategy: PatternKind,
-    router: RouterKind,
 ) -> Result<CaseRow> {
     let zen_src = fs::read_to_string(zen)?;
     let ict_map = parse_zen_ict_map(&zen_src);
@@ -73,8 +72,14 @@ fn run_one(
     if !local.is_empty() {
         let minx = local.iter().map(|c| c.xy[0]).fold(f64::INFINITY, f64::min);
         let miny = local.iter().map(|c| c.xy[1]).fold(f64::INFINITY, f64::min);
-        let maxx = local.iter().map(|c| c.xy[0]).fold(f64::NEG_INFINITY, f64::max);
-        let maxy = local.iter().map(|c| c.xy[1]).fold(f64::NEG_INFINITY, f64::max);
+        let maxx = local
+            .iter()
+            .map(|c| c.xy[0])
+            .fold(f64::NEG_INFINITY, f64::max);
+        let maxy = local
+            .iter()
+            .map(|c| c.xy[1])
+            .fold(f64::NEG_INFINITY, f64::max);
         let pad = 1.5;
         origin = [origin[0].min(minx - pad), origin[1].min(miny - pad)];
         let mx = (origin[0] + bw).max(maxx + pad);
@@ -88,7 +93,7 @@ fn run_one(
     let n_local = local.len();
     let n_boards = places.len();
 
-    let label = format!("{}+{}", strategy.name(), router.name());
+    let label = strategy.name().to_string();
     if contacts.is_empty() {
         return Ok(CaseRow {
             board: board_name.into(),
@@ -103,6 +108,9 @@ fn run_one(
         });
     }
 
+    // SMT pogo pads (top) never collide with mate lands (bottom); a net's
+    // single layer-change via is optional and sits in one of its own pads,
+    // so there is no suppression or board dropping any more.
     let mut problem: Problem = bundle(contacts)?;
     let mut cents: BTreeMap<BoardId, (f64, f64, u32)> = BTreeMap::new();
     for c in problem.contacts.values() {
@@ -129,7 +137,7 @@ fn run_one(
         Vec::new()
     };
     let route = if hall_ok {
-        route(router, sheet.w, sheet.h, &nets)
+        route_r5(sheet.w, sheet.h, &problem, &asg)
     } else {
         Default::default()
     };
@@ -159,11 +167,9 @@ fn run_one(
         score,
         svg,
         note: format!(
-            "local TPs={n_local}  packed={n_boards}  zen ict={}  hall={}  router={}  dropped={:?}",
+            "local TPs={n_local}  packed={n_boards}  zen ict={}  hall={}",
             ict_map.len(),
             if hall_ok { "ok" } else { "fail" },
-            router.name(),
-            route.dropped_boards.iter().map(|b| b.0).collect::<Vec<_>>()
         ),
     })
 }
@@ -178,49 +184,51 @@ fn main() -> Result<()> {
     for (name, zen, pcb) in &boards {
         for sheet in sheets {
             for strat in PatternKind::eval() {
-                for router in RouterKind::eval() {
-                    print!(
-                        "  {name} {} {}+{} ... ",
-                        sheet.name,
-                        strat.name(),
-                        router.name()
-                    );
-                    match run_one(name, zen, pcb, sheet, strat, router) {
-                        Ok(row) => {
-                            println!(
-                                "maze {}/{} usb {} pwr {} ls {} gnd {} boards {}/{}  {}",
-                                row.score.nets_routed,
-                                row.score.nets_total,
-                                row.score.usb.fmt_maze(),
-                                row.score.power.fmt_maze(),
-                                row.score.ls.fmt_maze(),
-                                row.score.gnd.fmt_gnd(),
-                                row.score.boards_complete,
-                                row.score.boards_total,
-                                row.note
-                            );
-                            rows.push(row);
-                        }
-                        Err(e) => {
-                            println!("ERR {e}");
-                            rows.push(CaseRow {
-                                board: name.clone(),
-                                sheet: sheet.name.into(),
-                                strategy: format!("{}+{}", strat.name(), router.name()),
-                                score: Default::default(),
-                                svg: String::new(),
-                                note: format!("error: {e}"),
-                            });
-                        }
+                print!("  {name} {} {} ... ", sheet.name, strat.name());
+                match run_one(name, zen, pcb, sheet, strat) {
+                    Ok(row) => {
+                        println!(
+                            "maze {}/{} usb {} pwr {} ls {} gnd {} boards {}/{} | vias {} bends {} sharp {} detour {:.2} UΔ {:.2} loose {} drc {} gap {:.2} | Q {:.1} | {}",
+                            row.score.nets_routed,
+                            row.score.nets_total,
+                            row.score.usb.fmt_maze(),
+                            row.score.power.fmt_maze(),
+                            row.score.ls.fmt_maze(),
+                            row.score.gnd.fmt_gnd(),
+                            row.score.boards_complete,
+                            row.score.boards_total,
+                            row.score.v_vias,
+                            row.score.bends,
+                            row.score.bends90,
+                            row.score.detour,
+                            row.score.u_delta_routed,
+                            row.score.loose_pairs,
+                            row.score.drc_violations,
+                            row.score.min_gap_mm,
+                            quality_score(&row.score),
+                            row.note
+                        );
+                        rows.push(row);
+                    }
+                    Err(e) => {
+                        println!("ERR {e}");
+                        rows.push(CaseRow {
+                            board: name.clone(),
+                            sheet: sheet.name.into(),
+                            strategy: strat.name().to_string(),
+                            score: Default::default(),
+                            svg: String::new(),
+                            note: format!("error: {e}"),
+                        });
                     }
                 }
             }
         }
     }
 
-    // Per strategy, take the worst panel (lowest board coverage, then most crossings).
-    // Rank those worst-panel scores — this is "best worst-panel S1" from the note.
-    let mut by_strat: BTreeMap<String, Vec<(String, pcb_interposer::Score)>> = BTreeMap::new();
+    // Rank strategies by their worst panel's quality score: the winner is
+    // the constellation we would actually commit to.
+    let mut by_strat: BTreeMap<String, Vec<(String, f64)>> = BTreeMap::new();
     for r in &rows {
         if r.score.nets_total == 0 {
             continue;
@@ -228,38 +236,27 @@ fn main() -> Result<()> {
         by_strat
             .entry(r.strategy.clone())
             .or_default()
-            .push((format!("{}-{}", r.board, r.sheet), r.score.clone()));
+            .push((format!("{}-{}", r.board, r.sheet), quality_score(&r.score)));
     }
-    let flat: Vec<(String, pcb_interposer::Score)> = by_strat
+    let mut ranking: Vec<(String, f64)> = by_strat
         .iter()
         .map(|(k, vs)| {
-            let worst = vs
+            let (case, q) = vs
                 .iter()
-                .max_by(|a, b| {
-                    let cov = |s: &pcb_interposer::Score| {
-                        if s.boards_total == 0 {
-                            0.0
-                        } else {
-                            s.boards_complete as f64 / s.boards_total as f64
-                        }
-                    };
-                    let ka = -cov(&a.1) * 100.0 + a.1.x_cross as f64 + a.1.a_mm * 0.01;
-                    let kb = -cov(&b.1) * 100.0 + b.1.x_cross as f64 + b.1.a_mm * 0.01;
-                    ka.partial_cmp(&kb).unwrap_or(std::cmp::Ordering::Equal)
-                })
+                .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
                 .unwrap();
-            (format!("{} (worst {})", k, worst.0), worst.1.clone())
+            (format!("{k} (worst {case})"), *q)
         })
         .collect();
-    let ranking = rank_s1(&flat);
+    ranking.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
     let html = viz::html_report(&rows, &ranking);
     let report = args.out.join("interposer-poc-report.html");
     fs::write(&report, html).with_context(|| format!("write {}", report.display()))?;
     println!("wrote {}", report.display());
 
-    if let Some((best, _, s1)) = ranking.first() {
-        println!("best-generalizing key (lowest S1 on worst panel): {best}  S1={s1:.3}");
+    if let Some((best, q)) = ranking.first() {
+        println!("best-generalizing strategy (lowest worst-panel Q): {best}  Q={q:.1}");
     }
     let live: Vec<_> = rows.iter().filter(|r| r.score.boards_total > 0).collect();
     let (mut bok, mut bn, mut nok, mut nn) = (0, 0, 0, 0);

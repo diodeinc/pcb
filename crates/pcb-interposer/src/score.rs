@@ -36,6 +36,19 @@ pub struct Score {
     pub w_unused: usize,
     pub v_vias: usize,
     pub l_routed: f64,
+    /// Direction changes >30° / >60° over all routed traces.
+    pub bends: usize,
+    pub bends90: usize,
+    /// Routed length over the Euclidean lower bound (1.0 = perfect).
+    pub detour: f64,
+    /// Max routed USB pair length mismatch (mm).
+    pub u_delta_routed: f64,
+    /// Self-DRC clearance violations on the final geometry.
+    pub drc_violations: usize,
+    /// Smallest observed copper gap (mm).
+    pub min_gap_mm: f64,
+    /// USB pairs routed as two individual traces instead of a ribbon.
+    pub loose_pairs: usize,
     /// Maze-attempted nets only (USB / power / LS). GND pours are not included.
     pub nets_total: usize,
     pub nets_routed: usize,
@@ -144,21 +157,14 @@ fn fill_kind(nets: &[TwoPinNet], route: &RouteResult, pred: impl Fn(Kind) -> boo
         .map(|t| t.contact)
         .collect();
     let poured: std::collections::HashSet<_> = route.poured.iter().copied().collect();
-    let failed: std::collections::HashSet<_> = route
-        .failed
-        .iter()
-        .filter(|n| pred(n.kind))
-        .map(|n| n.contact)
-        .collect();
     for n in nets.iter().filter(|n| pred(n.kind)) {
         c.total += 1;
         if routed.contains(&n.contact) {
             c.routed += 1;
         } else if poured.contains(&n.contact) {
             c.poured += 1;
-        } else if failed.contains(&n.contact) {
-            c.failed += 1;
         } else {
+            // Unassigned and failed alike: the contact has no copper.
             c.failed += 1;
         }
     }
@@ -166,8 +172,36 @@ fn fill_kind(nets: &[TwoPinNet], route: &RouteResult, pred: impl Fn(Kind) -> boo
 }
 
 pub fn score_g1(mut g0: Score, route: &RouteResult, nets: &[TwoPinNet]) -> Score {
-    g0.v_vias = 0;
+    g0.v_vias = route.maze_traces().map(|t| t.vias.len()).sum();
     g0.l_routed = route.maze_traces().map(|t| t.length_mm).sum();
+    let mut euclid = 0.0;
+    for t in route.maze_traces() {
+        let (b, s) = crate::router::count_bends(&t.points);
+        g0.bends += b;
+        g0.bends90 += s;
+        if let (Some(a), Some(z)) = (t.points.first(), t.points.last()) {
+            euclid += dist(*a, *z);
+        }
+    }
+    if euclid > 1e-9 {
+        g0.detour = g0.l_routed / euclid;
+    }
+    let loose: std::collections::HashSet<_> = route.loose_contacts.iter().copied().collect();
+    let mut by_board: std::collections::BTreeMap<_, Vec<f64>> = Default::default();
+    for t in route
+        .maze_traces()
+        .filter(|t| t.kind == Kind::UsbHs && !loose.contains(&t.contact))
+    {
+        by_board.entry(t.board).or_default().push(t.length_mm);
+    }
+    for lens in by_board.values() {
+        if lens.len() == 2 {
+            g0.u_delta_routed = g0.u_delta_routed.max((lens[0] - lens[1]).abs());
+        }
+    }
+    g0.drc_violations = route.drc_violations;
+    g0.min_gap_mm = route.min_gap_mm;
+    g0.loose_pairs = route.loose_pairs;
     g0.usb = fill_kind(nets, route, |k| k == Kind::UsbHs);
     g0.power = fill_kind(nets, route, |k| matches!(k, Kind::Vtarget | Kind::Vusb));
     g0.ls = fill_kind(nets, route, |k| k == Kind::Ls);
@@ -178,10 +212,31 @@ pub fn score_g1(mut g0: Score, route: &RouteResult, nets: &[TwoPinNet]) -> Score
     g0
 }
 
+/// Honest single-number quality score (lower is better). Completion is the
+/// gate: an incomplete board costs more than any polish metric can recover,
+/// so failed nets can never help a strategy win. Then legality, then USB
+/// integrity, then cleanliness (vias, bends, detour) normalized per net.
+pub fn quality_score(s: &Score) -> f64 {
+    let frac = if s.boards_total == 0 {
+        0.0
+    } else {
+        s.boards_complete as f64 / s.boards_total as f64
+    };
+    let per_net = |x: usize| x as f64 / s.nets_total.max(1) as f64;
+    1000.0 * (1.0 - frac)
+        + 200.0 * s.drc_violations as f64
+        + 30.0 * s.loose_pairs as f64
+        + 8.0 * s.u_delta_routed
+        + 25.0 * (s.detour - 1.0).max(0.0)
+        + 12.0 * per_net(s.v_vias)
+        + 6.0 * per_net(s.bends90)
+        + 2.0 * per_net(s.bends)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::route::{RouterKind, TwoPinNet, route};
+    use crate::route::{RouteResult, Trace, TwoPinNet};
     use crate::types::{BoardId, ContactId, MatePinId};
 
     fn net(kind: Kind, src: [f64; 2], dst: [f64; 2], id: u32) -> TwoPinNet {
@@ -200,11 +255,25 @@ mod tests {
     fn gnd_pour_does_not_count_as_maze_routed() {
         let usb = net(Kind::UsbHs, [12.0, 20.0], [30.0, 20.0], 0);
         let gnd = net(Kind::Gnd, [12.0, 24.0], [30.0, 24.0], 1);
-        let ls = net(Kind::Ls, [12.0, 28.0], [200.0, 28.0], 2); // off-sheet → fail
-        let nets = vec![usb, gnd, ls];
-        let r = route(RouterKind::R1, 50.0, 50.0, &nets);
-        assert_eq!(r.poured.len(), 1);
-        assert!(r.traces.iter().all(|t| t.kind != Kind::Gnd));
+        let ls = net(Kind::Ls, [12.0, 28.0], [200.0, 28.0], 2); // unroutable
+        let nets = vec![usb.clone(), gnd, ls.clone()];
+        let r = RouteResult {
+            traces: vec![Trace {
+                contact: usb.contact,
+                kind: usb.kind,
+                board: usb.board,
+                points: vec![usb.src, usb.dst],
+                length_mm: 18.0,
+                via_pattern: false,
+                layer_of: vec![0, 0],
+                vias: vec![],
+                term_via: None,
+                width: 0.2,
+            }],
+            failed: vec![ls],
+            poured: vec![ContactId(1)],
+            ..RouteResult::default()
+        };
         let s = score_g1(Score::default(), &r, &nets);
         assert_eq!(s.gnd.poured, 1);
         assert_eq!(s.gnd.routed, 0);
@@ -215,48 +284,32 @@ mod tests {
         assert_eq!(s.nets_routed, 1, "GND pour must not inflate maze routed");
         assert_eq!(s.nets_total, 2);
     }
-}
 
-/// Min-max hat then weighted S0 / S1 as in the note. `rows` are one per
-/// (strategy × sheet). Lower is better.
-pub fn rank_s1(rows: &[(String, Score)]) -> Vec<(String, f64, f64)> {
-    if rows.is_empty() {
-        return Vec::new();
+    #[test]
+    fn completion_dominates_polish() {
+        let mut complete = Score {
+            boards_total: 8,
+            boards_complete: 8,
+            nets_total: 40,
+            v_vias: 40,
+            bends: 120,
+            bends90: 30,
+            detour: 1.3,
+            u_delta_routed: 2.0,
+            ..Score::default()
+        };
+        let incomplete = Score {
+            boards_total: 8,
+            boards_complete: 7,
+            nets_total: 40,
+            detour: 1.0,
+            ..Score::default()
+        };
+        assert!(quality_score(&complete) < quality_score(&incomplete));
+        complete.drc_violations = 1;
+        assert!(
+            quality_score(&complete) > 100.0,
+            "DRC violations must be expensive"
+        );
     }
-    fn hat(xs: &[f64], x: f64) -> f64 {
-        let min = xs.iter().copied().fold(f64::INFINITY, f64::min);
-        let max = xs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-        if (max - min).abs() < 1e-9 {
-            0.0
-        } else {
-            (x - min) / (max - min)
-        }
-    }
-    let a: Vec<f64> = rows.iter().map(|(_, s)| s.a_mm).collect();
-    let u: Vec<f64> = rows.iter().map(|(_, s)| s.u_delta).collect();
-    let lmax: Vec<f64> = rows.iter().map(|(_, s)| s.l_max).collect();
-    let narr: Vec<f64> = rows.iter().map(|(_, s)| s.n_arr as f64).collect();
-    let x: Vec<f64> = rows.iter().map(|(_, s)| s.x_cross as f64).collect();
-    let w: Vec<f64> = rows.iter().map(|(_, s)| s.w_unused as f64).collect();
-    let v: Vec<f64> = rows.iter().map(|(_, s)| s.v_vias as f64).collect();
-    let l: Vec<f64> = rows.iter().map(|(_, s)| s.l_routed).collect();
-    let um: Vec<f64> = rows.iter().map(|(_, s)| s.u_mean).collect();
-    let p: Vec<f64> = rows.iter().map(|(_, s)| s.p_mean).collect();
-    let mut out = Vec::new();
-    for (name, s) in rows {
-        let s0 = 3.0 * hat(&a, s.a_mm)
-            + 4.0 * hat(&u, s.u_delta)
-            + 2.0 * hat(&lmax, s.l_max)
-            + hat(&narr, s.n_arr as f64)
-            + hat(&x, s.x_cross as f64)
-            + 0.5 * hat(&w, s.w_unused as f64);
-        let s1 = s0
-            + 3.0 * hat(&v, s.v_vias as f64)
-            + 2.0 * hat(&l, s.l_routed)
-            + 2.0 * hat(&um, s.u_mean)
-            + hat(&p, s.p_mean);
-        out.push((name.clone(), s0, s1));
-    }
-    out.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
-    out
 }

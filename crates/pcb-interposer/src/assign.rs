@@ -103,6 +103,15 @@ fn slot_cost(problem: &Problem, did: DemandId, sid: SlotId) -> f64 {
         .iter()
         .map(|c| problem.contacts[c].xy)
         .collect();
+    // A pairing whose terminal via has no legal home cannot be routed at
+    // all; make it a last resort.
+    let via_locked = cxy
+        .iter()
+        .zip(pin_xy.iter())
+        .any(|(c, p)| !crate::router::via_feasible(problem, demand.kind, *c, *p));
+    if via_locked {
+        return 10_000.0 + dist(cxy[0], pin_xy[0]);
+    }
     // Angular term uses LS/USB interchangeability so the funnel does not cross.
     let ang = 30.0 * ang_delta(centroid(&cxy), centroid(&pin_xy));
     let geo = match slot.shape {
