@@ -177,8 +177,11 @@ pub fn extract(ipc: &Ipc2581) -> Result<Panel> {
 
     // The folded A7 tile's corner tooling (fixture connector plate
     // registration); exactly coincident holes collapse.
-    let (mate_w, mate_h) = mate_dims(width, height);
+    let (mate_w, mate_h) = mate_dims(width, height).with_context(|| {
+        format!("panel ({width} × {height} mm) cannot contain the 74 × 105 mm A7 fixture tile")
+    })?;
     let inset = CORNER_TOOLING_INSET_MM;
+    let mut tile_holes: Vec<[f64; 2]> = Vec::new();
     for xy in [
         [inset, inset],
         [mate_w - inset, inset],
@@ -190,8 +193,21 @@ pub fn extract(ipc: &Ipc2581) -> Result<Panel> {
             .any(|(hole, _)| (hole[0] - xy[0]).abs() < EPS && (hole[1] - xy[1]).abs() < EPS)
         {
             holes.push((xy, CORNER_TOOLING_DIA_MM));
+            tile_holes.push(xy);
         }
     }
+    // On off-series sheets a tile hole can land next to one of the panel's
+    // fiducials. The tile is the fixture contract and cannot move, so the
+    // colliding fiducial copy is dropped instead — the others carry the
+    // registration.
+    let clear_of_tile = |fid: &[f64; 2]| {
+        tile_holes.iter().all(|hole| {
+            let d = ((hole[0] - fid[0]).powi(2) + (hole[1] - fid[1]).powi(2)).sqrt();
+            d >= CORNER_TOOLING_DIA_MM / 2.0 + 1.5
+        })
+    };
+    fids_top.retain(clear_of_tile);
+    fids_bottom.retain(clear_of_tile);
 
     Ok(Panel {
         width,

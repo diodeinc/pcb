@@ -28,6 +28,7 @@ pub fn generate(panel_xml: &Path) -> Result<(String, String)> {
         .with_context(|| format!("read panel {}", panel_xml.display()))?;
     let ipc = ipc2581::Ipc2581::parse(&content).context("parse IPC-2581 panel")?;
     let panel = panel::extract(&ipc)?;
-    let lands = pattern::oriented_s11(panel.width, panel.height);
+    let lands = pattern::oriented_s11(panel.width, panel.height)
+        .context("panel cannot contain the A7 fixture tile")?;
     Ok((emit::board(&panel, &lands), emit::project()))
 }
