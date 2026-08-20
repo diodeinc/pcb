@@ -9,6 +9,7 @@ pub mod dfm;
 pub mod fab_panel;
 pub(crate) mod fabrication;
 pub mod html_export;
+pub mod ict;
 pub mod info;
 pub mod outline;
 pub mod render;

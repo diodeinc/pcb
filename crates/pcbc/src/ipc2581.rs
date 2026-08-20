@@ -34,6 +34,18 @@ enum Commands {
         #[arg(long)]
         offline: bool,
     },
+    /// List ICT fixture contacts (components with an `Ict` BOM characteristic)
+    Ict {
+        /// IPC-2581 XML file to export from
+        #[arg(value_hint = clap::ValueHint::FilePath)]
+        file: PathBuf,
+        /// Output CSV file path. If omitted, writes CSV to stdout.
+        #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
+        output: Option<PathBuf>,
+        /// Component side to include
+        #[arg(long, default_value = "both")]
+        side: commands::cpl::CplSideFilter,
+    },
     /// Generate component placement data (CPL)
     Cpl {
         /// IPC-2581 XML file to export from
@@ -336,6 +348,9 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
             format,
             offline,
         } => commands::bom::execute(&file, format, offline),
+        Commands::Ict { file, output, side } => {
+            commands::ict::execute(&file, &commands::ict::IctOptions { output, side })
+        }
         Commands::Cpl {
             file,
             output,
