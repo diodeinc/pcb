@@ -34,7 +34,11 @@ fn sample() -> Document {
             Property {
                 key: "Reference".into(),
                 value: "P1".into(),
-                at: At::xy(0.0, -1.4),
+                at: At {
+                    x: 0.0,
+                    y: -1.4,
+                    rot: 90.0,
+                },
                 layer: "F.SilkS".into(),
                 hide: true,
                 uuid: uuids.next_uuid(),
@@ -185,6 +189,9 @@ fn output_is_deterministic_and_kicad_shaped() {
     assert!(text.trim_end().ends_with(')'));
     // Numbers trim like pcbnew's: no trailing zeros, no float noise.
     assert!(text.contains("(at 10 20.5)"));
+    // Property rotation survives, and zero angles are still written out.
+    assert!(text.contains("(at 0 -1.4 90)"));
+    assert!(text.contains("(at 0 1.4 0)"));
     assert!(text.contains("(size 2.1 2.1)"));
 }
 

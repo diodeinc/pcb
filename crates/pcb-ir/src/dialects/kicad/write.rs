@@ -117,10 +117,12 @@ fn write_footprint(w: &mut Writer, footprint: &super::Footprint) {
             "property",
             &format!("{} {}", quote(&property.key), quote(&property.value)),
         );
+        // Properties always carry the angle, even when zero — pcbnew's shape.
         w.line(&format!(
-            "(at {} {} 0)",
+            "(at {} {} {})",
             num(property.at.x),
-            num(property.at.y)
+            num(property.at.y),
+            num(property.at.rot)
         ));
         w.line(&format!("(layer {})", quote(&property.layer)));
         if property.hide {
