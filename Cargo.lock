@@ -4291,6 +4291,7 @@ dependencies = [
  "boostvoronoi",
  "i_overlay",
  "kurbo",
+ "pcb-sexpr",
  "resvg",
  "terminal_size",
 ]

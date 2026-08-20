@@ -1,5 +1,6 @@
 pub mod artwork;
 pub mod ipc;
+pub mod kicad;
 pub mod mask;
 pub mod nc;
 pub mod placement;
