@@ -55,17 +55,14 @@ pub struct Land {
     pub role: Role,
 }
 
-/// Dimensions of the A7 mate region at the origin corner of a sheet, by
-/// the ISO fold rule: each halving cuts the sheet's long side, so the A7
-/// descendant alternates orientation per fold. A7 → 74×105, A6 → 105×74,
-/// A5 → 74×105, A4 → 105×74. The fold decides only the orientation; the
-/// returned dimensions are the exact A7 tile — the fixture-plate contract
-/// — even when repeated halving leaves a remainder (297 mm halves to
-/// 74.25). Off-series sheets where the fold-parity orientation does not
-/// fit fall back to the orientation that does; `None` when the sheet
-/// cannot contain the tile at all.
-pub fn mate_dims(sheet_w: f64, sheet_h: f64) -> Option<(f64, f64)> {
-    let fits = |w: f64, h: f64| w <= sheet_w + 1e-6 && h <= sheet_h + 1e-6;
+/// Dimensions of the A7 mate region at the origin corner of a standard
+/// A-series sheet, by the ISO fold rule: each halving cuts the sheet's
+/// long side, so the A7 descendant alternates orientation per fold. A7 →
+/// 74×105, A6 → 105×74, A5 → 74×105, A4 → 105×74. The fold decides only
+/// the orientation; the returned dimensions are the exact A7 tile — the
+/// fixture-plate contract — even when repeated halving leaves a
+/// remainder (297 mm halves to 74.25).
+pub fn mate_dims(sheet_w: f64, sheet_h: f64) -> (f64, f64) {
     let (mut w, mut h) = (sheet_w, sheet_h);
     while w * h > A7_W * A7_H * 1.05 {
         if w >= h {
@@ -74,29 +71,21 @@ pub fn mate_dims(sheet_w: f64, sheet_h: f64) -> Option<(f64, f64)> {
             h /= 2.0;
         }
     }
-    let parity = if w >= h { (A7_H, A7_W) } else { (A7_W, A7_H) };
-    if fits(parity.0, parity.1) {
-        Some(parity)
-    } else if fits(parity.1, parity.0) {
-        Some((parity.1, parity.0))
-    } else {
-        None
-    }
+    if w >= h { (A7_H, A7_W) } else { (A7_W, A7_H) }
 }
 
 /// The S11 constellation oriented for a sheet: generated in the canonical
 /// portrait 74×105 frame, then rotated 90° (never mirrored — the mate is
-/// a rigid contract) when the sheet's folded A7 tile is landscape. `None`
-/// when the sheet cannot contain the tile.
-pub fn oriented_s11(sheet_w: f64, sheet_h: f64) -> Option<Vec<Land>> {
-    let (mw, mh) = mate_dims(sheet_w, sheet_h)?;
+/// a rigid contract) when the sheet's folded A7 tile is landscape.
+pub fn oriented_s11(sheet_w: f64, sheet_h: f64) -> Vec<Land> {
+    let (mw, mh) = mate_dims(sheet_w, sheet_h);
     let mut lands = s11();
     if mw > mh {
         for land in &mut lands {
             land.xy = [land.xy[1], A7_W - land.xy[0]];
         }
     }
-    Some(lands)
+    lands
 }
 
 /// One structure: rows of (inner, outer) roles, walked along the band.
@@ -260,34 +249,22 @@ mod tests {
     fn fold_orientation_rotates_landscape_mates() {
         // A7 and A5 sheets fold to a portrait tile: canonical frame.
         for (w, h) in [(74.0, 105.0), (148.0, 210.0)] {
-            assert_eq!(mate_dims(w, h), Some((74.0, 105.0)));
-            let lands = oriented_s11(w, h).unwrap();
+            assert_eq!(mate_dims(w, h), (74.0, 105.0));
+            let lands = oriented_s11(w, h);
             assert!(lands.iter().all(|l| l.xy[0] <= A7_W));
         }
         // A6 and A4 fold to a landscape tile: rotated, never mirrored.
         // A4's 297 mm side halves to 74.25, but the tile stays the exact
         // A7 contract.
-        assert_eq!(mate_dims(105.0, 148.0), Some((105.0, 74.0)));
-        assert_eq!(mate_dims(210.0, 297.0), Some((105.0, 74.0)));
+        assert_eq!(mate_dims(105.0, 148.0), (105.0, 74.0));
+        assert_eq!(mate_dims(210.0, 297.0), (105.0, 74.0));
         // A rotated sheet rotates its whole fold chain with it.
-        assert_eq!(mate_dims(297.0, 210.0), Some((74.0, 105.0)));
-        assert_eq!(mate_dims(148.0, 105.0), Some((74.0, 105.0)));
-        let lands = oriented_s11(105.0, 148.0).unwrap();
+        assert_eq!(mate_dims(297.0, 210.0), (74.0, 105.0));
+        assert_eq!(mate_dims(148.0, 105.0), (74.0, 105.0));
+        let lands = oriented_s11(105.0, 148.0);
         assert_eq!(lands.len(), 112);
         assert!(lands.iter().all(|l| l.xy[0] <= A7_H && l.xy[1] <= A7_W));
         // A rigid rotation preserves the land budget per role.
         assert_eq!(lands.iter().filter(|l| l.role == Role::Gnd).count(), 24);
-    }
-
-    #[test]
-    fn off_series_sheets_fit_or_refuse() {
-        // Fold parity says portrait, but only the landscape tile fits a
-        // 290×88 custom array.
-        assert_eq!(mate_dims(290.0, 88.0), Some((105.0, 74.0)));
-        // Too small for either orientation: refuse rather than hang the
-        // tile off the board.
-        assert_eq!(mate_dims(94.0, 82.0), None);
-        assert_eq!(mate_dims(70.8, 141.4), None);
-        assert!(oriented_s11(94.0, 82.0).is_none());
     }
 }
