@@ -1,0 +1,17 @@
+[package]
+name = "pcb-interposer"
+version = "0.1.0"
+edition.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+description = "Pogo-pin test-fixture interposer generation for assembly panels"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+anyhow = { workspace = true }
+ipc2581 = { workspace = true }
+pcb-ir = { workspace = true }
+
+[dev-dependencies]
+pcb-sexpr = { workspace = true }

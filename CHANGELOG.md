@@ -12,6 +12,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- `pcb ipc interposer` generates the test-fixture interposer board for a board-array panel.
 - `pcb ipc ict` lists ICT fixture contacts (components with an `Ict` BOM characteristic) as CSV.
 
 ### Fixed

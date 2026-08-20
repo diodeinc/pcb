@@ -1,0 +1,287 @@
+//! Emit the interposer as a KiCad board via `pcb_ir::dialects::kicad`.
+//!
+//! This slice is the deterministic base board: the panel's outline,
+//! tooling holes, and fiducials, the S11 mate lands on the bottom copper,
+//! and a full-sheet bottom GND pour. GND lands join the pour; every other
+//! land is left un-netted until a panel-specific assignment binds it. No
+//! pogo pads and no routing yet.
+
+use pcb_ir::dialects::kicad::{
+    At, Document, Footprint, FootprintAttrs, Graphic, Mount, Pad, PadKind, PadShape, Property,
+    Stroke, UuidGen, Zone, ZoneConnect, ZoneFill,
+};
+use pcb_ir::geom::Point;
+
+use crate::panel::{Outline, Panel};
+use crate::pattern::{Land, Role};
+
+/// Mate land pad diameter.
+const LAND_DIA_MM: f64 = 1.0;
+
+/// Build the `.kicad_pcb` source.
+pub fn board(panel: &Panel, lands: &[Land]) -> String {
+    let mut doc = Document::two_layer();
+    doc.generator = "pcb-interposer".into();
+    let mut uuids = UuidGen::new();
+    let gnd = doc.net("GND");
+
+    for outline in &panel.outline {
+        doc.graphics.push(match *outline {
+            Outline::Line { start, end } => Graphic::Line {
+                start: Point::new(start[0], start[1]),
+                end: Point::new(end[0], end[1]),
+                stroke: Stroke::solid(0.1),
+                layer: "Edge.Cuts".into(),
+                uuid: uuids.next_uuid(),
+            },
+            Outline::Arc { start, mid, end } => Graphic::Arc {
+                start: Point::new(start[0], start[1]),
+                mid: Point::new(mid[0], mid[1]),
+                end: Point::new(end[0], end[1]),
+                stroke: Stroke::solid(0.1),
+                layer: "Edge.Cuts".into(),
+                uuid: uuids.next_uuid(),
+            },
+        });
+    }
+
+    for (index, (at, dia)) in panel.holes.iter().enumerate() {
+        doc.footprints
+            .push(hole_footprint(&mut uuids, index, *at, *dia));
+    }
+    for (index, at) in panel.fids_top.iter().enumerate() {
+        doc.footprints
+            .push(fid_footprint(&mut uuids, index, *at, true));
+    }
+    for (index, at) in panel.fids_bottom.iter().enumerate() {
+        let ordinal = panel.fids_top.len() + index;
+        doc.footprints
+            .push(fid_footprint(&mut uuids, ordinal, *at, false));
+    }
+    for (index, land) in lands.iter().enumerate() {
+        let net = (land.role == Role::Gnd).then(|| (gnd, "GND".to_string()));
+        doc.footprints
+            .push(land_footprint(&mut uuids, index, land, net));
+    }
+
+    doc.zones.push(Zone {
+        net: gnd,
+        net_name: "GND".into(),
+        layers: vec!["B.Cu".into()],
+        uuid: uuids.next_uuid(),
+        name: None,
+        priority: None,
+        hatch_pitch: 0.5,
+        connect_pads: ZoneConnect::Thermal,
+        connect_clearance: 0.25,
+        min_thickness: 0.25,
+        fill: ZoneFill {
+            enabled: true,
+            thermal_gap: 0.3,
+            thermal_bridge_width: 0.4,
+        },
+        polygon: vec![
+            Point::new(0.0, 0.0),
+            Point::new(panel.width, 0.0),
+            Point::new(panel.width, panel.height),
+            Point::new(0.0, panel.height),
+        ],
+    });
+
+    pcb_ir::dialects::kicad::write(&doc)
+}
+
+fn hidden_properties(uuids: &mut UuidGen, reference: &str, top: bool) -> Vec<Property> {
+    let (silk, fab) = if top {
+        ("F.SilkS", "F.Fab")
+    } else {
+        ("B.SilkS", "B.Fab")
+    };
+    vec![
+        Property {
+            key: "Reference".into(),
+            value: reference.into(),
+            at: At::xy(0.0, -1.8),
+            layer: silk.into(),
+            hide: true,
+            uuid: uuids.next_uuid(),
+        },
+        Property {
+            key: "Value".into(),
+            value: String::new(),
+            at: At::xy(0.0, 1.8),
+            layer: fab.into(),
+            hide: true,
+            uuid: uuids.next_uuid(),
+        },
+    ]
+}
+
+fn hole_footprint(uuids: &mut UuidGen, index: usize, at: [f64; 2], dia: f64) -> Footprint {
+    Footprint {
+        lib_id: "Interposer:ToolingHole".into(),
+        layer: "F.Cu".into(),
+        uuid: uuids.next_uuid(),
+        at: At::xy(at[0], at[1]),
+        properties: hidden_properties(uuids, &format!("H{}", index + 1), true),
+        attrs: FootprintAttrs {
+            mount: None,
+            exclude_from_pos_files: true,
+            exclude_from_bom: true,
+        },
+        pads: vec![Pad {
+            number: String::new(),
+            kind: PadKind::NpThruHole,
+            shape: PadShape::Circle,
+            at: At::default(),
+            size: (dia, dia),
+            drill: Some(dia),
+            layers: vec!["*.Cu".into(), "*.Mask".into()],
+            net: None,
+            solder_mask_margin: None,
+            clearance: None,
+            uuid: uuids.next_uuid(),
+        }],
+    }
+}
+
+/// A global fiducial: Ø1 copper dot with a Ø2 mask opening. The pad-level
+/// clearance keeps pour copper outside the mask aperture so the aperture
+/// never bridges the dot with poured GND.
+fn fid_footprint(uuids: &mut UuidGen, index: usize, at: [f64; 2], top: bool) -> Footprint {
+    let (copper, mask) = if top {
+        ("F.Cu", "F.Mask")
+    } else {
+        ("B.Cu", "B.Mask")
+    };
+    Footprint {
+        lib_id: "Interposer:Fiducial_1.0_2.0".into(),
+        layer: copper.into(),
+        uuid: uuids.next_uuid(),
+        at: At::xy(at[0], at[1]),
+        properties: hidden_properties(uuids, &format!("FID{}", index + 1), top),
+        attrs: FootprintAttrs {
+            mount: Some(Mount::Smd),
+            exclude_from_pos_files: true,
+            exclude_from_bom: true,
+        },
+        pads: vec![Pad {
+            number: String::new(),
+            kind: PadKind::Smd,
+            shape: PadShape::Circle,
+            at: At::default(),
+            size: (1.0, 1.0),
+            drill: None,
+            layers: vec![copper.into(), mask.into()],
+            net: None,
+            solder_mask_margin: Some(0.5),
+            clearance: Some(0.6),
+            uuid: uuids.next_uuid(),
+        }],
+    }
+}
+
+fn land_footprint(
+    uuids: &mut UuidGen,
+    index: usize,
+    land: &Land,
+    net: Option<(u32, String)>,
+) -> Footprint {
+    let mut properties = hidden_properties(uuids, &format!("L{}", index + 1), false);
+    properties.push(Property {
+        key: "Ict".into(),
+        value: land.role.name().into(),
+        at: At::xy(0.0, 3.0),
+        layer: "B.Fab".into(),
+        hide: true,
+        uuid: uuids.next_uuid(),
+    });
+    Footprint {
+        lib_id: "Interposer:Mate_Pad_D1.0mm".into(),
+        layer: "B.Cu".into(),
+        uuid: uuids.next_uuid(),
+        at: At::xy(land.xy[0], land.xy[1]),
+        properties,
+        attrs: FootprintAttrs {
+            mount: Some(Mount::Smd),
+            exclude_from_pos_files: true,
+            exclude_from_bom: true,
+        },
+        pads: vec![Pad {
+            number: "1".into(),
+            kind: PadKind::Smd,
+            shape: PadShape::Circle,
+            at: At::default(),
+            size: (LAND_DIA_MM, LAND_DIA_MM),
+            drill: None,
+            layers: vec!["B.Cu".into(), "B.Mask".into()],
+            net,
+            solder_mask_margin: None,
+            clearance: None,
+            uuid: uuids.next_uuid(),
+        }],
+    }
+}
+
+/// The sibling `.kicad_pro`: design rules the later routing passes are
+/// built for, so every interposer artifact carries one consistent rule
+/// set from the start.
+pub fn project() -> String {
+    r##"{
+  "board": {
+    "design_settings": {
+      "rules": {
+        "max_error": 0.005,
+        "min_clearance": 0.1,
+        "min_connection": 0.0,
+        "min_copper_edge_clearance": 0.3,
+        "min_hole_clearance": 0.25,
+        "min_hole_to_hole": 0.25,
+        "min_microvia_diameter": 0.2,
+        "min_microvia_drill": 0.1,
+        "min_resolved_spokes": 1,
+        "min_silk_clearance": 0.0,
+        "min_text_height": 0.8,
+        "min_text_thickness": 0.08,
+        "min_through_hole_diameter": 0.3,
+        "min_track_width": 0.15,
+        "min_via_annular_width": 0.1,
+        "min_via_diameter": 0.5
+      }
+    }
+  },
+  "net_settings": {
+    "classes": [
+      {
+        "name": "Default",
+        "clearance": 0.2,
+        "track_width": 0.25,
+        "via_diameter": 0.6,
+        "via_drill": 0.3
+      },
+      {
+        "name": "USB",
+        "clearance": 0.1,
+        "track_width": 0.2,
+        "via_diameter": 0.6,
+        "via_drill": 0.3
+      }
+    ],
+    "netclass_patterns": [
+      {
+        "netclass": "USB",
+        "pattern": "*USB_DP*"
+      },
+      {
+        "netclass": "USB",
+        "pattern": "*USB_DM*"
+      }
+    ]
+  },
+  "meta": {
+    "version": 3
+  }
+}
+"##
+    .to_string()
+}
