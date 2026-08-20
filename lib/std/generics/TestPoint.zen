@@ -57,8 +57,32 @@ Variant = enum(
     "THTPad_D4.0mm_Drill2.0mm",
 )
 variant = config(Variant, help="Test point style and size")
+ict = config(
+    str,
+    optional=True,
+    allowed=[
+        "swd",
+        "swdio",
+        "swclk",
+        "nrst",
+        "swo",
+        "gnd",
+        "vusb",
+        "vtarget",
+        "usb_dp",
+        "usb_dm",
+        "ls",
+    ],
+    help="Optional ICT fixture role, copied onto the footprint.",
+)
 
 P1 = io(Net)
+
+
+def _properties(base):
+    if ict:
+        base["ict"] = ict
+    return base
 
 
 def _symbol(variant: Variant):
@@ -92,9 +116,11 @@ if "Keystone" in variant.value:
         mpn=_keystone_mpn(variant, color),
         symbol=Symbol(_symbol(variant)),
         footprint=File(_footprint(variant)),
-        properties={
-            "color": color,
-        },
+        properties=_properties(
+            {
+                "color": color,
+            }
+        ),
         pins={
             "1": P1,
         },
@@ -105,9 +131,11 @@ else:
         prefix="TP",
         symbol=Symbol(_symbol(variant)),
         footprint=File(_footprint(variant)),
-        properties={
-            "variant": variant,
-        },
+        properties=_properties(
+            {
+                "variant": variant,
+            }
+        ),
         pins={
             "1": P1,
         },
