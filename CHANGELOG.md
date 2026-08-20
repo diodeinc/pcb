@@ -8,11 +8,14 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `pcb ipc ict` lists ICT fixture contacts (components with an `Ict` BOM characteristic) as CSV.
+
 ## [0.4.32] - 2026-08-20
 
 ### Added
 
-- `pcb ipc ict` lists ICT fixture contacts (components with an `Ict` BOM characteristic) as CSV.
 - `TestPoint` accepts an optional `ict` fixture role that is copied onto the footprint.
 - `pcb ipc dfm check` validates IPC-2581 files against fabrication PDKs.
 
