@@ -10,6 +10,9 @@ license = "MIT OR Apache-2.0"
 keywords = ["pcb", "gerber", "ipc-2581", "geometry", "eda"]
 categories = ["graphics", "rendering", "hardware-support"]
 
+[dev-dependencies]
+pcb-sexpr = { workspace = true }
+
 [dependencies]
 base64 = { workspace = true }
 boostvoronoi = { workspace = true }
