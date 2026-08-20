@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.32] - 2026-08-20
+
 ### Added
 
 - `TestPoint` accepts an optional `ict` fixture role that is copied onto the footprint.
@@ -1603,7 +1605,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.31...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.32...HEAD
+[0.4.32]: https://github.com/diodeinc/pcb/compare/v0.4.31...v0.4.32
 [0.4.31]: https://github.com/diodeinc/pcb/compare/v0.4.30...v0.4.31
 [0.4.30]: https://github.com/diodeinc/pcb/compare/v0.4.29...v0.4.30
 [0.4.29]: https://github.com/diodeinc/pcb/compare/v0.4.28...v0.4.29
