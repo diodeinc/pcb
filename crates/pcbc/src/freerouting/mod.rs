@@ -127,6 +127,9 @@ pub fn execute(
 
     if !ses_path.exists() {
         println!("  No routing progress to save. Board left untouched.");
+        if outcome == RunOutcome::Terminated {
+            anyhow::bail!("FreeRouting terminated unexpectedly; see the log path printed above");
+        }
         return Ok(());
     }
 
