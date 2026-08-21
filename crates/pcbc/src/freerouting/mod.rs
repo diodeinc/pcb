@@ -127,9 +127,7 @@ pub fn execute(
 
     if !ses_path.exists() {
         println!("  No routing progress to save. Board left untouched.");
-        if outcome == RunOutcome::Terminated {
-            anyhow::bail!("FreeRouting terminated unexpectedly; see the log path printed above");
-        }
+        bail_if_terminated(outcome)?;
         return Ok(());
     }
 
@@ -168,10 +166,15 @@ pub fn execute(
         let _ = pcb_kicad::open_pcbnew(board_path);
     }
 
+    bail_if_terminated(outcome)?;
+
+    Ok(())
+}
+
+fn bail_if_terminated(outcome: RunOutcome) -> Result<()> {
     if outcome == RunOutcome::Terminated {
         anyhow::bail!("FreeRouting terminated unexpectedly; see the log path printed above");
     }
-
     Ok(())
 }
 

@@ -91,7 +91,7 @@ struct DrcReport {
 
 pub const GET_OUTPUT_TIMEOUT: Duration = Duration::from_secs(120);
 
-pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(20);
+const DEFAULT_TIMEOUT: Duration = Duration::from_secs(20);
 
 impl FreeroutingApiClient {
     pub fn new(base_url: String) -> Result<Self> {
