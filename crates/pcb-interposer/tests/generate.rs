@@ -3,8 +3,9 @@
 use pcb_sexpr::SexprKind;
 
 /// A miniature "panel": A7-sized rounded-rect profile, two NPTH tooling
-/// holes (one exactly on an A7-tile corner spot, which must dedupe), and
-/// one global fiducial per face.
+/// holes (one exactly on an A7-tile corner spot, which must dedupe), one
+/// global fiducial per face, and a second top fiducial sitting on a tile
+/// corner spot (which must yield to the tile hole).
 const PANEL: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
   <Content roleRef="Owner">
@@ -48,6 +49,10 @@ const PANEL: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
               <Location x="10.0" y="3.85"/>
               <Circle diameter="1"/>
             </GlobalFiducial>
+            <GlobalFiducial>
+              <Location x="71.5" y="3.5"/>
+              <Circle diameter="1"/>
+            </GlobalFiducial>
           </Set>
         </LayerFeature>
         <LayerFeature layerRef="BOTTOM">
@@ -72,6 +77,8 @@ fn generates_a_parseable_interposer() {
     // The hole at (3, 102) Y-up is (3, 3) Y-down — an exact A7-tile corner
     // spot, so only three tile holes are added on top of the panel's two.
     assert_eq!(panel.holes.len(), 5);
+    // The fiducial near the (71, 102) tile corner hole is dropped; the
+    // tile is the fixture contract.
     assert_eq!(panel.fids_top.len(), 1);
     assert_eq!(panel.fids_bottom.len(), 1);
     assert_eq!(panel.outline.len(), 8);

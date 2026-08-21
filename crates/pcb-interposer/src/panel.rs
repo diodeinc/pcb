@@ -91,7 +91,8 @@ pub fn extract(ipc: &Ipc2581) -> Result<Panel> {
             || ((width - b).abs() < 0.1 && (height - a).abs() < 0.1)
     }) {
         bail!(
-            "unsupported panel size {width} × {height} mm; interposers exist for the standard              A7/A6/A5/A4 board-array sheets"
+            "unsupported panel size {width} × {height} mm; interposers exist for the \
+             standard A7/A6/A5/A4 board-array sheets"
         );
     }
     // Y-up IPC frame → Y-down KiCad frame.
@@ -196,6 +197,7 @@ pub fn extract(ipc: &Ipc2581) -> Result<Panel> {
     // registration); exactly coincident holes collapse.
     let (mate_w, mate_h) = mate_dims(width, height);
     let inset = CORNER_TOOLING_INSET_MM;
+    let mut tile_holes: Vec<[f64; 2]> = Vec::new();
     for xy in [
         [inset, inset],
         [mate_w - inset, inset],
@@ -207,8 +209,21 @@ pub fn extract(ipc: &Ipc2581) -> Result<Panel> {
             .any(|(hole, _)| (hole[0] - xy[0]).abs() < EPS && (hole[1] - xy[1]).abs() < EPS)
         {
             holes.push((xy, CORNER_TOOLING_DIA_MM));
+            tile_holes.push(xy);
         }
     }
+    // Rail fiducials can land next to a tile corner hole (their positions
+    // depend on the packed board's dimensions). The tile is the fixture
+    // contract and cannot move, so the colliding fiducial copy is dropped
+    // instead — the others carry the registration.
+    let clear_of_tile = |fid: &[f64; 2]| {
+        tile_holes.iter().all(|hole| {
+            let d = ((hole[0] - fid[0]).powi(2) + (hole[1] - fid[1]).powi(2)).sqrt();
+            d >= CORNER_TOOLING_DIA_MM / 2.0 + 1.5
+        })
+    };
+    fids_top.retain(clear_of_tile);
+    fids_bottom.retain(clear_of_tile);
 
     Ok(Panel {
         width,
