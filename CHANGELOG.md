@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.34] - 2026-08-21
+
 ### Added
 
 - `pcb ipc interposer` generates the test-fixture interposer board for a board-array panel.
@@ -1623,7 +1625,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.33...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.34...HEAD
+[0.4.34]: https://github.com/diodeinc/pcb/compare/v0.4.33...v0.4.34
 [0.4.33]: https://github.com/diodeinc/pcb/compare/v0.4.32...v0.4.33
 [0.4.32]: https://github.com/diodeinc/pcb/compare/v0.4.31...v0.4.32
 [0.4.31]: https://github.com/diodeinc/pcb/compare/v0.4.30...v0.4.31
