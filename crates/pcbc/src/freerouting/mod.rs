@@ -22,7 +22,7 @@ use pcb_ui::prelude::*;
 use crate::route::{RouteArgs, format_duration, import_ses};
 
 mod api;
-use api::{DEFAULT_TIMEOUT, FreeroutingApiClient, GET_OUTPUT_TIMEOUT, JobOutput, JobState};
+use api::{FreeroutingApiClient, GET_OUTPUT_TIMEOUT, JobOutput, JobState};
 
 const FREEROUTING_VERSION: &str = "2.3.0";
 
@@ -38,9 +38,6 @@ const FREEROUTING_MAX_PASSES: u32 = 200;
 /// fires as a backstop. Must exceed `GET_OUTPUT_TIMEOUT`, or FreeRouting's
 /// timeout can fire mid-fetch and refuse output.
 const JOB_TIMEOUT_SAFETY_MARGIN_SECS: u64 = 150;
-
-/// How often `poll_job` refreshes its salvage cache of in-progress output.
-const OUTPUT_CACHE_INTERVAL: Duration = Duration::from_secs(5);
 
 fn freerouting_jar_filename() -> String {
     format!("freerouting-{FREEROUTING_VERSION}.jar")
@@ -660,12 +657,6 @@ struct PollResult {
     output: Option<Vec<u8>>,
 }
 
-/// FreeRouting's `GET /output` returns partial data while `RUNNING`, but
-/// unconditionally reports "no output" once a job settles into `CANCELLED` —
-/// so a call made right after `cancel_job` (which only requests a stop) can
-/// race the transition and lose real progress. We sidestep this by caching
-/// output opportunistically while still running, and falling back to that
-/// cache if the post-cancel fetch comes back empty.
 fn poll_job(
     api: &FreeroutingApiClient,
     job_id: &str,
@@ -677,8 +668,6 @@ fn poll_job(
     let deadline = start + Duration::from_secs(timeout_secs);
     let mut consecutive_errors = 0u32;
     let mut last_printed_pass: Option<u32> = None;
-    let mut cached_output: Option<Vec<u8>> = None;
-    let mut last_cache_attempt = start;
 
     loop {
         for _ in 0..10 {
@@ -689,13 +678,13 @@ fn poll_job(
                 });
             }
             if CANCEL.load(Ordering::SeqCst) {
-                return Ok(stop_and_capture(api, job_id, &cached_output));
+                return Ok(stop_and_capture(api, job_id));
             }
             thread::sleep(Duration::from_millis(100));
         }
 
         if Instant::now() > deadline {
-            return Ok(stop_and_capture(api, job_id, &cached_output));
+            return Ok(stop_and_capture(api, job_id));
         }
 
         // Hide the pass counter until it's > 0: FreeRouting's initial routing
@@ -715,20 +704,6 @@ fn poll_job(
                 if status.current_pass.is_some() && status.current_pass != last_printed_pass {
                     last_printed_pass = status.current_pass;
                 }
-                // Opportunistically cache output while still RUNNING, on a fixed
-                // interval rather than gated on pass changes: FreeRouting can sit
-                // on one pass (e.g. an extended pass 0) for a long time, and once
-                // the job settles into a terminal state, `/output` can refuse to
-                // return partial data. Gated on RUNNING so it doesn't fire an extra
-                // fetch right before a terminal-state fetch below.
-                if status.state == JobState::Running
-                    && Instant::now().duration_since(last_cache_attempt) >= OUTPUT_CACHE_INTERVAL
-                {
-                    last_cache_attempt = Instant::now();
-                    if let Ok(JobOutput::Data(bytes)) = api.get_output(job_id, DEFAULT_TIMEOUT) {
-                        cached_output = Some(bytes);
-                    }
-                }
                 match status.state {
                     JobState::Completed => {
                         return Ok(match api.get_output(job_id, GET_OUTPUT_TIMEOUT) {
@@ -747,7 +722,7 @@ fn poll_job(
                                 );
                                 PollResult {
                                     outcome: RunOutcome::Cancelled,
-                                    output: cached_output,
+                                    output: None,
                                 }
                             }
                         });
@@ -755,13 +730,13 @@ fn poll_job(
                     JobState::Cancelled | JobState::TimedOut => {
                         return Ok(PollResult {
                             outcome: RunOutcome::Cancelled,
-                            output: best_effort_output(api, job_id).or(cached_output),
+                            output: best_effort_output(api, job_id),
                         });
                     }
                     JobState::Terminated => {
                         return Ok(PollResult {
                             outcome: RunOutcome::Terminated,
-                            output: best_effort_output(api, job_id).or(cached_output),
+                            output: best_effort_output(api, job_id),
                         });
                     }
                     JobState::Invalid => {
@@ -790,14 +765,9 @@ fn poll_job(
 }
 
 /// Fetches output before cancelling: `/output` unconditionally reports "no
-/// output" once a job settles into `CANCELLED`. Falls back to `cached_output`
-/// (last output seen while `RUNNING`) if the fetch comes back empty.
-fn stop_and_capture(
-    api: &FreeroutingApiClient,
-    job_id: &str,
-    cached_output: &Option<Vec<u8>>,
-) -> PollResult {
-    let output = best_effort_output(api, job_id).or_else(|| cached_output.clone());
+/// output" once a job settles into `CANCELLED`.
+fn stop_and_capture(api: &FreeroutingApiClient, job_id: &str) -> PollResult {
+    let output = best_effort_output(api, job_id);
     let _ = api.cancel_job(job_id);
     PollResult {
         outcome: RunOutcome::Cancelled,

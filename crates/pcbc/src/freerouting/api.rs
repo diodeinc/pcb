@@ -270,8 +270,7 @@ impl FreeroutingApiClient {
     /// (204) and "job had nothing to route" — neither has a `.ses` to write.
     ///
     /// `timeout`: pass `GET_OUTPUT_TIMEOUT` for the one-shot post-completion
-    /// fetch, `DEFAULT_TIMEOUT` for in-loop refresh/cancel-path calls where a
-    /// long block would delay noticing Ctrl+C.
+    /// fetch.
     pub fn get_output(&self, job_id: &str, timeout: Duration) -> Result<JobOutput> {
         let resp = self
             .with_headers(
