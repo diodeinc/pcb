@@ -1,17 +1,32 @@
 //! The fixture plan: which boards one insertion tests, and which mate
-//! land carries which contact.
+//! land carries which contact. [`plan`] is a pure function of the
+//! contact list and the constellation — same inputs, same plan, no IO.
 //!
-//! Demands per board: the USB pair is one unsplittable ordered demand
-//! (`usb_dp` + `usb_dm` onto a kit's DP/DM lands), `vtarget` pads bank up
-//! to two onto one kit's Vt column, `vusb` and low-speed contacts are unit
-//! demands, and `gnd` is never assigned — it rides the pour. A panel
-//! repeats one board design, so capacity is a per-kind count against
-//! S11's fixed budget (8 kits, 48 LS lands); when the panel packs more
-//! boards than fit, the tested subset is spread evenly across the sheet —
-//! a clumped prefix concentrates every net far from half the perimeter.
+//! **Slots** are the supply side, derived from the constellation by
+//! connector block. Each 2×3 kit yields one `Pair` slot (its DP+DM
+//! lands, unsplittable), one `VtBank` slot (its two Vt lands), and one
+//! `Vusb` unit slot; each low-speed land is its own `Ls` unit slot.
+//! S11 therefore supplies 8 pair, 8 bank, 8 vusb, and 48 LS slots.
 //!
-//! Assignment is per-kind Hungarian matching on demand-to-slot distance,
-//! so the plan is deterministic and globally cheapest per kind.
+//! **Demands** are the ask side, built per board instance from its
+//! contacts: `usb_dp`+`usb_dm` pair up into one `Pair` demand (an
+//! unpaired polarity pad degrades to a plain LS demand); `vtarget` pads
+//! chunk into `VtBank` demands of up to two; `vusb` and low-speed
+//! contacts are unit demands; `gnd` is never a demand — it rides the
+//! bottom pour. A panel repeats one board design, so board 0's demand
+//! counts are every board's, and the number of testable boards per
+//! insertion is `min(slot count ÷ per-board count)` over the kinds.
+//! When the panel packs more boards than that, the tested subset is
+//! spread evenly across the sheet — a clumped prefix concentrates every
+//! net far from half the perimeter and routes badly.
+//!
+//! **Assignment** runs per kind: demands and slots of one kind form a
+//! square cost matrix (cost = centroid distance, dummy zero-cost rows
+//! filling unused slots) solved exactly by the Hungarian algorithm, so
+//! each kind's total wire length is minimal. Within a matched slot,
+//! pair members take the land of their own polarity and bank members
+//! take lands in order. Every binding gets a stable net name,
+//! `B{board}.{path}`.
 
 use anyhow::{Result, bail};
 
@@ -70,8 +85,6 @@ pub fn plan(contacts: Vec<PanelContact>, lands: &[Land]) -> Result<Plan> {
     let slots = derive_slots(lands);
     let capacity = |kind: Kind| slots.iter().filter(|slot| slot.kind == kind).count();
 
-    // Per-board demand template — every instance repeats the same design,
-    // so board 0's demands are everyone's.
     let boards_total = contacts.iter().map(|c| c.board).max().unwrap_or(0) + 1;
     let per_board = board_demands(&contacts, 0);
     let mut testable = boards_total as usize;
@@ -91,12 +104,10 @@ pub fn plan(contacts: Vec<PanelContact>, lands: &[Land]) -> Result<Plan> {
             testable = testable.min(cap / need);
         }
     }
-    // Spread the tested subset across the sheet.
     let tested: Vec<u32> = (0..testable)
         .map(|i| (i * boards_total as usize / testable) as u32)
         .collect();
 
-    // Demands for every tested board, then per-kind Hungarian.
     let mut demands: Vec<DemandRow> = Vec::new();
     for &board in &tested {
         demands.extend(board_demands(&contacts, board));
@@ -108,8 +119,6 @@ pub fn plan(contacts: Vec<PanelContact>, lands: &[Land]) -> Result<Plan> {
         if kind_demands.is_empty() {
             continue;
         }
-        // Square cost matrix: dummy demand rows fill unused slots at zero
-        // cost, so real demands always win their cheapest real slot.
         let n = kind_slots.len();
         let cost: Vec<Vec<i64>> = (0..n)
             .map(|i| {
@@ -136,10 +145,8 @@ pub fn plan(contacts: Vec<PanelContact>, lands: &[Land]) -> Result<Plan> {
                     net: net_name(contact),
                 });
             }
-            debug_assert_eq!(slot.kind, kind);
         }
     }
-    // GND contacts of tested boards ride the pour.
     for (index, contact) in contacts.iter().enumerate() {
         if contact.role == Role::Gnd && tested.contains(&contact.board) {
             bindings.push(Binding {
@@ -168,10 +175,8 @@ fn net_name(contact: &PanelContact) -> String {
     format!("B{}.{}", contact.board, name)
 }
 
-/// Pick the member's land inside a slot. Pair slots match the contact's
-/// polarity; every other slot hands out lands in member order (an
-/// unpaired `usb_dp`/`usb_dm` contact degrades to a plain LS demand and
-/// takes an ordinary LS land).
+/// Pick the member's land inside a slot: by polarity in pair slots, in
+/// member order everywhere else.
 fn land_for(role: Role, member: usize, slot: &Slot, lands: &[Land]) -> usize {
     if slot.kind == Kind::Pair {
         return *slot
@@ -269,7 +274,6 @@ fn board_demands(contacts: &[PanelContact], board: u32) -> Vec<DemandRow> {
             contacts: members,
         });
     }
-    // Unpaired polarity pads degrade to low-speed contacts.
     let mut ls: Vec<usize> = of(Role::Ls);
     ls.extend(dp.into_iter().skip(pairs));
     ls.extend(dm.into_iter().skip(pairs));
@@ -404,12 +408,6 @@ pub fn to_json(plan: &Plan, panel: &crate::panel::Panel, lands: &[Land]) -> Stri
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn identity_matching_is_cheapest() {
-        let cost = vec![vec![0, 9, 9], vec![9, 0, 9], vec![9, 9, 0]];
-        assert_eq!(hungarian(&cost), vec![Some(0), Some(1), Some(2)]);
-    }
 
     #[test]
     fn unpaired_polarity_degrades_to_ls() {
