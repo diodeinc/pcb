@@ -6,7 +6,7 @@
 //! output on timeout/interrupt, which the API's `GET /jobs/{id}/output`
 //! supports.
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
@@ -325,15 +325,16 @@ fn find_or_download_freerouting_jar(expected_hash: &[u8; 32]) -> Result<PathBuf>
         }
     }
 
-    // Per-process suffix so concurrent `pcb route` invocations don't race the
-    // same `.tmp`/`.part` file.
-    let tmp_path = cache_dir.join(format!("{jar_filename}.{}.tmp", std::process::id()));
-    download_to_file(&freerouting_jar_url(), &tmp_path)?;
+    let tmp = tempfile::Builder::new()
+        .prefix(&format!("{jar_filename}."))
+        .suffix(".part")
+        .tempfile_in(&cache_dir)
+        .context("Failed to create temp file for FreeRouting JAR download")?;
+    download_to_file(&freerouting_jar_url(), tmp.as_file())?;
 
     let actual_hash =
-        sha256_file(&tmp_path).context("Failed to hash downloaded FreeRouting JAR")?;
+        sha256_file(tmp.path()).context("Failed to hash downloaded FreeRouting JAR")?;
     if actual_hash != *expected_hash {
-        let _ = std::fs::remove_file(&tmp_path);
         anyhow::bail!(
             "Downloaded FreeRouting JAR has unexpected SHA-256\n\
              Expected: {}\n\
@@ -345,7 +346,9 @@ fn find_or_download_freerouting_jar(expected_hash: &[u8; 32]) -> Result<PathBuf>
         );
     }
 
-    std::fs::rename(&tmp_path, &cached).context("Failed to move FreeRouting JAR to cache")?;
+    tmp.persist(&cached)
+        .map_err(|e| anyhow::anyhow!(e.error))
+        .context("Failed to move FreeRouting JAR to cache")?;
     println!("  Downloaded to {}", cached.display());
 
     Ok(cached)
@@ -839,22 +842,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const TOTAL_TIMEOUT: Duration = Duration::from_secs(600);
 const MAX_DOWNLOAD_BYTES: u64 = 200 * 1024 * 1024;
 
-fn download_to_file(url: &str, dest: &Path) -> Result<()> {
-    let part_path = dest.with_extension(format!(
-        "{}.part",
-        dest.extension().and_then(|e| e.to_str()).unwrap_or("tmp")
-    ));
-
-    let result = try_download_to_file(url, &part_path);
-    if result.is_err() {
-        let _ = std::fs::remove_file(&part_path);
-    }
-    result?;
-
-    std::fs::rename(&part_path, dest).context("Failed to finalize downloaded file")
-}
-
-fn try_download_to_file(url: &str, part_path: &Path) -> Result<()> {
+fn download_to_file(url: &str, mut file: &std::fs::File) -> Result<()> {
     let client = reqwest::blocking::Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(TOTAL_TIMEOUT)
@@ -874,8 +862,6 @@ fn try_download_to_file(url: &str, part_path: &Path) -> Result<()> {
             "Download of {url} reports {total} bytes, exceeding the {MAX_DOWNLOAD_BYTES}-byte limit"
         );
     }
-
-    let mut file = std::fs::File::create(part_path).context("Failed to create download file")?;
 
     let bar = match response.content_length() {
         Some(total) if total > 0 => Some(
@@ -902,7 +888,7 @@ fn try_download_to_file(url: &str, part_path: &Path) -> Result<()> {
                 "Download of {url} exceeded the {MAX_DOWNLOAD_BYTES}-byte limit; aborting"
             );
         }
-        std::io::Write::write_all(&mut file, &buf[..n])
+        file.write_all(&buf[..n])
             .context("Failed to write downloaded bytes to disk")?;
         if let Some(bar) = &bar {
             bar.inc(n as u64);
