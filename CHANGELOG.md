@@ -12,6 +12,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `pcb ipc ict` lists ICT fixture contacts (components with an `Ict` BOM characteristic) as CSV.
 
+### Fixed
+
+- DiodeHub dependency resolution falls back to SSH when HTTPS authentication is unavailable.
+
 ## [0.4.32] - 2026-08-20
 
 ### Added

@@ -928,14 +928,13 @@ fn repo_exists(repo_url: &str) -> anyhow::Result<bool> {
         return Ok(true);
     }
 
-    let https_url = format!("https://{}.git", repo_url);
-    match ls_remote(&https_url, "HEAD", false) {
-        Ok(_) => return Ok(true),
-        Err(err) if !is_missing_remote(&err) => return Err(err),
-        Err(_) => {}
+    match with_remote_fallback(repo_url, |url, interactive| {
+        ls_remote(url, "HEAD", interactive)
+    }) {
+        Ok(_) => Ok(true),
+        Err(err) if is_missing_remote(&err) => Ok(false),
+        Err(err) => Err(err),
     }
-
-    Ok(ls_remote(&format_ssh_url(repo_url), "HEAD", true).is_ok())
 }
 
 fn is_missing_remote(err: &anyhow::Error) -> bool {
