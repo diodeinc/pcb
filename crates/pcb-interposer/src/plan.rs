@@ -136,6 +136,7 @@ pub fn plan(contacts: Vec<PanelContact>, lands: &[Land]) -> Result<Plan> {
                     net: net_name(contact),
                 });
             }
+            debug_assert_eq!(slot.kind, kind);
         }
     }
     // GND contacts of tested boards ride the pour.
@@ -167,17 +168,19 @@ fn net_name(contact: &PanelContact) -> String {
     format!("B{}.{}", contact.board, name)
 }
 
-/// Pick the member's land inside a slot: DP/DM by role, bank members in
-/// land order, units directly.
+/// Pick the member's land inside a slot. Pair slots match the contact's
+/// polarity; every other slot hands out lands in member order (an
+/// unpaired `usb_dp`/`usb_dm` contact degrades to a plain LS demand and
+/// takes an ordinary LS land).
 fn land_for(role: Role, member: usize, slot: &Slot, lands: &[Land]) -> usize {
-    match role {
-        Role::UsbDp | Role::UsbDm => *slot
+    if slot.kind == Kind::Pair {
+        return *slot
             .lands
             .iter()
             .find(|&&land| lands[land].role == role)
-            .expect("pair slot carries both polarities"),
-        _ => slot.lands[member.min(slot.lands.len() - 1)],
+            .expect("pair slot carries both polarities");
     }
+    slot.lands[member.min(slot.lands.len() - 1)]
 }
 
 /// Group the constellation into slots by connector block.
@@ -406,6 +409,35 @@ mod tests {
     fn identity_matching_is_cheapest() {
         let cost = vec![vec![0, 9, 9], vec![9, 0, 9], vec![9, 9, 0]];
         assert_eq!(hungarian(&cost), vec![Some(0), Some(1), Some(2)]);
+    }
+
+    #[test]
+    fn unpaired_polarity_degrades_to_ls() {
+        use crate::contacts::PanelContact;
+        let lands = crate::pattern::oriented_s11(74.0, 105.0);
+        // One board with a lone usb_dp and no usb_dm.
+        let contacts = vec![
+            PanelContact {
+                board: 0,
+                refdes: "TP1".into(),
+                path: "TP_DP.TP".into(),
+                role: Role::UsbDp,
+                xy: [30.0, 50.0],
+            },
+            PanelContact {
+                board: 0,
+                refdes: "TP2".into(),
+                path: "TP_SWDIO.TP".into(),
+                role: Role::Ls,
+                xy: [32.0, 50.0],
+            },
+        ];
+        let plan = plan(contacts, &lands).expect("plans without panicking");
+        assert_eq!(plan.bindings.len(), 2);
+        for binding in &plan.bindings {
+            // Both bind to ordinary LS lands.
+            assert_eq!(lands[binding.land.unwrap()].role, Role::Ls);
+        }
     }
 
     #[test]
