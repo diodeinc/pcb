@@ -115,7 +115,10 @@ fn test_freerouting_bad_jar_path() {
 
     sandbox.env("FREEROUTING_JAR", "/nonexistent/freerouting.jar");
     let (code, stdout, stderr) = run_route_freerouting(&mut sandbox, &[]);
-    assert_ne!(code, 0, "expected failure for a nonexistent FREEROUTING_JAR path");
+    assert_ne!(
+        code, 0,
+        "expected failure for a nonexistent FREEROUTING_JAR path"
+    );
     let combined = format!("{stdout}{stderr}");
     assert!(
         combined.contains("FreeRouting JAR not found"),

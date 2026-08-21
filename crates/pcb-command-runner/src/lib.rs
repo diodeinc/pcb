@@ -64,8 +64,14 @@ impl CommandOutput {
 /// stderr to the same on-disk log without either handle's `Drop` closing
 /// the fd the other is using.
 pub fn log_file_stdio(file: &File) -> Result<(Stdio, Stdio)> {
-    let stdout = Stdio::from(file.try_clone().context("Failed to duplicate log file handle")?);
-    let stderr = Stdio::from(file.try_clone().context("Failed to duplicate log file handle")?);
+    let stdout = Stdio::from(
+        file.try_clone()
+            .context("Failed to duplicate log file handle")?,
+    );
+    let stderr = Stdio::from(
+        file.try_clone()
+            .context("Failed to duplicate log file handle")?,
+    );
     Ok((stdout, stderr))
 }
 

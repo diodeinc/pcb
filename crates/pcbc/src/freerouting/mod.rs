@@ -193,7 +193,8 @@ fn publish_board(src: &Path, dst: &Path) -> Result<()> {
         .suffix(".kicad_pcb")
         .tempfile_in(dst_dir)
         .with_context(|| format!("Failed to create temp file in {}", dst_dir.display()))?;
-    let mut src_file = std::fs::File::open(src).context("Failed to open routed board for publish")?;
+    let mut src_file =
+        std::fs::File::open(src).context("Failed to open routed board for publish")?;
     std::io::copy(&mut src_file, tmp.as_file_mut())
         .context("Failed to stage routed board for publish")?;
     // `tempfile` creates the staging file owner-only (0o600); match the
@@ -982,7 +983,7 @@ mod tests {
         let mut command = Command::new("sleep");
         command.arg("5").stdout(std::process::Stdio::null());
         detach_process_group(&mut command);
-        let child = command.spawn().unwrap();
+        let mut child = command.spawn().unwrap();
 
         // process_group(0) makes the child its own group leader, so its pgid
         // equals its own pid, not ours — this is what keeps it out of the
@@ -993,6 +994,7 @@ mod tests {
         assert_ne!(child_pgid, our_pgid);
 
         let _ = Command::new("kill").arg(child.id().to_string()).status();
+        let _ = child.wait();
     }
 
     #[cfg(unix)]
