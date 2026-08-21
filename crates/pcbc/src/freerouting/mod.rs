@@ -160,20 +160,27 @@ pub fn execute(
     let elapsed = start_time.elapsed();
     println!("  Time:       {}", format_duration(elapsed));
     println!();
-    if outcome == RunOutcome::Cancelled {
-        println!(
+    match outcome {
+        RunOutcome::Cancelled => println!(
             "Partial result saved to {}",
             board_path.display().to_string().cyan()
-        );
-    } else {
-        println!(
+        ),
+        RunOutcome::Completed => println!(
             "Result saved to {}",
             board_path.display().to_string().cyan()
-        );
+        ),
+        RunOutcome::Terminated => println!(
+            "Partial result saved to {} (FreeRouting terminated unexpectedly)",
+            board_path.display().to_string().cyan()
+        ),
     }
 
     if !args.no_open {
         let _ = pcb_kicad::open_pcbnew(board_path);
+    }
+
+    if outcome == RunOutcome::Terminated {
+        anyhow::bail!("FreeRouting terminated unexpectedly; see the log path printed above");
     }
 
     Ok(())
@@ -411,6 +418,7 @@ pcbnew.ExportSpecctraDSN(brd, dsn_filename)
 enum RunOutcome {
     Completed,
     Cancelled,
+    Terminated,
 }
 
 /// Owns the `Child`; `Drop` kills it on every exit path (success, failure,
@@ -621,6 +629,11 @@ fn run_freerouting(
                 "FreeRouting stopped after {elapsed:.1}s with no routing progress"
             ));
         }
+        (RunOutcome::Terminated, _) => {
+            spinner.error(format!(
+                "FreeRouting terminated unexpectedly after {elapsed:.1}s"
+            ));
+        }
     }
 
     if let Some(bytes) = poll_result.output {
@@ -628,8 +641,16 @@ fn run_freerouting(
     }
     // else: leave ses_path absent — execute() treats that as "nothing to save".
 
-    // No error occurred, so the log has nothing worth keeping.
-    let _ = std::fs::remove_file(&server.log_path);
+    if poll_result.outcome == RunOutcome::Terminated {
+        eprintln!(
+            "  {} FreeRouting terminated unexpectedly; see log for details: {}",
+            "!".yellow(),
+            server.log_path.display()
+        );
+    } else {
+        // No error occurred, so the log has nothing worth keeping.
+        let _ = std::fs::remove_file(&server.log_path);
+    }
 
     Ok(poll_result.outcome)
 }
@@ -731,17 +752,15 @@ fn poll_job(
                             }
                         });
                     }
-                    // Cancelled/TimedOut are expected stops; Terminated is a crash —
-                    // salvage partial output either way.
-                    JobState::Cancelled | JobState::TimedOut | JobState::Terminated => {
-                        if status.state == JobState::Terminated {
-                            eprintln!(
-                                "  {} FreeRouting terminated unexpectedly; salvaging partial output.",
-                                "!".yellow()
-                            );
-                        }
+                    JobState::Cancelled | JobState::TimedOut => {
                         return Ok(PollResult {
                             outcome: RunOutcome::Cancelled,
+                            output: best_effort_output(api, job_id).or(cached_output),
+                        });
+                    }
+                    JobState::Terminated => {
+                        return Ok(PollResult {
+                            outcome: RunOutcome::Terminated,
                             output: best_effort_output(api, job_id).or(cached_output),
                         });
                     }
