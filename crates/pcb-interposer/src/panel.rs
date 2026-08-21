@@ -237,7 +237,7 @@ pub fn extract(ipc: &Ipc2581) -> Result<Panel> {
 
 /// The step the file is about: the Content section's first step reference,
 /// falling back to document order.
-fn primary_step<'a>(ipc: &Ipc2581, steps: &'a [Step]) -> Option<&'a Step> {
+pub(crate) fn primary_step<'a>(ipc: &Ipc2581, steps: &'a [Step]) -> Option<&'a Step> {
     ipc.content()
         .step_refs
         .first()

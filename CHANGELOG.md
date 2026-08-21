@@ -10,7 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
-- `pcb ipc interposer` generates the test-fixture interposer board for a board-array panel.
+- `pcb ipc interposer` generates the test-fixture interposer board for a board-array panel, with an optional `--fixture-map` JSON of tested boards and contact→land bindings.
 
 ## [0.4.33] - 2026-08-21
 

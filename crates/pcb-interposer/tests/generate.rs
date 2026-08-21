@@ -13,6 +13,53 @@ const PANEL: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
     <StepRef name="array"/>
     <DictionaryStandard units="MILLIMETER"/>
   </Content>
+  <Bom name="BOM_board">
+    <BomHeader assembly="board" revision="1.0">
+      <StepRef name="array"/>
+    </BomHeader>
+    <BomItem OEMDesignNumberRef="TP_DP" quantity="1" pinCount="1" category="ELECTRICAL">
+      <RefDes name="TP1" packageRef="Pad" populate="true" layerRef="BOTTOM"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual textualCharacteristicName="Ict" textualCharacteristicValue="usb_dp"/>
+        <Textual textualCharacteristicName="Path" textualCharacteristicValue="TP_DP.TP"/>
+      </Characteristics>
+    </BomItem>
+    <BomItem OEMDesignNumberRef="TP_DM" quantity="1" pinCount="1" category="ELECTRICAL">
+      <RefDes name="TP2" packageRef="Pad" populate="true" layerRef="BOTTOM"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual textualCharacteristicName="Ict" textualCharacteristicValue="usb_dm"/>
+        <Textual textualCharacteristicName="Path" textualCharacteristicValue="TP_DM.TP"/>
+      </Characteristics>
+    </BomItem>
+    <BomItem OEMDesignNumberRef="TP_VT" quantity="1" pinCount="1" category="ELECTRICAL">
+      <RefDes name="TP3" packageRef="Pad" populate="true" layerRef="BOTTOM"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual textualCharacteristicName="Ict" textualCharacteristicValue="vtarget"/>
+        <Textual textualCharacteristicName="Path" textualCharacteristicValue="TP_VT.TP"/>
+      </Characteristics>
+    </BomItem>
+    <BomItem OEMDesignNumberRef="TP_VU" quantity="1" pinCount="1" category="ELECTRICAL">
+      <RefDes name="TP4" packageRef="Pad" populate="true" layerRef="BOTTOM"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual textualCharacteristicName="Ict" textualCharacteristicValue="vusb"/>
+        <Textual textualCharacteristicName="Path" textualCharacteristicValue="TP_VU.TP"/>
+      </Characteristics>
+    </BomItem>
+    <BomItem OEMDesignNumberRef="TP_G" quantity="1" pinCount="1" category="ELECTRICAL">
+      <RefDes name="TP5" packageRef="Pad" populate="true" layerRef="BOTTOM"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual textualCharacteristicName="Ict" textualCharacteristicValue="gnd"/>
+        <Textual textualCharacteristicName="Path" textualCharacteristicValue="TP_G.TP"/>
+      </Characteristics>
+    </BomItem>
+    <BomItem OEMDesignNumberRef="TP_SWDIO" quantity="1" pinCount="1" category="ELECTRICAL">
+      <RefDes name="TP6" packageRef="Pad" populate="true" layerRef="BOTTOM"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual textualCharacteristicName="Ict" textualCharacteristicValue="swdio"/>
+        <Textual textualCharacteristicName="Path" textualCharacteristicValue="TP_SWDIO.TP"/>
+      </Characteristics>
+    </BomItem>
+  </Bom>
   <Ecad name="ecad">
     <CadHeader units="MILLIMETER"/>
     <CadData>
@@ -22,8 +69,34 @@ const PANEL: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
       <Stackup name="stackup" overallThickness="1.6" tolPlus="0.0" tolMinus="0.0">
         <StackupGroup name="group" thickness="1.6" tolPlus="0.0" tolMinus="0.0"/>
       </Stackup>
+      <Step name="layout">
+        <Datum x="0.0" y="0.0"/>
+        <Component refDes="TP1" layerRef="BOTTOM" part="TP_DP" mountType="SMT">
+          <Location x="5.0" y="5.0"/>
+        </Component>
+        <Component refDes="TP2" layerRef="BOTTOM" part="TP_DM" mountType="SMT">
+          <Location x="7.0" y="5.0"/>
+        </Component>
+        <Component refDes="TP3" layerRef="BOTTOM" part="TP_VT" mountType="SMT">
+          <Location x="9.0" y="5.0"/>
+        </Component>
+        <Component refDes="TP4" layerRef="BOTTOM" part="TP_VU" mountType="SMT">
+          <Location x="11.0" y="5.0"/>
+        </Component>
+        <Component refDes="TP5" layerRef="BOTTOM" part="TP_G" mountType="SMT">
+          <Location x="13.0" y="5.0"/>
+        </Component>
+        <Component refDes="TP6" layerRef="BOTTOM" part="TP_SWDIO" mountType="SMT">
+          <Location x="15.0" y="5.0"/>
+        </Component>
+      </Step>
+      <Step name="board_cell">
+        <Datum x="0.0" y="0.0"/>
+        <StepRepeat stepRef="layout" x="2.0" y="3.0" nx="1" ny="1" dx="0" dy="0" angle="0.00" mirror="false"/>
+      </Step>
       <Step name="array">
         <Datum x="0.0" y="0.0"/>
+        <StepRepeat stepRef="board_cell" x="10.0" y="10.0" nx="1" ny="2" dx="0" dy="40.0" angle="0.00" mirror="false"/>
         <Profile>
           <Polygon>
             <PolyBegin x="0.0" y="3.0"/>
@@ -108,6 +181,78 @@ fn generates_a_parseable_interposer() {
 
     // Deterministic output.
     assert_eq!(text, pcb_interposer::emit::board(&panel, &lands));
+}
+
+#[test]
+fn plans_the_fixture_map() {
+    let ipc = ipc2581::Ipc2581::parse(PANEL).expect("panel fixture parses");
+    let panel = pcb_interposer::panel::extract(&ipc).expect("panel extracts");
+    let lands = pcb_interposer::pattern::oriented_s11(panel.width, panel.height);
+    let contacts =
+        pcb_interposer::contacts::extract_contacts(&ipc, panel.height).expect("contacts");
+    // 2 board instances × 6 marked components.
+    assert_eq!(contacts.len(), 12);
+    // Board 1 sits one grid pitch below board 0 in the Y-down frame.
+    let tp1 = |board: u32| {
+        contacts
+            .iter()
+            .find(|c| c.board == board && c.refdes == "TP1")
+            .unwrap()
+    };
+    assert_eq!(tp1(0).xy[0], tp1(1).xy[0]);
+    assert!((tp1(0).xy[1] - tp1(1).xy[1] - 40.0).abs() < 1e-9);
+
+    let plan = pcb_interposer::plan::plan(contacts, &lands).expect("plan");
+    assert_eq!(plan.boards_total, 2);
+    assert_eq!(plan.tested, vec![0, 1]);
+    // 12 contacts bound: 10 to lands, 2 gnd to the pour.
+    assert_eq!(plan.bindings.len(), 12);
+    assert_eq!(plan.bindings.iter().filter(|b| b.land.is_none()).count(), 2);
+    for binding in &plan.bindings {
+        let contact = &plan.contacts[binding.contact];
+        match binding.land {
+            None => assert_eq!(binding.net, "GND"),
+            Some(land) => {
+                // Role-faithful: a contact lands on its own role's land
+                // (low-speed collapses onto Ls).
+                let land_role = lands[land].role;
+                let expected = match contact.role {
+                    pcb_interposer::pattern::Role::Vtarget => {
+                        pcb_interposer::pattern::Role::Vtarget
+                    }
+                    role => role,
+                };
+                assert_eq!(land_role, expected);
+                assert_eq!(
+                    binding.net,
+                    format!(
+                        "B{}.{}.TP",
+                        contact.board,
+                        contact.path.trim_end_matches(".TP")
+                    )
+                );
+            }
+        }
+    }
+    // The USB pair of one board shares a kit block.
+    let block_of = |refdes: &str| {
+        let binding = plan
+            .bindings
+            .iter()
+            .find(|b| {
+                let c = &plan.contacts[b.contact];
+                c.board == 0 && c.refdes == refdes
+            })
+            .unwrap();
+        lands[binding.land.unwrap()].block
+    };
+    assert_eq!(block_of("TP1"), block_of("TP2"));
+
+    // The JSON document is deterministic.
+    let json = pcb_interposer::plan::to_json(&plan, &panel, &lands);
+    let value: serde_json::Value = serde_json::from_str(&json).expect("valid json");
+    assert_eq!(value["boards_total"], 2);
+    assert_eq!(value["bindings"].as_array().unwrap().len(), 12);
 }
 
 #[test]

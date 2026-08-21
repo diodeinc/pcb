@@ -53,6 +53,8 @@ impl Role {
 pub struct Land {
     pub xy: [f64; 2],
     pub role: Role,
+    /// Which 2×3/2×4 connector block the land belongs to (0..16).
+    pub block: u32,
 }
 
 /// Dimensions of the A7 mate region at the origin corner of a standard
@@ -141,6 +143,7 @@ fn s11() -> Vec<Land> {
     ];
 
     let mut lands = Vec::new();
+    let mut block = 0u32;
     for (band, (along_y, b0, b1, outer, inward)) in bands.into_iter().enumerate() {
         let structs = &band_structs[band];
         let extents: Vec<f64> = structs
@@ -165,10 +168,11 @@ fn s11() -> Vec<Land> {
                     } else {
                         [along, cross]
                     };
-                    lands.push(Land { xy, role });
+                    lands.push(Land { xy, role, block });
                 }
             }
             pos += extent + gap;
+            block += 1;
         }
     }
     lands
