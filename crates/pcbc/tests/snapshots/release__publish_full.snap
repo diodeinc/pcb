@@ -78,7 +78,7 @@ expression: sb.snapshot_dir(&staging_dir)
       "kind": "module.io.unused",
       "severity": "warning",
       "body": "io() 'GND' in module 'LED1' is not connected to any ports",
-      "suppressed": false,
+      "suppressed": true,
       "occurrences": 1,
       "stack": []
     }
@@ -123,7 +123,7 @@ Designator,Val,Package,Mid X,Mid Y,Rotation,Layer
     "user": "<USER>"
   }
 }
-=== netlist.json <75334 bytes, sha256: a232edf>
+=== netlist.json <76006 bytes, sha256: 5e388e7>
 === src/boards/TestBoard.zen
 
 load("@stdlib/interfaces.zen", "Gpio")

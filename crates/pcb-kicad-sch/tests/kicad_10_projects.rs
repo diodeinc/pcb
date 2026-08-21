@@ -1,11 +1,13 @@
+mod common;
+
 use std::path::PathBuf;
 
-use pcb_kicad_sch::{KicadProject, connectivity::ConnectivityGraph};
+use pcb_kicad_sch::connectivity::ConnectivityGraph;
 
 #[test]
 fn issue_24201_reduces_hierarchical_connectivity() {
     let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-data/kicad-10/issue24201");
-    let project = KicadProject::load(directory).expect("load KiCad 10 hierarchy");
+    let project = common::TestProject::load(directory);
 
     assert_eq!(project.schematic_files.len(), 2);
     assert_eq!(project.document.pages.len(), 2);

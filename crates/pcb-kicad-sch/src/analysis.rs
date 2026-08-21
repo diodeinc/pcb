@@ -2,14 +2,17 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use anyhow::Context;
 use pcb_sch::Schematic;
 
 use crate::{
-    SchDocument, SymbolSlotKey,
+    SchDocument, SchItem, SymbolSlotKey,
     connectivity::{
         ComponentIdentity, ComponentOrigin, ConnectionGroup, ConnectionOrigin, ConnectivityGraph,
-        IslandRef, SymbolLocation, Terminal,
+        ConnectivityItemRef, IslandRef, PhysicalConnectivity, PhysicalIsland, PinVisibility,
+        SymbolLocation, Terminal, not_connected_terminals, reduce_with_provenance,
     },
+    symbol,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,7 +83,56 @@ pub enum SchematicIssue {
     },
 }
 
-#[derive(Debug, Clone)]
+/// Stable semantic identity for one reported schematic discrepancy.
+///
+/// Physical issues include the UUID-addressed items that form their affected
+/// islands instead of transient reduction indices, so the key is suitable for
+/// retaining UI selection across repeated analysis.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SchematicIssueKey {
+    MissingSymbol(SymbolSlotKey),
+    DuplicateSymbol(SymbolSlotKey),
+    MismatchedSymbolId {
+        slot: SymbolSlotKey,
+        symbol_id: String,
+    },
+    UnexpectedSymbol(SymbolSlotKey),
+    UnboundSymbol(SymbolLocation),
+    DisconnectedNet(String),
+    UnexpectedNet {
+        net_name: String,
+        items: BTreeSet<ConnectivityItemRef>,
+    },
+    UnexpectedConnection {
+        terminals: Vec<Terminal>,
+        items: BTreeSet<ConnectivityItemRef>,
+    },
+    Shorted {
+        net_names: BTreeSet<String>,
+        items: BTreeSet<ConnectivityItemRef>,
+    },
+}
+
+/// One issue together with its stable key and exact physical provenance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchematicIssueContext {
+    pub key: SchematicIssueKey,
+    pub issue: SchematicIssue,
+    pub items: BTreeSet<ConnectivityItemRef>,
+}
+
+/// A single-pass schematic analysis for UI and repair clients.
+///
+/// The physical graph is the same reduction used to produce `analysis` and
+/// `issues`; clients do not need to maintain or recompute an electrical model.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConnectivityInspection {
+    pub analysis: ConnectivityAnalysis,
+    pub physical: PhysicalConnectivity,
+    pub issues: Vec<SchematicIssueContext>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectivityAnalysis {
     pub components: BTreeMap<SymbolSlotKey, ComponentAnalysis>,
     pub nets: BTreeMap<String, NetAnalysis>,
@@ -97,15 +149,226 @@ impl ConnectivityAnalysis {
     }
 }
 
-/// Reduce both sources independently, then compare their connectivity graphs.
-pub fn analyze_schematic(
+/// Analyze a typed in-memory document and retain the physical provenance used
+/// to identify and repair each issue.
+pub fn inspect_schematic(
     document: &SchDocument,
     netlist: &Schematic,
-) -> anyhow::Result<ConnectivityAnalysis> {
-    Ok(analyze_connectivity(
-        &ConnectivityGraph::from_zener(netlist)?,
-        &ConnectivityGraph::from_kicad(document)?,
-    ))
+) -> anyhow::Result<ConnectivityInspection> {
+    let expected = expected_reconcilable_connectivity(document, netlist)?;
+    let physical = observed_reconcilable_connectivity(document, netlist)?;
+    let analysis = analyze_connectivity(&expected, &physical.graph);
+    let issues = analysis
+        .issues()
+        .iter()
+        .cloned()
+        .map(|issue| issue_context(issue, &physical.islands))
+        .collect();
+    Ok(ConnectivityInspection {
+        analysis,
+        physical,
+        issues,
+    })
+}
+
+pub(crate) fn issue_context(
+    issue: SchematicIssue,
+    islands: &BTreeMap<IslandRef, PhysicalIsland>,
+) -> SchematicIssueContext {
+    let island_items = |issue_islands: &[IslandRef]| {
+        issue_islands
+            .iter()
+            .filter_map(|island| islands.get(island))
+            .flat_map(|island| island.items.iter().cloned())
+            .collect::<BTreeSet<_>>()
+    };
+    let (key, items) = match &issue {
+        SchematicIssue::MissingSymbol { slot } => (
+            SchematicIssueKey::MissingSymbol(slot.clone()),
+            BTreeSet::new(),
+        ),
+        SchematicIssue::DuplicateSymbol { slot, locations } => (
+            SchematicIssueKey::DuplicateSymbol(slot.clone()),
+            locations.iter().map(symbol_item).collect(),
+        ),
+        SchematicIssue::MismatchedSymbolId { slot, location, .. } => (
+            SchematicIssueKey::MismatchedSymbolId {
+                slot: slot.clone(),
+                symbol_id: location.symbol_id.clone(),
+            },
+            BTreeSet::from([symbol_item(location)]),
+        ),
+        SchematicIssue::UnexpectedSymbol { slot, locations } => (
+            SchematicIssueKey::UnexpectedSymbol(slot.clone()),
+            locations.iter().map(symbol_item).collect(),
+        ),
+        SchematicIssue::UnboundSymbol { location } => (
+            SchematicIssueKey::UnboundSymbol(location.clone()),
+            BTreeSet::from([symbol_item(location)]),
+        ),
+        SchematicIssue::DisconnectedNet {
+            net_name,
+            islands: issue_islands,
+            ..
+        } => (
+            SchematicIssueKey::DisconnectedNet(net_name.clone()),
+            island_items(issue_islands),
+        ),
+        SchematicIssue::UnexpectedNet {
+            net_name,
+            islands: issue_islands,
+        } => {
+            let items = island_items(issue_islands);
+            (
+                SchematicIssueKey::UnexpectedNet {
+                    net_name: net_name.clone(),
+                    items: items.clone(),
+                },
+                items,
+            )
+        }
+        SchematicIssue::UnexpectedConnection {
+            terminals,
+            islands: issue_islands,
+        } => {
+            let items = island_items(issue_islands);
+            (
+                SchematicIssueKey::UnexpectedConnection {
+                    terminals: terminals.clone(),
+                    items: items.clone(),
+                },
+                items,
+            )
+        }
+        SchematicIssue::Shorted {
+            net_names,
+            islands: issue_islands,
+        } => {
+            let items = island_items(issue_islands);
+            (
+                SchematicIssueKey::Shorted {
+                    net_names: net_names.clone(),
+                    items: items.clone(),
+                },
+                items,
+            )
+        }
+    };
+    SchematicIssueContext { key, issue, items }
+}
+
+fn symbol_item(location: &SymbolLocation) -> ConnectivityItemRef {
+    ConnectivityItemRef::Symbol {
+        page_id: location.page_id.clone(),
+        id: location.symbol_id.clone(),
+    }
+}
+
+pub(crate) fn observed_reconcilable_connectivity(
+    document: &SchDocument,
+    netlist: &Schematic,
+) -> anyhow::Result<PhysicalConnectivity> {
+    let mut observed = reduce_with_provenance(document, PinVisibility::VisibleOnly)?;
+    let not_connected = not_connected_terminals(netlist);
+    let islands = &observed.islands;
+    observed
+        .graph
+        .groups
+        .retain(|group| !is_open_not_connected_group(group, islands, &not_connected));
+    Ok(observed)
+}
+
+fn is_open_not_connected_group(
+    group: &ConnectionGroup,
+    islands: &BTreeMap<IslandRef, PhysicalIsland>,
+    not_connected: &BTreeSet<Terminal>,
+) -> bool {
+    if !group.names.is_empty() || group.terminals.len() != 1 {
+        return false;
+    }
+    let terminal = group.terminals.first().expect("checked one terminal");
+    if !not_connected
+        .iter()
+        .any(|candidate| terminals_match(candidate, terminal))
+    {
+        return false;
+    }
+    let mut origins = group.origins.iter();
+    let Some(ConnectionOrigin::KiCadIsland(island)) = origins.next() else {
+        return false;
+    };
+    if origins.next().is_some() {
+        return false;
+    }
+    islands.get(island).is_some_and(|provenance| {
+        provenance
+            .items
+            .iter()
+            .all(|item| matches!(item, ConnectivityItemRef::NoConnect { .. }))
+    })
+}
+
+pub(crate) fn expected_reconcilable_connectivity(
+    document: &SchDocument,
+    netlist: &Schematic,
+) -> anyhow::Result<ConnectivityGraph> {
+    let (visible, hidden) = managed_terminals_by_visibility(document)?;
+    let mut graph = ConnectivityGraph::from_zener(netlist)?;
+    graph.groups.retain_mut(|group| {
+        let original_len = group.terminals.len();
+        group.terminals.retain(|terminal| {
+            visible
+                .iter()
+                .any(|candidate| terminals_match(terminal, candidate))
+                || !hidden
+                    .iter()
+                    .any(|ignored| terminals_match(terminal, ignored))
+        });
+        original_len == 0 || !group.terminals.is_empty()
+    });
+    Ok(graph)
+}
+
+fn managed_terminals_by_visibility(
+    document: &SchDocument,
+) -> anyhow::Result<(Vec<Terminal>, Vec<Terminal>)> {
+    let mut visible = Vec::new();
+    let mut hidden = Vec::new();
+    for page in &document.pages {
+        for placed in page.items.iter().filter_map(|item| match item {
+            SchItem::Symbol(symbol) => Some(symbol),
+            _ => None,
+        }) {
+            let Some(component_path) = placed.field_value("Path").filter(|path| !path.is_empty())
+            else {
+                continue;
+            };
+            let definition = page
+                .library
+                .definitions
+                .get(&placed.lib_id)
+                .with_context(|| {
+                    format!(
+                        "managed symbol {} has no cached definition {}",
+                        placed.id, placed.lib_id
+                    )
+                })?;
+            let parsed = symbol::ParsedSymbolDefinition::parse(definition)?;
+            for pin in parsed.placed_pins(placed)? {
+                let terminal = Terminal::ComponentPin {
+                    component: ComponentIdentity::ManagedPath(component_path.to_string()),
+                    pin_name: pin.name,
+                    pin_numbers: pin.numbers,
+                };
+                if pin.hidden {
+                    hidden.push(terminal);
+                } else {
+                    visible.push(terminal);
+                }
+            }
+        }
+    }
+    Ok((visible, hidden))
 }
 
 /// Compare an expected logical graph with an observed physical graph.
@@ -230,7 +493,7 @@ fn groups_match(expected: &ConnectionGroup, observed: &ConnectionGroup) -> bool 
         })
 }
 
-fn terminals_match(expected: &Terminal, observed: &Terminal) -> bool {
+pub(crate) fn terminals_match(expected: &Terminal, observed: &Terminal) -> bool {
     match (expected, observed) {
         (
             Terminal::ComponentPin {
@@ -367,18 +630,25 @@ fn collect_connection_issues(
             }
         }
 
-        let unexpected_terminals = observed_group
-            .terminals
-            .iter()
-            .filter(|observed_terminal| {
-                !matching_expected.iter().any(|expected_group| {
-                    expected_group.terminals.iter().any(|expected_terminal| {
-                        terminals_match(expected_terminal, observed_terminal)
+        let unexpected_terminals = if matching_expected.is_empty() {
+            // A standalone unmanaged symbol is already represented by its
+            // component issue. It becomes an unexpected connection only when
+            // one of its terminals joins expected connectivity.
+            Vec::new()
+        } else {
+            observed_group
+                .terminals
+                .iter()
+                .filter(|observed_terminal| {
+                    !matching_expected.iter().any(|expected_group| {
+                        expected_group.terminals.iter().any(|expected_terminal| {
+                            terminals_match(expected_terminal, observed_terminal)
+                        })
                     })
                 })
-            })
-            .cloned()
-            .collect::<Vec<_>>();
+                .cloned()
+                .collect::<Vec<_>>()
+        };
         if !unexpected_terminals.is_empty() {
             issues.push(SchematicIssue::UnexpectedConnection {
                 islands: kicad_islands(observed_group),
@@ -407,7 +677,7 @@ fn kicad_islands(group: &ConnectionGroup) -> Vec<IslandRef> {
         .collect()
 }
 
-fn logical_name(group: &ConnectionGroup) -> Option<&str> {
+pub(crate) fn logical_name(group: &ConnectionGroup) -> Option<&str> {
     group.origins.iter().find_map(|origin| match origin {
         ConnectionOrigin::ZenerNet { name } => Some(name.as_str()),
         ConnectionOrigin::KiCadIsland(_) => None,
@@ -436,7 +706,7 @@ mod tests {
         );
         let document = document_with_pages(vec![SchPage::new("page")]);
 
-        let analysis = analyze_schematic(&document, &netlist).unwrap();
+        let analysis = inspect_schematic(&document, &netlist).unwrap().analysis;
 
         assert!(matches!(
             analysis.issues(),
@@ -467,7 +737,9 @@ mod tests {
             pages.push(page);
         }
 
-        let analysis = analyze_schematic(&document_with_pages(pages), &netlist).unwrap();
+        let analysis = inspect_schematic(&document_with_pages(pages), &netlist)
+            .unwrap()
+            .analysis;
 
         assert!(analysis.nets["N1"].is_disconnected());
         assert!(!analysis.nets["GND"].is_disconnected());
@@ -483,7 +755,9 @@ mod tests {
             SchItem::Label(Label::new("c", "EXTRA", Point::new(10.0, 0.0))),
         ]);
 
-        let analysis = analyze_schematic(&document_with_pages(vec![page]), &netlist).unwrap();
+        let analysis = inspect_schematic(&document_with_pages(vec![page]), &netlist)
+            .unwrap()
+            .analysis;
 
         assert!(
             analysis
@@ -548,6 +822,46 @@ mod tests {
     }
 
     #[test]
+    fn not_connected_terminal_rejects_an_attached_wire() {
+        let terminal = Terminal::ComponentPin {
+            component: ComponentIdentity::ManagedPath("U1".to_string()),
+            pin_name: "NC".to_string(),
+            pin_numbers: BTreeSet::from(["1".to_string()]),
+        };
+        let island = IslandRef {
+            page_id: "page".to_string(),
+            index: 0,
+        };
+        let group = ConnectionGroup {
+            names: BTreeSet::new(),
+            terminals: BTreeSet::from([terminal.clone()]),
+            origins: BTreeSet::from([ConnectionOrigin::KiCadIsland(island.clone())]),
+        };
+        let mut islands = BTreeMap::from([(island, PhysicalIsland::default())]);
+        let not_connected = BTreeSet::from([terminal]);
+
+        assert!(is_open_not_connected_group(
+            &group,
+            &islands,
+            &not_connected
+        ));
+        islands
+            .values_mut()
+            .next()
+            .unwrap()
+            .items
+            .insert(ConnectivityItemRef::Wire {
+                page_id: "page".to_string(),
+                id: "wire".to_string(),
+            });
+        assert!(!is_open_not_connected_group(
+            &group,
+            &islands,
+            &not_connected
+        ));
+    }
+
+    #[test]
     fn equivalent_project_has_no_issues() {
         let netlist = netlist_with_nets(&["N1"]);
         let mut page = SchPage::new("page");
@@ -557,7 +871,9 @@ mod tests {
             Point::new(0.0, 0.0),
         )));
 
-        let analysis = analyze_schematic(&document_with_pages(vec![page]), &netlist).unwrap();
+        let analysis = inspect_schematic(&document_with_pages(vec![page]), &netlist)
+            .unwrap()
+            .analysis;
 
         assert!(analysis.is_equivalent(), "{:?}", analysis.issues());
     }
@@ -577,7 +893,9 @@ mod tests {
             page.items.push(SchItem::Label(label));
         }
 
-        let analysis = analyze_schematic(&document_with_pages(vec![page]), &netlist).unwrap();
+        let analysis = inspect_schematic(&document_with_pages(vec![page]), &netlist)
+            .unwrap()
+            .analysis;
 
         assert!(analysis.is_equivalent(), "{:?}", analysis.issues());
     }
@@ -587,7 +905,7 @@ mod tests {
         let mut netlist = netlist_with_nets(&["N"]);
         add_root_signature_io(&mut netlist, "SIG", "N", 42);
 
-        let error = analyze_schematic(&document_with_pages(vec![SchPage::new("page")]), &netlist)
+        let error = inspect_schematic(&document_with_pages(vec![SchPage::new("page")]), &netlist)
             .unwrap_err();
 
         assert!(error.to_string().contains("references unknown net id 42"));
@@ -615,7 +933,7 @@ mod tests {
             )));
         }
 
-        let analysis = analyze_schematic(&document, &netlist).unwrap();
+        let analysis = inspect_schematic(&document, &netlist).unwrap().analysis;
 
         assert!(analysis.is_equivalent(), "{:?}", analysis.issues());
         assert_eq!(analysis.nets["GND"].connected_islands.len(), 1);

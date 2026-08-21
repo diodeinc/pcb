@@ -4575,6 +4575,7 @@ name = "pcbc"
 version = "0.4.34"
 dependencies = [
  "anyhow",
+ "atomicwrites",
  "chrono",
  "clap",
  "colored",
@@ -4604,6 +4605,7 @@ dependencies = [
  "pcb-ipc2581-tools",
  "pcb-ir",
  "pcb-kicad",
+ "pcb-kicad-sch",
  "pcb-layout",
  "pcb-sch",
  "pcb-sexpr",

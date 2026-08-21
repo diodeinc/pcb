@@ -3,54 +3,70 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, bail};
-use pcb_sch::{AttributeValue, Schematic};
+use pcb_sch::{AttributeValue, InstanceRef, Schematic};
 use serde_json::Value;
 
-pub(crate) fn ports_by_net(netlist: &Schematic) -> Result<BTreeMap<String, BTreeSet<String>>> {
-    let Some(root) = netlist
-        .root_ref
-        .as_ref()
-        .and_then(|root| netlist.instances.get(root))
-    else {
-        return Ok(BTreeMap::new());
-    };
-    let Some(AttributeValue::Json(signature)) = root.attributes.get("__signature") else {
+pub(crate) fn ports_by_net(
+    netlist: &Schematic,
+    module_ref: &InstanceRef,
+) -> Result<BTreeMap<String, BTreeSet<String>>> {
+    let module = netlist
+        .instances
+        .get(module_ref)
+        .with_context(|| format!("module instance '{module_ref}' is absent from the netlist"))?;
+    let Some(AttributeValue::Json(signature)) = module.attributes.get("__signature") else {
         return Ok(BTreeMap::new());
     };
     let Some(parameters) = signature.get("parameters").and_then(Value::as_array) else {
-        bail!("root __signature.parameters must be an array");
+        bail!("module '{module_ref}' __signature.parameters must be an array");
     };
 
-    let net_name_by_id = netlist
-        .nets
-        .values()
-        .map(|net| (net.id as i64, net.name.clone()))
-        .collect::<BTreeMap<_, _>>();
+    let mut net_name_by_id = BTreeMap::new();
+    for net in netlist.nets.values() {
+        if let Some(previous) = net_name_by_id.insert(net.id as i64, net.name.clone()) {
+            bail!(
+                "nets '{previous}' and '{}' have the same id {}",
+                net.name,
+                net.id
+            );
+        }
+    }
     let mut ports = BTreeMap::new();
     for parameter in parameters {
         let is_config = parameter
             .get("is_config")
             .and_then(Value::as_bool)
-            .context("root signature parameter is_config must be a boolean")?;
+            .with_context(|| {
+                format!("module '{module_ref}' signature parameter is_config must be a boolean")
+            })?;
         if is_config {
             continue;
         }
         let io_name = parameter
             .get("name")
             .and_then(Value::as_str)
-            .context("root signature parameter name must be a string")?;
-        let value = parameter
-            .get("value")
-            .with_context(|| format!("root signature io {io_name} has no value"))?;
+            .with_context(|| {
+                format!("module '{module_ref}' signature parameter name must be a string")
+            })?;
+        let value = parameter.get("value").with_context(|| {
+            format!("module '{module_ref}' signature io {io_name} has no value")
+        })?;
         collect_ports(
             value,
             parameter.get("default_value"),
             io_name,
             &net_name_by_id,
             &mut ports,
+            ElectricalRequirement::Required,
         )?;
     }
     Ok(ports)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ElectricalRequirement {
+    Required,
+    Optional,
 }
 
 fn collect_ports(
@@ -59,6 +75,7 @@ fn collect_ports(
     io_name: &str,
     net_name_by_id: &BTreeMap<i64, String>,
     ports: &mut BTreeMap<String, BTreeSet<String>>,
+    requirement: ElectricalRequirement,
 ) -> Result<()> {
     if let Some(net) = value.get("Net").and_then(Value::as_object) {
         let Some(id) = net.get("id").and_then(Value::as_i64) else {
@@ -87,7 +104,10 @@ fn collect_ports(
         .and_then(|value| value.get("fields"))
         .and_then(Value::as_object)
     else {
-        bail!("root signature io {io_name} is neither a Net nor an Interface");
+        if requirement == ElectricalRequirement::Required {
+            bail!("root signature io {io_name} is neither a Net nor an Interface");
+        }
+        return Ok(());
     };
     let defaults = default_value
         .and_then(|value| value.get("Interface"))
@@ -105,6 +125,7 @@ fn collect_ports(
             &nested_name,
             net_name_by_id,
             ports,
+            ElectricalRequirement::Optional,
         )?;
     }
     Ok(())
@@ -115,4 +136,71 @@ fn net_symbol_value(value: &Value) -> Option<&str> {
     value
         .as_str()
         .or_else(|| value.get("String").and_then(Value::as_str))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use pcb_sch::{Instance, InstanceRef, ModuleRef, Net};
+
+    use super::*;
+
+    #[test]
+    fn ignores_non_electrical_fields_inside_root_interfaces() {
+        let module = ModuleRef::from_path(Path::new("/tmp/root.zen"), "root");
+        let root_ref = InstanceRef::new(module.clone(), Vec::new());
+        let mut root = Instance::module(module);
+        root.attributes.insert(
+            "__signature".to_string(),
+            AttributeValue::Json(serde_json::json!({
+                "parameters": [{
+                    "name": "CSI_A",
+                    "is_config": false,
+                    "value": {
+                        "Interface": {
+                            "fields": {
+                                "CLK": {
+                                    "Interface": {
+                                        "fields": {
+                                            "P": {
+                                                "Net": {
+                                                    "id": 7,
+                                                    "name": "CSI_A_CLK_P",
+                                                    "properties": {}
+                                                }
+                                            },
+                                            "impedance": {
+                                                "PhysicalValue": {
+                                                    "nominal": "90",
+                                                    "unit": "ohm"
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }]
+            })),
+        );
+        let mut netlist = Schematic::new();
+        netlist.root_ref = Some(root_ref.clone());
+        netlist.add_instance(root_ref.clone(), root);
+        netlist.add_net(Net {
+            kind: "Net".to_string(),
+            id: 7,
+            name: "CSI_A_CLK_P".to_string(),
+            ports: Vec::new(),
+            properties: Default::default(),
+        });
+
+        let ports = ports_by_net(&netlist, &root_ref).unwrap();
+
+        assert_eq!(
+            ports["CSI_A_CLK_P"],
+            BTreeSet::from(["CSI_A.CLK.P".to_string()])
+        );
+    }
 }

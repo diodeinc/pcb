@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeSet,
     fs,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
 };
 
 use anyhow::{Context, Result, bail};
@@ -9,7 +9,7 @@ use pcb_sch::{AttributeValue, Schematic};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::{SchDocument, SchItem, parse_kicad_sch_page};
+use pcb_kicad_sch::{SchDocument, SchItem, normalize_schematic_path, parse_kicad_sch_page};
 
 /// A KiCad schematic project loaded from one project directory.
 #[derive(Debug, Clone)]
@@ -74,7 +74,7 @@ fn load_schematic_hierarchy(
     let mut root_by_path = std::collections::BTreeMap::new();
     let mut seen = BTreeSet::new();
     for root in roots {
-        let path = normalize_path(&root.path);
+        let path = normalize_schematic_path(&root.path);
         if !seen.insert(path.clone()) {
             bail!(
                 "top-level schematic {} is listed more than once",
@@ -96,7 +96,7 @@ fn load_schematic_hierarchy(
         let relative = relative.to_string_lossy().replace('\\', "/");
         let mut page = parse_kicad_sch_page(Some(&relative), &content)
             .with_context(|| format!("failed to parse {}", path.display()))?;
-        if let Some(root_id) = root_by_path.get(&normalize_path(&path)) {
+        if let Some(root_id) = root_by_path.get(&normalize_schematic_path(&path)) {
             if let Some(root_id) = root_id {
                 page.id = (*root_id).to_string();
             }
@@ -107,7 +107,7 @@ fn load_schematic_hierarchy(
             SchItem::Sheet(sheet) => Some(sheet),
             _ => None,
         }) {
-            let child = normalize_path(&parent.join(sheet.file_name()));
+            let child = project_schematic_path(directory, parent, sheet.file_name())?;
             if !child.is_file() {
                 bail!(
                     "sheet {} references missing schematic {}",
@@ -157,7 +157,7 @@ fn project_root_schematics(directory: &Path, project_file: &Path) -> Result<Vec<
                 .with_context(|| {
                     format!("schematic.top_level_sheets[{index}].filename must be a string")
                 })?;
-            let path = normalize_path(&directory.join(file_name));
+            let path = project_schematic_path(directory, directory, file_name)?;
             if !path.is_file() {
                 bail!("top-level schematic {} does not exist", path.display());
             }
@@ -178,6 +178,56 @@ fn project_root_schematics(directory: &Path, project_file: &Path) -> Result<Vec<
         .collect()
 }
 
+/// Resolve a schematic filename while keeping reads and writes inside the
+/// linked KiCad project directory.
+pub(crate) fn project_schematic_path(
+    directory: &Path,
+    parent: &Path,
+    file_name: impl AsRef<Path>,
+) -> Result<PathBuf> {
+    let file_name = file_name.as_ref();
+    if file_name.as_os_str().is_empty() || file_name.is_absolute() {
+        bail!(
+            "schematic path '{}' is not relative to project directory {}",
+            file_name.display(),
+            directory.display()
+        );
+    }
+
+    let directory = normalize_schematic_path(directory);
+    let path = normalize_schematic_path(&parent.join(file_name));
+    if path == directory || !path.starts_with(&directory) {
+        bail!(
+            "schematic path '{}' escapes project directory {}",
+            file_name.display(),
+            directory.display()
+        );
+    }
+
+    // Lexical containment rejects absolute paths and `..`. Canonicalizing the
+    // closest existing ancestor also rejects a symlinked file or directory
+    // that resolves outside the project while still allowing new files.
+    if directory.exists() {
+        let canonical_directory = fs::canonicalize(&directory)
+            .with_context(|| format!("failed to resolve {}", directory.display()))?;
+        let existing = path
+            .ancestors()
+            .find(|ancestor| ancestor.exists())
+            .context("schematic path has no existing ancestor")?;
+        let canonical_existing = fs::canonicalize(existing)
+            .with_context(|| format!("failed to resolve {}", existing.display()))?;
+        if !canonical_existing.starts_with(&canonical_directory) {
+            bail!(
+                "schematic path '{}' resolves outside project directory {}",
+                file_name.display(),
+                directory.display()
+            );
+        }
+    }
+
+    Ok(path)
+}
+
 fn legacy_project_root(project_file: &Path) -> Result<Vec<ProjectRoot>> {
     let root = project_file.with_extension("kicad_sch");
     if !root.is_file() {
@@ -191,27 +241,6 @@ fn legacy_project_root(project_file: &Path) -> Result<Vec<ProjectRoot>> {
         path: root,
         id: None,
     }])
-}
-
-fn normalize_path(path: &Path) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if matches!(
-                    normalized.components().next_back(),
-                    Some(Component::Normal(_))
-                ) {
-                    normalized.pop();
-                } else if !path.is_absolute() {
-                    normalized.push("..");
-                }
-            }
-            other => normalized.push(other.as_os_str()),
-        }
-    }
-    normalized
 }
 
 /// Resolve the root module's `schematic_path` property, if present.
@@ -232,7 +261,7 @@ pub fn schematic_project_path(netlist: &Schematic) -> Result<Option<PathBuf>> {
     netlist.resolve_package_uri(path).map(Some)
 }
 
-fn files_with_extension(directory: &Path, extension: &str) -> Result<Vec<PathBuf>> {
+pub(crate) fn files_with_extension(directory: &Path, extension: &str) -> Result<Vec<PathBuf>> {
     let entries = fs::read_dir(directory)
         .with_context(|| format!("failed to read {}", directory.display()))?;
     let mut files = Vec::new();
@@ -337,6 +366,49 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["main.kicad_sch", "power.kicad_sch"]
         );
+    }
+
+    #[test]
+    fn rejects_nested_schematic_outside_project() {
+        let workspace = tempfile::tempdir().unwrap();
+        let directory = workspace.path().join("project");
+        fs::create_dir(&directory).unwrap();
+        let outside = workspace.path().join("outside.kicad_sch");
+        fs::write(directory.join("demo.kicad_pro"), "{}").unwrap();
+        fs::write(
+            directory.join("demo.kicad_sch"),
+            schematic_with_child("root", "../outside.kicad_sch"),
+        )
+        .unwrap();
+        fs::write(&outside, schematic("outside")).unwrap();
+
+        let error = KicadProject::load(&directory).unwrap_err();
+
+        assert!(error.to_string().contains("escapes project directory"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_schematic_symlink_outside_project() {
+        use std::os::unix::fs::symlink;
+
+        let workspace = tempfile::tempdir().unwrap();
+        let directory = workspace.path().join("project");
+        fs::create_dir(&directory).unwrap();
+        fs::write(
+            directory.join("demo.kicad_pro"),
+            r#"{"schematic":{"top_level_sheets":[
+                {"filename":"linked.kicad_sch"}
+            ]}}"#,
+        )
+        .unwrap();
+        let outside = workspace.path().join("outside.kicad_sch");
+        fs::write(&outside, schematic("outside")).unwrap();
+        symlink(outside, directory.join("linked.kicad_sch")).unwrap();
+
+        let error = KicadProject::load(&directory).unwrap_err();
+
+        assert!(error.to_string().contains("resolves outside"));
     }
 
     fn schematic(uuid: &str) -> String {
