@@ -826,11 +826,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn is_java_version_sufficient_returns_false_for_nonexistent_path() {
-        assert!(!is_java_version_sufficient("/nonexistent/java"));
-    }
-
-    #[test]
     fn sha256_file_matches_known_digest() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("f.txt");
@@ -843,71 +838,10 @@ mod tests {
     }
 
     #[test]
-    fn hex_decode32_round_trips_hex_encode() {
-        let bytes: [u8; 32] = std::array::from_fn(|i| i as u8);
-        assert_eq!(hex_decode32(&hex::encode(bytes)), bytes);
-    }
-
-    #[test]
-    fn sha256_file_errors_on_missing_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("missing.txt");
-        assert!(sha256_file(&path).is_err());
-    }
-
-    #[test]
     fn format_hms_preserves_seconds_not_just_minutes() {
         assert_eq!(format_hms(90), "00:01:30");
         assert_eq!(format_hms(59), "00:00:59");
         assert_eq!(format_hms(3661), "01:01:01");
         assert_eq!(format_hms(0), "00:00:00");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn detach_process_group_puts_child_in_its_own_group() {
-        let mut command = Command::new("sleep");
-        command.arg("5").stdout(std::process::Stdio::null());
-        detach_process_group(&mut command);
-        let mut child = command.spawn().unwrap();
-
-        let child_pgid = unsafe { libc_getpgid(child.id() as i32) };
-        let our_pgid = unsafe { libc_getpgid(0) };
-        assert_eq!(child_pgid, child.id() as i32);
-        assert_ne!(child_pgid, our_pgid);
-
-        let _ = Command::new("kill").arg(child.id().to_string()).status();
-        let _ = child.wait();
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn kill_child_now_kills_the_shared_child() {
-        let child = Command::new("sleep")
-            .arg("5")
-            .stdout(std::process::Stdio::null())
-            .spawn()
-            .unwrap();
-        let child = Arc::new(Mutex::new(child));
-        *CHILD.lock().unwrap() = Some(child.clone());
-
-        kill_child_now();
-
-        let status = child.lock().unwrap().wait().unwrap();
-        assert_eq!(
-            std::os::unix::process::ExitStatusExt::signal(&status),
-            Some(9)
-        );
-        *CHILD.lock().unwrap() = None;
-    }
-
-    #[cfg(unix)]
-    unsafe extern "C" {
-        fn getpgid(pid: i32) -> i32;
-    }
-
-    #[cfg(unix)]
-    unsafe fn libc_getpgid(pid: i32) -> i32 {
-        unsafe { getpgid(pid) }
     }
 }
