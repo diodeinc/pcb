@@ -334,10 +334,12 @@ import sys
 brd_filename = sys.argv[1]
 ses_filename = sys.argv[2]
 brd = pcbnew.LoadBoard(brd_filename)
-pcbnew.ImportSpecctraSES(brd, ses_filename)
+if not pcbnew.ImportSpecctraSES(brd, ses_filename):
+    sys.exit("Failed to import SES file into board")
 
 filler = pcbnew.ZONE_FILLER(brd)
-filler.Fill(brd.Zones())
+if not filler.Fill(brd.Zones()):
+    sys.exit("Failed to fill zones after SES import")
 
 pcbnew.SaveBoard(brd_filename, brd)
 "#;
