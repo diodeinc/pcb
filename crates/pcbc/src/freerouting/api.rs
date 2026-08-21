@@ -118,6 +118,29 @@ impl FreeroutingApiClient {
         format!("{}{}", self.base_url, path)
     }
 
+    fn get(&self, path: &str) -> RequestBuilder {
+        self.client.get(self.url(path))
+    }
+
+    fn post(&self, path: &str) -> RequestBuilder {
+        self.client.post(self.url(path))
+    }
+
+    fn put(&self, path: &str) -> RequestBuilder {
+        self.client.put(self.url(path))
+    }
+
+    fn send(&self, builder: RequestBuilder, action: &str) -> Result<Response> {
+        let resp = self
+            .with_headers(builder)
+            .send()
+            .with_context(|| action.to_string())?;
+        if !resp.status().is_success() {
+            return Err(api_error(action, resp));
+        }
+        Ok(resp)
+    }
+
     pub fn wait_ready(
         &self,
         deadline: Duration,
@@ -125,7 +148,7 @@ impl FreeroutingApiClient {
     ) -> Result<()> {
         let start = std::time::Instant::now();
         loop {
-            if let Ok(resp) = self.client.get(self.url("/v1/system/status")).send()
+            if let Ok(resp) = self.get("/v1/system/status").send()
                 && resp.status().is_success()
             {
                 return Ok(());
@@ -144,13 +167,10 @@ impl FreeroutingApiClient {
     }
 
     pub fn create_session(&self) -> Result<String> {
-        let resp = self
-            .with_headers(self.client.post(self.url("/v1/sessions/create")))
-            .send()
-            .context("Failed to create FreeRouting session")?;
-        if !resp.status().is_success() {
-            return Err(api_error("Failed to create FreeRouting session", resp));
-        }
+        let resp = self.send(
+            self.post("/v1/sessions/create"),
+            "Failed to create FreeRouting session",
+        )?;
         let body: CreateSessionResponse = resp
             .json()
             .context("Failed to parse FreeRouting session response")?;
@@ -158,18 +178,14 @@ impl FreeroutingApiClient {
     }
 
     pub fn enqueue_job(&self, session_id: &str, name: &str) -> Result<String> {
-        let resp = self
-            .with_headers(self.client.post(self.url("/v1/jobs/enqueue")))
-            .json(&EnqueueJobRequest {
+        let resp = self.send(
+            self.post("/v1/jobs/enqueue").json(&EnqueueJobRequest {
                 session_id,
                 name,
                 priority: "NORMAL",
-            })
-            .send()
-            .context("Failed to enqueue FreeRouting job")?;
-        if !resp.status().is_success() {
-            return Err(api_error("Failed to enqueue FreeRouting job", resp));
-        }
+            }),
+            "Failed to enqueue FreeRouting job",
+        )?;
         let body: EnqueueJobResponse = resp
             .json()
             .context("Failed to parse FreeRouting job response")?;
@@ -177,64 +193,43 @@ impl FreeroutingApiClient {
     }
 
     pub fn update_settings(&self, job_id: &str, max_passes: u32, job_timeout: &str) -> Result<()> {
-        let resp = self
-            .with_headers(
-                self.client
-                    .post(self.url(&format!("/v1/jobs/{job_id}/settings"))),
-            )
-            .json(&UpdateSettingsRequest {
-                max_passes,
-                job_timeout: job_timeout.to_string(),
-            })
-            .send()
-            .context("Failed to update FreeRouting job settings")?;
-        if !resp.status().is_success() {
-            return Err(api_error("Failed to update FreeRouting job settings", resp));
-        }
+        self.send(
+            self.post(&format!("/v1/jobs/{job_id}/settings"))
+                .json(&UpdateSettingsRequest {
+                    max_passes,
+                    job_timeout: job_timeout.to_string(),
+                }),
+            "Failed to update FreeRouting job settings",
+        )?;
         Ok(())
     }
 
     pub fn upload_input(&self, job_id: &str, filename: &str, dsn_bytes: &[u8]) -> Result<()> {
         use base64::Engine;
-        let resp = self
-            .with_headers(
-                self.client
-                    .post(self.url(&format!("/v1/jobs/{job_id}/input"))),
-            )
-            .json(&UploadInputRequest {
-                filename,
-                data: base64::engine::general_purpose::STANDARD.encode(dsn_bytes),
-            })
-            .send()
-            .context("Failed to upload DSN input to FreeRouting")?;
-        if !resp.status().is_success() {
-            return Err(api_error("Failed to upload DSN input to FreeRouting", resp));
-        }
+        self.send(
+            self.post(&format!("/v1/jobs/{job_id}/input"))
+                .json(&UploadInputRequest {
+                    filename,
+                    data: base64::engine::general_purpose::STANDARD.encode(dsn_bytes),
+                }),
+            "Failed to upload DSN input to FreeRouting",
+        )?;
         Ok(())
     }
 
     pub fn start_job(&self, job_id: &str) -> Result<()> {
-        let resp = self
-            .with_headers(
-                self.client
-                    .put(self.url(&format!("/v1/jobs/{job_id}/start"))),
-            )
-            .send()
-            .context("Failed to start FreeRouting job")?;
-        if !resp.status().is_success() {
-            return Err(api_error("Failed to start FreeRouting job", resp));
-        }
+        self.send(
+            self.put(&format!("/v1/jobs/{job_id}/start")),
+            "Failed to start FreeRouting job",
+        )?;
         Ok(())
     }
 
     pub fn get_job(&self, job_id: &str) -> Result<JobStatus> {
-        let resp = self
-            .with_headers(self.client.get(self.url(&format!("/v1/jobs/{job_id}"))))
-            .send()
-            .context("Failed to get FreeRouting job status")?;
-        if !resp.status().is_success() {
-            return Err(api_error("Failed to get FreeRouting job status", resp));
-        }
+        let resp = self.send(
+            self.get(&format!("/v1/jobs/{job_id}")),
+            "Failed to get FreeRouting job status",
+        )?;
         resp.json()
             .context("Failed to parse FreeRouting job status")
     }
@@ -242,8 +237,7 @@ impl FreeroutingApiClient {
     pub fn get_output(&self, job_id: &str, timeout: Duration) -> Result<JobOutput> {
         let resp = self
             .with_headers(
-                self.client
-                    .get(self.url(&format!("/v1/jobs/{job_id}/output")))
+                self.get(&format!("/v1/jobs/{job_id}/output"))
                     .timeout(timeout),
             )
             .send()
@@ -275,14 +269,11 @@ impl FreeroutingApiClient {
     }
 
     pub fn get_unrouted_count(&self, job_id: &str) -> Result<usize> {
-        let resp = self
-            .with_headers(self.client.get(self.url(&format!("/v1/jobs/{job_id}/drc"))))
-            .timeout(GET_OUTPUT_TIMEOUT)
-            .send()
-            .context("Failed to get FreeRouting DRC report")?;
-        if !resp.status().is_success() {
-            return Err(api_error("Failed to get FreeRouting DRC report", resp));
-        }
+        let resp = self.send(
+            self.get(&format!("/v1/jobs/{job_id}/drc"))
+                .timeout(GET_OUTPUT_TIMEOUT),
+            "Failed to get FreeRouting DRC report",
+        )?;
         let report: DrcReport = resp
             .json()
             .context("Failed to parse FreeRouting DRC report")?;
@@ -290,16 +281,10 @@ impl FreeroutingApiClient {
     }
 
     pub fn cancel_job(&self, job_id: &str) -> Result<()> {
-        let resp = self
-            .with_headers(
-                self.client
-                    .put(self.url(&format!("/v1/jobs/{job_id}/cancel"))),
-            )
-            .send()
-            .context("Failed to cancel FreeRouting job")?;
-        if !resp.status().is_success() {
-            return Err(api_error("Failed to cancel FreeRouting job", resp));
-        }
+        self.send(
+            self.put(&format!("/v1/jobs/{job_id}/cancel")),
+            "Failed to cancel FreeRouting job",
+        )?;
         Ok(())
     }
 }
