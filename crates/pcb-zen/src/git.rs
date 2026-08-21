@@ -901,8 +901,15 @@ pub fn split_repo_and_subpath(module_path: &str) -> anyhow::Result<(String, Stri
 }
 
 fn resolve_repo_and_subpath(module_path: &str) -> anyhow::Result<(String, String)> {
+    resolve_repo_and_subpath_with(module_path, repo_is_accessible)
+}
+
+fn resolve_repo_and_subpath_with(
+    module_path: &str,
+    mut is_accessible: impl FnMut(&str) -> anyhow::Result<bool>,
+) -> anyhow::Result<(String, String)> {
     for (repo_url, subpath) in repo_prefixes(module_path) {
-        if repo_exists(&repo_url)? {
+        if is_accessible(&repo_url)? {
             return Ok((repo_url, subpath));
         }
     }
@@ -920,7 +927,7 @@ pub(crate) fn repo_prefixes(module_path: &str) -> Vec<(String, String)> {
     prefixes
 }
 
-fn repo_exists(repo_url: &str) -> anyhow::Result<bool> {
+fn repo_is_accessible(repo_url: &str) -> anyhow::Result<bool> {
     if crate::cache_index::source_repo_dir(repo_url)?
         .join(".git")
         .exists()
@@ -928,20 +935,16 @@ fn repo_exists(repo_url: &str) -> anyhow::Result<bool> {
         return Ok(true);
     }
 
-    match with_remote_fallback(repo_url, |url, interactive| {
-        ls_remote(url, "HEAD", interactive)
-    }) {
-        Ok(_) => Ok(true),
-        Err(err) if is_missing_remote(&err) => Ok(false),
-        Err(err) => Err(err),
-    }
+    Ok(remote_is_accessible(repo_url, |url, interactive| {
+        ls_remote(url, "HEAD", interactive).map(drop)
+    }))
 }
 
-fn is_missing_remote(err: &anyhow::Error) -> bool {
-    let msg = err.to_string().to_ascii_lowercase();
-    msg.contains("not found")
-        || msg.contains("does not exist")
-        || msg.contains("does not appear to be a git repository")
+fn remote_is_accessible(
+    repo_url: &str,
+    probe: impl FnMut(&str, bool) -> anyhow::Result<()>,
+) -> bool {
+    with_remote_fallback(repo_url, probe).is_ok()
 }
 
 fn with_remote_fallback<T>(
@@ -1110,6 +1113,65 @@ mod tests {
         assert_eq!(
             format_ssh_url("gitlab.com/group/project"),
             "git@gitlab.com:group/project.git"
+        );
+    }
+
+    #[test]
+    fn repo_resolution_continues_to_shorter_accessible_prefix() {
+        let module_path =
+            "code.diode.computer/diode/registry/modules/UsbCSource16P/UsbCSource16P.zen";
+        let mut probed = Vec::new();
+
+        let resolved = resolve_repo_and_subpath_with(module_path, |repo_url| {
+            probed.push(repo_url.to_string());
+            Ok(repo_url == "code.diode.computer/diode/registry")
+        })
+        .unwrap();
+
+        assert_eq!(
+            resolved,
+            (
+                "code.diode.computer/diode/registry".to_string(),
+                "modules/UsbCSource16P/UsbCSource16P.zen".to_string(),
+            )
+        );
+        assert_eq!(
+            probed,
+            [
+                "code.diode.computer/diode/registry/modules",
+                "code.diode.computer/diode/registry",
+            ]
+        );
+    }
+
+    #[test]
+    fn inaccessible_remote_probe_does_not_depend_on_error_text() {
+        let mut attempts = Vec::new();
+
+        let accessible = remote_is_accessible(
+            "code.diode.computer/diode/registry/modules",
+            |url, interactive| {
+                attempts.push((url.to_string(), interactive));
+                if url.starts_with("https://") {
+                    anyhow::bail!("404 Not Found");
+                }
+                anyhow::bail!("Error: invalid repo");
+            },
+        );
+
+        assert!(!accessible);
+        assert_eq!(
+            attempts,
+            [
+                (
+                    "https://code.diode.computer/diode/registry/modules.git".to_string(),
+                    false,
+                ),
+                (
+                    "git@code.diode.computer:diode/registry/modules.git".to_string(),
+                    true,
+                ),
+            ]
         );
     }
 
