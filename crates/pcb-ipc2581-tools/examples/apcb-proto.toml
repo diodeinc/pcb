@@ -1,0 +1,29 @@
+schema_version = 1
+
+[pdk]
+id = "apcb-proto"
+name = "AdvancedPCB Aurora prototype"
+revision = "draft-2026-08-21"
+manufacturer = "AdvancedPCB"
+process = "Aurora 2-10 layer prototype"
+
+[capabilities.drilling]
+minimum_via_hole_diameter = "0.2 mm"
+minimum_pth_hole_diameter = "15 mil"
+minimum_npth_hole_diameter = "0.2 mm"
+minimum_slot_width = "31 mil"
+minimum_hole_to_hole_clearance = "10 mil"
+
+[capabilities.copper]
+minimum_via_annular_ring = "0.125 mm"
+minimum_pth_annular_ring = "7 mil"
+minimum_feature_width = "5 mil"
+minimum_copper_clearance = "5 mil"
+minimum_board_edge_clearance = "15 mil"
+minimum_vscore_to_copper_clearance = "15 mil"
+
+[capabilities.soldermask]
+minimum_web = "4 mil"
+
+[capabilities.panelization]
+minimum_board_array_spacing = "300 mil"
