@@ -10,9 +10,6 @@ use reqwest::StatusCode;
 use reqwest::blocking::{Client, RequestBuilder, Response};
 use serde::{Deserialize, Serialize};
 
-/// Per-request headers FreeRouting requires on every `/v1/*` call except
-/// `/v1/system/status`, even with auth disabled — unvalidated but must be
-/// present. `Freerouting-Profile-ID` is a stable per-invocation UUID.
 pub struct FreeroutingApiClient {
     client: Client,
     base_url: String,
@@ -26,20 +23,12 @@ pub enum JobState {
     Queued,
     ReadyToStart,
     Running,
-    /// Reported while the server is settling a job we asked to cancel, on
-    /// its way to `Cancelled`.
     Stopping,
-    /// FreeRouting supports pausing a job; not something we ever request
-    /// ourselves, but a real state the API can report.
     Paused,
     Completed,
     Cancelled,
     TimedOut,
-    /// The job's input (DSN) could not be processed at all — a terminal
-    /// failure state distinct from `Cancelled`/`TimedOut`.
     Invalid,
-    /// The router crashed or was killed server-side — a terminal failure
-    /// distinct from `Cancelled`/`TimedOut`/`Invalid`.
     Terminated,
 }
 
@@ -51,10 +40,7 @@ pub struct JobStatus {
 }
 
 pub enum JobOutput {
-    /// Routed data is available (final or partial).
     Data(Vec<u8>),
-    /// No output object exists yet, or the job had nothing to route (e.g.
-    /// every net already connected) despite reaching `COMPLETED`.
     NothingToRoute,
 }
 
@@ -103,11 +89,6 @@ struct DrcReport {
     unconnected_items: Vec<serde_json::Value>,
 }
 
-/// Timeout for `get_output`, whose cost scales with board size (the server
-/// serializes and base64-encodes the whole board), unlike the cheap,
-/// flat-cost status/control endpoints below. See poll_job's `Completed`
-/// handling in mod.rs for why a timeout here must not read as "nothing to
-/// save".
 pub const GET_OUTPUT_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(20);
@@ -116,9 +97,6 @@ impl FreeroutingApiClient {
     pub fn new(base_url: String) -> Result<Self> {
         let client = Client::builder()
             .timeout(DEFAULT_TIMEOUT)
-            // Targets only a FreeRouting process we spawned on 127.0.0.1;
-            // bypass HTTP_PROXY/HTTPS_PROXY so a corporate proxy doesn't
-            // swallow loopback traffic.
             .no_proxy()
             .build()
             .context("Failed to create FreeRouting API HTTP client")?;
@@ -140,8 +118,6 @@ impl FreeroutingApiClient {
         format!("{}{}", self.base_url, path)
     }
 
-    /// Poll `/v1/system/status` (the one endpoint that needs no headers)
-    /// until the server responds or `deadline` elapses.
     pub fn wait_ready(
         &self,
         deadline: Duration,
@@ -263,12 +239,6 @@ impl FreeroutingApiClient {
             .context("Failed to parse FreeRouting job status")
     }
 
-    /// Fetch the job's output (partial or final SES data), decoded to raw
-    /// bytes. Returns `NothingToRoute` for both "in progress, no output yet"
-    /// (204) and "job had nothing to route" — neither has a `.ses` to write.
-    ///
-    /// `timeout`: pass `GET_OUTPUT_TIMEOUT` for the one-shot post-completion
-    /// fetch.
     pub fn get_output(&self, job_id: &str, timeout: Duration) -> Result<JobOutput> {
         let resp = self
             .with_headers(
@@ -294,9 +264,6 @@ impl FreeroutingApiClient {
             return Ok(JobOutput::Data(bytes));
         }
 
-        // FreeRouting reports "no output available" as a 400 rather than
-        // 204 in two observed cases (nothing routed yet; cancelled with no
-        // progress) — both mean "nothing to write", not a real failure.
         match resp.json::<ApiErrorBody>() {
             Ok(body) if is_no_output_error(&body.error) => Ok(JobOutput::NothingToRoute),
             Ok(body) => anyhow::bail!(
@@ -307,7 +274,6 @@ impl FreeroutingApiClient {
         }
     }
 
-    /// Unrouted connections left per FreeRouting's own DRC report.
     pub fn get_unrouted_count(&self, job_id: &str) -> Result<usize> {
         let resp = self
             .with_headers(self.client.get(self.url(&format!("/v1/jobs/{job_id}/drc"))))
@@ -323,9 +289,6 @@ impl FreeroutingApiClient {
         Ok(report.unconnected_items.len())
     }
 
-    /// Best-effort: cancel a running or queued job. Errors are the caller's
-    /// choice whether to surface — we always still try `get_output`
-    /// afterward regardless of whether this succeeds.
     pub fn cancel_job(&self, job_id: &str) -> Result<()> {
         let resp = self
             .with_headers(
@@ -341,9 +304,6 @@ impl FreeroutingApiClient {
     }
 }
 
-/// Whether a `GET /jobs/{id}/output` error body means "no output exists"
-/// rather than a genuine error, matched on observed wording. If wording
-/// changes upstream, the fallback is a hard error, not a silent wrong guess.
 fn is_no_output_error(error: &str) -> bool {
     let error = error.to_lowercase();
     error.contains("hasn't started") || error.contains("no valid output")
@@ -363,8 +323,6 @@ fn api_error(context: &str, response: Response) -> anyhow::Error {
 mod tests {
     use super::*;
 
-    /// Every state FreeRouting's API can report must deserialize, or
-    /// `get_job` fails in a way `poll_job` mistakes for a lost connection.
     #[test]
     fn job_state_deserializes_all_known_variants() {
         let cases = [

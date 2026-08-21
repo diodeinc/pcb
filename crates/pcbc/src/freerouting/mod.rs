@@ -25,15 +25,13 @@ const FREEROUTING_VERSION: &str = "2.3.0";
 
 const FREEROUTING_REPO: &str = "freerouting/freerouting";
 
-/// SHA-256 of the `freerouting-{FREEROUTING_VERSION}.jar` release artifact.
 const FREEROUTING_JAR_SHA256: &str =
     "3cf18d608437740bc497db6b8ef5888e2e60a08de0def20691d1bad0c0e0ee24";
 
 const FREEROUTING_MAX_PASSES: u32 = 200;
 
-/// Margin added to our poll deadline so FreeRouting's own job_timeout only
-/// fires as a backstop. Must exceed `GET_OUTPUT_TIMEOUT`, or FreeRouting's
-/// timeout can fire mid-fetch and refuse output.
+/// Must exceed `GET_OUTPUT_TIMEOUT`, or FreeRouting's own job_timeout can
+/// fire mid-fetch and refuse output.
 const JOB_TIMEOUT_SAFETY_MARGIN_SECS: u64 = 150;
 
 fn freerouting_jar_filename() -> String {
@@ -46,14 +44,8 @@ fn freerouting_jar_url() -> String {
     )
 }
 
-/// Set by the Ctrl+C handler; only a request — `run_freerouting` owns the
-/// `Child` and does the actual killing.
 static CANCEL: AtomicBool = AtomicBool::new(false);
-
-/// Set on a second Ctrl+C: skip fetching partial output and kill Java now.
 static FORCE_KILL: AtomicBool = AtomicBool::new(false);
-
-/// The running FreeRouting `Child`, shared with the Ctrl+C handler thread.
 static CHILD: Mutex<Option<Arc<Mutex<Child>>>> = Mutex::new(None);
 
 pub fn execute(
@@ -62,7 +54,6 @@ pub fn execute(
     project_path: &Path,
     board_name: &str,
 ) -> Result<()> {
-    // Check Java before the auto-download fallback pays for a big download.
     let expected_hash = hex_decode32(FREEROUTING_JAR_SHA256);
     let explicit_jar = resolve_explicit_freerouting_jar(&expected_hash)?;
 
@@ -82,16 +73,12 @@ pub fn execute(
     let work_dir = tempfile::tempdir().context("Failed to create temp working directory")?;
     let work_board = work_dir.path().join(format!("{board_name}.kicad_pcb"));
     std::fs::copy(board_path, &work_board).context("Failed to stage board copy")?;
-    // Design rules/net classes live in the project file (KiCad 6+), not the
-    // board file, so DSN export and zone fill need it staged too.
     if project_path.exists() {
         std::fs::copy(
             project_path,
             work_dir.path().join(format!("{board_name}.kicad_pro")),
         )
         .context("Failed to stage project file copy")?;
-        // Custom design rules live in a sibling .kicad_dru, not the project
-        // file itself.
         let dru_path = project_path.with_extension("kicad_dru");
         if dru_path.exists() {
             std::fs::copy(
@@ -123,8 +110,6 @@ pub fn execute(
     export_dsn(&work_board, &dsn_path)?;
     spinner.finish();
 
-    // Otherwise CANCEL is only checked inside run_freerouting's poll loop, so
-    // Ctrl+C during export would print "Stopping..." then start anyway.
     if CANCEL.load(Ordering::SeqCst) {
         println!("  No routing progress to save. Board left untouched.");
         return Ok(());
@@ -149,7 +134,6 @@ pub fn execute(
     import_ses(&work_board, &ses_path)?;
     spinner.finish();
 
-    // Only now replace the original board, atomically.
     publish_board(&work_board, board_path)?;
 
     let elapsed = start_time.elapsed();
@@ -192,8 +176,6 @@ fn publish_board(src: &Path, dst: &Path) -> Result<()> {
     if std::fs::rename(src, dst).is_ok() {
         return Ok(());
     }
-    // Cross-filesystem fallback: copy via a uniquely-named temp file, then
-    // publish atomically.
     let dst_dir = dst
         .parent()
         .context("Expected board path to have a parent directory")?;
@@ -206,8 +188,6 @@ fn publish_board(src: &Path, dst: &Path) -> Result<()> {
         std::fs::File::open(src).context("Failed to open routed board for publish")?;
     std::io::copy(&mut src_file, tmp.as_file_mut())
         .context("Failed to stage routed board for publish")?;
-    // `tempfile` creates the staging file owner-only (0o600); match the
-    // source board's mode so publishing doesn't silently tighten permissions.
     let src_perms = src_file
         .metadata()
         .context("Failed to read source board metadata")?
@@ -222,15 +202,8 @@ fn publish_board(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Java resolution
-// ---------------------------------------------------------------------------
-
-/// The pinned jar's `build.gradle` targets this; keep in sync with
-/// `FREEROUTING_VERSION`.
 const REQUIRED_JAVA_VERSION: u32 = 25;
 
-/// No auto-download of a JRE/JDK — too heavy for a CLI tool; ask the user.
 fn resolve_java() -> Result<PathBuf> {
     if is_java_version_sufficient("java") {
         return Ok(PathBuf::from("java"));
@@ -269,12 +242,6 @@ fn is_java_version_sufficient(java_path: impl AsRef<Path>) -> bool {
     major >= REQUIRED_JAVA_VERSION
 }
 
-// ---------------------------------------------------------------------------
-// FreeRouting JAR resolution
-// ---------------------------------------------------------------------------
-
-/// `FREEROUTING_JAR` env var. `Ok(None)` means it's not set — caller falls
-/// back to the verified cache.
 fn resolve_explicit_freerouting_jar(expected_hash: &[u8; 32]) -> Result<Option<PathBuf>> {
     if let Ok(path) = std::env::var("FREEROUTING_JAR") {
         let p = PathBuf::from(&path);
@@ -288,7 +255,6 @@ fn resolve_explicit_freerouting_jar(expected_hash: &[u8; 32]) -> Result<Option<P
     Ok(None)
 }
 
-/// Downloads to (and caches in) `~/.cache/pcb/freerouting/`, verified by SHA-256.
 fn find_or_download_freerouting_jar(expected_hash: &[u8; 32]) -> Result<PathBuf> {
     let cache_dir = dirs::cache_dir()
         .context(
@@ -350,8 +316,6 @@ fn find_or_download_freerouting_jar(expected_hash: &[u8; 32]) -> Result<PathBuf>
     Ok(cached)
 }
 
-/// Chmod `dir` to owner-only, returning `false` (don't reuse it) if it's
-/// owned by someone else. No-op / always `true` on non-unix.
 #[cfg(unix)]
 fn restrict_dir_to_owner(dir: &Path) -> bool {
     use std::os::unix::fs::MetadataExt;
@@ -384,10 +348,6 @@ unsafe fn libc_geteuid() -> u32 {
     unsafe { geteuid() }
 }
 
-// ---------------------------------------------------------------------------
-// DSN/SES pipeline
-// ---------------------------------------------------------------------------
-
 fn export_dsn(board_path: &Path, dsn_path: &Path) -> Result<()> {
     let script = r#"
 import pcbnew
@@ -415,10 +375,6 @@ pcbnew.ExportSpecctraDSN(brd, dsn_filename)
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// FreeRouting process management
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum RunOutcome {
     Completed,
@@ -426,12 +382,9 @@ enum RunOutcome {
     Terminated,
 }
 
-/// Owns the `Child`; `Drop` kills it on every exit path (success, failure,
-/// timeout, Ctrl+C) instead of relying on each return site to do it.
 struct FreeroutingServer {
     child: Arc<Mutex<Child>>,
     base_url: String,
-    /// stdout+stderr, piped straight to disk instead of buffered in memory.
     log_path: PathBuf,
 }
 
@@ -439,9 +392,6 @@ impl FreeroutingServer {
     fn spawn(java_path: &Path, jar_path: &Path) -> Result<Self> {
         let port = pick_free_port()?;
 
-        // Unique, non-predictable name via `tempfile` — a fixed PID-based path in
-        // the shared temp dir could be pre-staked (e.g. as a symlink) by another
-        // local user.
         let (log_file, log_path) = tempfile::Builder::new()
             .prefix("pcb-freerouting-")
             .suffix(".log")
@@ -463,8 +413,6 @@ impl FreeroutingServer {
             .arg("--usage_and_diagnostic_data.disable_analytics=true")
             .stdout(log_stdout)
             .stderr(log_stderr);
-        // Otherwise Java shares pcb's foreground process group and gets the
-        // terminal's Ctrl+C SIGINT directly, exiting before we fetch output.
         detach_process_group(&mut command);
 
         let child = command
@@ -484,7 +432,6 @@ impl FreeroutingServer {
         Ok(self.child.lock().unwrap().try_wait()?.is_none())
     }
 
-    /// `path (status)` for error messages — the log itself isn't inlined.
     fn log_summary(&mut self) -> String {
         match self.child.lock().unwrap().try_wait().ok().flatten() {
             Some(status) => format!("log: {} ({status})", self.log_path.display()),
@@ -502,8 +449,6 @@ impl Drop for FreeroutingServer {
     }
 }
 
-/// Puts `command`'s child in its own process group so it doesn't receive
-/// signals sent to pcb's foreground process group.
 #[cfg(unix)]
 fn detach_process_group(command: &mut Command) {
     use std::os::unix::process::CommandExt;
@@ -520,15 +465,12 @@ fn detach_process_group(command: &mut Command) {
 #[cfg(not(any(unix, windows)))]
 fn detach_process_group(_command: &mut Command) {}
 
-/// Called from the Ctrl+C handler thread on a second press.
 fn kill_child_now() {
     if let Some(child) = CHILD.lock().unwrap().as_ref() {
         let _ = child.lock().unwrap().kill();
     }
 }
 
-/// TOCTOU race between release and FreeRouting binding it is accepted (same
-/// tradeoff as the OAuth callback server elsewhere in this codebase).
 fn pick_free_port() -> Result<u16> {
     let listener = TcpListener::bind("127.0.0.1:0")
         .context("Failed to bind ephemeral port for FreeRouting API server")?;
@@ -565,8 +507,6 @@ fn run_freerouting(
         .unwrap_or_else(|| "pcb-route".to_string());
     let job_id = api.enqueue_job(&session_id, &job_name)?;
 
-    // Safety net only — our poll loop fetches output and cancels at
-    // timeout_secs; this covers the case where that fails to happen.
     api.update_settings(
         &job_id,
         FREEROUTING_MAX_PASSES,
@@ -619,7 +559,6 @@ fn run_freerouting(
     if let Some(bytes) = poll_result.output {
         std::fs::write(ses_path, bytes).context("Failed to write FreeRouting SES output")?;
     }
-    // else: leave ses_path absent — execute() treats that as "nothing to save".
 
     if poll_result.outcome == RunOutcome::Terminated {
         eprintln!(
@@ -628,7 +567,6 @@ fn run_freerouting(
             server.log_path.display()
         );
     } else {
-        // No error occurred, so the log has nothing worth keeping.
         let _ = std::fs::remove_file(&server.log_path);
     }
 
@@ -675,9 +613,6 @@ fn poll_job(
             return Ok(stop_and_capture(api, job_id));
         }
 
-        // Hide the pass counter until it's > 0: FreeRouting's initial routing
-        // stage can sit at "pass 0" for a long time, indistinguishable from
-        // a stuck counter.
         let elapsed = start.elapsed().as_secs();
         spinner.set_message(match last_printed_pass {
             Some(pass) if pass > 0 => format!(
@@ -757,8 +692,6 @@ fn poll_job(
     }
 }
 
-/// Fetches output before cancelling: `/output` unconditionally reports "no
-/// output" once a job settles into `CANCELLED`.
 fn stop_and_capture(api: &FreeroutingApiClient, job_id: &str) -> PollResult {
     let output = best_effort_output(api, job_id);
     let _ = api.cancel_job(job_id);
@@ -776,11 +709,6 @@ fn best_effort_output(api: &FreeroutingApiClient, job_id: &str) -> Option<Vec<u8
     }
 }
 
-// ---------------------------------------------------------------------------
-// Utilities
-// ---------------------------------------------------------------------------
-
-/// `HH:MM:SS` for FreeRouting's `job_timeout`, at full second precision.
 fn format_hms(total_secs: u64) -> String {
     let hh = total_secs / 3600;
     let mm = (total_secs % 3600) / 60;
@@ -788,8 +716,6 @@ fn format_hms(total_secs: u64) -> String {
     format!("{hh:02}:{mm:02}:{ss:02}")
 }
 
-/// Non-fatal warning for FREEROUTING_JAR: an explicit user override
-/// may intentionally point at a patched build, so a mismatch isn't rejected.
 fn warn_on_hash_mismatch(path: &Path, expected_hash: &[u8; 32]) {
     match sha256_file(path) {
         Ok(hash) if hash == *expected_hash => {}
@@ -832,8 +758,6 @@ fn hex_decode32(hex: &str) -> [u8; 32] {
     .expect("FREEROUTING_JAR_SHA256 must decode to exactly 32 bytes")
 }
 
-/// Single attempt; no idle timeout in reqwest's blocking client, so
-/// `TOTAL_TIMEOUT` stays generous to not fail slow-but-live connections.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const TOTAL_TIMEOUT: Duration = Duration::from_secs(600);
 const MAX_DOWNLOAD_BYTES: u64 = 200 * 1024 * 1024;
@@ -911,7 +835,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("f.txt");
         std::fs::write(&path, b"hello world").unwrap();
-        // echo -n "hello world" | sha256sum
         let hash = sha256_file(&path).unwrap();
         assert_eq!(
             hex::encode(hash),
@@ -934,9 +857,6 @@ mod tests {
 
     #[test]
     fn format_hms_preserves_seconds_not_just_minutes() {
-        // Regression: a prior version rounded down to whole minutes
-        // (e.g. 90s -> "00:01:00" = 60s), which would let FreeRouting's own
-        // job_timeout expire before our poll deadline.
         assert_eq!(format_hms(90), "00:01:30");
         assert_eq!(format_hms(59), "00:00:59");
         assert_eq!(format_hms(3661), "01:01:01");
@@ -951,9 +871,6 @@ mod tests {
         detach_process_group(&mut command);
         let mut child = command.spawn().unwrap();
 
-        // process_group(0) makes the child its own group leader, so its pgid
-        // equals its own pid, not ours — this is what keeps it out of the
-        // terminal's SIGINT delivery to our foreground group.
         let child_pgid = unsafe { libc_getpgid(child.id() as i32) };
         let our_pgid = unsafe { libc_getpgid(0) };
         assert_eq!(child_pgid, child.id() as i32);
