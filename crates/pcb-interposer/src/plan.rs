@@ -18,7 +18,10 @@
 //! insertion is `min(slot count ÷ per-board count)` over the kinds.
 //! When the panel packs more boards than that, the tested subset is
 //! spread evenly across the sheet — a clumped prefix concentrates every
-//! net far from half the perimeter and routes badly.
+//! net far from half the perimeter and routes badly. A board whose
+//! contact would put a pogo pad inside a fixed-feature keep-out (the A7
+//! tile's corner tooling can sit under the board field on large sheets)
+//! is not selectable.
 //!
 //! **Assignment** runs per kind: demands and slots of one kind form a
 //! square cost matrix (cost = centroid distance, dummy zero-cost rows
@@ -78,7 +81,13 @@ struct DemandRow {
 }
 
 /// Compute the plan for a panel's contacts against the S11 lands.
-pub fn plan(contacts: Vec<PanelContact>, lands: &[Land]) -> Result<Plan> {
+/// `keepouts` are fixed-feature disks (center, radius) a pogo pad must
+/// stay out of.
+pub fn plan(
+    contacts: Vec<PanelContact>,
+    lands: &[Land],
+    keepouts: &[([f64; 2], f64)],
+) -> Result<Plan> {
     if contacts.is_empty() {
         bail!("panel has no ICT contacts; mark test points with the TestPoint `ict` config");
     }
@@ -104,8 +113,26 @@ pub fn plan(contacts: Vec<PanelContact>, lands: &[Land]) -> Result<Plan> {
             testable = testable.min(cap / need);
         }
     }
+    let valid: Vec<u32> = (0..boards_total)
+        .filter(|&board| {
+            contacts
+                .iter()
+                .filter(|contact| contact.board == board)
+                .all(|contact| {
+                    keepouts.iter().all(|(center, radius)| {
+                        let dx = contact.xy[0] - center[0];
+                        let dy = contact.xy[1] - center[1];
+                        (dx * dx + dy * dy).sqrt() >= *radius
+                    })
+                })
+        })
+        .collect();
+    if valid.is_empty() {
+        bail!("every board instance has a contact inside a fixed-feature keep-out");
+    }
+    let testable = testable.min(valid.len());
     let tested: Vec<u32> = (0..testable)
-        .map(|i| (i * boards_total as usize / testable) as u32)
+        .map(|i| valid[i * valid.len() / testable])
         .collect();
 
     let mut demands: Vec<DemandRow> = Vec::new();
@@ -430,7 +457,7 @@ mod tests {
                 xy: [32.0, 50.0],
             },
         ];
-        let plan = plan(contacts, &lands).expect("plans without panicking");
+        let plan = plan(contacts, &lands, &[]).expect("plans without panicking");
         assert_eq!(plan.bindings.len(), 2);
         for binding in &plan.bindings {
             // Both bind to ordinary LS lands.

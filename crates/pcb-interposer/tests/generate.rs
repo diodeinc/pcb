@@ -157,7 +157,10 @@ fn generates_a_parseable_interposer() {
     assert_eq!(panel.outline.len(), 8);
 
     let lands = pcb_interposer::pattern::oriented_s11(panel.width, panel.height);
-    let text = pcb_interposer::emit::board(&panel, &lands);
+    let contacts =
+        pcb_interposer::contacts::extract_contacts(&ipc, panel.height).expect("contacts");
+    let plan = pcb_interposer::plan::plan(contacts, &lands, &[]).expect("plan");
+    let text = pcb_interposer::emit::board(&panel, &lands, Some(&plan));
     let root = pcb_sexpr::parse(&text).expect("board parses");
     let SexprKind::List(items) = &root.kind else {
         panic!("root is a list");
@@ -171,16 +174,32 @@ fn generates_a_parseable_interposer() {
             })
             .count()
     };
-    // 5 holes + 2 fids + 112 lands.
-    assert_eq!(count("footprint"), 119);
+    // 5 holes + 2 fids + 112 lands + 12 pogos (2 boards × 6 contacts).
+    assert_eq!(count("footprint"), 131);
     assert_eq!(count("zone"), 1);
     assert_eq!(count("gr_arc"), 4);
     assert_eq!(count("gr_line"), 4);
-    // 24 GND lands plus the net-table entry and the zone reference.
-    assert_eq!(text.matches("(net 1 \"GND\")").count(), 25);
+    // Net table: no-net, GND, and ten planned nets.
+    assert_eq!(count("net"), 12);
+    // GND: the table entry, 24 lands, and 2 gnd pogos.
+    assert_eq!(text.matches("(net 1 \"GND\")").count(), 27);
+    // Every planned net appears on both faces: its pogo pad and its land.
+    for board in [0, 1] {
+        let net = format!("\"B{board}.TP_DP.TP\"");
+        assert_eq!(text.matches(net.as_str()).count(), 3, "table + pogo + land");
+    }
+    assert_eq!(text.matches("Interposer:Pogo_Pad_D1.0mm").count(), 12);
 
     // Deterministic output.
-    assert_eq!(text, pcb_interposer::emit::board(&panel, &lands));
+    assert_eq!(
+        text,
+        pcb_interposer::emit::board(&panel, &lands, Some(&plan))
+    );
+
+    // Without a plan the board stays bare: no pogos, no planned nets.
+    let bare = pcb_interposer::emit::board(&panel, &lands, None);
+    assert!(!bare.contains("Pogo_Pad"));
+    assert!(!bare.contains("B0.TP_DP.TP"));
 }
 
 #[test]
@@ -202,7 +221,7 @@ fn plans_the_fixture_map() {
     assert_eq!(tp1(0).xy[0], tp1(1).xy[0]);
     assert!((tp1(0).xy[1] - tp1(1).xy[1] - 40.0).abs() < 1e-9);
 
-    let plan = pcb_interposer::plan::plan(contacts, &lands).expect("plan");
+    let plan = pcb_interposer::plan::plan(contacts, &lands, &[]).expect("plan");
     assert_eq!(plan.boards_total, 2);
     assert_eq!(plan.tested, vec![0, 1]);
     // 12 contacts bound: 10 to lands, 2 gnd to the pour.

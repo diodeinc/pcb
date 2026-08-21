@@ -1,10 +1,13 @@
 //! Emit the interposer as a KiCad board via `pcb_ir::dialects::kicad`.
 //!
-//! This slice is the deterministic base board: the panel's outline,
-//! tooling holes, and fiducials, the S11 mate lands on the bottom copper,
-//! and a full-sheet bottom GND pour. GND lands join the pour; every other
-//! land is left un-netted until a panel-specific assignment binds it. No
-//! pogo pads and no routing yet.
+//! The deterministic board: the panel's outline, tooling holes, and
+//! fiducials, the S11 mate lands on the bottom copper, and a full-sheet
+//! bottom GND pour. With a fixture plan, the board is also populated —
+//! a pogo pad on the top face at every tested contact, and the plan's
+//! nets bound on both the pogo and its mate land — so the unrouted
+//! airwires are exactly the routing pass's work list. Without a plan
+//! (no ICT contacts), GND lands join the pour and everything else stays
+//! un-netted.
 
 use pcb_ir::dialects::kicad::{
     At, Document, Footprint, FootprintAttrs, Graphic, Mount, Pad, PadKind, PadShape, Property,
@@ -14,16 +17,32 @@ use pcb_ir::geom::Point;
 
 use crate::panel::{Outline, Panel};
 use crate::pattern::{Land, Role};
+use crate::plan::Plan;
 
 /// Mate land pad diameter.
 const LAND_DIA_MM: f64 = 1.0;
+/// Pogo land pad diameter, matching the Ø1 mm test points it presses on.
+const POGO_DIA_MM: f64 = 1.0;
 
 /// Build the `.kicad_pcb` source.
-pub fn board(panel: &Panel, lands: &[Land]) -> String {
+pub fn board(panel: &Panel, lands: &[Land], plan: Option<&Plan>) -> String {
     let mut doc = Document::two_layer();
     doc.generator = "pcb-interposer".into();
     let mut uuids = UuidGen::new();
     let gnd = doc.net("GND");
+
+    // The plan's nets, keyed both ways: per land index and per contact.
+    let mut land_nets: std::collections::BTreeMap<usize, (u32, String)> = Default::default();
+    let mut contact_nets: Vec<(usize, (u32, String))> = Vec::new();
+    if let Some(plan) = plan {
+        for binding in &plan.bindings {
+            let net = (doc.net(&binding.net), binding.net.clone());
+            if let Some(land) = binding.land {
+                land_nets.insert(land, net.clone());
+            }
+            contact_nets.push((binding.contact, net));
+        }
+    }
 
     for outline in &panel.outline {
         doc.graphics.push(match *outline {
@@ -59,9 +78,19 @@ pub fn board(panel: &Panel, lands: &[Land]) -> String {
             .push(fid_footprint(&mut uuids, ordinal, *at, false));
     }
     for (index, land) in lands.iter().enumerate() {
-        let net = (land.role == Role::Gnd).then(|| (gnd, "GND".to_string()));
+        let net = land_nets
+            .get(&index)
+            .cloned()
+            .or_else(|| (land.role == Role::Gnd).then(|| (gnd, "GND".to_string())));
         doc.footprints
             .push(land_footprint(&mut uuids, index, land, net));
+    }
+    if let Some(plan) = plan {
+        for (ordinal, (contact_index, net)) in contact_nets.iter().enumerate() {
+            let contact = &plan.contacts[*contact_index];
+            doc.footprints
+                .push(pogo_footprint(&mut uuids, ordinal, contact.xy, net.clone()));
+        }
     }
 
     doc.zones.push(Zone {
@@ -176,6 +205,40 @@ fn fid_footprint(uuids: &mut UuidGen, index: usize, at: [f64; 2], top: bool) -> 
             net: None,
             solder_mask_margin: Some(0.5),
             clearance: Some(0.6),
+            uuid: uuids.next_uuid(),
+        }],
+    }
+}
+
+/// A pogo-pin land on the top face, at a tested contact's position.
+fn pogo_footprint(
+    uuids: &mut UuidGen,
+    index: usize,
+    at: [f64; 2],
+    net: (u32, String),
+) -> Footprint {
+    Footprint {
+        lib_id: "Interposer:Pogo_Pad_D1.0mm".into(),
+        layer: "F.Cu".into(),
+        uuid: uuids.next_uuid(),
+        at: At::xy(at[0], at[1]),
+        properties: hidden_properties(uuids, &format!("P{}", index + 1), true),
+        attrs: FootprintAttrs {
+            mount: Some(Mount::Smd),
+            exclude_from_pos_files: false,
+            exclude_from_bom: false,
+        },
+        pads: vec![Pad {
+            number: "1".into(),
+            kind: PadKind::Smd,
+            shape: PadShape::Circle,
+            at: At::default(),
+            size: (POGO_DIA_MM, POGO_DIA_MM),
+            drill: None,
+            layers: vec!["F.Cu".into(), "F.Mask".into()],
+            net: Some(net),
+            solder_mask_margin: None,
+            clearance: None,
             uuid: uuids.next_uuid(),
         }],
     }
