@@ -18,6 +18,7 @@ pub mod emit;
 pub mod panel;
 pub mod pattern;
 pub mod plan;
+pub mod pogo;
 pub mod stitch;
 
 use std::path::Path;

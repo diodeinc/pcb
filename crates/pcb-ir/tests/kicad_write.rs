@@ -196,6 +196,19 @@ fn output_is_deterministic_and_kicad_shaped() {
 }
 
 #[test]
+fn raw_footprints_splice_verbatim() {
+    let mut doc = Document::two_layer();
+    doc.raw_footprints.push(
+        "(footprint \"Lib:Part\"\n\t(layer \"F.Cu\")\n\t(at 1 2)\n\t(pad \"1\" smd circle\n\t\t(at 0 0)\n\t\t(size 1 1)\n\t\t(layers \"F.Cu\")\n\t)\n)"
+            .into(),
+    );
+    let text = kicad::write(&doc);
+    // Re-indented one level under the document root, and still parseable.
+    assert!(text.contains("\t(footprint \"Lib:Part\"\n\t\t(layer \"F.Cu\")"));
+    pcb_sexpr::parse(&text).expect("spliced output parses");
+}
+
+#[test]
 fn number_formatting_matches_kicad() {
     // Exercised through a segment width, which passes straight through num().
     let mut doc = Document::two_layer();

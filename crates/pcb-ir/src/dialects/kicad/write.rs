@@ -60,6 +60,9 @@ pub fn write(document: &Document) -> String {
     for footprint in &document.footprints {
         write_footprint(&mut w, footprint);
     }
+    for raw in &document.raw_footprints {
+        w.raw_block(raw);
+    }
     for graphic in &document.graphics {
         write_graphic(&mut w, graphic);
     }
@@ -450,6 +453,18 @@ impl Writer {
         self.indent();
         self.out.push_str(content);
         self.out.push('\n');
+    }
+
+    /// Splice an already-serialized block, re-indented to this depth.
+    fn raw_block(&mut self, block: &str) {
+        for line in block.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            self.indent();
+            self.out.push_str(line);
+            self.out.push('\n');
+        }
     }
 
     fn close(&mut self) {
