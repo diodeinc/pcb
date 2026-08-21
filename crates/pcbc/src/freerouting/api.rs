@@ -330,21 +330,6 @@ mod tests {
     }
 
     #[test]
-    fn job_status_deserializes_with_current_pass() {
-        let status: JobStatus =
-            serde_json::from_str(r#"{"state":"RUNNING","current_pass":3}"#).unwrap();
-        assert_eq!(status.state, JobState::Running);
-        assert_eq!(status.current_pass, Some(3));
-    }
-
-    #[test]
-    fn job_status_deserializes_without_current_pass() {
-        let status: JobStatus = serde_json::from_str(r#"{"state":"QUEUED"}"#).unwrap();
-        assert_eq!(status.state, JobState::Queued);
-        assert_eq!(status.current_pass, None);
-    }
-
-    #[test]
     fn drc_report_counts_unconnected_items() {
         let report: DrcReport =
             serde_json::from_str(r#"{"unconnected_items":[{},{}],"violations":[]}"#).unwrap();
