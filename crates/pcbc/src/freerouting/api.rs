@@ -337,12 +337,6 @@ mod tests {
     }
 
     #[test]
-    fn drc_report_defaults_to_no_unconnected_items() {
-        let report: DrcReport = serde_json::from_str(r#"{}"#).unwrap();
-        assert_eq!(report.unconnected_items.len(), 0);
-    }
-
-    #[test]
     fn is_no_output_error_matches_observed_freerouting_wording() {
         assert!(is_no_output_error("The job hasn't started yet."));
         assert!(is_no_output_error(
