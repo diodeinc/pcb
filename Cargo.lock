@@ -4254,6 +4254,16 @@ name = "pcb-intern"
 version = "0.1.0"
 
 [[package]]
+name = "pcb-interposer"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ipc2581",
+ "pcb-ir",
+ "pcb-sexpr",
+]
+
+[[package]]
 name = "pcb-ipc2581-tools"
 version = "0.4.33"
 dependencies = [
@@ -4589,6 +4599,7 @@ dependencies = [
  "pcb-docgen",
  "pcb-eda",
  "pcb-fmt",
+ "pcb-interposer",
  "pcb-ipc2581-tools",
  "pcb-ir",
  "pcb-kicad",

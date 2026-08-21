@@ -1,0 +1,136 @@
+//! End-to-end: a board-array style panel in, a parseable interposer out.
+
+use pcb_sexpr::SexprKind;
+
+/// A miniature "panel": A7-sized rounded-rect profile, two NPTH tooling
+/// holes (one exactly on an A7-tile corner spot, which must dedupe), one
+/// global fiducial per face, and a second top fiducial sitting on a tile
+/// corner spot (which must yield to the tile hole).
+const PANEL: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="Owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="array"/>
+    <DictionaryStandard units="MILLIMETER"/>
+  </Content>
+  <Ecad name="ecad">
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="CONDUCTOR" side="TOP" polarity="POSITIVE"/>
+      <Layer name="BOTTOM" layerFunction="CONDUCTOR" side="BOTTOM" polarity="POSITIVE"/>
+      <Layer name="Board_Array_Drill" layerFunction="DRILL" polarity="POSITIVE"/>
+      <Stackup name="stackup" overallThickness="1.6" tolPlus="0.0" tolMinus="0.0">
+        <StackupGroup name="group" thickness="1.6" tolPlus="0.0" tolMinus="0.0"/>
+      </Stackup>
+      <Step name="array">
+        <Datum x="0.0" y="0.0"/>
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0.0" y="3.0"/>
+            <PolyStepSegment x="0.0" y="102.0"/>
+            <PolyStepCurve x="3.0" y="105.0" centerX="3.0" centerY="102.0" clockwise="true"/>
+            <PolyStepSegment x="71.0" y="105.0"/>
+            <PolyStepCurve x="74.0" y="102.0" centerX="71.0" centerY="102.0" clockwise="true"/>
+            <PolyStepSegment x="74.0" y="3.0"/>
+            <PolyStepCurve x="71.0" y="0.0" centerX="71.0" centerY="3.0" clockwise="true"/>
+            <PolyStepSegment x="3.0" y="0.0"/>
+            <PolyStepCurve x="0.0" y="3.0" centerX="3.0" centerY="3.0" clockwise="true"/>
+          </Polygon>
+        </Profile>
+        <LayerFeature layerRef="Board_Array_Drill">
+          <Set polarity="POSITIVE">
+            <Hole name="t0" type="CIRCLE" diameter="2.1" platingStatus="NONPLATED" plusTol="0" minusTol="0" x="3.0" y="102.0"/>
+            <Hole name="t1" type="CIRCLE" diameter="2.0" platingStatus="NONPLATED" plusTol="0" minusTol="0" x="20.0" y="2.5"/>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="TOP">
+          <Set polarity="POSITIVE">
+            <GlobalFiducial>
+              <Location x="10.0" y="3.85"/>
+              <Circle diameter="1"/>
+            </GlobalFiducial>
+            <GlobalFiducial>
+              <Location x="71.5" y="3.5"/>
+              <Circle diameter="1"/>
+            </GlobalFiducial>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="BOTTOM">
+          <Set polarity="POSITIVE">
+            <GlobalFiducial>
+              <Location x="11.0" y="3.85"/>
+              <Circle diameter="1"/>
+            </GlobalFiducial>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#;
+
+#[test]
+fn generates_a_parseable_interposer() {
+    let ipc = ipc2581::Ipc2581::parse(PANEL).expect("panel fixture parses");
+    let panel = pcb_interposer::panel::extract(&ipc).expect("panel extracts");
+
+    assert_eq!((panel.width, panel.height), (74.0, 105.0));
+    // The hole at (3, 102) Y-up is (3, 3) Y-down — an exact A7-tile corner
+    // spot, so only three tile holes are added on top of the panel's two.
+    assert_eq!(panel.holes.len(), 5);
+    // The fiducial near the (71, 102) tile corner hole is dropped; the
+    // tile is the fixture contract.
+    assert_eq!(panel.fids_top.len(), 1);
+    assert_eq!(panel.fids_bottom.len(), 1);
+    assert_eq!(panel.outline.len(), 8);
+
+    let lands = pcb_interposer::pattern::oriented_s11(panel.width, panel.height);
+    let text = pcb_interposer::emit::board(&panel, &lands);
+    let root = pcb_sexpr::parse(&text).expect("board parses");
+    let SexprKind::List(items) = &root.kind else {
+        panic!("root is a list");
+    };
+    let count = |name: &str| {
+        items
+            .iter()
+            .filter(|item| {
+                matches!(&item.kind, SexprKind::List(children)
+                    if children.first().and_then(|c| c.as_atom()) == Some(name))
+            })
+            .count()
+    };
+    // 5 holes + 2 fids + 112 lands.
+    assert_eq!(count("footprint"), 119);
+    assert_eq!(count("zone"), 1);
+    assert_eq!(count("gr_arc"), 4);
+    assert_eq!(count("gr_line"), 4);
+    // 24 GND lands plus the net-table entry and the zone reference.
+    assert_eq!(text.matches("(net 1 \"GND\")").count(), 25);
+
+    // Deterministic output.
+    assert_eq!(text, pcb_interposer::emit::board(&panel, &lands));
+}
+
+#[test]
+fn refuses_non_standard_panel_sizes() {
+    let custom = PANEL.replace("74.0", "94.0").replace("105.0", "82.0");
+    let ipc = ipc2581::Ipc2581::parse(&custom).expect("fixture parses");
+    let err = pcb_interposer::panel::extract(&ipc).unwrap_err();
+    assert!(err.to_string().contains("unsupported panel size"), "{err}");
+}
+
+#[test]
+fn arc_midpoints_stay_on_the_radius() {
+    let ipc = ipc2581::Ipc2581::parse(PANEL).expect("panel fixture parses");
+    let panel = pcb_interposer::panel::extract(&ipc).expect("panel extracts");
+    for outline in &panel.outline {
+        if let pcb_interposer::panel::Outline::Arc { start, mid, end } = outline {
+            // All fixture arcs are 3 mm corner rounds; the mid point must
+            // sit on the same circle as the endpoints.
+            let chord = ((end[0] - start[0]).powi(2) + (end[1] - start[1]).powi(2)).sqrt();
+            assert!((chord - 3.0 * std::f64::consts::SQRT_2).abs() < 1e-9);
+            let to_mid = ((mid[0] - start[0]).powi(2) + (mid[1] - start[1]).powi(2)).sqrt();
+            // Start-to-mid spans half the 90° sweep.
+            assert!((to_mid - 2.0 * 3.0 * (std::f64::consts::PI / 8.0).sin()).abs() < 1e-9);
+        }
+    }
+}

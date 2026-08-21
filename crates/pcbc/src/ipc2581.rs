@@ -34,6 +34,15 @@ enum Commands {
         #[arg(long)]
         offline: bool,
     },
+    /// Generate the test-fixture interposer board for a board-array panel
+    Interposer {
+        /// Board-array IPC-2581 XML file (`board-array create` output)
+        #[arg(value_hint = clap::ValueHint::FilePath)]
+        input: PathBuf,
+        /// Output `.kicad_pcb` path; a sibling `.kicad_pro` is written too
+        #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
+        output: PathBuf,
+    },
     /// List ICT fixture contacts (components with an `Ict` BOM characteristic)
     Ict {
         /// IPC-2581 XML file to export from
@@ -348,6 +357,20 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
             format,
             offline,
         } => commands::bom::execute(&file, format, offline),
+        Commands::Interposer { input, output } => {
+            use anyhow::Context as _;
+            let (pcb, pro) = pcb_interposer::generate(&input)?;
+            std::fs::write(&output, pcb).with_context(|| format!("write {}", output.display()))?;
+            let pro_path = output.with_extension("kicad_pro");
+            std::fs::write(&pro_path, pro)
+                .with_context(|| format!("write {}", pro_path.display()))?;
+            println!(
+                "✓ Wrote interposer {} and {}",
+                output.display(),
+                pro_path.display()
+            );
+            Ok(())
+        }
         Commands::Ict { file, output, side } => {
             commands::ict::execute(&file, &commands::ict::IctOptions { output, side })
         }
