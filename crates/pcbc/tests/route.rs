@@ -97,14 +97,17 @@ fn test_freerouting_no_layout() {
 #[test]
 fn test_freerouting_java_not_found() {
     let mut sandbox = Sandbox::new().with_workspace();
+    sandbox.env("PATH", "");
     sandbox.write("board.zen", BOARD_WITH_LAYOUT_ZEN);
     scaffold_layout(&mut sandbox);
 
     let (code, stdout, stderr) = run_route_freerouting(&mut sandbox, &[]);
     let combined = format!("{stdout}{stderr}");
-    if combined.contains("Java 25+ not found") {
-        assert_ne!(code, 0);
-    }
+    assert!(
+        combined.contains("Java 25+ not found"),
+        "expected Java-not-found error, got:\n{combined}"
+    );
+    assert_ne!(code, 0);
 }
 
 #[test]
