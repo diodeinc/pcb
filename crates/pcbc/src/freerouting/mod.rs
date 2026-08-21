@@ -10,7 +10,8 @@ use std::io::Read;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -56,8 +57,8 @@ static CANCEL: AtomicBool = AtomicBool::new(false);
 /// Set on a second Ctrl+C: skip fetching partial output and kill Java now.
 static FORCE_KILL: AtomicBool = AtomicBool::new(false);
 
-/// FreeRouting's pid, so the Ctrl+C handler can kill it directly.
-static CHILD_PID: AtomicU32 = AtomicU32::new(0);
+/// The running FreeRouting `Child`, shared with the Ctrl+C handler thread.
+static CHILD: Mutex<Option<Arc<Mutex<Child>>>> = Mutex::new(None);
 
 pub fn execute(
     args: &RouteArgs,
@@ -109,7 +110,7 @@ pub fn execute(
 
     CANCEL.store(false, Ordering::SeqCst);
     FORCE_KILL.store(false, Ordering::SeqCst);
-    CHILD_PID.store(0, Ordering::SeqCst);
+    *CHILD.lock().unwrap() = None;
     if let Err(e) = ctrlc::set_handler(|| {
         if CANCEL.swap(true, Ordering::SeqCst) {
             eprintln!("\n  Force-stopping FreeRouting...");
@@ -421,7 +422,7 @@ enum RunOutcome {
 /// Owns the `Child`; `Drop` kills it on every exit path (success, failure,
 /// timeout, Ctrl+C) instead of relying on each return site to do it.
 struct FreeroutingServer {
-    child: Child,
+    child: Arc<Mutex<Child>>,
     base_url: String,
     /// stdout+stderr, piped straight to disk instead of buffered in memory.
     log_path: PathBuf,
@@ -462,8 +463,8 @@ impl FreeroutingServer {
         let child = command
             .spawn()
             .context("Failed to launch FreeRouting API server (java -jar)")?;
-
-        CHILD_PID.store(child.id(), Ordering::SeqCst);
+        let child = Arc::new(Mutex::new(child));
+        *CHILD.lock().unwrap() = Some(child.clone());
 
         Ok(Self {
             child,
@@ -473,12 +474,12 @@ impl FreeroutingServer {
     }
 
     fn still_alive(&mut self) -> Result<bool> {
-        Ok(self.child.try_wait()?.is_none())
+        Ok(self.child.lock().unwrap().try_wait()?.is_none())
     }
 
     /// `path (status)` for error messages — the log itself isn't inlined.
     fn log_summary(&mut self) -> String {
-        match self.child.try_wait().ok().flatten() {
+        match self.child.lock().unwrap().try_wait().ok().flatten() {
             Some(status) => format!("log: {} ({status})", self.log_path.display()),
             None => format!("log: {}", self.log_path.display()),
         }
@@ -487,9 +488,10 @@ impl FreeroutingServer {
 
 impl Drop for FreeroutingServer {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        CHILD_PID.store(0, Ordering::SeqCst);
+        let mut child = self.child.lock().unwrap();
+        let _ = child.kill();
+        let _ = child.wait();
+        *CHILD.lock().unwrap() = None;
     }
 }
 
@@ -511,45 +513,10 @@ fn detach_process_group(command: &mut Command) {
 #[cfg(not(any(unix, windows)))]
 fn detach_process_group(_command: &mut Command) {}
 
-/// Called from the Ctrl+C handler on a second press.
-#[cfg(unix)]
+/// Called from the Ctrl+C handler thread on a second press.
 fn kill_child_now() {
-    let pid = CHILD_PID.load(Ordering::SeqCst);
-    if pid != 0 {
-        // SAFETY: kill(2) with a plain pid and signal cannot fail in a way
-        // that matters here.
-        unsafe {
-            libc_kill(pid as i32, 9);
-        }
-    }
-}
-
-/// Called from the Ctrl+C handler on a second press. Actually kills the
-/// process (not just sets `FORCE_KILL`): a second press can land while we're
-/// blocked in an output fetch, past the point where the poll loop checks it.
-#[cfg(windows)]
-fn kill_child_now() {
-    let pid = CHILD_PID.load(Ordering::SeqCst);
-    if pid != 0 {
-        let _ = Command::new("taskkill")
-            .args(["/F", "/PID", &pid.to_string()])
-            .output();
-    }
-}
-
-/// Best-effort only; `FORCE_KILL` still reaches `Child::kill()` via the poll loop.
-#[cfg(not(any(unix, windows)))]
-fn kill_child_now() {}
-
-#[cfg(unix)]
-unsafe extern "C" {
-    fn kill(pid: i32, sig: i32) -> i32;
-}
-
-#[cfg(unix)]
-unsafe fn libc_kill(pid: i32, sig: i32) {
-    unsafe {
-        kill(pid, sig);
+    if let Some(child) = CHILD.lock().unwrap().as_ref() {
+        let _ = child.lock().unwrap().kill();
     }
 }
 
@@ -988,22 +955,23 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn kill_child_now_kills_the_stored_pid() {
-        let mut child = Command::new("sleep")
+    fn kill_child_now_kills_the_shared_child() {
+        let child = Command::new("sleep")
             .arg("5")
             .stdout(std::process::Stdio::null())
             .spawn()
             .unwrap();
-        CHILD_PID.store(child.id(), Ordering::SeqCst);
+        let child = Arc::new(Mutex::new(child));
+        *CHILD.lock().unwrap() = Some(child.clone());
 
         kill_child_now();
 
-        let status = child.wait().unwrap();
+        let status = child.lock().unwrap().wait().unwrap();
         assert_eq!(
             std::os::unix::process::ExitStatusExt::signal(&status),
             Some(9)
         );
-        CHILD_PID.store(0, Ordering::SeqCst);
+        *CHILD.lock().unwrap() = None;
     }
 
     #[cfg(unix)]
