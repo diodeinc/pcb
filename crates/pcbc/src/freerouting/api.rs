@@ -105,6 +105,12 @@ struct JobOutputResponse {
     data: String,
 }
 
+#[derive(Deserialize)]
+struct DrcReport {
+    #[serde(default)]
+    unconnected_items: Vec<serde_json::Value>,
+}
+
 /// Timeout for `get_output`, whose cost scales with board size (the server
 /// serializes and base64-encodes the whole board), unlike the cheap,
 /// flat-cost status/control endpoints below. See poll_job's `Completed`
@@ -309,6 +315,22 @@ impl FreeroutingApiClient {
         }
     }
 
+    /// Unrouted connections left per FreeRouting's own DRC report.
+    pub fn get_unrouted_count(&self, job_id: &str) -> Result<usize> {
+        let resp = self
+            .with_headers(self.client.get(self.url(&format!("/v1/jobs/{job_id}/drc"))))
+            .timeout(GET_OUTPUT_TIMEOUT)
+            .send()
+            .context("Failed to get FreeRouting DRC report")?;
+        if !resp.status().is_success() {
+            return Err(api_error("Failed to get FreeRouting DRC report", resp));
+        }
+        let report: DrcReport = resp
+            .json()
+            .context("Failed to parse FreeRouting DRC report")?;
+        Ok(report.unconnected_items.len())
+    }
+
     /// Best-effort: cancel a running or queued job. Errors are the caller's
     /// choice whether to surface — we always still try `get_output`
     /// afterward regardless of whether this succeeds.
@@ -385,6 +407,19 @@ mod tests {
         let status: JobStatus = serde_json::from_str(r#"{"state":"QUEUED"}"#).unwrap();
         assert_eq!(status.state, JobState::Queued);
         assert_eq!(status.current_pass, None);
+    }
+
+    #[test]
+    fn drc_report_counts_unconnected_items() {
+        let report: DrcReport =
+            serde_json::from_str(r#"{"unconnected_items":[{},{}],"violations":[]}"#).unwrap();
+        assert_eq!(report.unconnected_items.len(), 2);
+    }
+
+    #[test]
+    fn drc_report_defaults_to_no_unconnected_items() {
+        let report: DrcReport = serde_json::from_str(r#"{}"#).unwrap();
+        assert_eq!(report.unconnected_items.len(), 0);
     }
 
     #[test]

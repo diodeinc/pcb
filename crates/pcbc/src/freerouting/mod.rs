@@ -135,13 +135,14 @@ pub fn execute(
     }
 
     let start_time = Instant::now();
-    let outcome = run_freerouting(
+    let run_result = run_freerouting(
         &java_path,
         &fr_jar,
         &dsn_path,
         &ses_path,
         args.timeout as u64 * 60,
     )?;
+    let outcome = run_result.outcome;
 
     if !ses_path.exists() {
         println!("  No routing progress to save. Board left untouched.");
@@ -163,10 +164,17 @@ pub fn execute(
             "Partial result saved to {}",
             board_path.display().to_string().cyan()
         ),
-        RunOutcome::Completed => println!(
-            "Result saved to {}",
-            board_path.display().to_string().cyan()
-        ),
+        RunOutcome::Completed => match run_result.unrouted {
+            Some(n) if n > 0 => println!(
+                "Result saved to {} ({n} unrouted connection{} remaining)",
+                board_path.display().to_string().cyan(),
+                if n == 1 { "" } else { "s" }
+            ),
+            _ => println!(
+                "Result saved to {}",
+                board_path.display().to_string().cyan()
+            ),
+        },
         RunOutcome::Terminated => println!(
             "Partial result saved to {} (FreeRouting terminated unexpectedly)",
             board_path.display().to_string().cyan()
@@ -528,13 +536,18 @@ fn pick_free_port() -> Result<u16> {
     Ok(listener.local_addr()?.port())
 }
 
+struct RunResult {
+    outcome: RunOutcome,
+    unrouted: Option<usize>,
+}
+
 fn run_freerouting(
     java_path: &Path,
     jar_path: &Path,
     dsn_path: &Path,
     ses_path: &Path,
     timeout_secs: u64,
-) -> Result<RunOutcome> {
+) -> Result<RunResult> {
     let spinner = Spinner::builder("Starting FreeRouting...").start();
 
     let mut server = FreeroutingServer::spawn(java_path, jar_path)?;
@@ -575,9 +588,13 @@ fn run_freerouting(
     let poll_result = poll_job(&api, &job_id, timeout_secs, &spinner, &mut server)?;
     let elapsed = start.elapsed().as_secs_f64();
     match (poll_result.outcome, poll_result.output.is_some()) {
-        (RunOutcome::Completed, true) => {
-            spinner.success(format!("FreeRouting finished in {elapsed:.1}s"));
-        }
+        (RunOutcome::Completed, true) => match poll_result.unrouted {
+            Some(n) if n > 0 => spinner.warning(format!(
+                "FreeRouting finished in {elapsed:.1}s with {n} unrouted connection{}",
+                if n == 1 { "" } else { "s" }
+            )),
+            _ => spinner.success(format!("FreeRouting finished in {elapsed:.1}s")),
+        },
         (RunOutcome::Completed, false) => {
             spinner.success(format!(
                 "FreeRouting finished in {elapsed:.1}s (nothing to route)"
@@ -616,12 +633,16 @@ fn run_freerouting(
         let _ = std::fs::remove_file(&server.log_path);
     }
 
-    Ok(poll_result.outcome)
+    Ok(RunResult {
+        outcome: poll_result.outcome,
+        unrouted: poll_result.unrouted,
+    })
 }
 
 struct PollResult {
     outcome: RunOutcome,
     output: Option<Vec<u8>>,
+    unrouted: Option<usize>,
 }
 
 fn poll_job(
@@ -642,6 +663,7 @@ fn poll_job(
                 return Ok(PollResult {
                     outcome: RunOutcome::Cancelled,
                     output: None,
+                    unrouted: None,
                 });
             }
             if CANCEL.load(Ordering::SeqCst) {
@@ -677,10 +699,12 @@ fn poll_job(
                             Ok(JobOutput::Data(bytes)) => PollResult {
                                 outcome: RunOutcome::Completed,
                                 output: Some(bytes),
+                                unrouted: api.get_unrouted_count(job_id).ok(),
                             },
                             Ok(JobOutput::NothingToRoute) => PollResult {
                                 outcome: RunOutcome::Completed,
                                 output: None,
+                                unrouted: None,
                             },
                             Err(_) => {
                                 eprintln!(
@@ -690,6 +714,7 @@ fn poll_job(
                                 PollResult {
                                     outcome: RunOutcome::Cancelled,
                                     output: None,
+                                    unrouted: None,
                                 }
                             }
                         });
@@ -698,12 +723,14 @@ fn poll_job(
                         return Ok(PollResult {
                             outcome: RunOutcome::Cancelled,
                             output: best_effort_output(api, job_id),
+                            unrouted: None,
                         });
                     }
                     JobState::Terminated => {
                         return Ok(PollResult {
                             outcome: RunOutcome::Terminated,
                             output: best_effort_output(api, job_id),
+                            unrouted: None,
                         });
                     }
                     JobState::Invalid => {
@@ -739,6 +766,7 @@ fn stop_and_capture(api: &FreeroutingApiClient, job_id: &str) -> PollResult {
     PollResult {
         outcome: RunOutcome::Cancelled,
         output,
+        unrouted: None,
     }
 }
 
