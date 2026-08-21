@@ -42,6 +42,9 @@ enum Commands {
         /// Output `.kicad_pcb` path; a sibling `.kicad_pro` is written too
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
         output: PathBuf,
+        /// Also write the fixture map (tested boards + contact→land bindings) as JSON
+        #[arg(long, value_hint = clap::ValueHint::FilePath)]
+        fixture_map: Option<PathBuf>,
     },
     /// List ICT fixture contacts (components with an `Ict` BOM characteristic)
     Ict {
@@ -357,7 +360,11 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
             format,
             offline,
         } => commands::bom::execute(&file, format, offline),
-        Commands::Interposer { input, output } => {
+        Commands::Interposer {
+            input,
+            output,
+            fixture_map,
+        } => {
             use anyhow::Context as _;
             let (pcb, pro) = pcb_interposer::generate(&input)?;
             std::fs::write(&output, pcb).with_context(|| format!("write {}", output.display()))?;
@@ -369,6 +376,12 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                 output.display(),
                 pro_path.display()
             );
+            if let Some(map_path) = fixture_map {
+                let map = pcb_interposer::fixture_map(&input)?;
+                std::fs::write(&map_path, map)
+                    .with_context(|| format!("write {}", map_path.display()))?;
+                println!("✓ Wrote fixture map {}", map_path.display());
+            }
             Ok(())
         }
         Commands::Ict { file, output, side } => {

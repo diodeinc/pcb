@@ -12,6 +12,7 @@ license = "MIT OR Apache-2.0"
 anyhow = { workspace = true }
 ipc2581 = { workspace = true }
 pcb-ir = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 pcb-sexpr = { workspace = true }

@@ -4261,6 +4261,7 @@ dependencies = [
  "ipc2581",
  "pcb-ir",
  "pcb-sexpr",
+ "serde_json",
 ]
 
 [[package]]
