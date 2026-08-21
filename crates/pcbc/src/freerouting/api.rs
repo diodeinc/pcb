@@ -1,15 +1,7 @@
-//! Minimal client for FreeRouting's local REST API (`--api_server.enabled=true`).
+//! Client for FreeRouting's local REST API (`--api_server.enabled=true`).
 //!
-//! Used instead of FreeRouting's CLI mode (`-de`/`-do`) because CLI mode only
-//! writes `.ses` output once the job reaches `COMPLETED`, and an upstream bug
-//! (`TIMED_OUT` never promotes to `COMPLETED`) means a timeout or interrupt
-//! there never yields a partial result. `GET /jobs/{id}/output` supports
-//! partial output for a still-running or just-cancelled job instead.
-//!
-//! All requests are local loopback calls to a FreeRouting process we spawn
-//! ourselves (see `super::mod.rs`), so there's no auth/workspace-context
-//! plumbing here, unlike the DeepPCB client in `pcb-diode-api::routing` this
-//! module otherwise mirrors in style.
+//! Output must be fetched before cancelling a job — `GET /jobs/{id}/output`
+//! reports nothing once the job settles into `CANCELLED`.
 
 use std::time::Duration;
 

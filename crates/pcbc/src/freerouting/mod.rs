@@ -1,10 +1,6 @@
 //! Local auto-routing engine backed by FreeRouting (`pcb route --engine
-//! freerouting`). KiCad board -> Specctra DSN -> FreeRouting -> SES -> board.
-//!
-//! Uses FreeRouting's REST API server mode (`self::api`), not its one-shot
-//! CLI mode: an upstream bug leaves CLI mode unable to recover partial
-//! output on timeout/interrupt, which the API's `GET /jobs/{id}/output`
-//! supports.
+//! freerouting`). KiCad board -> Specctra DSN -> FreeRouting -> SES -> board,
+//! driven through FreeRouting's REST API server mode (`self::api`).
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
