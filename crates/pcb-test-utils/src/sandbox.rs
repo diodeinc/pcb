@@ -643,9 +643,6 @@ impl Sandbox {
         if let Ok(path) = std::env::var("PATH") {
             env_map.insert("PATH".into(), path);
         }
-        if let Ok(java_home) = std::env::var("JAVA_HOME") {
-            env_map.insert("JAVA_HOME".into(), java_home);
-        }
         env_map.insert(
             "GIT_CONFIG_GLOBAL".into(),
             self.gitconfig.to_string_lossy().into_owned(),
