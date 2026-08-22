@@ -151,8 +151,12 @@ pub fn execute(
                 board_path.display().to_string().cyan(),
                 if n == 1 { "" } else { "s" }
             ),
-            _ => println!(
+            Some(_) => println!(
                 "Result saved to {}",
+                board_path.display().to_string().cyan()
+            ),
+            None => println!(
+                "Result saved to {} (could not verify remaining unrouted connections)",
                 board_path.display().to_string().cyan()
             ),
         },
@@ -548,7 +552,10 @@ fn run_freerouting(
                 "FreeRouting finished in {elapsed:.1}s with {n} unrouted connection{}",
                 if n == 1 { "" } else { "s" }
             )),
-            _ => spinner.success(format!("FreeRouting finished in {elapsed:.1}s")),
+            Some(_) => spinner.success(format!("FreeRouting finished in {elapsed:.1}s")),
+            None => spinner.warning(format!(
+                "FreeRouting finished in {elapsed:.1}s (could not verify unrouted connections)"
+            )),
         },
         (RunOutcome::Completed, false) => {
             spinner.success(format!(
