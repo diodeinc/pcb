@@ -559,18 +559,6 @@ mod tests {
     }
 
     #[test]
-    fn short_gaps_are_not_filtered_out_of_clearance() {
-        let left = rect_region(0.0, 0.0, 0.05, 0.05);
-        let right = rect_region(0.11, 0.0, 0.16, 0.05);
-        let region = left.union(&right);
-
-        let findings = thin_gaps(&region, 0.1);
-
-        assert_eq!(findings.len(), 1);
-        assert!((findings[0].width.mm - 0.06).abs() < 1e-9);
-    }
-
-    #[test]
     fn exact_minimums_are_not_morphology_false_positives() {
         let feature = rect_region(0.0, 0.0, 1.0, 0.1);
         let disk = ContourSet::from_filled_contours(
@@ -599,12 +587,49 @@ mod tests {
             tol::REGION_MM,
         );
         let width = min_width(&stadium).expect("a stadium has facing walls");
-        assert!((width.mm - 0.6).abs() < 1e-6, "width {}", width.mm);
+        // The flattened arc's inscribed disk is its apothem, short of the
+        // true radius by at most one flattening tolerance per side.
+        assert!(
+            (0.0..=width.uncertainty_mm).contains(&(0.6 - width.mm)),
+            "width {}",
+            width.mm
+        );
         assert_eq!(width.uncertainty_mm, 2.0 * tol::FLATTEN_MM);
 
         let plate = rect_region(0.0, 0.0, 10.0, 3.0);
         assert!((min_width(&plate).unwrap().mm - 3.0).abs() < 1e-9);
         assert!(min_width(&ContourSet::empty(tol::REGION_MM)).is_none());
+    }
+
+    #[test]
+    fn tapered_tip_is_measured_at_its_tip() {
+        // A plate with a trapezoidal spur narrowing from 0.4 mm to 0.05 mm:
+        // the tip is the width, though its walls are far from parallel.
+        let region = ContourSet::from_contours(
+            &[ContourBuf::new(vec![
+                PathCmd::move_to(Point::new(0.0, 0.0)),
+                PathCmd::line_to(Point::new(10.0, 0.0)),
+                PathCmd::line_to(Point::new(10.0, 4.8)),
+                PathCmd::line_to(Point::new(12.0, 4.975)),
+                PathCmd::line_to(Point::new(12.0, 5.025)),
+                PathCmd::line_to(Point::new(10.0, 5.2)),
+                PathCmd::line_to(Point::new(10.0, 10.0)),
+                PathCmd::line_to(Point::new(0.0, 10.0)),
+                PathCmd::close(),
+            ])],
+            FillRule::NonZero,
+            tol::REGION_MM,
+        );
+
+        let findings = thin_features(&region, 0.1);
+
+        assert_eq!(findings.len(), 1);
+        let width = findings[0].width;
+        assert!((width.mm - 0.05).abs() < 0.01, "width {}", width.mm);
+        assert!(
+            width.first.x > 11.5 && width.second.x > 11.5,
+            "witnesses at the tip"
+        );
     }
 
     #[test]

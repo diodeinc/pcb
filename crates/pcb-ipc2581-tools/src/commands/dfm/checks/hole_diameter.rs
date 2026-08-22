@@ -10,17 +10,16 @@
 //! dₕ ≥ D_min    for every hole h of the rule's plating class.
 //! ```
 
-use anyhow::Result;
 use pcb_ir::geom::Point;
 use pcb_ir::geom::dfm::Distance;
 
-use crate::commands::dfm::design::HoleClass;
+use crate::commands::dfm::design::{Design, HoleClass};
 use crate::commands::dfm::report::Evidence;
 
-use super::{Context, Evaluation, Measured, hole_subject, holes_of_class};
+use super::{Evaluation, Measured, hole_subject, holes_of_class};
 
-pub(super) fn evaluate(class: HoleClass, ctx: &Context) -> Result<Evaluation> {
-    let holes = holes_of_class(ctx.design, class)?;
+pub(super) fn evaluate(class: HoleClass, design: &Design) -> Evaluation {
+    let holes = holes_of_class(design, class);
     let measured = holes
         .iter()
         .map(|(_, hole)| {
@@ -33,7 +32,7 @@ pub(super) fn evaluate(class: HoleClass, ctx: &Context) -> Result<Evaluation> {
                 ),
                 bbox: hole.bbox,
                 layers: vec![hole.layer.clone()],
-                subjects: vec![hole_subject(ctx, hole, "offender")],
+                subjects: vec![hole_subject(design, hole, "offender")],
                 evidence: vec![Evidence::circle(
                     "drilled_hole",
                     hole.center,
@@ -42,8 +41,8 @@ pub(super) fn evaluate(class: HoleClass, ctx: &Context) -> Result<Evaluation> {
             }
         })
         .collect();
-    Ok(Evaluation {
+    Evaluation {
         checked: holes.len(),
         measured,
-    })
+    }
 }

@@ -164,15 +164,98 @@ impl RuleKind {
     pub fn method(self) -> &'static str {
         match self {
             Self::HoleDiameter(_) => "ipc_hole_diameter",
-            Self::SlotWidth => "ipc_slot_width_or_outline_boundary_distance",
+            Self::SlotWidth => "ipc_slot_width_or_outline_medial_axis_width",
             Self::HolePairClearance => "circle_edge_distance",
             Self::AnnularRing(_) => "maximal_centered_disk_minus_hole_radius",
             Self::LineworkToCopperClearance(_) => "segment_to_filled_region_boundary",
             Self::BoardArrayPairClearance => "filled_profile_boundary_distance",
-            Self::ThinFeature(_) => "opening_candidate_then_boundary_distance",
-            Self::ThinGap(_) => "closing_candidate_then_boundary_distance",
+            Self::ThinFeature(_) => "opening_candidate_then_medial_axis_width",
+            Self::ThinGap(_) => "closing_candidate_then_medial_axis_width",
         }
     }
+}
+
+/// The entity pools a rule reads. Extraction builds exactly the union over
+/// the configured rules, so a rule set pays only for what it measures.
+#[derive(Debug, Clone, Copy, Default)]
+pub(super) struct Pools {
+    pub drilled: bool,
+    pub copper: bool,
+    pub copper_boundaries: bool,
+    pub hole_lands: bool,
+    pub masks: bool,
+    pub scores: bool,
+    pub board_outlines: bool,
+    pub board_arrays: bool,
+}
+
+impl std::ops::BitOr for Pools {
+    type Output = Self;
+
+    fn bitor(self, other: Self) -> Self {
+        Self {
+            drilled: self.drilled || other.drilled,
+            copper: self.copper || other.copper,
+            copper_boundaries: self.copper_boundaries || other.copper_boundaries,
+            hole_lands: self.hole_lands || other.hole_lands,
+            masks: self.masks || other.masks,
+            scores: self.scores || other.scores,
+            board_outlines: self.board_outlines || other.board_outlines,
+            board_arrays: self.board_arrays || other.board_arrays,
+        }
+    }
+}
+
+impl RuleKind {
+    pub fn pools(self) -> Pools {
+        let none = Pools::default();
+        match self {
+            Self::HoleDiameter(_) | Self::HolePairClearance | Self::SlotWidth => Pools {
+                drilled: true,
+                ..none
+            },
+            Self::AnnularRing(_) => Pools {
+                drilled: true,
+                copper: true,
+                copper_boundaries: true,
+                hole_lands: true,
+                ..none
+            },
+            Self::LineworkToCopperClearance(Linework::VScore) => Pools {
+                scores: true,
+                copper: true,
+                copper_boundaries: true,
+                ..none
+            },
+            Self::LineworkToCopperClearance(Linework::BoardEdge) => Pools {
+                board_outlines: true,
+                copper: true,
+                copper_boundaries: true,
+                ..none
+            },
+            Self::BoardArrayPairClearance => Pools {
+                board_arrays: true,
+                ..none
+            },
+            Self::ThinFeature(ImageSel::Copper) | Self::ThinGap(ImageSel::Copper) => Pools {
+                copper: true,
+                ..none
+            },
+            Self::ThinFeature(ImageSel::Soldermask) | Self::ThinGap(ImageSel::Soldermask) => {
+                Pools {
+                    masks: true,
+                    ..none
+                }
+            }
+        }
+    }
+}
+
+pub(super) fn pools(rules: &[Rule]) -> Pools {
+    rules
+        .iter()
+        .map(|rule| rule.kind.pools())
+        .fold(Pools::default(), |union, pools| union | pools)
 }
 
 /// Lower every configured capability to its rules. Absent capabilities lower

@@ -72,11 +72,11 @@ high-level pass is never allowed to suppress a later authoritative failure.
 | --- | --- | --- |
 | Hole diameter | Materialized IPC drill primitive and plating class | None |
 | Nominal slot width | IPC slot primitive width | None |
-| Outline slot width | Materialized filled route outline, then opposing-boundary distance | Morphological opening localizes candidates |
+| Outline slot width | Materialized filled route outline, then its narrowest maximal inscribed disk | None |
 | Hole-to-hole clearance | Materialized drill circles and overlapping drill spans | Sorted bounds prune pairs already proven clear |
 | Annular ring | Drill circle and final composed copper image on each applicable layer | Batched containment and an indexed copper boundary |
-| Copper width and clearance | Final composed copper image | Guarded opening or closing localizes candidates |
-| Soldermask web | Final composed mask-opening image | Guarded closing localizes candidates |
+| Copper width and clearance | Final composed copper image, medial-axis width of each residue | Guarded opening or closing localizes candidates |
+| Soldermask web | Final composed mask-opening image, medial-axis width of each residue | Guarded closing localizes candidates |
 | V-score and board-edge clearance | Materialized line/profile geometry against final composed copper | Indexed copper boundaries |
 | Board-array spacing | Materialized filled array profiles | Bounding boxes prune pairs already proven clear |
 
@@ -89,11 +89,16 @@ own uncertainty — so curve tessellation by itself cannot manufacture a
 violation, and the same rule decides every quantity in the table above.
 
 Morphological opening and closing are deliberately candidate stages for width
-and gap checks. A candidate becomes a measurement only when two nonincident,
-opposing source-boundary branches wall it; their exact separation is the
-width. Bounds and spatial indices have the same one-way contract: they can
-prove work unnecessary, but they cannot emit a finding without the exact
-geometric measurement.
+and gap checks. Each candidate residue is measured on the medial axis of the
+boundary around it — the Voronoi diagram of the nearby boundary segments —
+as the diameter of its narrowest maximal inscribed disk. Disks tangent only
+to incident segments are corner spokes and carry no width, so one-sided
+residue (the bite an isolated corner sheds) measures nothing; disks that a
+larger disk contains within the flattening tolerance are branches the
+tessellation sprouted and are pruned, so a flattened arc measures its
+diameter while a tapered spur still measures its tip. Bounds and spatial
+indices have the same one-way contract: they can prove work unnecessary, but
+they cannot emit a finding without the exact geometric measurement.
 
 `--layout-target board` extracts the canonical board step. `board-array`
 materializes the root layout and every nested repeat, so the same evaluators
@@ -124,8 +129,8 @@ when fewer than two exist.
 - `minimum_feature_width` and `minimum_copper_clearance` report narrow copper
   and narrow gaps piece by piece per layer after final polarity composition.
   `soldermask.minimum_web` reports mask webs — gaps between mask openings —
-  narrower than the limit. Morphology finds candidates; opposing-boundary
-  distance decides each finding.
+  narrower than the limit. Morphology finds candidates; the medial-axis
+  width decides each finding.
 - V-score and board-edge clearance measure the shortest distance from the
   centerlines or profile outlines (cutouts included) to each layer's
   composed copper image.

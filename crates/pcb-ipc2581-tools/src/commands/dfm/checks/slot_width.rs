@@ -6,15 +6,13 @@
 //! local width, the separation of its two facing walls. The check is the
 //! pointwise predicate `wₛ ≥ W_min` for every slot `s`.
 
-use anyhow::Result;
-
-use crate::commands::dfm::design::Slot;
+use crate::commands::dfm::design::{Design, Slot};
 use crate::commands::dfm::report::Evidence;
 
-use super::{Context, Evaluation, Measured, drilled_subject};
+use super::{Evaluation, Measured, drilled_subject};
 
-pub(super) fn evaluate(ctx: &Context) -> Result<Evaluation> {
-    let slots = ctx.design.slots()?;
+pub(super) fn evaluate(design: &Design) -> Evaluation {
+    let slots = &design.slots;
     let measured = slots
         .iter()
         .map(|slot: &Slot| Measured {
@@ -22,7 +20,7 @@ pub(super) fn evaluate(ctx: &Context) -> Result<Evaluation> {
             bbox: slot.bbox,
             layers: vec![slot.layer.clone()],
             subjects: vec![drilled_subject(
-                ctx,
+                design,
                 "offender",
                 "routed_slot",
                 slot.net,
@@ -35,8 +33,8 @@ pub(super) fn evaluate(ctx: &Context) -> Result<Evaluation> {
             evidence: vec![Evidence::bounds("routed_slot", slot.bbox)],
         })
         .collect();
-    Ok(Evaluation {
+    Evaluation {
         checked: slots.len(),
         measured,
-    })
+    }
 }

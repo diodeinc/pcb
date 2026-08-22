@@ -28,15 +28,15 @@
 //! soldermask image is the mask *openings*, so `Residue::Gap` flags the
 //! web of mask remaining between them.
 
-use anyhow::Result;
 use pcb_ir::geom::ContourSet;
 use pcb_ir::geom::dfm::{ThinPiece, thin_features, thin_gaps};
 use rayon::prelude::*;
 
+use crate::commands::dfm::design::Design;
 use crate::commands::dfm::report::{Evidence, LayerRef, Subject};
 use crate::commands::dfm::rules::ImageSel;
 
-use super::{Context, Evaluation, Measured};
+use super::{Evaluation, Measured};
 
 /// Which morphological residue the rule reports.
 #[derive(Clone, Copy)]
@@ -49,20 +49,20 @@ pub(super) fn evaluate(
     limit_mm: f64,
     sel: ImageSel,
     residue: Residue,
-    ctx: &Context,
-) -> Result<Evaluation> {
+    design: &Design,
+) -> Evaluation {
     let (images, offender_kind): (Vec<(&LayerRef, &ContourSet)>, &'static str) = match sel {
         ImageSel::Copper => (
-            ctx.design
-                .copper_layers()?
+            design
+                .copper_layers
                 .iter()
                 .map(|layer| (&layer.layer, &layer.image))
                 .collect(),
             "copper_image",
         ),
         ImageSel::Soldermask => (
-            ctx.design
-                .mask_layers()?
+            design
+                .mask_layers
                 .iter()
                 .map(|layer| (&layer.layer, &layer.image))
                 .collect(),
@@ -90,8 +90,8 @@ pub(super) fn evaluate(
             })
         })
         .collect();
-    Ok(Evaluation {
+    Evaluation {
         checked: images.len(),
         measured,
-    })
+    }
 }

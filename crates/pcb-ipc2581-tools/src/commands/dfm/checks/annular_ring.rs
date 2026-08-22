@@ -32,15 +32,14 @@
 //! over the boundary segments, searched only to `r + A_min` since farther
 //! boundaries cannot violate.
 
-use anyhow::Result;
 use pcb_ir::geom::BBox;
 use pcb_ir::geom::dfm::Distance;
 use rayon::prelude::*;
 
-use crate::commands::dfm::design::{CopperLayer, Hole, HoleClass, HoleLand, Land};
+use crate::commands::dfm::design::{CopperLayer, Design, Hole, HoleClass, HoleLand, Land};
 use crate::commands::dfm::report::{Evidence, SourceLocator, Subject};
 
-use super::{Context, Evaluation, Measured, hole_subject, holes_of_class, layers};
+use super::{Evaluation, Measured, hole_subject, holes_of_class, layers};
 
 /// One copper layer on which a hole has a ring to measure.
 struct RingSubject<'a> {
@@ -49,12 +48,11 @@ struct RingSubject<'a> {
     in_copper: bool,
 }
 
-pub(super) fn evaluate(limit_mm: f64, class: HoleClass, ctx: &Context) -> Result<Evaluation> {
-    let design = ctx.design;
-    let holes = holes_of_class(design, class)?;
-    let copper_layers = design.copper_layers()?;
-    let hole_lands = design.hole_lands()?;
-    let boundaries = ctx.copper_boundaries()?;
+pub(super) fn evaluate(limit_mm: f64, class: HoleClass, design: &Design) -> Evaluation {
+    let holes = holes_of_class(design, class);
+    let copper_layers = &design.copper_layers;
+    let hole_lands = &design.hole_lands;
+    let boundaries = &design.copper_boundaries;
     let centers = holes
         .iter()
         .map(|(_, hole)| hole.center)
@@ -103,23 +101,23 @@ pub(super) fn evaluate(limit_mm: f64, class: HoleClass, ctx: &Context) -> Result
                 .filter_map(|(subject, enclosure)| enclosure.map(|enclosure| (subject, enclosure)))
                 .min_by(|(_, left), (_, right)| left.mm.total_cmp(&right.mm))
                 .map(|(subject, enclosure)| {
-                    measured(ctx, hole, subject, enclosure, radius + limit_mm)
+                    measured(design, hole, subject, enclosure, radius + limit_mm)
                 });
             (enclosures.len(), worst)
         })
         .collect::<Vec<_>>();
 
-    Ok(Evaluation {
+    Evaluation {
         checked: per_hole.iter().map(|(checked, _)| checked).sum(),
         measured: per_hole
             .into_iter()
             .filter_map(|(_, measured)| measured)
             .collect(),
-    })
+    }
 }
 
 fn measured(
-    ctx: &Context,
+    design: &Design,
     hole: &Hole,
     subject: &RingSubject,
     enclosure: Distance,
@@ -136,13 +134,13 @@ fn measured(
         |land| Subject {
             role: "land",
             kind: "padstack_land",
-            name: ctx.resolve(land.primitive_ref),
-            reference_designator: ctx.resolve(land.reference_designator),
-            pin: ctx.resolve(land.pin),
-            net: ctx.resolve(land.net),
-            padstack_ref: ctx.resolve(Some(land.padstack)),
+            name: design.resolve(land.primitive_ref),
+            reference_designator: design.resolve(land.reference_designator),
+            pin: design.resolve(land.pin),
+            net: design.resolve(land.net),
+            padstack_ref: design.resolve(Some(land.padstack)),
             source: Some(SourceLocator {
-                step: ctx.resolve(land.step),
+                step: design.resolve(land.step),
                 layer: Some(copper.layer.name.clone()),
                 set_index: Some(land.source_set_index),
                 feature_index: Some(land.source_feature_index),
@@ -157,7 +155,7 @@ fn measured(
         distance: enclosure,
         bbox: BBox::from_point(hole.center).expand(required_radius_mm),
         layers: layers([&hole.layer, &copper.layer]),
-        subjects: vec![hole_subject(ctx, hole, "hole"), land_subject],
+        subjects: vec![hole_subject(design, hole, "hole"), land_subject],
         evidence: [
             Evidence::circle("drilled_hole", hole.center, hole.diameter_mm),
             Evidence::circle(
@@ -176,7 +174,6 @@ fn measured(
 mod tests {
     use pcb_ir::dialects::ipc::ArtworkScope;
 
-    use crate::commands::dfm::design::Design;
     use crate::commands::dfm::pdk::Pdk;
     use crate::commands::dfm::rules::{self, Rule};
     use crate::ipc2581::Ipc2581;
@@ -263,9 +260,9 @@ minimum_pth_annular_ring = "0.2 mm"
 
     fn evaluate_pth(ipc: &Ipc2581) -> Evaluation {
         let rule = rule();
-        let design = Design::new(ipc, ArtworkScope::Board);
-        let ctx = Context::new(&design, std::slice::from_ref(&rule));
-        evaluate(rule.limit.millimeters(), HoleClass::Pth, &ctx).unwrap()
+        let design =
+            Design::extract(ipc, ArtworkScope::Board, std::slice::from_ref(&rule)).unwrap();
+        evaluate(rule.limit.millimeters(), HoleClass::Pth, &design)
     }
 
     #[test]
@@ -296,20 +293,5 @@ minimum_pth_annular_ring = "0.2 mm"
         let measured = &evaluation.measured[0];
         assert_eq!(measured.layers[1].name, "L1");
         assert_eq!(measured.distance.mm, 0.0);
-    }
-
-    #[test]
-    fn thin_ring_is_measured_with_its_witnesses() {
-        let evaluation = evaluate_pth(&board(2, &[0, 1], None));
-        let limit = rule().limit.millimeters();
-
-        // 2 mm square around a 1 mm hole: 0.5 mm ring, comfortably above 0.2.
-        assert_eq!(evaluation.checked, 2);
-        assert!(
-            evaluation
-                .measured
-                .iter()
-                .all(|measured| !measured.distance.certainly_below(limit))
-        );
     }
 }

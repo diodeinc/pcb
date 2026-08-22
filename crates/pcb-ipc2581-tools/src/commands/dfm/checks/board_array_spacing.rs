@@ -23,16 +23,15 @@
 //! clear without walking its boundary segments; every pair counts as
 //! checked either way.
 
-use anyhow::Result;
 use pcb_ir::geom::dfm::{Distance, region_clearance};
 
-use crate::commands::dfm::design::BoardArray;
+use crate::commands::dfm::design::{BoardArray, Design};
 use crate::commands::dfm::report::{Evidence, SourceLocator, Subject};
 
-use super::{Context, Evaluation, Measured};
+use super::{Evaluation, Measured};
 
-pub(super) fn evaluate(limit_mm: f64, ctx: &Context) -> Result<Evaluation> {
-    let arrays = ctx.design.board_arrays()?;
+pub(super) fn evaluate(limit_mm: f64, design: &Design) -> Evaluation {
+    let arrays = &design.board_arrays;
     let pairs = arrays.iter().enumerate().flat_map(|(index, first)| {
         arrays[index + 1..]
             .iter()
@@ -64,10 +63,10 @@ pub(super) fn evaluate(limit_mm: f64, ctx: &Context) -> Result<Evaluation> {
             ],
         })
         .collect();
-    Ok(Evaluation {
+    Evaluation {
         checked: pairs.count(),
         measured,
-    })
+    }
 }
 
 fn board_array_subject(array: &BoardArray, role: &'static str) -> Subject {

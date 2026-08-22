@@ -1,17 +1,16 @@
 //! The checkable design: entity pools extracted from one IPC-2581 file for
 //! one layout target, in plain millimeters.
 //!
-//! Pools are extracted on first touch and cached for the run, so a rule set
-//! pays only for the pools it reads. Each pool is a flat vector in source
-//! order; derived facts that relate pools (a hole's lands) are side tables
-//! indexed like their primary pool. Extraction fails closed: a drilled
-//! feature whose plating, diameter, or outline the file does not state is
-//! an error, never a quietly dropped subject.
+//! Exactly the pools the configured rules read are extracted; the rest stay
+//! empty. Each pool is a flat vector in source order; derived facts that
+//! relate pools (a hole's lands, a copper layer's boundary index) are side
+//! tables indexed like their primary pool. Extraction fails closed: a
+//! drilled feature whose plating, diameter, or outline the file does not
+//! state is an error, never a quietly dropped subject.
 
 use std::collections::HashMap;
-use std::sync::OnceLock;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use ipc2581::Symbol;
 use ipc2581::types::LayerFunction;
 use pcb_ir::dialects::Side;
@@ -19,7 +18,7 @@ use pcb_ir::dialects::ipc::{
     ArtworkScope, FeatureDomain, FeatureKind, FeatureSpan, LayoutStepKind, PlatingKind,
     ProfileOccurrenceRole, profile_occurrences_for,
 };
-use pcb_ir::geom::dfm::{Distance, min_width};
+use pcb_ir::geom::dfm::{Distance, RegionBoundaryIndex, min_width};
 use pcb_ir::geom::region::Ring;
 use pcb_ir::geom::{BBox, ContourSet, Point, Polarity, tol};
 use rayon::prelude::*;
@@ -29,101 +28,81 @@ use crate::ipc2581::Ipc2581;
 use crate::layers;
 
 use super::report::LayerRef;
-
-/// A lazily extracted pool. Extraction errors are kept and re-raised on
-/// every touch.
-pub(super) type Pool<T> = OnceLock<Result<T>>;
-
-pub(super) fn force<T>(pool: &Pool<T>, build: impl FnOnce() -> Result<T>) -> Result<&T> {
-    pool.get_or_init(build)
-        .as_ref()
-        .map_err(|error| anyhow!("{error:#}"))
-}
+use super::rules::{self, Rule, RuleKind};
 
 pub(super) struct Design<'a> {
     pub ipc: &'a Ipc2581,
     pub scope: ArtworkScope,
-    drilled: Pool<(Vec<Hole>, Vec<Slot>)>,
-    copper_layers: Pool<Vec<CopperLayer>>,
-    mask_layers: Pool<Vec<MaskLayer>>,
-    scores: Pool<Vec<Score>>,
-    layout: Pool<GeometryDocument>,
-    board_outlines: Pool<Vec<BoardOutline>>,
-    board_arrays: Pool<Vec<BoardArray>>,
-    hole_lands: Pool<Vec<Vec<HoleLand>>>,
+    pub holes: Vec<Hole>,
+    pub slots: Vec<Slot>,
+    pub copper_layers: Vec<CopperLayer>,
+    /// One boundary index per copper layer, for clearance and enclosure
+    /// queries against the composed copper.
+    pub copper_boundaries: Vec<RegionBoundaryIndex>,
+    /// Each hole's lands, one per copper layer it owns a land on, indexed
+    /// like `holes`.
+    pub hole_lands: Vec<Vec<HoleLand>>,
+    pub mask_layers: Vec<MaskLayer>,
+    pub scores: Vec<Score>,
+    pub board_outlines: Vec<BoardOutline>,
+    pub board_arrays: Vec<BoardArray>,
+}
+
+/// Build a pool only when a rule reads it.
+fn when<T: Default>(wanted: bool, build: impl FnOnce() -> Result<T>) -> Result<T> {
+    if wanted { build() } else { Ok(T::default()) }
 }
 
 impl<'a> Design<'a> {
-    pub fn new(ipc: &'a Ipc2581, scope: ArtworkScope) -> Self {
-        Self {
+    pub fn extract(ipc: &'a Ipc2581, scope: ArtworkScope, rules: &[Rule]) -> Result<Self> {
+        let pools = rules::pools(rules);
+        let (holes, slots) = when(pools.drilled, || collect_drilled(ipc, scope))?;
+        let copper_layers = when(pools.copper, || collect_copper_layers(ipc, scope))?;
+        let layout = when(pools.board_outlines || pools.board_arrays, || {
+            geometry::extract_layout(ipc).map(Some)
+        })?;
+        // A pitch hint for the boundary grids, from the rule limits alone:
+        // queries stay correct at any pitch, and sizing cells by hole radii
+        // would let one large hole coarsen every fine-clearance query.
+        let boundary_search_mm = rules
+            .iter()
+            .map(|rule| match rule.kind {
+                RuleKind::AnnularRing(_) | RuleKind::LineworkToCopperClearance(_) => {
+                    rule.limit.millimeters()
+                }
+                _ => 0.0,
+            })
+            .fold(1.0, f64::max);
+        Ok(Self {
             ipc,
             scope,
-            drilled: Pool::new(),
-            copper_layers: Pool::new(),
-            mask_layers: Pool::new(),
-            scores: Pool::new(),
-            layout: Pool::new(),
-            board_outlines: Pool::new(),
-            board_arrays: Pool::new(),
-            hole_lands: Pool::new(),
-        }
-    }
-
-    fn drilled(&self) -> Result<&(Vec<Hole>, Vec<Slot>)> {
-        force(&self.drilled, || collect_drilled(self.ipc, self.scope))
-    }
-
-    pub fn holes(&self) -> Result<&[Hole]> {
-        self.drilled().map(|(holes, _)| holes.as_slice())
-    }
-
-    pub fn slots(&self) -> Result<&[Slot]> {
-        self.drilled().map(|(_, slots)| slots.as_slice())
-    }
-
-    pub fn copper_layers(&self) -> Result<&[CopperLayer]> {
-        force(&self.copper_layers, || {
-            collect_copper_layers(self.ipc, self.scope)
+            copper_boundaries: when(pools.copper_boundaries, || {
+                Ok(copper_layers
+                    .par_iter()
+                    .map(|layer| RegionBoundaryIndex::new(&layer.image, boundary_search_mm))
+                    .collect())
+            })?,
+            hole_lands: when(pools.hole_lands, || Ok(link_lands(&holes, &copper_layers)))?,
+            mask_layers: when(pools.masks, || collect_mask_layers(ipc, scope))?,
+            scores: when(pools.scores, || collect_scores(ipc, scope))?,
+            board_outlines: layout
+                .as_ref()
+                .filter(|_| pools.board_outlines)
+                .map(|layout| collect_board_outlines(ipc, layout, scope))
+                .unwrap_or_default(),
+            board_arrays: layout
+                .as_ref()
+                .filter(|_| pools.board_arrays)
+                .map(|layout| collect_board_arrays(ipc, layout))
+                .unwrap_or_default(),
+            holes,
+            slots,
+            copper_layers,
         })
-        .map(Vec::as_slice)
     }
 
-    pub fn mask_layers(&self) -> Result<&[MaskLayer]> {
-        force(&self.mask_layers, || {
-            collect_mask_layers(self.ipc, self.scope)
-        })
-        .map(Vec::as_slice)
-    }
-
-    pub fn scores(&self) -> Result<&[Score]> {
-        force(&self.scores, || collect_scores(self.ipc, self.scope)).map(Vec::as_slice)
-    }
-
-    fn layout(&self) -> Result<&GeometryDocument> {
-        force(&self.layout, || geometry::extract_layout(self.ipc))
-    }
-
-    pub fn board_outlines(&self) -> Result<&[BoardOutline]> {
-        force(&self.board_outlines, || {
-            Ok(collect_board_outlines(self.ipc, self.layout()?, self.scope))
-        })
-        .map(Vec::as_slice)
-    }
-
-    pub fn board_arrays(&self) -> Result<&[BoardArray]> {
-        force(&self.board_arrays, || {
-            Ok(collect_board_arrays(self.ipc, self.layout()?))
-        })
-        .map(Vec::as_slice)
-    }
-
-    /// Each hole's lands, one per copper layer it owns a land on, indexed
-    /// like [`Design::holes`].
-    pub fn hole_lands(&self) -> Result<&[Vec<HoleLand>]> {
-        force(&self.hole_lands, || {
-            Ok(link_lands(self.holes()?, self.copper_layers()?))
-        })
-        .map(Vec::as_slice)
+    pub fn resolve(&self, symbol: Option<Symbol>) -> Option<String> {
+        symbol.map(|symbol| self.ipc.resolve(symbol).to_owned())
     }
 }
 
@@ -372,7 +351,9 @@ fn slot_width(stated_mm: f64, measured: Distance) -> Result<Distance> {
     if !(stated_mm > 0.0 && stated_mm.is_finite()) {
         return Ok(measured);
     }
-    if (measured.mm - stated_mm).abs() > measured.uncertainty_mm {
+    // The outline's width is short by up to its uncertainty, plus the
+    // flattening slack the medial-axis pruning allows.
+    if (measured.mm - stated_mm).abs() > measured.uncertainty_mm + tol::FLATTEN_MM {
         bail!(
             "states width {stated_mm:.6} mm but its outline measures {:.6} mm",
             measured.mm
@@ -729,23 +710,20 @@ mod tests {
     }
 
     #[test]
-    fn stated_oval_width_is_exact() {
-        let ipc = slot_fixture(
+    fn slot_width_is_stated_when_given_and_measured_otherwise() {
+        let oval = slot_fixture(
             r#"<Location x="10" y="20"/>
               <Oval width="1.8" height="0.6"/>"#,
         );
-
-        let (_, slots) = collect_drilled(&ipc, ArtworkScope::Board).unwrap();
-
+        let (_, slots) = collect_drilled(&oval, ArtworkScope::Board).unwrap();
         assert_eq!(slots.len(), 1);
-        let width = slots[0].width;
-        assert!((width.mm - 0.6).abs() < 1e-9);
-        assert_eq!(width.uncertainty_mm, 0.0, "a stated width is exact");
-    }
+        assert!((slots[0].width.mm - 0.6).abs() < 1e-9);
+        assert_eq!(
+            slots[0].width.uncertainty_mm, 0.0,
+            "a stated width is exact"
+        );
 
-    #[test]
-    fn outline_slot_width_is_measured() {
-        let ipc = slot_fixture(
+        let outline = slot_fixture(
             r#"<Outline>
                 <Polygon>
                   <PolyBegin x="10" y="20"/>
@@ -757,9 +735,7 @@ mod tests {
                 <LineDesc lineWidth="0" lineEnd="ROUND"/>
               </Outline>"#,
         );
-
-        let (_, slots) = collect_drilled(&ipc, ArtworkScope::Board).unwrap();
-
+        let (_, slots) = collect_drilled(&outline, ArtworkScope::Board).unwrap();
         assert_eq!(slots.len(), 1);
         let width = slots[0].width;
         assert!(

@@ -24,7 +24,6 @@
 
 use std::ops::Range;
 
-use anyhow::Result;
 use pcb_ir::geom::dfm::Distance;
 use pcb_ir::geom::region::ring_edges;
 use pcb_ir::geom::{BBox, Point};
@@ -33,7 +32,7 @@ use crate::commands::dfm::design::{BoardOutline, CopperLayer, Design};
 use crate::commands::dfm::report::{Evidence, LayerRef, SourceLocator, Subject};
 use crate::commands::dfm::rules::Linework;
 
-use super::{Context, Evaluation, Measured, layers};
+use super::{Evaluation, Measured, layers};
 
 /// One reference item: a V-score centerline or a board outline, as a range
 /// of bare segments plus its report identity.
@@ -52,7 +51,7 @@ struct LineworkPool {
     segments: Vec<(Point, Point)>,
 }
 
-fn linework_items(linework: Linework, design: &Design) -> Result<LineworkPool> {
+fn linework_items(linework: Linework, design: &Design) -> LineworkPool {
     let mut segments = Vec::new();
     let mut push = |item_segments: Vec<(Point, Point)>| {
         let start = segments.len();
@@ -61,7 +60,7 @@ fn linework_items(linework: Linework, design: &Design) -> Result<LineworkPool> {
     };
     let items = match linework {
         Linework::VScore => design
-            .scores()?
+            .scores
             .iter()
             .map(|score| LineworkItem {
                 segments: push(vec![(score.start, score.end)]),
@@ -77,7 +76,7 @@ fn linework_items(linework: Linework, design: &Design) -> Result<LineworkPool> {
             })
             .collect(),
         Linework::BoardEdge => design
-            .board_outlines()?
+            .board_outlines
             .iter()
             .map(|outline| LineworkItem {
                 segments: push(outline.contours.iter().flat_map(ring_edges).collect()),
@@ -88,14 +87,13 @@ fn linework_items(linework: Linework, design: &Design) -> Result<LineworkPool> {
             })
             .collect(),
     };
-    Ok(LineworkPool { items, segments })
+    LineworkPool { items, segments }
 }
 
-pub(super) fn evaluate(limit_mm: f64, linework: Linework, ctx: &Context) -> Result<Evaluation> {
-    let design = ctx.design;
-    let copper_layers = design.copper_layers()?;
-    let boundaries = ctx.copper_boundaries()?;
-    let pool = linework_items(linework, design)?;
+pub(super) fn evaluate(limit_mm: f64, linework: Linework, design: &Design) -> Evaluation {
+    let copper_layers = &design.copper_layers;
+    let boundaries = &design.copper_boundaries;
+    let pool = linework_items(linework, design);
     let (items, segments) = (&pool.items, &pool.segments);
     let endpoints = segments
         .iter()
@@ -137,10 +135,10 @@ pub(super) fn evaluate(limit_mm: f64, linework: Linework, ctx: &Context) -> Resu
             })
         })
         .collect();
-    Ok(Evaluation {
+    Evaluation {
         checked: copper_layers.len() * items.len(),
         measured,
-    })
+    }
 }
 
 fn copper_subject(copper: &CopperLayer) -> Subject {

@@ -19,21 +19,19 @@ mod thin_regions;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
-use anyhow::Result;
 use chrono::NaiveDate;
 use ipc2581::Symbol;
 use pcb_ir::dialects::ipc::ArtworkScope;
 use pcb_ir::geom::BBox;
-use pcb_ir::geom::dfm::{Distance, RegionBoundaryIndex};
-use rayon::prelude::*;
+use pcb_ir::geom::dfm::Distance;
 use sha2::{Digest, Sha256};
 
-use super::design::{Design, Hole, HoleClass, Pool, force};
+use super::design::{Design, Hole, HoleClass};
 use super::report::{
     Evidence, Finding, LayerRef, Location, Measurement, RuleResult, RuleStatus, SourceLocator,
     Subject, Witness,
 };
-use super::rules::{ImageSel, Linework, Rule, RuleKind};
+use super::rules::{Linework, Rule, RuleKind};
 use super::waivers::{self, WaiverFile, WaiverOutcome};
 
 use thin_regions::Residue;
@@ -72,15 +70,14 @@ pub(super) fn run(
     design: &Design,
     waiver_file: Option<&WaiverFile>,
     today: NaiveDate,
-) -> Result<Results> {
-    let ctx = Context::new(design, rules);
+) -> Results {
     let mut results = Results::default();
     for rule in rules {
         let mut result = RuleResult::new(rule);
-        match skip_reason(rule, design)? {
+        match skip_reason(rule, design) {
             Some(reason) => result.skip(reason),
             None => {
-                let evaluation = evaluate(rule, &ctx)?;
+                let evaluation = evaluate(rule, design);
                 let limit = rule.limit.millimeters();
                 match evaluation.checked {
                     // A nominally populated pool can still yield nothing to
@@ -120,7 +117,7 @@ pub(super) fn run(
             result.finish(total, waived);
         }
     }
-    Ok(results)
+    results
 }
 
 /// The one verdict: a distance violates a minimum when it is certainly
@@ -131,74 +128,57 @@ fn violates(distance: &Distance, limit_mm: f64) -> bool {
 }
 
 /// The one skip policy: a rule is skipped when its subject pool or a
-/// required layer pool is empty for the selected layout target. This is
-/// also the only place that knows which pools a rule kind reads; pools are
-/// extracted on first touch.
-fn skip_reason(rule: &Rule, design: &Design) -> Result<Option<String>> {
+/// required layer pool is empty for the selected layout target.
+fn skip_reason(rule: &Rule, design: &Design) -> Option<String> {
     let subjects = match rule.kind {
         RuleKind::BoardArrayPairClearance if design.scope != ArtworkScope::ArrayFlattened => {
-            return Ok(Some(
-                "board-array spacing requires --layout-target board-array".to_owned(),
-            ));
+            return Some("board-array spacing requires --layout-target board-array".to_owned());
         }
-        RuleKind::BoardArrayPairClearance => (design.board_arrays()?.len() < 2)
+        RuleKind::BoardArrayPairClearance => (design.board_arrays.len() < 2)
             .then(|| "two or more direct board-array instances".to_owned()),
         RuleKind::HoleDiameter(class) | RuleKind::AnnularRing(class) => design
-            .holes()?
+            .holes
             .iter()
             .all(|hole| hole.class != class)
             .then(|| format!("{} holes", class.label())),
         RuleKind::HolePairClearance => {
-            (design.holes()?.len() < 2).then(|| "two or more holes".to_owned())
+            (design.holes.len() < 2).then(|| "two or more holes".to_owned())
         }
-        RuleKind::SlotWidth => design
-            .slots()?
-            .is_empty()
-            .then(|| "routed slots".to_owned()),
+        RuleKind::SlotWidth => design.slots.is_empty().then(|| "routed slots".to_owned()),
         RuleKind::LineworkToCopperClearance(Linework::VScore) => design
-            .scores()?
+            .scores
             .is_empty()
             .then(|| "V-score centerlines".to_owned()),
         RuleKind::LineworkToCopperClearance(Linework::BoardEdge) => design
-            .board_outlines()?
+            .board_outlines
             .is_empty()
             .then(|| "board profile outlines".to_owned()),
         RuleKind::ThinFeature(_) | RuleKind::ThinGap(_) => None,
     };
-    let layers = match rule.kind {
-        RuleKind::AnnularRing(_)
-        | RuleKind::LineworkToCopperClearance(_)
-        | RuleKind::ThinFeature(ImageSel::Copper)
-        | RuleKind::ThinGap(ImageSel::Copper) => design
-            .copper_layers()?
-            .is_empty()
-            .then(|| "copper layers".to_owned()),
-        RuleKind::ThinFeature(ImageSel::Soldermask) | RuleKind::ThinGap(ImageSel::Soldermask) => {
-            design
-                .mask_layers()?
-                .is_empty()
-                .then(|| "soldermask layers".to_owned())
-        }
-        _ => None,
-    };
-    Ok(subjects
+    let pools = rule.kind.pools();
+    let layers = (pools.copper && design.copper_layers.is_empty())
+        .then(|| "copper layers".to_owned())
+        .or_else(|| {
+            (pools.masks && design.mask_layers.is_empty()).then(|| "soldermask layers".to_owned())
+        });
+    subjects
         .or(layers)
-        .map(|what| format!("no {what} in the selected layout target")))
+        .map(|what| format!("no {what} in the selected layout target"))
 }
 
-fn evaluate(rule: &Rule, ctx: &Context) -> Result<Evaluation> {
+fn evaluate(rule: &Rule, design: &Design) -> Evaluation {
     let limit = rule.limit.millimeters();
     match rule.kind {
-        RuleKind::HoleDiameter(class) => hole_diameter::evaluate(class, ctx),
-        RuleKind::SlotWidth => slot_width::evaluate(ctx),
-        RuleKind::HolePairClearance => hole_pair_clearance::evaluate(limit, ctx),
-        RuleKind::AnnularRing(class) => annular_ring::evaluate(limit, class, ctx),
+        RuleKind::HoleDiameter(class) => hole_diameter::evaluate(class, design),
+        RuleKind::SlotWidth => slot_width::evaluate(design),
+        RuleKind::HolePairClearance => hole_pair_clearance::evaluate(limit, design),
+        RuleKind::AnnularRing(class) => annular_ring::evaluate(limit, class, design),
         RuleKind::LineworkToCopperClearance(linework) => {
-            linework_clearance::evaluate(limit, linework, ctx)
+            linework_clearance::evaluate(limit, linework, design)
         }
-        RuleKind::BoardArrayPairClearance => board_array_spacing::evaluate(limit, ctx),
-        RuleKind::ThinFeature(sel) => thin_regions::evaluate(limit, sel, Residue::Feature, ctx),
-        RuleKind::ThinGap(sel) => thin_regions::evaluate(limit, sel, Residue::Gap, ctx),
+        RuleKind::BoardArrayPairClearance => board_array_spacing::evaluate(limit, design),
+        RuleKind::ThinFeature(sel) => thin_regions::evaluate(limit, sel, Residue::Feature, design),
+        RuleKind::ThinGap(sel) => thin_regions::evaluate(limit, sel, Residue::Gap, design),
     }
 }
 
@@ -247,66 +227,20 @@ fn finding(rule: &Rule, measured: Measured) -> Finding {
     }
 }
 
-/// Shared evaluation state: the design, and one boundary index per copper
-/// layer, built on first use and reused by every rule that queries copper.
-struct Context<'a> {
-    design: &'a Design<'a>,
-    boundary_search_mm: f64,
-    copper_boundaries: Pool<Vec<RegionBoundaryIndex>>,
-}
-
-impl<'a> Context<'a> {
-    fn new(design: &'a Design<'a>, rules: &[Rule]) -> Self {
-        // A pitch hint for the boundary grids, from the rule limits alone:
-        // queries stay correct at any pitch, and sizing cells by hole radii
-        // would let one large hole coarsen every fine-clearance query.
-        let boundary_search_mm = rules
-            .iter()
-            .map(|rule| match rule.kind {
-                RuleKind::AnnularRing(_) | RuleKind::LineworkToCopperClearance(_) => {
-                    rule.limit.millimeters()
-                }
-                _ => 0.0,
-            })
-            .fold(1.0, f64::max);
-        Self {
-            design,
-            boundary_search_mm,
-            copper_boundaries: Pool::new(),
-        }
-    }
-
-    fn copper_boundaries(&self) -> Result<&[RegionBoundaryIndex]> {
-        force(&self.copper_boundaries, || {
-            Ok(self
-                .design
-                .copper_layers()?
-                .par_iter()
-                .map(|layer| RegionBoundaryIndex::new(&layer.image, self.boundary_search_mm))
-                .collect())
-        })
-        .map(Vec::as_slice)
-    }
-
-    fn resolve(&self, symbol: Option<Symbol>) -> Option<String> {
-        symbol.map(|symbol| self.design.ipc.resolve(symbol).to_owned())
-    }
-}
-
 /// Holes of one plating class, with their indices into the hole pool.
-fn holes_of_class<'a>(design: &'a Design<'a>, class: HoleClass) -> Result<Vec<(usize, &'a Hole)>> {
-    Ok(design
-        .holes()?
+fn holes_of_class<'a>(design: &'a Design<'a>, class: HoleClass) -> Vec<(usize, &'a Hole)> {
+    design
+        .holes
         .iter()
         .enumerate()
         .filter(|(_, hole)| hole.class == class)
-        .collect())
+        .collect()
 }
 
 /// The shared subject shape of every drilled feature (holes and slots).
 #[allow(clippy::too_many_arguments)]
 fn drilled_subject(
-    ctx: &Context,
+    design: &Design,
     role: &'static str,
     kind: &'static str,
     net: Option<Symbol>,
@@ -319,10 +253,10 @@ fn drilled_subject(
     Subject {
         role,
         kind,
-        net: ctx.resolve(net),
-        padstack_ref: ctx.resolve(padstack),
+        net: design.resolve(net),
+        padstack_ref: design.resolve(padstack),
         source: Some(SourceLocator {
-            step: ctx.resolve(step),
+            step: design.resolve(step),
             layer: Some(layer.name.clone()),
             set_index: Some(set_index),
             feature_index: Some(feature_index),
@@ -332,9 +266,9 @@ fn drilled_subject(
     }
 }
 
-fn hole_subject(ctx: &Context, hole: &Hole, role: &'static str) -> Subject {
+fn hole_subject(design: &Design, hole: &Hole, role: &'static str) -> Subject {
     drilled_subject(
-        ctx,
+        design,
         role,
         hole.class.subject_kind(),
         hole.net,

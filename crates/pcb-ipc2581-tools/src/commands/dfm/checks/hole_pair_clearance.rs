@@ -20,15 +20,15 @@
 //! thereby *proven* clear, not left unexamined, so `checked` counts the
 //! holes entering the sweep: every hole is decided against every other.
 
-use anyhow::Result;
 use pcb_ir::geom::dfm::disk_clearance;
 
+use crate::commands::dfm::design::Design;
 use crate::commands::dfm::report::Evidence;
 
-use super::{COMPARISON_EPSILON_MM, Context, Evaluation, Measured, hole_subject, layers};
+use super::{COMPARISON_EPSILON_MM, Evaluation, Measured, hole_subject, layers};
 
-pub(super) fn evaluate(limit_mm: f64, ctx: &Context) -> Result<Evaluation> {
-    let holes = ctx.design.holes()?;
+pub(super) fn evaluate(limit_mm: f64, design: &Design) -> Evaluation {
+    let holes = &design.holes;
     let reach = limit_mm - COMPARISON_EPSILON_MM;
     let measured = holes
         .iter()
@@ -53,8 +53,8 @@ pub(super) fn evaluate(limit_mm: f64, ctx: &Context) -> Result<Evaluation> {
                     bbox: first.bbox.union(second.bbox),
                     layers: layers([&first.layer, &second.layer]),
                     subjects: vec![
-                        hole_subject(ctx, first, "first"),
-                        hole_subject(ctx, second, "second"),
+                        hole_subject(design, first, "first"),
+                        hole_subject(design, second, "second"),
                     ],
                     evidence: vec![
                         Evidence::circle("first_hole", first.center, first.diameter_mm),
@@ -63,8 +63,8 @@ pub(super) fn evaluate(limit_mm: f64, ctx: &Context) -> Result<Evaluation> {
                 })
         })
         .collect();
-    Ok(Evaluation {
+    Evaluation {
         checked: holes.len(),
         measured,
-    })
+    }
 }

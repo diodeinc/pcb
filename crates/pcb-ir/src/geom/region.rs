@@ -275,11 +275,11 @@ pub struct DiskGapRegularization {
     pub removed: ContourSet,
 }
 
-/// One connected opening/closing residue bounded by two distinct source
-/// boundary branches. `width` is the exact separation of those branches in
-/// the flattened polygon representation — the authoritative local width of
-/// the material or void `region` represents — counting both branches as
-/// flattened inputs.
+/// One connected opening/closing residue that two distinct source boundary
+/// branches wall. `width` is the diameter of the narrowest maximal inscribed
+/// disk inside it — the local width of the material or void `region`
+/// represents, exact for the flattened polygon representation — counting
+/// both branches as flattened inputs.
 #[derive(Debug, Clone)]
 pub(crate) struct TwoSidedResidualComponent {
     pub region: ContourSet,
@@ -874,33 +874,30 @@ impl ContourSet {
     /// concavity. An empty result proves no two facing boundary branches fail
     /// the rolling-disk test.
     pub fn disk_gap_violations(&self, radius: f64) -> Self {
-        let rings = self
-            .two_sided_residual(radius, WallTest::Opposing, closing_residual)
-            .into_iter()
-            .flat_map(|component| component.region.rings)
-            .collect();
-        Self::new(rings, FillRule::NonZero, self.tolerance)
+        if self.is_empty() || !(radius > 0.0 && radius.is_finite()) {
+            return Self::empty(self.tolerance);
+        }
+        two_sided_gap_residual(self, &closing_residual(self, radius))
     }
 
     /// Connected sub-diameter material residues (opening residue) with the
-    /// exact separation of the two parallel source-boundary branches walling
-    /// each.
+    /// local width of each.
     pub(crate) fn disk_feature_violation_components(
         &self,
         radius: f64,
     ) -> Vec<TwoSidedResidualComponent> {
-        self.two_sided_residual(radius, WallTest::Parallel, |region, radius| {
+        self.two_sided_residual(radius, |region, radius| {
             region.difference(&region.disk_open(radius))
         })
     }
 
-    /// Connected sub-diameter void residues (closing residue) with the exact
-    /// separation of the two parallel source-boundary branches walling each.
+    /// Connected sub-diameter void residues (closing residue) with the local
+    /// width of each.
     pub(crate) fn disk_gap_violation_components(
         &self,
         radius: f64,
     ) -> Vec<TwoSidedResidualComponent> {
-        self.two_sided_residual(radius, WallTest::Parallel, closing_residual)
+        self.two_sided_residual(radius, closing_residual)
     }
 
     /// Morphological residue of this region, kept only where two distinct
@@ -908,13 +905,12 @@ impl ContourSet {
     fn two_sided_residual(
         &self,
         radius: f64,
-        walls: WallTest,
         residual: impl FnOnce(&Self, f64) -> Self,
     ) -> Vec<TwoSidedResidualComponent> {
         if self.is_empty() || !(radius > 0.0 && radius.is_finite()) {
             return Vec::new();
         }
-        two_sided_residual_components(self, &residual(self, radius), walls)
+        two_sided_residual_components(self, &residual(self, radius), radius)
     }
 
     pub fn to_contours(&self) -> Vec<ContourBuf> {
@@ -1110,20 +1106,6 @@ fn closing_residual(region: &ContourSet, radius: f64) -> ContourSet {
     region.disk_close(radius).difference(region)
 }
 
-/// When two boundary segments of one ring count as opposite walls of a
-/// residue. Segments on distinct rings always do.
-#[derive(Debug, Clone, Copy)]
-enum WallTest {
-    /// Tangents oppose. Conservative: any facing pair is a void, which is
-    /// what a gap certificate or regularization keep-out must not miss.
-    Opposing,
-    /// Tangents oppose and the closest-pair separation is normal to both,
-    /// so the measured distance is a width between parallel walls rather
-    /// than a chord between oblique edges of one curve. Required wherever
-    /// the distance itself is the verdict.
-    Parallel,
-}
-
 /// Every source boundary edge longer than the region tolerance, sorted by
 /// minimum x so a query can stop scanning once edges start past its bounds.
 fn source_boundary_segments(source: &ContourSet) -> Vec<OrientedBoundarySegment> {
@@ -1151,12 +1133,21 @@ fn source_boundary_segments(source: &ContourSet) -> Vec<OrientedBoundarySegment>
     segments
 }
 
-/// Each connected component of `residual` that is walled by two facing
-/// source-boundary branches, with the exact separation of those branches.
+/// Each connected component of `residual` that two distinct source-boundary
+/// branches wall, with its local width.
+///
+/// A point of the residue is nearer than `reach` to the source boundary —
+/// no disk of that radius covers it — so the boundary segments within
+/// `reach` of the component are every segment its inscribed disks can
+/// touch, and their Voronoi diagram restricted to the component is the
+/// medial axis there. The narrowest maximal inscribed disk on that axis is
+/// the component's width. Disks tangent only to incident segments are
+/// corner spokes, not widths: discarding those leaves one-sided residue —
+/// the bite an isolated corner sheds — with no width at all.
 fn two_sided_residual_components(
     source: &ContourSet,
     residual: &ContourSet,
-    walls: WallTest,
+    reach: f64,
 ) -> Vec<TwoSidedResidualComponent> {
     let segments = source_boundary_segments(source);
     let contact_tolerance = source.tolerance.max(residual.tolerance);
@@ -1164,8 +1155,8 @@ fn two_sided_residual_components(
         .connected_components()
         .into_iter()
         .filter_map(|component| {
-            let contacts = contacting_segments(&segments, &component, contact_tolerance);
-            opposing_boundary_clearance(&contacts, contact_tolerance, walls).map(|width| {
+            let sites = segments_near(&segments, component.bbox.expand(reach));
+            component_width(&sites, &component, reach, contact_tolerance).map(|width| {
                 TwoSidedResidualComponent {
                     region: component,
                     width,
@@ -1175,74 +1166,392 @@ fn two_sided_residual_components(
         .collect()
 }
 
-/// The source boundary segments touching `component`.
-fn contacting_segments<'a>(
-    segments: &'a [OrientedBoundarySegment],
-    component: &ContourSet,
-    contact_tolerance: f64,
-) -> Vec<&'a OrientedBoundarySegment> {
-    let query = component.bbox.expand(contact_tolerance);
+/// The segments (sorted by minimum x) whose bounds meet `query`.
+fn segments_near(
+    segments: &[OrientedBoundarySegment],
+    query: BBox,
+) -> Vec<OrientedBoundarySegment> {
     let candidate_end = segments.partition_point(|segment| segment.bbox.min.x <= query.max.x);
     segments[..candidate_end]
         .iter()
-        .filter(|segment| {
-            segment.bbox.intersects(query)
-                && region_boundary_within_distance(
-                    component,
-                    segment.start,
-                    segment.end,
-                    contact_tolerance,
-                )
-        })
+        .filter(|segment| segment.bbox.intersects(query))
+        .copied()
         .collect()
 }
 
-/// The closest pair of contact segments that are two distinct walls facing
-/// each other across the residue, or `None` when the residue is one-sided.
-fn opposing_boundary_clearance(
-    contacts: &[&OrientedBoundarySegment],
-    contact_tolerance: f64,
-    walls: WallTest,
-) -> Option<Distance> {
-    contacts
+/// A boundary segment snapped to the tolerance grid, with its topology.
+type GridSite = (VoronoiLine<i32>, BoundarySegment);
+
+/// The sites snap-rounded to a planar set on the tolerance grid. The
+/// Voronoi builder accepts segments that meet only at endpoints, while
+/// regularized rings may touch along a seam (two rings sharing an edge),
+/// at a vertex on another ring's edge, or fold into hairpins narrower than
+/// the tolerance. On the grid, points within tolerance are one point:
+/// zero-length and duplicate segments drop, a segment splits where another
+/// endpoint lies on it, and of two segments that still cross — noise at
+/// tolerance scale — the shorter drops. Pieces keep their parent's topology
+/// and so remain incident to each other and to its neighbors.
+fn planar_grid_sites(
+    sites: &[OrientedBoundarySegment],
+    quantize: impl Fn(Point) -> VoronoiPoint<i32>,
+) -> Vec<GridSite> {
+    let orient = |a: VoronoiPoint<i32>, b: VoronoiPoint<i32>, c: VoronoiPoint<i32>| -> i128 {
+        (i128::from(b.x) - i128::from(a.x)) * (i128::from(c.y) - i128::from(a.y))
+            - (i128::from(b.y) - i128::from(a.y)) * (i128::from(c.x) - i128::from(a.x))
+    };
+    let on_interior = |line: &VoronoiLine<i32>, point: VoronoiPoint<i32>| {
+        point != line.start
+            && point != line.end
+            && orient(line.start, line.end, point) == 0
+            && (line.start.x.min(line.end.x)..=line.start.x.max(line.end.x)).contains(&point.x)
+            && (line.start.y.min(line.end.y)..=line.start.y.max(line.end.y)).contains(&point.y)
+    };
+    let length2 = |line: &VoronoiLine<i32>| {
+        let dx = i128::from(line.end.x) - i128::from(line.start.x);
+        let dy = i128::from(line.end.y) - i128::from(line.start.y);
+        dx * dx + dy * dy
+    };
+    let snapped = sites
+        .iter()
+        .map(|site| {
+            (
+                VoronoiLine::new(quantize(site.start), quantize(site.end)),
+                site.topology,
+            )
+        })
+        .filter(|(line, _)| line.start != line.end)
+        .collect::<Vec<_>>();
+    let endpoints = snapped
+        .iter()
+        .flat_map(|(line, _)| [line.start, line.end])
+        .collect::<Vec<_>>();
+    let split = snapped
+        .iter()
+        .flat_map(|&(line, topology)| {
+            let mut stations = endpoints
+                .iter()
+                .copied()
+                .filter(|&point| on_interior(&line, point))
+                .collect::<Vec<_>>();
+            let along = |point: VoronoiPoint<i32>| {
+                (i128::from(point.x) - i128::from(line.start.x)).abs()
+                    + (i128::from(point.y) - i128::from(line.start.y)).abs()
+            };
+            stations.sort_by_key(|&point| along(point));
+            stations.dedup();
+            std::iter::once(line.start)
+                .chain(stations)
+                .chain(std::iter::once(line.end))
+                .collect::<Vec<_>>()
+                .windows(2)
+                .map(|pair| (VoronoiLine::new(pair[0], pair[1]), topology))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let mut seen = std::collections::HashSet::new();
+    let split = split
+        .into_iter()
+        .filter(|(line, _)| {
+            let key = if (line.start.x, line.start.y) <= (line.end.x, line.end.y) {
+                (line.start.x, line.start.y, line.end.x, line.end.y)
+            } else {
+                (line.end.x, line.end.y, line.start.x, line.start.y)
+            };
+            seen.insert(key)
+        })
+        .collect::<Vec<_>>();
+    let crosses = |a: &VoronoiLine<i32>, b: &VoronoiLine<i32>| {
+        let o1 = orient(a.start, a.end, b.start).signum();
+        let o2 = orient(a.start, a.end, b.end).signum();
+        let o3 = orient(b.start, b.end, a.start).signum();
+        let o4 = orient(b.start, b.end, a.end).signum();
+        o1 * o2 < 0 && o3 * o4 < 0
+    };
+    split
         .iter()
         .enumerate()
-        .flat_map(|(index, left)| {
-            contacts[index + 1..].iter().filter_map(move |right| {
-                facing_wall_clearance(left, right, contact_tolerance, walls)
+        .filter(|(index, (line, _))| {
+            !split.iter().enumerate().any(|(other_index, (other, _))| {
+                other_index != *index
+                    && crosses(line, other)
+                    && (length2(other), other_index) > (length2(line), *index)
             })
         })
+        .map(|(_, site)| *site)
+        .collect()
+}
+
+/// A maximal inscribed disk of the boundary's Voronoi diagram: its center,
+/// radius, and the two tangency points on distinct walls.
+#[derive(Debug, Clone, Copy)]
+struct InscribedDisk {
+    center: Point,
+    radius: f64,
+    first: Point,
+    second: Point,
+}
+
+impl InscribedDisk {
+    fn width(self) -> Distance {
+        Distance::flattened(2.0 * self.radius, self.first, self.second, 2)
+    }
+}
+
+/// The narrowest maximal inscribed disk of `sites` inside `component`, as a
+/// width between its two tangency points.
+///
+/// Candidates are the Voronoi vertices, and every non-incident edge sampled
+/// along its length, at the apex of a parabolic or point–point edge, and
+/// where it crosses the component boundary — the clearance along an edge is
+/// linear or convex, so its minimum over the inside is at one of those.
+/// Flattening a curve sprouts axis branches the source does not have, whose
+/// disks sit inside a neighbor's disk up to the flattening tolerance; those
+/// are pruned, so a flattened arc measures its diameter and a taper keeps
+/// its tip.
+fn component_width(
+    sites: &[OrientedBoundarySegment],
+    component: &ContourSet,
+    reach: f64,
+    contact_tolerance: f64,
+) -> Option<Distance> {
+    let origin = component.bbox.min;
+    let units_per_mm = 1.0 / contact_tolerance;
+    let quantize = |point: Point| {
+        VoronoiPoint::new(
+            ((point.x - origin.x) * units_per_mm).round() as i32,
+            ((point.y - origin.y) * units_per_mm).round() as i32,
+        )
+    };
+    let unquantize =
+        |[x, y]: [f64; 2]| Point::new(x / units_per_mm + origin.x, y / units_per_mm + origin.y);
+    let grid = planar_grid_sites(sites, quantize);
+    let lines = grid.iter().map(|(line, _)| *line).collect::<Vec<_>>();
+    let sites = grid
+        .iter()
+        .map(|(line, topology)| {
+            let start = unquantize([f64::from(line.start.x), f64::from(line.start.y)]);
+            let end = unquantize([f64::from(line.end.x), f64::from(line.end.y)]);
+            OrientedBoundarySegment {
+                topology: *topology,
+                start,
+                end,
+                bbox: segment_bbox(start, end),
+            }
+        })
+        .collect::<Vec<_>>();
+    let sites = sites.as_slice();
+    if lines.len() < 2 {
+        return None;
+    }
+    let diagram = VoronoiBuilder::<i32>::default()
+        .with_segments(lines.iter())
+        .and_then(VoronoiBuilder::build)
+        .expect("snap-rounded boundary segments do not cross");
+    let site_of = |cell: VoronoiCellIndex| {
+        let cell = diagram.cell(cell).expect("diagram cell");
+        let site = &sites[cell.source_index().usize()];
+        let point = match cell.source_category() {
+            SourceCategory::SegmentStart => Some(site.start),
+            SourceCategory::SegmentEnd => Some(site.end),
+            SourceCategory::Segment | SourceCategory::SinglePoint => None,
+        };
+        (site, point)
+    };
+    let disk =
+        |center: Point, first: &OrientedBoundarySegment, second: &OrientedBoundarySegment| {
+            let (first_distance, first) = dist::point_segment(center, first.start, first.end);
+            let (second_distance, second) = dist::point_segment(center, second.start, second.end);
+            InscribedDisk {
+                center,
+                radius: (first_distance + second_distance) / 2.0,
+                first,
+                second,
+            }
+        };
+    let component_edges = component
+        .rings
+        .iter()
+        .flat_map(ring_edges)
+        .collect::<Vec<_>>();
+
+    // Vertices: tangent to every site around them; a width needs two that
+    // are not incident.
+    let at_vertices = diagram.vertices().iter().filter_map(|vertex| {
+        let center = unquantize([vertex.x(), vertex.y()]);
+        let around = diagram
+            .edge_rot_next_iterator(vertex.get_incident_edge().ok()?)
+            .filter_map(|edge| diagram.edge(edge).ok()?.cell().ok())
+            .map(|cell| site_of(cell).0)
+            .collect::<Vec<_>>();
+        around
+            .iter()
+            .enumerate()
+            .flat_map(|(index, first)| {
+                around[index + 1..]
+                    .iter()
+                    .map(move |second| (first, second))
+            })
+            .find(|(first, second)| {
+                !boundary_segments_are_incident(first.topology, second.topology)
+            })
+            .map(|(first, second)| (disk(center, first, second), false))
+    });
+
+    // Edges between non-incident sites, sampled along their length, at the
+    // apex of a parabola (reflex vertex against a segment) or point–point
+    // bisector, and where they cross the component boundary.
+    let along_edges = diagram.edges().iter().flat_map(|edge| {
+        let twin = edge.twin().expect("diagram edge twin");
+        let (first, first_point) = site_of(edge.cell().expect("diagram edge cell"));
+        let (second, second_point) = site_of(
+            diagram
+                .edge(twin)
+                .and_then(|twin| twin.cell())
+                .expect("twin cell"),
+        );
+        let skip = edge.id() > twin
+            || !edge.is_primary()
+            || boundary_segments_are_incident(first.topology, second.topology);
+        let samples = if skip {
+            Vec::new()
+        } else {
+            voronoi_edge_samples(&diagram, edge.id(), &lines, component, reach, units_per_mm)
+                .expect("voronoi edge samples")
+                .into_iter()
+                .map(unquantize)
+                .collect::<Vec<_>>()
+        };
+        let apex = match (first_point, second_point) {
+            (Some(point), Some(other)) => Some(point.midpoint(other)),
+            (Some(point), None) => {
+                Some(point.midpoint(dist::point_segment(point, second.start, second.end).1))
+            }
+            (None, Some(point)) => {
+                Some(point.midpoint(dist::point_segment(point, first.start, first.end).1))
+            }
+            (None, None) => None,
+        }
+        .filter(|_| !samples.is_empty());
+        let crossings = samples
+            .windows(2)
+            .flat_map(|pair| {
+                component_edges.iter().filter_map(move |&(start, end)| {
+                    let (distance, on_edge, _) = dist::segments(pair[0], pair[1], start, end);
+                    (distance <= contact_tolerance).then_some(on_edge)
+                })
+            })
+            .collect::<Vec<_>>();
+        samples
+            .into_iter()
+            .chain(apex)
+            .map(|center| (disk(center, first, second), false))
+            .chain(
+                crossings
+                    .into_iter()
+                    .map(|center| (disk(center, first, second), true)),
+            )
+            .collect::<Vec<_>>()
+    });
+
+    let candidates = at_vertices.chain(along_edges).collect::<Vec<_>>();
+    let centers = candidates
+        .iter()
+        .map(|(disk, _)| disk.center)
+        .collect::<Vec<_>>();
+    let present = candidates
+        .into_iter()
+        .zip(component.contains_points_batch(&centers))
+        .filter(|((_, on_boundary), inside)| *inside || *on_boundary)
+        .map(|((disk, _), _)| disk)
+        .collect::<Vec<_>>();
+    // A disk inside a larger present disk up to the flattening tolerance is
+    // a branch the flattening sprouted, not a width of the source. Only
+    // present disks prune: a void's exterior axis must not swallow a slit
+    // thinner than the tolerance.
+    let pruned = |disk: &InscribedDisk| {
+        present.iter().any(|other| {
+            other.radius > disk.radius
+                && disk.center.distance_to(other.center) + disk.radius
+                    <= other.radius + tol::FLATTEN_MM
+        })
+    };
+    present
+        .iter()
+        .filter(|disk| !pruned(disk))
+        .map(|disk| disk.width())
+        .filter(|width| width.mm > contact_tolerance)
         .min_by(|left, right| left.mm.total_cmp(&right.mm))
 }
 
-/// The separation of two boundary segments when they are opposite walls of
-/// the same residue. Incident segments and segments closer than the contact
-/// tolerance are the same wall. Segments on distinct rings always face each
-/// other across material or void; segments on one ring must pass `walls`,
-/// so the rounded bite of one smooth corner is not a width.
-fn facing_wall_clearance(
-    left: &OrientedBoundarySegment,
-    right: &OrientedBoundarySegment,
-    contact_tolerance: f64,
-    walls: WallTest,
-) -> Option<Distance> {
-    if boundary_segments_are_incident(left.topology, right.topology) {
-        return None;
-    }
-    let (mm, first, second) = dist::segments(left.start, left.end, right.start, right.end);
-    let clearance = Distance::flattened(mm, first, second, 2);
-    let left_tangent = left.end - left.start;
-    let right_tangent = right.end - right.start;
-    let same_ring_walls = match walls {
-        WallTest::Opposing => tangents_oppose(left_tangent, right_tangent),
-        WallTest::Parallel => {
-            tangents_oppose(left_tangent, right_tangent)
-                && separation_is_normal(clearance, left_tangent, contact_tolerance)
-                && separation_is_normal(clearance, right_tangent, contact_tolerance)
-        }
-    };
-    (mm > contact_tolerance && (left.topology.ring != right.topology.ring || same_ring_walls))
-        .then_some(clearance)
+/// The closing residue kept only where two distinct source-boundary
+/// branches wall it — the balancing certificate's conservative notion of a
+/// narrow void. Contacts on distinct rings always face each other across
+/// void, whatever their relative angle; same-ring contacts must oppose, so
+/// the rounded bite of one smooth concavity is not mistaken for a gap.
+fn two_sided_gap_residual(source: &ContourSet, residual: &ContourSet) -> ContourSet {
+    let source_segments = source
+        .rings
+        .iter()
+        .enumerate()
+        .flat_map(|(ring_id, ring)| {
+            (0..ring.len()).filter_map(move |index| {
+                let [start_x, start_y] = ring[index];
+                let [end_x, end_y] = ring[(index + 1) % ring.len()];
+                let start = Point::new(start_x, start_y);
+                let end = Point::new(end_x, end_y);
+                (start.distance_to(end) > source.tolerance).then_some(OrientedBoundarySegment {
+                    topology: BoundarySegment {
+                        ring: ring_id,
+                        index,
+                        ring_len: ring.len(),
+                    },
+                    start,
+                    end,
+                    bbox: segment_bbox(start, end),
+                })
+            })
+        })
+        .collect::<Vec<_>>();
+    let contact_tolerance = source.tolerance.max(residual.tolerance);
+
+    let rings = residual
+        .connected_components()
+        .into_iter()
+        .filter(|component| {
+            let contacts = source_segments
+                .iter()
+                .filter(|segment| {
+                    segment
+                        .bbox
+                        .expand(contact_tolerance)
+                        .intersects(component.bbox)
+                        && region_boundary_within_distance(
+                            component,
+                            segment.start,
+                            segment.end,
+                            contact_tolerance,
+                        )
+                })
+                .collect::<Vec<_>>();
+            contacts.iter().enumerate().any(|(index, left)| {
+                contacts[index + 1..].iter().any(|right| {
+                    let (separation, _, _) =
+                        dist::segments(left.start, left.end, right.start, right.end);
+                    // Contacts on distinct rings always face each other across
+                    // void, whatever their relative angle. Same-ring pairs
+                    // must additionally oppose so the rounded bite of one
+                    // smooth concavity is not mistaken for a gap; walls at
+                    // exactly 90° remain ambiguous there by construction.
+                    !boundary_segments_are_incident(left.topology, right.topology)
+                        && separation > contact_tolerance
+                        && (left.topology.ring != right.topology.ring
+                            || boundary_tangents_oppose(left, right))
+                })
+            })
+        })
+        .flat_map(|component| component.rings)
+        .collect();
+    ContourSet::new(rings, FillRule::NonZero, residual.tolerance)
 }
 
 fn region_boundary_within_distance(
@@ -1253,24 +1562,24 @@ fn region_boundary_within_distance(
 ) -> bool {
     let expanded = segment_bbox(start, end).expand(distance);
     region.rings.iter().any(|ring| {
-        ring_edges(ring).any(|(other_start, other_end)| {
+        (0..ring.len()).any(|index| {
+            let [other_start_x, other_start_y] = ring[index];
+            let [other_end_x, other_end_y] = ring[(index + 1) % ring.len()];
+            let other_start = Point::new(other_start_x, other_start_y);
+            let other_end = Point::new(other_end_x, other_end_y);
             expanded.intersects(segment_bbox(other_start, other_end))
                 && dist::segments(start, end, other_start, other_end).0 <= distance
         })
     })
 }
 
-fn tangents_oppose(left: Point, right: Point) -> bool {
-    left.x * right.x + left.y * right.y < 0.0
-}
-
-/// Whether the closest-pair separation is normal to a wall within the
-/// contact tolerance (at least the flattening chord error): the component
-/// of the separation along the wall's tangent is negligible.
-fn separation_is_normal(clearance: Distance, tangent: Point, contact_tolerance: f64) -> bool {
-    let separation = clearance.second - clearance.first;
-    let along = (tangent.x * separation.x + tangent.y * separation.y).abs() / tangent.length();
-    along <= contact_tolerance.max(tol::FLATTEN_MM)
+fn boundary_tangents_oppose(
+    left: &OrientedBoundarySegment,
+    right: &OrientedBoundarySegment,
+) -> bool {
+    let left_tangent = left.end - left.start;
+    let right_tangent = right.end - right.start;
+    left_tangent.x * right_tangent.x + left_tangent.y * right_tangent.y < 0.0
 }
 
 /// Keep-out whose removal widens every narrow void: a radius-`radius` tube
@@ -1368,7 +1677,14 @@ fn narrow_void_medial_axis_keep_out(
         if boundary_segments_are_incident(*left_boundary, *right_boundary) {
             continue;
         }
-        let samples = voronoi_edge_samples(&diagram, edge.id(), &segments, source, radius)?;
+        let samples = voronoi_edge_samples(
+            &diagram,
+            edge.id(),
+            &segments,
+            source,
+            radius,
+            VORONOI_COORDINATES_PER_MM,
+        )?;
         let mut commands = Vec::with_capacity(samples.len());
         for sample in samples {
             let point = Point::new(
@@ -1454,6 +1770,7 @@ fn voronoi_edge_samples(
     segments: &[VoronoiLine<i32>],
     region: &ContourSet,
     radius: f64,
+    units_per_mm: f64,
 ) -> Result<Vec<[f64; 2]>, GapRegularizationError> {
     let edge = diagram.edge(edge_id).map_err(gap_regularization_error)?;
     let affine = SimpleAffine::default();
@@ -1470,7 +1787,7 @@ fn voronoi_edge_samples(
             affine.transform(end.x(), end.y()),
         ]
     } else {
-        clip_infinite_voronoi_edge(diagram, edge_id, segments, region, radius)?
+        clip_infinite_voronoi_edge(diagram, edge_id, segments, region, radius, units_per_mm)?
     };
 
     if edge.is_curved() {
@@ -1493,7 +1810,7 @@ fn voronoi_edge_samples(
         VoronoiVisualUtils::discretize(
             &point,
             segment,
-            tol::FLATTEN_MM * VORONOI_COORDINATES_PER_MM,
+            tol::FLATTEN_MM * units_per_mm,
             &affine,
             &mut samples,
         );
@@ -1507,6 +1824,7 @@ fn clip_infinite_voronoi_edge(
     segments: &[VoronoiLine<i32>],
     region: &ContourSet,
     radius: f64,
+    units_per_mm: f64,
 ) -> Result<Vec<[f64; 2]>, GapRegularizationError> {
     let edge = diagram.edge(edge_id).map_err(gap_regularization_error)?;
     let cell = edge.cell().map_err(gap_regularization_error)?;
@@ -1549,8 +1867,7 @@ fn clip_infinite_voronoi_edge(
         };
         (origin, direction)
     };
-    let reach =
-        (region.bbox.width().max(region.bbox.height()) + 4.0 * radius) * VORONOI_COORDINATES_PER_MM;
+    let reach = (region.bbox.width().max(region.bbox.height()) + 4.0 * radius) * units_per_mm;
     let direction_scale = direction[0].abs().max(direction[1].abs());
     if direction_scale == 0.0 {
         return Err(GapRegularizationError(
