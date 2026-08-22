@@ -178,6 +178,15 @@ pub fn create_diagnostics_passes(
     suppress: &[String],
     promote: &[String],
 ) -> Vec<Box<dyn pcb_zen_core::DiagnosticsPass>> {
+    let mut passes = create_diagnostics_processing_passes(suppress, promote);
+    passes.push(Box::new(pcb_zen::diagnostics::RenderPass));
+    passes
+}
+
+pub(crate) fn create_diagnostics_processing_passes(
+    suppress: &[String],
+    promote: &[String],
+) -> Vec<Box<dyn pcb_zen_core::DiagnosticsPass>> {
     let mut passes: Vec<Box<dyn pcb_zen_core::DiagnosticsPass>> = vec![
         Box::new(pcb_zen_core::FilterHiddenPass),
         Box::new(pcb_zen_core::SuppressPass::new(suppress.to_vec())),
@@ -190,8 +199,6 @@ pub fn create_diagnostics_passes(
     }
 
     passes.push(Box::new(pcb_zen_core::AggregatePass));
-    passes.push(Box::new(pcb_zen::diagnostics::RenderPass));
-
     passes
 }
 

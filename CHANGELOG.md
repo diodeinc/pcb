@@ -13,6 +13,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `pcb preview` and its preview release upload path.
 - `pcb vendor` remains available but is hidden from top-level command help.
 
+### Added
+
+- `pcb publish` warns about unknown BOM parts and parts without supplier offers.
+
 ## [0.4.34] - 2026-08-21
 
 ### Added
