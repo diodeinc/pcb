@@ -570,16 +570,16 @@ fn run_freerouting(
         }
     }
 
-    if let Some(bytes) = poll_result.output {
-        std::fs::write(ses_path, bytes).context("Failed to write FreeRouting SES output")?;
-    }
-
     if poll_result.outcome == RunOutcome::Terminated {
         eprintln!(
             "  {} FreeRouting terminated unexpectedly; see log for details: {}",
             "!".yellow(),
             server.keep_log().display()
         );
+    }
+
+    if let Some(bytes) = poll_result.output {
+        std::fs::write(ses_path, bytes).context("Failed to write FreeRouting SES output")?;
     }
 
     Ok(RunResult {
