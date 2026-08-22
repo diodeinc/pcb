@@ -437,11 +437,13 @@ impl FreeroutingServer {
     }
 
     fn keep_log(&mut self) -> PathBuf {
-        self.log_file
-            .take()
-            .and_then(|f| f.keep().ok())
-            .map(|(_, path)| path)
-            .unwrap_or_default()
+        match self.log_file.take() {
+            Some(f) => match f.keep() {
+                Ok((_, path)) => path,
+                Err(e) => e.file.path().to_path_buf(),
+            },
+            None => PathBuf::new(),
+        }
     }
 
     fn log_summary(&mut self) -> String {
