@@ -444,7 +444,10 @@ impl FreeroutingServer {
         match self.log_file.take() {
             Some(f) => match f.keep() {
                 Ok((_, path)) => path,
-                Err(e) => e.file.path().to_path_buf(),
+                Err(mut e) => {
+                    e.file.disable_cleanup(true);
+                    e.file.path().to_path_buf()
+                }
             },
             None => PathBuf::new(),
         }
