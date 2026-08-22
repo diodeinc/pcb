@@ -636,28 +636,17 @@ fn poll_job(
                 }
                 match status.state {
                     JobState::Completed => {
-                        return Ok(match api.get_output(job_id, GET_OUTPUT_TIMEOUT) {
-                            Ok(JobOutput::Data(bytes)) => PollResult {
+                        return Ok(match api.get_output(job_id, GET_OUTPUT_TIMEOUT)? {
+                            JobOutput::Data(bytes) => PollResult {
                                 outcome: RunOutcome::Completed,
                                 output: Some(bytes),
                                 unrouted: api.get_unrouted_count(job_id).ok(),
                             },
-                            Ok(JobOutput::NothingToRoute) => PollResult {
+                            JobOutput::NothingToRoute => PollResult {
                                 outcome: RunOutcome::Completed,
                                 output: None,
                                 unrouted: None,
                             },
-                            Err(_) => {
-                                eprintln!(
-                                    "  {} FreeRouting finished but its final output could not be fetched.",
-                                    "!".yellow()
-                                );
-                                PollResult {
-                                    outcome: RunOutcome::Cancelled,
-                                    output: None,
-                                    unrouted: None,
-                                }
-                            }
                         });
                     }
                     JobState::Cancelled | JobState::TimedOut => {
