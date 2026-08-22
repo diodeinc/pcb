@@ -1,11 +1,12 @@
 //! The rule engine: one evaluator per measurement kind, uniform bookkeeping.
 //!
-//! Every rule reduces to enumerating entities, taking one measurement per
-//! subject, and comparing it against the rule's limit. Each check lives in
-//! its own module, whose docstring defines the measurement mathematically.
-//! The engine here owns the shared policy — skip reasons, checked counts,
-//! finding order, stable ids, waivers, statuses — so each check only
-//! measures, and may assume its subject pools are non-empty.
+//! Every rule reduces to enumerating subjects and taking one [`Distance`]
+//! per subject. Each check lives in its own module, whose docstring defines
+//! the measurement mathematically, and returns those measurements with the
+//! report identity of what was measured. The engine here owns everything
+//! else — the verdict against the limit, finding text, witness roles, skip
+//! reasons, checked counts, finding order, stable ids, waivers, statuses —
+//! so a check only measures, and may assume its subject pools are non-empty.
 
 mod annular_ring;
 mod board_array_spacing;
@@ -17,28 +18,28 @@ mod thin_regions;
 
 use std::cmp::Ordering;
 use std::collections::HashMap;
-use std::sync::OnceLock;
 
+use anyhow::Result;
 use chrono::NaiveDate;
 use ipc2581::Symbol;
 use pcb_ir::dialects::ipc::ArtworkScope;
 use pcb_ir::geom::BBox;
-use pcb_ir::geom::dfm::{ClearanceMeasurement, RegionBoundaryIndex};
+use pcb_ir::geom::dfm::{Distance, RegionBoundaryIndex};
 use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 
-use crate::ipc2581::Ipc2581;
-
-use super::design::{Design, Hole, HoleClass};
+use super::design::{Design, Hole, HoleClass, Pool, force};
 use super::report::{
     Evidence, Finding, LayerRef, Location, Measurement, RuleResult, RuleStatus, SourceLocator,
     Subject, Witness,
 };
-use super::rules::{Linework, Rule, RuleKind};
+use super::rules::{ImageSel, Linework, Rule, RuleKind};
 use super::waivers::{self, WaiverFile, WaiverOutcome};
 
 use thin_regions::Residue;
 
+/// Absorbs floating-point unit conversion when a measurement sits exactly
+/// on its limit.
 const COMPARISON_EPSILON_MM: f64 = 1e-6;
 
 #[derive(Default)]
@@ -48,32 +49,59 @@ pub(super) struct Results {
     pub(super) waivers: Option<WaiverOutcome>,
 }
 
+/// One subject measured by a check: the distance and what it is about.
+struct Measured {
+    distance: Distance,
+    /// The extent the finding points at: the subject, or the violating piece.
+    bbox: BBox,
+    layers: Vec<LayerRef>,
+    subjects: Vec<Subject>,
+    evidence: Vec<Evidence>,
+}
+
+/// What one check did for one rule. `checked` is the number of subjects
+/// decided, including those a broad phase proved clear without measuring;
+/// `measured` holds every candidate the engine must still judge.
+struct Evaluation {
+    checked: usize,
+    measured: Vec<Measured>,
+}
+
 pub(super) fn run(
     rules: &[Rule],
     design: &Design,
-    ipc: &Ipc2581,
     waiver_file: Option<&WaiverFile>,
     today: NaiveDate,
-) -> Results {
-    let ctx = Context::new(design, ipc, rules);
+) -> Result<Results> {
+    let ctx = Context::new(design, rules);
     let mut results = Results::default();
     for rule in rules {
         let mut result = RuleResult::new(rule);
-        match skip_reason(rule, design) {
+        match skip_reason(rule, design)? {
             Some(reason) => result.skip(reason),
-            None => match evaluate(rule, &ctx) {
-                // A nominally populated pool can still yield nothing to
-                // measure (e.g. hole pairs with disjoint spans); an
-                // unexercised rule must not read as validated.
-                (0, _) => result.skip(format!(
-                    "no measurable {} subjects in the selected layout target",
-                    rule.kind.subject()
-                )),
-                (checked, findings) => {
-                    result.checked = checked;
-                    results.findings.extend(findings);
+            None => {
+                let evaluation = evaluate(rule, &ctx)?;
+                let limit = rule.limit.millimeters();
+                match evaluation.checked {
+                    // A nominally populated pool can still yield nothing to
+                    // measure (e.g. hole pairs with disjoint spans); an
+                    // unexercised rule must not read as validated.
+                    0 => result.skip(format!(
+                        "no measurable {} subjects in the selected layout target",
+                        rule.kind.subject()
+                    )),
+                    checked => {
+                        result.checked = checked;
+                        results.findings.extend(
+                            evaluation
+                                .measured
+                                .into_iter()
+                                .filter(|measured| violates(&measured.distance, limit))
+                                .map(|measured| finding(rule, measured)),
+                        );
+                    }
                 }
-            },
+            }
         }
         results.rules.push(result);
     }
@@ -92,78 +120,143 @@ pub(super) fn run(
             result.finish(total, waived);
         }
     }
-    results
+    Ok(results)
+}
+
+/// The one verdict: a distance violates a minimum when it is certainly
+/// below it, beyond both its own geometric uncertainty and the comparison
+/// epsilon.
+fn violates(distance: &Distance, limit_mm: f64) -> bool {
+    distance.certainly_below(limit_mm - COMPARISON_EPSILON_MM)
 }
 
 /// The one skip policy: a rule is skipped when its subject pool or a
-/// required layer pool is empty for the selected layout target.
-fn skip_reason(rule: &Rule, design: &Design) -> Option<String> {
-    let no = |what: &str| Some(format!("no {what} in the selected layout target"));
-    match rule.kind {
+/// required layer pool is empty for the selected layout target. This is
+/// also the only place that knows which pools a rule kind reads; pools are
+/// extracted on first touch.
+fn skip_reason(rule: &Rule, design: &Design) -> Result<Option<String>> {
+    let subjects = match rule.kind {
         RuleKind::BoardArrayPairClearance if design.scope != ArtworkScope::ArrayFlattened => {
-            return Some("board-array spacing requires --layout-target board-array".to_owned());
+            return Ok(Some(
+                "board-array spacing requires --layout-target board-array".to_owned(),
+            ));
         }
-        RuleKind::BoardArrayPairClearance if design.board_arrays.len() < 2 => {
-            return no("two or more direct board-array instances");
+        RuleKind::BoardArrayPairClearance => (design.board_arrays()?.len() < 2)
+            .then(|| "two or more direct board-array instances".to_owned()),
+        RuleKind::HoleDiameter(class) | RuleKind::AnnularRing(class) => design
+            .holes()?
+            .iter()
+            .all(|hole| hole.class != class)
+            .then(|| format!("{} holes", class.label())),
+        RuleKind::HolePairClearance => {
+            (design.holes()?.len() < 2).then(|| "two or more holes".to_owned())
         }
-        RuleKind::HoleDiameter(class) | RuleKind::AnnularRing(class)
-            if holes_of_class(design, class).is_empty() =>
-        {
-            return no(&format!("{} holes", class.label()));
+        RuleKind::SlotWidth => design
+            .slots()?
+            .is_empty()
+            .then(|| "routed slots".to_owned()),
+        RuleKind::LineworkToCopperClearance(Linework::VScore) => design
+            .scores()?
+            .is_empty()
+            .then(|| "V-score centerlines".to_owned()),
+        RuleKind::LineworkToCopperClearance(Linework::BoardEdge) => design
+            .board_outlines()?
+            .is_empty()
+            .then(|| "board profile outlines".to_owned()),
+        RuleKind::ThinFeature(_) | RuleKind::ThinGap(_) => None,
+    };
+    let layers = match rule.kind {
+        RuleKind::AnnularRing(_)
+        | RuleKind::LineworkToCopperClearance(_)
+        | RuleKind::ThinFeature(ImageSel::Copper)
+        | RuleKind::ThinGap(ImageSel::Copper) => design
+            .copper_layers()?
+            .is_empty()
+            .then(|| "copper layers".to_owned()),
+        RuleKind::ThinFeature(ImageSel::Soldermask) | RuleKind::ThinGap(ImageSel::Soldermask) => {
+            design
+                .mask_layers()?
+                .is_empty()
+                .then(|| "soldermask layers".to_owned())
         }
-        RuleKind::HolePairClearance if design.holes.len() < 2 => {
-            return no("two or more holes");
-        }
-        RuleKind::SlotWidth if design.slots.is_empty() => {
-            return no("routed slots");
-        }
-        RuleKind::LineworkToCopperClearance(Linework::VScore) if design.scores.is_empty() => {
-            return no("V-score centerlines");
-        }
-        RuleKind::LineworkToCopperClearance(Linework::BoardEdge)
-            if design.board_outlines.is_empty() =>
-        {
-            return no("board profile outlines");
-        }
-        _ => {}
-    }
-    let needs = rule.kind.needs();
-    if needs.copper && design.copper_layers.is_empty() {
-        return no("copper layers");
-    }
-    if needs.masks && design.mask_layers.is_empty() {
-        return no("soldermask layers");
-    }
-    None
+        _ => None,
+    };
+    Ok(subjects
+        .or(layers)
+        .map(|what| format!("no {what} in the selected layout target")))
 }
 
-fn evaluate(rule: &Rule, ctx: &Context) -> (usize, Vec<Finding>) {
+fn evaluate(rule: &Rule, ctx: &Context) -> Result<Evaluation> {
+    let limit = rule.limit.millimeters();
     match rule.kind {
-        RuleKind::HoleDiameter(class) => hole_diameter::evaluate(rule, class, ctx),
-        RuleKind::SlotWidth => slot_width::evaluate(rule, ctx),
-        RuleKind::HolePairClearance => hole_pair_clearance::evaluate(rule, ctx),
-        RuleKind::AnnularRing(class) => annular_ring::evaluate(rule, class, ctx),
+        RuleKind::HoleDiameter(class) => hole_diameter::evaluate(class, ctx),
+        RuleKind::SlotWidth => slot_width::evaluate(ctx),
+        RuleKind::HolePairClearance => hole_pair_clearance::evaluate(limit, ctx),
+        RuleKind::AnnularRing(class) => annular_ring::evaluate(limit, class, ctx),
         RuleKind::LineworkToCopperClearance(linework) => {
-            linework_clearance::evaluate(rule, linework, ctx)
+            linework_clearance::evaluate(limit, linework, ctx)
         }
-        RuleKind::BoardArrayPairClearance => board_array_spacing::evaluate(rule, ctx),
-        RuleKind::ThinFeature(sel) => thin_regions::evaluate(rule, sel, Residue::Feature, ctx),
-        RuleKind::ThinGap(sel) => thin_regions::evaluate(rule, sel, Residue::Gap, ctx),
+        RuleKind::BoardArrayPairClearance => board_array_spacing::evaluate(limit, ctx),
+        RuleKind::ThinFeature(sel) => thin_regions::evaluate(limit, sel, Residue::Feature, ctx),
+        RuleKind::ThinGap(sel) => thin_regions::evaluate(limit, sel, Residue::Gap, ctx),
     }
 }
 
-/// Shared evaluation state: the design, the interner for resolving entity
-/// symbols into report strings, and one boundary index per copper layer,
-/// built lazily and reused by every rule that queries copper.
+/// Render one violating measurement as a finding. Titles, message shape,
+/// and witness roles come from the rule kind; the location is the measured
+/// distance itself.
+fn finding(rule: &Rule, measured: Measured) -> Finding {
+    let limit = rule.limit.millimeters();
+    let [first_role, second_role] = rule.kind.witness_roles();
+    let distance = measured.distance;
+    let layer_names = measured
+        .layers
+        .iter()
+        .map(|layer| layer.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let on_layers = measured
+        .layers
+        .first()
+        .map(|_| format!(" on {layer_names}"))
+        .unwrap_or_default();
+    Finding {
+        id: String::new(),
+        rule_id: rule.id.clone(),
+        severity: rule.severity,
+        waived: false,
+        waiver_reason: None,
+        title: rule.kind.finding_title(),
+        message: format!(
+            "{} is {:.6} mm{on_layers}; the PDK requires at least {limit:.6} mm",
+            rule.kind.quantity_label(),
+            distance.mm
+        ),
+        measurement: Measurement::minimum(distance.mm, limit),
+        location: Location {
+            point: Some(distance.midpoint().into()),
+            bounding_box: Some(measured.bbox.into()),
+            witnesses: vec![
+                Witness::new(first_role, distance.first),
+                Witness::new(second_role, distance.second),
+            ],
+        },
+        layers: measured.layers,
+        subjects: measured.subjects,
+        evidence: measured.evidence,
+    }
+}
+
+/// Shared evaluation state: the design, and one boundary index per copper
+/// layer, built on first use and reused by every rule that queries copper.
 struct Context<'a> {
-    design: &'a Design,
-    ipc: &'a Ipc2581,
+    design: &'a Design<'a>,
     boundary_search_mm: f64,
-    copper_boundaries: OnceLock<Vec<RegionBoundaryIndex>>,
+    copper_boundaries: Pool<Vec<RegionBoundaryIndex>>,
 }
 
 impl<'a> Context<'a> {
-    fn new(design: &'a Design, ipc: &'a Ipc2581, rules: &[Rule]) -> Self {
+    fn new(design: &'a Design<'a>, rules: &[Rule]) -> Self {
         // A pitch hint for the boundary grids, from the rule limits alone:
         // queries stay correct at any pitch, and sizing cells by hole radii
         // would let one large hole coarsen every fine-clearance query.
@@ -178,91 +271,36 @@ impl<'a> Context<'a> {
             .fold(1.0, f64::max);
         Self {
             design,
-            ipc,
             boundary_search_mm,
-            copper_boundaries: OnceLock::new(),
+            copper_boundaries: Pool::new(),
         }
     }
 
-    fn copper_boundaries(&self) -> &[RegionBoundaryIndex] {
-        let search_mm = self.boundary_search_mm;
-        let copper_layers = &self.design.copper_layers;
-        self.copper_boundaries.get_or_init(|| {
-            copper_layers
+    fn copper_boundaries(&self) -> Result<&[RegionBoundaryIndex]> {
+        force(&self.copper_boundaries, || {
+            Ok(self
+                .design
+                .copper_layers()?
                 .par_iter()
-                .map(|layer| RegionBoundaryIndex::new(&layer.image, search_mm))
-                .collect()
+                .map(|layer| RegionBoundaryIndex::new(&layer.image, self.boundary_search_mm))
+                .collect())
         })
+        .map(Vec::as_slice)
     }
 
     fn resolve(&self, symbol: Option<Symbol>) -> Option<String> {
-        symbol.map(|symbol| self.ipc.resolve(symbol).to_owned())
+        symbol.map(|symbol| self.design.ipc.resolve(symbol).to_owned())
     }
 }
 
-/// A clearance finding under construction: measurement plus report identity.
-struct ClearanceViolation<'a> {
-    rule: &'a Rule,
-    title: &'static str,
-    message: String,
-    witness_roles: [&'static str; 2],
-    clearance: ClearanceMeasurement,
-    layers: Vec<LayerRef>,
-    subjects: Vec<Subject>,
-    evidence: Vec<Evidence>,
-}
-
-impl ClearanceViolation<'_> {
-    fn into_finding(self) -> Finding {
-        let bbox =
-            BBox::from_point(self.clearance.first).union(BBox::from_point(self.clearance.second));
-        Finding {
-            title: self.title.to_owned(),
-            message: self.message,
-            measurement: Measurement::minimum(
-                self.clearance.distance_mm,
-                self.rule.limit.millimeters(),
-            ),
-            location: Location {
-                point: Some(self.clearance.first.midpoint(self.clearance.second).into()),
-                bounding_box: Some(bbox.into()),
-                witnesses: vec![
-                    Witness::new(self.witness_roles[0], self.clearance.first),
-                    Witness::new(self.witness_roles[1], self.clearance.second),
-                ],
-            },
-            layers: self.layers,
-            subjects: self.subjects,
-            evidence: self.evidence,
-            ..blank_finding(self.rule)
-        }
-    }
-}
-
-/// The rule-derived identity fields every finding starts from.
-fn blank_finding(rule: &Rule) -> Finding {
-    Finding {
-        id: String::new(),
-        rule_id: rule.id.clone(),
-        severity: rule.severity,
-        waived: false,
-        waiver_reason: None,
-        title: String::new(),
-        message: String::new(),
-        measurement: Measurement::minimum(0.0, 0.0),
-        location: Location::default(),
-        layers: Vec::new(),
-        subjects: Vec::new(),
-        evidence: Vec::new(),
-    }
-}
-
-fn holes_of_class(design: &Design, class: HoleClass) -> Vec<&Hole> {
-    design
-        .holes
+/// Holes of one plating class, with their indices into the hole pool.
+fn holes_of_class<'a>(design: &'a Design<'a>, class: HoleClass) -> Result<Vec<(usize, &'a Hole)>> {
+    Ok(design
+        .holes()?
         .iter()
-        .filter(|hole| hole.class == class)
-        .collect()
+        .enumerate()
+        .filter(|(_, hole)| hole.class == class)
+        .collect())
 }
 
 /// The shared subject shape of every drilled feature (holes and slots).
@@ -308,16 +346,11 @@ fn hole_subject(ctx: &Context, hole: &Hole, role: &'static str) -> Subject {
     )
 }
 
-fn unique_layers(first: &LayerRef, second: &LayerRef) -> Vec<LayerRef> {
-    if first.name == second.name {
-        vec![first.clone()]
-    } else {
-        vec![first.clone(), second.clone()]
-    }
-}
-
-fn violates_minimum(actual: f64, required: f64) -> bool {
-    actual + COMPARISON_EPSILON_MM < required
+/// The layers a finding spans, each named once.
+fn layers<'a>(layers: impl IntoIterator<Item = &'a LayerRef>) -> Vec<LayerRef> {
+    let mut layers = layers.into_iter().cloned().collect::<Vec<_>>();
+    layers.dedup_by(|left, right| left.name == right.name);
+    layers
 }
 
 /// Sort findings into rule/location order and give each an id hashed from

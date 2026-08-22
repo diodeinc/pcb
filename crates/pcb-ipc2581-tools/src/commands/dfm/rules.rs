@@ -56,32 +56,71 @@ pub(super) enum ImageSel {
 }
 
 impl RuleKind {
-    pub fn needs(self) -> Needs {
-        let mut needs = Needs::default();
+    /// The title every finding of this rule carries.
+    pub fn finding_title(self) -> String {
         match self {
-            Self::HoleDiameter(_) | Self::HolePairClearance => needs.holes = true,
-            Self::SlotWidth => needs.slots = true,
-            Self::AnnularRing(_) => {
-                needs.holes = true;
-                needs.copper = true;
+            Self::HoleDiameter(class) => {
+                format!("{} hole is below minimum diameter", class.label())
             }
+            Self::SlotWidth => "Slot is below minimum width".to_owned(),
+            Self::HolePairClearance => "Hole-to-hole clearance is below minimum".to_owned(),
+            Self::AnnularRing(class) => format!("{} annular ring is below minimum", class.label()),
             Self::LineworkToCopperClearance(Linework::VScore) => {
-                needs.scores = true;
-                needs.copper = true;
+                "V-score centerline is too close to copper".to_owned()
             }
             Self::LineworkToCopperClearance(Linework::BoardEdge) => {
-                needs.board_outlines = true;
-                needs.copper = true;
+                "Board edge is too close to copper".to_owned()
             }
-            Self::BoardArrayPairClearance => needs.board_arrays = true,
-            Self::ThinFeature(ImageSel::Copper) | Self::ThinGap(ImageSel::Copper) => {
-                needs.copper = true;
+            Self::BoardArrayPairClearance => "Board arrays are too close together".to_owned(),
+            Self::ThinFeature(ImageSel::Copper) => {
+                "Copper feature is below minimum width".to_owned()
             }
-            Self::ThinFeature(ImageSel::Soldermask) | Self::ThinGap(ImageSel::Soldermask) => {
-                needs.masks = true;
+            Self::ThinGap(ImageSel::Copper) => "Copper spacing is below minimum".to_owned(),
+            Self::ThinFeature(ImageSel::Soldermask) => {
+                "Soldermask feature is below minimum width".to_owned()
             }
+            Self::ThinGap(ImageSel::Soldermask) => "Soldermask web is below minimum".to_owned(),
         }
-        needs
+    }
+
+    /// The measured quantity as prose, for finding messages.
+    pub fn quantity_label(self) -> String {
+        match self {
+            Self::HoleDiameter(class) => format!("{} hole diameter", class.label()),
+            Self::SlotWidth => "routed slot width".to_owned(),
+            Self::HolePairClearance => "hole edge-to-edge clearance".to_owned(),
+            Self::AnnularRing(class) => format!("{} annular ring", class.label()),
+            Self::LineworkToCopperClearance(Linework::VScore) => {
+                "V-score centerline-to-copper clearance".to_owned()
+            }
+            Self::LineworkToCopperClearance(Linework::BoardEdge) => {
+                "board-edge-to-copper clearance".to_owned()
+            }
+            Self::BoardArrayPairClearance => "board-array outline spacing".to_owned(),
+            Self::ThinFeature(ImageSel::Copper) => "copper feature width".to_owned(),
+            Self::ThinGap(ImageSel::Copper) => "copper-to-copper clearance".to_owned(),
+            Self::ThinFeature(ImageSel::Soldermask) => "soldermask feature width".to_owned(),
+            Self::ThinGap(ImageSel::Soldermask) => "soldermask web width".to_owned(),
+        }
+    }
+
+    /// The roles of a finding's two witness points: the ends of the measured
+    /// distance.
+    pub fn witness_roles(self) -> [&'static str; 2] {
+        match self {
+            Self::HoleDiameter(_) => ["hole_boundary", "hole_boundary"],
+            Self::SlotWidth => ["first_slot_boundary", "second_slot_boundary"],
+            Self::HolePairClearance => ["first_hole_boundary", "second_hole_boundary"],
+            Self::AnnularRing(_) => ["hole_boundary", "copper_boundary"],
+            Self::LineworkToCopperClearance(Linework::VScore) => {
+                ["vscore_centerline", "copper_boundary"]
+            }
+            Self::LineworkToCopperClearance(Linework::BoardEdge) => {
+                ["board_outline", "copper_boundary"]
+            }
+            Self::BoardArrayPairClearance => ["first_board_array", "second_board_array"],
+            Self::ThinFeature(_) | Self::ThinGap(_) => ["first_boundary", "second_boundary"],
+        }
     }
 
     /// What one `checked` unit is for this rule.
@@ -125,7 +164,7 @@ impl RuleKind {
     pub fn method(self) -> &'static str {
         match self {
             Self::HoleDiameter(_) => "ipc_hole_diameter",
-            Self::SlotWidth => "ipc_nominal_or_outline_boundary_distance",
+            Self::SlotWidth => "ipc_slot_width_or_outline_boundary_distance",
             Self::HolePairClearance => "circle_edge_distance",
             Self::AnnularRing(_) => "maximal_centered_disk_minus_hole_radius",
             Self::LineworkToCopperClearance(_) => "segment_to_filled_region_boundary",
@@ -134,40 +173,6 @@ impl RuleKind {
             Self::ThinGap(_) => "closing_candidate_then_boundary_distance",
         }
     }
-}
-
-/// Which entity pools the configured rules read; extraction builds exactly
-/// this union.
-#[derive(Debug, Clone, Copy, Default)]
-pub(super) struct Needs {
-    pub holes: bool,
-    pub slots: bool,
-    pub copper: bool,
-    pub masks: bool,
-    pub scores: bool,
-    pub board_outlines: bool,
-    pub board_arrays: bool,
-}
-
-impl Needs {
-    fn union(self, other: Self) -> Self {
-        Self {
-            holes: self.holes || other.holes,
-            slots: self.slots || other.slots,
-            copper: self.copper || other.copper,
-            masks: self.masks || other.masks,
-            scores: self.scores || other.scores,
-            board_outlines: self.board_outlines || other.board_outlines,
-            board_arrays: self.board_arrays || other.board_arrays,
-        }
-    }
-}
-
-pub(super) fn needs(rules: &[Rule]) -> Needs {
-    rules
-        .iter()
-        .map(|rule| rule.kind.needs())
-        .fold(Needs::default(), Needs::union)
 }
 
 /// Lower every configured capability to its rules. Absent capabilities lower

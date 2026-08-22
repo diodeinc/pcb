@@ -23,57 +23,51 @@
 //! clear without walking its boundary segments; every pair counts as
 //! checked either way.
 
-use pcb_ir::geom::dfm::region_clearance;
+use anyhow::Result;
+use pcb_ir::geom::dfm::{Distance, region_clearance};
 
 use crate::commands::dfm::design::BoardArray;
-use crate::commands::dfm::report::{Evidence, Finding, SourceLocator, Subject};
-use crate::commands::dfm::rules::Rule;
+use crate::commands::dfm::report::{Evidence, SourceLocator, Subject};
 
-use super::{ClearanceViolation, Context, violates_minimum};
+use super::{Context, Evaluation, Measured};
 
-pub(super) fn evaluate(rule: &Rule, ctx: &Context) -> (usize, Vec<Finding>) {
-    let arrays = &ctx.design.board_arrays;
-    let limit = rule.limit.millimeters();
+pub(super) fn evaluate(limit_mm: f64, ctx: &Context) -> Result<Evaluation> {
+    let arrays = ctx.design.board_arrays()?;
     let pairs = arrays.iter().enumerate().flat_map(|(index, first)| {
         arrays[index + 1..]
             .iter()
             .map(move |second| (first, second))
     });
-    let findings = pairs
+    let measured = pairs
         .clone()
         .filter(|(first, second)| {
-            violates_minimum(first.region.bbox.distance_to(second.region.bbox), limit)
+            let bound = first.region.bbox.distance_to(second.region.bbox);
+            Distance::exact(
+                bound,
+                first.region.bbox.center(),
+                second.region.bbox.center(),
+            )
+            .certainly_below(limit_mm)
         })
-        .map(|(first, second)| {
-            let clearance = region_clearance(&first.region, &second.region)
-                .expect("board arrays are extracted with non-empty profiles");
-            (first, second, clearance)
-        })
-        .filter(|(_, _, clearance)| violates_minimum(clearance.distance_mm, limit))
-        .map(|(first, second, clearance)| {
-            ClearanceViolation {
-                rule,
-                title: "Board arrays are too close together",
-                message: format!(
-                    "board-array outlines are {:.6} mm apart; the PDK requires at least {:.6} mm",
-                    clearance.distance_mm, limit
-                ),
-                witness_roles: ["first_board_array", "second_board_array"],
-                clearance,
-                layers: Vec::new(),
-                subjects: vec![
-                    board_array_subject(first, "first"),
-                    board_array_subject(second, "second"),
-                ],
-                evidence: vec![
-                    Evidence::bounds("first_board_array", first.region.bbox),
-                    Evidence::bounds("second_board_array", second.region.bbox),
-                ],
-            }
-            .into_finding()
+        .map(|(first, second)| Measured {
+            distance: region_clearance(&first.region, &second.region)
+                .expect("board arrays are extracted with non-empty profiles"),
+            bbox: first.region.bbox.union(second.region.bbox),
+            layers: Vec::new(),
+            subjects: vec![
+                board_array_subject(first, "first"),
+                board_array_subject(second, "second"),
+            ],
+            evidence: vec![
+                Evidence::bounds("first_board_array", first.region.bbox),
+                Evidence::bounds("second_board_array", second.region.bbox),
+            ],
         })
         .collect();
-    (pairs.count(), findings)
+    Ok(Evaluation {
+        checked: pairs.count(),
+        measured,
+    })
 }
 
 fn board_array_subject(array: &BoardArray, role: &'static str) -> Subject {

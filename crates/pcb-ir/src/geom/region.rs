@@ -26,7 +26,7 @@ use i_overlay::mesh::style::{LineJoin as OutlineLineJoin, OutlineStyle};
 
 use crate::geom::affine::Affine2;
 use crate::geom::bbox::BBox;
-use crate::geom::dist::{self, ClearanceMeasurement};
+use crate::geom::dist::{self, Distance};
 use crate::geom::path::{ContourBuf, PathCmd, contours_to_kurbo, stroke_to_fill, transform_cmds};
 use crate::geom::point::Point;
 use crate::geom::store::{Path, PathArena};
@@ -276,13 +276,14 @@ pub struct DiskGapRegularization {
 }
 
 /// One connected opening/closing residue bounded by two distinct source
-/// boundary branches. `clearance` is the exact separation of those branches
-/// in the flattened polygon representation: the authoritative local width of
-/// the material or void `region` represents.
+/// boundary branches. `width` is the exact separation of those branches in
+/// the flattened polygon representation — the authoritative local width of
+/// the material or void `region` represents — counting both branches as
+/// flattened inputs.
 #[derive(Debug, Clone)]
 pub(crate) struct TwoSidedResidualComponent {
     pub region: ContourSet,
-    pub clearance: ClearanceMeasurement,
+    pub width: Distance,
 }
 
 /// Failure to construct a narrow void's medial axis for gap regularization.
@@ -1164,10 +1165,10 @@ fn two_sided_residual_components(
         .into_iter()
         .filter_map(|component| {
             let contacts = contacting_segments(&segments, &component, contact_tolerance);
-            opposing_boundary_clearance(&contacts, contact_tolerance, walls).map(|clearance| {
+            opposing_boundary_clearance(&contacts, contact_tolerance, walls).map(|width| {
                 TwoSidedResidualComponent {
                     region: component,
-                    clearance,
+                    width,
                 }
             })
         })
@@ -1202,7 +1203,7 @@ fn opposing_boundary_clearance(
     contacts: &[&OrientedBoundarySegment],
     contact_tolerance: f64,
     walls: WallTest,
-) -> Option<ClearanceMeasurement> {
+) -> Option<Distance> {
     contacts
         .iter()
         .enumerate()
@@ -1211,7 +1212,7 @@ fn opposing_boundary_clearance(
                 facing_wall_clearance(left, right, contact_tolerance, walls)
             })
         })
-        .min_by(|left, right| left.distance_mm.total_cmp(&right.distance_mm))
+        .min_by(|left, right| left.mm.total_cmp(&right.mm))
 }
 
 /// The separation of two boundary segments when they are opposite walls of
@@ -1224,16 +1225,12 @@ fn facing_wall_clearance(
     right: &OrientedBoundarySegment,
     contact_tolerance: f64,
     walls: WallTest,
-) -> Option<ClearanceMeasurement> {
+) -> Option<Distance> {
     if boundary_segments_are_incident(left.topology, right.topology) {
         return None;
     }
-    let (distance_mm, first, second) = dist::segments(left.start, left.end, right.start, right.end);
-    let clearance = ClearanceMeasurement {
-        distance_mm,
-        first,
-        second,
-    };
+    let (mm, first, second) = dist::segments(left.start, left.end, right.start, right.end);
+    let clearance = Distance::flattened(mm, first, second, 2);
     let left_tangent = left.end - left.start;
     let right_tangent = right.end - right.start;
     let same_ring_walls = match walls {
@@ -1244,8 +1241,7 @@ fn facing_wall_clearance(
                 && separation_is_normal(clearance, right_tangent, contact_tolerance)
         }
     };
-    (distance_mm > contact_tolerance
-        && (left.topology.ring != right.topology.ring || same_ring_walls))
+    (mm > contact_tolerance && (left.topology.ring != right.topology.ring || same_ring_walls))
         .then_some(clearance)
 }
 
@@ -1271,11 +1267,7 @@ fn tangents_oppose(left: Point, right: Point) -> bool {
 /// Whether the closest-pair separation is normal to a wall within the
 /// contact tolerance (at least the flattening chord error): the component
 /// of the separation along the wall's tangent is negligible.
-fn separation_is_normal(
-    clearance: ClearanceMeasurement,
-    tangent: Point,
-    contact_tolerance: f64,
-) -> bool {
+fn separation_is_normal(clearance: Distance, tangent: Point, contact_tolerance: f64) -> bool {
     let separation = clearance.second - clearance.first;
     let along = (tangent.x * separation.x + tangent.y * separation.y).abs() / tangent.length();
     along <= contact_tolerance.max(tol::FLATTEN_MM)

@@ -72,14 +72,13 @@ pub fn execute_check(file: &Path, options: &CheckOptions) -> Result<()> {
     let generated_at = generation_time();
     let content = file_utils::ipc_text(file, &input_bytes)?;
     let ipc = Ipc2581::parse(&content).context("failed to parse IPC-2581 file")?;
-    let design = design::Design::extract(&ipc, &rules, options.layout_target.artwork_scope())?;
+    let design = design::Design::new(&ipc, options.layout_target.artwork_scope());
     let checked = checks::run(
         &rules,
         &design,
-        &ipc,
         waivers.as_ref().map(|loaded| &loaded.file),
         generated_at.date_naive(),
-    );
+    )?;
 
     let summary = summarize(&checked);
     let failed = summary.errors > 0;
@@ -299,14 +298,14 @@ minimum_board_array_spacing = "300 mil"
         let ipc = Ipc2581::parse(xml).unwrap();
         let pdk = pdk::Pdk::parse(PDK).unwrap();
         let rules = rules::lower(&pdk).unwrap();
-        let design = design::Design::extract(&ipc, &rules, scope).unwrap();
+        let design = design::Design::new(&ipc, scope);
         checks::run(
             &rules,
             &design,
-            &ipc,
             None,
             NaiveDate::from_ymd_opt(2026, 8, 21).unwrap(),
         )
+        .unwrap()
     }
 
     fn rule<'a>(results: &'a checks::Results, id: &str) -> &'a report::RuleResult {

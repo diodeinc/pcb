@@ -80,13 +80,20 @@ high-level pass is never allowed to suppress a later authoritative failure.
 | V-score and board-edge clearance | Materialized line/profile geometry against final composed copper | Indexed copper boundaries |
 | Board-array spacing | Materialized filled array profiles | Bounding boxes prune pairs already proven clear |
 
+Every check produces one measurement per subject: a signed distance between
+two witness points, carrying the uncertainty of the flattened boundaries it
+was measured against (one flattening tolerance per tessellated curve; zero
+for stated primitives and analytic shapes). The engine applies the single
+verdict — the distance violates the limit only when it falls short beyond its
+own uncertainty — so curve tessellation by itself cannot manufacture a
+violation, and the same rule decides every quantity in the table above.
+
 Morphological opening and closing are deliberately candidate stages for width
-and gap checks. A candidate becomes a finding only when the distance between
-two nonincident, opposing source-boundary branches is below the limit. The
-comparison includes the flattening uncertainty of both boundaries, so curve
-tessellation by itself cannot manufacture a violation. Bounds and spatial
-indices have the same one-way contract: they can prove work unnecessary, but
-they cannot emit a finding without the exact geometric measurement.
+and gap checks. A candidate becomes a measurement only when two nonincident,
+opposing source-boundary branches wall it; their exact separation is the
+width. Bounds and spatial indices have the same one-way contract: they can
+prove work unnecessary, but they cannot emit a finding without the exact
+geometric measurement.
 
 `--layout-target board` extracts the canonical board step. `board-array`
 materializes the root layout and every nested repeat, so the same evaluators
@@ -99,10 +106,12 @@ when fewer than two exist.
 ## Rule semantics
 
 - Hole diameter rules measure every drilled hole of the rule's class;
-  `minimum_slot_width` measures every routed slot. It uses a stated nominal
-  width when present and the filled route outline otherwise. Drill
-  extraction fails rather than silently discarding a hole whose plating
-  class or diameter is missing.
+  `minimum_slot_width` measures every routed slot. A slot's width is settled
+  at extraction: the stated primitive width when present — exact, and
+  verified against the materialized outline — and otherwise the outline's
+  narrowest local width. Drill extraction fails rather than silently
+  discarding a hole whose plating class or diameter is missing, or a slot
+  whose stated width its outline contradicts.
 - Hole-to-hole clearance measures edge-to-edge distance between hole pairs
   whose drill spans overlap; stacked blind and buried vias on disjoint spans
   do not interact.

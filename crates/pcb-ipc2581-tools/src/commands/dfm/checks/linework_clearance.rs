@@ -18,34 +18,54 @@
 //! intersects it iff it crosses its boundary). Otherwise `S` is disjoint
 //! from `M` and `dist(S, M) = dist(S, ∂M)`, the minimum segment-to-segment
 //! distance against the indexed boundary, searched only within `L` since
-//! farther boundaries cannot violate.
+//! farther boundaries cannot violate. A profile's rings are flattened
+//! curves and count toward the measurement's uncertainty; a score line is
+//! exact.
 
-use pcb_ir::geom::Point;
-use pcb_ir::geom::dfm::ClearanceMeasurement;
+use std::ops::Range;
+
+use anyhow::Result;
+use pcb_ir::geom::dfm::Distance;
 use pcb_ir::geom::region::ring_edges;
+use pcb_ir::geom::{BBox, Point};
 
 use crate::commands::dfm::design::{BoardOutline, CopperLayer, Design};
-use crate::commands::dfm::report::{Evidence, Finding, LayerRef, SourceLocator, Subject};
-use crate::commands::dfm::rules::{Linework, Rule};
+use crate::commands::dfm::report::{Evidence, LayerRef, SourceLocator, Subject};
+use crate::commands::dfm::rules::Linework;
 
-use super::{ClearanceViolation, Context, unique_layers, violates_minimum};
+use super::{Context, Evaluation, Measured, layers};
 
-/// One reference item: a V-score centerline or a board outline, as bare
-/// segments plus its report identity.
+/// One reference item: a V-score centerline or a board outline, as a range
+/// of bare segments plus its report identity.
 struct LineworkItem {
-    segments: Vec<(Point, Point)>,
+    segments: Range<usize>,
+    flattened_boundaries: u32,
     layer: Option<LayerRef>,
     subject: Subject,
     evidence: Evidence,
 }
 
-fn linework_items(linework: Linework, design: &Design) -> Vec<LineworkItem> {
-    match linework {
+/// The reference items and their segments, flattened into one pool so the
+/// endpoint containment sweep runs once per layer.
+struct LineworkPool {
+    items: Vec<LineworkItem>,
+    segments: Vec<(Point, Point)>,
+}
+
+fn linework_items(linework: Linework, design: &Design) -> Result<LineworkPool> {
+    let mut segments = Vec::new();
+    let mut push = |item_segments: Vec<(Point, Point)>| {
+        let start = segments.len();
+        segments.extend(item_segments);
+        start..segments.len()
+    };
+    let items = match linework {
         Linework::VScore => design
-            .scores
+            .scores()?
             .iter()
             .map(|score| LineworkItem {
-                segments: vec![(score.start, score.end)],
+                segments: push(vec![(score.start, score.end)]),
+                flattened_boundaries: 0,
                 layer: Some(score.layer.clone()),
                 subject: Subject {
                     role: "reference",
@@ -57,97 +77,70 @@ fn linework_items(linework: Linework, design: &Design) -> Vec<LineworkItem> {
             })
             .collect(),
         Linework::BoardEdge => design
-            .board_outlines
+            .board_outlines()?
             .iter()
             .map(|outline| LineworkItem {
-                segments: outline.contours.iter().flat_map(ring_edges).collect(),
+                segments: push(outline.contours.iter().flat_map(ring_edges).collect()),
+                flattened_boundaries: 1,
                 layer: None,
                 subject: outline_subject(outline, "reference"),
                 evidence: Evidence::bounds("board_outline", outline.bbox),
             })
             .collect(),
-    }
+    };
+    Ok(LineworkPool { items, segments })
 }
 
-pub(super) fn evaluate(rule: &Rule, linework: Linework, ctx: &Context) -> (usize, Vec<Finding>) {
+pub(super) fn evaluate(limit_mm: f64, linework: Linework, ctx: &Context) -> Result<Evaluation> {
     let design = ctx.design;
-    let items = linework_items(linework, design);
-    let (title, witness_role, reference_label) = match linework {
-        Linework::VScore => (
-            "V-score centerline is too close to copper",
-            "vscore_centerline",
-            "V-score centerline",
-        ),
-        Linework::BoardEdge => (
-            "Board edge is too close to copper",
-            "board_outline",
-            "board edge",
-        ),
-    };
-    let limit = rule.limit.millimeters();
-    let boundaries = ctx.copper_boundaries();
-    let endpoints = items
+    let copper_layers = design.copper_layers()?;
+    let boundaries = ctx.copper_boundaries()?;
+    let pool = linework_items(linework, design)?;
+    let (items, segments) = (&pool.items, &pool.segments);
+    let endpoints = segments
         .iter()
-        .flat_map(|item| item.segments.iter().flat_map(|&(start, end)| [start, end]))
+        .flat_map(|&(start, end)| [start, end])
         .collect::<Vec<_>>();
 
-    let mut checked = 0;
-    let mut findings = Vec::new();
-    for (copper_index, copper) in design.copper_layers.iter().enumerate() {
-        let inside = copper.image.contains_points_batch(&endpoints);
-        let mut cursor = 0;
-        for item in &items {
-            checked += 1;
-            let mut nearest: Option<ClearanceMeasurement> = None;
-            for &(start, end) in &item.segments {
-                let (start_inside, end_inside) = (inside[cursor], inside[cursor + 1]);
-                cursor += 2;
-                let candidate = if start_inside || end_inside {
-                    let point = if start_inside { start } else { end };
-                    Some(ClearanceMeasurement {
-                        distance_mm: 0.0,
-                        first: point,
-                        second: point,
+    let measured = copper_layers
+        .iter()
+        .enumerate()
+        .flat_map(|(copper_index, copper)| {
+            let inside = copper.image.contains_points_batch(&endpoints);
+            items.iter().filter_map(move |item| {
+                let nearest = item
+                    .segments
+                    .clone()
+                    .filter_map(|segment_index| {
+                        let (start, end) = segments[segment_index];
+                        let (start_inside, end_inside) =
+                            (inside[2 * segment_index], inside[2 * segment_index + 1]);
+                        // A segment touching copper measures zero at the
+                        // contained endpoint; otherwise both ends are outside
+                        // and the boundary distance is the set distance.
+                        match (start_inside, end_inside) {
+                            (true, _) => Some(Distance::flattened(0.0, start, start, 1)),
+                            (_, true) => Some(Distance::flattened(0.0, end, end, 1)),
+                            _ => boundaries[copper_index]
+                                .segment_nearest_within(start, end, limit_mm),
+                        }
                     })
-                } else {
-                    boundaries[copper_index].segment_nearest_within(start, end, limit)
-                };
-                if let Some(candidate) = candidate
-                    && nearest
-                        .as_ref()
-                        .is_none_or(|current| candidate.distance_mm < current.distance_mm)
-                {
-                    nearest = Some(candidate);
-                }
-            }
-            let Some(clearance) = nearest else {
-                continue;
-            };
-            if !violates_minimum(clearance.distance_mm, limit) {
-                continue;
-            }
-            findings.push(
-                ClearanceViolation {
-                    rule,
-                    title,
-                    message: format!(
-                        "{reference_label} is {:.6} mm from copper on {}; the PDK requires at least {:.6} mm",
-                        clearance.distance_mm, copper.layer.name, limit
-                    ),
-                    witness_roles: [witness_role, "copper_boundary"],
-                    clearance,
-                    layers: match &item.layer {
-                        Some(layer) => unique_layers(layer, &copper.layer),
-                        None => vec![copper.layer.clone()],
-                    },
+                    .min_by(|left, right| left.mm.total_cmp(&right.mm))?;
+                let distance = nearest.also_flattened(item.flattened_boundaries);
+                Some(Measured {
+                    distance,
+                    bbox: BBox::from_point(distance.first).union(BBox::from_point(distance.second)),
+                    layers: layers(item.layer.iter().chain([&copper.layer])),
                     subjects: vec![item.subject.clone(), copper_subject(copper)],
                     evidence: vec![item.evidence.clone()],
-                }
-                .into_finding(),
-            );
-        }
-    }
-    (checked, findings)
+                })
+            })
+        })
+        .collect();
+    Ok(Evaluation {
+        checked: copper_layers.len() * items.len(),
+        measured,
+    })
 }
 
 fn copper_subject(copper: &CopperLayer) -> Subject {

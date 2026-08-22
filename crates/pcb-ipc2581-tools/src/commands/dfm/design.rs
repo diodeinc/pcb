@@ -1,18 +1,17 @@
-//! The checked design: fat entity pools extracted once from IPC-2581.
+//! The checkable design: entity pools extracted from one IPC-2581 file for
+//! one layout target, in plain millimeters.
 //!
-//! Extraction resolves the semantics rules need — hole spans, hole-to-land
-//! links, composed layer images — so the engine measures geometry without
-//! re-deriving identity. Only the pools the configured rules read are built.
-//! Entities carry interned [`Symbol`]s; strings are resolved only when a
-//! finding is emitted.
-//!
-//! Copper layers form the design's stackup: the pool is ordered top to
-//! bottom as the file lists it, and drill spans are resolved to inclusive
-//! ordinal ranges over that pool.
+//! Pools are extracted on first touch and cached for the run, so a rule set
+//! pays only for the pools it reads. Each pool is a flat vector in source
+//! order; derived facts that relate pools (a hole's lands) are side tables
+//! indexed like their primary pool. Extraction fails closed: a drilled
+//! feature whose plating, diameter, or outline the file does not state is
+//! an error, never a quietly dropped subject.
 
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use ipc2581::Symbol;
 use ipc2581::types::LayerFunction;
 use pcb_ir::dialects::Side;
@@ -20,6 +19,7 @@ use pcb_ir::dialects::ipc::{
     ArtworkScope, FeatureDomain, FeatureKind, FeatureSpan, LayoutStepKind, PlatingKind,
     ProfileOccurrenceRole, profile_occurrences_for,
 };
+use pcb_ir::geom::dfm::{Distance, min_width};
 use pcb_ir::geom::region::Ring;
 use pcb_ir::geom::{BBox, ContourSet, Point, Polarity, tol};
 use rayon::prelude::*;
@@ -29,63 +29,101 @@ use crate::ipc2581::Ipc2581;
 use crate::layers;
 
 use super::report::LayerRef;
-use super::rules::Rule;
 
-pub(super) struct Design {
-    pub scope: ArtworkScope,
-    pub holes: Vec<Hole>,
-    pub slots: Vec<Slot>,
-    pub copper_layers: Vec<CopperLayer>,
-    pub mask_layers: Vec<MaskLayer>,
-    pub scores: Vec<Score>,
-    pub board_outlines: Vec<BoardOutline>,
-    pub board_arrays: Vec<BoardArray>,
+/// A lazily extracted pool. Extraction errors are kept and re-raised on
+/// every touch.
+pub(super) type Pool<T> = OnceLock<Result<T>>;
+
+pub(super) fn force<T>(pool: &Pool<T>, build: impl FnOnce() -> Result<T>) -> Result<&T> {
+    pool.get_or_init(build)
+        .as_ref()
+        .map_err(|error| anyhow!("{error:#}"))
 }
 
-impl Design {
-    pub fn extract(ipc: &Ipc2581, rules: &[Rule], scope: ArtworkScope) -> Result<Self> {
-        let needs = super::rules::needs(rules);
-        let (mut holes, slots) = if needs.holes || needs.slots {
-            collect_drilled(ipc, scope)?
-        } else {
-            (Vec::new(), Vec::new())
-        };
-        let copper_layers = if needs.copper {
-            collect_copper_layers(ipc, scope)?
-        } else {
-            Vec::new()
-        };
-        link_lands(&mut holes, &copper_layers);
-        let wants_arrays = needs.board_arrays && scope == ArtworkScope::ArrayFlattened;
-        let layout = if needs.board_outlines || wants_arrays {
-            Some(geometry::extract_layout(ipc)?)
-        } else {
-            None
-        };
-        Ok(Self {
+pub(super) struct Design<'a> {
+    pub ipc: &'a Ipc2581,
+    pub scope: ArtworkScope,
+    drilled: Pool<(Vec<Hole>, Vec<Slot>)>,
+    copper_layers: Pool<Vec<CopperLayer>>,
+    mask_layers: Pool<Vec<MaskLayer>>,
+    scores: Pool<Vec<Score>>,
+    layout: Pool<GeometryDocument>,
+    board_outlines: Pool<Vec<BoardOutline>>,
+    board_arrays: Pool<Vec<BoardArray>>,
+    hole_lands: Pool<Vec<Vec<HoleLand>>>,
+}
+
+impl<'a> Design<'a> {
+    pub fn new(ipc: &'a Ipc2581, scope: ArtworkScope) -> Self {
+        Self {
+            ipc,
             scope,
-            holes,
-            slots,
-            copper_layers,
-            mask_layers: if needs.masks {
-                collect_mask_layers(ipc, scope)?
-            } else {
-                Vec::new()
-            },
-            scores: if needs.scores {
-                collect_scores(ipc, scope)?
-            } else {
-                Vec::new()
-            },
-            board_outlines: match &layout {
-                Some(layout) if needs.board_outlines => collect_board_outlines(ipc, layout, scope),
-                _ => Vec::new(),
-            },
-            board_arrays: match &layout {
-                Some(layout) if wants_arrays => collect_board_arrays(ipc, layout),
-                _ => Vec::new(),
-            },
+            drilled: Pool::new(),
+            copper_layers: Pool::new(),
+            mask_layers: Pool::new(),
+            scores: Pool::new(),
+            layout: Pool::new(),
+            board_outlines: Pool::new(),
+            board_arrays: Pool::new(),
+            hole_lands: Pool::new(),
+        }
+    }
+
+    fn drilled(&self) -> Result<&(Vec<Hole>, Vec<Slot>)> {
+        force(&self.drilled, || collect_drilled(self.ipc, self.scope))
+    }
+
+    pub fn holes(&self) -> Result<&[Hole]> {
+        self.drilled().map(|(holes, _)| holes.as_slice())
+    }
+
+    pub fn slots(&self) -> Result<&[Slot]> {
+        self.drilled().map(|(_, slots)| slots.as_slice())
+    }
+
+    pub fn copper_layers(&self) -> Result<&[CopperLayer]> {
+        force(&self.copper_layers, || {
+            collect_copper_layers(self.ipc, self.scope)
         })
+        .map(Vec::as_slice)
+    }
+
+    pub fn mask_layers(&self) -> Result<&[MaskLayer]> {
+        force(&self.mask_layers, || {
+            collect_mask_layers(self.ipc, self.scope)
+        })
+        .map(Vec::as_slice)
+    }
+
+    pub fn scores(&self) -> Result<&[Score]> {
+        force(&self.scores, || collect_scores(self.ipc, self.scope)).map(Vec::as_slice)
+    }
+
+    fn layout(&self) -> Result<&GeometryDocument> {
+        force(&self.layout, || geometry::extract_layout(self.ipc))
+    }
+
+    pub fn board_outlines(&self) -> Result<&[BoardOutline]> {
+        force(&self.board_outlines, || {
+            Ok(collect_board_outlines(self.ipc, self.layout()?, self.scope))
+        })
+        .map(Vec::as_slice)
+    }
+
+    pub fn board_arrays(&self) -> Result<&[BoardArray]> {
+        force(&self.board_arrays, || {
+            Ok(collect_board_arrays(self.ipc, self.layout()?))
+        })
+        .map(Vec::as_slice)
+    }
+
+    /// Each hole's lands, one per copper layer it owns a land on, indexed
+    /// like [`Design::holes`].
+    pub fn hole_lands(&self) -> Result<&[Vec<HoleLand>]> {
+        force(&self.hole_lands, || {
+            Ok(link_lands(self.holes()?, self.copper_layers()?))
+        })
+        .map(Vec::as_slice)
     }
 }
 
@@ -121,51 +159,34 @@ pub(super) struct Hole {
     pub diameter_mm: f64,
     pub bbox: BBox,
     pub layer: LayerRef,
-    /// Inclusive ordinal range over the copper stackup the drill spans.
-    /// `None` spans the whole board (or the span is unknown).
-    pub copper_span: Option<(u16, u16)>,
+    /// Inclusive ordinal range over the copper stackup the drill spans. A
+    /// through-board or unstated span covers every copper layer.
+    pub copper_span: (u16, u16),
     pub step: Option<Symbol>,
     pub padstack: Option<Symbol>,
     pub net: Option<Symbol>,
-    /// Lands this hole owns, one per copper layer, linked at extraction.
-    pub lands: Vec<HoleLand>,
     pub source_set_index: u32,
     pub source_feature_index: u32,
 }
 
 impl Hole {
-    pub fn spans_copper(&self, copper_ordinal: u16) -> bool {
-        self.copper_span
-            .is_none_or(|(low, high)| (low..=high).contains(&copper_ordinal))
+    pub fn spans_copper(&self, copper_index: usize) -> bool {
+        let (low, high) = self.copper_span;
+        (usize::from(low)..=usize::from(high)).contains(&copper_index)
     }
 
-    /// Whether two drill spans coexist at some board depth. Unknown spans
-    /// conservatively overlap everything.
+    /// Whether two drill spans coexist at some board depth.
     pub fn span_overlaps(&self, other: &Hole) -> bool {
-        match (self.copper_span, other.copper_span) {
-            (Some((self_low, self_high)), Some((other_low, other_high))) => {
-                self_low <= other_high && other_low <= self_high
-            }
-            _ => true,
-        }
+        let (self_low, self_high) = self.copper_span;
+        let (other_low, other_high) = other.copper_span;
+        self_low <= other_high && other_low <= self_high
     }
 
-    pub fn land_on(&self, copper_index: usize) -> Option<&HoleLand> {
-        self.lands
-            .iter()
-            .find(|land| land.copper_index as usize == copper_index)
-    }
-
-    /// Whether `copper_index` is an end of the drill span: the layers the
-    /// plating barrel must land on. An unknown span terminates on the
-    /// outermost of the `copper_layer_count` layers.
-    pub fn terminates_on(&self, copper_index: usize, copper_layer_count: usize) -> bool {
-        let (low, high) = self
-            .copper_span
-            .map_or((0, copper_layer_count - 1), |(low, high)| {
-                (usize::from(low), usize::from(high))
-            });
-        copper_index == low || copper_index == high
+    /// Whether `copper_index` is an end of the drill span: a layer the
+    /// plating barrel must land on.
+    pub fn terminates_on(&self, copper_index: usize) -> bool {
+        let (low, high) = self.copper_span;
+        copper_index == usize::from(low) || copper_index == usize::from(high)
     }
 }
 
@@ -176,21 +197,13 @@ pub(super) struct HoleLand {
     pub land_index: u32,
 }
 
-/// The authoritative width basis retained for one routed slot.
-#[derive(Debug, Clone)]
-pub(super) enum SlotWidth {
-    /// Exact source primitive width (normally an IPC `Oval`).
-    Nominal(f64),
-    /// Final materialized slot image when the source states only an outline.
-    Geometry(ContourSet),
-}
-
-/// A routed slot on a drill layer. Primitive widths stay semantic; arbitrary
-/// outlines retain their materialized filled geometry for local-width checks.
+/// A routed slot on a drill layer. Its width is settled at extraction: the
+/// stated primitive width when the source gives one (exact, verified
+/// against the materialized outline), otherwise the outline's narrowest
+/// local width.
 #[derive(Debug, Clone)]
 pub(super) struct Slot {
-    pub width: SlotWidth,
-    pub center: Point,
+    pub width: Distance,
     pub bbox: BBox,
     pub layer: LayerRef,
     pub step: Option<Symbol>,
@@ -253,6 +266,13 @@ pub(super) struct BoardArray {
 
 fn collect_drilled(ipc: &Ipc2581, scope: ArtworkScope) -> Result<(Vec<Hole>, Vec<Slot>)> {
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
+    let copper_count = ecad
+        .cad_data
+        .layers
+        .iter()
+        .filter(|layer| layers::is_copper(layer.layer_function))
+        .count();
+    let whole_stack = (0, copper_count.max(1) as u16 - 1);
     let mut holes = Vec::new();
     let mut slots = Vec::new();
     for source_layer in ecad.cad_data.layers.iter().filter(|layer| {
@@ -288,35 +308,28 @@ fn collect_drilled(ipc: &Ipc2581, scope: ArtworkScope) -> Result<(Vec<Hole>, Vec
                         diameter_mm: feature.outer_diameter,
                         bbox: BBox::from_point(feature.center).expand(feature.outer_diameter / 2.0),
                         layer: layer_ref(layer_name, source_layer.layer_function, None),
-                        copper_span: copper_span(feature.intent.span, &ecad.cad_data.layers),
+                        copper_span: copper_span(feature.intent.span, &ecad.cad_data.layers)
+                            .unwrap_or(whole_stack),
                         step: feature.source_step_ref,
                         padstack: feature.padstack_ref,
                         net: feature.net,
-                        lands: Vec::new(),
                         source_set_index: feature.source.set_index,
                         source_feature_index: feature.source.feature_index,
                     });
                 }
                 FeatureKind::Slot => {
-                    let width = if feature.outer_diameter > 0.0
-                        && feature.outer_diameter.is_finite()
-                    {
-                        SlotWidth::Nominal(feature.outer_diameter)
-                    } else {
-                        let contours = document.placed_feature_contours(feature);
-                        let geometry = ContourSet::from_filled_contours(&contours, tol::REGION_MM);
-                        if geometry.is_empty() {
-                            bail!(
-                                "routed slot on layer '{layer_name}' at ({:.6}, {:.6}) has neither a nominal width nor outline geometry",
-                                feature.bbox.center().x,
-                                feature.bbox.center().y
-                            );
-                        }
-                        SlotWidth::Geometry(geometry)
+                    let at = format!(
+                        "routed slot on layer '{layer_name}' at ({:.6}, {:.6})",
+                        feature.bbox.center().x,
+                        feature.bbox.center().y
+                    );
+                    let contours = document.placed_feature_contours(feature);
+                    let outline = ContourSet::from_filled_contours(&contours, tol::REGION_MM);
+                    let Some(measured) = min_width(&outline) else {
+                        bail!("{at} has no measurable outline");
                     };
                     slots.push(Slot {
-                        width,
-                        center: feature.bbox.center(),
+                        width: slot_width(feature.outer_diameter, measured).with_context(|| at)?,
                         bbox: feature.bbox,
                         layer: layer_ref(layer_name, source_layer.layer_function, None),
                         step: feature.source_step_ref,
@@ -340,14 +353,32 @@ fn collect_drilled(ipc: &Ipc2581, scope: ArtworkScope) -> Result<(Vec<Hole>, Vec
             .then_with(|| left.diameter_mm.total_cmp(&right.diameter_mm))
     });
     slots.sort_by(|left, right| {
-        left.center
+        left.bbox
+            .min
             .x
-            .total_cmp(&right.center.x)
-            .then_with(|| left.center.y.total_cmp(&right.center.y))
+            .total_cmp(&right.bbox.min.x)
+            .then_with(|| left.bbox.min.y.total_cmp(&right.bbox.min.y))
             .then_with(|| left.bbox.max.x.total_cmp(&right.bbox.max.x))
             .then_with(|| left.bbox.max.y.total_cmp(&right.bbox.max.y))
     });
     Ok((holes, slots))
+}
+
+/// A slot's width: the stated primitive width when the source gives one,
+/// otherwise the outline's measured minimum width. A stated width is exact,
+/// and the outline must agree with it within the measurement's uncertainty;
+/// a file that states one width and draws another is inconsistent.
+fn slot_width(stated_mm: f64, measured: Distance) -> Result<Distance> {
+    if !(stated_mm > 0.0 && stated_mm.is_finite()) {
+        return Ok(measured);
+    }
+    if (measured.mm - stated_mm).abs() > measured.uncertainty_mm {
+        bail!(
+            "states width {stated_mm:.6} mm but its outline measures {:.6} mm",
+            measured.mm
+        );
+    }
+    Ok(Distance::exact(stated_mm, measured.first, measured.second))
 }
 
 /// Resolve a drill span to an inclusive ordinal range over the copper
@@ -494,13 +525,15 @@ fn collect_mask_layers(ipc: &Ipc2581, scope: ArtworkScope) -> Result<Vec<MaskLay
 
 /// Attach each hole to its land on every copper layer it spans: same
 /// padstack, same step, compatible net, overlapping bounds, nearest center.
+/// The result is indexed like `holes`.
 ///
 /// Lands are gridded by their bounds so each hole only meets the handful of
 /// lands around it, not every instance of its padstack on the layer.
-fn link_lands(holes: &mut [Hole], copper_layers: &[CopperLayer]) {
+fn link_lands(holes: &[Hole], copper_layers: &[CopperLayer]) -> Vec<Vec<HoleLand>> {
     const CELL_MM: f64 = 1.0;
     let cell = |value: f64| (value / CELL_MM).floor() as i64;
     let mut candidates: Vec<u32> = Vec::new();
+    let mut hole_lands = vec![Vec::new(); holes.len()];
     for (copper_index, copper) in copper_layers.iter().enumerate() {
         let mut grid: HashMap<(i64, i64), Vec<u32>> = HashMap::new();
         for (land_index, land) in copper.lands.iter().enumerate() {
@@ -510,8 +543,8 @@ fn link_lands(holes: &mut [Hole], copper_layers: &[CopperLayer]) {
                 }
             }
         }
-        for hole in holes.iter_mut() {
-            if !hole.spans_copper(copper_index as u16) {
+        for (hole_index, hole) in holes.iter().enumerate() {
+            if !hole.spans_copper(copper_index) {
                 continue;
             }
             let Some(padstack) = hole.padstack else {
@@ -540,13 +573,14 @@ fn link_lands(holes: &mut [Hole], copper_layers: &[CopperLayer]) {
                         .total_cmp(&right.center.distance_to(hole.center))
                 });
             if let Some((land_index, _)) = best {
-                hole.lands.push(HoleLand {
+                hole_lands[hole_index].push(HoleLand {
                     copper_index: copper_index as u32,
                     land_index,
                 });
             }
         }
     }
+    hole_lands
 }
 
 fn collect_scores(ipc: &Ipc2581, scope: ArtworkScope) -> Result<Vec<Score>> {
@@ -663,8 +697,6 @@ fn layer_ref(name: &str, function: LayerFunction, side: Option<&'static str>) ->
 
 #[cfg(test)]
 mod tests {
-    use pcb_ir::geom::dfm::thin_features;
-
     use super::*;
 
     fn slot_fixture(shape: &str) -> Ipc2581 {
@@ -697,7 +729,7 @@ mod tests {
     }
 
     #[test]
-    fn retains_nominal_oval_slot_width() {
+    fn stated_oval_width_is_exact() {
         let ipc = slot_fixture(
             r#"<Location x="10" y="20"/>
               <Oval width="1.8" height="0.6"/>"#,
@@ -706,14 +738,13 @@ mod tests {
         let (_, slots) = collect_drilled(&ipc, ArtworkScope::Board).unwrap();
 
         assert_eq!(slots.len(), 1);
-        let SlotWidth::Nominal(width) = slots[0].width else {
-            panic!("oval slot must retain its nominal width")
-        };
-        assert!((width - 0.6).abs() < 1e-9);
+        let width = slots[0].width;
+        assert!((width.mm - 0.6).abs() < 1e-9);
+        assert_eq!(width.uncertainty_mm, 0.0, "a stated width is exact");
     }
 
     #[test]
-    fn retains_and_measures_outline_slot_geometry() {
+    fn outline_slot_width_is_measured() {
         let ipc = slot_fixture(
             r#"<Outline>
                 <Polygon>
@@ -730,15 +761,28 @@ mod tests {
         let (_, slots) = collect_drilled(&ipc, ArtworkScope::Board).unwrap();
 
         assert_eq!(slots.len(), 1);
-        let SlotWidth::Geometry(geometry) = &slots[0].width else {
-            panic!("outline slot must retain materialized geometry")
-        };
-        let violations = thin_features(geometry, 0.8);
-        assert_eq!(violations.len(), 1);
+        let width = slots[0].width;
         assert!(
-            (violations[0].width_mm - 0.6).abs() < 1e-8,
+            (width.mm - 0.6).abs() < 1e-8,
             "measured width was {}",
-            violations[0].width_mm
+            width.mm
         );
+        assert!(
+            width.uncertainty_mm > 0.0,
+            "a measured outline carries uncertainty"
+        );
+    }
+
+    #[test]
+    fn stated_width_must_match_the_outline() {
+        let ipc = slot_fixture(
+            r#"<Location x="10" y="20"/>
+              <Oval width="1.8" height="0.6"/>"#,
+        );
+        let oval = collect_drilled(&ipc, ArtworkScope::Board)
+            .unwrap()
+            .1
+            .remove(0);
+        assert!(slot_width(0.9, oval.width).is_err());
     }
 }
