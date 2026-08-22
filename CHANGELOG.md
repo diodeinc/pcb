@@ -165,6 +165,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- Added `pcb route --engine freerouting` to auto-route boards locally via FreeRouting.
 - Added AEC-Q200-qualified Vishay D/CRCW e3 parts as 0402 generic resistor matches through 10 MΩ.
 
 ### Changed

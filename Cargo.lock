@@ -4575,6 +4575,7 @@ name = "pcbc"
 version = "0.4.34"
 dependencies = [
  "anyhow",
+ "base64 0.23.0",
  "chrono",
  "clap",
  "colored",
@@ -4584,6 +4585,7 @@ dependencies = [
  "env_logger",
  "gerberx2",
  "glam 0.33.3",
+ "hex",
  "httpmock",
  "ignore",
  "inquire",
@@ -4595,6 +4597,7 @@ dependencies = [
  "open",
  "pathdiff",
  "pcb-canonical",
+ "pcb-command-runner",
  "pcb-component-gen",
  "pcb-diode-api",
  "pcb-docgen",
@@ -4618,6 +4621,7 @@ dependencies = [
  "semver",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "similar 3.1.1",
  "starlark",
  "starlark_syntax",

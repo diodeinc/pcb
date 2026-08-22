@@ -22,6 +22,7 @@ mod drc;
 mod embed_step;
 mod file_walker;
 mod fmt;
+mod freerouting;
 mod gerber;
 mod import;
 mod info;
@@ -159,7 +160,7 @@ enum Commands {
     /// Search for electronic components
     Search(pcb_diode_api::SearchArgs),
 
-    /// Auto-route PCB using DeepPCB cloud service
+    /// Auto-route a PCB (DeepPCB cloud or local FreeRouting)
     #[command(hide = true)]
     Route(route::RouteArgs),
 
