@@ -2,6 +2,7 @@
 
 use std::fs::File;
 
+use httpmock::prelude::*;
 use pcb_test_utils::assert_snapshot;
 use pcb_test_utils::sandbox::Sandbox;
 use serde_json::Value;
@@ -233,8 +234,47 @@ fn test_publish_board_with_version() {
 
 #[test]
 fn test_publish_board_full() {
+    let server = MockServer::start();
+    let matched_paths = ["C1.C", "C2.C", "LED1.D1.LED", "LED1.R1.R", "R1.R"];
+    let results = matched_paths
+        .iter()
+        .map(|path| {
+            let has_offer = *path != "C1.C";
+            serde_json::json!({
+                "designEntry": { "path": path },
+                "offerIds": if has_offer { vec!["offer-1"] } else { Vec::<&str>::new() },
+                "offerStockClasses": if has_offer {
+                    serde_json::json!({ "offer-1": "PLENTY" })
+                } else {
+                    serde_json::json!({})
+                },
+                "match": "MATCH_EXACT",
+                "selectedOfferId": null
+            })
+        })
+        .collect::<Vec<_>>();
+    let bom_match = server.mock(|when, then| {
+        when.method(POST)
+            .path("/api/boms/match")
+            .query_param("strict", "true");
+        then.status(200).json_body(serde_json::json!({
+            "results": results,
+            "offers": {
+                "offer-1": {
+                    "id": "offer-1",
+                    "geography": "US",
+                    "distributor": "test",
+                    "stockAvailable": 100
+                }
+            }
+        }));
+    });
+
     let mut sb = Sandbox::new();
     sb.cwd("src")
+        .env("DIODE_API_URL", server.base_url())
+        .env("NO_PROXY", "127.0.0.1,localhost")
+        .env("no_proxy", "127.0.0.1,localhost")
         .write("pcb.toml", PCB_TOML)
         .write("boards/pcb.toml", BOARD_PCB_TOML)
         .write("boards/modules/LedModule.zen", LED_MODULE_ZEN)
@@ -259,20 +299,26 @@ fn test_publish_board_full() {
         .expect("layout generation failed");
 
     // Run full publish (with all artifacts, suppress test board DRC issues)
-    sb.run(
-        "pcbc",
-        [
-            "publish",
-            "boards/TestBoard.zen",
-            "-S",
-            "layout",
-            "-S",
-            "warnings",
-            "--no-push",
-        ],
-    )
-    .run()
-    .expect("Failed to run pcb publish command");
+    let output = sb
+        .run(
+            "pcbc",
+            [
+                "publish",
+                "boards/TestBoard.zen",
+                "-S",
+                "layout",
+                "--no-push",
+            ],
+        )
+        .stderr_capture()
+        .stdout_capture()
+        .run()
+        .expect("Failed to run pcb publish command");
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("No supplier offers found for 100nF 0402 (C1)")
+    );
+    bom_match.assert_calls(1);
 
     let staging_dir = find_staging_dir(&sb, "TestBoard");
     assert_snapshot!("publish_full", sb.snapshot_dir(&staging_dir));

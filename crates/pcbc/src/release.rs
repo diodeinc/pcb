@@ -13,6 +13,7 @@ use pcb_zen_core::EvalOutput;
 use pcb_zen_core::resolution::ResolutionResult;
 
 use inquire::Confirm;
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::io::{BufWriter, Write};
 use std::time::Instant;
@@ -228,6 +229,19 @@ fn confirm_continue_on_error(spinner: Option<&Spinner>, allow_errors: bool, mess
     } else {
         confirm()
     }
+}
+
+fn confirm_continue_on_warnings(spinner: &Spinner, has_warnings: bool, message: &str) -> bool {
+    if !has_warnings || !crate::tty::is_interactive() {
+        return true;
+    }
+
+    spinner.suspend(|| {
+        Confirm::new(message)
+            .with_default(true)
+            .prompt()
+            .unwrap_or(false)
+    })
 }
 
 /// Execute a list of tasks with proper error handling and UI feedback
@@ -726,18 +740,12 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
     }
 
     // Handle warnings: prompt interactively, proceed silently in CI
-    if has_warnings && crate::tty::is_interactive() {
-        spinner.suspend(|| {
-            let confirmed = Confirm::new(
-                "Build completed with warnings. Do you want to proceed with the release?",
-            )
-            .with_default(true)
-            .prompt()
-            .unwrap_or(false);
-            if !confirmed {
-                std::process::exit(1);
-            }
-        });
+    if !confirm_continue_on_warnings(
+        spinner,
+        has_warnings,
+        "Build completed with warnings. Do you want to proceed with the release?",
+    ) {
+        std::process::exit(1);
     }
     // In non-interactive mode (CI), warnings have been rendered - proceed with release
 
@@ -760,8 +768,125 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+enum BomOfferIssue {
+    Unknown,
+    NoOffers,
+}
+
+fn bom_part_label(entry: &pcb_sch::bom::BomEntry) -> String {
+    if let Some(mpn) = entry.mpn.as_deref() {
+        return match entry.manufacturer.as_deref() {
+            Some(manufacturer) => format!("{manufacturer} {mpn}"),
+            None => mpn.to_string(),
+        };
+    }
+
+    match (entry.value.as_deref(), entry.package.as_deref()) {
+        (Some(value), Some(package)) => format!("{value} {package}"),
+        (Some(value), None) => value.to_string(),
+        (None, Some(package)) => package.to_string(),
+        (None, None) => "generic BOM part".to_string(),
+    }
+}
+
+fn bom_offer_diagnostics(board_path: &Path, bom: &pcb_sch::bom::Bom) -> pcb_zen_core::Diagnostics {
+    let mut groups = HashMap::<(BomOfferIssue, pcb_sch::bom::BomEntry), BTreeSet<String>>::new();
+
+    for (path, entry) in &bom.entries {
+        let availability = bom
+            .availability
+            .get(path)
+            .expect("validated BOM match must include every requested path");
+        let issue = if availability.no_match {
+            BomOfferIssue::Unknown
+        } else if availability.offers.is_empty() {
+            BomOfferIssue::NoOffers
+        } else {
+            continue;
+        };
+        groups
+            .entry((issue, entry.clone()))
+            .or_default()
+            .insert(bom.designators[path].clone());
+    }
+
+    let mut groups = groups.into_iter().collect::<Vec<_>>();
+    groups.sort_by(
+        |((left_issue, _), left_refs), ((right_issue, _), right_refs)| {
+            (left_refs.first(), left_issue).cmp(&(right_refs.first(), right_issue))
+        },
+    );
+
+    let diagnostics = groups
+        .into_iter()
+        .map(|((issue, entry), designators)| {
+            let designators = designators.into_iter().collect::<Vec<_>>().join(", ");
+            let part = bom_part_label(&entry);
+            let (kind, message) = match issue {
+                BomOfferIssue::Unknown => (
+                    "bom.sourceability.unknown",
+                    format!("Strict BOM matching does not recognize {part} ({designators})"),
+                ),
+                BomOfferIssue::NoOffers => (
+                    "bom.sourceability.no_offers",
+                    format!("No supplier offers found for {part} ({designators})"),
+                ),
+            };
+            pcb_zen_core::Diagnostic::categorized(
+                &board_path.to_string_lossy(),
+                &message,
+                kind,
+                starlark::errors::EvalSeverity::Warning,
+            )
+        })
+        .collect();
+
+    pcb_zen_core::Diagnostics { diagnostics }
+}
+
+fn check_bom_offers(info: &ReleaseInfo, spinner: &Spinner, bom: &pcb_sch::bom::Bom) {
+    let mut sourcing_bom = bom.filter_excluded();
+    sourcing_bom.entries.retain(|_, entry| !entry.dnp);
+    if sourcing_bom.is_empty() {
+        return;
+    }
+
+    spinner.set_message("Checking strict BOM offers");
+    let ctx = pcb_diode_api::WorkspaceContext::from_path(&info.zen_path);
+    let mut diagnostics = match pcb_diode_api::match_bom_with_context(
+        &ctx,
+        None,
+        &mut sourcing_bom,
+        true,
+        pcb_diode_api::BomMatchMode::Online,
+    ) {
+        Ok(()) => bom_offer_diagnostics(&info.zen_path, &sourcing_bom),
+        Err(error) => pcb_zen_core::Diagnostics {
+            diagnostics: vec![pcb_zen_core::Diagnostic::categorized(
+                &info.zen_path.to_string_lossy(),
+                &format!("Could not check strict BOM offers: {error:#}"),
+                "bom.sourceability.check_failed",
+                starlark::errors::EvalSeverity::Warning,
+            )],
+        },
+    };
+
+    spinner.suspend(|| crate::drc::render_diagnostics(&mut diagnostics, &info.suppress));
+    let warning_count = diagnostics.warning_count();
+    if !confirm_continue_on_warnings(
+        spinner,
+        warning_count > 0,
+        &format!(
+            "BOM offer check produced {warning_count} warning(s). Do you want to proceed with the release?"
+        ),
+    ) {
+        std::process::exit(1);
+    }
+}
+
 /// Generate design BOM JSON file (with optional KiCad fallback if layout exists)
-fn generate_design_bom(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
+fn generate_design_bom(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
     // Generate BOM entries from the schematic
     let bom = info.schematic.bom();
 
@@ -775,6 +900,8 @@ fn generate_design_bom(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
         .as_ref()
         .map(|l| info.workspace_root().join(l.layout_dir_rel()));
     let final_bom = generate_bom_with_fallback(bom, layout_path.as_deref())?;
+
+    check_bom_offers(info, spinner, &final_bom);
 
     // Write design BOM as JSON
     let bom_file = bom_dir.join("design_bom.json");
@@ -1358,19 +1485,15 @@ fn run_kicad_drc(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
     }
 
     // Prompt user if there are warnings (interactive mode only)
-    if diagnostics.warning_count() > 0 && crate::tty::is_interactive() {
-        spinner.suspend(|| {
-            let confirmed = Confirm::new(&format!(
-                "DRC completed with {} warning(s). Do you want to proceed with the release?",
-                diagnostics.warning_count()
-            ))
-            .with_default(true)
-            .prompt()
-            .unwrap_or(false);
-            if !confirmed {
-                std::process::exit(1);
-            }
-        });
+    if !confirm_continue_on_warnings(
+        spinner,
+        diagnostics.warning_count() > 0,
+        &format!(
+            "DRC completed with {} warning(s). Do you want to proceed with the release?",
+            diagnostics.warning_count()
+        ),
+    ) {
+        std::process::exit(1);
     }
 
     Ok(())
@@ -1474,6 +1597,83 @@ mod tests {
         assert!(names.iter().all(|name| !should_skip_release_zip_path(name)));
 
         Ok(())
+    }
+
+    #[test]
+    fn bom_offer_warnings_group_parts_and_prefer_unknown() {
+        use pcb_sch::bom::{Availability, Bom, BomEntry, Offer};
+
+        let part = |manufacturer: &str, mpn: &str| BomEntry {
+            mpn: Some(mpn.to_string()),
+            alternatives: Vec::new(),
+            manufacturer: Some(manufacturer.to_string()),
+            package: None,
+            value: None,
+            description: None,
+            generic_data: None,
+            dnp: false,
+            skip_bom: false,
+            matcher: None,
+            properties: Default::default(),
+        };
+        let offer = || Offer {
+            region: "US".to_string(),
+            distributor: "test".to_string(),
+            stock: 1,
+            price: Some(1.0),
+            part_id: None,
+        };
+
+        let resistor = part("Yageo", "RC0603FR-0710KL");
+        let unknown = part("Acme", "UNKNOWN");
+        let sourceable = part("Murata", "GRM188R71C104KA01");
+        let mut bom = Bom::new(
+            HashMap::from([
+                ("root.R1".to_string(), resistor.clone()),
+                ("root.R2".to_string(), resistor),
+                ("root.U1".to_string(), unknown),
+                ("root.C1".to_string(), sourceable),
+            ]),
+            HashMap::from([
+                ("root.R1".to_string(), "R1".to_string()),
+                ("root.R2".to_string(), "R2".to_string()),
+                ("root.U1".to_string(), "U1".to_string()),
+                ("root.C1".to_string(), "C1".to_string()),
+            ]),
+        );
+        bom.availability = HashMap::from([
+            ("root.R1".to_string(), Availability::default()),
+            ("root.R2".to_string(), Availability::default()),
+            (
+                "root.U1".to_string(),
+                Availability {
+                    no_match: true,
+                    offers: vec![offer()],
+                    ..Default::default()
+                },
+            ),
+            (
+                "root.C1".to_string(),
+                Availability {
+                    offers: vec![offer()],
+                    ..Default::default()
+                },
+            ),
+        ]);
+
+        let diagnostics = bom_offer_diagnostics(Path::new("board.zen"), &bom);
+        let warnings = diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.body.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            warnings,
+            vec![
+                "No supplier offers found for Yageo RC0603FR-0710KL (R1, R2)",
+                "Strict BOM matching does not recognize Acme UNKNOWN (U1)",
+            ]
+        );
     }
 
     #[test]
