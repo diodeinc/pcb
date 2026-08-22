@@ -18,11 +18,10 @@ use pcb_ir::geom::Point;
 use crate::panel::{Outline, Panel};
 use crate::pattern::{Land, Role};
 use crate::plan::Plan;
+use crate::pogo::PogoTemplate;
 
 /// Mate land pad diameter.
 const LAND_DIA_MM: f64 = 1.0;
-/// Pogo land pad diameter, matching the Ø1 mm test points it presses on.
-const POGO_DIA_MM: f64 = 1.0;
 
 /// Build the `.kicad_pcb` source.
 pub fn board(panel: &Panel, lands: &[Land], plan: Option<&Plan>) -> String {
@@ -86,10 +85,15 @@ pub fn board(panel: &Panel, lands: &[Land], plan: Option<&Plan>) -> String {
             .push(land_footprint(&mut uuids, index, land, net));
     }
     if let Some(plan) = plan {
+        let template = PogoTemplate::load().expect("vendored pogo template is valid");
         for (ordinal, (contact_index, net)) in contact_nets.iter().enumerate() {
             let contact = &plan.contacts[*contact_index];
-            doc.footprints
-                .push(pogo_footprint(&mut uuids, ordinal, contact.xy, net.clone()));
+            doc.raw_footprints.push(template.stamp(
+                contact.xy,
+                &format!("P{}", ordinal + 1),
+                net.clone(),
+                &mut uuids,
+            ));
         }
     }
 
@@ -205,40 +209,6 @@ fn fid_footprint(uuids: &mut UuidGen, index: usize, at: [f64; 2], top: bool) -> 
             net: None,
             solder_mask_margin: Some(0.5),
             clearance: Some(0.6),
-            uuid: uuids.next_uuid(),
-        }],
-    }
-}
-
-/// A pogo-pin land on the top face, at a tested contact's position.
-fn pogo_footprint(
-    uuids: &mut UuidGen,
-    index: usize,
-    at: [f64; 2],
-    net: (u32, String),
-) -> Footprint {
-    Footprint {
-        lib_id: "Interposer:Pogo_Pad_D1.0mm".into(),
-        layer: "F.Cu".into(),
-        uuid: uuids.next_uuid(),
-        at: At::xy(at[0], at[1]),
-        properties: hidden_properties(uuids, &format!("P{}", index + 1), true),
-        attrs: FootprintAttrs {
-            mount: Some(Mount::Smd),
-            exclude_from_pos_files: false,
-            exclude_from_bom: false,
-        },
-        pads: vec![Pad {
-            number: "1".into(),
-            kind: PadKind::Smd,
-            shape: PadShape::Circle,
-            at: At::default(),
-            size: (POGO_DIA_MM, POGO_DIA_MM),
-            drill: None,
-            layers: vec!["F.Cu".into(), "F.Mask".into()],
-            net: Some(net),
-            solder_mask_margin: None,
-            clearance: None,
             uuid: uuids.next_uuid(),
         }],
     }
