@@ -391,21 +391,19 @@ enum RunOutcome {
 struct FreeroutingServer {
     child: Arc<Mutex<Child>>,
     base_url: String,
-    log_path: PathBuf,
+    log_file: Option<tempfile::NamedTempFile>,
 }
 
 impl FreeroutingServer {
     fn spawn(java_path: &Path, jar_path: &Path) -> Result<Self> {
         let port = pick_free_port()?;
 
-        let (log_file, log_path) = tempfile::Builder::new()
+        let log_file = tempfile::Builder::new()
             .prefix("pcb-freerouting-")
             .suffix(".log")
             .tempfile()
-            .context("Failed to create FreeRouting log file")?
-            .keep()
-            .context("Failed to persist FreeRouting log file")?;
-        let (log_stdout, log_stderr) = pcb_command_runner::log_file_stdio(&log_file)?;
+            .context("Failed to create FreeRouting log file")?;
+        let (log_stdout, log_stderr) = pcb_command_runner::log_file_stdio(log_file.as_file())?;
 
         let mut command = Command::new(java_path);
         command
@@ -430,7 +428,7 @@ impl FreeroutingServer {
         Ok(Self {
             child,
             base_url: format!("http://127.0.0.1:{port}"),
-            log_path,
+            log_file: Some(log_file),
         })
     }
 
@@ -438,10 +436,19 @@ impl FreeroutingServer {
         Ok(self.child.lock().unwrap().try_wait()?.is_none())
     }
 
+    fn keep_log(&mut self) -> PathBuf {
+        self.log_file
+            .take()
+            .and_then(|f| f.keep().ok())
+            .map(|(_, path)| path)
+            .unwrap_or_default()
+    }
+
     fn log_summary(&mut self) -> String {
+        let log_path = self.keep_log();
         match self.child.lock().unwrap().try_wait().ok().flatten() {
-            Some(status) => format!("log: {} ({status})", self.log_path.display()),
-            None => format!("log: {}", self.log_path.display()),
+            Some(status) => format!("log: {} ({status})", log_path.display()),
+            None => format!("log: {}", log_path.display()),
         }
     }
 }
@@ -571,10 +578,8 @@ fn run_freerouting(
         eprintln!(
             "  {} FreeRouting terminated unexpectedly; see log for details: {}",
             "!".yellow(),
-            server.log_path.display()
+            server.keep_log().display()
         );
-    } else {
-        let _ = std::fs::remove_file(&server.log_path);
     }
 
     Ok(RunResult {
@@ -665,7 +670,8 @@ fn poll_job(
                     }
                     JobState::Invalid => {
                         anyhow::bail!(
-                            "FreeRouting rejected the job input (state: INVALID) — the exported DSN may be malformed"
+                            "FreeRouting rejected the job input (state: INVALID) — the exported DSN may be malformed\n{}",
+                            server.log_summary()
                         );
                     }
                     JobState::Queued
