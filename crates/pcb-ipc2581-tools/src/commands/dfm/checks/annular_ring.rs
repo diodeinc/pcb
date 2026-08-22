@@ -20,10 +20,11 @@
 //! ```
 //!
 //! equivalently `D(p, r + A_min) ⊆ M` — the indexed form of a morphological
-//! erosion test. For `p ∉ M` the artwork deliberately places no copper at
-//! the hole — a plane anti-pad, a thermal-relief clearance, a removed
-//! unused land — so there is no ring to measure and the layer is not
-//! checked. One finding per hole reports the layer minimizing `a`.
+//! erosion test. For `p ∉ M`, an intermediate layer with no matching land is
+//! an anti-pad or removed unused land and has no ring to measure. A terminal
+//! layer, or any layer carrying a matching source land, is required to retain
+//! copper at `p`; absence there is an authoritative zero-enclosure failure.
+//! One finding per hole reports the layer minimizing `a`.
 //!
 //! Computation: `p ∈ M` by a batched winding-number sweep over all hole
 //! centers; `d(p, ∂M)` by a nearest-boundary query against a uniform grid
@@ -50,8 +51,15 @@ struct AnnularViolation<'a> {
     copper_index: usize,
     land: Option<&'a Land>,
     enclosure_mm: f64,
-    cutout_boundary: Point,
-    material_boundary: Point,
+    geometry: AnnularViolationGeometry,
+}
+
+enum AnnularViolationGeometry {
+    Boundary {
+        cutout_boundary: Point,
+        material_boundary: Point,
+    },
+    MissingCopper,
 }
 
 pub(super) fn evaluate(rule: &Rule, class: HoleClass, ctx: &Context) -> (usize, Vec<Finding>) {
@@ -78,10 +86,32 @@ pub(super) fn evaluate(rule: &Rule, class: HoleClass, ctx: &Context) -> (usize, 
                 if !hole.spans_copper(copper_index as u16) {
                     continue;
                 }
+                let land = hole
+                    .land_on(copper_index)
+                    .map(|link| &copper.lands[link.land_index as usize]);
                 if !contains[copper_index][hole_index] {
-                    // No copper at the hole here — a plane anti-pad, a
-                    // thermal-relief clearance, or a removed unused land.
-                    // There is no ring to measure.
+                    // Intermediate layers without a source land are plane
+                    // anti-pads or removed unused lands. A terminal layer or
+                    // intended land with no composed copper is not allowed to
+                    // disappear from an annular-ring check.
+                    if land.is_none()
+                        && !hole.terminates_on(copper_index, design.copper_layers.len())
+                    {
+                        continue;
+                    }
+                    checked += 1;
+                    let violation = AnnularViolation {
+                        copper_index,
+                        land,
+                        enclosure_mm: 0.0,
+                        geometry: AnnularViolationGeometry::MissingCopper,
+                    };
+                    if worst
+                        .as_ref()
+                        .is_none_or(|current| violation.enclosure_mm < current.enclosure_mm)
+                    {
+                        worst = Some(violation);
+                    }
                     continue;
                 }
                 checked += 1;
@@ -90,12 +120,12 @@ pub(super) fn evaluate(rule: &Rule, class: HoleClass, ctx: &Context) -> (usize, 
                     .filter(|measurement| measurement.enclosure_mm + tolerance < limit)
                     .map(|measurement| AnnularViolation {
                         copper_index,
-                        land: hole
-                            .land_on(copper_index)
-                            .map(|link| &copper.lands[link.land_index as usize]),
+                        land,
                         enclosure_mm: measurement.enclosure_mm,
-                        cutout_boundary: measurement.cutout_boundary,
-                        material_boundary: measurement.material_boundary,
+                        geometry: AnnularViolationGeometry::Boundary {
+                            cutout_boundary: measurement.cutout_boundary,
+                            material_boundary: measurement.material_boundary,
+                        },
                     });
                 if let Some(violation) = violation
                     && worst
@@ -131,23 +161,36 @@ fn annular_finding(
     let limit = rule.limit.millimeters();
     let copper = &ctx.design.copper_layers[violation.copper_index];
     let required_radius = hole.diameter_mm / 2.0 + limit;
-    let witnesses = vec![
-        Witness::new("hole_boundary", violation.cutout_boundary),
-        Witness::new("copper_boundary", violation.material_boundary),
-    ];
-    let location_point = violation
-        .cutout_boundary
-        .midpoint(violation.material_boundary);
-    let detail = if violation.enclosure_mm < 0.0 {
-        format!(
-            "the drilled hole breaches the copper image by {:.6} mm",
-            -violation.enclosure_mm
-        )
-    } else {
-        format!(
-            "only {:.6} mm of copper remains outside the drilled hole",
-            violation.enclosure_mm
-        )
+    let (location_point, witnesses, detail) = match violation.geometry {
+        AnnularViolationGeometry::Boundary {
+            cutout_boundary,
+            material_boundary,
+        } => {
+            let detail = if violation.enclosure_mm < 0.0 {
+                format!(
+                    "the drilled hole breaches the copper image by {:.6} mm",
+                    -violation.enclosure_mm
+                )
+            } else {
+                format!(
+                    "only {:.6} mm of copper remains outside the drilled hole",
+                    violation.enclosure_mm
+                )
+            };
+            (
+                cutout_boundary.midpoint(material_boundary),
+                vec![
+                    Witness::new("hole_boundary", cutout_boundary),
+                    Witness::new("copper_boundary", material_boundary),
+                ],
+                detail,
+            )
+        }
+        AnnularViolationGeometry::MissingCopper => (
+            hole.center,
+            Vec::new(),
+            "no composed copper remains at the required hole center".to_owned(),
+        ),
     };
     Finding {
         title: format!("{} annular ring is below minimum", class.label()),
@@ -222,4 +265,155 @@ fn annular_ring_evidence(
         evidence.push(Evidence::bounds("source_padstack_land_bounds", land.bbox));
     }
     evidence
+}
+
+#[cfg(test)]
+mod tests {
+    use pcb_ir::dialects::ipc::ArtworkScope;
+    use pcb_ir::geom::{ContourSet, FillRule, Point, shapes, tol};
+
+    use crate::commands::dfm::design::{Design, Hole};
+    use crate::commands::dfm::pdk::Pdk;
+    use crate::commands::dfm::report::LayerRef;
+    use crate::commands::dfm::rules;
+    use crate::ipc2581::Ipc2581;
+
+    use super::*;
+
+    fn rule() -> Rule {
+        let pdk = Pdk::parse(
+            r#"schema_version = 1
+
+[pdk]
+id = "test"
+name = "Test"
+revision = "1"
+
+[capabilities.copper]
+minimum_pth_annular_ring = "0.2 mm"
+"#,
+        )
+        .unwrap();
+        rules::lower(&pdk).unwrap().remove(0)
+    }
+
+    fn ipc() -> Ipc2581 {
+        Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Step name="board" type="BOARD"/>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap()
+    }
+
+    fn copper_layer(name: &str, diameter_mm: Option<f64>) -> CopperLayer {
+        let image = diameter_mm.map_or_else(
+            || ContourSet::empty(tol::REGION_MM),
+            |diameter| {
+                ContourSet::from_contours(
+                    &[shapes::circle(diameter).unwrap()],
+                    FillRule::NonZero,
+                    tol::REGION_MM,
+                )
+            },
+        );
+        CopperLayer {
+            layer: LayerRef {
+                name: name.to_owned(),
+                function: "CONDUCTOR".to_owned(),
+                side: None,
+            },
+            image,
+            lands: Vec::new(),
+        }
+    }
+
+    fn through_hole_design(layer_diameters: &[Option<f64>]) -> Design {
+        let center = Point::ZERO;
+        Design {
+            scope: ArtworkScope::Board,
+            holes: vec![Hole {
+                class: HoleClass::Pth,
+                center,
+                diameter_mm: 1.0,
+                bbox: BBox::from_point(center).expand(0.5),
+                layer: LayerRef {
+                    name: "DRILL".to_owned(),
+                    function: "DRILL".to_owned(),
+                    side: None,
+                },
+                copper_span: None,
+                step: None,
+                padstack: None,
+                net: None,
+                lands: Vec::new(),
+                source_set_index: 0,
+                source_feature_index: 0,
+            }],
+            slots: Vec::new(),
+            copper_layers: layer_diameters
+                .iter()
+                .enumerate()
+                .map(|(index, diameter)| copper_layer(&format!("L{index}"), *diameter))
+                .collect(),
+            mask_layers: Vec::new(),
+            scores: Vec::new(),
+            board_outlines: Vec::new(),
+            board_arrays: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn missing_terminal_copper_is_a_zero_enclosure_violation() {
+        let rule = rule();
+        let ipc = ipc();
+        let design = through_hole_design(&[None, None, Some(2.0)]);
+        let ctx = Context::new(&design, &ipc, std::slice::from_ref(&rule));
+
+        let (checked, findings) = evaluate(&rule, HoleClass::Pth, &ctx);
+
+        assert_eq!(checked, 2);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].measurement.actual_mm, 0.0);
+        assert!(findings[0].message.contains("no composed copper remains"));
+    }
+
+    #[test]
+    fn intermediate_antipad_without_a_source_land_is_not_an_annular_subject() {
+        let rule = rule();
+        let ipc = ipc();
+        let design = through_hole_design(&[Some(2.0), None, Some(2.0)]);
+        let ctx = Context::new(&design, &ipc, std::slice::from_ref(&rule));
+
+        let (checked, findings) = evaluate(&rule, HoleClass::Pth, &ctx);
+
+        assert_eq!(checked, 2);
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn known_blind_span_requires_copper_at_its_own_terminal_layers() {
+        let rule = rule();
+        let ipc = ipc();
+        let mut design = through_hole_design(&[None, None, Some(2.0), None]);
+        design.holes[0].copper_span = Some((1, 2));
+        let ctx = Context::new(&design, &ipc, std::slice::from_ref(&rule));
+
+        let (checked, findings) = evaluate(&rule, HoleClass::Pth, &ctx);
+
+        assert_eq!(checked, 2);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].layers[1].name, "L1");
+        assert_eq!(findings[0].measurement.actual_mm, 0.0);
+    }
 }

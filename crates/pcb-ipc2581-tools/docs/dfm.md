@@ -61,22 +61,62 @@ table with a `preferred` tier the fab would rather see met:
 Rule ids are the PDK capability paths, so every reported limit can be traced
 to its PDK line verbatim.
 
+## Evaluation model
+
+Each rule has one verdict-producing evaluator. The evaluator uses the
+highest-level representation that still states the measured quantity exactly,
+and lowers only when fabrication composition can change that quantity. A
+high-level pass is never allowed to suppress a later authoritative failure.
+
+| Rules | Authoritative representation | Acceleration only |
+| --- | --- | --- |
+| Hole diameter | Materialized IPC drill primitive and plating class | None |
+| Nominal slot width | IPC slot primitive width | None |
+| Outline slot width | Materialized filled route outline, then opposing-boundary distance | Morphological opening localizes candidates |
+| Hole-to-hole clearance | Materialized drill circles and overlapping drill spans | Sorted bounds prune pairs already proven clear |
+| Annular ring | Drill circle and final composed copper image on each applicable layer | Batched containment and an indexed copper boundary |
+| Copper width and clearance | Final composed copper image | Guarded opening or closing localizes candidates |
+| Soldermask web | Final composed mask-opening image | Guarded closing localizes candidates |
+| V-score and board-edge clearance | Materialized line/profile geometry against final composed copper | Indexed copper boundaries |
+| Board-array spacing | Materialized filled array profiles | Bounding boxes prune pairs already proven clear |
+
+Morphological opening and closing are deliberately candidate stages for width
+and gap checks. A candidate becomes a finding only when the distance between
+two nonincident, opposing source-boundary branches is below the limit. The
+comparison includes the flattening uncertainty of both boundaries, so curve
+tessellation by itself cannot manufacture a violation. Bounds and spatial
+indices have the same one-way contract: they can prove work unnecessary, but
+they cannot emit a finding without the exact geometric measurement.
+
+`--layout-target board` extracts the canonical board step. `board-array`
+materializes the root layout and every nested repeat, so the same evaluators
+operate on a board array or on a fabrication panel without a second DFM code
+path. Instance transforms therefore affect only extracted coordinates and
+subject multiplicity. The board-array-spacing rule is intentionally narrower:
+it compares direct sibling array instances of a fabrication panel and skips
+when fewer than two exist.
+
 ## Rule semantics
 
 - Hole diameter rules measure every drilled hole of the rule's class;
-  `minimum_slot_width` measures every routed slot with a stated width.
+  `minimum_slot_width` measures every routed slot. It uses a stated nominal
+  width when present and the filled route outline otherwise. A class-specific
+  drill rule fails extraction rather than silently discarding a hole whose
+  plating class is unknown.
 - Hole-to-hole clearance measures edge-to-edge distance between hole pairs
   whose drill spans overlap; stacked blind and buried vias on disjoint spans
   do not interact.
 - Annular ring measures the radial copper enclosure of each via or PTH hole
-  on every spanned copper layer where the hole has a matching land or its
-  center lies in copper. Layers where no copper reaches the hole — a plane
-  anti-pad, a removed unused land — have no ring to measure. One finding per
-  hole reports the worst layer.
-- `minimum_feature_width` and `minimum_copper_clearance` are morphological:
-  copper narrower than the limit, and gaps in copper narrower than the
-  limit, are reported piece by piece per layer. `soldermask.minimum_web`
-  reports mask webs — gaps between mask openings — narrower than the limit.
+  on every applicable layer. A genuine intermediate plane anti-pad with no
+  matching source land has no ring to measure. Both terminal layers, and any
+  layer with a matching source land, must retain copper at the hole center;
+  missing copper there is a zero-enclosure failure. One finding per hole
+  reports the worst layer.
+- `minimum_feature_width` and `minimum_copper_clearance` report narrow copper
+  and narrow gaps piece by piece per layer after final polarity composition.
+  `soldermask.minimum_web` reports mask webs — gaps between mask openings —
+  narrower than the limit. Morphology finds candidates; opposing-boundary
+  distance decides each finding.
 - V-score and board-edge clearance measure the shortest distance from the
   centerlines or profile outlines (cutouts included) to each layer's
   composed copper image.

@@ -15,12 +15,13 @@
 //! Dually, the closing residue `(M • B_ρ) \ M` is exactly the complement
 //! material narrower than `L` — the sub-minimum gaps, notches, and webs.
 //!
-//! Each connected residue component is one finding, with the
-//! isoperimetric width estimate `w = 2·area / perimeter` (exact for long
-//! ribbons) compared against `L`. Residue at the arc-flattening scale is
-//! dropped as noise, and so is one-sided residue — the bite an isolated
-//! corner or shallow arc sheds, whose perimeter mostly leaves the source
-//! boundary — since a violation is walled by material on both sides.
+//! Morphology is the conservative broad phase: it runs with an offset guard
+//! large enough to retain candidates across curve/offset tessellation. A
+//! candidate becomes a finding only after exact segment distance between its
+//! two opposing source-boundary branches is below `L`. One-sided opening or
+//! closing residue — the bite an isolated corner sheds — has no opposing
+//! branches and is discarded. Thus the composed image supplies the
+//! authoritative verdict while morphology only localizes the work.
 //!
 //! For copper, `Residue::Feature` flags copper that will not survive
 //! etching and `Residue::Gap` flags spacing that will not resolve. A
@@ -31,10 +32,12 @@ use pcb_ir::geom::ContourSet;
 use pcb_ir::geom::dfm::{ThinPiece, thin_features, thin_gaps};
 use rayon::prelude::*;
 
-use crate::commands::dfm::report::{Evidence, Finding, LayerRef, Location, Measurement, Subject};
+use crate::commands::dfm::report::{
+    Evidence, Finding, LayerRef, Location, Measurement, Subject, Witness,
+};
 use crate::commands::dfm::rules::{ImageSel, Rule};
 
-use super::{Context, blank_finding};
+use super::{Context, blank_finding, violates_minimum};
 
 /// Which morphological residue the rule reports.
 #[derive(Clone, Copy)]
@@ -96,6 +99,7 @@ pub(super) fn evaluate(
             };
             pieces
                 .into_iter()
+                .filter(|piece| violates_minimum(piece.width_mm, limit))
                 .map(|piece| thin_finding(rule, layer, &piece, title, noun, offender_kind))
                 .collect::<Vec<_>>()
         })
@@ -125,7 +129,10 @@ fn thin_finding(
         location: Location {
             point: Some(piece.bbox.center().into()),
             bounding_box: Some(piece.bbox.into()),
-            witnesses: Vec::new(),
+            witnesses: vec![
+                Witness::new("first_boundary", piece.first),
+                Witness::new("second_boundary", piece.second),
+            ],
         },
         layers: vec![layer.clone()],
         subjects: vec![Subject {

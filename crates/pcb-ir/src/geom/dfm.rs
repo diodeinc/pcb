@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use crate::geom::bbox::BBox;
 use crate::geom::dist;
 use crate::geom::point::Point;
-use crate::geom::region::{ContourSet, Ring, ring_edges, ring_signed_area, rings_bbox};
+use crate::geom::region::{ContourSet, Ring, TwoSidedResidualComponent, ring_edges};
 use crate::geom::tol;
 
 /// The shortest separation between two pieces of geometry, with the points
@@ -220,6 +220,20 @@ pub fn disk_clearance(
     }
 }
 
+/// Euclidean separation of two axis-aligned bounds. Because each enclosed
+/// region is a subset of its bounds, this is a conservative lower bound on
+/// region-to-region clearance: a value meeting a minimum proves the exact
+/// regions meet it too.
+pub fn bbox_clearance_lower_bound(first: BBox, second: BBox) -> f64 {
+    let x = (second.min.x - first.max.x)
+        .max(first.min.x - second.max.x)
+        .max(0.0);
+    let y = (second.min.y - first.max.y)
+        .max(first.min.y - second.max.y)
+        .max(0.0);
+    x.hypot(y)
+}
+
 /// Shortest boundary-to-boundary clearance between two filled regions.
 ///
 /// Overlapping, contained, or touching regions have zero clearance. `None`
@@ -288,21 +302,35 @@ fn closest_ring_edges(first: &[Ring], second: &[Ring]) -> Option<ClearanceMeasur
 pub struct ThinPiece {
     pub bbox: BBox,
     pub area_mm2: f64,
-    /// Estimated width (2·area/perimeter — exact for long ribbons).
+    /// Exact separation of the two opposing source-boundary branches in the
+    /// flattened polygon representation.
     pub width_mm: f64,
-    /// Estimated length (half the perimeter — exact for long ribbons).
+    /// Approximate longitudinal extent (half the residue perimeter).
     pub length_mm: f64,
+    pub first: Point,
+    pub second: Point,
 }
+
+/// Opening and closing use tessellated round offsets. Widening the candidate
+/// threshold by the full two-offset plus source-flattening error makes the
+/// morphological stage conservative; exact source-boundary distance below
+/// then decides the verdict and discards the extra candidates.
+const MORPHOLOGY_CANDIDATE_GUARD_MM: f64 = 2.0 * tol::STROKE_OUTLINE_MM + tol::FLATTEN_MM;
+
+/// Two flattened source boundaries determine a local width. Each may lie up
+/// to one chord tolerance inside its source curve, so a result within this
+/// band of the limit is geometrically indeterminate rather than a finding.
+const TWO_BOUNDARY_UNCERTAINTY_MM: f64 = 2.0 * tol::FLATTEN_MM + tol::EPSILON_MM;
 
 /// Filled material narrower than `min_width_mm`. Only two-sided residue is
 /// reported, so the bite an isolated convex arc sheds under the opening is
 /// not a thin feature.
 pub fn thin_features(region: &ContourSet, min_width_mm: f64) -> Vec<ThinPiece> {
-    let boundary = RegionBoundaryIndex::new(region, min_width_mm);
     pieces(
-        &region.difference(&region.disk_open(min_width_mm / 2.0)),
+        region.disk_feature_violation_components(
+            (min_width_mm + MORPHOLOGY_CANDIDATE_GUARD_MM) / 2.0,
+        ),
         min_width_mm,
-        &boundary,
     )
 }
 
@@ -310,80 +338,40 @@ pub fn thin_features(region: &ContourSet, min_width_mm: f64) -> Vec<ThinPiece> {
 /// notches. Only two-sided residue is reported, so the bite an isolated
 /// concave corner sheds under the closing is not clearance.
 pub fn thin_gaps(region: &ContourSet, min_gap_mm: f64) -> Vec<ThinPiece> {
-    let boundary = RegionBoundaryIndex::new(region, min_gap_mm);
     pieces(
-        &region.disk_close(min_gap_mm / 2.0).difference(region),
+        region.disk_gap_violation_components((min_gap_mm + MORPHOLOGY_CANDIDATE_GUARD_MM) / 2.0),
         min_gap_mm,
-        &boundary,
     )
 }
 
-/// A violation is bounded by source material along both long sides, so its
-/// perimeter lies on the source boundary almost everywhere; a single-corner
-/// or single-arc bite touches it on at most one wall and two legs.
-const TWO_SIDED_CONTACT_FRACTION: f64 = 0.75;
-
-/// Extract reportable pieces from a residue region, dropping numeric noise —
-/// flattening-scale ribbons along long edges — and one-sided pieces whose
-/// perimeter mostly leaves the source boundary.
-fn pieces(
-    residue: &ContourSet,
-    min_width_mm: f64,
-    source_boundary: &RegionBoundaryIndex,
-) -> Vec<ThinPiece> {
-    let noise_width = 2.0 * tol::FLATTEN_MM;
-    let min_length = 2.0 * min_width_mm;
-    let min_area = 0.25 * min_width_mm * min_width_mm;
-
-    let mut pieces: Vec<ThinPiece> = residue
-        .rings
-        .iter()
-        .filter_map(|ring| {
-            let area = ring_signed_area(ring);
-            if area <= 0.0 {
-                return None; // holes of residue pieces
-            }
-            let perimeter: f64 = ring_edges(ring)
+/// Convert the conservative opening/closing candidates into authoritative
+/// measurements. A candidate is reportable only when the exact distance
+/// between its opposing source-boundary branches violates the requested
+/// minimum; this is what prevents offset tessellation from creating findings.
+fn pieces(components: Vec<TwoSidedResidualComponent>, minimum_mm: f64) -> Vec<ThinPiece> {
+    let mut pieces = components
+        .into_iter()
+        .filter(|component| component.distance_mm + TWO_BOUNDARY_UNCERTAINTY_MM < minimum_mm)
+        .filter_map(|component| {
+            let perimeter = component
+                .region
+                .rings
+                .iter()
+                .flat_map(ring_edges)
                 .map(|(start, end)| start.distance_to(end))
-                .sum();
-            if perimeter <= 0.0 {
-                return None;
-            }
-            let piece = ThinPiece {
-                bbox: rings_bbox(std::slice::from_ref(ring)),
-                area_mm2: area,
-                width_mm: 2.0 * area / perimeter,
+                .sum::<f64>();
+            (perimeter > 0.0).then(|| ThinPiece {
+                bbox: component.region.bbox,
+                area_mm2: component.region.area(),
+                width_mm: component.distance_mm,
                 length_mm: perimeter / 2.0,
-            };
-            let long_side = piece.bbox.width().max(piece.bbox.height());
-            (piece.width_mm >= noise_width
-                && long_side >= min_length
-                && area >= min_area
-                && boundary_contact_fraction(source_boundary, ring) >= TWO_SIDED_CONTACT_FRACTION)
-                .then_some(piece)
+                first: component.first,
+                second: component.second,
+            })
         })
-        .collect();
+        .collect::<Vec<_>>();
     pieces.sort_by(|a, b| b.area_mm2.total_cmp(&a.area_mm2));
     pieces
-}
-
-/// The fraction of the ring's perimeter that lies on the source boundary,
-/// judged edge midpoints against the indexed boundary at flattening scale.
-fn boundary_contact_fraction(source_boundary: &RegionBoundaryIndex, ring: &Ring) -> f64 {
-    let contact_eps = 2.0 * tol::FLATTEN_MM;
-    let mut perimeter = 0.0;
-    let mut contact = 0.0;
-    for (start, end) in ring_edges(ring) {
-        let length = start.distance_to(end);
-        perimeter += length;
-        if source_boundary
-            .nearest_within(start.midpoint(end), contact_eps)
-            .is_some()
-        {
-            contact += length;
-        }
-    }
-    contact / perimeter
 }
 
 #[cfg(test)]
@@ -430,6 +418,36 @@ mod tests {
             .segment_nearest_within(Point::new(-1.0, 1.0), Point::new(3.0, 1.0), 0.5)
             .unwrap();
         assert_eq!(crossing.distance_mm, 0.0);
+    }
+
+    #[test]
+    fn region_clearance_handles_diagonal_separation_crossing_and_containment() {
+        let origin = rect_region(0.0, 0.0, 1.0, 1.0);
+        let diagonal = rect_region(2.0, 3.0, 3.0, 4.0);
+        let clearance = region_clearance(&origin, &diagonal).unwrap();
+        assert!((clearance.distance_mm - 5.0_f64.sqrt()).abs() < 1e-9);
+        assert!(
+            (bbox_clearance_lower_bound(origin.bbox, diagonal.bbox) - 5.0_f64.sqrt()).abs() < 1e-9
+        );
+
+        let horizontal = rect_region(-2.0, -0.25, 2.0, 0.25);
+        let vertical = rect_region(-0.25, -2.0, 0.25, 2.0);
+        assert_eq!(
+            region_clearance(&horizontal, &vertical)
+                .unwrap()
+                .distance_mm,
+            0.0,
+            "crossing regions overlap even when neither contains the other"
+        );
+
+        let container = rect_region(-2.0, -2.0, 2.0, 2.0);
+        let contained = rect_region(-0.5, -0.5, 0.5, 0.5);
+        assert_eq!(
+            region_clearance(&container, &contained)
+                .unwrap()
+                .distance_mm,
+            0.0
+        );
     }
 
     #[test]
@@ -577,5 +595,72 @@ mod tests {
             gaps[0].width_mm
         );
         assert!(thin_features(&region, 0.1).is_empty());
+    }
+
+    #[test]
+    fn small_islands_are_not_filtered_out_of_feature_width() {
+        let island = rect_region(0.0, 0.0, 0.05, 0.05);
+
+        let findings = thin_features(&island, 0.1);
+
+        assert_eq!(findings.len(), 1);
+        assert!((findings[0].width_mm - 0.05).abs() < 1e-9);
+        assert!((findings[0].first.distance_to(findings[0].second) - 0.05).abs() < 1e-9);
+    }
+
+    #[test]
+    fn short_gaps_are_not_filtered_out_of_clearance() {
+        let left = rect_region(0.0, 0.0, 0.05, 0.05);
+        let right = rect_region(0.11, 0.0, 0.16, 0.05);
+        let region = left.union(&right);
+
+        let findings = thin_gaps(&region, 0.1);
+
+        assert_eq!(findings.len(), 1);
+        assert!((findings[0].width_mm - 0.06).abs() < 1e-9);
+    }
+
+    #[test]
+    fn exact_minimums_are_not_morphology_false_positives() {
+        let feature = rect_region(0.0, 0.0, 1.0, 0.1);
+        let disk = ContourSet::from_filled_contours(
+            &[shapes::circle(0.1).expect("valid circle")],
+            tol::REGION_MM,
+        );
+        let undersized_disk = ContourSet::from_filled_contours(
+            &[shapes::circle(0.08).expect("valid circle")],
+            tol::REGION_MM,
+        );
+        let left = rect_region(2.0, 0.0, 3.0, 1.0);
+        let right = rect_region(3.1, 0.0, 4.1, 1.0);
+
+        assert!(thin_features(&feature, 0.1).is_empty());
+        let disk_findings = thin_features(&disk, 0.1);
+        assert!(disk_findings.is_empty(), "findings: {disk_findings:?}");
+        assert_eq!(thin_features(&undersized_disk, 0.1).len(), 1);
+        assert!(thin_gaps(&left.union(&right), 0.1).is_empty());
+    }
+
+    #[test]
+    fn widths_are_invariant_under_quarter_turns() {
+        let left = rect_region(0.0, 0.0, 4.0, 2.0);
+        let right = rect_region(4.06, 0.0, 8.0, 2.0);
+        let region = left.union(&right);
+        let rotated = ContourSet::new(
+            region
+                .rings
+                .iter()
+                .map(|ring| ring.iter().map(|[x, y]| [-y, *x]).collect())
+                .collect(),
+            FillRule::NonZero,
+            tol::REGION_MM,
+        );
+
+        let original = thin_gaps(&region, 0.1);
+        let turned = thin_gaps(&rotated, 0.1);
+
+        assert_eq!(original.len(), 1);
+        assert_eq!(turned.len(), 1);
+        assert!((original[0].width_mm - turned[0].width_mm).abs() < 1e-9);
     }
 }

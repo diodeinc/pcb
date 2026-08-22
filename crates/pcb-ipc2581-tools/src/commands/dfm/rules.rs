@@ -59,10 +59,15 @@ impl RuleKind {
     pub fn needs(self) -> Needs {
         let mut needs = Needs::default();
         match self {
-            Self::HoleDiameter(_) | Self::HolePairClearance => needs.holes = true,
+            Self::HoleDiameter(_) => {
+                needs.holes = true;
+                needs.classified_holes = true;
+            }
+            Self::HolePairClearance => needs.holes = true,
             Self::SlotWidth => needs.slots = true,
             Self::AnnularRing(_) => {
                 needs.holes = true;
+                needs.classified_holes = true;
                 needs.copper = true;
             }
             Self::LineworkToCopperClearance(Linework::VScore) => {
@@ -125,13 +130,13 @@ impl RuleKind {
     pub fn method(self) -> &'static str {
         match self {
             Self::HoleDiameter(_) => "ipc_hole_diameter",
-            Self::SlotWidth => "ipc_slot_width",
+            Self::SlotWidth => "ipc_nominal_or_outline_boundary_distance",
             Self::HolePairClearance => "circle_edge_distance",
             Self::AnnularRing(_) => "maximal_centered_disk_minus_hole_radius",
             Self::LineworkToCopperClearance(_) => "segment_to_filled_region_boundary",
             Self::BoardArrayPairClearance => "filled_profile_boundary_distance",
-            Self::ThinFeature(_) => "morphological_opening_residue",
-            Self::ThinGap(_) => "morphological_closing_residue",
+            Self::ThinFeature(_) => "opening_candidate_then_boundary_distance",
+            Self::ThinGap(_) => "closing_candidate_then_boundary_distance",
         }
     }
 }
@@ -141,6 +146,9 @@ impl RuleKind {
 #[derive(Debug, Clone, Copy, Default)]
 pub(super) struct Needs {
     pub holes: bool,
+    /// Class-specific rules cannot certify a hole whose plating intent is
+    /// absent or unknown; extraction fails closed when this is set.
+    pub classified_holes: bool,
     pub slots: bool,
     pub copper: bool,
     pub masks: bool,
@@ -153,6 +161,7 @@ impl Needs {
     fn union(self, other: Self) -> Self {
         Self {
             holes: self.holes || other.holes,
+            classified_holes: self.classified_holes || other.classified_holes,
             slots: self.slots || other.slots,
             copper: self.copper || other.copper,
             masks: self.masks || other.masks,

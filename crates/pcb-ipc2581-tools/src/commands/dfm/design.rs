@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use ipc2581::Symbol;
 use ipc2581::types::LayerFunction;
 use pcb_ir::dialects::Side;
@@ -29,7 +29,7 @@ use crate::ipc2581::Ipc2581;
 use crate::layers;
 
 use super::report::LayerRef;
-use super::rules::Rule;
+use super::rules::{Needs, Rule};
 
 pub(super) struct Design {
     pub scope: ArtworkScope,
@@ -46,7 +46,7 @@ impl Design {
     pub fn extract(ipc: &Ipc2581, rules: &[Rule], scope: ArtworkScope) -> Result<Self> {
         let needs = super::rules::needs(rules);
         let (mut holes, slots) = if needs.holes || needs.slots {
-            collect_drilled(ipc, scope)?
+            collect_drilled(ipc, scope, needs)?
         } else {
             (Vec::new(), Vec::new())
         };
@@ -94,6 +94,7 @@ pub(super) enum HoleClass {
     Via,
     Pth,
     Npth,
+    Unknown,
 }
 
 impl HoleClass {
@@ -102,6 +103,7 @@ impl HoleClass {
             Self::Via => "via",
             Self::Pth => "PTH",
             Self::Npth => "NPTH",
+            Self::Unknown => "unclassified",
         }
     }
 
@@ -110,6 +112,7 @@ impl HoleClass {
             Self::Via => "via_hole",
             Self::Pth => "plated_hole",
             Self::Npth => "nonplated_hole",
+            Self::Unknown => "unclassified_hole",
         }
     }
 }
@@ -155,6 +158,19 @@ impl Hole {
             .iter()
             .find(|land| land.copper_index as usize == copper_index)
     }
+
+    /// A plated hole must have copper enclosure on both terminal layers of
+    /// its known span. Unknown/through-board spans conservatively terminate
+    /// on the outermost copper layers.
+    pub fn terminates_on(&self, copper_index: usize, copper_layer_count: usize) -> bool {
+        if copper_layer_count == 0 {
+            return false;
+        }
+        match self.copper_span {
+            Some((low, high)) => copper_index == low as usize || copper_index == high as usize,
+            None => copper_index == 0 || copper_index + 1 == copper_layer_count,
+        }
+    }
 }
 
 /// One hole's land on one copper layer, by pool indices.
@@ -164,11 +180,20 @@ pub(super) struct HoleLand {
     pub land_index: u32,
 }
 
-/// A routed slot on a drill layer. Only slots whose primitive states a width
-/// are measurable; outline-shaped slots carry no nominal width.
+/// The authoritative width basis retained for one routed slot.
+#[derive(Debug, Clone)]
+pub(super) enum SlotWidth {
+    /// Exact source primitive width (normally an IPC `Oval`).
+    Nominal(f64),
+    /// Final materialized slot image when the source states only an outline.
+    Geometry(ContourSet),
+}
+
+/// A routed slot on a drill layer. Primitive widths stay semantic; arbitrary
+/// outlines retain their materialized filled geometry for local-width checks.
 #[derive(Debug, Clone)]
 pub(super) struct Slot {
-    pub width_mm: f64,
+    pub width: SlotWidth,
     pub center: Point,
     pub bbox: BBox,
     pub layer: LayerRef,
@@ -230,7 +255,11 @@ pub(super) struct BoardArray {
     pub region: ContourSet,
 }
 
-fn collect_drilled(ipc: &Ipc2581, scope: ArtworkScope) -> Result<(Vec<Hole>, Vec<Slot>)> {
+fn collect_drilled(
+    ipc: &Ipc2581,
+    scope: ArtworkScope,
+    needs: Needs,
+) -> Result<(Vec<Hole>, Vec<Slot>)> {
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
     let mut holes = Vec::new();
     let mut slots = Vec::new();
@@ -244,16 +273,28 @@ fn collect_drilled(ipc: &Ipc2581, scope: ArtworkScope) -> Result<(Vec<Hole>, Vec
         let mut document = geometry::extract_layer_for_view(ipc, layer_name, scope)
             .with_context(|| format!("failed to extract drill layer '{layer_name}'"))?;
         pcb_ir::dialects::ipc::process::expand_feature_placement_groups(&mut document);
-        for feature in document.features.iter().filter(|feature| {
-            feature.is_drill_like()
-                && feature.outer_diameter.is_finite()
-                && feature.outer_diameter > 0.0
-        }) {
+        for feature in document
+            .features
+            .iter()
+            .filter(|feature| feature.is_drill_like())
+        {
             match feature.kind {
-                FeatureKind::Hole => {
-                    let Some(class) = hole_class(feature.intent.plating) else {
-                        continue;
-                    };
+                FeatureKind::Hole if needs.holes => {
+                    if !feature.outer_diameter.is_finite() || feature.outer_diameter <= 0.0 {
+                        bail!(
+                            "drilled hole on layer '{layer_name}' at ({:.6}, {:.6}) has no positive finite diameter",
+                            feature.center.x,
+                            feature.center.y
+                        );
+                    }
+                    let class = hole_class(feature.intent.plating);
+                    if class == HoleClass::Unknown && needs.classified_holes {
+                        bail!(
+                            "drilled hole on layer '{layer_name}' at ({:.6}, {:.6}) has unknown plating; class-specific DFM rules cannot certify it",
+                            feature.center.x,
+                            feature.center.y
+                        );
+                    }
                     holes.push(Hole {
                         class,
                         center: feature.center,
@@ -269,9 +310,25 @@ fn collect_drilled(ipc: &Ipc2581, scope: ArtworkScope) -> Result<(Vec<Hole>, Vec
                         source_feature_index: feature.source.feature_index,
                     });
                 }
-                FeatureKind::Slot => {
+                FeatureKind::Slot if needs.slots => {
+                    let width = if feature.outer_diameter.is_finite()
+                        && feature.outer_diameter > 0.0
+                    {
+                        SlotWidth::Nominal(feature.outer_diameter)
+                    } else {
+                        let contours = document.placed_feature_contours(feature);
+                        let geometry = ContourSet::from_filled_contours(&contours, tol::REGION_MM);
+                        if geometry.is_empty() {
+                            bail!(
+                                "routed slot on layer '{layer_name}' at ({:.6}, {:.6}) has neither a nominal width nor measurable outline geometry",
+                                feature.bbox.center().x,
+                                feature.bbox.center().y
+                            );
+                        }
+                        SlotWidth::Geometry(geometry)
+                    };
                     slots.push(Slot {
-                        width_mm: feature.outer_diameter,
+                        width,
                         center: feature.bbox.center(),
                         bbox: feature.bbox,
                         layer: layer_ref(layer_name, source_layer.layer_function, None),
@@ -281,6 +338,9 @@ fn collect_drilled(ipc: &Ipc2581, scope: ArtworkScope) -> Result<(Vec<Hole>, Vec
                         source_set_index: feature.source.set_index,
                         source_feature_index: feature.source.feature_index,
                     });
+                }
+                FeatureKind::Hole | FeatureKind::Slot => {
+                    continue;
                 }
                 _ => {}
             }
@@ -300,7 +360,7 @@ fn collect_drilled(ipc: &Ipc2581, scope: ArtworkScope) -> Result<(Vec<Hole>, Vec
             .x
             .total_cmp(&right.center.x)
             .then_with(|| left.center.y.total_cmp(&right.center.y))
-            .then_with(|| left.width_mm.total_cmp(&right.width_mm))
+            .then_with(|| slot_width_hint(&left.width).total_cmp(&slot_width_hint(&right.width)))
     });
     Ok((holes, slots))
 }
@@ -342,12 +402,19 @@ fn copper_span(span: FeatureSpan<Symbol>, layers: &[ipc2581::types::Layer]) -> O
     Some((first?, last?))
 }
 
-fn hole_class(plating: PlatingKind) -> Option<HoleClass> {
+fn slot_width_hint(width: &SlotWidth) -> f64 {
+    match width {
+        SlotWidth::Nominal(width) => *width,
+        SlotWidth::Geometry(geometry) => geometry.bbox.width().min(geometry.bbox.height()),
+    }
+}
+
+fn hole_class(plating: PlatingKind) -> HoleClass {
     match plating {
-        PlatingKind::Via | PlatingKind::ViaCapped => Some(HoleClass::Via),
-        PlatingKind::Plated => Some(HoleClass::Pth),
-        PlatingKind::NonPlated => Some(HoleClass::Npth),
-        PlatingKind::Unknown | PlatingKind::None => None,
+        PlatingKind::Via | PlatingKind::ViaCapped => HoleClass::Via,
+        PlatingKind::Plated => HoleClass::Pth,
+        PlatingKind::NonPlated => HoleClass::Npth,
+        PlatingKind::Unknown | PlatingKind::None => HoleClass::Unknown,
     }
 }
 
@@ -613,5 +680,103 @@ fn layer_ref(name: &str, function: LayerFunction, side: Option<&'static str>) ->
         name: name.to_owned(),
         function: function.as_str().to_owned(),
         side,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use pcb_ir::geom::dfm::thin_features;
+
+    use super::*;
+
+    fn slot_fixture(shape: &str) -> Ipc2581 {
+        Ipc2581::parse(&format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <LayerRef name="ROUT"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="ROUT" layerFunction="ROUT" side="ALL" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <LayerFeature layerRef="ROUT">
+          <Set>
+            <SlotCavity name="S1" platingStatus="PLATED" plusTol="0" minusTol="0">
+              {shape}
+            </SlotCavity>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn retains_nominal_oval_slot_width() {
+        let ipc = slot_fixture(
+            r#"<Location x="10" y="20"/>
+              <Oval width="1.8" height="0.6"/>"#,
+        );
+
+        let (_, slots) = collect_drilled(
+            &ipc,
+            ArtworkScope::Board,
+            Needs {
+                slots: true,
+                ..Needs::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(slots.len(), 1);
+        let SlotWidth::Nominal(width) = slots[0].width else {
+            panic!("oval slot must retain its nominal width")
+        };
+        assert!((width - 0.6).abs() < 1e-9);
+    }
+
+    #[test]
+    fn retains_and_measures_outline_slot_geometry() {
+        let ipc = slot_fixture(
+            r#"<Outline>
+                <Polygon>
+                  <PolyBegin x="10" y="20"/>
+                  <PolyStepSegment x="10.6" y="20"/>
+                  <PolyStepSegment x="10.6" y="21.8"/>
+                  <PolyStepSegment x="10" y="21.8"/>
+                  <PolyStepSegment x="10" y="20"/>
+                </Polygon>
+                <LineDesc lineWidth="0" lineEnd="ROUND"/>
+              </Outline>"#,
+        );
+
+        let (_, slots) = collect_drilled(
+            &ipc,
+            ArtworkScope::Board,
+            Needs {
+                slots: true,
+                ..Needs::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(slots.len(), 1);
+        let SlotWidth::Geometry(geometry) = &slots[0].width else {
+            panic!("outline slot must retain materialized geometry")
+        };
+        let violations = thin_features(geometry, 0.8);
+        assert_eq!(violations.len(), 1);
+        assert!(
+            (violations[0].width_mm - 0.6).abs() < 1e-8,
+            "measured width was {}",
+            violations[0].width_mm
+        );
     }
 }

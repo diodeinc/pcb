@@ -20,7 +20,7 @@
 //! child that places a single board is per-board packaging, not an array,
 //! and is excluded at extraction.
 
-use pcb_ir::geom::dfm::region_clearance;
+use pcb_ir::geom::dfm::{bbox_clearance_lower_bound, region_clearance};
 
 use crate::commands::dfm::design::BoardArray;
 use crate::commands::dfm::report::{Evidence, Finding, SourceLocator, Subject};
@@ -36,10 +36,19 @@ pub(super) fn evaluate(rule: &Rule, ctx: &Context) -> (usize, Vec<Finding>) {
     for first_index in 0..arrays.len() {
         let first = &arrays[first_index];
         for second in &arrays[first_index + 1..] {
+            checked += 1;
+            // Bounds are a conservative broad phase: their distance is a
+            // lower bound on profile distance, so a passing bound proves the
+            // exact profiles pass without walking their boundary segments.
+            if !violates_minimum(
+                bbox_clearance_lower_bound(first.region.bbox, second.region.bbox),
+                limit,
+            ) {
+                continue;
+            }
             let Some(clearance) = region_clearance(&first.region, &second.region) else {
                 continue;
             };
-            checked += 1;
             if !violates_minimum(clearance.distance_mm, limit) {
                 continue;
             }
