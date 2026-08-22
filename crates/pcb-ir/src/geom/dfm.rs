@@ -8,14 +8,7 @@ use crate::geom::point::Point;
 use crate::geom::region::{ContourSet, Ring, TwoSidedResidualComponent, ring_edges};
 use crate::geom::tol;
 
-/// The shortest separation between two pieces of geometry, with the points
-/// that realize it. Distances are expressed in the IR's canonical millimeters.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ClearanceMeasurement {
-    pub distance_mm: f64,
-    pub first: Point,
-    pub second: Point,
-}
+pub use crate::geom::dist::ClearanceMeasurement;
 
 /// The minimum radial material enclosure around a circular cutout whose
 /// center lies in the material.
@@ -220,20 +213,6 @@ pub fn disk_clearance(
     }
 }
 
-/// Euclidean separation of two axis-aligned bounds. Because each enclosed
-/// region is a subset of its bounds, this is a conservative lower bound on
-/// region-to-region clearance: a value meeting a minimum proves the exact
-/// regions meet it too.
-pub fn bbox_clearance_lower_bound(first: BBox, second: BBox) -> f64 {
-    let x = (second.min.x - first.max.x)
-        .max(first.min.x - second.max.x)
-        .max(0.0);
-    let y = (second.min.y - first.max.y)
-        .max(first.min.y - second.max.y)
-        .max(0.0);
-    x.hypot(y)
-}
-
 /// Shortest boundary-to-boundary clearance between two filled regions.
 ///
 /// Overlapping, contained, or touching regions have zero clearance. `None`
@@ -348,30 +327,33 @@ pub fn thin_gaps(region: &ContourSet, min_gap_mm: f64) -> Vec<ThinPiece> {
 /// measurements. A candidate is reportable only when the exact distance
 /// between its opposing source-boundary branches violates the requested
 /// minimum; this is what prevents offset tessellation from creating findings.
+/// Pieces are ordered largest first.
 fn pieces(components: Vec<TwoSidedResidualComponent>, minimum_mm: f64) -> Vec<ThinPiece> {
     let mut pieces = components
         .into_iter()
-        .filter(|component| component.distance_mm + TWO_BOUNDARY_UNCERTAINTY_MM < minimum_mm)
-        .filter_map(|component| {
-            let perimeter = component
-                .region
-                .rings
-                .iter()
-                .flat_map(ring_edges)
-                .map(|(start, end)| start.distance_to(end))
-                .sum::<f64>();
-            (perimeter > 0.0).then(|| ThinPiece {
-                bbox: component.region.bbox,
-                area_mm2: component.region.area(),
-                width_mm: component.distance_mm,
-                length_mm: perimeter / 2.0,
-                first: component.first,
-                second: component.second,
-            })
+        .filter(|component| {
+            component.clearance.distance_mm + TWO_BOUNDARY_UNCERTAINTY_MM < minimum_mm
+        })
+        .map(|component| ThinPiece {
+            bbox: component.region.bbox,
+            area_mm2: component.region.area(),
+            width_mm: component.clearance.distance_mm,
+            length_mm: region_perimeter(&component.region) / 2.0,
+            first: component.clearance.first,
+            second: component.clearance.second,
         })
         .collect::<Vec<_>>();
     pieces.sort_by(|a, b| b.area_mm2.total_cmp(&a.area_mm2));
     pieces
+}
+
+fn region_perimeter(region: &ContourSet) -> f64 {
+    region
+        .rings
+        .iter()
+        .flat_map(ring_edges)
+        .map(|(start, end)| start.distance_to(end))
+        .sum()
 }
 
 #[cfg(test)]
@@ -426,9 +408,7 @@ mod tests {
         let diagonal = rect_region(2.0, 3.0, 3.0, 4.0);
         let clearance = region_clearance(&origin, &diagonal).unwrap();
         assert!((clearance.distance_mm - 5.0_f64.sqrt()).abs() < 1e-9);
-        assert!(
-            (bbox_clearance_lower_bound(origin.bbox, diagonal.bbox) - 5.0_f64.sqrt()).abs() < 1e-9
-        );
+        assert!((origin.bbox.distance_to(diagonal.bbox) - 5.0_f64.sqrt()).abs() < 1e-9);
 
         let horizontal = rect_region(-2.0, -0.25, 2.0, 0.25);
         let vertical = rect_region(-0.25, -2.0, 0.25, 2.0);

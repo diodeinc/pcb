@@ -33,10 +33,11 @@
 //! subtracted from the requirement so arc discretization cannot
 //! manufacture violations.
 
-use pcb_ir::geom::{BBox, Point, tol};
+use pcb_ir::geom::dfm::CircularEnclosureMeasurement;
+use pcb_ir::geom::{BBox, tol};
 use rayon::prelude::*;
 
-use crate::commands::dfm::design::{CopperLayer, Hole, HoleClass, Land};
+use crate::commands::dfm::design::{CopperLayer, Design, Hole, HoleClass, Land};
 use crate::commands::dfm::report::{
     Evidence, Finding, Location, Measurement, SourceLocator, Subject, Witness,
 };
@@ -46,20 +47,28 @@ use super::{
     COMPARISON_EPSILON_MM, Context, blank_finding, hole_subject, holes_of_class, unique_layers,
 };
 
-/// One (hole, copper layer) enclosure violation candidate.
+/// One (hole, copper layer) enclosure violation.
 struct AnnularViolation<'a> {
     copper_index: usize,
     land: Option<&'a Land>,
-    enclosure_mm: f64,
-    geometry: AnnularViolationGeometry,
+    enclosure: Enclosure,
 }
 
-enum AnnularViolationGeometry {
-    Boundary {
-        cutout_boundary: Point,
-        material_boundary: Point,
-    },
+/// The measured enclosure on one layer the hole is required to have copper
+/// on. No copper at the hole center is a zero enclosure with no boundary
+/// witnesses; otherwise the signed radial measurement stands.
+enum Enclosure {
+    Measured(CircularEnclosureMeasurement),
     MissingCopper,
+}
+
+impl Enclosure {
+    fn millimeters(&self) -> f64 {
+        match self {
+            Self::Measured(measurement) => measurement.enclosure_mm,
+            Self::MissingCopper => 0.0,
+        }
+    }
 }
 
 pub(super) fn evaluate(rule: &Rule, class: HoleClass, ctx: &Context) -> (usize, Vec<Finding>) {
@@ -80,63 +89,30 @@ pub(super) fn evaluate(rule: &Rule, class: HoleClass, ctx: &Context) -> (usize, 
         .enumerate()
         .map(|(hole_index, hole)| {
             let radius = hole.diameter_mm / 2.0;
-            let mut checked = 0;
-            let mut worst: Option<AnnularViolation> = None;
-            for (copper_index, copper) in design.copper_layers.iter().enumerate() {
-                if !hole.spans_copper(copper_index as u16) {
-                    continue;
-                }
-                let land = hole
-                    .land_on(copper_index)
-                    .map(|link| &copper.lands[link.land_index as usize]);
-                if !contains[copper_index][hole_index] {
-                    // Intermediate layers without a source land are plane
-                    // anti-pads or removed unused lands. A terminal layer or
-                    // intended land with no composed copper is not allowed to
-                    // disappear from an annular-ring check.
-                    if land.is_none()
-                        && !hole.terminates_on(copper_index, design.copper_layers.len())
-                    {
-                        continue;
-                    }
-                    checked += 1;
-                    let violation = AnnularViolation {
-                        copper_index,
-                        land,
-                        enclosure_mm: 0.0,
-                        geometry: AnnularViolationGeometry::MissingCopper,
+            let violations = ring_subjects(design, hole, &contains, hole_index)
+                .map(|subject| {
+                    let enclosure = if subject.in_copper {
+                        boundaries[subject.copper_index]
+                            .circular_enclosure(hole.center, radius, limit - tolerance)
+                            .filter(|measurement| measurement.enclosure_mm + tolerance < limit)
+                            .map(Enclosure::Measured)
+                    } else {
+                        Some(Enclosure::MissingCopper)
                     };
-                    if worst
-                        .as_ref()
-                        .is_none_or(|current| violation.enclosure_mm < current.enclosure_mm)
-                    {
-                        worst = Some(violation);
-                    }
-                    continue;
-                }
-                checked += 1;
-                let violation = boundaries[copper_index]
-                    .circular_enclosure(hole.center, radius, limit - tolerance)
-                    .filter(|measurement| measurement.enclosure_mm + tolerance < limit)
-                    .map(|measurement| AnnularViolation {
-                        copper_index,
-                        land,
-                        enclosure_mm: measurement.enclosure_mm,
-                        geometry: AnnularViolationGeometry::Boundary {
-                            cutout_boundary: measurement.cutout_boundary,
-                            material_boundary: measurement.material_boundary,
-                        },
-                    });
-                if let Some(violation) = violation
-                    && worst
-                        .as_ref()
-                        .is_none_or(|current| violation.enclosure_mm < current.enclosure_mm)
-                {
-                    worst = Some(violation);
-                }
-            }
+                    enclosure.map(|enclosure| AnnularViolation {
+                        copper_index: subject.copper_index,
+                        land: subject.land,
+                        enclosure,
+                    })
+                })
+                .collect::<Vec<_>>();
+            let worst = violations.iter().flatten().min_by(|left, right| {
+                left.enclosure
+                    .millimeters()
+                    .total_cmp(&right.enclosure.millimeters())
+            });
             (
-                checked,
+                violations.len(),
                 worst.map(|worst| annular_finding(rule, class, hole, ctx, worst)),
             )
         })
@@ -151,42 +127,74 @@ pub(super) fn evaluate(rule: &Rule, class: HoleClass, ctx: &Context) -> (usize, 
     )
 }
 
+/// One copper layer on which a hole has a ring to measure.
+struct RingSubject<'a> {
+    copper_index: usize,
+    land: Option<&'a Land>,
+    in_copper: bool,
+}
+
+/// Layers where the hole must carry copper, hence has a ring to measure:
+/// spanned layers holding copper at the center, plus spanned layers with a
+/// source land or at an end of the drill span even without it. A spanned
+/// intermediate layer with neither is a plane anti-pad or a removed unused
+/// land, and is not a subject.
+fn ring_subjects<'a>(
+    design: &'a Design,
+    hole: &'a Hole,
+    contains: &'a [Vec<bool>],
+    hole_index: usize,
+) -> impl Iterator<Item = RingSubject<'a>> + 'a {
+    design
+        .copper_layers
+        .iter()
+        .enumerate()
+        .filter(move |(copper_index, _)| hole.spans_copper(*copper_index as u16))
+        .filter_map(move |(copper_index, copper)| {
+            let land = hole
+                .land_on(copper_index)
+                .map(|link| &copper.lands[link.land_index as usize]);
+            let in_copper = contains[copper_index][hole_index];
+            let required =
+                land.is_some() || hole.terminates_on(copper_index, design.copper_layers.len());
+            (in_copper || required).then_some(RingSubject {
+                copper_index,
+                land,
+                in_copper,
+            })
+        })
+}
+
 fn annular_finding(
     rule: &Rule,
     class: HoleClass,
     hole: &Hole,
     ctx: &Context,
-    violation: AnnularViolation,
+    violation: &AnnularViolation,
 ) -> Finding {
     let limit = rule.limit.millimeters();
     let copper = &ctx.design.copper_layers[violation.copper_index];
     let required_radius = hole.diameter_mm / 2.0 + limit;
-    let (location_point, witnesses, detail) = match violation.geometry {
-        AnnularViolationGeometry::Boundary {
-            cutout_boundary,
-            material_boundary,
-        } => {
-            let detail = if violation.enclosure_mm < 0.0 {
+    let enclosure_mm = violation.enclosure.millimeters();
+    let (location_point, witnesses, detail) = match &violation.enclosure {
+        Enclosure::Measured(measurement) => (
+            measurement
+                .cutout_boundary
+                .midpoint(measurement.material_boundary),
+            vec![
+                Witness::new("hole_boundary", measurement.cutout_boundary),
+                Witness::new("copper_boundary", measurement.material_boundary),
+            ],
+            if enclosure_mm < 0.0 {
                 format!(
                     "the drilled hole breaches the copper image by {:.6} mm",
-                    -violation.enclosure_mm
+                    -enclosure_mm
                 )
             } else {
-                format!(
-                    "only {:.6} mm of copper remains outside the drilled hole",
-                    violation.enclosure_mm
-                )
-            };
-            (
-                cutout_boundary.midpoint(material_boundary),
-                vec![
-                    Witness::new("hole_boundary", cutout_boundary),
-                    Witness::new("copper_boundary", material_boundary),
-                ],
-                detail,
-            )
-        }
-        AnnularViolationGeometry::MissingCopper => (
+                format!("only {enclosure_mm:.6} mm of copper remains outside the drilled hole")
+            },
+        ),
+        Enclosure::MissingCopper => (
             hole.center,
             Vec::new(),
             "no composed copper remains at the required hole center".to_owned(),
@@ -195,13 +203,11 @@ fn annular_finding(
     Finding {
         title: format!("{} annular ring is below minimum", class.label()),
         message: format!(
-            "{} minimum radial copper enclosure is {:.6} mm on {}; the PDK requires {:.6} mm ({detail})",
+            "{} minimum radial copper enclosure is {enclosure_mm:.6} mm on {}; the PDK requires {limit:.6} mm ({detail})",
             class.label(),
-            violation.enclosure_mm,
             copper.layer.name,
-            limit
         ),
-        measurement: Measurement::minimum(violation.enclosure_mm, limit),
+        measurement: Measurement::minimum(enclosure_mm, limit),
         location: Location {
             point: Some(location_point.into()),
             bounding_box: Some(BBox::from_point(hole.center).expand(required_radius).into()),

@@ -18,9 +18,12 @@
 //! The check requires `dist(Aᵢ, Aⱼ) ≥ L` for every unordered pair of
 //! direct board-array instances of the panel's root step. A panel-kind
 //! child that places a single board is per-board packaging, not an array,
-//! and is excluded at extraction.
+//! and is excluded at extraction. Bounds distance is a lower bound on
+//! region distance, so a pair whose bounds already clear `L` is proven
+//! clear without walking its boundary segments; every pair counts as
+//! checked either way.
 
-use pcb_ir::geom::dfm::{bbox_clearance_lower_bound, region_clearance};
+use pcb_ir::geom::dfm::region_clearance;
 
 use crate::commands::dfm::design::BoardArray;
 use crate::commands::dfm::report::{Evidence, Finding, SourceLocator, Subject};
@@ -31,52 +34,46 @@ use super::{ClearanceViolation, Context, violates_minimum};
 pub(super) fn evaluate(rule: &Rule, ctx: &Context) -> (usize, Vec<Finding>) {
     let arrays = &ctx.design.board_arrays;
     let limit = rule.limit.millimeters();
-    let mut checked = 0;
-    let mut findings = Vec::new();
-    for first_index in 0..arrays.len() {
-        let first = &arrays[first_index];
-        for second in &arrays[first_index + 1..] {
-            checked += 1;
-            // Bounds are a conservative broad phase: their distance is a
-            // lower bound on profile distance, so a passing bound proves the
-            // exact profiles pass without walking their boundary segments.
-            if !violates_minimum(
-                bbox_clearance_lower_bound(first.region.bbox, second.region.bbox),
-                limit,
-            ) {
-                continue;
+    let pairs = arrays.iter().enumerate().flat_map(|(index, first)| {
+        arrays[index + 1..]
+            .iter()
+            .map(move |second| (first, second))
+    });
+    let findings = pairs
+        .clone()
+        .filter(|(first, second)| {
+            violates_minimum(first.region.bbox.distance_to(second.region.bbox), limit)
+        })
+        .map(|(first, second)| {
+            let clearance = region_clearance(&first.region, &second.region)
+                .expect("board arrays are extracted with non-empty profiles");
+            (first, second, clearance)
+        })
+        .filter(|(_, _, clearance)| violates_minimum(clearance.distance_mm, limit))
+        .map(|(first, second, clearance)| {
+            ClearanceViolation {
+                rule,
+                title: "Board arrays are too close together",
+                message: format!(
+                    "board-array outlines are {:.6} mm apart; the PDK requires at least {:.6} mm",
+                    clearance.distance_mm, limit
+                ),
+                witness_roles: ["first_board_array", "second_board_array"],
+                clearance,
+                layers: Vec::new(),
+                subjects: vec![
+                    board_array_subject(first, "first"),
+                    board_array_subject(second, "second"),
+                ],
+                evidence: vec![
+                    Evidence::bounds("first_board_array", first.region.bbox),
+                    Evidence::bounds("second_board_array", second.region.bbox),
+                ],
             }
-            let Some(clearance) = region_clearance(&first.region, &second.region) else {
-                continue;
-            };
-            if !violates_minimum(clearance.distance_mm, limit) {
-                continue;
-            }
-            findings.push(
-                ClearanceViolation {
-                    rule,
-                    title: "Board arrays are too close together",
-                    message: format!(
-                        "board-array outlines are {:.6} mm apart; the PDK requires at least {:.6} mm",
-                        clearance.distance_mm, limit
-                    ),
-                    witness_roles: ["first_board_array", "second_board_array"],
-                    clearance,
-                    layers: Vec::new(),
-                    subjects: vec![
-                        board_array_subject(first, "first"),
-                        board_array_subject(second, "second"),
-                    ],
-                    evidence: vec![
-                        Evidence::bounds("first_board_array", first.region.bbox),
-                        Evidence::bounds("second_board_array", second.region.bbox),
-                    ],
-                }
-                .into_finding(),
-            );
-        }
-    }
-    (checked, findings)
+            .into_finding()
+        })
+        .collect();
+    (pairs.count(), findings)
 }
 
 fn board_array_subject(array: &BoardArray, role: &'static str) -> Subject {

@@ -37,7 +37,7 @@ use crate::commands::dfm::report::{
 };
 use crate::commands::dfm::rules::{ImageSel, Rule};
 
-use super::{Context, blank_finding, violates_minimum};
+use super::{Context, blank_finding};
 
 /// Which morphological residue the rule reports.
 #[derive(Clone, Copy)]
@@ -99,7 +99,6 @@ pub(super) fn evaluate(
             };
             pieces
                 .into_iter()
-                .filter(|piece| violates_minimum(piece.width_mm, limit))
                 .map(|piece| thin_finding(rule, layer, &piece, title, noun, offender_kind))
                 .collect::<Vec<_>>()
         })

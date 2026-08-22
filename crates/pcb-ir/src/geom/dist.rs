@@ -2,6 +2,15 @@
 
 use crate::geom::point::Point;
 
+/// The shortest separation between two pieces of geometry, with the points
+/// that realize it. Distances are expressed in the IR's canonical millimeters.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ClearanceMeasurement {
+    pub distance_mm: f64,
+    pub first: Point,
+    pub second: Point,
+}
+
 /// Distance from a point to a closed segment, with the closest point on the
 /// segment.
 pub fn point_segment(point: Point, start: Point, end: Point) -> (f64, Point) {

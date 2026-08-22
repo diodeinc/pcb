@@ -29,7 +29,7 @@ use crate::ipc2581::Ipc2581;
 use crate::layers;
 
 use super::report::LayerRef;
-use super::rules::{Needs, Rule};
+use super::rules::Rule;
 
 pub(super) struct Design {
     pub scope: ArtworkScope,
@@ -46,7 +46,7 @@ impl Design {
     pub fn extract(ipc: &Ipc2581, rules: &[Rule], scope: ArtworkScope) -> Result<Self> {
         let needs = super::rules::needs(rules);
         let (mut holes, slots) = if needs.holes || needs.slots {
-            collect_drilled(ipc, scope, needs)?
+            collect_drilled(ipc, scope)?
         } else {
             (Vec::new(), Vec::new())
         };
@@ -94,7 +94,6 @@ pub(super) enum HoleClass {
     Via,
     Pth,
     Npth,
-    Unknown,
 }
 
 impl HoleClass {
@@ -103,7 +102,6 @@ impl HoleClass {
             Self::Via => "via",
             Self::Pth => "PTH",
             Self::Npth => "NPTH",
-            Self::Unknown => "unclassified",
         }
     }
 
@@ -112,7 +110,6 @@ impl HoleClass {
             Self::Via => "via_hole",
             Self::Pth => "plated_hole",
             Self::Npth => "nonplated_hole",
-            Self::Unknown => "unclassified_hole",
         }
     }
 }
@@ -159,17 +156,16 @@ impl Hole {
             .find(|land| land.copper_index as usize == copper_index)
     }
 
-    /// A plated hole must have copper enclosure on both terminal layers of
-    /// its known span. Unknown/through-board spans conservatively terminate
-    /// on the outermost copper layers.
+    /// Whether `copper_index` is an end of the drill span: the layers the
+    /// plating barrel must land on. An unknown span terminates on the
+    /// outermost of the `copper_layer_count` layers.
     pub fn terminates_on(&self, copper_index: usize, copper_layer_count: usize) -> bool {
-        if copper_layer_count == 0 {
-            return false;
-        }
-        match self.copper_span {
-            Some((low, high)) => copper_index == low as usize || copper_index == high as usize,
-            None => copper_index == 0 || copper_index + 1 == copper_layer_count,
-        }
+        let (low, high) = self
+            .copper_span
+            .map_or((0, copper_layer_count - 1), |(low, high)| {
+                (usize::from(low), usize::from(high))
+            });
+        copper_index == low || copper_index == high
     }
 }
 
@@ -255,11 +251,7 @@ pub(super) struct BoardArray {
     pub region: ContourSet,
 }
 
-fn collect_drilled(
-    ipc: &Ipc2581,
-    scope: ArtworkScope,
-    needs: Needs,
-) -> Result<(Vec<Hole>, Vec<Slot>)> {
+fn collect_drilled(ipc: &Ipc2581, scope: ArtworkScope) -> Result<(Vec<Hole>, Vec<Slot>)> {
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
     let mut holes = Vec::new();
     let mut slots = Vec::new();
@@ -279,22 +271,17 @@ fn collect_drilled(
             .filter(|feature| feature.is_drill_like())
         {
             match feature.kind {
-                FeatureKind::Hole if needs.holes => {
-                    if !feature.outer_diameter.is_finite() || feature.outer_diameter <= 0.0 {
-                        bail!(
-                            "drilled hole on layer '{layer_name}' at ({:.6}, {:.6}) has no positive finite diameter",
-                            feature.center.x,
-                            feature.center.y
-                        );
+                FeatureKind::Hole => {
+                    let at = format!(
+                        "drilled hole on layer '{layer_name}' at ({:.6}, {:.6})",
+                        feature.center.x, feature.center.y
+                    );
+                    if !(feature.outer_diameter > 0.0 && feature.outer_diameter.is_finite()) {
+                        bail!("{at} has no positive finite diameter");
                     }
-                    let class = hole_class(feature.intent.plating);
-                    if class == HoleClass::Unknown && needs.classified_holes {
-                        bail!(
-                            "drilled hole on layer '{layer_name}' at ({:.6}, {:.6}) has unknown plating; class-specific DFM rules cannot certify it",
-                            feature.center.x,
-                            feature.center.y
-                        );
-                    }
+                    let Some(class) = hole_class(feature.intent.plating) else {
+                        bail!("{at} has unknown plating; DFM rules cannot certify it");
+                    };
                     holes.push(Hole {
                         class,
                         center: feature.center,
@@ -310,9 +297,9 @@ fn collect_drilled(
                         source_feature_index: feature.source.feature_index,
                     });
                 }
-                FeatureKind::Slot if needs.slots => {
-                    let width = if feature.outer_diameter.is_finite()
-                        && feature.outer_diameter > 0.0
+                FeatureKind::Slot => {
+                    let width = if feature.outer_diameter > 0.0
+                        && feature.outer_diameter.is_finite()
                     {
                         SlotWidth::Nominal(feature.outer_diameter)
                     } else {
@@ -320,7 +307,7 @@ fn collect_drilled(
                         let geometry = ContourSet::from_filled_contours(&contours, tol::REGION_MM);
                         if geometry.is_empty() {
                             bail!(
-                                "routed slot on layer '{layer_name}' at ({:.6}, {:.6}) has neither a nominal width nor measurable outline geometry",
+                                "routed slot on layer '{layer_name}' at ({:.6}, {:.6}) has neither a nominal width nor outline geometry",
                                 feature.bbox.center().x,
                                 feature.bbox.center().y
                             );
@@ -338,9 +325,6 @@ fn collect_drilled(
                         source_set_index: feature.source.set_index,
                         source_feature_index: feature.source.feature_index,
                     });
-                }
-                FeatureKind::Hole | FeatureKind::Slot => {
-                    continue;
                 }
                 _ => {}
             }
@@ -360,7 +344,8 @@ fn collect_drilled(
             .x
             .total_cmp(&right.center.x)
             .then_with(|| left.center.y.total_cmp(&right.center.y))
-            .then_with(|| slot_width_hint(&left.width).total_cmp(&slot_width_hint(&right.width)))
+            .then_with(|| left.bbox.max.x.total_cmp(&right.bbox.max.x))
+            .then_with(|| left.bbox.max.y.total_cmp(&right.bbox.max.y))
     });
     Ok((holes, slots))
 }
@@ -402,19 +387,12 @@ fn copper_span(span: FeatureSpan<Symbol>, layers: &[ipc2581::types::Layer]) -> O
     Some((first?, last?))
 }
 
-fn slot_width_hint(width: &SlotWidth) -> f64 {
-    match width {
-        SlotWidth::Nominal(width) => *width,
-        SlotWidth::Geometry(geometry) => geometry.bbox.width().min(geometry.bbox.height()),
-    }
-}
-
-fn hole_class(plating: PlatingKind) -> HoleClass {
+fn hole_class(plating: PlatingKind) -> Option<HoleClass> {
     match plating {
-        PlatingKind::Via | PlatingKind::ViaCapped => HoleClass::Via,
-        PlatingKind::Plated => HoleClass::Pth,
-        PlatingKind::NonPlated => HoleClass::Npth,
-        PlatingKind::Unknown | PlatingKind::None => HoleClass::Unknown,
+        PlatingKind::Via | PlatingKind::ViaCapped => Some(HoleClass::Via),
+        PlatingKind::Plated => Some(HoleClass::Pth),
+        PlatingKind::NonPlated => Some(HoleClass::Npth),
+        PlatingKind::Unknown | PlatingKind::None => None,
     }
 }
 
@@ -725,15 +703,7 @@ mod tests {
               <Oval width="1.8" height="0.6"/>"#,
         );
 
-        let (_, slots) = collect_drilled(
-            &ipc,
-            ArtworkScope::Board,
-            Needs {
-                slots: true,
-                ..Needs::default()
-            },
-        )
-        .unwrap();
+        let (_, slots) = collect_drilled(&ipc, ArtworkScope::Board).unwrap();
 
         assert_eq!(slots.len(), 1);
         let SlotWidth::Nominal(width) = slots[0].width else {
@@ -757,15 +727,7 @@ mod tests {
               </Outline>"#,
         );
 
-        let (_, slots) = collect_drilled(
-            &ipc,
-            ArtworkScope::Board,
-            Needs {
-                slots: true,
-                ..Needs::default()
-            },
-        )
-        .unwrap();
+        let (_, slots) = collect_drilled(&ipc, ArtworkScope::Board).unwrap();
 
         assert_eq!(slots.len(), 1);
         let SlotWidth::Geometry(geometry) = &slots[0].width else {

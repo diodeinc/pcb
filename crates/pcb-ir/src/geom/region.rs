@@ -26,7 +26,7 @@ use i_overlay::mesh::style::{LineJoin as OutlineLineJoin, OutlineStyle};
 
 use crate::geom::affine::Affine2;
 use crate::geom::bbox::BBox;
-use crate::geom::dist;
+use crate::geom::dist::{self, ClearanceMeasurement};
 use crate::geom::path::{ContourBuf, PathCmd, contours_to_kurbo, stroke_to_fill, transform_cmds};
 use crate::geom::point::Point;
 use crate::geom::store::{Path, PathArena};
@@ -276,15 +276,13 @@ pub struct DiskGapRegularization {
 }
 
 /// One connected opening/closing residue bounded by two distinct source
-/// boundary branches. The boundary measurement is exact for the flattened
-/// polygon representation and is the authoritative local width of the
-/// material or void represented by `region`.
+/// boundary branches. `clearance` is the exact separation of those branches
+/// in the flattened polygon representation: the authoritative local width of
+/// the material or void `region` represents.
 #[derive(Debug, Clone)]
 pub(crate) struct TwoSidedResidualComponent {
     pub region: ContourSet,
-    pub distance_mm: f64,
-    pub first: Point,
-    pub second: Point,
+    pub clearance: ClearanceMeasurement,
 }
 
 /// Failure to construct a narrow void's medial axis for gap regularization.
@@ -875,42 +873,47 @@ impl ContourSet {
     /// concavity. An empty result proves no two facing boundary branches fail
     /// the rolling-disk test.
     pub fn disk_gap_violations(&self, radius: f64) -> Self {
-        if self.is_empty() || radius <= 0.0 || !radius.is_finite() {
-            return Self::empty(self.tolerance);
-        }
-        let closing_residual = self.disk_close(radius).difference(self);
-        let rings =
-            two_sided_residual_components(self, &closing_residual, same_ring_tangents_oppose)
-                .into_iter()
-                .flat_map(|component| component.region.rings)
-                .collect();
+        let rings = self
+            .two_sided_residual(radius, WallTest::Opposing, closing_residual)
+            .into_iter()
+            .flat_map(|component| component.region.rings)
+            .collect();
         Self::new(rings, FillRule::NonZero, self.tolerance)
     }
 
-    /// Connected sub-diameter material residues and their exact opposing
-    /// source-boundary measurements.
+    /// Connected sub-diameter material residues (opening residue) with the
+    /// exact separation of the two parallel source-boundary branches walling
+    /// each.
     pub(crate) fn disk_feature_violation_components(
         &self,
         radius: f64,
     ) -> Vec<TwoSidedResidualComponent> {
-        if self.is_empty() || radius <= 0.0 || !radius.is_finite() {
-            return Vec::new();
-        }
-        let opening_residual = self.difference(&self.disk_open(radius));
-        two_sided_residual_components(self, &opening_residual, same_ring_boundaries_face_across)
+        self.two_sided_residual(radius, WallTest::Parallel, |region, radius| {
+            region.difference(&region.disk_open(radius))
+        })
     }
 
-    /// Connected sub-diameter void residues and their exact opposing
-    /// source-boundary measurements.
+    /// Connected sub-diameter void residues (closing residue) with the exact
+    /// separation of the two parallel source-boundary branches walling each.
     pub(crate) fn disk_gap_violation_components(
         &self,
         radius: f64,
     ) -> Vec<TwoSidedResidualComponent> {
-        if self.is_empty() || radius <= 0.0 || !radius.is_finite() {
+        self.two_sided_residual(radius, WallTest::Parallel, closing_residual)
+    }
+
+    /// Morphological residue of this region, kept only where two distinct
+    /// source-boundary branches wall it. A degenerate disk has no residue.
+    fn two_sided_residual(
+        &self,
+        radius: f64,
+        walls: WallTest,
+        residual: impl FnOnce(&Self, f64) -> Self,
+    ) -> Vec<TwoSidedResidualComponent> {
+        if self.is_empty() || !(radius > 0.0 && radius.is_finite()) {
             return Vec::new();
         }
-        let closing_residual = self.disk_close(radius).difference(self);
-        two_sided_residual_components(self, &closing_residual, same_ring_boundaries_face_across)
+        two_sided_residual_components(self, &residual(self, radius), walls)
     }
 
     pub fn to_contours(&self) -> Vec<ContourBuf> {
@@ -1102,32 +1105,36 @@ struct OrientedBoundarySegment {
     bbox: BBox,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct BoundaryPairMeasurement {
-    distance_mm: f64,
-    first: Point,
-    second: Point,
+fn closing_residual(region: &ContourSet, radius: f64) -> ContourSet {
+    region.disk_close(radius).difference(region)
 }
 
-type SameRingBoundaryPredicate =
-    fn(&OrientedBoundarySegment, &OrientedBoundarySegment, BoundaryPairMeasurement, f64) -> bool;
+/// When two boundary segments of one ring count as opposite walls of a
+/// residue. Segments on distinct rings always do.
+#[derive(Debug, Clone, Copy)]
+enum WallTest {
+    /// Tangents oppose. Conservative: any facing pair is a void, which is
+    /// what a gap certificate or regularization keep-out must not miss.
+    Opposing,
+    /// Tangents oppose and the closest-pair separation is normal to both,
+    /// so the measured distance is a width between parallel walls rather
+    /// than a chord between oblique edges of one curve. Required wherever
+    /// the distance itself is the verdict.
+    Parallel,
+}
 
-fn two_sided_residual_components(
-    source: &ContourSet,
-    residual: &ContourSet,
-    same_ring_qualifies: SameRingBoundaryPredicate,
-) -> Vec<TwoSidedResidualComponent> {
-    let mut source_segments = source
+/// Every source boundary edge longer than the region tolerance, sorted by
+/// minimum x so a query can stop scanning once edges start past its bounds.
+fn source_boundary_segments(source: &ContourSet) -> Vec<OrientedBoundarySegment> {
+    let mut segments = source
         .rings
         .iter()
         .enumerate()
         .flat_map(|(ring_id, ring)| {
-            (0..ring.len()).filter_map(move |index| {
-                let [start_x, start_y] = ring[index];
-                let [end_x, end_y] = ring[(index + 1) % ring.len()];
-                let start = Point::new(start_x, start_y);
-                let end = Point::new(end_x, end_y);
-                (start.distance_to(end) > source.tolerance).then_some(OrientedBoundarySegment {
+            ring_edges(ring)
+                .enumerate()
+                .filter(|(_, (start, end))| start.distance_to(*end) > source.tolerance)
+                .map(move |(index, (start, end))| OrientedBoundarySegment {
                     topology: BoundarySegment {
                         ring: ring_id,
                         index,
@@ -1137,76 +1144,109 @@ fn two_sided_residual_components(
                     end,
                     bbox: segment_bbox(start, end),
                 })
-            })
         })
         .collect::<Vec<_>>();
-    source_segments.sort_by(|left, right| left.bbox.min.x.total_cmp(&right.bbox.min.x));
-    let contact_tolerance = source.tolerance.max(residual.tolerance);
+    segments.sort_by(|left, right| left.bbox.min.x.total_cmp(&right.bbox.min.x));
+    segments
+}
 
+/// Each connected component of `residual` that is walled by two facing
+/// source-boundary branches, with the exact separation of those branches.
+fn two_sided_residual_components(
+    source: &ContourSet,
+    residual: &ContourSet,
+    walls: WallTest,
+) -> Vec<TwoSidedResidualComponent> {
+    let segments = source_boundary_segments(source);
+    let contact_tolerance = source.tolerance.max(residual.tolerance);
     residual
         .connected_components()
         .into_iter()
         .filter_map(|component| {
-            let query = component.bbox.expand(contact_tolerance);
-            let candidate_end =
-                source_segments.partition_point(|segment| segment.bbox.min.x <= query.max.x);
-            let contacts = source_segments[..candidate_end]
-                .iter()
-                .filter(|segment| {
-                    segment.bbox.max.x >= query.min.x
-                        && segment.bbox.max.y >= query.min.y
-                        && segment.bbox.min.y <= query.max.y
-                        && region_boundary_within_distance(
-                            &component,
-                            segment.start,
-                            segment.end,
-                            contact_tolerance,
-                        )
-                })
-                .collect::<Vec<_>>();
-            let closest = contacts
-                .iter()
-                .enumerate()
-                .flat_map(|(index, left)| {
-                    contacts[index + 1..].iter().filter_map(move |right| {
-                        qualifying_boundary_pair(
-                            left,
-                            right,
-                            contact_tolerance,
-                            same_ring_qualifies,
-                        )
-                    })
-                })
-                .min_by(|left, right| left.distance_mm.total_cmp(&right.distance_mm));
-            closest.map(|measurement| TwoSidedResidualComponent {
-                region: component,
-                distance_mm: measurement.distance_mm,
-                first: measurement.first,
-                second: measurement.second,
+            let contacts = contacting_segments(&segments, &component, contact_tolerance);
+            opposing_boundary_clearance(&contacts, contact_tolerance, walls).map(|clearance| {
+                TwoSidedResidualComponent {
+                    region: component,
+                    clearance,
+                }
             })
         })
         .collect()
 }
 
-fn qualifying_boundary_pair(
+/// The source boundary segments touching `component`.
+fn contacting_segments<'a>(
+    segments: &'a [OrientedBoundarySegment],
+    component: &ContourSet,
+    contact_tolerance: f64,
+) -> Vec<&'a OrientedBoundarySegment> {
+    let query = component.bbox.expand(contact_tolerance);
+    let candidate_end = segments.partition_point(|segment| segment.bbox.min.x <= query.max.x);
+    segments[..candidate_end]
+        .iter()
+        .filter(|segment| {
+            segment.bbox.intersects(query)
+                && region_boundary_within_distance(
+                    component,
+                    segment.start,
+                    segment.end,
+                    contact_tolerance,
+                )
+        })
+        .collect()
+}
+
+/// The closest pair of contact segments that are two distinct walls facing
+/// each other across the residue, or `None` when the residue is one-sided.
+fn opposing_boundary_clearance(
+    contacts: &[&OrientedBoundarySegment],
+    contact_tolerance: f64,
+    walls: WallTest,
+) -> Option<ClearanceMeasurement> {
+    contacts
+        .iter()
+        .enumerate()
+        .flat_map(|(index, left)| {
+            contacts[index + 1..].iter().filter_map(move |right| {
+                facing_wall_clearance(left, right, contact_tolerance, walls)
+            })
+        })
+        .min_by(|left, right| left.distance_mm.total_cmp(&right.distance_mm))
+}
+
+/// The separation of two boundary segments when they are opposite walls of
+/// the same residue. Incident segments and segments closer than the contact
+/// tolerance are the same wall. Segments on distinct rings always face each
+/// other across material or void; segments on one ring must pass `walls`,
+/// so the rounded bite of one smooth corner is not a width.
+fn facing_wall_clearance(
     left: &OrientedBoundarySegment,
     right: &OrientedBoundarySegment,
     contact_tolerance: f64,
-    same_ring_qualifies: SameRingBoundaryPredicate,
-) -> Option<BoundaryPairMeasurement> {
+    walls: WallTest,
+) -> Option<ClearanceMeasurement> {
     if boundary_segments_are_incident(left.topology, right.topology) {
         return None;
     }
     let (distance_mm, first, second) = dist::segments(left.start, left.end, right.start, right.end);
-    let measurement = BoundaryPairMeasurement {
+    let clearance = ClearanceMeasurement {
         distance_mm,
         first,
         second,
     };
+    let left_tangent = left.end - left.start;
+    let right_tangent = right.end - right.start;
+    let same_ring_walls = match walls {
+        WallTest::Opposing => tangents_oppose(left_tangent, right_tangent),
+        WallTest::Parallel => {
+            tangents_oppose(left_tangent, right_tangent)
+                && separation_is_normal(clearance, left_tangent, contact_tolerance)
+                && separation_is_normal(clearance, right_tangent, contact_tolerance)
+        }
+    };
     (distance_mm > contact_tolerance
-        && (left.topology.ring != right.topology.ring
-            || same_ring_qualifies(left, right, measurement, contact_tolerance)))
-    .then_some(measurement)
+        && (left.topology.ring != right.topology.ring || same_ring_walls))
+        .then_some(clearance)
 }
 
 fn region_boundary_within_distance(
@@ -1217,61 +1257,28 @@ fn region_boundary_within_distance(
 ) -> bool {
     let expanded = segment_bbox(start, end).expand(distance);
     region.rings.iter().any(|ring| {
-        (0..ring.len()).any(|index| {
-            let [other_start_x, other_start_y] = ring[index];
-            let [other_end_x, other_end_y] = ring[(index + 1) % ring.len()];
-            let other_start = Point::new(other_start_x, other_start_y);
-            let other_end = Point::new(other_end_x, other_end_y);
+        ring_edges(ring).any(|(other_start, other_end)| {
             expanded.intersects(segment_bbox(other_start, other_end))
                 && dist::segments(start, end, other_start, other_end).0 <= distance
         })
     })
 }
 
-fn same_ring_boundaries_face_across(
-    left: &OrientedBoundarySegment,
-    right: &OrientedBoundarySegment,
-    measurement: BoundaryPairMeasurement,
-    contact_tolerance: f64,
-) -> bool {
-    let left_tangent = left.end - left.start;
-    let right_tangent = right.end - right.start;
-    let separation = measurement.second - measurement.first;
-    let (left_length, right_length, separation_length) = (
-        left_tangent.length(),
-        right_tangent.length(),
-        separation.length(),
-    );
-    if left_length <= f64::EPSILON
-        || right_length <= f64::EPSILON
-        || separation_length <= f64::EPSILON
-    {
-        return false;
-    }
-
-    let left_unit = left_tangent / left_length;
-    let right_unit = right_tangent / right_length;
-    let separation_unit = separation / separation_length;
-    let normal_slack = contact_tolerance.max(tol::FLATTEN_MM);
-
-    left_unit.x * right_unit.x + left_unit.y * right_unit.y < 0.0
-        && (left_unit.x * separation_unit.x + left_unit.y * separation_unit.y).abs()
-            * separation_length
-            <= normal_slack
-        && (right_unit.x * separation_unit.x + right_unit.y * separation_unit.y).abs()
-            * separation_length
-            <= normal_slack
+fn tangents_oppose(left: Point, right: Point) -> bool {
+    left.x * right.x + left.y * right.y < 0.0
 }
 
-fn same_ring_tangents_oppose(
-    left: &OrientedBoundarySegment,
-    right: &OrientedBoundarySegment,
-    _measurement: BoundaryPairMeasurement,
-    _contact_tolerance: f64,
+/// Whether the closest-pair separation is normal to a wall within the
+/// contact tolerance (at least the flattening chord error): the component
+/// of the separation along the wall's tangent is negligible.
+fn separation_is_normal(
+    clearance: ClearanceMeasurement,
+    tangent: Point,
+    contact_tolerance: f64,
 ) -> bool {
-    let left_tangent = left.end - left.start;
-    let right_tangent = right.end - right.start;
-    left_tangent.x * right_tangent.x + left_tangent.y * right_tangent.y < 0.0
+    let separation = clearance.second - clearance.first;
+    let along = (tangent.x * separation.x + tangent.y * separation.y).abs() / tangent.length();
+    along <= contact_tolerance.max(tol::FLATTEN_MM)
 }
 
 /// Keep-out whose removal widens every narrow void: a radius-`radius` tube

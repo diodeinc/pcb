@@ -100,9 +100,9 @@ when fewer than two exist.
 
 - Hole diameter rules measure every drilled hole of the rule's class;
   `minimum_slot_width` measures every routed slot. It uses a stated nominal
-  width when present and the filled route outline otherwise. A class-specific
-  drill rule fails extraction rather than silently discarding a hole whose
-  plating class is unknown.
+  width when present and the filled route outline otherwise. Drill
+  extraction fails rather than silently discarding a hole whose plating
+  class or diameter is missing.
 - Hole-to-hole clearance measures edge-to-edge distance between hole pairs
   whose drill spans overlap; stacked blind and buried vias on disjoint spans
   do not interact.
