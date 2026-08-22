@@ -472,7 +472,8 @@ fn detach_process_group(command: &mut Command) {
 fn detach_process_group(_command: &mut Command) {}
 
 fn kill_child_now() {
-    if let Some(child) = CHILD.lock().unwrap().as_ref() {
+    let child = CHILD.lock().unwrap().clone();
+    if let Some(child) = child {
         let _ = child.lock().unwrap().kill();
     }
 }
