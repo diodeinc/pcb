@@ -55,6 +55,13 @@ impl PogoTemplate {
                 bail!("footprint template is missing the {anchor:?} anchor");
             }
         }
+        // Every pad must carry a layers list — that is where stamping
+        // injects the net, whatever the layer set is.
+        for (index, pad) in body.split("(pad ").skip(1).enumerate() {
+            if !pad.contains("(layers ") {
+                bail!("footprint template pad {index} has no (layers …) list");
+            }
+        }
         Ok(Self {
             body,
             header: format!("(footprint \"{LIB_NICKNAME}:{name}\""),
@@ -79,14 +86,22 @@ impl PogoTemplate {
             "(property \"Reference\" \"REF**\"",
             &format!("(property \"Reference\" \"{reference}\""),
         );
-        // Bind every pad: KiCad wants the net right after the layer list.
-        let body = body.replace(
-            "(layers \"F.Cu\" \"F.Mask\")",
-            &format!(
-                "(layers \"F.Cu\" \"F.Mask\")\n\t\t(net {} \"{}\")",
-                net.0, net.1
-            ),
-        );
+        // Bind every pad, whatever its layer set: KiCad wants the net
+        // right after the layers list.
+        let mut bound = String::with_capacity(body.len() + 64);
+        let mut pieces = body.split("(pad ");
+        bound.push_str(pieces.next().unwrap_or_default());
+        for piece in pieces {
+            bound.push_str("(pad ");
+            let layers = piece
+                .find("(layers ")
+                .expect("validated: every pad has layers");
+            let close = layers + piece[layers..].find(')').expect("layers list closes");
+            bound.push_str(&piece[..=close]);
+            bound.push_str(&format!("\n\t\t(net {} \"{}\")", net.0, net.1));
+            bound.push_str(&piece[close + 1..]);
+        }
+        let body = bound;
         // Fresh instance UUIDs.
         for (index, piece) in body.split("(uuid \"").enumerate() {
             if index == 0 {
@@ -130,6 +145,22 @@ mod tests {
         assert!(!text.contains("(version"));
         assert!(!text.contains("(generator"));
         assert!(!text.contains("0000000000a1"));
+
+        // A template with a different pad layer set still binds its nets.
+        let alt = PogoTemplate::from_source(
+            "(footprint \"Alt\"\n\t(layer \"F.Cu\")\n\t(property \"Reference\" \"REF**\"\n\t\t(at 0 0 0)\n\t\t(layer \"F.SilkS\")\n\t\t(uuid \"x\")\n\t\t(effects (font (size 1 1) (thickness 0.15)))\n\t)\n\t(pad \"1\" thru_hole circle\n\t\t(at 0 0)\n\t\t(size 1.5 1.5)\n\t\t(drill 0.9)\n\t\t(layers \"*.Cu\" \"*.Mask\" \"F.Paste\")\n\t\t(uuid \"y\")\n\t)\n)",
+        )
+        .expect("alt template validates");
+        let alt_text = alt.stamp([0.0, 0.0], "P1", (5, "N".into()), &mut UuidGen::new());
+        assert!(alt_text.contains("(layers \"*.Cu\" \"*.Mask\" \"F.Paste\")\n\t\t(net 5 \"N\")"));
+
+        // A pad without a layers list is rejected at load.
+        assert!(
+            PogoTemplate::from_source(
+                "(footprint \"Bad\"\n\t(property \"Reference\" \"REF**\"\n\t)\n\t(pad \"1\" smd circle\n\t\t(at 0 0)\n\t)\n)"
+            )
+            .is_err()
+        );
 
         // Deterministic given the same generator state.
         let again = template.stamp(
