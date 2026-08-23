@@ -1278,7 +1278,13 @@ fn planar_grid_sites(
                 .copied()
                 .filter(|&point| on_interior(&line, point))
                 .collect::<Vec<_>>();
-            stations.sort_by_key(|point| (point.x, point.y));
+            // Collinear with the segment, so distance from its start orders
+            // them along it whichever way it runs.
+            let along = |point: &VoronoiPoint<i32>| {
+                (i64::from(point.x) - i64::from(line.start.x)).abs()
+                    + (i64::from(point.y) - i64::from(line.start.y)).abs()
+            };
+            stations.sort_by_key(along);
             stations.dedup();
             std::iter::once(line.start)
                 .chain(stations)
@@ -2070,6 +2076,41 @@ fn segment_bbox(start: Point, end: Point) -> BBox {
 mod tests {
     use super::*;
     use crate::geom::shapes;
+
+    #[test]
+    fn planar_sites_split_along_the_segment_whichever_way_it_runs() {
+        let site = |start: (f64, f64), end: (f64, f64), index: usize| OrientedBoundarySegment {
+            topology: BoundarySegment {
+                ring: index / 10,
+                index,
+                ring_len: 10,
+            },
+            start: Point::new(start.0, start.1),
+            end: Point::new(end.0, end.1),
+            bbox: segment_bbox(Point::new(start.0, start.1), Point::new(end.0, end.1)),
+        };
+        // A right-to-left host touched at two interior points by other rings.
+        let sites = [
+            site((10.0, 0.0), (0.0, 0.0), 0),
+            site((7.0, 5.0), (7.0, 0.0), 10),
+            site((3.0, 5.0), (3.0, 0.0), 20),
+        ];
+        let grid = planar_grid_sites(&sites, |point| {
+            VoronoiPoint::new(point.x as i32, point.y as i32)
+        });
+
+        let host = grid
+            .iter()
+            .filter(|(_, topology)| topology.index == 0)
+            .map(|(line, _)| line)
+            .collect::<Vec<_>>();
+        assert_eq!(host.len(), 3);
+        assert_eq!(host[0].start, VoronoiPoint::new(10, 0));
+        for pair in host.windows(2) {
+            assert_eq!(pair[0].end, pair[1].start, "pieces chain along the host");
+        }
+        assert_eq!(host[2].end, VoronoiPoint::new(0, 0));
+    }
 
     #[test]
     fn inward_decimation_only_shrinks_and_respects_deviation() {
