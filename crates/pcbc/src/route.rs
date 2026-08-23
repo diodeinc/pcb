@@ -341,7 +341,8 @@ filler = pcbnew.ZONE_FILLER(brd)
 if not filler.Fill(brd.Zones()):
     sys.exit("Failed to fill zones after SES import")
 
-pcbnew.SaveBoard(brd_filename, brd)
+if not pcbnew.SaveBoard(brd_filename, brd):
+    sys.exit("Failed to save board after SES import")
 "#;
 
     PythonScriptBuilder::new(script)

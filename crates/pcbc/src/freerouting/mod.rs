@@ -366,7 +366,8 @@ import sys
 brd_filename = sys.argv[1]
 dsn_filename = sys.argv[2]
 brd = pcbnew.LoadBoard(brd_filename)
-pcbnew.ExportSpecctraDSN(brd, dsn_filename)
+if not pcbnew.ExportSpecctraDSN(brd, dsn_filename):
+    sys.exit("Failed to export DSN file from board")
 "#;
 
     PythonScriptBuilder::new(script)
