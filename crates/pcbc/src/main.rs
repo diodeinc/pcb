@@ -138,6 +138,7 @@ enum Commands {
     Publish(publish::PublishArgs),
 
     /// Vendor external dependencies
+    #[command(hide = true)]
     Vendor(vendor::VendorArgs),
 
     /// Reserved subcommand for future use
