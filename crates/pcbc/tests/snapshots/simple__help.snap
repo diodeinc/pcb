@@ -29,7 +29,6 @@ Commands:
   fmt         Format .zen files
   open        Open PCB layout files
   publish     Publish packages and boards by creating version tags
-  preview     Build and upload a preview release for a board
   vendor      Vendor external dependencies
   fork        Reserved subcommand for future use
   embed-step  Embed a STEP model into a KiCad footprint

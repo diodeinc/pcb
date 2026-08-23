@@ -104,7 +104,6 @@ struct ReleaseInfo {
     suppress: Vec<String>,
     resolution: ResolutionResult,
     root_package_url: Option<String>,
-    allow_errors: bool,
 }
 
 impl ReleaseInfo {
@@ -206,30 +205,6 @@ fn format_task_duration(seconds: f64) -> colored::ColoredString {
     }
 }
 
-fn confirm_continue_on_error(spinner: Option<&Spinner>, allow_errors: bool, message: &str) -> bool {
-    if !allow_errors {
-        return false;
-    }
-
-    let confirm = || {
-        if crate::tty::is_interactive() {
-            Confirm::new(message)
-                .with_default(true)
-                .prompt()
-                .unwrap_or(false)
-        } else {
-            eprintln!("{message} Continuing despite errors.");
-            true
-        }
-    };
-
-    if let Some(spinner) = spinner {
-        spinner.suspend(confirm)
-    } else {
-        confirm()
-    }
-}
-
 /// Execute a list of tasks with proper error handling and UI feedback
 fn execute_tasks(info: &ReleaseInfo, tasks: &[(&str, TaskFn)], start_time: Instant) -> Result<()> {
     for (name, task) in tasks {
@@ -262,7 +237,6 @@ pub fn build_board_release(
     suppress: Vec<String>,
     version: Option<String>,
     exclude: Vec<ArtifactType>,
-    allow_errors: bool,
 ) -> Result<PathBuf> {
     let start_time = Instant::now();
 
@@ -279,30 +253,14 @@ pub fn build_board_release(
         // Pass resolution so Module() paths resolve correctly
         let eval_result = pcb_zen::eval(&zen_path, resolution.clone(), Default::default());
 
-        let has_eval_errors = eval_result.diagnostics.has_errors();
-        if has_eval_errors || eval_result.output.is_none() {
+        if eval_result.diagnostics.has_errors() || eval_result.output.is_none() {
             info_spinner.suspend(|| {
                 let mut diagnostics = eval_result.diagnostics.clone();
                 let passes = crate::build::create_diagnostics_passes(&[], &[]);
                 diagnostics.apply_passes(&passes);
             });
-            if eval_result.output.is_none() {
-                info_spinner.finish();
-                anyhow::bail!("Evaluation failed");
-            }
-            if has_eval_errors {
-                if !allow_errors {
-                    info_spinner.finish();
-                    anyhow::bail!("Evaluation failed");
-                }
-                if !confirm_continue_on_error(
-                    Some(&info_spinner),
-                    allow_errors,
-                    "Evaluation completed with errors. Do you want to proceed anyway?",
-                ) {
-                    std::process::exit(1);
-                }
-            }
+            info_spinner.finish();
+            anyhow::bail!("Evaluation failed");
         }
 
         info_spinner.finish();
@@ -373,7 +331,6 @@ pub fn build_board_release(
             suppress,
             resolution,
             root_package_url: package_url,
-            allow_errors,
         };
 
         let elapsed = start_time.elapsed().as_secs_f64();
@@ -715,13 +672,7 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
         (has_errors, has_warnings, schematic)
     });
 
-    if has_errors
-        && !confirm_continue_on_error(
-            Some(spinner),
-            info.allow_errors,
-            "Build completed with errors. Do you want to proceed anyway?",
-        )
-    {
+    if has_errors {
         std::process::exit(1);
     }
 
@@ -1344,16 +1295,7 @@ fn run_kicad_drc(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
     spinner.suspend(|| crate::drc::render_diagnostics(&mut diagnostics, &info.suppress));
 
     // Fail if there are errors
-    if diagnostics.error_count() > 0
-        && !confirm_continue_on_error(
-            Some(spinner),
-            info.allow_errors,
-            &format!(
-                "DRC completed with {} error(s). Do you want to proceed anyway?",
-                diagnostics.error_count()
-            ),
-        )
-    {
+    if diagnostics.error_count() > 0 {
         std::process::exit(1);
     }
 

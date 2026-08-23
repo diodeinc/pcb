@@ -21,7 +21,7 @@ use std::env;
 use std::fmt;
 use std::path::Path;
 
-use crate::file_walker::{collect_zen_files, resolve_board_target};
+use crate::file_walker::{collect_zen_files, require_zen_file};
 use crate::pcb_mod::sync_targets;
 use crate::pcb_mod::target::add_target_for_package;
 use crate::release;
@@ -477,27 +477,58 @@ pub fn execute(args: PublishArgs) -> Result<()> {
 /// - Local hash release (no --bump, non-interactive): just build the release archive
 /// - Versioned release (--bump provided): preflight checks, fetch tags, build, upload, tag, push
 fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
-    let target = resolve_board_target(zen_path, "publish")?;
-    ensure_board_publish_has_no_workspace_overrides(&target.workspace)?;
+    require_zen_file(zen_path)?;
+    let file_provider = DefaultFileProvider::new();
+    let start_path = zen_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let workspace = get_workspace_info(&file_provider, start_path)?;
+
+    if !workspace.errors.is_empty() {
+        for error in &workspace.errors {
+            eprintln!("{}", error.error);
+        }
+        bail!("Found {} invalid pcb.toml file(s)", workspace.errors.len());
+    }
+
+    let board_path = zen_path.canonicalize().context("Board file not found")?;
+    let package_url = workspace
+        .package_url_for_zen(&board_path)
+        .ok_or_else(|| anyhow::anyhow!("File not found in workspace: {}", zen_path.display()))?;
+    let package = &workspace.packages[&package_url];
+    if package.config.board.is_none() {
+        bail!(
+            "Not a board package: {}\n\nTo publish a board, the package's pcb.toml must have a [board] section.",
+            zen_path.display()
+        );
+    }
+
+    let board_name = workspace
+        .board_name_for_zen(&board_path)
+        .unwrap_or_else(|| {
+            board_path
+                .file_stem()
+                .expect("validated board path must have a file stem")
+                .to_string_lossy()
+                .to_string()
+        });
+    let package_relative_path = package.rel_path.clone();
+
+    ensure_board_publish_has_no_workspace_overrides(&workspace)?;
 
     // Local hash release: no --bump, just build the archive
     if args.bump.is_none() {
         let _zip_path = release::build_board_release(
-            target.workspace,
-            target.zen_path,
-            target.board_name,
+            workspace,
+            board_path,
+            board_name,
             args.suppress.clone(),
             None, // version = None means use git hash
             args.exclude.clone(),
-            false,
         )?;
         return Ok(());
     }
-
-    let workspace = target.workspace;
-    let board_path = target.zen_path;
-    let board_name = target.board_name;
-    let pkg_rel_path = target.pkg_rel_path;
 
     let remote = if !args.no_push {
         let r = resolve_remote(&workspace.root, args.force)?;
@@ -513,7 +544,7 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
     };
 
     // Compute current version from tags (after fetch)
-    let tag_prefix = tags::compute_tag_prefix(Some(&pkg_rel_path), workspace.path());
+    let tag_prefix = tags::compute_tag_prefix(Some(&package_relative_path), workspace.path());
     let all_tags = git::list_all_tags(&workspace.root).unwrap_or_default();
     let current = tags::find_latest_version(&all_tags, &tag_prefix);
 
@@ -539,7 +570,6 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
         args.suppress.clone(),
         Some(format!("v{}", next_version)),
         args.exclude.clone(),
-        false,
     )?;
 
     // Upload to API (must succeed before creating tag)

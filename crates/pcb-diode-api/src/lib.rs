@@ -39,7 +39,7 @@ pub use registry::{
     RegistryModuleEntrypoint, RegistryModuleHit, RegistryModuleSymbol, RegistrySearchClient,
     RegistrySymbol, RegistrySymbolHit, SearchHit,
 };
-pub use release::{upload_preview, upload_release};
+pub use release::upload_release;
 pub use sandbox::{
     ExecSyncOutput, ExecSyncRequest, SandboxClient, SandboxDirEntry, SandboxListResponse,
     SandboxLockGuard, SandboxLockOptions,

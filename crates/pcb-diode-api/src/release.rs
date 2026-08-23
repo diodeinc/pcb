@@ -28,24 +28,14 @@ pub struct ReleaseResult {
     pub release_id: Option<String>,
 }
 
-/// Response from creating a preview.
-#[derive(Debug)]
-pub struct PreviewResult {
-    pub preview_id: String,
-    pub preview_url: String,
-}
-
-struct UploadContext {
-    client: Client,
-    base_url: String,
-    web_base_url: String,
-    token: Option<String>,
-    sha256_hex: String,
-}
-
-fn prepare_upload(ctx: &WorkspaceContext, zip_path: &Path) -> Result<UploadContext> {
+/// Upload a board release archive to the Diode API.
+pub fn upload_release(
+    zip_path: &Path,
+    workspace: &str,
+    ctx: &WorkspaceContext,
+) -> Result<ReleaseResult> {
     let token = crate::auth::get_api_token_with_context(ctx)?;
-    let base_url = ctx.api_base_url().to_string();
+    let base_url = ctx.api_base_url();
 
     let client = Client::builder()
         .user_agent(format!("diode-pcb/{}", env!("CARGO_PKG_VERSION")))
@@ -55,48 +45,13 @@ fn prepare_upload(ctx: &WorkspaceContext, zip_path: &Path) -> Result<UploadConte
     let (sha256_hex, sha256_b64) = calculate_sha256(zip_path)?;
     stage_artifact(
         &client,
-        &base_url,
+        base_url,
         token.as_deref(),
         zip_path,
         &sha256_hex,
         &sha256_b64,
     )?;
-
-    Ok(UploadContext {
-        client,
-        base_url,
-        web_base_url: ctx.web_base_url().to_string(),
-        token,
-        sha256_hex,
-    })
-}
-
-/// Upload a board release archive to the Diode API.
-pub fn upload_release(
-    zip_path: &Path,
-    workspace: &str,
-    ctx: &WorkspaceContext,
-) -> Result<ReleaseResult> {
-    let upload = prepare_upload(ctx, zip_path)?;
-    create_release(
-        &upload.client,
-        &upload.base_url,
-        upload.token.as_deref(),
-        workspace,
-        &upload.sha256_hex,
-    )
-}
-
-/// Upload a board preview archive to the Diode API.
-pub fn upload_preview(zip_path: &Path, ctx: &WorkspaceContext) -> Result<PreviewResult> {
-    let upload = prepare_upload(ctx, zip_path)?;
-    create_preview(
-        &upload.client,
-        &upload.base_url,
-        &upload.web_base_url,
-        upload.token.as_deref(),
-        &upload.sha256_hex,
-    )
+    create_release(&client, base_url, token.as_deref(), workspace, &sha256_hex)
 }
 
 fn calculate_sha256(path: &Path) -> Result<(String, String)> {
@@ -199,53 +154,6 @@ fn create_release(
         commit_sha: json["commitSha"].as_str().map(String::from),
         version: json["version"].as_str().map(String::from),
         release_id: json["releaseId"].as_str().map(String::from),
-    })
-}
-
-fn create_preview(
-    client: &Client,
-    base_url: &str,
-    web_base_url: &str,
-    token: Option<&str>,
-    sha256_hex: &str,
-) -> Result<PreviewResult> {
-    let url = format!("{}/api/previews", base_url);
-
-    let resp = crate::auth::apply_bearer_auth(client.post(&url), token)
-        .json(&serde_json::json!({ "artifactHash": sha256_hex }))
-        .send()
-        .context("Failed to connect to Diode API")?;
-
-    let resp = check_response(resp, |status, msg| match status {
-        StatusCode::UNAUTHORIZED => AUTHENTICATION_FAILED_MESSAGE.into(),
-        StatusCode::NOT_FOUND if msg.contains("artifact") => {
-            "Staged artifact not found. The upload may have expired.".into()
-        }
-        StatusCode::BAD_REQUEST if msg.contains("metadata") => {
-            "Invalid preview archive: missing metadata.json".into()
-        }
-        StatusCode::BAD_REQUEST if msg.contains("Checksum") || msg.contains("checksum") => {
-            "Checksum mismatch".into()
-        }
-        StatusCode::BAD_REQUEST => format!("Invalid preview: {msg}"),
-        _ => format!("Failed to create preview ({status}): {msg}"),
-    })?;
-
-    let json: serde_json::Value = resp.json().context("Invalid response from server")?;
-    let preview_id = json["previewId"]
-        .as_str()
-        .context("Missing previewId in response")?
-        .to_string();
-
-    let preview_url = if let Some(url) = json["previewUrl"].as_str() {
-        url.to_string()
-    } else {
-        format!("{}/preview/{}", web_base_url, preview_id)
-    };
-
-    Ok(PreviewResult {
-        preview_id,
-        preview_url,
     })
 }
 
