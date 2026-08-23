@@ -85,7 +85,7 @@ pub(super) fn run(
                     // unexercised rule must not read as validated.
                     0 => result.skip(format!(
                         "no measurable {} subjects in the selected layout target",
-                        rule.kind.subject()
+                        rule.kind.semantics().subject
                     )),
                     checked => {
                         result.checked = checked;
@@ -155,7 +155,7 @@ fn skip_reason(rule: &Rule, design: &Design) -> Option<String> {
             .then(|| "board profile outlines".to_owned()),
         RuleKind::ThinFeature(_) | RuleKind::ThinGap(_) => None,
     };
-    let pools = rule.kind.pools();
+    let pools = rule.kind.semantics().pools;
     let layers = (pools.copper && design.copper_layers.is_empty())
         .then(|| "copper layers".to_owned())
         .or_else(|| {
@@ -187,7 +187,8 @@ fn evaluate(rule: &Rule, design: &Design) -> Evaluation {
 /// distance itself.
 fn finding(rule: &Rule, measured: Measured) -> Finding {
     let limit = rule.limit.millimeters();
-    let [first_role, second_role] = rule.kind.witness_roles();
+    let semantics = rule.kind.semantics();
+    let [first_role, second_role] = semantics.witness_roles;
     let distance = measured.distance;
     let layer_names = measured
         .layers
@@ -206,11 +207,10 @@ fn finding(rule: &Rule, measured: Measured) -> Finding {
         severity: rule.severity,
         waived: false,
         waiver_reason: None,
-        title: rule.kind.finding_title(),
+        title: semantics.finding_title,
         message: format!(
             "{} is {:.6} mm{on_layers}; the PDK requires at least {limit:.6} mm",
-            rule.kind.quantity_label(),
-            distance.mm
+            semantics.quantity_label, distance.mm
         ),
         measurement: Measurement::minimum(distance.mm, limit),
         location: Location {

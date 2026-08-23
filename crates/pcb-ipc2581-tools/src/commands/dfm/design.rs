@@ -28,7 +28,7 @@ use crate::ipc2581::Ipc2581;
 use crate::layers;
 
 use super::report::LayerRef;
-use super::rules::{self, Rule, RuleKind};
+use super::rules::{self, Rule};
 
 pub(super) struct Design<'a> {
     pub ipc: &'a Ipc2581,
@@ -66,12 +66,8 @@ impl<'a> Design<'a> {
         // would let one large hole coarsen every fine-clearance query.
         let boundary_search_mm = rules
             .iter()
-            .map(|rule| match rule.kind {
-                RuleKind::AnnularRing(_) | RuleKind::LineworkToCopperClearance(_) => {
-                    rule.limit.millimeters()
-                }
-                _ => 0.0,
-            })
+            .filter(|rule| rule.kind.semantics().pools.copper_boundaries)
+            .map(|rule| rule.limit.millimeters())
             .fold(1.0, f64::max);
         Ok(Self {
             ipc,

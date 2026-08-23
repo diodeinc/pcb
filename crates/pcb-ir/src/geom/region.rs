@@ -1203,7 +1203,7 @@ fn planar_grid_sites(
         point != line.start
             && point != line.end
             && orient(line.start, line.end, point) == 0
-            && (line.start.x.min(line.end.x)..=line.start.x.max(line.end.x)).contains(&point.x)
+            && (line.start.x..=line.end.x).contains(&point.x)
             && (line.start.y.min(line.end.y)..=line.start.y.max(line.end.y)).contains(&point.y)
     };
     let length2 = |line: &VoronoiLine<i32>| {
@@ -1211,13 +1211,21 @@ fn planar_grid_sites(
         let dy = i128::from(line.end.y) - i128::from(line.start.y);
         dx * dx + dy * dy
     };
+    let crosses = |a: &VoronoiLine<i32>, b: &VoronoiLine<i32>| {
+        orient(a.start, a.end, b.start).signum() * orient(a.start, a.end, b.end).signum() < 0
+            && orient(b.start, b.end, a.start).signum() * orient(b.start, b.end, a.end).signum() < 0
+    };
+    // Oriented start ≤ end so a segment and its reverse are one site.
     let snapped = sites
         .iter()
         .map(|site| {
-            (
-                VoronoiLine::new(quantize(site.start), quantize(site.end)),
-                site.topology,
-            )
+            let (a, b) = (quantize(site.start), quantize(site.end));
+            let (start, end) = if (a.x, a.y) <= (b.x, b.y) {
+                (a, b)
+            } else {
+                (b, a)
+            };
+            (VoronoiLine::new(start, end), site.topology)
         })
         .filter(|(line, _)| line.start != line.end)
         .collect::<Vec<_>>();
@@ -1225,6 +1233,7 @@ fn planar_grid_sites(
         .iter()
         .flat_map(|(line, _)| [line.start, line.end])
         .collect::<Vec<_>>();
+    let mut seen = std::collections::HashSet::new();
     let split = snapped
         .iter()
         .flat_map(|&(line, topology)| {
@@ -1233,11 +1242,7 @@ fn planar_grid_sites(
                 .copied()
                 .filter(|&point| on_interior(&line, point))
                 .collect::<Vec<_>>();
-            let along = |point: VoronoiPoint<i32>| {
-                (i128::from(point.x) - i128::from(line.start.x)).abs()
-                    + (i128::from(point.y) - i128::from(line.start.y)).abs()
-            };
-            stations.sort_by_key(|&point| along(point));
+            stations.sort_by_key(|point| (point.x, point.y));
             stations.dedup();
             std::iter::once(line.start)
                 .chain(stations)
@@ -1247,26 +1252,8 @@ fn planar_grid_sites(
                 .map(|pair| (VoronoiLine::new(pair[0], pair[1]), topology))
                 .collect::<Vec<_>>()
         })
+        .filter(|(line, _)| seen.insert((line.start.x, line.start.y, line.end.x, line.end.y)))
         .collect::<Vec<_>>();
-    let mut seen = std::collections::HashSet::new();
-    let split = split
-        .into_iter()
-        .filter(|(line, _)| {
-            let key = if (line.start.x, line.start.y) <= (line.end.x, line.end.y) {
-                (line.start.x, line.start.y, line.end.x, line.end.y)
-            } else {
-                (line.end.x, line.end.y, line.start.x, line.start.y)
-            };
-            seen.insert(key)
-        })
-        .collect::<Vec<_>>();
-    let crosses = |a: &VoronoiLine<i32>, b: &VoronoiLine<i32>| {
-        let o1 = orient(a.start, a.end, b.start).signum();
-        let o2 = orient(a.start, a.end, b.end).signum();
-        let o3 = orient(b.start, b.end, a.start).signum();
-        let o4 = orient(b.start, b.end, a.end).signum();
-        o1 * o2 < 0 && o3 * o4 < 0
-    };
     split
         .iter()
         .enumerate()
@@ -1279,6 +1266,49 @@ fn planar_grid_sites(
         })
         .map(|(_, site)| *site)
         .collect()
+}
+
+/// Whether the sites are one cyclic run of consecutive segments of one ring
+/// that turns the same way throughout by less than a half turn: a single
+/// convex corner or arc. Nothing in such a run faces anything else, so a
+/// residue it walls alone is the bite of one corner and has no width.
+fn convex_chain(sites: &[OrientedBoundarySegment]) -> bool {
+    let Some(first) = sites.first() else {
+        return true;
+    };
+    if sites
+        .iter()
+        .any(|site| site.topology.ring != first.topology.ring)
+    {
+        return false;
+    }
+    let ring_len = first.topology.ring_len;
+    let mut run = sites.to_vec();
+    run.sort_by_key(|site| site.topology.index);
+    // A run is contiguous when, read cyclically, exactly one step is not
+    // the next index: the step from its last segment back to its first.
+    let gaps = (0..run.len())
+        .filter(|&position| {
+            let next = run[(position + 1) % run.len()].topology.index;
+            (run[position].topology.index + 1) % ring_len != next
+        })
+        .collect::<Vec<_>>();
+    let [gap] = gaps[..] else {
+        return false;
+    };
+    run.rotate_left(gap + 1);
+    let turns = run.windows(2).map(|pair| {
+        let a = pair[0].end - pair[0].start;
+        let b = pair[1].end - pair[1].start;
+        (a.x * b.y - a.y * b.x).atan2(a.x * b.x + a.y * b.y)
+    });
+    let (mut positive, mut negative, mut total) = (false, false, 0.0);
+    for turn in turns {
+        positive |= turn > 0.0;
+        negative |= turn < 0.0;
+        total += turn.abs();
+    }
+    !(positive && negative) && total < std::f64::consts::PI
 }
 
 /// A maximal inscribed disk of the boundary's Voronoi diagram: its center,
@@ -1314,6 +1344,9 @@ fn component_width(
     reach: f64,
     contact_tolerance: f64,
 ) -> Option<Distance> {
+    if convex_chain(sites) {
+        return None;
+    }
     let origin = component.bbox.min;
     let units_per_mm = 1.0 / contact_tolerance;
     let quantize = |point: Point| {
@@ -1339,35 +1372,46 @@ fn component_width(
             }
         })
         .collect::<Vec<_>>();
-    let sites = sites.as_slice();
     if lines.len() < 2 {
         return None;
     }
+    // Incidence on the grid: sites of one source segment, ring-adjacent
+    // sites, and sites sharing a grid point (snapping can collapse the
+    // segment between two and make them neighbors) are the same wall.
+    let incident = |i: usize, j: usize| {
+        let (a, b) = (&lines[i], &lines[j]);
+        boundary_segments_are_incident(sites[i].topology, sites[j].topology)
+            || [a.start, a.end]
+                .iter()
+                .any(|point| [b.start, b.end].contains(point))
+    };
     let diagram = VoronoiBuilder::<i32>::default()
         .with_segments(lines.iter())
         .and_then(VoronoiBuilder::build)
         .expect("snap-rounded boundary segments do not cross");
+    // A cell's site index, and its point when the site is a segment end.
     let site_of = |cell: VoronoiCellIndex| {
         let cell = diagram.cell(cell).expect("diagram cell");
-        let site = &sites[cell.source_index().usize()];
+        let index = cell.source_index().usize();
         let point = match cell.source_category() {
-            SourceCategory::SegmentStart => Some(site.start),
-            SourceCategory::SegmentEnd => Some(site.end),
+            SourceCategory::SegmentStart => Some(sites[index].start),
+            SourceCategory::SegmentEnd => Some(sites[index].end),
             SourceCategory::Segment | SourceCategory::SinglePoint => None,
         };
-        (site, point)
+        (index, point)
     };
-    let disk =
-        |center: Point, first: &OrientedBoundarySegment, second: &OrientedBoundarySegment| {
-            let (first_distance, first) = dist::point_segment(center, first.start, first.end);
-            let (second_distance, second) = dist::point_segment(center, second.start, second.end);
-            InscribedDisk {
-                center,
-                radius: (first_distance + second_distance) / 2.0,
-                first,
-                second,
-            }
-        };
+    let disk = |center: Point, first: usize, second: usize| {
+        let (first_distance, first) =
+            dist::point_segment(center, sites[first].start, sites[first].end);
+        let (second_distance, second) =
+            dist::point_segment(center, sites[second].start, sites[second].end);
+        InscribedDisk {
+            center,
+            radius: (first_distance + second_distance) / 2.0,
+            first,
+            second,
+        }
+    };
     let component_edges = component
         .rings
         .iter()
@@ -1377,7 +1421,6 @@ fn component_width(
     // Vertices: tangent to every site around them; a width needs two that
     // are not incident.
     let at_vertices = diagram.vertices().iter().filter_map(|vertex| {
-        let center = unquantize([vertex.x(), vertex.y()]);
         let around = diagram
             .edge_rot_next_iterator(vertex.get_incident_edge().ok()?)
             .filter_map(|edge| diagram.edge(edge).ok()?.cell().ok())
@@ -1386,21 +1429,20 @@ fn component_width(
         around
             .iter()
             .enumerate()
-            .flat_map(|(index, first)| {
-                around[index + 1..]
+            .flat_map(|(position, &first)| {
+                around[position + 1..]
                     .iter()
-                    .map(move |second| (first, second))
+                    .map(move |&second| (first, second))
             })
-            .find(|(first, second)| {
-                !boundary_segments_are_incident(first.topology, second.topology)
-            })
-            .map(|(first, second)| (disk(center, first, second), false))
+            .find(|&(first, second)| !incident(first, second))
+            .map(|(first, second)| disk(unquantize([vertex.x(), vertex.y()]), first, second))
     });
 
-    // Edges between non-incident sites, sampled along their length, at the
-    // apex of a parabola (reflex vertex against a segment) or point–point
-    // bisector, and where they cross the component boundary.
-    let along_edges = diagram.edges().iter().flat_map(|edge| {
+    // Edges between non-incident sites, sampled along their length and at
+    // the apex of a parabola (reflex vertex against a segment) or of a
+    // point–point bisector; plus where they cross the component boundary.
+    let (mut on_axis, mut on_boundary) = (Vec::new(), Vec::new());
+    for edge in diagram.edges() {
         let twin = edge.twin().expect("diagram edge twin");
         let (first, first_point) = site_of(edge.cell().expect("diagram edge cell"));
         let (second, second_point) = site_of(
@@ -1409,60 +1451,55 @@ fn component_width(
                 .and_then(|twin| twin.cell())
                 .expect("twin cell"),
         );
-        let skip = edge.id() > twin
-            || !edge.is_primary()
-            || boundary_segments_are_incident(first.topology, second.topology);
-        let samples = if skip {
-            Vec::new()
-        } else {
+        if edge.id() > twin || !edge.is_primary() || incident(first, second) {
+            continue;
+        }
+        let samples =
             voronoi_edge_samples(&diagram, edge.id(), &lines, component, reach, units_per_mm)
                 .expect("voronoi edge samples")
                 .into_iter()
                 .map(unquantize)
-                .collect::<Vec<_>>()
+                .collect::<Vec<_>>();
+        let foot = |point: Point, site: usize| {
+            dist::point_segment(point, sites[site].start, sites[site].end).1
         };
         let apex = match (first_point, second_point) {
             (Some(point), Some(other)) => Some(point.midpoint(other)),
-            (Some(point), None) => {
-                Some(point.midpoint(dist::point_segment(point, second.start, second.end).1))
-            }
-            (None, Some(point)) => {
-                Some(point.midpoint(dist::point_segment(point, first.start, first.end).1))
-            }
+            (Some(point), None) => Some(point.midpoint(foot(point, second))),
+            (None, Some(point)) => Some(point.midpoint(foot(point, first))),
             (None, None) => None,
-        }
-        .filter(|_| !samples.is_empty());
-        let crossings = samples
-            .windows(2)
-            .flat_map(|pair| {
-                component_edges.iter().filter_map(move |&(start, end)| {
-                    let (distance, on_edge, _) = dist::segments(pair[0], pair[1], start, end);
-                    (distance <= contact_tolerance).then_some(on_edge)
-                })
+        };
+        on_boundary.extend(samples.windows(2).flat_map(|pair| {
+            component_edges.iter().filter_map(move |&(start, end)| {
+                let (distance, on_edge, _) = dist::segments(pair[0], pair[1], start, end);
+                (distance <= contact_tolerance).then(|| disk(on_edge, first, second))
             })
-            .collect::<Vec<_>>();
-        samples
-            .into_iter()
-            .chain(apex)
-            .map(|center| (disk(center, first, second), false))
-            .chain(
-                crossings
-                    .into_iter()
-                    .map(|center| (disk(center, first, second), true)),
-            )
-            .collect::<Vec<_>>()
-    });
+        }));
+        on_axis.extend(
+            samples
+                .into_iter()
+                .chain(apex)
+                .map(|center| disk(center, first, second)),
+        );
+    }
+    on_axis.extend(at_vertices);
 
-    let candidates = at_vertices.chain(along_edges).collect::<Vec<_>>();
-    let centers = candidates
-        .iter()
-        .map(|(disk, _)| disk.center)
-        .collect::<Vec<_>>();
-    let present = candidates
+    // A disk is maximal only if its radius is its clearance to every site;
+    // the builder's degenerate edges can put a center next to a wall it
+    // does not touch.
+    let clearance = |center: Point| {
+        sites
+            .iter()
+            .map(|site| dist::point_segment(center, site.start, site.end).0)
+            .fold(f64::INFINITY, f64::min)
+    };
+    let centers = on_axis.iter().map(|disk| disk.center).collect::<Vec<_>>();
+    let present = on_axis
         .into_iter()
         .zip(component.contains_points_batch(&centers))
-        .filter(|((_, on_boundary), inside)| *inside || *on_boundary)
-        .map(|((disk, _), _)| disk)
+        .filter_map(|(disk, inside)| inside.then_some(disk))
+        .chain(on_boundary)
+        .filter(|disk| disk.radius <= clearance(disk.center) + contact_tolerance)
         .collect::<Vec<_>>();
     // A disk inside a larger present disk up to the flattening tolerance is
     // a branch the flattening sprouted, not a width of the source. Only
@@ -1479,7 +1516,8 @@ fn component_width(
         .iter()
         .filter(|disk| !pruned(disk))
         .map(|disk| disk.width())
-        .filter(|width| width.mm > contact_tolerance)
+        // Below two grid units a width is snapping noise, not geometry.
+        .filter(|width| width.mm > 2.0 * contact_tolerance)
         .min_by(|left, right| left.mm.total_cmp(&right.mm))
 }
 
