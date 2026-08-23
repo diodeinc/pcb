@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Added `pcb route --engine freerouting` to auto-route boards locally via FreeRouting.
+
 ### Changed
 
 - `pcb preview` and its preview release upload path.

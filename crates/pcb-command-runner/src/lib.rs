@@ -60,6 +60,21 @@ impl CommandOutput {
     }
 }
 
+/// Two independent handles to `file` for redirecting a child's stdout and
+/// stderr to the same on-disk log without either handle's `Drop` closing
+/// the fd the other is using.
+pub fn log_file_stdio(file: &File) -> Result<(Stdio, Stdio)> {
+    let stdout = Stdio::from(
+        file.try_clone()
+            .context("Failed to duplicate log file handle")?,
+    );
+    let stderr = Stdio::from(
+        file.try_clone()
+            .context("Failed to duplicate log file handle")?,
+    );
+    Ok((stdout, stderr))
+}
+
 /// Options for running a command
 pub struct CommandRunnerOptions {
     /// Capture the command output (both stdout and stderr)
@@ -202,13 +217,9 @@ where
         }
     } else {
         // If not capturing output, just run the command and wait for it to finish
-        let (out, err) = if let Some(log_file) = options.log_file {
-            (
-                Stdio::from(log_file.try_clone().unwrap()),
-                Stdio::from(log_file.try_clone().unwrap()),
-            )
-        } else {
-            (Stdio::inherit(), Stdio::inherit())
+        let (out, err) = match &options.log_file {
+            Some(log_file) => log_file_stdio(log_file)?,
+            None => (Stdio::inherit(), Stdio::inherit()),
         };
 
         let mut child = command
