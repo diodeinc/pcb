@@ -85,7 +85,6 @@ struct JobOutputResponse {
 
 #[derive(Deserialize)]
 struct DrcReport {
-    #[serde(default)]
     unconnected_items: Vec<serde_json::Value>,
 }
 
