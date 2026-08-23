@@ -6,6 +6,7 @@
 //! dilation over filled point sets, shared by every dialect so IPC, Gerber,
 //! SVG, and comparison all use the same geometry semantics.
 
+use std::collections::HashMap;
 use std::fmt;
 
 use boostvoronoi::prelude::{
@@ -1106,10 +1107,10 @@ fn closing_residual(region: &ContourSet, radius: f64) -> ContourSet {
     region.disk_close(radius).difference(region)
 }
 
-/// Every source boundary edge longer than the region tolerance, sorted by
-/// minimum x so a query can stop scanning once edges start past its bounds.
+/// Every source boundary edge longer than the region tolerance, in ring
+/// order.
 fn source_boundary_segments(source: &ContourSet) -> Vec<OrientedBoundarySegment> {
-    let mut segments = source
+    source
         .rings
         .iter()
         .enumerate()
@@ -1128,9 +1129,7 @@ fn source_boundary_segments(source: &ContourSet) -> Vec<OrientedBoundarySegment>
                     bbox: segment_bbox(start, end),
                 })
         })
-        .collect::<Vec<_>>();
-    segments.sort_by(|left, right| left.bbox.min.x.total_cmp(&right.bbox.min.x));
-    segments
+        .collect()
 }
 
 /// Each connected component of `residual` that two distinct source-boundary
@@ -1149,13 +1148,13 @@ fn two_sided_residual_components(
     residual: &ContourSet,
     reach: f64,
 ) -> Vec<TwoSidedResidualComponent> {
-    let segments = source_boundary_segments(source);
+    let segments = SegmentGrid::new(source_boundary_segments(source), reach);
     let contact_tolerance = source.tolerance.max(residual.tolerance);
     residual
         .connected_components()
         .into_iter()
         .filter_map(|component| {
-            let sites = segments_near(&segments, component.bbox.expand(reach));
+            let sites = segments.near(component.bbox.expand(reach));
             component_width(&sites, &component, reach, contact_tolerance).map(|width| {
                 TwoSidedResidualComponent {
                     region: component,
@@ -1166,17 +1165,52 @@ fn two_sided_residual_components(
         .collect()
 }
 
-/// The segments (sorted by minimum x) whose bounds meet `query`.
-fn segments_near(
-    segments: &[OrientedBoundarySegment],
-    query: BBox,
-) -> Vec<OrientedBoundarySegment> {
-    let candidate_end = segments.partition_point(|segment| segment.bbox.min.x <= query.max.x);
-    segments[..candidate_end]
-        .iter()
-        .filter(|segment| segment.bbox.intersects(query))
-        .copied()
-        .collect()
+/// Boundary segments bucketed on a uniform grid, so the segments around one
+/// residue component are found without scanning the whole boundary.
+struct SegmentGrid {
+    cell_mm: f64,
+    segments: Vec<OrientedBoundarySegment>,
+    cells: HashMap<(i64, i64), Vec<u32>>,
+}
+
+impl SegmentGrid {
+    fn new(segments: Vec<OrientedBoundarySegment>, cell_mm: f64) -> Self {
+        let cell_mm = cell_mm.max(tol::REGION_MM);
+        let mut cells: HashMap<(i64, i64), Vec<u32>> = HashMap::new();
+        for (index, segment) in segments.iter().enumerate() {
+            for cell in Self::cells_of(segment.bbox, cell_mm) {
+                cells.entry(cell).or_default().push(index as u32);
+            }
+        }
+        Self {
+            cell_mm,
+            segments,
+            cells,
+        }
+    }
+
+    fn cells_of(bbox: BBox, cell_mm: f64) -> impl Iterator<Item = (i64, i64)> {
+        let cell = move |value: f64| (value / cell_mm).floor() as i64;
+        let (min_x, max_x) = (cell(bbox.min.x), cell(bbox.max.x));
+        let (min_y, max_y) = (cell(bbox.min.y), cell(bbox.max.y));
+        (min_x..=max_x).flat_map(move |x| (min_y..=max_y).map(move |y| (x, y)))
+    }
+
+    /// The segments whose bounds meet `query`, in index order, each once.
+    fn near(&self, query: BBox) -> Vec<OrientedBoundarySegment> {
+        let mut indices = Self::cells_of(query, self.cell_mm)
+            .filter_map(|cell| self.cells.get(&cell))
+            .flatten()
+            .copied()
+            .collect::<Vec<_>>();
+        indices.sort_unstable();
+        indices.dedup();
+        indices
+            .into_iter()
+            .map(|index| self.segments[index as usize])
+            .filter(|segment| segment.bbox.intersects(query))
+            .collect()
+    }
 }
 
 /// A boundary segment snapped to the tolerance grid, with its topology.
@@ -1203,7 +1237,7 @@ fn planar_grid_sites(
         point != line.start
             && point != line.end
             && orient(line.start, line.end, point) == 0
-            && (line.start.x..=line.end.x).contains(&point.x)
+            && (line.start.x.min(line.end.x)..=line.start.x.max(line.end.x)).contains(&point.x)
             && (line.start.y.min(line.end.y)..=line.start.y.max(line.end.y)).contains(&point.y)
     };
     let length2 = |line: &VoronoiLine<i32>| {
@@ -1215,17 +1249,19 @@ fn planar_grid_sites(
         orient(a.start, a.end, b.start).signum() * orient(a.start, a.end, b.end).signum() < 0
             && orient(b.start, b.end, a.start).signum() * orient(b.start, b.end, a.end).signum() < 0
     };
-    // Oriented start ≤ end so a segment and its reverse are one site.
+    // Sites keep their ring's traversal direction; a segment and its
+    // reverse are one site.
+    let key = |line: &VoronoiLine<i32>| {
+        let (a, b) = ((line.start.x, line.start.y), (line.end.x, line.end.y));
+        (a.min(b), a.max(b))
+    };
     let snapped = sites
         .iter()
         .map(|site| {
-            let (a, b) = (quantize(site.start), quantize(site.end));
-            let (start, end) = if (a.x, a.y) <= (b.x, b.y) {
-                (a, b)
-            } else {
-                (b, a)
-            };
-            (VoronoiLine::new(start, end), site.topology)
+            (
+                VoronoiLine::new(quantize(site.start), quantize(site.end)),
+                site.topology,
+            )
         })
         .filter(|(line, _)| line.start != line.end)
         .collect::<Vec<_>>();
@@ -1252,7 +1288,7 @@ fn planar_grid_sites(
                 .map(|pair| (VoronoiLine::new(pair[0], pair[1]), topology))
                 .collect::<Vec<_>>()
         })
-        .filter(|(line, _)| seen.insert((line.start.x, line.start.y, line.end.x, line.end.y)))
+        .filter(|(line, _)| seen.insert(key(line)))
         .collect::<Vec<_>>();
     split
         .iter()
@@ -1375,15 +1411,24 @@ fn component_width(
     if lines.len() < 2 {
         return None;
     }
-    // Incidence on the grid: sites of one source segment, ring-adjacent
-    // sites, and sites sharing a grid point (snapping can collapse the
-    // segment between two and make them neighbors) are the same wall.
+    // Which sites are one wall. A ring's two sides of a channel are
+    // traversed in opposite directions, so two segments of one ring face
+    // each other only when their directions oppose; ring-adjacent segments
+    // and segments running within a quarter turn of each other — chords of
+    // one curve, however a sub-tolerance stub between them snapped — are
+    // the same wall. Segments of different rings are one wall only where
+    // they touch.
     let incident = |i: usize, j: usize| {
-        let (a, b) = (&lines[i], &lines[j]);
-        boundary_segments_are_incident(sites[i].topology, sites[j].topology)
-            || [a.start, a.end]
+        let (a, b) = (&sites[i], &sites[j]);
+        if a.topology.ring == b.topology.ring {
+            let (da, db) = (a.end - a.start, b.end - b.start);
+            boundary_segments_are_incident(a.topology, b.topology)
+                || da.x * db.x + da.y * db.y > 0.0
+        } else {
+            [lines[i].start, lines[i].end]
                 .iter()
-                .any(|point| [b.start, b.end].contains(point))
+                .any(|point| [lines[j].start, lines[j].end].contains(point))
+        }
     };
     let diagram = VoronoiBuilder::<i32>::default()
         .with_segments(lines.iter())
