@@ -277,15 +277,6 @@ fn find_or_download_freerouting_jar(expected_hash: &[u8; 32]) -> Result<PathBuf>
     let cached = cache_dir.join(&jar_filename);
 
     std::fs::create_dir_all(&cache_dir).context("Failed to create FreeRouting cache dir")?;
-    if !restrict_dir_to_owner(&cache_dir) {
-        anyhow::bail!(
-            "Refusing to use FreeRouting cache dir {} — it's owned by another user.\n\
-             This can happen when the system cache/temp dir is shared between users.\n\
-             Remove the directory (if you control it) or set FREEROUTING_JAR \
-             to point at a JAR directly.",
-            cache_dir.display()
-        );
-    }
 
     if cached.exists() {
         match sha256_file(&cached) {
@@ -324,38 +315,6 @@ fn find_or_download_freerouting_jar(expected_hash: &[u8; 32]) -> Result<PathBuf>
     println!("  Downloaded to {}", cached.display());
 
     Ok(cached)
-}
-
-#[cfg(unix)]
-fn restrict_dir_to_owner(dir: &Path) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    use std::os::unix::fs::PermissionsExt;
-
-    let Ok(meta) = std::fs::metadata(dir) else {
-        return false;
-    };
-    // SAFETY: geteuid takes no arguments and cannot fail.
-    let euid = unsafe { libc_geteuid() };
-    if meta.uid() != euid {
-        return false;
-    }
-    let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
-    true
-}
-
-#[cfg(not(unix))]
-fn restrict_dir_to_owner(_dir: &Path) -> bool {
-    true
-}
-
-#[cfg(unix)]
-unsafe extern "C" {
-    fn geteuid() -> u32;
-}
-
-#[cfg(unix)]
-unsafe fn libc_geteuid() -> u32 {
-    unsafe { geteuid() }
 }
 
 fn export_dsn(board_path: &Path, dsn_path: &Path) -> Result<()> {
