@@ -429,7 +429,7 @@ fn test_freerouting_cli() {
     );
 
     let mut sandbox = Sandbox::new().with_workspace();
-    sandbox.write("board.zen", BOARD_WITH_LAYOUT_ZEN);
+    sandbox.write("board.zen", BOARD_WITH_ROUTABLE_NETS_ZEN);
 
     let build_output = sandbox
         .run("pcbc", ["layout", "--no-open", "board.zen"])
