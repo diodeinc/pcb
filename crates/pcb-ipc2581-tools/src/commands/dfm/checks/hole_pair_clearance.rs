@@ -22,65 +22,49 @@
 
 use pcb_ir::geom::dfm::disk_clearance;
 
-use crate::commands::dfm::report::{Evidence, Finding};
-use crate::commands::dfm::rules::Rule;
+use crate::commands::dfm::design::Design;
+use crate::commands::dfm::report::Evidence;
 
-use super::{
-    COMPARISON_EPSILON_MM, ClearanceViolation, Context, hole_subject, unique_layers,
-    violates_minimum,
-};
+use super::{COMPARISON_EPSILON_MM, Evaluation, Measured, hole_subject, layers};
 
-pub(super) fn evaluate(rule: &Rule, ctx: &Context) -> (usize, Vec<Finding>) {
-    let holes = &ctx.design.holes;
-    let limit = rule.limit.millimeters();
-    let mut findings = Vec::new();
-    for first_index in 0..holes.len() {
-        let first = &holes[first_index];
-        for second in &holes[first_index + 1..] {
-            if second.bbox.min.x - first.bbox.max.x >= limit - COMPARISON_EPSILON_MM {
-                break;
-            }
-            let y_gap = (second.bbox.min.y - first.bbox.max.y)
-                .max(first.bbox.min.y - second.bbox.max.y)
-                .max(0.0);
-            if y_gap >= limit - COMPARISON_EPSILON_MM {
-                continue;
-            }
-            if !first.span_overlaps(second) {
-                continue;
-            }
-            let clearance = disk_clearance(
-                first.center,
-                first.diameter_mm / 2.0,
-                second.center,
-                second.diameter_mm / 2.0,
-            );
-            if !violates_minimum(clearance.distance_mm, limit) {
-                continue;
-            }
-            findings.push(
-                ClearanceViolation {
-                    rule,
-                    title: "Hole-to-hole clearance is below minimum",
-                    message: format!(
-                        "hole edges are {:.6} mm apart; the PDK requires at least {:.6} mm",
-                        clearance.distance_mm, limit
+pub(super) fn evaluate(limit_mm: f64, design: &Design) -> Evaluation {
+    let holes = &design.holes;
+    let reach = limit_mm - COMPARISON_EPSILON_MM;
+    let measured = holes
+        .iter()
+        .enumerate()
+        .flat_map(|(index, first)| {
+            holes[index + 1..]
+                .iter()
+                .take_while(move |second| second.bbox.min.x - first.bbox.max.x < reach)
+                .filter(move |second| {
+                    let y_gap = (second.bbox.min.y - first.bbox.max.y)
+                        .max(first.bbox.min.y - second.bbox.max.y)
+                        .max(0.0);
+                    y_gap < reach && first.span_overlaps(second)
+                })
+                .map(move |second| Measured {
+                    distance: disk_clearance(
+                        first.center,
+                        first.diameter_mm / 2.0,
+                        second.center,
+                        second.diameter_mm / 2.0,
                     ),
-                    witness_roles: ["first_hole_boundary", "second_hole_boundary"],
-                    clearance,
-                    layers: unique_layers(&first.layer, &second.layer),
+                    bbox: first.bbox.union(second.bbox),
+                    layers: layers([&first.layer, &second.layer]),
                     subjects: vec![
-                        hole_subject(ctx, first, "first"),
-                        hole_subject(ctx, second, "second"),
+                        hole_subject(design, first, "first"),
+                        hole_subject(design, second, "second"),
                     ],
                     evidence: vec![
                         Evidence::circle("first_hole", first.center, first.diameter_mm),
                         Evidence::circle("second_hole", second.center, second.diameter_mm),
                     ],
-                }
-                .into_finding(),
-            );
-        }
+                })
+        })
+        .collect();
+    Evaluation {
+        checked: holes.len(),
+        measured,
     }
-    (holes.len(), findings)
 }

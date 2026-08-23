@@ -1,39 +1,26 @@
 //! Geometry measurements shared by manufacturability checks.
+//!
+//! Every query here answers with a [`Distance`]: a signed length between
+//! two witness points, carrying the uncertainty of the flattened boundaries
+//! it was measured against. Deciding whether a distance violates a limit is
+//! the caller's policy, via [`Distance::certainly_below`].
 
 use std::collections::HashMap;
 
 use crate::geom::bbox::BBox;
 use crate::geom::dist;
 use crate::geom::point::Point;
-use crate::geom::region::{ContourSet, Ring, ring_edges, ring_signed_area, rings_bbox};
+use crate::geom::region::{ContourSet, Ring, TwoSidedResidualComponent, ring_edges};
 use crate::geom::tol;
 
-/// The shortest separation between two pieces of geometry, with the points
-/// that realize it. Distances are expressed in the IR's canonical millimeters.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ClearanceMeasurement {
-    pub distance_mm: f64,
-    pub first: Point,
-    pub second: Point,
-}
-
-/// The minimum radial material enclosure around a circular cutout whose
-/// center lies in the material.
-///
-/// `enclosure_mm` is signed. A positive value is material outside the cutout;
-/// a negative value is the amount by which the cutout breaches the material.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct CircularEnclosureMeasurement {
-    pub enclosure_mm: f64,
-    pub cutout_boundary: Point,
-    pub material_boundary: Point,
-}
+pub use crate::geom::dist::Distance;
 
 /// Uniform-grid index over a region's boundary segments.
 ///
 /// DFM rules ask whether thousands of points and segments lie within a small
 /// clearance of the same composed layer boundary. This keeps those queries
-/// local instead of walking every polygon edge for every query.
+/// local instead of walking every polygon edge for every query. Every
+/// answer counts the region boundary as one flattened input.
 #[derive(Debug, Clone)]
 pub struct RegionBoundaryIndex {
     cell_size_mm: f64,
@@ -55,9 +42,9 @@ impl RegionBoundaryIndex {
         let segments = region.rings.iter().flat_map(ring_edges).collect::<Vec<_>>();
         let mut cells: HashMap<(i64, i64), Vec<u32>> = HashMap::new();
         for (index, &(start, end)) in segments.iter().enumerate() {
-            corridor_cells(start, end, 0.0, cell_size_mm, |cell| {
+            for cell in corridor_cells(start, end, 0.0, cell_size_mm) {
                 cells.entry(cell).or_default().push(index as u32);
-            });
+            }
         }
         Self {
             cell_size_mm,
@@ -67,34 +54,15 @@ impl RegionBoundaryIndex {
     }
 
     /// Nearest boundary point no farther than `max_distance_mm` from `point`.
-    pub fn nearest_within(
-        &self,
-        point: Point,
-        max_distance_mm: f64,
-    ) -> Option<ClearanceMeasurement> {
-        let min_x = grid_cell(point.x - max_distance_mm, self.cell_size_mm);
-        let max_x = grid_cell(point.x + max_distance_mm, self.cell_size_mm);
-        let min_y = grid_cell(point.y - max_distance_mm, self.cell_size_mm);
-        let max_y = grid_cell(point.y + max_distance_mm, self.cell_size_mm);
-        let mut nearest: Option<ClearanceMeasurement> = None;
-        for x in min_x..=max_x {
-            for y in min_y..=max_y {
-                for &index in self.cells.get(&(x, y)).into_iter().flatten() {
-                    let (start, end) = self.segments[index as usize];
-                    let (distance_mm, boundary) = dist::point_segment(point, start, end);
-                    if distance_mm <= max_distance_mm + tol::EPSILON_MM
-                        && nearest.is_none_or(|current| distance_mm < current.distance_mm)
-                    {
-                        nearest = Some(ClearanceMeasurement {
-                            distance_mm,
-                            first: point,
-                            second: boundary,
-                        });
-                    }
-                }
-            }
-        }
-        nearest
+    pub fn nearest_within(&self, point: Point, max_distance_mm: f64) -> Option<Distance> {
+        let cells = corridor_cells(point, point, max_distance_mm, self.cell_size_mm);
+        self.segments_in(cells)
+            .map(|&(start, end)| {
+                let (mm, boundary) = dist::point_segment(point, start, end);
+                Distance::flattened(mm, point, boundary, 1)
+            })
+            .filter(|distance| distance.mm <= max_distance_mm + tol::EPSILON_MM)
+            .min_by(|left, right| left.mm.total_cmp(&right.mm))
     }
 
     /// Nearest boundary point no farther than `max_distance_mm` from the
@@ -104,25 +72,15 @@ impl RegionBoundaryIndex {
         start: Point,
         end: Point,
         max_distance_mm: f64,
-    ) -> Option<ClearanceMeasurement> {
-        let mut nearest: Option<ClearanceMeasurement> = None;
-        corridor_cells(start, end, max_distance_mm, self.cell_size_mm, |cell| {
-            for &index in self.cells.get(&cell).into_iter().flatten() {
-                let (edge_start, edge_end) = self.segments[index as usize];
-                let (distance_mm, on_query, on_boundary) =
-                    dist::segments(start, end, edge_start, edge_end);
-                if distance_mm <= max_distance_mm + tol::EPSILON_MM
-                    && nearest.is_none_or(|current| distance_mm < current.distance_mm)
-                {
-                    nearest = Some(ClearanceMeasurement {
-                        distance_mm,
-                        first: on_query,
-                        second: on_boundary,
-                    });
-                }
-            }
-        });
-        nearest
+    ) -> Option<Distance> {
+        let cells = corridor_cells(start, end, max_distance_mm, self.cell_size_mm);
+        self.segments_in(cells)
+            .map(|&(edge_start, edge_end)| {
+                let (mm, on_query, on_boundary) = dist::segments(start, end, edge_start, edge_end);
+                Distance::flattened(mm, on_query, on_boundary, 1)
+            })
+            .filter(|distance| distance.mm <= max_distance_mm + tol::EPSILON_MM)
+            .min_by(|left, right| left.mm.total_cmp(&right.mm))
     }
 
     /// The radial material enclosure of a circular cutout whose center lies
@@ -130,15 +88,16 @@ impl RegionBoundaryIndex {
     ///
     /// The largest disk centered at `center` inside the material has radius
     /// `d(center, boundary)`, so the enclosure is that distance minus the
-    /// cutout radius. `None` means the enclosure exceeds `max_enclosure_mm`;
-    /// comparing the returned measurement against a limit is the caller's
-    /// policy.
+    /// cutout radius: signed, negative by the depth the cutout breaches the
+    /// material. The witnesses are the cutout boundary and the material
+    /// boundary along the nearest direction. `None` means the enclosure
+    /// exceeds `max_enclosure_mm`.
     pub fn circular_enclosure(
         &self,
         center: Point,
         cutout_radius_mm: f64,
         max_enclosure_mm: f64,
-    ) -> Option<CircularEnclosureMeasurement> {
+    ) -> Option<Distance> {
         let search = (cutout_radius_mm + max_enclosure_mm).max(0.0);
         let nearest = self.nearest_within(center, search)?;
         let direction = nearest.second - center;
@@ -147,11 +106,25 @@ impl RegionBoundaryIndex {
         } else {
             direction / direction.length()
         };
-        Some(CircularEnclosureMeasurement {
-            enclosure_mm: nearest.distance_mm - cutout_radius_mm,
-            cutout_boundary: center + direction * cutout_radius_mm,
-            material_boundary: nearest.second,
-        })
+        Some(Distance::flattened(
+            nearest.mm - cutout_radius_mm,
+            center + direction * cutout_radius_mm,
+            nearest.second,
+            1,
+        ))
+    }
+
+    /// Every indexed segment registered in any of `cells`. A segment spanning
+    /// several cells is yielded once per cell; every consumer takes a
+    /// minimum, for which repeats are harmless.
+    fn segments_in(
+        &self,
+        cells: impl Iterator<Item = (i64, i64)>,
+    ) -> impl Iterator<Item = &(Point, Point)> {
+        cells
+            .filter_map(|cell| self.cells.get(&cell))
+            .flatten()
+            .map(|&index| &self.segments[index as usize])
     }
 }
 
@@ -159,20 +132,19 @@ fn grid_cell(value: f64, cell_size_mm: f64) -> i64 {
     (value / cell_size_mm).floor() as i64
 }
 
-/// Visit every grid cell within `radius_mm` of the segment, column by
-/// column, so long diagonal segments touch a linear number of cells instead
-/// of their whole bounding box.
+/// Every grid cell within `radius_mm` of the segment, column by column, so
+/// long diagonal segments touch a linear number of cells instead of their
+/// whole bounding box. A zero-length segment yields the cells around a point.
 fn corridor_cells(
     start: Point,
     end: Point,
     radius_mm: f64,
     cell_size_mm: f64,
-    mut visit: impl FnMut((i64, i64)),
-) {
+) -> impl Iterator<Item = (i64, i64)> {
     let min_column = grid_cell(start.x.min(end.x) - radius_mm, cell_size_mm);
     let max_column = grid_cell(start.x.max(end.x) + radius_mm, cell_size_mm);
     let delta = end - start;
-    for column in min_column..=max_column {
+    (min_column..=max_column).flat_map(move |column| {
         let column_min = column as f64 * cell_size_mm - radius_mm;
         let column_max = (column + 1) as f64 * cell_size_mm + radius_mm;
         let (t_min, t_max) = if delta.x.abs() <= f64::EPSILON {
@@ -189,53 +161,44 @@ fn corridor_cells(
         let y_at_max = start.y + delta.y * t_max;
         let min_row = grid_cell(y_at_min.min(y_at_max) - radius_mm, cell_size_mm);
         let max_row = grid_cell(y_at_min.max(y_at_max) + radius_mm, cell_size_mm);
-        for row in min_row..=max_row {
-            visit((column, row));
-        }
-    }
+        (min_row..=max_row).map(move |row| (column, row))
+    })
 }
 
 /// Set distance between two closed disks: `max(0, ‖c₁ − c₂‖ − r₁ − r₂)`,
-/// with the boundary witness points along the center line.
+/// with the boundary witness points along the center line. Exact.
 pub fn disk_clearance(
     first_center: Point,
     first_radius_mm: f64,
     second_center: Point,
     second_radius_mm: f64,
-) -> ClearanceMeasurement {
+) -> Distance {
     let delta = second_center - first_center;
     let length = delta.length();
     if length <= f64::EPSILON {
-        return ClearanceMeasurement {
-            distance_mm: 0.0,
-            first: first_center,
-            second: second_center,
-        };
+        return Distance::exact(0.0, first_center, second_center);
     }
     let direction = delta / length;
-    ClearanceMeasurement {
-        distance_mm: (length - first_radius_mm - second_radius_mm).max(0.0),
-        first: first_center + direction * first_radius_mm,
-        second: second_center - direction * second_radius_mm,
-    }
+    Distance::exact(
+        (length - first_radius_mm - second_radius_mm).max(0.0),
+        first_center + direction * first_radius_mm,
+        second_center - direction * second_radius_mm,
+    )
 }
 
 /// Shortest boundary-to-boundary clearance between two filled regions.
 ///
-/// Overlapping, contained, or touching regions have zero clearance. `None`
-/// means at least one input is empty.
-pub fn region_clearance(first: &ContourSet, second: &ContourSet) -> Option<ClearanceMeasurement> {
+/// Overlapping, contained, or touching regions have zero clearance. Both
+/// boundaries count as flattened inputs. `None` means at least one input is
+/// empty: an empty set has no nearest point.
+pub fn region_clearance(first: &ContourSet, second: &ContourSet) -> Option<Distance> {
     if first.is_empty() || second.is_empty() {
         return None;
     }
 
     if let Some(point) = contained_vertex(first, second).or_else(|| contained_vertex(second, first))
     {
-        return Some(ClearanceMeasurement {
-            distance_mm: 0.0,
-            first: point,
-            second: point,
-        });
+        return Some(Distance::flattened(0.0, point, point, 2));
     }
 
     closest_ring_edges(&first.rings, &second.rings)
@@ -256,24 +219,20 @@ fn contained_vertex(subject: &ContourSet, container: &ContourSet) -> Option<Poin
         .find_map(|(inside, vertex)| inside.then_some(vertex))
 }
 
-fn closest_ring_edges(first: &[Ring], second: &[Ring]) -> Option<ClearanceMeasurement> {
+fn closest_ring_edges(first: &[Ring], second: &[Ring]) -> Option<Distance> {
     first
         .iter()
         .flat_map(ring_edges)
         .flat_map(|(first_start, first_end)| {
             second.iter().flat_map(move |ring| {
                 ring_edges(ring).map(move |(second_start, second_end)| {
-                    let (distance_mm, on_first, on_second) =
+                    let (mm, on_first, on_second) =
                         dist::segments(first_start, first_end, second_start, second_end);
-                    ClearanceMeasurement {
-                        distance_mm,
-                        first: on_first,
-                        second: on_second,
-                    }
+                    Distance::flattened(mm, on_first, on_second, 2)
                 })
             })
         })
-        .min_by(|left, right| left.distance_mm.total_cmp(&right.distance_mm))
+        .min_by(|left, right| left.mm.total_cmp(&right.mm))
 }
 
 /// One contiguous sub-minimum piece of material or clearance.
@@ -288,102 +247,81 @@ fn closest_ring_edges(first: &[Ring], second: &[Ring]) -> Option<ClearanceMeasur
 pub struct ThinPiece {
     pub bbox: BBox,
     pub area_mm2: f64,
-    /// Estimated width (2·area/perimeter — exact for long ribbons).
-    pub width_mm: f64,
-    /// Estimated length (half the perimeter — exact for long ribbons).
+    /// Exact separation of the two opposing source-boundary branches in the
+    /// flattened polygon representation; both branches count as flattened.
+    pub width: Distance,
+    /// Approximate longitudinal extent (half the residue perimeter).
     pub length_mm: f64,
 }
 
-/// Filled material narrower than `min_width_mm`. Only two-sided residue is
-/// reported, so the bite an isolated convex arc sheds under the opening is
-/// not a thin feature.
+/// Opening and closing use tessellated round offsets. Widening the candidate
+/// threshold by the full two-offset plus source-flattening error makes the
+/// morphological stage conservative; exact source-boundary distance below
+/// then decides the verdict and discards the extra candidates.
+const MORPHOLOGY_CANDIDATE_GUARD_MM: f64 = 2.0 * tol::STROKE_OUTLINE_MM + tol::FLATTEN_MM;
+
+/// Filled material certainly narrower than `min_width_mm`. Only two-sided
+/// residue is reported, so the bite an isolated convex arc sheds under the
+/// opening is not a thin feature. Largest piece first.
 pub fn thin_features(region: &ContourSet, min_width_mm: f64) -> Vec<ThinPiece> {
-    let boundary = RegionBoundaryIndex::new(region, min_width_mm);
     pieces(
-        &region.difference(&region.disk_open(min_width_mm / 2.0)),
+        region.disk_feature_violation_components(
+            (min_width_mm + MORPHOLOGY_CANDIDATE_GUARD_MM) / 2.0,
+        ),
         min_width_mm,
-        &boundary,
     )
 }
 
-/// Gaps in the material narrower than `min_gap_mm`, including boundary
-/// notches. Only two-sided residue is reported, so the bite an isolated
-/// concave corner sheds under the closing is not clearance.
+/// Gaps in the material certainly narrower than `min_gap_mm`, including
+/// boundary notches. Only two-sided residue is reported, so the bite an
+/// isolated concave corner sheds under the closing is not clearance.
+/// Largest piece first.
 pub fn thin_gaps(region: &ContourSet, min_gap_mm: f64) -> Vec<ThinPiece> {
-    let boundary = RegionBoundaryIndex::new(region, min_gap_mm);
     pieces(
-        &region.disk_close(min_gap_mm / 2.0).difference(region),
+        region.disk_gap_violation_components((min_gap_mm + MORPHOLOGY_CANDIDATE_GUARD_MM) / 2.0),
         min_gap_mm,
-        &boundary,
     )
 }
 
-/// A violation is bounded by source material along both long sides, so its
-/// perimeter lies on the source boundary almost everywhere; a single-corner
-/// or single-arc bite touches it on at most one wall and two legs.
-const TWO_SIDED_CONTACT_FRACTION: f64 = 0.75;
+/// The narrowest local width of a filled region: the least separation of
+/// any two facing boundary branches. An opening wide enough to erase the
+/// whole region makes every piece of it a candidate. `None` when no two
+/// branches face each other (an empty region, or a single point).
+pub fn min_width(region: &ContourSet) -> Option<Distance> {
+    let erase_all = 2.0 * region.bbox.width().max(region.bbox.height());
+    thin_features(region, erase_all)
+        .into_iter()
+        .map(|piece| piece.width)
+        .min_by(|left, right| left.mm.total_cmp(&right.mm))
+}
 
-/// Extract reportable pieces from a residue region, dropping numeric noise —
-/// flattening-scale ribbons along long edges — and one-sided pieces whose
-/// perimeter mostly leaves the source boundary.
-fn pieces(
-    residue: &ContourSet,
-    min_width_mm: f64,
-    source_boundary: &RegionBoundaryIndex,
-) -> Vec<ThinPiece> {
-    let noise_width = 2.0 * tol::FLATTEN_MM;
-    let min_length = 2.0 * min_width_mm;
-    let min_area = 0.25 * min_width_mm * min_width_mm;
-
-    let mut pieces: Vec<ThinPiece> = residue
-        .rings
-        .iter()
-        .filter_map(|ring| {
-            let area = ring_signed_area(ring);
-            if area <= 0.0 {
-                return None; // holes of residue pieces
-            }
-            let perimeter: f64 = ring_edges(ring)
-                .map(|(start, end)| start.distance_to(end))
-                .sum();
-            if perimeter <= 0.0 {
-                return None;
-            }
-            let piece = ThinPiece {
-                bbox: rings_bbox(std::slice::from_ref(ring)),
-                area_mm2: area,
-                width_mm: 2.0 * area / perimeter,
-                length_mm: perimeter / 2.0,
-            };
-            let long_side = piece.bbox.width().max(piece.bbox.height());
-            (piece.width_mm >= noise_width
-                && long_side >= min_length
-                && area >= min_area
-                && boundary_contact_fraction(source_boundary, ring) >= TWO_SIDED_CONTACT_FRACTION)
-                .then_some(piece)
+/// Convert the conservative opening/closing candidates into authoritative
+/// measurements. A candidate is reportable only when the exact distance
+/// between its opposing source-boundary branches is certainly below the
+/// requested minimum; this is what prevents offset tessellation from
+/// creating findings.
+fn pieces(components: Vec<TwoSidedResidualComponent>, minimum_mm: f64) -> Vec<ThinPiece> {
+    let mut pieces = components
+        .into_iter()
+        .filter(|component| component.width.certainly_below(minimum_mm))
+        .map(|component| ThinPiece {
+            bbox: component.region.bbox,
+            area_mm2: component.region.area(),
+            width: component.width,
+            length_mm: region_perimeter(&component.region) / 2.0,
         })
-        .collect();
+        .collect::<Vec<_>>();
     pieces.sort_by(|a, b| b.area_mm2.total_cmp(&a.area_mm2));
     pieces
 }
 
-/// The fraction of the ring's perimeter that lies on the source boundary,
-/// judged edge midpoints against the indexed boundary at flattening scale.
-fn boundary_contact_fraction(source_boundary: &RegionBoundaryIndex, ring: &Ring) -> f64 {
-    let contact_eps = 2.0 * tol::FLATTEN_MM;
-    let mut perimeter = 0.0;
-    let mut contact = 0.0;
-    for (start, end) in ring_edges(ring) {
-        let length = start.distance_to(end);
-        perimeter += length;
-        if source_boundary
-            .nearest_within(start.midpoint(end), contact_eps)
-            .is_some()
-        {
-            contact += length;
-        }
-    }
-    contact / perimeter
+fn region_perimeter(region: &ContourSet) -> f64 {
+    region
+        .rings
+        .iter()
+        .flat_map(ring_edges)
+        .map(|(start, end)| start.distance_to(end))
+        .sum()
 }
 
 #[cfg(test)]
@@ -416,7 +354,7 @@ mod tests {
         let right = rect_region(3.5, 0.5, 5.0, 1.5);
 
         let between_regions = region_clearance(&left, &right).unwrap();
-        assert!((between_regions.distance_mm - 1.5).abs() < 1e-9);
+        assert!((between_regions.mm - 1.5).abs() < 1e-9);
         assert!((between_regions.first.x - 2.0).abs() < 1e-9);
         assert!((between_regions.second.x - 3.5).abs() < 1e-9);
 
@@ -424,12 +362,33 @@ mod tests {
         let from_segment = index
             .segment_nearest_within(Point::new(-1.0, 3.0), Point::new(3.0, 3.0), 1.5)
             .unwrap();
-        assert!((from_segment.distance_mm - 1.0).abs() < 1e-9);
+        assert!((from_segment.mm - 1.0).abs() < 1e-9);
 
         let crossing = index
             .segment_nearest_within(Point::new(-1.0, 1.0), Point::new(3.0, 1.0), 0.5)
             .unwrap();
-        assert_eq!(crossing.distance_mm, 0.0);
+        assert_eq!(crossing.mm, 0.0);
+    }
+
+    #[test]
+    fn region_clearance_handles_diagonal_separation_crossing_and_containment() {
+        let origin = rect_region(0.0, 0.0, 1.0, 1.0);
+        let diagonal = rect_region(2.0, 3.0, 3.0, 4.0);
+        let clearance = region_clearance(&origin, &diagonal).unwrap();
+        assert!((clearance.mm - 5.0_f64.sqrt()).abs() < 1e-9);
+        assert!((origin.bbox.distance_to(diagonal.bbox) - 5.0_f64.sqrt()).abs() < 1e-9);
+
+        let horizontal = rect_region(-2.0, -0.25, 2.0, 0.25);
+        let vertical = rect_region(-0.25, -2.0, 0.25, 2.0);
+        assert_eq!(
+            region_clearance(&horizontal, &vertical).unwrap().mm,
+            0.0,
+            "crossing regions overlap even when neither contains the other"
+        );
+
+        let container = rect_region(-2.0, -2.0, 2.0, 2.0);
+        let contained = rect_region(-0.5, -0.5, 0.5, 0.5);
+        assert_eq!(region_clearance(&container, &contained).unwrap().mm, 0.0);
     }
 
     #[test]
@@ -449,7 +408,7 @@ mod tests {
         let near_middle = index
             .nearest_within(Point::new(40.3, 40.0), 0.5)
             .expect("mid-segment boundary within reach");
-        assert!((near_middle.distance_mm - 0.3 / 2.0_f64.sqrt()).abs() < 1e-6);
+        assert!((near_middle.mm - 0.3 / 2.0_f64.sqrt()).abs() < 1e-6);
     }
 
     #[test]
@@ -470,9 +429,10 @@ mod tests {
         let measurement = index
             .circular_enclosure(Point::new(1.3, 0.0), 1.35, 0.125)
             .expect("hole extending beyond copper must measure");
-        assert!((measurement.enclosure_mm + 0.15).abs() < tol::FLATTEN_MM);
-        assert!((measurement.cutout_boundary.x - 2.65).abs() < tol::FLATTEN_MM);
-        assert!((measurement.material_boundary.x - 2.5).abs() < tol::FLATTEN_MM);
+        assert!((measurement.mm + 0.15).abs() < tol::FLATTEN_MM);
+        assert_eq!(measurement.uncertainty_mm, tol::FLATTEN_MM);
+        assert!((measurement.first.x - 2.65).abs() < tol::FLATTEN_MM);
+        assert!((measurement.second.x - 2.5).abs() < tol::FLATTEN_MM);
     }
 
     #[test]
@@ -483,8 +443,8 @@ mod tests {
         let measurement = index
             .circular_enclosure(Point::default(), 1.0, 0.6)
             .expect("the short side of a rectangular land must set the enclosure");
-        assert!((measurement.enclosure_mm - 0.5).abs() < 1e-9);
-        assert!((measurement.material_boundary.y.abs() - 1.5).abs() < 1e-9);
+        assert!((measurement.mm - 0.5).abs() < 1e-9);
+        assert!((measurement.second.y.abs() - 1.5).abs() < 1e-9);
     }
 
     #[test]
@@ -527,9 +487,9 @@ mod tests {
         assert_eq!(findings.len(), 1);
         let piece = &findings[0];
         assert!(
-            (piece.width_mm - 0.05).abs() < 0.02,
+            (piece.width.mm - 0.05).abs() < 0.02,
             "width {}",
-            piece.width_mm
+            piece.width.mm
         );
         assert!(piece.length_mm > 1.5, "length {}", piece.length_mm);
     }
@@ -572,10 +532,126 @@ mod tests {
 
         assert_eq!(gaps.len(), 1);
         assert!(
-            (gaps[0].width_mm - 0.06).abs() < 0.02,
+            (gaps[0].width.mm - 0.06).abs() < 0.02,
             "width {}",
-            gaps[0].width_mm
+            gaps[0].width.mm
         );
         assert!(thin_features(&region, 0.1).is_empty());
+    }
+
+    #[test]
+    fn small_islands_are_not_filtered_out_of_feature_width() {
+        let island = rect_region(0.0, 0.0, 0.05, 0.05);
+
+        let findings = thin_features(&island, 0.1);
+
+        assert_eq!(findings.len(), 1);
+        assert!((findings[0].width.mm - 0.05).abs() < 1e-9);
+        assert!(
+            (findings[0]
+                .width
+                .first
+                .distance_to(findings[0].width.second)
+                - 0.05)
+                .abs()
+                < 1e-9
+        );
+    }
+
+    #[test]
+    fn exact_minimums_are_not_morphology_false_positives() {
+        let feature = rect_region(0.0, 0.0, 1.0, 0.1);
+        let disk = ContourSet::from_filled_contours(
+            &[shapes::circle(0.1).expect("valid circle")],
+            tol::REGION_MM,
+        );
+        let undersized_disk = ContourSet::from_filled_contours(
+            &[shapes::circle(0.08).expect("valid circle")],
+            tol::REGION_MM,
+        );
+        let left = rect_region(2.0, 0.0, 3.0, 1.0);
+        let right = rect_region(3.1, 0.0, 4.1, 1.0);
+
+        assert!(thin_features(&feature, 0.1).is_empty());
+        let disk_findings = thin_features(&disk, 0.1);
+        assert!(disk_findings.is_empty(), "findings: {disk_findings:?}");
+        assert_eq!(thin_features(&undersized_disk, 0.1).len(), 1);
+        assert!(thin_gaps(&left.union(&right), 0.1).is_empty());
+    }
+
+    #[test]
+    fn min_width_is_limit_free() {
+        let stadium = ContourSet::from_contours(
+            &[shapes::obround(1.8, 0.6, true).expect("valid obround")],
+            FillRule::NonZero,
+            tol::REGION_MM,
+        );
+        let width = min_width(&stadium).expect("a stadium has facing walls");
+        // The flattened arc's inscribed disk is its apothem, short of the
+        // true radius by at most one flattening tolerance per side.
+        assert!(
+            (0.0..=width.uncertainty_mm).contains(&(0.6 - width.mm)),
+            "width {}",
+            width.mm
+        );
+        assert_eq!(width.uncertainty_mm, 2.0 * tol::FLATTEN_MM);
+
+        let plate = rect_region(0.0, 0.0, 10.0, 3.0);
+        assert!((min_width(&plate).unwrap().mm - 3.0).abs() < 1e-9);
+        assert!(min_width(&ContourSet::empty(tol::REGION_MM)).is_none());
+    }
+
+    #[test]
+    fn tapered_tip_is_measured_at_its_tip() {
+        // A plate with a trapezoidal spur narrowing from 0.4 mm to 0.05 mm:
+        // the tip is the width, though its walls are far from parallel.
+        let region = ContourSet::from_contours(
+            &[ContourBuf::new(vec![
+                PathCmd::move_to(Point::new(0.0, 0.0)),
+                PathCmd::line_to(Point::new(10.0, 0.0)),
+                PathCmd::line_to(Point::new(10.0, 4.8)),
+                PathCmd::line_to(Point::new(12.0, 4.975)),
+                PathCmd::line_to(Point::new(12.0, 5.025)),
+                PathCmd::line_to(Point::new(10.0, 5.2)),
+                PathCmd::line_to(Point::new(10.0, 10.0)),
+                PathCmd::line_to(Point::new(0.0, 10.0)),
+                PathCmd::close(),
+            ])],
+            FillRule::NonZero,
+            tol::REGION_MM,
+        );
+
+        let findings = thin_features(&region, 0.1);
+
+        assert_eq!(findings.len(), 1);
+        let width = findings[0].width;
+        assert!((width.mm - 0.05).abs() < 0.01, "width {}", width.mm);
+        assert!(
+            width.first.x > 11.5 && width.second.x > 11.5,
+            "witnesses at the tip"
+        );
+    }
+
+    #[test]
+    fn widths_are_invariant_under_quarter_turns() {
+        let left = rect_region(0.0, 0.0, 4.0, 2.0);
+        let right = rect_region(4.06, 0.0, 8.0, 2.0);
+        let region = left.union(&right);
+        let rotated = ContourSet::new(
+            region
+                .rings
+                .iter()
+                .map(|ring| ring.iter().map(|[x, y]| [-y, *x]).collect())
+                .collect(),
+            FillRule::NonZero,
+            tol::REGION_MM,
+        );
+
+        let original = thin_gaps(&region, 0.1);
+        let turned = thin_gaps(&rotated, 0.1);
+
+        assert_eq!(original.len(), 1);
+        assert_eq!(turned.len(), 1);
+        assert!((original[0].width.mm - turned[0].width.mm).abs() < 1e-9);
     }
 }

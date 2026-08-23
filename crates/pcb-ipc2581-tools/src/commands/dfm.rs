@@ -72,11 +72,10 @@ pub fn execute_check(file: &Path, options: &CheckOptions) -> Result<()> {
     let generated_at = generation_time();
     let content = file_utils::ipc_text(file, &input_bytes)?;
     let ipc = Ipc2581::parse(&content).context("failed to parse IPC-2581 file")?;
-    let design = design::Design::extract(&ipc, &rules, options.layout_target.artwork_scope())?;
+    let design = design::Design::extract(&ipc, options.layout_target.artwork_scope(), &rules)?;
     let checked = checks::run(
         &rules,
         &design,
-        &ipc,
         waivers.as_ref().map(|loaded| &loaded.file),
         generated_at.date_naive(),
     );
@@ -220,4 +219,146 @@ fn write_report(output: Option<&Path>, report: &str) -> Result<()> {
 
 fn sha256(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::NaiveDate;
+    use pcb_ir::dialects::ipc::ArtworkScope;
+
+    use super::*;
+    use crate::commands::EdgeInsetsMm;
+    use crate::commands::board_array::{BoardArrayCreateOptions, create_board_array};
+    use crate::commands::fab_panel::{FabPanelSpec, create_fab_panel};
+
+    const BOARD: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="board"/>
+    <LayerRef name="TOP"/>
+    <LayerRef name="F.Mask"/>
+    <LayerRef name="BOTTOM"/>
+    <LayerRef name="B.Mask"/>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Layer name="F.Mask" layerFunction="SOLDERMASK" side="TOP" polarity="POSITIVE"/>
+      <Layer name="BOTTOM" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>
+      <Layer name="B.Mask" layerFunction="SOLDERMASK" side="BOTTOM" polarity="POSITIVE"/>
+      <Stackup name="Primary" overallThickness="0.07" tolPlus="0" tolMinus="0" whereMeasured="METAL" stackupStatus="PROPOSED">
+        <StackupGroup name="Primary_Group" thickness="0.07" tolPlus="0" tolMinus="0">
+          <StackupLayer layerOrGroupRef="TOP" thickness="0.035" tolPlus="0" tolMinus="0" sequence="0"/>
+          <StackupLayer layerOrGroupRef="BOTTOM" thickness="0.035" tolPlus="0" tolMinus="0" sequence="1"/>
+        </StackupGroup>
+      </Stackup>
+      <Step name="board" type="BOARD">
+        <Datum x="0" y="0"/>
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="30" y="0"/>
+            <PolyStepSegment x="30" y="30"/>
+            <PolyStepSegment x="0" y="30"/>
+            <PolyStepSegment x="0" y="0"/>
+          </Polygon>
+        </Profile>
+        <LayerFeature layerRef="TOP">
+          <Set polarity="POSITIVE">
+            <Features>
+              <Line startX="1" startY="1" endX="29" endY="1">
+                <LineDesc lineWidth="0.2" lineEnd="ROUND"/>
+              </Line>
+            </Features>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#;
+
+    const PDK: &str = r#"schema_version = 1
+
+[pdk]
+id = "scope-test"
+name = "Scope test"
+revision = "1"
+
+[capabilities.copper]
+minimum_vscore_to_copper_clearance = "0.5 mm"
+minimum_board_edge_clearance = "0.5 mm"
+
+[capabilities.panelization]
+minimum_board_array_spacing = "300 mil"
+"#;
+
+    fn check(xml: &str, scope: ArtworkScope) -> checks::Results {
+        let ipc = Ipc2581::parse(xml).unwrap();
+        let pdk = pdk::Pdk::parse(PDK).unwrap();
+        let rules = rules::lower(&pdk).unwrap();
+        let design = design::Design::extract(&ipc, scope, &rules).unwrap();
+        checks::run(
+            &rules,
+            &design,
+            None,
+            NaiveDate::from_ymd_opt(2026, 8, 21).unwrap(),
+        )
+    }
+
+    fn rule<'a>(results: &'a checks::Results, id: &str) -> &'a report::RuleResult {
+        results.rules.iter().find(|rule| rule.id == id).unwrap()
+    }
+
+    #[test]
+    fn one_evaluator_scales_through_board_array_and_fab_panel_lowering() {
+        let array = create_board_array(
+            BOARD,
+            &BoardArrayCreateOptions {
+                columns: 2,
+                rows: 2,
+                board_margin_mm: EdgeInsetsMm::all(0.0),
+                edge_rail_mm: EdgeInsetsMm::all(5.0),
+            },
+            false,
+        )
+        .unwrap()
+        .xml;
+        let fab = create_fab_panel(
+            std::slice::from_ref(&array),
+            &[0, 0],
+            FabPanelSpec::default(),
+            false,
+        )
+        .unwrap()
+        .xml;
+
+        let board_results = check(BOARD, ArtworkScope::Board);
+        let array_results = check(&array, ArtworkScope::ArrayFlattened);
+        let fab_results = check(&fab, ArtworkScope::ArrayFlattened);
+
+        let board_edge = "copper.minimum_board_edge_clearance";
+        let vscore = "copper.minimum_vscore_to_copper_clearance";
+        let spacing = "panelization.minimum_board_array_spacing";
+
+        assert_eq!(rule(&board_results, board_edge).checked, 2);
+        assert_eq!(rule(&array_results, board_edge).checked, 8);
+        assert_eq!(rule(&fab_results, board_edge).checked, 16);
+
+        assert_eq!(rule(&board_results, vscore).checked, 0);
+        assert!(rule(&array_results, vscore).checked > 0);
+        assert_eq!(
+            rule(&fab_results, vscore).checked,
+            2 * rule(&array_results, vscore).checked
+        );
+
+        assert_eq!(rule(&board_results, spacing).checked, 0);
+        assert_eq!(rule(&array_results, spacing).checked, 0);
+        assert_eq!(rule(&fab_results, spacing).checked, 1);
+        assert_eq!(rule(&fab_results, spacing).finding_count, 0);
+        assert!(board_results.findings.is_empty());
+        assert!(array_results.findings.is_empty());
+        assert!(fab_results.findings.is_empty());
+    }
 }

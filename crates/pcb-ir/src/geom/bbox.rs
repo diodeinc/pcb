@@ -48,6 +48,20 @@ impl BBox {
             && self.max.y >= other.min.y
     }
 
+    /// Euclidean separation of two bounds: zero when they touch or overlap.
+    /// Each enclosed region is a subset of its bounds, so this is a lower
+    /// bound on the regions' clearance: a bound that meets a minimum proves
+    /// the regions meet it too.
+    pub fn distance_to(self, other: BBox) -> f64 {
+        let x = (other.min.x - self.max.x)
+            .max(self.min.x - other.max.x)
+            .max(0.0);
+        let y = (other.min.y - self.max.y)
+            .max(self.min.y - other.max.y)
+            .max(0.0);
+        x.hypot(y)
+    }
+
     pub fn expand(self, amount: f64) -> Self {
         if self.is_empty() {
             return self;

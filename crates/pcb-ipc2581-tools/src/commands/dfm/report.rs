@@ -124,15 +124,16 @@ pub struct RuleResult {
 
 impl RuleResult {
     pub fn new(rule: &Rule) -> Self {
+        let semantics = rule.kind.semantics();
         Self {
             id: rule.id.clone(),
             title: rule.title.clone(),
             severity: rule.severity,
             status: RuleStatus::Pass,
             limit: RuleLimit::from_length(&rule.limit),
-            subject: rule.kind.subject(),
-            quantity: rule.kind.quantity(),
-            method: rule.kind.method(),
+            subject: semantics.subject,
+            quantity: semantics.quantity,
+            method: semantics.method,
             checked: 0,
             finding_count: 0,
             waived_count: 0,

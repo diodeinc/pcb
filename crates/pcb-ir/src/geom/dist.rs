@@ -1,6 +1,66 @@
 //! Euclidean distance primitives with closest-point witnesses.
 
 use crate::geom::point::Point;
+use crate::geom::tol;
+
+/// A measured length between two witness points, in the IR's canonical
+/// millimeters, with the uncertainty its inputs carry.
+///
+/// Flattening places each curved boundary up to [`tol::FLATTEN_MM`] from
+/// its source, so a length measured against `n` flattened boundaries is
+/// known only to within `n · FLATTEN_MM`. A consumer comparing against a
+/// minimum uses [`Distance::certainly_below`], so tessellation alone can
+/// never manufacture a violation. `mm` is signed where the quantity is: a
+/// negative enclosure is the depth of a breach.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Distance {
+    pub mm: f64,
+    pub uncertainty_mm: f64,
+    pub first: Point,
+    pub second: Point,
+}
+
+impl Distance {
+    /// A length taken from exact geometry: stated primitives, or analytic
+    /// shapes such as disks.
+    pub fn exact(mm: f64, first: Point, second: Point) -> Self {
+        Self {
+            mm,
+            uncertainty_mm: 0.0,
+            first,
+            second,
+        }
+    }
+
+    /// A length measured against `flattened_boundaries` tessellated curves.
+    pub fn flattened(mm: f64, first: Point, second: Point, flattened_boundaries: u32) -> Self {
+        Self {
+            mm,
+            uncertainty_mm: f64::from(flattened_boundaries) * tol::FLATTEN_MM,
+            first,
+            second,
+        }
+    }
+
+    /// The same length, with `flattened_boundaries` more tessellated inputs
+    /// counted toward its uncertainty.
+    pub fn also_flattened(self, flattened_boundaries: u32) -> Self {
+        Self {
+            uncertainty_mm: self.uncertainty_mm + f64::from(flattened_boundaries) * tol::FLATTEN_MM,
+            ..self
+        }
+    }
+
+    /// Whether the length falls short of `limit_mm` even at the top of its
+    /// uncertainty band.
+    pub fn certainly_below(&self, limit_mm: f64) -> bool {
+        self.mm + self.uncertainty_mm < limit_mm
+    }
+
+    pub fn midpoint(&self) -> Point {
+        self.first.midpoint(self.second)
+    }
+}
 
 /// Distance from a point to a closed segment, with the closest point on the
 /// segment.

@@ -269,7 +269,7 @@ fn create_fab_panel_xml(source_xml: &[String], occurrences: &[usize]) -> Result<
         .map(|creation| creation.xml)
 }
 
-fn create_fab_panel(
+pub(crate) fn create_fab_panel(
     source_xml: &[String],
     occurrences: &[usize],
     spec: FabPanelSpec,

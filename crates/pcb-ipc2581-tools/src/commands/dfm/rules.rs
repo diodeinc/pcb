@@ -55,106 +55,43 @@ pub(super) enum ImageSel {
     Soldermask,
 }
 
-impl RuleKind {
-    pub fn needs(self) -> Needs {
-        let mut needs = Needs::default();
-        match self {
-            Self::HoleDiameter(_) | Self::HolePairClearance => needs.holes = true,
-            Self::SlotWidth => needs.slots = true,
-            Self::AnnularRing(_) => {
-                needs.holes = true;
-                needs.copper = true;
-            }
-            Self::LineworkToCopperClearance(Linework::VScore) => {
-                needs.scores = true;
-                needs.copper = true;
-            }
-            Self::LineworkToCopperClearance(Linework::BoardEdge) => {
-                needs.board_outlines = true;
-                needs.copper = true;
-            }
-            Self::BoardArrayPairClearance => needs.board_arrays = true,
-            Self::ThinFeature(ImageSel::Copper) | Self::ThinGap(ImageSel::Copper) => {
-                needs.copper = true;
-            }
-            Self::ThinFeature(ImageSel::Soldermask) | Self::ThinGap(ImageSel::Soldermask) => {
-                needs.masks = true;
-            }
-        }
-        needs
-    }
-
-    /// What one `checked` unit is for this rule.
-    pub fn subject(self) -> &'static str {
-        match self {
-            Self::HoleDiameter(_) | Self::HolePairClearance => "hole",
-            Self::SlotWidth => "slot",
-            Self::AnnularRing(_) => "hole_layer_pair",
-            Self::LineworkToCopperClearance(Linework::VScore) => "score_layer_pair",
-            Self::LineworkToCopperClearance(Linework::BoardEdge) => "outline_layer_pair",
-            Self::BoardArrayPairClearance => "array_pair",
-            Self::ThinFeature(ImageSel::Copper) | Self::ThinGap(ImageSel::Copper) => "copper_layer",
-            Self::ThinFeature(ImageSel::Soldermask) | Self::ThinGap(ImageSel::Soldermask) => {
-                "soldermask_layer"
-            }
-        }
-    }
-
-    /// The measured quantity every finding of this rule reports.
-    pub fn quantity(self) -> &'static str {
-        match self {
-            Self::HoleDiameter(_) => "hole_diameter",
-            Self::SlotWidth => "slot_width",
-            Self::HolePairClearance => "hole_edge_to_hole_edge_clearance",
-            Self::AnnularRing(_) => "annular_ring",
-            Self::LineworkToCopperClearance(Linework::VScore) => {
-                "vscore_centerline_to_copper_clearance"
-            }
-            Self::LineworkToCopperClearance(Linework::BoardEdge) => {
-                "board_edge_to_copper_clearance"
-            }
-            Self::BoardArrayPairClearance => "board_array_outline_spacing",
-            Self::ThinFeature(ImageSel::Copper) => "copper_feature_width",
-            Self::ThinGap(ImageSel::Copper) => "copper_to_copper_clearance",
-            Self::ThinFeature(ImageSel::Soldermask) => "soldermask_feature_width",
-            Self::ThinGap(ImageSel::Soldermask) => "soldermask_web_width",
-        }
-    }
-
-    /// How the quantity is measured.
-    pub fn method(self) -> &'static str {
-        match self {
-            Self::HoleDiameter(_) => "ipc_hole_diameter",
-            Self::SlotWidth => "ipc_slot_width",
-            Self::HolePairClearance => "circle_edge_distance",
-            Self::AnnularRing(_) => "maximal_centered_disk_minus_hole_radius",
-            Self::LineworkToCopperClearance(_) => "segment_to_filled_region_boundary",
-            Self::BoardArrayPairClearance => "filled_profile_boundary_distance",
-            Self::ThinFeature(_) => "morphological_opening_residue",
-            Self::ThinGap(_) => "morphological_closing_residue",
-        }
-    }
+/// Everything the engine and report know about a rule kind, in one table:
+/// what one `checked` unit is, the measured quantity and method, how a
+/// finding is titled and phrased, the roles of its two witness points, and
+/// the pools it reads.
+pub(super) struct Semantics {
+    pub subject: &'static str,
+    pub quantity: &'static str,
+    pub method: &'static str,
+    pub finding_title: String,
+    pub quantity_label: String,
+    pub witness_roles: [&'static str; 2],
+    pub pools: Pools,
 }
 
-/// Which entity pools the configured rules read; extraction builds exactly
-/// this union.
+/// The entity pools a rule reads. Extraction builds exactly the union over
+/// the configured rules, so a rule set pays only for what it measures.
 #[derive(Debug, Clone, Copy, Default)]
-pub(super) struct Needs {
-    pub holes: bool,
-    pub slots: bool,
+pub(super) struct Pools {
+    pub drilled: bool,
     pub copper: bool,
+    pub copper_boundaries: bool,
+    pub hole_lands: bool,
     pub masks: bool,
     pub scores: bool,
     pub board_outlines: bool,
     pub board_arrays: bool,
 }
 
-impl Needs {
-    fn union(self, other: Self) -> Self {
+impl std::ops::BitOr for Pools {
+    type Output = Self;
+
+    fn bitor(self, other: Self) -> Self {
         Self {
-            holes: self.holes || other.holes,
-            slots: self.slots || other.slots,
+            drilled: self.drilled || other.drilled,
             copper: self.copper || other.copper,
+            copper_boundaries: self.copper_boundaries || other.copper_boundaries,
+            hole_lands: self.hole_lands || other.hole_lands,
             masks: self.masks || other.masks,
             scores: self.scores || other.scores,
             board_outlines: self.board_outlines || other.board_outlines,
@@ -163,11 +100,166 @@ impl Needs {
     }
 }
 
-pub(super) fn needs(rules: &[Rule]) -> Needs {
+const DRILLED: Pools = Pools {
+    drilled: true,
+    copper: false,
+    copper_boundaries: false,
+    hole_lands: false,
+    masks: false,
+    scores: false,
+    board_outlines: false,
+    board_arrays: false,
+};
+const COPPER: Pools = Pools {
+    copper: true,
+    ..DRILLED
+};
+const COPPER_BOUNDARIES: Pools = Pools {
+    copper_boundaries: true,
+    ..COPPER
+};
+const NONE: Pools = Pools {
+    drilled: false,
+    ..DRILLED
+};
+
+impl RuleKind {
+    pub fn semantics(self) -> Semantics {
+        match self {
+            Self::HoleDiameter(class) => Semantics {
+                subject: "hole",
+                quantity: "hole_diameter",
+                method: "ipc_hole_diameter",
+                finding_title: format!("{} hole is below minimum diameter", class.label()),
+                quantity_label: format!("{} hole diameter", class.label()),
+                witness_roles: ["hole_boundary", "hole_boundary"],
+                pools: DRILLED,
+            },
+            Self::SlotWidth => Semantics {
+                subject: "slot",
+                quantity: "slot_width",
+                method: "ipc_slot_width_or_outline_medial_axis_width",
+                finding_title: "Slot is below minimum width".to_owned(),
+                quantity_label: "routed slot width".to_owned(),
+                witness_roles: ["first_slot_boundary", "second_slot_boundary"],
+                pools: DRILLED,
+            },
+            Self::HolePairClearance => Semantics {
+                subject: "hole",
+                quantity: "hole_edge_to_hole_edge_clearance",
+                method: "circle_edge_distance",
+                finding_title: "Hole-to-hole clearance is below minimum".to_owned(),
+                quantity_label: "hole edge-to-edge clearance".to_owned(),
+                witness_roles: ["first_hole_boundary", "second_hole_boundary"],
+                pools: DRILLED,
+            },
+            Self::AnnularRing(class) => Semantics {
+                subject: "hole_layer_pair",
+                quantity: "annular_ring",
+                method: "maximal_centered_disk_minus_hole_radius",
+                finding_title: format!("{} annular ring is below minimum", class.label()),
+                quantity_label: format!("{} annular ring", class.label()),
+                witness_roles: ["hole_boundary", "copper_boundary"],
+                pools: Pools {
+                    hole_lands: true,
+                    ..COPPER_BOUNDARIES
+                },
+            },
+            Self::LineworkToCopperClearance(Linework::VScore) => Semantics {
+                subject: "score_layer_pair",
+                quantity: "vscore_centerline_to_copper_clearance",
+                method: "segment_to_filled_region_boundary",
+                finding_title: "V-score centerline is too close to copper".to_owned(),
+                quantity_label: "V-score centerline-to-copper clearance".to_owned(),
+                witness_roles: ["vscore_centerline", "copper_boundary"],
+                pools: Pools {
+                    scores: true,
+                    drilled: false,
+                    ..COPPER_BOUNDARIES
+                },
+            },
+            Self::LineworkToCopperClearance(Linework::BoardEdge) => Semantics {
+                subject: "outline_layer_pair",
+                quantity: "board_edge_to_copper_clearance",
+                method: "segment_to_filled_region_boundary",
+                finding_title: "Board edge is too close to copper".to_owned(),
+                quantity_label: "board-edge-to-copper clearance".to_owned(),
+                witness_roles: ["board_outline", "copper_boundary"],
+                pools: Pools {
+                    board_outlines: true,
+                    drilled: false,
+                    ..COPPER_BOUNDARIES
+                },
+            },
+            Self::BoardArrayPairClearance => Semantics {
+                subject: "array_pair",
+                quantity: "board_array_outline_spacing",
+                method: "filled_profile_boundary_distance",
+                finding_title: "Board arrays are too close together".to_owned(),
+                quantity_label: "board-array outline spacing".to_owned(),
+                witness_roles: ["first_board_array", "second_board_array"],
+                pools: Pools {
+                    board_arrays: true,
+                    ..NONE
+                },
+            },
+            Self::ThinFeature(ImageSel::Copper) => Semantics {
+                subject: "copper_layer",
+                quantity: "copper_feature_width",
+                method: "opening_candidate_then_medial_axis_width",
+                finding_title: "Copper feature is below minimum width".to_owned(),
+                quantity_label: "copper feature width".to_owned(),
+                witness_roles: ["first_boundary", "second_boundary"],
+                pools: Pools {
+                    drilled: false,
+                    ..COPPER
+                },
+            },
+            Self::ThinGap(ImageSel::Copper) => Semantics {
+                subject: "copper_layer",
+                quantity: "copper_to_copper_clearance",
+                method: "closing_candidate_then_medial_axis_width",
+                finding_title: "Copper spacing is below minimum".to_owned(),
+                quantity_label: "copper-to-copper clearance".to_owned(),
+                witness_roles: ["first_boundary", "second_boundary"],
+                pools: Pools {
+                    drilled: false,
+                    ..COPPER
+                },
+            },
+            Self::ThinFeature(ImageSel::Soldermask) => Semantics {
+                subject: "soldermask_layer",
+                quantity: "soldermask_feature_width",
+                method: "opening_candidate_then_medial_axis_width",
+                finding_title: "Soldermask feature is below minimum width".to_owned(),
+                quantity_label: "soldermask feature width".to_owned(),
+                witness_roles: ["first_boundary", "second_boundary"],
+                pools: Pools {
+                    masks: true,
+                    ..NONE
+                },
+            },
+            Self::ThinGap(ImageSel::Soldermask) => Semantics {
+                subject: "soldermask_layer",
+                quantity: "soldermask_web_width",
+                method: "closing_candidate_then_medial_axis_width",
+                finding_title: "Soldermask web is below minimum".to_owned(),
+                quantity_label: "soldermask web width".to_owned(),
+                witness_roles: ["first_boundary", "second_boundary"],
+                pools: Pools {
+                    masks: true,
+                    ..NONE
+                },
+            },
+        }
+    }
+}
+
+pub(super) fn pools(rules: &[Rule]) -> Pools {
     rules
         .iter()
-        .map(|rule| rule.kind.needs())
-        .fold(Needs::default(), Needs::union)
+        .map(|rule| rule.kind.semantics().pools)
+        .fold(Pools::default(), |union, pools| union | pools)
 }
 
 /// Lower every configured capability to its rules. Absent capabilities lower

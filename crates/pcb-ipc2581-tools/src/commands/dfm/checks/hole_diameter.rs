@@ -2,51 +2,47 @@
 //!
 //! Model each drilled hole `h` as the closed disk `D(cₕ, rₕ)`. The measured
 //! quantity is the finished diameter `dₕ = 2·rₕ` as the source `Hole`
-//! element declares it — no geometry is derived. The check is the pointwise
-//! predicate
+//! element declares it — exact, no geometry is derived — witnessed by the
+//! two boundary points on the hole's horizontal diameter. The check is the
+//! pointwise predicate
 //!
 //! ```text
-//! dₕ ≥ D_min    for every hole h of the rule's plating class,
+//! dₕ ≥ D_min    for every hole h of the rule's plating class.
 //! ```
-//!
-//! with the engine's shared comparison epsilon absorbing floating-point
-//! unit conversion.
 
-use crate::commands::dfm::design::HoleClass;
-use crate::commands::dfm::report::{Evidence, Finding, Location, Measurement};
-use crate::commands::dfm::rules::Rule;
+use pcb_ir::geom::Point;
+use pcb_ir::geom::dfm::Distance;
 
-use super::{Context, blank_finding, hole_subject, holes_of_class, violates_minimum};
+use crate::commands::dfm::design::{Design, HoleClass};
+use crate::commands::dfm::report::Evidence;
 
-pub(super) fn evaluate(rule: &Rule, class: HoleClass, ctx: &Context) -> (usize, Vec<Finding>) {
-    let holes = holes_of_class(ctx.design, class);
-    let limit = rule.limit.millimeters();
-    let findings = holes
+use super::{Evaluation, Measured, hole_subject, holes_of_class};
+
+pub(super) fn evaluate(class: HoleClass, design: &Design) -> Evaluation {
+    let holes = holes_of_class(design, class);
+    let measured = holes
         .iter()
-        .filter(|hole| violates_minimum(hole.diameter_mm, limit))
-        .map(|hole| Finding {
-            title: format!("{} hole is below minimum diameter", class.label()),
-            message: format!(
-                "{} hole diameter is {:.6} mm; the PDK requires at least {:.6} mm",
-                class.label(),
-                hole.diameter_mm,
-                limit
-            ),
-            measurement: Measurement::minimum(hole.diameter_mm, limit),
-            location: Location {
-                point: Some(hole.center.into()),
-                bounding_box: Some(hole.bbox.into()),
-                witnesses: Vec::new(),
-            },
-            layers: vec![hole.layer.clone()],
-            subjects: vec![hole_subject(ctx, hole, "offender")],
-            evidence: vec![Evidence::circle(
-                "drilled_hole",
-                hole.center,
-                hole.diameter_mm,
-            )],
-            ..blank_finding(rule)
+        .map(|(_, hole)| {
+            let radius = Point::new(hole.diameter_mm / 2.0, 0.0);
+            Measured {
+                distance: Distance::exact(
+                    hole.diameter_mm,
+                    hole.center - radius,
+                    hole.center + radius,
+                ),
+                bbox: hole.bbox,
+                layers: vec![hole.layer.clone()],
+                subjects: vec![hole_subject(design, hole, "offender")],
+                evidence: vec![Evidence::circle(
+                    "drilled_hole",
+                    hole.center,
+                    hole.diameter_mm,
+                )],
+            }
         })
-        .collect::<Vec<_>>();
-    (holes.len(), findings)
+        .collect();
+    Evaluation {
+        checked: holes.len(),
+        measured,
+    }
 }

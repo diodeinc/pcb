@@ -1,43 +1,26 @@
 //! Minimum routed slot width.
 //!
-//! A routed slot is the Minkowski sum of its routing centerline `P` with
-//! the cutting tool's disk: `S = P ⊕ D(0, w/2)`, so the slot's width `w`
-//! equals the tool diameter — the minor dimension of the slot's oval
-//! primitive. The check is the pointwise predicate
-//!
-//! ```text
-//! wₛ ≥ W_min    for every slot s with a stated primitive width.
-//! ```
-//!
-//! Outline-shaped slots state no nominal width and are not measured; they
-//! are absent from the checked count rather than silently passed as zero.
+//! A routed slot's width is fixed at extraction ([`Slot::width`]): the
+//! stated primitive width when the source gives one — exact, and verified
+//! against the materialized outline — and otherwise the outline's narrowest
+//! local width, the separation of its two facing walls. The check is the
+//! pointwise predicate `wₛ ≥ W_min` for every slot `s`.
 
-use crate::commands::dfm::report::{Evidence, Finding, Location, Measurement};
-use crate::commands::dfm::rules::Rule;
+use crate::commands::dfm::design::{Design, Slot};
+use crate::commands::dfm::report::Evidence;
 
-use super::{Context, blank_finding, drilled_subject, violates_minimum};
+use super::{Evaluation, Measured, drilled_subject};
 
-pub(super) fn evaluate(rule: &Rule, ctx: &Context) -> (usize, Vec<Finding>) {
-    let slots = &ctx.design.slots;
-    let limit = rule.limit.millimeters();
-    let findings = slots
+pub(super) fn evaluate(design: &Design) -> Evaluation {
+    let slots = &design.slots;
+    let measured = slots
         .iter()
-        .filter(|slot| violates_minimum(slot.width_mm, limit))
-        .map(|slot| Finding {
-            title: "Slot is below minimum width".to_owned(),
-            message: format!(
-                "routed slot width is {:.6} mm; the PDK requires at least {:.6} mm",
-                slot.width_mm, limit
-            ),
-            measurement: Measurement::minimum(slot.width_mm, limit),
-            location: Location {
-                point: Some(slot.center.into()),
-                bounding_box: Some(slot.bbox.into()),
-                witnesses: Vec::new(),
-            },
+        .map(|slot: &Slot| Measured {
+            distance: slot.width,
+            bbox: slot.bbox,
             layers: vec![slot.layer.clone()],
             subjects: vec![drilled_subject(
-                ctx,
+                design,
                 "offender",
                 "routed_slot",
                 slot.net,
@@ -48,8 +31,10 @@ pub(super) fn evaluate(rule: &Rule, ctx: &Context) -> (usize, Vec<Finding>) {
                 slot.source_feature_index,
             )],
             evidence: vec![Evidence::bounds("routed_slot", slot.bbox)],
-            ..blank_finding(rule)
         })
-        .collect::<Vec<_>>();
-    (slots.len(), findings)
+        .collect();
+    Evaluation {
+        checked: slots.len(),
+        measured,
+    }
 }
