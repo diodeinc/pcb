@@ -9,10 +9,11 @@ use crate::bom::generate_bom_with_fallback;
 use crate::bundle::{self, MetadataInput, SourceBundlePlan};
 use pcb_zen::WorkspaceInfo;
 use pcb_zen::workspace::WorkspaceInfoExt;
-use pcb_zen_core::EvalOutput;
 use pcb_zen_core::resolution::ResolutionResult;
+use pcb_zen_core::{Diagnostics, DiagnosticsPass, EvalOutput};
 
 use inquire::Confirm;
+use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::io::{BufWriter, Write};
 use std::time::Instant;
@@ -36,46 +37,6 @@ pub enum ArtifactType {
     Ipc2581,
     Step,
     Vrml,
-}
-
-impl ArtifactType {
-    /// Get the human-readable task name for this artifact type
-    fn task_name(&self) -> &'static str {
-        match self {
-            ArtifactType::Drc => "Running KiCad DRC checks",
-            ArtifactType::Bom => "Generating design BOM",
-            ArtifactType::Gerbers => "Generating gerber files",
-            ArtifactType::Cpl => "Generating pick-and-place file",
-            ArtifactType::Assembly => "Generating assembly drawings",
-            ArtifactType::Odb => "Generating ODB++ files",
-            ArtifactType::Ipc2581 => "Generating IPC-2581 file",
-            ArtifactType::Step => "Generating STEP model",
-            ArtifactType::Vrml => "Generating VRML model",
-        }
-    }
-
-    /// Get the task function for this artifact type
-    fn task_fn(&self) -> TaskFn {
-        match self {
-            ArtifactType::Drc => run_kicad_drc,
-            ArtifactType::Bom => generate_design_bom,
-            ArtifactType::Gerbers => generate_gerbers,
-            ArtifactType::Cpl => generate_cpl,
-            ArtifactType::Assembly => generate_assembly_drawings,
-            ArtifactType::Odb => generate_odb,
-            ArtifactType::Ipc2581 => generate_ipc2581,
-            ArtifactType::Step => generate_step_model,
-            ArtifactType::Vrml => generate_vrml_model,
-        }
-    }
-
-    /// Whether this artifact type requires a layout directory to generate
-    fn requires_layout(&self) -> bool {
-        match self {
-            ArtifactType::Bom => false, // BOM is generated from schematic
-            _ => true,                  // All other artifacts require KiCad layout files
-        }
-    }
 }
 
 /// All information gathered during the release preparation phase
@@ -139,23 +100,39 @@ impl ReleaseInfo {
 
 type TaskFn = fn(&ReleaseInfo, &Spinner) -> Result<()>;
 
-const BASE_TASKS: &[(&str, TaskFn)] = &[
-    ("Copying source files and dependencies", copy_sources),
-    ("Generating netlist from staged sources", validate_build),
-    ("Substituting version variables", substitute_variables),
-];
-
-/// All manufacturing artifacts in the order they should be generated
-const MANUFACTURING_ARTIFACTS: &[ArtifactType] = &[
-    ArtifactType::Drc, // Run DRC checks first, before generating any manufacturing files
-    ArtifactType::Bom,
-    ArtifactType::Gerbers,
-    ArtifactType::Cpl,
-    ArtifactType::Assembly,
-    ArtifactType::Odb,
-    ArtifactType::Ipc2581,
-    ArtifactType::Step,
-    ArtifactType::Vrml,
+/// Manufacturing work that runs only after the release preflight is accepted.
+const MANUFACTURING_TASKS: &[(ArtifactType, &str, TaskFn)] = &[
+    (
+        ArtifactType::Gerbers,
+        "Generating gerber files",
+        generate_gerbers,
+    ),
+    (
+        ArtifactType::Cpl,
+        "Generating pick-and-place file",
+        generate_cpl,
+    ),
+    (
+        ArtifactType::Assembly,
+        "Generating assembly drawings",
+        generate_assembly_drawings,
+    ),
+    (ArtifactType::Odb, "Generating ODB++ files", generate_odb),
+    (
+        ArtifactType::Ipc2581,
+        "Generating IPC-2581 file",
+        generate_ipc2581,
+    ),
+    (
+        ArtifactType::Step,
+        "Generating STEP model",
+        generate_step_model,
+    ),
+    (
+        ArtifactType::Vrml,
+        "Generating VRML model",
+        generate_vrml_model,
+    ),
 ];
 
 const ODB_EXPORT_PRECISION: &str = "4";
@@ -170,11 +147,14 @@ fn get_manufacturing_tasks(
     excluded: &[ArtifactType],
     has_layout: bool,
 ) -> Vec<(&'static str, TaskFn)> {
-    MANUFACTURING_ARTIFACTS
+    if !has_layout {
+        return Vec::new();
+    }
+
+    MANUFACTURING_TASKS
         .iter()
-        .filter(|artifact| !excluded.contains(artifact))
-        .filter(|artifact| has_layout || !artifact.requires_layout())
-        .map(|artifact| (artifact.task_name(), artifact.task_fn()))
+        .filter(|(artifact, _, _)| !excluded.contains(artifact))
+        .map(|(_, name, task)| (*name, *task))
         .collect()
 }
 
@@ -205,23 +185,45 @@ fn format_task_duration(seconds: f64) -> colored::ColoredString {
     }
 }
 
+fn confirm_continue_on_warnings(spinner: &Spinner, has_warnings: bool, message: &str) -> bool {
+    if !has_warnings || !crate::tty::is_interactive() {
+        return true;
+    }
+
+    spinner.suspend(|| {
+        Confirm::new(message)
+            .with_default(true)
+            .prompt()
+            .unwrap_or(false)
+    })
+}
+
+fn execute_task<T>(
+    info: &ReleaseInfo,
+    name: &str,
+    start_time: Instant,
+    task: impl FnOnce(&ReleaseInfo, &Spinner) -> Result<T>,
+) -> Result<T> {
+    let spinner = Spinner::builder(name).start();
+    let task_start = Instant::now();
+    let output = task(info, &spinner)?;
+    let task_duration = task_start.elapsed().as_secs_f64();
+    let cumulative_duration = start_time.elapsed().as_secs_f64();
+
+    spinner.finish();
+    eprintln!(
+        "{}: {} ({}) {name}",
+        format_cumulative_time(cumulative_duration),
+        "✓".green(),
+        format_task_duration(task_duration)
+    );
+    Ok(output)
+}
+
 /// Execute a list of tasks with proper error handling and UI feedback
 fn execute_tasks(info: &ReleaseInfo, tasks: &[(&str, TaskFn)], start_time: Instant) -> Result<()> {
     for (name, task) in tasks {
-        let spinner = Spinner::builder(*name).start();
-
-        let task_start = Instant::now();
-        task(info, &spinner)?;
-        let task_duration = task_start.elapsed().as_secs_f64();
-        let cumulative_duration = start_time.elapsed().as_secs_f64();
-
-        spinner.finish();
-        eprintln!(
-            "{}: {} ({}) {name}",
-            format_cumulative_time(cumulative_duration),
-            "✓".green(),
-            format_task_duration(task_duration)
-        );
+        execute_task(info, name, start_time, task)?;
     }
     Ok(())
 }
@@ -352,10 +354,8 @@ pub fn build_board_release(
         ensure_board_compatible_with_installed_kicad(&kicad_pcb_path)?;
     }
 
-    // Execute base tasks
-    execute_tasks(&release_info, BASE_TASKS, start_time)?;
+    run_release_preflight(&release_info, &exclude, start_time)?;
 
-    // Execute manufacturing tasks
     let manufacturing_tasks = get_manufacturing_tasks(&exclude, release_info.has_layout());
     execute_tasks(&release_info, &manufacturing_tasks, start_time)?;
 
@@ -631,8 +631,94 @@ fn substitute_variables(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     Ok(())
 }
 
-/// Validate that the staged zen file can be built successfully
-fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
+fn run_release_preflight(
+    info: &ReleaseInfo,
+    excluded: &[ArtifactType],
+    start_time: Instant,
+) -> Result<()> {
+    execute_task(
+        info,
+        "Copying source files and dependencies",
+        start_time,
+        copy_sources,
+    )?;
+    let mut diagnostics = execute_task(
+        info,
+        "Generating netlist from staged sources",
+        start_time,
+        validate_build,
+    )?;
+    execute_task(
+        info,
+        "Substituting version variables",
+        start_time,
+        substitute_variables,
+    )?;
+
+    if info.has_layout() && !excluded.contains(&ArtifactType::Drc) {
+        diagnostics.diagnostics.extend(
+            execute_task(info, "Running KiCad DRC checks", start_time, run_kicad_drc)?.diagnostics,
+        );
+    }
+    if !excluded.contains(&ArtifactType::Bom) {
+        diagnostics.diagnostics.extend(
+            execute_task(
+                info,
+                "Generating design BOM",
+                start_time,
+                generate_design_bom,
+            )?
+            .diagnostics,
+        );
+    }
+
+    execute_task(
+        info,
+        "Reviewing release preflight",
+        start_time,
+        |info, spinner| review_release_preflight(info, spinner, &mut diagnostics),
+    )
+}
+
+fn review_release_preflight(
+    info: &ReleaseInfo,
+    spinner: &Spinner,
+    diagnostics: &mut Diagnostics,
+) -> Result<()> {
+    spinner.suspend(|| crate::drc::render_diagnostics(diagnostics, &info.suppress));
+    let warning_count = diagnostics.warning_count();
+    if !confirm_continue_on_warnings(
+        spinner,
+        warning_count > 0,
+        &format!(
+            "Release preflight produced {warning_count} warning(s). Do you want to proceed with the release?"
+        ),
+    ) {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+fn active_errors(diagnostics: &Diagnostics) -> Diagnostics {
+    Diagnostics {
+        diagnostics: diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.is_error() && !diagnostic.suppressed)
+            .cloned()
+            .collect(),
+    }
+}
+
+struct RenderBuildErrorsPass;
+
+impl DiagnosticsPass for RenderBuildErrorsPass {
+    fn apply(&self, diagnostics: &mut Diagnostics) {
+        pcb_zen::diagnostics::RenderPass.apply(&mut active_errors(diagnostics));
+    }
+}
+
+/// Validate that the staged zen file can be built successfully.
+fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<Diagnostics> {
     // Calculate the zen file path in the staging directory
     let zen_file_rel = info
         .zen_path
@@ -647,72 +733,164 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
     // copy_sources.
     let staged_resolution = crate::resolve::resolve(Some(&staged_zen_path), true)?;
 
-    // Use build function with offline mode but allow warnings
-    // Suspend spinner during build to allow diagnostics to render properly
-    let (has_errors, has_warnings, schematic) = spinner.suspend(|| {
+    // Reuse the build pipeline without rendering; release preflight owns the combined report.
+    let build_result = spinner.suspend(|| {
         let mut has_errors = false;
         let mut has_warnings = false;
 
         // Export diagnostics to JSON for release artifacts
-        let mut passes = crate::build::create_diagnostics_passes(&[], &[]);
+        let mut passes = crate::build::create_diagnostics_processing_passes(&info.suppress, &[]);
+        passes.push(Box::new(RenderBuildErrorsPass));
         passes.push(Box::new(pcb_zen_core::JsonExportPass::new(
             info.staging_dir.join("diagnostics.json"),
             zen_file_rel.display().to_string(),
         )));
 
-        let schematic = crate::build::build(
+        crate::build::BuildEvalState::new(staged_resolution).build(
             &staged_zen_path,
             Default::default(),
             passes,
             false, // don't deny warnings - we'll prompt user instead
             &mut has_errors,
             &mut has_warnings,
-            staged_resolution,
-        );
-        (has_errors, has_warnings, schematic)
+        )
     });
 
-    if has_errors {
+    let crate::build::BuildResult {
+        schematic,
+        diagnostics,
+        ..
+    } = build_result;
+    if diagnostics.error_count() > 0 {
         std::process::exit(1);
     }
 
-    // Handle warnings: prompt interactively, proceed silently in CI
-    if has_warnings && crate::tty::is_interactive() {
-        spinner.suspend(|| {
-            let confirmed = Confirm::new(
-                "Build completed with warnings. Do you want to proceed with the release?",
-            )
-            .with_default(true)
-            .prompt()
-            .unwrap_or(false);
-            if !confirmed {
-                std::process::exit(1);
-            }
-        });
-    }
-    // In non-interactive mode (CI), warnings have been rendered - proceed with release
-
     // Write fp-lib-table with correct vendor/ paths to staged layout directory
     // The staged schematic has footprint paths pointing to src/vendor/ instead of .pcb/cache
-    if let Some(ref sch) = schematic {
+    if let Some(ref schematic) = schematic {
         if let Some(staged_layout_dir) = info.staged_layout_dir()
             && staged_layout_dir.exists()
         {
-            pcb_layout::utils::write_footprint_library_table(&staged_layout_dir, sch)
+            pcb_layout::utils::write_footprint_library_table(&staged_layout_dir, schematic)
                 .context("Failed to write fp-lib-table for staged layout")?;
         }
 
         // Write RFC 8785 canonical netlist JSON to staging directory.
-        let netlist_json = sch.to_json().context("Failed to serialize netlist")?;
+        let netlist_json = schematic.to_json().context("Failed to serialize netlist")?;
         fs::write(info.staging_dir.join("netlist.json"), &netlist_json)
             .context("Failed to write netlist.json")?;
     }
 
-    Ok(())
+    Ok(diagnostics)
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+enum BomOfferIssue {
+    Unknown,
+    NoOffers,
+}
+
+fn bom_part_label(entry: &pcb_sch::bom::BomEntry) -> String {
+    if let Some(mpn) = entry.mpn.as_deref() {
+        return match entry.manufacturer.as_deref() {
+            Some(manufacturer) => format!("{manufacturer} {mpn}"),
+            None => mpn.to_string(),
+        };
+    }
+
+    match (entry.value.as_deref(), entry.package.as_deref()) {
+        (Some(value), Some(package)) => format!("{value} {package}"),
+        (Some(value), None) => value.to_string(),
+        (None, Some(package)) => package.to_string(),
+        (None, None) => "generic BOM part".to_string(),
+    }
+}
+
+fn bom_offer_diagnostics(board_path: &Path, bom: &pcb_sch::bom::Bom) -> pcb_zen_core::Diagnostics {
+    let mut groups = HashMap::<(BomOfferIssue, pcb_sch::bom::BomEntry), BTreeSet<String>>::new();
+
+    for (path, entry) in &bom.entries {
+        let availability = bom
+            .availability
+            .get(path)
+            .expect("validated BOM match must include every requested path");
+        let issue = if availability.no_match {
+            BomOfferIssue::Unknown
+        } else if availability.offers.is_empty() {
+            BomOfferIssue::NoOffers
+        } else {
+            continue;
+        };
+        groups
+            .entry((issue, entry.clone()))
+            .or_default()
+            .insert(bom.designators[path].clone());
+    }
+
+    let mut groups = groups.into_iter().collect::<Vec<_>>();
+    groups.sort_by(
+        |((left_issue, _), left_refs), ((right_issue, _), right_refs)| {
+            (left_refs.first(), left_issue).cmp(&(right_refs.first(), right_issue))
+        },
+    );
+
+    let diagnostics = groups
+        .into_iter()
+        .map(|((issue, entry), designators)| {
+            let designators = designators.into_iter().collect::<Vec<_>>().join(", ");
+            let part = bom_part_label(&entry);
+            let (kind, message) = match issue {
+                BomOfferIssue::Unknown => (
+                    "bom.sourceability.unknown",
+                    format!("Strict BOM matching does not recognize {part} ({designators})"),
+                ),
+                BomOfferIssue::NoOffers => (
+                    "bom.sourceability.no_offers",
+                    format!("No supplier offers found for {part} ({designators})"),
+                ),
+            };
+            pcb_zen_core::Diagnostic::categorized(
+                &board_path.to_string_lossy(),
+                &message,
+                kind,
+                starlark::errors::EvalSeverity::Warning,
+            )
+        })
+        .collect();
+
+    pcb_zen_core::Diagnostics { diagnostics }
+}
+
+fn check_bom_offers(info: &ReleaseInfo, spinner: &Spinner, bom: &pcb_sch::bom::Bom) -> Diagnostics {
+    let mut sourcing_bom = bom.filter_excluded();
+    sourcing_bom.entries.retain(|_, entry| !entry.dnp);
+    if sourcing_bom.is_empty() {
+        return Diagnostics::default();
+    }
+
+    spinner.set_message("Checking strict BOM offers");
+    let ctx = pcb_diode_api::WorkspaceContext::from_path(&info.zen_path);
+    match pcb_diode_api::match_bom_with_context(
+        &ctx,
+        None,
+        &mut sourcing_bom,
+        true,
+        pcb_diode_api::BomMatchMode::Online,
+    ) {
+        Ok(()) => bom_offer_diagnostics(&info.zen_path, &sourcing_bom),
+        Err(error) => pcb_zen_core::Diagnostics {
+            diagnostics: vec![pcb_zen_core::Diagnostic::categorized(
+                &info.zen_path.to_string_lossy(),
+                &format!("Could not check strict BOM offers: {error:#}"),
+                "bom.sourceability.check_failed",
+                starlark::errors::EvalSeverity::Warning,
+            )],
+        },
+    }
 }
 
 /// Generate design BOM JSON file (with optional KiCad fallback if layout exists)
-fn generate_design_bom(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
+fn generate_design_bom(info: &ReleaseInfo, spinner: &Spinner) -> Result<Diagnostics> {
     // Generate BOM entries from the schematic
     let bom = info.schematic.bom();
 
@@ -727,12 +905,14 @@ fn generate_design_bom(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
         .map(|l| info.workspace_root().join(l.layout_dir_rel()));
     let final_bom = generate_bom_with_fallback(bom, layout_path.as_deref())?;
 
+    let diagnostics = check_bom_offers(info, spinner, &final_bom);
+
     // Write design BOM as JSON
     let bom_file = bom_dir.join("design_bom.json");
     let mut file = fs::File::create(&bom_file)?;
     write!(file, "{}", final_bom.ungrouped_json())?;
 
-    Ok(())
+    Ok(diagnostics)
 }
 
 /// Write release metadata to JSON file
@@ -1263,7 +1443,7 @@ fn generate_vrml_model(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
 }
 
 /// Run KiCad DRC checks on the layout file
-fn run_kicad_drc(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
+fn run_kicad_drc(info: &ReleaseInfo, spinner: &Spinner) -> Result<Diagnostics> {
     let mut diagnostics = pcb_zen_core::Diagnostics::default();
     let netlist_json_path = info.staging_dir.join("netlist.json");
     let netlist_json = fs::read_to_string(&netlist_json_path)
@@ -1292,30 +1472,13 @@ fn run_kicad_drc(info: &ReleaseInfo, spinner: &Spinner) -> Result<()> {
     let report = pcb_kicad::run_drc(&kicad_pcb_path, false, working_dir, &drc_json_path)?;
     report.add_to_diagnostics(&mut diagnostics, &display_pcb_file.to_string_lossy());
 
-    spinner.suspend(|| crate::drc::render_diagnostics(&mut diagnostics, &info.suppress));
-
-    // Fail if there are errors
+    pcb_zen_core::SuppressPass::new(info.suppress.clone()).apply(&mut diagnostics);
     if diagnostics.error_count() > 0 {
+        spinner.suspend(|| crate::drc::render_diagnostics(&mut active_errors(&diagnostics), &[]));
         std::process::exit(1);
     }
 
-    // Prompt user if there are warnings (interactive mode only)
-    if diagnostics.warning_count() > 0 && crate::tty::is_interactive() {
-        spinner.suspend(|| {
-            let confirmed = Confirm::new(&format!(
-                "DRC completed with {} warning(s). Do you want to proceed with the release?",
-                diagnostics.warning_count()
-            ))
-            .with_default(true)
-            .prompt()
-            .unwrap_or(false);
-            if !confirmed {
-                std::process::exit(1);
-            }
-        });
-    }
-
-    Ok(())
+    Ok(diagnostics)
 }
 
 #[cfg(test)]
@@ -1416,6 +1579,83 @@ mod tests {
         assert!(names.iter().all(|name| !should_skip_release_zip_path(name)));
 
         Ok(())
+    }
+
+    #[test]
+    fn bom_offer_warnings_group_parts_and_prefer_unknown() {
+        use pcb_sch::bom::{Availability, Bom, BomEntry, Offer};
+
+        let part = |manufacturer: &str, mpn: &str| BomEntry {
+            mpn: Some(mpn.to_string()),
+            alternatives: Vec::new(),
+            manufacturer: Some(manufacturer.to_string()),
+            package: None,
+            value: None,
+            description: None,
+            generic_data: None,
+            dnp: false,
+            skip_bom: false,
+            matcher: None,
+            properties: Default::default(),
+        };
+        let offer = || Offer {
+            region: "US".to_string(),
+            distributor: "test".to_string(),
+            stock: 1,
+            price: Some(1.0),
+            part_id: None,
+        };
+
+        let resistor = part("Yageo", "RC0603FR-0710KL");
+        let unknown = part("Acme", "UNKNOWN");
+        let sourceable = part("Murata", "GRM188R71C104KA01");
+        let mut bom = Bom::new(
+            HashMap::from([
+                ("root.R1".to_string(), resistor.clone()),
+                ("root.R2".to_string(), resistor),
+                ("root.U1".to_string(), unknown),
+                ("root.C1".to_string(), sourceable),
+            ]),
+            HashMap::from([
+                ("root.R1".to_string(), "R1".to_string()),
+                ("root.R2".to_string(), "R2".to_string()),
+                ("root.U1".to_string(), "U1".to_string()),
+                ("root.C1".to_string(), "C1".to_string()),
+            ]),
+        );
+        bom.availability = HashMap::from([
+            ("root.R1".to_string(), Availability::default()),
+            ("root.R2".to_string(), Availability::default()),
+            (
+                "root.U1".to_string(),
+                Availability {
+                    no_match: true,
+                    offers: vec![offer()],
+                    ..Default::default()
+                },
+            ),
+            (
+                "root.C1".to_string(),
+                Availability {
+                    offers: vec![offer()],
+                    ..Default::default()
+                },
+            ),
+        ]);
+
+        let diagnostics = bom_offer_diagnostics(Path::new("board.zen"), &bom);
+        let warnings = diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.body.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            warnings,
+            vec![
+                "No supplier offers found for Yageo RC0603FR-0710KL (R1, R2)",
+                "Strict BOM matching does not recognize Acme UNKNOWN (U1)",
+            ]
+        );
     }
 
     #[test]
