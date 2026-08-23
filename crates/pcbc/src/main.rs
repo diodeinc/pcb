@@ -36,7 +36,6 @@ mod new;
 mod open;
 #[path = "mod/mod.rs"]
 mod pcb_mod;
-mod preview;
 mod publish;
 mod release;
 mod remote_sandbox;
@@ -138,10 +137,8 @@ enum Commands {
     #[command(alias = "p")]
     Publish(publish::PublishArgs),
 
-    /// Build and upload a preview release for a board
-    Preview(preview::PreviewArgs),
-
     /// Vendor external dependencies
+    #[command(hide = true)]
     Vendor(vendor::VendorArgs),
 
     /// Reserved subcommand for future use
@@ -236,7 +233,6 @@ fn run() -> anyhow::Result<()> {
         Commands::Lsp(args) => lsp::execute(args),
         Commands::Open(args) => open::execute(args),
         Commands::Publish(args) => publish::execute(args),
-        Commands::Preview(args) => preview::execute(args),
         Commands::Vendor(args) => vendor::execute(args),
         Commands::Fork => {
             println!("`pcb fork` is a reserved subcommand for future use.");

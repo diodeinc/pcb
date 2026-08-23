@@ -8,6 +8,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- `pcb preview` and its preview release upload path.
+- `pcb vendor` remains available but is hidden from top-level command help.
+
 ## [0.4.34] - 2026-08-21
 
 ### Added
