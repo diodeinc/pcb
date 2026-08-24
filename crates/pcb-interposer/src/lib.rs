@@ -50,7 +50,7 @@ pub fn fixture_map(panel_xml: &Path) -> Result<String> {
 fn pogo_keepouts(panel: &panel::Panel) -> Vec<([f64; 2], f64)> {
     // The vendored 806 pogo footprint's courtyard radius: the cap is
     // wider than the solder land, so the courtyard governs interference.
-    let pogo = 1.65;
+    let pogo = 1.5;
     let clear = 0.5;
     panel
         .holes
