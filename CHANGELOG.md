@@ -11,7 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - Added `pcb route --engine freerouting` to auto-route boards locally via FreeRouting.
-- Added `pcb ipc interposer --route` to auto-route the interposer with FreeRouting.
+- Added `pcb ipc interposer --route` to auto-route the interposer with FreeRouting and stitch the GND pours with vias.
 
 ### Changed
 

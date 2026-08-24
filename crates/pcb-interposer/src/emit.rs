@@ -2,10 +2,9 @@
 //!
 //! The deterministic board: the panel's outline, tooling holes, and
 //! fiducials, the S11 mate lands on the bottom copper, and full-sheet
-//! GND pours on both faces, cross-stitched with a via at each GND land
-//! and GND pogo that sits clear of foreign copper — routed tracks slice
-//! a pour into fragments, and the stitch vias bridge every fragment
-//! through the opposite face. With a fixture plan, the board is also
+//! GND pours on both faces — GND rides the pours, unrouted; the
+//! post-route stitching pass adds the vias that tie the faces together
+//! around whatever copper the router drew. With a fixture plan, the board is also
 //! populated — a pogo pad on the top face at every tested contact, and
 //! the plan's nets bound on both the pogo and its mate land — so the
 //! unrouted airwires are exactly the routing pass's work list. Without a
@@ -14,7 +13,7 @@
 
 use pcb_ir::dialects::kicad::{
     At, Document, Footprint, FootprintAttrs, Graphic, Mount, Pad, PadKind, PadShape, Property,
-    Stroke, UuidGen, Via, Zone, ZoneConnect, ZoneFill,
+    Stroke, UuidGen, Zone, ZoneConnect, ZoneFill,
 };
 use pcb_ir::geom::Point;
 
@@ -96,42 +95,6 @@ pub fn board(panel: &Panel, lands: &[Land], plan: Option<&Plan>) -> String {
         }
     }
 
-    // GND stitch candidates and the non-GND pads a through-via must keep
-    // away from: the faces deliberately overlap in the plane, so a GND
-    // land can sit exactly under a signal pogo — a via there would short
-    // through the board. Skipping a crowded candidate is safe; the land
-    // stays on the pour and the remaining vias still bridge fragments.
-    let (mut stitch, mut foreign): (Vec<[f64; 2]>, Vec<[f64; 2]>) = (Vec::new(), Vec::new());
-    if let Some(plan) = plan {
-        for (contact_index, net) in &contact_nets {
-            let xy = plan.contacts[*contact_index].xy;
-            if net.1 == "GND" {
-                &mut stitch
-            } else {
-                &mut foreign
-            }
-            .push(xy);
-        }
-    }
-    for (index, land) in lands.iter().enumerate() {
-        let gnd_land = !land_nets.contains_key(&index) && land.role == Role::Gnd;
-        if gnd_land { &mut stitch } else { &mut foreign }.push(land.xy);
-    }
-    let clear_of = |points: &[[f64; 2]], xy: [f64; 2], r: f64| {
-        points
-            .iter()
-            .all(|p| (p[0] - xy[0]).hypot(p[1] - xy[1]) >= r)
-    };
-    let mut placed: Vec<[f64; 2]> = Vec::new();
-    for xy in stitch {
-        // 1.2 mm keeps the via's pad, hole, and mask aperture clear of a
-        // Ø1 mm pad; 0.9 mm keeps coincident GND vias' holes apart.
-        if clear_of(&foreign, xy, 1.2) && clear_of(&placed, xy, 0.9) {
-            doc.vias.push(stitch_via(&mut uuids, xy, gnd));
-            placed.push(xy);
-        }
-    }
-
     for layer in ["F.Cu", "B.Cu"] {
         doc.zones.push(Zone {
             net: gnd,
@@ -159,18 +122,6 @@ pub fn board(panel: &Panel, lands: &[Land], plan: Option<&Plan>) -> String {
     }
 
     pcb_ir::dialects::kicad::write(&doc)
-}
-
-/// A GND stitch via, bridging the two pours at a GND land or pogo.
-fn stitch_via(uuids: &mut UuidGen, at: [f64; 2], gnd: u32) -> Via {
-    Via {
-        at: Point::new(at[0], at[1]),
-        size: 0.6,
-        drill: 0.3,
-        layers: ("F.Cu".into(), "B.Cu".into()),
-        net: gnd,
-        uuid: uuids.next_uuid(),
-    }
 }
 
 fn hidden_properties(uuids: &mut UuidGen, reference: &str, top: bool) -> Vec<Property> {

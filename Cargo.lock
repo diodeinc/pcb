@@ -4260,8 +4260,10 @@ dependencies = [
  "anyhow",
  "ipc2581",
  "pcb-ir",
+ "pcb-kicad",
  "pcb-sexpr",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
