@@ -45,6 +45,12 @@ enum Commands {
         /// Also write the fixture map (tested boards + contact→land bindings) as JSON
         #[arg(long, value_hint = clap::ValueHint::FilePath)]
         fixture_map: Option<PathBuf>,
+        /// Auto-route the interposer with FreeRouting (requires Java 25+)
+        #[arg(long)]
+        route: bool,
+        /// [route] Routing timeout in minutes
+        #[arg(long, default_value = "20")]
+        route_timeout: u32,
     },
     /// List ICT fixture contacts (components with an `Ict` BOM characteristic)
     Ict {
@@ -364,6 +370,8 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
             input,
             output,
             fixture_map,
+            route,
+            route_timeout,
         } => {
             use anyhow::Context as _;
             let (pcb, pro) = pcb_interposer::generate(&input)?;
@@ -381,6 +389,24 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                 std::fs::write(&map_path, map)
                     .with_context(|| format!("write {}", map_path.display()))?;
                 println!("✓ Wrote fixture map {}", map_path.display());
+            }
+            if route {
+                if route_timeout > 60 {
+                    anyhow::bail!("--route-timeout cannot exceed 60 minutes");
+                }
+                let board_name = output
+                    .file_stem()
+                    .context("output path has no file name")?
+                    .to_string_lossy()
+                    .to_string();
+                let route_args = crate::route::RouteArgs {
+                    file: input,
+                    engine: crate::route::RouteEngine::Freerouting,
+                    no_open: true,
+                    timeout: route_timeout,
+                    project_id: None,
+                };
+                crate::freerouting::execute(&route_args, &output, &pro_path, &board_name)?;
             }
             Ok(())
         }
