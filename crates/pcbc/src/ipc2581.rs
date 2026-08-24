@@ -406,9 +406,14 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                     timeout: route_timeout,
                     project_id: None,
                 };
-                crate::freerouting::execute(&route_args, &output, &pro_path, &board_name)?;
+                // Stitch whatever board state routing left behind — a
+                // partial result published before a routing error still
+                // gets a coherent GND — then surface the routing error.
+                let routed =
+                    crate::freerouting::execute(&route_args, &output, &pro_path, &board_name);
                 let vias = pcb_interposer::stitch::stitch(&output)?;
                 println!("✓ Stitched {vias} GND vias");
+                routed?;
             }
             Ok(())
         }
