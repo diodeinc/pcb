@@ -84,6 +84,8 @@ P1 = io(Net)
 # extraction keys on the footprint and the role together.
 if variant.value == "ICT" and not ict:
     error('variant Variant("ICT") requires an ict= role')
+if ict and "Keystone" in variant.value:
+    error("ict= is not supported on Keystone test points; they are real parts, not bare pads")
 
 
 def _properties(base):
