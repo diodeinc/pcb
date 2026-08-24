@@ -45,6 +45,9 @@ enum Commands {
         /// Also write the fixture map (tested boards + contact→land bindings) as JSON
         #[arg(long, value_hint = clap::ValueHint::FilePath)]
         fixture_map: Option<PathBuf>,
+        /// Auto-route the interposer with FreeRouting (requires Java 25+)
+        #[arg(long)]
+        route: bool,
     },
     /// List ICT fixture contacts (components with an `Ict` BOM characteristic)
     Ict {
@@ -364,6 +367,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
             input,
             output,
             fixture_map,
+            route,
         } => {
             use anyhow::Context as _;
             let (pcb, pro) = pcb_interposer::generate(&input)?;
@@ -381,6 +385,28 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                 std::fs::write(&map_path, map)
                     .with_context(|| format!("write {}", map_path.display()))?;
                 println!("✓ Wrote fixture map {}", map_path.display());
+            }
+            if route {
+                let board_name = output
+                    .file_stem()
+                    .context("output path has no file name")?
+                    .to_string_lossy()
+                    .to_string();
+                let route_args = crate::route::RouteArgs {
+                    file: input,
+                    engine: crate::route::RouteEngine::Freerouting,
+                    no_open: true,
+                    timeout: 20,
+                    project_id: None,
+                };
+                // Stitch whatever board state routing left behind — a
+                // partial result published before a routing error still
+                // gets a coherent GND — then surface the routing error.
+                let routed =
+                    crate::freerouting::execute(&route_args, &output, &pro_path, &board_name);
+                let vias = pcb_interposer::stitch::stitch(&output)?;
+                println!("✓ Stitched {vias} GND vias");
+                routed?;
             }
             Ok(())
         }

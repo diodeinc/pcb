@@ -176,7 +176,9 @@ fn generates_a_parseable_interposer() {
     };
     // 5 holes + 2 fids + 112 lands + 12 pogos (2 boards × 6 contacts).
     assert_eq!(count("footprint"), 131);
-    assert_eq!(count("zone"), 1);
+    assert_eq!(count("zone"), 2);
+    // Stitch vias are the route step's job; the emitted board has none.
+    assert_eq!(count("via"), 0);
     assert_eq!(count("gr_arc"), 4);
     assert_eq!(count("gr_line"), 4);
     // Net table: no-net, GND, and ten planned nets.

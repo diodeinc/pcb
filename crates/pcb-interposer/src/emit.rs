@@ -1,13 +1,15 @@
 //! Emit the interposer as a KiCad board via `pcb_ir::dialects::kicad`.
 //!
 //! The deterministic board: the panel's outline, tooling holes, and
-//! fiducials, the S11 mate lands on the bottom copper, and a full-sheet
-//! bottom GND pour. With a fixture plan, the board is also populated —
-//! a pogo pad on the top face at every tested contact, and the plan's
-//! nets bound on both the pogo and its mate land — so the unrouted
-//! airwires are exactly the routing pass's work list. Without a plan
-//! (no ICT contacts), GND lands join the pour and everything else stays
-//! un-netted.
+//! fiducials, the S11 mate lands on the bottom copper, and full-sheet
+//! GND pours on both faces — GND rides the pours, unrouted; the
+//! post-route stitching pass (`crate::stitch`) adds the vias that tie
+//! the faces together around whatever copper the router drew. With a
+//! fixture plan, the board is also populated — a pogo pad on the top
+//! face at every tested contact, and the plan's nets bound on both the
+//! pogo and its mate land — so the unrouted airwires are exactly the
+//! routing pass's work list. Without a plan (no ICT contacts), GND
+//! lands join the pour and everything else stays un-netted.
 
 use pcb_ir::dialects::kicad::{
     At, Document, Footprint, FootprintAttrs, Graphic, Mount, Pad, PadKind, PadShape, Property,
@@ -93,29 +95,31 @@ pub fn board(panel: &Panel, lands: &[Land], plan: Option<&Plan>) -> String {
         }
     }
 
-    doc.zones.push(Zone {
-        net: gnd,
-        net_name: "GND".into(),
-        layers: vec!["B.Cu".into()],
-        uuid: uuids.next_uuid(),
-        name: None,
-        priority: None,
-        hatch_pitch: 0.5,
-        connect_pads: ZoneConnect::Thermal,
-        connect_clearance: 0.25,
-        min_thickness: 0.25,
-        fill: ZoneFill {
-            enabled: true,
-            thermal_gap: 0.3,
-            thermal_bridge_width: 0.4,
-        },
-        polygon: vec![
-            Point::new(0.0, 0.0),
-            Point::new(panel.width, 0.0),
-            Point::new(panel.width, panel.height),
-            Point::new(0.0, panel.height),
-        ],
-    });
+    for layer in ["F.Cu", "B.Cu"] {
+        doc.zones.push(Zone {
+            net: gnd,
+            net_name: "GND".into(),
+            layers: vec![layer.into()],
+            uuid: uuids.next_uuid(),
+            name: None,
+            priority: None,
+            hatch_pitch: 0.5,
+            connect_pads: ZoneConnect::Thermal,
+            connect_clearance: 0.25,
+            min_thickness: 0.25,
+            fill: ZoneFill {
+                enabled: true,
+                thermal_gap: 0.3,
+                thermal_bridge_width: 0.4,
+            },
+            polygon: vec![
+                Point::new(0.0, 0.0),
+                Point::new(panel.width, 0.0),
+                Point::new(panel.width, panel.height),
+                Point::new(0.0, panel.height),
+            ],
+        });
+    }
 
     pcb_ir::dialects::kicad::write(&doc)
 }
