@@ -169,7 +169,12 @@ if not filler.Fill(board.Zones()):
 RESCUE_STEP = pcbnew.FromMM(0.4)
 RESCUE_SEP = pcbnew.FromMM(0.7)
 gnd_pads = [
-    (pad.GetPosition().x, pad.GetPosition().y, pad.IsOnLayer(pcbnew.F_Cu))
+    (
+        pad.GetPosition().x,
+        pad.GetPosition().y,
+        pad.IsOnLayer(pcbnew.F_Cu),
+        max(pad.GetSize().x, pad.GetSize().y) // 2,
+    )
     for footprint in board.GetFootprints()
     for pad in footprint.Pads()
     if pad.GetNetCode() == gnd
@@ -200,14 +205,15 @@ for zone in board.Zones():
         for layer in (pcbnew.F_Cu, pcbnew.B_Cu):
             if zone.IsOnLayer(layer):
                 gnd_fills[layer] = zone.GetFilledPolysList(layer)
-for x, y, top in gnd_pads:
+for x, y, top, radius in gnd_pads:
     layer = pcbnew.F_Cu if top else pcbnew.B_Cu
     fill = gnd_fills.get(layer)
     if fill is None:
         continue
     # A connected pad has fill copper (spokes or solid) overlapping it,
-    # so the fill comes within the pad's radius of its center.
-    touched = fill.Collide(pcbnew.VECTOR2I(x, y), pcbnew.FromMM(1.0))
+    # so the fill comes within the pad's own radius of its center; an
+    # orphan's nearest fill sits a full thermal gap further out.
+    touched = fill.Collide(pcbnew.VECTOR2I(x, y), radius + pcbnew.FromMM(0.05))
     if not touched and all(
         (ox - x) ** 2 + (oy - y) ** 2 >= RESCUE_SEP * RESCUE_SEP for ox, oy in accepted
     ):
@@ -226,7 +232,7 @@ for zone in board.Zones():
             on_top = layer == pcbnew.F_Cu
             pads_in = [
                 (x, y)
-                for x, y, top in gnd_pads
+                for x, y, top, _ in gnd_pads
                 if top == on_top and island.Collide(pcbnew.VECTOR2I(x, y))
             ]
             if not pads_in:
