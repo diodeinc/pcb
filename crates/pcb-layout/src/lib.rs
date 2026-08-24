@@ -18,6 +18,7 @@ use include_dir::{Dir, include_dir};
 use pcb_kicad::{PythonScriptBuilder, ensure_board_compatible_with_installed_kicad};
 use pcb_sch::kicad_netlist::{try_format_footprint_with_package_roots, write_fp_lib_table};
 
+mod design_rules;
 mod effective_netlist;
 mod kicad_project_patch;
 mod moved;
@@ -776,6 +777,7 @@ pub fn process_layout(
         &netclass_assignments,
         layout_name.as_deref(),
     )?;
+    design_rules::write_design_rules(&paths.pcb.with_extension("kicad_dru"))?;
     patch_pcb_file(
         &paths.pcb,
         board_config.as_ref(),
@@ -1207,6 +1209,7 @@ fn build_pcb_patchset(
         board,
         internal_connectivity_by_path,
     )?);
+    patches.extend(build_footprint_component_class_patchset(board)?);
 
     if let Some(stackup) = board_config.and_then(|config| config.stackup.as_ref()) {
         let board_thickness_iu = stackup_thickness_iu(stackup);
@@ -1296,6 +1299,74 @@ fn build_footprint_internal_connectivity_patchset(
             direct_child_node(footprint, "jumper_pad_groups"),
             groups_text,
         ) {
+            (Some(node), Some(text)) => patches.replace_raw(node.span, text),
+            (Some(node), None) => patches.replace_raw(node.span, String::new()),
+            (None, Some(text)) => insert_footprint_child(&mut patches, footprint, &text),
+            (None, None) => {}
+        }
+    }
+
+    Ok(patches)
+}
+
+/// Stamp the `ICT` component class on every footprint whose `Ict`
+/// property is non-empty (and strip it where the property is gone), so
+/// the generated design rule (see `design_rules`) can pair-match ICT
+/// test points in DRC. Only the `ICT` class is managed; any other
+/// classes on the footprint are kept.
+fn build_footprint_component_class_patchset(
+    board: &pcb_sexpr::Sexpr,
+) -> Result<pcb_sexpr::PatchSet, LayoutError> {
+    const CLASS: &str = "ICT";
+    let root_items = board.as_list().ok_or_else(|| {
+        LayoutError::StackupPatchingError("PCB root is not an S-expression list".to_string())
+    })?;
+
+    let mut patches = pcb_sexpr::PatchSet::new();
+    for item in root_items.iter().skip(1) {
+        let Some(footprint) = item.as_list() else {
+            continue;
+        };
+        if footprint.first().and_then(pcb_sexpr::Sexpr::as_sym) != Some("footprint") {
+            continue;
+        }
+
+        let is_ict = pcb_sexpr::kicad::schematic_properties(footprint)
+            .get("Ict")
+            .is_some_and(|value| !value.is_empty());
+        let existing = direct_child_node(footprint, "component_classes");
+        let mut classes: Vec<String> = existing
+            .and_then(pcb_sexpr::Sexpr::as_list)
+            .map(|node| {
+                node.iter()
+                    .skip(1)
+                    .filter_map(pcb_sexpr::Sexpr::as_list)
+                    .filter(|child| {
+                        child.first().and_then(pcb_sexpr::Sexpr::as_sym) == Some("class")
+                    })
+                    .filter_map(|child| child.get(1).and_then(pcb_sexpr::Sexpr::as_str))
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let had = classes.iter().any(|class| class == CLASS);
+        match (is_ict, had) {
+            (true, false) => classes.push(CLASS.to_string()),
+            (false, true) => classes.retain(|class| class != CLASS),
+            _ => continue,
+        }
+        classes.sort();
+
+        let text = (!classes.is_empty()).then(|| {
+            let list = classes
+                .iter()
+                .map(|class| format!("(class \"{class}\")"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!("(component_classes {list})")
+        });
+        match (existing, text) {
             (Some(node), Some(text)) => patches.replace_raw(node.span, text),
             (Some(node), None) => patches.replace_raw(node.span, String::new()),
             (None, Some(text)) => insert_footprint_child(&mut patches, footprint, &text),
@@ -1642,8 +1713,8 @@ fn stackup_thickness_iu(stackup: &Stackup) -> Option<PcbIu> {
 mod tests {
     use super::{
         PCB_GIT_HASH_PLACEHOLDER, PCB_VERSION_PLACEHOLDER, PcbIu, build_board_properties_patchset,
-        build_footprint_internal_connectivity_patchset, build_stackup_patchset,
-        build_title_block_patchset, patch_pcb_file, stackup_thickness_iu,
+        build_footprint_component_class_patchset, build_footprint_internal_connectivity_patchset,
+        build_stackup_patchset, build_title_block_patchset, patch_pcb_file, stackup_thickness_iu,
     };
     use pcb_zen_core::lang::stackup::{BoardConfig, CopperRole, DielectricForm, Layer, Stackup};
     use std::collections::{BTreeMap, BTreeSet};
@@ -1707,6 +1778,46 @@ mod tests {
         assert!(out.contains(&format!(
             r#"(property "PCB_GIT_HASH" "{PCB_GIT_HASH_PLACEHOLDER}")"#
         )));
+    }
+
+    #[test]
+    fn build_footprint_component_class_patchset_manages_ict_class() {
+        let input = r##"(kicad_pcb
+	(footprint "TP:Pad"
+		(layer "B.Cu")
+		(property "Ict" "usb_dp")
+		(pad "1" smd circle (at 0 0) (size 1 1) (layers "B.Cu"))
+	)
+	(footprint "TP:Pad"
+		(layer "B.Cu")
+		(property "Ict" "")
+		(component_classes (class "ICT") (class "USER"))
+		(pad "1" smd circle (at 0 0) (size 1 1) (layers "B.Cu"))
+	)
+	(footprint "R:R"
+		(layer "F.Cu")
+		(pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu"))
+	)
+)"##;
+
+        let board = pcb_sexpr::parse(input).unwrap();
+        let patches = build_footprint_component_class_patchset(&board).unwrap();
+        let mut out = Vec::new();
+        patches.write_to(input, &mut out).unwrap();
+        let out = String::from_utf8(out).unwrap();
+
+        // The ict footprint gains the class; the retired one keeps only
+        // its foreign class; the resistor stays untouched.
+        assert_eq!(out.matches("(component_classes").count(), 2);
+        assert!(out.contains(r#"(component_classes (class "ICT"))"#));
+        assert!(out.contains(r#"(component_classes (class "USER"))"#));
+
+        // Idempotent: re-running on the output produces no patches.
+        let board = pcb_sexpr::parse(&out).unwrap();
+        let patches = build_footprint_component_class_patchset(&board).unwrap();
+        let mut again = Vec::new();
+        patches.write_to(&out, &mut again).unwrap();
+        assert_eq!(String::from_utf8(again).unwrap(), out);
     }
 
     #[test]

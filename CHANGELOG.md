@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- `pcb layout` enforces 3 mm ICT test-point spacing via a generated KiCad design rule.
+
 ### Changed
 
 - Interposer pogo pads use the Mill-Max 806 footprint.
