@@ -199,33 +199,6 @@ impl Default for KicadSearchResults {
     }
 }
 
-/// Query sent to the component search worker (online API)
-#[derive(Debug, Clone)]
-pub struct ComponentSearchQuery {
-    pub id: u64,
-    pub text: String,
-}
-
-/// Results from the component search worker
-#[derive(Debug, Clone)]
-pub struct ComponentSearchResults {
-    pub query_id: u64,
-    pub results: Vec<crate::component::ComponentSearchResult>,
-    pub duration: Duration,
-    pub error: Option<String>,
-}
-
-impl Default for ComponentSearchResults {
-    fn default() -> Self {
-        Self {
-            query_id: 0,
-            results: Vec::new(),
-            duration: Duration::ZERO,
-            error: None,
-        }
-    }
-}
-
 pub struct SearchWorkerOptions {
     pub registry_enabled: bool,
     pub kicad_enabled: bool,
@@ -369,7 +342,6 @@ pub fn spawn_detail_worker(
                         relations: ModuleRelations::default(),
                     });
                 }
-                SearchMode::WebComponents => {}
             }
         }
     })
@@ -843,90 +815,7 @@ pub fn spawn_worker(
                         duration,
                     }));
                 }
-                SearchMode::WebComponents => {}
             }
-        }
-    })
-}
-
-/// Spawn the component search worker thread (online API search)
-///
-/// This worker handles searches for new components from online sources.
-/// It caches API auth lazily on first request.
-pub fn spawn_component_worker(
-    query_rx: Receiver<ComponentSearchQuery>,
-    result_tx: Sender<ComponentSearchResults>,
-) -> JoinHandle<()> {
-    thread::spawn(move || {
-        let mut auth_token: Option<String> = None;
-        let mut auth_checked = false;
-
-        while let Ok(mut query) = query_rx.recv() {
-            // Coalesce rapid queries - keep only the latest
-            while let Ok(next) = query_rx.try_recv() {
-                query = next;
-            }
-
-            let query_text = query.text.trim();
-
-            // Empty query - return empty results
-            if query_text.is_empty() {
-                let _ = result_tx.send(ComponentSearchResults {
-                    query_id: query.id,
-                    results: Vec::new(),
-                    duration: Duration::ZERO,
-                    error: None,
-                });
-                continue;
-            }
-
-            if !auth_checked {
-                match crate::auth::get_api_token() {
-                    Ok(token) => auth_token = token,
-                    Err(e) => {
-                        let _ = result_tx.send(ComponentSearchResults {
-                            query_id: query.id,
-                            results: Vec::new(),
-                            duration: Duration::ZERO,
-                            error: Some(format!("Auth failed: {}", e)),
-                        });
-                        continue;
-                    }
-                }
-                auth_checked = true;
-            }
-
-            // Execute search
-            let start = Instant::now();
-            let search_result =
-                crate::component::search_components(auth_token.as_deref(), query_text);
-            let duration = start.elapsed();
-
-            let (results, error) = match search_result {
-                Ok(all_results) => {
-                    // Filter to only components with ECAD models
-                    let filtered: Vec<_> = all_results
-                        .into_iter()
-                        .filter(|r| r.model_availability.ecad_model)
-                        .collect();
-                    (filtered, None)
-                }
-                Err(e) => {
-                    // Clear cached token on auth errors so we retry
-                    if e.to_string().contains("401") || e.to_string().contains("403") {
-                        auth_checked = false;
-                        auth_token = None;
-                    }
-                    (Vec::new(), Some(e.to_string()))
-                }
-            };
-
-            let _ = result_tx.send(ComponentSearchResults {
-                query_id: query.id,
-                results,
-                duration,
-                error,
-            });
         }
     })
 }

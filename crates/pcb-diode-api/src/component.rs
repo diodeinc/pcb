@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 use clap::Args;
 use colored::Colorize;
-use indicatif::ProgressBar;
 use inquire::{Select, Text};
 use pcb_eda::kicad::metadata::SymbolMetadata;
 use pcb_sexpr::formatter::{FormatMode, format_tree};
@@ -10,202 +9,12 @@ use pcb_sexpr::kicad::symbol::{
     symbol_properties,
 };
 use pcb_zen_core::config::find_workspace_root;
-use reqwest::blocking::Client;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use walkdir::WalkDir;
 
 use crate::RegistryInfo;
-
-pub use pcb_component_gen::sanitize_mpn_for_path;
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct ModelAvailability {
-    #[serde(rename = "ECAD_model", default)]
-    pub ecad_model: bool,
-    #[serde(rename = "STEP_model", default)]
-    pub step_model: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ComponentSearchResult {
-    pub part_number: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub manufacturer: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub package_category: Option<String>,
-    pub component_id: String,
-    #[serde(default)]
-    pub datasheets: Vec<String>,
-    #[serde(default)]
-    pub model_availability: ModelAvailability,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source: Option<String>,
-    /// Search relevance score (if provided by API)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub score: Option<f64>,
-}
-
-#[derive(Debug, Clone)]
-pub struct ComponentDownloadResult {
-    pub mpn: String,
-    pub manufacturer: Option<String>,
-    pub symbol_url: Option<String>,
-    pub footprint_url: Option<String>,
-    pub step_url: Option<String>,
-    pub datasheet_url: Option<String>,
-}
-
-#[derive(Serialize)]
-struct SearchRequest {
-    mpn: String,
-}
-
-#[derive(Serialize)]
-struct DownloadRequest {
-    component_id: String,
-}
-
-#[derive(Deserialize)]
-struct DownloadResponse {
-    #[serde(rename = "symbolUrl")]
-    symbol_url: Option<String>,
-    #[serde(rename = "footprintUrl")]
-    footprint_url: Option<String>,
-    #[serde(rename = "stepUrl")]
-    step_url: Option<String>,
-    #[serde(rename = "datasheetUrl")]
-    datasheet_url: Option<String>,
-    metadata: DownloadResponseMetadata,
-}
-
-#[derive(Deserialize)]
-struct DownloadResponseMetadata {
-    mpn: String,
-    manufacturer: Option<String>,
-}
-
-pub fn search_components(
-    auth_token: Option<&str>,
-    mpn: &str,
-) -> Result<Vec<ComponentSearchResult>> {
-    let api_base_url = crate::get_api_base_url();
-    let url = format!("{}/api/component/search", api_base_url);
-
-    let client = Client::builder().timeout(Duration::from_secs(60)).build()?;
-
-    let response = crate::auth::apply_bearer_auth(client.post(&url), auth_token)
-        .json(&SearchRequest {
-            mpn: mpn.to_string(),
-        })
-        .send()?;
-
-    if !response.status().is_success() {
-        anyhow::bail!("Search failed: {}", response.status());
-    }
-
-    Ok(response.json()?)
-}
-
-pub fn download_component(
-    auth_token: Option<&str>,
-    component_id: &str,
-) -> Result<ComponentDownloadResult> {
-    let api_base_url = crate::get_api_base_url();
-    let url = format!("{}/api/component/download", api_base_url);
-
-    let client = Client::builder().timeout(Duration::from_secs(60)).build()?;
-
-    let response = crate::auth::apply_bearer_auth(client.post(&url), auth_token)
-        .json(&DownloadRequest {
-            component_id: component_id.to_string(),
-        })
-        .send()?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let error_text = response.text().unwrap_or_default();
-        anyhow::bail!("Download failed ({}): {}", status, error_text);
-    }
-
-    let download_response: DownloadResponse = response.json()?;
-
-    Ok(ComponentDownloadResult {
-        mpn: download_response.metadata.mpn,
-        manufacturer: download_response.metadata.manufacturer,
-        symbol_url: download_response.symbol_url,
-        footprint_url: download_response.footprint_url,
-        step_url: download_response.step_url,
-        datasheet_url: download_response.datasheet_url,
-    })
-}
-
-pub fn download_file(url: &str, output_path: &Path) -> Result<()> {
-    let bytes = download_bytes(url)?;
-
-    // Normalize line endings for text files (KiCad files)
-    if let Some(ext) = output_path.extension().and_then(|e| e.to_str())
-        && matches!(
-            ext,
-            "kicad_sym" | "kicad_mod" | "kicad_pcb" | "kicad_sch" | "kicad_pro"
-        )
-    {
-        let text = String::from_utf8_lossy(&bytes);
-        let normalized = text.replace("\r\n", "\n");
-        std::fs::write(output_path, normalized.as_bytes())?;
-        return Ok(());
-    }
-
-    std::fs::write(output_path, bytes)?;
-    Ok(())
-}
-
-fn download_bytes(url: &str) -> Result<Vec<u8>> {
-    let client = Client::builder()
-        .timeout(Duration::from_secs(60))
-        .redirect(reqwest::redirect::Policy::limited(10))
-        .user_agent(format!("diode-pcb/{}", env!("CARGO_PKG_VERSION")))
-        .build()?;
-
-    let response = client.get(url).send()?;
-
-    if !response.status().is_success() {
-        anyhow::bail!("File download failed: {} - URL: {}", response.status(), url);
-    }
-
-    Ok(response.bytes()?.to_vec())
-}
-
-fn is_valid_pdf_bytes(bytes: &[u8]) -> bool {
-    bytes.starts_with(b"%PDF")
-}
-
-fn write_validated_pdf(bytes: &[u8], output_path: &Path) -> Result<()> {
-    if !is_valid_pdf_bytes(bytes) {
-        anyhow::bail!(
-            "Downloaded file is not a valid PDF: {}",
-            output_path.display()
-        );
-    }
-
-    if let Some(parent) = output_path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create {}", parent.display()))?;
-    }
-    std::fs::write(output_path, bytes)?;
-    Ok(())
-}
-
-fn download_pdf_file(url: &str, output_path: &Path) -> Result<()> {
-    let bytes = download_bytes(url)?;
-    write_validated_pdf(&bytes, output_path)
-}
 
 /// Upgrade a .kicad_sym file to the latest version using kicad-cli
 /// Returns Ok(()) if upgrade succeeds or kicad-cli is not available (non-fatal)
@@ -231,71 +40,11 @@ fn upgrade_footprint(footprint_path: &Path) -> Result<()> {
         .run()
 }
 
-// Helper: Show component already exists message and return early
-fn handle_already_exists(workspace_root: &Path, result: &AddComponentResult) -> bool {
-    if !result.already_exists {
-        return false;
-    }
-
-    let display_path = component_display_path(workspace_root, &result.component_path);
-    eprintln!(
-        "{} Component already exists at: {}",
-        "ℹ".blue().bold(),
-        display_path.display().to_string().cyan()
-    );
-    true
-}
-
-// Helper: Show component added message
-fn show_component_added(workspace_root: &Path, result: &AddComponentResult) {
-    let display_path = component_display_path(workspace_root, &result.component_path);
-    eprintln!(
-        "{} Added {} to {}",
-        "✓".green().bold(),
-        result.part_number.bold(),
-        display_path.display().to_string().cyan()
-    );
-    if let Some(datasheet_path) = &result.datasheet_path {
-        let display_path = component_display_path(workspace_root, datasheet_path);
-        eprintln!("  Datasheet: {}", display_path.display().to_string().cyan());
-    }
-    if let Some(module_url) = infer_component_module_url(workspace_root, &result.component_path) {
-        eprintln!("  Use with: Module(\"{}\")", module_url);
-    }
-}
-
-fn component_display_path<'a>(workspace_root: &'a Path, component_path: &'a Path) -> &'a Path {
-    component_path
-        .strip_prefix(workspace_root)
-        .unwrap_or(component_path)
-}
-
-fn infer_component_module_url(workspace_root: &Path, component_path: &Path) -> Option<String> {
-    let repo_root = pcb_zen::git::get_repo_root(workspace_root).ok()?;
-    let repo_url = pcb_zen::git::detect_repository_url(&repo_root).ok()?;
-    let rel_path = component_path.strip_prefix(&repo_root).ok()?;
-    Some(format!(
-        "{}/{}",
-        repo_url,
-        rel_path.to_string_lossy().replace('\\', "/")
-    ))
-}
-
-fn non_empty_trimmed(value: Option<&str>) -> Option<&str> {
-    value.map(str::trim).filter(|value| !value.is_empty())
-}
-
-struct ResolvedComponentIdentity {
-    part_number: String,
-    manufacturer: Option<String>,
-}
-
 struct ComponentFilePaths {
     sanitized_mpn: String,
     symbol_path: PathBuf,
     footprint_path: PathBuf,
     step_path: PathBuf,
-    pdf_path: PathBuf,
     zen_path: PathBuf,
 }
 
@@ -305,7 +54,6 @@ fn component_file_paths(component_dir: &Path, mpn: &str) -> ComponentFilePaths {
         symbol_path: component_dir.join(format!("{}.kicad_sym", sanitized_mpn)),
         footprint_path: component_dir.join(format!("{}.kicad_mod", sanitized_mpn)),
         step_path: component_dir.join(format!("{}.step", sanitized_mpn)),
-        pdf_path: component_docs_dir(component_dir).join(format!("{}.pdf", sanitized_mpn)),
         zen_path: component_dir.join(format!("{}.zen", sanitized_mpn)),
         sanitized_mpn,
     }
@@ -317,375 +65,6 @@ fn component_docs_dir(component_dir: &Path) -> PathBuf {
 
 fn component_datasheet_ref(sanitized_mpn: &str) -> String {
     format!("docs/{}.pdf", sanitized_mpn)
-}
-
-fn resolve_component_identity(
-    download: &ComponentDownloadResult,
-    part_number: Option<&str>,
-    manufacturer: Option<&str>,
-) -> Result<ResolvedComponentIdentity> {
-    let part_number = non_empty_trimmed(Some(&download.mpn))
-        .map(str::to_string)
-        .or_else(|| non_empty_trimmed(part_number).map(str::to_string))
-        .ok_or_else(|| anyhow::anyhow!("Component download response did not include an MPN"))?;
-    let manufacturer = non_empty_trimmed(manufacturer)
-        .or_else(|| non_empty_trimmed(download.manufacturer.as_deref()))
-        .map(str::to_string);
-
-    Ok(ResolvedComponentIdentity {
-        part_number,
-        manufacturer,
-    })
-}
-
-fn materialize_symbol_datasheet(
-    auth_token: Option<&str>,
-    symbol_path: &Path,
-    output_path: &Path,
-) -> Result<DatasheetProcessingOutcome> {
-    let symbol_lib = pcb_eda::SymbolLibrary::from_file(symbol_path).with_context(|| {
-        format!(
-            "Failed to parse KiCad symbol file {}",
-            symbol_path.display()
-        )
-    })?;
-    let symbol = only_symbol_in_library(&symbol_lib, symbol_path)?;
-    let datasheet_ref = symbol
-        .datasheet
-        .as_deref()
-        .and_then(pcb_eda::usable_kicad_field_value)
-        .ok_or_else(|| anyhow::anyhow!("No valid Datasheet found in {}", symbol_path.display()))?;
-
-    if datasheet_ref.starts_with("http://") || datasheet_ref.starts_with("https://") {
-        // Verify the URL resolves to a PDF through the backend datasheet
-        // cache (which also warms it for later `pcb scan` runs). The symbol
-        // keeps the original URL, so no docs/ copy is needed.
-        crate::datasheet::ensure_pdf_for_url(auth_token, datasheet_ref)?;
-        return Ok(DatasheetProcessingOutcome::SymbolUrlCached);
-    }
-
-    materialize_datasheet_pdf(datasheet_ref, symbol_path.parent(), output_path)?;
-    Ok(DatasheetProcessingOutcome::SymbolDownloaded)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DatasheetProcessingOutcome {
-    /// Symbol datasheet URL verified and cached; the symbol keeps the URL.
-    SymbolUrlCached,
-    /// Symbol's local datasheet reference copied into docs/.
-    SymbolDownloaded,
-    /// Component-download fallback PDF downloaded into docs/.
-    FallbackDownloaded,
-    NotResolved,
-}
-
-fn materialize_datasheet_pdf(
-    datasheet_ref: &str,
-    relative_to_dir: Option<&Path>,
-    output_path: &Path,
-) -> Result<()> {
-    let source_path = {
-        let path = Path::new(datasheet_ref);
-        if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            relative_to_dir.unwrap_or_else(|| Path::new("")).join(path)
-        }
-    };
-
-    if !source_path.exists() {
-        anyhow::bail!("Datasheet PDF not found: {}", source_path.display());
-    }
-
-    let bytes = fs::read(&source_path)
-        .with_context(|| format!("Failed to read datasheet PDF {}", source_path.display()))?;
-    write_validated_pdf(&bytes, output_path)
-        .with_context(|| format!("Failed to materialize datasheet {}", source_path.display()))
-}
-
-fn process_component_datasheet(
-    auth_token: Option<&str>,
-    symbol_path: &Path,
-    output_path: &Path,
-    fallback_datasheet_url: Option<&str>,
-) -> (DatasheetProcessingOutcome, Vec<String>) {
-    let mut symbol_error: Option<String> = None;
-
-    if symbol_path.exists() {
-        match materialize_symbol_datasheet(auth_token, symbol_path, output_path) {
-            Ok(outcome) => return (outcome, Vec::new()),
-            Err(e) => symbol_error = Some(format!("symbol datasheet download: {e}")),
-        }
-    }
-
-    let mut warnings = Vec::new();
-    let mut add_symbol_error = |warnings: &mut Vec<String>| {
-        if let Some(err) = symbol_error.take() {
-            warnings.push(err);
-        }
-    };
-
-    let Some(url) = fallback_datasheet_url else {
-        add_symbol_error(&mut warnings);
-        return (DatasheetProcessingOutcome::NotResolved, warnings);
-    };
-
-    match download_pdf_file(url, output_path) {
-        Ok(()) => (DatasheetProcessingOutcome::FallbackDownloaded, warnings),
-        Err(e) => {
-            add_symbol_error(&mut warnings);
-            warnings.push(format!("fallback datasheet download: {e}"));
-            (DatasheetProcessingOutcome::NotResolved, warnings)
-        }
-    }
-}
-
-pub fn add_component_to_workspace(
-    auth_token: Option<&str>,
-    component_id: &str,
-    part_number: Option<&str>,
-    workspace_root: &std::path::Path,
-    search_manufacturer: Option<&str>,
-) -> Result<AddComponentResult> {
-    // Show progress during API call on stderr so structured stdout stays clean.
-    let spinner = ProgressBar::new_spinner();
-    spinner.set_draw_target(indicatif::ProgressDrawTarget::stderr());
-    spinner.enable_steady_tick(std::time::Duration::from_millis(100));
-    spinner.set_message("Fetching component...");
-
-    let download = download_component(auth_token, component_id)?;
-    let identity = resolve_component_identity(&download, part_number, search_manufacturer)?;
-    spinner.set_message(format!("Fetching {}...", identity.part_number));
-
-    let component_dir = component_dir_path(
-        workspace_root,
-        identity.manufacturer.as_deref(),
-        &identity.part_number,
-    );
-    let files = component_file_paths(&component_dir, &identity.part_number);
-    let zen_file = files.zen_path.clone();
-
-    if zen_file.exists() {
-        spinner.finish_and_clear();
-        return Ok(AddComponentResult {
-            component_path: zen_file,
-            datasheet_path: None,
-            part_number: identity.part_number,
-            already_exists: true,
-        });
-    }
-
-    fs::create_dir_all(&component_dir)?;
-
-    // Track which files will be downloaded
-    let has_symbol = download.symbol_url.is_some();
-    let has_footprint = download.footprint_url.is_some();
-    let has_step = download.step_url.is_some();
-    // Collect download tasks
-    let mut download_tasks = Vec::new();
-    let mut upgrade_tasks = Vec::new();
-
-    if has_symbol {
-        download_tasks.push((
-            download.symbol_url.clone().unwrap(),
-            files.symbol_path.clone(),
-            "symbol",
-        ));
-        upgrade_tasks.push(("symbol", files.symbol_path.clone()));
-    }
-    if has_footprint {
-        download_tasks.push((
-            download.footprint_url.clone().unwrap(),
-            files.footprint_path.clone(),
-            "footprint",
-        ));
-        upgrade_tasks.push(("footprint", files.footprint_path.clone()));
-    }
-    if has_step {
-        download_tasks.push((
-            download.step_url.clone().unwrap(),
-            files.step_path.clone(),
-            "step",
-        ));
-    }
-    let file_count = download_tasks.len();
-
-    // Show task summary on stderr so structured stdout stays clean.
-    spinner.suspend(|| {
-        eprintln!(
-            "{} {}",
-            "Downloading".green().bold(),
-            identity.part_number.bold()
-        );
-        eprintln!("• {} files", file_count);
-    });
-
-    let start = std::time::Instant::now();
-
-    // Download in parallel with the shared spinner + per-file completion lines.
-    spinner.set_message("Downloading files...");
-
-    let errors = Arc::new(Mutex::new(Vec::new()));
-
-    std::thread::scope(|s| {
-        let mut handles = Vec::new();
-
-        // Download tasks
-        for (url, path, label) in download_tasks {
-            let errors = Arc::clone(&errors);
-            let spinner = spinner.clone();
-            handles.push(s.spawn(move || {
-                if let Err(e) = download_file(&url, &path) {
-                    errors.lock().unwrap().push(format!("{}: {}", label, e));
-                    spinner.suspend(|| {
-                        eprintln!(
-                            "  {} failed to download {}",
-                            "✗".red(),
-                            label.to_string().dimmed()
-                        );
-                    });
-                } else {
-                    let filename = path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or(label)
-                        .to_string();
-                    spinner.suspend(|| {
-                        eprintln!("  {} {}", "✓".green(), filename.cyan());
-                    });
-                }
-            }));
-        }
-
-        // Wait for downloads to complete
-        for handle in handles {
-            let _ = handle.join();
-        }
-
-        let mut handles = Vec::new();
-
-        // Upgrade tasks (after downloads complete)
-        for (file_type, path) in upgrade_tasks {
-            let errors = Arc::clone(&errors);
-            handles.push(s.spawn(move || {
-                let result = match file_type {
-                    "symbol" => upgrade_symbol(&path),
-                    "footprint" => upgrade_footprint(&path),
-                    _ => return,
-                };
-
-                // Silently skip if kicad-cli not available, report other errors
-                if let Err(e) = result {
-                    let err_msg = e.to_string();
-                    if !err_msg.contains("KiCad CLI not found") {
-                        errors
-                            .lock()
-                            .unwrap()
-                            .push(format!("upgrade {}: {}", file_type, e));
-                    }
-                }
-            }));
-        }
-
-        // Wait for upgrades to complete
-        for handle in handles {
-            let _ = handle.join();
-        }
-    });
-
-    let elapsed = start.elapsed();
-    let errors = Arc::try_unwrap(errors).unwrap().into_inner().unwrap();
-
-    // Show results on stderr so structured stdout stays clean.
-    spinner.suspend(|| {
-        if errors.is_empty() {
-            eprintln!(
-                "{} Downloaded {} files ({:.1}s)",
-                "✓".green(),
-                file_count,
-                elapsed.as_secs_f64()
-            );
-        } else {
-            eprintln!(
-                "  {} Completed with {} errors ({:.1}s)",
-                "!".yellow(),
-                errors.len(),
-                elapsed.as_secs_f64()
-            );
-            for err in &errors {
-                eprintln!("    • {}", err.dimmed());
-            }
-        }
-    });
-
-    spinner.set_message("Downloading datasheet...");
-
-    let (datasheet_outcome, datasheet_warnings) = process_component_datasheet(
-        auth_token,
-        &files.symbol_path,
-        &files.pdf_path,
-        download.datasheet_url.as_deref(),
-    );
-    spinner.finish_and_clear();
-
-    let datasheet_ref = matches!(
-        datasheet_outcome,
-        DatasheetProcessingOutcome::SymbolDownloaded
-            | DatasheetProcessingOutcome::FallbackDownloaded
-    )
-    .then(|| component_datasheet_ref(&files.sanitized_mpn));
-    match datasheet_outcome {
-        DatasheetProcessingOutcome::SymbolUrlCached => {
-            eprintln!("{} Datasheet URL verified and cached", "✓".green());
-        }
-        DatasheetProcessingOutcome::SymbolDownloaded => {
-            eprintln!("{} Downloaded datasheet from symbol", "✓".green());
-        }
-        DatasheetProcessingOutcome::FallbackDownloaded => {
-            eprintln!("{} Downloaded datasheet from fallback URL", "✓".green());
-        }
-        DatasheetProcessingOutcome::NotResolved => {}
-    }
-
-    if !datasheet_warnings.is_empty() {
-        eprintln!(
-            "  {} Datasheet processing had {} non-fatal issues:",
-            "!".yellow(),
-            datasheet_warnings.len()
-        );
-        for err in &datasheet_warnings {
-            eprintln!("    • {}", err.dimmed());
-        }
-    }
-
-    // Finalize: embed STEP, generate .zen file
-    finalize_component(
-        &component_dir,
-        &identity.part_number,
-        identity.manufacturer.as_deref(),
-        datasheet_ref.as_deref(),
-    )?;
-
-    if !zen_file.exists() {
-        anyhow::bail!(
-            "Failed to generate component .zen file at {}",
-            zen_file.display()
-        );
-    }
-
-    Ok(AddComponentResult {
-        component_path: zen_file,
-        datasheet_path: datasheet_ref.map(|_| files.pdf_path.clone()),
-        part_number: identity.part_number,
-        already_exists: false,
-    })
-}
-
-pub struct AddComponentResult {
-    pub component_path: PathBuf,
-    pub datasheet_path: Option<PathBuf>,
-    pub part_number: String,
-    pub already_exists: bool,
 }
 
 /// Build component directory path: components/<manufacturer>/<mpn>/
@@ -927,7 +306,7 @@ pub struct SearchArgs {
     #[arg(short = 'f', long, value_enum, default_value_t = SearchOutputFormat::Human)]
     pub format: SearchOutputFormat,
 
-    /// Search mode; web:components is deprecated (use `pcb component search`)
+    /// Search mode
     #[arg(short = 'm', long, value_enum)]
     pub mode: Option<crate::registry::tui::SearchMode>,
 
@@ -1279,71 +658,6 @@ pub fn execute(args: SearchArgs) -> Result<()> {
     )
 }
 
-/// Handle a selected component from the TUI - download and add to workspace
-fn add_component_with_feedback(
-    workspace_root: &Path,
-    component_id: &str,
-    part_number: Option<&str>,
-    manufacturer: Option<&str>,
-) -> Result<()> {
-    let token = crate::auth::get_api_token()?;
-    let result = add_component_to_workspace(
-        token.as_deref(),
-        component_id,
-        part_number,
-        workspace_root,
-        manufacturer,
-    )?;
-
-    if handle_already_exists(workspace_root, &result) {
-        return Ok(());
-    }
-
-    show_component_added(workspace_root, &result);
-    Ok(())
-}
-
-fn handle_tui_component_selection(
-    component: ComponentSearchResult,
-    workspace_root: &Path,
-) -> Result<()> {
-    println!(
-        "{} {}",
-        "Selected:".green().bold(),
-        component.part_number.bold()
-    );
-    if let Some(ref description) = component.description {
-        println!("{} {}", "Description:".cyan(), description);
-    }
-
-    add_component_with_feedback(
-        workspace_root,
-        &component.component_id,
-        Some(&component.part_number),
-        component.manufacturer.as_deref(),
-    )
-}
-
-pub fn execute_component_from_id(
-    component_id: &str,
-    part_number: Option<&str>,
-    manufacturer: Option<&str>,
-) -> Result<()> {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let workspace_root = find_workspace_root(&pcb_zen_core::DefaultFileProvider::new(), &cwd)?;
-
-    add_component_with_feedback(&workspace_root, component_id, part_number, manufacturer)
-}
-
-/// Execute the component search TUI in WebComponents mode only (no registry access)
-pub fn execute_web_components_tui(workspace_root: &Path) -> Result<()> {
-    let tui_result = crate::registry::tui::run_web_components_only()?;
-    if let Some(component) = tui_result.selected_component {
-        handle_tui_component_selection(component, workspace_root)?;
-    }
-    Ok(())
-}
-
 fn execute_search(
     query: &str,
     json: bool,
@@ -1356,15 +670,12 @@ fn execute_search(
 
     // If no query provided, launch interactive TUI
     if query.is_empty() {
-        let tui_result = crate::registry::tui::run_with_mode_and_registry_index(
+        crate::registry::tui::run_with_mode_and_registry_index(
             mode,
             registry_index.map(Path::to_path_buf),
             registry_selectors.to_vec(),
             Some(workspace_root.to_path_buf()),
         )?;
-        if let Some(component) = tui_result.selected_component {
-            handle_tui_component_selection(component, workspace_root)?;
-        }
         return Ok(());
     }
 
@@ -1406,7 +717,7 @@ fn execute_search(
         None if registry_index.is_some() => SearchMode::RegistryModules,
         None if registry_client.is_some() => SearchMode::RegistryModules,
         None if crate::KicadSymbolsClient::open().is_ok() => SearchMode::KicadSymbols,
-        None => SearchMode::WebComponents,
+        None => anyhow::bail!("No component search index is available"),
     };
 
     refresh_search_index_if_stale(effective_mode);
@@ -1419,7 +730,6 @@ fn execute_search(
             execute_registry_search_filtered(query, json, effective_mode, &client)
         }
         SearchMode::KicadSymbols => execute_kicad_symbols_search(query, json),
-        SearchMode::WebComponents => execute_web_search(query, json),
     }
 }
 
@@ -1431,7 +741,6 @@ fn refresh_search_index_if_stale(mode: crate::registry::tui::SearchMode) {
         SearchMode::KicadSymbols => {
             let _ = crate::KicadSymbolsClient::refresh_if_stale();
         }
-        SearchMode::WebComponents => {}
     }
 }
 
@@ -1836,130 +1145,7 @@ fn print_search_scoring(scoring: Option<&crate::registry::tui::search::SearchSco
     );
 }
 
-/// Component search result with availability data
-#[derive(Debug, Clone, Serialize)]
-pub struct ComponentResult {
-    #[serde(flatten)]
-    pub component: ComponentSearchResult,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub availability: Option<pcb_sch::bom::Availability>,
-}
-
-/// Search for components and fetch availability data in batch
-pub fn search_components_with_availability(
-    auth_token: Option<&str>,
-    query: &str,
-) -> Result<Vec<ComponentResult>> {
-    let results = filter_component_search_results(search_components(auth_token, query)?);
-
-    if results.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let keys: Vec<_> = results
-        .iter()
-        .map(|r| crate::bom::ComponentKey {
-            mpn: r.part_number.clone(),
-            manufacturer: r.manufacturer.clone(),
-        })
-        .collect();
-
-    let availability_results =
-        crate::bom::fetch_pricing_batch(auth_token, &keys).unwrap_or_default();
-
-    let all_availability: Vec<_> = availability_results
-        .into_iter()
-        .map(|p| {
-            if crate::bom::has_search_availability(&p) {
-                Some(p)
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    let combined: Vec<ComponentResult> = results
-        .into_iter()
-        .zip(all_availability)
-        .map(|(component, availability)| ComponentResult {
-            component,
-            availability,
-        })
-        .collect();
-
-    Ok(combined)
-}
-
-fn filter_component_search_results(
-    results: Vec<ComponentSearchResult>,
-) -> Vec<ComponentSearchResult> {
-    let mut results = results;
-    results.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    let mut counts: HashMap<String, usize> = HashMap::new();
-    results
-        .into_iter()
-        .filter(|result| {
-            let source = result.source.as_deref().unwrap_or("").to_ascii_lowercase();
-            let limit = if source == "digikey" { 2 } else { 4 };
-            let count = counts.entry(source).or_default();
-            if *count >= limit {
-                return false;
-            }
-            *count += 1;
-            true
-        })
-        .collect()
-}
-
-/// Search web API for components
-fn execute_web_search(query: &str, json: bool) -> Result<()> {
-    use crate::registry::tui::display::WebComponentDisplay;
-
-    let token = crate::auth::get_api_token()?;
-    let results = search_components_with_availability(token.as_deref(), query)?;
-
-    if results.is_empty() {
-        if json {
-            println!("[]");
-        } else {
-            println!("{} No results found for '{}'", "✗".red(), query);
-        }
-        return Ok(());
-    }
-
-    if json {
-        println!("{}", serde_json::to_string_pretty(&results)?);
-        return Ok(());
-    }
-
-    println!(
-        "{} Found {} results for '{}' (web:components):\n",
-        "✓".green().bold(),
-        results.len(),
-        query,
-    );
-
-    for result in &results {
-        let display = WebComponentDisplay::from_component(&result.component);
-        for line in display.to_cli_lines() {
-            println!("{}", line);
-        }
-        // Add availability summary line
-        if let Some(p) = &result.availability {
-            print_availability_summary(p);
-        }
-        println!(); // Extra line between results
-    }
-
-    Ok(())
-}
-
-/// Print a compact availability summary line for CLI output
+/// Print a compact availability summary line for CLI output.
 fn print_availability_summary(avail: &pcb_sch::bom::Availability) {
     use crate::bom::{format_number_with_commas, format_price};
 
@@ -2469,37 +1655,6 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("Expected exactly one symbol"));
         assert!(msg.contains("found 2"));
-    }
-
-    #[test]
-    fn test_is_valid_pdf_bytes_requires_pdf_magic_header() {
-        assert!(is_valid_pdf_bytes(b"%PDF-1.7\n"));
-        assert!(!is_valid_pdf_bytes(b"<!doctype html>"));
-        assert!(!is_valid_pdf_bytes(b""));
-    }
-
-    #[test]
-    fn test_materialize_datasheet_pdf_rejects_invalid_local_file() {
-        let nonce = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "pcb-diode-api-test-{}-{}",
-            std::process::id(),
-            nonce
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-
-        let source = dir.join("bad.pdf");
-        let output = dir.join("docs").join("copied.pdf");
-        std::fs::write(&source, b"<!doctype html>").unwrap();
-
-        let err = materialize_datasheet_pdf("bad.pdf", Some(&dir), &output).unwrap_err();
-        let _ = std::fs::remove_dir_all(&dir);
-        let message = format!("{err:#}");
-
-        assert!(message.contains("Downloaded file is not a valid PDF"));
     }
 
     #[test]

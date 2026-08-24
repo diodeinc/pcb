@@ -16,6 +16,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `pcb preview` and its preview release upload path.
 - `pcb vendor` remains available but is hidden from top-level command help.
+- Removed deprecated v1 web-component workflows.
 
 ### Added
 
