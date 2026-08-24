@@ -48,9 +48,6 @@ enum Commands {
         /// Auto-route the interposer with FreeRouting (requires Java 25+)
         #[arg(long)]
         route: bool,
-        /// [route] Routing timeout in minutes
-        #[arg(long, default_value = "20")]
-        route_timeout: u32,
     },
     /// List ICT fixture contacts (components with an `Ict` BOM characteristic)
     Ict {
@@ -371,7 +368,6 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
             output,
             fixture_map,
             route,
-            route_timeout,
         } => {
             use anyhow::Context as _;
             let (pcb, pro) = pcb_interposer::generate(&input)?;
@@ -391,9 +387,6 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                 println!("✓ Wrote fixture map {}", map_path.display());
             }
             if route {
-                if route_timeout > 60 {
-                    anyhow::bail!("--route-timeout cannot exceed 60 minutes");
-                }
                 let board_name = output
                     .file_stem()
                     .context("output path has no file name")?
@@ -403,7 +396,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                     file: input,
                     engine: crate::route::RouteEngine::Freerouting,
                     no_open: true,
-                    timeout: route_timeout,
+                    timeout: 20,
                     project_id: None,
                 };
                 // Stitch whatever board state routing left behind — a

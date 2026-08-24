@@ -3,13 +3,13 @@
 //! The deterministic board: the panel's outline, tooling holes, and
 //! fiducials, the S11 mate lands on the bottom copper, and full-sheet
 //! GND pours on both faces — GND rides the pours, unrouted; the
-//! post-route stitching pass adds the vias that tie the faces together
-//! around whatever copper the router drew. With a fixture plan, the board is also
-//! populated — a pogo pad on the top face at every tested contact, and
-//! the plan's nets bound on both the pogo and its mate land — so the
-//! unrouted airwires are exactly the routing pass's work list. Without a
-//! plan (no ICT contacts), GND lands join the pour and everything else
-//! stays un-netted.
+//! post-route stitching pass (`crate::stitch`) adds the vias that tie
+//! the faces together around whatever copper the router drew. With a
+//! fixture plan, the board is also populated — a pogo pad on the top
+//! face at every tested contact, and the plan's nets bound on both the
+//! pogo and its mate land — so the unrouted airwires are exactly the
+//! routing pass's work list. Without a plan (no ICT contacts), GND
+//! lands join the pour and everything else stays un-netted.
 
 use pcb_ir::dialects::kicad::{
     At, Document, Footprint, FootprintAttrs, Graphic, Mount, Pad, PadKind, PadShape, Property,
