@@ -33,7 +33,6 @@ fn create_template_env() -> Environment<'static> {
         Examples:\n  \
         pcb new board MainBoard https://github.com/user/MainBoard\n  \
         pcb new package modules/power_supply\n  \
-        pcb new component\n  \
         pcb new component path/to/component-dir"
 )]
 pub struct NewArgs {
@@ -49,7 +48,7 @@ pub enum NewCommand {
     /// Create a new package at the given path (requires existing workspace)
     Package(NewPackageArgs),
 
-    /// Import a local component; no-DIR online search and --component-id are deprecated
+    /// Import a component from a local directory
     Component(NewComponentArgs),
 }
 
@@ -71,23 +70,11 @@ pub struct NewPackageArgs {
     pub path: String,
 }
 
-#[derive(Args, Debug, Default)]
+#[derive(Args, Debug)]
 pub struct NewComponentArgs {
     /// Local component directory to import
-    #[arg(value_name = "DIR", conflicts_with = "component_id")]
-    pub dir: Option<PathBuf>,
-
-    /// Deprecated: use `pcb component download`
-    #[arg(long, value_name = "ID")]
-    pub component_id: Option<String>,
-
-    /// Deprecated: fallback MPN for --component-id
-    #[arg(long, value_name = "MPN", requires = "component_id")]
-    pub part_number: Option<String>,
-
-    /// Deprecated: manufacturer override for --component-id
-    #[arg(long, value_name = "MFR", requires = "component_id")]
-    pub manufacturer: Option<String>,
+    #[arg(value_name = "DIR")]
+    pub dir: PathBuf,
 }
 
 /// Validate a name for use as a directory/git repo name.
@@ -246,20 +233,7 @@ fn require_workspace() -> Result<(std::path::PathBuf, PcbToml)> {
 }
 
 fn execute_new_component(args: NewComponentArgs) -> Result<()> {
-    if let Some(dir) = args.dir.as_deref() {
-        return pcb_diode_api::execute_component_from_local_dir(dir);
-    }
-
-    if let Some(component_id) = args.component_id.as_deref() {
-        return pcb_diode_api::execute_component_from_id(
-            component_id,
-            args.part_number.as_deref(),
-            args.manufacturer.as_deref(),
-        );
-    }
-
-    let (workspace_root, _) = require_workspace()?;
-    pcb_diode_api::execute_web_components_tui(&workspace_root)
+    pcb_diode_api::execute_component_from_local_dir(&args.dir)
 }
 
 fn execute_interactive() -> Result<()> {
@@ -272,7 +246,7 @@ fn execute_interactive() -> Result<()> {
 
         match selection {
             "package" => prompt_new_package(),
-            "component" => execute_new_component(NewComponentArgs::default()),
+            "component" => prompt_new_component(),
             _ => unreachable!(),
         }
     } else {
@@ -298,6 +272,16 @@ fn prompt_new_package() -> Result<()> {
         .context("Failed to get package path")?;
 
     execute_new_package(&path)
+}
+
+fn prompt_new_component() -> Result<()> {
+    let dir = Text::new("Local component directory:")
+        .prompt()
+        .context("Failed to get component directory")?;
+
+    execute_new_component(NewComponentArgs {
+        dir: PathBuf::from(dir),
+    })
 }
 
 fn execute_new_board(board: &str, repo: &str) -> Result<()> {
@@ -504,24 +488,25 @@ mod tests {
     }
 
     #[test]
-    fn test_component_accepts_optional_directory() {
-        let parsed = TestCli::try_parse_from(["pcb", "component"]).unwrap();
-        assert!(matches!(
-            parsed.args.command,
-            Some(NewCommand::Component(NewComponentArgs { dir: None, .. }))
-        ));
-
+    fn test_component_requires_directory() {
         let parsed = TestCli::try_parse_from(["pcb", "component", "components/foo"]).unwrap();
         assert!(matches!(
             parsed.args.command,
             Some(NewCommand::Component(NewComponentArgs {
-                dir: Some(ref dir),
-                ..
+                ref dir,
             })) if dir == &PathBuf::from("components/foo")
         ));
 
+        assert!(TestCli::try_parse_from(["pcb", "component"]).is_err());
         let parsed = TestCli::try_parse_from(["pcb"]).unwrap();
         assert!(parsed.args.command.is_none());
+    }
+
+    #[test]
+    fn test_legacy_component_flags_are_rejected() {
+        for flag in ["--component-id", "--part-number", "--manufacturer"] {
+            assert!(TestCli::try_parse_from(["pcb", "component", flag, "legacy"]).is_err());
+        }
     }
 
     #[test]

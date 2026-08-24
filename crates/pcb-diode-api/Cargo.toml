@@ -24,7 +24,6 @@ fslock = { workspace = true }
 fuzzy-matcher = "0.3"
 hex = { workspace = true }
 image = { workspace = true }
-indicatif = { workspace = true }
 inquire = { workspace = true }
 log = { workspace = true }
 md-5 = { workspace = true }

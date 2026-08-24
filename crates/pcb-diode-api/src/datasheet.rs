@@ -170,15 +170,6 @@ fn resolve_source_url_datasheet(
     execute_resolve_execution(client, auth_token, execution, page_range)
 }
 
-/// Ensure the PDF behind a datasheet URL is present in the local URL cache,
-/// fetching it through the backend datasheet cache on miss, and return its
-/// local path.
-pub(crate) fn ensure_pdf_for_url(auth_token: Option<&str>, url: &str) -> Result<PathBuf> {
-    let client = build_scan_client()?;
-    let canonical_url = canonicalize_url(url)?;
-    ensure_url_pdf_cached(&client, auth_token, &canonical_url)
-}
-
 fn ensure_url_pdf_cached(
     client: &Client,
     auth_token: Option<&str>,

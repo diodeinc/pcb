@@ -23,12 +23,7 @@ pub use bom::{
     BomMatchMode, fetch_and_populate_availability, fetch_and_populate_availability_with_context,
     match_bom_with_context,
 };
-pub use component::{
-    AddComponentResult, ComponentDownloadResult, ComponentResult, ComponentSearchResult,
-    ModelAvailability, SearchArgs, add_component_to_workspace, download_component,
-    execute as execute_search, execute_component_from_id, execute_component_from_local_dir,
-    execute_web_components_tui, search_components, search_components_with_availability,
-};
+pub use component::{SearchArgs, execute as execute_search, execute_component_from_local_dir};
 pub use component_api::{ComponentArgs, execute_component};
 pub use diode_uri::{DiodeUri, DiodeUriParseError, SandboxFileUri, is_diode_uri};
 pub use endpoint::WorkspaceContext;

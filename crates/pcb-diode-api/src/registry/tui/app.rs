@@ -9,10 +9,9 @@ use super::image::{
     ImageKey, ImageProtocol, ImageRequest, ImageResponse, ImageStore, spawn_image_workers,
 };
 use super::search::{
-    AvailabilityKey, AvailabilityRequest, ComponentSearchQuery, ComponentSearchResults,
-    DetailRequest, DetailResponse, PricingRequest, PricingResponse, SearchQuery, SearchResults,
-    SearchWorkerOptions, spawn_availability_worker, spawn_component_worker, spawn_detail_worker,
-    spawn_worker,
+    AvailabilityKey, AvailabilityRequest, DetailRequest, DetailResponse, PricingRequest,
+    PricingResponse, SearchQuery, SearchResults, SearchWorkerOptions, spawn_availability_worker,
+    spawn_detail_worker, spawn_worker,
 };
 use super::ui;
 use crate::kicad_symbols::KicadSymbol;
@@ -287,9 +286,6 @@ pub enum SearchMode {
     /// Search KiCad components index (fast, local)
     #[value(name = "kicad:components")]
     KicadSymbols,
-    /// Deprecated: use `pcb component search`
-    #[value(name = "web:components")]
-    WebComponents,
 }
 
 impl SearchMode {
@@ -310,7 +306,6 @@ impl SearchMode {
             SearchMode::RegistryModules => "registry:modules",
             SearchMode::RegistryComponents => "registry:components",
             SearchMode::KicadSymbols => "kicad:components",
-            SearchMode::WebComponents => "web:components",
         }
     }
 
@@ -324,10 +319,6 @@ impl SearchMode {
 
     pub fn requires_kicad_symbols(&self) -> bool {
         matches!(self, SearchMode::KicadSymbols)
-    }
-
-    pub fn requires_local_index(&self) -> bool {
-        self.requires_registry() || self.requires_kicad_symbols()
     }
 }
 
@@ -490,24 +481,6 @@ pub struct App {
     pub command_palette_filtered: Vec<Command>,
     /// Show debug panels (Trigram/Word/Semantic)
     pub show_debug_panels: bool,
-    /// Channel to send queries to component search worker
-    component_query_tx: Sender<ComponentSearchQuery>,
-    /// Channel to receive results from component search worker
-    component_result_rx: Receiver<ComponentSearchResults>,
-    /// Current component search results (for New mode)
-    pub component_results: ComponentSearchResults,
-    /// Query counter for component search (separate from registry search)
-    component_query_counter: u64,
-    /// Last component query text (for change detection)
-    last_component_query: String,
-    /// Whether component search is in progress
-    pub component_searching: bool,
-    /// When component search started (for spinner animation)
-    pub component_search_started: Instant,
-    /// List state for component results (handles selection + scroll)
-    pub component_list_state: ListState,
-    /// Selected component to download after TUI exits (WebComponents mode)
-    pub selected_component_for_download: Option<crate::component::ComponentSearchResult>,
     /// Available search modes (determines which modes can be cycled to)
     pub available_modes: Vec<SearchMode>,
     /// Registry search scope, when registry modes are available.
@@ -542,18 +515,6 @@ pub struct Preflight {
     pub warning: Option<String>,
 }
 
-impl Preflight {
-    fn web_only() -> Self {
-        Self {
-            start_mode: SearchMode::WebComponents,
-            available_modes: vec![SearchMode::WebComponents],
-            registry_scope: None,
-            kicad_symbols_metadata: None,
-            warning: None,
-        }
-    }
-}
-
 impl App {
     pub fn new(preflight: Preflight) -> Self {
         let Preflight {
@@ -569,27 +530,18 @@ impl App {
         let (detail_tx, detail_req_rx) = mpsc::channel::<DetailRequest>();
         let (detail_resp_tx, detail_rx) = mpsc::channel::<DetailResponse>();
 
-        // Only spawn local-index workers if any local modes are available
-        let has_local_modes = available_modes.iter().any(SearchMode::requires_local_index);
-        if has_local_modes {
-            spawn_worker(
-                query_rx,
-                result_tx,
-                download_tx,
-                SearchWorkerOptions {
-                    registry_enabled: available_modes.iter().any(SearchMode::requires_registry),
-                    kicad_enabled: available_modes.contains(&SearchMode::KicadSymbols),
-                    registry_scope: registry_scope.clone(),
-                    prefetched_kicad_metadata: kicad_symbols_metadata,
-                },
-            );
-            spawn_detail_worker(detail_req_rx, detail_resp_tx, registry_scope.clone());
-        }
-
-        // Component search (online API) channels
-        let (component_query_tx, component_query_rx) = mpsc::channel::<ComponentSearchQuery>();
-        let (component_result_tx, component_result_rx) = mpsc::channel::<ComponentSearchResults>();
-        spawn_component_worker(component_query_rx, component_result_tx);
+        spawn_worker(
+            query_rx,
+            result_tx,
+            download_tx,
+            SearchWorkerOptions {
+                registry_enabled: available_modes.iter().any(SearchMode::requires_registry),
+                kicad_enabled: available_modes.contains(&SearchMode::KicadSymbols),
+                registry_scope: registry_scope.clone(),
+                prefetched_kicad_metadata: kicad_symbols_metadata,
+            },
+        );
+        spawn_detail_worker(detail_req_rx, detail_resp_tx, registry_scope.clone());
 
         // Pricing worker (fetches availability/availability for selected component)
         let (availability_tx, availability_req_rx) = mpsc::channel::<PricingRequest>();
@@ -643,15 +595,6 @@ impl App {
             command_palette_input: TextInput::new(),
             command_palette_filtered: Command::ALL.to_vec(),
             show_debug_panels: false,
-            component_query_tx,
-            component_result_rx,
-            component_results: ComponentSearchResults::default(),
-            component_query_counter: 0,
-            last_component_query: String::new(),
-            component_searching: false,
-            component_search_started: Instant::now(),
-            component_list_state: ListState::default(),
-            selected_component_for_download: None,
             available_modes,
             registry_scope,
             availability_tx,
@@ -673,10 +616,6 @@ impl App {
 
     /// Check if query changed and send to worker if so.
     fn maybe_send_local_query(&mut self) {
-        if !self.mode.requires_local_index() {
-            return;
-        }
-
         if !matches!(
             self.download_state,
             DownloadState::Done | DownloadState::Updating { .. }
@@ -698,42 +637,11 @@ impl App {
         }
     }
 
-    /// Send component search query if changed (for WebComponents mode)
-    fn maybe_send_component_query(&mut self) {
-        if self.mode != SearchMode::WebComponents {
-            return;
-        }
-
-        let query = self.current_query();
-        if query != self.last_component_query {
-            self.last_component_query = query.clone();
-            self.component_query_counter += 1;
-            self.component_searching = true;
-
-            let _ = self.component_query_tx.send(ComponentSearchQuery {
-                id: self.component_query_counter,
-                text: query,
-            });
-        }
-    }
-
     fn on_input_change(&mut self) {
         if self.search_input.text.is_empty() {
-            if self.mode.requires_local_index() {
-                self.results = SearchResults::default();
-                self.list_state = ListState::default();
-                self.enqueue_detail_request();
-            } else if self.mode == SearchMode::WebComponents {
-                self.component_results = ComponentSearchResults::default();
-                self.component_list_state = ListState::default();
-            }
-            return;
-        }
-
-        if self.mode == SearchMode::WebComponents {
-            self.component_results = ComponentSearchResults::default();
-            self.component_searching = true;
-            self.component_search_started = Instant::now();
+            self.results = SearchResults::default();
+            self.list_state = ListState::default();
+            self.enqueue_detail_request();
         }
     }
 
@@ -885,10 +793,6 @@ impl App {
     /// Called when selection changes - the worker will coalesce rapid requests.
     /// Note: We keep showing old details until new data arrives to avoid flicker.
     fn enqueue_detail_request(&mut self) {
-        if !self.mode.requires_local_index() {
-            return;
-        }
-
         let idx = self.selected_index();
         let Some(item_id) = self.results.selected_item_id(idx) else {
             self.pending_detail_for = None;
@@ -959,39 +863,9 @@ impl App {
         }
     }
 
-    /// Poll for component search results from worker (non-blocking)
-    fn poll_component_results(&mut self) {
-        while let Ok(results) = self.component_result_rx.try_recv() {
-            if results.query_id == self.component_query_counter {
-                self.component_searching = false;
-
-                // Handle errors
-                if let Some(ref error) = results.error {
-                    self.toast = Some(Toast::error(error.clone(), Duration::from_secs(5)));
-                }
-
-                self.component_results = results;
-
-                // Reset selection to first item
-                self.component_list_state = ListState::default();
-                if !self.component_results.results.is_empty() {
-                    self.set_web_selected_index(0);
-                }
-            }
-        }
-    }
-
     /// Enqueue a batch availability request for current results (skips cached)
     fn enqueue_availability_request(&mut self) {
-        let requests: Vec<_> = if self.mode.requires_local_index() {
-            self.local_availability_requests()
-        } else if self.mode == SearchMode::WebComponents {
-            self.web_component_availability_requests()
-        } else {
-            return;
-        };
-
-        self.enqueue_availability_requests(requests, true);
+        self.enqueue_availability_requests(self.local_availability_requests(), true);
     }
 
     fn local_availability_requests(&self) -> Vec<AvailabilityRequest> {
@@ -1012,22 +886,9 @@ impl App {
                         lookups: vec![key],
                     })
                 }
-                SearchMode::RegistryModules | SearchMode::WebComponents => None,
+                SearchMode::RegistryModules => None,
             }
         })
-    }
-
-    fn web_component_availability_requests(&self) -> Vec<AvailabilityRequest> {
-        ordered_availability_requests(
-            self.component_results.results.len(),
-            self.component_list_state.selected(),
-            |idx| {
-                self.component_results
-                    .results
-                    .get(idx)
-                    .and_then(component_result_availability_request)
-            },
-        )
     }
 
     fn enqueue_availability_requests(
@@ -1115,81 +976,44 @@ impl App {
         self.enqueue_availability_request();
     }
 
-    fn set_web_selected_index(&mut self, index: usize) {
-        self.component_list_state.select(Some(index));
-        self.enqueue_availability_request();
-    }
-
     /// Move selection up by n items (toward index 0 = best matches at bottom of display)
     fn scroll_up(&mut self, n: u16) {
-        if self.mode.requires_local_index() {
-            if self.results.is_empty() {
-                return;
-            }
-            let current = self.list_state.selected().unwrap_or(0);
-            let new_index = current.saturating_sub(n as usize);
-            self.set_local_selected_index(new_index);
-        } else {
-            if self.component_results.results.is_empty() {
-                return;
-            }
-            let current = self.component_list_state.selected().unwrap_or(0);
-            let new_index = current.saturating_sub(n as usize);
-            self.set_web_selected_index(new_index);
+        if self.results.is_empty() {
+            return;
         }
+        let current = self.list_state.selected().unwrap_or(0);
+        let new_index = current.saturating_sub(n as usize);
+        self.set_local_selected_index(new_index);
     }
 
     /// Move selection down by n items (toward higher indices = worse matches at top of display)
     fn scroll_down(&mut self, n: u16) {
-        if self.mode.requires_local_index() {
-            if self.results.is_empty() {
-                return;
-            }
-            let current = self.list_state.selected().unwrap_or(0);
-            let max_index = self.results.len().saturating_sub(1);
-            let new_index = current.saturating_add(n as usize).min(max_index);
-            self.set_local_selected_index(new_index);
-        } else {
-            if self.component_results.results.is_empty() {
-                return;
-            }
-            let current = self.component_list_state.selected().unwrap_or(0);
-            let max_index = self.component_results.results.len().saturating_sub(1);
-            let new_index = current.saturating_add(n as usize).min(max_index);
-            self.set_web_selected_index(new_index);
+        if self.results.is_empty() {
+            return;
         }
+        let current = self.list_state.selected().unwrap_or(0);
+        let max_index = self.results.len().saturating_sub(1);
+        let new_index = current.saturating_add(n as usize).min(max_index);
+        self.set_local_selected_index(new_index);
     }
 
     /// Jump to first result (index 0 = best match, displayed at bottom)
     fn select_first(&mut self) {
-        if self.mode.requires_local_index() {
-            if !self.results.is_empty() {
-                self.set_local_selected_index(0);
-            }
-        } else if !self.component_results.results.is_empty() {
-            self.set_web_selected_index(0);
+        if !self.results.is_empty() {
+            self.set_local_selected_index(0);
         }
     }
 
     /// Jump to last result (highest index = worst match, displayed at top)
     fn select_last(&mut self) {
-        if self.mode.requires_local_index() {
-            if !self.results.is_empty() {
-                self.set_local_selected_index(self.results.len() - 1);
-            }
-        } else if !self.component_results.results.is_empty() {
-            self.set_web_selected_index(self.component_results.results.len() - 1);
+        if !self.results.is_empty() {
+            self.set_local_selected_index(self.results.len() - 1);
         }
     }
 
     /// Handle Enter key - mode-specific behavior
     fn handle_enter(&mut self) {
-        if self.mode.requires_local_index() {
-            self.copy_selected();
-        } else {
-            // WebComponents mode
-            self.select_component_for_download();
-        }
+        self.copy_selected();
     }
 
     /// Copy selected item's URL to clipboard (Registry mode)
@@ -1215,17 +1039,6 @@ impl App {
                     Duration::from_secs(2),
                 ));
             }
-        }
-    }
-
-    /// Select component for download and exit TUI (New mode)
-    fn select_component_for_download(&mut self) {
-        let selected_index = self.component_list_state.selected();
-        if let Some(idx) = selected_index
-            && let Some(result) = self.component_results.results.get(idx)
-        {
-            self.selected_component_for_download = Some(result.clone());
-            self.should_quit = true;
         }
     }
 
@@ -1276,12 +1089,6 @@ impl App {
     }
 
     fn start_local_mode_if_needed(&mut self) {
-        if !self.mode.requires_local_index() {
-            self.download_state = DownloadState::Done;
-            self.index_count = 0;
-            return;
-        }
-
         if self.local_index_exists(self.mode) {
             self.download_state = DownloadState::Done;
             self.refresh_local_count();
@@ -1553,19 +1360,6 @@ fn registry_symbol_image_key(symbol: &RegistrySymbol) -> Option<ImageKey> {
     })
 }
 
-fn component_result_availability_request(
-    result: &crate::component::ComponentSearchResult,
-) -> Option<AvailabilityRequest> {
-    let key = component_lookup_key(
-        Some(result.part_number.as_str()),
-        result.manufacturer.as_deref(),
-    )?;
-    Some(AvailabilityRequest {
-        key: AvailabilityKey::Component(key.clone()),
-        lookups: vec![key],
-    })
-}
-
 fn ordered_availability_requests(
     len: usize,
     selected: Option<usize>,
@@ -1578,12 +1372,6 @@ fn ordered_availability_requests(
         .filter_map(request_at)
         .filter(|request| seen.insert(request.key.clone()))
         .collect()
-}
-
-/// Result from running the TUI
-pub struct TuiResult {
-    /// Component selected for download (WebComponents mode only)
-    pub selected_component: Option<crate::component::ComponentSearchResult>,
 }
 
 /// Determine the preflight configuration based on auth and local-index access
@@ -1602,8 +1390,6 @@ fn compute_preflight(
         if KicadSymbolsClient::default_db_path()?.exists() {
             available_modes.push(SearchMode::KicadSymbols);
         }
-        available_modes.push(SearchMode::WebComponents);
-
         return Ok(Preflight {
             start_mode: SearchMode::RegistryModules,
             available_modes,
@@ -1638,14 +1424,12 @@ fn compute_preflight(
         }
     }
 
-    available_modes.push(SearchMode::WebComponents);
-
     let start_mode = if available_modes.contains(&SearchMode::RegistryModules) {
         SearchMode::RegistryModules
     } else if available_modes.contains(&SearchMode::KicadSymbols) {
         SearchMode::KicadSymbols
     } else {
-        SearchMode::WebComponents
+        anyhow::bail!("No component search index is available");
     };
 
     Ok(Preflight {
@@ -1664,7 +1448,7 @@ fn current_workspace_root() -> Option<PathBuf> {
 }
 
 /// Run the TUI application
-pub fn run() -> Result<TuiResult> {
+pub fn run() -> Result<()> {
     let workspace_root = current_workspace_root();
     let preflight = compute_preflight(None, &[], workspace_root.as_deref())?;
     run_with_preflight(preflight)
@@ -1672,8 +1456,8 @@ pub fn run() -> Result<TuiResult> {
 
 /// Run the TUI with an explicit starting mode
 /// - If mode is Some, use that mode (but available modes still depend on registry access)
-/// - If mode is None, use default behavior (registry:modules if registry access available, web:components otherwise)
-pub fn run_with_mode(mode: Option<SearchMode>) -> Result<TuiResult> {
+/// - If mode is None, use the first available local search index.
+pub fn run_with_mode(mode: Option<SearchMode>) -> Result<()> {
     run_with_mode_and_registry_index(mode, None, Vec::new(), current_workspace_root())
 }
 
@@ -1682,7 +1466,7 @@ pub fn run_with_mode_and_registry_index(
     registry_db_path_override: Option<PathBuf>,
     registry_selectors: Vec<String>,
     workspace_root: Option<PathBuf>,
-) -> Result<TuiResult> {
+) -> Result<()> {
     let mut preflight = compute_preflight(
         registry_db_path_override,
         &registry_selectors,
@@ -1693,23 +1477,16 @@ pub fn run_with_mode_and_registry_index(
         if preflight.available_modes.contains(&m) {
             preflight.start_mode = m;
         } else {
-            // If requested mode requires registry but we only have web mode,
-            // just use the default (web:components)
-            // This handles the case where user requests registry:modules but isn't auth'd
+            anyhow::bail!(
+                "Requested search mode '{}' is unavailable",
+                m.display_name()
+            );
         }
     }
     run_with_preflight(preflight)
 }
 
-/// Run the TUI in WebComponents mode only (for pcb new component)
-pub fn run_web_components_only() -> Result<TuiResult> {
-    // Check authentication first
-    crate::auth::get_api_token()?;
-
-    run_with_preflight(Preflight::web_only())
-}
-
-fn run_with_preflight(preflight: Preflight) -> Result<TuiResult> {
+fn run_with_preflight(preflight: Preflight) -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, SetCursorStyle::BlinkingBar)?;
@@ -1728,19 +1505,12 @@ fn run_with_preflight(preflight: Preflight) -> Result<TuiResult> {
     )?;
     terminal.show_cursor()?;
 
-    result?;
-
-    Ok(TuiResult {
-        selected_component: app.selected_component_for_download,
-    })
+    result
 }
 
 fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) -> Result<()> {
-    // Mode-specific debounce times
-    // Registry: very short (worker coalesces), just batch keystrokes
-    const REGISTRY_DEBOUNCE_MS: u64 = 5;
-    // Component: longer since API calls are expensive
-    const COMPONENT_DEBOUNCE_MS: u64 = 200;
+    // The worker coalesces queries, so only a short debounce is needed to batch keystrokes.
+    const SEARCH_DEBOUNCE_MS: u64 = 5;
     // Target ~120Hz refresh rate
     const FRAME_TIME: Duration = Duration::from_micros(8333);
 
@@ -1785,15 +1555,9 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) ->
             break;
         }
 
-        // Send search query after mode-specific debounce
-        let debounce_ms = if app.mode.requires_local_index() {
-            REGISTRY_DEBOUNCE_MS
-        } else {
-            COMPONENT_DEBOUNCE_MS
-        };
-        if app.last_input_time.elapsed() > Duration::from_millis(debounce_ms) {
+        // Send search query after the debounce window.
+        if app.last_input_time.elapsed() > Duration::from_millis(SEARCH_DEBOUNCE_MS) {
             app.maybe_send_local_query();
-            app.maybe_send_component_query();
         }
 
         // Poll for async results
@@ -1801,7 +1565,6 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<Stdout>>, app: &mut App) ->
         app.poll_download();
         app.poll_results();
         app.poll_detail_responses();
-        app.poll_component_results();
         app.poll_availability_responses();
         app.poll_image_responses();
 

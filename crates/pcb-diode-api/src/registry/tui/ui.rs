@@ -93,140 +93,98 @@ fn render_search_input(frame: &mut Frame, app: &App, area: Rect) {
 
 /// Render the results panels: optionally Trigram/Word/Semantic on top, Merged below
 fn render_results_panels(frame: &mut Frame, app: &mut App, area: Rect) {
-    if app.mode.requires_local_index() {
-        if app.show_debug_panels {
-            // Split: debug panels on top, merged below
-            let rows = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Percentage(40), // Trigram + Word + Semantic
-                    Constraint::Percentage(60), // Merged (larger)
-                ])
-                .split(area);
+    if app.show_debug_panels {
+        // Split: debug panels on top, merged below
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Percentage(40), // Trigram + Word + Semantic
+                Constraint::Percentage(60), // Merged (larger)
+            ])
+            .split(area);
 
-            // Semantic on left, Trigram + Word stacked on right
-            let cols = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-                .split(rows[0]);
+        // Semantic on left, Trigram + Word stacked on right
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(rows[0]);
 
-            let left_rows = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-                .split(cols[0]);
-            let right_rows = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-                .split(cols[1]);
+        let left_rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(cols[0]);
+        let right_rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(cols[1]);
 
-            let panel_areas = [left_rows[0], left_rows[1], right_rows[0], right_rows[1]];
-            match &app.results {
-                super::search::SearchResults::RegistryModules(results) => render_panel_set(
-                    frame,
-                    panel_areas,
-                    [
-                        &results.semantic,
-                        &results.trigram,
-                        &results.word,
-                        &results.docs_full_text,
-                    ],
-                    module_row_spans,
-                ),
-                super::search::SearchResults::RegistrySymbols(results) => render_panel_set(
-                    frame,
-                    panel_areas,
-                    [
-                        &results.semantic,
-                        &results.trigram,
-                        &results.word,
-                        &results.docs_full_text,
-                    ],
-                    symbol_row_spans,
-                ),
-                super::search::SearchResults::KicadSymbols(results) => render_panel_set(
-                    frame,
-                    panel_areas,
-                    [
-                        &results.semantic,
-                        &results.trigram,
-                        &results.word,
-                        &results.docs_full_text,
-                    ],
-                    kicad_row_spans,
-                ),
-                super::search::SearchResults::Empty => {}
-            }
-
-            render_local_merged_list(frame, app, rows[1]);
-        } else {
-            render_local_merged_list(frame, app, area);
+        let panel_areas = [left_rows[0], left_rows[1], right_rows[0], right_rows[1]];
+        match &app.results {
+            super::search::SearchResults::RegistryModules(results) => render_panel_set(
+                frame,
+                panel_areas,
+                [
+                    &results.semantic,
+                    &results.trigram,
+                    &results.word,
+                    &results.docs_full_text,
+                ],
+                module_row_spans,
+            ),
+            super::search::SearchResults::RegistrySymbols(results) => render_panel_set(
+                frame,
+                panel_areas,
+                [
+                    &results.semantic,
+                    &results.trigram,
+                    &results.word,
+                    &results.docs_full_text,
+                ],
+                symbol_row_spans,
+            ),
+            super::search::SearchResults::KicadSymbols(results) => render_panel_set(
+                frame,
+                panel_areas,
+                [
+                    &results.semantic,
+                    &results.trigram,
+                    &results.word,
+                    &results.docs_full_text,
+                ],
+                kicad_row_spans,
+            ),
+            super::search::SearchResults::Empty => {}
         }
+
+        render_local_merged_list(frame, app, rows[1]);
     } else {
-        // WebComponents mode
-        render_component_list(frame, app, area);
+        render_local_merged_list(frame, app, area);
     }
 }
 
 /// Render results count + query time line (subtle)
 fn render_results_count(frame: &mut Frame, app: &App, area: Rect) {
-    let line = if app.mode.requires_local_index() {
-        let count = app.results.len();
-        let query_time = format_duration(app.results.duration());
+    let count = app.results.len();
+    let query_time = format_duration(app.results.duration());
 
-        if count == 0 {
-            Line::from(vec![Span::styled(
-                format!("  0/{}", app.index_count),
-                Style::default().fg(Color::DarkGray),
-            )])
-        } else {
-            Line::from(vec![
-                Span::styled(
-                    format!("  {}/{} ", count, app.index_count),
-                    Style::default().fg(Color::DarkGray),
-                ),
-                Span::styled(
-                    format!("({})", query_time),
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::DIM),
-                ),
-            ])
-        }
+    let line = if count == 0 {
+        Line::from(vec![Span::styled(
+            format!("  0/{}", app.index_count),
+            Style::default().fg(Color::DarkGray),
+        )])
     } else {
-        // WebComponents mode
-        if app.component_searching {
-            // Show spinner while searching
-            let spinner = spinner_frame(app.component_search_started);
-            Line::from(vec![Span::styled(
-                format!("  {} Searching...", spinner),
+        Line::from(vec![
+            Span::styled(
+                format!("  {}/{} ", count, app.index_count),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::styled(
+                format!("({})", query_time),
                 Style::default()
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::DIM),
-            )])
-        } else {
-            let count = app.component_results.results.len();
-            let query_time = format_duration(app.component_results.duration);
-
-            if count == 0 {
-                Line::from(vec![Span::styled(
-                    "  0 results",
-                    Style::default().fg(Color::DarkGray),
-                )])
-            } else {
-                Line::from(vec![
-                    Span::styled(
-                        format!("  {} results ", count),
-                        Style::default().fg(Color::DarkGray),
-                    ),
-                    Span::styled(
-                        format!("({})", query_time),
-                        Style::default()
-                            .fg(Color::Yellow)
-                            .add_modifier(Modifier::DIM),
-                    ),
-                ])
-            }
-        }
+            ),
+        ])
     };
 
     let para = Paragraph::new(line);
@@ -428,84 +386,12 @@ fn render_kicad_merged_list(frame: &mut Frame, app: &mut App, area: Rect) {
     );
 }
 
-/// Render component search results list (New mode)
-fn render_component_list(frame: &mut Frame, app: &mut App, area: Rect) {
-    use super::display::WebComponentDisplay;
-
-    let selection_bg = Color::Rgb(38, 38, 38);
-    let selected_index = app.component_list_state.selected();
-
-    let items: Vec<ListItem> = app
-        .component_results
-        .results
-        .iter()
-        .enumerate()
-        .map(|(i, result)| {
-            let is_selected = selected_index == Some(i);
-
-            let base_style = if is_selected {
-                Style::default().bg(selection_bg)
-            } else {
-                Style::default()
-            };
-
-            let prefix_style = if is_selected {
-                Style::default().fg(Color::LightRed).bg(selection_bg)
-            } else {
-                Style::default()
-            };
-
-            let display = WebComponentDisplay::from_component(result);
-            let lines = display.to_tui_lines(is_selected, base_style, prefix_style);
-
-            let item = ListItem::new(lines);
-            if is_selected {
-                item.style(Style::default().bg(selection_bg))
-            } else {
-                item
-            }
-        })
-        .collect();
-
-    let list = List::new(items).direction(ListDirection::BottomToTop);
-
-    // Reserve 1 column on the right for scrollbar
-    let list_area = Rect {
-        width: area.width.saturating_sub(1),
-        ..area
-    };
-    let scrollbar_area = Rect {
-        x: area.x + area.width.saturating_sub(1),
-        width: 1,
-        ..area
-    };
-
-    StatefulWidget::render(
-        list,
-        list_area,
-        frame.buffer_mut(),
-        &mut app.component_list_state,
-    );
-
-    render_scrollbar(
-        frame,
-        scrollbar_area,
-        app.component_results.results.len(),
-        app.component_list_state.offset(),
-        3, // WebComponentDisplay uses 3 lines per item
-    );
-}
-
 /// Render the preview panel showing selected package details
 fn render_preview_panel(frame: &mut Frame, app: &mut App, area: Rect) {
-    let title = if app.mode == super::app::SearchMode::RegistryModules {
-        " Module Details "
-    } else if app.mode == super::app::SearchMode::RegistryComponents {
-        " Component Details "
-    } else if app.mode == super::app::SearchMode::KicadSymbols {
-        " Symbol Details "
-    } else {
-        " Component Details "
+    let title = match app.mode {
+        super::app::SearchMode::RegistryModules => " Module Details ",
+        super::app::SearchMode::RegistryComponents => " Component Details ",
+        super::app::SearchMode::KicadSymbols => " Symbol Details ",
     };
 
     let block = Block::default()
@@ -571,180 +457,7 @@ fn render_preview_panel(frame: &mut Frame, app: &mut App, area: Rect) {
                 .alignment(Alignment::Center);
             frame.render_widget(loading, inner);
         }
-    } else {
-        // WebComponents mode - show selected component details
-        let selected_index = app.component_list_state.selected();
-        if let Some(idx) = selected_index {
-            if let Some(result) = app.component_results.results.get(idx) {
-                // Add 2 char left padding
-                let padded = Rect {
-                    x: inner.x + 2,
-                    y: inner.y,
-                    width: inner.width.saturating_sub(2),
-                    height: inner.height,
-                };
-                let (availability, is_loading) = app.availability_for_lookup(
-                    Some(result.part_number.as_str()),
-                    result.manufacturer.as_deref(),
-                );
-                render_component_details(frame, result, padded, availability, is_loading);
-            }
-        } else if app.component_results.results.is_empty() {
-            let empty = Paragraph::new("No component selected")
-                .style(Style::default().fg(Color::DarkGray))
-                .alignment(Alignment::Center);
-            frame.render_widget(empty, inner);
-        }
     }
-}
-
-/// Render component details in the preview panel (for New mode)
-fn render_component_details(
-    frame: &mut Frame,
-    result: &crate::component::ComponentSearchResult,
-    area: Rect,
-    availability: Option<&pcb_sch::bom::Availability>,
-    is_loading_availability: bool,
-) {
-    use crate::component::sanitize_mpn_for_path;
-
-    let label_style = Style::default().fg(Color::DarkGray);
-    let value_style = Style::default().fg(Color::White);
-    let artifact_label = Style::default().fg(Color::Gray);
-
-    let mut lines: Vec<Line> = Vec::new();
-
-    // Path (bold, prominent - matches registry mode URL)
-    let sanitized_mfr = result
-        .manufacturer
-        .as_deref()
-        .map(sanitize_mpn_for_path)
-        .unwrap_or_else(|| "unknown".to_string());
-    let sanitized_mpn = sanitize_mpn_for_path(&result.part_number);
-    let path = format!("components/{}/{}", sanitized_mfr, sanitized_mpn);
-
-    lines.push(Line::from(vec![
-        Span::styled("Path          ", label_style),
-        Span::styled(
-            path,
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
-    ]));
-
-    // Part Number
-    lines.push(Line::from(vec![
-        Span::styled("Part Number   ", label_style),
-        Span::styled(&result.part_number, value_style),
-    ]));
-
-    // Manufacturer
-    if let Some(ref mfr) = result.manufacturer {
-        lines.push(Line::from(vec![
-            Span::styled("Manufacturer  ", label_style),
-            Span::styled(mfr, value_style),
-        ]));
-    }
-
-    // Package Category
-    if let Some(ref pkg) = result.package_category {
-        lines.push(Line::from(vec![
-            Span::styled("Package       ", label_style),
-            Span::styled(pkg, Style::default().fg(Color::Yellow)),
-        ]));
-    }
-
-    lines.push(Line::from(""));
-
-    // ═══════════════════════════════════════════
-    // ARTIFACT AVAILABILITY (one per line)
-    // ═══════════════════════════════════════════
-    lines.push(Line::from(vec![Span::styled(
-        "─── Artifacts ───",
-        Style::default().fg(Color::DarkGray),
-    )]));
-
-    let has_eda = result.model_availability.ecad_model;
-    let has_step = result.model_availability.step_model;
-    let has_datasheet = !result.datasheets.is_empty();
-
-    let check = Span::styled("✓", Style::default().fg(Color::Green));
-    let cross = Span::styled("✗", Style::default().fg(Color::Red));
-
-    lines.push(Line::from(vec![
-        Span::styled("EDA Symbol    ", artifact_label),
-        if has_eda {
-            check.clone()
-        } else {
-            cross.clone()
-        },
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("STEP Model    ", artifact_label),
-        if has_step {
-            check.clone()
-        } else {
-            cross.clone()
-        },
-    ]));
-    lines.push(Line::from(vec![
-        Span::styled("Datasheet     ", artifact_label),
-        if has_datasheet { check } else { cross },
-    ]));
-
-    // ═══════════════════════════════════════════
-    // AVAILABILITY (2 fixed lines: US and Global)
-    // ═══════════════════════════════════════════
-    lines.push(Line::from(""));
-    lines.push(Line::from(vec![Span::styled(
-        "─── Availability ───",
-        Style::default().fg(Color::DarkGray),
-    )]));
-
-    // US line
-    lines.push(format_avail_line(
-        "US",
-        availability.and_then(|p| p.us.as_ref()),
-        is_loading_availability,
-    ));
-    // Global line
-    lines.push(format_avail_line(
-        "Global",
-        availability.and_then(|p| p.global.as_ref()),
-        is_loading_availability,
-    ));
-
-    // ═══════════════════════════════════════════
-    // OFFERS (raw offer data)
-    // ═══════════════════════════════════════════
-    if let Some(p) = availability {
-        let in_stock: Vec<_> = p.offers.iter().filter(|o| o.stock > 0).take(6).collect();
-        if !in_stock.is_empty() {
-            lines.push(Line::from(""));
-            lines.push(Line::from(vec![Span::styled(
-                "─── Offers ───",
-                Style::default().fg(Color::DarkGray),
-            )]));
-            lines.extend(format_offer_lines(&in_stock));
-        }
-    }
-
-    // Description
-    if let Some(ref desc) = result.description {
-        lines.push(Line::from(""));
-        lines.push(Line::from(vec![Span::styled(
-            "─── Description ───",
-            Style::default().fg(Color::DarkGray),
-        )]));
-        // Wrap description
-        for chunk in wrap_text(desc, area.width.saturating_sub(4) as usize) {
-            lines.push(Line::from(vec![Span::styled(chunk, value_style)]));
-        }
-    }
-
-    let para = Paragraph::new(lines);
-    frame.render_widget(para, area);
 }
 
 /// Format a price value for display (re-export from bom)
@@ -1716,14 +1429,6 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         super::app::SearchMode::RegistryModules => Color::Magenta,
         super::app::SearchMode::RegistryComponents => Color::Green,
         super::app::SearchMode::KicadSymbols => Color::Cyan,
-        super::app::SearchMode::WebComponents => Color::Cyan,
-    };
-
-    // Mode-specific Enter action
-    let enter_action = if app.mode.requires_local_index() {
-        "Enter copy"
-    } else {
-        "Enter add"
     };
 
     let mut spans = vec![
@@ -1752,7 +1457,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         Span::styled("] [", bracket),
         Span::styled("Esc quit", dim),
         Span::styled("] [", bracket),
-        Span::styled(enter_action, dim),
+        Span::styled("Enter copy", dim),
         Span::styled("]", bracket),
     ]);
 
@@ -1778,14 +1483,12 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
             spans.push(Span::styled("]", bracket));
         }
         DownloadState::Failed(msg) => {
-            if app.available_modes.iter().any(|m| m.requires_local_index()) {
-                spans.push(Span::styled(" [", bracket));
-                spans.push(Span::styled(
-                    format!("✗ {}", msg),
-                    Style::default().fg(Color::Red).add_modifier(Modifier::DIM),
-                ));
-                spans.push(Span::styled("]", bracket));
-            }
+            spans.push(Span::styled(" [", bracket));
+            spans.push(Span::styled(
+                format!("✗ {}", msg),
+                Style::default().fg(Color::Red).add_modifier(Modifier::DIM),
+            ));
+            spans.push(Span::styled("]", bracket));
         }
         DownloadState::Done => {}
     }
