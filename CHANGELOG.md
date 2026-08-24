@@ -10,6 +10,14 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- Added `pcb ipc interposer --ipc` to export the finished board as manufacturing IPC-2581 XML with its BOM.
+
+### Changed
+
+- Interposer mate lands are Ø1.5 mm, sized for the fixture bed's 2.54 mm pogo blocks.
+
+### Added
+
 - TestPoint `ict=` uses a dedicated ICT footprint whose courtyard enforces 3 mm spacing.
 
 ### Changed

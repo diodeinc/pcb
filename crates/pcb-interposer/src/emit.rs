@@ -22,8 +22,10 @@ use crate::pattern::{Land, Role};
 use crate::plan::Plan;
 use crate::pogo::PogoTemplate;
 
-/// Mate land pad diameter.
-const LAND_DIA_MM: f64 = 1.0;
+/// Mate land pad diameter: the target for the fixture bed's 2.54 mm
+/// pitch pogo blocks — tip plus alignment margin, with ~1 mm of copper
+/// gap left between neighbors.
+const LAND_DIA_MM: f64 = 1.5;
 
 /// Build the `.kicad_pcb` source.
 pub fn board(panel: &Panel, lands: &[Land], plan: Option<&Plan>) -> String {
@@ -234,7 +236,7 @@ fn land_footprint(
         uuid: uuids.next_uuid(),
     });
     Footprint {
-        lib_id: "Interposer:Mate_Pad_D1.0mm".into(),
+        lib_id: "Interposer:Mate_Pad_D1.5mm".into(),
         layer: "B.Cu".into(),
         uuid: uuids.next_uuid(),
         at: At::xy(land.xy[0], land.xy[1]),
