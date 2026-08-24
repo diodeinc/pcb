@@ -10,7 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
-- Interposer pogo pads now use the Mill-Max 806-22-001-30-0xx191 footprint with its embedded 3D model.
+- Interposer pogo pads use the Mill-Max 806 footprint.
 
 ## [0.4.35] - 2026-08-24
 
