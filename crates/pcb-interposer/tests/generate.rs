@@ -18,42 +18,42 @@ const PANEL: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
       <StepRef name="array"/>
     </BomHeader>
     <BomItem OEMDesignNumberRef="TP_DP" quantity="1" pinCount="1" category="ELECTRICAL">
-      <RefDes name="TP1" packageRef="Pad" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="TP1" packageRef="TestPoint_ICT" populate="true" layerRef="BOTTOM"/>
       <Characteristics category="ELECTRICAL">
         <Textual textualCharacteristicName="Ict" textualCharacteristicValue="usb_dp"/>
         <Textual textualCharacteristicName="Path" textualCharacteristicValue="TP_DP.TP"/>
       </Characteristics>
     </BomItem>
     <BomItem OEMDesignNumberRef="TP_DM" quantity="1" pinCount="1" category="ELECTRICAL">
-      <RefDes name="TP2" packageRef="Pad" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="TP2" packageRef="TestPoint_ICT" populate="true" layerRef="BOTTOM"/>
       <Characteristics category="ELECTRICAL">
         <Textual textualCharacteristicName="Ict" textualCharacteristicValue="usb_dm"/>
         <Textual textualCharacteristicName="Path" textualCharacteristicValue="TP_DM.TP"/>
       </Characteristics>
     </BomItem>
     <BomItem OEMDesignNumberRef="TP_VT" quantity="1" pinCount="1" category="ELECTRICAL">
-      <RefDes name="TP3" packageRef="Pad" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="TP3" packageRef="TestPoint_ICT" populate="true" layerRef="BOTTOM"/>
       <Characteristics category="ELECTRICAL">
         <Textual textualCharacteristicName="Ict" textualCharacteristicValue="vtarget"/>
         <Textual textualCharacteristicName="Path" textualCharacteristicValue="TP_VT.TP"/>
       </Characteristics>
     </BomItem>
     <BomItem OEMDesignNumberRef="TP_VU" quantity="1" pinCount="1" category="ELECTRICAL">
-      <RefDes name="TP4" packageRef="Pad" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="TP4" packageRef="TestPoint_ICT" populate="true" layerRef="BOTTOM"/>
       <Characteristics category="ELECTRICAL">
         <Textual textualCharacteristicName="Ict" textualCharacteristicValue="vusb"/>
         <Textual textualCharacteristicName="Path" textualCharacteristicValue="TP_VU.TP"/>
       </Characteristics>
     </BomItem>
     <BomItem OEMDesignNumberRef="TP_G" quantity="1" pinCount="1" category="ELECTRICAL">
-      <RefDes name="TP5" packageRef="Pad" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="TP5" packageRef="TestPoint_ICT" populate="true" layerRef="BOTTOM"/>
       <Characteristics category="ELECTRICAL">
         <Textual textualCharacteristicName="Ict" textualCharacteristicValue="gnd"/>
         <Textual textualCharacteristicName="Path" textualCharacteristicValue="TP_G.TP"/>
       </Characteristics>
     </BomItem>
     <BomItem OEMDesignNumberRef="TP_SWDIO" quantity="1" pinCount="1" category="ELECTRICAL">
-      <RefDes name="TP6" packageRef="Pad" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="TP6" packageRef="TestPoint_ICT" populate="true" layerRef="BOTTOM"/>
       <Characteristics category="ELECTRICAL">
         <Textual textualCharacteristicName="Ict" textualCharacteristicValue="swdio"/>
         <Textual textualCharacteristicName="Path" textualCharacteristicValue="TP_SWDIO.TP"/>

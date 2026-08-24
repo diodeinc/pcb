@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- TestPoint `ict=` uses a dedicated ICT footprint whose courtyard enforces 3 mm spacing.
+
 ### Changed
 
 - Interposer pogo pads use the Mill-Max 806 footprint.

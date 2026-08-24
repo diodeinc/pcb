@@ -13,6 +13,7 @@ Variant = enum(
     "Bridge_Pitch5.08mm_Drill1.3mm",
     "Bridge_Pitch6.35mm_Drill1.3mm",
     "Bridge_Pitch7.62mm_Drill1.3mm",
+    "ICT",
     "Keystone_5005-5009_Compact",
     "Loop_D1.80mm_Drill1.0mm_Beaded",
     "Loop_D2.50mm_Drill1.0mm_LowProfile",
@@ -73,10 +74,15 @@ ict = config(
         "usb_dm",
         "ls",
     ],
-    help="Optional ICT fixture role, copied onto the footprint.",
+    help="Optional ICT fixture role, copied onto the footprint. Implies the TestPoint_ICT footprint, whose 3mm courtyard reserves the interposer pogo pitch.",
 )
 
 P1 = io(Net)
+
+if variant.value == "ICT" and not ict:
+    error('variant Variant("ICT") requires an ict= role')
+if ict and "Keystone" in variant.value:
+    error("ict= is not supported on Keystone test points; they are real parts, not bare pads")
 
 
 def _properties(base):
@@ -91,7 +97,7 @@ def _symbol(variant: Variant):
 
 def _footprint(variant):
     """Returns the footprint for a specific variant."""
-    name = variant.value
+    name = "ICT" if ict else variant.value
     return f"../kicad-footprints/TestPoint.pretty/TestPoint_{name}.kicad_mod"
 
 

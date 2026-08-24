@@ -5,8 +5,10 @@ load("../../properties.zen", "Layout")
 
 TestPoint = Module("../TestPoint.zen")
 
-# Test all Variant values
+# Test all Variant values (ICT requires an ict= role, tested below)
 for variant in TestPoint.Variant.values():
+    if variant.value == "ICT":
+        continue
     # Replace dots and special characters in variant name for valid component names
     name = "TP_" + str(variant.value).replace(".", "_").replace("x", "x").upper()
     TestPoint(
@@ -17,7 +19,14 @@ for variant in TestPoint.Variant.values():
 
 TestPoint(
     name="TP_ICT_GND",
-    variant="Pad_D1.0mm",
+    variant="ICT",
     ict="gnd",
     P1=Net("TP_ICT_GND_P1"),
+)
+
+TestPoint(
+    name="TP_ICT_UPGRADE",
+    variant="Pad_D1.0mm",
+    ict="vusb",
+    P1=Net("TP_ICT_UPGRADE_P1"),
 )

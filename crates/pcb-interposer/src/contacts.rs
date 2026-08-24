@@ -2,7 +2,8 @@
 //!
 //! The board-array file carries the board's components once (in the
 //! repeated board step) and the placement grid as step repeats; the BOM
-//! carries each component's `Ict` role. This joins the three into one
+//! carries each component's `Ict` role; only `TestPoint_ICT`-footprint
+//! components qualify. This joins the three into one
 //! contact list in the interposer's Y-down sheet frame — one entry per
 //! fixture-facing test point per board instance.
 
@@ -132,6 +133,9 @@ fn bom_roles(ipc: &Ipc2581) -> BTreeMap<String, (String, String)> {
         }
         let Some(ict) = ict else { continue };
         for ref_des in &item.ref_des_list {
+            if !is_ict_package(ipc.resolve(ref_des.package_ref)) {
+                continue;
+            }
             let refdes = ipc.resolve(ref_des.name).to_string();
             if !refdes.is_empty() {
                 roles.insert(refdes, (ict.clone(), path.clone()));
@@ -139,4 +143,18 @@ fn bom_roles(ipc: &Ipc2581) -> BTreeMap<String, (String, String)> {
         }
     }
     roles
+}
+
+/// The `TestPoint` ICT variant's footprint, allowing the `_<n>` suffix
+/// board-array creation appends when deduplicating package names.
+/// Mirrors `pcb_ipc2581_tools::commands::ict::is_ict_package`.
+fn is_ict_package(name: &str) -> bool {
+    const FOOTPRINT: &str = "TestPoint_ICT";
+    match name.strip_prefix(FOOTPRINT) {
+        Some("") => true,
+        Some(rest) => rest
+            .strip_prefix('_')
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())),
+        None => false,
+    }
 }
