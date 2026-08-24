@@ -29,6 +29,10 @@ pub(crate) struct HierarchyPlan {
 }
 
 impl HierarchyPlan {
+    pub(crate) fn root_page(&self) -> usize {
+        self.root_page
+    }
+
     pub fn page_for_new_component(&self, component_path: &str) -> Result<usize> {
         if let Some(sheet) = self
             .sheets

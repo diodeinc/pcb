@@ -1,7 +1,9 @@
 mod common;
 
+use std::collections::BTreeSet;
+
 use pcb_kicad_sch::{
-    Label, Point, SchDocument, SchItem, Symbol, SymbolDefinition, SymbolSlotKey,
+    Label, LabelKind, Point, SchDocument, SchItem, Symbol, SymbolDefinition, SymbolSlotKey,
     analysis::inspect_schematic,
     connectivity::{PhysicalConnectivity, PinVisibility},
     deterministic_uuid,
@@ -60,6 +62,94 @@ fn editor_core_plans_applies_analyzes_and_reopens_in_memory() {
     let preserved = plan_reconciliation(Some(&reorganized), &netlist, "Editor.kicad_sch").unwrap();
     assert!(preserved.is_empty(), "{:#?}", preserved.edits());
     assert_eq!(preserved.apply(Some(&reorganized)).unwrap(), reorganized);
+}
+
+#[test]
+fn root_interfaces_use_hierarchical_labels_directly_on_component_pins() {
+    let netlist = common::compile_fixture("hierarchy", "root_interface.zen");
+    let document = plan_reconciliation(None, &netlist, "RootInterface.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    let page = &document.pages[0];
+    let labels = page
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            SchItem::Label(label) => Some(label),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        labels
+            .iter()
+            .map(|label| label.text.as_str())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["INPUT", "OUTPUT"])
+    );
+    assert!(
+        labels
+            .iter()
+            .all(|label| matches!(label.kind, LabelKind::Hierarchical { .. }))
+    );
+
+    let pin_points = page
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            SchItem::Symbol(symbol) => Some(
+                page.library.definitions[&symbol.lib_id]
+                    .placed_pins(symbol)
+                    .unwrap(),
+            ),
+            _ => None,
+        })
+        .flatten()
+        .map(|pin| pin.point)
+        .collect::<Vec<_>>();
+    assert!(
+        labels.iter().all(|label| pin_points.contains(&label.at)),
+        "labels={labels:#?} pins={pin_points:#?}"
+    );
+    assert!(
+        page.items
+            .iter()
+            .all(|item| !matches!(item, SchItem::Wire(_)))
+    );
+}
+
+#[test]
+fn generated_hierarchy_connects_sheet_ports_without_label_bridges() {
+    let netlist = common::compile_fixture("hierarchy", "root.zen");
+    let document = plan_reconciliation(None, &netlist, "Hierarchy.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+
+    assert!(document.pages.iter().all(|page| {
+        page.items
+            .iter()
+            .all(|item| !matches!(item, SchItem::Wire(_)))
+    }));
+    for page in &document.pages {
+        let labels = page.items.iter().filter_map(|item| match item {
+            SchItem::Label(label) => Some(label),
+            _ => None,
+        });
+        if document.root_page_ids.contains(&page.id) {
+            assert!(labels.clone().all(|label| label.kind == LabelKind::Local));
+        } else {
+            assert!(
+                labels
+                    .clone()
+                    .all(|label| matches!(label.kind, LabelKind::Hierarchical { .. })),
+                "page={} labels={:#?}",
+                page.id,
+                labels.clone().collect::<Vec<_>>()
+            );
+        }
+        assert!(labels.count() > 0);
+    }
 }
 
 #[test]

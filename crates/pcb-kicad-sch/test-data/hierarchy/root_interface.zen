@@ -1,0 +1,10 @@
+"""Root schematic with two plain external net endpoints."""
+
+Project(name="RootInterface", path="kicad", layout=False)
+
+Resistor = Module("@stdlib/generics/Resistor.zen")
+
+INPUT = io("INPUT", Net, direction="input")
+OUTPUT = io("OUTPUT", Net, direction="output")
+
+Resistor(name="R1", value="1kohms", package="0402", P1=INPUT, P2=OUTPUT)
