@@ -3,11 +3,9 @@
 //! A fixture contact is a `TestPoint_ICT`-footprint component whose BOM
 //! item carries an `Ict` characteristic — the `TestPoint` `ict=` config,
 //! which layout sync title-cases onto the footprint and IPC exports emit
-//! as a BOM characteristic. The footprint requirement is the contract:
-//! its 3mm courtyard reserves the interposer pogo pitch, so only points
-//! that carry it are fixture contacts. One CSV row per connected pin, at
-//! the pad position when the export carries per-pad nets and the
-//! component origin otherwise.
+//! as a BOM characteristic. One CSV row per connected pin, at the pad
+//! position when the export carries per-pad nets and the component
+//! origin otherwise.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;

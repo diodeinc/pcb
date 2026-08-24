@@ -24,7 +24,6 @@ TestPoint(
     P1=Net("TP_ICT_GND_P1"),
 )
 
-# An ict= role on any variant upgrades the footprint to TestPoint_ICT.
 TestPoint(
     name="TP_ICT_UPGRADE",
     variant="Pad_D1.0mm",

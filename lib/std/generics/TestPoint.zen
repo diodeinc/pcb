@@ -74,14 +74,11 @@ ict = config(
         "usb_dm",
         "ls",
     ],
-    help="Optional ICT fixture role, copied onto the footprint.",
+    help="Optional ICT fixture role, copied onto the footprint. Implies the TestPoint_ICT footprint, whose 3mm courtyard reserves the interposer pogo pitch.",
 )
 
 P1 = io(Net)
 
-# An ict= role implies the ICT footprint: its 3mm-pitch courtyard
-# reserves the interposer pogo pin's landing room, and fixture
-# extraction keys on the footprint and the role together.
 if variant.value == "ICT" and not ict:
     error('variant Variant("ICT") requires an ict= role')
 if ict and "Keystone" in variant.value:

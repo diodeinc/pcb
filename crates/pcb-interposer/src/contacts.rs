@@ -2,9 +2,8 @@
 //!
 //! The board-array file carries the board's components once (in the
 //! repeated board step) and the placement grid as step repeats; the BOM
-//! carries each component's `Ict` role. A contact must use the
-//! `TestPoint_ICT` footprint — the one whose 3mm courtyard reserves the
-//! interposer pogo pitch. This joins the three into one
+//! carries each component's `Ict` role; only `TestPoint_ICT`-footprint
+//! components qualify. This joins the three into one
 //! contact list in the interposer's Y-down sheet frame — one entry per
 //! fixture-facing test point per board instance.
 
