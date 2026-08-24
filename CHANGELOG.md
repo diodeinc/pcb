@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Added a TestPoint `ICT` variant whose footprint courtyard enforces the 3 mm fixture pitch; ICT extraction requires it.
+
 ### Changed
 
 - Interposer pogo pads use the Mill-Max 806 footprint.

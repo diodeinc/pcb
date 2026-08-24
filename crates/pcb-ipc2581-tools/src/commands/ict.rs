@@ -1,10 +1,13 @@
 //! List ICT fixture contacts from an IPC-2581 file.
 //!
-//! A fixture contact is any component whose BOM item carries an `Ict`
-//! characteristic — the `TestPoint` `ict=` config, which layout sync
-//! title-cases onto the footprint and IPC exports emit as a BOM
-//! characteristic. One CSV row per connected pin, at the pad position when
-//! the export carries per-pad nets and the component origin otherwise.
+//! A fixture contact is a `TestPoint_ICT`-footprint component whose BOM
+//! item carries an `Ict` characteristic — the `TestPoint` `ict=` config,
+//! which layout sync title-cases onto the footprint and IPC exports emit
+//! as a BOM characteristic. The footprint requirement is the contract:
+//! its 3mm courtyard reserves the interposer pogo pitch, so only points
+//! that carry it are fixture contacts. One CSV row per connected pin, at
+//! the pad position when the export carries per-pad nets and the
+//! component origin otherwise.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -73,6 +76,9 @@ pub fn extract_contacts(ipc: &Ipc2581) -> Result<Vec<IctContact>> {
                 continue;
             };
             for ref_des in &item.ref_des_list {
+                if !is_ict_package(ipc.resolve(ref_des.package_ref)) {
+                    continue;
+                }
                 let designator = ipc.resolve(ref_des.name).to_string();
                 if !designator.is_empty() {
                     roles.insert(
@@ -174,6 +180,20 @@ pub fn extract_contacts(ipc: &Ipc2581) -> Result<Vec<IctContact>> {
 
 static EMPTY: String = String::new();
 
+/// The `TestPoint` ICT variant's footprint, allowing the `_<n>` suffix
+/// board-array creation appends when deduplicating package names.
+/// Mirrored in `pcb_interposer::contacts`.
+pub fn is_ict_package(name: &str) -> bool {
+    const FOOTPRINT: &str = "TestPoint_ICT";
+    match name.strip_prefix(FOOTPRINT) {
+        Some("") => true,
+        Some(rest) => rest
+            .strip_prefix('_')
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())),
+        None => false,
+    }
+}
+
 fn compare_contacts(left: &IctContact, right: &IctContact) -> Ordering {
     side_sort_key(left.side)
         .cmp(&side_sort_key(right.side))
@@ -257,6 +277,16 @@ fn write_csv_field(output: &mut String, field: &str) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn ict_package_names_match_with_dedupe_suffix() {
+        assert!(is_ict_package("TestPoint_ICT"));
+        assert!(is_ict_package("TestPoint_ICT_35"));
+        assert!(!is_ict_package("TestPoint_ICT_"));
+        assert!(!is_ict_package("TestPoint_ICT_x"));
+        assert!(!is_ict_package("TestPoint_Pad_D1.0mm"));
+        assert!(!is_ict_package("Pad_D1.0mm"));
+    }
+
     const FIXTURE: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
   <Content roleRef="Owner">
@@ -268,7 +298,7 @@ mod tests {
       <StepRef name="board"/>
     </BomHeader>
     <BomItem OEMDesignNumberRef="TP_GND" quantity="1" pinCount="1" category="ELECTRICAL">
-      <RefDes name="TP1" packageRef="Pad_D1.0mm" populate="true" layerRef="BOTTOM"/>
+      <RefDes name="TP1" packageRef="TestPoint_ICT" populate="true" layerRef="BOTTOM"/>
       <Characteristics category="ELECTRICAL">
         <Textual textualCharacteristicName="Ict" textualCharacteristicValue="gnd"/>
         <Textual textualCharacteristicName="Path" textualCharacteristicValue="TP_GND"/>
@@ -307,7 +337,7 @@ mod tests {
         <LogicalNet name="SIG">
           <PinRef pin="1" componentRef="R1"/>
         </LogicalNet>
-        <Component refDes="TP1" packageRef="Pad_D1.0mm" layerRef="BOTTOM" part="TP_GND" mountType="SMT">
+        <Component refDes="TP1" packageRef="TestPoint_ICT" layerRef="BOTTOM" part="TP_GND" mountType="SMT">
           <Location x="3.500" y="4.250"/>
         </Component>
         <Component refDes="R1" packageRef="R_0603" layerRef="TOP" part="R10k" mountType="SMT">

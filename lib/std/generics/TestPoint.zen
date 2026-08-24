@@ -13,6 +13,7 @@ Variant = enum(
     "Bridge_Pitch5.08mm_Drill1.3mm",
     "Bridge_Pitch6.35mm_Drill1.3mm",
     "Bridge_Pitch7.62mm_Drill1.3mm",
+    "ICT",
     "Keystone_5005-5009_Compact",
     "Loop_D1.80mm_Drill1.0mm_Beaded",
     "Loop_D2.50mm_Drill1.0mm_LowProfile",
@@ -77,6 +78,14 @@ ict = config(
 )
 
 P1 = io(Net)
+
+# The ICT variant's footprint carries the 3mm-pitch courtyard the
+# interposer pogo pins need; the role and the footprint always travel
+# together so fixture extraction can key on both.
+if ict and variant.value != "ICT":
+    error("ict= requires variant Variant(\"ICT\")")
+if variant.value == "ICT" and not ict:
+    error("variant Variant(\"ICT\") requires an ict= role")
 
 
 def _properties(base):
