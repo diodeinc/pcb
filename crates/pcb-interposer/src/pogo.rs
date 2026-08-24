@@ -1,12 +1,11 @@
 //! The pogo-pin footprint, stamped from a vendored `.kicad_mod` template.
 //!
-//! The pogo pin is a real, purchasable part, so its footprint comes from a
-//! KiCad footprint file rather than this crate's generated primitives —
-//! that file is where the land geometry, courtyard, BOM properties
-//! (MPN/Manufacturer), and the embedded STEP model live. Swapping in the
-//! selected part is a file replacement: drop in its `.kicad_mod` (with
-//! the 3D model embedded via KiCad's embedded-files support) and every
-//! generated interposer carries it.
+//! The pogo pin is a real, purchasable part — Mill-Max
+//! 806-22-001-30-0xx191 — so its footprint comes from the part's KiCad
+//! footprint file rather than this crate's generated primitives: the
+//! recommended Ø2.08 mm land, the Ø3 mm courtyard that doubles as the
+//! minimum ICT test-point pitch (the pick-and-place cap is Ø2.79), and
+//! the embedded STEP model. Changing the part is a file replacement.
 //!
 //! Stamping keeps the template text verbatim — embedded binary blocks
 //! round-trip untouched — and rewrites only the instance fields: library
@@ -141,10 +140,12 @@ mod tests {
         assert!(text.contains("(at 12.5 30)"));
         assert!(text.contains("(property \"Reference\" \"P7\""));
         assert!(text.contains("(net 3 \"B0.TP_X.TP\")"));
-        // File-only header lines are stripped; template UUIDs are replaced.
+        // File-only header lines are stripped; the embedded STEP model
+        // rides along verbatim.
         assert!(!text.contains("(version"));
         assert!(!text.contains("(generator"));
-        assert!(!text.contains("0000000000a1"));
+        assert!(text.contains("kicad-embed://806-22-001-30-0xx191.step"));
+        assert!(text.contains("(checksum \"4F7DDC79DE4608C2E5D4EC110543877B\")"));
 
         // A template with a different pad layer set still binds its nets.
         let alt = PogoTemplate::from_source(
