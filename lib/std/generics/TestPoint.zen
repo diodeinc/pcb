@@ -79,13 +79,11 @@ ict = config(
 
 P1 = io(Net)
 
-# The ICT variant's footprint carries the 3mm-pitch courtyard the
-# interposer pogo pins need; the role and the footprint always travel
-# together so fixture extraction can key on both.
-if ict and variant.value != "ICT":
-    error("ict= requires variant Variant(\"ICT\")")
+# An ict= role implies the ICT footprint: its 3mm-pitch courtyard
+# reserves the interposer pogo pin's landing room, and fixture
+# extraction keys on the footprint and the role together.
 if variant.value == "ICT" and not ict:
-    error("variant Variant(\"ICT\") requires an ict= role")
+    error('variant Variant("ICT") requires an ict= role')
 
 
 def _properties(base):
@@ -100,7 +98,7 @@ def _symbol(variant: Variant):
 
 def _footprint(variant):
     """Returns the footprint for a specific variant."""
-    name = variant.value
+    name = "ICT" if ict else variant.value
     return f"../kicad-footprints/TestPoint.pretty/TestPoint_{name}.kicad_mod"
 
 
