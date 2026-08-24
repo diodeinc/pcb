@@ -38,25 +38,21 @@ if ! command -v uv >/dev/null 2>&1; then
   log 'Installed uv'
 fi
 
-# --- Diode KiCad 10 (native Debian package) ----------------------------------
-KICAD_METADATA_URL=https://kicad-mirror.api.diode.computer/packages/kicad/diode/10.0/latest.json
+# --- Diode KiCad 10 (signed APT repository) ---------------------------------
+KICAD_APT_URL=https://kicad-mirror.api.diode.computer/apt
+KICAD_KEYRING=/usr/share/keyrings/diode-kicad-archive-keyring.asc
 
-log 'Downloading Diode KiCad package metadata'
-metadata=$(curl -fsSL "$KICAD_METADATA_URL")
-deb_url=$(jq -er .deb_url <<<"$metadata")
-sha256=$(jq -er .sha256 <<<"$metadata")
+# shellcheck disable=SC1091
+. /etc/os-release
 
-log 'Downloading Diode KiCad package'
-tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
-curl -fsSL "$deb_url" -o "$tmp/kicad.deb"
-
-log 'Verifying Diode KiCad package checksum'
-printf '%s  %s\n' "$sha256" "$tmp/kicad.deb" | sha256sum --check --strict
-
-log 'Installing Diode KiCad package'
+log 'Installing Diode KiCad from signed APT repository'
+curl -fsSL "$KICAD_APT_URL/diode-kicad-archive-keyring.asc" \
+  | sudo tee "$KICAD_KEYRING" >/dev/null
+printf 'deb [arch=%s signed-by=%s] %s %s main\n' \
+  "$(dpkg --print-architecture)" "$KICAD_KEYRING" "$KICAD_APT_URL" "$VERSION_CODENAME" \
+  | sudo tee /etc/apt/sources.list.d/diode-kicad.list >/dev/null
 sudo apt-get update -qq
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$tmp/kicad.deb"
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq kicad
 
 # Fail setup immediately if the command-line tools or Python bindings are not
 # usable; otherwise the problem surfaces much later as pcb-layout test failures.
