@@ -190,7 +190,7 @@ fn generates_a_parseable_interposer() {
         let net = format!("\"B{board}.TP_DP.TP\"");
         assert_eq!(text.matches(net.as_str()).count(), 3, "table + pogo + land");
     }
-    assert_eq!(text.matches("Interposer:Pogo_Pad_D1.0mm").count(), 12);
+    assert_eq!(text.matches("Interposer:806-22-001-30-0xx191").count(), 12);
 
     // Deterministic output.
     assert_eq!(

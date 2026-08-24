@@ -12,7 +12,7 @@
 
 mod write;
 
-pub use write::write;
+pub use write::{quote, write};
 
 use crate::geom::Point;
 
@@ -32,6 +32,13 @@ pub struct Document {
     /// "no net" and should stay the empty string.
     pub nets: Vec<String>,
     pub footprints: Vec<Footprint>,
+    /// Library footprints spliced in verbatim as already-serialized
+    /// `(footprint …)` blocks — the escape hatch for real parts whose
+    /// definitions (graphics, embedded 3D models) come from `.kicad_mod`
+    /// files rather than this dialect's generated primitives. Each block
+    /// must be a complete well-formed footprint expression; the writer
+    /// only re-indents it.
+    pub raw_footprints: Vec<String>,
     pub segments: Vec<Segment>,
     pub arcs: Vec<TrackArc>,
     pub vias: Vec<Via>,
@@ -51,6 +58,7 @@ impl Default for Document {
             setup: Setup::default(),
             nets: vec![String::new()],
             footprints: Vec::new(),
+            raw_footprints: Vec::new(),
             segments: Vec::new(),
             arcs: Vec::new(),
             vias: Vec::new(),
