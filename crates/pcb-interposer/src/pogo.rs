@@ -97,7 +97,11 @@ impl PogoTemplate {
                 .expect("validated: every pad has layers");
             let close = layers + piece[layers..].find(')').expect("layers list closes");
             bound.push_str(&piece[..=close]);
-            bound.push_str(&format!("\n\t\t(net {} \"{}\")", net.0, net.1));
+            bound.push_str(&format!(
+                "\n\t\t(net {} {})",
+                net.0,
+                pcb_ir::dialects::kicad::quote(&net.1)
+            ));
             bound.push_str(&piece[close + 1..]);
         }
         let body = bound;

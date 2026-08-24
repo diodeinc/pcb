@@ -407,7 +407,8 @@ fn yes_no(value: bool) -> &'static str {
     if value { "yes" } else { "no" }
 }
 
-fn quote(value: &str) -> String {
+/// Quote a string as a KiCad s-expression atom, escaping as pcbnew does.
+pub fn quote(value: &str) -> String {
     let mut out = String::with_capacity(value.len() + 2);
     out.push('"');
     for ch in value.chars() {

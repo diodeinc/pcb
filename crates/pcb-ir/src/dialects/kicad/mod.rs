@@ -12,7 +12,7 @@
 
 mod write;
 
-pub use write::write;
+pub use write::{quote, write};
 
 use crate::geom::Point;
 
