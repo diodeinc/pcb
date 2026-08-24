@@ -48,6 +48,9 @@ enum Commands {
         /// Auto-route the interposer with FreeRouting (requires Java 25+)
         #[arg(long)]
         route: bool,
+        /// Also export the finished board as manufacturing IPC-2581 XML
+        #[arg(long, value_hint = clap::ValueHint::FilePath)]
+        ipc: Option<PathBuf>,
     },
     /// List ICT fixture contacts (components with an `Ict` BOM characteristic)
     Ict {
@@ -368,6 +371,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
             output,
             fixture_map,
             route,
+            ipc,
         } => {
             use anyhow::Context as _;
             let (pcb, pro) = pcb_interposer::generate(&input)?;
@@ -407,6 +411,24 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                 let vias = pcb_interposer::stitch::stitch(&output)?;
                 println!("✓ Stitched {vias} GND vias");
                 routed?;
+            }
+            if let Some(ipc_path) = ipc {
+                pcb_kicad::KiCadCliBuilder::new()
+                    .command("pcb")
+                    .subcommand("export")
+                    .subcommand("ipc2581")
+                    .arg("--output")
+                    .arg(ipc_path.to_string_lossy())
+                    .arg("--bom-col-int-id")
+                    .arg("Path")
+                    .arg("--bom-col-mfg-pn")
+                    .arg("Mpn")
+                    .arg("--bom-col-mfg")
+                    .arg("Manufacturer")
+                    .arg(output.to_string_lossy())
+                    .run()
+                    .context("export interposer IPC-2581")?;
+                println!("✓ Wrote IPC-2581 {}", ipc_path.display());
             }
             Ok(())
         }

@@ -72,12 +72,15 @@ for track in board.GetTracks():
     if track.GetNetCode() != gnd:
         add(track, layer, obstacles)
 
+gnd_land_centers = []
 for footprint in board.GetFootprints():
     for pad in footprint.Pads():
         layer = pcbnew.F_Cu if pad.IsOnLayer(pcbnew.F_Cu) else pcbnew.B_Cu
         add(pad, layer, envelope, ENVELOPE_EXTRA)
         if pad.GetNetCode() != gnd:
             add(pad, layer, obstacles)
+        elif layer == pcbnew.B_Cu:
+            gnd_land_centers.append((pad.GetPosition().x, pad.GetPosition().y))
 
 obstacles.Simplify()
 envelope.Simplify()
@@ -130,8 +133,15 @@ def place(x, y):
     if far_enough(x, y) and allowed.Collide(pcbnew.VECTOR2I(x, y)):
         accepted.append((x, y))
         buckets.setdefault((x // MIN_SEP, y // MIN_SEP), []).append((x, y))
+        return True
+    return False
 
 
+# A via in each GND mate land (same net, pressure contact — no solder)
+# guarantees its pour pocket bridges the faces even where routed traces
+# and neighboring lands squeeze out every contour candidate.
+for x, y in gnd_land_centers:
+    place(x, y)
 for chain in chains(envelope):
     for x, y in samples(chain):
         place(x, y)
@@ -152,6 +162,102 @@ for x, y in accepted:
 filler = pcbnew.ZONE_FILLER(board)
 if not filler.Fill(board.Zones()):
     sys.exit("Failed to fill zones after stitching")
+
+# Rescue pass: a routed-trace pocket can sever a fill island holding a
+# GND pad from every via (a top pogo pad can't take one in-pad). Any
+# island with a GND pad and no via gets one dropped inside it.
+RESCUE_STEP = pcbnew.FromMM(0.4)
+RESCUE_SEP = pcbnew.FromMM(0.7)
+gnd_pads = [
+    (
+        pad.GetPosition().x,
+        pad.GetPosition().y,
+        pad.IsOnLayer(pcbnew.F_Cu),
+        max(pad.GetSize().x, pad.GetSize().y) // 2,
+    )
+    for footprint in board.GetFootprints()
+    for pad in footprint.Pads()
+    if pad.GetNetCode() == gnd
+]
+rescued = 0
+
+
+def add_via(pt):
+    global rescued
+    via = pcbnew.PCB_VIA(board)
+    via.SetViaType(pcbnew.VIATYPE_THROUGH)
+    via.SetPosition(pt)
+    via.SetWidth(VIA_WIDTH)
+    via.SetDrill(VIA_DRILL)
+    via.SetLayerPair(pcbnew.F_Cu, pcbnew.B_Cu)
+    via.SetNetCode(gnd)
+    board.Add(via)
+    accepted.append((pt.x, pt.y))
+    rescued += 1
+
+
+# A pad ringed by foreign traces at minimum clearance gets no spokes,
+# no fill, and leaves no legal spot beside it — the only bridge left is
+# a via in the pad itself. Fixture pads tolerate that.
+gnd_fills = {}
+for zone in board.Zones():
+    if zone.GetNetCode() == gnd:
+        for layer in (pcbnew.F_Cu, pcbnew.B_Cu):
+            if zone.IsOnLayer(layer):
+                gnd_fills[layer] = zone.GetFilledPolysList(layer)
+for x, y, top, radius in gnd_pads:
+    layer = pcbnew.F_Cu if top else pcbnew.B_Cu
+    fill = gnd_fills.get(layer)
+    if fill is None:
+        continue
+    # A connected pad has fill copper (spokes or solid) overlapping it,
+    # so the fill comes within the pad's own radius of its center; an
+    # orphan's nearest fill sits a full thermal gap further out.
+    touched = fill.Collide(pcbnew.VECTOR2I(x, y), radius + pcbnew.FromMM(0.05))
+    if not touched and all(
+        (ox - x) ** 2 + (oy - y) ** 2 >= RESCUE_SEP * RESCUE_SEP for ox, oy in accepted
+    ):
+        add_via(pcbnew.VECTOR2I(x, y))
+
+for zone in board.Zones():
+    if zone.GetNetCode() != gnd:
+        continue
+    for layer in (pcbnew.F_Cu, pcbnew.B_Cu):
+        if not zone.IsOnLayer(layer):
+            continue
+        fill = zone.GetFilledPolysList(layer)
+        for i in range(fill.OutlineCount()):
+            island = pcbnew.SHAPE_POLY_SET()
+            island.AddOutline(fill.COutline(i))
+            on_top = layer == pcbnew.F_Cu
+            pads_in = [
+                (x, y)
+                for x, y, top, _ in gnd_pads
+                if top == on_top and island.Collide(pcbnew.VECTOR2I(x, y))
+            ]
+            if not pads_in:
+                continue
+            if any(island.Collide(pcbnew.VECTOR2I(x, y)) for x, y in accepted):
+                continue
+            box = island.BBox()
+            done = False
+            y = box.GetY()
+            while not done and y <= box.GetBottom():
+                x = box.GetX()
+                while not done and x <= box.GetRight():
+                    pt = pcbnew.VECTOR2I(x, y)
+                    clear = all(
+                        (ox - x) ** 2 + (oy - y) ** 2 >= RESCUE_SEP * RESCUE_SEP
+                        for ox, oy in accepted
+                    )
+                    if clear and island.Collide(pt) and allowed.Collide(pt):
+                        add_via(pt)
+                        done = True
+                    x += RESCUE_STEP
+                y += RESCUE_STEP
+
+if rescued and not filler.Fill(board.Zones()):
+    sys.exit("Failed to refill zones after rescue vias")
 if not pcbnew.SaveBoard(board_path, board):
     sys.exit("Failed to save stitched board")
 

@@ -24,6 +24,42 @@
 			)
 		)
 	)
+	(property "Mpn" "806-22-001-30-012191"
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "1c7a0000-0000-4000-8000-000000000001")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Manufacturer" "Mill-Max"
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "1c7a0000-0000-4000-8000-000000000002")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
+	(property "Datasheet" "https://www.mill-max.com/products/datasheet/806-22-001-30-012191"
+		(at 0 0 0)
+		(layer "F.Fab")
+		(hide yes)
+		(uuid "1c7a0000-0000-4000-8000-000000000003")
+		(effects
+			(font
+				(size 1 1)
+				(thickness 0.15)
+			)
+		)
+	)
 	(property "KiLib_Generator" "package/explicit_land_pattern"
 		(at 0 0 0)
 		(layer "F.Fab")
