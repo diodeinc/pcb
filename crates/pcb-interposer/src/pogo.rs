@@ -15,7 +15,7 @@
 use anyhow::{Context, Result, bail};
 
 /// The vendored template, compiled in.
-const TEMPLATE: &str = include_str!("../footprints/Pogo_Pad_D1.0mm.kicad_mod");
+const TEMPLATE: &str = include_str!("../footprints/806-22-001-30-0xx191.kicad_mod");
 const LIB_NICKNAME: &str = "Interposer";
 
 /// A parsed-and-validated stamping template.
@@ -137,7 +137,7 @@ mod tests {
         let mut uuids = UuidGen::new();
         let text = template.stamp([12.5, 30.0], "P7", (3, "B0.TP_X.TP".into()), &mut uuids);
 
-        assert!(text.starts_with("(footprint \"Interposer:Pogo_Pad_D1.0mm\"\n"));
+        assert!(text.starts_with("(footprint \"Interposer:806-22-001-30-0xx191\"\n"));
         assert!(text.contains("(at 12.5 30)"));
         assert!(text.contains("(property \"Reference\" \"P7\""));
         assert!(text.contains("(net 3 \"B0.TP_X.TP\")"));

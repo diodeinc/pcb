@@ -48,7 +48,9 @@ pub fn fixture_map(panel_xml: &Path) -> Result<String> {
 /// top-face fiducial mask openings, each grown by the pogo pad radius
 /// plus clearance.
 fn pogo_keepouts(panel: &panel::Panel) -> Vec<([f64; 2], f64)> {
-    let pogo = 0.5;
+    // The vendored 806 pogo footprint's courtyard radius: the cap is
+    // wider than the solder land, so the courtyard governs interference.
+    let pogo = 1.65;
     let clear = 0.5;
     panel
         .holes
