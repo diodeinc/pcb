@@ -10,7 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
-- Added a TestPoint `ICT` variant whose footprint courtyard enforces the 3 mm fixture pitch; ICT extraction requires it.
+- TestPoint `ict=` uses a dedicated ICT footprint whose courtyard enforces 3 mm spacing.
 
 ### Changed
 
