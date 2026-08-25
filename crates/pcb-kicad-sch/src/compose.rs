@@ -2030,11 +2030,13 @@ fn resolve_pin_targets(
     pin_name: &str,
     pin_numbers: &BTreeSet<String>,
 ) -> Result<Vec<PinTarget>> {
+    let mut component_placed = false;
     let mut matches = Vec::new();
     for (slot, placed) in placed
         .iter()
         .filter(|(slot, _)| slot.component_path() == component_path)
     {
+        component_placed = true;
         let parsed = symbol::ParsedSymbolDefinition::parse(&placed.definition)?;
         for pin in parsed.placed_pins(&placed.symbol)? {
             let matches_name = !pin_name.is_empty() && !pin.name.is_empty() && pin.name == pin_name;
@@ -2053,6 +2055,12 @@ fn resolve_pin_targets(
         }
     }
     if matches.is_empty() {
+        // A component that is not placed at all contributes no anchors; its
+        // absence is already reported as a missing-symbol issue, and partial
+        // repairs must stay plannable while other components remain unplaced.
+        if !component_placed {
+            return Ok(Vec::new());
+        }
         bail!(
             "netlist terminal '{}.{}' does not match a KiCad symbol pin",
             component_path,
@@ -2078,6 +2086,17 @@ fn resolve_pin_targets(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unplaced_component_terminals_are_skipped_not_errors() {
+        // Partial repairs must stay plannable while other components remain
+        // unplaced; their absence is reported as a missing-symbol issue.
+        let placed = BTreeMap::new();
+        let targets =
+            resolve_pin_targets(&placed, "R_EN.R", "2", &BTreeSet::from(["2".to_string()]))
+                .expect("unplaced component contributes no anchors");
+        assert!(targets.is_empty());
+    }
 
     #[test]
     fn grid_packer_prefers_the_page_center() {
