@@ -14,7 +14,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
-- The interposer mate constellation is S13: 24 uniform 2×3 blocks with per-block ground pairing.
+- The interposer mate constellation is S13: 24 uniform 2×3 blocks with per-block ground pairing and corner mate-detect loops.
 
 ## [0.4.37] - 2026-08-26
 

@@ -13,7 +13,7 @@
 
 use pcb_ir::dialects::kicad::{
     At, Document, Footprint, FootprintAttrs, Graphic, Mount, Pad, PadKind, PadShape, Property,
-    Stroke, UuidGen, Zone, ZoneConnect, ZoneFill,
+    Segment, Stroke, UuidGen, Zone, ZoneConnect, ZoneFill,
 };
 use pcb_ir::geom::Point;
 
@@ -80,13 +80,38 @@ pub fn board(panel: &Panel, lands: &[Land], plan: Option<&Plan>) -> String {
         doc.footprints
             .push(fid_footprint(&mut uuids, ordinal, *at, false));
     }
+    // Corner mate-detect loops: each corner pair is one isolated net,
+    // shorted on this face so the bed proves per-corner seating by
+    // continuity through the mated plate.
+    let mut detect_nets: std::collections::BTreeMap<u32, (u32, String)> = Default::default();
+    for land in lands.iter().filter(|land| land.role == Role::Detect) {
+        let next = detect_nets.len() + 1;
+        detect_nets
+            .entry(land.block)
+            .or_insert_with(|| (doc.net(&format!("DETECT_{next}")), format!("DETECT_{next}")));
+    }
     for (index, land) in lands.iter().enumerate() {
         let net = land_nets
             .get(&index)
             .cloned()
-            .or_else(|| (land.role == Role::Gnd).then(|| (gnd, "GND".to_string())));
+            .or_else(|| (land.role == Role::Gnd).then(|| (gnd, "GND".to_string())))
+            .or_else(|| (land.role == Role::Detect).then(|| detect_nets[&land.block].clone()));
         doc.footprints
             .push(land_footprint(&mut uuids, index, land, net));
+    }
+    for (block, net) in &detect_nets {
+        let pair: Vec<&Land> = lands
+            .iter()
+            .filter(|land| land.role == Role::Detect && land.block == *block)
+            .collect();
+        doc.segments.push(Segment {
+            start: Point::new(pair[0].xy[0], pair[0].xy[1]),
+            end: Point::new(pair[1].xy[0], pair[1].xy[1]),
+            width: 0.3,
+            layer: "B.Cu".into(),
+            net: net.0,
+            uuid: uuids.next_uuid(),
+        });
     }
     if let Some(plan) = plan {
         let template = PogoTemplate::load().expect("vendored pogo template is valid");

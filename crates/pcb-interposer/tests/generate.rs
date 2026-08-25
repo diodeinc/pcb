@@ -179,10 +179,17 @@ fn generates_a_parseable_interposer() {
     assert_eq!(count("zone"), 2);
     // Stitch vias are the route step's job; the emitted board has none.
     assert_eq!(count("via"), 0);
+    // The four corner mate-detect pairs come pre-shorted.
+    assert_eq!(count("segment"), 4);
+    assert_eq!(
+        text.matches("\"DETECT_").count(),
+        12,
+        "table entry + two pads, x4"
+    );
     assert_eq!(count("gr_arc"), 4);
     assert_eq!(count("gr_line"), 4);
-    // Net table: no-net, GND, and ten planned nets.
-    assert_eq!(count("net"), 12);
+    // Net table: no-net, GND, ten planned nets, four detect loops.
+    assert_eq!(count("net"), 16);
     // GND: the table entry, 56 lands, and 2 gnd pogos.
     assert_eq!(text.matches("(net 1 \"GND\")").count(), 59);
     // Every planned net appears on both faces: its pogo pad and its land.

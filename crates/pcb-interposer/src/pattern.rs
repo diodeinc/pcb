@@ -9,15 +9,21 @@
 //!
 //! Three block flavors:
 //! - **USB** (signal): inner column GND GND LS, outer column D+ D− LS —
-//!   each pair member has its return beside it.
+//!   each pair member has its return beside it. The four blocks nearest
+//!   the tile corners trade their LS row for a **mate-detect pair**: two
+//!   lands on one isolated net, shorted by a trace on the interposer, so
+//!   the bed proves per-corner seating by continuity before applying
+//!   power. The four loops are independent — the bed chains them in
+//!   series or senses each corner alone.
 //! - **PWR** (power): inner column all GND, outer column VUSB VT VT —
 //!   every power pin individually paired with a ground.
 //! - **LS** (signal): four low-speed lands with GND seeded at opposite
 //!   corners.
 //!
-//! The vertical bands carry a USB and a PWR block per board (eight
-//! boards); the horizontal bands carry the LS arrays. Totals: 24 blocks,
-//! 144 lands — 8 USB pairs, 16 Vtarget, 8 Vusb, 48 low-speed, 56 ground.
+//! The vertical bands run USB PWR PWR USB USB PWR PWR USB, putting a
+//! USB block (and its detect pair) at every corner; the horizontal bands
+//! carry the LS arrays. Totals: 24 blocks, 144 lands — 8 USB pairs, 16
+//! Vtarget, 8 Vusb, 40 low-speed, 8 detect, 56 ground.
 
 /// A7 tile dimensions, portrait.
 pub const A7_W: f64 = 74.0;
@@ -36,6 +42,8 @@ pub enum Role {
     Vtarget,
     Gnd,
     Ls,
+    /// One land of a corner mate-detect continuity pair.
+    Detect,
 }
 
 impl Role {
@@ -48,6 +56,7 @@ impl Role {
             Role::Vtarget => "vtarget",
             Role::Gnd => "gnd",
             Role::Ls => "ls",
+            Role::Detect => "detect",
         }
     }
 
@@ -111,6 +120,20 @@ fn usb_block() -> Rows {
     ]
 }
 
+/// A corner USB block: the LS row becomes the mate-detect pair, placed
+/// on the corner-facing end (`first` = the band's leading block).
+fn corner_usb_block(first: bool) -> Rows {
+    let mut rows = vec![
+        (Role::Gnd, Role::UsbDp),
+        (Role::Gnd, Role::UsbDm),
+        (Role::Detect, Role::Detect),
+    ];
+    if first {
+        rows.rotate_right(1);
+    }
+    rows
+}
+
 fn pwr_block() -> Rows {
     vec![
         (Role::Gnd, Role::Vusb),
@@ -129,9 +152,19 @@ fn ls_block() -> Rows {
 
 /// The canonical portrait-frame S13 pattern.
 fn s13() -> Vec<Land> {
-    // The vertical bands each carry four boards' USB+PWR block pairs;
-    // the horizontal bands carry four LS arrays each.
-    let board_band: Vec<Rows> = (0..4).flat_map(|_| [usb_block(), pwr_block()]).collect();
+    // The vertical bands each carry four boards' USB and PWR blocks with
+    // USB (and its detect pair) at both ends; the horizontal bands carry
+    // four LS arrays each.
+    let board_band: Vec<Rows> = vec![
+        corner_usb_block(true),
+        pwr_block(),
+        pwr_block(),
+        usb_block(),
+        usb_block(),
+        pwr_block(),
+        pwr_block(),
+        corner_usb_block(false),
+    ];
     let ls_band: Vec<Rows> = (0..4).map(|_| ls_block()).collect();
     let band_structs: [Vec<Rows>; 4] = [board_band.clone(), ls_band.clone(), board_band, ls_band];
     // (along_y, band span start..end, outer row coordinate, inward sign);
@@ -202,7 +235,8 @@ mod tests {
         assert_eq!(role_count(&lands, Role::Vusb), 8);
         assert_eq!(role_count(&lands, Role::Vtarget), 16);
         assert_eq!(role_count(&lands, Role::Gnd), 56);
-        assert_eq!(role_count(&lands, Role::Ls), 48);
+        assert_eq!(role_count(&lands, Role::Ls), 40);
+        assert_eq!(role_count(&lands, Role::Detect), 8);
     }
 
     #[test]
@@ -276,6 +310,35 @@ mod tests {
         }
         assert_eq!(sizes.len(), 24);
         assert!(sizes.iter().all(|size| *size == 6));
+    }
+
+    #[test]
+    fn s13_detect_pairs_guard_the_corners() {
+        let lands = s13();
+        let detects: Vec<&Land> = lands.iter().filter(|l| l.role == Role::Detect).collect();
+        assert_eq!(detects.len(), 8);
+        // Two per corner block, one pitch apart, on that block's
+        // corner-facing row.
+        let mut pairs: std::collections::BTreeMap<u32, Vec<&Land>> = Default::default();
+        for land in &detects {
+            pairs.entry(land.block).or_default().push(land);
+        }
+        assert_eq!(pairs.len(), 4);
+        for (_, pair) in &pairs {
+            assert_eq!(pair.len(), 2);
+            let d = ((pair[0].xy[0] - pair[1].xy[0]).powi(2)
+                + (pair[0].xy[1] - pair[1].xy[1]).powi(2))
+            .sqrt();
+            assert!((d - PITCH_254).abs() < 1e-6);
+        }
+        // Each tile corner has a pair within 16 mm.
+        for corner in [[0.0, 0.0], [A7_W, 0.0], [0.0, A7_H], [A7_W, A7_H]] {
+            let nearest = detects
+                .iter()
+                .map(|l| ((l.xy[0] - corner[0]).powi(2) + (l.xy[1] - corner[1]).powi(2)).sqrt())
+                .fold(f64::INFINITY, f64::min);
+            assert!(nearest < 16.0, "corner {corner:?} unguarded ({nearest:.1})");
+        }
     }
 
     #[test]
