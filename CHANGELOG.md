@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.36] - 2026-08-25
+
 ### Added
 
 - Added `pcb ipc interposer --ipc` to export the finished board as manufacturing IPC-2581 XML with its BOM.
@@ -1653,7 +1655,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.35...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.36...HEAD
+[0.4.36]: https://github.com/diodeinc/pcb/compare/v0.4.35...v0.4.36
 [0.4.35]: https://github.com/diodeinc/pcb/compare/v0.4.34...v0.4.35
 [0.4.34]: https://github.com/diodeinc/pcb/compare/v0.4.33...v0.4.34
 [0.4.33]: https://github.com/diodeinc/pcb/compare/v0.4.32...v0.4.33
