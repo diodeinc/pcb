@@ -238,11 +238,12 @@ exact MPN matches. Workspace manifests can opt out to use fuzzy matching:
 strict = false
 ```
 
-Normalized BOM match responses are cached locally for ten minutes. Online
-commands refresh stale entries and reuse the exact stale response if refresh
-fails. `pcb bom --offline` never contacts the API and uses the exact cached
-response regardless of age; without one, it emits the locally generated BOM
-without availability data.
+Normalized BOM matches are cached independently per BOM line. `pcb bom` treats
+entries updated within the last ten minutes as fresh, refreshes only stale or
+missing lines, and keeps available stale matches if the refresh fails.
+`pcb bom --offline` never contacts the API and uses each available cached line
+regardless of age; cache misses retain the locally generated BOM data without
+availability.
 
 ## Registry search scope
 
