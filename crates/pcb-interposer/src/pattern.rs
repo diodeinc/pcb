@@ -12,7 +12,7 @@
 //!   each pair member has its return beside it.
 //! - **PWR** (power): inner column all GND, outer column VUSB VT VT —
 //!   every power pin individually paired with a ground.
-//! - **LS** (signal): five low-speed lands with GND seeded at opposite
+//! - **LS** (signal): four low-speed lands with GND seeded at opposite
 //!   corners.
 //!
 //! The vertical bands carry a USB and a PWR block per board (eight
