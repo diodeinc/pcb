@@ -51,6 +51,7 @@ impl Role {
         }
     }
 
+    #[cfg(test)]
     fn is_power(self) -> bool {
         matches!(self, Role::Vusb | Role::Vtarget)
     }
