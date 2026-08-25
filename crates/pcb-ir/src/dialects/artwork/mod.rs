@@ -9,6 +9,9 @@
 pub mod compare;
 pub mod legalize;
 
+use std::collections::HashMap;
+use std::hash::Hash;
+
 use crate::dialects::mask;
 use crate::dialects::{LayerRole, Side};
 use crate::geom::path::ContourBuf;
@@ -533,10 +536,109 @@ pub fn paint_ordered<ObjectMeta>(objects: &[Object<ObjectMeta>]) -> Vec<&Object<
     painted
 }
 
+/// One fully composed layer image together with the surviving material
+/// attributed to each caller-defined owner. Owner images may overlap when
+/// different source objects claim the same physical copper; their union is
+/// always exactly `image`.
+#[derive(Debug)]
+pub struct AttributedImage<Owner> {
+    pub image: Vec<Ring>,
+    pub owners: Vec<(Owner, Vec<Ring>)>,
+}
+
+/// Ordered artwork composition with caller-defined ownership.
+///
+/// Dark objects add material to their owner. Clear objects and final cutouts
+/// subtract from every owner painted before them. This is the same canonical
+/// paint fold used by [`compose_to_mask`], with labels retained instead of
+/// discarded after unioning.
+pub fn compose_attributed<LayerMeta: Clone, ObjectMeta: Clone, Owner: Clone + Eq + Hash>(
+    doc: &Document<LayerMeta, ObjectMeta>,
+    owner: impl Fn(&ObjectMeta) -> Owner,
+) -> (Vec<AttributedImage<Owner>>, Vec<Diagnostic>) {
+    let doc = expand_native_geometry_to_regions(doc.clone());
+    struct OwnerState {
+        composer: region::PaintComposer,
+        bbox: BBox,
+    }
+
+    let mut layers = Vec::with_capacity(doc.layers.len());
+    for layer in &doc.layers {
+        let objects = paint_ordered(layer.objects.slice(&doc.objects));
+        let has_material = objects
+            .iter()
+            .any(|object| object.order.stage != PaintStage::FinalCutout);
+        // Preserve first-paint order for deterministic attributed output and
+        // retain constant-time lookup for later objects of the same owner.
+        let mut owner_indices: HashMap<Owner, usize> = HashMap::new();
+        let mut states: Vec<(Owner, OwnerState)> = Vec::new();
+        for object in objects {
+            let image = object_image_rings(&doc, object);
+            if image.is_empty() {
+                continue;
+            }
+            let polarity = if object.order.stage == PaintStage::FinalCutout && has_material {
+                Polarity::Clear
+            } else {
+                object.polarity
+            };
+            match polarity {
+                Polarity::Dark => {
+                    let owner = owner(&object.meta);
+                    let index = match owner_indices.get(&owner) {
+                        Some(&index) => index,
+                        None => {
+                            let index = states.len();
+                            owner_indices.insert(owner.clone(), index);
+                            states.push((
+                                owner,
+                                OwnerState {
+                                    composer: region::PaintComposer::default(),
+                                    bbox: BBox::empty(),
+                                },
+                            ));
+                            index
+                        }
+                    };
+                    let state = &mut states[index].1;
+                    state.bbox = state.bbox.union(object.bbox);
+                    state.composer.push(Polarity::Dark, image);
+                }
+                Polarity::Clear => {
+                    for state in states
+                        .iter_mut()
+                        .map(|(_, state)| state)
+                        .filter(|state| state.bbox.intersects(object.bbox))
+                    {
+                        state.composer.push(Polarity::Clear, image.clone());
+                    }
+                }
+            }
+        }
+
+        let owners = states
+            .into_iter()
+            .filter_map(|(owner, state)| {
+                let image = state.composer.finish();
+                (!image.is_empty()).then_some((owner, image))
+            })
+            .collect::<Vec<_>>();
+        let image = region::union_rings(
+            owners
+                .iter()
+                .flat_map(|(_, image)| image.iter().cloned())
+                .collect(),
+            FillRule::NonZero,
+        );
+        layers.push(AttributedImage { image, owners });
+    }
+    (layers, doc.diagnostics)
+}
+
 pub fn compose_to_mask<LayerMeta: Clone, ObjectMeta: Clone>(
     doc: &Document<LayerMeta, ObjectMeta>,
 ) -> mask::Document<LayerMeta> {
-    let doc = expand_native_geometry_to_regions(doc.clone());
+    let (images, diagnostics) = compose_attributed(doc, |_| ());
     let mut mask = mask::Document::new();
 
     for layer in &doc.layers {
@@ -550,32 +652,14 @@ pub fn compose_to_mask<LayerMeta: Clone, ObjectMeta: Clone>(
         });
     }
 
-    for (layer_index, layer) in doc.layers.iter().enumerate() {
-        let objects = paint_ordered(layer.objects.slice(&doc.objects));
-        let has_material = objects
-            .iter()
-            .any(|object| object.order.stage != PaintStage::FinalCutout);
-        let mut composer = region::PaintComposer::default();
-        for object in objects {
-            let image = object_image_rings(&doc, object);
-            if image.is_empty() {
-                continue;
-            }
-            let polarity = if object.order.stage == PaintStage::FinalCutout && has_material {
-                Polarity::Clear
-            } else {
-                object.polarity
-            };
-            composer.push(polarity, image);
-        }
-
-        let contours = region::rings_to_contours(composer.finish());
+    for (layer_index, image) in images.into_iter().enumerate() {
+        let contours = region::rings_to_contours(image.image);
         if !contours.is_empty() {
             mask.push_shape(layer_index as u32, FillRule::NonZero, contours);
         }
     }
 
-    mask.diagnostics.extend(doc.diagnostics);
+    mask.diagnostics.extend(diagnostics);
     mask
 }
 
@@ -1236,6 +1320,85 @@ mod tests {
         // The dark-drawn final cutout removes material.
         assert!(!image.contains_point(Point::new(0.5, 0.5)));
         assert!(image.contains_point(Point::new(9.0, 9.0)));
+    }
+
+    #[test]
+    fn attributed_composition_preserves_owner_claims_through_clear_and_overlay() {
+        let mut doc = Document::<(), &'static str>::new();
+        let layer = doc.push_layer(Layer::new("F.Cu", LayerRole::Copper, Side::Top));
+        let rect = |doc: &mut Document<(), &'static str>, x0, y0, x1, y1| {
+            doc.push_path(
+                Paint::Fill {
+                    rule: FillRule::NonZero,
+                },
+                vec![ContourBuf::new(vec![
+                    PathCmd::move_to(Point::new(x0, y0)),
+                    PathCmd::line_to(Point::new(x1, y0)),
+                    PathCmd::line_to(Point::new(x1, y1)),
+                    PathCmd::line_to(Point::new(x0, y1)),
+                    PathCmd::close(),
+                ])],
+            )
+        };
+        let object = |polarity, path, stage, meta| {
+            let mut object = Object::new(polarity, Geometry::Region { path });
+            object.order = PaintOrder { stage };
+            object.meta = meta;
+            object
+        };
+
+        let base = rect(&mut doc, 0.0, 0.0, 10.0, 10.0);
+        doc.push_object(layer, object(Polarity::Dark, base, PaintStage::Base, "A"));
+        let clear = rect(&mut doc, 3.0, 3.0, 7.0, 7.0);
+        doc.push_object(
+            layer,
+            object(Polarity::Clear, clear, PaintStage::Base, "ignored"),
+        );
+        let overlay = rect(&mut doc, 4.0, 4.0, 6.0, 6.0);
+        doc.push_object(
+            layer,
+            object(Polarity::Dark, overlay, PaintStage::Overlay, "B"),
+        );
+        let overlap = rect(&mut doc, 8.0, 8.0, 9.0, 9.0);
+        doc.push_object(
+            layer,
+            object(Polarity::Dark, overlap, PaintStage::Overlay, "C"),
+        );
+
+        let (mut layers, diagnostics) = compose_attributed(&doc, |meta| *meta);
+        assert!(diagnostics.is_empty());
+        let composed = layers.remove(0);
+        let physical = region::ContourSet::new(
+            composed.image,
+            FillRule::NonZero,
+            crate::geom::tol::REGION_MM,
+        );
+        assert_eq!(
+            composed
+                .owners
+                .iter()
+                .map(|(owner, _)| *owner)
+                .collect::<Vec<_>>(),
+            ["A", "B", "C"]
+        );
+        let owners = composed
+            .owners
+            .into_iter()
+            .map(|(owner, rings)| {
+                (
+                    owner,
+                    region::ContourSet::new(rings, FillRule::NonZero, crate::geom::tol::REGION_MM),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+
+        assert!(owners["A"].contains_point(Point::new(2.0, 2.0)));
+        assert!(!owners["A"].contains_point(Point::new(5.0, 5.0)));
+        assert!(owners["B"].contains_point(Point::new(5.0, 5.0)));
+        assert!(owners["A"].contains_point(Point::new(8.5, 8.5)));
+        assert!(owners["C"].contains_point(Point::new(8.5, 8.5)));
+        assert!(physical.contains_point(Point::new(5.0, 5.0)));
+        assert!(physical.contains_point(Point::new(8.5, 8.5)));
     }
 
     #[test]

@@ -595,12 +595,14 @@ pub fn extract_layer_for_view(
         None => extract_step_layer_local(ipc, step, &ecad.cad_data.layers, layer, layer_name)?,
     };
 
-    match view {
-        ArtworkScope::Board | ArtworkScope::ArrayLocal | ArtworkScope::ArraySupport => {
-            append_step_only_layout_geometry(&mut doc, step)
-        }
-        ArtworkScope::ArrayFlattened => {
-            append_layout_geometry(&mut doc, ipc, &ecad.cad_data.steps, step)?
+    if doc.layout.is_empty() {
+        match view {
+            ArtworkScope::Board | ArtworkScope::ArrayLocal | ArtworkScope::ArraySupport => {
+                append_step_only_layout_geometry(&mut doc, step)
+            }
+            ArtworkScope::ArrayFlattened => {
+                append_layout_geometry(&mut doc, ipc, &ecad.cad_data.steps, step)?
+            }
         }
     }
     populate_ipc_specs(&mut doc, ipc);
@@ -695,11 +697,15 @@ fn extract_panel_layer(
     mode: PanelLayerMode,
 ) -> Result<GeometryDocument> {
     let mut doc = GeometryDocument::new();
+    append_panel_geometry(&mut doc, ipc, steps, panel)?;
+    let root_layout_step = doc
+        .layout
+        .root_step
+        .context("panel layout has no root step")?;
     let feature_start = doc.features.len() as u32;
     let set_start = doc.feature_sets.len() as u32;
     let mut layer_bbox = BBox::empty();
     let mut append_state = LayerAppendState::default();
-    let mut stack = vec![panel.name];
 
     layer_bbox = layer_bbox.union(append_step_layer_tree(
         &mut doc,
@@ -711,10 +717,13 @@ fn extract_panel_layer(
             layer,
             layer_name,
         },
-        panel,
-        Affine2::identity(),
+        LayerTreeOccurrence {
+            step: panel,
+            layout_step: root_layout_step,
+            source_instance: None,
+            transform: Affine2::identity(),
+        },
         mode,
-        &mut stack,
     )?);
 
     let feature_count = doc.features.len() as u32 - feature_start;
@@ -748,64 +757,87 @@ enum PanelLayerMode {
     Flattened,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct LayerTreeOccurrence<'a> {
+    step: &'a Step,
+    layout_step: u32,
+    source_instance: Option<u32>,
+    transform: Affine2,
+}
+
 fn append_step_layer_tree(
     doc: &mut GeometryDocument,
     append_state: &mut LayerAppendState,
     context: LayerMaterializeContext<'_>,
-    step: &Step,
-    transform: Affine2,
+    occurrence: LayerTreeOccurrence<'_>,
     mode: PanelLayerMode,
-    stack: &mut Vec<Symbol>,
 ) -> Result<BBox> {
-    if mode == PanelLayerMode::SupportOnly && is_board_step(step) {
+    if mode == PanelLayerMode::SupportOnly && is_board_step(occurrence.step) {
         return Ok(BBox::empty());
     }
 
     let step_doc = extract_step_layer_local(
         context.ipc,
-        step,
+        occurrence.step,
         context.layers,
         context.layer,
         context.layer_name,
     )?;
     doc.diagnostics.extend(step_doc.diagnostics.iter().cloned());
-    let mut bbox = append_state.append_layer(doc, &step_doc, 0, transform)?;
+    let mut bbox = append_state.append_layer(
+        doc,
+        &step_doc,
+        0,
+        occurrence.transform,
+        occurrence.source_instance,
+    )?;
 
-    for repeat in &step.step_repeats {
+    // Materialize from the canonical layout graph. This keeps the transform
+    // and occurrence identity attached to copied artwork instead of deriving
+    // them through an independent StepRepeat traversal.
+    let children = doc
+        .layout
+        .repeats
+        .iter()
+        .filter(|repeat| {
+            repeat.parent_step == occurrence.layout_step
+                && repeat.parent_instance == occurrence.source_instance
+        })
+        .flat_map(|repeat| repeat.instances.indices())
+        .map(|instance_index| {
+            let instance = &doc.layout.instances[instance_index as usize];
+            (
+                instance_index,
+                instance.child_step,
+                instance.source_step_ref,
+                instance.transform,
+            )
+        })
+        .collect::<Vec<_>>();
+
+    for (instance_index, child_layout_step, source_step_ref, instance_transform) in children {
         let source_step = context
             .steps
             .iter()
-            .find(|step| step.name == repeat.step_ref)
+            .find(|step| step.name == source_step_ref)
             .with_context(|| {
                 format!(
-                    "StepRepeat references unknown Step '{}'",
-                    context.ipc.resolve(repeat.step_ref)
+                    "layout instance references unknown Step '{}'",
+                    context.ipc.resolve(source_step_ref)
                 )
             })?;
-
-        if stack.contains(&source_step.name) {
-            bail!(
-                "StepRepeat cycle references Step '{}'",
-                context.ipc.resolve(source_step.name)
-            );
-        }
-
-        stack.push(source_step.name);
-        for iy in 0..repeat.ny {
-            for ix in 0..repeat.nx {
-                let instance_transform = transform.concat(step_repeat_transform(repeat, ix, iy));
-                bbox = bbox.union(append_step_layer_tree(
-                    doc,
-                    append_state,
-                    context,
-                    source_step,
-                    instance_transform,
-                    mode,
-                    stack,
-                )?);
-            }
-        }
-        stack.pop();
+        bbox = bbox.union(append_step_layer_tree(
+            doc,
+            append_state,
+            context,
+            LayerTreeOccurrence {
+                step: source_step,
+                layout_step: child_layout_step,
+                source_instance: Some(instance_index),
+                transform: instance_transform,
+            },
+            mode,
+        )?);
     }
 
     Ok(bbox)
@@ -1201,11 +1233,18 @@ impl LayerAppendState {
         source: &GeometryDocument,
         layer_index: usize,
         transform: Affine2,
+        source_instance: Option<u32>,
     ) -> Result<BBox> {
         let source_set_offset = self.next_source_set_index;
         let source_set_span = source_layer_set_span(source, layer_index)?;
-        let bbox =
-            append_transformed_layer(target, source, layer_index, transform, source_set_offset)?;
+        let bbox = append_transformed_layer(
+            target,
+            source,
+            layer_index,
+            transform,
+            source_set_offset,
+            source_instance,
+        )?;
         self.next_source_set_index = self
             .next_source_set_index
             .checked_add(source_set_span)
@@ -1233,6 +1272,7 @@ fn append_transformed_layer(
     layer_index: usize,
     transform: Affine2,
     source_set_offset: u32,
+    source_instance: Option<u32>,
 ) -> Result<BBox> {
     let layer = &source.layers[layer_index];
     let mut layer_bbox = BBox::empty();
@@ -1325,6 +1365,7 @@ fn append_transformed_layer(
             feature.bbox = bbox;
             feature.paths = paths;
             feature.placement_group = target_placement_group;
+            feature.source_instance = source_instance;
             feature.set = Some(target_set);
             feature.source.set_index = feature
                 .source
@@ -4541,6 +4582,8 @@ mod tests {
         assert!(traces.iter().all(|feature| feature.paths.count > 0));
         assert_eq!(traces[0].source.set_index, 0);
         assert_eq!(traces[1].source.set_index, 1);
+        assert_eq!(traces[0].source_instance, Some(0));
+        assert_eq!(traces[1].source_instance, Some(1));
     }
 
     #[test]

@@ -13,14 +13,15 @@ use std::collections::HashMap;
 use anyhow::{Context, Result, bail};
 use ipc2581::Symbol;
 use ipc2581::types::LayerFunction;
-use pcb_ir::dialects::Side;
 use pcb_ir::dialects::ipc::{
-    ArtworkScope, FeatureDomain, FeatureKind, FeatureSpan, LayoutStepKind, PlatingKind,
-    ProfileOccurrenceRole, profile_occurrences_for,
+    ArtworkLowering, ArtworkObjectKind, ArtworkScope, Feature, FeatureDomain, FeatureKind,
+    FeatureSpan, LayoutStepKind, PlatingKind, ProfileOccurrenceRole, lower_layer_to_artwork_with,
+    profile_occurrences_for,
 };
+use pcb_ir::dialects::{LayerRole, Side, artwork};
 use pcb_ir::geom::dfm::{Distance, RegionBoundaryIndex, min_width};
 use pcb_ir::geom::region::Ring;
-use pcb_ir::geom::{BBox, ContourSet, Point, Polarity, tol};
+use pcb_ir::geom::{BBox, ContourSet, FillRule, Point, Polarity, Span, tol};
 use rayon::prelude::*;
 
 use crate::geometry::{self, GeometryDocument};
@@ -57,7 +58,9 @@ impl<'a> Design<'a> {
     pub fn extract(ipc: &'a Ipc2581, scope: ArtworkScope, rules: &[Rule]) -> Result<Self> {
         let pools = rules::pools(rules);
         let (holes, slots) = when(pools.drilled, || collect_drilled(ipc, scope))?;
-        let copper_layers = when(pools.copper, || collect_copper_layers(ipc, scope))?;
+        let copper_layers = when(pools.copper, || {
+            collect_copper_layers(ipc, scope, pools.conductor_ownership)
+        })?;
         let layout = when(pools.board_outlines || pools.board_arrays, || {
             geometry::extract_layout(ipc).map(Some)
         })?;
@@ -206,7 +209,65 @@ pub(super) struct Land {
 pub(super) struct CopperLayer {
     pub layer: LayerRef,
     pub image: ContourSet,
+    pub conductors: Vec<CopperConductor>,
     pub lands: Vec<Land>,
+}
+
+/// Electrical ownership of one final copper image. Net identity is scoped by
+/// its materialized Step occurrence so repeated boards do not accidentally
+/// share every same-named net.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) enum ConductorId {
+    Net {
+        step: Option<Symbol>,
+        instance: Option<u32>,
+        net: Symbol,
+    },
+    Auxiliary {
+        step: Option<Symbol>,
+        instance: Option<u32>,
+        source_set_index: u32,
+    },
+    Unattributed {
+        step: Option<Symbol>,
+        instance: Option<u32>,
+        source_set_index: u32,
+    },
+}
+
+impl ConductorId {
+    pub fn step(self) -> Option<Symbol> {
+        match self {
+            Self::Net { step, .. }
+            | Self::Auxiliary { step, .. }
+            | Self::Unattributed { step, .. } => step,
+        }
+    }
+
+    pub fn instance(self) -> Option<u32> {
+        match self {
+            Self::Net { instance, .. }
+            | Self::Auxiliary { instance, .. }
+            | Self::Unattributed { instance, .. } => instance,
+        }
+    }
+
+    pub fn net(self) -> Option<Symbol> {
+        match self {
+            Self::Net { net, .. } => Some(net),
+            Self::Auxiliary { .. } | Self::Unattributed { .. } => None,
+        }
+    }
+
+    fn is_unattributed(self) -> bool {
+        matches!(self, Self::Unattributed { .. })
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct CopperConductor {
+    pub id: ConductorId,
+    pub image: ContourSet,
 }
 
 #[derive(Debug)]
@@ -404,7 +465,119 @@ fn hole_class(plating: PlatingKind) -> Option<HoleClass> {
     }
 }
 
-fn collect_copper_layers(ipc: &Ipc2581, scope: ArtworkScope) -> Result<Vec<CopperLayer>> {
+struct CopperAttributionLowering;
+
+impl ArtworkLowering<Symbol, Option<ConductorId>> for CopperAttributionLowering {
+    fn object_meta(
+        &mut self,
+        feature: &Feature<Symbol>,
+        _kind: ArtworkObjectKind,
+    ) -> Option<ConductorId> {
+        if let Some(net) = feature.net {
+            return Some(ConductorId::Net {
+                step: feature.source_step_ref,
+                instance: feature.source_instance,
+                net,
+            });
+        }
+        if feature.is_fiducial() || feature.flags.copper_balance.is_some() {
+            return Some(ConductorId::Auxiliary {
+                step: feature.source_step_ref,
+                instance: feature.source_instance,
+                source_set_index: feature.source.set_index,
+            });
+        }
+        Some(ConductorId::Unattributed {
+            step: feature.source_step_ref,
+            instance: feature.source_instance,
+            source_set_index: feature.source.set_index,
+        })
+    }
+}
+
+fn compose_attributed_copper(
+    document: &mut GeometryDocument,
+) -> Result<(ContourSet, Vec<CopperConductor>)> {
+    pcb_ir::dialects::ipc::process::normalize_for_artwork(document);
+    pcb_ir::dialects::ipc::validate_artwork_ready(document)
+        .map_err(|error| anyhow::anyhow!("copper layer is not artwork-ready: {error}"))?;
+    let layer = document
+        .layers
+        .first()
+        .context("extracted copper document has no layer")?;
+    let header = artwork::Layer {
+        name: layer.name.clone(),
+        role: LayerRole::Copper,
+        side: Side::None,
+        objects: Span::EMPTY,
+        bbox: layer.bbox,
+        meta: layer.layer_function,
+    };
+    let attributed_artwork =
+        lower_layer_to_artwork_with(document, 0, header, &mut CopperAttributionLowering);
+    let (mut composed, _) = artwork::compose_attributed(&attributed_artwork, |owner| *owner);
+    let composed = composed
+        .pop()
+        .context("attributed copper composition produced no layer")?;
+    let image = ContourSet::new(composed.image, FillRule::NonZero, tol::REGION_MM);
+    let conductors = composed
+        .owners
+        .into_iter()
+        .map(|(id, rings)| {
+            Ok(CopperConductor {
+                id: id.context(
+                    "structural artwork instance survived copper ownership materialization",
+                )?,
+                image: ContourSet::new(rings, FillRule::NonZero, tol::REGION_MM),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok((image, conductors))
+}
+
+fn conductor_order(ipc: &Ipc2581, id: ConductorId) -> (u8, &str, Option<u32>, &str, u32) {
+    match id {
+        ConductorId::Net {
+            step,
+            instance,
+            net,
+        } => (
+            0,
+            step.map(|step| ipc.resolve(step)).unwrap_or(""),
+            instance,
+            ipc.resolve(net),
+            0,
+        ),
+        ConductorId::Auxiliary {
+            step,
+            instance,
+            source_set_index,
+        } => (
+            1,
+            step.map(|step| ipc.resolve(step)).unwrap_or(""),
+            instance,
+            "",
+            source_set_index,
+        ),
+        ConductorId::Unattributed {
+            step,
+            instance,
+            source_set_index,
+        } => (
+            2,
+            step.map(|step| ipc.resolve(step)).unwrap_or(""),
+            instance,
+            "",
+            source_set_index,
+        ),
+    }
+}
+
+fn collect_copper_layers(
+    ipc: &Ipc2581,
+    scope: ArtworkScope,
+    require_conductor_ownership: bool,
+) -> Result<Vec<CopperLayer>> {
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
     let copper_layers = ecad
         .cad_data
@@ -444,13 +617,30 @@ fn collect_copper_layers(ipc: &Ipc2581, scope: ArtworkScope) -> Result<Vec<Coppe
                     source_feature_index: feature.source.feature_index,
                 });
             }
+            let (image, mut conductors) = compose_attributed_copper(&mut document)?;
+            conductors.sort_by_key(|conductor| conductor_order(ipc, conductor.id));
+            if require_conductor_ownership
+                && let Some(conductor) = conductors
+                    .iter()
+                    .find(|conductor| conductor.id.is_unattributed())
+            {
+                let id = conductor.id;
+                bail!(
+                    "IPC-2581 copper layer '{name}' has final functional copper without net attribution in Step '{}'{}; copper clearance cannot be certified",
+                    id.step().map(|step| ipc.resolve(step)).unwrap_or("<root>"),
+                    id.instance()
+                        .map(|instance| format!(", layout instance {instance}"))
+                        .unwrap_or_default()
+                );
+            }
             // The file's side attribute is authoritative; the stackup
             // position is the fallback for files that omit it.
             let side =
                 side_label(layers::ir_side(layer.side)).unwrap_or(stack_side(ordinal, total));
             Ok(CopperLayer {
                 layer: layer_ref(name, layer.layer_function, Some(side)),
-                image: crate::copper_balance::composed_copper_image_from_document(document),
+                image,
+                conductors,
                 lands,
             })
         })
