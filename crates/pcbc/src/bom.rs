@@ -127,17 +127,21 @@ pub fn execute(args: BomArgs) -> Result<()> {
     bom = bom.filter_excluded();
 
     let ctx = pcb_diode_api::WorkspaceContext::from_path(&args.file);
-    let mode = if args.offline {
-        pcb_diode_api::BomMatchMode::Offline
-    } else {
-        pcb_diode_api::BomMatchMode::Online
+    let options = pcb_diode_api::BomMatchOptions {
+        mode: if args.offline {
+            pcb_diode_api::BomMatchMode::Offline
+        } else {
+            pcb_diode_api::BomMatchMode::Online
+        },
+        ..Default::default()
     };
     spinner.set_message(if args.offline {
         format!("{file_name}: Loading cached availability")
     } else {
         format!("{file_name}: Fetching availability")
     });
-    if let Err(error) = pcb_diode_api::match_bom_with_context(&ctx, None, &mut bom, strict, mode) {
+    if let Err(error) = pcb_diode_api::match_bom_with_context(&ctx, None, &mut bom, strict, options)
+    {
         log::warn!("Failed to fetch availability data: {error:#}");
     }
     spinner.finish();

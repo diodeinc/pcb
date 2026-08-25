@@ -1,19 +1,21 @@
 use anyhow::{Context, Result};
 use reqwest::blocking::Client;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 use pcb_sch::bom::{Availability, AvailabilitySummary, BOARD_QUANTITY, Offer, SourcingStockClass};
 
 use crate::{
     WorkspaceContext,
-    bom_cache::{BomMatchCache, cache_key},
+    cache::{WriteThroughCache, cache_key, unix_now},
 };
 
 const BOM_MATCH_TIMEOUT_SECS: u64 = 120;
+const BOM_MATCH_CACHE_NAMESPACE: &str = "bom-match-v2";
+const DEFAULT_BOM_CACHE_TTL: Duration = Duration::from_secs(10 * 60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BomMatchMode {
@@ -21,15 +23,31 @@ pub enum BomMatchMode {
     Offline,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BomMatchOptions {
+    pub mode: BomMatchMode,
+    /// Age at which an online read refreshes a cache entry. Stale entries remain usable.
+    pub cache_ttl: Duration,
+}
+
+impl Default for BomMatchOptions {
+    fn default() -> Self {
+        Self {
+            mode: BomMatchMode::Online,
+            cache_ttl: DEFAULT_BOM_CACHE_TTL,
+        }
+    }
+}
+
 /// Price break structure
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct PriceBreak {
     qty: i32,
     price: f64,
 }
 
 /// Geography/region for an offer
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "UPPERCASE")]
 enum Geography {
     Us,
@@ -48,7 +66,7 @@ impl std::fmt::Display for Geography {
 }
 
 /// Component offer from API - internal deserialization type
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct ComponentOffer {
     id: String,
     geography: Geography,
@@ -90,12 +108,12 @@ impl ComponentOffer {
 }
 
 /// Design BOM entry structure from the API
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct DesignBomEntry {
     path: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 enum BomMatchStatus {
     #[serde(rename = "MATCH_EXACT")]
     Exact,
@@ -110,7 +128,7 @@ enum BomMatchStatus {
 }
 
 /// BOM Line - represents a single line in the matched BOM response
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct BomLine {
     #[serde(rename = "designEntry")]
     design_entry: DesignBomEntry,
@@ -129,7 +147,7 @@ fn bom_line_no_match(bom_line: &BomLine) -> bool {
 }
 
 /// Response from /api/boms/match endpoint
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct MatchBomResponse {
     results: Vec<BomLine>,
     offers: HashMap<String, ComponentOffer>,
@@ -143,13 +161,18 @@ impl MatchBomResponse {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct PreparedBomMatch {
     availability: HashMap<String, Availability>,
     selected_parts: HashMap<String, (String, String)>,
 }
 
 impl PreparedBomMatch {
+    fn extend(&mut self, other: Self) {
+        self.availability.extend(other.availability);
+        self.selected_parts.extend(other.selected_parts);
+    }
+
     fn apply(self, bom: &mut pcb_sch::bom::Bom) {
         for (path, (mpn, manufacturer)) in self.selected_parts {
             let entry = bom
@@ -253,24 +276,22 @@ fn bom_match_request(bom_entries: &[serde_json::Value]) -> serde_json::Value {
     })
 }
 
-fn send_bom_match_request(
+fn call_bom_match_api(
     ctx: &WorkspaceContext,
     auth_token: Option<&str>,
-    request_body: &serde_json::Value,
+    bom_entries: &[serde_json::Value],
     timeout_secs: u64,
     strict: bool,
-) -> Result<String> {
+) -> Result<MatchBomResponse> {
     let url = bom_match_url(ctx.api_base_url(), strict);
-
+    let request_body = bom_match_request(bom_entries);
     let client = Client::builder()
         .timeout(Duration::from_secs(timeout_secs))
         .build()?;
-
-    let response = crate::auth::apply_bearer_auth(client.post(&url), auth_token)
-        .json(request_body)
+    let response = crate::auth::apply_bearer_auth(client.post(url), auth_token)
+        .json(&request_body)
         .send()
         .context("Failed to send BOM match request")?;
-
     let status = response.status();
     let response_text = response
         .text()
@@ -279,21 +300,6 @@ fn send_bom_match_request(
         status.is_success(),
         "BOM match request failed ({status}): {response_text}"
     );
-
-    Ok(response_text)
-}
-
-/// Call the BOM match API and return a parsed response without using the CLI cache.
-fn call_bom_match_api(
-    ctx: &WorkspaceContext,
-    auth_token: Option<&str>,
-    bom_entries: &[serde_json::Value],
-    timeout_secs: u64,
-    strict: bool,
-) -> Result<MatchBomResponse> {
-    let request_body = bom_match_request(bom_entries);
-    let response_text =
-        send_bom_match_request(ctx, auth_token, &request_body, timeout_secs, strict)?;
     serde_json::from_str(&response_text).context("Failed to parse BOM match response")
 }
 
@@ -305,15 +311,15 @@ fn bom_match_url(api_base_url: &str, strict: bool) -> String {
     )
 }
 
-fn prepare_bom_match(
+fn prepare_bom_match_for_paths(
     bom: &pcb_sch::bom::Bom,
     match_response: &MatchBomResponse,
+    expected_paths: &HashSet<String>,
 ) -> Result<PreparedBomMatch> {
     anyhow::ensure!(
         !match_response.needs_retry(),
         "BOM matching could not complete"
     );
-    let expected_paths = bom.entries.keys().cloned().collect::<HashSet<_>>();
     anyhow::ensure!(
         match_response.results.len() == expected_paths.len(),
         "BOM match response returned {} results for {} requested paths",
@@ -429,47 +435,109 @@ fn prepare_bom_match(
     })
 }
 
-fn prepare_response(bom: &pcb_sch::bom::Bom, response_json: &str) -> Result<PreparedBomMatch> {
-    let response =
-        serde_json::from_str(response_json).context("Failed to parse BOM match response")?;
-    prepare_bom_match(bom, &response)
+fn prepare_bom_match(
+    bom: &pcb_sch::bom::Bom,
+    match_response: &MatchBomResponse,
+) -> Result<PreparedBomMatch> {
+    let expected_paths = bom.entries.keys().cloned().collect();
+    prepare_bom_match_for_paths(bom, match_response, &expected_paths)
 }
 
-fn load_cached_match(
-    cache: Option<&BomMatchCache>,
+struct CachedBomLine {
+    prepared: PreparedBomMatch,
+    fresh: bool,
+}
+
+fn load_cached_bom_line(
+    cache: Option<&WriteThroughCache>,
     key: &str,
     bom: &pcb_sch::bom::Bom,
+    path: &str,
+    ttl: Duration,
     now: i64,
-) -> Option<(PreparedBomMatch, bool)> {
-    let cached = match cache?.load(key) {
-        Ok(Some(cached)) => cached,
-        Ok(None) => return None,
-        Err(error) => {
-            log::warn!("Ignoring unreadable BOM cache entry: {error:#}");
-            return None;
-        }
+) -> Result<Option<CachedBomLine>> {
+    let Some(cache) = cache else {
+        return Ok(None);
     };
-    let fresh = cached.is_fresh(now);
-    match prepare_response(bom, &cached.response_json) {
-        Ok(prepared) => Some((prepared, fresh)),
-        Err(error) => {
-            log::warn!("Ignoring invalid BOM cache entry: {error:#}");
-            None
-        }
-    }
-}
-
-fn unix_now() -> Result<i64> {
-    Ok(SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .context("System clock is before the Unix epoch")?
-        .as_secs() as i64)
+    let Some(cached) = cache.load(key)? else {
+        return Ok(None);
+    };
+    let response = serde_json::from_slice(&cached.value)?;
+    let expected_paths = HashSet::from([path.to_string()]);
+    let prepared = prepare_bom_match_for_paths(bom, &response, &expected_paths)?;
+    Ok(Some(CachedBomLine {
+        prepared,
+        fresh: cached.is_fresh(ttl, now),
+    }))
 }
 
 fn bom_request_entries(bom: &pcb_sch::bom::Bom) -> Result<Vec<serde_json::Value>> {
     let mut request_bom = bom.clone();
     request_bom.availability.clear();
     serde_json::from_str(&request_bom.ungrouped_json()).context("Failed to parse BOM JSON")
+}
+
+struct BomMatchRequestLine {
+    path: String,
+    entry: serde_json::Value,
+    cache_key: String,
+    cached: Option<CachedBomLine>,
+}
+
+fn bom_match_request_lines(
+    url: &str,
+    entries: Vec<serde_json::Value>,
+) -> Result<Vec<BomMatchRequestLine>> {
+    entries
+        .into_iter()
+        .map(|entry| {
+            let path = entry
+                .get("path")
+                .and_then(serde_json::Value::as_str)
+                .context("BOM entry omitted its path")?
+                .to_string();
+            let request = bom_match_request(std::slice::from_ref(&entry));
+            Ok(BomMatchRequestLine {
+                path,
+                entry,
+                cache_key: cache_key(&(url, request))?,
+                cached: None,
+            })
+        })
+        .collect()
+}
+
+fn split_bom_match_response(response: &MatchBomResponse) -> Result<HashMap<String, Vec<u8>>> {
+    response
+        .results
+        .iter()
+        .map(|line| {
+            let path = line
+                .design_entry
+                .path
+                .as_deref()
+                .context("BOM match response omitted a design entry path")?;
+            let offers = line
+                .offer_ids
+                .iter()
+                .map(|offer_id| {
+                    response
+                        .offers
+                        .get(offer_id)
+                        .cloned()
+                        .map(|offer| (offer_id.clone(), offer))
+                        .with_context(|| {
+                            format!("BOM match response omitted referenced offer {offer_id}")
+                        })
+                })
+                .collect::<Result<_>>()?;
+            let response = MatchBomResponse {
+                results: vec![line.clone()],
+                offers,
+            };
+            Ok((path.to_string(), serde_json::to_vec(&response)?))
+        })
+        .collect()
 }
 
 /// Fetch BOM matching results from the API and populate availability data
@@ -487,7 +555,15 @@ pub fn fetch_and_populate_availability_with_context(
     bom: &mut pcb_sch::bom::Bom,
     strict: bool,
 ) -> Result<()> {
-    match_bom_with_context(ctx, auth_token, bom, strict, BomMatchMode::Online)
+    let response = call_bom_match_api(
+        ctx,
+        auth_token,
+        &bom_request_entries(bom)?,
+        BOM_MATCH_TIMEOUT_SECS,
+        strict,
+    )?;
+    prepare_bom_match(bom, &response)?.apply(bom);
+    Ok(())
 }
 
 pub fn match_bom_with_context(
@@ -495,9 +571,9 @@ pub fn match_bom_with_context(
     auth_token: Option<&str>,
     bom: &mut pcb_sch::bom::Bom,
     strict: bool,
-    mode: BomMatchMode,
+    options: BomMatchOptions,
 ) -> Result<()> {
-    let cache = match BomMatchCache::open() {
+    let mut cache = match WriteThroughCache::open(BOM_MATCH_CACHE_NAMESPACE) {
         Ok(cache) => Some(cache),
         Err(error) => {
             log::warn!("Failed to open local BOM cache: {error:#}");
@@ -509,8 +585,8 @@ pub fn match_bom_with_context(
         auth_token,
         bom,
         strict,
-        mode,
-        cache.as_ref(),
+        options,
+        cache.as_mut(),
         unix_now()?,
     )
 }
@@ -520,60 +596,109 @@ fn match_bom_with_cache(
     auth_token: Option<&str>,
     bom: &mut pcb_sch::bom::Bom,
     strict: bool,
-    mode: BomMatchMode,
-    cache: Option<&BomMatchCache>,
+    options: BomMatchOptions,
+    cache: Option<&mut WriteThroughCache>,
     now: i64,
 ) -> Result<()> {
-    let bom_entries = bom_request_entries(bom)?;
-    let request_body = bom_match_request(&bom_entries);
     let url = bom_match_url(ctx.api_base_url(), strict);
-    let key = cache_key(&url, &request_body)?;
-    let mut cached = load_cached_match(cache, &key, bom, now);
+    let mut lines = bom_match_request_lines(&url, bom_request_entries(bom)?)?;
+    for line in &mut lines {
+        line.cached = match load_cached_bom_line(
+            cache.as_deref(),
+            &line.cache_key,
+            bom,
+            &line.path,
+            options.cache_ttl,
+            now,
+        ) {
+            Ok(cached) => cached,
+            Err(error) => {
+                log::warn!("Ignoring invalid BOM cache entry: {error:#}");
+                None
+            }
+        };
+    }
 
-    if mode == BomMatchMode::Offline {
-        if let Some((prepared, _)) = cached {
-            prepared.apply(bom);
+    let mut prepared = PreparedBomMatch::default();
+    if options.mode == BomMatchMode::Offline {
+        for line in lines {
+            if let Some(cached) = line.cached {
+                prepared.extend(cached.prepared);
+            }
         }
+        prepared.apply(bom);
         return Ok(());
     }
 
-    if cached.as_ref().is_some_and(|(_, fresh)| *fresh) {
-        cached
-            .take()
-            .expect("checked fresh cache entry")
-            .0
-            .apply(bom);
+    let mut refresh_lines = Vec::new();
+    for mut line in lines {
+        match line.cached.take() {
+            Some(cached) if cached.fresh => prepared.extend(cached.prepared),
+            cached => {
+                line.cached = cached;
+                refresh_lines.push(line);
+            }
+        }
+    }
+
+    if refresh_lines.is_empty() {
+        prepared.apply(bom);
         return Ok(());
     }
 
-    let live = send_bom_match_request(
+    let refresh_entries = refresh_lines
+        .iter()
+        .map(|line| line.entry.clone())
+        .collect::<Vec<_>>();
+    let expected_paths = refresh_lines
+        .iter()
+        .map(|line| line.path.clone())
+        .collect::<HashSet<_>>();
+    let live = call_bom_match_api(
         ctx,
         auth_token,
-        &request_body,
+        &refresh_entries,
         BOM_MATCH_TIMEOUT_SECS,
         strict,
     )
-    .and_then(|response_json| {
-        let prepared = prepare_response(bom, &response_json)?;
-        Ok((response_json, prepared))
+    .and_then(|response| {
+        let prepared = prepare_bom_match_for_paths(bom, &response, &expected_paths)?;
+        let cache_values = split_bom_match_response(&response)?;
+        Ok((cache_values, prepared))
     });
 
     match live {
-        Ok((response_json, prepared)) => {
-            let fetched_at = unix_now().unwrap_or(now);
+        Ok((mut response_lines, live_prepared)) => {
+            let writes = refresh_lines
+                .iter()
+                .map(|line| {
+                    (
+                        line.cache_key.clone(),
+                        response_lines
+                            .remove(&line.path)
+                            .expect("validated BOM match response path"),
+                    )
+                })
+                .collect::<Vec<_>>();
             if let Some(cache) = cache
-                && let Err(error) = cache.store(&key, &response_json, fetched_at)
+                && let Err(error) = cache.store_many(&writes)
             {
                 log::warn!("Failed to update local BOM cache: {error:#}");
             }
+            prepared.extend(live_prepared);
             prepared.apply(bom);
             Ok(())
         }
         Err(error) => {
-            let Some((prepared, _)) = cached else {
+            for line in refresh_lines {
+                if let Some(cached) = line.cached {
+                    prepared.extend(cached.prepared);
+                }
+            }
+            if prepared.availability.is_empty() {
                 return Err(error);
-            };
-            log::warn!("BOM matching failed; using stale cache: {error:#}");
+            }
+            log::warn!("BOM matching failed; using available cached lines: {error:#}");
             prepared.apply(bom);
             Ok(())
         }
@@ -829,22 +954,22 @@ mod tests {
         )
     }
 
-    fn compatible_response() -> serde_json::Value {
+    fn compatible_response_for(path: &str, offer_id: &str, mpn: &str) -> serde_json::Value {
         serde_json::json!({
             "results": [{
-                "designEntry": {"path": "root.U1"},
-                "offerIds": ["selected-offer"],
-                "offerStockClasses": {"selected-offer": "PLENTY"},
+                "designEntry": {"path": path},
+                "offerIds": [offer_id],
+                "offerStockClasses": {(offer_id): "PLENTY"},
                 "match": "MATCH_COMPATIBLE",
-                "selectedOfferId": "selected-offer"
+                "selectedOfferId": offer_id
             }],
             "offers": {
-                "selected-offer": {
-                    "id": "selected-offer",
+                (offer_id): {
+                    "id": offer_id,
                     "geography": "US",
                     "distributor": "testdist",
                     "distributorPartId": "DIST-1",
-                    "mpn": "API-MPN",
+                    "mpn": mpn,
                     "manufacturer": "API Manufacturer",
                     "priceBreaks": [{"qty": 1, "price": 0.25}],
                     "stockAvailable": 100
@@ -853,8 +978,32 @@ mod tests {
         })
     }
 
-    fn cache_for(tempdir: &tempfile::TempDir) -> BomMatchCache {
-        BomMatchCache::open_at(tempdir.path().join("bom.sqlite")).unwrap()
+    fn compatible_response() -> serde_json::Value {
+        compatible_response_for("root.U1", "selected-offer", "API-MPN")
+    }
+
+    fn test_bom_with_second_line() -> Bom {
+        let mut bom = test_bom();
+        bom.entries
+            .insert("root.U2".to_string(), bom.entries["root.U1"].clone());
+        bom.designators
+            .insert("root.U2".to_string(), "U2".to_string());
+        bom
+    }
+
+    fn cache_for(tempdir: &tempfile::TempDir) -> WriteThroughCache {
+        WriteThroughCache::open_at(
+            tempdir.path().join("cache.sqlite"),
+            BOM_MATCH_CACHE_NAMESPACE,
+        )
+        .unwrap()
+    }
+
+    fn match_options(mode: BomMatchMode) -> BomMatchOptions {
+        BomMatchOptions {
+            mode,
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -992,7 +1141,7 @@ mod tests {
             then.status(200).json_body(compatible_response());
         });
         let tempdir = tempfile::tempdir().unwrap();
-        let cache = cache_for(&tempdir);
+        let mut cache = cache_for(&tempdir);
         let context = WorkspaceContext::from_api_base_url(server.base_url());
         let now = unix_now().unwrap();
 
@@ -1002,8 +1151,8 @@ mod tests {
             None,
             &mut offline_miss,
             true,
-            BomMatchMode::Offline,
-            Some(&cache),
+            match_options(BomMatchMode::Offline),
+            Some(&mut cache),
             now,
         )
         .unwrap();
@@ -1016,8 +1165,8 @@ mod tests {
             None,
             &mut network,
             true,
-            BomMatchMode::Online,
-            Some(&cache),
+            match_options(BomMatchMode::Online),
+            Some(&mut cache),
             now,
         )
         .unwrap();
@@ -1030,13 +1179,33 @@ mod tests {
             None,
             &mut fresh,
             true,
-            BomMatchMode::Online,
-            Some(&cache),
+            match_options(BomMatchMode::Online),
+            Some(&mut cache),
             now + 100,
         )
         .unwrap();
         assert_eq!(fresh.entries["root.U1"].mpn.as_deref(), Some("API-MPN"));
         success.assert_calls(1);
+
+        let mut custom_ttl = test_bom();
+        match_bom_with_cache(
+            &context,
+            None,
+            &mut custom_ttl,
+            true,
+            BomMatchOptions {
+                mode: BomMatchMode::Online,
+                cache_ttl: Duration::from_secs(10),
+            },
+            Some(&mut cache),
+            now + 100,
+        )
+        .unwrap();
+        assert_eq!(
+            custom_ttl.entries["root.U1"].mpn.as_deref(),
+            Some("API-MPN")
+        );
+        success.assert_calls(2);
         success.delete();
 
         let failure = server.mock(|when, then| {
@@ -1051,8 +1220,8 @@ mod tests {
             None,
             &mut stale,
             true,
-            BomMatchMode::Online,
-            Some(&cache),
+            match_options(BomMatchMode::Online),
+            Some(&mut cache),
             now + 1_000,
         )
         .unwrap();
@@ -1065,8 +1234,8 @@ mod tests {
             None,
             &mut offline,
             true,
-            BomMatchMode::Offline,
-            Some(&cache),
+            match_options(BomMatchMode::Offline),
+            Some(&mut cache),
             now + 1_000,
         )
         .unwrap();
@@ -1080,7 +1249,7 @@ mod tests {
                 None,
                 &mut no_cache,
                 true,
-                BomMatchMode::Online,
+                match_options(BomMatchMode::Online),
                 None,
                 now + 1_000,
             )
@@ -1088,5 +1257,120 @@ mod tests {
         );
         assert!(no_cache.entries["root.U1"].mpn.is_none());
         failure.assert_calls(2);
+    }
+
+    #[test]
+    fn cache_reads_and_refreshes_individual_bom_lines() {
+        let server = MockServer::start();
+        let tempdir = tempfile::tempdir().unwrap();
+        let mut cache = cache_for(&tempdir);
+        let context = WorkspaceContext::from_api_base_url(server.base_url());
+        let now = unix_now().unwrap();
+
+        let one_line_bom = test_bom();
+        let initial_request = bom_match_request(&bom_request_entries(&one_line_bom).unwrap());
+        let initial = server.mock(|when, then| {
+            when.method(POST)
+                .path("/api/boms/match")
+                .query_param("strict", "true")
+                .json_body(initial_request);
+            then.status(200).json_body(compatible_response());
+        });
+        let mut initial_bom = one_line_bom;
+        match_bom_with_cache(
+            &context,
+            None,
+            &mut initial_bom,
+            true,
+            match_options(BomMatchMode::Online),
+            Some(&mut cache),
+            now,
+        )
+        .unwrap();
+        initial.assert_calls(1);
+
+        let mut partial_offline = test_bom_with_second_line();
+        match_bom_with_cache(
+            &context,
+            None,
+            &mut partial_offline,
+            true,
+            match_options(BomMatchMode::Offline),
+            Some(&mut cache),
+            now + 100,
+        )
+        .unwrap();
+        assert_eq!(
+            partial_offline.entries["root.U1"].mpn.as_deref(),
+            Some("API-MPN")
+        );
+        assert!(partial_offline.entries["root.U2"].mpn.is_none());
+        initial.assert_calls(1);
+
+        let mut online_bom = test_bom_with_second_line();
+        let refresh_entry = bom_request_entries(&online_bom)
+            .unwrap()
+            .into_iter()
+            .find(|entry| entry["path"] == "root.U2")
+            .unwrap();
+        let refresh_request = bom_match_request(&[refresh_entry]);
+        let mut failure = server.mock(|when, then| {
+            when.method(POST)
+                .path("/api/boms/match")
+                .query_param("strict", "true")
+                .json_body(refresh_request.clone());
+            then.status(503).body("offline");
+        });
+        match_bom_with_cache(
+            &context,
+            None,
+            &mut online_bom,
+            true,
+            match_options(BomMatchMode::Online),
+            Some(&mut cache),
+            now + 100,
+        )
+        .unwrap();
+        assert_eq!(
+            online_bom.entries["root.U1"].mpn.as_deref(),
+            Some("API-MPN")
+        );
+        assert!(online_bom.entries["root.U2"].mpn.is_none());
+        failure.assert_calls(1);
+        failure.delete();
+
+        online_bom = test_bom_with_second_line();
+        let refresh = server.mock(|when, then| {
+            when.method(POST)
+                .path("/api/boms/match")
+                .query_param("strict", "true")
+                .json_body(refresh_request);
+            then.status(200).json_body(compatible_response_for(
+                "root.U2",
+                "second-offer",
+                "API-MPN-2",
+            ));
+        });
+        match_bom_with_cache(
+            &context,
+            None,
+            &mut online_bom,
+            true,
+            match_options(BomMatchMode::Online),
+            Some(&mut cache),
+            now + 100,
+        )
+        .unwrap();
+
+        assert_eq!(
+            online_bom.entries["root.U1"].mpn.as_deref(),
+            Some("API-MPN")
+        );
+        assert_eq!(
+            online_bom.entries["root.U2"].mpn.as_deref(),
+            Some("API-MPN-2")
+        );
+        initial.assert_calls(1);
+        refresh.assert_calls(1);
     }
 }

@@ -870,12 +870,11 @@ fn check_bom_offers(info: &ReleaseInfo, spinner: &Spinner, bom: &pcb_sch::bom::B
 
     spinner.set_message("Checking strict BOM offers");
     let ctx = pcb_diode_api::WorkspaceContext::from_path(&info.zen_path);
-    match pcb_diode_api::match_bom_with_context(
+    match pcb_diode_api::fetch_and_populate_availability_with_context(
         &ctx,
         None,
         &mut sourcing_bom,
         true,
-        pcb_diode_api::BomMatchMode::Online,
     ) {
         Ok(()) => bom_offer_diagnostics(&info.zen_path, &sourcing_bom),
         Err(error) => pcb_zen_core::Diagnostics {
