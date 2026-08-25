@@ -9,7 +9,7 @@
 //! generated assembly-panel IPC-2581 file (`pcbc ipc2581 board-array
 //! create` output): the panel's exact outline, tooling holes, and global
 //! fiducials — inherited, so they cannot drift from the panel — plus the
-//! folded-A7 tile's corner tooling, the S11 mate constellation on the
+//! folded-A7 tile's corner tooling, the S13 mate constellation on the
 //! bottom copper, and a full-sheet bottom GND pour. Pogo placement and
 //! routing are later, panel-specific passes.
 
@@ -65,7 +65,7 @@ fn build(panel_xml: &Path) -> Result<(panel::Panel, Vec<pattern::Land>, Option<p
         .with_context(|| format!("read panel {}", panel_xml.display()))?;
     let ipc = ipc2581::Ipc2581::parse(&content).context("parse IPC-2581 panel")?;
     let panel = panel::extract(&ipc)?;
-    let lands = pattern::oriented_s11(panel.width, panel.height);
+    let lands = pattern::oriented_s13(panel.width, panel.height);
     let contacts = contacts::extract_contacts(&ipc, panel.height)?;
     let plan = if contacts.is_empty() {
         None

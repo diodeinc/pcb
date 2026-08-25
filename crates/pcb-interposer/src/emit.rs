@@ -1,7 +1,7 @@
 //! Emit the interposer as a KiCad board via `pcb_ir::dialects::kicad`.
 //!
 //! The deterministic board: the panel's outline, tooling holes, and
-//! fiducials, the S11 mate lands on the bottom copper, and full-sheet
+//! fiducials, the S13 mate lands on the bottom copper, and full-sheet
 //! GND pours on both faces — GND rides the pours, unrouted; the
 //! post-route stitching pass (`crate::stitch`) adds the vias that tie
 //! the faces together around whatever copper the router drew. With a

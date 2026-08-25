@@ -1,18 +1,23 @@
-//! The committed S11 mate constellation.
+//! The committed S13 mate constellation.
 //!
 //! The interposer's bottom face carries a fixed land pattern the fixture's
 //! A7-sized connector plate mates against — a hardware contract, identical
-//! on every interposer. S11 places structures around all four edges of the
-//! folded A7 tile: per band, `[LS-array, kit, kit, LS-array]` with
-//! symmetric gaps. A *kit* is a 2×3 block carrying one board's USB pair,
-//! power, and ground (inner column Vt Vt Gnd, outer Dp Dm Vusb); an
-//! *LS-array* is a 2×4 block of low-speed lands with a ground seeded in.
-//! The trailing array of the bottom band is a spare all-GND block. Only
-//! 2×3 and 2×4 blocks at 2.54 mm pitch appear — standard pogo-array
-//! connectors.
+//! on every interposer. Per the fixture-bed design rules, S13 uses only
+//! 2×3 blocks (one connector part), every block is *pure* — power + GND
+//! or signals + GND, never both — every block carries at least one GND,
+//! and every power land has a GND land beside it in its own block.
 //!
-//! Totals: 16 blocks, 112 lands — 8 USB pairs, 16 Vtarget, 8 Vusb, 48
-//! low-speed, and 24 ground.
+//! Three block flavors:
+//! - **USB** (signal): inner column GND GND LS, outer column D+ D− LS —
+//!   each pair member has its return beside it.
+//! - **PWR** (power): inner column all GND, outer column VUSB VT VT —
+//!   every power pin individually paired with a ground.
+//! - **LS** (signal): five low-speed lands with GND seeded at opposite
+//!   corners.
+//!
+//! The vertical bands carry a USB and a PWR block per board (eight
+//! boards); the horizontal bands carry the LS arrays. Totals: 24 blocks,
+//! 144 lands — 8 USB pairs, 16 Vtarget, 8 Vusb, 48 low-speed, 56 ground.
 
 /// A7 tile dimensions, portrait.
 pub const A7_W: f64 = 74.0;
@@ -45,6 +50,10 @@ impl Role {
             Role::Ls => "ls",
         }
     }
+
+    fn is_power(self) -> bool {
+        matches!(self, Role::Vusb | Role::Vtarget)
+    }
 }
 
 /// One land of the constellation, in the sheet frame (millimeters, Y
@@ -53,7 +62,7 @@ impl Role {
 pub struct Land {
     pub xy: [f64; 2],
     pub role: Role,
-    /// Which 2×3/2×4 connector block the land belongs to (0..16).
+    /// Which 2×3 connector block the land belongs to (0..24).
     pub block: u32,
 }
 
@@ -76,12 +85,12 @@ pub fn mate_dims(sheet_w: f64, sheet_h: f64) -> (f64, f64) {
     if w >= h { (A7_H, A7_W) } else { (A7_W, A7_H) }
 }
 
-/// The S11 constellation oriented for a sheet: generated in the canonical
+/// The S13 constellation oriented for a sheet: generated in the canonical
 /// portrait 74×105 frame, then rotated 90° (never mirrored — the mate is
 /// a rigid contract) when the sheet's folded A7 tile is landscape.
-pub fn oriented_s11(sheet_w: f64, sheet_h: f64) -> Vec<Land> {
+pub fn oriented_s13(sheet_w: f64, sheet_h: f64) -> Vec<Land> {
     let (mw, mh) = mate_dims(sheet_w, sheet_h);
-    let mut lands = s11();
+    let mut lands = s13();
     if mw > mh {
         for land in &mut lands {
             land.xy = [land.xy[1], A7_W - land.xy[0]];
@@ -90,43 +99,40 @@ pub fn oriented_s11(sheet_w: f64, sheet_h: f64) -> Vec<Land> {
     lands
 }
 
-/// One structure: rows of (inner, outer) roles, walked along the band.
+/// One block: rows of (inner, outer) roles, walked along the band.
 type Rows = Vec<(Role, Role)>;
 
-fn kit() -> Rows {
+fn usb_block() -> Rows {
     vec![
-        (Role::Vtarget, Role::UsbDp),
-        (Role::Vtarget, Role::UsbDm),
-        (Role::Gnd, Role::Vusb),
+        (Role::Gnd, Role::UsbDp),
+        (Role::Gnd, Role::UsbDm),
+        (Role::Ls, Role::Ls),
     ]
 }
 
-fn ls_array(extra_gnd: usize) -> Rows {
-    (0..4)
-        .map(|row| {
-            let inner = match row {
-                3 if extra_gnd > 0 => Role::Gnd,
-                2 if extra_gnd > 1 => Role::Gnd,
-                _ => Role::Ls,
-            };
-            (inner, Role::Ls)
-        })
-        .collect()
+fn pwr_block() -> Rows {
+    vec![
+        (Role::Gnd, Role::Vusb),
+        (Role::Gnd, Role::Vtarget),
+        (Role::Gnd, Role::Vtarget),
+    ]
 }
 
-/// The canonical portrait-frame S11 pattern.
-fn s11() -> Vec<Land> {
-    let gnd_array: Rows = (0..4).map(|_| (Role::Gnd, Role::Gnd)).collect();
+fn ls_block() -> Rows {
+    vec![
+        (Role::Gnd, Role::Ls),
+        (Role::Ls, Role::Ls),
+        (Role::Ls, Role::Gnd),
+    ]
+}
 
-    // Per band, walking the band axis: [array, kit, kit, array]. Bands in
-    // order: right, top, left, bottom. The spare all-GND array is the
-    // trailing array of the bottom band (the quiet origin corner).
-    let band_structs: [[Rows; 4]; 4] = [
-        [ls_array(2), kit(), kit(), ls_array(1)],
-        [ls_array(1), kit(), kit(), ls_array(1)],
-        [ls_array(1), kit(), kit(), ls_array(1)],
-        [ls_array(1), kit(), kit(), gnd_array],
-    ];
+/// The canonical portrait-frame S13 pattern.
+fn s13() -> Vec<Land> {
+    // The vertical bands each carry four boards' USB+PWR block pairs;
+    // the horizontal bands carry four LS arrays each.
+    let board_band: Vec<Rows> = (0..4).flat_map(|_| [usb_block(), pwr_block()]).collect();
+    let ls_band: Vec<Rows> = (0..4).map(|_| ls_block()).collect();
+    let band_structs: [Vec<Rows>; 4] = [board_band.clone(), ls_band.clone(), board_band, ls_band];
     // (along_y, band span start..end, outer row coordinate, inward sign);
     // the inner row sits one pitch further inward.
     let bands = [
@@ -151,8 +157,8 @@ fn s11() -> Vec<Land> {
             .map(|rows| (rows.len() - 1) as f64 * PITCH_254)
             .collect();
         let total: f64 = extents.iter().sum();
-        // Symmetric spacing: equal gaps between structures, equal margins.
-        let gap = ((b1 - b0) - total) / 5.0;
+        // Symmetric spacing: equal gaps between blocks, equal margins.
+        let gap = ((b1 - b0) - total) / (structs.len() + 1) as f64;
         let mut pos = b0 + gap;
         for (rows, extent) in structs.iter().zip(&extents) {
             for (row, (inner, outer_role)) in rows.iter().enumerate() {
@@ -187,20 +193,50 @@ mod tests {
     }
 
     #[test]
-    fn s11_land_budget() {
-        let lands = s11();
-        assert_eq!(lands.len(), 112);
+    fn s13_land_budget() {
+        let lands = s13();
+        assert_eq!(lands.len(), 144);
         assert_eq!(role_count(&lands, Role::UsbDp), 8);
         assert_eq!(role_count(&lands, Role::UsbDm), 8);
         assert_eq!(role_count(&lands, Role::Vusb), 8);
         assert_eq!(role_count(&lands, Role::Vtarget), 16);
-        assert_eq!(role_count(&lands, Role::Gnd), 24);
+        assert_eq!(role_count(&lands, Role::Gnd), 56);
         assert_eq!(role_count(&lands, Role::Ls), 48);
     }
 
     #[test]
-    fn s11_uses_the_254_pitch_and_only_2x3_or_2x4_blocks() {
-        let lands = s11();
+    fn s13_blocks_are_pure_2x3_with_grounds() {
+        let lands = s13();
+        let blocks = lands.iter().map(|l| l.block).max().unwrap() + 1;
+        assert_eq!(blocks, 24);
+        for block in 0..blocks {
+            let members: Vec<&Land> = lands.iter().filter(|l| l.block == block).collect();
+            // Every block is exactly 2×3.
+            assert_eq!(members.len(), 6, "block {block}");
+            // At least one ground per block.
+            let gnds = members.iter().filter(|l| l.role == Role::Gnd).count();
+            assert!(gnds >= 1, "block {block} has no ground");
+            // Pure: power and signals never share a block.
+            let power = members.iter().filter(|l| l.role.is_power()).count();
+            let signals = members
+                .iter()
+                .filter(|l| !l.role.is_power() && l.role != Role::Gnd)
+                .count();
+            assert!(
+                power == 0 || signals == 0,
+                "block {block} mixes power and signals"
+            );
+            // Every power pin is paired with a ground in its own block.
+            assert!(gnds >= power, "block {block} under-grounds its power");
+        }
+        // Constellation-wide, grounds cover every power pin.
+        let power = lands.iter().filter(|l| l.role.is_power()).count();
+        assert!(role_count(&lands, Role::Gnd) >= power);
+    }
+
+    #[test]
+    fn s13_uses_the_254_pitch_and_only_2x3_blocks() {
+        let lands = s13();
         // Nearest-neighbor distance is exactly one pitch for every land.
         for a in &lands {
             let nearest = lands
@@ -210,7 +246,7 @@ mod tests {
                 .fold(f64::INFINITY, f64::min);
             assert!((nearest - PITCH_254).abs() < 1e-6, "land at {:?}", a.xy);
         }
-        // Connected components under one-pitch adjacency are 2×3 or 2×4.
+        // Connected components under one-pitch adjacency are all 2×3.
         let mut seen = vec![false; lands.len()];
         let mut sizes = Vec::new();
         for start in 0..lands.len() {
@@ -237,13 +273,13 @@ mod tests {
             }
             sizes.push(size);
         }
-        assert_eq!(sizes.len(), 16);
-        assert!(sizes.iter().all(|size| *size == 6 || *size == 8));
+        assert_eq!(sizes.len(), 24);
+        assert!(sizes.iter().all(|size| *size == 6));
     }
 
     #[test]
-    fn s11_respects_the_tile_margin() {
-        for land in s11() {
+    fn s13_respects_the_tile_margin() {
+        for land in s13() {
             assert!(land.xy[0] >= MARGIN - 1e-9 && land.xy[0] <= A7_W - MARGIN + 1e-9);
             assert!(land.xy[1] >= MARGIN - 1e-9 && land.xy[1] <= A7_H - MARGIN + 1e-9);
         }
@@ -254,7 +290,7 @@ mod tests {
         // A7 and A5 sheets fold to a portrait tile: canonical frame.
         for (w, h) in [(74.0, 105.0), (148.0, 210.0)] {
             assert_eq!(mate_dims(w, h), (74.0, 105.0));
-            let lands = oriented_s11(w, h);
+            let lands = oriented_s13(w, h);
             assert!(lands.iter().all(|l| l.xy[0] <= A7_W));
         }
         // A6 and A4 fold to a landscape tile: rotated, never mirrored.
@@ -265,10 +301,10 @@ mod tests {
         // A rotated sheet rotates its whole fold chain with it.
         assert_eq!(mate_dims(297.0, 210.0), (74.0, 105.0));
         assert_eq!(mate_dims(148.0, 105.0), (74.0, 105.0));
-        let lands = oriented_s11(105.0, 148.0);
-        assert_eq!(lands.len(), 112);
+        let lands = oriented_s13(105.0, 148.0);
+        assert_eq!(lands.len(), 144);
         assert!(lands.iter().all(|l| l.xy[0] <= A7_H && l.xy[1] <= A7_W));
         // A rigid rotation preserves the land budget per role.
-        assert_eq!(lands.iter().filter(|l| l.role == Role::Gnd).count(), 24);
+        assert_eq!(lands.iter().filter(|l| l.role == Role::Gnd).count(), 56);
     }
 }

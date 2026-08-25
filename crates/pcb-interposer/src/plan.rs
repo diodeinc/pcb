@@ -6,7 +6,7 @@
 //! connector block. Each 2×3 kit yields one `Pair` slot (its DP+DM
 //! lands, unsplittable), one `VtBank` slot (its two Vt lands), and one
 //! `Vusb` unit slot; each low-speed land is its own `Ls` unit slot.
-//! S11 therefore supplies 8 pair, 8 bank, 8 vusb, and 48 LS slots.
+//! S13 therefore supplies 8 pair, 8 bank, 8 vusb, and 48 LS slots.
 //!
 //! **Demands** are the ask side, built per board instance from its
 //! contacts: `usb_dp`+`usb_dm` pair up into one `Pair` demand (an
@@ -80,7 +80,7 @@ struct DemandRow {
     at: [f64; 2],
 }
 
-/// Compute the plan for a panel's contacts against the S11 lands.
+/// Compute the plan for a panel's contacts against the S13 lands.
 /// `keepouts` are fixed-feature disks (center, radius) a pogo pad must
 /// stay out of.
 pub fn plan(
@@ -439,7 +439,7 @@ mod tests {
     #[test]
     fn unpaired_polarity_degrades_to_ls() {
         use crate::contacts::PanelContact;
-        let lands = crate::pattern::oriented_s11(74.0, 105.0);
+        let lands = crate::pattern::oriented_s13(74.0, 105.0);
         // One board with a lone usb_dp and no usb_dm.
         let contacts = vec![
             PanelContact {
@@ -466,8 +466,8 @@ mod tests {
     }
 
     #[test]
-    fn s11_slot_budget() {
-        let lands = crate::pattern::oriented_s11(74.0, 105.0);
+    fn s13_slot_budget() {
+        let lands = crate::pattern::oriented_s13(74.0, 105.0);
         let slots = derive_slots(&lands);
         let count = |kind: Kind| slots.iter().filter(|slot| slot.kind == kind).count();
         assert_eq!(count(Kind::Pair), 8);
