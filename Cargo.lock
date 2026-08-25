@@ -4289,8 +4289,10 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "tempfile",
  "toml",
  "uppsala",
+ "uuid",
  "zip",
  "zstd",
 ]
@@ -7801,6 +7803,7 @@ dependencies = [
  "getrandom 0.4.3",
  "js-sys",
  "rand 0.10.2",
+ "serde_core",
  "sha1_smol",
  "wasm-bindgen",
 ]

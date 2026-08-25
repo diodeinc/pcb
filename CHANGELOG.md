@@ -15,6 +15,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- `pcb ipc2581 edit bom --selections` preserves canonical manufacturer IDs and selected supplier provenance.
 - Interposer mate lands are Ø1.5 mm, sized for the fixture bed's 2.54 mm pogo blocks.
 - Interposer pogo pads use the Mill-Max 806 footprint.
 

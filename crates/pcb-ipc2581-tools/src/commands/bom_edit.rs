@@ -4,16 +4,37 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use pcb_sch::bom::{BomMatchingKey, BomMatchingRule, Capacitor, GenericComponent, Resistor};
 use serde::Deserialize;
+use uuid::Uuid;
 
 use crate::utils::file as file_utils;
 
+const MANUFACTURER_ENTERPRISE_PREFIX: &str = "diode-mfr-";
+const OFFER_DEFINITION_SOURCE: &str = "urn:diode:ipc2581:offer:v1";
+const SUPPLIER_ENTERPRISE_REF: &str = "SelectedSupplierEnterpriseRef";
+const SUPPLIER_PART_NUMBER: &str = "SelectedSupplierPartNumber";
+
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Selection {
     path: String,
     refdes: Option<String>,
+    manufacturer_id: Uuid,
     manufacturer: String,
     mpn: String,
+    distributor: Option<String>,
+    distributor_part_id: Option<String>,
+}
+
+impl Selection {
+    fn offer_fields(&self) -> (&Uuid, &str, &str, Option<&str>, Option<&str>) {
+        (
+            &self.manufacturer_id,
+            &self.manufacturer,
+            &self.mpn,
+            self.distributor.as_deref(),
+            self.distributor_part_id.as_deref(),
+        )
+    }
 }
 
 #[derive(Debug)]
@@ -21,6 +42,12 @@ struct ResolvedSelection<'a> {
     selection: &'a Selection,
     oem_design_number: String,
     used_refdes_fallback: bool,
+}
+
+#[derive(Debug)]
+struct BomHydration {
+    oem_design_number: String,
+    supplier: Option<(String, String)>,
 }
 
 type AlternativesMap = HashMap<String, HashMap<VmpnKey, ipc2581::types::AvlVmpn>>;
@@ -34,9 +61,11 @@ struct VmpnKey {
 #[derive(Debug, Default)]
 struct EnterpriseRegistry {
     name_to_id: HashMap<String, String>,
-    id_to_name: HashMap<String, String>,
+    id_to_name: HashMap<String, Option<String>>,
+    requested_manufacturer_names: HashMap<String, String>,
     next_vendor_id: usize,
     new_enterprises: Vec<(String, String)>,
+    renamed_enterprises: Vec<(String, String)>,
 }
 
 impl EnterpriseRegistry {
@@ -51,76 +80,114 @@ impl EnterpriseRegistry {
 
         for enterprise in &logistic.enterprises {
             let id = ipc.resolve(enterprise.id);
+            let name = enterprise.name.map(|name| ipc.resolve(name).to_string());
 
             if let Some(num) = id.strip_prefix("VENDOR_").and_then(|s| s.parse().ok()) {
                 max_vendor_id = max_vendor_id.max(num);
             }
 
-            if let Some(name) = enterprise.name.map(|name| ipc.resolve(name))
+            if let Some(name) = name.as_deref()
                 && !name.is_empty()
                 && !matches!(name, "Manufacturer" | "NONE" | "N/A")
+                && !id.starts_with(MANUFACTURER_ENTERPRISE_PREFIX)
             {
                 name_to_id
                     .entry(name.to_string())
                     .or_insert_with(|| id.to_string());
-                id_to_name.insert(id.to_string(), name.to_string());
             }
+            id_to_name.insert(id.to_string(), name);
         }
 
         Self {
             name_to_id,
             id_to_name,
+            requested_manufacturer_names: HashMap::new(),
             next_vendor_id: max_vendor_id + 1,
             new_enterprises: Vec::new(),
+            renamed_enterprises: Vec::new(),
         }
     }
 
-    fn get_or_create_enterprise_id(&mut self, manufacturer: &str) -> String {
-        if let Some(id) = self.name_to_id.get(manufacturer) {
+    fn get_or_create_enterprise_id(&mut self, name: &str) -> String {
+        if let Some(id) = self.name_to_id.get(name) {
             return id.clone();
         }
 
         let id = format!("VENDOR_{}", self.next_vendor_id);
         self.next_vendor_id += 1;
 
-        self.name_to_id.insert(manufacturer.to_string(), id.clone());
-        self.id_to_name.insert(id.clone(), manufacturer.to_string());
-        self.new_enterprises
-            .push((id.clone(), manufacturer.to_string()));
+        self.name_to_id.insert(name.to_string(), id.clone());
+        self.id_to_name.insert(id.clone(), Some(name.to_string()));
+        self.new_enterprises.push((id.clone(), name.to_string()));
 
         id
     }
 
-    fn manufacturer_for_id(&self, id: &str) -> Option<&str> {
-        self.id_to_name.get(id).map(String::as_str)
+    fn get_or_create_manufacturer_id(
+        &mut self,
+        manufacturer_id: Uuid,
+        manufacturer: &str,
+    ) -> Result<String> {
+        let enterprise_id = format!("{MANUFACTURER_ENTERPRISE_PREFIX}{manufacturer_id}");
+
+        if let Some(previous) = self
+            .requested_manufacturer_names
+            .insert(enterprise_id.clone(), manufacturer.to_string())
+            && previous != manufacturer
+        {
+            anyhow::bail!(
+                "Manufacturer ID {manufacturer_id} has conflicting names: {previous:?} and {manufacturer:?}"
+            );
+        }
+
+        if let Some(existing_name) = self.id_to_name.get(&enterprise_id) {
+            if existing_name.as_deref() != Some(manufacturer) {
+                self.id_to_name
+                    .insert(enterprise_id.clone(), Some(manufacturer.to_string()));
+                self.renamed_enterprises
+                    .push((enterprise_id.clone(), manufacturer.to_string()));
+            }
+            return Ok(enterprise_id);
+        }
+
+        self.id_to_name
+            .insert(enterprise_id.clone(), Some(manufacturer.to_string()));
+        self.new_enterprises
+            .push((enterprise_id.clone(), manufacturer.to_string()));
+        Ok(enterprise_id)
     }
 }
 
 fn load_selections(path: &Path) -> Result<Vec<Selection>> {
-    let selections: Vec<Selection> =
-        serde_json::from_str(&std::fs::read_to_string(path).context("Read selections file")?)
-            .context("Parse selections JSON")?;
+    parse_selections(&std::fs::read_to_string(path).context("Read selections file")?)
+}
+
+fn parse_selections(content: &str) -> Result<Vec<Selection>> {
+    let mut selections: Vec<Selection> =
+        serde_json::from_str(content).context("Parse selections JSON")?;
     let mut paths = HashSet::new();
 
-    for selection in &selections {
+    for selection in &mut selections {
+        if selection.distributor.is_some() != selection.distributor_part_id.is_some() {
+            anyhow::bail!("Selection distributor and distributorPartId must be supplied together");
+        }
         for (name, value) in [
-            ("path", &selection.path),
-            ("manufacturer", &selection.manufacturer),
-            ("mpn", &selection.mpn),
+            ("path", Some(selection.path.as_str())),
+            ("refdes", selection.refdes.as_deref()),
+            ("manufacturer", Some(selection.manufacturer.as_str())),
+            ("mpn", Some(selection.mpn.as_str())),
+            ("distributor", selection.distributor.as_deref()),
+            (
+                "distributorPartId",
+                selection.distributor_part_id.as_deref(),
+            ),
         ] {
+            let Some(value) = value else { continue };
             if value.is_empty() {
                 anyhow::bail!("Selection {name} must not be empty");
             }
             if value.trim() != value {
                 anyhow::bail!("Selection {name} must not have leading or trailing whitespace");
-            }
-        }
-        if let Some(refdes) = &selection.refdes {
-            if refdes.is_empty() {
-                anyhow::bail!("Selection refdes must not be empty");
-            }
-            if refdes.trim() != refdes {
-                anyhow::bail!("Selection refdes must not have leading or trailing whitespace");
             }
         }
 
@@ -197,23 +264,31 @@ fn resolve_selections<'a>(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let mut selections_by_oem = HashMap::new();
-    for resolved_selection in &resolved {
+    let mut index_by_oem: HashMap<String, usize> = HashMap::new();
+    let mut deduplicated: Vec<ResolvedSelection<'_>> = Vec::new();
+    for resolved_selection in resolved {
         let selection = resolved_selection.selection;
-        if let Some(previous) =
-            selections_by_oem.insert(resolved_selection.oem_design_number.as_str(), selection)
-            && (previous.manufacturer != selection.manufacturer || previous.mpn != selection.mpn)
-        {
-            anyhow::bail!(
-                "Paths {} and {} select different parts for OEM {}",
-                previous.path,
-                selection.path,
-                resolved_selection.oem_design_number
+        if let Some(&index) = index_by_oem.get(&resolved_selection.oem_design_number) {
+            let previous = deduplicated[index].selection;
+            if previous.offer_fields() != selection.offer_fields() {
+                anyhow::bail!(
+                    "Selections for paths {} and {} resolve to OEM {} but have differing offer fields",
+                    previous.path,
+                    selection.path,
+                    resolved_selection.oem_design_number
+                );
+            }
+            deduplicated[index].used_refdes_fallback |= resolved_selection.used_refdes_fallback;
+        } else {
+            index_by_oem.insert(
+                resolved_selection.oem_design_number.clone(),
+                deduplicated.len(),
             );
+            deduplicated.push(resolved_selection);
         }
     }
 
-    Ok(resolved)
+    Ok(deduplicated)
 }
 
 fn extract_generic_component(
@@ -418,9 +493,20 @@ fn apply_selection(
     interner: &mut ipc2581::Interner,
     enterprise_registry: &mut EnterpriseRegistry,
     resolved: &ResolvedSelection<'_>,
-) {
+) -> Result<BomHydration> {
     let selection = resolved.selection;
-    let enterprise_id = enterprise_registry.get_or_create_enterprise_id(&selection.manufacturer);
+    let manufacturer_enterprise_id = enterprise_registry
+        .get_or_create_manufacturer_id(selection.manufacturer_id, &selection.manufacturer)?;
+    let supplier = selection
+        .distributor
+        .as_deref()
+        .zip(selection.distributor_part_id.as_deref())
+        .map(|(distributor, part_number)| {
+            (
+                enterprise_registry.get_or_create_enterprise_id(distributor),
+                part_number.to_string(),
+            )
+        });
 
     let item = match avl
         .items
@@ -447,10 +533,10 @@ fn apply_selection(
             .mpns
             .iter()
             .any(|mpn| interner.resolve(mpn.name) == selection.mpn);
-        let has_manufacturer = vmpn.vendors.iter().any(|vendor| {
-            enterprise_registry.manufacturer_for_id(interner.resolve(vendor.enterprise_ref))
-                == Some(selection.manufacturer.as_str())
-        });
+        let has_manufacturer = vmpn
+            .vendors
+            .iter()
+            .any(|vendor| interner.resolve(vendor.enterprise_ref) == manufacturer_enterprise_id);
         has_mpn && has_manufacturer
     });
 
@@ -461,12 +547,17 @@ fn apply_selection(
         item.vmpn_list.push(create_vmpn(
             interner,
             &selection.mpn,
-            &enterprise_id,
+            &manufacturer_enterprise_id,
             None,
             Some(true),
             Some(true),
         ));
     }
+
+    Ok(BomHydration {
+        oem_design_number: resolved.oem_design_number.clone(),
+        supplier,
+    })
 }
 
 fn load_existing_alternatives(
@@ -527,17 +618,14 @@ fn write_avl(
     avl: ipc2581::types::Avl,
     interner: &ipc2581::Interner,
     enterprise_registry: &EnterpriseRegistry,
+    bom_hydrations: &[BomHydration],
     output: &Path,
     history_comment: &str,
 ) -> Result<()> {
     let doc = ipc2581::edit::Doc::parse(content)?;
     let mut edits = crate::utils::history::file_revision_edits(&doc, history_comment)?;
-    if !enterprise_registry.new_enterprises.is_empty() {
-        edits.extend(logistic_header_edit(
-            &doc,
-            &enterprise_registry.new_enterprises,
-        ));
-    }
+    edits.extend(enterprise_edits(&doc, enterprise_registry)?);
+    edits.extend(bom_hydration_edits(&doc, bom_hydrations)?);
     edits.push(avl_section_edit(&doc, avl.to_xml(interner))?);
 
     let updated_xml = ipc2581::edit::apply(content, edits)?;
@@ -571,9 +659,15 @@ pub fn execute_selections(file: &Path, selections_file: &Path, output: &Path) ->
     let mut interner = ipc2581::Interner::new();
     let mut enterprise_registry = EnterpriseRegistry::from_ipc(&ipc);
     let mut avl = reintern_avl(&ipc, &mut interner);
+    let mut bom_hydrations = Vec::with_capacity(resolved.len());
 
     for selection in &resolved {
-        apply_selection(&mut avl, &mut interner, &mut enterprise_registry, selection);
+        bom_hydrations.push(apply_selection(
+            &mut avl,
+            &mut interner,
+            &mut enterprise_registry,
+            selection,
+        )?);
     }
 
     let comment = format!("BOM selections updated ({} items)", resolved.len());
@@ -582,6 +676,7 @@ pub fn execute_selections(file: &Path, selections_file: &Path, output: &Path) ->
         avl,
         &interner,
         &enterprise_registry,
+        &bom_hydrations,
         output,
         &comment,
     )?;
@@ -678,6 +773,7 @@ pub fn execute_rules(file: &Path, rules_file: &Path, output: Option<&Path>) -> R
         avl,
         &interner,
         &enterprise_registry,
+        &[],
         output,
         &comment,
     )?;
@@ -686,15 +782,55 @@ pub fn execute_rules(file: &Path, rules_file: &Path, output: Option<&Path>) -> R
     Ok(())
 }
 
-fn logistic_header_edit(
+fn unique_node_by_attr(
     doc: &ipc2581::edit::Doc,
-    new_enterprises: &[(String, String)],
-) -> Option<ipc2581::edit::Edit> {
-    let root = doc.root().ok()?;
-    let header = doc.child(root, "LogisticHeader")?;
+    element: &str,
+    attribute: &str,
+    value: &str,
+) -> Result<ipc2581::edit::Node> {
+    let mut matches = doc
+        .find_all(element)
+        .into_iter()
+        .filter(|&node| doc.attr(node, attribute) == Some(value));
+    let node = matches
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("{element} {attribute}={value} not found"))?;
+    if matches.next().is_some() {
+        anyhow::bail!("{element} {attribute}={value} is duplicated");
+    }
+    Ok(node)
+}
+
+fn enterprise_edits(
+    doc: &ipc2581::edit::Doc,
+    enterprise_registry: &EnterpriseRegistry,
+) -> Result<Vec<ipc2581::edit::Edit>> {
+    let mut edits = Vec::new();
+
+    for (id, name) in &enterprise_registry.renamed_enterprises {
+        let enterprise = unique_node_by_attr(doc, "Enterprise", "id", id)?;
+        let attributes: Vec<_> = doc
+            .attrs(enterprise)
+            .filter(|(attribute, _)| *attribute != "name")
+            .map(|(attribute, value)| (attribute.to_string(), value.to_string()))
+            .chain(std::iter::once(("name".to_string(), name.clone())))
+            .collect();
+        let mut writer = ipc2581::XmlWriter::new();
+        writer.empty_element_with("Enterprise", attributes);
+        edits.push(doc.replace(enterprise, writer.into_string()));
+    }
+
+    if enterprise_registry.new_enterprises.is_empty() {
+        return Ok(edits);
+    }
+
+    let root = doc.root()?;
+    let header = doc
+        .child(root, "LogisticHeader")
+        .ok_or_else(|| anyhow::anyhow!("IPC-2581 has no LogisticHeader for new enterprises"))?;
 
     let mut writer = ipc2581::XmlWriter::new();
-    for (id, name) in new_enterprises {
+    for (id, name) in &enterprise_registry.new_enterprises {
         writer.empty_element(
             "Enterprise",
             &[
@@ -706,10 +842,72 @@ fn logistic_header_edit(
     }
     let enterprises_xml = writer.into_string();
 
-    Some(match doc.child(header, "Person") {
+    edits.push(match doc.child(header, "Person") {
         Some(person) => doc.insert_before(person, enterprises_xml),
         None => doc.append_inside(header, enterprises_xml),
-    })
+    });
+    Ok(edits)
+}
+
+fn bom_hydration_edits(
+    doc: &ipc2581::edit::Doc,
+    bom_hydrations: &[BomHydration],
+) -> Result<Vec<ipc2581::edit::Edit>> {
+    let mut edits = Vec::new();
+
+    for hydration in bom_hydrations {
+        let item = unique_node_by_attr(
+            doc,
+            "BomItem",
+            "OEMDesignNumberRef",
+            &hydration.oem_design_number,
+        )?;
+        let characteristics = doc.child(item, "Characteristics").ok_or_else(|| {
+            anyhow::anyhow!(
+                "BOM item {} has no Characteristics section",
+                hydration.oem_design_number
+            )
+        })?;
+
+        for textual in doc
+            .children(characteristics)
+            .into_iter()
+            .filter(|&child| doc.name(child) == "Textual")
+        {
+            let is_diode_offer = doc.attr(textual, "definitionSource")
+                == Some(OFFER_DEFINITION_SOURCE)
+                && matches!(
+                    doc.attr(textual, "textualCharacteristicName"),
+                    Some(SUPPLIER_ENTERPRISE_REF | SUPPLIER_PART_NUMBER)
+                );
+            if is_diode_offer {
+                edits.push(doc.delete(textual));
+            }
+        }
+
+        if let Some((enterprise_id, part_number)) = &hydration.supplier {
+            let mut writer = ipc2581::XmlWriter::new();
+            writer.empty_element(
+                "Textual",
+                &[
+                    ("definitionSource", OFFER_DEFINITION_SOURCE),
+                    ("textualCharacteristicName", SUPPLIER_ENTERPRISE_REF),
+                    ("textualCharacteristicValue", enterprise_id.as_str()),
+                ],
+            );
+            writer.empty_element(
+                "Textual",
+                &[
+                    ("definitionSource", OFFER_DEFINITION_SOURCE),
+                    ("textualCharacteristicName", SUPPLIER_PART_NUMBER),
+                    ("textualCharacteristicValue", part_number.as_str()),
+                ],
+            );
+            edits.push(doc.append_inside(characteristics, writer.into_string()));
+        }
+    }
+
+    Ok(edits)
 }
 
 fn avl_section_edit(doc: &ipc2581::edit::Doc, new_avl_xml: String) -> Result<ipc2581::edit::Edit> {
@@ -737,6 +935,7 @@ mod tests {
       <RefDes name="R1" packageRef="R0402" populate="true" layerRef="F.Cu"/>
       <Characteristics category="ELECTRICAL">
         <Textual definitionSource="pcb" textualCharacteristicName="Path" textualCharacteristicValue="Power.R1"/>
+        <Textual definitionSource="pcb" textualCharacteristicName="Path" textualCharacteristicValue="Alternate.R1"/>
       </Characteristics>
     </BomItem>
     <BomItem OEMDesignNumberRef="GROUPED_PART" quantity="2" category="ELECTRICAL">
@@ -755,8 +954,11 @@ mod tests {
         Selection {
             path: path.to_string(),
             refdes: refdes.map(str::to_string),
+            manufacturer_id: Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap(),
             manufacturer: "Example Manufacturer".to_string(),
             mpn: "EXAMPLE-MPN".to_string(),
+            distributor: Some("Example Distributor".to_string()),
+            distributor_part_id: Some("EXAMPLE-SKU".to_string()),
         }
     }
 
@@ -764,6 +966,124 @@ mod tests {
         let doc = ipc2581::edit::Doc::parse(original).unwrap();
         let edit = avl_section_edit(&doc, new_avl.to_string()).unwrap();
         ipc2581::edit::apply(original, vec![edit]).unwrap()
+    }
+
+    fn schema_valid_hydration_ipc() -> &'static str {
+        r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="ASSEMBLY"/>
+    <BomRef name="bom"/>
+    <AvlRef name="avl"/>
+  </Content>
+  <LogisticHeader>
+    <Role id="owner" roleFunction="OWNER"/>
+    <Enterprise id="owner-enterprise" name="Owner" code="OWNER"/>
+    <Enterprise id="LEGACY_MFR" name="New &amp; &lt;Manufacturer&gt;" code="LEGACY"/>
+    <Enterprise id="diode-mfr-550e8400-e29b-41d4-a716-446655440000" name="Old Manufacturer Name" code="KEEP" address1="Preserve this address" phone="555-0100"/>
+    <Enterprise id="VENDOR_7" name="Digi-Key &amp; Partners" code="SUPPLIER" email="orders@example.com"/>
+    <Person name="designer" enterpriseRef="owner-enterprise" roleRef="owner"/>
+  </LogisticHeader>
+  <HistoryRecord number="1" origination="2026-08-25T00:00:00Z" software="test" lastChange="2026-08-25T00:00:00Z">
+    <FileRevision fileRevisionId="1" comment="fixture">
+      <SoftwarePackage name="test" vendor="test" revision="1">
+        <Certification certificationStatus="SELFTEST"/>
+      </SoftwarePackage>
+    </FileRevision>
+  </HistoryRecord>
+  <Bom name="bom">
+    <BomHeader assembly="test" revision="1"/>
+    <BomItem OEMDesignNumberRef="EXISTING_PART" quantity="1" category="ELECTRICAL">
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="pcb" textualCharacteristicName="Path" textualCharacteristicValue="Power.R1"/>
+        <Textual definitionSource="other" textualCharacteristicName="SelectedSupplierPartNumber" textualCharacteristicValue="preserve-me"/>
+        <Textual definitionSource="urn:diode:ipc2581:offer:v1" textualCharacteristicName="SelectedSupplierEnterpriseRef" textualCharacteristicValue="OLD_VENDOR"/>
+        <Textual definitionSource="urn:diode:ipc2581:offer:v1" textualCharacteristicName="SelectedSupplierEnterpriseRef" textualCharacteristicValue="DUPLICATE_VENDOR"/>
+        <Textual definitionSource="urn:diode:ipc2581:offer:v1" textualCharacteristicName="SelectedSupplierPartNumber" textualCharacteristicValue="OLD-SKU"/>
+        <Textual definitionSource="urn:diode:ipc2581:offer:v1" textualCharacteristicName="SelectedSupplierPartNumber" textualCharacteristicValue="DUPLICATE-SKU"/>
+      </Characteristics>
+    </BomItem>
+    <BomItem OEMDesignNumberRef="NEW_PART" quantity="1" category="ELECTRICAL">
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="pcb" textualCharacteristicName="Path" textualCharacteristicValue="Power.C1"/>
+      </Characteristics>
+    </BomItem>
+  </Bom>
+  <Ecad name="assembly">
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Step name="board">
+        <Datum x="0" y="0"/>
+      </Step>
+    </CadData>
+  </Ecad>
+  <Avl name="avl">
+    <AvlHeader title="Test" source="test" author="test" datetime="2026-08-25T00:00:00Z" version="1"/>
+    <AvlItem OEMDesignNumber="EXISTING_PART">
+      <AvlVmpn qualified="true" chosen="true">
+        <AvlMpn name="LEGACY-MPN" rank="7" other="preserve-me"/>
+        <AvlVendor enterpriseRef="LEGACY_MFR"/>
+      </AvlVmpn>
+    </AvlItem>
+  </Avl>
+</IPC-2581>"#
+    }
+
+    fn assert_hydrated_output(xml: &str) {
+        ipc2581::Ipc2581::validate(xml).unwrap();
+        let doc = ipc2581::edit::Doc::parse(xml).unwrap();
+
+        let existing_manufacturer = unique_node_by_attr(
+            &doc,
+            "Enterprise",
+            "id",
+            "diode-mfr-550e8400-e29b-41d4-a716-446655440000",
+        )
+        .unwrap();
+        assert_eq!(
+            doc.attr(existing_manufacturer, "name"),
+            Some("New & <Manufacturer>")
+        );
+        assert_eq!(doc.attr(existing_manufacturer, "code"), Some("KEEP"));
+        assert_eq!(
+            doc.attr(existing_manufacturer, "address1"),
+            Some("Preserve this address")
+        );
+        assert_eq!(doc.attr(existing_manufacturer, "phone"), Some("555-0100"));
+        for id in ["diode-mfr-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "VENDOR_8"] {
+            let enterprise = unique_node_by_attr(&doc, "Enterprise", "id", id).unwrap();
+            assert_eq!(doc.attr(enterprise, "code"), Some("NONE"));
+        }
+
+        for id in [
+            "diode-mfr-550e8400-e29b-41d4-a716-446655440000",
+            "diode-mfr-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+            "VENDOR_7",
+            "VENDOR_8",
+        ] {
+            assert_eq!(xml.matches(&format!("id=\"{id}\"")).count(), 1);
+        }
+        let diode_textuals = doc
+            .find_all("Textual")
+            .into_iter()
+            .filter(|&node| doc.attr(node, "definitionSource") == Some(OFFER_DEFINITION_SOURCE))
+            .collect::<Vec<_>>();
+        assert_eq!(diode_textuals.len(), 4);
+        for value in ["VENDOR_7", "SKU<&\"", "VENDOR_8", "NEW-SKU"] {
+            assert_eq!(
+                diode_textuals
+                    .iter()
+                    .filter(|&&node| doc.attr(node, "textualCharacteristicValue") == Some(value))
+                    .count(),
+                1
+            );
+        }
+        assert!(xml.contains("definitionSource=\"other\""));
+        assert!(xml.contains("LEGACY-MPN"));
+        assert!(xml.contains("rank=\"7\""));
+        assert!(xml.contains("other=\"preserve-me\""));
+        assert!(xml.contains("enterpriseRef=\"diode-mfr-550e8400-e29b-41d4-a716-446655440000\""));
     }
 
     #[test]
@@ -841,5 +1161,74 @@ mod tests {
             error.to_string(),
             "Selection fallback RefDes is ambiguous: C2"
         );
+    }
+
+    #[test]
+    fn selection_schema_canonicalizes_uuid_and_validates_supplier_pair() {
+        let selections = parse_selections(
+            r#"[{"path":"Power.R1","manufacturerId":"550E8400E29B41D4A716446655440000","manufacturer":"Example","mpn":"MPN"}]"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            selections[0].manufacturer_id.to_string(),
+            "550e8400-e29b-41d4-a716-446655440000"
+        );
+        assert!(parse_selections(
+            r#"[{"path":"Power.R1","manufacturerId":"not-a-uuid","manufacturer":"Example","mpn":"MPN"}]"#,
+        )
+        .is_err());
+        assert!(parse_selections(
+            r#"[{"path":"Power.R1","manufacturerId":"550e8400-e29b-41d4-a716-446655440000","manufacturer":"Example","mpn":"MPN","distributor":"Digi-Key"}]"#,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn selections_deduplicate_or_reject_after_resolving_to_one_oem_item() {
+        let ipc = parse_selection_test_ipc("");
+        let mut selections = [
+            selection("Power.R1", Some("R1")),
+            selection("Alternate.R1", Some("R1")),
+        ];
+
+        let resolved = resolve_selections(&ipc, &selections).unwrap();
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].oem_design_number, "PATH_PART");
+
+        selections[1].mpn = "DIFFERENT-MPN".to_string();
+        assert!(resolve_selections(&ipc, &selections).is_err());
+    }
+
+    #[test]
+    fn hydration_preserves_provenance_and_is_idempotent_and_schema_valid() {
+        let temp = tempfile::tempdir().unwrap();
+        let input = temp.path().join("input.xml");
+        let selections = temp.path().join("selections.json");
+        let first_output = temp.path().join("first.xml");
+        let second_output = temp.path().join("second.xml");
+
+        let input_xml = schema_valid_hydration_ipc();
+        ipc2581::Ipc2581::validate(input_xml).unwrap();
+        std::fs::write(&input, input_xml).unwrap();
+        std::fs::write(
+            &selections,
+            r#"[
+  {"path":"Power.R1","manufacturerId":"550E8400E29B41D4A716446655440000","manufacturer":"New & <Manufacturer>","mpn":"MPN<&\"","distributor":"Digi-Key & Partners","distributorPartId":"SKU<&\""},
+  {"path":"Power.C1","manufacturerId":"AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE","manufacturer":"New Manufacturer","mpn":"NEW-MPN","distributor":"New Distributor","distributorPartId":"NEW-SKU"}
+]"#,
+        )
+        .unwrap();
+
+        execute_selections(&input, &selections, &first_output).unwrap();
+        let first_xml = std::fs::read_to_string(&first_output).unwrap();
+        assert_hydrated_output(&first_xml);
+        assert!(first_xml.contains("New &amp; &lt;Manufacturer&gt;"));
+        assert!(first_xml.contains("MPN&lt;&amp;&quot;"));
+        assert!(first_xml.contains("SKU&lt;&amp;&quot;"));
+
+        execute_selections(&first_output, &selections, &second_output).unwrap();
+        let second_xml = std::fs::read_to_string(&second_output).unwrap();
+        assert_hydrated_output(&second_xml);
     }
 }
