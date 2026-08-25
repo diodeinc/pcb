@@ -153,18 +153,25 @@ struct MatchBomResponse {
     offers: HashMap<String, ComponentOffer>,
 }
 
-impl MatchBomResponse {
-    fn needs_retry(&self) -> bool {
-        self.results
-            .iter()
-            .any(|line| line.match_status == BomMatchStatus::NeedsRetry)
-    }
-}
-
 #[derive(Debug, Default)]
 struct PreparedBomMatch {
     availability: HashMap<String, Availability>,
     selected_parts: HashMap<String, (String, String)>,
+}
+
+struct PreparedBomResponse {
+    prepared: PreparedBomMatch,
+    retry_paths: HashSet<String>,
+}
+
+impl PreparedBomResponse {
+    fn into_complete(self) -> Result<PreparedBomMatch> {
+        anyhow::ensure!(
+            self.retry_paths.is_empty(),
+            "BOM matching could not complete"
+        );
+        Ok(self.prepared)
+    }
 }
 
 impl PreparedBomMatch {
@@ -315,11 +322,7 @@ fn prepare_bom_match_for_paths(
     bom: &pcb_sch::bom::Bom,
     match_response: &MatchBomResponse,
     expected_paths: &HashSet<String>,
-) -> Result<PreparedBomMatch> {
-    anyhow::ensure!(
-        !match_response.needs_retry(),
-        "BOM matching could not complete"
-    );
+) -> Result<PreparedBomResponse> {
     anyhow::ensure!(
         match_response.results.len() == expected_paths.len(),
         "BOM match response returned {} results for {} requested paths",
@@ -330,6 +333,7 @@ fn prepare_bom_match_for_paths(
     let mut seen_paths = HashSet::with_capacity(expected_paths.len());
     let mut availability = HashMap::with_capacity(expected_paths.len());
     let mut selected_parts = HashMap::new();
+    let mut retry_paths = HashSet::new();
 
     for bom_line in &match_response.results {
         let path = bom_line
@@ -345,6 +349,10 @@ fn prepare_bom_match_for_paths(
             seen_paths.insert(path.to_string()),
             "BOM match response returned duplicate path: {path}"
         );
+        if bom_line.match_status == BomMatchStatus::NeedsRetry {
+            retry_paths.insert(path.to_string());
+            continue;
+        }
 
         let mut resolved_offers = Vec::with_capacity(bom_line.offer_ids.len());
         for offer_id in &bom_line.offer_ids {
@@ -429,9 +437,12 @@ fn prepare_bom_match_for_paths(
         );
     }
 
-    Ok(PreparedBomMatch {
-        availability,
-        selected_parts,
+    Ok(PreparedBomResponse {
+        prepared: PreparedBomMatch {
+            availability,
+            selected_parts,
+        },
+        retry_paths,
     })
 }
 
@@ -440,7 +451,7 @@ fn prepare_bom_match(
     match_response: &MatchBomResponse,
 ) -> Result<PreparedBomMatch> {
     let expected_paths = bom.entries.keys().cloned().collect();
-    prepare_bom_match_for_paths(bom, match_response, &expected_paths)
+    prepare_bom_match_for_paths(bom, match_response, &expected_paths)?.into_complete()
 }
 
 struct CachedBomLine {
@@ -464,7 +475,7 @@ fn load_cached_bom_line(
     };
     let response = serde_json::from_slice(&cached.value)?;
     let expected_paths = HashSet::from([path.to_string()]);
-    let prepared = prepare_bom_match_for_paths(bom, &response, &expected_paths)?;
+    let prepared = prepare_bom_match_for_paths(bom, &response, &expected_paths)?.into_complete()?;
     Ok(Some(CachedBomLine {
         prepared,
         fresh: cached.is_fresh(ttl, now),
@@ -507,30 +518,33 @@ fn bom_match_request_lines(
         .collect()
 }
 
-fn split_bom_match_response(response: &MatchBomResponse) -> Result<HashMap<String, Vec<u8>>> {
+fn split_completed_bom_match_response(
+    response: &MatchBomResponse,
+) -> Result<HashMap<String, Vec<u8>>> {
     response
         .results
         .iter()
+        .filter(|line| line.match_status != BomMatchStatus::NeedsRetry)
         .map(|line| {
             let path = line
                 .design_entry
                 .path
                 .as_deref()
-                .context("BOM match response omitted a design entry path")?;
+                .expect("validated BOM match response path");
             let offers = line
                 .offer_ids
                 .iter()
                 .map(|offer_id| {
-                    response
-                        .offers
-                        .get(offer_id)
-                        .cloned()
-                        .map(|offer| (offer_id.clone(), offer))
-                        .with_context(|| {
-                            format!("BOM match response omitted referenced offer {offer_id}")
-                        })
+                    (
+                        offer_id.clone(),
+                        response
+                            .offers
+                            .get(offer_id)
+                            .expect("validated BOM match response offer")
+                            .clone(),
+                    )
                 })
-                .collect::<Result<_>>()?;
+                .collect();
             let response = MatchBomResponse {
                 results: vec![line.clone()],
                 offers,
@@ -663,46 +677,56 @@ fn match_bom_with_cache(
     )
     .and_then(|response| {
         let prepared = prepare_bom_match_for_paths(bom, &response, &expected_paths)?;
-        let cache_values = split_bom_match_response(&response)?;
-        Ok((cache_values, prepared))
+        let mut response_lines = split_completed_bom_match_response(&response)?;
+        let writes = refresh_lines
+            .iter()
+            .filter(|line| !prepared.retry_paths.contains(&line.path))
+            .map(|line| {
+                (
+                    line.cache_key.clone(),
+                    response_lines
+                        .remove(&line.path)
+                        .expect("validated completed BOM match response path"),
+                )
+            })
+            .collect::<Vec<_>>();
+        if let Some(cache) = cache
+            && let Err(error) = cache.store_many(&writes)
+        {
+            log::warn!("Failed to update local BOM cache: {error:#}");
+        }
+        Ok(prepared)
     });
 
-    match live {
-        Ok((mut response_lines, live_prepared)) => {
-            let writes = refresh_lines
-                .iter()
-                .map(|line| {
-                    (
-                        line.cache_key.clone(),
-                        response_lines
-                            .remove(&line.path)
-                            .expect("validated BOM match response path"),
-                    )
-                })
-                .collect::<Vec<_>>();
-            if let Some(cache) = cache
-                && let Err(error) = cache.store_many(&writes)
-            {
-                log::warn!("Failed to update local BOM cache: {error:#}");
-            }
-            prepared.extend(live_prepared);
-            prepared.apply(bom);
-            Ok(())
+    let (live_prepared, unresolved_paths, live_error) = match live {
+        Ok(response) => {
+            let error = (!response.retry_paths.is_empty())
+                .then(|| anyhow::anyhow!("BOM matching could not complete"));
+            (response.prepared, response.retry_paths, error)
         }
-        Err(error) => {
-            for line in refresh_lines {
-                if let Some(cached) = line.cached {
-                    prepared.extend(cached.prepared);
-                }
-            }
-            if prepared.availability.is_empty() {
-                return Err(error);
-            }
-            log::warn!("BOM matching failed; using available cached lines: {error:#}");
-            prepared.apply(bom);
-            Ok(())
+        Err(error) => (
+            PreparedBomMatch::default(),
+            refresh_lines.iter().map(|line| line.path.clone()).collect(),
+            Some(error),
+        ),
+    };
+
+    prepared.extend(live_prepared);
+    for line in refresh_lines {
+        if unresolved_paths.contains(&line.path)
+            && let Some(cached) = line.cached
+        {
+            prepared.extend(cached.prepared);
         }
     }
+    if let Some(error) = live_error {
+        if prepared.availability.is_empty() {
+            return Err(error);
+        }
+        log::warn!("BOM matching incomplete; using available lines: {error:#}");
+    }
+    prepared.apply(bom);
+    Ok(())
 }
 
 /// Component key for pricing requests
@@ -982,6 +1006,19 @@ mod tests {
         compatible_response_for("root.U1", "selected-offer", "API-MPN")
     }
 
+    fn retry_response(path: &str) -> serde_json::Value {
+        serde_json::json!({
+            "results": [{
+                "designEntry": {"path": path},
+                "offerIds": [],
+                "offerStockClasses": {},
+                "match": "MATCH_NEEDS_RETRY",
+                "selectedOfferId": null
+            }],
+            "offers": {}
+        })
+    }
+
     fn test_bom_with_second_line() -> Bom {
         let mut bom = test_bom();
         bom.entries
@@ -1257,6 +1294,75 @@ mod tests {
         );
         assert!(no_cache.entries["root.U1"].mpn.is_none());
         failure.assert_calls(2);
+    }
+
+    #[test]
+    fn completed_lines_are_served_and_cached_when_another_line_needs_retry() {
+        let server = MockServer::start();
+        let tempdir = tempfile::tempdir().unwrap();
+        let mut cache = cache_for(&tempdir);
+        let context = WorkspaceContext::from_api_base_url(server.base_url());
+        let now = unix_now().unwrap();
+        let mut bom = test_bom_with_second_line();
+        let entries = bom_request_entries(&bom).unwrap();
+
+        let mut initial_response = compatible_response();
+        initial_response["results"]
+            .as_array_mut()
+            .unwrap()
+            .push(retry_response("root.U2")["results"][0].clone());
+        let initial = server.mock(|when, then| {
+            when.method(POST)
+                .path("/api/boms/match")
+                .query_param("strict", "true")
+                .json_body(bom_match_request(&entries));
+            then.status(200).json_body(initial_response);
+        });
+
+        match_bom_with_cache(
+            &context,
+            None,
+            &mut bom,
+            true,
+            match_options(BomMatchMode::Online),
+            Some(&mut cache),
+            now,
+        )
+        .unwrap();
+        assert_eq!(bom.entries["root.U1"].mpn.as_deref(), Some("API-MPN"));
+        assert!(bom.entries["root.U2"].mpn.is_none());
+        assert!(bom.availability.contains_key("root.U1"));
+        assert!(!bom.availability.contains_key("root.U2"));
+
+        let retry_entry = entries
+            .into_iter()
+            .find(|entry| entry["path"] == "root.U2")
+            .unwrap();
+        let retry = server.mock(|when, then| {
+            when.method(POST)
+                .path("/api/boms/match")
+                .query_param("strict", "true")
+                .json_body(bom_match_request(&[retry_entry]));
+            then.status(200).json_body(retry_response("root.U2"));
+        });
+        let mut cached = test_bom_with_second_line();
+        match_bom_with_cache(
+            &context,
+            None,
+            &mut cached,
+            true,
+            match_options(BomMatchMode::Online),
+            Some(&mut cache),
+            now + 1,
+        )
+        .unwrap();
+
+        assert_eq!(cached.entries["root.U1"].mpn.as_deref(), Some("API-MPN"));
+        assert!(cached.entries["root.U2"].mpn.is_none());
+        assert!(cached.availability.contains_key("root.U1"));
+        assert!(!cached.availability.contains_key("root.U2"));
+        initial.assert_calls(1);
+        retry.assert_calls(1);
     }
 
     #[test]
