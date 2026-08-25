@@ -24,6 +24,9 @@ pub struct Feature<Symbol> {
     pub net: Option<Symbol>,
     pub source_layer_ref: Option<Symbol>,
     pub source_step_ref: Option<Symbol>,
+    /// Materialized occurrence of `source_step_ref` in the layout graph.
+    /// `None` identifies geometry owned directly by the root step.
+    pub source_instance: Option<u32>,
     pub source_step_kind: LayoutStepKind,
     /// Index into `doc.feature_sets`, when the feature came from a set.
     pub set: Option<u32>,
@@ -84,6 +87,7 @@ impl<Symbol> Feature<Symbol> {
             net: None,
             source_layer_ref: None,
             source_step_ref: None,
+            source_instance: None,
             source_step_kind: LayoutStepKind::Unknown,
             set: None,
             placement_group: None,

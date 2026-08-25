@@ -1,4 +1,4 @@
-//! Minimum feature width and minimum gap, by mathematical morphology.
+//! Minimum copper feature width and soldermask web width, by morphology.
 //!
 //! Let `M` be one layer's composed image and `B_ρ` the closed disk of
 //! radius `ρ = L/2`. The morphological opening and closing of `M` with
@@ -13,7 +13,7 @@
 //! `M`, so the residue `M \ (M ∘ B_ρ)` is exactly the material through
 //! which no disk of diameter `L` passes — the sub-minimum features.
 //! Dually, the closing residue `(M • B_ρ) \ M` is exactly the complement
-//! material narrower than `L` — the sub-minimum gaps, notches, and webs.
+//! material narrower than `L`, used here for soldermask webs.
 //!
 //! Morphology is the conservative broad phase: it runs with an offset guard
 //! large enough to retain candidates across curve/offset tessellation. A
@@ -23,56 +23,52 @@
 //! and is discarded. Thus the composed image supplies the authoritative
 //! measurement while morphology only localizes the work.
 //!
-//! For copper, `Residue::Feature` flags copper that will not survive
-//! etching and `Residue::Gap` flags spacing that will not resolve. A
-//! soldermask image is the mask *openings*, so `Residue::Gap` flags the
-//! web of mask remaining between them.
+//! The opening residue flags copper that will not survive etching. A
+//! soldermask image is the mask *openings*, so its closing residue flags the
+//! web of mask remaining between them. Copper clearance is a separate
+//! electrical-conductor boundary-distance check; morphology must not
+//! reinterpret a same-net notch as spacing between conductors.
 
 use pcb_ir::geom::ContourSet;
 use pcb_ir::geom::dfm::{ThinPiece, thin_features, thin_gaps};
 use rayon::prelude::*;
 
+use super::{Evaluation, Measured};
 use crate::commands::dfm::design::Design;
 use crate::commands::dfm::report::{Evidence, LayerRef, Subject};
-use crate::commands::dfm::rules::ImageSel;
 
-use super::{Evaluation, Measured};
-
-/// Which morphological residue the rule reports.
-#[derive(Clone, Copy)]
-pub(super) enum Residue {
-    Feature,
-    Gap,
+pub(super) fn copper_feature_width(limit_mm: f64, design: &Design) -> Evaluation {
+    evaluate(
+        limit_mm,
+        design
+            .copper_layers
+            .iter()
+            .map(|layer| (&layer.layer, &layer.image))
+            .collect(),
+        "copper_image",
+        thin_features,
+    )
 }
 
-pub(super) fn evaluate(
+pub(super) fn soldermask_web(limit_mm: f64, design: &Design) -> Evaluation {
+    evaluate(
+        limit_mm,
+        design
+            .mask_layers
+            .iter()
+            .map(|layer| (&layer.layer, &layer.image))
+            .collect(),
+        "soldermask_image",
+        thin_gaps,
+    )
+}
+
+fn evaluate(
     limit_mm: f64,
-    sel: ImageSel,
-    residue: Residue,
-    design: &Design,
+    images: Vec<(&LayerRef, &ContourSet)>,
+    offender_kind: &'static str,
+    thin: fn(&ContourSet, f64) -> Vec<ThinPiece>,
 ) -> Evaluation {
-    let (images, offender_kind): (Vec<(&LayerRef, &ContourSet)>, &'static str) = match sel {
-        ImageSel::Copper => (
-            design
-                .copper_layers
-                .iter()
-                .map(|layer| (&layer.layer, &layer.image))
-                .collect(),
-            "copper_image",
-        ),
-        ImageSel::Soldermask => (
-            design
-                .mask_layers
-                .iter()
-                .map(|layer| (&layer.layer, &layer.image))
-                .collect(),
-            "soldermask_image",
-        ),
-    };
-    let thin: fn(&ContourSet, f64) -> Vec<ThinPiece> = match residue {
-        Residue::Feature => thin_features,
-        Residue::Gap => thin_gaps,
-    };
     let measured = images
         .par_iter()
         .flat_map_iter(|(layer, image)| {

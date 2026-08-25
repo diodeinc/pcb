@@ -37,22 +37,18 @@ pub(super) enum RuleKind {
     LineworkToCopperClearance(Linework),
     /// Clearance: sibling board-array outlines keep their spacing.
     BoardArrayPairClearance,
-    /// Residue: image material narrower than the limit.
-    ThinFeature(ImageSel),
-    /// Residue: gaps in the image narrower than the limit.
-    ThinGap(ImageSel),
+    /// Width: final composed copper material narrower than the limit.
+    CopperFeatureWidth,
+    /// Clearance: final copper owned by distinct electrical conductors.
+    CopperClearance,
+    /// Residue: final soldermask material between openings narrower than the limit.
+    SoldermaskWeb,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Linework {
     VScore,
     BoardEdge,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum ImageSel {
-    Copper,
-    Soldermask,
 }
 
 /// Everything the engine and report know about a rule kind, in one table:
@@ -75,6 +71,7 @@ pub(super) struct Semantics {
 pub(super) struct Pools {
     pub drilled: bool,
     pub copper: bool,
+    pub conductor_ownership: bool,
     pub copper_boundaries: bool,
     pub hole_lands: bool,
     pub masks: bool,
@@ -90,6 +87,7 @@ impl std::ops::BitOr for Pools {
         Self {
             drilled: self.drilled || other.drilled,
             copper: self.copper || other.copper,
+            conductor_ownership: self.conductor_ownership || other.conductor_ownership,
             copper_boundaries: self.copper_boundaries || other.copper_boundaries,
             hole_lands: self.hole_lands || other.hole_lands,
             masks: self.masks || other.masks,
@@ -103,6 +101,7 @@ impl std::ops::BitOr for Pools {
 const DRILLED: Pools = Pools {
     drilled: true,
     copper: false,
+    conductor_ownership: false,
     copper_boundaries: false,
     hole_lands: false,
     masks: false,
@@ -203,7 +202,7 @@ impl RuleKind {
                     ..NONE
                 },
             },
-            Self::ThinFeature(ImageSel::Copper) => Semantics {
+            Self::CopperFeatureWidth => Semantics {
                 subject: "copper_layer",
                 quantity: "copper_feature_width",
                 method: "opening_candidate_then_medial_axis_width",
@@ -215,31 +214,20 @@ impl RuleKind {
                     ..COPPER
                 },
             },
-            Self::ThinGap(ImageSel::Copper) => Semantics {
-                subject: "copper_layer",
+            Self::CopperClearance => Semantics {
+                subject: "conductor_pair",
                 quantity: "copper_to_copper_clearance",
-                method: "closing_candidate_then_medial_axis_width",
+                method: "distinct_conductor_boundary_distance",
                 finding_title: "Copper spacing is below minimum".to_owned(),
                 quantity_label: "copper-to-copper clearance".to_owned(),
-                witness_roles: ["first_boundary", "second_boundary"],
+                witness_roles: ["first_conductor", "second_conductor"],
                 pools: Pools {
                     drilled: false,
+                    conductor_ownership: true,
                     ..COPPER
                 },
             },
-            Self::ThinFeature(ImageSel::Soldermask) => Semantics {
-                subject: "soldermask_layer",
-                quantity: "soldermask_feature_width",
-                method: "opening_candidate_then_medial_axis_width",
-                finding_title: "Soldermask feature is below minimum width".to_owned(),
-                quantity_label: "soldermask feature width".to_owned(),
-                witness_roles: ["first_boundary", "second_boundary"],
-                pools: Pools {
-                    masks: true,
-                    ..NONE
-                },
-            },
-            Self::ThinGap(ImageSel::Soldermask) => Semantics {
+            Self::SoldermaskWeb => Semantics {
                 subject: "soldermask_layer",
                 quantity: "soldermask_web_width",
                 method: "closing_candidate_then_medial_axis_width",
@@ -319,13 +307,13 @@ pub(super) fn lower(pdk: &Pdk) -> Result<Vec<Rule>> {
             &copper.minimum_feature_width,
             "copper.minimum_feature_width",
             "Minimum copper feature width",
-            RuleKind::ThinFeature(ImageSel::Copper),
+            RuleKind::CopperFeatureWidth,
         ),
         (
             &copper.minimum_copper_clearance,
             "copper.minimum_copper_clearance",
             "Minimum copper-to-copper clearance",
-            RuleKind::ThinGap(ImageSel::Copper),
+            RuleKind::CopperClearance,
         ),
         (
             &copper.minimum_vscore_to_copper_clearance,
@@ -343,7 +331,7 @@ pub(super) fn lower(pdk: &Pdk) -> Result<Vec<Rule>> {
             &soldermask.minimum_web,
             "soldermask.minimum_web",
             "Minimum soldermask web",
-            RuleKind::ThinGap(ImageSel::Soldermask),
+            RuleKind::SoldermaskWeb,
         ),
         (
             &panelization.minimum_board_array_spacing,

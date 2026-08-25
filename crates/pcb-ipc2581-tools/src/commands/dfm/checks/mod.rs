@@ -10,6 +10,7 @@
 
 mod annular_ring;
 mod board_array_spacing;
+mod copper_clearance;
 mod hole_diameter;
 mod hole_pair_clearance;
 mod linework_clearance;
@@ -33,8 +34,6 @@ use super::report::{
 };
 use super::rules::{Linework, Rule, RuleKind};
 use super::waivers::{self, WaiverFile, WaiverOutcome};
-
-use thin_regions::Residue;
 
 /// Absorbs floating-point unit conversion when a measurement sits exactly
 /// on its limit.
@@ -153,7 +152,7 @@ fn skip_reason(rule: &Rule, design: &Design) -> Option<String> {
             .board_outlines
             .is_empty()
             .then(|| "board profile outlines".to_owned()),
-        RuleKind::ThinFeature(_) | RuleKind::ThinGap(_) => None,
+        RuleKind::CopperFeatureWidth | RuleKind::CopperClearance | RuleKind::SoldermaskWeb => None,
     };
     let pools = rule.kind.semantics().pools;
     let layers = (pools.copper && design.copper_layers.is_empty())
@@ -177,8 +176,9 @@ fn evaluate(rule: &Rule, design: &Design) -> Evaluation {
             linework_clearance::evaluate(limit, linework, design)
         }
         RuleKind::BoardArrayPairClearance => board_array_spacing::evaluate(limit, design),
-        RuleKind::ThinFeature(sel) => thin_regions::evaluate(limit, sel, Residue::Feature, design),
-        RuleKind::ThinGap(sel) => thin_regions::evaluate(limit, sel, Residue::Gap, design),
+        RuleKind::CopperFeatureWidth => thin_regions::copper_feature_width(limit, design),
+        RuleKind::CopperClearance => copper_clearance::evaluate(limit, design),
+        RuleKind::SoldermaskWeb => thin_regions::soldermask_web(limit, design),
     }
 }
 
