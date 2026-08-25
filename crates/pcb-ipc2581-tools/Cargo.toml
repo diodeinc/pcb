@@ -27,7 +27,11 @@ rayon = { workspace = true }
 sha2 = { workspace = true }
 toml = { workspace = true }
 uppsala = { workspace = true }
+uuid = { workspace = true, features = ["serde"] }
 zstd = { workspace = true }
 pcb-diode-api = { workspace = true }
 pcb-ui = { workspace = true }
 zip = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

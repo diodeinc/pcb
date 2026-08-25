@@ -183,12 +183,12 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum EditCommands {
-    /// Apply manufacturer/MPN selections to BOM entries
+    /// Apply manufacturer, MPN, and supplier selections to BOM entries
     Bom {
         /// IPC-2581 XML file to hydrate
         #[arg(value_hint = clap::ValueHint::FilePath)]
         file: PathBuf,
-        /// JSON file containing path-based manufacturer/MPN selections
+        /// JSON file containing path-based manufacturer, MPN, and supplier selections
         #[arg(
             short,
             long,
