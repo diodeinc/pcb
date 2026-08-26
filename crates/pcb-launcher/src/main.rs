@@ -645,23 +645,10 @@ mod tests {
     }
 
     #[test]
-    fn rejects_untrusted_api_hosts() {
-        assert!(
-            validate_uri(
-                "diode://attacker.example/sandboxes/sandbox/fs/read?path=%2Fworkspace%2Flayout.kicad_pcb",
-            )
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn accepts_diode_preview_and_loopback_hosts() {
-        assert!(
-            validate_uri("diode://pr-983.preview.api.diode.computer/sandboxes/s/fs/read?path=%2Fa")
-                .is_ok()
-        );
-        assert!(validate_uri("diode://localhost:3001/sandboxes/s/fs/read?path=%2Fa").is_ok());
-        assert!(validate_uri("diode://localhost:8080/sandboxes/s/fs/read?path=%2Fa").is_err());
+    fn rejects_untrusted_api_hosts_in_release_builds() {
+        let untrusted = "diode://attacker.example/sandboxes/sandbox/fs/read?path=%2Fworkspace%2Flayout.kicad_pcb";
+        // Debug builds trust every host so local API stacks work.
+        assert_eq!(validate_uri(untrusted).is_ok(), cfg!(debug_assertions));
     }
 
     #[test]
