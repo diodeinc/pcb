@@ -1,17 +1,17 @@
 ---
 name: zener-language
-description: Use before reading or changing `.zen` files for Zener semantics, package APIs, dependency workflow, stable topology, and validation.
+description: Use before reading or changing `.zen` files for Zener semantics, package APIs, dependency workflow, stable topology, and completion evidence.
 ---
 
 # Zener Language
 
-Zener is Starlark plus PCB-specific modules, typed electrical connections, physical parts, sourcing, layout, and validation.
+Zener is Starlark plus PCB-specific modules, typed electrical connections, physical parts, sourcing, layout, and diagnostics.
 
 ## Discover Before Authoring
 
 Use `pcb doc --package @stdlib` or `pcb doc --package <package>` to inspect public APIs and their source roots. Read the installed implementation when exact behavior matters.
 
-For toolchain behavior that may have changed, inspect the installed version and nearby entries in the [`pcb` changelog](https://github.com/diodeinc/pcb/blob/main/CHANGELOG.md) instead of relying on old examples.
+For CLI behavior, use the installed command's `--help`; do not invent or infer subcommands or flags. When version history matters, inspect the installed version and nearby entries in the [`pcb` changelog](https://github.com/diodeinc/pcb/blob/main/CHANGELOG.md) instead of relying on old examples.
 
 ## Modules and Components
 
@@ -112,7 +112,7 @@ When renaming or deleting an item, update or remove only its corresponding recor
 
 ## Packages and Dependencies
 
-The stdlib is toolchain-managed and does not belong in `[dependencies]`. For other packages, change the `load()` or `Module()` import in `.zen`, then run `pcb sync`. Let `pcb sync` maintain direct and indirect dependency state in `pcb.toml`.
+The stdlib is toolchain-managed and does not belong in `[dependencies]`. Other packages are declared by their `load()` or `Module()` imports, and the dependency state in `pcb.toml`, including indirect entries, is tool-managed.
 
 Use `pcb list -m -u` to inspect compatible and breaking updates. Use `pcb add -u` for compatible updates and `pcb list -m -versions <url>` plus `pcb add <url>@<version>` for a specific or breaking version. Do not hand-edit resolved versions or use the legacy `pcb update` workflow.
 
@@ -133,8 +133,13 @@ Prefer stdlib generics for common passives, discretes, connectors, test points, 
 
 For ordinary boards, prefer `Board(..., layers=<count>)`; standard defaults exist for 2, 4, 6, 8, and 10 layers. Customize them with `outer_copper_weight`, `copper_finish`, `solder_mask_color`, `track_widths`, and `via_dimensions`. Use explicit stackup and design-rule records only when those defaults are insufficient; an explicit `config` merges over the layers-derived defaults.
 
-## Validation
+## Completion Evidence
 
-After changing imports, run `pcb sync` from the relevant workspace or package. Run `pcb fmt` on changed Zener and `pcb build <path>` for the affected entrypoints. Use `pcb bom <entrypoint>.zen -f json` when sourceability or part selection is relevant.
+Use each supported primitive for its own purpose:
 
-Verification should cover the public API, electrical constraints, stable topology, dependencies, sourceability where applicable, and preservation of schematic position state.
+- after changing imports or dependencies, run `pcb sync` from the relevant workspace or package;
+- run `pcb fmt` on changed Zener;
+- run `pcb build <path>` for affected entrypoints to evaluate the design and collect diagnostics; for registry package curation, use `pcb build -Wstyle <path>` to promote style advice to warnings; and
+- use `pcb bom <entrypoint>.zen -f json` only when sourceability or part selection is relevant.
+
+Command success is evidence, not a complete correctness verdict. Separately review the public API, electrical constraints, stable topology, dependencies, applicable sourceability, and preservation of schematic position state. Report commands actually run and their results separately from engineering conclusions; call unavailable or unperformed work unverified.

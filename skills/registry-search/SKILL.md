@@ -62,17 +62,11 @@ Instantiate the `.zen` entrypoint from the chosen `registry:modules` result dire
 PartModule = Module("code.diode.computer/diode/registry/components/<Manufacturer>/<NAME>/<NAME>.zen")
 ```
 
-Do not manually edit `pcb.toml` to add the dependency; `pcb sync` handles manifest updates.
+Do not manually edit `pcb.toml` to add the dependency; follow the dependency workflow in `zener-language`.
 
 Use `pcb doc --package` and its reported source path for exact IO and configs. Do not infer pin names from search snippets.
 
-After adding the package to a board or module, verify the consuming design:
-
-```bash
-pcb sync
-pcb build <board-or-module-path>
-pcb bom <board-or-module-path> -f json
-```
+After adding the package to a board or module, finish the consuming `.zen` change according to `zener-language`.
 
 ## Librarian Requests
 
