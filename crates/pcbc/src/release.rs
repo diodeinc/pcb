@@ -318,7 +318,8 @@ pub fn build_board_release(
             None => None,
         };
 
-        let schematic = eval_output.to_schematic()?;
+        let mut schematic = eval_output.to_schematic()?;
+        pcb_diode_api::hydrate_schematic_from_bom_cache(&zen_path, &mut schematic);
 
         let info = ReleaseInfo {
             zen_path,
@@ -746,14 +747,16 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<Diagnostics> 
             zen_file_rel.display().to_string(),
         )));
 
-        crate::build::BuildEvalState::new(staged_resolution).build(
-            &staged_zen_path,
-            Default::default(),
-            passes,
-            false, // don't deny warnings - we'll prompt user instead
-            &mut has_errors,
-            &mut has_warnings,
-        )
+        crate::build::BuildEvalState::new(staged_resolution)
+            .with_cached_bom_hydration()
+            .build(
+                &staged_zen_path,
+                Default::default(),
+                passes,
+                false, // don't deny warnings - we'll prompt user instead
+                &mut has_errors,
+                &mut has_warnings,
+            )
     });
 
     let crate::build::BuildResult {

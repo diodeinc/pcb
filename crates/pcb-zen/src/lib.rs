@@ -79,16 +79,23 @@ pub fn lsp_with_eager(eager: bool) -> anyhow::Result<()> {
     pcb_starlark_lsp::server::stdio_server(ctx).map_err(Into::into)
 }
 
-/// Start the LSP server with `eager` and a custom request handler.
-pub fn lsp_with_custom_request_handler<F>(eager: bool, handler: F) -> anyhow::Result<()>
+/// Start the LSP server with `eager`, a custom request handler, and a
+/// post-evaluation schematic hydrator.
+pub fn lsp_with_custom_request_handler<F, H>(
+    eager: bool,
+    handler: F,
+    hydrator: H,
+) -> anyhow::Result<()>
 where
     F: Fn(&str, &serde_json::Value) -> anyhow::Result<Option<serde_json::Value>>
         + Send
         + Sync
         + 'static,
+    H: Fn(&Path, &mut Schematic) + Send + Sync + 'static,
 {
     let ctx = lsp::LspEvalContext::default()
         .set_eager(eager)
-        .with_custom_request_handler(handler);
+        .with_custom_request_handler(handler)
+        .with_schematic_hydrator(hydrator);
     pcb_starlark_lsp::server::stdio_server(ctx).map_err(Into::into)
 }

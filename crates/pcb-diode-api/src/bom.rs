@@ -3,10 +3,15 @@ use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
+    path::Path,
     time::Duration,
 };
 
-use pcb_sch::bom::{Availability, AvailabilitySummary, BOARD_QUANTITY, Offer, SourcingStockClass};
+use pcb_sch::{
+    AttributeValue, InstanceKind, Schematic,
+    bom::{Availability, AvailabilitySummary, BOARD_QUANTITY, Offer, SourcingStockClass},
+};
+use pcb_zen_core::{attrs, lang::part::PartValue};
 
 use crate::{
     WorkspaceContext,
@@ -172,7 +177,13 @@ struct MatchBomResponse {
 #[derive(Debug, Default)]
 struct PreparedBomMatch {
     availability: HashMap<String, Availability>,
-    selected_parts: HashMap<String, (String, String)>,
+    selected: HashMap<String, SelectedBomMetadata>,
+}
+
+#[derive(Debug, Default)]
+struct SelectedBomMetadata {
+    compatible_part: Option<(String, String)>,
+    datasheet_url: Option<String>,
 }
 
 struct PreparedBomResponse {
@@ -193,11 +204,14 @@ impl PreparedBomResponse {
 impl PreparedBomMatch {
     fn extend(&mut self, other: Self) {
         self.availability.extend(other.availability);
-        self.selected_parts.extend(other.selected_parts);
+        self.selected.extend(other.selected);
     }
 
     fn apply(self, bom: &mut pcb_sch::bom::Bom) {
-        for (path, (mpn, manufacturer)) in self.selected_parts {
+        for (path, selected) in self.selected {
+            let Some((mpn, manufacturer)) = selected.compatible_part else {
+                continue;
+            };
             let entry = bom
                 .entries
                 .get_mut(&path)
@@ -206,6 +220,87 @@ impl PreparedBomMatch {
             entry.manufacturer = Some(manufacturer);
         }
         bom.availability = self.availability;
+    }
+
+    fn apply_to_schematic(&self, schematic: &mut Schematic) -> usize {
+        let mut hydrated = 0;
+
+        for (instance_ref, instance) in &mut schematic.instances {
+            if instance.kind != InstanceKind::Component {
+                continue;
+            }
+
+            let path = instance_ref.instance_path.join(".");
+            let Some(selected) = self.selected.get(&path) else {
+                continue;
+            };
+
+            let has_authored_identity = [
+                attrs::PART,
+                attrs::MPN,
+                "Mpn",
+                attrs::MANUFACTURER,
+                "Manufacturer",
+            ]
+            .iter()
+            .any(|key| instance.attributes.contains_key(*key));
+            let has_authored_datasheet = [attrs::DATASHEET, "Datasheet"]
+                .iter()
+                .any(|key| instance.attributes.contains_key(*key))
+                || instance
+                    .attributes
+                    .get(attrs::PART)
+                    .and_then(|value| match value {
+                        AttributeValue::Json(value) => Some(value.clone()),
+                        AttributeValue::String(value) => serde_json::from_str(value).ok(),
+                        _ => None,
+                    })
+                    .and_then(|value| value.get("datasheet").cloned())
+                    .and_then(|value| value.as_str().map(str::to_owned))
+                    .is_some_and(|value| !value.trim().is_empty());
+
+            let projected_datasheet = selected
+                .datasheet_url
+                .as_ref()
+                .filter(|_| !has_authored_datasheet);
+            let mut changed = false;
+
+            if let Some((mpn, manufacturer)) = &selected.compatible_part
+                && !has_authored_identity
+            {
+                let part = PartValue::new(
+                    mpn.clone(),
+                    manufacturer.clone(),
+                    Vec::new(),
+                    projected_datasheet.cloned(),
+                );
+
+                instance
+                    .attributes
+                    .insert(attrs::MPN.into(), AttributeValue::String(mpn.clone()));
+                instance.attributes.insert(
+                    attrs::MANUFACTURER.into(),
+                    AttributeValue::String(manufacturer.clone()),
+                );
+                instance.attributes.insert(
+                    attrs::PART.into(),
+                    AttributeValue::Json(part.to_json_value()),
+                );
+                changed = true;
+            }
+
+            if let Some(datasheet) = projected_datasheet {
+                instance.attributes.insert(
+                    attrs::DATASHEET.into(),
+                    AttributeValue::String(datasheet.clone()),
+                );
+                changed = true;
+            }
+
+            hydrated += usize::from(changed);
+        }
+
+        hydrated
     }
 }
 
@@ -348,7 +443,7 @@ fn prepare_bom_match_for_paths(
 
     let mut seen_paths = HashSet::with_capacity(expected_paths.len());
     let mut availability = HashMap::with_capacity(expected_paths.len());
-    let mut selected_parts = HashMap::new();
+    let mut selected = HashMap::new();
     let mut retry_paths = HashSet::new();
 
     for bom_line in &match_response.results {
@@ -397,7 +492,7 @@ fn prepare_bom_match_for_paths(
                 .get(selected_offer_id)
                 .with_context(|| format!("BOM match response omitted offer {selected_offer_id}"))?;
 
-            if bom_line.match_status == BomMatchStatus::Compatible {
+            let compatible_part = if bom_line.match_status == BomMatchStatus::Compatible {
                 let mpn = selected_offer
                     .mpn
                     .as_deref()
@@ -410,9 +505,32 @@ fn prepare_bom_match_for_paths(
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .context("Selected compatible offer omitted its manufacturer")?;
-                selected_parts.insert(
+                Some((mpn.to_string(), manufacturer.to_string()))
+            } else {
+                None
+            };
+
+            let datasheet_url = if matches!(
+                bom_line.match_status,
+                BomMatchStatus::Exact | BomMatchStatus::Compatible
+            ) {
+                selected_offer
+                    .datasheet_url
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned)
+            } else {
+                None
+            };
+
+            if compatible_part.is_some() || datasheet_url.is_some() {
+                selected.insert(
                     path.to_string(),
-                    (mpn.to_string(), manufacturer.to_string()),
+                    SelectedBomMetadata {
+                        compatible_part,
+                        datasheet_url,
+                    },
                 );
             }
         }
@@ -459,7 +577,7 @@ fn prepare_bom_match_for_paths(
     Ok(PreparedBomResponse {
         prepared: PreparedBomMatch {
             availability,
-            selected_parts,
+            selected,
         },
         retry_paths,
     })
@@ -633,6 +751,19 @@ fn match_bom_with_cache(
     cache: Option<&mut WriteThroughCache>,
     now: i64,
 ) -> Result<()> {
+    prepare_bom_match_with_cache(ctx, auth_token, bom, strict, options, cache, now)?.apply(bom);
+    Ok(())
+}
+
+fn prepare_bom_match_with_cache(
+    ctx: &WorkspaceContext,
+    auth_token: Option<&str>,
+    bom: &pcb_sch::bom::Bom,
+    strict: bool,
+    options: BomMatchOptions,
+    cache: Option<&mut WriteThroughCache>,
+    now: i64,
+) -> Result<PreparedBomMatch> {
     let url = bom_match_url(ctx.api_base_url(), strict);
     let mut lines = bom_match_request_lines(&url, bom_request_entries(bom)?)?;
     for line in &mut lines {
@@ -659,8 +790,7 @@ fn match_bom_with_cache(
                 prepared.extend(cached.prepared);
             }
         }
-        prepared.apply(bom);
-        return Ok(());
+        return Ok(prepared);
     }
 
     let mut refresh_lines = Vec::new();
@@ -675,8 +805,7 @@ fn match_bom_with_cache(
     }
 
     if refresh_lines.is_empty() {
-        prepared.apply(bom);
-        return Ok(());
+        return Ok(prepared);
     }
 
     let refresh_entries = refresh_lines
@@ -744,8 +873,70 @@ fn match_bom_with_cache(
         }
         log::warn!("BOM matching incomplete; using available lines: {error:#}");
     }
-    prepared.apply(bom);
-    Ok(())
+    Ok(prepared)
+}
+
+/// Opportunistically hydrate a schematic from previously cached BOM matches.
+///
+/// This path never contacts the API. Cache misses and invalid cache lines leave
+/// the corresponding raw schematic components unchanged.
+pub fn hydrate_schematic_from_bom_cache(source_path: &Path, schematic: &mut Schematic) {
+    if let Err(error) = try_hydrate_schematic_from_bom_cache(source_path, schematic) {
+        log::warn!("Ignoring cached BOM hydration failure: {error:#}");
+    }
+}
+
+fn try_hydrate_schematic_from_bom_cache(
+    source_path: &Path,
+    schematic: &mut Schematic,
+) -> Result<usize> {
+    let ctx = WorkspaceContext::from_path(source_path);
+    let strict = ctx.bom_strict()?;
+    let mut cache = WriteThroughCache::open(BOM_MATCH_CACHE_NAMESPACE)?;
+    hydrate_schematic_from_bom_cache_with_cache(
+        &ctx,
+        schematic,
+        strict,
+        Some(&mut cache),
+        unix_now()?,
+    )
+}
+
+fn hydrate_schematic_from_bom_cache_with_cache(
+    ctx: &WorkspaceContext,
+    schematic: &mut Schematic,
+    strict: bool,
+    cache: Option<&mut WriteThroughCache>,
+    now: i64,
+) -> Result<usize> {
+    let mut component_paths = HashSet::new();
+    for (instance_ref, instance) in &schematic.instances {
+        if instance.kind != InstanceKind::Component {
+            continue;
+        }
+        let path = instance_ref.instance_path.join(".");
+        if path.is_empty()
+            || instance.reference_designator.is_none()
+            || !component_paths.insert(path)
+        {
+            return Ok(0);
+        }
+    }
+
+    let bom = schematic.bom().filter_excluded();
+    let prepared = prepare_bom_match_with_cache(
+        ctx,
+        None,
+        &bom,
+        strict,
+        BomMatchOptions {
+            mode: BomMatchMode::Offline,
+            ..Default::default()
+        },
+        cache,
+        now,
+    )?;
+    Ok(prepared.apply_to_schematic(schematic))
 }
 
 /// Component key for pricing requests
@@ -947,6 +1138,7 @@ mod tests {
 
     use httpmock::{Method::POST, MockServer};
     use pcb_sch::bom::{Bom, BomEntry, GenericComponent, Resistor};
+    use pcb_sch::{AttributeValue, Instance, InstanceRef, ModuleRef, Schematic};
 
     use super::*;
 
@@ -1011,6 +1203,37 @@ mod tests {
             HashMap::from([("root.U1".to_string(), entry)]),
             HashMap::from([("root.U1".to_string(), "U1".to_string())]),
         )
+    }
+
+    fn test_schematic() -> Schematic {
+        let module = ModuleRef::new("/tmp/root.zen", "Root");
+        let instance_ref = InstanceRef::new(module.clone(), vec!["root".into(), "U1".into()]);
+        let mut instance = Instance::component(module);
+        instance.reference_designator = Some("U1".to_string());
+        instance
+            .attributes
+            .insert("package".into(), AttributeValue::String("0603".into()));
+        instance
+            .attributes
+            .insert("value".into(), AttributeValue::String("10kOhm".into()));
+        instance
+            .attributes
+            .insert("type".into(), AttributeValue::String("resistor".into()));
+        instance
+            .attributes
+            .insert("resistance".into(), AttributeValue::String("10kOhm".into()));
+
+        let mut schematic = Schematic::default();
+        schematic.instances.insert(instance_ref, instance);
+        schematic
+    }
+
+    fn test_component(schematic: &Schematic) -> &Instance {
+        schematic
+            .instances
+            .values()
+            .find(|instance| instance.kind == InstanceKind::Component)
+            .unwrap()
     }
 
     fn compatible_response_for(path: &str, offer_id: &str, mpn: &str) -> serde_json::Value {
@@ -1209,6 +1432,180 @@ mod tests {
             selected_offer.datasheet_url.as_deref(),
             Some("https://example.com/API-MPN.pdf")
         );
+    }
+
+    #[test]
+    fn compatible_match_hydrates_missing_schematic_metadata() {
+        let response: MatchBomResponse = serde_json::from_value(compatible_response()).unwrap();
+        let mut schematic = test_schematic();
+        let prepared = prepare_bom_match(&schematic.bom(), &response).unwrap();
+
+        assert_eq!(prepared.apply_to_schematic(&mut schematic), 1);
+
+        let component = test_component(&schematic);
+        assert_eq!(component.mpn().as_deref(), Some("API-MPN"));
+        assert_eq!(
+            component.manufacturer().as_deref(),
+            Some("API Manufacturer")
+        );
+        assert_eq!(
+            component.string_attr(&["datasheet"]).as_deref(),
+            Some("https://example.com/API-MPN.pdf")
+        );
+    }
+
+    #[test]
+    fn hydration_preserves_authored_part_and_datasheet() {
+        let response: MatchBomResponse = serde_json::from_value(compatible_response()).unwrap();
+        let mut schematic = test_schematic();
+        let component = schematic.instances.values_mut().next().unwrap();
+        component.attributes.insert(
+            "part".into(),
+            AttributeValue::Json(serde_json::json!({
+                "mpn": "AUTHORED-MPN",
+                "manufacturer": "Authored Manufacturer",
+                "qualifications": [],
+                "datasheet": "https://example.com/authored.pdf"
+            })),
+        );
+        let prepared = prepare_bom_match_for_paths(
+            &test_bom(),
+            &response,
+            &HashSet::from(["root.U1".to_string()]),
+        )
+        .unwrap()
+        .into_complete()
+        .unwrap();
+
+        assert_eq!(prepared.apply_to_schematic(&mut schematic), 0);
+
+        let component = test_component(&schematic);
+        assert_eq!(component.mpn().as_deref(), Some("AUTHORED-MPN"));
+        let AttributeValue::Json(part) = &component.attributes[attrs::PART] else {
+            panic!("authored part should remain structured JSON");
+        };
+        assert_eq!(
+            part["datasheet"].as_str(),
+            Some("https://example.com/authored.pdf")
+        );
+    }
+
+    #[test]
+    fn fuzzy_match_does_not_hydrate_schematic() {
+        let mut response = compatible_response();
+        response["results"][0]["match"] = serde_json::json!("MATCH_FUZZY");
+        let response: MatchBomResponse = serde_json::from_value(response).unwrap();
+        let mut schematic = test_schematic();
+        let prepared = prepare_bom_match(&schematic.bom(), &response).unwrap();
+
+        assert_eq!(prepared.apply_to_schematic(&mut schematic), 0);
+        assert!(test_component(&schematic).part().is_none());
+        assert!(
+            test_component(&schematic)
+                .string_attr(&["datasheet"])
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn exact_match_only_hydrates_missing_datasheet() {
+        let mut response = compatible_response();
+        response["results"][0]["match"] = serde_json::json!("MATCH_EXACT");
+        let response: MatchBomResponse = serde_json::from_value(response).unwrap();
+        let mut schematic = test_schematic();
+        let prepared = prepare_bom_match(&schematic.bom(), &response).unwrap();
+
+        assert_eq!(prepared.apply_to_schematic(&mut schematic), 1);
+
+        let component = test_component(&schematic);
+        assert!(component.part().is_none());
+        assert_eq!(
+            component.string_attr(&["datasheet"]).as_deref(),
+            Some("https://example.com/API-MPN.pdf")
+        );
+    }
+
+    #[test]
+    fn schematic_cache_miss_leaves_raw_schematic_unchanged() {
+        let context = WorkspaceContext::from_api_base_url("https://api.example.com");
+        let mut schematic = test_schematic();
+        let before = serde_json::to_value(&schematic).unwrap();
+
+        assert_eq!(
+            hydrate_schematic_from_bom_cache_with_cache(
+                &context,
+                &mut schematic,
+                true,
+                None,
+                unix_now().unwrap(),
+            )
+            .unwrap(),
+            0
+        );
+        assert_eq!(serde_json::to_value(&schematic).unwrap(), before);
+    }
+
+    #[test]
+    fn incomplete_schematic_is_left_unchanged() {
+        let context = WorkspaceContext::from_api_base_url("https://api.example.com");
+        let mut schematic = test_schematic();
+        schematic
+            .instances
+            .values_mut()
+            .next()
+            .unwrap()
+            .reference_designator = None;
+        let before = serde_json::to_value(&schematic).unwrap();
+
+        assert_eq!(
+            hydrate_schematic_from_bom_cache_with_cache(
+                &context,
+                &mut schematic,
+                true,
+                None,
+                unix_now().unwrap(),
+            )
+            .unwrap(),
+            0
+        );
+        assert_eq!(serde_json::to_value(&schematic).unwrap(), before);
+    }
+
+    #[test]
+    fn schematic_hydration_reads_cache_without_network() {
+        let server = MockServer::start();
+        let network = server.mock(|when, then| {
+            when.method(POST).path("/api/boms/match");
+            then.status(500);
+        });
+        let context = WorkspaceContext::from_api_base_url(server.base_url());
+        let tempdir = tempfile::tempdir().unwrap();
+        let mut cache = cache_for(&tempdir);
+        let mut schematic = test_schematic();
+        let bom = schematic.bom().filter_excluded();
+        let url = bom_match_url(context.api_base_url(), true);
+        let line = bom_match_request_lines(&url, bom_request_entries(&bom).unwrap())
+            .unwrap()
+            .pop()
+            .unwrap();
+        let response: MatchBomResponse = serde_json::from_value(compatible_response()).unwrap();
+        cache
+            .store_many(&[(line.cache_key, serde_json::to_vec(&response).unwrap())])
+            .unwrap();
+
+        assert_eq!(
+            hydrate_schematic_from_bom_cache_with_cache(
+                &context,
+                &mut schematic,
+                true,
+                Some(&mut cache),
+                unix_now().unwrap(),
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(test_component(&schematic).mpn().as_deref(), Some("API-MPN"));
+        network.assert_calls(0);
     }
 
     #[test]

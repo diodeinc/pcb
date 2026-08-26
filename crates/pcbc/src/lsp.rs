@@ -6,7 +6,11 @@ pub struct LspArgs {}
 const RESOLVE_DATASHEET_METHOD: &str = "pcb/resolveDatasheet";
 
 pub fn execute(_args: LspArgs) -> anyhow::Result<()> {
-    pcb_zen::lsp_with_custom_request_handler(false, handle_custom_request)
+    pcb_zen::lsp_with_custom_request_handler(
+        false,
+        handle_custom_request,
+        pcb_diode_api::hydrate_schematic_from_bom_cache,
+    )
 }
 
 fn handle_custom_request(
