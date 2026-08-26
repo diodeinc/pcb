@@ -1331,6 +1331,26 @@ fn generate_ipc2581(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
         .context("No layout directory for IPC-2581 generation")?;
     let ipc2581_path = manufacturing_dir.join("ipc2581.xml");
 
+    export_ipc2581(&kicad_pcb_path, &ipc2581_path)?;
+
+    // Generate HTML export from the IPC-2581 XML file (silently, without printing)
+    let ipc2581_html_path = manufacturing_dir.join("ipc2581.html");
+    let ipc_content = pcb_ipc2581_tools::utils::file::load_ipc_file(&ipc2581_path)
+        .context("Failed to load IPC-2581 file for HTML export")?;
+    let ipc = pcb_ipc2581_tools::ipc2581::Ipc2581::parse(&ipc_content)
+        .context("Failed to parse IPC-2581 file for HTML export")?;
+    let accessor = pcb_ipc2581_tools::accessors::IpcAccessor::new(&ipc);
+    let html = pcb_ipc2581_tools::commands::html_export::generate_html(
+        &accessor,
+        pcb_ipc2581_tools::UnitFormat::Mm,
+    )
+    .context("Failed to generate HTML from IPC-2581")?;
+    fs::write(&ipc2581_html_path, html).context("Failed to write IPC-2581 HTML export")?;
+
+    Ok(())
+}
+
+pub(crate) fn export_ipc2581(kicad_pcb_path: &Path, ipc2581_path: &Path) -> Result<()> {
     KiCadCliBuilder::new()
         .command("pcb")
         .subcommand("export")
@@ -1346,20 +1366,6 @@ fn generate_ipc2581(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
         .arg(kicad_pcb_path.to_string_lossy())
         .run()
         .context("Failed to generate IPC-2581 file")?;
-
-    // Generate HTML export from the IPC-2581 XML file (silently, without printing)
-    let ipc2581_html_path = manufacturing_dir.join("ipc2581.html");
-    let ipc_content = pcb_ipc2581_tools::utils::file::load_ipc_file(&ipc2581_path)
-        .context("Failed to load IPC-2581 file for HTML export")?;
-    let ipc = pcb_ipc2581_tools::ipc2581::Ipc2581::parse(&ipc_content)
-        .context("Failed to parse IPC-2581 file for HTML export")?;
-    let accessor = pcb_ipc2581_tools::accessors::IpcAccessor::new(&ipc);
-    let html = pcb_ipc2581_tools::commands::html_export::generate_html(
-        &accessor,
-        pcb_ipc2581_tools::UnitFormat::Mm,
-    )
-    .context("Failed to generate HTML from IPC-2581")?;
-    fs::write(&ipc2581_html_path, html).context("Failed to write IPC-2581 HTML export")?;
 
     Ok(())
 }

@@ -27,6 +27,7 @@ Commands:
   import      Import a KiCad schematic or project into a Zener board repository
   doc         Generate package documentation
   layout      Layout PCB designs
+  dfm         Run DFM checks for a .zen board
   fmt         Format .zen files
   open        Open PCB layout files
   publish     Publish packages and boards by creating version tags
