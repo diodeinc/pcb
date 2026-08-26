@@ -236,6 +236,25 @@ fn plan_repairs_impl(
     )
 }
 
+/// The key with volatile item fingerprints stripped, for before/after
+/// identity comparisons.
+fn coarse_key(key: &SchematicIssueKey) -> SchematicIssueKey {
+    let mut key = key.clone();
+    match &mut key {
+        SchematicIssueKey::UnexpectedNet { items, .. }
+        | SchematicIssueKey::UnexpectedConnection { items, .. }
+        | SchematicIssueKey::Shorted { items, .. } => items.clear(),
+        SchematicIssueKey::MissingSymbol(_)
+        | SchematicIssueKey::DuplicateSymbol(_)
+        | SchematicIssueKey::MismatchedSymbolId { .. }
+        | SchematicIssueKey::UnexpectedSymbol(_)
+        | SchematicIssueKey::UnboundSymbol(_)
+        | SchematicIssueKey::DisconnectedNet(_)
+        | SchematicIssueKey::MissingPort(_) => {}
+    }
+    key
+}
+
 fn issue_summaries<'a>(issues: impl Iterator<Item = &'a SchematicIssue>) -> String {
     issues
         .map(|issue| issue.summary())
@@ -283,20 +302,23 @@ fn build_plan(
                 if inspection_after
                     .issues
                     .iter()
-                    .any(|issue| &issue.key == key)
+                    .any(|issue| coarse_key(&issue.key) == coarse_key(key))
                 {
                     bail!("planned repair did not resolve schematic issue {key:?}");
                 }
             }
+            // Compare without item fingerprints: a pre-existing issue whose
+            // affected islands shifted is still the same issue, not a new one
+            // this repair introduced.
             let before_keys = before
                 .issues
                 .iter()
-                .map(|issue| &issue.key)
+                .map(|issue| coarse_key(&issue.key))
                 .collect::<std::collections::BTreeSet<_>>();
             let new_issues = inspection_after
                 .issues
                 .iter()
-                .filter(|issue| !before_keys.contains(&issue.key))
+                .filter(|issue| !before_keys.contains(&coarse_key(&issue.key)))
                 .collect::<Vec<_>>();
             if !new_issues.is_empty() {
                 bail!(

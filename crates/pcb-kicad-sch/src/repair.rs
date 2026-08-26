@@ -132,6 +132,21 @@ pub(crate) fn plan_connectivity_repair(
             break;
         };
 
+        // Whatever gets dismantled, its nets get rebuilt — including issues
+        // repaired only because they overlap the selection.
+        if let SchematicIssue::Shorted { net_names, .. } = issue {
+            reconnect_nets.extend(net_names.iter().cloned());
+        }
+        if let SchematicIssue::Shorted { islands, .. }
+        | SchematicIssue::UnexpectedConnection { islands, .. } = issue
+        {
+            for island in islands {
+                if let Some(provenance) = current_observed.islands.get(island) {
+                    reconnect_nets.extend(expected_names_for_island(&expected, provenance));
+                }
+            }
+        }
+
         let candidates = repair_candidates(issue, &expected, &current_observed.islands);
         let mut valid = Vec::new();
         for candidate in candidates {
