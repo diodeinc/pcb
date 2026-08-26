@@ -21,6 +21,7 @@ use crate::{
 const BOM_MATCH_TIMEOUT_SECS: u64 = 120;
 const BOM_MATCH_CACHE_NAMESPACE: &str = "bom-match-v2";
 const DEFAULT_BOM_CACHE_TTL: Duration = Duration::from_secs(10 * 60);
+const SCHEMATIC_BOM_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BomMatchMode {
@@ -40,6 +41,15 @@ impl Default for BomMatchOptions {
         Self {
             mode: BomMatchMode::Online,
             cache_ttl: DEFAULT_BOM_CACHE_TTL,
+        }
+    }
+}
+
+impl BomMatchOptions {
+    pub const fn for_schematic(mode: BomMatchMode) -> Self {
+        Self {
+            mode,
+            cache_ttl: SCHEMATIC_BOM_CACHE_TTL,
         }
     }
 }
@@ -876,36 +886,43 @@ fn prepare_bom_match_with_cache(
     Ok(prepared)
 }
 
-/// Opportunistically hydrate a schematic from previously cached BOM matches.
+/// Opportunistically hydrate a schematic from BOM matches.
 ///
-/// This path never contacts the API. Cache misses and invalid cache lines leave
-/// the corresponding raw schematic components unchanged.
-pub fn hydrate_schematic_from_bom_cache(source_path: &Path, schematic: &mut Schematic) {
-    if let Err(error) = try_hydrate_schematic_from_bom_cache(source_path, schematic) {
-        log::warn!("Ignoring cached BOM hydration failure: {error:#}");
+/// Online mode refreshes stale and missing cache lines. Any failure falls back
+/// to stale cache data, while unresolved components remain unchanged.
+pub fn hydrate_schematic_from_bom(
+    source_path: &Path,
+    schematic: &mut Schematic,
+    mode: BomMatchMode,
+) {
+    if let Err(error) = try_hydrate_schematic_from_bom(source_path, schematic, mode) {
+        log::warn!("Ignoring BOM hydration failure: {error:#}");
     }
 }
 
-fn try_hydrate_schematic_from_bom_cache(
+fn try_hydrate_schematic_from_bom(
     source_path: &Path,
     schematic: &mut Schematic,
+    mode: BomMatchMode,
 ) -> Result<usize> {
     let ctx = WorkspaceContext::from_path(source_path);
     let strict = ctx.bom_strict()?;
     let mut cache = WriteThroughCache::open(BOM_MATCH_CACHE_NAMESPACE)?;
-    hydrate_schematic_from_bom_cache_with_cache(
+    hydrate_schematic_from_bom_with_cache(
         &ctx,
         schematic,
         strict,
+        mode,
         Some(&mut cache),
         unix_now()?,
     )
 }
 
-fn hydrate_schematic_from_bom_cache_with_cache(
+fn hydrate_schematic_from_bom_with_cache(
     ctx: &WorkspaceContext,
     schematic: &mut Schematic,
     strict: bool,
+    mode: BomMatchMode,
     cache: Option<&mut WriteThroughCache>,
     now: i64,
 ) -> Result<usize> {
@@ -929,10 +946,7 @@ fn hydrate_schematic_from_bom_cache_with_cache(
         None,
         &bom,
         strict,
-        BomMatchOptions {
-            mode: BomMatchMode::Offline,
-            ..Default::default()
-        },
+        BomMatchOptions::for_schematic(mode),
         cache,
         now,
     )?;
@@ -1515,10 +1529,11 @@ mod tests {
             .reference_designator = None;
 
         assert_eq!(
-            hydrate_schematic_from_bom_cache_with_cache(
+            hydrate_schematic_from_bom_with_cache(
                 &context,
                 &mut schematic,
                 true,
+                BomMatchMode::Offline,
                 None,
                 unix_now().unwrap(),
             )
@@ -1528,40 +1543,39 @@ mod tests {
     }
 
     #[test]
-    fn schematic_hydration_reads_cache_without_network() {
+    fn schematic_hydration_refreshes_online_and_reuses_cache_offline() {
         let server = MockServer::start();
         let network = server.mock(|when, then| {
-            when.method(POST).path("/api/boms/match");
-            then.status(500);
+            when.method(POST)
+                .path("/api/boms/match")
+                .query_param("strict", "true");
+            then.status(200).json_body(compatible_response());
         });
         let context = WorkspaceContext::from_api_base_url(server.base_url());
         let tempdir = tempfile::tempdir().unwrap();
         let mut cache = cache_for(&tempdir);
-        let mut schematic = test_schematic();
-        let bom = schematic.bom().filter_excluded();
-        let url = bom_match_url(context.api_base_url(), true);
-        let line = bom_match_request_lines(&url, bom_request_entries(&bom).unwrap())
-            .unwrap()
-            .pop()
-            .unwrap();
-        let response: MatchBomResponse = serde_json::from_value(compatible_response()).unwrap();
-        cache
-            .store_many(&[(line.cache_key, serde_json::to_vec(&response).unwrap())])
-            .unwrap();
+        let now = unix_now().unwrap();
 
-        assert_eq!(
-            hydrate_schematic_from_bom_cache_with_cache(
+        for (mode, expected_mpn, expected_calls) in [
+            (BomMatchMode::Offline, None, 0),
+            (BomMatchMode::Online, Some("API-MPN"), 1),
+            (BomMatchMode::Offline, Some("API-MPN"), 1),
+        ] {
+            let mut schematic = test_schematic();
+            let hydrated = hydrate_schematic_from_bom_with_cache(
                 &context,
                 &mut schematic,
                 true,
+                mode,
                 Some(&mut cache),
-                unix_now().unwrap(),
+                now,
             )
-            .unwrap(),
-            1
-        );
-        assert_eq!(test_component(&schematic).mpn().as_deref(), Some("API-MPN"));
-        network.assert_calls(0);
+            .unwrap();
+
+            assert_eq!(hydrated, usize::from(expected_mpn.is_some()));
+            assert_eq!(test_component(&schematic).mpn().as_deref(), expected_mpn);
+            network.assert_calls(expected_calls);
+        }
     }
 
     #[test]

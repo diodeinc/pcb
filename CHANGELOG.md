@@ -14,6 +14,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- Refresh stale or missing BOM matches during online build, layout, apply, and publish flows while retaining cached fallback.
 - Hydrate evaluated schematics with compatible part and datasheet metadata from the local BOM cache without network access.
 - Added cross-platform `diode://` links that open sandbox layouts in KiCad with live sync and native recovery prompts.
 - The interposer mate constellation is S13: uniform 2×3 blocks with corner mate-detect loops.
