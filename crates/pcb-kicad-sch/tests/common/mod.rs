@@ -23,6 +23,12 @@ use pcb_zen_core::{
 
 const PACKAGE_URL: &str = "github.com/diodeinc/pcb-kicad-sch-analysis-fixture";
 
+/// The pcb-kicad-sch fixture tree, workspace-relative so sibling test crates
+/// can share this module via `#[path]`.
+pub fn test_data_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../pcb-kicad-sch/test-data")
+}
+
 /// A compiled Zener project paired with a parsed KiCad project.
 ///
 /// The project path is relative to this crate's `test-data` directory. Tests can
@@ -34,7 +40,7 @@ pub struct AnalysisFixture {
 
 impl AnalysisFixture {
     pub fn load(project: &str, zener_entrypoint: &str, kicad_project: &str) -> Self {
-        let test_data = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-data");
+        let test_data = test_data_dir();
         let project = test_data.join(project);
         let netlist = compile_zener_project(&project, zener_entrypoint);
         let project = TestProject::load(project.join(kicad_project));
@@ -175,7 +181,7 @@ impl TestProject {
 }
 
 pub fn compile_fixture(project: &str, entrypoint: &str) -> pcb_sch::Schematic {
-    let test_data = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-data");
+    let test_data = test_data_dir();
     compile_zener_project(&test_data.join(project), entrypoint)
 }
 
