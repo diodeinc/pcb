@@ -13,6 +13,7 @@ mod board_array_spacing;
 mod copper_clearance;
 mod hole_diameter;
 mod hole_pair_clearance;
+mod layer_count;
 mod linework_clearance;
 mod slot_width;
 mod thin_regions;
@@ -32,7 +33,7 @@ use super::report::{
     Evidence, Finding, LayerRef, Location, Measurement, RuleResult, RuleStatus, SourceLocator,
     Subject, Witness,
 };
-use super::rules::{Linework, Rule, RuleKind};
+use super::rules::{Comparison, Linework, Rule, RuleKind};
 use super::waivers::{self, WaiverFile, WaiverOutcome};
 
 /// Absorbs floating-point unit conversion when a measurement sits exactly
@@ -64,6 +65,23 @@ struct Evaluation {
     measured: Vec<Measured>,
 }
 
+struct CountEvaluation {
+    actual: u32,
+    layers: Vec<LayerRef>,
+    subjects: Vec<Subject>,
+}
+
+enum RuleEvaluation {
+    Distance(Evaluation),
+    Count(CountEvaluation),
+}
+
+impl From<Evaluation> for RuleEvaluation {
+    fn from(evaluation: Evaluation) -> Self {
+        Self::Distance(evaluation)
+    }
+}
+
 pub(super) fn run(
     rules: &[Rule],
     design: &Design,
@@ -77,24 +95,38 @@ pub(super) fn run(
             Some(reason) => result.skip(reason),
             None => {
                 let evaluation = evaluate(rule, design);
-                let limit = rule.limit.millimeters();
-                match evaluation.checked {
-                    // A nominally populated pool can still yield nothing to
-                    // measure (e.g. hole pairs with disjoint spans); an
-                    // unexercised rule must not read as validated.
-                    0 => result.skip(format!(
-                        "no measurable {} subjects in the selected layout target",
-                        rule.kind.semantics().subject
-                    )),
-                    checked => {
-                        result.checked = checked;
-                        results.findings.extend(
-                            evaluation
-                                .measured
-                                .into_iter()
-                                .filter(|measured| violates(&measured.distance, limit))
-                                .map(|measured| finding(rule, measured)),
-                        );
+                match evaluation {
+                    RuleEvaluation::Distance(evaluation) => {
+                        debug_assert_eq!(rule.comparison, Comparison::Minimum);
+                        let limit = rule.limit.length().millimeters();
+                        match evaluation.checked {
+                            // A nominally populated pool can still yield nothing to
+                            // measure (e.g. hole pairs with disjoint spans); an
+                            // unexercised rule must not read as validated.
+                            0 => result.skip(format!(
+                                "no measurable {} subjects in the selected layout target",
+                                rule.kind.semantics().subject
+                            )),
+                            checked => {
+                                result.checked = checked;
+                                results.findings.extend(
+                                    evaluation
+                                        .measured
+                                        .into_iter()
+                                        .filter(|measured| violates(&measured.distance, limit))
+                                        .map(|measured| finding(rule, measured)),
+                                );
+                            }
+                        }
+                    }
+                    RuleEvaluation::Count(evaluation) => {
+                        result.checked = 1;
+                        let limit = rule.limit.count();
+                        if violates_count(evaluation.actual, rule.comparison, limit) {
+                            results
+                                .findings
+                                .push(count_finding(rule, evaluation, limit));
+                        }
                     }
                 }
             }
@@ -126,10 +158,18 @@ fn violates(distance: &Distance, limit_mm: f64) -> bool {
     distance.certainly_below(limit_mm - COMPARISON_EPSILON_MM)
 }
 
+fn violates_count(actual: u32, comparison: Comparison, limit: u32) -> bool {
+    match comparison {
+        Comparison::Minimum => actual < limit,
+        Comparison::Maximum => actual > limit,
+    }
+}
+
 /// The one skip policy: a rule is skipped when its subject pool or a
 /// required layer pool is empty for the selected layout target.
 fn skip_reason(rule: &Rule, design: &Design) -> Option<String> {
     let subjects = match rule.kind {
+        RuleKind::CopperLayerCount => None,
         RuleKind::BoardArrayPairClearance if design.scope != ArtworkScope::ArrayFlattened => {
             return Some("board-array spacing requires --layout-target board-array".to_owned());
         }
@@ -165,20 +205,21 @@ fn skip_reason(rule: &Rule, design: &Design) -> Option<String> {
         .map(|what| format!("no {what} in the selected layout target"))
 }
 
-fn evaluate(rule: &Rule, design: &Design) -> Evaluation {
-    let limit = rule.limit.millimeters();
+fn evaluate(rule: &Rule, design: &Design) -> RuleEvaluation {
+    let limit = || rule.limit.length().millimeters();
     match rule.kind {
-        RuleKind::HoleDiameter(class) => hole_diameter::evaluate(class, design),
-        RuleKind::SlotWidth => slot_width::evaluate(design),
-        RuleKind::HolePairClearance => hole_pair_clearance::evaluate(limit, design),
-        RuleKind::AnnularRing(class) => annular_ring::evaluate(limit, class, design),
+        RuleKind::CopperLayerCount => RuleEvaluation::Count(layer_count::evaluate(design)),
+        RuleKind::HoleDiameter(class) => hole_diameter::evaluate(class, design).into(),
+        RuleKind::SlotWidth => slot_width::evaluate(design).into(),
+        RuleKind::HolePairClearance => hole_pair_clearance::evaluate(limit(), design).into(),
+        RuleKind::AnnularRing(class) => annular_ring::evaluate(limit(), class, design).into(),
         RuleKind::LineworkToCopperClearance(linework) => {
-            linework_clearance::evaluate(limit, linework, design)
+            linework_clearance::evaluate(limit(), linework, design).into()
         }
-        RuleKind::BoardArrayPairClearance => board_array_spacing::evaluate(limit, design),
-        RuleKind::CopperFeatureWidth => thin_regions::copper_feature_width(limit, design),
-        RuleKind::CopperClearance => copper_clearance::evaluate(limit, design),
-        RuleKind::SoldermaskWeb => thin_regions::soldermask_web(limit, design),
+        RuleKind::BoardArrayPairClearance => board_array_spacing::evaluate(limit(), design).into(),
+        RuleKind::CopperFeatureWidth => thin_regions::copper_feature_width(limit(), design).into(),
+        RuleKind::CopperClearance => copper_clearance::evaluate(limit(), design).into(),
+        RuleKind::SoldermaskWeb => thin_regions::soldermask_web(limit(), design).into(),
     }
 }
 
@@ -186,9 +227,11 @@ fn evaluate(rule: &Rule, design: &Design) -> Evaluation {
 /// and witness roles come from the rule kind; the location is the measured
 /// distance itself.
 fn finding(rule: &Rule, measured: Measured) -> Finding {
-    let limit = rule.limit.millimeters();
+    let limit = rule.limit.length().millimeters();
     let semantics = rule.kind.semantics();
-    let [first_role, second_role] = semantics.witness_roles;
+    let [first_role, second_role] = semantics
+        .witness_roles
+        .expect("distance-valued rules define witness roles");
     let distance = measured.distance;
     let layer_names = measured
         .layers
@@ -212,7 +255,7 @@ fn finding(rule: &Rule, measured: Measured) -> Finding {
             "{} is {:.6} mm{on_layers}; the PDK requires at least {limit:.6} mm",
             semantics.quantity_label, distance.mm
         ),
-        measurement: Measurement::minimum(distance.mm, limit),
+        measurement: Measurement::minimum_distance(distance.mm, limit),
         location: Location {
             point: Some(distance.midpoint().into()),
             bounding_box: Some(measured.bbox.into()),
@@ -224,6 +267,38 @@ fn finding(rule: &Rule, measured: Measured) -> Finding {
         layers: measured.layers,
         subjects: measured.subjects,
         evidence: measured.evidence,
+    }
+}
+
+fn count_finding(rule: &Rule, measured: CountEvaluation, limit: u32) -> Finding {
+    let (title, requirement, measurement) = match rule.comparison {
+        Comparison::Minimum => (
+            "Copper layer count is below the minimum",
+            format!("requires at least {limit}"),
+            Measurement::minimum_count(measured.actual, limit),
+        ),
+        Comparison::Maximum => (
+            "Copper layer count exceeds the maximum",
+            format!("permits at most {limit}"),
+            Measurement::maximum_count(measured.actual, limit),
+        ),
+    };
+    Finding {
+        id: String::new(),
+        rule_id: rule.id.clone(),
+        severity: rule.severity,
+        waived: false,
+        waiver_reason: None,
+        title: title.to_owned(),
+        message: format!(
+            "copper layer count is {}; the PDK {requirement}",
+            measured.actual
+        ),
+        measurement,
+        location: Location::default(),
+        layers: measured.layers,
+        subjects: measured.subjects,
+        evidence: Vec::new(),
     }
 }
 
@@ -349,7 +424,7 @@ mod tests {
             waiver_reason: None,
             title: String::new(),
             message: String::new(),
-            measurement: Measurement::minimum(0.0, 1.0),
+            measurement: Measurement::minimum_distance(0.0, 1.0),
             location: Location {
                 point: Some(ReportPoint { x, y: 0.0 }),
                 bounding_box: None,

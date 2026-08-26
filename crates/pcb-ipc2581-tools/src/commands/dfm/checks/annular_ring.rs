@@ -262,7 +262,7 @@ minimum_pth_annular_ring = "0.2 mm"
         let rule = rule();
         let design =
             Design::extract(ipc, ArtworkScope::Board, std::slice::from_ref(&rule)).unwrap();
-        evaluate(rule.limit.millimeters(), HoleClass::Pth, &design)
+        evaluate(rule.limit.length().millimeters(), HoleClass::Pth, &design)
     }
 
     #[test]

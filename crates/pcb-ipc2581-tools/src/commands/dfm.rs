@@ -1,5 +1,6 @@
 //! PDK-driven manufacturability checks for IPC-2581 geometry.
 
+use std::borrow::Cow;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -10,6 +11,7 @@ use crate::LayoutTarget;
 use crate::ipc2581::Ipc2581;
 use crate::utils::file as file_utils;
 
+mod builtin_pdks;
 mod checks;
 mod design;
 mod pdk;
@@ -25,6 +27,12 @@ pub struct CheckOptions {
     pub layout_target: LayoutTarget,
 }
 
+/// PDK source bytes plus the stable identity echoed into reports.
+struct LoadedPdk {
+    path: String,
+    bytes: Cow<'static, [u8]>,
+}
+
 /// A parsed waiver file plus the identity the report echoes back.
 struct LoadedWaivers {
     path: String,
@@ -35,19 +43,18 @@ struct LoadedWaivers {
 pub fn execute_check(file: &Path, options: &CheckOptions) -> Result<()> {
     let input_bytes = std::fs::read(file)
         .with_context(|| format!("failed to read IPC-2581 file {}", file.display()))?;
-    let pdk_bytes = std::fs::read(&options.pdk)
-        .with_context(|| format!("failed to read PDK file {}", options.pdk.display()))?;
-    let pdk_source = std::str::from_utf8(&pdk_bytes)
-        .with_context(|| format!("PDK file {} is not UTF-8", options.pdk.display()))?;
+    let loaded_pdk = load_pdk(&options.pdk)?;
+    let pdk_source = std::str::from_utf8(&loaded_pdk.bytes)
+        .with_context(|| format!("PDK {} is not UTF-8", loaded_pdk.path))?;
     let pdk = pdk::Pdk::parse(pdk_source)
-        .with_context(|| format!("failed to parse PDK file {}", options.pdk.display()))?;
+        .with_context(|| format!("failed to parse PDK {}", loaded_pdk.path))?;
 
-    let rules = rules::lower(&pdk)
-        .with_context(|| format!("failed to lower PDK file {}", options.pdk.display()))?;
+    let rules =
+        rules::lower(&pdk).with_context(|| format!("failed to lower PDK {}", loaded_pdk.path))?;
     if rules.is_empty() {
         bail!(
             "PDK {} configures no DFM rules; add at least one capability",
-            options.pdk.display()
+            loaded_pdk.path
         );
     }
 
@@ -99,11 +106,7 @@ pub fn execute_check(file: &Path, options: &CheckOptions) -> Result<()> {
             sha256: sha256(&input_bytes),
             size_bytes: input_bytes.len() as u64,
         },
-        pdk: report::PdkIdentity::from_pdk(
-            &pdk,
-            options.pdk.display().to_string(),
-            sha256(&pdk_bytes),
-        ),
+        pdk: report::PdkIdentity::from_pdk(&pdk, loaded_pdk.path, sha256(&loaded_pdk.bytes)),
         layout_target: match options.layout_target {
             LayoutTarget::Board => "board",
             LayoutTarget::BoardArray => "board_array",
@@ -146,6 +149,22 @@ pub fn execute_check(file: &Path, options: &CheckOptions) -> Result<()> {
         annotations(summary)
     );
     Ok(())
+}
+
+fn load_pdk(reference: &Path) -> Result<LoadedPdk> {
+    if let Some(pdk) = reference.to_str().and_then(builtin_pdks::find) {
+        return Ok(LoadedPdk {
+            path: format!("builtin:{}", pdk.name),
+            bytes: Cow::Borrowed(pdk.source.as_bytes()),
+        });
+    }
+
+    let bytes = std::fs::read(reference)
+        .with_context(|| format!("failed to read PDK file {}", reference.display()))?;
+    Ok(LoadedPdk {
+        path: reference.display().to_string(),
+        bytes: Cow::Owned(bytes),
+    })
 }
 
 /// The non-verdict counts worth surfacing next to the pass/fail line.
@@ -286,6 +305,10 @@ id = "scope-test"
 name = "Scope test"
 revision = "1"
 
+[capabilities.stackup]
+minimum_copper_layer_count = 2
+maximum_copper_layer_count = 4
+
 [capabilities.copper]
 minimum_vscore_to_copper_clearance = "0.5 mm"
 minimum_board_edge_clearance = "0.5 mm"
@@ -295,8 +318,12 @@ minimum_board_array_spacing = "300 mil"
 "#;
 
     fn check(xml: &str, scope: ArtworkScope) -> checks::Results {
+        check_with_pdk(xml, scope, PDK)
+    }
+
+    fn check_with_pdk(xml: &str, scope: ArtworkScope, pdk_source: &str) -> checks::Results {
         let ipc = Ipc2581::parse(xml).unwrap();
-        let pdk = pdk::Pdk::parse(PDK).unwrap();
+        let pdk = pdk::Pdk::parse(pdk_source).unwrap();
         let rules = rules::lower(&pdk).unwrap();
         let design = design::Design::extract(&ipc, scope, &rules).unwrap();
         checks::run(
@@ -309,6 +336,120 @@ minimum_board_array_spacing = "300 mil"
 
     fn rule<'a>(results: &'a checks::Results, id: &str) -> &'a report::RuleResult {
         results.rules.iter().find(|rule| rule.id == id).unwrap()
+    }
+
+    #[test]
+    fn loads_the_embedded_standard_pdk() {
+        let loaded = load_pdk(Path::new("standard")).unwrap();
+        let parsed = pdk::Pdk::parse(std::str::from_utf8(&loaded.bytes).unwrap()).unwrap();
+
+        assert_eq!(loaded.path, "builtin:standard");
+        assert_eq!(parsed.pdk.id, "standard");
+        assert_eq!(parsed.pdk.name, "Standard");
+        assert_eq!(parsed.pdk.manufacturer.as_deref(), Some("Diode"));
+        assert_eq!(parsed.pdk.process.as_deref(), Some("Standard"));
+        assert_eq!(
+            parsed.capabilities.stackup.minimum_copper_layer_count,
+            Some(2)
+        );
+        assert_eq!(
+            parsed.capabilities.stackup.maximum_copper_layer_count,
+            Some(10)
+        );
+        assert!(!rules::lower(&parsed).unwrap().is_empty());
+    }
+
+    #[test]
+    fn still_loads_a_pdk_from_a_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("custom.toml");
+        std::fs::write(&path, PDK).unwrap();
+
+        let loaded = load_pdk(&path).unwrap();
+
+        assert_eq!(loaded.path, path.display().to_string());
+        assert_eq!(&*loaded.bytes, PDK.as_bytes());
+    }
+
+    #[test]
+    fn copper_layer_count_checks_both_bounds_from_the_physical_stackup() {
+        let below_minimum = check_with_pdk(
+            BOARD,
+            ArtworkScope::Board,
+            &PDK.replace(
+                "minimum_copper_layer_count = 2",
+                "minimum_copper_layer_count = 3",
+            ),
+        );
+        let minimum_rule = rule(&below_minimum, "stackup.minimum_copper_layer_count");
+        assert_eq!(minimum_rule.checked, 1);
+        assert_eq!(minimum_rule.comparison, "minimum");
+        assert_eq!(minimum_rule.limit.normalized_unit, "layers");
+        assert_eq!(minimum_rule.limit.normalized_value, 3.0);
+        assert!(matches!(minimum_rule.status, report::RuleStatus::Fail));
+        let minimum_finding = below_minimum
+            .findings
+            .iter()
+            .find(|finding| finding.rule_id == minimum_rule.id)
+            .unwrap();
+        assert!(matches!(
+            minimum_finding.measurement,
+            report::Measurement::Count {
+                actual_count: 2,
+                required_count: 3,
+                margin_count: -1,
+            }
+        ));
+        assert_eq!(
+            minimum_finding
+                .layers
+                .iter()
+                .map(|layer| layer.name.as_str())
+                .collect::<Vec<_>>(),
+            ["TOP", "BOTTOM"]
+        );
+
+        let above_maximum = check_with_pdk(
+            BOARD,
+            ArtworkScope::Board,
+            &PDK.replace(
+                "minimum_copper_layer_count = 2\nmaximum_copper_layer_count = 4",
+                "minimum_copper_layer_count = 1\nmaximum_copper_layer_count = 1",
+            ),
+        );
+        let maximum_rule = rule(&above_maximum, "stackup.maximum_copper_layer_count");
+        assert_eq!(maximum_rule.checked, 1);
+        assert_eq!(maximum_rule.comparison, "maximum");
+        assert!(matches!(maximum_rule.status, report::RuleStatus::Fail));
+        assert!(above_maximum.findings.iter().any(|finding| matches!(
+            finding.measurement,
+            report::Measurement::Count {
+                actual_count: 2,
+                required_count: 1,
+                margin_count: -1,
+            }
+        )));
+    }
+
+    #[test]
+    fn copper_layer_count_rejects_an_incomplete_physical_stackup() {
+        let ipc = Ipc2581::parse(&BOARD.replace(
+            "layerOrGroupRef=\"BOTTOM\"",
+            "layerOrGroupRef=\"DIELECTRIC\"",
+        ))
+        .unwrap();
+        let pdk = pdk::Pdk::parse(PDK).unwrap();
+        let rules = rules::lower(&pdk).unwrap();
+
+        let error = design::Design::extract(&ipc, ArtworkScope::Board, &rules)
+            .err()
+            .unwrap();
+
+        assert!(
+            error
+                .to_string()
+                .contains("omits declared copper layer(s): BOTTOM")
+        );
     }
 
     #[test]

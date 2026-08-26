@@ -40,18 +40,22 @@ by the retained geometry.
 
 ## DFM process design kits
 
-`dfm check` reads a strict, versioned TOML process design kit. Each length has
-its own `mm` or `mil` unit, and only configured capabilities become rules.
+`dfm check` accepts a built-in process design kit name or a strict, versioned
+TOML file. The built-in `standard` PDK is bundled with `pcb`:
 
 ```bash
 pcb ipc dfm check fabrication-panel.xml \
-  --pdk fab-process.toml \
+  --pdk standard \
   --output dfm-report.json
 ```
 
+`standard` currently supports 2 through 10 copper layers.
+
+Pass a path such as `--pdk ./fab-process.toml` to use a custom PDK. Exact
+built-in names take precedence, so prefix a same-named file with `./`.
+
 See the [DFM format reference](docs/dfm.md) and
-[`examples/dfm-pdk.toml`](examples/dfm-pdk.toml) for the PDK and JSON report
-contracts.
+[`pdks/standard.toml`](pdks/standard.toml) for the PDK and JSON report contracts.
 
 `fab-panel create` supports the common 12 by 18, 16 by 18, 18 by 24, and 21 by
 24 inch fabrication panel sizes through `--panel-size`. The default is 18 by 24

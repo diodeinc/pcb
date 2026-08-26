@@ -1,9 +1,11 @@
 schema_version = 1
 
 [pdk]
-id = "example-fab-standard"
-name = "Example fabrication standard"
-revision = "1"
+id = "standard"
+name = "Standard"
+revision = "draft-2026-08-21"
+manufacturer = "Diode"
+process = "Standard"
 
 [capabilities.stackup]
 minimum_copper_layer_count = 2
@@ -11,21 +13,21 @@ maximum_copper_layer_count = 10
 
 [capabilities.drilling]
 minimum_via_hole_diameter = "0.2 mm"
-minimum_pth_hole_diameter = "0.2 mm"
+minimum_pth_hole_diameter = "15 mil"
 minimum_npth_hole_diameter = "0.2 mm"
-minimum_slot_width = "0.8 mm"
+minimum_slot_width = "31 mil"
 minimum_hole_to_hole_clearance = "10 mil"
 
 [capabilities.copper]
-minimum_via_annular_ring = { minimum = "100 um", preferred = "0.125 mm" }
-minimum_pth_annular_ring = "0.125 mm"
-minimum_feature_width = "0.09 mm"
-minimum_copper_clearance = "0.09 mm"
-minimum_board_edge_clearance = "0.25 mm"
+minimum_via_annular_ring = "0.125 mm"
+minimum_pth_annular_ring = "7 mil"
+minimum_feature_width = "5 mil"
+minimum_copper_clearance = "5 mil"
+minimum_board_edge_clearance = "15 mil"
 minimum_vscore_to_copper_clearance = "15 mil"
 
 [capabilities.soldermask]
-minimum_web = "3 mil"
+minimum_web = "4 mil"
 
 [capabilities.panelization]
 minimum_board_array_spacing = "300 mil"

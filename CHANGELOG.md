@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Add the `standard` DFM PDK with copper layer-count checks.
+
 ### Changed
 
 - Cache `pcb bom` matches per line with stale-data fallback.
