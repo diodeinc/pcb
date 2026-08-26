@@ -4578,6 +4578,7 @@ name = "pcbc"
 version = "0.4.36"
 dependencies = [
  "anyhow",
+ "atomicwrites",
  "base64 0.23.0",
  "chrono",
  "clap",
@@ -4610,6 +4611,7 @@ dependencies = [
  "pcb-ipc2581-tools",
  "pcb-ir",
  "pcb-kicad",
+ "pcb-kicad-sch",
  "pcb-layout",
  "pcb-sch",
  "pcb-sexpr",

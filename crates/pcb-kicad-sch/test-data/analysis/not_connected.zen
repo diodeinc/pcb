@@ -1,0 +1,11 @@
+"""Not-connected pin regression design."""
+
+Project(name="NotConnected", path="kicad", layout=False)
+
+Resistor = Module("@stdlib/generics/Resistor.zen")
+
+LEFT = Net("LEFT")
+MID = Net("MID")
+
+Resistor(name="R1", value="1kohms", package="0402", P1=LEFT, P2=NotConnected())
+Resistor(name="R2", value="2kohms", package="0402", P1=MID, P2=NotConnected())

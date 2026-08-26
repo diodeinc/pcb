@@ -761,6 +761,12 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<Diagnostics> 
         diagnostics,
         ..
     } = build_result;
+    if pcbc::kicad_schematic::has_unsuppressed_schematic_diagnostics(&diagnostics) {
+        anyhow::bail!(
+            "Linked KiCad schematic is not equivalent. Run `pcb apply schematic {}` before publishing.",
+            info.zen_path.display()
+        );
+    }
     if diagnostics.error_count() > 0 {
         std::process::exit(1);
     }

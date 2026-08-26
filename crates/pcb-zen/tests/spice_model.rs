@@ -74,7 +74,7 @@ macro_rules! sim_snapshot {
             filters => filters,
             prepend_module_to_snapshot => false,
         }, {
-            insta::assert_snapshot!(crate::insta_snapshot_name!(), result);
+            insta::assert_snapshot!($crate::insta_snapshot_name!(), result);
         });
     }};
 }

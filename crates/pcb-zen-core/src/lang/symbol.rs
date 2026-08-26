@@ -71,6 +71,7 @@ pub struct SymbolValue {
     pub pad_to_signal: SmallMap<String, String>, // pad name -> signal name
     pub pins: Vec<SymbolPin>, // Full pin metadata preserved from the source symbol
     pub source_uri: Option<String>, // Stable package URI for the symbol library when available
+    pub source_format_version: Option<i32>, // Declared KiCad symbol-library format version
     pub raw_sexp: Option<String>, // Raw s-expression of the symbol (if loaded from file, otherwise None)
     pub properties: SmallMap<String, String>, // Properties from the symbol definition
     pub in_bom: bool,             // KiCad in_bom flag (inverse of skip_bom)
@@ -250,6 +251,7 @@ impl<'v> SymbolValue {
                 pad_to_signal,
                 pins,
                 source_uri: None,
+                source_format_version: None,
                 raw_sexp: None,
                 properties: SmallMap::new(),
                 in_bom: true,
@@ -296,7 +298,9 @@ impl<'v> SymbolValue {
     ) -> Result<SymbolValue, starlark::Error> {
         let file_provider = eval_ctx.file_provider();
 
-        let (_symbol_name, symbol, source_path) = if file_provider.is_directory(resolved_path) {
+        let (_symbol_name, symbol, source_path, source_format_version) = if file_provider
+            .is_directory(resolved_path)
+        {
             load_split_library_symbol(resolved_path, name, file_provider)?
         } else {
             // Get or load the library (lazy - only scans for symbol names, doesn't parse them)
@@ -351,7 +355,12 @@ impl<'v> SymbolValue {
                         symbol_name
                     ))
                 })?;
-            (symbol_name, symbol, resolved_path.to_path_buf())
+            (
+                symbol_name,
+                symbol,
+                resolved_path.to_path_buf(),
+                library.format_version(),
+            )
         };
 
         let source_uri = eval_ctx
@@ -363,7 +372,6 @@ impl<'v> SymbolValue {
                     source_path.display()
                 ))
             })?;
-
         let sexpr = symbol.raw_sexp.as_ref().map(|s| {
             pcb_sexpr::formatter::format_tree(s, pcb_sexpr::formatter::FormatMode::Normal)
         });
@@ -376,6 +384,7 @@ impl<'v> SymbolValue {
         Ok(SymbolValue::from_eda_symbol(
             &symbol,
             Some(source_uri),
+            source_format_version,
             sexpr,
             properties,
         ))
@@ -399,6 +408,10 @@ impl<'v> SymbolValue {
 
     pub fn raw_sexp(&self) -> Option<&str> {
         self.raw_sexp.as_deref()
+    }
+
+    pub fn source_format_version(&self) -> Option<i32> {
+        self.source_format_version
     }
 
     pub fn signal_names(&self) -> impl Iterator<Item = &str> {
@@ -438,6 +451,7 @@ impl<'v> SymbolValue {
     fn from_eda_symbol(
         symbol: &pcb_eda::Symbol,
         source_uri: Option<String>,
+        source_format_version: Option<i32>,
         raw_sexp: Option<String>,
         properties: SmallMap<String, String>,
     ) -> Self {
@@ -475,6 +489,7 @@ impl<'v> SymbolValue {
             pad_to_signal,
             pins,
             source_uri,
+            source_format_version,
             raw_sexp,
             properties,
             in_bom: symbol.in_bom,
@@ -793,7 +808,7 @@ fn load_split_library_symbol(
     dir: &std::path::Path,
     requested_name: Option<String>,
     file_provider: &dyn crate::FileProvider,
-) -> starlark::Result<(String, pcb_eda::Symbol, std::path::PathBuf)> {
+) -> starlark::Result<(String, pcb_eda::Symbol, std::path::PathBuf, Option<i32>)> {
     let symbol_files = split_library_symbol_files(dir, file_provider)?;
     let available: Vec<String> = symbol_files.iter().map(|(name, _)| name.clone()).collect();
 
@@ -858,6 +873,7 @@ fn load_split_library_symbol(
         symbol_name.clone(),
         symbol,
         dir.join(format!("{symbol_name}.kicad_sym")),
+        library.format_version(),
     ))
 }
 
@@ -895,6 +911,7 @@ mod tests {
         let symbol_value = SymbolValue::from_eda_symbol(
             &symbol,
             Some("package://demo/AlternatePinDemo.kicad_sym".to_string()),
+            Some(20211014),
             Some("(symbol \"AlternatePinDemo\")".to_string()),
             properties,
         );
@@ -942,7 +959,7 @@ mod tests {
         )
         .expect("symbol should parse");
 
-        let symbol_value = SymbolValue::from_eda_symbol(&symbol, None, None, SmallMap::new());
+        let symbol_value = SymbolValue::from_eda_symbol(&symbol, None, None, None, SmallMap::new());
 
         assert_eq!(
             symbol_value.pad_to_signal().get("1").map(String::as_str),
@@ -976,7 +993,7 @@ mod tests {
         )
         .expect("symbol should parse");
 
-        let symbol_value = SymbolValue::from_eda_symbol(&symbol, None, None, SmallMap::new());
+        let symbol_value = SymbolValue::from_eda_symbol(&symbol, None, None, None, SmallMap::new());
 
         assert_eq!(
             symbol_value.explicit_jumper_signal_groups(),

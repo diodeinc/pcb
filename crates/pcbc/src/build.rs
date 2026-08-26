@@ -110,6 +110,14 @@ impl BuildEvalState {
             schematic_result.output
         });
 
+        if let Some(schematic) = &schematic {
+            diagnostics
+                .diagnostics
+                .extend(pcbc::kicad_schematic::linked_schematic_diagnostics(
+                    schematic, zen_path,
+                ));
+        }
+
         if diagnostics.diagnostics.is_empty() && schematic.is_none() {
             spinner.set_message(format!("{file_name}: No output generated"));
         }

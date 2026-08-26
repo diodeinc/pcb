@@ -813,6 +813,13 @@ impl ModuleConverter {
                 );
             }
 
+            if let Some(version) = symbol.source_format_version() {
+                comp_inst.add_attribute(
+                    pcb_sch::ATTR_SYMBOL_FORMAT_VERSION.to_string(),
+                    AttributeValue::Number(version as f64),
+                );
+            }
+
             // Add the raw s-expression if available
             let raw_sexp = symbol.raw_sexp();
             if let Some(sexp_string) = raw_sexp {

@@ -3,28 +3,35 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{Context, Result, anyhow, bail};
 use pcb_sexpr::Sexpr;
 
-use crate::{MirrorAxis, Point, Rotation, Symbol, SymbolDefinition};
+use crate::{LabelSpin, MirrorAxis, Point, Rotation, Symbol, SymbolDefinition};
 
 const MAX_EXPANDED_STACKED_PIN_NUMBERS: usize = 4096;
 
+/// A symbol-definition pin transformed into placed schematic coordinates.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct SymbolPin {
+pub struct PlacedPin {
     pub name: String,
     pub number: String,
     pub numbers: BTreeSet<String>,
     pub point: Point,
+    pub body_point: Point,
+    pub outward_spin: LabelSpin,
     pub electrical_type: String,
     pub hidden: bool,
     alternates: BTreeMap<String, String>,
 }
 
-impl SymbolPin {
+impl PlacedPin {
     pub fn is_hidden_power_input(&self) -> bool {
         self.hidden && self.electrical_type == "power_in"
     }
 
     pub fn is_power_input(&self) -> bool {
         self.electrical_type == "power_in"
+    }
+
+    pub fn supports_alternate(&self, name: &str) -> bool {
+        self.alternates.contains_key(name)
     }
 }
 
@@ -38,7 +45,7 @@ pub(crate) enum PowerScope {
 struct SymbolSection {
     unit: u32,
     body_style: u32,
-    pins: Vec<SymbolPin>,
+    pins: Vec<PlacedPin>,
 }
 
 #[derive(Debug, Clone)]
@@ -104,6 +111,19 @@ impl ParsedSymbolDefinition {
         self.power_scope
     }
 
+    pub fn power_input_units(&self) -> Vec<u32> {
+        self.unit_indices
+            .iter()
+            .copied()
+            .filter(|unit| {
+                self.sections.iter().any(|section| {
+                    matches_unit(section.unit, *unit)
+                        && section.pins.iter().any(PlacedPin::is_power_input)
+                })
+            })
+            .collect()
+    }
+
     pub fn unit_indices(&self) -> &[u32] {
         &self.unit_indices
     }
@@ -116,7 +136,7 @@ impl ParsedSymbolDefinition {
         &self.jumper_pin_groups
     }
 
-    pub fn placed_pins(&self, symbol: &Symbol) -> Result<Vec<SymbolPin>> {
+    pub fn placed_pins(&self, symbol: &Symbol) -> Result<Vec<PlacedPin>> {
         let mut pins = self
             .sections
             .iter()
@@ -180,11 +200,24 @@ impl ParsedSymbolDefinition {
                 // unlike schematic-page coordinates.
                 pin.point.y = -pin.point.y;
                 pin.point = transform_point(pin.point, symbol);
+                pin.body_point.y = -pin.body_point.y;
+                pin.body_point = transform_point(pin.body_point, symbol);
+                pin.outward_spin = transform_spin(pin.outward_spin, symbol);
                 Ok(pin)
             })
             .collect::<Result<Vec<_>>>()?;
         debug_assert!(placed_alternates.is_empty());
         Ok(resolved)
+    }
+}
+
+impl SymbolDefinition {
+    pub fn placed_pins(&self, symbol: &Symbol) -> Result<Vec<PlacedPin>> {
+        ParsedSymbolDefinition::parse(self)?.placed_pins(symbol)
+    }
+
+    pub fn unit_indices(&self) -> Result<Vec<u32>> {
+        Ok(ParsedSymbolDefinition::parse(self)?.unit_indices().to_vec())
     }
 }
 
@@ -203,7 +236,7 @@ fn parse_power_scope(items: &[Sexpr], lib_id: &str) -> Result<Option<PowerScope>
     }
 }
 
-fn parse_pins(items: &[Sexpr]) -> Result<Vec<SymbolPin>> {
+fn parse_pins(items: &[Sexpr]) -> Result<Vec<PlacedPin>> {
     let mut pins = Vec::new();
     for items in items.iter().filter_map(Sexpr::as_list) {
         if items.first().and_then(Sexpr::as_sym) != Some("pin") {
@@ -214,7 +247,7 @@ fn parse_pins(items: &[Sexpr]) -> Result<Vec<SymbolPin>> {
     Ok(pins)
 }
 
-fn parse_pin(items: &[Sexpr]) -> Result<SymbolPin> {
+fn parse_pin(items: &[Sexpr]) -> Result<PlacedPin> {
     let electrical_type = items
         .get(1)
         .and_then(Sexpr::as_atom)
@@ -227,6 +260,23 @@ fn parse_pin(items: &[Sexpr]) -> Result<SymbolPin> {
         number(at.get(1).context("symbol pin missing x")?).context("invalid symbol pin x")?,
         number(at.get(2).context("symbol pin missing y")?).context("invalid symbol pin y")?,
     );
+    let rotation_degrees = number(at.get(3).context("symbol pin missing rotation")?)
+        .context("invalid symbol pin rotation")?;
+    if rotation_degrees.fract() != 0.0 {
+        bail!("symbol pin rotation must be a whole number of degrees");
+    }
+    let rotation = Rotation::from_degrees(rotation_degrees as i64)
+        .context("symbol pin rotation must be a multiple of 90 degrees")?;
+    let length = child_list(items, "length")
+        .and_then(|items| items.get(1))
+        .and_then(number)
+        .context("symbol pin missing or invalid length")?;
+    let body_point = match rotation {
+        Rotation::Deg0 => Point::new(point.x + length, point.y),
+        Rotation::Deg90 => Point::new(point.x, point.y + length),
+        Rotation::Deg180 => Point::new(point.x - length, point.y),
+        Rotation::Deg270 => Point::new(point.x, point.y - length),
+    };
     let name = child_list(items, "name")
         .and_then(|list| list.get(1))
         .and_then(Sexpr::as_atom)
@@ -261,11 +311,13 @@ fn parse_pin(items: &[Sexpr]) -> Result<SymbolPin> {
             bail!("pin {number} has duplicate alternate {name}");
         }
     }
-    Ok(SymbolPin {
+    Ok(PlacedPin {
         name,
         number,
         numbers,
         point,
+        body_point,
+        outward_spin: pin_outward_spin(rotation),
         electrical_type,
         hidden,
         alternates,
@@ -430,14 +482,18 @@ fn child_list<'a>(items: &'a [Sexpr], tag: &str) -> Option<&'a [Sexpr]> {
     })
 }
 
-fn number(value: &Sexpr) -> Option<f64> {
+/// Parse a finite numeric atom. Non-finite values (NaN, inf) are rejected the
+/// same way `kicad.rs::atom_f64` rejects them: geometry built from them would
+/// silently snap to the origin during connectivity reduction.
+pub(crate) fn number(value: &Sexpr) -> Option<f64> {
     value
         .as_float()
         .or_else(|| value.as_int().map(|value| value as f64))
         .or_else(|| value.as_atom()?.parse().ok())
+        .filter(|value: &f64| value.is_finite())
 }
 
-fn section_unit_style(name: &str) -> Result<(u32, u32)> {
+pub(crate) fn section_unit_style(name: &str) -> Result<(u32, u32)> {
     let mut parts = name.rsplitn(3, '_');
     let style = parts
         .next()
@@ -460,7 +516,7 @@ fn matches_body_style(section: u32, selected: u32) -> bool {
     section == 0 || section == selected
 }
 
-fn transform_point(mut point: Point, symbol: &Symbol) -> Point {
+pub(crate) fn transform_point(mut point: Point, symbol: &Symbol) -> Point {
     // KiCad composes the symbol matrix as rotation * mirror, so the mirror is
     // applied to the library-local point before the rotation.
     point = match symbol.mirror {
@@ -475,6 +531,42 @@ fn transform_point(mut point: Point, symbol: &Symbol) -> Point {
         Rotation::Deg270 => Point::new(-point.y, point.x),
     };
     Point::new(symbol.at.x + point.x, symbol.at.y + point.y)
+}
+
+fn pin_outward_spin(rotation: Rotation) -> LabelSpin {
+    match rotation {
+        Rotation::Deg0 => LabelSpin::Left,
+        Rotation::Deg90 => LabelSpin::Bottom,
+        Rotation::Deg180 => LabelSpin::Right,
+        Rotation::Deg270 => LabelSpin::Up,
+    }
+}
+
+fn transform_spin(spin: LabelSpin, symbol: &Symbol) -> LabelSpin {
+    let mut direction = match spin {
+        LabelSpin::Left => Point::new(-1.0, 0.0),
+        LabelSpin::Up => Point::new(0.0, -1.0),
+        LabelSpin::Right => Point::new(1.0, 0.0),
+        LabelSpin::Bottom => Point::new(0.0, 1.0),
+    };
+    direction = match symbol.mirror {
+        None => direction,
+        Some(MirrorAxis::X) => Point::new(direction.x, -direction.y),
+        Some(MirrorAxis::Y) => Point::new(-direction.x, direction.y),
+    };
+    direction = match symbol.rotation {
+        Rotation::Deg0 => direction,
+        Rotation::Deg90 => Point::new(direction.y, -direction.x),
+        Rotation::Deg180 => Point::new(-direction.x, -direction.y),
+        Rotation::Deg270 => Point::new(-direction.y, direction.x),
+    };
+    match (direction.x as i8, direction.y as i8) {
+        (-1, 0) => LabelSpin::Left,
+        (0, -1) => LabelSpin::Up,
+        (1, 0) => LabelSpin::Right,
+        (0, 1) => LabelSpin::Bottom,
+        _ => unreachable!("cardinal pin direction must remain cardinal"),
+    }
 }
 
 #[cfg(test)]
@@ -514,11 +606,13 @@ mod tests {
         };
         assert_eq!(
             definition.placed_pins(&symbol).unwrap(),
-            vec![SymbolPin {
+            vec![PlacedPin {
                 name: "B".into(),
                 number: "2".into(),
                 numbers: BTreeSet::from(["2".into()]),
                 point: Point::new(10.0, 17.46),
+                body_point: Point::new(10.0, 14.92),
+                outward_spin: LabelSpin::Bottom,
                 electrical_type: "input".into(),
                 hidden: false,
                 alternates: BTreeMap::new(),

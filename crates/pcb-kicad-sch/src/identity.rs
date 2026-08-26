@@ -4,7 +4,10 @@
 //! the symbol UUID. For netlist-backed symbols we generate the symbol UUID from
 //! the same canonical component path string used by the layout pipeline.
 
-use std::fmt;
+use std::{
+    fmt,
+    path::{Component, Path, PathBuf},
+};
 
 pub use pcb_sch::kicad_identity::UUID_NAMESPACE_URL;
 
@@ -52,6 +55,31 @@ where
     }
 
     (!path.is_empty()).then_some(path)
+}
+
+/// Normalize `.` and `..` components without consulting the filesystem.
+///
+/// Project adapters use this when resolving sheet filenames so their page
+/// names match the pure hierarchy analysis.
+pub fn normalize_schematic_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if matches!(
+                    normalized.components().next_back(),
+                    Some(Component::Normal(_))
+                ) {
+                    normalized.pop();
+                } else if !path.is_absolute() {
+                    normalized.push("..");
+                }
+            }
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    normalized
 }
 
 /// A netlist component/unit slot that can map to one KiCad schematic symbol.

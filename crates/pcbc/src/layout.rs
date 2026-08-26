@@ -60,12 +60,53 @@ pub enum LayoutOutputFormat {
     Json,
 }
 
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum LayoutAction {
+    Created,
+    Updated,
+    Checked,
+    Unchanged,
+}
+
+impl LayoutAction {
+    pub(crate) fn from_flags(created: bool, changed: bool) -> Self {
+        if created {
+            Self::Created
+        } else if changed {
+            Self::Updated
+        } else {
+            Self::Unchanged
+        }
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Created => "created",
+            Self::Updated => "updated",
+            Self::Checked => "checked",
+            Self::Unchanged => "unchanged",
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct LayoutCommandResult {
-    source_file: PathBuf,
-    layout_dir: Option<PathBuf>,
-    pcb_file: Option<PathBuf>,
+pub(crate) struct LayoutCommandResult {
+    pub(crate) source_file: PathBuf,
+    pub(crate) layout_dir: Option<PathBuf>,
+    pub(crate) pcb_file: Option<PathBuf>,
+    pub(crate) action: Option<LayoutAction>,
+    /// Absolute board path for follow-up steps (DRC); not part of the output.
+    #[serde(skip)]
+    pub(crate) pcb_file_abs: Option<PathBuf>,
+}
+
+pub(crate) struct PreparedDesign {
+    pub(crate) zen_path: PathBuf,
+    pub(crate) file_name: String,
+    pub(crate) schematic: Schematic,
+    pub(crate) eval_output: Option<pcb_zen_core::EvalOutput>,
 }
 
 pub fn execute(mut args: LayoutArgs) -> Result<()> {
@@ -74,14 +115,42 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
         return crate::remote_sandbox::execute_layout(uri, args);
     }
 
-    crate::file_walker::require_zen_file(&args.file)?;
-    let config_inputs = parse_config_overrides(&args.config)?;
-    let hide_progress = args.format == LayoutOutputFormat::Json;
-
     // --check implies --no-open
     if args.check {
         args.no_open = true;
     }
+
+    let design = prepare_design(&args)?;
+    let result = apply_prepared(&args, design)?;
+    // The result is reported before DRC so check runs still emit their
+    // output (including --format json) when checks fail.
+    print_layout_result(&result, args.format)?;
+    run_drc_check(&args, &result)?;
+    if !args.no_open
+        && let Some(pcb_file) = &result.pcb_file
+    {
+        pcb_kicad::open_pcbnew(pcb_file)?;
+    }
+    Ok(())
+}
+
+/// Render diagnostics honoring suppressions and fail with `message` when any
+/// unsuppressed error remains.
+pub(crate) fn render_or_bail(
+    diagnostics: &mut pcb_zen_core::Diagnostics,
+    suppress: &[String],
+    message: &str,
+) -> Result<()> {
+    drc::render_diagnostics(diagnostics, suppress);
+    if diagnostics.error_count() > 0 {
+        anyhow::bail!("{message}");
+    }
+    Ok(())
+}
+
+pub(crate) fn prepare_design(args: &LayoutArgs) -> Result<PreparedDesign> {
+    crate::file_walker::require_zen_file(&args.file)?;
+    let config_inputs = parse_config_overrides(&args.config)?;
 
     // Resolve dependencies before building
     let resolution_result = crate::resolve::resolve(Some(&args.file), args.offline)?;
@@ -101,31 +170,43 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
         anyhow::bail!("Build failed");
     };
 
+    Ok(PreparedDesign {
+        zen_path: zen_path.to_path_buf(),
+        file_name,
+        schematic,
+        eval_output: build_result.eval_output,
+    })
+}
+
+pub(crate) fn apply_prepared(
+    args: &LayoutArgs,
+    design: PreparedDesign,
+) -> Result<LayoutCommandResult> {
+    let hide_progress = args.format == LayoutOutputFormat::Json;
+    let PreparedDesign {
+        zen_path,
+        file_name,
+        schematic,
+        eval_output,
+    } = design;
+
     if args.no_sync {
-        let result = resolve_existing_layout(zen_path, &schematic)?;
-        print_layout_result(&result, args.format, zen_path, &file_name)?;
-
-        if !args.no_open
-            && let Some(pcb_file) = &result.pcb_file
-        {
-            pcb_kicad::open_pcbnew(pcb_file)?;
-        }
-
-        return Ok(());
+        return resolve_existing_layout(&zen_path, &schematic);
     }
 
     // Layout consumes the footprints, so validate their contents (including
     // embedded payloads) before generating the board.
-    if let Some(eval_output) = &build_result.eval_output {
+    if let Some(eval_output) = &eval_output {
         let mut footprint_diagnostics = pcb_zen_core::Diagnostics::default();
         footprint_diagnostics
             .diagnostics
             .extend(eval_output.validate_footprints());
         if !footprint_diagnostics.diagnostics.is_empty() {
-            drc::render_diagnostics(&mut footprint_diagnostics, &args.suppress);
-            if footprint_diagnostics.error_count() > 0 {
-                anyhow::bail!("Invalid footprints");
-            }
+            render_or_bail(
+                &mut footprint_diagnostics,
+                &args.suppress,
+                "Invalid footprints",
+            )?;
         }
     }
 
@@ -148,62 +229,66 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
     spinner.finish();
 
     let Some(layout_result) = result else {
-        drc::render_diagnostics(&mut diagnostics, &args.suppress);
-        if diagnostics.error_count() > 0 {
-            anyhow::bail!("Layout sync failed with errors");
-        }
-
-        print_layout_result(
-            &LayoutCommandResult {
-                source_file: zen_path.to_path_buf(),
-                layout_dir: None,
-                pcb_file: None,
-            },
-            args.format,
-            zen_path,
-            &file_name,
+        render_or_bail(
+            &mut diagnostics,
+            &args.suppress,
+            "Layout sync failed with errors",
         )?;
 
-        return Ok(());
+        return Ok(LayoutCommandResult {
+            source_file: zen_path,
+            layout_dir: None,
+            pcb_file: None,
+            action: None,
+            pcb_file_abs: None,
+        });
     };
     let pcb_file = layout_result.pcb_file.clone();
     let display_pcb_file = layout_result.display_pcb_file().to_path_buf();
 
-    print_layout_result(
-        &LayoutCommandResult {
-            source_file: zen_path.to_path_buf(),
-            layout_dir: Some(layout_result.layout_dir.clone()),
-            pcb_file: Some(display_pcb_file.clone()),
-        },
-        args.format,
-        zen_path,
-        &file_name,
-    )?;
+    render_or_bail(&mut diagnostics, &args.suppress, "DRC failed")?;
 
-    // Run DRC in check mode.
-    if args.check {
-        let spinner = Spinner::builder(format!("{file_name}: Running DRC checks"))
-            .hidden(hide_progress)
-            .start();
-        let drc_output = tempfile::NamedTempFile::new()?;
-        let working_dir = pcb_file.parent();
-        let report = pcb_kicad::run_drc(&pcb_file, false, working_dir, drc_output.path())?;
-        report.add_to_diagnostics(&mut diagnostics, &display_pcb_file.to_string_lossy());
-        spinner.finish();
+    Ok(LayoutCommandResult {
+        source_file: zen_path,
+        layout_dir: Some(layout_result.layout_dir),
+        pcb_file: Some(display_pcb_file),
+        action: Some(if args.check {
+            LayoutAction::Checked
+        } else if layout_result.created {
+            LayoutAction::Created
+        } else {
+            LayoutAction::Updated
+        }),
+        pcb_file_abs: Some(pcb_file),
+    })
+}
+
+/// Run KiCad DRC for a `--check` invocation and fail on unsuppressed errors.
+/// Callers report the layout result first so check failures still produce
+/// their output payload.
+pub(crate) fn run_drc_check(args: &LayoutArgs, result: &LayoutCommandResult) -> Result<()> {
+    if !args.check {
+        return Ok(());
     }
-
-    // Render diagnostics
-    drc::render_diagnostics(&mut diagnostics, &args.suppress);
-    if diagnostics.error_count() > 0 {
-        anyhow::bail!("DRC failed");
-    }
-
-    // Open the layout if not disabled
-    if !args.no_open {
-        pcb_kicad::open_pcbnew(&pcb_file)?;
-    }
-
-    Ok(())
+    let (Some(pcb_file), Some(display_pcb_file)) = (&result.pcb_file_abs, &result.pcb_file) else {
+        return Ok(());
+    };
+    let hide_progress = args.format == LayoutOutputFormat::Json;
+    let file_name = result
+        .source_file
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let spinner = Spinner::builder(format!("{file_name}: Running DRC checks"))
+        .hidden(hide_progress)
+        .start();
+    let drc_output = tempfile::NamedTempFile::new()?;
+    let working_dir = pcb_file.parent();
+    let report = pcb_kicad::run_drc(pcb_file, false, working_dir, drc_output.path())?;
+    let mut diagnostics = pcb_zen_core::Diagnostics::default();
+    report.add_to_diagnostics(&mut diagnostics, &display_pcb_file.to_string_lossy());
+    spinner.finish();
+    render_or_bail(&mut diagnostics, &args.suppress, "DRC failed")
 }
 
 fn resolve_existing_layout(zen_path: &Path, schematic: &Schematic) -> Result<LayoutCommandResult> {
@@ -212,6 +297,8 @@ fn resolve_existing_layout(zen_path: &Path, schematic: &Schematic) -> Result<Lay
             source_file: zen_path.to_path_buf(),
             layout_dir: None,
             pcb_file: None,
+            action: None,
+            pcb_file_abs: None,
         });
     };
 
@@ -228,29 +315,31 @@ fn resolve_existing_layout(zen_path: &Path, schematic: &Schematic) -> Result<Lay
     Ok(LayoutCommandResult {
         source_file: zen_path.to_path_buf(),
         layout_dir: Some(layout_dir),
-        pcb_file: Some(pcb_file),
+        pcb_file: Some(pcb_file.clone()),
+        action: Some(LayoutAction::Unchanged),
+        pcb_file_abs: Some(pcb_file),
     })
 }
 
-fn print_layout_result(
+pub(crate) fn print_layout_result(
     result: &LayoutCommandResult,
     format: LayoutOutputFormat,
-    zen_path: &Path,
-    file_name: &str,
 ) -> Result<()> {
     match format {
         LayoutOutputFormat::Json => println!("{}", serde_json::to_string_pretty(result)?),
         LayoutOutputFormat::Human => {
-            if let Some(pcb_file) = &result.pcb_file {
-                let relative_path = zen_path
-                    .parent()
-                    .and_then(|parent| pcb_file.strip_prefix(parent).ok())
-                    .unwrap_or(pcb_file);
+            if let (Some(pcb_file), Some(action)) = (&result.pcb_file, result.action) {
+                let file_name = result
+                    .source_file
+                    .file_name()
+                    .unwrap_or(result.source_file.as_os_str())
+                    .to_string_lossy();
                 println!(
-                    "{} {} ({})",
+                    "{} {} layout {} ({})",
                     pcb_ui::icons::success(),
                     file_name.with_style(Style::Green).bold(),
-                    relative_path.display()
+                    action.as_str(),
+                    pcb_file.display()
                 );
             }
         }

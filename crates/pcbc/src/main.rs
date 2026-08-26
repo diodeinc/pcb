@@ -11,6 +11,7 @@ use std::process::Command;
 
 const BUNDLED_EXTERNAL_COMMANDS: &[&str] = &["rectify"];
 
+mod apply;
 mod bom;
 mod build;
 mod bundle;
@@ -76,6 +77,9 @@ enum Commands {
     /// Build PCB projects
     #[command(alias = "b")]
     Build(build::BuildArgs),
+
+    /// Apply a Zener design to its linked KiCad project
+    Apply(apply::ApplyArgs),
 
     /// Run tests in .zen files
     #[command(alias = "t")]
@@ -216,6 +220,7 @@ fn run() -> anyhow::Result<()> {
             pcb_diode_api::execute_auth(args, &ctx)
         }
         Commands::Build(args) => build::execute(args),
+        Commands::Apply(args) => apply::execute(args),
         Commands::Test(args) => test::execute(args),
         Commands::Migrate(args) => migrate::execute(args),
         Commands::Mod(args) => mod_cmd::execute(args),

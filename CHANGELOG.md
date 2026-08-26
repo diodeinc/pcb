@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - Add the `standard` DFM PDK with copper layer-count checks.
+- `pcb apply schematic` reconciles a linked KiCad schematic with its design, planning and applying per-issue repairs; builds of linked projects report schematic-equivalence diagnostics.
 
 ### Changed
 

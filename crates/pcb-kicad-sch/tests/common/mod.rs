@@ -8,9 +8,10 @@ use std::{
 };
 
 use pcb_kicad_sch::{
-    KicadProject, SchDocument, SchItem,
+    SchDocument, SchItem,
     analysis::{ConnectivityAnalysis, analyze_connectivity},
     connectivity::ConnectivityGraph,
+    normalize_schematic_path, parse_kicad_sch_page,
 };
 
 pub mod kicad_builder;
@@ -22,22 +23,27 @@ use pcb_zen_core::{
 
 const PACKAGE_URL: &str = "github.com/diodeinc/pcb-kicad-sch-analysis-fixture";
 
+/// The pcb-kicad-sch fixture tree, workspace-relative so sibling test crates
+/// can share this module via `#[path]`.
+pub fn test_data_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../pcb-kicad-sch/test-data")
+}
+
 /// A compiled Zener project paired with a parsed KiCad project.
 ///
 /// The project path is relative to this crate's `test-data` directory. Tests can
 /// analyze the pair as-is or make focused edits to the parsed KiCad document.
 pub struct AnalysisFixture {
     netlist: pcb_sch::Schematic,
-    project: KicadProject,
+    project: TestProject,
 }
 
 impl AnalysisFixture {
     pub fn load(project: &str, zener_entrypoint: &str, kicad_project: &str) -> Self {
-        let test_data = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-data");
+        let test_data = test_data_dir();
         let project = test_data.join(project);
         let netlist = compile_zener_project(&project, zener_entrypoint);
-        let project =
-            KicadProject::load(project.join(kicad_project)).expect("load KiCad analysis fixture");
+        let project = TestProject::load(project.join(kicad_project));
         Self { netlist, project }
     }
 
@@ -58,6 +64,10 @@ impl AnalysisFixture {
         &self.project.document
     }
 
+    pub fn netlist(&self) -> &pcb_sch::Schematic {
+        &self.netlist
+    }
+
     /// Remove a semantic KiCad item by UUID and return it.
     ///
     /// This is the smallest useful fixture-editing API: tests start with a real
@@ -70,6 +80,109 @@ impl AnalysisFixture {
         }
         panic!("KiCad fixture item {id:?} not found");
     }
+}
+
+pub struct TestProject {
+    pub schematic_files: Vec<PathBuf>,
+    pub document: SchDocument,
+}
+
+impl TestProject {
+    pub fn load(path: impl AsRef<Path>) -> Self {
+        let requested = path.as_ref();
+        let directory = if requested.extension().and_then(|ext| ext.to_str()) == Some("kicad_pro") {
+            requested.parent().unwrap()
+        } else {
+            requested
+        };
+        let project_file = if requested.extension().and_then(|ext| ext.to_str())
+            == Some("kicad_pro")
+        {
+            requested.to_path_buf()
+        } else {
+            let mut projects = fs::read_dir(directory)
+                .unwrap()
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("kicad_pro"))
+                .collect::<Vec<_>>();
+            projects.sort();
+            assert_eq!(projects.len(), 1, "fixture must contain one KiCad project");
+            projects.remove(0)
+        };
+        let project: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&project_file).unwrap()).unwrap();
+        let roots = project
+            .pointer("/schematic/top_level_sheets")
+            .and_then(serde_json::Value::as_array)
+            .filter(|roots| !roots.is_empty())
+            .map(|roots| {
+                roots
+                    .iter()
+                    .map(|root| {
+                        let path = directory.join(root["filename"].as_str().unwrap());
+                        let id = root["uuid"].as_str().map(str::to_owned);
+                        (normalize_schematic_path(&path), id)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_else(|| vec![(project_file.with_extension("kicad_sch"), None)]);
+        let root_ids = roots
+            .iter()
+            .map(|(path, id)| (path.clone(), id.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let mut schematic_files = roots
+            .iter()
+            .map(|(path, _)| path.clone())
+            .collect::<Vec<_>>();
+        let mut seen = schematic_files
+            .iter()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut pages = Vec::new();
+        let mut root_page_ids = Vec::new();
+        let mut index = 0;
+        while index < schematic_files.len() {
+            let path = schematic_files[index].clone();
+            index += 1;
+            let relative = path.strip_prefix(directory).unwrap_or(&path);
+            let mut page = parse_kicad_sch_page(
+                Some(&relative.to_string_lossy().replace('\\', "/")),
+                &fs::read_to_string(&path).unwrap(),
+            )
+            .unwrap();
+            if let Some(root_id) = root_ids.get(&path) {
+                if let Some(root_id) = root_id {
+                    page.id = root_id.clone();
+                }
+                root_page_ids.push(page.id.clone());
+            }
+            for sheet in page.items.iter().filter_map(|item| match item {
+                SchItem::Sheet(sheet) => Some(sheet),
+                _ => None,
+            }) {
+                let child = normalize_schematic_path(
+                    &path.parent().unwrap_or(directory).join(sheet.file_name()),
+                );
+                if seen.insert(child.clone()) {
+                    schematic_files.push(child);
+                }
+            }
+            pages.push(page);
+        }
+        Self {
+            schematic_files,
+            document: SchDocument {
+                pages,
+                root_page_ids,
+            },
+        }
+    }
+}
+
+pub fn compile_fixture(project: &str, entrypoint: &str) -> pcb_sch::Schematic {
+    let test_data = test_data_dir();
+    compile_zener_project(&test_data.join(project), entrypoint)
 }
 
 fn item_id(item: &SchItem) -> Option<&str> {
