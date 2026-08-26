@@ -81,6 +81,8 @@ struct ComponentOffer {
     stock_available: Option<i32>,
     #[serde(rename = "productUrl")]
     product_url: Option<String>,
+    #[serde(rename = "datasheetUrl", skip_serializing_if = "Option::is_none")]
+    datasheet_url: Option<String>,
 }
 
 impl ComponentOffer {
@@ -98,11 +100,15 @@ impl ComponentOffer {
 
     fn to_offer(&self, qty: i32) -> Offer {
         Offer {
+            id: Some(self.id.clone()),
             region: self.geography.to_string(),
             distributor: self.distributor.clone().unwrap_or_else(|| "—".into()),
             stock: self.stock_available.unwrap_or_default(),
             price: self.unit_price_at_qty(qty),
             part_id: self.distributor_part_id.clone(),
+            mpn: self.mpn.clone(),
+            manufacturer: self.manufacturer.clone(),
+            datasheet_url: self.datasheet_url.clone(),
         }
     }
 }
@@ -144,6 +150,16 @@ struct BomLine {
 
 fn bom_line_no_match(bom_line: &BomLine) -> bool {
     bom_line.match_status == BomMatchStatus::Failed
+}
+
+fn retained_selected_offer_id(offers: &[Offer], selected_offer_id: Option<&str>) -> Option<String> {
+    selected_offer_id
+        .filter(|selected_id| {
+            offers
+                .iter()
+                .any(|offer| offer.id.as_deref() == Some(*selected_id))
+        })
+        .map(str::to_owned)
 }
 
 /// Response from /api/boms/match endpoint
@@ -425,13 +441,16 @@ fn prepare_bom_match_for_paths(
             .iter()
             .chain(global_offers.iter())
             .map(|offer| offer.to_offer(target_qty))
-            .collect();
+            .collect::<Vec<_>>();
+        let selected_offer_id =
+            retained_selected_offer_id(&all_offers, bom_line.selected_offer_id.as_deref());
         availability.insert(
             path.to_string(),
             Availability {
                 us,
                 global,
                 no_match: bom_line_no_match(bom_line),
+                selected_offer_id,
                 offers: all_offers,
             },
         );
@@ -839,7 +858,11 @@ fn fetch_pricing_grouped_batch_once(
             .iter()
             .filter_map(|id| match_response.offers.get(id))
             .collect();
-        *slot = build_search_availability(&offers, bom_line_no_match(bom_line));
+        *slot = build_search_availability(
+            &offers,
+            bom_line.selected_offer_id.as_deref(),
+            bom_line_no_match(bom_line),
+        );
     }
 
     Ok(results)
@@ -885,25 +908,36 @@ fn fetch_pricing_batch_once(
             .filter_map(|id| match_response.offers.get(id))
             .collect();
 
-        *slot = build_search_availability(&offers, bom_line_no_match(&bom_line));
+        *slot = build_search_availability(
+            &offers,
+            bom_line.selected_offer_id.as_deref(),
+            bom_line_no_match(&bom_line),
+        );
     }
 
     Ok(results)
 }
 
-fn build_search_availability(offers: &[&ComponentOffer], no_match: bool) -> Availability {
+fn build_search_availability(
+    offers: &[&ComponentOffer],
+    selected_offer_id: Option<&str>,
+    no_match: bool,
+) -> Availability {
     let (_, us) = summarize_region(offers, Geography::Us, 1, 1);
     let (_, global) = summarize_region(offers, Geography::Global, 1, 1);
+    let offers = offers
+        .iter()
+        .filter(|offer| offer.geography != Geography::Uk)
+        .map(|offer| offer.to_offer(1))
+        .collect::<Vec<_>>();
+    let selected_offer_id = retained_selected_offer_id(&offers, selected_offer_id);
 
     Availability {
         us,
         global,
         no_match,
-        offers: offers
-            .iter()
-            .filter(|offer| offer.geography != Geography::Uk)
-            .map(|offer| offer.to_offer(1))
-            .collect(),
+        selected_offer_id,
+        offers,
     }
 }
 
@@ -935,6 +969,7 @@ mod tests {
             ),
             stock_available: Some(100),
             product_url: None,
+            datasheet_url: Some(format!("https://example.com/{id}.pdf")),
         }
     }
 
@@ -996,7 +1031,8 @@ mod tests {
                     "mpn": mpn,
                     "manufacturer": "API Manufacturer",
                     "priceBreaks": [{"qty": 1, "price": 0.25}],
-                    "stockAvailable": 100
+                    "stockAvailable": 100,
+                    "datasheetUrl": format!("https://example.com/{mpn}.pdf")
                 }
             }
         })
@@ -1092,7 +1128,7 @@ mod tests {
         let mut uk_offer = offer("uk-offer", &[(1, 1.0)]);
         uk_offer.geography = Geography::Uk;
 
-        let availability = build_search_availability(&[&uk_offer], false);
+        let availability = build_search_availability(&[&uk_offer], None, false);
 
         assert!(availability.us.is_none());
         assert!(availability.global.is_none());
@@ -1111,10 +1147,21 @@ mod tests {
             .filter_map(|id| response.offers.get(id))
             .collect();
 
-        let availability = build_search_availability(&offers, false);
+        let availability =
+            build_search_availability(&offers, line.selected_offer_id.as_deref(), false);
 
         assert_eq!(availability.us.as_ref().unwrap().stock, 5);
         assert_eq!(availability.us.as_ref().unwrap().price, Some(10.0));
+        assert_eq!(
+            availability.selected_offer_id.as_deref(),
+            Some("selected-offer")
+        );
+        assert_eq!(
+            availability
+                .selected_offer()
+                .and_then(|offer| offer.datasheet_url.as_deref()),
+            Some("https://example.com/selected.pdf")
+        );
         assert_eq!(
             availability.offers[0].part_id.as_deref(),
             Some("SELECTED-OFFER")
@@ -1151,6 +1198,68 @@ mod tests {
         assert_eq!(
             bom.entries["root.U1"].manufacturer.as_deref(),
             Some("API Manufacturer")
+        );
+        let selected_offer = bom.availability["root.U1"].selected_offer().unwrap();
+        assert_eq!(selected_offer.mpn.as_deref(), Some("API-MPN"));
+        assert_eq!(
+            selected_offer.manufacturer.as_deref(),
+            Some("API Manufacturer")
+        );
+        assert_eq!(
+            selected_offer.datasheet_url.as_deref(),
+            Some("https://example.com/API-MPN.pdf")
+        );
+    }
+
+    #[test]
+    fn selected_offer_keeps_its_own_part_datasheet() {
+        let response: MatchBomResponse = serde_json::from_value(serde_json::json!({
+            "results": [{
+                "designEntry": {"path": "root.U1"},
+                "offerIds": ["part-a", "part-b"],
+                "offerStockClasses": {
+                    "part-a": "PLENTY",
+                    "part-b": "PLENTY"
+                },
+                "match": "MATCH_COMPATIBLE",
+                "selectedOfferId": "part-b"
+            }],
+            "offers": {
+                "part-a": {
+                    "id": "part-a",
+                    "geography": "US",
+                    "mpn": "PART-A",
+                    "manufacturer": "Manufacturer A",
+                    "datasheetUrl": "https://example.com/part-a.pdf"
+                },
+                "part-b": {
+                    "id": "part-b",
+                    "geography": "US",
+                    "mpn": "PART-B",
+                    "manufacturer": "Manufacturer B",
+                    "datasheetUrl": "https://example.com/part-b.pdf"
+                }
+            }
+        }))
+        .unwrap();
+
+        let mut bom = test_bom();
+        prepare_bom_match(&bom, &response).unwrap().apply(&mut bom);
+
+        let availability = &bom.availability["root.U1"];
+        let selected_offer = availability.selected_offer().unwrap();
+        assert_eq!(selected_offer.mpn.as_deref(), Some("PART-B"));
+        assert_eq!(
+            selected_offer.manufacturer.as_deref(),
+            Some("Manufacturer B")
+        );
+        assert_eq!(
+            selected_offer.datasheet_url.as_deref(),
+            Some("https://example.com/part-b.pdf")
+        );
+        assert_eq!(
+            availability.offers[0].datasheet_url.as_deref(),
+            Some("https://example.com/part-a.pdf")
         );
     }
 
@@ -1222,6 +1331,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(fresh.entries["root.U1"].mpn.as_deref(), Some("API-MPN"));
+        assert_eq!(
+            fresh.availability["root.U1"]
+                .selected_offer()
+                .and_then(|offer| offer.datasheet_url.as_deref()),
+            Some("https://example.com/API-MPN.pdf")
+        );
         success.assert_calls(1);
 
         let mut custom_ttl = test_bom();
@@ -1263,6 +1378,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(stale.entries["root.U1"].mpn.as_deref(), Some("API-MPN"));
+        assert_eq!(
+            stale.availability["root.U1"]
+                .selected_offer()
+                .and_then(|offer| offer.datasheet_url.as_deref()),
+            Some("https://example.com/API-MPN.pdf")
+        );
         failure.assert_calls(1);
 
         let mut offline = test_bom();
@@ -1277,6 +1398,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(offline.entries["root.U1"].mpn.as_deref(), Some("API-MPN"));
+        assert_eq!(
+            offline.availability["root.U1"]
+                .selected_offer()
+                .and_then(|offer| offer.datasheet_url.as_deref()),
+            Some("https://example.com/API-MPN.pdf")
+        );
         failure.assert_calls(1);
 
         let mut no_cache = test_bom();

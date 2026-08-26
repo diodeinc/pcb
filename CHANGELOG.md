@@ -16,6 +16,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Cache `pcb bom` matches per line with stale-data fallback.
 - Make IPC DFM copper-clearance checks net-aware.
+- Preserve selected BOM offer identities and datasheet URLs in PCB BOM results.
 
 ## [0.4.36] - 2026-08-25
 
