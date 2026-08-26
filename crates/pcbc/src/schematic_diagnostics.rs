@@ -74,7 +74,7 @@ fn issue_diagnostic(source_path: &Path, issue: &SchematicIssue) -> Diagnostic {
             ),
         ),
         SchematicIssue::UnexpectedSymbol { slot, locations } => (
-            "sch.unbound_symbol",
+            "sch.unexpected_symbol",
             format!(
                 "KiCad schematic contains {} placement(s) for unknown component '{}' unit {}",
                 locations.len(),

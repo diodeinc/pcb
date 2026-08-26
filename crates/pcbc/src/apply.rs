@@ -29,28 +29,12 @@ pub struct ApplyArgs {
     #[arg(value_name = "FILE", value_hint = clap::ValueHint::FilePath)]
     file: Option<PathBuf>,
 
-    #[arg(long = "config", value_name = "KEY=VALUE", help = CONFIG_ARG_HELP)]
-    config: Vec<String>,
-
-    /// Skip opening KiCad after applying the project
-    #[arg(long)]
-    no_open: bool,
-
-    /// Disable network access
-    #[arg(long)]
-    offline: bool,
+    #[command(flatten)]
+    shared: SharedApplyArgs,
 
     /// Run KiCad DRC after applying the layout
     #[arg(long)]
     check: bool,
-
-    /// Suppress diagnostics by kind or severity
-    #[arg(short = 'S', long = "suppress", value_name = "KIND")]
-    suppress: Vec<String>,
-
-    /// Output format
-    #[arg(short = 'f', long, value_enum, default_value_t = LayoutOutputFormat::Human)]
-    format: LayoutOutputFormat,
 }
 
 #[derive(Subcommand, Debug)]
@@ -67,10 +51,17 @@ struct SchematicArgs {
     #[arg(value_name = "FILE", value_hint = clap::ValueHint::FilePath)]
     file: PathBuf,
 
+    #[command(flatten)]
+    shared: SharedApplyArgs,
+}
+
+/// Options shared by every `pcb apply` form.
+#[derive(Args, Debug, Clone)]
+struct SharedApplyArgs {
     #[arg(long = "config", value_name = "KEY=VALUE", help = CONFIG_ARG_HELP)]
     config: Vec<String>,
 
-    /// Skip opening KiCad after applying the schematic
+    /// Skip opening KiCad after applying
     #[arg(long)]
     no_open: bool,
 
@@ -87,15 +78,32 @@ struct SchematicArgs {
     format: LayoutOutputFormat,
 }
 
+impl SharedApplyArgs {
+    /// The layout invocation equivalent to these apply options. Unrelated
+    /// layout flags keep their defaults via struct update.
+    fn layout_args(&self, file: PathBuf, check: bool) -> LayoutArgs {
+        LayoutArgs {
+            file,
+            config: self.config.clone(),
+            no_open: true,
+            offline: self.offline,
+            check,
+            suppress: self.suppress.clone(),
+            format: self.format,
+            ..LayoutArgs::default()
+        }
+    }
+}
+
 pub fn execute(args: ApplyArgs) -> Result<()> {
     match args.command {
         Some(ApplyCommand::Layout(args)) => layout::execute(args),
         Some(ApplyCommand::Schematic(args)) => {
-            let layout_args = schematic_layout_args(&args);
+            let layout_args = args.shared.layout_args(args.file.clone(), false);
             let design = layout::prepare_design_for_apply(&layout_args)?;
             let result = apply_linked_schematic(&design.schematic)?;
-            print_schematic_result(result.as_ref(), args.format, &design.file_name)?;
-            if !args.no_open
+            print_schematic_result(result.as_ref(), args.shared.format, &design.file_name)?;
+            if !args.shared.no_open
                 && let Some(result) = &result
             {
                 open_path(&result.root_schematic, "schematic")?;
@@ -106,16 +114,7 @@ pub fn execute(args: ApplyArgs) -> Result<()> {
             let file = args
                 .file
                 .context("pcb apply requires FILE, `schematic FILE`, or `layout FILE`")?;
-            let layout_args = LayoutArgs {
-                file,
-                config: args.config,
-                no_open: true,
-                offline: args.offline,
-                check: args.check,
-                suppress: args.suppress,
-                no_sync: false,
-                format: args.format,
-            };
+            let layout_args = args.shared.layout_args(file, args.check);
             if crate::sandbox_uri::parse_sandbox_file_arg(&layout_args.file)?.is_some() {
                 anyhow::bail!(
                     "pcb apply cannot update a remote schematic; use `pcb apply layout` for a remote sandbox"
@@ -124,30 +123,23 @@ pub fn execute(args: ApplyArgs) -> Result<()> {
             let design = layout::prepare_design_for_apply(&layout_args)?;
             let schematic = apply_linked_schematic(&design.schematic)?;
             let layout = layout::apply_prepared(&layout_args, design)?;
-            let project_to_open = if args.no_open || args.check {
+            let project_to_open = if args.shared.no_open || args.check {
                 None
             } else {
                 complete_project_file(schematic.as_ref(), &layout)?
             };
-            print_complete_result(args.format, &layout_args.file, schematic.as_ref(), &layout)?;
+            print_complete_result(
+                args.shared.format,
+                &layout_args.file,
+                schematic.as_ref(),
+                &layout,
+            )?;
+            layout::run_drc_check(&layout_args, &layout)?;
             if let Some(project_file) = project_to_open {
                 open_path(&project_file, "project")?;
             }
             Ok(())
         }
-    }
-}
-
-fn schematic_layout_args(args: &SchematicArgs) -> LayoutArgs {
-    LayoutArgs {
-        file: args.file.clone(),
-        config: args.config.clone(),
-        no_open: true,
-        offline: args.offline,
-        check: false,
-        suppress: args.suppress.clone(),
-        no_sync: false,
-        format: args.format,
     }
 }
 

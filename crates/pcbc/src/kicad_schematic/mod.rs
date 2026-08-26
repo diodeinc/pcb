@@ -222,7 +222,14 @@ fn initialize_project(project_file: PathBuf, netlist: &Schematic) -> Result<Sche
     let plan = plan_reconciliation(None, netlist, file_name)?;
     let document = plan.apply(None)?;
     let schematic_files = desired_file_paths(&directory, &document)?;
+    let mut unique_paths = std::collections::BTreeSet::new();
     for path in &schematic_files {
+        if !unique_paths.insert(path) {
+            bail!(
+                "two schematic pages resolve to the same file {}; rename the root schematic or the conflicting module",
+                path.display()
+            );
+        }
         if path.exists() {
             bail!(
                 "refusing to replace existing KiCad schematic {}",

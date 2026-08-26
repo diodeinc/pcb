@@ -87,6 +87,9 @@ pub(crate) struct LayoutCommandResult {
     pub(crate) layout_dir: Option<PathBuf>,
     pub(crate) pcb_file: Option<PathBuf>,
     pub(crate) action: Option<LayoutAction>,
+    /// Absolute board path for follow-up steps (DRC); not part of the output.
+    #[serde(skip)]
+    pub(crate) pcb_file_abs: Option<PathBuf>,
 }
 
 pub(crate) struct PreparedDesign {
@@ -109,7 +112,10 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
 
     let design = prepare_design(&args)?;
     let result = apply_prepared(&args, design)?;
+    // The result is reported before DRC so check runs still emit their
+    // output (including --format json) when checks fail.
     print_layout_result(&result, args.format)?;
+    run_drc_check(&args, &result)?;
     if !args.no_open
         && let Some(pcb_file) = &result.pcb_file
     {
@@ -223,22 +229,11 @@ pub(crate) fn apply_prepared(
             layout_dir: None,
             pcb_file: None,
             action: None,
+            pcb_file_abs: None,
         });
     };
     let pcb_file = layout_result.pcb_file.clone();
     let display_pcb_file = layout_result.display_pcb_file().to_path_buf();
-
-    // Run DRC in check mode.
-    if args.check {
-        let spinner = Spinner::builder(format!("{file_name}: Running DRC checks"))
-            .hidden(hide_progress)
-            .start();
-        let drc_output = tempfile::NamedTempFile::new()?;
-        let working_dir = pcb_file.parent();
-        let report = pcb_kicad::run_drc(&pcb_file, false, working_dir, drc_output.path())?;
-        report.add_to_diagnostics(&mut diagnostics, &display_pcb_file.to_string_lossy());
-        spinner.finish();
-    }
 
     // Render diagnostics
     drc::render_diagnostics(&mut diagnostics, &args.suppress);
@@ -257,7 +252,40 @@ pub(crate) fn apply_prepared(
         } else {
             LayoutAction::Updated
         }),
+        pcb_file_abs: Some(pcb_file),
     })
+}
+
+/// Run KiCad DRC for a `--check` invocation and fail on unsuppressed errors.
+/// Callers report the layout result first so check failures still produce
+/// their output payload.
+pub(crate) fn run_drc_check(args: &LayoutArgs, result: &LayoutCommandResult) -> Result<()> {
+    if !args.check {
+        return Ok(());
+    }
+    let (Some(pcb_file), Some(display_pcb_file)) = (&result.pcb_file_abs, &result.pcb_file) else {
+        return Ok(());
+    };
+    let hide_progress = args.format == LayoutOutputFormat::Json;
+    let file_name = result
+        .source_file
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let spinner = Spinner::builder(format!("{file_name}: Running DRC checks"))
+        .hidden(hide_progress)
+        .start();
+    let drc_output = tempfile::NamedTempFile::new()?;
+    let working_dir = pcb_file.parent();
+    let report = pcb_kicad::run_drc(pcb_file, false, working_dir, drc_output.path())?;
+    let mut diagnostics = pcb_zen_core::Diagnostics::default();
+    report.add_to_diagnostics(&mut diagnostics, &display_pcb_file.to_string_lossy());
+    spinner.finish();
+    drc::render_diagnostics(&mut diagnostics, &args.suppress);
+    if diagnostics.error_count() > 0 {
+        anyhow::bail!("DRC failed");
+    }
+    Ok(())
 }
 
 fn resolve_existing_layout(zen_path: &Path, schematic: &Schematic) -> Result<LayoutCommandResult> {
@@ -267,6 +295,7 @@ fn resolve_existing_layout(zen_path: &Path, schematic: &Schematic) -> Result<Lay
             layout_dir: None,
             pcb_file: None,
             action: None,
+            pcb_file_abs: None,
         });
     };
 
@@ -283,8 +312,9 @@ fn resolve_existing_layout(zen_path: &Path, schematic: &Schematic) -> Result<Lay
     Ok(LayoutCommandResult {
         source_file: zen_path.to_path_buf(),
         layout_dir: Some(layout_dir),
-        pcb_file: Some(pcb_file),
+        pcb_file: Some(pcb_file.clone()),
         action: Some(LayoutAction::Unchanged),
+        pcb_file_abs: Some(pcb_file),
     })
 }
 
