@@ -11,8 +11,8 @@ use crate::{
     analysis::{ConnectivityInspection, SchematicIssue, SchematicIssueKey},
     component_slots,
     connectivity::{
-        ComponentIdentity, ConnectivityItemRef, PhysicalIsland, PinVisibility, SymbolLocation,
-        Terminal, named_connected_nets, reduce_with_provenance,
+        ComponentIdentity, ConnectionOrigin, ConnectivityItemRef, IslandRef, PhysicalIsland,
+        PinVisibility, SymbolLocation, Terminal, named_connected_nets, reduce_with_provenance,
     },
     deterministic_uuid, field_autoplace, hierarchy, net_symbols,
     repair::{ConnectivityRepairPlan, plan_connectivity_repair, remove_items},
@@ -1582,8 +1582,25 @@ fn sync_net_drivers(
                 .push(target_index);
         }
 
-        for (island, target_indices) in targets_by_island {
-            let provenance = &observed.islands[&island];
+        // The merged connection group each island belongs to. An island whose
+        // drivers already merge it with the net's other pages needs nothing;
+        // an island left in its own group despite a name driver (a local
+        // label, or a hierarchical label with no bridging sheet pin) can only
+        // reach the other pages through a global driver.
+        let island_group = |island: &IslandRef| {
+            observed.graph.groups.iter().position(|group| {
+                group
+                    .origins
+                    .contains(&ConnectionOrigin::KiCadIsland(island.clone()))
+            })
+        };
+        let island_groups = targets_by_island
+            .keys()
+            .map(|island| (island.clone(), island_group(island)))
+            .collect::<BTreeMap<_, _>>();
+
+        for (island, target_indices) in &targets_by_island {
+            let provenance = &observed.islands[island];
             let canonical = *target_indices
                 .iter()
                 .min_by_key(|index| (&targets[**index].slot, &targets[**index].number))
@@ -1592,7 +1609,13 @@ fn sync_net_drivers(
             let interface_names = page_contexts
                 .get(&target.page_index)
                 .and_then(|context| context.get(net_name));
-            let has_driver = if net_symbol_specs.contains_key(net_name) {
+            let needs_global = net_page_count > 1
+                && island_groups.iter().any(|(other, group)| {
+                    other.page_id != island.page_id && group != &island_groups[island]
+                });
+            let has_driver = if needs_global {
+                island_has_global_driver(document, target.page_index, provenance, net_name)
+            } else if net_symbol_specs.contains_key(net_name) {
                 has_named_driver(provenance, net_name)
             } else if let Some(interface_names) = interface_names {
                 island_has_hierarchical_driver(
@@ -1615,8 +1638,8 @@ fn sync_net_drivers(
                 let id = available_deterministic_id(document, &target.label_key(net_name));
                 let mut label = driver_label(
                     net_name,
-                    interface_names,
-                    net_page_count > 1,
+                    if needs_global { None } else { interface_names },
+                    needs_global,
                     id,
                     target.point,
                 );
@@ -1787,6 +1810,32 @@ fn has_named_driver(provenance: &PhysicalIsland, net_name: &str) -> bool {
         .named_drivers
         .get(net_name)
         .is_some_and(|drivers| !drivers.is_empty())
+}
+
+/// Whether the island carries a driver that merges by name across pages: a
+/// global label with the net's name, or a power symbol (power symbols merge
+/// globally through their hidden power-input pins).
+fn island_has_global_driver(
+    document: &SchDocument,
+    page_index: usize,
+    provenance: &PhysicalIsland,
+    net_name: &str,
+) -> bool {
+    provenance
+        .named_drivers
+        .get(net_name)
+        .is_some_and(|drivers| {
+            drivers.iter().any(|driver| match driver {
+                ConnectivityItemRef::Symbol { .. } => true,
+                ConnectivityItemRef::Label { id, .. } => {
+                    document.pages[page_index].items.iter().any(|item| {
+                        matches!(item, SchItem::Label(label)
+                        if label.id == *id && matches!(label.kind, LabelKind::Global { .. }))
+                    })
+                }
+                _ => false,
+            })
+        })
 }
 
 fn island_has_hierarchical_driver(
