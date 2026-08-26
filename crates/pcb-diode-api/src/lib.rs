@@ -7,7 +7,7 @@ mod cache;
 pub mod component;
 mod component_api;
 pub mod datasheet;
-pub mod diode_uri;
+pub use pcb_diode_uri as diode_uri;
 mod download_support;
 mod endpoint;
 mod git_auth;

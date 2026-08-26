@@ -14,7 +14,8 @@ path = "src/main.rs"
 [dependencies]
 anyhow = { workspace = true }
 dirs = { workspace = true }
-url = { workspace = true }
+pcb-diode-uri = { workspace = true }
+pcb-native-dialog = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.4"

@@ -326,7 +326,7 @@ mod tests {
             pairs.entry(land.block).or_default().push(land);
         }
         assert_eq!(pairs.len(), 4);
-        for (_, pair) in &pairs {
+        for pair in pairs.values() {
             assert_eq!(pair.len(), 2);
             let d = ((pair[0].xy[0] - pair[1].xy[0]).powi(2)
                 + (pair[0].xy[1] - pair[1].xy[1]).powi(2))

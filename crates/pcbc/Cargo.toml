@@ -44,6 +44,7 @@ dirs = { workspace = true }
 env_logger = { workspace = true }
 colored = { workspace = true }
 pcb-kicad = { workspace = true }
+pcb-native-dialog = { workspace = true }
 pcb-command-runner = { workspace = true }
 pcb-kicad-sch = { workspace = true }
 open = { workspace = true }

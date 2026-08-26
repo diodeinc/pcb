@@ -4184,6 +4184,7 @@ dependencies = [
  "md-5",
  "open",
  "pcb-component-gen",
+ "pcb-diode-uri",
  "pcb-eda",
  "pcb-fmt",
  "pcb-kicad",
@@ -4211,6 +4212,15 @@ dependencies = [
  "walkdir",
  "zip",
  "zstd",
+]
+
+[[package]]
+name = "pcb-diode-uri"
+version = "0.4.37"
+dependencies = [
+ "thiserror 2.0.19",
+ "url",
+ "urlencoding",
 ]
 
 [[package]]
@@ -4354,7 +4364,8 @@ dependencies = [
  "objc2",
  "objc2-app-kit",
  "objc2-foundation",
- "url",
+ "pcb-diode-uri",
+ "pcb-native-dialog",
 ]
 
 [[package]]
@@ -4380,6 +4391,13 @@ dependencies = [
  "starlark",
  "tempfile",
  "thiserror 2.0.19",
+]
+
+[[package]]
+name = "pcb-native-dialog"
+version = "0.4.37"
+dependencies = [
+ "anyhow",
 ]
 
 [[package]]
@@ -4625,6 +4643,7 @@ dependencies = [
  "pcb-kicad",
  "pcb-kicad-sch",
  "pcb-layout",
+ "pcb-native-dialog",
  "pcb-sch",
  "pcb-sexpr",
  "pcb-sim",

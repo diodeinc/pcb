@@ -1,11 +1,11 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 use anyhow::{Context, Result, bail};
+use pcb_diode_uri::{SandboxFileUri, is_trusted_api_host};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use url::Url;
 
 const LAUNCHER_LOG_MAX_BYTES: u64 = 1024 * 1024;
 
@@ -124,7 +124,8 @@ fn launch_pcb(uri: &str, toolchain: LauncherToolchain) -> Result<()> {
 
 fn report_launch_error(error: &anyhow::Error) {
     append_launcher_error(error);
-    platform::show_error(error, &launcher_log_path());
+    let message = format!("{error:#}\n\nDetails: {}", launcher_log_path().display());
+    pcb_native_dialog::show_error("Open in KiCad failed", &message);
 }
 
 #[cfg(target_os = "macos")]
@@ -144,12 +145,12 @@ fn launch_pcb_inner(uri: &str, toolchain: LauncherToolchain) -> Result<()> {
     validate_uri(uri)?;
     let pcb = sibling_pcb_executable()?;
     let mut log = open_launcher_log()?;
-    writeln!(
-        log,
-        "\n--- pcb-launcher invocation at {:?} ---",
-        std::time::SystemTime::now()
-    )
-    .context("failed to write the launcher log")?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or_default();
+    writeln!(log, "\n--- pcb-launcher invocation at unix {now} ---")
+        .context("failed to write the launcher log")?;
     let stdout = log
         .try_clone()
         .context("failed to clone the launcher log handle")?;
@@ -188,68 +189,11 @@ fn launch_pcb_inner(uri: &str, toolchain: LauncherToolchain) -> Result<()> {
 }
 
 fn validate_uri(uri: &str) -> Result<()> {
-    let url = Url::parse(uri).context("invalid diode URI")?;
-    if url.scheme() != "diode" {
-        bail!("expected a diode:// sandbox file URI");
-    }
-    if !url.username().is_empty() || url.password().is_some() {
-        bail!("diode URI must not include user info");
-    }
-    if url.fragment().is_some() {
-        bail!("diode URI must not include a fragment");
-    }
-
-    let host = url.host_str().context("diode URI must include a host")?;
-    if !is_trusted_api_host(host, url.port()) {
-        bail!("refusing untrusted diode API host: {host}");
-    }
-
-    let segments: Vec<_> = url.path().split('/').skip(1).collect();
-    if segments.len() != 4
-        || segments[0] != "sandboxes"
-        || segments[1].is_empty()
-        || segments[2] != "fs"
-        || segments[3] != "read"
-    {
-        bail!("expected /sandboxes/{{sandboxId}}/fs/read");
-    }
-
-    let mut query = url.query_pairs();
-    let Some((key, path)) = query.next() else {
-        bail!("diode URI must include one path query parameter");
-    };
-    if key != "path" || query.next().is_some() {
-        bail!("diode URI must include only one path query parameter");
-    }
-    if !path.starts_with('/')
-        || path
-            .split('/')
-            .skip(1)
-            .any(|segment| segment.is_empty() || segment == "." || segment == "..")
-    {
-        bail!("diode URI path must be a safe absolute sandbox path");
+    let parsed = SandboxFileUri::parse(uri).context("expected a diode:// sandbox file URI")?;
+    if !is_trusted_api_host(&parsed.host) {
+        bail!("refusing untrusted diode API host: {}", parsed.host);
     }
     Ok(())
-}
-
-fn is_trusted_api_host(host: &str, port: Option<u16>) -> bool {
-    let host = host.to_ascii_lowercase();
-    if host == "localhost" || host == "127.0.0.1" {
-        return port == Some(3001);
-    }
-    port.is_none()
-        && (host == "api.diode.computer"
-            || host == "api.gov.diode.computer"
-            || is_preview_api_host(&host))
-}
-
-fn is_preview_api_host(host: &str) -> bool {
-    let Some(pr) = host.strip_suffix(".preview.api.diode.computer") else {
-        return false;
-    };
-    pr.strip_prefix("pr-").is_some_and(|number| {
-        !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
-    })
 }
 
 fn launcher_log_path() -> PathBuf {
@@ -264,7 +208,6 @@ fn open_launcher_log() -> Result<File> {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
-    secure_launcher_log_permissions(&path)?;
     if path
         .metadata()
         .is_ok_and(|metadata| metadata.len() >= LAUNCHER_LOG_MAX_BYTES)
@@ -457,15 +400,12 @@ mod platform {
         fs::write(contents.join("Info.plist"), INFO_PLIST)
             .context("failed to write the macOS launcher Info.plist")?;
 
-        if let Err(error) = run_checked(
+        run_checked(
             Command::new("codesign")
                 .args(["--force", "--deep", "--sign", "-"])
                 .arg(&staged_app),
             "sign the macOS launcher app",
-        ) {
-            let _ = fs::remove_dir_all(&staged_app);
-            return Err(error);
-        }
+        )?;
 
         let had_app = app.exists();
         if had_app {
@@ -505,22 +445,6 @@ mod platform {
             );
         }
         Ok(())
-    }
-
-    pub fn show_error(error: &anyhow::Error, log_path: &Path) {
-        let message = format!("{error:#}\n\nDetails: {}", log_path.display());
-        let _ = Command::new("osascript")
-            .args([
-                "-e",
-                "on run argv",
-                "-e",
-                "display alert \"Open in KiCad failed\" message (item 1 of argv) as critical",
-                "-e",
-                "end run",
-                "--",
-            ])
-            .arg(message)
-            .status();
     }
 
     fn remove_dir_if_exists(path: &Path) -> Result<()> {
@@ -571,21 +495,6 @@ mod platform {
         Ok(())
     }
 
-    pub fn show_error(error: &anyhow::Error, log_path: &Path) {
-        let message = format!("{error:#}\n\nDetails: {}", log_path.display());
-        let shown = Command::new("zenity")
-            .args(["--error", "--title=Open in KiCad failed", "--text"])
-            .arg(&message)
-            .status()
-            .is_ok_and(|status| status.success());
-        if !shown {
-            let _ = Command::new("kdialog")
-                .args(["--title", "Open in KiCad failed", "--error"])
-                .arg(message)
-                .status();
-        }
-    }
-
     fn run_optional(command: &mut Command, description: &str) -> Result<()> {
         match command.status() {
             Ok(status) if status.success() => Ok(()),
@@ -626,21 +535,6 @@ mod platform {
             &command,
         )?;
         Ok(())
-    }
-
-    pub fn show_error(error: &anyhow::Error, log_path: &Path) {
-        let message = format!("{error:#}\n\nDetails: {}", log_path.display());
-        let mut command = Command::new("powershell.exe");
-        command.creation_flags(CREATE_NO_WINDOW);
-        let _ = command
-            .env("PCB_LAUNCHER_ERROR", &message)
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                "Add-Type -AssemblyName PresentationFramework; [System.Windows.MessageBox]::Show($env:PCB_LAUNCHER_ERROR, 'Open in KiCad failed', 'OK', 'Error')",
-            ])
-            .status();
     }
 
     fn reg_add(key: &str, name: Option<&str>, value: &str) -> Result<()> {
@@ -731,8 +625,8 @@ mod macos {
 #[cfg(test)]
 mod tests {
     use super::{
-        LauncherCommand, LauncherToolchain, escape_desktop_exec_path, is_trusted_api_host,
-        parse_launcher_args, validate_uri,
+        LauncherCommand, LauncherToolchain, escape_desktop_exec_path, parse_launcher_args,
+        validate_uri,
     };
     use std::ffi::OsString;
     use std::path::Path;
@@ -762,22 +656,12 @@ mod tests {
 
     #[test]
     fn accepts_diode_preview_and_loopback_hosts() {
-        assert!(is_trusted_api_host(
-            "pr-983.preview.api.diode.computer",
-            None
-        ));
-        assert!(is_trusted_api_host("api.gov.diode.computer", None));
-        assert!(is_trusted_api_host("localhost", Some(3001)));
-        assert!(is_trusted_api_host("127.0.0.1", Some(3001)));
-        assert!(!is_trusted_api_host("127.0.0.2", Some(3001)));
-        assert!(!is_trusted_api_host("[::1]", Some(3001)));
-        assert!(!is_trusted_api_host("localhost", Some(8080)));
-        assert!(!is_trusted_api_host("preview.api.diode.computer", None));
-        assert!(!is_trusted_api_host("evil.diode.computer", None));
-        assert!(!is_trusted_api_host(
-            "pr-main.preview.api.diode.computer",
-            None
-        ));
+        assert!(
+            validate_uri("diode://pr-983.preview.api.diode.computer/sandboxes/s/fs/read?path=%2Fa")
+                .is_ok()
+        );
+        assert!(validate_uri("diode://localhost:3001/sandboxes/s/fs/read?path=%2Fa").is_ok());
+        assert!(validate_uri("diode://localhost:8080/sandboxes/s/fs/read?path=%2Fa").is_err());
     }
 
     #[test]

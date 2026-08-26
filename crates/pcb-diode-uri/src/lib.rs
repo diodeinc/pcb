@@ -203,6 +203,26 @@ fn host_api_base_url(host: &str) -> String {
     format!("{scheme}://{host}")
 }
 
+/// Whether a parsed [`SandboxFileUri::host`] (host, plus `:port` when present)
+/// is a Diode API endpoint that browser-launched opens may talk to.
+pub fn is_trusted_api_host(host: &str) -> bool {
+    let host = host.to_ascii_lowercase();
+    host == "localhost:3001"
+        || host == "127.0.0.1:3001"
+        || host == "api.diode.computer"
+        || host == "api.gov.diode.computer"
+        || is_preview_api_host(&host)
+}
+
+fn is_preview_api_host(host: &str) -> bool {
+    let Some(pr) = host.strip_suffix(".preview.api.diode.computer") else {
+        return false;
+    };
+    pr.strip_prefix("pr-").is_some_and(|number| {
+        !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -303,6 +323,23 @@ mod tests {
             .unwrap_err(),
             DiodeUriParseError::UnsafeSandboxPath
         );
+    }
+
+    #[test]
+    fn trusts_only_diode_api_hosts() {
+        assert!(is_trusted_api_host("api.diode.computer"));
+        assert!(is_trusted_api_host("api.gov.diode.computer"));
+        assert!(is_trusted_api_host("pr-983.preview.api.diode.computer"));
+        assert!(is_trusted_api_host("localhost:3001"));
+        assert!(is_trusted_api_host("127.0.0.1:3001"));
+        assert!(!is_trusted_api_host("127.0.0.2:3001"));
+        assert!(!is_trusted_api_host("[::1]:3001"));
+        assert!(!is_trusted_api_host("localhost:8080"));
+        assert!(!is_trusted_api_host("localhost"));
+        assert!(!is_trusted_api_host("api.diode.computer:443"));
+        assert!(!is_trusted_api_host("preview.api.diode.computer"));
+        assert!(!is_trusted_api_host("evil.diode.computer"));
+        assert!(!is_trusted_api_host("pr-main.preview.api.diode.computer"));
     }
 
     #[test]

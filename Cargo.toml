@@ -45,6 +45,8 @@ pcb-fmt = { path = "crates/pcb-fmt" }
 pcb-test-utils = { path = "crates/pcb-test-utils" }
 pcb-sim = { path = "crates/pcb-sim" }
 pcb-diode-api = { path = "crates/pcb-diode-api" }
+pcb-diode-uri = { path = "crates/pcb-diode-uri" }
+pcb-native-dialog = { path = "crates/pcb-native-dialog" }
 pcb-ipc2581-tools = { path = "crates/pcb-ipc2581-tools" }
 pcb-docgen = { path = "crates/pcb-docgen" }
 
