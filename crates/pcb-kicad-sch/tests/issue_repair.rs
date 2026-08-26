@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use pcb_kicad_sch::{
     Point, SchDocument, SchItem, Symbol, Wire,
     analysis::{SchematicIssue, inspect_schematic},
-    reconcile::{InitialInspection, plan_reconciliation, plan_repairs},
+    reconcile::{InitialInspection, plan_reconciliation, plan_repairs, plan_repairs_on_page},
 };
 
 const CONNECTION_GRID_MM: f64 = 1.27;
@@ -541,6 +541,88 @@ fn generated_pages_follow_their_parent_directory() {
 /// A generated module page that the user emptied of managed symbols is still
 /// the module's page: re-applying repopulates it instead of materializing a
 /// duplicate sheet with the same deterministic identity.
+/// An interactive placement can ask for the missing symbol to be created on
+/// the page the user is viewing instead of its module's own page. The plan
+/// must place it there and still verify (net drivers adapt to the new span).
+#[test]
+fn missing_symbol_repair_places_on_the_requested_page() {
+    let netlist = common::compile_fixture("hierarchy", "root.zen");
+    let baseline = plan_reconciliation(None, &netlist, "root.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    let root_page_id = baseline
+        .pages
+        .iter()
+        .find(|page| page.file_name.as_deref() == Some("root.kicad_sch"))
+        .expect("hierarchy fixture has a root page")
+        .id
+        .clone();
+
+    let mut document = baseline.clone();
+    let removed_path = {
+        let page = document
+            .pages
+            .iter_mut()
+            .find(|page| page.id != root_page_id)
+            .expect("hierarchy fixture has module pages");
+        let path = page
+            .items
+            .iter()
+            .find_map(|item| match item {
+                SchItem::Symbol(symbol) => {
+                    symbol.fields.get("Path").map(|field| field.value.clone())
+                }
+                _ => None,
+            })
+            .expect("module page has managed symbols");
+        page.items.retain(|item| {
+            !matches!(
+                item,
+                SchItem::Symbol(symbol)
+                    if symbol.fields.get("Path").is_some_and(|field| field.value == path)
+            )
+        });
+        path
+    };
+
+    let inspection = inspect_schematic(&document, &netlist).unwrap();
+    let key = inspection
+        .issues
+        .iter()
+        .find(|issue| matches!(&issue.issue, SchematicIssue::MissingSymbol { .. }))
+        .expect("removing a managed symbol reports it missing")
+        .key
+        .clone();
+
+    let repaired = plan_repairs_on_page(
+        &document,
+        &netlist,
+        &inspection,
+        BTreeSet::from([key]),
+        &root_page_id,
+    )
+    .unwrap_or_else(|error| panic!("placement on the viewed page must plan: {error:#}"))
+    .apply(Some(&document))
+    .unwrap();
+
+    let placed_page = repaired
+        .pages
+        .iter()
+        .find(|page| {
+            page.items.iter().any(|item| matches!(
+                item,
+                SchItem::Symbol(symbol)
+                    if symbol.fields.get("Path").is_some_and(|field| field.value == removed_path)
+            ))
+        })
+        .expect("the repaired symbol is placed");
+    assert_eq!(
+        placed_page.id, root_page_id,
+        "the symbol must land on the requested page, not its module page"
+    );
+}
+
 #[test]
 fn emptied_module_page_is_repopulated_not_duplicated() {
     let netlist = common::compile_fixture("hierarchy", "root.zen");

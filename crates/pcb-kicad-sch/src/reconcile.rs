@@ -179,6 +179,7 @@ pub fn plan_reconciliation(
         netlist,
         Some(root_file_name),
         None,
+        None,
         initial_inspection,
     )
 }
@@ -194,12 +195,43 @@ pub fn plan_repairs(
     inspection: &ConnectivityInspection,
     selected_issue_keys: BTreeSet<SchematicIssueKey>,
 ) -> Result<ReconciliationPlan> {
+    plan_repairs_impl(document, netlist, inspection, selected_issue_keys, None)
+}
+
+/// Like [`plan_repairs`], but new symbols for the selected missing-symbol
+/// issues are placed on `placement_page_id` instead of their module's page.
+/// Net drivers adapt (a net that now spans pages gets global labels), and the
+/// usual plan verification still applies.
+pub fn plan_repairs_on_page(
+    document: &SchDocument,
+    netlist: &Schematic,
+    inspection: &ConnectivityInspection,
+    selected_issue_keys: BTreeSet<SchematicIssueKey>,
+    placement_page_id: &str,
+) -> Result<ReconciliationPlan> {
+    plan_repairs_impl(
+        document,
+        netlist,
+        inspection,
+        selected_issue_keys,
+        Some(placement_page_id),
+    )
+}
+
+fn plan_repairs_impl(
+    document: &SchDocument,
+    netlist: &Schematic,
+    inspection: &ConnectivityInspection,
+    selected_issue_keys: BTreeSet<SchematicIssueKey>,
+    placement_page_id: Option<&str>,
+) -> Result<ReconciliationPlan> {
     component_slots::validate_symbol_library_versions(netlist)?;
     build_plan(
         Some(document),
         netlist,
         None,
         Some(&selected_issue_keys),
+        placement_page_id,
         InitialInspection::Available(inspection.clone()),
     )
 }
@@ -209,6 +241,7 @@ fn build_plan(
     netlist: &Schematic,
     root_file_name: Option<&str>,
     issue_selection: Option<&BTreeSet<SchematicIssueKey>>,
+    placement_page_id: Option<&str>,
     initial_inspection: InitialInspection,
 ) -> Result<ReconciliationPlan> {
     let inspection_before = match &initial_inspection {
@@ -220,6 +253,7 @@ fn build_plan(
         netlist,
         root_file_name,
         issue_selection,
+        placement_page_id,
         inspection_before,
     )?;
     let inspection_after = inspect_schematic(&desired, netlist)?;

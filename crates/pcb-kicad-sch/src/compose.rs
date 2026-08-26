@@ -34,6 +34,7 @@ pub(crate) fn reconcile_document(
     netlist: &Schematic,
     root_file_name: Option<&str>,
     issue_selection: Option<&BTreeSet<SchematicIssueKey>>,
+    placement_page_id: Option<&str>,
     inspection_before: Option<&ConnectivityInspection>,
 ) -> Result<SchDocument> {
     if issue_selection.is_some_and(BTreeSet::is_empty) {
@@ -146,6 +147,15 @@ pub(crate) fn reconcile_document(
     for location in &remove_locations {
         remove_symbol_location(&mut document, location);
     }
+    let placement_page = placement_page_id
+        .map(|page_id| {
+            document
+                .pages
+                .iter()
+                .position(|page| page.id == page_id)
+                .with_context(|| format!("placement page '{page_id}' is absent"))
+        })
+        .transpose()?;
     for slot in &project_slots {
         project_component_slot(
             &mut document,
@@ -153,6 +163,7 @@ pub(crate) fn reconcile_document(
             &instances,
             slot,
             selected_existing.get(slot),
+            placement_page,
             &hierarchy,
         )?;
     }
@@ -351,6 +362,7 @@ fn project_component_slot(
     instances: &BTreeMap<String, &Instance>,
     slot: &SymbolSlotKey,
     selected: Option<&ExistingSymbol>,
+    placement_page: Option<usize>,
     hierarchy: &hierarchy::HierarchyPlan,
 ) -> Result<()> {
     let instance = instances.get(slot.component_path()).with_context(|| {
@@ -368,6 +380,8 @@ fn project_component_slot(
         })?;
     let page_index = if let Some(selected) = selected {
         selected.page_index
+    } else if let Some(placement_page) = placement_page {
+        placement_page
     } else {
         hierarchy.page_for_new_component(slot.component_path())?
     };
