@@ -734,13 +734,7 @@ pub fn match_bom_with_context(
     strict: bool,
     options: BomMatchOptions,
 ) -> Result<()> {
-    let mut cache = match WriteThroughCache::open(BOM_MATCH_CACHE_NAMESPACE) {
-        Ok(cache) => Some(cache),
-        Err(error) => {
-            log::warn!("Failed to open local BOM cache: {error:#}");
-            None
-        }
-    };
+    let mut cache = open_bom_cache();
     match_bom_with_cache(
         ctx,
         auth_token,
@@ -750,6 +744,16 @@ pub fn match_bom_with_context(
         cache.as_mut(),
         unix_now()?,
     )
+}
+
+fn open_bom_cache() -> Option<WriteThroughCache> {
+    match WriteThroughCache::open(BOM_MATCH_CACHE_NAMESPACE) {
+        Ok(cache) => Some(cache),
+        Err(error) => {
+            log::warn!("Failed to open local BOM cache: {error:#}");
+            None
+        }
+    }
 }
 
 fn match_bom_with_cache(
@@ -907,13 +911,13 @@ fn try_hydrate_schematic_from_bom(
 ) -> Result<usize> {
     let ctx = WorkspaceContext::from_path(source_path);
     let strict = ctx.bom_strict()?;
-    let mut cache = WriteThroughCache::open(BOM_MATCH_CACHE_NAMESPACE)?;
+    let mut cache = open_bom_cache();
     hydrate_schematic_from_bom_with_cache(
         &ctx,
         schematic,
         strict,
         mode,
-        Some(&mut cache),
+        cache.as_mut(),
         unix_now()?,
     )
 }

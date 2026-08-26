@@ -9,7 +9,7 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 
-use crate::build::{build as build_zen, create_diagnostics_passes};
+use crate::build::{BuildEvalState, create_diagnostics_passes};
 use crate::config_input::{CONFIG_ARG_HELP, parse_config_overrides};
 use crate::file_walker;
 
@@ -52,15 +52,24 @@ fn simulate_one(
 ) -> Result<bool> {
     let file_name = zen_path.file_name().unwrap().to_string_lossy().to_string();
 
-    let Some(schematic) = build_zen(
-        zen_path,
-        config_inputs,
-        create_diagnostics_passes(&[], &[]),
-        false,
-        &mut false.clone(),
-        &mut false.clone(),
-        resolution_result,
-    ) else {
+    let bom_match_mode = if args.offline {
+        pcb_diode_api::BomMatchMode::Offline
+    } else {
+        pcb_diode_api::BomMatchMode::Online
+    };
+    let mut has_errors = false;
+    let mut has_warnings = false;
+    let build_result = BuildEvalState::new(resolution_result)
+        .with_bom_hydration(bom_match_mode)
+        .build(
+            zen_path,
+            config_inputs,
+            create_diagnostics_passes(&[], &[]),
+            false,
+            &mut has_errors,
+            &mut has_warnings,
+        );
+    let Some(schematic) = build_result.schematic else {
         anyhow::bail!("Build failed for {file_name}");
     };
 
