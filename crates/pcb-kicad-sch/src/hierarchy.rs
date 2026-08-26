@@ -59,6 +59,7 @@ impl HierarchyPlan {
 pub(crate) fn plan(
     mut linked_modules: Vec<LinkedModule>,
     existing_component_pages: BTreeMap<String, BTreeSet<usize>>,
+    existing_page_ids: &[String],
     root_page: usize,
     first_new_page: usize,
 ) -> Result<HierarchyPlan> {
@@ -71,7 +72,7 @@ pub(crate) fn plan(
     // Assign each existing component to its closest linked module. A component
     // inside a nested linked child is evidence for the child page, not for the
     // page that owns the parent module's direct contents.
-    let existing_module_pages = existing_component_pages
+    let mut existing_module_pages = existing_component_pages
         .iter()
         .filter_map(|(component_path, pages)| {
             owning_module(component_path, &linked_modules)
@@ -84,13 +85,28 @@ pub(crate) fn plan(
                 modules
             },
         );
+    // A previously generated module page keeps its deterministic id even when
+    // the user has emptied it of managed symbols; the page itself is the
+    // authoritative evidence that the module is already materialized.
+    for module in &linked_modules {
+        if let Some(index) = existing_page_ids
+            .iter()
+            .position(|id| *id == page_id(&module.path))
+        {
+            existing_module_pages
+                .entry(module.path.clone())
+                .or_default()
+                .insert(index);
+        }
+    }
 
     let mut sheets = Vec::<PlannedSheet>::new();
     for module in &linked_modules {
-        let has_managed_descendant = existing_component_pages
-            .keys()
-            .any(|component_path| is_descendant(component_path, &module.path));
-        if has_managed_descendant {
+        let already_materialized = existing_module_pages.contains_key(&module.path)
+            || existing_component_pages
+                .keys()
+                .any(|component_path| is_descendant(component_path, &module.path));
+        if already_materialized {
             continue;
         }
 
@@ -215,6 +231,7 @@ mod tests {
         let plan = plan(
             vec![module("POWER_B"), module("POWER_A")],
             BTreeMap::new(),
+            &[],
             0,
             1,
         )
@@ -239,6 +256,7 @@ mod tests {
         let plan = plan(
             vec![module("A"), module("A.NEW"), module("EXISTING")],
             component_pages(&[("A.R1", 4), ("EXISTING.R1", 7)]),
+            &[],
             0,
             8,
         )
@@ -256,6 +274,7 @@ mod tests {
         let plan = plan(
             vec![module("A"), module("A.CHILD"), module("A.NEW")],
             component_pages(&[("A.CHILD.R1", 4), ("A.R1", 7)]),
+            &[],
             0,
             8,
         )
@@ -273,6 +292,7 @@ mod tests {
         let plan = plan(
             vec![module("A")],
             component_pages(&[("A.REMOVED", 3)]),
+            &[],
             0,
             4,
         )
@@ -287,6 +307,7 @@ mod tests {
         let ambiguous = plan(
             vec![module("A")],
             component_pages(&[("A.R1", 2), ("A.R2", 3)]),
+            &[],
             0,
             4,
         )
@@ -303,6 +324,7 @@ mod tests {
         let missing = plan(
             vec![module("A"), module("A.CHILD")],
             component_pages(&[("A.CHILD.R1", 2)]),
+            &[],
             0,
             3,
         )

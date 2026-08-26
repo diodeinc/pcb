@@ -121,9 +121,15 @@ pub(crate) fn reconcile_document(
             })
             .collect()
     };
+    let existing_page_ids = document
+        .pages
+        .iter()
+        .map(|page| page.id.clone())
+        .collect::<Vec<_>>();
     let hierarchy = hierarchy::plan(
         linked_modules,
         existing_component_pages,
+        &existing_page_ids,
         default_page,
         document.pages.len(),
     )?;
@@ -187,9 +193,15 @@ pub(crate) fn reconcile_document(
             .issues
             .iter()
             .filter(|issue| {
+                // Any selected mutation (projection or removal) shifts issue
+                // keys, so connectivity issues that appear only after the
+                // mutation belong to this repair's scope.
+                let document_mutated = !project_slots.is_empty()
+                    || !remove_slots.is_empty()
+                    || !remove_locations.is_empty();
                 selected_connectivity.contains(&issue.key)
                     || projected_disconnects.contains(&issue.key)
-                    || (!project_slots.is_empty()
+                    || (document_mutated
                         && !before_keys.contains(&issue.key)
                         && is_connectivity_issue(&issue.issue))
             })
@@ -205,7 +217,11 @@ pub(crate) fn reconcile_document(
         apply_connectivity_repair(&mut document, netlist, &mut placed, default_page, plan)?;
     }
 
-    prune_unused_symbol_definitions(&mut document);
+    // Library cleanup is a whole-document concern; a scoped repair must not
+    // touch pages outside its selection.
+    if complete {
+        prune_unused_symbol_definitions(&mut document);
+    }
     Ok(document)
 }
 
@@ -657,8 +673,24 @@ fn materialize_hierarchy(
             .collect();
         let mut name_field = SymbolField::new("Sheetname", name, at);
         name_field.at.y -= 0.7112;
+        // The sheet reference is parent-relative (KiCad resolves Sheetfile
+        // against the referencing page's directory), so the new page lives in
+        // the parent page's directory and the reference stays the bare name.
         let mut file_field = SymbolField::new("Sheetfile", &sheet_plan.file_name, at);
         file_field.at.y += height + 0.7112;
+        let child_file_name = match document.pages[sheet_plan.parent_page]
+            .file_name
+            .as_deref()
+            .and_then(|file_name| std::path::Path::new(file_name).parent())
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            Some(parent) => format!(
+                "{}/{}",
+                parent.to_string_lossy().replace('\\', "/"),
+                sheet_plan.file_name
+            ),
+            None => sheet_plan.file_name.clone(),
+        };
         let sheet = Sheet {
             id: hierarchy::sheet_id(&sheet_plan.module_path),
             at: Some(at),
@@ -673,7 +705,7 @@ fn materialize_hierarchy(
             .push(SchItem::Sheet(Box::new(sheet)));
 
         let mut child = SchPage::new(hierarchy::page_id(&sheet_plan.module_path));
-        child.file_name = Some(sheet_plan.file_name.clone());
+        child.file_name = Some(child_file_name);
         child.paper = document.pages[sheet_plan.parent_page].paper.clone();
         document.pages.push(child);
     }
@@ -1418,7 +1450,7 @@ fn add_hierarchy_connectivity(
         .collect();
     let targets = connectivity_targets(netlist, placed, &all_nets)?;
     let net_symbol_specs = net_symbols::specs(netlist)?;
-    let page_contexts = page_driver_contexts(document, netlist, placed, plan.root_page())?;
+    let page_contexts = page_driver_contexts(document, netlist, plan.root_page())?;
 
     for sheet_plan in &plan.sheets {
         let ports = module_ports(netlist, &sheet_plan.instance_ref)?;
@@ -1477,7 +1509,7 @@ fn add_connectivity_drivers(
     target_nets: &BTreeSet<String>,
 ) -> Result<()> {
     let anchors_by_net = connectivity_targets(netlist, placed, target_nets)?;
-    let page_contexts = page_driver_contexts(document, netlist, placed, root_page)?;
+    let page_contexts = page_driver_contexts(document, netlist, root_page)?;
     ensure_context_endpoints(
         document,
         &anchors_by_net,
@@ -1500,6 +1532,11 @@ fn sync_net_drivers(
     let observed = reduce_with_provenance(document, PinVisibility::VisibleOnly)?;
 
     for (net_name, targets) in targets_by_net {
+        let net_page_count = targets
+            .iter()
+            .map(|target| target.page_index)
+            .collect::<BTreeSet<_>>()
+            .len();
         let mut targets_by_island = BTreeMap::<_, Vec<usize>>::new();
         for (target_index, target) in targets.iter().enumerate() {
             if target.hidden {
@@ -1562,15 +1599,13 @@ fn sync_net_drivers(
                 insert_net_symbol(document, target.page_index, symbol, &spec.definition)?;
             } else {
                 let id = available_deterministic_id(document, &target.label_key(net_name));
-                let text = interface_names
-                    .and_then(|names| names.first())
-                    .map_or(net_name.as_str(), String::as_str);
-                let mut label = Label::new(id, text, target.point);
-                if interface_names.is_some() {
-                    label.kind = LabelKind::Hierarchical {
-                        shape: LabelShape::Bidirectional,
-                    };
-                }
+                let mut label = driver_label(
+                    net_name,
+                    interface_names,
+                    net_page_count > 1,
+                    id,
+                    target.point,
+                );
                 label.spin = target.spin;
                 document.pages[target.page_index]
                     .items
@@ -1587,9 +1622,13 @@ type PageDriverContexts = BTreeMap<usize, BTreeMap<String, BTreeSet<String>>>;
 fn page_driver_contexts(
     document: &SchDocument,
     netlist: &Schematic,
-    placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
     root_page: usize,
 ) -> Result<PageDriverContexts> {
+    // A page's interface names come from its identity: the root page speaks
+    // the root module's interface, and a generated module page (deterministic
+    // page id) speaks that module's interface. Pages the user created or
+    // reorganized carry no interface names, so their drivers fall back to
+    // local labels and net symbols — any KiCad organization stays valid.
     let modules = linked_modules(netlist)?;
     let mut module_by_page = BTreeMap::<usize, &pcb_sch::InstanceRef>::new();
     if let Some(root) = netlist.root_ref.as_ref() {
@@ -1601,24 +1640,8 @@ fn page_driver_contexts(
             .iter()
             .position(|page| page.id == hierarchy::page_id(&module.path))
         {
-            insert_page_module(&mut module_by_page, page_index, &module.instance_ref)?;
+            module_by_page.insert(page_index, &module.instance_ref);
         }
-    }
-    for (slot, item) in placed {
-        if item.page_index == root_page {
-            continue;
-        }
-        let owner = modules
-            .iter()
-            .filter(|module| component_belongs_to_module(slot.component_path(), &module.path))
-            .max_by_key(|module| module.path.split('.').count())
-            .with_context(|| {
-                format!(
-                    "component '{}' is on a non-root page without an owning linked module",
-                    slot.component_path()
-                )
-            })?;
-        insert_page_module(&mut module_by_page, item.page_index, &owner.instance_ref)?;
     }
 
     module_by_page
@@ -1632,24 +1655,6 @@ fn page_driver_contexts(
         .collect()
 }
 
-fn insert_page_module<'a>(
-    module_by_page: &mut BTreeMap<usize, &'a pcb_sch::InstanceRef>,
-    page_index: usize,
-    module_ref: &'a pcb_sch::InstanceRef,
-) -> Result<()> {
-    if let Some(previous) = module_by_page.insert(page_index, module_ref)
-        && previous != module_ref
-    {
-        bail!("schematic page {page_index} belongs to both module '{previous}' and '{module_ref}'");
-    }
-    Ok(())
-}
-
-fn component_belongs_to_module(component_path: &str, module_path: &str) -> bool {
-    component_path
-        .strip_prefix(module_path)
-        .is_some_and(|suffix| suffix.starts_with('.'))
-}
 
 fn ensure_context_endpoints(
     document: &mut SchDocument,
@@ -1725,17 +1730,37 @@ fn upsert_contextual_driver(
     let interface_names = page_contexts
         .get(&page_index)
         .and_then(|context| context.get(net_name));
+    // Hierarchy drivers bridge pages through their sheet pins, so they never
+    // need a global label.
+    let mut label = driver_label(net_name, interface_names, false, deterministic_uuid(key), at);
+    label.spin = spin;
+    upsert_label(document, page_index, label)
+}
+
+/// The driver label for a net on one page: hierarchical when the page's
+/// interface exposes the net, global when the net spans pages that no
+/// interface path connects, local otherwise.
+fn driver_label(
+    net_name: &str,
+    interface_names: Option<&BTreeSet<String>>,
+    spans_unbridged_pages: bool,
+    id: String,
+    at: Point,
+) -> Label {
     let text = interface_names
         .and_then(|names| names.first())
         .map_or(net_name, String::as_str);
-    let mut label = Label::new(deterministic_uuid(key), text, at);
+    let mut label = Label::new(id, text, at);
     if interface_names.is_some() {
         label.kind = LabelKind::Hierarchical {
             shape: LabelShape::Bidirectional,
         };
+    } else if spans_unbridged_pages {
+        label.kind = LabelKind::Global {
+            shape: LabelShape::Bidirectional,
+        };
     }
-    label.spin = spin;
-    upsert_label(document, page_index, label)
+    label
 }
 
 fn has_named_driver(provenance: &PhysicalIsland, net_name: &str) -> bool {
