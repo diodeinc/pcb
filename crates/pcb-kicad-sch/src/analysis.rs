@@ -92,6 +92,23 @@ pub enum SchematicIssue {
 }
 
 impl SchematicIssue {
+    /// Stable machine-readable category slug, for diagnostic kinds and
+    /// suppression patterns.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            SchematicIssue::MissingSymbol { .. } => "missing_symbol",
+            SchematicIssue::DuplicateSymbol { .. } => "duplicate_symbol",
+            SchematicIssue::MismatchedSymbolId { .. } => "mismatched_symbol_id",
+            SchematicIssue::UnexpectedSymbol { .. } => "unexpected_symbol",
+            SchematicIssue::UnboundSymbol { .. } => "unbound_symbol",
+            SchematicIssue::DisconnectedNet { .. } => "disconnected_net",
+            SchematicIssue::MissingPort { .. } => "missing_port",
+            SchematicIssue::UnexpectedNet { .. } => "unexpected_net",
+            SchematicIssue::UnexpectedConnection { .. } => "unexpected_connection",
+            SchematicIssue::Shorted { .. } => "short",
+        }
+    }
+
     /// One-line human summary, for error messages and logs.
     pub fn summary(&self) -> String {
         match self {

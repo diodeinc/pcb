@@ -761,7 +761,7 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<Diagnostics> 
         diagnostics,
         ..
     } = build_result;
-    if crate::schematic_diagnostics::has_unsuppressed_schematic_diagnostics(&diagnostics) {
+    if pcbc::kicad_schematic::has_unsuppressed_schematic_diagnostics(&diagnostics) {
         anyhow::bail!(
             "Linked KiCad schematic is not equivalent. Run `pcb apply schematic {}` before publishing.",
             info.zen_path.display()

@@ -8,6 +8,9 @@ use anyhow::{Context, Result, bail};
 use atomicwrites::{AtomicFile, OverwriteBehavior};
 use pcb_sch::{ATTR_SCHEMATIC_NAME, AttributeValue, KICAD_PROJECT_BASENAME, Schematic};
 use serde::Serialize;
+
+mod diagnostics;
+pub use diagnostics::{has_unsuppressed_schematic_diagnostics, linked_schematic_diagnostics};
 use serde_json::{Value, json};
 
 use pcb_kicad_sch::{

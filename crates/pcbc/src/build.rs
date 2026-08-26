@@ -120,9 +120,11 @@ impl BuildEvalState {
         if self.analyze_linked_schematic
             && let Some(schematic) = &schematic
         {
-            diagnostics.diagnostics.extend(
-                crate::schematic_diagnostics::linked_schematic_diagnostics(schematic, zen_path),
-            );
+            diagnostics
+                .diagnostics
+                .extend(pcbc::kicad_schematic::linked_schematic_diagnostics(
+                    schematic, zen_path,
+                ));
         }
 
         if diagnostics.diagnostics.is_empty() && schematic.is_none() {

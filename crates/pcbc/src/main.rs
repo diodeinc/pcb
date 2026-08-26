@@ -43,7 +43,6 @@ mod release;
 mod remote_sandbox;
 mod route;
 mod sandbox_uri;
-mod schematic_diagnostics;
 mod sim;
 mod test;
 mod update;
