@@ -15,7 +15,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
-- `pcb layout` reports whether the board was created, updated, checked, or unchanged — in the human output and as a new `action` field in `--format json`.
 - Cache `pcb bom` matches per line with stale-data fallback.
 - Make IPC DFM copper-clearance checks net-aware.
 
