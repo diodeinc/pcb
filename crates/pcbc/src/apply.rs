@@ -88,7 +88,14 @@ impl SharedApplyArgs {
             no_open: true,
             offline: self.offline,
             check,
-            suppress: self.suppress.clone(),
+            // Apply is about to reconcile the schematic; drift warnings
+            // against the pre-apply state are noise here.
+            suppress: self
+                .suppress
+                .iter()
+                .cloned()
+                .chain(["sch".to_string()])
+                .collect(),
             format: self.format,
             ..LayoutArgs::default()
         }
@@ -100,7 +107,7 @@ pub fn execute(args: ApplyArgs) -> Result<()> {
         Some(ApplyCommand::Layout(args)) => layout::execute(args),
         Some(ApplyCommand::Schematic(args)) => {
             let layout_args = args.shared.layout_args(args.file.clone(), false);
-            let design = layout::prepare_design_for_apply(&layout_args)?;
+            let design = layout::prepare_design(&layout_args)?;
             let result = apply_linked_schematic(&design.schematic)?;
             print_schematic_result(result.as_ref(), args.shared.format, &design.file_name)?;
             if !args.shared.no_open
@@ -120,7 +127,7 @@ pub fn execute(args: ApplyArgs) -> Result<()> {
                     "pcb apply cannot update a remote schematic; use `pcb apply layout` for a remote sandbox"
                 );
             }
-            let design = layout::prepare_design_for_apply(&layout_args)?;
+            let design = layout::prepare_design(&layout_args)?;
             let schematic = apply_linked_schematic(&design.schematic)?;
             let layout = layout::apply_prepared(&layout_args, design)?;
             let project_to_open = if args.shared.no_open || args.check {
@@ -152,18 +159,11 @@ fn print_schematic_result(
         LayoutOutputFormat::Json => println!("{}", serde_json::to_string_pretty(&result)?),
         LayoutOutputFormat::Human => {
             if let Some(result) = result {
-                let action = if result.created {
-                    "created"
-                } else if result.changed {
-                    "updated"
-                } else {
-                    "unchanged"
-                };
                 println!(
                     "{} {} schematic {} ({})",
                     pcb_ui::icons::success(),
                     file_name.green().bold(),
-                    action,
+                    layout::LayoutAction::from_flags(result.created, result.changed).as_str(),
                     result.root_schematic.display()
                 );
             }

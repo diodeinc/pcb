@@ -743,6 +743,24 @@ impl Diagnostics {
     }
 
     /// Count active (non-suppressed) errors
+    /// Whether any unsuppressed diagnostic carries the categorized kind
+    /// `prefix` or a `prefix.`-nested kind.
+    pub fn has_unsuppressed_kind(&self, prefix: &str) -> bool {
+        self.diagnostics.iter().any(|diagnostic| {
+            !diagnostic.suppressed
+                && diagnostic
+                    .innermost()
+                    .downcast_error_ref::<crate::lang::error::CategorizedDiagnostic>()
+                    .is_some_and(|categorized| {
+                        categorized.kind == prefix
+                            || categorized
+                                .kind
+                                .strip_prefix(prefix)
+                                .is_some_and(|rest| rest.starts_with('.'))
+                    })
+        })
+    }
+
     pub fn error_count(&self) -> usize {
         self.diagnostics
             .iter()

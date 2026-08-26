@@ -70,7 +70,17 @@ pub(crate) enum LayoutAction {
 }
 
 impl LayoutAction {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn from_flags(created: bool, changed: bool) -> Self {
+        if created {
+            Self::Created
+        } else if changed {
+            Self::Updated
+        } else {
+            Self::Unchanged
+        }
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Created => "created",
             Self::Updated => "updated",
@@ -124,18 +134,21 @@ pub fn execute(mut args: LayoutArgs) -> Result<()> {
     Ok(())
 }
 
+/// Render diagnostics honoring suppressions and fail with `message` when any
+/// unsuppressed error remains.
+pub(crate) fn render_or_bail(
+    diagnostics: &mut pcb_zen_core::Diagnostics,
+    suppress: &[String],
+    message: &str,
+) -> Result<()> {
+    drc::render_diagnostics(diagnostics, suppress);
+    if diagnostics.error_count() > 0 {
+        anyhow::bail!("{message}");
+    }
+    Ok(())
+}
+
 pub(crate) fn prepare_design(args: &LayoutArgs) -> Result<PreparedDesign> {
-    prepare_design_with_schematic_analysis(args, true)
-}
-
-pub(crate) fn prepare_design_for_apply(args: &LayoutArgs) -> Result<PreparedDesign> {
-    prepare_design_with_schematic_analysis(args, false)
-}
-
-fn prepare_design_with_schematic_analysis(
-    args: &LayoutArgs,
-    analyze_linked_schematic: bool,
-) -> Result<PreparedDesign> {
     crate::file_walker::require_zen_file(&args.file)?;
     let config_inputs = parse_config_overrides(&args.config)?;
 
@@ -145,11 +158,7 @@ fn prepare_design_with_schematic_analysis(
     let zen_path = &args.file;
     let file_name = zen_path.file_name().unwrap().to_string_lossy().to_string();
 
-    let mut build_state = BuildEvalState::new(resolution_result);
-    if !analyze_linked_schematic {
-        build_state = build_state.without_linked_schematic_analysis();
-    }
-    let build_result = build_state.build(
+    let build_result = BuildEvalState::new(resolution_result).build(
         zen_path,
         config_inputs,
         create_diagnostics_passes(&args.suppress, &[]),
@@ -193,10 +202,11 @@ pub(crate) fn apply_prepared(
             .diagnostics
             .extend(eval_output.validate_footprints());
         if !footprint_diagnostics.diagnostics.is_empty() {
-            drc::render_diagnostics(&mut footprint_diagnostics, &args.suppress);
-            if footprint_diagnostics.error_count() > 0 {
-                anyhow::bail!("Invalid footprints");
-            }
+            render_or_bail(
+                &mut footprint_diagnostics,
+                &args.suppress,
+                "Invalid footprints",
+            )?;
         }
     }
 
@@ -219,10 +229,11 @@ pub(crate) fn apply_prepared(
     spinner.finish();
 
     let Some(layout_result) = result else {
-        drc::render_diagnostics(&mut diagnostics, &args.suppress);
-        if diagnostics.error_count() > 0 {
-            anyhow::bail!("Layout sync failed with errors");
-        }
+        render_or_bail(
+            &mut diagnostics,
+            &args.suppress,
+            "Layout sync failed with errors",
+        )?;
 
         return Ok(LayoutCommandResult {
             source_file: zen_path,
@@ -235,11 +246,7 @@ pub(crate) fn apply_prepared(
     let pcb_file = layout_result.pcb_file.clone();
     let display_pcb_file = layout_result.display_pcb_file().to_path_buf();
 
-    // Render diagnostics
-    drc::render_diagnostics(&mut diagnostics, &args.suppress);
-    if diagnostics.error_count() > 0 {
-        anyhow::bail!("DRC failed");
-    }
+    render_or_bail(&mut diagnostics, &args.suppress, "DRC failed")?;
 
     Ok(LayoutCommandResult {
         source_file: zen_path,
@@ -281,11 +288,7 @@ pub(crate) fn run_drc_check(args: &LayoutArgs, result: &LayoutCommandResult) -> 
     let mut diagnostics = pcb_zen_core::Diagnostics::default();
     report.add_to_diagnostics(&mut diagnostics, &display_pcb_file.to_string_lossy());
     spinner.finish();
-    drc::render_diagnostics(&mut diagnostics, &args.suppress);
-    if diagnostics.error_count() > 0 {
-        anyhow::bail!("DRC failed");
-    }
-    Ok(())
+    render_or_bail(&mut diagnostics, &args.suppress, "DRC failed")
 }
 
 fn resolve_existing_layout(zen_path: &Path, schematic: &Schematic) -> Result<LayoutCommandResult> {

@@ -100,20 +100,14 @@ fn apply_existing(project: KicadProject, netlist: &Schematic) -> Result<Schemati
         .and_then(|name| name.to_str())
         .context("linked KiCad project has no UTF-8 root schematic filename")?;
     let plan = plan_reconciliation(Some(&project.document), netlist, root_file_name)?;
-    let desired = plan.apply(Some(&project.document))?;
 
     // Semantic equality is the no-op boundary. Do not run a parsed KiCad file
     // through our serializer merely because its valid item ordering or
     // formatting differs from generated output.
     if plan.is_empty() {
-        return Ok(SchematicApplyResult {
-            project_file: project.project_file,
-            root_schematic,
-            schematic_files: project.schematic_files,
-            changed: false,
-            created: false,
-        });
+        return Ok(unchanged(project, root_schematic));
     }
+    let desired = plan.apply(Some(&project.document))?;
 
     let mut writes = Vec::new();
     let existing_page_ids = project
@@ -158,33 +152,15 @@ fn apply_existing(project: KicadProject, netlist: &Schematic) -> Result<Schemati
         }
     }
     if writes.is_empty() {
-        return Ok(SchematicApplyResult {
-            project_file: project.project_file,
-            root_schematic,
-            schematic_files: project.schematic_files,
-            changed: false,
-            created: false,
-        });
+        return Ok(unchanged(project, root_schematic));
     }
 
-    for (index, write) in writes.iter().enumerate() {
-        if let Err(error) = write_atomically(&write.path, &write.next) {
-            if let Err(rollback) = restore_sources(&writes[..index]) {
-                return Err(error.context(format!(
-                    "schematic write failed and rollback also failed: {rollback:#}"
-                )));
-            }
-            return Err(error.context("schematic write failed; restored previously written files"));
-        }
-    }
-    if let Err(error) = verify_project(&project.project_file, netlist) {
-        if let Err(rollback) = restore_sources(&writes) {
-            return Err(error.context(format!(
-                "schematic verification failed and rollback also failed: {rollback:#}"
-            )));
-        }
-        return Err(error.context("schematic verification failed; restored original files"));
-    }
+    commit_and_verify(
+        &writes,
+        &project.project_file,
+        netlist,
+        "schematic apply failed",
+    )?;
 
     Ok(SchematicApplyResult {
         project_file: project.project_file,
@@ -199,6 +175,43 @@ struct PendingWrite {
     path: PathBuf,
     source: Option<String>,
     next: String,
+}
+
+fn unchanged(project: KicadProject, root_schematic: PathBuf) -> SchematicApplyResult {
+    SchematicApplyResult {
+        project_file: project.project_file,
+        root_schematic,
+        schematic_files: project.schematic_files,
+        changed: false,
+        created: false,
+    }
+}
+
+/// Write every pending file, then verify the reloaded project against the
+/// netlist; on any failure restore what was written (removing files that had
+/// no prior source) in reverse order.
+fn commit_and_verify(
+    writes: &[PendingWrite],
+    project_file: &Path,
+    netlist: &Schematic,
+    context: &str,
+) -> Result<()> {
+    let mut written = 0;
+    let result = writes
+        .iter()
+        .try_for_each(|write| {
+            write_atomically(&write.path, &write.next)?;
+            written += 1;
+            Ok(())
+        })
+        .and_then(|()| verify_project(project_file, netlist));
+    let Err(error) = result else {
+        return Ok(());
+    };
+    if let Err(rollback) = restore_sources(&writes[..written]) {
+        return Err(error.context(format!("{context} and rollback also failed: {rollback:#}")));
+    }
+    Err(error.context(format!("{context}; restored original files")))
 }
 
 fn initialize_project(project_file: PathBuf, netlist: &Schematic) -> Result<SchematicApplyResult> {
@@ -257,25 +270,29 @@ fn initialize_project(project_file: PathBuf, netlist: &Schematic) -> Result<Sche
 
     fs::create_dir_all(&directory)
         .with_context(|| format!("failed to create {}", directory.display()))?;
-    write_atomically(&project_file, &project_source)?;
-    let result = document
-        .to_kicad_sch_files()
-        .into_iter()
-        .zip(&schematic_files)
-        .try_for_each(|(file, path)| write_atomically(path, &file.content))
-        .and_then(|_| verify_project(&project_file, netlist));
-    if let Err(error) = result {
-        if let Err(rollback) =
-            rollback_initialization(&project_file, original_project.as_deref(), &schematic_files)
-        {
-            return Err(error.context(format!(
-                "failed to create verified KiCad schematic project and rollback also failed: {rollback:#}"
-            )));
-        }
-        return Err(error.context(
-            "failed to create verified KiCad schematic project; restored original files",
-        ));
-    }
+    // The project file first, so rollback (reverse order) restores it last.
+    let mut writes = vec![PendingWrite {
+        path: project_file.clone(),
+        source: original_project,
+        next: project_source,
+    }];
+    writes.extend(
+        document
+            .to_kicad_sch_files()
+            .into_iter()
+            .zip(&schematic_files)
+            .map(|(file, path)| PendingWrite {
+                path: path.clone(),
+                source: None,
+                next: file.content,
+            }),
+    );
+    commit_and_verify(
+        &writes,
+        &project_file,
+        netlist,
+        "failed to create verified KiCad schematic project",
+    )?;
 
     Ok(SchematicApplyResult {
         project_file,
@@ -361,20 +378,16 @@ fn project_has_single_missing_root(project_file: &Path) -> Result<bool> {
     Ok(!root.is_file())
 }
 
-fn verify_document(document: &SchDocument, netlist: &Schematic, description: &str) -> Result<()> {
-    let analysis = inspect_schematic(document, netlist)?.analysis;
+fn verify_project(project_file: &Path, netlist: &Schematic) -> Result<()> {
+    let reloaded = KicadProject::load(project_file)?;
+    let analysis = inspect_schematic(&reloaded.document, netlist)?.analysis;
     if !analysis.is_equivalent() {
         bail!(
-            "{description} is not netlist-equivalent: {:#?}",
+            "reloaded schematic is not netlist-equivalent: {:#?}",
             analysis.issues()
         );
     }
     Ok(())
-}
-
-fn verify_project(project_file: &Path, netlist: &Schematic) -> Result<()> {
-    let reloaded = KicadProject::load(project_file)?;
-    verify_document(&reloaded.document, netlist, "reloaded schematic")
 }
 
 fn restore_sources(writes: &[PendingWrite]) -> Result<()> {
@@ -387,31 +400,6 @@ fn restore_sources(writes: &[PendingWrite]) -> Result<()> {
         if let Err(error) = result {
             failures.push(format!("{}: {error:#}", write.path.display()));
         }
-    }
-    if failures.is_empty() {
-        Ok(())
-    } else {
-        bail!("failed to restore {}", failures.join("; "))
-    }
-}
-
-fn rollback_initialization(
-    project_file: &Path,
-    original_project: Option<&str>,
-    schematic_files: &[PathBuf],
-) -> Result<()> {
-    let mut failures = Vec::new();
-    for schematic in schematic_files.iter().rev() {
-        if let Err(error) = remove_file_if_present(schematic) {
-            failures.push(format!("{}: {error:#}", schematic.display()));
-        }
-    }
-    let project_result = match original_project {
-        Some(original) => write_atomically(project_file, original),
-        None => remove_file_if_present(project_file),
-    };
-    if let Err(error) = project_result {
-        failures.push(format!("{}: {error:#}", project_file.display()));
     }
     if failures.is_empty() {
         Ok(())

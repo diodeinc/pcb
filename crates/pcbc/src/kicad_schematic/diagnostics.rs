@@ -5,7 +5,6 @@ use std::path::Path;
 use pcb_kicad_sch::analysis::inspect_schematic;
 use pcb_sch::Schematic;
 use pcb_zen_core::Diagnostic;
-use pcb_zen_core::lang::error::CategorizedDiagnostic;
 use starlark::errors::EvalSeverity;
 
 use super::{KicadProject, schematic_project_path};
@@ -57,13 +56,5 @@ fn warning(source_path: &Path, kind: &str, message: String) -> Diagnostic {
 
 /// Whether any unsuppressed `sch.*` diagnostic is present.
 pub fn has_unsuppressed_schematic_diagnostics(diagnostics: &pcb_zen_core::Diagnostics) -> bool {
-    diagnostics.diagnostics.iter().any(|diagnostic| {
-        !diagnostic.suppressed
-            && diagnostic
-                .innermost()
-                .downcast_error_ref::<CategorizedDiagnostic>()
-                .is_some_and(|categorized| {
-                    categorized.kind == "sch" || categorized.kind.starts_with("sch.")
-                })
-    })
+    diagnostics.has_unsuppressed_kind("sch")
 }

@@ -28,26 +28,24 @@ impl KicadProject {
     /// that field use KiCad's legacy same-stem root-file rule.
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         let requested = path.as_ref();
-        let directory = if requested.extension().and_then(|ext| ext.to_str()) == Some("kicad_pro") {
-            requested
-                .parent()
-                .context("KiCad project file has no parent directory")?
-                .to_path_buf()
-        } else {
-            requested.to_path_buf()
-        };
-        let mut project_files = files_with_extension(&directory, "kicad_pro")?;
-        if requested.extension().and_then(|ext| ext.to_str()) == Some("kicad_pro") {
-            project_files.retain(|candidate| candidate == requested);
-        }
-        if project_files.len() != 1 {
-            bail!(
-                "expected exactly one .kicad_pro in {}, found {}",
-                directory.display(),
-                project_files.len()
-            );
-        }
-        let project_file = project_files.remove(0);
+        let (directory, project_file) =
+            if requested.extension().and_then(|ext| ext.to_str()) == Some("kicad_pro") {
+                let directory = requested
+                    .parent()
+                    .context("KiCad project file has no parent directory")?
+                    .to_path_buf();
+                (directory, requested.to_path_buf())
+            } else {
+                let mut project_files = files_with_extension(requested, "kicad_pro")?;
+                if project_files.len() != 1 {
+                    bail!(
+                        "expected exactly one .kicad_pro in {}, found {}",
+                        requested.display(),
+                        project_files.len()
+                    );
+                }
+                (requested.to_path_buf(), project_files.remove(0))
+            };
         let project_roots = project_root_schematics(&directory, &project_file)?;
         let root_schematics = project_roots.iter().map(|root| root.path.clone()).collect();
         let (schematic_files, document) = load_schematic_hierarchy(&directory, &project_roots)?;
