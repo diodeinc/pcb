@@ -158,14 +158,16 @@ pub(crate) fn prepare_design(args: &LayoutArgs) -> Result<PreparedDesign> {
     let zen_path = &args.file;
     let file_name = zen_path.file_name().unwrap().to_string_lossy().to_string();
 
-    let build_result = BuildEvalState::new(resolution_result).build(
-        zen_path,
-        config_inputs,
-        create_diagnostics_passes(&args.suppress, &[]),
-        false,
-        &mut false.clone(),
-        &mut false.clone(),
-    );
+    let build_result = BuildEvalState::new(resolution_result)
+        .with_cached_bom_hydration()
+        .build(
+            zen_path,
+            config_inputs,
+            create_diagnostics_passes(&args.suppress, &[]),
+            false,
+            &mut false.clone(),
+            &mut false.clone(),
+        );
     let Some(schematic) = build_result.schematic else {
         anyhow::bail!("Build failed");
     };

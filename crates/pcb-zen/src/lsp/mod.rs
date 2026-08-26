@@ -66,10 +66,12 @@ pub struct LspEvalContext {
     /// the shared session module tree can be contaminated by other files.
     last_schematics: Arc<RwLock<HashMap<PathBuf, pcb_sch::Schematic>>>,
     custom_request_handler: Option<Arc<CustomRequestHandler>>,
+    schematic_hydrator: Option<Arc<SchematicHydrator>>,
 }
 
 type CustomRequestHandler =
     dyn Fn(&str, &JsonValue) -> anyhow::Result<Option<JsonValue>> + Send + Sync;
+type SchematicHydrator = dyn Fn(&Path, &mut pcb_sch::Schematic) + Send + Sync;
 
 #[derive(Default)]
 struct NetlistSubscription {
@@ -194,6 +196,7 @@ impl Default for LspEvalContext {
             netlist_subscriptions: Arc::new(RwLock::new(HashMap::new())),
             last_schematics: Arc::new(RwLock::new(HashMap::new())),
             custom_request_handler: None,
+            schematic_hydrator: None,
         }
     }
 }
@@ -221,6 +224,20 @@ impl LspEvalContext {
     {
         self.custom_request_handler = Some(Arc::new(handler));
         self
+    }
+
+    pub fn with_schematic_hydrator<F>(mut self, hydrator: F) -> Self
+    where
+        F: Fn(&Path, &mut pcb_sch::Schematic) + Send + Sync + 'static,
+    {
+        self.schematic_hydrator = Some(Arc::new(hydrator));
+        self
+    }
+
+    fn hydrate_schematic(&self, source_path: &Path, schematic: &mut pcb_sch::Schematic) {
+        if let Some(hydrator) = &self.schematic_hydrator {
+            hydrator(source_path, schematic);
+        }
     }
 
     fn open_file_contents(&self, path: &Path) -> Option<String> {
@@ -417,6 +434,10 @@ impl LspEvalContext {
             .output
             .as_ref()
             .and_then(|output| output.to_schematic().ok())
+            .map(|mut schematic| {
+                self.hydrate_schematic(path_buf, &mut schematic);
+                schematic
+            })
             .and_then(|schematic| serde_json::to_value(&schematic).ok());
 
         let diagnostics = eval_result
@@ -1137,7 +1158,8 @@ impl LspContext for LspEvalContext {
                             // Try the cached schematic first (populated during
                             // parse_file_with_contents) so we can return the
                             // schematic without a redundant full evaluation.
-                            if let Some(cached) = self.get_last_schematic(path_buf) {
+                            if let Some(mut cached) = self.get_last_schematic(path_buf) {
+                                self.hydrate_schematic(path_buf, &mut cached);
                                 serde_json::to_value(&cached).ok()
                             } else {
                                 // Fallback: evaluate from scratch using the
@@ -1159,6 +1181,10 @@ impl LspContext for LspEvalContext {
                                 eval_result
                                     .output
                                     .and_then(|fmv| fmv.to_schematic().ok())
+                                    .map(|mut schematic| {
+                                        self.hydrate_schematic(path_buf, &mut schematic);
+                                        schematic
+                                    })
                                     .and_then(|schematic| serde_json::to_value(&schematic).ok())
                             }
                         }
@@ -1557,6 +1583,36 @@ mod tests {
 
         assert_eq!(ctx.get_netlist_inputs(&path), None);
         assert!(ctx.watched_symbol_paths().is_empty());
+    }
+
+    #[test]
+    fn viewer_hydrates_a_copy_without_mutating_the_eval_cache() {
+        let path = std::env::temp_dir().join("hydrated-viewer.zen");
+        let ctx = LspEvalContext::default().with_schematic_hydrator(|_, schematic| {
+            schematic
+                .symbols
+                .insert("hydrated".into(), "from cache".into());
+        });
+        ctx.set_last_schematic(&path, pcb_sch::Schematic::default());
+
+        let request = Request {
+            id: RequestId::from(1),
+            method: "viewer/getState".into(),
+            params: json!({ "uri": LspUri::File(path.clone()) }),
+        };
+        let response = ctx
+            .handle_custom_request(&request, &lsp_types::InitializeParams::default())
+            .expect("viewer request should be handled")
+            .response_result
+            .expect("viewer request should succeed");
+        let hydrated: pcb_sch::Schematic =
+            serde_json::from_value(response["state"].clone()).unwrap();
+
+        assert_eq!(
+            hydrated.symbols.get("hydrated").map(String::as_str),
+            Some("from cache")
+        );
+        assert!(ctx.get_last_schematic(&path).unwrap().symbols.is_empty());
     }
 
     #[test]

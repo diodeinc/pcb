@@ -23,6 +23,7 @@ pub(crate) struct BuildEvalState {
     session: pcb_zen_core::lang::eval::EvalSession,
     file_provider: Arc<DefaultFileProvider>,
     resolution: Arc<ResolutionResult>,
+    hydrate_cached_bom: bool,
 }
 
 pub(crate) struct BuildResult {
@@ -41,7 +42,13 @@ impl BuildEvalState {
             session: pcb_zen_core::lang::eval::EvalSession::default(),
             file_provider,
             resolution: Arc::new(resolution),
+            hydrate_cached_bom: false,
         }
+    }
+
+    pub(crate) fn with_cached_bom_hydration(mut self) -> Self {
+        self.hydrate_cached_bom = true;
+        self
     }
 
     fn eval(
@@ -95,7 +102,7 @@ impl BuildEvalState {
             None
         };
 
-        let schematic = output.as_ref().and_then(|eval_output| {
+        let mut schematic = output.as_ref().and_then(|eval_output| {
             let _span = info_span!("to_schematic").entered();
             let schematic_result = eval_output.to_schematic_with_diagnostics();
             diagnostics
@@ -116,6 +123,12 @@ impl BuildEvalState {
                 .extend(pcbc::kicad_schematic::linked_schematic_diagnostics(
                     schematic, zen_path,
                 ));
+        }
+
+        if self.hydrate_cached_bom
+            && let Some(schematic) = &mut schematic
+        {
+            pcb_diode_api::hydrate_schematic_from_bom_cache(zen_path, schematic);
         }
 
         if diagnostics.diagnostics.is_empty() && schematic.is_none() {
@@ -383,7 +396,7 @@ pub fn build(
     has_warnings: &mut bool,
     resolution: ResolutionResult,
 ) -> Option<Schematic> {
-    let eval_state = BuildEvalState::new(resolution);
+    let eval_state = BuildEvalState::new(resolution).with_cached_bom_hydration();
 
     eval_state
         .build(
@@ -447,7 +460,7 @@ pub fn execute(args: BuildArgs) -> Result<()> {
 
     let zen_files = build_input.collect_zen_files(&resolution.workspace_info)?;
 
-    let eval_state = BuildEvalState::new(resolution);
+    let eval_state = BuildEvalState::new(resolution).with_cached_bom_hydration();
 
     // Process each .zen file
     let deny_warnings = args.deny.contains(&"warnings".to_string());
