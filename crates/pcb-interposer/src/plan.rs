@@ -3,10 +3,11 @@
 //! contact list and the constellation — same inputs, same plan, no IO.
 //!
 //! **Slots** are the supply side, derived from the constellation by
-//! connector block. Each 2×3 kit yields one `Pair` slot (its DP+DM
-//! lands, unsplittable), one `VtBank` slot (its two Vt lands), and one
-//! `Vusb` unit slot; each low-speed land is its own `Ls` unit slot.
-//! S13 therefore supplies 8 pair, 8 bank, 8 vusb, and 48 LS slots.
+//! connector block. A USB block yields one `Pair` slot (its DP+DM
+//! lands, unsplittable); a PWR block yields one `VtBank` slot (its two
+//! Vt lands) and one `Vusb` unit slot; each low-speed land is its own
+//! `Ls` unit slot. Detect and ground lands are not slots. S13 therefore
+//! supplies 8 pair, 8 bank, 8 vusb, and 48 LS slots.
 //!
 //! **Demands** are the ask side, built per board instance from its
 //! contacts: `usb_dp`+`usb_dm` pair up into one `Pair` demand (an

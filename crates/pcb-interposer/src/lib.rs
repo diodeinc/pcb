@@ -10,8 +10,9 @@
 //! create` output): the panel's exact outline, tooling holes, and global
 //! fiducials — inherited, so they cannot drift from the panel — plus the
 //! folded-A7 tile's corner tooling, the S13 mate constellation on the
-//! bottom copper, and a full-sheet bottom GND pour. Pogo placement and
-//! routing are later, panel-specific passes.
+//! bottom copper (its corner mate-detect pairs pre-shorted), and
+//! full-sheet GND pours. Pogo placement and routing are later,
+//! panel-specific passes.
 
 pub mod contacts;
 pub mod emit;
