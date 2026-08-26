@@ -11,6 +11,7 @@ use crate::{
     CONNECTION_GRID_MM, FieldHorizontalJustify, FieldJustify, FieldVerticalJustify,
     GEOMETRY_EPS_MM, LabelSpin, MirrorAxis, Point, Rotation, Symbol, SymbolDefinition, symbol,
 };
+use crate::symbol::number;
 
 const FIELD_ROW_SPACING_MM: f64 = 2.54;
 const HPADDING_MM: f64 = 0.635;
@@ -580,13 +581,6 @@ fn child<'a>(items: &'a [Sexpr], tag: &str) -> Option<&'a [Sexpr]> {
 
 fn parse_xy(items: &[Sexpr]) -> Option<Point> {
     Some(Point::new(number(items.get(1)?)?, number(items.get(2)?)?))
-}
-
-fn number(value: &Sexpr) -> Option<f64> {
-    value
-        .as_float()
-        .or_else(|| value.as_int().map(|value| value as f64))
-        .or_else(|| value.as_atom()?.parse().ok())
 }
 
 #[cfg(test)]

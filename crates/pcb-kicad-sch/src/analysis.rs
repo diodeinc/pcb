@@ -630,25 +630,25 @@ fn collect_connection_issues(
             }
         }
 
-        let unexpected_terminals = if matching_expected.is_empty() {
-            // A standalone unmanaged symbol is already represented by its
-            // component issue. It becomes an unexpected connection only when
-            // one of its terminals joins expected connectivity.
-            Vec::new()
-        } else {
-            observed_group
-                .terminals
-                .iter()
-                .filter(|observed_terminal| {
-                    !matching_expected.iter().any(|expected_group| {
-                        expected_group.terminals.iter().any(|expected_terminal| {
-                            terminals_match(expected_terminal, observed_terminal)
-                        })
+        let mut unexpected_terminals = observed_group
+            .terminals
+            .iter()
+            .filter(|observed_terminal| {
+                !matching_expected.iter().any(|expected_group| {
+                    expected_group.terminals.iter().any(|expected_terminal| {
+                        terminals_match(expected_terminal, observed_terminal)
                     })
                 })
-                .cloned()
-                .collect::<Vec<_>>()
-        };
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        // A lone unmatched terminal is a standalone unmanaged pin, already
+        // represented by its component issue — it cannot form a connection.
+        // Two or more joined terminals the netlist keeps apart (including
+        // wires between NotConnected pins) are a real unexpected connection.
+        if matching_expected.is_empty() && observed_group.terminals.len() < 2 {
+            unexpected_terminals.clear();
+        }
         if !unexpected_terminals.is_empty() {
             issues.push(SchematicIssue::UnexpectedConnection {
                 islands: kicad_islands(observed_group),

@@ -470,8 +470,12 @@ fn collect_symbol(
             page.id
         );
     }
+    // Locations address the symbol in the file, so they use the page's own id
+    // like every other ConnectivityItemRef — never the page-instance id.
+    // (An unmanaged symbol on a repeated page therefore shares one identity
+    // across instances, matching how wires and labels are already keyed.)
     let location = SymbolLocation {
-        page_id: page_instance_id.to_string(),
+        page_id: page.id.clone(),
         symbol_id: placed.id.clone(),
     };
     output.components.push(ComponentNode {

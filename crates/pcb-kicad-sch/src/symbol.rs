@@ -482,11 +482,15 @@ fn child_list<'a>(items: &'a [Sexpr], tag: &str) -> Option<&'a [Sexpr]> {
     })
 }
 
-fn number(value: &Sexpr) -> Option<f64> {
+/// Parse a finite numeric atom. Non-finite values (NaN, inf) are rejected the
+/// same way `kicad.rs::atom_f64` rejects them: geometry built from them would
+/// silently snap to the origin during connectivity reduction.
+pub(crate) fn number(value: &Sexpr) -> Option<f64> {
     value
         .as_float()
         .or_else(|| value.as_int().map(|value| value as f64))
         .or_else(|| value.as_atom()?.parse().ok())
+        .filter(|value: &f64| value.is_finite())
 }
 
 fn section_unit_style(name: &str) -> Result<(u32, u32)> {

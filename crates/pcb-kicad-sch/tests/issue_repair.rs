@@ -403,3 +403,204 @@ fn move_symbol(symbol: &mut Symbol, at: Point) {
         field.at = Point::new(field.at.x + delta.x, field.at.y + delta.y);
     }
 }
+
+/// Symbol locations must address file pages, not page instances, so unbound
+/// symbols on generated child sheets can be repaired by issue selection.
+#[test]
+fn unbound_symbol_on_a_child_sheet_repairs_by_selection() {
+    let netlist = common::compile_fixture("hierarchy", "root.zen");
+    let baseline = plan_reconciliation(None, &netlist, "root.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+
+    let mut document = baseline.clone();
+    let child_index = document
+        .pages
+        .iter()
+        .position(|page| page.file_name.as_deref() != Some("root.kicad_sch"))
+        .expect("hierarchy fixture has a child page");
+    let mut unbound = managed_symbols(&document)
+        .next()
+        .expect("baseline has managed symbols")
+        .clone();
+    unbound.id = "unbound-child".to_string();
+    unbound.fields.remove("Path");
+    let moved_at = Point::new(unbound.at.x + 50.8, unbound.at.y);
+    move_symbol(&mut unbound, moved_at);
+    let definition = document
+        .pages
+        .iter()
+        .flat_map(|page| page.library.definitions.get(&unbound.lib_id))
+        .next()
+        .expect("definition exists")
+        .clone();
+    let child = &mut document.pages[child_index];
+    child
+        .library
+        .definitions
+        .entry(unbound.lib_id.clone())
+        .or_insert(definition);
+    let child_page_id = child.id.clone();
+    child.items.push(SchItem::Symbol(unbound));
+
+    let inspection = inspect_schematic(&document, &netlist).unwrap();
+    let key = inspection
+        .issues
+        .iter()
+        .find(|issue| matches!(&issue.issue, SchematicIssue::UnboundSymbol { .. }))
+        .expect("unbound symbol issue reported")
+        .key
+        .clone();
+    // The reported location addresses the file page, not a page instance.
+    if let pcb_kicad_sch::analysis::SchematicIssueKey::UnboundSymbol(location) = &key {
+        assert_eq!(location.page_id, child_page_id);
+    }
+
+    let repaired = plan_repairs(&document, &netlist, &inspection, BTreeSet::from([key]))
+        .expect("child-sheet unbound repair plans")
+        .apply(Some(&document))
+        .unwrap();
+    assert!(
+        !repaired
+            .pages
+            .iter()
+            .flat_map(|page| &page.items)
+            .any(|item| matches!(item, SchItem::Symbol(symbol) if symbol.id == "unbound-child")),
+        "the unbound symbol is removed from the child page"
+    );
+}
+
+/// A KiCad wire joining two pins the netlist marks NotConnected is a real
+/// electrical divergence and must be reported, while unwired NotConnected
+/// pins stay silent.
+#[test]
+fn wired_not_connected_pins_report_an_unexpected_connection() {
+    let netlist = common::compile_fixture("analysis", "not_connected.zen");
+    let baseline = plan_reconciliation(None, &netlist, "not_connected.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    let inspection = inspect_schematic(&baseline, &netlist).unwrap();
+    assert!(
+        inspection.issues.is_empty(),
+        "unwired NotConnected pins must not report issues: {:#?}",
+        inspection.issues
+    );
+
+    let mut document = baseline.clone();
+    let a = pin_point(&document, "R1.R", "2");
+    let b = pin_point(&document, "R2.R", "2");
+    document.pages[0].items.push(SchItem::Wire(Wire {
+        id: "nc-short".to_string(),
+        a,
+        b,
+        unsupported: Vec::new(),
+    }));
+    let inspection = inspect_schematic(&document, &netlist).unwrap();
+    assert!(
+        inspection
+            .issues
+            .iter()
+            .any(|issue| matches!(issue.issue, SchematicIssue::UnexpectedConnection { .. })),
+        "a wire between NotConnected pins must be reported: {:#?}",
+        inspection.issues
+    );
+}
+
+/// Generated child pages live in their parent page's directory so the
+/// parent-relative Sheetfile reference and the project-relative page path
+/// resolve to the same file.
+#[test]
+fn generated_pages_follow_their_parent_directory() {
+    let netlist = common::compile_fixture("hierarchy", "root.zen");
+    let document = plan_reconciliation(None, &netlist, "sub/root.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+
+    for page in &document.pages {
+        let file_name = page.file_name.as_deref().expect("page has a file name");
+        assert!(
+            file_name.starts_with("sub/") && file_name.matches('/').count() == 1,
+            "page '{}' must live next to its parent: {file_name}",
+            page.id
+        );
+    }
+    for sheet in document.pages.iter().flat_map(|page| &page.items) {
+        if let pcb_kicad_sch::SchItem::Sheet(sheet) = sheet {
+            assert!(
+                !sheet.file_name().contains('/'),
+                "sheet references stay parent-relative: {}",
+                sheet.file_name()
+            );
+        }
+    }
+}
+
+/// A generated module page that the user emptied of managed symbols is still
+/// the module's page: re-applying repopulates it instead of materializing a
+/// duplicate sheet with the same deterministic identity.
+#[test]
+fn emptied_module_page_is_repopulated_not_duplicated() {
+    let netlist = common::compile_fixture("hierarchy", "root.zen");
+    let baseline = plan_reconciliation(None, &netlist, "root.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    let module_page_id = baseline
+        .pages
+        .iter()
+        .find(|page| page.file_name.as_deref() != Some("root.kicad_sch"))
+        .expect("hierarchy fixture has module pages")
+        .id
+        .clone();
+
+    let mut document = baseline.clone();
+    let module_prefix = {
+        let page = document
+            .pages
+            .iter_mut()
+            .find(|page| page.id == module_page_id)
+            .unwrap();
+        let prefix = page
+            .items
+            .iter()
+            .find_map(|item| match item {
+                SchItem::Symbol(symbol) => symbol
+                    .fields
+                    .get("Path")
+                    .and_then(|field| field.value.split('.').next())
+                    .map(str::to_string),
+                _ => None,
+            })
+            .expect("module page has managed symbols");
+        page.items.retain(|item| !matches!(item, SchItem::Symbol(_)));
+        prefix
+    };
+
+    let repaired = plan_reconciliation(Some(&document), &netlist, "root.kicad_sch")
+        .unwrap_or_else(|error| panic!("emptied module page must replan: {error:#}"))
+        .apply(Some(&document))
+        .unwrap();
+
+    let page_count = repaired
+        .pages
+        .iter()
+        .filter(|page| page.id == module_page_id)
+        .count();
+    assert_eq!(page_count, 1, "the module page is reused, not duplicated");
+    let repopulated = repaired
+        .pages
+        .iter()
+        .find(|page| page.id == module_page_id)
+        .unwrap()
+        .items
+        .iter()
+        .any(|item| matches!(
+            item,
+            SchItem::Symbol(symbol)
+                if symbol.fields.get("Path").is_some_and(|field| field.value.starts_with(&module_prefix))
+        ));
+    assert!(repopulated, "the module's symbols return to their page");
+}
