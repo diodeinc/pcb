@@ -223,27 +223,36 @@ pub fn ensure_board_compatible_with_installed_kicad(pcb_path: &Path) -> Result<(
     Ok(())
 }
 
+/// Build the per-platform command that opens a board in the KiCad GUI. On
+/// macOS `waitable` launches a dedicated app instance through `open -n -W`
+/// so the returned child tracks the editor's lifetime.
+fn pcbnew_launch_command(pcbnew_path: &str, pcb_path: &Path, waitable: bool) -> Result<Command> {
+    #[cfg(target_os = "macos")]
+    {
+        let mut cmd = Command::new("open");
+        if waitable {
+            cmd.arg("-n").arg("-W");
+        }
+        cmd.arg("-a")
+            .arg(pcbnew_app_bundle_path(pcbnew_path)?)
+            .arg(pcb_path);
+        Ok(cmd)
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = waitable;
+        let mut cmd = Command::new(pcbnew_path);
+        cmd.arg(pcb_path);
+        Ok(cmd)
+    }
+}
+
 /// Open a KiCad board in the GUI that matches this toolchain's discovered install.
 pub fn open_pcbnew(pcb_path: impl AsRef<Path>) -> Result<()> {
     let pcb_path = pcb_path.as_ref();
     let pcbnew_path = require_pcbnew_launch(pcb_path)?;
-
-    #[cfg(target_os = "macos")]
-    let cmd = {
-        let mut cmd = Command::new("open");
-        cmd.arg("-a")
-            .arg(pcbnew_app_bundle_path(&pcbnew_path)?)
-            .arg(pcb_path);
-        cmd
-    };
-
-    #[cfg(not(target_os = "macos"))]
-    let cmd = {
-        let mut cmd = Command::new(&pcbnew_path);
-        cmd.arg(pcb_path);
-        cmd
-    };
-
+    let cmd = pcbnew_launch_command(&pcbnew_path, pcb_path, false)?;
     spawn_pcbnew_command(cmd, &pcbnew_path, pcb_path)?;
     Ok(())
 }
@@ -268,25 +277,8 @@ impl PcbnewSession {
 pub fn open_pcbnew_session(pcb_path: impl AsRef<Path>) -> Result<PcbnewSession> {
     let pcb_path = pcb_path.as_ref();
     let pcbnew_path = require_pcbnew_launch(pcb_path)?;
-
-    #[cfg(target_os = "macos")]
-    {
-        let pcbnew_app = pcbnew_app_bundle_path(&pcbnew_path)?;
-        let mut cmd = Command::new("open");
-        cmd.arg("-n")
-            .arg("-W")
-            .arg("-a")
-            .arg(&pcbnew_app)
-            .arg(pcb_path);
-        spawn_pcbnew_command(cmd, &pcbnew_path, pcb_path).map(|child| PcbnewSession { child })
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        let mut cmd = Command::new(&pcbnew_path);
-        cmd.arg(pcb_path);
-        spawn_pcbnew_command(cmd, &pcbnew_path, pcb_path).map(|child| PcbnewSession { child })
-    }
+    let cmd = pcbnew_launch_command(&pcbnew_path, pcb_path, true)?;
+    spawn_pcbnew_command(cmd, &pcbnew_path, pcb_path).map(|child| PcbnewSession { child })
 }
 
 fn require_pcbnew_launch(pcb_path: &Path) -> Result<String> {

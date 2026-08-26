@@ -26,8 +26,8 @@ installer writes `pcb.exe` to `%USERPROFILE%\.pcb\bin` by default. Set
 `PCB_INSTALL_DIR` to choose a different directory.
 
 The installer also registers the `diode://` URL scheme for the current user.
-Registry can use these links to open sandbox layouts in KiCad without a
-terminal. `pcb self update` updates and re-registers the launcher together with
+The Diode registry can use these links to open sandbox layouts in KiCad
+without a terminal. `pcb self update` updates and re-registers the launcher together with
 the `pcb` shim. If a browser-launched open fails, the launcher displays the
 error and records command output in `~/.pcb/pcb-launcher.log` (or
 `%USERPROFILE%\.pcb\pcb-launcher.log` on Windows).

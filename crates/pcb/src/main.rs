@@ -1938,129 +1938,10 @@ fn install_shim_launcher(latest: &LatestRelease) -> Result<()> {
         .parent()
         .context("current pcb shim has no parent directory")?;
     let installed_launcher = install_dir.join(executable_name("pcb-launcher"));
-    let client = http_client(ARCHIVE_TIMEOUT)?;
-    let mut download = None;
-    let mut launcher_is_current = false;
-    for target in download_target_triples().iter().copied() {
-        let binary_name = binary_artifact_name_for("pcb-launcher", target);
-        let binary_url = format!("{RELEASE_BASE_URL}/{}/{}", latest.tag, binary_name);
-        let checksum_url = format!("{binary_url}.sha256");
-        let expected_sha256 = download_optional(&client, &checksum_url)?
-            .map(|bytes| {
-                let checksum = String::from_utf8(bytes)
-                    .with_context(|| format!("checksum is not UTF-8: {checksum_url}"))?;
-                parse_sha256(&checksum)
-            })
-            .transpose()?;
 
-        if let Some(expected_sha256) = expected_sha256.as_deref()
-            && installed_launcher.is_file()
-            && sha256_file(&installed_launcher)? == expected_sha256
-        {
-            launcher_is_current = true;
-            break;
-        }
-
-        if let Some(bytes) = download_optional_artifact(&client, &binary_url)? {
-            let expected_sha256 = expected_sha256.with_context(|| {
-                format!("missing checksum for pcb launcher artifact: {binary_url}")
-            })?;
-            let actual_sha256 = sha256_hex(&bytes);
-            anyhow::ensure!(
-                actual_sha256 == expected_sha256,
-                "checksum mismatch for {binary_url}: expected {expected_sha256}, got {actual_sha256}"
-            );
-            download = Some(bytes);
-            break;
-        }
-    }
-    if !launcher_is_current && download.is_none() {
-        anyhow::bail!(
-            "no pcb launcher binary found for {} on {}",
-            latest.tag,
-            target_triple()
-        );
-    }
-
-    if let Some(bytes) = download {
-        let temporary_launcher =
-            install_dir.join(format!(".pcb-launcher-{}.tmp", std::process::id()));
-        let install_result: Result<()> = (|| {
-            fs::write(&temporary_launcher, bytes).with_context(|| {
-                format!(
-                    "failed to stage pcb launcher at {}",
-                    temporary_launcher.display()
-                )
-            })?;
-            copy_executable_permissions(&temporary_launcher, &temporary_launcher)?;
-
-            #[cfg(windows)]
-            {
-                let backup_launcher =
-                    install_dir.join(format!(".pcb-launcher-{}.old", std::process::id()));
-                if backup_launcher.exists() {
-                    fs::remove_file(&backup_launcher).with_context(|| {
-                        format!(
-                            "failed to remove stale pcb launcher backup {}",
-                            backup_launcher.display()
-                        )
-                    })?;
-                }
-                let had_installed_launcher = installed_launcher.exists();
-                if had_installed_launcher {
-                    fs::rename(&installed_launcher, &backup_launcher).with_context(|| {
-                        format!(
-                            "failed to back up existing pcb launcher {}",
-                            installed_launcher.display()
-                        )
-                    })?;
-                }
-                if let Err(install_error) = fs::rename(&temporary_launcher, &installed_launcher) {
-                    if had_installed_launcher {
-                        fs::rename(&backup_launcher, &installed_launcher).with_context(|| {
-                        format!(
-                            "failed to restore pcb launcher {} after update failed: {install_error}",
-                            installed_launcher.display()
-                        )
-                    })?;
-                    }
-                    return Err(install_error).with_context(|| {
-                        format!(
-                            "failed to install pcb launcher at {}",
-                            installed_launcher.display()
-                        )
-                    });
-                }
-                if had_installed_launcher {
-                    if let Err(error) = fs::remove_file(&backup_launcher) {
-                        eprintln!(
-                            "Warning: failed to remove pcb launcher backup {}: {error}",
-                            backup_launcher.display()
-                        );
-                    }
-                }
-            }
-            #[cfg(not(windows))]
-            fs::rename(&temporary_launcher, &installed_launcher).with_context(|| {
-                format!(
-                    "failed to install pcb launcher at {}",
-                    installed_launcher.display()
-                )
-            })?;
-
-            Ok(())
-        })();
-        if let Err(error) = install_result {
-            if let Err(cleanup_error) = fs::remove_file(&temporary_launcher)
-                && cleanup_error.kind() != std::io::ErrorKind::NotFound
-            {
-                eprintln!(
-                    "Warning: failed to remove staged pcb launcher {}: {cleanup_error}",
-                    temporary_launcher.display()
-                );
-            }
-            return Err(error);
-        }
+    if let Some(bytes) = fetch_launcher_update(latest, &installed_launcher)? {
+        let staged_launcher = install_dir.join(format!(".pcb-launcher-{}.tmp", std::process::id()));
+        install_staged_executable(&staged_launcher, &installed_launcher, &bytes)?;
     }
 
     let status = Command::new(&installed_launcher)
@@ -2081,6 +1962,113 @@ fn install_shim_launcher(latest: &LatestRelease) -> Result<()> {
         launcher_log.display()
     );
     Ok(())
+}
+
+/// Download the launcher binary for this release, or return `None` when the
+/// installed launcher already matches the release checksum.
+fn fetch_launcher_update(
+    latest: &LatestRelease,
+    installed_launcher: &Path,
+) -> Result<Option<Vec<u8>>> {
+    let client = http_client(ARCHIVE_TIMEOUT)?;
+    for target in download_target_triples().iter().copied() {
+        let binary_name = binary_artifact_name_for("pcb-launcher", target);
+        let binary_url = format!("{RELEASE_BASE_URL}/{}/{}", latest.tag, binary_name);
+        let checksum_url = format!("{binary_url}.sha256");
+        let expected_sha256 = download_optional(&client, &checksum_url)?
+            .map(|bytes| {
+                let checksum = String::from_utf8(bytes)
+                    .with_context(|| format!("checksum is not UTF-8: {checksum_url}"))?;
+                parse_sha256(&checksum)
+            })
+            .transpose()?;
+
+        if let Some(expected_sha256) = expected_sha256.as_deref()
+            && installed_launcher.is_file()
+            && sha256_file(installed_launcher)? == expected_sha256
+        {
+            return Ok(None);
+        }
+
+        if let Some(bytes) = download_optional_artifact(&client, &binary_url)? {
+            let expected_sha256 = expected_sha256.with_context(|| {
+                format!("missing checksum for pcb launcher artifact: {binary_url}")
+            })?;
+            let actual_sha256 = sha256_hex(&bytes);
+            anyhow::ensure!(
+                actual_sha256 == expected_sha256,
+                "checksum mismatch for {binary_url}: expected {expected_sha256}, got {actual_sha256}"
+            );
+            return Ok(Some(bytes));
+        }
+    }
+    anyhow::bail!(
+        "no pcb launcher binary found for {} on {}",
+        latest.tag,
+        target_triple()
+    )
+}
+
+/// Write `bytes` to `staged` and move it over `installed`, cleaning up the
+/// staged file on failure.
+fn install_staged_executable(staged: &Path, installed: &Path, bytes: &[u8]) -> Result<()> {
+    let result = (|| {
+        fs::write(staged, bytes)
+            .with_context(|| format!("failed to stage {}", staged.display()))?;
+        copy_executable_permissions(staged, staged)?;
+        replace_executable_with_backup(staged, installed)
+    })();
+    if result.is_err()
+        && let Err(cleanup_error) = fs::remove_file(staged)
+        && cleanup_error.kind() != std::io::ErrorKind::NotFound
+    {
+        eprintln!(
+            "Warning: failed to remove staged {}: {cleanup_error}",
+            staged.display()
+        );
+    }
+    result
+}
+
+/// Move `staged` over `installed`. Windows cannot replace a running or
+/// locked executable in place, so the existing binary is moved aside first
+/// and restored when the swap fails.
+fn replace_executable_with_backup(staged: &Path, installed: &Path) -> Result<()> {
+    #[cfg(windows)]
+    {
+        let backup = installed.with_extension(format!("{}.old", std::process::id()));
+        if backup.exists() {
+            fs::remove_file(&backup)
+                .with_context(|| format!("failed to remove stale backup {}", backup.display()))?;
+        }
+        let had_installed = installed.exists();
+        if had_installed {
+            fs::rename(installed, &backup)
+                .with_context(|| format!("failed to back up {}", installed.display()))?;
+        }
+        if let Err(install_error) = fs::rename(staged, installed) {
+            if had_installed {
+                fs::rename(&backup, installed).with_context(|| {
+                    format!(
+                        "failed to restore {} after update failed: {install_error}",
+                        installed.display()
+                    )
+                })?;
+            }
+            return Err(install_error)
+                .with_context(|| format!("failed to install {}", installed.display()));
+        }
+        if had_installed && let Err(error) = fs::remove_file(&backup) {
+            eprintln!(
+                "Warning: failed to remove backup {}: {error}",
+                backup.display()
+            );
+        }
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    fs::rename(staged, installed)
+        .with_context(|| format!("failed to install {}", installed.display()))
 }
 
 fn reexec_self_update(
