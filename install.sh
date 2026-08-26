@@ -55,6 +55,13 @@ EOF
   echo "Added $install_dir to PATH. Restart your shell or run: $source_line"
 }
 
+register_url_launcher() {
+  launcher_toolchain="$1"
+  if ! "$install_dir/pcb-launcher" --install --toolchain "$launcher_toolchain"; then
+    echo "Warning: installed pcb, but could not register the Diode URL launcher; see $HOME/.pcb/pcb-launcher.log" >&2
+  fi
+}
+
 install_local() {
   command -v cargo >/dev/null || { echo "missing required command: cargo" >&2; exit 1; }
 
@@ -69,7 +76,7 @@ install_local() {
   fi
 
   target_dir="$source_dir/target"
-  cargo build --release -p pcb -p pcbc -p rectify --manifest-path "$source_dir/Cargo.toml" --target-dir "$target_dir"
+  cargo build --release -p pcb -p pcb-launcher -p pcbc -p rectify --manifest-path "$source_dir/Cargo.toml" --target-dir "$target_dir"
 
   local_target_dir="$data_dir/toolchains/local/$target"
   stdlib_dir="$local_target_dir/lib/std"
@@ -78,6 +85,12 @@ install_local() {
 
   mkdir -p "$install_dir"
   install -m 755 "$target_dir/release/pcb" "$install_dir/pcb"
+  launcher_installed=""
+  if install -m 755 "$target_dir/release/pcb-launcher" "$install_dir/pcb-launcher"; then
+    launcher_installed="true"
+  else
+    echo "Warning: installed pcb, but could not install the Diode URL launcher" >&2
+  fi
 
   mkdir -p "$local_target_dir/lib"
   install -m 755 "$target_dir/release/pcbc" "$local_target_dir/pcbc"
@@ -87,8 +100,14 @@ install_local() {
   cp -R "$source_dir/lib/std" "$stdlib_dir"
 
   add_install_dir_to_path
+  if [ -n "$launcher_installed" ]; then
+    register_url_launcher local
+  fi
 
   echo "Installed local pcb to $install_dir/pcb"
+  if [ -n "$launcher_installed" ]; then
+    echo "Installed Diode URL launcher to $install_dir/pcb-launcher"
+  fi
   echo "Installed local pcbc to $local_target_dir/pcbc"
   echo "Installed local pcb-rectify to $local_target_dir/pcb-rectify"
   echo "Installed local stdlib to $stdlib_dir"
@@ -117,40 +136,85 @@ tag="$(printf '%s' "$json" | sed -n 's/.*"tag"[[:space:]]*:[[:space:]]*"\([^"]*\
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
-artifact=""
-downloaded=""
-for artifact_target in $download_targets; do
-  rm -f "$tmp/pcb" "$tmp/pcb.zst" "$tmp/pcb.sha256"
-  artifact="pcb-$artifact_target"
-  if ! curl -fsSL "$base_url/$tag/$artifact.sha256" -o "$tmp/pcb.sha256" 2>/dev/null; then
-    continue
-  fi
-  if command -v zstd >/dev/null \
-    && curl -fsSL "$base_url/$tag/$artifact.zst" -o "$tmp/pcb.zst" 2>/dev/null; then
-    zstd -q -d -f "$tmp/pcb.zst" -o "$tmp/pcb"
-  elif ! curl -fsSL "$base_url/$tag/$artifact" -o "$tmp/pcb" 2>/dev/null; then
-    continue
-  fi
-  downloaded="true"
-  break
-done
-[ -n "$downloaded" ] || { echo "could not find pcb release artifact for $target" >&2; exit 1; }
+download_binary() {
+  binary_name="$1"
+  downloaded=""
+  for artifact_target in $download_targets; do
+    output="$tmp/$binary_name"
+    compressed="$output.zst"
+    checksum="$output.sha256"
+    artifact="$binary_name-$artifact_target"
+    rm -f "$output" "$compressed" "$checksum"
+    if ! curl -fsSL "$base_url/$tag/$artifact.sha256" -o "$checksum" 2>/dev/null; then
+      continue
+    fi
+    if command -v zstd >/dev/null \
+      && curl -fsSL "$base_url/$tag/$artifact.zst" -o "$compressed" 2>/dev/null; then
+      if ! zstd -q -d -f "$compressed" -o "$output"; then
+        rm -f "$output"
+        if ! curl -fsSL "$base_url/$tag/$artifact" -o "$output" 2>/dev/null; then
+          continue
+        fi
+      fi
+    elif ! curl -fsSL "$base_url/$tag/$artifact" -o "$output" 2>/dev/null; then
+      continue
+    fi
 
-expected="$(sed 's/[[:space:]].*//' "$tmp/pcb.sha256")"
-if command -v shasum >/dev/null; then
-  actual="$(shasum -a 256 "$tmp/pcb" | sed 's/[[:space:]].*//')"
-elif command -v sha256sum >/dev/null; then
-  actual="$(sha256sum "$tmp/pcb" | sed 's/[[:space:]].*//')"
+    expected="$(sed 's/[[:space:]].*//' "$checksum")"
+    if command -v shasum >/dev/null; then
+      actual="$(shasum -a 256 "$output" | sed 's/[[:space:]].*//')"
+    elif command -v sha256sum >/dev/null; then
+      actual="$(sha256sum "$output" | sed 's/[[:space:]].*//')"
+    else
+      echo "missing shasum or sha256sum" >&2
+      exit 1
+    fi
+    [ "$actual" = "$expected" ] || { echo "checksum mismatch for $artifact" >&2; return 2; }
+    downloaded="true"
+    break
+  done
+  [ -n "$downloaded" ]
+}
+
+if download_binary pcb; then
+  :
 else
-  echo "missing shasum or sha256sum" >&2
-  exit 1
+  pcb_status="$?"
+  if [ "$pcb_status" -eq 1 ]; then
+    echo "could not find pcb release artifact for $target" >&2
+  fi
+  exit "$pcb_status"
 fi
-[ "$actual" = "$expected" ] || { echo "checksum mismatch" >&2; exit 1; }
+
+launcher_downloaded=""
+if download_binary pcb-launcher; then
+  launcher_downloaded="true"
+else
+  launcher_status="$?"
+  if [ "$launcher_status" -eq 1 ]; then
+    echo "Warning: pcb-launcher is not available for $tag; skipping Diode URL launcher install" >&2
+  else
+    echo "Warning: pcb-launcher failed integrity verification; skipping Diode URL launcher install" >&2
+  fi
+fi
 
 mkdir -p "$install_dir"
 chmod +x "$tmp/pcb"
 mv "$tmp/pcb" "$install_dir/pcb"
 
+if [ -n "$launcher_downloaded" ]; then
+  if ! chmod +x "$tmp/pcb-launcher" || ! mv "$tmp/pcb-launcher" "$install_dir/pcb-launcher"; then
+    echo "Warning: installed pcb, but could not install the Diode URL launcher" >&2
+    launcher_downloaded=""
+  fi
+fi
+
 add_install_dir_to_path
+if [ -n "$launcher_downloaded" ]; then
+  register_url_launcher latest
+fi
 
 echo "Installed pcb to $install_dir/pcb"
+if [ -n "$launcher_downloaded" ]; then
+  echo "Installed Diode URL launcher to $install_dir/pcb-launcher"
+fi

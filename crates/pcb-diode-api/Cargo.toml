@@ -30,6 +30,7 @@ md-5 = { workspace = true }
 open = { workspace = true }
 pcb-eda = { workspace = true }
 pcb-component-gen = { workspace = true }
+pcb-diode-uri = { workspace = true }
 pcb-fmt = { workspace = true }
 pcb-kicad = { workspace = true }
 pcb-sch = { workspace = true }

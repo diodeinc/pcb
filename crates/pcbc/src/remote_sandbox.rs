@@ -21,6 +21,7 @@ use uuid::Uuid;
 
 use crate::layout::{LayoutArgs, LayoutOutputFormat};
 use crate::open::OpenArgs;
+use crate::recovery_dialog::{RecoveryChoice, URL_LAUNCHER_ENV};
 
 const WATCH_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const WATCH_DEBOUNCE: Duration = Duration::from_millis(150);
@@ -51,7 +52,9 @@ pub fn execute_layout(uri: SandboxFileUri, args: LayoutArgs) -> Result<()> {
     let result = run_remote_layout(&client, &uri, &args)?;
     status.set_message("Downloading layout from sandbox...");
     let restore_status = should_open.then_some(&status);
-    let local = sync_layout_down(&client, &uri, &result, restore_status)?;
+    let Some(local) = sync_layout_down(&client, &uri, &result, restore_status)? else {
+        return finish_cancelled(lock, status);
+    };
     if should_open {
         return open_layout_and_sync(&client, &uri, &local, lock, status);
     }
@@ -91,11 +94,22 @@ pub fn execute_open(uri: SandboxFileUri, args: OpenArgs) -> Result<()> {
         status.set_message("Downloading layout from sandbox...");
         sync_layout_down(&client, &uri, &result, Some(&status))?
     };
+    let Some(local) = local else {
+        return finish_cancelled(lock, status);
+    };
 
     open_layout_and_sync(&client, &uri, &local, lock, status)
 }
 
+/// Wind down cleanly after the user cancels the recovery prompt.
+fn finish_cancelled(lock: SandboxLockGuard, status: pcb_ui::Spinner) -> Result<()> {
+    lock.release()?;
+    status.finish();
+    Ok(())
+}
+
 struct LocalLayout {
+    cache_root: PathBuf,
     remote_layout_dir: String,
     local_layout_dir: PathBuf,
     pcb_file: PathBuf,
@@ -151,6 +165,8 @@ struct SyncSessionManifest {
     layout_file: PathBuf,
     state: SyncSessionState,
     stop_reason: Option<RecoverableStopReason>,
+    #[serde(default)]
+    editor_pid: Option<u32>,
     prompt_seen: bool,
     started_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
@@ -188,13 +204,13 @@ fn open_layout_and_sync(
         .sync_session
         .clone()
         .context("Remote sync session was not initialized")?;
-    restore_recovered_layout_if_needed(client, uri, local, &status).with_context(|| {
-        format!(
-            "Failed to restore local recovery file {}",
-            local.pcb_file.display()
-        )
-    })?;
-    sync_session.mark_active()?;
+    restore_recovered_layout_if_needed(client, uri, local, &mut sync_session, &status)
+        .with_context(|| {
+            format!(
+                "Failed to restore local recovery file {}",
+                local.pcb_file.display()
+            )
+        })?;
     let running = install_shutdown_flag()?;
     status.set_message(format!("Opening {}...", local.pcb_file.display()));
     let watcher = LocalLayoutWatcher::new(&local.local_layout_dir)?;
@@ -205,6 +221,7 @@ fn open_layout_and_sync(
             return Err(err);
         }
     };
+    sync_session.mark_active(session.id())?;
     status.set_message(format!(
         "Watching {} for KiCad changes...",
         local.local_layout_dir.display()
@@ -237,16 +254,9 @@ fn open_layout_and_sync(
                 "Remote sync stopped; local recovery file is {}",
                 local.pcb_file.display()
             ));
-            let terminate_result = session.terminate();
+            // Leave KiCad open so an interrupted sync cannot discard unsaved
+            // edits or close another concurrent editor session.
             let release_result = lock.release();
-            if let Err(terminate_err) = terminate_result {
-                return Err(error).with_context(|| {
-                    format!(
-                        "Remote sync stopped. Local recovery file: {}. Also failed to quit KiCad: {terminate_err:#}",
-                        local.pcb_file.display()
-                    )
-                });
-            }
             if let Err(release_err) = release_result {
                 return Err(error).with_context(|| {
                     format!(
@@ -440,7 +450,7 @@ fn sync_remote_pcb_file_down(
     client: &SandboxClient,
     uri: &SandboxFileUri,
     status: Option<&pcb_ui::Spinner>,
-) -> Result<LocalLayout> {
+) -> Result<Option<LocalLayout>> {
     let result = RemoteLayoutResult {
         layout_dir: Some(remote_parent_dir(&uri.sandbox_path)?),
         pcb_file: Some(uri.sandbox_path.clone()),
@@ -453,7 +463,7 @@ fn sync_layout_down(
     uri: &SandboxFileUri,
     result: &RemoteLayoutResult,
     restore_status: Option<&pcb_ui::Spinner>,
-) -> Result<LocalLayout> {
+) -> Result<Option<LocalLayout>> {
     let remote_layout_dir = result
         .layout_dir
         .as_ref()
@@ -470,11 +480,12 @@ fn sync_layout_down(
     let mut recovered_session = None;
     if let Some(status) = restore_status
         && let Some(session) = latest_recoverable_session(&cache_root)?
-        && let Some(restore) = prompt_restore_recovery(status, &session)
     {
-        mark_recoverable_sessions_prompt_seen(&cache_root);
-        if restore {
-            recovered_session = Some(session);
+        match prompt_restore_recovery(status, &session)? {
+            Some(RecoveryChoice::Restore) => recovered_session = Some(session),
+            Some(RecoveryChoice::Discard) => mark_recoverable_sessions_prompt_seen(&cache_root),
+            Some(RecoveryChoice::Cancel) => return Ok(None),
+            None => {}
         }
     }
 
@@ -506,19 +517,21 @@ fn sync_layout_down(
             (local_layout_dir, pcb_file, sync_session, false)
         };
 
-    Ok(LocalLayout {
+    Ok(Some(LocalLayout {
+        cache_root,
         remote_layout_dir,
         local_layout_dir,
         pcb_file,
         sync_session,
         restored_from_recovery,
-    })
+    }))
 }
 
 fn restore_recovered_layout_if_needed(
     client: &SandboxClient,
     uri: &SandboxFileUri,
     local: &LocalLayout,
+    sync_session: &mut SyncSession,
     status: &pcb_ui::Spinner,
 ) -> Result<()> {
     if !local.restored_from_recovery {
@@ -529,6 +542,8 @@ fn restore_recovered_layout_if_needed(
         local.pcb_file.display()
     ));
     let stats = sync_layout_up_with_retry(client, uri, local)?;
+    mark_recoverable_sessions_prompt_seen(&local.cache_root);
+    sync_session.mark_prompt_seen()?;
     status.set_message(format!(
         "Restored recovery file ({} uploaded, {} removed).",
         stats.uploaded, stats.removed
@@ -684,6 +699,7 @@ impl SyncSession {
                 layout_file,
                 state: SyncSessionState::Active,
                 stop_reason: None,
+                editor_pid: None,
                 prompt_seen: false,
                 started_at: now,
                 updated_at: now,
@@ -705,9 +721,10 @@ impl SyncSession {
         })
     }
 
-    fn mark_active(&mut self) -> Result<()> {
+    fn mark_active(&mut self, editor_pid: u32) -> Result<()> {
         self.manifest.state = SyncSessionState::Active;
         self.manifest.stop_reason = None;
+        self.manifest.editor_pid = Some(editor_pid);
         self.manifest.updated_at = Utc::now();
         self.save()
     }
@@ -715,6 +732,7 @@ impl SyncSession {
     fn mark_complete(&mut self) -> Result<()> {
         self.manifest.state = SyncSessionState::Complete;
         self.manifest.stop_reason = None;
+        self.manifest.editor_pid = None;
         self.manifest.prompt_seen = true;
         self.manifest.updated_at = Utc::now();
         self.save()
@@ -757,6 +775,19 @@ fn latest_recoverable_session(cache_root: &Path) -> Result<Option<SyncSession>> 
         let Ok(session) = SyncSession::load(entry.path()) else {
             continue;
         };
+        if matches!(
+            session.manifest.state,
+            SyncSessionState::Active | SyncSessionState::Recoverable
+        ) && session
+            .manifest
+            .editor_pid
+            .is_some_and(editor_process_is_running)
+        {
+            bail!(
+                "KiCad is still open for {}. Close that KiCad window before opening this board again.",
+                session.manifest.layout_file.display()
+            );
+        }
         if !is_recovery_candidate(&session.manifest) {
             continue;
         }
@@ -770,13 +801,21 @@ fn latest_recoverable_session(cache_root: &Path) -> Result<Option<SyncSession>> 
     Ok(latest)
 }
 
-fn prompt_restore_recovery(status: &pcb_ui::Spinner, session: &SyncSession) -> Option<bool> {
+fn prompt_restore_recovery(
+    status: &pcb_ui::Spinner,
+    session: &SyncSession,
+) -> Result<Option<RecoveryChoice>> {
     if !crate::tty::is_interactive() {
+        if std::env::var_os(URL_LAUNCHER_ENV).is_some() {
+            return status.suspend(|| {
+                crate::recovery_dialog::choose(&session.manifest.layout_file).map(Some)
+            });
+        }
         eprintln!(
             "Found local recovery file for this remote layout at {}. Re-run interactively to restore it.",
             session.manifest.layout_file.display()
         );
-        return None;
+        return Ok(None);
     }
     let prompt = format!(
         "Restore previous local KiCad recovery file from {}?",
@@ -788,7 +827,11 @@ fn prompt_restore_recovery(status: &pcb_ui::Spinner, session: &SyncSession) -> O
             .prompt()
             .unwrap_or(false)
     };
-    Some(status.suspend(ask))
+    Ok(Some(if status.suspend(ask) {
+        RecoveryChoice::Restore
+    } else {
+        RecoveryChoice::Discard
+    }))
 }
 
 fn mark_recoverable_sessions_prompt_seen(cache_root: &Path) {
@@ -835,6 +878,58 @@ fn is_recovery_candidate(manifest: &SyncSessionManifest) -> bool {
         SyncSessionState::Active | SyncSessionState::Recoverable
     ) && !manifest.prompt_seen
         && manifest.layout_file.is_file()
+}
+
+/// Best-effort check that `pid` is still the editor process this session
+/// launched (`open` on macOS, pcbnew elsewhere). Matching the process name
+/// keeps a recycled pid from permanently blocking the board.
+#[cfg(unix)]
+fn editor_process_is_running(pid: u32) -> bool {
+    std::process::Command::new("ps")
+        .args(["-o", "comm=", "-p", &pid.to_string()])
+        .output()
+        .is_ok_and(|output| {
+            output.status.success()
+                && is_editor_process_name(&String::from_utf8_lossy(&output.stdout))
+        })
+}
+
+#[cfg(windows)]
+fn editor_process_is_running(pid: u32) -> bool {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let mut command = std::process::Command::new("tasklist.exe");
+    command.creation_flags(CREATE_NO_WINDOW).args([
+        "/FI",
+        &format!("PID eq {pid}"),
+        "/FO",
+        "CSV",
+        "/NH",
+    ]);
+    command.output().is_ok_and(|output| {
+        output.status.success()
+            && String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .filter_map(|line| line.split(',').next())
+                .any(is_editor_process_name)
+    })
+}
+
+#[cfg(not(any(unix, windows)))]
+fn editor_process_is_running(_pid: u32) -> bool {
+    false
+}
+
+#[cfg(any(unix, windows))]
+fn is_editor_process_name(raw: &str) -> bool {
+    let name = raw.trim().trim_matches('"');
+    let name = name
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(name)
+        .to_ascii_lowercase();
+    name == "open" || name.contains("pcbnew") || name.contains("kicad")
 }
 
 fn prune_old_layout_sessions(cache_root: &Path, retention: Duration) -> Result<()> {
@@ -965,4 +1060,89 @@ fn shell_command(args: &[String]) -> String {
 
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_session_manifest(cache_root: &Path, state: SyncSessionState, editor_pid: Option<u32>) {
+        let local_layout_dir = cache_root.join("session");
+        fs::create_dir(&local_layout_dir).unwrap();
+        let layout_file = local_layout_dir.join("layout.kicad_pcb");
+        fs::write(&layout_file, "").unwrap();
+        let now = Utc::now();
+        let manifest = SyncSessionManifest {
+            version: 1,
+            uri: "diode://api.diode.computer/sandboxes/test/fs/read?path=%2Flayout.kicad_pcb"
+                .to_string(),
+            remote_layout_dir: "/".to_string(),
+            local_layout_dir: local_layout_dir.clone(),
+            layout_file,
+            state,
+            stop_reason: None,
+            editor_pid,
+            prompt_seen: false,
+            started_at: now,
+            updated_at: now,
+        };
+        fs::write(
+            local_layout_dir.join(SESSION_MANIFEST),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_open_while_tracked_editor_is_running() {
+        let cache = tempfile::tempdir().unwrap();
+        let sleep = ["/bin/sleep", "/usr/bin/sleep"]
+            .into_iter()
+            .find(|path| Path::new(path).is_file())
+            .expect("sleep binary");
+        let editor = cache.path().join("pcbnew");
+        fs::copy(sleep, &editor).unwrap();
+        let mut editor = std::process::Command::new(&editor)
+            .arg("30")
+            .spawn()
+            .unwrap();
+        write_session_manifest(
+            cache.path(),
+            SyncSessionState::Recoverable,
+            Some(editor.id()),
+        );
+
+        let error = latest_recoverable_session(cache.path()).unwrap_err();
+        let _ = editor.kill();
+        let _ = editor.wait();
+        assert!(error.to_string().contains("KiCad is still open"));
+    }
+
+    #[test]
+    fn recycled_editor_pid_does_not_block_recovery() {
+        let cache = tempfile::tempdir().unwrap();
+        // A live pid that is not a KiCad editor process: pid reuse must not
+        // permanently block the board.
+        write_session_manifest(
+            cache.path(),
+            SyncSessionState::Recoverable,
+            Some(std::process::id()),
+        );
+
+        let session = latest_recoverable_session(cache.path()).unwrap();
+        assert!(session.is_some());
+    }
+
+    #[test]
+    fn matches_only_editor_process_names() {
+        assert!(is_editor_process_name("/usr/bin/open\n"));
+        assert!(is_editor_process_name("pcbnew"));
+        assert!(is_editor_process_name("\"kicad.exe\""));
+        assert!(is_editor_process_name(
+            "/Applications/KiCad/KiCad.app/Contents/MacOS/pcbnew"
+        ));
+        assert!(!is_editor_process_name("cargo"));
+        assert!(!is_editor_process_name("INFO: No tasks are running"));
+    }
 }

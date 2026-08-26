@@ -143,6 +143,7 @@ jobs:
             export CFLAGS="-Du_int8_t=uint8_t -Du_int16_t=uint16_t -Du_int32_t=uint32_t -Du_int64_t=uint64_t"
           fi
           cargo build --profile dist -p pcb --bin pcb --target "$TARGET"
+          cargo build --profile dist -p pcb-launcher --bin pcb-launcher --target "$TARGET"
 
       - name: Prepare artifacts
         shell: bash
@@ -151,19 +152,21 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifacts
-          exe=pcb
-          artifact="pcb-$TARGET"
-          if [[ "$TARGET" == *windows* ]]; then
-            exe=pcb.exe
-            artifact="$artifact.exe"
-          fi
-          cp "target/$TARGET/dist/$exe" "artifacts/$artifact"
-          zstd -q -f -3 "artifacts/$artifact" -o "artifacts/$artifact.zst"
-          if command -v shasum >/dev/null; then
-            shasum -a 256 "artifacts/$artifact" > "artifacts/$artifact.sha256"
-          else
-            sha256sum "artifacts/$artifact" > "artifacts/$artifact.sha256"
-          fi
+          for binary in pcb pcb-launcher; do
+            exe="$binary"
+            artifact="$binary-$TARGET"
+            if [[ "$TARGET" == *windows* ]]; then
+              exe="$exe.exe"
+              artifact="$artifact.exe"
+            fi
+            cp "target/$TARGET/dist/$exe" "artifacts/$artifact"
+            zstd -q -f -3 "artifacts/$artifact" -o "artifacts/$artifact.zst"
+            if command -v shasum >/dev/null; then
+              shasum -a 256 "artifacts/$artifact" > "artifacts/$artifact.sha256"
+            else
+              sha256sum "artifacts/$artifact" > "artifacts/$artifact.sha256"
+            fi
+          done
 
       - name: Upload artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

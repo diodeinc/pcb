@@ -1,0 +1,33 @@
+[package]
+name = "pcb-launcher"
+version = { workspace = true }
+edition = { workspace = true }
+repository = { workspace = true }
+description = "Native diode URL launcher for the pcb toolchain"
+homepage = { workspace = true }
+authors = { workspace = true }
+
+[[bin]]
+name = "pcb-launcher"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+dirs = { workspace = true }
+pcb-diode-uri = { workspace = true }
+pcb-native-dialog = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.4"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "NSApplication",
+    "NSResponder",
+    "NSRunningApplication",
+] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "NSArray",
+    "NSEnumerator",
+    "NSObject",
+    "NSString",
+    "NSURL",
+] }

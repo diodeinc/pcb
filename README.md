@@ -25,6 +25,13 @@ The Unix installer writes `pcb` to `$HOME/.local/bin` by default. The Windows
 installer writes `pcb.exe` to `%USERPROFILE%\.pcb\bin` by default. Set
 `PCB_INSTALL_DIR` to choose a different directory.
 
+The installer also registers the `diode://` URL scheme for the current user.
+The Diode registry can use these links to open sandbox layouts in KiCad
+without a terminal. `pcb self update` updates and re-registers the launcher together with
+the `pcb` shim. If a browser-launched open fails, the launcher displays the
+error and records command output in `~/.pcb/pcb-launcher.log` (or
+`%USERPROFILE%\.pcb\pcb-launcher.log` on Windows).
+
 KiCad 10.x is required only for generating and editing layouts. Building and
 validating Zener files does not require KiCad.
 
@@ -62,6 +69,9 @@ cd pcb
 cargo build -p pcb -p pcbc
 ./install.sh --local
 ```
+
+Local installation registers `diode://` links against the local toolchain.
+Installing or self-updating a release registers them against `latest` again.
 
 Repository maintenance scripts are run by their explicit path, such as
 `./bin/embed-readme --check README.md`; no shell environment activation is needed.

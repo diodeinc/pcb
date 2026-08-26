@@ -1,0 +1,11 @@
+[package]
+name = "pcb-native-dialog"
+version = { workspace = true }
+edition = { workspace = true }
+repository = { workspace = true }
+description = "Minimal native message dialogs for the pcb toolchain"
+homepage = { workspace = true }
+authors = { workspace = true }
+
+[dependencies]
+anyhow = { workspace = true }

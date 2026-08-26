@@ -203,6 +203,18 @@ fn host_api_base_url(host: &str) -> String {
     format!("{scheme}://{host}")
 }
 
+/// Whether a parsed [`SandboxFileUri::host`] (host, plus `:port` when present)
+/// is a Diode API endpoint that browser-launched opens may talk to. Release
+/// builds trust only `*.diode.computer`; debug builds trust every host so
+/// local API stacks work.
+pub fn is_trusted_api_host(host: &str) -> bool {
+    cfg!(debug_assertions) || is_diode_computer_host(host)
+}
+
+fn is_diode_computer_host(host: &str) -> bool {
+    host.to_ascii_lowercase().ends_with(".diode.computer")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -303,6 +315,19 @@ mod tests {
             .unwrap_err(),
             DiodeUriParseError::UnsafeSandboxPath
         );
+    }
+
+    #[test]
+    fn release_trust_is_limited_to_diode_computer_hosts() {
+        assert!(is_diode_computer_host("api.diode.computer"));
+        assert!(is_diode_computer_host("api.gov.diode.computer"));
+        assert!(is_diode_computer_host("pr-983.preview.api.diode.computer"));
+        assert!(is_diode_computer_host("API.DIODE.COMPUTER"));
+        assert!(!is_diode_computer_host("diode.computer"));
+        assert!(!is_diode_computer_host("evil-diode.computer"));
+        assert!(!is_diode_computer_host("diode.computer.attacker.example"));
+        assert!(!is_diode_computer_host("api.diode.computer:443"));
+        assert!(!is_diode_computer_host("localhost:3001"));
     }
 
     #[test]

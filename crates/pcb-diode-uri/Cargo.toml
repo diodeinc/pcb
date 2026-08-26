@@ -1,0 +1,13 @@
+[package]
+name = "pcb-diode-uri"
+version = { workspace = true }
+edition = { workspace = true }
+repository = { workspace = true }
+description = "Parsing and trust policy for diode:// URIs"
+homepage = { workspace = true }
+authors = { workspace = true }
+
+[dependencies]
+thiserror = { workspace = true }
+url = { workspace = true }
+urlencoding = { workspace = true }
