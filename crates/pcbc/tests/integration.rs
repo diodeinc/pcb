@@ -2,6 +2,7 @@ mod apply;
 mod auth_git;
 mod bom;
 mod build;
+mod dfm;
 mod doc;
 mod electrical_checks;
 mod import;

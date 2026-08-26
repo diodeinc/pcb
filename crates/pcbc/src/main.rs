@@ -18,6 +18,7 @@ mod bundle;
 mod changelog;
 mod codegen;
 mod config_input;
+mod dfm;
 mod doc;
 mod drc;
 mod embed_step;
@@ -127,6 +128,9 @@ enum Commands {
     #[command(alias = "l")]
     Layout(layout::LayoutArgs),
 
+    /// Run DFM checks for a .zen board
+    Dfm(dfm::DfmArgs),
+
     /// Format .zen files
     Fmt(fmt::FmtArgs),
 
@@ -235,6 +239,7 @@ fn run() -> anyhow::Result<()> {
         Commands::Doc(args) => doc::execute(args),
         Commands::Changelog(args) => changelog::execute(args),
         Commands::Layout(args) => layout::execute(args),
+        Commands::Dfm(args) => dfm::execute(args),
         Commands::Fmt(args) => fmt::execute(args),
         Commands::Lsp(args) => lsp::execute(args),
         Commands::Open(args) => open::execute(args),

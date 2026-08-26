@@ -180,6 +180,7 @@ pcb new board <NAME> <REPO_URL>              # Create a board repository
 pcb build [PATHS...]                         # Build and validate designs
 pcb sync                                     # Reconcile imports and dependency manifests
 pcb layout <FILE>                            # Generate layout files
+pcb dfm <FILE> --pdk standard                # Check a .zen board for manufacturability
 pcb import <KICAD_SCH|KICAD_PRO> <OUTPUT_DIR> # Import a KiCad schematic or project
 ```
 
