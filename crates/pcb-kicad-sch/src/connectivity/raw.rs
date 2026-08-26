@@ -59,6 +59,37 @@ pub enum Terminal {
     InterfacePort { name: String },
 }
 
+impl Terminal {
+    /// Whether two terminals name the same connection point. Sources differ in
+    /// what they record for a pin (zener ports carry a pin name, KiCad symbols
+    /// may leave names empty), so pins compare by component identity plus a
+    /// shared pin number, or a shared non-empty pin name.
+    pub fn matches(&self, other: &Terminal) -> bool {
+        match (self, other) {
+            (
+                Terminal::ComponentPin {
+                    component,
+                    pin_name,
+                    pin_numbers,
+                },
+                Terminal::ComponentPin {
+                    component: other_component,
+                    pin_name: other_name,
+                    pin_numbers: other_numbers,
+                },
+            ) => {
+                component == other_component
+                    && ((!pin_name.is_empty() && !other_name.is_empty() && pin_name == other_name)
+                        || !pin_numbers.is_disjoint(other_numbers))
+            }
+            (Terminal::InterfacePort { name }, Terminal::InterfacePort { name: other }) => {
+                name == other
+            }
+            _ => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ConnectionOrigin {
     ZenerNet { name: String },

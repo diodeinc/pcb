@@ -8,7 +8,7 @@ use crate::{
     CONNECTION_GRID_MM, GEOMETRY_EPS_MM, Label, LabelKind, LabelShape, LabelSpin, Paper, Point,
     Rotation, SchDocument, SchItem, SchPage, Sheet, SheetPin, Symbol, SymbolDefinition,
     SymbolField, SymbolSlotKey,
-    analysis::{ConnectivityInspection, SchematicIssue, SchematicIssueKey, terminals_match},
+    analysis::{ConnectivityInspection, SchematicIssue, SchematicIssueKey},
     component_slots,
     connectivity::{
         ComponentIdentity, ConnectivityItemRef, PhysicalIsland, PinVisibility, SymbolLocation,
@@ -270,7 +270,7 @@ fn disconnected_from_projected_symbol(
                     pin_name: pin.name,
                     pin_numbers: pin.numbers,
                 };
-                if terminals_match(terminal, &projected) {
+                if terminal.matches(&projected) {
                     return Ok(true);
                 }
             }
@@ -1550,7 +1550,7 @@ fn sync_net_drivers(
                     provenance
                         .terminals
                         .iter()
-                        .any(|found| terminals_match(&terminal, found))
+                        .any(|found| terminal.matches(found))
                 })
                 .map(|(island, _)| island.clone())
                 .collect::<Vec<_>>();
@@ -1655,7 +1655,6 @@ fn page_driver_contexts(
         .collect()
 }
 
-
 fn ensure_context_endpoints(
     document: &mut SchDocument,
     targets_by_net: &BTreeMap<String, Vec<PinTarget>>,
@@ -1732,7 +1731,13 @@ fn upsert_contextual_driver(
         .and_then(|context| context.get(net_name));
     // Hierarchy drivers bridge pages through their sheet pins, so they never
     // need a global label.
-    let mut label = driver_label(net_name, interface_names, false, deterministic_uuid(key), at);
+    let mut label = driver_label(
+        net_name,
+        interface_names,
+        false,
+        deterministic_uuid(key),
+        at,
+    );
     label.spin = spin;
     upsert_label(document, page_index, label)
 }

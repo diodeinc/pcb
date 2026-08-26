@@ -10,7 +10,10 @@ use pcb_kicad_sch::{
 #[test]
 fn user_reorganized_page_stays_reconcilable() {
     let netlist = common::compile_fixture("analysis", "simple.zen");
-    let baseline = plan_reconciliation(None, &netlist, "simple.kicad_sch").unwrap().apply(None).unwrap();
+    let baseline = plan_reconciliation(None, &netlist, "simple.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
     let mut document = baseline.clone();
     // Move the entire circuit onto a user-created page.
     let root = &mut document.pages[0];
@@ -25,7 +28,11 @@ fn user_reorganized_page_stays_reconcilable() {
         id: "user-sheet".to_string(),
         at: Some(Point::new(200.0, 100.0)),
         size: Some(Point::new(40.0, 20.0)),
-        name: Some(SymbolField::new("Sheetname", "User", Point::new(200.0, 99.0))),
+        name: Some(SymbolField::new(
+            "Sheetname",
+            "User",
+            Point::new(200.0, 99.0),
+        )),
         file: SymbolField::new("Sheetfile", "user.kicad_sch", Point::new(200.0, 121.0)),
         pins: Vec::new(),
         unsupported: Vec::new(),

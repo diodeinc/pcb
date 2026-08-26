@@ -575,7 +575,8 @@ fn emptied_module_page_is_repopulated_not_duplicated() {
                 _ => None,
             })
             .expect("module page has managed symbols");
-        page.items.retain(|item| !matches!(item, SchItem::Symbol(_)));
+        page.items
+            .retain(|item| !matches!(item, SchItem::Symbol(_)));
         prefix
     };
 

@@ -7,11 +7,11 @@
 use anyhow::Result;
 use pcb_sexpr::Sexpr;
 
+use crate::symbol::number;
 use crate::{
     CONNECTION_GRID_MM, FieldHorizontalJustify, FieldJustify, FieldVerticalJustify,
     GEOMETRY_EPS_MM, LabelSpin, MirrorAxis, Point, Rotation, Symbol, SymbolDefinition, symbol,
 };
-use crate::symbol::number;
 
 const FIELD_ROW_SPACING_MM: f64 = 2.54;
 const HPADDING_MM: f64 = 0.635;

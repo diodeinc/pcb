@@ -289,7 +289,7 @@ fn is_open_not_connected_group(
     let terminal = group.terminals.first().expect("checked one terminal");
     if !not_connected
         .iter()
-        .any(|candidate| terminals_match(candidate, terminal))
+        .any(|candidate| candidate.matches(terminal))
     {
         return false;
     }
@@ -317,12 +317,8 @@ pub(crate) fn expected_reconcilable_connectivity(
     graph.groups.retain_mut(|group| {
         let original_len = group.terminals.len();
         group.terminals.retain(|terminal| {
-            visible
-                .iter()
-                .any(|candidate| terminals_match(terminal, candidate))
-                || !hidden
-                    .iter()
-                    .any(|ignored| terminals_match(terminal, ignored))
+            visible.iter().any(|candidate| terminal.matches(candidate))
+                || !hidden.iter().any(|ignored| terminal.matches(ignored))
         });
         original_len == 0 || !group.terminals.is_empty()
     });
@@ -456,9 +452,10 @@ fn analyze_nets(
                 .iter()
                 .filter(|expected_terminal| {
                     !matching_groups.iter().any(|observed_group| {
-                        observed_group.terminals.iter().any(|observed_terminal| {
-                            terminals_match(expected_terminal, observed_terminal)
-                        })
+                        observed_group
+                            .terminals
+                            .iter()
+                            .any(|observed_terminal| expected_terminal.matches(observed_terminal))
                     })
                 })
                 .cloned()
@@ -489,41 +486,8 @@ fn groups_match(expected: &ConnectionGroup, observed: &ConnectionGroup) -> bool 
             observed
                 .terminals
                 .iter()
-                .any(|observed_terminal| terminals_match(expected_terminal, observed_terminal))
+                .any(|observed_terminal| expected_terminal.matches(observed_terminal))
         })
-}
-
-pub(crate) fn terminals_match(expected: &Terminal, observed: &Terminal) -> bool {
-    match (expected, observed) {
-        (
-            Terminal::ComponentPin {
-                component: expected_component,
-                pin_name: expected_name,
-                pin_numbers: expected_numbers,
-            },
-            Terminal::ComponentPin {
-                component: observed_component,
-                pin_name: observed_name,
-                pin_numbers: observed_numbers,
-            },
-        ) => {
-            matches!(
-                (expected_component, observed_component),
-                (
-                    ComponentIdentity::ManagedPath(expected_path),
-                    ComponentIdentity::ManagedPath(observed_path),
-                ) if expected_path == observed_path
-            ) && ((!expected_name.is_empty()
-                && !observed_name.is_empty()
-                && expected_name == observed_name)
-                || !expected_numbers.is_disjoint(observed_numbers))
-        }
-        (
-            Terminal::InterfacePort { name: expected },
-            Terminal::InterfacePort { name: observed },
-        ) => expected == observed,
-        _ => false,
-    }
 }
 
 fn collect_issues(
@@ -635,9 +599,10 @@ fn collect_connection_issues(
             .iter()
             .filter(|observed_terminal| {
                 !matching_expected.iter().any(|expected_group| {
-                    expected_group.terminals.iter().any(|expected_terminal| {
-                        terminals_match(expected_terminal, observed_terminal)
-                    })
+                    expected_group
+                        .terminals
+                        .iter()
+                        .any(|expected_terminal| expected_terminal.matches(observed_terminal))
                 })
             })
             .cloned()
@@ -816,9 +781,9 @@ mod tests {
             pin_numbers: BTreeSet::from([number.to_string()]),
         };
 
-        assert!(terminals_match(&terminal("A", "1"), &terminal("A", "2")));
-        assert!(terminals_match(&terminal("A", "1"), &terminal("B", "1")));
-        assert!(!terminals_match(&terminal("A", "1"), &terminal("1", "2")));
+        assert!(terminal("A", "1").matches(&terminal("A", "2")));
+        assert!(terminal("A", "1").matches(&terminal("B", "1")));
+        assert!(!terminal("A", "1").matches(&terminal("1", "2")));
     }
 
     #[test]

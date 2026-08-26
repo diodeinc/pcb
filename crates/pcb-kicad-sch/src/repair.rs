@@ -10,7 +10,7 @@ use crate::{
     analysis::{
         ConnectivityInspection, SchematicIssue, SchematicIssueKey, analyze_connectivity,
         expected_reconcilable_connectivity, issue_context, logical_name,
-        observed_reconcilable_connectivity, terminals_match,
+        observed_reconcilable_connectivity,
     },
     connectivity::{
         ComponentIdentity, ConnectivityGraph, ConnectivityItemRef, PhysicalIsland, SymbolLocation,
@@ -455,9 +455,10 @@ fn expected_names_for_island(
         .filter(|group| {
             !group.names.is_disjoint(&island.names)
                 || group.terminals.iter().any(|expected_terminal| {
-                    island.terminals.iter().any(|observed_terminal| {
-                        terminals_match(expected_terminal, observed_terminal)
-                    })
+                    island
+                        .terminals
+                        .iter()
+                        .any(|observed_terminal| expected_terminal.matches(observed_terminal))
                 })
         })
         .filter_map(logical_name)
