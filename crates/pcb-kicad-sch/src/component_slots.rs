@@ -33,9 +33,8 @@ pub(crate) fn validate_symbol_library_version(
     owner: &str,
     attributes: &HashMap<String, AttributeValue>,
 ) -> Result<()> {
-    let has_symbol_value =
-        validate_optional_string_attribute(owner, attributes, SYMBOL_VALUE_ATTR)?;
-    let has_symbol_path = validate_optional_string_attribute(owner, attributes, SYMBOL_PATH_ATTR)?;
+    let has_symbol_value = string_attribute(owner, attributes, SYMBOL_VALUE_ATTR)?.is_some();
+    let has_symbol_path = string_attribute(owner, attributes, SYMBOL_PATH_ATTR)?.is_some();
     if !has_symbol_value && !has_symbol_path {
         return Ok(());
     }
@@ -58,18 +57,6 @@ pub(crate) fn validate_symbol_library_version(
         );
     }
     Ok(())
-}
-
-fn validate_optional_string_attribute(
-    owner: &str,
-    attributes: &HashMap<String, AttributeValue>,
-    key: &str,
-) -> Result<bool> {
-    match attributes.get(key) {
-        None => Ok(false),
-        Some(AttributeValue::String(_)) => Ok(true),
-        Some(_) => bail!("{owner} attribute {key} must be a string"),
-    }
 }
 
 pub(crate) fn component_symbol_slots(netlist: &Schematic) -> Result<Vec<SymbolSlotKey>> {

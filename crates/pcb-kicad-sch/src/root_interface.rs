@@ -6,6 +6,123 @@ use anyhow::{Context, Result, bail};
 use pcb_sch::{AttributeValue, InstanceRef, Schematic};
 use serde_json::Value;
 
+/// Net names keyed by netlist id, shared by every signature walker.
+pub(crate) fn net_names_by_id(netlist: &Schematic) -> Result<BTreeMap<u64, &str>> {
+    let mut names = BTreeMap::new();
+    for net in netlist.nets.values() {
+        if let Some(previous) = names.insert(net.id, net.name.as_str()) {
+            bail!(
+                "nets '{previous}' and '{}' have the same id {}",
+                net.name,
+                net.id
+            );
+        }
+    }
+    Ok(names)
+}
+
+/// A signature-net callback: dotted io path, resolved net name, the leaf
+/// value, and its matching default value.
+pub(crate) type SignatureNetVisitor<'a> =
+    dyn FnMut(&str, &str, &Value, Option<&Value>) -> Result<()> + 'a;
+
+/// Walk one module signature's electrical structure, calling `visit` for
+/// every `Net` leaf with its dotted io path, resolved net name, leaf value,
+/// and matching default value. With `strict`, a top-level io that is neither
+/// a `Net` nor an `Interface` is an error; nested non-electrical fields are
+/// always skipped.
+pub(crate) fn visit_signature_nets(
+    signature: &Value,
+    owner: &str,
+    strict: bool,
+    net_names: &BTreeMap<u64, &str>,
+    visit: &mut SignatureNetVisitor,
+) -> Result<()> {
+    let Some(parameters) = signature.get("parameters").and_then(Value::as_array) else {
+        bail!("{owner} __signature.parameters must be an array");
+    };
+    for parameter in parameters {
+        let is_config = parameter
+            .get("is_config")
+            .and_then(Value::as_bool)
+            .with_context(|| format!("{owner} signature parameter is_config must be a boolean"))?;
+        if is_config {
+            continue;
+        }
+        let io_name = parameter
+            .get("name")
+            .and_then(Value::as_str)
+            .with_context(|| format!("{owner} signature parameter name must be a string"))?;
+        let value = parameter
+            .get("value")
+            .with_context(|| format!("{owner} signature io {io_name} has no value"))?;
+        visit_signature_value(
+            value,
+            parameter.get("default_value"),
+            io_name,
+            owner,
+            strict,
+            net_names,
+            visit,
+        )?;
+    }
+    Ok(())
+}
+
+fn visit_signature_value(
+    value: &Value,
+    default_value: Option<&Value>,
+    io_path: &str,
+    owner: &str,
+    strict: bool,
+    net_names: &BTreeMap<u64, &str>,
+    visit: &mut SignatureNetVisitor,
+) -> Result<()> {
+    if value.get("Net").and_then(Value::as_object).is_some() {
+        let id = value
+            .get("Net")
+            .and_then(|net| net.get("id"))
+            .and_then(Value::as_u64)
+            .with_context(|| format!("{owner} signature net {io_path} has no integer id"))?;
+        let net_name = net_names.get(&id).with_context(|| {
+            format!("{owner} signature net {io_path} references unknown net id {id}")
+        })?;
+        return visit(io_path, net_name, value, default_value);
+    }
+
+    let Some(fields) = value
+        .get("Interface")
+        .and_then(|value| value.get("fields"))
+        .and_then(Value::as_object)
+    else {
+        if strict {
+            bail!("{owner} signature io {io_path} is neither a Net nor an Interface");
+        }
+        return Ok(());
+    };
+    let defaults = default_value
+        .and_then(|value| value.get("Interface"))
+        .and_then(|value| value.get("fields"))
+        .and_then(Value::as_object);
+    for (field_name, field_value) in fields {
+        let nested_path = if io_path.is_empty() {
+            field_name.clone()
+        } else {
+            format!("{io_path}.{field_name}")
+        };
+        visit_signature_value(
+            field_value,
+            defaults.and_then(|defaults| defaults.get(field_name)),
+            &nested_path,
+            owner,
+            false,
+            net_names,
+            visit,
+        )?;
+    }
+    Ok(())
+}
+
 pub(crate) fn ports_by_net(
     netlist: &Schematic,
     module_ref: &InstanceRef,
@@ -17,118 +134,27 @@ pub(crate) fn ports_by_net(
     let Some(AttributeValue::Json(signature)) = module.attributes.get("__signature") else {
         return Ok(BTreeMap::new());
     };
-    let Some(parameters) = signature.get("parameters").and_then(Value::as_array) else {
-        bail!("module '{module_ref}' __signature.parameters must be an array");
-    };
-
-    let mut net_name_by_id = BTreeMap::new();
-    for net in netlist.nets.values() {
-        if let Some(previous) = net_name_by_id.insert(net.id as i64, net.name.clone()) {
-            bail!(
-                "nets '{previous}' and '{}' have the same id {}",
-                net.name,
-                net.id
-            );
-        }
-    }
-    let mut ports = BTreeMap::new();
-    for parameter in parameters {
-        let is_config = parameter
-            .get("is_config")
-            .and_then(Value::as_bool)
-            .with_context(|| {
-                format!("module '{module_ref}' signature parameter is_config must be a boolean")
-            })?;
-        if is_config {
-            continue;
-        }
-        let io_name = parameter
-            .get("name")
-            .and_then(Value::as_str)
-            .with_context(|| {
-                format!("module '{module_ref}' signature parameter name must be a string")
-            })?;
-        let value = parameter.get("value").with_context(|| {
-            format!("module '{module_ref}' signature io {io_name} has no value")
-        })?;
-        collect_ports(
-            value,
-            parameter.get("default_value"),
-            io_name,
-            &net_name_by_id,
-            &mut ports,
-            ElectricalRequirement::Required,
-        )?;
-    }
+    let net_names = net_names_by_id(netlist)?;
+    let mut ports = BTreeMap::<String, BTreeSet<String>>::new();
+    visit_signature_nets(
+        signature,
+        &format!("module '{module_ref}'"),
+        true,
+        &net_names,
+        &mut |io_path, net_name, _value, default_value| {
+            // A default symbol represents the endpoint directly, so the
+            // external interface port does not need a persisted endpoint.
+            if default_value.and_then(net_symbol_value).is_some() {
+                return Ok(());
+            }
+            ports
+                .entry(net_name.to_string())
+                .or_default()
+                .insert(io_path.to_string());
+            Ok(())
+        },
+    )?;
     Ok(ports)
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ElectricalRequirement {
-    Required,
-    Optional,
-}
-
-fn collect_ports(
-    value: &Value,
-    default_value: Option<&Value>,
-    io_name: &str,
-    net_name_by_id: &BTreeMap<i64, String>,
-    ports: &mut BTreeMap<String, BTreeSet<String>>,
-    requirement: ElectricalRequirement,
-) -> Result<()> {
-    if let Some(net) = value.get("Net").and_then(Value::as_object) {
-        let Some(id) = net.get("id").and_then(Value::as_i64) else {
-            bail!("root signature net {io_name} has no integer id");
-        };
-        // A default symbol represents the endpoint directly, so the external
-        // interface port does not need a separate persisted endpoint.
-        if default_value.and_then(net_symbol_value).is_some() {
-            return Ok(());
-        }
-        let net_name = net_name_by_id
-            .get(&id)
-            .with_context(|| {
-                format!("root signature net {io_name} references unknown net id {id}")
-            })?
-            .clone();
-        ports
-            .entry(net_name)
-            .or_default()
-            .insert(io_name.to_string());
-        return Ok(());
-    }
-
-    let Some(fields) = value
-        .get("Interface")
-        .and_then(|value| value.get("fields"))
-        .and_then(Value::as_object)
-    else {
-        if requirement == ElectricalRequirement::Required {
-            bail!("root signature io {io_name} is neither a Net nor an Interface");
-        }
-        return Ok(());
-    };
-    let defaults = default_value
-        .and_then(|value| value.get("Interface"))
-        .and_then(|value| value.get("fields"))
-        .and_then(Value::as_object);
-    for (field_name, field_value) in fields {
-        let nested_name = if io_name.is_empty() {
-            field_name.clone()
-        } else {
-            format!("{io_name}.{field_name}")
-        };
-        collect_ports(
-            field_value,
-            defaults.and_then(|defaults| defaults.get(field_name)),
-            &nested_name,
-            net_name_by_id,
-            ports,
-            ElectricalRequirement::Optional,
-        )?;
-    }
-    Ok(())
 }
 
 fn net_symbol_value(value: &Value) -> Option<&str> {

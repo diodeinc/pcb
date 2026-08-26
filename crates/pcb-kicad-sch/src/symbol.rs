@@ -493,7 +493,7 @@ pub(crate) fn number(value: &Sexpr) -> Option<f64> {
         .filter(|value: &f64| value.is_finite())
 }
 
-fn section_unit_style(name: &str) -> Result<(u32, u32)> {
+pub(crate) fn section_unit_style(name: &str) -> Result<(u32, u32)> {
     let mut parts = name.rsplitn(3, '_');
     let style = parts
         .next()

@@ -9,8 +9,7 @@ use crate::{
     SchDocument, SchItem, SchPage,
     analysis::{
         ConnectivityInspection, SchematicIssue, SchematicIssueKey, analyze_connectivity,
-        expected_reconcilable_connectivity, issue_context, logical_name,
-        observed_reconcilable_connectivity,
+        issue_context, logical_name, observed_reconcilable_connectivity,
     },
     connectivity::{
         ComponentIdentity, ConnectivityGraph, ConnectivityItemRef, PhysicalIsland, SymbolLocation,
@@ -35,7 +34,7 @@ pub(crate) fn plan_connectivity_repair(
     inspection: &ConnectivityInspection,
     selected_keys: &BTreeSet<SchematicIssueKey>,
 ) -> Result<ConnectivityRepairPlan> {
-    let expected = expected_reconcilable_connectivity(document, netlist)?;
+    let expected = &inspection.expected;
     let observed = &inspection.physical;
     let mut removals = BTreeSet::new();
     let mut relocate_symbols = BTreeSet::new();
@@ -76,7 +75,7 @@ pub(crate) fn plan_connectivity_repair(
                                     .cloned(),
                             );
                         }
-                        reconnect_nets.extend(expected_names_for_island(&expected, provenance));
+                        reconnect_nets.extend(expected_names_for_island(expected, provenance));
                     }
                 }
                 if drivers.is_empty() {
@@ -90,14 +89,14 @@ pub(crate) fn plan_connectivity_repair(
                 reconnect_nets.extend(net_names.iter().cloned());
                 for island in islands {
                     if let Some(provenance) = observed.islands.get(island) {
-                        reconnect_nets.extend(expected_names_for_island(&expected, provenance));
+                        reconnect_nets.extend(expected_names_for_island(expected, provenance));
                     }
                 }
             }
             SchematicIssue::UnexpectedConnection { islands, .. } => {
                 for island in islands {
                     if let Some(provenance) = observed.islands.get(island) {
-                        reconnect_nets.extend(expected_names_for_island(&expected, provenance));
+                        reconnect_nets.extend(expected_names_for_island(expected, provenance));
                     }
                 }
             }
@@ -116,7 +115,7 @@ pub(crate) fn plan_connectivity_repair(
 
     loop {
         let current_observed = observed_reconcilable_connectivity(&simulated, netlist)?;
-        let current_analysis = analyze_connectivity(&expected, &current_observed.graph);
+        let current_analysis = analyze_connectivity(expected, &current_observed.graph);
         let current_problems = repair_problem_counts(current_analysis.issues());
         let Some(issue) = current_analysis.issues().iter().find(|issue| {
             if !matches!(
@@ -142,18 +141,18 @@ pub(crate) fn plan_connectivity_repair(
         {
             for island in islands {
                 if let Some(provenance) = current_observed.islands.get(island) {
-                    reconnect_nets.extend(expected_names_for_island(&expected, provenance));
+                    reconnect_nets.extend(expected_names_for_island(expected, provenance));
                 }
             }
         }
 
-        let candidates = repair_candidates(issue, &expected, &current_observed.islands);
+        let candidates = repair_candidates(issue, expected, &current_observed.islands);
         let mut valid = Vec::new();
         for candidate in candidates {
             let mut next = simulated.clone();
             remove_items(&mut next, &BTreeSet::from([candidate.clone()]))?;
             let next_observed = observed_reconcilable_connectivity(&next, netlist)?;
-            let next_analysis = analyze_connectivity(&expected, &next_observed.graph);
+            let next_analysis = analyze_connectivity(expected, &next_observed.graph);
             let next_problems = repair_problem_counts(next_analysis.issues());
             if strictly_reduces_problems(&current_problems, &next_problems) {
                 valid.push(candidate);
@@ -540,20 +539,12 @@ fn matching_item_count(page: &SchPage, item_ref: &ConnectivityItemRef) -> usize 
 
 fn item_matches(page_id: &str, item: &SchItem, item_ref: &ConnectivityItemRef) -> bool {
     match (item, item_ref) {
-        (SchItem::Symbol(item), ConnectivityItemRef::Symbol { page_id: page, id }) => {
-            page == page_id && &item.id == id
-        }
-        (SchItem::Wire(item), ConnectivityItemRef::Wire { page_id: page, id }) => {
-            page == page_id && &item.id == id
-        }
-        (SchItem::Junction(item), ConnectivityItemRef::Junction { page_id: page, id }) => {
-            page == page_id && &item.id == id
-        }
-        (SchItem::NoConnect(item), ConnectivityItemRef::NoConnect { page_id: page, id }) => {
-            page == page_id && &item.id == id
-        }
-        (SchItem::Label(item), ConnectivityItemRef::Label { page_id: page, id }) => {
-            page == page_id && &item.id == id
+        (SchItem::Symbol(_), ConnectivityItemRef::Symbol { page_id: page, id })
+        | (SchItem::Wire(_), ConnectivityItemRef::Wire { page_id: page, id })
+        | (SchItem::Junction(_), ConnectivityItemRef::Junction { page_id: page, id })
+        | (SchItem::NoConnect(_), ConnectivityItemRef::NoConnect { page_id: page, id })
+        | (SchItem::Label(_), ConnectivityItemRef::Label { page_id: page, id }) => {
+            page == page_id && item.id() == Some(id.as_str())
         }
         _ => false,
     }

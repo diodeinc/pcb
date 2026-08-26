@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use pcb_sch::{ATTR_SYMBOL_FORMAT_VERSION, AttributeValue, InstanceKind, Schematic};
 use serde_json::{Map, Value};
 
@@ -90,16 +90,7 @@ fn definitions_by_net(netlist: &Schematic) -> Result<BTreeMap<String, SymbolDefi
     // are empty, so use signatures only as an unambiguous fallback.
     let mut signature_definitions = BTreeMap::new();
     let authoritative_names = definitions.keys().cloned().collect::<BTreeSet<_>>();
-    let mut names_by_id = BTreeMap::new();
-    for net in netlist.nets.values() {
-        if let Some(previous) = names_by_id.insert(net.id, net.name.as_str()) {
-            bail!(
-                "nets '{previous}' and '{}' have the same id {}",
-                net.name,
-                net.id
-            );
-        }
-    }
+    let net_names = crate::root_interface::net_names_by_id(netlist)?;
     for (instance_ref, instance) in &netlist.instances {
         if instance.kind != InstanceKind::Module {
             continue;
@@ -107,100 +98,34 @@ fn definitions_by_net(netlist: &Schematic) -> Result<BTreeMap<String, SymbolDefi
         let Some(AttributeValue::Json(signature)) = instance.attributes.get("__signature") else {
             continue;
         };
-        let parameters = signature
-            .get("parameters")
-            .and_then(Value::as_array)
-            .with_context(|| {
-                format!("module '{instance_ref}' __signature.parameters must be an array")
-            })?;
-        for parameter in parameters {
-            let is_config = parameter
-                .get("is_config")
-                .and_then(Value::as_bool)
-                .context("signature parameter is_config must be a boolean")?;
-            if is_config {
-                continue;
-            }
-            let name = parameter
-                .get("name")
-                .and_then(Value::as_str)
-                .context("signature parameter name must be a string")?;
-            let value = parameter
-                .get("value")
-                .with_context(|| format!("signature parameter '{name}' has no value"))?;
-            collect_signature_definitions(
-                netlist,
-                value,
-                parameter.get("default_value"),
-                &format!("module '{instance_ref}' signature io '{name}'"),
-                &names_by_id,
-                &authoritative_names,
-                &mut signature_definitions,
-            )?;
-        }
+        crate::root_interface::visit_signature_nets(
+            signature,
+            &format!("module '{instance_ref}'"),
+            false,
+            &net_names,
+            &mut |io_path, net_name, value, default_value| {
+                if authoritative_names.contains(net_name) {
+                    return Ok(());
+                }
+                let properties =
+                    symbol_properties(value).or_else(|| default_value.and_then(symbol_properties));
+                if let Some(properties) = properties {
+                    let owner = format!("module '{instance_ref}' signature io '{io_path}'");
+                    let attributes = json_symbol_attributes(properties);
+                    insert_definition(
+                        &mut signature_definitions,
+                        net_name,
+                        definition_from_attributes(netlist, &owner, &attributes)?,
+                    )?;
+                }
+                Ok(())
+            },
+        )?;
     }
     for (net_name, definition) in signature_definitions {
         definitions.entry(net_name).or_insert(definition);
     }
     Ok(definitions)
-}
-
-fn collect_signature_definitions(
-    netlist: &Schematic,
-    value: &Value,
-    default_value: Option<&Value>,
-    owner: &str,
-    names_by_id: &BTreeMap<u64, &str>,
-    authoritative_names: &BTreeSet<String>,
-    definitions: &mut BTreeMap<String, SymbolDefinition>,
-) -> Result<()> {
-    if let Some(net) = value.get("Net").and_then(Value::as_object) {
-        let id = net
-            .get("id")
-            .and_then(Value::as_u64)
-            .with_context(|| format!("{owner} net has no integer id"))?;
-        let net_name = names_by_id
-            .get(&id)
-            .with_context(|| format!("{owner} references unknown net id {id}"))?;
-        if authoritative_names.contains(*net_name) {
-            return Ok(());
-        }
-        let properties =
-            symbol_properties(value).or_else(|| default_value.and_then(symbol_properties));
-        if let Some(properties) = properties {
-            let attributes = json_symbol_attributes(properties);
-            insert_definition(
-                definitions,
-                net_name,
-                definition_from_attributes(netlist, owner, &attributes)?,
-            )?;
-        }
-        return Ok(());
-    }
-
-    let Some(fields) = value
-        .get("Interface")
-        .and_then(|interface| interface.get("fields"))
-        .and_then(Value::as_object)
-    else {
-        return Ok(());
-    };
-    let default_fields = default_value
-        .and_then(|default| default.get("Interface"))
-        .and_then(|interface| interface.get("fields"))
-        .and_then(Value::as_object);
-    for (name, field) in fields {
-        collect_signature_definitions(
-            netlist,
-            field,
-            default_fields.and_then(|defaults| defaults.get(name)),
-            &format!("{owner}.{name}"),
-            names_by_id,
-            authoritative_names,
-            definitions,
-        )?;
-    }
-    Ok(())
 }
 
 fn symbol_properties(value: &Value) -> Option<&Map<String, Value>> {

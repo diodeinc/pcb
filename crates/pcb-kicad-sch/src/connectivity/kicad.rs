@@ -900,7 +900,6 @@ fn connection_groups(
                 island: island.clone(),
                 provenance,
                 global_names,
-                page_instance_id: page_instance_id.to_string(),
                 hierarchical_ports,
                 child_pins,
                 group: ConnectionGroup {
@@ -918,7 +917,6 @@ struct ScopedConnectionGroup {
     provenance: PhysicalIsland,
     group: ConnectionGroup,
     global_names: BTreeSet<String>,
-    page_instance_id: String,
     hierarchical_ports: BTreeSet<String>,
     child_pins: BTreeSet<SheetPinLink>,
 }
@@ -943,7 +941,7 @@ fn merge_scoped_groups(groups: Vec<ScopedConnectionGroup>) -> Vec<ConnectionGrou
     for (index, group) in groups.iter().enumerate() {
         for name in &group.hierarchical_ports {
             ports
-                .entry((&group.page_instance_id, name))
+                .entry((group.island.page_id.as_str(), name))
                 .or_default()
                 .push(index);
         }

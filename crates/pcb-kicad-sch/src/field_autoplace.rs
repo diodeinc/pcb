@@ -309,7 +309,7 @@ fn symbol_body_bounds(definition: &SymbolDefinition, placed: &Symbol) -> Option<
         };
         if items.first().and_then(Sexpr::as_sym) == Some("symbol") {
             let name = items.get(1).and_then(Sexpr::as_atom)?;
-            let (unit, body_style) = section_unit_style(name)?;
+            let (unit, body_style) = crate::symbol::section_unit_style(name).ok()?;
             if unit != 0 && unit != placed.unit {
                 continue;
             }
@@ -337,7 +337,7 @@ fn include_primitive(bounds: &mut Option<Bounds>, items: &[Sexpr], placed: &Symb
         return;
     };
     let local = match tag {
-        "polyline" | "bezier" => child(items, "pts").and_then(|pts| {
+        "polyline" | "bezier" => pcb_sexpr::find_child_list(items, "pts").and_then(|pts| {
             Bounds::from_points(
                 pts.iter()
                     .skip(1)
@@ -347,16 +347,18 @@ fn include_primitive(bounds: &mut Option<Bounds>, items: &[Sexpr], placed: &Symb
         }),
         "rectangle" => Bounds::from_points(
             [
-                child(items, "start").and_then(parse_xy),
-                child(items, "end").and_then(parse_xy),
+                pcb_sexpr::find_child_list(items, "start").and_then(parse_xy),
+                pcb_sexpr::find_child_list(items, "end").and_then(parse_xy),
             ]
             .into_iter()
             .flatten(),
         ),
-        "circle" => child(items, "center")
+        "circle" => pcb_sexpr::find_child_list(items, "center")
             .and_then(parse_xy)
             .and_then(|center| {
-                let radius = child(items, "radius")?.get(1).and_then(number)?;
+                let radius = pcb_sexpr::find_child_list(items, "radius")?
+                    .get(1)
+                    .and_then(number)?;
                 Bounds::from_points([
                     Point::new(center.x - radius, center.y - radius),
                     Point::new(center.x + radius, center.y + radius),
@@ -365,7 +367,7 @@ fn include_primitive(bounds: &mut Option<Bounds>, items: &[Sexpr], placed: &Symb
         "arc" => Bounds::from_points(
             ["start", "mid", "end"]
                 .into_iter()
-                .filter_map(|tag| child(items, tag).and_then(parse_xy)),
+                .filter_map(|tag| pcb_sexpr::find_child_list(items, tag).and_then(parse_xy)),
         ),
         _ => None,
     };
@@ -563,20 +565,6 @@ fn field_position(
         Side::Bottom => position.y = snap_up(position.y, CONNECTION_GRID_MM),
     }
     position
-}
-
-fn section_unit_style(name: &str) -> Option<(u32, u32)> {
-    let mut parts = name.rsplitn(3, '_');
-    let style = parts.next()?.parse().ok()?;
-    let unit = parts.next()?.parse().ok()?;
-    Some((unit, style))
-}
-
-fn child<'a>(items: &'a [Sexpr], tag: &str) -> Option<&'a [Sexpr]> {
-    items.iter().find_map(|item| {
-        let list = item.as_list()?;
-        (list.first().and_then(Sexpr::as_sym) == Some(tag)).then_some(list)
-    })
 }
 
 fn parse_xy(items: &[Sexpr]) -> Option<Point> {

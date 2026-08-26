@@ -227,6 +227,8 @@ pub struct SchematicIssueContext {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectivityInspection {
     pub analysis: ConnectivityAnalysis,
+    /// The netlist-side graph the analysis compared against.
+    pub expected: ConnectivityGraph,
     pub physical: PhysicalConnectivity,
     pub issues: Vec<SchematicIssueContext>,
 }
@@ -265,6 +267,7 @@ pub fn inspect_schematic(
         .collect();
     Ok(ConnectivityInspection {
         analysis,
+        expected,
         physical,
         issues,
     })

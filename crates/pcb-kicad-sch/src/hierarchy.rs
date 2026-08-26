@@ -187,7 +187,7 @@ pub(crate) fn sheet_id(module_path: &str) -> String {
     deterministic_uuid(format!("zener:module-sheet:{module_path}"))
 }
 
-fn is_descendant(path: &str, ancestor: &str) -> bool {
+pub(crate) fn is_descendant(path: &str, ancestor: &str) -> bool {
     path == ancestor
         || path
             .strip_prefix(ancestor)

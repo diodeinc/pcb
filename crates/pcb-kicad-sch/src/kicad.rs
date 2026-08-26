@@ -1330,7 +1330,7 @@ fn text_effects_to_sexpr(effects: &TextEffects, justify: Option<FieldJustify>) -
     Sexpr::list(items)
 }
 
-fn label_kind_token(kind: LabelKind) -> &'static str {
+pub(crate) fn label_kind_token(kind: LabelKind) -> &'static str {
     match kind {
         LabelKind::Local => "label",
         LabelKind::Global { .. } => "global_label",

@@ -114,11 +114,9 @@ pub(crate) fn reconcile_document(
         linked_modules
             .into_iter()
             .filter(|module| {
-                project_slots.iter().any(|slot| {
-                    slot.component_path()
-                        .strip_prefix(&module.path)
-                        .is_some_and(|suffix| suffix.starts_with('.'))
-                })
+                project_slots
+                    .iter()
+                    .any(|slot| hierarchy::is_descendant(slot.component_path(), &module.path))
             })
             .collect()
     };
@@ -174,7 +172,14 @@ pub(crate) fn reconcile_document(
     let mut placed = placed_symbols_from_document(&document, &expected_slots)?;
     pack_generated_symbols(&mut document, netlist, &mut placed, &relocatable_slots)?;
 
-    add_hierarchy_connectivity(&mut document, netlist, &placed, &hierarchy)?;
+    let net_symbol_specs = net_symbols::specs(netlist)?;
+    add_hierarchy_connectivity(
+        &mut document,
+        netlist,
+        &placed,
+        &net_symbol_specs,
+        &hierarchy,
+    )?;
 
     let current = crate::analysis::inspect_schematic(&document, netlist)?;
     let repair_keys = if complete {
@@ -193,37 +198,26 @@ pub(crate) fn reconcile_document(
         // Tracked by net name, not issue key: satisfying the pin terminal can
         // flip the issue's variant (DisconnectedNet -> MissingPort) while the
         // net still needs its drivers placed.
-        let projected_nets = inspection_before
+        let mut projected_nets = BTreeSet::new();
+        for issue in inspection_before
             .into_iter()
             .flat_map(|inspection| &inspection.issues)
-            .map(|issue| {
-                disconnected_from_projected_symbol(&issue.issue, &project_slots, &placed).map(
-                    |related| {
-                        related
-                            .then(|| match &issue.issue {
-                                SchematicIssue::DisconnectedNet { net_name, .. } => {
-                                    Some(net_name.clone())
-                                }
-                                _ => None,
-                            })
-                            .flatten()
-                    },
-                )
-            })
-            .collect::<Result<Vec<_>>>()?
-            .into_iter()
-            .flatten()
-            .collect::<BTreeSet<_>>();
+        {
+            if let SchematicIssue::DisconnectedNet { net_name, .. } = &issue.issue
+                && disconnected_from_projected_symbol(&issue.issue, &project_slots, &placed)?
+            {
+                projected_nets.insert(net_name.clone());
+            }
+        }
+        // Any selected mutation (projection or removal) shifts issue keys, so
+        // connectivity issues that appear only after the mutation belong to
+        // this repair's scope.
+        let document_mutated =
+            !project_slots.is_empty() || !remove_slots.is_empty() || !remove_locations.is_empty();
         current
             .issues
             .iter()
             .filter(|issue| {
-                // Any selected mutation (projection or removal) shifts issue
-                // keys, so connectivity issues that appear only after the
-                // mutation belong to this repair's scope.
-                let document_mutated = !project_slots.is_empty()
-                    || !remove_slots.is_empty()
-                    || !remove_locations.is_empty();
                 let issue_net = match &issue.issue {
                     SchematicIssue::DisconnectedNet { net_name, .. }
                     | SchematicIssue::MissingPort { net_name, .. } => Some(net_name),
@@ -244,7 +238,14 @@ pub(crate) fn reconcile_document(
             plan.reconnect_nets
                 .extend(named_connected_nets(netlist).map(|net| net.name.clone()));
         }
-        apply_connectivity_repair(&mut document, netlist, &mut placed, default_page, plan)?;
+        apply_connectivity_repair(
+            &mut document,
+            netlist,
+            &mut placed,
+            &net_symbol_specs,
+            default_page,
+            plan,
+        )?;
     }
 
     // Library cleanup is a whole-document concern; a scoped repair must not
@@ -655,11 +656,10 @@ fn linked_modules(netlist: &Schematic) -> Result<Vec<hierarchy::LinkedModule>> {
         }
         let path = crate::canonical_component_path(&instance_ref.instance_path)
             .context("linked module instance has no canonical path")?;
-        if !component_paths.iter().any(|component_path| {
-            component_path
-                .strip_prefix(&path)
-                .is_some_and(|suffix| suffix.starts_with('.'))
-        }) {
+        if !component_paths
+            .iter()
+            .any(|component_path| hierarchy::is_descendant(component_path, &path))
+        {
             continue;
         }
         if path.contains(['/', '\\']) || path.chars().any(char::is_control) {
@@ -827,7 +827,11 @@ fn pack_generated_symbols(
             continue;
         }
         let mut packer = GridPacker::for_page(&document.pages[page_index].paper)?;
-        occupy_page_items_except(&mut packer, &document.pages[page_index], &relocatable)?;
+        let relocatable_ids = relocatable
+            .iter()
+            .map(|slot| slot.symbol_id())
+            .collect::<BTreeSet<_>>();
+        occupy_page_items_except(&mut packer, &document.pages[page_index], &relocatable_ids)?;
 
         let mut items = relocatable
             .into_iter()
@@ -857,15 +861,11 @@ fn occupy_page_items(packer: &mut GridPacker, page: &SchPage) -> Result<()> {
 fn occupy_page_items_except(
     packer: &mut GridPacker,
     page: &SchPage,
-    excluded_slots: &BTreeSet<SymbolSlotKey>,
+    excluded_symbol_ids: &BTreeSet<String>,
 ) -> Result<()> {
     for item in &page.items {
         match item {
-            SchItem::Symbol(symbol)
-                if !excluded_slots
-                    .iter()
-                    .any(|slot| slot.symbol_id() == symbol.id) =>
-            {
+            SchItem::Symbol(symbol) if !excluded_symbol_ids.contains(&symbol.id) => {
                 let Some(definition) = page.library.definitions.get(&symbol.lib_id) else {
                     continue;
                 };
@@ -1126,25 +1126,23 @@ fn net_label_bounds(net_name: &str, target: &PinTarget) -> field_autoplace::Boun
     let text_height = crate::TextEffects::default().font_size.y.abs();
     let length = estimated_label_width(net_name);
     let half_height = text_height * 0.5;
-    let (min, max) = match target.spin {
-        LabelSpin::Left => (
-            Point::new(target.point.x - length, target.point.y - half_height),
-            Point::new(target.point.x, target.point.y + half_height),
-        ),
-        LabelSpin::Right => (
-            Point::new(target.point.x, target.point.y - half_height),
-            Point::new(target.point.x + length, target.point.y + half_height),
-        ),
-        LabelSpin::Up => (
-            Point::new(target.point.x - half_height, target.point.y - length),
-            Point::new(target.point.x + half_height, target.point.y),
-        ),
-        LabelSpin::Bottom => (
-            Point::new(target.point.x - half_height, target.point.y),
-            Point::new(target.point.x + half_height, target.point.y + length),
-        ),
+    // Extend `length` along the spin direction, +/- half a text height on the
+    // perpendicular axis.
+    let (dx, dy): (f64, f64) = match target.spin {
+        LabelSpin::Left => (-1.0, 0.0),
+        LabelSpin::Right => (1.0, 0.0),
+        LabelSpin::Up => (0.0, -1.0),
+        LabelSpin::Bottom => (0.0, 1.0),
     };
-    field_autoplace::Bounds::from_points([min, max]).expect("two points define label bounds")
+    let (px, py) = (dy.abs() * half_height, dx.abs() * half_height);
+    field_autoplace::Bounds::from_points([
+        Point::new(target.point.x - px, target.point.y - py),
+        Point::new(
+            target.point.x + dx * length + px,
+            target.point.y + dy * length + py,
+        ),
+    ])
+    .expect("two points define label bounds")
 }
 
 fn move_placed_symbol(
@@ -1385,6 +1383,7 @@ fn apply_connectivity_repair(
     document: &mut SchDocument,
     netlist: &Schematic,
     placed: &mut BTreeMap<SymbolSlotKey, PlacedSymbol>,
+    net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
     root_page: usize,
     plan: ConnectivityRepairPlan,
 ) -> Result<()> {
@@ -1392,12 +1391,11 @@ fn apply_connectivity_repair(
     for location in &plan.relocate_symbols {
         relocate_symbol(document, placed, location)?;
     }
-    let net_symbol_specs = net_symbols::specs(netlist)?;
     add_connectivity_drivers(
         document,
         netlist,
         placed,
-        &net_symbol_specs,
+        net_symbol_specs,
         root_page,
         &plan.reconnect_nets,
     )?;
@@ -1432,12 +1430,12 @@ fn relocate_symbol(
                 symbol.id, symbol.lib_id
             )
         })?;
-    let mut page_without_symbol = document.pages[page_index].clone();
-    page_without_symbol
-        .items
-        .retain(|item| !matches!(item, SchItem::Symbol(candidate) if candidate.id == symbol.id));
-    let mut packer = GridPacker::for_page(&page_without_symbol.paper)?;
-    occupy_page_items(&mut packer, &page_without_symbol)?;
+    let mut packer = GridPacker::for_page(&document.pages[page_index].paper)?;
+    occupy_page_items_except(
+        &mut packer,
+        &document.pages[page_index],
+        &BTreeSet::from([symbol.id.clone()]),
+    )?;
     let relative = GridRect::from_bounds(
         field_autoplace::symbol_visual_bounds(&symbol, definition)?
             .unwrap_or_else(|| {
@@ -1475,6 +1473,7 @@ fn add_hierarchy_connectivity(
     document: &mut SchDocument,
     netlist: &Schematic,
     placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
+    net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
     plan: &hierarchy::HierarchyPlan,
 ) -> Result<()> {
     if plan.sheets.is_empty() {
@@ -1484,7 +1483,6 @@ fn add_hierarchy_connectivity(
         .map(|net| net.name.clone())
         .collect();
     let targets = connectivity_targets(netlist, placed, &all_nets)?;
-    let net_symbol_specs = net_symbols::specs(netlist)?;
     let page_contexts = page_driver_contexts(document, netlist, plan.root_page())?;
 
     for sheet_plan in &plan.sheets {
@@ -1507,7 +1505,7 @@ fn add_hierarchy_connectivity(
             let key = format!("{}:{port_name}", sheet_plan.module_path);
             upsert_contextual_driver(
                 document,
-                &net_symbol_specs,
+                net_symbol_specs,
                 &page_contexts,
                 sheet_plan.parent_page,
                 &net_name,
@@ -1523,7 +1521,7 @@ fn add_hierarchy_connectivity(
                 ));
             upsert_contextual_driver(
                 document,
-                &net_symbol_specs,
+                net_symbol_specs,
                 &page_contexts,
                 sheet_plan.child_page,
                 &net_name,
@@ -2127,36 +2125,26 @@ fn available_deterministic_id(document: &SchDocument, key: &str) -> String {
 }
 
 fn upsert_label(document: &mut SchDocument, page_index: usize, mut label: Label) -> Result<()> {
-    let mut found = Vec::new();
-    for (found_page, page) in document.pages.iter().enumerate() {
-        for (item_index, item) in page.items.iter().enumerate() {
-            if item.id() == Some(label.id.as_str()) {
-                found.push((found_page, item_index, matches!(item, SchItem::Label(_))));
-            }
-        }
+    // Refresh our previously-composed label in place when it still lives on
+    // the target page.
+    let existing = document.pages[page_index]
+        .items
+        .iter_mut()
+        .find_map(|item| match item {
+            SchItem::Label(existing) if existing.id == label.id => Some(existing),
+            _ => None,
+        });
+    if let Some(existing) = existing {
+        existing.text = label.text;
+        existing.at = label.at;
+        existing.kind = label.kind;
+        existing.spin = label.spin;
+        return Ok(());
     }
-    match found.as_slice() {
-        [] => {}
-        [(found_page, item_index, true)] if *found_page == page_index => {
-            let SchItem::Label(mut existing) = document.pages[page_index].items.remove(*item_index)
-            else {
-                unreachable!("matched label changed before update")
-            };
-            existing.text = label.text;
-            existing.at = label.at;
-            existing.kind = label.kind;
-            existing.spin = label.spin;
-            document.pages[page_index]
-                .items
-                .push(SchItem::Label(existing));
-            return Ok(());
-        }
-        _ => {
-            // The deterministic id now belongs to an item the editor moved to
-            // another page (or reused). That item is no longer ours to
-            // relocate — leave it where it is and mint a fresh id.
-            label.id = available_deterministic_id(document, &label.id);
-        }
+    // The deterministic id may belong to an item the editor moved elsewhere
+    // (or reused). That item is not ours to relocate — mint a fresh id.
+    if contains_id(document, &label.id) {
+        label.id = available_deterministic_id(document, &label.id);
     }
     document.pages[page_index].items.push(SchItem::Label(label));
     Ok(())

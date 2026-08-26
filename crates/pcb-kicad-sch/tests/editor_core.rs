@@ -501,13 +501,11 @@ fn repairing_a_missing_port_never_steals_a_label_from_another_page() {
         .apply(None)
         .unwrap();
     let root_page_id = document.pages[0].id.clone();
-    for item in &mut document.pages[0].items {
-        if let SchItem::Label(label) = item
-            && label.text == "INPUT"
-        {
-            label.kind = LabelKind::Local;
-        }
-    }
+    // Delete the composed INPUT label outright: the deterministic id the
+    // repair would mint must exist only on the other page.
+    document.pages[0]
+        .items
+        .retain(|item| !matches!(item, SchItem::Label(label) if label.text == "INPUT"));
     // Another page owns the id the repair would mint for the root's INPUT
     // context endpoint.
     let taken_id = deterministic_uuid(format!("zener:context-endpoint:{root_page_id}:INPUT:INPUT"));

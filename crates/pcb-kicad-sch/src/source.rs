@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use anyhow::{Context, Result, bail};
 use pcb_sexpr::{PatchSet, Sexpr, formatter::FormatMode};
 
-use crate::{LabelKind, SchDocument, SchItem, SchPage, SymbolLibrary, parse_kicad_sch_page};
+use crate::{SchDocument, SchItem, SchPage, SymbolLibrary, parse_kicad_sch_page};
 
 /// Patch one parsed page into its original KiCad source.
 ///
@@ -97,12 +97,7 @@ fn managed_values(page: &SchPage) -> BTreeMap<String, ManagedValue<'_>> {
             SchItem::Wire(_) => "wire",
             SchItem::Junction(_) => "junction",
             SchItem::NoConnect(_) => "no_connect",
-            SchItem::Label(label) => match label.kind {
-                LabelKind::Local => "label",
-                LabelKind::Global { .. } => "global_label",
-                LabelKind::Hierarchical { .. } => "hierarchical_label",
-                LabelKind::Directive { .. } => "netclass_flag",
-            },
+            SchItem::Label(label) => crate::kicad::label_kind_token(label.kind),
             SchItem::Sheet(_) => "sheet",
             SchItem::Unsupported(_) => continue,
         };
