@@ -66,11 +66,18 @@ def add(item, layer, poly, extra=0):
     )
 
 
+# Per-layer obstacle masks back the in-pad rescue: a through-via at a
+# pad center clears its own face by construction but must still clear
+# the opposite face's copper.
+layer_obstacles = {pcbnew.F_Cu: pcbnew.SHAPE_POLY_SET(), pcbnew.B_Cu: pcbnew.SHAPE_POLY_SET()}
+
 for track in board.GetTracks():
     layer = pcbnew.F_Cu if track.Type() == pcbnew.PCB_VIA_T else track.GetLayer()
     add(track, layer, envelope, ENVELOPE_EXTRA)
     if track.GetNetCode() != gnd:
         add(track, layer, obstacles)
+        if layer in layer_obstacles:
+            add(track, layer, layer_obstacles[layer])
 
 gnd_land_centers = []
 for footprint in board.GetFootprints():
@@ -79,6 +86,7 @@ for footprint in board.GetFootprints():
         add(pad, layer, envelope, ENVELOPE_EXTRA)
         if pad.GetNetCode() != gnd:
             add(pad, layer, obstacles)
+            add(pad, layer, layer_obstacles[layer])
         elif layer == pcbnew.B_Cu:
             gnd_land_centers.append((pad.GetPosition().x, pad.GetPosition().y))
 
@@ -214,10 +222,34 @@ for x, y, top, radius in gnd_pads:
     # so the fill comes within the pad's own radius of its center; an
     # orphan's nearest fill sits a full thermal gap further out.
     touched = fill.Collide(pcbnew.VECTOR2I(x, y), radius + pcbnew.FromMM(0.05))
-    if not touched and all(
-        (ox - x) ** 2 + (oy - y) ** 2 >= RESCUE_SEP * RESCUE_SEP for ox, oy in accepted
-    ):
-        add_via(pcbnew.VECTOR2I(x, y))
+    if not touched:
+        # In-pad candidates: the via clears this face inside its own
+        # pad, but each spot must clear the opposite face's copper and
+        # keep its own distance from every already-placed via.
+        opposite = layer_obstacles[pcbnew.B_Cu if top else pcbnew.F_Cu]
+        step = pcbnew.FromMM(0.35)
+        spots = [(x, y)] + [
+            (x + round(step * math.cos(k * math.pi / 3)), y + round(step * math.sin(k * math.pi / 3)))
+            for k in range(6)
+        ]
+        spot = next(
+            (
+                s
+                for s in spots
+                if not opposite.Collide(pcbnew.VECTOR2I(*s))
+                and all(
+                    (ox - s[0]) ** 2 + (oy - s[1]) ** 2 >= RESCUE_SEP * RESCUE_SEP
+                    for ox, oy in accepted
+                )
+            ),
+            None,
+        )
+        if spot is None:
+            sys.exit(
+                f"no legal rescue via inside the orphaned GND pad at "
+                f"({pcbnew.ToMM(x):.2f}, {pcbnew.ToMM(y):.2f})"
+            )
+        add_via(pcbnew.VECTOR2I(*spot))
 
 for zone in board.Zones():
     if zone.GetNetCode() != gnd:

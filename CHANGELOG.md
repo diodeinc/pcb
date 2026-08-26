@@ -12,6 +12,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Add `pcb dfm` for `.zen` boards.
 
+### Changed
+
+- The interposer mate constellation is S13: uniform 2×3 blocks with corner mate-detect loops.
+
 ## [0.4.37] - 2026-08-26
 
 ### Added

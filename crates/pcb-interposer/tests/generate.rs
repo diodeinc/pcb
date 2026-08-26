@@ -156,7 +156,7 @@ fn generates_a_parseable_interposer() {
     assert_eq!(panel.fids_bottom.len(), 1);
     assert_eq!(panel.outline.len(), 8);
 
-    let lands = pcb_interposer::pattern::oriented_s11(panel.width, panel.height);
+    let lands = pcb_interposer::pattern::oriented_s13(panel.width, panel.height);
     let contacts =
         pcb_interposer::contacts::extract_contacts(&ipc, panel.height).expect("contacts");
     let plan = pcb_interposer::plan::plan(contacts, &lands, &[]).expect("plan");
@@ -174,17 +174,24 @@ fn generates_a_parseable_interposer() {
             })
             .count()
     };
-    // 5 holes + 2 fids + 112 lands + 12 pogos (2 boards × 6 contacts).
-    assert_eq!(count("footprint"), 131);
+    // 5 holes + 2 fids + 156 lands + 12 pogos (2 boards × 6 contacts).
+    assert_eq!(count("footprint"), 175);
     assert_eq!(count("zone"), 2);
     // Stitch vias are the route step's job; the emitted board has none.
     assert_eq!(count("via"), 0);
+    // The four corner mate-detect pairs come pre-shorted.
+    assert_eq!(count("segment"), 4);
+    assert_eq!(
+        text.matches("\"DETECT_").count(),
+        12,
+        "table entry + two pads, x4"
+    );
     assert_eq!(count("gr_arc"), 4);
     assert_eq!(count("gr_line"), 4);
-    // Net table: no-net, GND, and ten planned nets.
-    assert_eq!(count("net"), 12);
-    // GND: the table entry, 24 lands, and 2 gnd pogos.
-    assert_eq!(text.matches("(net 1 \"GND\")").count(), 27);
+    // Net table: no-net, GND, ten planned nets, four detect loops.
+    assert_eq!(count("net"), 16);
+    // GND: the table entry, 60 lands, and 2 gnd pogos.
+    assert_eq!(text.matches("(net 1 \"GND\")").count(), 63);
     // Every planned net appears on both faces: its pogo pad and its land.
     for board in [0, 1] {
         let net = format!("\"B{board}.TP_DP.TP\"");
@@ -208,7 +215,7 @@ fn generates_a_parseable_interposer() {
 fn plans_the_fixture_map() {
     let ipc = ipc2581::Ipc2581::parse(PANEL).expect("panel fixture parses");
     let panel = pcb_interposer::panel::extract(&ipc).expect("panel extracts");
-    let lands = pcb_interposer::pattern::oriented_s11(panel.width, panel.height);
+    let lands = pcb_interposer::pattern::oriented_s13(panel.width, panel.height);
     let contacts =
         pcb_interposer::contacts::extract_contacts(&ipc, panel.height).expect("contacts");
     // 2 board instances × 6 marked components.
