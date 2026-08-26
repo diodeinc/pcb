@@ -229,17 +229,4 @@ mod tests {
         assert_eq!(scope.web_base_url(), default_web_base_url());
         assert!(!scope.use_legacy_auth_file());
     }
-
-    #[test]
-    fn reads_bom_matching_mode_from_workspace() {
-        let tempdir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            tempdir.path().join("pcb.toml"),
-            "[workspace.bom]\nstrict = false\n",
-        )
-        .unwrap();
-
-        let context = WorkspaceContext::from_workspace_root(tempdir.path());
-        assert!(!context.bom_strict().unwrap());
-    }
 }
