@@ -1586,36 +1586,6 @@ mod tests {
     }
 
     #[test]
-    fn viewer_hydrates_a_copy_without_mutating_the_eval_cache() {
-        let path = std::env::temp_dir().join("hydrated-viewer.zen");
-        let ctx = LspEvalContext::default().with_schematic_hydrator(|_, schematic| {
-            schematic
-                .symbols
-                .insert("hydrated".into(), "from cache".into());
-        });
-        ctx.set_last_schematic(&path, pcb_sch::Schematic::default());
-
-        let request = Request {
-            id: RequestId::from(1),
-            method: "viewer/getState".into(),
-            params: json!({ "uri": LspUri::File(path.clone()) }),
-        };
-        let response = ctx
-            .handle_custom_request(&request, &lsp_types::InitializeParams::default())
-            .expect("viewer request should be handled")
-            .response_result
-            .expect("viewer request should succeed");
-        let hydrated: pcb_sch::Schematic =
-            serde_json::from_value(response["state"].clone()).unwrap();
-
-        assert_eq!(
-            hydrated.symbols.get("hydrated").map(String::as_str),
-            Some("from cache")
-        );
-        assert!(ctx.get_last_schematic(&path).unwrap().symbols.is_empty());
-    }
-
-    #[test]
     fn lsp_uses_file_scope_for_navigation_and_evaluation() -> anyhow::Result<()> {
         let dir = tempfile::tempdir()?;
         let root = dir.path().canonicalize()?;

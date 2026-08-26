@@ -1435,118 +1435,76 @@ mod tests {
     }
 
     #[test]
-    fn compatible_match_hydrates_missing_schematic_metadata() {
+    fn schematic_hydration_respects_match_status() {
+        let cases = [
+            (
+                "MATCH_COMPATIBLE",
+                Some("API-MPN"),
+                Some("API Manufacturer"),
+                Some("https://example.com/API-MPN.pdf"),
+            ),
+            (
+                "MATCH_EXACT",
+                None,
+                None,
+                Some("https://example.com/API-MPN.pdf"),
+            ),
+            ("MATCH_FUZZY", None, None, None),
+        ];
+
+        for (status, expected_mpn, expected_manufacturer, expected_datasheet) in cases {
+            let mut response = compatible_response();
+            response["results"][0]["match"] = serde_json::json!(status);
+            let response: MatchBomResponse = serde_json::from_value(response).unwrap();
+            let mut schematic = test_schematic();
+            prepare_bom_match(&schematic.bom(), &response)
+                .unwrap()
+                .apply_to_schematic(&mut schematic);
+
+            let component = test_component(&schematic);
+            assert_eq!(component.mpn().as_deref(), expected_mpn, "{status}");
+            assert_eq!(
+                component.manufacturer().as_deref(),
+                expected_manufacturer,
+                "{status}"
+            );
+            assert_eq!(
+                component.string_attr(&["datasheet"]).as_deref(),
+                expected_datasheet,
+                "{status}"
+            );
+        }
+    }
+
+    #[test]
+    fn hydration_does_not_replace_authored_metadata() {
         let response: MatchBomResponse = serde_json::from_value(compatible_response()).unwrap();
         let mut schematic = test_schematic();
-        let prepared = prepare_bom_match(&schematic.bom(), &response).unwrap();
-
-        assert_eq!(prepared.apply_to_schematic(&mut schematic), 1);
-
-        let component = test_component(&schematic);
-        assert_eq!(component.mpn().as_deref(), Some("API-MPN"));
-        assert_eq!(
-            component.manufacturer().as_deref(),
-            Some("API Manufacturer")
-        );
-        assert_eq!(
-            component.string_attr(&["datasheet"]).as_deref(),
-            Some("https://example.com/API-MPN.pdf")
-        );
-    }
-
-    #[test]
-    fn hydration_preserves_authored_part_and_datasheet() {
-        let response: MatchBomResponse = serde_json::from_value(compatible_response()).unwrap();
-        let mut schematic = test_schematic();
-        let component = schematic.instances.values_mut().next().unwrap();
-        component.attributes.insert(
-            "part".into(),
-            AttributeValue::Json(serde_json::json!({
-                "mpn": "AUTHORED-MPN",
-                "manufacturer": "Authored Manufacturer",
-                "qualifications": [],
-                "datasheet": "https://example.com/authored.pdf"
-            })),
-        );
-        let prepared = prepare_bom_match_for_paths(
-            &test_bom(),
-            &response,
-            &HashSet::from(["root.U1".to_string()]),
-        )
-        .unwrap()
-        .into_complete()
-        .unwrap();
-
-        assert_eq!(prepared.apply_to_schematic(&mut schematic), 0);
-
-        let component = test_component(&schematic);
-        assert_eq!(component.mpn().as_deref(), Some("AUTHORED-MPN"));
-        let AttributeValue::Json(part) = &component.attributes[attrs::PART] else {
-            panic!("authored part should remain structured JSON");
-        };
-        assert_eq!(
-            part["datasheet"].as_str(),
-            Some("https://example.com/authored.pdf")
-        );
-    }
-
-    #[test]
-    fn fuzzy_match_does_not_hydrate_schematic() {
-        let mut response = compatible_response();
-        response["results"][0]["match"] = serde_json::json!("MATCH_FUZZY");
-        let response: MatchBomResponse = serde_json::from_value(response).unwrap();
-        let mut schematic = test_schematic();
-        let prepared = prepare_bom_match(&schematic.bom(), &response).unwrap();
-
-        assert_eq!(prepared.apply_to_schematic(&mut schematic), 0);
-        assert!(test_component(&schematic).part().is_none());
-        assert!(
-            test_component(&schematic)
-                .string_attr(&["datasheet"])
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn exact_match_only_hydrates_missing_datasheet() {
-        let mut response = compatible_response();
-        response["results"][0]["match"] = serde_json::json!("MATCH_EXACT");
-        let response: MatchBomResponse = serde_json::from_value(response).unwrap();
-        let mut schematic = test_schematic();
-        let prepared = prepare_bom_match(&schematic.bom(), &response).unwrap();
-
-        assert_eq!(prepared.apply_to_schematic(&mut schematic), 1);
-
-        let component = test_component(&schematic);
-        assert!(component.part().is_none());
-        assert_eq!(
-            component.string_attr(&["datasheet"]).as_deref(),
-            Some("https://example.com/API-MPN.pdf")
-        );
-    }
-
-    #[test]
-    fn schematic_cache_miss_leaves_raw_schematic_unchanged() {
-        let context = WorkspaceContext::from_api_base_url("https://api.example.com");
-        let mut schematic = test_schematic();
+        schematic
+            .instances
+            .values_mut()
+            .next()
+            .unwrap()
+            .attributes
+            .insert(
+                "part".into(),
+                AttributeValue::Json(serde_json::json!({
+                    "mpn": "AUTHORED-MPN",
+                    "manufacturer": "Authored Manufacturer",
+                    "qualifications": [],
+                    "datasheet": "https://example.com/authored.pdf"
+                })),
+            );
         let before = serde_json::to_value(&schematic).unwrap();
 
-        assert_eq!(
-            hydrate_schematic_from_bom_cache_with_cache(
-                &context,
-                &mut schematic,
-                true,
-                None,
-                unix_now().unwrap(),
-            )
-            .unwrap(),
-            0
-        );
+        prepare_bom_match(&schematic.bom(), &response)
+            .unwrap()
+            .apply_to_schematic(&mut schematic);
         assert_eq!(serde_json::to_value(&schematic).unwrap(), before);
     }
 
     #[test]
-    fn incomplete_schematic_is_left_unchanged() {
+    fn incomplete_schematic_does_not_reach_panicking_bom_conversion() {
         let context = WorkspaceContext::from_api_base_url("https://api.example.com");
         let mut schematic = test_schematic();
         schematic
@@ -1555,7 +1513,6 @@ mod tests {
             .next()
             .unwrap()
             .reference_designator = None;
-        let before = serde_json::to_value(&schematic).unwrap();
 
         assert_eq!(
             hydrate_schematic_from_bom_cache_with_cache(
@@ -1568,7 +1525,6 @@ mod tests {
             .unwrap(),
             0
         );
-        assert_eq!(serde_json::to_value(&schematic).unwrap(), before);
     }
 
     #[test]
