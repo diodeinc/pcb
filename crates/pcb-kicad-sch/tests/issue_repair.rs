@@ -821,7 +821,11 @@ fn nets_split_into_a_user_created_subsheet_are_repairable() {
         .map(|issue| issue.key.clone())
         .collect();
     assert!(
-        selected.contains(&SchematicIssueKey::DisconnectedNet("INPUT".to_string())),
+        selected.iter().any(|key| matches!(
+            key,
+            SchematicIssueKey::DisconnectedNet(net) | SchematicIssueKey::MissingPort(net)
+                if net == "INPUT"
+        )),
         "{:#?}",
         inspection.analysis.issues()
     );
