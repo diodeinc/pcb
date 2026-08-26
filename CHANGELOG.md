@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - Add the `standard` DFM PDK with copper layer-count checks.
+- `pcb apply schematic` reconciles a linked KiCad schematic with its design, planning and applying per-issue repairs; builds of linked projects report schematic-equivalence diagnostics.
 
 ### Changed
 
@@ -104,7 +105,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - IPC-derived Gerbers no longer apply padstack shape offsets twice to rotated pads.
 - Board-array rail fiducials now distinguish top and bottom surfaces.
-- Automatic schematic repairs place new items near the page center instead of a corner.
 - BOM generation no longer panics when truncating UTF-8 component descriptions.
 - Nested modules retain group ownership for copied routing and graphics during layout synchronization.
 - Distinct KiCad signal names that sanitize to the same Starlark identifier are now uniquified instead of silently merging onto one net.

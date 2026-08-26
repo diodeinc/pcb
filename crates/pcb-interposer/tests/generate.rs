@@ -237,13 +237,7 @@ fn plans_the_fixture_map() {
                 // Role-faithful: a contact lands on its own role's land
                 // (low-speed collapses onto Ls).
                 let land_role = lands[land].role;
-                let expected = match contact.role {
-                    pcb_interposer::pattern::Role::Vtarget => {
-                        pcb_interposer::pattern::Role::Vtarget
-                    }
-                    role => role,
-                };
-                assert_eq!(land_role, expected);
+                assert_eq!(land_role, contact.role);
                 assert_eq!(
                     binding.net,
                     format!(

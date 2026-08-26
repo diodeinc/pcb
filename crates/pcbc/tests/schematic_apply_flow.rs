@@ -658,7 +658,7 @@ fn projects_the_exact_symbol_and_library_definition_set() {
 }
 
 #[test]
-fn separates_root_interface_aliases_on_wired_stubs() {
+fn root_interface_aliases_drive_their_component_pins() {
     let workspace = tempfile::tempdir().unwrap();
     let project_dir = workspace.path().join("hardware");
     let mut netlist = linked_fixture(&project_dir);
@@ -677,42 +677,24 @@ fn separates_root_interface_aliases_on_wired_stubs() {
         })
         .expect("root interface label");
     assert!(matches!(hierarchical.kind, LabelKind::Hierarchical { .. }));
-    assert_eq!(hierarchical.spin, LabelSpin::Right);
-    let wire = page
-        .items
-        .iter()
-        .find_map(|item| match item {
-            SchItem::Wire(wire) if wire.a == hierarchical.at || wire.b == hierarchical.at => {
-                Some(wire)
-            }
-            _ => None,
-        })
-        .expect("interface stub wire");
-    let net_anchor = if wire.a == hierarchical.at {
-        wire.b
-    } else {
-        wire.a
-    };
-    let net_label = page
-        .items
-        .iter()
-        .find_map(|item| match item {
-            SchItem::Label(label)
-                if label.text == "LEFT"
-                    && matches!(label.kind, LabelKind::Local)
-                    && label.at == net_anchor =>
-            {
-                Some(label)
-            }
-            _ => None,
-        })
-        .expect("interface net label");
-    assert_eq!(net_label.spin, LabelSpin::Left);
-    assert_ne!(net_label.at, hierarchical.at);
-    assert_on_connection_grid(net_label.at);
     assert_on_connection_grid(hierarchical.at);
-    assert_on_connection_grid(wire.a);
-    assert_on_connection_grid(wire.b);
+    // The interface label anchors directly on the component pin it drives.
+    let on_pin = page.items.iter().any(|item| match item {
+        SchItem::Symbol(symbol) => page
+            .library
+            .definitions
+            .get(&symbol.lib_id)
+            .and_then(|definition| definition.placed_pins(symbol).ok())
+            .is_some_and(|pins| pins.iter().any(|pin| pin.point == hierarchical.at)),
+        _ => false,
+    });
+    assert!(on_pin, "interface label must sit on a component pin");
+    assert!(
+        inspect_schematic(&project.document, &netlist)
+            .unwrap()
+            .analysis
+            .is_equivalent()
+    );
 }
 
 #[test]
