@@ -28,9 +28,21 @@ pub struct Availability {
     /// The matching service found no component for the specified MPN.
     #[serde(skip_serializing_if = "std::ops::Not::not", default)]
     pub no_match: bool,
+    /// Offer selected by the API sourcing planner.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selected_offer_id: Option<String>,
     /// All raw offers for detailed display
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub offers: Vec<Offer>,
+}
+
+impl Availability {
+    pub fn selected_offer(&self) -> Option<&Offer> {
+        let selected_offer_id = self.selected_offer_id.as_deref()?;
+        self.offers
+            .iter()
+            .find(|offer| offer.id.as_deref() == Some(selected_offer_id))
+    }
 }
 
 /// Compact availability summary for a region
@@ -62,10 +74,18 @@ pub struct AvailabilitySummary {
 /// Distributor offer with live pricing/stock data
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Offer {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     pub region: String,
     pub distributor: String,
     pub stock: i32,
     pub price: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub part_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mpn: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manufacturer: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub datasheet_url: Option<String>,
 }

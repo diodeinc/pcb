@@ -1604,11 +1604,15 @@ mod tests {
             properties: Default::default(),
         };
         let offer = || Offer {
+            id: None,
             region: "US".to_string(),
             distributor: "test".to_string(),
             stock: 1,
             price: Some(1.0),
             part_id: None,
+            mpn: None,
+            manufacturer: None,
+            datasheet_url: None,
         };
 
         let resistor = part("Yageo", "RC0603FR-0710KL");
