@@ -7,7 +7,6 @@ mod cache;
 pub mod component;
 mod component_api;
 pub mod datasheet;
-pub use pcb_diode_uri as diode_uri;
 mod download_support;
 mod endpoint;
 mod git_auth;
@@ -25,9 +24,9 @@ pub use bom::{
 };
 pub use component::{SearchArgs, execute as execute_search, execute_component_from_local_dir};
 pub use component_api::{ComponentArgs, execute_component};
-pub use diode_uri::{DiodeUri, DiodeUriParseError, SandboxFileUri, is_diode_uri};
 pub use endpoint::WorkspaceContext;
 pub use kicad_symbols::KicadSymbolsClient;
+pub use pcb_diode_uri::{DiodeUri, DiodeUriParseError, SandboxFileUri, is_diode_uri};
 pub use registry::{
     DigikeyClassifications, DigikeyData, DigikeyPriceBreak, ModuleRelations, ParsedQuery,
     RegistryClient, RegistryInfo, RegistryModule, RegistryModuleDependency,
