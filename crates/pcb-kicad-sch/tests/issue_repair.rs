@@ -688,3 +688,55 @@ fn emptied_module_page_is_repopulated_not_duplicated() {
         ));
     assert!(repopulated, "the module's symbols return to their page");
 }
+
+/// The LTC regression: a hierarchical port label dragged onto another net's
+/// pin shorts the two ports. No single island looks inconsistent on its own
+/// and the offending label is a hierarchy alias (not a named driver), so the
+/// gated searches see nothing — the teardown fallback must still repair it.
+#[test]
+fn short_from_a_mislabeled_hierarchical_label_is_repairable() {
+    let netlist = common::compile_fixture("hierarchy", "root_interface.zen");
+    let mut document = plan_reconciliation(None, &netlist, "RootInterface.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    // Drag the INPUT port label onto the OUTPUT pin.
+    let output_at = document.pages[0]
+        .items
+        .iter()
+        .find_map(|item| match item {
+            SchItem::Label(label) if label.text == "OUTPUT" => Some(label.at),
+            _ => None,
+        })
+        .expect("composed OUTPUT label");
+    for item in &mut document.pages[0].items {
+        if let SchItem::Label(label) = item
+            && label.text == "INPUT"
+        {
+            label.at = output_at;
+        }
+    }
+
+    let inspection = inspect_schematic(&document, &netlist).unwrap();
+    let shorted = inspection
+        .issues
+        .iter()
+        .find(|issue| matches!(issue.issue, SchematicIssue::Shorted { .. }))
+        .expect("mislabeled port shorts the nets");
+
+    let repaired = plan_repairs(
+        &document,
+        &netlist,
+        &inspection,
+        BTreeSet::from([shorted.key.clone()]),
+    )
+    .expect("shorts caused by mislabeled labels are repairable")
+    .apply(Some(&document))
+    .unwrap();
+    let after = inspect_schematic(&repaired, &netlist).unwrap();
+    assert!(
+        after.analysis.is_equivalent(),
+        "{:#?}",
+        after.analysis.issues()
+    );
+}

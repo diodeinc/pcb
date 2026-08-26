@@ -151,7 +151,7 @@ pub(crate) fn plan_connectivity_repair(
             continue;
         }
 
-        let fallback = repair_region_items(issue, &expected, &current_observed.islands);
+        let fallback = repair_region_items(issue, &current_observed.islands);
         if fallback.is_empty() {
             let locations = relocation_candidates(document, issue, &current_observed.islands);
             if locations.is_empty() {
@@ -233,9 +233,14 @@ fn collect_terminal_symbols(
     }
 }
 
+/// Teardown fallback: every removable item across the issue's islands. This
+/// is deliberately ungated — the affected nets are queued for driver
+/// reconnection, which rebuilds correct connectivity from the component pins.
+/// Not minimal, but it makes every wiring-caused short repairable, including
+/// shorts created by mislabeled hierarchical labels that no single-item
+/// search can attribute to one island.
 fn repair_region_items(
     issue: &SchematicIssue,
-    expected: &ConnectivityGraph,
     islands: &std::collections::BTreeMap<crate::connectivity::IslandRef, PhysicalIsland>,
 ) -> BTreeSet<ConnectivityItemRef> {
     let issue_islands = match issue {
@@ -243,29 +248,13 @@ fn repair_region_items(
         | SchematicIssue::UnexpectedConnection { islands, .. } => islands,
         _ => return BTreeSet::new(),
     };
-    let mut removals = BTreeSet::new();
-    for island in issue_islands
+    issue_islands
         .iter()
         .filter_map(|island| islands.get(island))
-        .filter(|island| repair_island(issue, expected, island))
-    {
-        removals.extend(
-            island
-                .items
-                .iter()
-                .filter(|item| item.is_physical_connector())
-                .cloned(),
-        );
-        removals.extend(
-            island
-                .named_drivers
-                .values()
-                .flatten()
-                .filter(|item| item.is_removable_name_driver())
-                .cloned(),
-        );
-    }
-    removals
+        .flat_map(|island| island.items.iter())
+        .filter(|item| item.is_removable())
+        .cloned()
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -390,7 +379,7 @@ fn unrepairable_issue(document: &SchDocument, issue: &SchematicIssue) -> anyhow:
             )
         }
         SchematicIssue::Shorted { net_names, .. } => anyhow::anyhow!(
-            "KiCad shorts nets {} but no single power symbol, wire, or junction removal repairs the short",
+            "KiCad shorts nets {} without any removable wire, junction, label, or power symbol joining them",
             net_names.iter().cloned().collect::<Vec<_>>().join(", ")
         ),
         _ => anyhow::anyhow!("KiCad connectivity issue cannot be repaired: {issue:?}"),
@@ -558,6 +547,16 @@ fn item_matches(page_id: &str, item: &SchItem, item_ref: &ConnectivityItemRef) -
 impl ConnectivityItemRef {
     fn is_removable_name_driver(&self) -> bool {
         matches!(self, Self::Label { .. } | Self::Symbol { .. })
+    }
+
+    /// Anything the repair teardown may delete: labels of any kind, wires,
+    /// junctions, and driver symbols. Component symbols never appear as
+    /// connectivity items, and sheet pins belong to their sheet's structure.
+    fn is_removable(&self) -> bool {
+        matches!(
+            self,
+            Self::Label { .. } | Self::Wire { .. } | Self::Junction { .. } | Self::Symbol { .. }
+        )
     }
 
     fn is_symbol(&self) -> bool {
