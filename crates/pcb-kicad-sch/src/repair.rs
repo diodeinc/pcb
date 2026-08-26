@@ -60,7 +60,8 @@ pub(crate) fn plan_connectivity_repair(
 
     for context in &selected {
         match &context.issue {
-            SchematicIssue::DisconnectedNet { net_name, .. } => {
+            SchematicIssue::DisconnectedNet { net_name, .. }
+            | SchematicIssue::MissingPort { net_name, .. } => {
                 reconnect_nets.insert(net_name.clone());
             }
             SchematicIssue::UnexpectedNet { net_name, islands } => {
@@ -301,6 +302,7 @@ fn repair_problem_counts(issues: &[SchematicIssue]) -> BTreeMap<RepairProblem, u
                 }
             }
             SchematicIssue::DisconnectedNet { .. }
+            | SchematicIssue::MissingPort { .. }
             | SchematicIssue::UnboundSymbol { .. }
             | SchematicIssue::MissingSymbol { .. }
             | SchematicIssue::DuplicateSymbol { .. }

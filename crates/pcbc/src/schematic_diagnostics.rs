@@ -107,6 +107,15 @@ fn issue_diagnostic(source_path: &Path, issue: &SchematicIssue) -> Diagnostic {
                 format!("KiCad net '{net_name}' is disconnected: {detail}"),
             )
         }
+        SchematicIssue::MissingPort {
+            net_name, ports, ..
+        } => (
+            "sch.missing_port",
+            format!(
+                "KiCad net '{net_name}' is connected but does not expose interface port(s) {}: add a hierarchical label on the top-level page",
+                ports.join(", ")
+            ),
+        ),
         SchematicIssue::UnexpectedNet { net_name, .. } => (
             "sch.unexpected_net",
             format!("KiCad schematic contains unexpected net '{net_name}'"),

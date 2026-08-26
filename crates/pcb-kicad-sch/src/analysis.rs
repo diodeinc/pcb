@@ -69,6 +69,14 @@ pub enum SchematicIssue {
         islands: Vec<IslandRef>,
         missing_terminals: Vec<Terminal>,
     },
+    /// The net's pins all connect, but the interface port(s) the netlist
+    /// declares for it have no hierarchical label on a top-level page, so
+    /// the module no longer exposes the net to a consuming design.
+    MissingPort {
+        net_name: String,
+        islands: Vec<IslandRef>,
+        ports: Vec<String>,
+    },
     UnexpectedNet {
         net_name: String,
         islands: Vec<IslandRef>,
@@ -99,6 +107,7 @@ pub enum SchematicIssueKey {
     UnexpectedSymbol(SymbolSlotKey),
     UnboundSymbol(SymbolLocation),
     DisconnectedNet(String),
+    MissingPort(String),
     UnexpectedNet {
         net_name: String,
         items: BTreeSet<ConnectivityItemRef>,
@@ -212,6 +221,14 @@ pub(crate) fn issue_context(
             ..
         } => (
             SchematicIssueKey::DisconnectedNet(net_name.clone()),
+            island_items(issue_islands),
+        ),
+        SchematicIssue::MissingPort {
+            net_name,
+            islands: issue_islands,
+            ..
+        } => (
+            SchematicIssueKey::MissingPort(net_name.clone()),
             island_items(issue_islands),
         ),
         SchematicIssue::UnexpectedNet {
@@ -622,12 +639,34 @@ fn collect_connection_issues(
         }
     }
 
-    for net in nets.values().filter(|net| net.is_disconnected()) {
-        issues.push(SchematicIssue::DisconnectedNet {
-            net_name: net.name.clone(),
-            islands: net.islands.clone(),
-            missing_terminals: net.missing_terminals.clone(),
-        });
+    for net in nets.values() {
+        // Missing interface ports are their own issue: the placed geometry
+        // can be fully connected while the module's port is unrepresented.
+        let (ports, missing_terminals): (Vec<_>, Vec<_>) = net
+            .missing_terminals
+            .iter()
+            .cloned()
+            .partition(|terminal| matches!(terminal, Terminal::InterfacePort { .. }));
+        if net.connected_islands.len() > 1 || !missing_terminals.is_empty() {
+            issues.push(SchematicIssue::DisconnectedNet {
+                net_name: net.name.clone(),
+                islands: net.islands.clone(),
+                missing_terminals,
+            });
+        }
+        if !ports.is_empty() {
+            issues.push(SchematicIssue::MissingPort {
+                net_name: net.name.clone(),
+                islands: net.islands.clone(),
+                ports: ports
+                    .into_iter()
+                    .map(|terminal| match terminal {
+                        Terminal::InterfacePort { name } => name,
+                        Terminal::ComponentPin { .. } => unreachable!("partitioned above"),
+                    })
+                    .collect(),
+            });
+        }
     }
 }
 

@@ -240,6 +240,7 @@ fn is_connectivity_issue(issue: &SchematicIssue) -> bool {
     matches!(
         issue,
         SchematicIssue::DisconnectedNet { .. }
+            | SchematicIssue::MissingPort { .. }
             | SchematicIssue::UnexpectedNet { .. }
             | SchematicIssue::UnexpectedConnection { .. }
             | SchematicIssue::Shorted { .. }
@@ -338,6 +339,7 @@ fn repair_targets(
                     remove_locations.insert(location.clone());
                 }
                 SchematicIssue::DisconnectedNet { .. }
+                | SchematicIssue::MissingPort { .. }
                 | SchematicIssue::UnexpectedNet { .. }
                 | SchematicIssue::UnexpectedConnection { .. }
                 | SchematicIssue::Shorted { .. } => {

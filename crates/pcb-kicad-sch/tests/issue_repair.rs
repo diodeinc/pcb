@@ -62,6 +62,7 @@ fn issue_kind(issue: &SchematicIssue) -> &'static str {
         SchematicIssue::UnexpectedSymbol { .. } => "unexpected-managed",
         SchematicIssue::UnboundSymbol { .. } => "unbound",
         SchematicIssue::DisconnectedNet { .. } => "disconnected-net",
+        SchematicIssue::MissingPort { .. } => "missing-port",
         SchematicIssue::UnexpectedNet { .. } => "unexpected-net",
         SchematicIssue::Shorted { .. } => "short",
         SchematicIssue::UnexpectedConnection { .. } => "unexpected-connection",

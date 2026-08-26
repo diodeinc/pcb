@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use pcb_kicad_sch::{
     Label, LabelKind, Point, SchDocument, SchItem, Symbol, SymbolDefinition, SymbolSlotKey,
-    analysis::inspect_schematic,
+    analysis::{SchematicIssue, inspect_schematic},
     connectivity::{PhysicalConnectivity, PinVisibility},
     deterministic_uuid,
     reconcile::plan_reconciliation,
@@ -456,4 +456,35 @@ fn managed_pin_at(document: &SchDocument, point: Point) -> (SymbolSlotKey, Strin
         })
         .next()
         .unwrap_or_else(|| panic!("missing managed pin at {point:?}"))
+}
+
+#[test]
+fn connected_net_missing_its_port_label_reports_missing_port() {
+    let netlist = common::compile_fixture("hierarchy", "root_interface.zen");
+    let mut document = plan_reconciliation(None, &netlist, "RootInterface.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    // Demote the INPUT port's hierarchical label to a local label: every pin
+    // stays connected, but the module no longer exposes the port.
+    for page in &mut document.pages {
+        for item in &mut page.items {
+            if let SchItem::Label(label) = item
+                && label.text == "INPUT"
+            {
+                label.kind = LabelKind::Local;
+            }
+        }
+    }
+
+    let inspection = inspect_schematic(&document, &netlist).unwrap();
+    assert!(
+        matches!(
+            inspection.analysis.issues(),
+            [SchematicIssue::MissingPort { net_name, ports, .. }]
+                if net_name == "INPUT" && ports == &["INPUT".to_string()]
+        ),
+        "{:#?}",
+        inspection.analysis.issues()
+    );
 }
