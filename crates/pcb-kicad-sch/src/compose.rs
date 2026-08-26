@@ -189,12 +189,26 @@ pub(crate) fn reconcile_document(
             .flat_map(|inspection| &inspection.issues)
             .map(|issue| issue.key.clone())
             .collect::<BTreeSet<_>>();
-        let projected_disconnects = inspection_before
+        // Nets whose disconnection involves a symbol this repair projects.
+        // Tracked by net name, not issue key: satisfying the pin terminal can
+        // flip the issue's variant (DisconnectedNet -> MissingPort) while the
+        // net still needs its drivers placed.
+        let projected_nets = inspection_before
             .into_iter()
             .flat_map(|inspection| &inspection.issues)
             .map(|issue| {
-                disconnected_from_projected_symbol(&issue.issue, &project_slots, &placed)
-                    .map(|related| related.then(|| issue.key.clone()))
+                disconnected_from_projected_symbol(&issue.issue, &project_slots, &placed).map(
+                    |related| {
+                        related
+                            .then(|| match &issue.issue {
+                                SchematicIssue::DisconnectedNet { net_name, .. } => {
+                                    Some(net_name.clone())
+                                }
+                                _ => None,
+                            })
+                            .flatten()
+                    },
+                )
             })
             .collect::<Result<Vec<_>>>()?
             .into_iter()
@@ -210,8 +224,13 @@ pub(crate) fn reconcile_document(
                 let document_mutated = !project_slots.is_empty()
                     || !remove_slots.is_empty()
                     || !remove_locations.is_empty();
+                let issue_net = match &issue.issue {
+                    SchematicIssue::DisconnectedNet { net_name, .. }
+                    | SchematicIssue::MissingPort { net_name, .. } => Some(net_name),
+                    _ => None,
+                };
                 selected_connectivity.contains(&issue.key)
-                    || projected_disconnects.contains(&issue.key)
+                    || issue_net.is_some_and(|net| projected_nets.contains(net))
                     || (document_mutated
                         && !before_keys.contains(&issue.key)
                         && is_connectivity_issue(&issue.issue))

@@ -841,3 +841,41 @@ fn nets_split_into_a_user_created_subsheet_are_repairable() {
         after.analysis.issues()
     );
 }
+
+/// Placing a missing symbol must also drive its nets: with the pin terminal
+/// satisfied, the net's remaining defect flips from DisconnectedNet to
+/// MissingPort, and the projection scope must still cover it so the
+/// hierarchical interface labels appear with the placement.
+#[test]
+fn placing_a_missing_symbol_drives_its_interface_labels() {
+    let netlist = common::compile_fixture("hierarchy", "root_interface.zen");
+    let mut document = plan_reconciliation(None, &netlist, "RootInterface.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    // Everything deleted: an empty page.
+    document.pages[0].items.clear();
+
+    let inspection = inspect_schematic(&document, &netlist).unwrap();
+    let missing = inspection
+        .issues
+        .iter()
+        .find(|issue| matches!(issue.key, SchematicIssueKey::MissingSymbol(_)))
+        .expect("R1 is missing");
+
+    let repaired = plan_repairs(
+        &document,
+        &netlist,
+        &inspection,
+        BTreeSet::from([missing.key.clone()]),
+    )
+    .expect("plan placement")
+    .apply(Some(&document))
+    .unwrap();
+    let after = inspect_schematic(&repaired, &netlist).unwrap();
+    assert!(
+        after.analysis.is_equivalent(),
+        "{:#?}",
+        after.analysis.issues()
+    );
+}
