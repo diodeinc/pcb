@@ -20,10 +20,11 @@
 //! - **LS** (signal): four low-speed lands with GND seeded at opposite
 //!   corners.
 //!
-//! The vertical bands run USB PWR PWR USB USB PWR PWR USB, putting a
-//! USB block (and its detect pair) at every corner; the horizontal bands
-//! carry the LS arrays. Totals: 24 blocks, 144 lands — 8 USB pairs, 16
-//! Vtarget, 8 Vusb, 40 low-speed, 8 detect, 56 ground.
+//! The vertical bands run USB PWR PWR USB LS USB PWR PWR USB, putting a
+//! USB block (and its detect pair) at every corner and an LS array at
+//! mid-band; the horizontal bands carry four LS arrays each. Totals: 26
+//! blocks, 156 lands — 8 USB pairs, 16 Vtarget, 8 Vusb, 48 low-speed,
+//! 8 detect, 60 ground.
 
 /// A7 tile dimensions, portrait.
 pub const A7_W: f64 = 74.0;
@@ -160,6 +161,7 @@ fn s13() -> Vec<Land> {
         pwr_block(),
         pwr_block(),
         usb_block(),
+        ls_block(),
         usb_block(),
         pwr_block(),
         pwr_block(),
@@ -229,13 +231,13 @@ mod tests {
     #[test]
     fn s13_land_budget() {
         let lands = s13();
-        assert_eq!(lands.len(), 144);
+        assert_eq!(lands.len(), 156);
         assert_eq!(role_count(&lands, Role::UsbDp), 8);
         assert_eq!(role_count(&lands, Role::UsbDm), 8);
         assert_eq!(role_count(&lands, Role::Vusb), 8);
         assert_eq!(role_count(&lands, Role::Vtarget), 16);
-        assert_eq!(role_count(&lands, Role::Gnd), 56);
-        assert_eq!(role_count(&lands, Role::Ls), 40);
+        assert_eq!(role_count(&lands, Role::Gnd), 60);
+        assert_eq!(role_count(&lands, Role::Ls), 48);
         assert_eq!(role_count(&lands, Role::Detect), 8);
     }
 
@@ -243,7 +245,7 @@ mod tests {
     fn s13_blocks_are_pure_2x3_with_grounds() {
         let lands = s13();
         let blocks = lands.iter().map(|l| l.block).max().unwrap() + 1;
-        assert_eq!(blocks, 24);
+        assert_eq!(blocks, 26);
         for block in 0..blocks {
             let members: Vec<&Land> = lands.iter().filter(|l| l.block == block).collect();
             // Every block is exactly 2×3.
@@ -308,7 +310,7 @@ mod tests {
             }
             sizes.push(size);
         }
-        assert_eq!(sizes.len(), 24);
+        assert_eq!(sizes.len(), 26);
         assert!(sizes.iter().all(|size| *size == 6));
     }
 
@@ -366,9 +368,9 @@ mod tests {
         assert_eq!(mate_dims(297.0, 210.0), (74.0, 105.0));
         assert_eq!(mate_dims(148.0, 105.0), (74.0, 105.0));
         let lands = oriented_s13(105.0, 148.0);
-        assert_eq!(lands.len(), 144);
+        assert_eq!(lands.len(), 156);
         assert!(lands.iter().all(|l| l.xy[0] <= A7_H && l.xy[1] <= A7_W));
         // A rigid rotation preserves the land budget per role.
-        assert_eq!(lands.iter().filter(|l| l.role == Role::Gnd).count(), 56);
+        assert_eq!(lands.iter().filter(|l| l.role == Role::Gnd).count(), 60);
     }
 }

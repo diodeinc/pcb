@@ -174,8 +174,8 @@ fn generates_a_parseable_interposer() {
             })
             .count()
     };
-    // 5 holes + 2 fids + 144 lands + 12 pogos (2 boards × 6 contacts).
-    assert_eq!(count("footprint"), 163);
+    // 5 holes + 2 fids + 156 lands + 12 pogos (2 boards × 6 contacts).
+    assert_eq!(count("footprint"), 175);
     assert_eq!(count("zone"), 2);
     // Stitch vias are the route step's job; the emitted board has none.
     assert_eq!(count("via"), 0);
@@ -190,8 +190,8 @@ fn generates_a_parseable_interposer() {
     assert_eq!(count("gr_line"), 4);
     // Net table: no-net, GND, ten planned nets, four detect loops.
     assert_eq!(count("net"), 16);
-    // GND: the table entry, 56 lands, and 2 gnd pogos.
-    assert_eq!(text.matches("(net 1 \"GND\")").count(), 59);
+    // GND: the table entry, 60 lands, and 2 gnd pogos.
+    assert_eq!(text.matches("(net 1 \"GND\")").count(), 63);
     // Every planned net appears on both faces: its pogo pad and its land.
     for board in [0, 1] {
         let net = format!("\"B{board}.TP_DP.TP\"");

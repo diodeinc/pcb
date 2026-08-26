@@ -6,7 +6,7 @@
 //! connector block. Each 2×3 kit yields one `Pair` slot (its DP+DM
 //! lands, unsplittable), one `VtBank` slot (its two Vt lands), and one
 //! `Vusb` unit slot; each low-speed land is its own `Ls` unit slot.
-//! S13 therefore supplies 8 pair, 8 bank, 8 vusb, and 40 LS slots.
+//! S13 therefore supplies 8 pair, 8 bank, 8 vusb, and 48 LS slots.
 //!
 //! **Demands** are the ask side, built per board instance from its
 //! contacts: `usb_dp`+`usb_dm` pair up into one `Pair` demand (an
@@ -473,6 +473,6 @@ mod tests {
         assert_eq!(count(Kind::Pair), 8);
         assert_eq!(count(Kind::VtBank), 8);
         assert_eq!(count(Kind::Vusb), 8);
-        assert_eq!(count(Kind::Ls), 40);
+        assert_eq!(count(Kind::Ls), 48);
     }
 }
