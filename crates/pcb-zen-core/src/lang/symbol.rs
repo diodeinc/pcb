@@ -298,7 +298,9 @@ impl<'v> SymbolValue {
     ) -> Result<SymbolValue, starlark::Error> {
         let file_provider = eval_ctx.file_provider();
 
-        let (_symbol_name, symbol, source_path) = if file_provider.is_directory(resolved_path) {
+        let (_symbol_name, symbol, source_path, source_format_version) = if file_provider
+            .is_directory(resolved_path)
+        {
             load_split_library_symbol(resolved_path, name, file_provider)?
         } else {
             // Get or load the library (lazy - only scans for symbol names, doesn't parse them)
@@ -353,7 +355,12 @@ impl<'v> SymbolValue {
                         symbol_name
                     ))
                 })?;
-            (symbol_name, symbol, resolved_path.to_path_buf())
+            (
+                symbol_name,
+                symbol,
+                resolved_path.to_path_buf(),
+                library.format_version(),
+            )
         };
 
         let source_uri = eval_ctx
@@ -365,21 +372,6 @@ impl<'v> SymbolValue {
                     source_path.display()
                 ))
             })?;
-        let source = file_provider.read_file(&source_path).map_err(|error| {
-            starlark::Error::new_other(anyhow!(
-                "Failed to read symbol library '{}': {}",
-                source_path.display(),
-                error
-            ))
-        })?;
-        let source_format_version = symbol_library_version(&source).map_err(|error| {
-            starlark::Error::new_other(anyhow!(
-                "Failed to read symbol-library version from '{}': {}",
-                source_path.display(),
-                error
-            ))
-        })?;
-
         let sexpr = symbol.raw_sexp.as_ref().map(|s| {
             pcb_sexpr::formatter::format_tree(s, pcb_sexpr::formatter::FormatMode::Normal)
         });
@@ -737,28 +729,6 @@ fn path_exists(file_provider: &dyn FileProvider, path: &Path) -> bool {
     file_provider.exists(path) || file_provider.is_directory(path)
 }
 
-fn symbol_library_version(source: &str) -> anyhow::Result<Option<i32>> {
-    let root = pcb_sexpr::parse(source)
-        .map_err(|error| anyhow!("invalid KiCad symbol library: {error}"))?;
-    let items = pcb_sexpr::kicad::symbol::kicad_symbol_lib_items(&root)
-        .ok_or_else(|| anyhow!("expected kicad_symbol_lib root"))?;
-    let Some(version) = items.iter().skip(1).find_map(|item| {
-        let item = item.as_list()?;
-        (item.first()?.as_sym()? == "version")
-            .then_some(item.get(1))
-            .flatten()
-    }) else {
-        return Ok(None);
-    };
-    let version: i64 = version
-        .as_int()
-        .or_else(|| version.as_atom()?.parse().ok())
-        .ok_or_else(|| anyhow!("symbol-library version must be an integer"))?;
-    Ok(Some(version.try_into().map_err(|_| {
-        anyhow!("symbol-library version is outside the supported integer range")
-    })?))
-}
-
 fn unresolved_symbol_library_path(err: anyhow::Error) -> starlark::Error {
     starlark::Error::new_other(anyhow!("Failed to resolve library path: {}", err))
 }
@@ -838,7 +808,7 @@ fn load_split_library_symbol(
     dir: &std::path::Path,
     requested_name: Option<String>,
     file_provider: &dyn crate::FileProvider,
-) -> starlark::Result<(String, pcb_eda::Symbol, std::path::PathBuf)> {
+) -> starlark::Result<(String, pcb_eda::Symbol, std::path::PathBuf, Option<i32>)> {
     let symbol_files = split_library_symbol_files(dir, file_provider)?;
     let available: Vec<String> = symbol_files.iter().map(|(name, _)| name.clone()).collect();
 
@@ -903,6 +873,7 @@ fn load_split_library_symbol(
         symbol_name.clone(),
         symbol,
         dir.join(format!("{symbol_name}.kicad_sym")),
+        library.format_version(),
     ))
 }
 

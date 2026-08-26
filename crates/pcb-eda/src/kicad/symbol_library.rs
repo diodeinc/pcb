@@ -94,6 +94,21 @@ pub struct KicadSymbolLibrary {
     symbol_locations: BTreeMap<String, SymbolLocation>,
     /// Cache of already-parsed and resolved symbols
     resolved_cache: RwLock<HashMap<String, KicadSymbol>>,
+    /// The `(version ...)` stamp from the library header, if declared.
+    format_version: Option<i32>,
+}
+
+/// Read the `(version NNNN)` stamp from a library header without parsing the
+/// file: scan only the text before the first symbol definition.
+fn scan_format_version(source: &str) -> Option<i32> {
+    let head = &source[..source.find("(symbol").unwrap_or(source.len())];
+    let rest = head.split_once("(version")?.1;
+    let digits: String = rest
+        .trim_start()
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    digits.parse().ok()
 }
 
 impl KicadSymbolLibrary {
@@ -113,11 +128,20 @@ impl KicadSymbolLibrary {
             }
         }
 
+        let format_version = sources
+            .first()
+            .and_then(|source| scan_format_version(source));
         Ok(KicadSymbolLibrary {
             sources,
             symbol_locations,
             resolved_cache: RwLock::new(HashMap::new()),
+            format_version,
         })
+    }
+
+    /// The KiCad symbol-library format version declared in the file header.
+    pub fn format_version(&self) -> Option<i32> {
+        self.format_version
     }
 
     /// Parse a KiCad symbol library from a string with lazy parsing.
