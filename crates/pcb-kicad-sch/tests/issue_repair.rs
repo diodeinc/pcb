@@ -3,8 +3,9 @@ mod common;
 use std::collections::BTreeSet;
 
 use pcb_kicad_sch::{
-    Point, SchDocument, SchItem, Symbol, Wire,
-    analysis::{SchematicIssue, inspect_schematic},
+    LabelShape, Point, Rotation, SchDocument, SchItem, SchPage, Sheet, SheetPin, Symbol,
+    SymbolField, Wire,
+    analysis::{SchematicIssue, SchematicIssueKey, inspect_schematic},
     reconcile::{InitialInspection, plan_reconciliation, plan_repairs, plan_repairs_on_page},
 };
 
@@ -733,6 +734,97 @@ fn short_from_a_mislabeled_hierarchical_label_is_repairable() {
     .expect("shorts caused by mislabeled labels are repairable")
     .apply(Some(&document))
     .unwrap();
+    let after = inspect_schematic(&repaired, &netlist).unwrap();
+    assert!(
+        after.analysis.is_equivalent(),
+        "{:#?}",
+        after.analysis.issues()
+    );
+}
+
+/// The other LTC regression: components moved into a user-created subsheet
+/// (a page with no module identity) whose nets need reconnecting. Driver
+/// placement must inherit the parent page's interface context so the child
+/// gets hierarchical labels that bridge through the sheet pins — a local
+/// label can never rejoin the parent's side of the net.
+#[test]
+fn nets_split_into_a_user_created_subsheet_are_repairable() {
+    let netlist = common::compile_fixture("hierarchy", "root_interface.zen");
+    let mut document = plan_reconciliation(None, &netlist, "RootInterface.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+
+    // Move R1 to a new subsheet page the composer knows nothing about,
+    // leaving the root's port labels behind, bridged by sheet pins placed
+    // exactly on them.
+    let symbol_index = document.pages[0]
+        .items
+        .iter()
+        .position(|item| matches!(item, SchItem::Symbol(_)))
+        .expect("composed symbol");
+    let symbol = document.pages[0].items.remove(symbol_index);
+    let mut child = SchPage::new("sub");
+    child.file_name = Some("Sub.kicad_sch".to_string());
+    child.library = document.pages[0].library.clone();
+    child.items.push(symbol);
+
+    let pin_at = |text: &str| {
+        document.pages[0]
+            .items
+            .iter()
+            .find_map(|item| match item {
+                SchItem::Label(label) if label.text == text => Some(label.at),
+                _ => None,
+            })
+            .expect("composed port label")
+    };
+    let sheet = Sheet {
+        id: "sheet-sub".to_string(),
+        at: Some(Point::new(0.0, 0.0)),
+        size: Some(Point::new(25.4, 25.4)),
+        name: Some(SymbolField::new("Sheetname", "sub", Point::new(0.0, 0.0))),
+        file: SymbolField::new("Sheetfile", "Sub.kicad_sch", Point::new(0.0, 0.0)),
+        pins: ["INPUT", "OUTPUT"]
+            .into_iter()
+            .map(|name| SheetPin {
+                id: format!("pin-{name}"),
+                name: name.to_string(),
+                at: pin_at(name),
+                rotation: Rotation::Deg0,
+                shape: LabelShape::Bidirectional,
+                unsupported: Vec::new(),
+            })
+            .collect(),
+        unsupported: Vec::new(),
+    };
+    document.pages[0]
+        .items
+        .push(SchItem::Sheet(Box::new(sheet)));
+    document.pages.push(child);
+
+    let inspection = inspect_schematic(&document, &netlist).unwrap();
+    let selected: BTreeSet<_> = inspection
+        .issues
+        .iter()
+        .filter(|issue| {
+            matches!(
+                issue.key,
+                SchematicIssueKey::DisconnectedNet(_) | SchematicIssueKey::MissingPort(_)
+            )
+        })
+        .map(|issue| issue.key.clone())
+        .collect();
+    assert!(
+        selected.contains(&SchematicIssueKey::DisconnectedNet("INPUT".to_string())),
+        "{:#?}",
+        inspection.analysis.issues()
+    );
+
+    let repaired = plan_repairs(&document, &netlist, &inspection, selected)
+        .expect("nets split into a user subsheet are repairable")
+        .apply(Some(&document))
+        .unwrap();
     let after = inspect_schematic(&repaired, &netlist).unwrap();
     assert!(
         after.analysis.is_equivalent(),

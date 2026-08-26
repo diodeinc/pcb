@@ -226,7 +226,7 @@ fn normalize_file_name(name: &str) -> String {
         .replace('\\', "/")
 }
 
-fn resolve_file_name(parent: &SchPage, child: &str) -> String {
+pub(crate) fn resolve_file_name(parent: &SchPage, child: &str) -> String {
     let child = Path::new(child);
     let path = if child.is_absolute() {
         child.to_path_buf()

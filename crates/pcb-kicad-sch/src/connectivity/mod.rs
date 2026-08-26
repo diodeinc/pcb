@@ -4,7 +4,7 @@
 //! the shared graph. Analysis can then compare graphs without either frontend
 //! depending on the other source format.
 
-mod kicad;
+pub(crate) mod kicad;
 mod raw;
 mod zener;
 

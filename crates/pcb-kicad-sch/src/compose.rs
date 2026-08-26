@@ -1683,7 +1683,7 @@ fn page_driver_contexts(
         }
     }
 
-    module_by_page
+    let mut contexts = module_by_page
         .into_iter()
         .map(|(page_index, module_ref)| {
             Ok((
@@ -1691,7 +1691,56 @@ fn page_driver_contexts(
                 root_interface::ports_by_net(netlist, module_ref)?,
             ))
         })
-        .collect()
+        .collect::<Result<PageDriverContexts>>()?;
+
+    // A page the user created (subsheet extraction, reorganization) has no
+    // module identity of its own: it belongs to the module of the page
+    // instantiating it, so it inherits that page's interface names and its
+    // drivers can bridge through the sheet pins. Contexts flow down the
+    // sheet hierarchy until nothing changes.
+    let page_by_file: BTreeMap<String, usize> = document
+        .pages
+        .iter()
+        .enumerate()
+        .filter_map(|(index, page)| {
+            let file_name = page.file_name.as_deref()?;
+            Some((
+                crate::normalize_schematic_path(std::path::Path::new(file_name))
+                    .to_string_lossy()
+                    .replace('\\', "/"),
+                index,
+            ))
+        })
+        .collect();
+    loop {
+        let mut changed = false;
+        for parent_index in 0..document.pages.len() {
+            let Some(parent_context) = contexts.get(&parent_index).cloned() else {
+                continue;
+            };
+            for item in &document.pages[parent_index].items {
+                let SchItem::Sheet(sheet) = item else {
+                    continue;
+                };
+                let child_file = crate::connectivity::kicad::resolve_file_name(
+                    &document.pages[parent_index],
+                    sheet.file_name(),
+                );
+                let Some(&child_index) = page_by_file.get(&child_file) else {
+                    continue;
+                };
+                if child_index == parent_index || contexts.contains_key(&child_index) {
+                    continue;
+                }
+                contexts.insert(child_index, parent_context.clone());
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    Ok(contexts)
 }
 
 fn ensure_context_endpoints(
