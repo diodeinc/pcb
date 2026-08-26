@@ -1,7 +1,7 @@
 # DFM PDK, waiver, and report formats
 
-`pcb ipc dfm check` turns fabrication capabilities from one TOML PDK into
-geometry checks over an IPC-2581 design and writes one JSON report.
+`pcb ipc dfm check` turns fabrication capabilities from a built-in or file-backed
+TOML PDK into geometry checks over an IPC-2581 design and writes one JSON report.
 
 ## PDK
 
@@ -20,6 +20,10 @@ name = "Example fabrication standard"
 revision = "1"
 # manufacturer = "Example Fabricator"
 # process = "standard"
+
+[capabilities.stackup]
+minimum_copper_layer_count = 2
+maximum_copper_layer_count = 10
 
 [capabilities.drilling]
 minimum_via_hole_diameter = "0.2 mm"
@@ -43,13 +47,15 @@ minimum_web = "3 mil"
 minimum_board_array_spacing = "300 mil"
 ```
 
-Every length is a positive string containing a number and `mm`, `mil`,
-`mils`, or `um`. Units can be mixed in one PDK. Checks normalize lengths to
-millimeters and the report retains both the source spelling and normalized
-value.
+Layer counts are positive integers and refer specifically to conductive layers
+in the physical stackup. When both bounds are configured, the minimum must not
+exceed the maximum. Every dimensional limit is a positive string containing a
+number and `mm`, `mil`, `mils`, or `um`. Units can be mixed in one PDK. Checks
+normalize lengths to millimeters and the report retains both the source
+spelling and normalized value.
 
-Every capability takes either a bare length — the binding minimum — or a
-table with a `preferred` tier the fab would rather see met:
+Every dimensional capability takes either a bare length — the binding minimum
+— or a table with a `preferred` tier the fab would rather see met:
 
 - The minimum lowers to an **error**-severity rule whose id is the
   capability path, e.g. `copper.minimum_via_annular_ring`. Error findings
@@ -70,6 +76,7 @@ high-level pass is never allowed to suppress a later authoritative failure.
 
 | Rules | Authoritative representation | Acceleration only |
 | --- | --- | --- |
+| Copper layer count | Conductive layers in the one physical IPC stackup | None |
 | Hole diameter | Materialized IPC drill primitive and plating class | None |
 | Nominal slot width | IPC slot primitive width | None |
 | Outline slot width | Materialized filled route outline, then its narrowest maximal inscribed disk | None |
@@ -81,13 +88,13 @@ high-level pass is never allowed to suppress a later authoritative failure.
 | V-score and board-edge clearance | Materialized line/profile geometry against final composed copper | Indexed copper boundaries |
 | Board-array spacing | Materialized filled array profiles | Bounding boxes prune pairs already proven clear |
 
-Every check produces one measurement per subject: a signed distance between
-two witness points, carrying the uncertainty of the flattened boundaries it
-was measured against (one flattening tolerance per tessellated curve; zero
-for stated primitives and analytic shapes). The engine applies the single
-verdict — the distance violates the limit only when it falls short beyond its
-own uncertainty — so curve tessellation by itself cannot manufacture a
-violation, and the same rule decides every quantity in the table above.
+Geometric checks produce one signed-distance measurement per subject, between
+two witness points and carrying the uncertainty of the flattened boundaries it
+was measured against (one flattening tolerance per tessellated curve; zero for
+stated primitives and analytic shapes). The engine fails a minimum only when
+the distance falls short beyond its own uncertainty, so curve tessellation by
+itself cannot manufacture a violation. Layer-count checks instead compare one
+exact integer with the configured minimum or maximum.
 
 Morphological opening and closing are deliberately candidate stages for width
 and soldermask-web checks. Each candidate residue is measured on the medial
@@ -118,6 +125,9 @@ when fewer than two exist.
 
 ## Rule semantics
 
+- Copper layer count requires exactly one physical stackup. Every declared
+  copper layer must occur exactly once in it; missing or ambiguous stackup data
+  fails extraction rather than guessing from artwork layer names.
 - Hole diameter rules measure every drilled hole of the rule's class;
   `minimum_slot_width` measures every routed slot. A slot's width is settled
   at extraction: the stated primitive width when present — exact, and
@@ -179,11 +189,17 @@ silently.
 
 ```bash
 pcb ipc dfm check fabrication-panel.xml \
-  --pdk fab-process.toml \
+  --pdk standard \
   --waivers waivers.toml \
   --layout-target board-array \
   --output dfm-report.json
 ```
+
+`--pdk` accepts an exact built-in name or a TOML file path. `standard` is
+bundled with `pcb`; use a path such as `./standard` when a file has the same
+name as a built-in. Reports identify built-ins with paths such as
+`builtin:standard`. Custom PDK files otherwise use the same parser, rules, and
+report pipeline.
 
 `--layout-target` is `board` or `board-array` and defaults to `board-array`.
 Omit `--output` to write JSON to stdout. The report is written before the
@@ -216,9 +232,8 @@ The report is a self-contained record of what was checked:
   `.preferred` for warning tiers), severity, source and normalized limit,
   status (`pass`, `warning`, `fail`, or `skipped`), skip reason, and the
   measurement contract shared by all of its findings — `subject` (what one
-  checked unit is), `quantity`, `method`, and `checked`, the number of
-  measurements evaluated. Every rule requires its measured quantity to be at
-  least its limit.
+  checked unit is), `quantity`, `method`, `comparison` (`minimum` or
+  `maximum`), and `checked`, the number of measurements evaluated.
 - `findings`: violations in deterministic rule/location order.
 
 Each finding is intentionally a fat record:
@@ -232,8 +247,9 @@ Each finding is intentionally a fat record:
   a waived violation that shrinks or grows in place keeps its waiver.
 - `rule_id`, `severity`, `title`, and `message` identify and explain the
   violation; `waived` and `waiver_reason` record acceptance.
-- `measurement` carries `actual_mm`, `required_mm`, and the signed
-  `margin_mm`; its quantity, method, and comparison live on the rule.
+- `measurement` carries `actual_mm`, `required_mm`, and signed `margin_mm` for
+  geometry, or the corresponding `actual_count`, `required_count`, and
+  `margin_count` for discrete counts. A nonnegative margin passes.
 - `location` carries a representative point, bounding box, and role-labelled
   geometric witnesses.
 - `layers` identify every involved manufacturing layer: name, IPC-2581
@@ -246,6 +262,6 @@ Each finding is intentionally a fat record:
   evidence; circle, segment, and bounds fields are populated as applicable
   and otherwise remain `null`.
 
-Within schema version 1, new optional fields and new `kind`, `role`,
+Within schema version 1, new fields and new `kind`, `role`,
 `status`, rule, and method values may be added. Removing or changing the
 meaning of an existing field requires a new schema version.

@@ -9,7 +9,7 @@
 use anyhow::{Result, bail};
 
 use super::design::HoleClass;
-use super::pdk::{Length, Limit, Pdk};
+use super::pdk::{Length, Limit as LengthLimit, Pdk};
 use super::report::Severity;
 
 #[derive(Debug, Clone)]
@@ -17,14 +17,54 @@ pub(super) struct Rule {
     pub id: String,
     pub title: String,
     pub severity: Severity,
-    pub limit: Length,
+    pub comparison: Comparison,
+    pub limit: LimitValue,
     pub kind: RuleKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Comparison {
+    Minimum,
+    Maximum,
+}
+
+impl Comparison {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Minimum => "minimum",
+            Self::Maximum => "maximum",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(super) enum LimitValue {
+    Length(Length),
+    Count(u32),
+}
+
+impl LimitValue {
+    pub fn length(&self) -> &Length {
+        match self {
+            Self::Length(length) => length,
+            Self::Count(_) => unreachable!("a count-valued rule has no length limit"),
+        }
+    }
+
+    pub fn count(&self) -> u32 {
+        match self {
+            Self::Count(count) => *count,
+            Self::Length(_) => unreachable!("a length-valued rule has no count limit"),
+        }
+    }
 }
 
 /// The measurement semantics of a rule: a size, a clearance, an enclosure,
 /// or a morphological residue over one of the design's entity pools.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RuleKind {
+    /// Count: conductive layers in the one physical stackup.
+    CopperLayerCount,
     /// Size: each hole's drilled diameter meets the limit.
     HoleDiameter(HoleClass),
     /// Size: each routed slot's width meets the limit.
@@ -61,7 +101,7 @@ pub(super) struct Semantics {
     pub method: &'static str,
     pub finding_title: String,
     pub quantity_label: String,
-    pub witness_roles: [&'static str; 2],
+    pub witness_roles: Option<[&'static str; 2]>,
     pub pools: Pools,
 }
 
@@ -69,6 +109,7 @@ pub(super) struct Semantics {
 /// the configured rules, so a rule set pays only for what it measures.
 #[derive(Debug, Clone, Copy, Default)]
 pub(super) struct Pools {
+    pub stackup: bool,
     pub drilled: bool,
     pub copper: bool,
     pub conductor_ownership: bool,
@@ -85,6 +126,7 @@ impl std::ops::BitOr for Pools {
 
     fn bitor(self, other: Self) -> Self {
         Self {
+            stackup: self.stackup || other.stackup,
             drilled: self.drilled || other.drilled,
             copper: self.copper || other.copper,
             conductor_ownership: self.conductor_ownership || other.conductor_ownership,
@@ -99,6 +141,7 @@ impl std::ops::BitOr for Pools {
 }
 
 const DRILLED: Pools = Pools {
+    stackup: false,
     drilled: true,
     copper: false,
     conductor_ownership: false,
@@ -118,6 +161,7 @@ const COPPER_BOUNDARIES: Pools = Pools {
     ..COPPER
 };
 const NONE: Pools = Pools {
+    stackup: false,
     drilled: false,
     ..DRILLED
 };
@@ -125,13 +169,25 @@ const NONE: Pools = Pools {
 impl RuleKind {
     pub fn semantics(self) -> Semantics {
         match self {
+            Self::CopperLayerCount => Semantics {
+                subject: "stackup",
+                quantity: "copper_layer_count",
+                method: "physical_stackup_conductive_layer_count",
+                finding_title: "Copper layer count is outside the supported range".to_owned(),
+                quantity_label: "copper layer count".to_owned(),
+                witness_roles: None,
+                pools: Pools {
+                    stackup: true,
+                    ..NONE
+                },
+            },
             Self::HoleDiameter(class) => Semantics {
                 subject: "hole",
                 quantity: "hole_diameter",
                 method: "ipc_hole_diameter",
                 finding_title: format!("{} hole is below minimum diameter", class.label()),
                 quantity_label: format!("{} hole diameter", class.label()),
-                witness_roles: ["hole_boundary", "hole_boundary"],
+                witness_roles: Some(["hole_boundary", "hole_boundary"]),
                 pools: DRILLED,
             },
             Self::SlotWidth => Semantics {
@@ -140,7 +196,7 @@ impl RuleKind {
                 method: "ipc_slot_width_or_outline_medial_axis_width",
                 finding_title: "Slot is below minimum width".to_owned(),
                 quantity_label: "routed slot width".to_owned(),
-                witness_roles: ["first_slot_boundary", "second_slot_boundary"],
+                witness_roles: Some(["first_slot_boundary", "second_slot_boundary"]),
                 pools: DRILLED,
             },
             Self::HolePairClearance => Semantics {
@@ -149,7 +205,7 @@ impl RuleKind {
                 method: "circle_edge_distance",
                 finding_title: "Hole-to-hole clearance is below minimum".to_owned(),
                 quantity_label: "hole edge-to-edge clearance".to_owned(),
-                witness_roles: ["first_hole_boundary", "second_hole_boundary"],
+                witness_roles: Some(["first_hole_boundary", "second_hole_boundary"]),
                 pools: DRILLED,
             },
             Self::AnnularRing(class) => Semantics {
@@ -158,7 +214,7 @@ impl RuleKind {
                 method: "maximal_centered_disk_minus_hole_radius",
                 finding_title: format!("{} annular ring is below minimum", class.label()),
                 quantity_label: format!("{} annular ring", class.label()),
-                witness_roles: ["hole_boundary", "copper_boundary"],
+                witness_roles: Some(["hole_boundary", "copper_boundary"]),
                 pools: Pools {
                     hole_lands: true,
                     ..COPPER_BOUNDARIES
@@ -170,7 +226,7 @@ impl RuleKind {
                 method: "segment_to_filled_region_boundary",
                 finding_title: "V-score centerline is too close to copper".to_owned(),
                 quantity_label: "V-score centerline-to-copper clearance".to_owned(),
-                witness_roles: ["vscore_centerline", "copper_boundary"],
+                witness_roles: Some(["vscore_centerline", "copper_boundary"]),
                 pools: Pools {
                     scores: true,
                     drilled: false,
@@ -183,7 +239,7 @@ impl RuleKind {
                 method: "segment_to_filled_region_boundary",
                 finding_title: "Board edge is too close to copper".to_owned(),
                 quantity_label: "board-edge-to-copper clearance".to_owned(),
-                witness_roles: ["board_outline", "copper_boundary"],
+                witness_roles: Some(["board_outline", "copper_boundary"]),
                 pools: Pools {
                     board_outlines: true,
                     drilled: false,
@@ -196,7 +252,7 @@ impl RuleKind {
                 method: "filled_profile_boundary_distance",
                 finding_title: "Board arrays are too close together".to_owned(),
                 quantity_label: "board-array outline spacing".to_owned(),
-                witness_roles: ["first_board_array", "second_board_array"],
+                witness_roles: Some(["first_board_array", "second_board_array"]),
                 pools: Pools {
                     board_arrays: true,
                     ..NONE
@@ -208,7 +264,7 @@ impl RuleKind {
                 method: "opening_candidate_then_medial_axis_width",
                 finding_title: "Copper feature is below minimum width".to_owned(),
                 quantity_label: "copper feature width".to_owned(),
-                witness_roles: ["first_boundary", "second_boundary"],
+                witness_roles: Some(["first_boundary", "second_boundary"]),
                 pools: Pools {
                     drilled: false,
                     ..COPPER
@@ -220,7 +276,7 @@ impl RuleKind {
                 method: "distinct_conductor_boundary_distance",
                 finding_title: "Copper spacing is below minimum".to_owned(),
                 quantity_label: "copper-to-copper clearance".to_owned(),
-                witness_roles: ["first_conductor", "second_conductor"],
+                witness_roles: Some(["first_conductor", "second_conductor"]),
                 pools: Pools {
                     drilled: false,
                     conductor_ownership: true,
@@ -233,7 +289,7 @@ impl RuleKind {
                 method: "closing_candidate_then_medial_axis_width",
                 finding_title: "Soldermask web is below minimum".to_owned(),
                 quantity_label: "soldermask web width".to_owned(),
-                witness_roles: ["first_boundary", "second_boundary"],
+                witness_roles: Some(["first_boundary", "second_boundary"]),
                 pools: Pools {
                     masks: true,
                     ..NONE
@@ -256,11 +312,12 @@ pub(super) fn pools(rules: &[Rule]) -> Pools {
 /// warning-severity rule under `<path>.preferred` and must exceed the
 /// minimum.
 pub(super) fn lower(pdk: &Pdk) -> Result<Vec<Rule>> {
+    let stackup = &pdk.capabilities.stackup;
     let drilling = &pdk.capabilities.drilling;
     let copper = &pdk.capabilities.copper;
     let soldermask = &pdk.capabilities.soldermask;
     let panelization = &pdk.capabilities.panelization;
-    let table: [(&Option<Limit>, &str, &str, RuleKind); 13] = [
+    let table: [(&Option<LengthLimit>, &str, &str, RuleKind); 13] = [
         (
             &drilling.minimum_via_hole_diameter,
             "drilling.minimum_via_hole_diameter",
@@ -350,7 +407,8 @@ pub(super) fn lower(pdk: &Pdk) -> Result<Vec<Rule>> {
             id: id.to_owned(),
             title: title.to_owned(),
             severity: Severity::Error,
-            limit: limit.minimum().clone(),
+            comparison: Comparison::Minimum,
+            limit: LimitValue::Length(limit.minimum().clone()),
             kind,
         });
         if let Some(preferred) = limit.preferred() {
@@ -365,8 +423,34 @@ pub(super) fn lower(pdk: &Pdk) -> Result<Vec<Rule>> {
                 id: format!("{id}.preferred"),
                 title: format!("{title} (preferred)"),
                 severity: Severity::Warning,
-                limit: preferred.clone(),
+                comparison: Comparison::Minimum,
+                limit: LimitValue::Length(preferred.clone()),
                 kind,
+            });
+        }
+    }
+    for (limit, id, title, comparison) in [
+        (
+            stackup.minimum_copper_layer_count,
+            "stackup.minimum_copper_layer_count",
+            "Minimum copper layer count",
+            Comparison::Minimum,
+        ),
+        (
+            stackup.maximum_copper_layer_count,
+            "stackup.maximum_copper_layer_count",
+            "Maximum copper layer count",
+            Comparison::Maximum,
+        ),
+    ] {
+        if let Some(limit) = limit {
+            rules.push(Rule {
+                id: id.to_owned(),
+                title: title.to_owned(),
+                severity: Severity::Error,
+                comparison,
+                limit: LimitValue::Count(limit),
+                kind: RuleKind::CopperLayerCount,
             });
         }
     }

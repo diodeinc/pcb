@@ -242,7 +242,7 @@ minimum_copper_clearance = "0.15 mm"
         let actual = results
             .findings
             .iter()
-            .map(|finding| finding.measurement.actual_mm)
+            .map(|finding| finding.measurement.actual_mm().unwrap())
             .collect::<Vec<_>>();
         assert!(actual.iter().any(|value| value.abs() < 1e-9));
         assert!(actual.iter().any(|value| (value - 0.05).abs() < 1e-9));

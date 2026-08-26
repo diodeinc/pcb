@@ -19,6 +19,30 @@ impl Pdk {
                 pdk.schema_version
             );
         }
+        let stackup = &pdk.capabilities.stackup;
+        for (name, count) in [
+            (
+                "stackup.minimum_copper_layer_count",
+                stackup.minimum_copper_layer_count,
+            ),
+            (
+                "stackup.maximum_copper_layer_count",
+                stackup.maximum_copper_layer_count,
+            ),
+        ] {
+            if count == Some(0) {
+                bail!("{name} must be a positive integer");
+            }
+        }
+        if let (Some(minimum), Some(maximum)) = (
+            stackup.minimum_copper_layer_count,
+            stackup.maximum_copper_layer_count,
+        ) && minimum > maximum
+        {
+            bail!(
+                "stackup.minimum_copper_layer_count ({minimum}) must not exceed stackup.maximum_copper_layer_count ({maximum})"
+            );
+        }
         Ok(pdk)
     }
 }
@@ -39,6 +63,8 @@ pub struct PdkIdentity {
 #[serde(deny_unknown_fields)]
 pub struct Capabilities {
     #[serde(default)]
+    pub stackup: StackupCapabilities,
+    #[serde(default)]
     pub drilling: DrillingCapabilities,
     #[serde(default)]
     pub copper: CopperCapabilities,
@@ -46,6 +72,15 @@ pub struct Capabilities {
     pub soldermask: SoldermaskCapabilities,
     #[serde(default)]
     pub panelization: PanelizationCapabilities,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StackupCapabilities {
+    #[serde(default)]
+    pub minimum_copper_layer_count: Option<u32>,
+    #[serde(default)]
+    pub maximum_copper_layer_count: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -194,6 +229,10 @@ id = "example"
 name = "Example process"
 revision = "1"
 
+[capabilities.stackup]
+minimum_copper_layer_count = 2
+maximum_copper_layer_count = 10
+
 [capabilities.drilling]
 minimum_via_hole_diameter = "0.2 mm"
 minimum_hole_to_hole_clearance = "10 mil"
@@ -209,6 +248,11 @@ minimum_board_array_spacing = "300 mil"
     #[test]
     fn parses_mixed_units_and_tiers_into_canonical_millimeters() {
         let pdk = Pdk::parse(MIXED_UNIT_PDK).unwrap();
+        assert_eq!(pdk.capabilities.stackup.minimum_copper_layer_count, Some(2));
+        assert_eq!(
+            pdk.capabilities.stackup.maximum_copper_layer_count,
+            Some(10)
+        );
         let drilling = &pdk.capabilities.drilling;
         assert_eq!(
             drilling
@@ -264,6 +308,28 @@ minimum_board_array_spacing = "300 mil"
                 &MIXED_UNIT_PDK.replace("preferred = \"0.125 mm\"", "prefered = \"0.125 mm\"")
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_copper_layer_ranges() {
+        assert!(
+            Pdk::parse(&MIXED_UNIT_PDK.replace(
+                "minimum_copper_layer_count = 2",
+                "minimum_copper_layer_count = 0"
+            ))
+            .unwrap_err()
+            .to_string()
+            .contains("must be a positive integer")
+        );
+        assert!(
+            Pdk::parse(&MIXED_UNIT_PDK.replace(
+                "minimum_copper_layer_count = 2",
+                "minimum_copper_layer_count = 12"
+            ))
+            .unwrap_err()
+            .to_string()
+            .contains("must not exceed")
         );
     }
 }

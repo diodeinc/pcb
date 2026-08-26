@@ -8,7 +8,7 @@
 //! drilled feature whose plating, diameter, or outline the file does not
 //! state is an error, never a quietly dropped subject.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result, bail};
 use ipc2581::Symbol;
@@ -34,6 +34,7 @@ use super::rules::{self, Rule};
 pub(super) struct Design<'a> {
     pub ipc: &'a Ipc2581,
     pub scope: ArtworkScope,
+    pub stackup: Option<PhysicalStackup>,
     pub holes: Vec<Hole>,
     pub slots: Vec<Slot>,
     pub copper_layers: Vec<CopperLayer>,
@@ -70,11 +71,12 @@ impl<'a> Design<'a> {
         let boundary_search_mm = rules
             .iter()
             .filter(|rule| rule.kind.semantics().pools.copper_boundaries)
-            .map(|rule| rule.limit.millimeters())
+            .map(|rule| rule.limit.length().millimeters())
             .fold(1.0, f64::max);
         Ok(Self {
             ipc,
             scope,
+            stackup: when(pools.stackup, || collect_physical_stackup(ipc).map(Some))?,
             copper_boundaries: when(pools.copper_boundaries, || {
                 Ok(copper_layers
                     .par_iter()
@@ -103,6 +105,87 @@ impl<'a> Design<'a> {
     pub fn resolve(&self, symbol: Option<Symbol>) -> Option<String> {
         symbol.map(|symbol| self.ipc.resolve(symbol).to_owned())
     }
+}
+
+#[derive(Debug)]
+pub(super) struct PhysicalStackup {
+    pub name: String,
+    pub copper_layers: Vec<LayerRef>,
+}
+
+fn collect_physical_stackup(ipc: &Ipc2581) -> Result<PhysicalStackup> {
+    let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
+    let stackup = match ecad.cad_data.stackups.as_slice() {
+        [stackup] => stackup,
+        [] => bail!("IPC-2581 file carries no physical stackup"),
+        stackups => bail!(
+            "IPC-2581 file carries {} physical stackups; layer-count DFM requires exactly one",
+            stackups.len()
+        ),
+    };
+
+    let mut copper_by_name = HashMap::new();
+    for layer in ecad
+        .cad_data
+        .layers
+        .iter()
+        .filter(|layer| layers::is_copper(layer.layer_function))
+    {
+        if copper_by_name.insert(layer.name, layer).is_some() {
+            bail!(
+                "IPC-2581 file declares copper layer '{}' more than once",
+                ipc.resolve(layer.name)
+            );
+        }
+    }
+    if copper_by_name.is_empty() {
+        bail!("IPC-2581 file declares no copper layers");
+    }
+
+    let mut seen = HashSet::new();
+    let mut ordered = Vec::new();
+    for stackup_layer in &stackup.layers {
+        let Some(layer) = copper_by_name.get(&stackup_layer.layer_ref).copied() else {
+            continue;
+        };
+        if !seen.insert(layer.name) {
+            bail!(
+                "physical stackup '{}' contains copper layer '{}' more than once",
+                ipc.resolve(stackup.name),
+                ipc.resolve(layer.name)
+            );
+        }
+        ordered.push(layer);
+    }
+
+    let mut missing = copper_by_name
+        .keys()
+        .filter(|name| !seen.contains(name))
+        .map(|name| ipc.resolve(*name))
+        .collect::<Vec<_>>();
+    missing.sort_unstable();
+    if !missing.is_empty() {
+        bail!(
+            "physical stackup '{}' omits declared copper layer(s): {}",
+            ipc.resolve(stackup.name),
+            missing.join(", ")
+        );
+    }
+
+    let total = ordered.len();
+    let copper_layers = ordered
+        .into_iter()
+        .enumerate()
+        .map(|(ordinal, layer)| {
+            let side = side_label(layers::ir_side(layer.side))
+                .unwrap_or_else(|| stack_side(ordinal, total));
+            layer_ref(ipc.resolve(layer.name), layer.layer_function, Some(side))
+        })
+        .collect();
+    Ok(PhysicalStackup {
+        name: ipc.resolve(stackup.name).to_owned(),
+        copper_layers,
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

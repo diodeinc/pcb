@@ -1,8 +1,8 @@
 use pcb_ir::geom::{BBox, Point};
 use serde::Serialize;
 
-use super::pdk::{Length, Pdk};
-use super::rules::Rule;
+use super::pdk::Pdk;
+use super::rules::{LimitValue, Rule};
 
 pub const REPORT_SCHEMA_VERSION: u32 = 1;
 
@@ -108,10 +108,11 @@ pub struct RuleResult {
     pub severity: Severity,
     pub status: RuleStatus,
     pub limit: RuleLimit,
+    /// Whether values below or above the limit violate this rule.
+    pub comparison: &'static str,
     /// What one `checked` unit is, e.g. `hole` or `copper_layer`.
     pub subject: &'static str,
-    /// The quantity every finding of this rule measures; every rule requires
-    /// the measured value to be at least its limit.
+    /// The quantity every finding of this rule measures.
     pub quantity: &'static str,
     /// How the quantity is measured.
     pub method: &'static str,
@@ -130,7 +131,8 @@ impl RuleResult {
             title: rule.title.clone(),
             severity: rule.severity,
             status: RuleStatus::Pass,
-            limit: RuleLimit::from_length(&rule.limit),
+            limit: RuleLimit::from_value(&rule.limit),
+            comparison: rule.comparison.label(),
             subject: semantics.subject,
             quantity: semantics.quantity,
             method: semantics.method,
@@ -178,11 +180,18 @@ pub struct RuleLimit {
 }
 
 impl RuleLimit {
-    fn from_length(length: &Length) -> Self {
-        Self {
-            pdk_value: length.original().to_owned(),
-            normalized_value: length.millimeters(),
-            normalized_unit: "mm",
+    fn from_value(value: &LimitValue) -> Self {
+        match value {
+            LimitValue::Length(length) => Self {
+                pdk_value: length.original().to_owned(),
+                normalized_value: length.millimeters(),
+                normalized_unit: "mm",
+            },
+            LimitValue::Count(count) => Self {
+                pdk_value: count.to_string(),
+                normalized_value: f64::from(*count),
+                normalized_unit: "layers",
+            },
         }
     }
 }
@@ -210,21 +219,53 @@ pub enum Severity {
     Warning,
 }
 
-/// The one measurement that gates a finding, in report millimeters. The
-/// quantity, method, and comparison live on the finding's rule.
+/// The one measurement that gates a finding. The quantity, method, unit, and
+/// comparison live on the finding's rule.
 #[derive(Debug, Serialize)]
-pub struct Measurement {
-    pub actual_mm: f64,
-    pub required_mm: f64,
-    pub margin_mm: f64,
+#[serde(untagged)]
+pub enum Measurement {
+    Distance {
+        actual_mm: f64,
+        required_mm: f64,
+        margin_mm: f64,
+    },
+    Count {
+        actual_count: u32,
+        required_count: u32,
+        margin_count: i64,
+    },
 }
 
 impl Measurement {
-    pub fn minimum(actual_mm: f64, required_mm: f64) -> Self {
-        Self {
+    pub fn minimum_distance(actual_mm: f64, required_mm: f64) -> Self {
+        Self::Distance {
             actual_mm,
             required_mm,
             margin_mm: actual_mm - required_mm,
+        }
+    }
+
+    pub fn minimum_count(actual_count: u32, required_count: u32) -> Self {
+        Self::Count {
+            actual_count,
+            required_count,
+            margin_count: i64::from(actual_count) - i64::from(required_count),
+        }
+    }
+
+    pub fn maximum_count(actual_count: u32, required_count: u32) -> Self {
+        Self::Count {
+            actual_count,
+            required_count,
+            margin_count: i64::from(required_count) - i64::from(actual_count),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn actual_mm(&self) -> Option<f64> {
+        match self {
+            Self::Distance { actual_mm, .. } => Some(*actual_mm),
+            Self::Count { .. } => None,
         }
     }
 }
