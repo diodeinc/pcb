@@ -7,7 +7,7 @@ use pcb_sch::Schematic;
 
 use crate::{
     SchDocument, SchPage,
-    analysis::{ConnectivityInspection, SchematicIssueKey, inspect_schematic},
+    analysis::{ConnectivityInspection, SchematicIssue, SchematicIssueKey, inspect_schematic},
     component_slots, compose,
 };
 
@@ -236,6 +236,13 @@ fn plan_repairs_impl(
     )
 }
 
+fn issue_summaries<'a>(issues: impl Iterator<Item = &'a SchematicIssue>) -> String {
+    issues
+        .map(|issue| issue.summary())
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 fn build_plan(
     document: Option<&SchDocument>,
     netlist: &Schematic,
@@ -261,8 +268,8 @@ fn build_plan(
         None => {
             if !inspection_after.analysis.is_equivalent() {
                 bail!(
-                    "planned schematic is not netlist-equivalent: {:#?}",
-                    inspection_after.analysis.issues()
+                    "planned schematic is not netlist-equivalent: {}",
+                    issue_summaries(inspection_after.analysis.issues().iter())
                 );
             }
         }
@@ -292,7 +299,10 @@ fn build_plan(
                 .filter(|issue| !before_keys.contains(&issue.key))
                 .collect::<Vec<_>>();
             if !new_issues.is_empty() {
-                bail!("planned repair introduced unrelated issues: {new_issues:#?}");
+                bail!(
+                    "planned repair would introduce unrelated issues: {}",
+                    issue_summaries(new_issues.iter().map(|context| &context.issue))
+                );
             }
         }
     }

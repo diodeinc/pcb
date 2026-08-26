@@ -3,11 +3,12 @@ mod common;
 use std::collections::BTreeSet;
 
 use pcb_kicad_sch::{
-    Label, LabelKind, Point, SchDocument, SchItem, Symbol, SymbolDefinition, SymbolSlotKey,
-    analysis::{SchematicIssue, inspect_schematic},
+    Label, LabelKind, Point, SchDocument, SchItem, SchPage, Symbol, SymbolDefinition,
+    SymbolSlotKey,
+    analysis::{SchematicIssue, SchematicIssueKey, inspect_schematic},
     connectivity::{PhysicalConnectivity, PinVisibility},
     deterministic_uuid,
-    reconcile::plan_reconciliation,
+    reconcile::{plan_reconciliation, plan_repairs},
 };
 use pcb_sch::Schematic;
 
@@ -487,4 +488,73 @@ fn connected_net_missing_its_port_label_reports_missing_port() {
         "{:#?}",
         inspection.analysis.issues()
     );
+}
+
+/// The composer mints deterministic label ids. When the editor has since
+/// moved that label to another page (or the id is otherwise taken), a repair
+/// must mint a fresh id instead of stealing the existing item back.
+#[test]
+fn repairing_a_missing_port_never_steals_a_label_from_another_page() {
+    let netlist = common::compile_fixture("hierarchy", "root_interface.zen");
+    let mut document = plan_reconciliation(None, &netlist, "RootInterface.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    let root_page_id = document.pages[0].id.clone();
+    for item in &mut document.pages[0].items {
+        if let SchItem::Label(label) = item
+            && label.text == "INPUT"
+        {
+            label.kind = LabelKind::Local;
+        }
+    }
+    // Another page owns the id the repair would mint for the root's INPUT
+    // context endpoint.
+    let taken_id = deterministic_uuid(format!("zener:context-endpoint:{root_page_id}:INPUT:INPUT"));
+    let mut extra = SchPage::new("extra");
+    extra.file_name = Some("Extra.kicad_sch".to_string());
+    extra.items.push(SchItem::Label(Label::new(
+        &taken_id,
+        "OTHER",
+        Point::new(10.0, 10.0),
+    )));
+    document.pages.push(extra);
+    document.root_page_ids.push("extra".to_string());
+
+    let inspection = inspect_schematic(&document, &netlist).unwrap();
+    assert!(
+        inspection
+            .issues
+            .iter()
+            .any(|issue| issue.key == SchematicIssueKey::MissingPort("INPUT".to_string())),
+        "{:#?}",
+        inspection.analysis.issues()
+    );
+    let repaired = plan_repairs(
+        &document,
+        &netlist,
+        &inspection,
+        std::collections::BTreeSet::from([SchematicIssueKey::MissingPort("INPUT".to_string())]),
+    )
+    .unwrap()
+    .apply(Some(&document))
+    .unwrap();
+
+    // The foreign label stays exactly where the user left it.
+    let extra_page = repaired
+        .pages
+        .iter()
+        .find(|page| page.id == "extra")
+        .unwrap();
+    assert!(extra_page.items.iter().any(|item| matches!(
+        item,
+        SchItem::Label(label) if label.id == taken_id && label.text == "OTHER"
+    )));
+    // The root regained its INPUT port under a fresh id.
+    assert!(repaired.pages[0].items.iter().any(|item| matches!(
+        item,
+        SchItem::Label(label) if label.text == "INPUT"
+            && matches!(label.kind, LabelKind::Hierarchical { .. })
+            && label.id != taken_id
+    )));
 }

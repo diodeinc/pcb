@@ -91,6 +91,79 @@ pub enum SchematicIssue {
     },
 }
 
+impl SchematicIssue {
+    /// One-line human summary, for error messages and logs.
+    pub fn summary(&self) -> String {
+        match self {
+            SchematicIssue::MissingSymbol { slot } => {
+                format!(
+                    "component '{}' unit {} is not placed",
+                    slot.component_path(),
+                    slot.unit()
+                )
+            }
+            SchematicIssue::DuplicateSymbol { slot, locations } => format!(
+                "component '{}' unit {} is placed {} times",
+                slot.component_path(),
+                slot.unit(),
+                locations.len()
+            ),
+            SchematicIssue::MismatchedSymbolId { slot, .. } => format!(
+                "component '{}' unit {} uses the wrong symbol variant",
+                slot.component_path(),
+                slot.unit()
+            ),
+            SchematicIssue::UnexpectedSymbol { slot, .. } => format!(
+                "component '{}' unit {} is not in the netlist",
+                slot.component_path(),
+                slot.unit()
+            ),
+            SchematicIssue::UnboundSymbol { location } => format!(
+                "symbol '{}' is not bound to a component",
+                location.symbol_id
+            ),
+            SchematicIssue::DisconnectedNet {
+                net_name,
+                islands,
+                missing_terminals,
+            } => {
+                if missing_terminals.is_empty() {
+                    format!(
+                        "net '{net_name}' is wired in {} separate pieces",
+                        islands.len()
+                    )
+                } else {
+                    format!(
+                        "net '{net_name}' is missing {} connection(s)",
+                        missing_terminals.len()
+                    )
+                }
+            }
+            SchematicIssue::MissingPort {
+                net_name, ports, ..
+            } => format!(
+                "net '{net_name}' does not expose interface port(s) {}",
+                ports.join(", ")
+            ),
+            SchematicIssue::UnexpectedNet { net_name, .. } => {
+                format!("net '{net_name}' is not in the netlist")
+            }
+            SchematicIssue::UnexpectedConnection { terminals, .. } => format!(
+                "{} pins the netlist keeps apart are joined",
+                terminals.len()
+            ),
+            SchematicIssue::Shorted { net_names, .. } => format!(
+                "nets {} are shorted together",
+                net_names
+                    .iter()
+                    .map(|name| format!("'{name}'"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        }
+    }
+}
+
 /// Stable semantic identity for one reported schematic discrepancy.
 ///
 /// Physical issues include the UUID-addressed items that form their affected

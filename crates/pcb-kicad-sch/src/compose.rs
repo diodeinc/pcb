@@ -2023,7 +2023,7 @@ fn available_deterministic_id(document: &SchDocument, key: &str) -> String {
         .expect("a finite schematic cannot exhaust deterministic UUIDs")
 }
 
-fn upsert_label(document: &mut SchDocument, page_index: usize, label: Label) -> Result<()> {
+fn upsert_label(document: &mut SchDocument, page_index: usize, mut label: Label) -> Result<()> {
     let mut found = Vec::new();
     for (found_page, page) in document.pages.iter().enumerate() {
         for (item_index, item) in page.items.iter().enumerate() {
@@ -2034,23 +2034,11 @@ fn upsert_label(document: &mut SchDocument, page_index: usize, label: Label) -> 
     }
     match found.as_slice() {
         [] => {}
-        [(found_page, item_index, true)] => {
-            let SchItem::Label(mut existing) =
-                document.pages[*found_page].items.remove(*item_index)
+        [(found_page, item_index, true)] if *found_page == page_index => {
+            let SchItem::Label(mut existing) = document.pages[page_index].items.remove(*item_index)
             else {
                 unreachable!("matched label changed before update")
             };
-            if *found_page == page_index
-                && existing.text == label.text
-                && existing.at == label.at
-                && existing.kind == label.kind
-                && existing.spin == label.spin
-            {
-                document.pages[*found_page]
-                    .items
-                    .insert(*item_index, SchItem::Label(existing));
-                return Ok(());
-            }
             existing.text = label.text;
             existing.at = label.at;
             existing.kind = label.kind;
@@ -2060,14 +2048,12 @@ fn upsert_label(document: &mut SchDocument, page_index: usize, label: Label) -> 
                 .push(SchItem::Label(existing));
             return Ok(());
         }
-        [(_, _, false)] => bail!(
-            "generated label UUID '{}' is already used by another schematic item",
-            label.id
-        ),
-        _ => bail!(
-            "generated label UUID '{}' occurs more than once in the schematic",
-            label.id
-        ),
+        _ => {
+            // The deterministic id now belongs to an item the editor moved to
+            // another page (or reused). That item is no longer ours to
+            // relocate — leave it where it is and mint a fresh id.
+            label.id = available_deterministic_id(document, &label.id);
+        }
     }
     document.pages[page_index].items.push(SchItem::Label(label));
     Ok(())
