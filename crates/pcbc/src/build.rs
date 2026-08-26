@@ -384,31 +384,6 @@ pub fn print_build_success(file_name: &str, schematic: &Schematic) {
     );
 }
 
-#[instrument(name = "build_file", skip_all, fields(file = %zen_path.file_name().unwrap().to_string_lossy()))]
-pub fn build(
-    zen_path: &Path,
-    inputs: SmallMap<String, JsonValue>,
-    passes: Vec<Box<dyn pcb_zen_core::DiagnosticsPass>>,
-    deny_warnings: bool,
-    has_errors: &mut bool,
-    has_warnings: &mut bool,
-    resolution: ResolutionResult,
-) -> Option<Schematic> {
-    let eval_state =
-        BuildEvalState::new(resolution).with_bom_hydration(pcb_diode_api::BomMatchMode::Online);
-
-    eval_state
-        .build(
-            zen_path,
-            inputs,
-            passes,
-            deny_warnings,
-            has_errors,
-            has_warnings,
-        )
-        .schematic
-}
-
 fn workspace_relative_path(path: &Path, workspace_root: &Path) -> String {
     path.strip_prefix(workspace_root)
         .unwrap_or(path)
