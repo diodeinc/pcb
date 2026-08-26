@@ -1756,16 +1756,23 @@ fn ensure_context_endpoints(
             if !target_nets.contains(net_name) || net_symbol_specs.contains_key(net_name) {
                 continue;
             }
-            let (anchor, spin) = canonical_target(targets_by_net, net_name, page_index)
+            // Anchor at a pin, else at a sheet pin carrying the interface
+            // (the net reaches this page only through a subsheet), else at a
+            // free spot.
+            let (anchor, spin) = match canonical_target(targets_by_net, net_name, page_index)
                 .map(|target| (target.point, target.spin))
-                .unwrap_or((
+                .or_else(|| sheet_pin_anchor(document, page_index, interface_names))
+            {
+                Some(anchor) => anchor,
+                None => (
                     place_context_label(
                         document,
                         page_index,
                         interface_names.first().map_or(net_name, String::as_str),
                     )?,
                     LabelSpin::Right,
-                ));
+                ),
+            };
             for interface_name in interface_names {
                 if page_has_hierarchical_label(document, page_index, interface_name) {
                     continue;
@@ -1786,6 +1793,34 @@ fn ensure_context_endpoints(
         }
     }
     Ok(())
+}
+
+/// A sheet pin on this page named after one of the net's interface names:
+/// the attachment point for the page's context label when the net has no
+/// component pins here.
+fn sheet_pin_anchor(
+    document: &SchDocument,
+    page_index: usize,
+    interface_names: &BTreeSet<String>,
+) -> Option<(Point, LabelSpin)> {
+    document.pages[page_index].items.iter().find_map(|item| {
+        let SchItem::Sheet(sheet) = item else {
+            return None;
+        };
+        sheet
+            .pins
+            .iter()
+            .find(|pin| interface_names.contains(&pin.name))
+            .map(|pin| {
+                let spin = match pin.rotation {
+                    Rotation::Deg0 => LabelSpin::Right,
+                    Rotation::Deg90 => LabelSpin::Up,
+                    Rotation::Deg180 => LabelSpin::Left,
+                    Rotation::Deg270 => LabelSpin::Bottom,
+                };
+                (pin.at, spin)
+            })
+    })
 }
 
 fn canonical_target<'a>(

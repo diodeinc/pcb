@@ -802,6 +802,11 @@ fn nets_split_into_a_user_created_subsheet_are_repairable() {
         .items
         .push(SchItem::Sheet(Box::new(sheet)));
     document.pages.push(child);
+    // Drop the root's port labels too: the repair must rebuild them anchored
+    // at the sheet pins, or the ports float and the nets stay split.
+    document.pages[0]
+        .items
+        .retain(|item| !matches!(item, SchItem::Label(_)));
 
     let inspection = inspect_schematic(&document, &netlist).unwrap();
     let selected: BTreeSet<_> = inspection
