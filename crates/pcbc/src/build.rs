@@ -23,7 +23,7 @@ pub(crate) struct BuildEvalState {
     session: pcb_zen_core::lang::eval::EvalSession,
     file_provider: Arc<DefaultFileProvider>,
     resolution: Arc<ResolutionResult>,
-    hydrate_cached_bom: bool,
+    bom_match_mode: Option<pcb_diode_api::BomMatchMode>,
 }
 
 pub(crate) struct BuildResult {
@@ -42,12 +42,12 @@ impl BuildEvalState {
             session: pcb_zen_core::lang::eval::EvalSession::default(),
             file_provider,
             resolution: Arc::new(resolution),
-            hydrate_cached_bom: false,
+            bom_match_mode: None,
         }
     }
 
-    pub(crate) fn with_cached_bom_hydration(mut self) -> Self {
-        self.hydrate_cached_bom = true;
+    pub(crate) fn with_bom_hydration(mut self, mode: pcb_diode_api::BomMatchMode) -> Self {
+        self.bom_match_mode = Some(mode);
         self
     }
 
@@ -125,10 +125,8 @@ impl BuildEvalState {
                 ));
         }
 
-        if self.hydrate_cached_bom
-            && let Some(schematic) = &mut schematic
-        {
-            pcb_diode_api::hydrate_schematic_from_bom_cache(zen_path, schematic);
+        if let (Some(mode), Some(schematic)) = (self.bom_match_mode, &mut schematic) {
+            pcb_diode_api::hydrate_schematic_from_bom(zen_path, schematic, mode);
         }
 
         if diagnostics.diagnostics.is_empty() && schematic.is_none() {
@@ -396,7 +394,8 @@ pub fn build(
     has_warnings: &mut bool,
     resolution: ResolutionResult,
 ) -> Option<Schematic> {
-    let eval_state = BuildEvalState::new(resolution).with_cached_bom_hydration();
+    let eval_state =
+        BuildEvalState::new(resolution).with_bom_hydration(pcb_diode_api::BomMatchMode::Online);
 
     eval_state
         .build(
@@ -460,7 +459,12 @@ pub fn execute(args: BuildArgs) -> Result<()> {
 
     let zen_files = build_input.collect_zen_files(&resolution.workspace_info)?;
 
-    let eval_state = BuildEvalState::new(resolution).with_cached_bom_hydration();
+    let bom_match_mode = if args.offline {
+        pcb_diode_api::BomMatchMode::Offline
+    } else {
+        pcb_diode_api::BomMatchMode::Online
+    };
+    let eval_state = BuildEvalState::new(resolution).with_bom_hydration(bom_match_mode);
 
     // Process each .zen file
     let deny_warnings = args.deny.contains(&"warnings".to_string());

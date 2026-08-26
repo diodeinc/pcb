@@ -319,7 +319,11 @@ pub fn build_board_release(
         };
 
         let mut schematic = eval_output.to_schematic()?;
-        pcb_diode_api::hydrate_schematic_from_bom_cache(&zen_path, &mut schematic);
+        pcb_diode_api::hydrate_schematic_from_bom(
+            &zen_path,
+            &mut schematic,
+            pcb_diode_api::BomMatchMode::Online,
+        );
 
         let info = ReleaseInfo {
             zen_path,
@@ -748,7 +752,7 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<Diagnostics> 
         )));
 
         crate::build::BuildEvalState::new(staged_resolution)
-            .with_cached_bom_hydration()
+            .with_bom_hydration(pcb_diode_api::BomMatchMode::Offline)
             .build(
                 &staged_zen_path,
                 Default::default(),
@@ -879,17 +883,27 @@ fn check_bom_offers(info: &ReleaseInfo, spinner: &Spinner, bom: &pcb_sch::bom::B
 
     spinner.set_message("Checking strict BOM offers");
     let ctx = pcb_diode_api::WorkspaceContext::from_path(&info.zen_path);
-    match pcb_diode_api::fetch_and_populate_availability_with_context(
+    let match_result = pcb_diode_api::match_bom_with_context(
         &ctx,
         None,
         &mut sourcing_bom,
         true,
-    ) {
-        Ok(()) => bom_offer_diagnostics(&info.zen_path, &sourcing_bom),
-        Err(error) => pcb_zen_core::Diagnostics {
+        pcb_diode_api::BomMatchOptions::for_schematic(pcb_diode_api::BomMatchMode::Online),
+    );
+    let failure = match match_result {
+        Err(error) => Some(format!("{error:#}")),
+        Ok(()) if sourcing_bom.availability.len() != sourcing_bom.entries.len() => {
+            Some("BOM matching could not complete".to_string())
+        }
+        Ok(()) => None,
+    };
+
+    match failure {
+        None => bom_offer_diagnostics(&info.zen_path, &sourcing_bom),
+        Some(error) => pcb_zen_core::Diagnostics {
             diagnostics: vec![pcb_zen_core::Diagnostic::categorized(
                 &info.zen_path.to_string_lossy(),
-                &format!("Could not check strict BOM offers: {error:#}"),
+                &format!("Could not check strict BOM offers: {error}"),
                 "bom.sourceability.check_failed",
                 starlark::errors::EvalSeverity::Warning,
             )],

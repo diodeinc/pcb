@@ -158,8 +158,13 @@ pub(crate) fn prepare_design(args: &LayoutArgs) -> Result<PreparedDesign> {
     let zen_path = &args.file;
     let file_name = zen_path.file_name().unwrap().to_string_lossy().to_string();
 
+    let bom_match_mode = if args.offline {
+        pcb_diode_api::BomMatchMode::Offline
+    } else {
+        pcb_diode_api::BomMatchMode::Online
+    };
     let build_result = BuildEvalState::new(resolution_result)
-        .with_cached_bom_hydration()
+        .with_bom_hydration(bom_match_mode)
         .build(
             zen_path,
             config_inputs,
