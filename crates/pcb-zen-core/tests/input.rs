@@ -1173,14 +1173,15 @@ fn errors_for_typed_components_without_house_bom_matching() {
     assert!(
         unspecified
             .iter()
-            .all(|(_, body)| !body.contains("Component 'J1'")),
-        "expected pin header connector to be house-match eligible, got: {unspecified:?}"
+            .any(|(severity, body)| matches!(severity, EvalSeverity::Error)
+                && body.contains("Component 'J2'")),
+        "expected terminal block connector to error, got: {unspecified:?}"
     );
     assert!(
         unspecified
             .iter()
-            .all(|(_, body)| !body.contains("Component 'J2'")),
-        "expected terminal block connector to be house-match eligible, got: {unspecified:?}"
+            .all(|(_, body)| !body.contains("Component 'J1'")),
+        "expected pin header connector to be house-match eligible, got: {unspecified:?}"
     );
 }
 

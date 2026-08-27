@@ -473,10 +473,7 @@ impl ModuleConverter {
             ) => true,
             Some("connector") => instance
                 .string_attr(&["connector_type", "Connector_type"])
-                .is_some_and(|connector_type| {
-                    connector_type.eq_ignore_ascii_case("pin header")
-                        || connector_type.eq_ignore_ascii_case("terminal block")
-                }),
+                .is_some_and(|connector_type| connector_type.eq_ignore_ascii_case("pin header")),
             _ => false,
         }
     }
