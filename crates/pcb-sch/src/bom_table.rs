@@ -83,6 +83,15 @@ fn collection_color(collection: Option<PartCollection>) -> Option<Color> {
     }
 }
 
+fn common_part_collection(
+    mut collections: impl Iterator<Item = Option<PartCollection>>,
+) -> Option<PartCollection> {
+    let collection = collections.next()??;
+    collections
+        .all(|candidate| candidate == Some(collection))
+        .then_some(collection)
+}
+
 /// Apply styling to a cell based on component flags.
 fn styled_cell(content: impl ToString, is_dnp: bool, collection: Option<PartCollection>) -> Cell {
     let cell = Cell::new(content);
@@ -98,19 +107,21 @@ fn styled_cell(content: impl ToString, is_dnp: bool, collection: Option<PartColl
 /// Map the selected planner result to its presentation color.
 fn color_for_status(
     is_dnp: bool,
-    no_match: bool,
+    no_match: Option<bool>,
     sourceability: Option<SourcingStockClass>,
 ) -> Option<Color> {
     if is_dnp {
         Some(Color::DarkGrey)
-    } else if no_match {
-        Some(Color::Magenta)
     } else {
-        sourceability.map(|sourceability| match sourceability {
-            SourcingStockClass::Plenty => Color::Green,
-            SourcingStockClass::Limited | SourcingStockClass::Unknown => Color::Yellow,
-            SourcingStockClass::Insufficient => Color::Red,
-        })
+        match no_match {
+            None => Some(Color::Grey),
+            Some(true) => Some(Color::Magenta),
+            Some(false) => sourceability.map(|sourceability| match sourceability {
+                SourcingStockClass::Plenty => Color::Green,
+                SourcingStockClass::Limited | SourcingStockClass::Unknown => Color::Yellow,
+                SourcingStockClass::Insufficient => Color::Red,
+            }),
+        }
     }
 }
 
@@ -118,7 +129,7 @@ fn color_for_status(
 fn styled_status_cell(
     content: impl ToString,
     is_dnp: bool,
-    no_match: bool,
+    no_match: Option<bool>,
     sourceability: Option<SourcingStockClass>,
 ) -> Cell {
     let cell = Cell::new(content);
@@ -380,16 +391,21 @@ impl Bom {
                 .collect();
 
             // A grouped row is sourceable only when every represented line has match data.
-            let avail = if paths
+            let availabilities = paths
                 .iter()
-                .all(|path| self.availability.contains_key(*path))
-            {
-                paths.first().and_then(|path| self.availability.get(*path))
-            } else {
-                None
-            };
-            let no_match = avail.is_some_and(|a| a.no_match);
-            let collection = avail.and_then(|a| a.selected_part_collection());
+                .map(|path| self.availability.get(*path))
+                .collect::<Option<Vec<_>>>();
+            let avail = availabilities
+                .as_deref()
+                .and_then(|availabilities| availabilities.first().copied());
+            let no_match = avail.map(|availability| availability.no_match);
+            let collection = availabilities.as_deref().and_then(|availabilities| {
+                common_part_collection(
+                    availabilities
+                        .iter()
+                        .map(|availability| availability.selected_part_collection()),
+                )
+            });
 
             let us_data =
                 RegionDisplayData::from_region_avail(avail.and_then(|a| a.us.as_ref()), qty);
@@ -407,7 +423,7 @@ impl Bom {
                 } else if avail.is_none() {
                     no_match_data_count += 1;
                     no_match_data_qty += qty;
-                } else if no_match {
+                } else if matches!(no_match, Some(true)) {
                     no_match_count += 1;
                     no_match_qty += qty;
                 } else {
@@ -678,9 +694,23 @@ mod tests {
     use crate::bom::{Availability, BomEntry};
 
     #[test]
+    fn grouped_collection_requires_consistent_provenance() {
+        assert_eq!(
+            common_part_collection([Some(PartCollection::House); 2].into_iter()),
+            Some(PartCollection::House)
+        );
+        assert_eq!(
+            common_part_collection(
+                [Some(PartCollection::House), Some(PartCollection::Extended),].into_iter()
+            ),
+            None
+        );
+    }
+
+    #[test]
     fn no_match_status_is_magenta() {
         assert_eq!(
-            color_for_status(false, true, Some(SourcingStockClass::Plenty)),
+            color_for_status(false, Some(true), Some(SourcingStockClass::Plenty)),
             Some(Color::Magenta)
         );
     }
@@ -688,26 +718,27 @@ mod tests {
     #[test]
     fn api_stock_classes_map_to_sourceability_colors() {
         assert_eq!(
-            color_for_status(false, false, Some(SourcingStockClass::Plenty)),
+            color_for_status(false, Some(false), Some(SourcingStockClass::Plenty)),
             Some(Color::Green)
         );
         assert_eq!(
-            color_for_status(false, false, Some(SourcingStockClass::Limited)),
+            color_for_status(false, Some(false), Some(SourcingStockClass::Limited)),
             Some(Color::Yellow)
         );
         assert_eq!(
-            color_for_status(false, false, Some(SourcingStockClass::Insufficient)),
+            color_for_status(false, Some(false), Some(SourcingStockClass::Insufficient)),
             Some(Color::Red)
         );
         assert_eq!(
-            color_for_status(false, false, Some(SourcingStockClass::Unknown)),
+            color_for_status(false, Some(false), Some(SourcingStockClass::Unknown)),
             Some(Color::Yellow)
         );
     }
 
     #[test]
-    fn missing_region_is_uncolored_and_existing_region_drives_line() {
-        assert_eq!(color_for_status(false, false, None), None);
+    fn missing_match_data_is_grey_but_missing_region_is_uncolored() {
+        assert_eq!(color_for_status(false, None, None), Some(Color::Grey));
+        assert_eq!(color_for_status(false, Some(false), None), None);
         assert_eq!(
             line_sourceability(Some(SourcingStockClass::Plenty), None),
             Some(SourcingStockClass::Plenty)
