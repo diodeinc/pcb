@@ -1,0 +1,34 @@
+"""Initial schematic symbol orientation regression design."""
+
+Project(name="InitialOrientation", path="kicad", layout=False)
+
+Resistor = Module("@stdlib/generics/Resistor.zen")
+
+Resistor(
+    name="R_SINGLE",
+    value="1kohms",
+    package="0402",
+    P1=Ground("VCC_LIKE_NAME"),
+    P2=Net("SINGLE_SIGNAL"),
+)
+Resistor(
+    name="R_BOTH",
+    value="2kohms",
+    package="0402",
+    P1=Ground("BOTH_LOW"),
+    P2=Power("BOTH_HIGH"),
+)
+Resistor(
+    name="R_TIED",
+    value="3kohms",
+    package="0402",
+    P1=Ground("TIE_A"),
+    P2=Ground("TIE_B"),
+)
+Resistor(
+    name="R_NONE",
+    value="4kohms",
+    package="0402",
+    P1=Net("NONE_A"),
+    P2=Net("NONE_B"),
+)

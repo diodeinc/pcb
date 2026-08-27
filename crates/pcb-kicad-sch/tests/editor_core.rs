@@ -10,7 +10,7 @@ use pcb_kicad_sch::{
     deterministic_uuid,
     reconcile::{plan_reconciliation, plan_repairs},
 };
-use pcb_sch::Schematic;
+use pcb_sch::{AttributeValue, Schematic};
 
 #[test]
 fn editor_core_plans_applies_analyzes_and_reopens_in_memory() {
@@ -151,6 +151,47 @@ fn generated_hierarchy_connects_sheet_ports_without_label_bridges() {
         }
         assert!(labels.count() > 0);
     }
+}
+
+#[test]
+fn missing_symbols_use_attached_net_symbol_orientation() {
+    let mut netlist = common::compile_fixture("analysis", "initial_orientation.zen");
+    netlist.net_mut("VCC_LIKE_NAME").unwrap().properties.insert(
+        "__symbol_value".into(),
+        AttributeValue::String(
+            r#"(symbol "Custom:Side" (power global)
+                  (symbol "Side_1_1"
+                    (pin power_in line (at 0 0 180) (length 0)
+                      (name "") (number "1"))))"#
+                .into(),
+        ),
+    );
+    let document = plan_reconciliation(None, &netlist, "InitialOrientation.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    let rotation = |path: &str| {
+        document.pages[0]
+            .items
+            .iter()
+            .find_map(|item| match item {
+                SchItem::Symbol(symbol) if symbol.field_value("Path") == Some(path) => {
+                    Some(symbol.rotation)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("missing managed symbol {path}"))
+    };
+
+    // The custom symbol's visible pin points right, so resistor pin 1 points
+    // left even though the net has a VCC-like name.
+    assert_eq!(rotation("R_SINGLE.R"), pcb_kicad_sch::Rotation::Deg90);
+    // Default GND and VCC symbols on opposite ends agree on this rotation.
+    assert_eq!(rotation("R_BOTH.R"), pcb_kicad_sch::Rotation::Deg180);
+    // Two equal GND constraints conflict, while ordinary nets do not constrain
+    // orientation; both cases retain the deterministic default.
+    assert_eq!(rotation("R_TIED.R"), pcb_kicad_sch::Rotation::Deg0);
+    assert_eq!(rotation("R_NONE.R"), pcb_kicad_sch::Rotation::Deg0);
 }
 
 #[test]
