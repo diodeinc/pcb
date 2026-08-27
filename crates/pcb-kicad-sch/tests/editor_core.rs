@@ -98,6 +98,18 @@ fn generated_net_symbols_form_a_wired_staircase() {
             .is_equivalent()
     );
     let page = &document.pages[0];
+    let shared_ground_count = page
+        .items
+        .iter()
+        .filter(|item| {
+            matches!(
+                item,
+                SchItem::Symbol(symbol)
+                    if symbol.field_value("Value") == Some("GROUND_SHARED")
+            )
+        })
+        .count();
+    assert_eq!(shared_ground_count, 1);
     let mut net_symbols = page
         .items
         .iter()
@@ -123,7 +135,7 @@ fn generated_net_symbols_form_a_wired_staircase() {
         .iter()
         .filter(|item| matches!(item, SchItem::Wire(_)))
         .count();
-    assert!((2..=4).contains(&wire_count));
+    assert!((5..=10).contains(&wire_count), "{wire_count}");
     assert!(page.items.iter().all(|item| match item {
         SchItem::Wire(wire) => wire.a.x == wire.b.x || wire.a.y == wire.b.y,
         _ => true,

@@ -218,6 +218,22 @@ pub(crate) fn symbol_visual_bounds(
     Ok(bounds)
 }
 
+pub(crate) fn symbol_geometry_bounds(
+    symbol: &Symbol,
+    definition: &SymbolDefinition,
+) -> Result<Option<Bounds>> {
+    let parsed = symbol::ParsedSymbolDefinition::parse(definition)?;
+    let pins = parsed.placed_pins(symbol)?;
+    let mut bounds = symbol_body_bounds(definition, symbol);
+    let pin_bounds = Bounds::from_points(pins.iter().flat_map(|pin| [pin.point, pin.body_point]));
+    match (&mut bounds, pin_bounds) {
+        (Some(bounds), Some(pin_bounds)) => bounds.union(pin_bounds),
+        (None, pin_bounds) => bounds = pin_bounds,
+        _ => {}
+    }
+    Ok(bounds)
+}
+
 impl Symbol {
     pub fn visual_bounds(&self, definition: &SymbolDefinition) -> Result<Option<Bounds>> {
         symbol_visual_bounds(self, definition)

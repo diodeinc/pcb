@@ -1729,7 +1729,11 @@ fn sync_net_drivers(
             .map(|island| (island.clone(), island_group(island)))
             .collect::<BTreeMap<_, _>>();
 
+        let mut handled_islands = BTreeSet::new();
         for (island, target_indices) in &targets_by_island {
+            if handled_islands.contains(island) {
+                continue;
+            }
             let provenance = &observed.islands[island];
             let canonical = *target_indices
                 .iter()
@@ -1761,6 +1765,50 @@ fn sync_net_drivers(
                 continue;
             }
             if let Some(spec) = net_symbol_specs.get(net_name) {
+                // Match the old schematic viewer: one power symbol serves every
+                // undriven pin for the same component, net, and component side.
+                let mut group_targets = targets_by_island
+                    .iter()
+                    .filter_map(|(member_island, member_indices)| {
+                        if handled_islands.contains(member_island) {
+                            return None;
+                        }
+                        let member_index = *member_indices.iter().min_by_key(|index| {
+                            (&targets[**index].slot, &targets[**index].number)
+                        })?;
+                        let member = &targets[member_index];
+                        (member.page_index == target.page_index
+                            && member.slot == target.slot
+                            && member.spin == target.spin)
+                            .then_some((member_island.clone(), member))
+                    })
+                    .collect::<Vec<_>>();
+                group_targets.sort_by(|left, right| {
+                    left.1
+                        .point
+                        .x
+                        .total_cmp(&right.1.point.x)
+                        .then_with(|| left.1.point.y.total_cmp(&right.1.point.y))
+                        .then_with(|| left.1.number.cmp(&right.1.number))
+                });
+                for (member_island, _) in &group_targets {
+                    handled_islands.insert(member_island.clone());
+                }
+
+                let average_point = Point::new(
+                    group_targets
+                        .iter()
+                        .map(|(_, member)| member.point.x)
+                        .sum::<f64>()
+                        / group_targets.len() as f64,
+                    group_targets
+                        .iter()
+                        .map(|(_, member)| member.point.y)
+                        .sum::<f64>()
+                        / group_targets.len() as f64,
+                );
+                let mut placement_target = target.clone();
+                placement_target.point = average_point;
                 let id = available_deterministic_id(document, &target.net_symbol_key(net_name));
                 let pin = target.physical_pin(&document.pages[target.page_index].id);
                 let stair_index = stair_indices
@@ -1769,21 +1817,23 @@ fn sync_net_drivers(
                     .unwrap_or(0);
                 let connection_point = net_symbol_connection_point(
                     &placed[&target.slot],
-                    target,
+                    &placement_target,
                     spec.pin_outward_spin,
                     stair_index,
                 )?;
                 let symbol = build_net_symbol(spec, net_name, id, connection_point)?;
                 let symbol_id = symbol.id.clone();
                 insert_net_symbol(document, target.page_index, symbol, &spec.definition)?;
-                insert_connection_wires(
-                    document,
-                    target.page_index,
-                    &symbol_id,
-                    target.point,
-                    connection_point,
-                    spec.pin_outward_spin,
-                );
+                for (_, member) in group_targets {
+                    insert_connection_wires(
+                        document,
+                        member.page_index,
+                        &symbol_id,
+                        member.point,
+                        connection_point,
+                        spec.pin_outward_spin,
+                    );
+                }
             } else {
                 let id = available_deterministic_id(document, &target.label_key(net_name));
                 let mut label = driver_label(
@@ -1810,43 +1860,64 @@ fn net_symbol_stair_indices(
     net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
 ) -> BTreeMap<(String, PhysicalPinRef), usize> {
     type Slot = (usize, SymbolSlotKey, LabelSpin, LabelSpin);
-    type Candidate = (String, PhysicalPinRef, Point, String);
+    type GroupKey = (String, usize, SymbolSlotKey, LabelSpin, LabelSpin);
+    type GroupMember = (PhysicalPinRef, Point, String);
+    type Candidate = (String, Vec<GroupMember>);
 
-    let mut slots = BTreeMap::<Slot, Vec<Candidate>>::new();
+    let mut groups = BTreeMap::<GroupKey, Vec<GroupMember>>::new();
     for (net_name, targets) in targets_by_net {
         let Some(spec) = net_symbol_specs.get(net_name) else {
             continue;
         };
         for target in targets.iter().filter(|target| !target.hidden) {
             let pin = target.physical_pin(&document.pages[target.page_index].id);
-            slots
+            groups
                 .entry((
+                    net_name.clone(),
                     target.page_index,
                     target.slot.clone(),
                     target.spin,
                     spec.pin_outward_spin,
                 ))
                 .or_default()
-                .push((net_name.clone(), pin, target.point, target.number.clone()));
+                .push((pin, target.point, target.number.clone()));
         }
+    }
+
+    let mut slots = BTreeMap::<Slot, Vec<Candidate>>::new();
+    for ((net_name, page_index, slot, target_side, symbol_side), members) in groups {
+        slots
+            .entry((page_index, slot, target_side, symbol_side))
+            .or_default()
+            .push((net_name, members));
     }
 
     let mut indices = BTreeMap::new();
     for ((_, _, target_side, _), candidates) in &mut slots {
         candidates.sort_by(|left, right| {
+            let average = |candidate: &Candidate| {
+                let count = candidate.1.len() as f64;
+                Point::new(
+                    candidate.1.iter().map(|member| member.1.x).sum::<f64>() / count,
+                    candidate.1.iter().map(|member| member.1.y).sum::<f64>() / count,
+                )
+            };
+            let left_point = average(left);
+            let right_point = average(right);
             let primary = if matches!(*target_side, LabelSpin::Left | LabelSpin::Right) {
-                left.2.y.total_cmp(&right.2.y)
+                left_point.y.total_cmp(&right_point.y)
             } else {
-                left.2.x.total_cmp(&right.2.x)
+                left_point.x.total_cmp(&right_point.x)
             };
             primary
-                .then_with(|| left.2.x.total_cmp(&right.2.x))
-                .then_with(|| left.2.y.total_cmp(&right.2.y))
+                .then_with(|| left_point.x.total_cmp(&right_point.x))
+                .then_with(|| left_point.y.total_cmp(&right_point.y))
                 .then_with(|| left.0.cmp(&right.0))
-                .then_with(|| left.3.cmp(&right.3))
         });
-        for (index, (net_name, pin, _, _)) in candidates.iter().enumerate() {
-            indices.insert((net_name.clone(), pin.clone()), index);
+        for (index, (net_name, members)) in candidates.iter().enumerate() {
+            for (pin, _, _) in members {
+                indices.insert((net_name.clone(), pin.clone()), index);
+            }
         }
     }
     indices
@@ -1858,7 +1929,7 @@ fn net_symbol_connection_point(
     symbol_pin_spin: LabelSpin,
     stair_index: usize,
 ) -> Result<Point> {
-    let bounds = field_autoplace::symbol_visual_bounds(&placed.symbol, &placed.definition)?
+    let bounds = field_autoplace::symbol_geometry_bounds(&placed.symbol, &placed.definition)?
         .unwrap_or_else(|| {
             field_autoplace::Bounds::from_points([placed.symbol.at])
                 .expect("one point defines bounds")
@@ -2611,9 +2682,13 @@ mod tests {
 
         let first = net_symbol_connection_point(item, &target, LabelSpin::Up, 0).unwrap();
         let second = net_symbol_connection_point(item, &target, LabelSpin::Up, 1).unwrap();
+        let bounds = field_autoplace::symbol_geometry_bounds(&item.symbol, &item.definition)
+            .unwrap()
+            .unwrap();
 
         assert!((second.x - first.x - 2.0 * CONNECTION_GRID_MM).abs() < GEOMETRY_EPS_MM);
         assert!((second.y - first.y - 2.0 * CONNECTION_GRID_MM).abs() < GEOMETRY_EPS_MM);
+        assert!((first.x - bounds.max_x - 4.0 * CONNECTION_GRID_MM).abs() < GEOMETRY_EPS_MM);
         assert!(first.x > target.point.x);
         assert!(first.y > target.point.y);
     }

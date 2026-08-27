@@ -4,15 +4,19 @@ Project(name="NetSymbolStaircase", path="kicad", layout=False)
 
 GROUND_Z = io(Ground("GROUND_Z"))
 GROUND_A = io(Ground("GROUND_A"))
+GROUND_SHARED = io(Ground("GROUND_SHARED"))
 
 Component(
     name="STAIR",
-    footprint="Package_DIP:DIP-4_W7.62mm",
+    footprint="Package_DIP:DIP-8_W7.62mm",
     symbol=Symbol(library="staircase.kicad_sym"),
     skip_bom=True,
     pins={
         "A": GROUND_Z,
         "B": GROUND_A,
+        "C": GROUND_SHARED,
+        "D": GROUND_SHARED,
+        "E": GROUND_SHARED,
     },
 )
 
