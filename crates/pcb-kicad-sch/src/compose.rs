@@ -209,7 +209,7 @@ pub(crate) fn reconcile_document(
         .filter(|(_, targets)| {
             targets
                 .iter()
-                .any(|target| project_slots.contains(&target.slot))
+                .any(|target| relocatable_slots.contains(&target.slot))
         })
         .map(|(net_name, _)| net_name)
         .collect::<BTreeSet<_>>();
