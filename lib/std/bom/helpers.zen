@@ -23,18 +23,6 @@ def prop(c, names):
     return None
 
 
-def merge_parts(parts: list[dict]) -> dict:
-    """Merge two part lists."""
-    merged = {}
-    for part in parts:
-        for key, value in part.items():
-            if key not in merged:
-                merged[key] = value
-            else:
-                merged[key] += value
-    return merged
-
-
 def set_from_matches(c, matches):
     """Set primary MPN and alternatives from a list of matches.
 
