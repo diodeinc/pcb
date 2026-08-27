@@ -2313,7 +2313,8 @@ fn resolve_pin_targets(
     pin_numbers: &BTreeSet<String>,
 ) -> Result<Vec<PinTarget>> {
     let mut component_placed = false;
-    let mut matches = Vec::new();
+    let mut number_matches = Vec::new();
+    let mut name_matches = Vec::new();
     for (slot, placed) in placed
         .iter()
         .filter(|(slot, _)| slot.component_path() == component_path)
@@ -2322,8 +2323,9 @@ fn resolve_pin_targets(
         let parsed = symbol::ParsedSymbolDefinition::parse(&placed.definition)?;
         for pin in parsed.placed_pins(&placed.symbol)? {
             let matches_name = !pin_name.is_empty() && !pin.name.is_empty() && pin.name == pin_name;
-            if matches_name || !pin.numbers.is_disjoint(pin_numbers) {
-                matches.push(PinTarget {
+            let matches_number = !pin.numbers.is_disjoint(pin_numbers);
+            if matches_name || matches_number {
+                let target = PinTarget {
                     page_index: placed.page_index,
                     slot: slot.clone(),
                     pin_name: pin.name,
@@ -2332,10 +2334,23 @@ fn resolve_pin_targets(
                     point: pin.point,
                     spin: pin.outward_spin,
                     hidden: pin.hidden,
-                });
+                };
+                if matches_number {
+                    number_matches.push(target);
+                } else {
+                    name_matches.push(target);
+                }
             }
         }
     }
+    // One Zener terminal can represent multiple physical pads. Prefer the
+    // exact pad numbers and retain every matching KiCad pin in that case;
+    // names are a fallback for symbols whose number metadata is unavailable.
+    let (matches, exact_numbers) = if number_matches.is_empty() {
+        (name_matches, false)
+    } else {
+        (number_matches, true)
+    };
     if matches.is_empty() {
         // A component that is not placed at all contributes no anchors; its
         // absence is already reported as a missing-symbol issue, and partial
@@ -2357,6 +2372,7 @@ fn resolve_pin_targets(
     match visible.as_slice() {
         [target] => Ok(vec![target.clone()]),
         [] => Ok(matches),
+        _ if exact_numbers => Ok(visible),
         _ => bail!(
             "netlist terminal '{}.{}' matches more than one KiCad symbol pin",
             component_path,
@@ -2368,6 +2384,75 @@ fn resolve_pin_targets(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn multi_pad_symbol() -> BTreeMap<SymbolSlotKey, PlacedSymbol> {
+        let definition = SymbolDefinition::from_kicad_symbol_sexpr(
+            r#"(symbol "Test:MultiPad"
+              (symbol "MultiPad_1_1"
+                (pin input line (at -2.54 2.54 0) (length 2.54)
+                  (name "A") (number "1"))
+                (pin input line (at -2.54 -2.54 0) (length 2.54)
+                  (name "A") (number "3"))
+                (pin input line (at 2.54 0 180) (length 2.54)
+                  (name "B") (number "4"))))"#,
+        )
+        .unwrap();
+        let slot = SymbolSlotKey::new("MQ-7.MQ-7", 1).unwrap();
+        let symbol = Symbol {
+            id: slot.symbol_id(),
+            lib_id: definition.lib_id.clone(),
+            unit: 1,
+            body_style: 1,
+            at: Point::default(),
+            rotation: Rotation::default(),
+            mirror: None,
+            fields_autoplaced: true,
+            fields: BTreeMap::new(),
+            pins: Vec::new(),
+            unsupported: Vec::new(),
+        };
+        BTreeMap::from([(
+            slot,
+            PlacedSymbol {
+                page_index: 0,
+                symbol,
+                definition,
+            },
+        )])
+    }
+
+    #[test]
+    fn logical_terminal_resolves_all_of_its_physical_pins() {
+        let targets = resolve_pin_targets(
+            &multi_pad_symbol(),
+            "MQ-7.MQ-7",
+            "A",
+            &BTreeSet::from(["1".to_string(), "3".to_string()]),
+        )
+        .unwrap();
+
+        assert_eq!(
+            targets
+                .into_iter()
+                .map(|target| target.number)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["1".to_string(), "3".to_string()])
+        );
+    }
+
+    #[test]
+    fn pin_numbers_take_precedence_over_a_repeated_pin_name() {
+        let targets = resolve_pin_targets(
+            &multi_pad_symbol(),
+            "MQ-7.MQ-7",
+            "A",
+            &BTreeSet::from(["1".to_string()]),
+        )
+        .unwrap();
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].number, "1");
+    }
 
     #[test]
     fn unplaced_component_terminals_are_skipped_not_errors() {

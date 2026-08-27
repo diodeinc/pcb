@@ -21,6 +21,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - The interposer mate constellation is S13: uniform 2×3 blocks with corner mate-detect loops.
 - Orient newly generated missing schematic symbols from attached net-symbol pin directions.
 
+### Fixed
+
+- Allow `pcb apply schematic` to connect one logical terminal to multiple physical symbol pins.
+
 ## [0.4.37] - 2026-08-26
 
 ### Added
