@@ -11,9 +11,9 @@ use crate::{
     analysis::{ConnectivityInspection, SchematicIssue, SchematicIssueKey},
     component_slots,
     connectivity::{
-        ComponentIdentity, ConnectionOrigin, ConnectivityItemRef, IslandRef, PhysicalConnectivity,
-        PhysicalIsland, PhysicalPinRef, PinVisibility, SymbolLocation, Terminal,
-        named_connected_nets, reduce_with_provenance,
+        ConnectionOrigin, ConnectivityItemRef, IslandRef, PhysicalConnectivity, PhysicalIsland,
+        PhysicalPinRef, PinVisibility, SymbolLocation, named_connected_nets,
+        reduce_with_provenance,
     },
     deterministic_uuid, field_autoplace, hierarchy, net_symbols,
     repair::{ConnectivityRepairPlan, plan_connectivity_repair, remove_items},
@@ -198,6 +198,32 @@ pub(crate) fn reconcile_document(
         &hierarchy,
     )?;
 
+    // A projected component's expected connectivity is already known from the
+    // netlist. Attach its pins now, after placement, instead of rediscovering
+    // their disconnections as a second set of schematic issues.
+    let all_nets = named_connected_nets(netlist)
+        .map(|net| net.name.clone())
+        .collect::<BTreeSet<_>>();
+    let projected_nets = connectivity_targets(netlist, &placed, &all_nets)?
+        .into_iter()
+        .filter(|(_, targets)| {
+            targets
+                .iter()
+                .any(|target| project_slots.contains(&target.slot))
+        })
+        .map(|(net_name, _)| net_name)
+        .collect::<BTreeSet<_>>();
+    if !projected_nets.is_empty() {
+        add_connectivity_drivers(
+            &mut document,
+            netlist,
+            &placed,
+            &net_symbol_specs,
+            default_page,
+            &projected_nets,
+        )?;
+    }
+
     let current = crate::analysis::inspect_schematic(&document, netlist)?;
     let repair_keys = if complete {
         current
@@ -211,21 +237,6 @@ pub(crate) fn reconcile_document(
             .flat_map(|inspection| &inspection.issues)
             .map(|issue| issue.key.clone())
             .collect::<BTreeSet<_>>();
-        // Nets whose disconnection involves a symbol this repair projects.
-        // Tracked by net name, not issue key: satisfying the pin terminal can
-        // flip the issue's variant (DisconnectedNet -> MissingPort) while the
-        // net still needs its drivers placed.
-        let mut projected_nets = BTreeSet::new();
-        for issue in inspection_before
-            .into_iter()
-            .flat_map(|inspection| &inspection.issues)
-        {
-            if let SchematicIssue::DisconnectedNet { net_name, .. } = &issue.issue
-                && disconnected_from_projected_symbol(&issue.issue, &project_slots, &placed)?
-            {
-                projected_nets.insert(net_name.clone());
-            }
-        }
         // Any selected mutation (projection or removal) shifts issue keys, so
         // connectivity issues that appear only after the mutation belong to
         // this repair's scope.
@@ -235,13 +246,7 @@ pub(crate) fn reconcile_document(
             .issues
             .iter()
             .filter(|issue| {
-                let issue_net = match &issue.issue {
-                    SchematicIssue::DisconnectedNet { net_name, .. }
-                    | SchematicIssue::MissingPort { net_name, .. } => Some(net_name),
-                    _ => None,
-                };
                 selected_connectivity.contains(&issue.key)
-                    || issue_net.is_some_and(|net| projected_nets.contains(net))
                     || (document_mutated
                         && !before_keys.contains(&issue.key)
                         && is_connectivity_issue(&issue.issue))
@@ -282,50 +287,6 @@ fn is_connectivity_issue(issue: &SchematicIssue) -> bool {
             | SchematicIssue::UnexpectedConnection { .. }
             | SchematicIssue::Shorted { .. }
     )
-}
-
-fn disconnected_from_projected_symbol(
-    issue: &SchematicIssue,
-    project_slots: &BTreeSet<SymbolSlotKey>,
-    placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
-) -> Result<bool> {
-    let SchematicIssue::DisconnectedNet {
-        missing_terminals, ..
-    } = issue
-    else {
-        return Ok(false);
-    };
-    for terminal in missing_terminals {
-        let Terminal::ComponentPin {
-            component: ComponentIdentity::ManagedPath(path),
-            ..
-        } = terminal
-        else {
-            continue;
-        };
-        for slot in project_slots
-            .iter()
-            .filter(|slot| slot.component_path() == path)
-        {
-            let Some(symbol) = placed.get(slot) else {
-                continue;
-            };
-            for pin in symbol.definition.placed_pins(&symbol.symbol)? {
-                if pin.hidden {
-                    continue;
-                }
-                let projected = Terminal::ComponentPin {
-                    component: ComponentIdentity::ManagedPath(path.clone()),
-                    pin_name: pin.name,
-                    pin_numbers: pin.numbers,
-                };
-                if terminal.matches(&projected) {
-                    return Ok(true);
-                }
-            }
-        }
-    }
-    Ok(false)
 }
 
 struct RepairTargets {
@@ -932,7 +893,8 @@ fn pack_generated_symbols(
         .map(|net| net.name.clone())
         .collect();
     let targets = connectivity_targets(netlist, placed, &all_nets)?;
-    let net_symbol_runs = plan_net_symbol_runs(document, &targets, net_symbol_specs, placed)?;
+    let net_symbol_runs =
+        plan_projected_net_symbol_runs(&targets, relocatable_slots, net_symbol_specs, placed)?;
 
     for page_index in 0..document.pages.len() {
         let relocatable = relocatable_slots
@@ -1980,15 +1942,12 @@ fn plan_net_symbol_runs(
     net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
     placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
 ) -> Result<Vec<NetSymbolRun>> {
-    type Slot = (usize, SymbolSlotKey, LabelSpin, LabelSpin);
-    type GroupKey = (String, usize, SymbolSlotKey, LabelSpin, LabelSpin);
-
     let observed = reduce_with_provenance(document, PinVisibility::VisibleOnly)?;
-    let mut groups = BTreeMap::<GroupKey, Vec<&PinTarget>>::new();
+    let mut missing = Vec::new();
     for (net_name, targets) in targets_by_net {
-        let Some(spec) = net_symbol_specs.get(net_name) else {
+        if !net_symbol_specs.contains_key(net_name) {
             continue;
-        };
+        }
 
         for driver_island in net_driver_islands(document, targets, &observed)? {
             let target = &targets[driver_island.canonical_target];
@@ -2001,17 +1960,51 @@ fn plan_net_symbol_runs(
             if has_driver {
                 continue;
             }
-            groups
-                .entry((
-                    net_name.clone(),
-                    target.page_index,
-                    target.slot.clone(),
-                    target.spin,
-                    spec.pin_outward_spin,
-                ))
-                .or_default()
-                .push(target);
+            missing.push((net_name, target));
         }
+    }
+    arrange_net_symbol_runs(missing, net_symbol_specs, placed)
+}
+
+fn plan_projected_net_symbol_runs(
+    targets_by_net: &BTreeMap<String, Vec<PinTarget>>,
+    projected_slots: &BTreeSet<SymbolSlotKey>,
+    net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
+    placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
+) -> Result<Vec<NetSymbolRun>> {
+    let missing = targets_by_net
+        .iter()
+        .filter(|(net_name, _)| net_symbol_specs.contains_key(*net_name))
+        .flat_map(|(net_name, targets)| {
+            targets
+                .iter()
+                .filter(|target| !target.hidden && projected_slots.contains(&target.slot))
+                .map(move |target| (net_name, target))
+        });
+    arrange_net_symbol_runs(missing, net_symbol_specs, placed)
+}
+
+fn arrange_net_symbol_runs<'a>(
+    missing: impl IntoIterator<Item = (&'a String, &'a PinTarget)>,
+    net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
+    placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
+) -> Result<Vec<NetSymbolRun>> {
+    type Slot = (usize, SymbolSlotKey, LabelSpin, LabelSpin);
+    type GroupKey = (String, usize, SymbolSlotKey, LabelSpin, LabelSpin);
+
+    let mut groups = BTreeMap::<GroupKey, Vec<&PinTarget>>::new();
+    for (net_name, target) in missing {
+        let spec = &net_symbol_specs[net_name];
+        groups
+            .entry((
+                net_name.clone(),
+                target.page_index,
+                target.slot.clone(),
+                target.spin,
+                spec.pin_outward_spin,
+            ))
+            .or_default()
+            .push(target);
     }
 
     let mut runs = Vec::<NetSymbolRun>::new();
@@ -2773,6 +2766,22 @@ mod tests {
         )])
     }
 
+    fn ground_net_symbol_spec() -> net_symbols::NetSymbolSpec {
+        net_symbols::NetSymbolSpec {
+            definition: SymbolDefinition::from_kicad_symbol_sexpr(
+                r#"(symbol "power:GND"
+                  (power)
+                  (symbol "GND_1_1"
+                    (pin power_in line (at 0 0 270) (length 2.54)
+                      (name "GND") (number "1"))))"#,
+            )
+            .unwrap(),
+            unit: 1,
+            pin_offset: Point::default(),
+            pin_outward_spin: LabelSpin::Up,
+        }
+    }
+
     #[test]
     fn logical_terminal_resolves_all_of_its_physical_pins() {
         let targets = resolve_pin_targets(
@@ -2852,20 +2861,7 @@ mod tests {
         )
         .unwrap()
         .remove(0);
-        let definition = SymbolDefinition::from_kicad_symbol_sexpr(
-            r#"(symbol "power:GND"
-              (power)
-              (symbol "GND_1_1"
-                (pin power_in line (at 0 0 270) (length 2.54)
-                  (name "GND") (number "1"))))"#,
-        )
-        .unwrap();
-        let spec = net_symbols::NetSymbolSpec {
-            definition,
-            unit: 1,
-            pin_offset: Point::default(),
-            pin_outward_spin: LabelSpin::Up,
-        };
+        let spec = ground_net_symbol_spec();
         let targets = BTreeMap::from([
             ("FIRST".to_string(), vec![first.clone()]),
             ("SECOND".to_string(), vec![second.clone()]),
@@ -2933,6 +2929,40 @@ mod tests {
         let shared = adjacent_target_runs(item, vec![&first, &intervening, &last]).unwrap();
         assert_eq!(shared.len(), 1);
         assert_eq!(shared[0].len(), 3);
+    }
+
+    #[test]
+    fn projected_net_symbol_runs_keep_coincident_components_distinct() {
+        let mut placed = multi_pad_symbol();
+        let first = resolve_pin_targets(
+            &placed,
+            "MQ-7.MQ-7",
+            "B",
+            &BTreeSet::from(["4".to_string()]),
+        )
+        .unwrap()
+        .remove(0);
+        let second_slot = SymbolSlotKey::new("OTHER", 1).unwrap();
+        let mut second_item = placed[&first.slot].clone();
+        second_item.symbol.id = second_slot.symbol_id();
+        placed.insert(second_slot.clone(), second_item);
+        let mut second = first.clone();
+        second.slot = second_slot.clone();
+        second.symbol_id = second_slot.symbol_id();
+
+        let specs = BTreeMap::from([("GROUND".to_string(), ground_net_symbol_spec())]);
+        let targets = BTreeMap::from([("GROUND".to_string(), vec![first.clone(), second])]);
+        let projected = BTreeSet::from([first.slot, second_slot]);
+
+        let runs = plan_projected_net_symbol_runs(&targets, &projected, &specs, &placed).unwrap();
+
+        assert_eq!(runs.len(), 2);
+        assert_eq!(
+            runs.into_iter()
+                .map(|run| run.slot)
+                .collect::<BTreeSet<_>>(),
+            projected
+        );
     }
 
     #[test]
