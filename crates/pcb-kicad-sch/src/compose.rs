@@ -182,7 +182,13 @@ pub(crate) fn reconcile_document(
     }
 
     let mut placed = placed_symbols_from_document(&document, &expected_slots)?;
-    pack_generated_symbols(&mut document, netlist, &mut placed, &relocatable_slots)?;
+    pack_generated_symbols(
+        &mut document,
+        netlist,
+        &mut placed,
+        &relocatable_slots,
+        &net_symbol_specs,
+    )?;
 
     add_hierarchy_connectivity(
         &mut document,
@@ -917,6 +923,7 @@ fn pack_generated_symbols(
     netlist: &Schematic,
     placed: &mut BTreeMap<SymbolSlotKey, PlacedSymbol>,
     relocatable_slots: &BTreeSet<SymbolSlotKey>,
+    net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
 ) -> Result<()> {
     if relocatable_slots.is_empty() {
         return Ok(());
@@ -925,6 +932,7 @@ fn pack_generated_symbols(
         .map(|net| net.name.clone())
         .collect();
     let targets = connectivity_targets(netlist, placed, &all_nets)?;
+    let stair_indices = net_symbol_stair_indices(document, &targets, net_symbol_specs);
 
     for page_index in 0..document.pages.len() {
         let relocatable = relocatable_slots
@@ -949,7 +957,13 @@ fn pack_generated_symbols(
         let mut items = relocatable
             .into_iter()
             .map(|slot| {
-                let bounds = GridRect::from_bounds(component_envelope(&placed[&slot], &targets)?);
+                let bounds = GridRect::from_bounds(component_envelope(
+                    &placed[&slot],
+                    &targets,
+                    net_symbol_specs,
+                    &stair_indices,
+                    &document.pages[page_index].id,
+                )?);
                 Ok((slot, bounds))
             })
             .collect::<Result<Vec<_>>>()?;
@@ -1218,6 +1232,9 @@ fn grid_ceil(value: f64) -> i32 {
 fn component_envelope(
     placed: &PlacedSymbol,
     targets: &BTreeMap<String, Vec<PinTarget>>,
+    net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
+    stair_indices: &BTreeMap<(String, PhysicalPinRef), usize>,
+    page_id: &str,
 ) -> Result<field_autoplace::Bounds> {
     let mut bounds = field_autoplace::symbol_visual_bounds(&placed.symbol, &placed.definition)?
         .unwrap_or_else(|| {
@@ -1225,11 +1242,60 @@ fn component_envelope(
                 .expect("one point defines bounds")
         });
     for (net_name, net_targets) in targets {
-        for target in net_targets
+        let component_targets = net_targets
             .iter()
             .filter(|target| !target.hidden && target.slot.symbol_id() == placed.symbol.id)
-        {
+            .collect::<Vec<_>>();
+        for target in &component_targets {
             bounds.union(net_label_bounds(net_name, target));
+        }
+
+        let Some(spec) = net_symbol_specs.get(net_name) else {
+            continue;
+        };
+        let mut groups = BTreeMap::<LabelSpin, Vec<&PinTarget>>::new();
+        for target in component_targets {
+            groups.entry(target.spin).or_default().push(target);
+        }
+        for group in groups.values_mut() {
+            group.sort_by(|left, right| {
+                left.point
+                    .x
+                    .total_cmp(&right.point.x)
+                    .then_with(|| left.point.y.total_cmp(&right.point.y))
+                    .then_with(|| left.number.cmp(&right.number))
+            });
+            let canonical = group[0];
+            let average_point = Point::new(
+                group.iter().map(|target| target.point.x).sum::<f64>() / group.len() as f64,
+                group.iter().map(|target| target.point.y).sum::<f64>() / group.len() as f64,
+            );
+            let mut placement_target = canonical.clone();
+            placement_target.point = average_point;
+            let pin = canonical.physical_pin(page_id);
+            let stair_index = stair_indices
+                .get(&(net_name.clone(), pin))
+                .copied()
+                .unwrap_or(0);
+            let connection = net_symbol_connection_point(
+                placed,
+                &placement_target,
+                spec.pin_outward_spin,
+                stair_index,
+            )?;
+            let symbol = build_net_symbol(spec, net_name, String::new(), connection)?;
+            if let Some(symbol_bounds) =
+                field_autoplace::symbol_visual_bounds(&symbol, &spec.definition)?
+            {
+                bounds.union(symbol_bounds);
+            }
+            for target in group {
+                let bend = net_symbol_wire_bend(target.point, connection, spec.pin_outward_spin);
+                bounds.union(
+                    field_autoplace::Bounds::from_points([target.point, bend, connection])
+                        .expect("net-symbol route has at least two points"),
+                );
+            }
         }
     }
     Ok(bounds.translated(-placed.symbol.at.x, -placed.symbol.at.y))
@@ -1971,11 +2037,7 @@ fn insert_connection_wires(
     connection: Point,
     symbol_pin_spin: LabelSpin,
 ) {
-    let bend = if symbol_pin_spin.is_vertical() {
-        Point::new(connection.x, target.y)
-    } else {
-        Point::new(target.x, connection.y)
-    };
+    let bend = net_symbol_wire_bend(target, connection, symbol_pin_spin);
     for (index, (a, b)) in [(target, bend), (bend, connection)].into_iter().enumerate() {
         if points_coincide(a, b) {
             continue;
@@ -1990,6 +2052,14 @@ fn insert_connection_wires(
             b,
             unsupported: Vec::new(),
         }));
+    }
+}
+
+fn net_symbol_wire_bend(target: Point, connection: Point, symbol_pin_spin: LabelSpin) -> Point {
+    if symbol_pin_spin.is_vertical() {
+        Point::new(connection.x, target.y)
+    } else {
+        Point::new(target.x, connection.y)
     }
 }
 
@@ -2607,7 +2677,9 @@ mod tests {
                 (pin input line (at -2.54 -2.54 0) (length 2.54)
                   (name "A") (number "3"))
                 (pin input line (at 2.54 0 180) (length 2.54)
-                  (name "B") (number "4"))))"#,
+                  (name "B") (number "4"))
+                (pin input line (at 2.54 -2.54 180) (length 2.54)
+                  (name "C") (number "5"))))"#,
         )
         .unwrap();
         let slot = SymbolSlotKey::new("MQ-7.MQ-7", 1).unwrap();
@@ -2691,6 +2763,71 @@ mod tests {
         assert!((first.x - bounds.max_x - 4.0 * CONNECTION_GRID_MM).abs() < GEOMETRY_EPS_MM);
         assert!(first.x > target.point.x);
         assert!(first.y > target.point.y);
+    }
+
+    #[test]
+    fn component_envelope_reserves_net_symbol_stairs_and_wires() {
+        let placed = multi_pad_symbol();
+        let item = placed.values().next().unwrap();
+        let first = resolve_pin_targets(
+            &placed,
+            "MQ-7.MQ-7",
+            "B",
+            &BTreeSet::from(["4".to_string()]),
+        )
+        .unwrap()
+        .remove(0);
+        let second = resolve_pin_targets(
+            &placed,
+            "MQ-7.MQ-7",
+            "C",
+            &BTreeSet::from(["5".to_string()]),
+        )
+        .unwrap()
+        .remove(0);
+        let definition = SymbolDefinition::from_kicad_symbol_sexpr(
+            r#"(symbol "power:GND"
+              (power)
+              (symbol "GND_1_1"
+                (pin power_in line (at 0 0 270) (length 2.54)
+                  (name "GND") (number "1"))))"#,
+        )
+        .unwrap();
+        let spec = net_symbols::NetSymbolSpec {
+            definition,
+            unit: 1,
+            pin_offset: Point::default(),
+            pin_outward_spin: LabelSpin::Up,
+        };
+        let targets = BTreeMap::from([
+            ("FIRST".to_string(), vec![first.clone()]),
+            ("SECOND".to_string(), vec![second.clone()]),
+        ]);
+        let specs = BTreeMap::from([
+            ("FIRST".to_string(), spec.clone()),
+            ("SECOND".to_string(), spec.clone()),
+        ]);
+        let stairs = BTreeMap::from([
+            (("FIRST".to_string(), first.physical_pin("root")), 0),
+            (("SECOND".to_string(), second.physical_pin("root")), 1),
+        ]);
+
+        let envelope = component_envelope(item, &targets, &specs, &stairs, "root").unwrap();
+        let connection = net_symbol_connection_point(item, &second, LabelSpin::Up, 1).unwrap();
+        let bend = net_symbol_wire_bend(second.point, connection, LabelSpin::Up);
+        let symbol = build_net_symbol(&spec, "SECOND", String::new(), connection).unwrap();
+        let symbol_bounds = field_autoplace::symbol_visual_bounds(&symbol, &spec.definition)
+            .unwrap()
+            .unwrap();
+
+        assert!(envelope.min_x <= symbol_bounds.min_x);
+        assert!(envelope.min_y <= symbol_bounds.min_y);
+        assert!(envelope.max_x >= symbol_bounds.max_x);
+        assert!(envelope.max_y >= symbol_bounds.max_y);
+        assert!(envelope.min_x <= bend.x && bend.x <= envelope.max_x);
+        assert!(envelope.min_y <= bend.y && bend.y <= envelope.max_y);
+        assert!(envelope.min_x <= connection.x && connection.x <= envelope.max_x);
+        assert!(envelope.min_y <= connection.y && connection.y <= envelope.max_y);
     }
 
     #[test]
