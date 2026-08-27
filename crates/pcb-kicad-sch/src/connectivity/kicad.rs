@@ -44,6 +44,36 @@ pub struct PhysicalIsland {
     pub named_drivers: BTreeMap<String, BTreeSet<ConnectivityItemRef>>,
     pub names: BTreeSet<String>,
     pub terminals: BTreeSet<Terminal>,
+    pub(crate) pins: BTreeSet<PhysicalPinRef>,
+}
+
+/// Exact identity of one placed KiCad symbol pin.
+///
+/// This stays separate from [`Terminal`]: terminals describe semantic
+/// equivalence, while reconciliation needs to distinguish physical pins that
+/// share one logical name.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct PhysicalPinRef {
+    page_id: String,
+    symbol_id: String,
+    number: String,
+    point: GridPoint,
+}
+
+impl PhysicalPinRef {
+    pub(crate) fn new(
+        page_id: impl Into<String>,
+        symbol_id: impl Into<String>,
+        number: impl Into<String>,
+        point: Point,
+    ) -> Self {
+        Self {
+            page_id: page_id.into(),
+            symbol_id: symbol_id.into(),
+            number: number.into(),
+            point: point.into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -290,6 +320,7 @@ fn reduce_page(
                 }),
                 driver: None,
                 terminal: None,
+                pin: None,
                 hierarchy: None,
                 internal_links: BTreeSet::new(),
                 source: Some(ConnectivityItemRef::Wire {
@@ -307,6 +338,7 @@ fn reduce_page(
                 },
                 driver: None,
                 terminal: None,
+                pin: None,
                 hierarchy: None,
                 internal_links: BTreeSet::new(),
                 source: Some(ConnectivityItemRef::Junction {
@@ -321,6 +353,7 @@ fn reduce_page(
                 },
                 driver: None,
                 terminal: None,
+                pin: None,
                 hierarchy: None,
                 internal_links: BTreeSet::new(),
                 source: Some(ConnectivityItemRef::NoConnect {
@@ -349,6 +382,7 @@ fn reduce_page(
                             merge_by_name: false,
                         }),
                         terminal: None,
+                        pin: None,
                         hierarchy: Some(HierarchyEndpoint::Child {
                             instance_id: child_id.clone(),
                             name,
@@ -450,6 +484,7 @@ fn collect_symbol(
                     merge_by_name: true,
                 }),
                 terminal: None,
+                pin: None,
                 hierarchy: None,
                 internal_links: BTreeSet::new(),
                 source: Some(ConnectivityItemRef::Symbol {
@@ -510,6 +545,12 @@ fn collect_symbol(
                 pin_name,
                 pin_numbers: pin.numbers.clone(),
             }),
+            pin: Some(PhysicalPinRef::new(
+                &page.id,
+                &placed.id,
+                &pin.number,
+                pin.point,
+            )),
             hierarchy: None,
             internal_links: internal_link_keys(
                 placed,
@@ -542,6 +583,7 @@ fn collect_label(
             },
             driver: None,
             terminal: None,
+            pin: None,
             hierarchy: None,
             internal_links: BTreeSet::new(),
             source: Some(ConnectivityItemRef::Label {
@@ -579,6 +621,7 @@ fn collect_label(
             merge_by_name: true,
         }),
         terminal,
+        pin: None,
         hierarchy: matches!(label.kind, LabelKind::Hierarchical { .. })
             .then(|| HierarchyEndpoint::Parent { name }),
         internal_links: BTreeSet::new(),
@@ -663,6 +706,7 @@ struct Connectable {
     geometry: Geometry,
     driver: Option<NameDriver>,
     terminal: Option<Terminal>,
+    pin: Option<PhysicalPinRef>,
     hierarchy: Option<HierarchyEndpoint>,
     internal_links: BTreeSet<String>,
     source: Option<ConnectivityItemRef>,
@@ -857,6 +901,7 @@ fn connection_groups(
                 if let Some(source) = &item.source {
                     provenance.items.insert(source.clone());
                 }
+                provenance.pins.extend(item.pin);
                 if let Some(driver) = item.driver {
                     if driver.role == DriverNameRole::NetName {
                         names.insert(driver.name.clone());

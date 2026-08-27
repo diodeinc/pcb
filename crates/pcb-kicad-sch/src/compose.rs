@@ -7,12 +7,13 @@ use pcb_sexpr::Sexpr;
 use crate::{
     CONNECTION_GRID_MM, GEOMETRY_EPS_MM, Label, LabelKind, LabelShape, LabelSpin, Paper, Point,
     Rotation, SchDocument, SchItem, SchPage, Sheet, SheetPin, Symbol, SymbolDefinition,
-    SymbolField, SymbolSlotKey,
+    SymbolField, SymbolSlotKey, Wire,
     analysis::{ConnectivityInspection, SchematicIssue, SchematicIssueKey},
     component_slots,
     connectivity::{
-        ComponentIdentity, ConnectionOrigin, ConnectivityItemRef, IslandRef, PhysicalIsland,
-        PinVisibility, SymbolLocation, Terminal, named_connected_nets, reduce_with_provenance,
+        ConnectionOrigin, ConnectivityItemRef, IslandRef, PhysicalConnectivity, PhysicalIsland,
+        PhysicalPinRef, PinVisibility, SymbolLocation, named_connected_nets,
+        reduce_with_provenance,
     },
     deterministic_uuid, field_autoplace, hierarchy, net_symbols,
     repair::{ConnectivityRepairPlan, plan_connectivity_repair, remove_items},
@@ -24,6 +25,8 @@ const DEFAULT_TITLE_BLOCK_HEIGHT_MM: f64 = 34.0;
 const PACKING_MARGIN_CELLS: i32 = 5;
 const PACKING_CLEARANCE_CELLS: i32 = 2;
 const LABEL_SHAPE_LENGTH_MM: f64 = 2.54;
+const NET_SYMBOL_OFFSET_CELLS: f64 = 4.0;
+const NET_SYMBOL_STAIR_CELLS: f64 = 2.0;
 const ESTIMATED_LABEL_WIDTH_EM: f64 = 0.8;
 const SHEET_PIN_SPACING_MM: f64 = 5.08;
 const SHEET_MIN_WIDTH_MM: f64 = 50.8;
@@ -179,7 +182,13 @@ pub(crate) fn reconcile_document(
     }
 
     let mut placed = placed_symbols_from_document(&document, &expected_slots)?;
-    pack_generated_symbols(&mut document, netlist, &mut placed, &relocatable_slots)?;
+    pack_generated_symbols(
+        &mut document,
+        netlist,
+        &mut placed,
+        &relocatable_slots,
+        &net_symbol_specs,
+    )?;
 
     add_hierarchy_connectivity(
         &mut document,
@@ -188,6 +197,32 @@ pub(crate) fn reconcile_document(
         &net_symbol_specs,
         &hierarchy,
     )?;
+
+    // A projected component's expected connectivity is already known from the
+    // netlist. Attach its pins now, after placement, instead of rediscovering
+    // their disconnections as a second set of schematic issues.
+    let all_nets = named_connected_nets(netlist)
+        .map(|net| net.name.clone())
+        .collect::<BTreeSet<_>>();
+    let projected_nets = connectivity_targets(netlist, &placed, &all_nets)?
+        .into_iter()
+        .filter(|(_, targets)| {
+            targets
+                .iter()
+                .any(|target| relocatable_slots.contains(&target.slot))
+        })
+        .map(|(net_name, _)| net_name)
+        .collect::<BTreeSet<_>>();
+    if !projected_nets.is_empty() {
+        add_connectivity_drivers(
+            &mut document,
+            netlist,
+            &placed,
+            &net_symbol_specs,
+            default_page,
+            &projected_nets,
+        )?;
+    }
 
     let current = crate::analysis::inspect_schematic(&document, netlist)?;
     let repair_keys = if complete {
@@ -202,21 +237,6 @@ pub(crate) fn reconcile_document(
             .flat_map(|inspection| &inspection.issues)
             .map(|issue| issue.key.clone())
             .collect::<BTreeSet<_>>();
-        // Nets whose disconnection involves a symbol this repair projects.
-        // Tracked by net name, not issue key: satisfying the pin terminal can
-        // flip the issue's variant (DisconnectedNet -> MissingPort) while the
-        // net still needs its drivers placed.
-        let mut projected_nets = BTreeSet::new();
-        for issue in inspection_before
-            .into_iter()
-            .flat_map(|inspection| &inspection.issues)
-        {
-            if let SchematicIssue::DisconnectedNet { net_name, .. } = &issue.issue
-                && disconnected_from_projected_symbol(&issue.issue, &project_slots, &placed)?
-            {
-                projected_nets.insert(net_name.clone());
-            }
-        }
         // Any selected mutation (projection or removal) shifts issue keys, so
         // connectivity issues that appear only after the mutation belong to
         // this repair's scope.
@@ -226,13 +246,7 @@ pub(crate) fn reconcile_document(
             .issues
             .iter()
             .filter(|issue| {
-                let issue_net = match &issue.issue {
-                    SchematicIssue::DisconnectedNet { net_name, .. }
-                    | SchematicIssue::MissingPort { net_name, .. } => Some(net_name),
-                    _ => None,
-                };
                 selected_connectivity.contains(&issue.key)
-                    || issue_net.is_some_and(|net| projected_nets.contains(net))
                     || (document_mutated
                         && !before_keys.contains(&issue.key)
                         && is_connectivity_issue(&issue.issue))
@@ -273,50 +287,6 @@ fn is_connectivity_issue(issue: &SchematicIssue) -> bool {
             | SchematicIssue::UnexpectedConnection { .. }
             | SchematicIssue::Shorted { .. }
     )
-}
-
-fn disconnected_from_projected_symbol(
-    issue: &SchematicIssue,
-    project_slots: &BTreeSet<SymbolSlotKey>,
-    placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
-) -> Result<bool> {
-    let SchematicIssue::DisconnectedNet {
-        missing_terminals, ..
-    } = issue
-    else {
-        return Ok(false);
-    };
-    for terminal in missing_terminals {
-        let Terminal::ComponentPin {
-            component: ComponentIdentity::ManagedPath(path),
-            ..
-        } = terminal
-        else {
-            continue;
-        };
-        for slot in project_slots
-            .iter()
-            .filter(|slot| slot.component_path() == path)
-        {
-            let Some(symbol) = placed.get(slot) else {
-                continue;
-            };
-            for pin in symbol.definition.placed_pins(&symbol.symbol)? {
-                if pin.hidden {
-                    continue;
-                }
-                let projected = Terminal::ComponentPin {
-                    component: ComponentIdentity::ManagedPath(path.clone()),
-                    pin_name: pin.name,
-                    pin_numbers: pin.numbers,
-                };
-                if terminal.matches(&projected) {
-                    return Ok(true);
-                }
-            }
-        }
-    }
-    Ok(false)
 }
 
 struct RepairTargets {
@@ -914,6 +884,7 @@ fn pack_generated_symbols(
     netlist: &Schematic,
     placed: &mut BTreeMap<SymbolSlotKey, PlacedSymbol>,
     relocatable_slots: &BTreeSet<SymbolSlotKey>,
+    net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
 ) -> Result<()> {
     if relocatable_slots.is_empty() {
         return Ok(());
@@ -922,6 +893,8 @@ fn pack_generated_symbols(
         .map(|net| net.name.clone())
         .collect();
     let targets = connectivity_targets(netlist, placed, &all_nets)?;
+    let net_symbol_runs =
+        plan_projected_net_symbol_runs(&targets, relocatable_slots, net_symbol_specs, placed)?;
 
     for page_index in 0..document.pages.len() {
         let relocatable = relocatable_slots
@@ -946,7 +919,12 @@ fn pack_generated_symbols(
         let mut items = relocatable
             .into_iter()
             .map(|slot| {
-                let bounds = GridRect::from_bounds(component_envelope(&placed[&slot], &targets)?);
+                let bounds = GridRect::from_bounds(component_envelope(
+                    &placed[&slot],
+                    &targets,
+                    net_symbol_specs,
+                    &net_symbol_runs,
+                )?);
                 Ok((slot, bounds))
             })
             .collect::<Result<Vec<_>>>()?;
@@ -1215,6 +1193,8 @@ fn grid_ceil(value: f64) -> i32 {
 fn component_envelope(
     placed: &PlacedSymbol,
     targets: &BTreeMap<String, Vec<PinTarget>>,
+    net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
+    net_symbol_runs: &[NetSymbolRun],
 ) -> Result<field_autoplace::Bounds> {
     let mut bounds = field_autoplace::symbol_visual_bounds(&placed.symbol, &placed.definition)?
         .unwrap_or_else(|| {
@@ -1222,11 +1202,40 @@ fn component_envelope(
                 .expect("one point defines bounds")
         });
     for (net_name, net_targets) in targets {
-        for target in net_targets
+        let component_targets = net_targets
             .iter()
             .filter(|target| !target.hidden && target.slot.symbol_id() == placed.symbol.id)
-        {
+            .collect::<Vec<_>>();
+        for target in &component_targets {
             bounds.union(net_label_bounds(net_name, target));
+        }
+
+        for run in net_symbol_runs.iter().filter(|run| {
+            run.net_name == *net_name
+                && run.page_index == placed.page_index
+                && run.slot.symbol_id() == placed.symbol.id
+        }) {
+            let spec = &net_symbol_specs[net_name];
+            let placement_target = run.placement_target();
+            let connection = net_symbol_connection_point(
+                placed,
+                &placement_target,
+                spec.pin_outward_spin,
+                run.stair_index,
+            )?;
+            let symbol = build_net_symbol(spec, net_name, String::new(), connection)?;
+            if let Some(symbol_bounds) =
+                field_autoplace::symbol_visual_bounds(&symbol, &spec.definition)?
+            {
+                bounds.union(symbol_bounds);
+            }
+            for target in &run.targets {
+                let bend = net_symbol_wire_bend(target.point, connection, spec.pin_outward_spin);
+                bounds.union(
+                    field_autoplace::Bounds::from_points([target.point, bend, connection])
+                        .expect("net-symbol route has at least two points"),
+                );
+            }
         }
     }
     Ok(bounds.translated(-placed.symbol.at.x, -placed.symbol.at.y))
@@ -1453,21 +1462,16 @@ struct PlacedSymbol {
 struct PinTarget {
     page_index: usize,
     slot: SymbolSlotKey,
-    pin_name: String,
+    symbol_id: String,
     number: String,
-    pin_numbers: BTreeSet<String>,
     point: Point,
     spin: LabelSpin,
     hidden: bool,
 }
 
 impl PinTarget {
-    fn terminal(&self) -> Terminal {
-        Terminal::ComponentPin {
-            component: ComponentIdentity::ManagedPath(self.slot.component_path().to_string()),
-            pin_name: self.pin_name.clone(),
-            pin_numbers: self.pin_numbers.clone(),
-        }
+    fn physical_pin(&self, page_id: &str) -> PhysicalPinRef {
+        PhysicalPinRef::new(page_id, &self.symbol_id, &self.number, self.point)
     }
 
     fn label_key(&self, net_name: &str) -> String {
@@ -1487,6 +1491,111 @@ impl PinTarget {
             self.point.y
         )
     }
+}
+
+#[derive(Clone)]
+struct NetSymbolRun {
+    net_name: String,
+    page_index: usize,
+    slot: SymbolSlotKey,
+    targets: Vec<PinTarget>,
+    stair_index: usize,
+}
+
+impl NetSymbolRun {
+    fn placement_target(&self) -> PinTarget {
+        let mut target = self.targets[0].clone();
+        let count = self.targets.len() as f64;
+        target.point = Point::new(
+            self.targets
+                .iter()
+                .map(|target| target.point.x)
+                .sum::<f64>()
+                / count,
+            self.targets
+                .iter()
+                .map(|target| target.point.y)
+                .sum::<f64>()
+                / count,
+        );
+        target
+    }
+}
+
+struct NetDriverIsland {
+    island: IslandRef,
+    canonical_target: usize,
+    needs_global: bool,
+}
+
+fn net_driver_islands(
+    document: &SchDocument,
+    targets: &[PinTarget],
+    observed: &PhysicalConnectivity,
+) -> Result<Vec<NetDriverIsland>> {
+    let mut targets_by_island = BTreeMap::<IslandRef, Vec<usize>>::new();
+    for (target_index, target) in targets.iter().enumerate() {
+        if target.hidden {
+            continue;
+        }
+        let pin = target.physical_pin(&document.pages[target.page_index].id);
+        let islands = observed
+            .islands
+            .iter()
+            .filter(|(_, provenance)| provenance.pins.contains(&pin))
+            .map(|(island, _)| island.clone())
+            .collect::<Vec<_>>();
+        let [island] = islands.as_slice() else {
+            bail!(
+                "visible terminal '{}.{}' belongs to {} physical schematic islands",
+                target.slot.component_path(),
+                target.number,
+                islands.len()
+            );
+        };
+        targets_by_island
+            .entry(island.clone())
+            .or_default()
+            .push(target_index);
+    }
+
+    // A page-scoped driver does not serve an island that remains disconnected
+    // from the same net on another page; that island requires a global driver.
+    let island_group = |island: &IslandRef| {
+        observed.graph.groups.iter().position(|group| {
+            group
+                .origins
+                .contains(&ConnectionOrigin::KiCadIsland(island.clone()))
+        })
+    };
+    let island_groups = targets_by_island
+        .keys()
+        .map(|island| (island.clone(), island_group(island)))
+        .collect::<BTreeMap<_, _>>();
+    let net_page_count = targets
+        .iter()
+        .map(|target| target.page_index)
+        .collect::<BTreeSet<_>>()
+        .len();
+
+    Ok(targets_by_island
+        .into_iter()
+        .map(|(island, target_indices)| {
+            let canonical_target = *target_indices
+                .iter()
+                .min_by_key(|index| (&targets[**index].slot, &targets[**index].number))
+                .expect("a terminal island has a target");
+            let needs_global = net_page_count > 1
+                && island_groups.iter().any(|(other, group)| {
+                    other.page_id != island.page_id && group != &island_groups[&island]
+                });
+            NetDriverIsland {
+                island,
+                canonical_target,
+                needs_global,
+            }
+        })
+        .collect())
 }
 
 fn apply_connectivity_repair(
@@ -1660,92 +1769,65 @@ fn add_connectivity_drivers(
         &page_contexts,
         target_nets,
     )?;
-    sync_net_drivers(document, &anchors_by_net, net_symbol_specs, &page_contexts)
+    sync_net_drivers(
+        document,
+        &anchors_by_net,
+        placed,
+        net_symbol_specs,
+        &page_contexts,
+    )
 }
 
 fn sync_net_drivers(
     document: &mut SchDocument,
     targets_by_net: &BTreeMap<String, Vec<PinTarget>>,
+    placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
     net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
     page_contexts: &PageDriverContexts,
 ) -> Result<()> {
     // Adopt any exact existing contextual driver. For an unnamed island, add
     // a power symbol, current-sheet hierarchical endpoint, or local label in
     // that order without treating a deterministic UUID as ownership.
+    let net_symbol_runs = plan_net_symbol_runs(document, targets_by_net, net_symbol_specs, placed)?;
     let observed = reduce_with_provenance(document, PinVisibility::VisibleOnly)?;
 
-    for (net_name, targets) in targets_by_net {
-        let net_page_count = targets
-            .iter()
-            .map(|target| target.page_index)
-            .collect::<BTreeSet<_>>()
-            .len();
-        let mut targets_by_island = BTreeMap::<_, Vec<usize>>::new();
-        for (target_index, target) in targets.iter().enumerate() {
-            if target.hidden {
-                continue;
-            }
-            let terminal = target.terminal();
-            let islands = observed
-                .islands
-                .iter()
-                .filter(|(_, provenance)| {
-                    provenance
-                        .terminals
-                        .iter()
-                        .any(|found| terminal.matches(found))
-                })
-                .map(|(island, _)| island.clone())
-                .collect::<Vec<_>>();
-            let [island] = islands.as_slice() else {
-                bail!(
-                    "visible terminal '{}.{}' belongs to {} physical schematic islands",
-                    target.slot.component_path(),
-                    target.number,
-                    islands.len()
-                );
-            };
-            targets_by_island
-                .entry(island.clone())
-                .or_default()
-                .push(target_index);
+    for run in net_symbol_runs {
+        let spec = &net_symbol_specs[&run.net_name];
+        let target = &run.targets[0];
+        let connection_point = net_symbol_connection_point(
+            &placed[&run.slot],
+            &run.placement_target(),
+            spec.pin_outward_spin,
+            run.stair_index,
+        )?;
+        let id = available_deterministic_id(document, &target.net_symbol_key(&run.net_name));
+        let symbol = build_net_symbol(spec, &run.net_name, id, connection_point)?;
+        let symbol_id = symbol.id.clone();
+        insert_net_symbol(document, run.page_index, symbol, &spec.definition)?;
+        for member in run.targets {
+            insert_connection_wires(
+                document,
+                member.page_index,
+                &symbol_id,
+                member.point,
+                connection_point,
+                spec.pin_outward_spin,
+            );
         }
+    }
 
-        // The merged connection group each island belongs to. An island whose
-        // drivers already merge it with the net's other pages needs nothing;
-        // an island left in its own group despite a name driver (a local
-        // label, or a hierarchical label with no bridging sheet pin) can only
-        // reach the other pages through a global driver.
-        let island_group = |island: &IslandRef| {
-            observed.graph.groups.iter().position(|group| {
-                group
-                    .origins
-                    .contains(&ConnectionOrigin::KiCadIsland(island.clone()))
-            })
-        };
-        let island_groups = targets_by_island
-            .keys()
-            .map(|island| (island.clone(), island_group(island)))
-            .collect::<BTreeMap<_, _>>();
-
-        for (island, target_indices) in &targets_by_island {
-            let provenance = &observed.islands[island];
-            let canonical = *target_indices
-                .iter()
-                .min_by_key(|index| (&targets[**index].slot, &targets[**index].number))
-                .expect("a terminal island has a target");
-            let target = &targets[canonical];
+    for (net_name, targets) in targets_by_net {
+        if net_symbol_specs.contains_key(net_name) {
+            continue;
+        }
+        for driver_island in net_driver_islands(document, targets, &observed)? {
+            let target = &targets[driver_island.canonical_target];
+            let provenance = &observed.islands[&driver_island.island];
             let interface_names = page_contexts
                 .get(&target.page_index)
                 .and_then(|context| context.get(net_name));
-            let needs_global = net_page_count > 1
-                && island_groups.iter().any(|(other, group)| {
-                    other.page_id != island.page_id && group != &island_groups[island]
-                });
-            let has_driver = if needs_global {
+            let has_driver = if driver_island.needs_global {
                 island_has_global_driver(document, target.page_index, provenance, net_name)
-            } else if net_symbol_specs.contains_key(net_name) {
-                has_named_driver(provenance, net_name)
             } else if let Some(interface_names) = interface_names {
                 island_has_hierarchical_driver(
                     document,
@@ -1759,28 +1841,288 @@ fn sync_net_drivers(
             if has_driver {
                 continue;
             }
-            if let Some(spec) = net_symbol_specs.get(net_name) {
-                let id = available_deterministic_id(document, &target.net_symbol_key(net_name));
-                let symbol = build_net_symbol(spec, net_name, id, target.point)?;
-                insert_net_symbol(document, target.page_index, symbol, &spec.definition)?;
-            } else {
-                let id = available_deterministic_id(document, &target.label_key(net_name));
-                let mut label = driver_label(
-                    net_name,
-                    if needs_global { None } else { interface_names },
-                    needs_global,
-                    id,
-                    target.point,
-                );
-                label.spin = target.spin;
-                document.pages[target.page_index]
-                    .items
-                    .push(SchItem::Label(label));
-            }
+            let id = available_deterministic_id(document, &target.label_key(net_name));
+            let mut label = driver_label(
+                net_name,
+                if driver_island.needs_global {
+                    None
+                } else {
+                    interface_names
+                },
+                driver_island.needs_global,
+                id,
+                target.point,
+            );
+            label.spin = target.spin;
+            document.pages[target.page_index]
+                .items
+                .push(SchItem::Label(label));
         }
     }
 
     Ok(())
+}
+
+fn adjacent_target_runs<'a>(
+    placed: &PlacedSymbol,
+    mut targets: Vec<&'a PinTarget>,
+) -> Result<Vec<Vec<&'a PinTarget>>> {
+    let Some(side) = targets.first().map(|target| target.spin) else {
+        return Ok(Vec::new());
+    };
+    debug_assert!(targets.iter().all(|target| target.spin == side));
+    let compare_points = |left: Point, right: Point| {
+        let primary = if matches!(side, LabelSpin::Left | LabelSpin::Right) {
+            left.y.total_cmp(&right.y)
+        } else {
+            left.x.total_cmp(&right.x)
+        };
+        primary
+            .then_with(|| left.x.total_cmp(&right.x))
+            .then_with(|| left.y.total_cmp(&right.y))
+    };
+    targets.sort_by(|left, right| {
+        compare_points(left.point, right.point).then_with(|| left.number.cmp(&right.number))
+    });
+
+    let mut visible_pins = placed
+        .definition
+        .placed_pins(&placed.symbol)?
+        .into_iter()
+        .filter(|pin| !pin.hidden && pin.outward_spin == side)
+        .collect::<Vec<_>>();
+    visible_pins.sort_by(|left, right| {
+        compare_points(left.point, right.point).then_with(|| left.number.cmp(&right.number))
+    });
+
+    let ranked = targets
+        .into_iter()
+        .map(|target| {
+            let matches = visible_pins
+                .iter()
+                .enumerate()
+                .filter(|(_, pin)| pin.number == target.number && pin.point == target.point)
+                .map(|(index, _)| index)
+                .collect::<Vec<_>>();
+            let [rank] = matches.as_slice() else {
+                bail!(
+                    "schematic pin '{}:{}' does not uniquely identify a visible component pin",
+                    target.slot.component_path(),
+                    target.number
+                );
+            };
+            let stacked = visible_pins
+                .iter()
+                .filter(|pin| pin.point == target.point)
+                .count()
+                > 1;
+            Ok((target, *rank, stacked))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut runs = Vec::<Vec<&PinTarget>>::new();
+    let mut previous: Option<(usize, bool)> = None;
+    for (target, rank, stacked) in ranked {
+        let joins_previous = previous.is_some_and(|(previous_rank, previous_stacked)| {
+            !stacked && !previous_stacked && rank == previous_rank + 1
+        });
+        if joins_previous {
+            runs.last_mut().expect("a previous run exists").push(target);
+        } else {
+            runs.push(vec![target]);
+        }
+        previous = Some((rank, stacked));
+    }
+    Ok(runs)
+}
+
+fn plan_net_symbol_runs(
+    document: &SchDocument,
+    targets_by_net: &BTreeMap<String, Vec<PinTarget>>,
+    net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
+    placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
+) -> Result<Vec<NetSymbolRun>> {
+    let observed = reduce_with_provenance(document, PinVisibility::VisibleOnly)?;
+    let mut missing = Vec::new();
+    for (net_name, targets) in targets_by_net {
+        if !net_symbol_specs.contains_key(net_name) {
+            continue;
+        }
+
+        for driver_island in net_driver_islands(document, targets, &observed)? {
+            let target = &targets[driver_island.canonical_target];
+            let provenance = &observed.islands[&driver_island.island];
+            let has_driver = if driver_island.needs_global {
+                island_has_global_driver(document, target.page_index, provenance, net_name)
+            } else {
+                has_named_driver(provenance, net_name)
+            };
+            if has_driver {
+                continue;
+            }
+            missing.push((net_name, target));
+        }
+    }
+    arrange_net_symbol_runs(missing, net_symbol_specs, placed)
+}
+
+fn plan_projected_net_symbol_runs(
+    targets_by_net: &BTreeMap<String, Vec<PinTarget>>,
+    projected_slots: &BTreeSet<SymbolSlotKey>,
+    net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
+    placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
+) -> Result<Vec<NetSymbolRun>> {
+    let missing = targets_by_net
+        .iter()
+        .filter(|(net_name, _)| net_symbol_specs.contains_key(*net_name))
+        .flat_map(|(net_name, targets)| {
+            targets
+                .iter()
+                .filter(|target| !target.hidden && projected_slots.contains(&target.slot))
+                .map(move |target| (net_name, target))
+        });
+    arrange_net_symbol_runs(missing, net_symbol_specs, placed)
+}
+
+fn arrange_net_symbol_runs<'a>(
+    missing: impl IntoIterator<Item = (&'a String, &'a PinTarget)>,
+    net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
+    placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
+) -> Result<Vec<NetSymbolRun>> {
+    type Slot = (usize, SymbolSlotKey, LabelSpin, LabelSpin);
+    type GroupKey = (String, usize, SymbolSlotKey, LabelSpin, LabelSpin);
+
+    let mut groups = BTreeMap::<GroupKey, Vec<&PinTarget>>::new();
+    for (net_name, target) in missing {
+        let spec = &net_symbol_specs[net_name];
+        groups
+            .entry((
+                net_name.clone(),
+                target.page_index,
+                target.slot.clone(),
+                target.spin,
+                spec.pin_outward_spin,
+            ))
+            .or_default()
+            .push(target);
+    }
+
+    let mut runs = Vec::<NetSymbolRun>::new();
+    let mut slots = BTreeMap::<Slot, Vec<usize>>::new();
+    for ((net_name, page_index, slot, target_side, symbol_side), members) in groups {
+        for members in adjacent_target_runs(&placed[&slot], members)? {
+            let run_index = runs.len();
+            runs.push(NetSymbolRun {
+                net_name: net_name.clone(),
+                page_index,
+                slot: slot.clone(),
+                targets: members.into_iter().cloned().collect(),
+                stair_index: 0,
+            });
+            slots
+                .entry((page_index, slot.clone(), target_side, symbol_side))
+                .or_default()
+                .push(run_index);
+        }
+    }
+
+    for ((_, _, target_side, _), run_indices) in &mut slots {
+        run_indices.sort_by(|left, right| {
+            let left_point = runs[*left].placement_target().point;
+            let right_point = runs[*right].placement_target().point;
+            let primary = if matches!(*target_side, LabelSpin::Left | LabelSpin::Right) {
+                left_point.y.total_cmp(&right_point.y)
+            } else {
+                left_point.x.total_cmp(&right_point.x)
+            };
+            primary
+                .then_with(|| left_point.x.total_cmp(&right_point.x))
+                .then_with(|| left_point.y.total_cmp(&right_point.y))
+                .then_with(|| runs[*left].net_name.cmp(&runs[*right].net_name))
+        });
+        for (stair_index, run_index) in run_indices.iter().enumerate() {
+            runs[*run_index].stair_index = stair_index;
+        }
+    }
+    Ok(runs)
+}
+
+fn net_symbol_connection_point(
+    placed: &PlacedSymbol,
+    target: &PinTarget,
+    symbol_pin_spin: LabelSpin,
+    stair_index: usize,
+) -> Result<Point> {
+    let bounds = field_autoplace::symbol_geometry_bounds(&placed.symbol, &placed.definition)?
+        .unwrap_or_else(|| {
+            field_autoplace::Bounds::from_points([placed.symbol.at])
+                .expect("one point defines bounds")
+        });
+    let offset = NET_SYMBOL_OFFSET_CELLS * CONNECTION_GRID_MM;
+    let stair = stair_index as f64 * NET_SYMBOL_STAIR_CELLS * CONNECTION_GRID_MM;
+    let point = match target.spin {
+        LabelSpin::Left | LabelSpin::Right => {
+            let x = if target.spin == LabelSpin::Left {
+                bounds.min_x - offset - stair
+            } else {
+                bounds.max_x + offset + stair
+            };
+            let y = match symbol_pin_spin {
+                LabelSpin::Up => bounds.max_y + offset + stair,
+                LabelSpin::Bottom => bounds.min_y - offset - stair,
+                LabelSpin::Left | LabelSpin::Right => target.point.y + stair,
+            };
+            Point::new(x, y)
+        }
+        LabelSpin::Up => Point::new(target.point.x + stair, bounds.min_y - offset),
+        LabelSpin::Bottom => Point::new(target.point.x + stair, bounds.max_y + offset),
+    };
+    Ok(Point::new(
+        snap_connection_grid(point.x),
+        snap_connection_grid(point.y),
+    ))
+}
+
+fn snap_connection_grid(value: f64) -> f64 {
+    (value / CONNECTION_GRID_MM).round() * CONNECTION_GRID_MM
+}
+
+fn insert_connection_wires(
+    document: &mut SchDocument,
+    page_index: usize,
+    symbol_id: &str,
+    target: Point,
+    connection: Point,
+    symbol_pin_spin: LabelSpin,
+) {
+    let bend = net_symbol_wire_bend(target, connection, symbol_pin_spin);
+    for (index, (a, b)) in [(target, bend), (bend, connection)].into_iter().enumerate() {
+        if points_coincide(a, b) {
+            continue;
+        }
+        let id = available_deterministic_id(
+            document,
+            &format!("zener:net-symbol-wire:{symbol_id}:{index}"),
+        );
+        document.pages[page_index].items.push(SchItem::Wire(Wire {
+            id,
+            a,
+            b,
+            unsupported: Vec::new(),
+        }));
+    }
+}
+
+fn net_symbol_wire_bend(target: Point, connection: Point, symbol_pin_spin: LabelSpin) -> Point {
+    if symbol_pin_spin.is_vertical() {
+        Point::new(connection.x, target.y)
+    } else {
+        Point::new(target.x, connection.y)
+    }
+}
+
+fn points_coincide(left: Point, right: Point) -> bool {
+    (left.x - right.x).abs() <= GEOMETRY_EPS_MM && (left.y - right.y).abs() <= GEOMETRY_EPS_MM
 }
 
 type PageDriverContexts = BTreeMap<usize, BTreeMap<String, BTreeSet<String>>>;
@@ -2313,7 +2655,8 @@ fn resolve_pin_targets(
     pin_numbers: &BTreeSet<String>,
 ) -> Result<Vec<PinTarget>> {
     let mut component_placed = false;
-    let mut matches = Vec::new();
+    let mut number_matches = Vec::new();
+    let mut name_matches = Vec::new();
     for (slot, placed) in placed
         .iter()
         .filter(|(slot, _)| slot.component_path() == component_path)
@@ -2322,20 +2665,33 @@ fn resolve_pin_targets(
         let parsed = symbol::ParsedSymbolDefinition::parse(&placed.definition)?;
         for pin in parsed.placed_pins(&placed.symbol)? {
             let matches_name = !pin_name.is_empty() && !pin.name.is_empty() && pin.name == pin_name;
-            if matches_name || !pin.numbers.is_disjoint(pin_numbers) {
-                matches.push(PinTarget {
+            let matches_number = !pin.numbers.is_disjoint(pin_numbers);
+            if matches_name || matches_number {
+                let target = PinTarget {
                     page_index: placed.page_index,
                     slot: slot.clone(),
-                    pin_name: pin.name,
+                    symbol_id: placed.symbol.id.clone(),
                     number: pin.number,
-                    pin_numbers: pin.numbers,
                     point: pin.point,
                     spin: pin.outward_spin,
                     hidden: pin.hidden,
-                });
+                };
+                if matches_number {
+                    number_matches.push(target);
+                } else {
+                    name_matches.push(target);
+                }
             }
         }
     }
+    // One Zener terminal can represent multiple physical pads. Prefer the
+    // exact pad numbers and retain every matching KiCad pin in that case;
+    // names are a fallback for symbols whose number metadata is unavailable.
+    let (matches, exact_numbers) = if number_matches.is_empty() {
+        (name_matches, false)
+    } else {
+        (number_matches, true)
+    };
     if matches.is_empty() {
         // A component that is not placed at all contributes no anchors; its
         // absence is already reported as a missing-symbol issue, and partial
@@ -2357,6 +2713,7 @@ fn resolve_pin_targets(
     match visible.as_slice() {
         [target] => Ok(vec![target.clone()]),
         [] => Ok(matches),
+        _ if exact_numbers => Ok(visible),
         _ => bail!(
             "netlist terminal '{}.{}' matches more than one KiCad symbol pin",
             component_path,
@@ -2368,6 +2725,245 @@ fn resolve_pin_targets(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn multi_pad_symbol() -> BTreeMap<SymbolSlotKey, PlacedSymbol> {
+        let definition = SymbolDefinition::from_kicad_symbol_sexpr(
+            r#"(symbol "Test:MultiPad"
+              (symbol "MultiPad_1_1"
+                (pin input line (at -2.54 2.54 0) (length 2.54)
+                  (name "A") (number "1"))
+                (pin input line (at -2.54 -2.54 0) (length 2.54)
+                  (name "A") (number "3"))
+                (pin input line (at 2.54 0 180) (length 2.54)
+                  (name "B") (number "4"))
+                (pin input line (at 2.54 -1.27 180) (length 2.54)
+                  (name "X") (number "6"))
+                (pin input line (at 2.54 -2.54 180) (length 2.54)
+                  (name "C") (number "5"))))"#,
+        )
+        .unwrap();
+        let slot = SymbolSlotKey::new("MQ-7.MQ-7", 1).unwrap();
+        let symbol = Symbol {
+            id: slot.symbol_id(),
+            lib_id: definition.lib_id.clone(),
+            unit: 1,
+            body_style: 1,
+            at: Point::default(),
+            rotation: Rotation::default(),
+            mirror: None,
+            fields_autoplaced: true,
+            fields: BTreeMap::new(),
+            pins: Vec::new(),
+            unsupported: Vec::new(),
+        };
+        BTreeMap::from([(
+            slot,
+            PlacedSymbol {
+                page_index: 0,
+                symbol,
+                definition,
+            },
+        )])
+    }
+
+    fn ground_net_symbol_spec() -> net_symbols::NetSymbolSpec {
+        net_symbols::NetSymbolSpec {
+            definition: SymbolDefinition::from_kicad_symbol_sexpr(
+                r#"(symbol "power:GND"
+                  (power)
+                  (symbol "GND_1_1"
+                    (pin power_in line (at 0 0 270) (length 2.54)
+                      (name "GND") (number "1"))))"#,
+            )
+            .unwrap(),
+            unit: 1,
+            pin_offset: Point::default(),
+            pin_outward_spin: LabelSpin::Up,
+        }
+    }
+
+    #[test]
+    fn logical_terminal_resolves_all_of_its_physical_pins() {
+        let targets = resolve_pin_targets(
+            &multi_pad_symbol(),
+            "MQ-7.MQ-7",
+            "A",
+            &BTreeSet::from(["1".to_string(), "3".to_string()]),
+        )
+        .unwrap();
+
+        assert_eq!(
+            targets
+                .into_iter()
+                .map(|target| target.number)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["1".to_string(), "3".to_string()])
+        );
+    }
+
+    #[test]
+    fn pin_numbers_take_precedence_over_a_repeated_pin_name() {
+        let targets = resolve_pin_targets(
+            &multi_pad_symbol(),
+            "MQ-7.MQ-7",
+            "A",
+            &BTreeSet::from(["1".to_string()]),
+        )
+        .unwrap();
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].number, "1");
+    }
+
+    #[test]
+    fn right_side_net_symbols_stair_outward_and_below() {
+        let placed = multi_pad_symbol();
+        let target = resolve_pin_targets(
+            &placed,
+            "MQ-7.MQ-7",
+            "B",
+            &BTreeSet::from(["4".to_string()]),
+        )
+        .unwrap()
+        .remove(0);
+        let item = &placed[&target.slot];
+
+        let first = net_symbol_connection_point(item, &target, LabelSpin::Up, 0).unwrap();
+        let second = net_symbol_connection_point(item, &target, LabelSpin::Up, 1).unwrap();
+        let bounds = field_autoplace::symbol_geometry_bounds(&item.symbol, &item.definition)
+            .unwrap()
+            .unwrap();
+
+        assert!((second.x - first.x - 2.0 * CONNECTION_GRID_MM).abs() < GEOMETRY_EPS_MM);
+        assert!((second.y - first.y - 2.0 * CONNECTION_GRID_MM).abs() < GEOMETRY_EPS_MM);
+        assert!((first.x - bounds.max_x - 4.0 * CONNECTION_GRID_MM).abs() < GEOMETRY_EPS_MM);
+        assert!(first.x > target.point.x);
+        assert!(first.y > target.point.y);
+    }
+
+    #[test]
+    fn component_envelope_reserves_net_symbol_stairs_and_wires() {
+        let placed = multi_pad_symbol();
+        let item = placed.values().next().unwrap();
+        let first = resolve_pin_targets(
+            &placed,
+            "MQ-7.MQ-7",
+            "B",
+            &BTreeSet::from(["4".to_string()]),
+        )
+        .unwrap()
+        .remove(0);
+        let second = resolve_pin_targets(
+            &placed,
+            "MQ-7.MQ-7",
+            "C",
+            &BTreeSet::from(["5".to_string()]),
+        )
+        .unwrap()
+        .remove(0);
+        let spec = ground_net_symbol_spec();
+        let targets = BTreeMap::from([
+            ("FIRST".to_string(), vec![first.clone()]),
+            ("SECOND".to_string(), vec![second.clone()]),
+        ]);
+        let specs = BTreeMap::from([
+            ("FIRST".to_string(), spec.clone()),
+            ("SECOND".to_string(), spec.clone()),
+        ]);
+        let runs = vec![
+            NetSymbolRun {
+                net_name: "FIRST".to_string(),
+                page_index: 0,
+                slot: first.slot.clone(),
+                targets: vec![first.clone()],
+                stair_index: 0,
+            },
+            NetSymbolRun {
+                net_name: "SECOND".to_string(),
+                page_index: 0,
+                slot: second.slot.clone(),
+                targets: vec![second.clone()],
+                stair_index: 1,
+            },
+        ];
+
+        let envelope = component_envelope(item, &targets, &specs, &runs).unwrap();
+        let connection = net_symbol_connection_point(item, &second, LabelSpin::Up, 1).unwrap();
+        let bend = net_symbol_wire_bend(second.point, connection, LabelSpin::Up);
+        let symbol = build_net_symbol(&spec, "SECOND", String::new(), connection).unwrap();
+        let symbol_bounds = field_autoplace::symbol_visual_bounds(&symbol, &spec.definition)
+            .unwrap()
+            .unwrap();
+
+        assert!(envelope.min_x <= symbol_bounds.min_x);
+        assert!(envelope.min_y <= symbol_bounds.min_y);
+        assert!(envelope.max_x >= symbol_bounds.max_x);
+        assert!(envelope.max_y >= symbol_bounds.max_y);
+        assert!(envelope.min_x <= bend.x && bend.x <= envelope.max_x);
+        assert!(envelope.min_y <= bend.y && bend.y <= envelope.max_y);
+        assert!(envelope.min_x <= connection.x && connection.x <= envelope.max_x);
+        assert!(envelope.min_y <= connection.y && connection.y <= envelope.max_y);
+    }
+
+    #[test]
+    fn net_symbols_share_only_consecutive_visible_pins() {
+        let placed = multi_pad_symbol();
+        let item = placed.values().next().unwrap();
+        let target = |name: &str, number: &str| {
+            resolve_pin_targets(
+                &placed,
+                "MQ-7.MQ-7",
+                name,
+                &BTreeSet::from([number.to_string()]),
+            )
+            .unwrap()
+            .remove(0)
+        };
+        let first = target("B", "4");
+        let intervening = target("X", "6");
+        let last = target("C", "5");
+
+        let split = adjacent_target_runs(item, vec![&first, &last]).unwrap();
+        assert_eq!(split.len(), 2);
+
+        let shared = adjacent_target_runs(item, vec![&first, &intervening, &last]).unwrap();
+        assert_eq!(shared.len(), 1);
+        assert_eq!(shared[0].len(), 3);
+    }
+
+    #[test]
+    fn projected_net_symbol_runs_keep_coincident_components_distinct() {
+        let mut placed = multi_pad_symbol();
+        let first = resolve_pin_targets(
+            &placed,
+            "MQ-7.MQ-7",
+            "B",
+            &BTreeSet::from(["4".to_string()]),
+        )
+        .unwrap()
+        .remove(0);
+        let second_slot = SymbolSlotKey::new("OTHER", 1).unwrap();
+        let mut second_item = placed[&first.slot].clone();
+        second_item.symbol.id = second_slot.symbol_id();
+        placed.insert(second_slot.clone(), second_item);
+        let mut second = first.clone();
+        second.slot = second_slot.clone();
+        second.symbol_id = second_slot.symbol_id();
+
+        let specs = BTreeMap::from([("GROUND".to_string(), ground_net_symbol_spec())]);
+        let targets = BTreeMap::from([("GROUND".to_string(), vec![first.clone(), second])]);
+        let projected = BTreeSet::from([first.slot, second_slot]);
+
+        let runs = plan_projected_net_symbol_runs(&targets, &projected, &specs, &placed).unwrap();
+
+        assert_eq!(runs.len(), 2);
+        assert_eq!(
+            runs.into_iter()
+                .map(|run| run.slot)
+                .collect::<BTreeSet<_>>(),
+            projected
+        );
+    }
 
     #[test]
     fn unplaced_component_terminals_are_skipped_not_errors() {

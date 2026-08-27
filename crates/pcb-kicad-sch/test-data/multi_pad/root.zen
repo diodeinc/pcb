@@ -1,0 +1,10 @@
+"""Logical terminals backed by multiple physical symbol pins."""
+
+Project(name="MultiPad", path="kicad", layout=False)
+
+MultiPad = Module("multi_pad.zen")
+
+LEFT = Net("LEFT")
+RIGHT = Net("RIGHT")
+
+MultiPad(name="U1", A=LEFT, B=RIGHT)

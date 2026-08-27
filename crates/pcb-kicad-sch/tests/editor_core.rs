@@ -4,7 +4,6 @@ use std::collections::BTreeSet;
 
 use pcb_kicad_sch::{
     Label, LabelKind, Point, SchDocument, SchItem, SchPage, Symbol, SymbolDefinition,
-    SymbolSlotKey,
     analysis::{SchematicIssue, SchematicIssueKey, inspect_schematic},
     connectivity::{PhysicalConnectivity, PinVisibility},
     deterministic_uuid,
@@ -63,6 +62,182 @@ fn editor_core_plans_applies_analyzes_and_reopens_in_memory() {
     let preserved = plan_reconciliation(Some(&reorganized), &netlist, "Editor.kicad_sch").unwrap();
     assert!(preserved.is_empty(), "{:#?}", preserved.edits());
     assert_eq!(preserved.apply(Some(&reorganized)).unwrap(), reorganized);
+}
+
+#[test]
+fn reconciliation_drives_each_physical_pin_of_a_logical_terminal() {
+    let netlist = common::compile_fixture("multi_pad", "root.zen");
+    let document = plan_reconciliation(None, &netlist, "MultiPad.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+
+    let inspection = inspect_schematic(&document, &netlist).unwrap();
+    assert!(
+        inspection.analysis.is_equivalent(),
+        "{:#?}",
+        inspection.analysis.issues()
+    );
+
+    let unchanged = plan_reconciliation(Some(&document), &netlist, "MultiPad.kicad_sch").unwrap();
+    assert!(unchanged.is_empty(), "{:#?}", unchanged.edits());
+}
+
+#[test]
+fn generated_net_symbols_form_a_wired_staircase() {
+    let netlist = common::compile_fixture("net_symbol_staircase", "root.zen");
+    let document = plan_reconciliation(None, &netlist, "NetSymbolStaircase.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+
+    assert!(
+        inspect_schematic(&document, &netlist)
+            .unwrap()
+            .analysis
+            .is_equivalent()
+    );
+    let page = &document.pages[0];
+    let shared_ground_count = page
+        .items
+        .iter()
+        .filter(|item| {
+            matches!(
+                item,
+                SchItem::Symbol(symbol)
+                    if symbol.field_value("Value") == Some("GROUND_SHARED")
+            )
+        })
+        .count();
+    assert_eq!(shared_ground_count, 1);
+    let mut net_symbols = page
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            SchItem::Symbol(symbol)
+                if matches!(symbol.field_value("Value"), Some("GROUND_A" | "GROUND_Z")) =>
+            {
+                let definition = &page.library.definitions[&symbol.lib_id];
+                Some((
+                    symbol.field_value("Value").unwrap(),
+                    definition.placed_pins(symbol).unwrap()[0].point,
+                ))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    net_symbols.sort_by(|left, right| left.1.x.total_cmp(&right.1.x));
+    assert_eq!(net_symbols.len(), 2);
+    let connection_points = [net_symbols[0].1, net_symbols[1].1];
+    assert_ne!(connection_points[0], connection_points[1]);
+    let wire_count = page
+        .items
+        .iter()
+        .filter(|item| matches!(item, SchItem::Wire(_)))
+        .count();
+    assert!((5..=10).contains(&wire_count), "{wire_count}");
+    assert!(page.items.iter().all(|item| match item {
+        SchItem::Wire(wire) => wire.a.x == wire.b.x || wire.a.y == wire.b.y,
+        _ => true,
+    }));
+    assert!(connection_points.iter().all(|point| {
+        page.items.iter().any(|item| match item {
+            SchItem::Wire(wire) => wire.a == *point || wire.b == *point,
+            _ => false,
+        })
+    }));
+    let managed_pin_points = page
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            SchItem::Symbol(symbol) if symbol.field_value("Path").is_some() => Some(
+                page.library.definitions[&symbol.lib_id]
+                    .placed_pins(symbol)
+                    .unwrap(),
+            ),
+            _ => None,
+        })
+        .flatten()
+        .map(|pin| pin.point)
+        .collect::<Vec<_>>();
+    assert!(
+        connection_points
+            .iter()
+            .all(|connection| !managed_pin_points.contains(connection))
+    );
+
+    let unchanged =
+        plan_reconciliation(Some(&document), &netlist, "NetSymbolStaircase.kicad_sch").unwrap();
+    assert!(unchanged.is_empty(), "{:#?}", unchanged.edits());
+}
+
+#[test]
+fn driven_pin_splits_missing_net_symbol_runs_into_distinct_stairs() {
+    let netlist = common::compile_fixture("net_symbol_staircase", "root.zen");
+    let mut document = plan_reconciliation(None, &netlist, "NetSymbolStaircase.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    let component = document.pages[0]
+        .items
+        .iter()
+        .find_map(|item| match item {
+            SchItem::Symbol(symbol) if symbol.field_value("Path") == Some("STAIR") => Some(symbol),
+            _ => None,
+        })
+        .unwrap();
+    let pins = document.pages[0].library.definitions[&component.lib_id]
+        .placed_pins(component)
+        .unwrap();
+    let pin_point = |number: &str| pins.iter().find(|pin| pin.number == number).unwrap().point;
+    let missing = [pin_point("3"), pin_point("5")];
+    let driven = pin_point("4");
+    let incident_wires = |document: &SchDocument, point| {
+        document.pages[0]
+            .items
+            .iter()
+            .filter(
+                |item| matches!(item, SchItem::Wire(wire) if wire.a == point || wire.b == point),
+            )
+            .count()
+    };
+    let items_before = document.pages[0].items.len();
+    document.pages[0].items.retain(|item| {
+        !matches!(item, SchItem::Wire(wire) if missing.contains(&wire.a) || missing.contains(&wire.b))
+    });
+    assert!(document.pages[0].items.len() < items_before);
+    let driven_before = incident_wires(&document, driven);
+
+    let repaired = plan_reconciliation(Some(&document), &netlist, "NetSymbolStaircase.kicad_sch")
+        .unwrap()
+        .apply(Some(&document))
+        .unwrap();
+
+    assert!(
+        inspect_schematic(&repaired, &netlist)
+            .unwrap()
+            .analysis
+            .is_equivalent()
+    );
+    assert_eq!(incident_wires(&repaired, driven), driven_before);
+    let mut connection_points = repaired.pages[0]
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            SchItem::Symbol(symbol) if symbol.field_value("Value") == Some("GROUND_SHARED") => {
+                let definition = &repaired.pages[0].library.definitions[&symbol.lib_id];
+                Some(definition.placed_pins(symbol).unwrap()[0].point)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    connection_points.sort_by(|left, right| {
+        left.x
+            .total_cmp(&right.x)
+            .then_with(|| left.y.total_cmp(&right.y))
+    });
+    connection_points.dedup();
+    assert_eq!(connection_points.len(), 3);
 }
 
 #[test]
@@ -301,13 +476,8 @@ fn preserves_an_equivalent_label_instead_of_preferring_a_net_symbol() {
         .into_iter()
         .find(|pin| pin.is_power_input())
         .unwrap();
-    let (slot, pin_number) = managed_pin_at(&document, ground_pin.point);
-    let label_id = deterministic_uuid(format!(
-        "zener:net-label:GROUND:{}:{pin_number}",
-        slot.symbol_id()
-    ));
     document.pages[0].items.push(SchItem::Label(Label::new(
-        label_id,
+        deterministic_uuid("equivalent-ground-label"),
         "GROUND",
         ground_pin.point,
     )));
@@ -475,29 +645,6 @@ fn move_symbol(symbol: &mut Symbol, at: Point) {
         field.at.x += dx;
         field.at.y += dy;
     }
-}
-
-fn managed_pin_at(document: &SchDocument, point: Point) -> (SymbolSlotKey, String) {
-    document.pages[0]
-        .items
-        .iter()
-        .filter_map(|item| match item {
-            SchItem::Symbol(symbol) => Some(symbol),
-            _ => None,
-        })
-        .filter_map(|symbol| {
-            let path = symbol.field_value("Path")?;
-            let slot = SymbolSlotKey::new(path, symbol.unit)?;
-            let definition = &document.pages[0].library.definitions[&symbol.lib_id];
-            definition
-                .placed_pins(symbol)
-                .ok()?
-                .into_iter()
-                .find(|pin| pin.point == point)
-                .map(|pin| (slot, pin.number))
-        })
-        .next()
-        .unwrap_or_else(|| panic!("missing managed pin at {point:?}"))
 }
 
 #[test]
