@@ -49,7 +49,6 @@ load(
     "tvs",
     "rectifier",
     "zener",
-    "merge_parts",
     "crystal",
 )
 
@@ -583,37 +582,6 @@ HOUSE_CRYSTALS_BY_PKG = {
     ],
 }
 
-# House pin header catalog (Würth Elektronik WR-PHD series)
-# Key: (pitch, rows, pins, orientation) -> [(mpn, manufacturer), ...]
-HOUSE_PH = merge_parts(
-    [
-        WURTH_ELEKTRONIK_WR_PHD,
-        {
-            # 1.27mm pitch, 2 rows, vertical
-            ("1.27mm", 2, 2, "Vertical"): [("62200421121", "Würth Elektronik")],
-            ("1.27mm", 2, 4, "Vertical"): [("62200821121", "Würth Elektronik")],
-            ("1.27mm", 2, 5, "Vertical"): [("62201021121", "Würth Elektronik"), ("ZX-PZ1.27-2-5PZZ", "Megastar")],
-            ("1.27mm", 2, 10, "Vertical"): [("62202021121", "Würth Elektronik")],
-            # 2.54mm pitch, 1 row, vertical
-            ("2.54mm", 1, 2, "Vertical"): [("61300211121", "Würth Elektronik")],
-            ("2.54mm", 1, 3, "Vertical"): [("61300311121", "Würth Elektronik")],
-            ("2.54mm", 1, 4, "Vertical"): [("61300411121", "Würth Elektronik")],
-            ("2.54mm", 1, 5, "Vertical"): [("61300511121", "Würth Elektronik")],
-            ("2.54mm", 1, 6, "Vertical"): [("61300611121", "Würth Elektronik")],
-            ("2.54mm", 1, 8, "Vertical"): [("61300811121", "Würth Elektronik")],
-            ("2.54mm", 1, 10, "Vertical"): [("61301011121", "Würth Elektronik")],
-            ("2.54mm", 1, 15, "Vertical"): [("61301511121", "Würth Elektronik")],
-            # 2.54mm pitch, 2 rows, vertical
-            ("2.54mm", 2, 2, "Vertical"): [("61300421121", "Würth Elektronik")],
-            ("2.54mm", 2, 3, "Vertical"): [("61300621121", "Würth Elektronik")],
-            ("2.54mm", 2, 4, "Vertical"): [("61300821121", "Würth Elektronik")],
-            ("2.54mm", 2, 5, "Vertical"): [("61301021121", "Würth Elektronik")],
-            ("2.54mm", 2, 10, "Vertical"): [("61302021121", "Würth Elektronik")],
-            ("2.54mm", 2, 20, "Vertical"): [("61304021121", "Würth Elektronik")],
-        },
-    ]
-)
-
 # House rectifier diode catalog by technology and package
 HOUSE_RECTIFIERS_BY_PKG = {
     ("PN", "DO-219AB"): [
@@ -1127,6 +1095,7 @@ HOUSE_TVS_BY_PKG = {
     ],
 }
 
+
 def assign_house_resistor(c, series_by_pkg):
     """Assign house resistor MPNs."""
     resistance = Resistance(prop(c, ["resistance", "Resistance"]))
@@ -1371,15 +1340,7 @@ def assign_house_pin_header(c, house_ph):
     gender_req = prop(c, ["gender", "Gender"])
     mount_req = prop(c, ["mount", "Mount"])
 
-    # O(1) lookup using tuple key
-    if mount_req and gender_req:
-        # Generic pin header with mount and gender
-        key = (pitch_req, rows_req, pins_req, orientation_req, gender_req, mount_req)
-    else:
-        # Legacy style pin header (deprecated)
-        key = (pitch_req, rows_req, pins_req, orientation_req)
-
-    # Check for an exact match
+    key = (pitch_req, rows_req, pins_req, orientation_req, gender_req, mount_req)
     matches = house_ph.get(key, [])
 
     if matches:
@@ -1596,4 +1557,4 @@ def assign_house_parts(c):
     elif c.type == "crystal":
         assign_house_crystal(c, HOUSE_CRYSTALS_BY_PKG)
     elif c.type == "connector" and prop(c, ["connector_type", "Connector_type"]) == "Pin Header":
-        assign_house_pin_header(c, HOUSE_PH)
+        assign_house_pin_header(c, WURTH_ELEKTRONIK_WR_PHD)
