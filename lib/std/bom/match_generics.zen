@@ -1127,33 +1127,6 @@ HOUSE_TVS_BY_PKG = {
     ],
 }
 
-# House terminal block catalog
-# Key: (pitch, pins) -> list of (mpn, manufacturer) tuples
-HOUSE_TERMINAL_BLOCKS = {
-    # 2.54mm pitch
-    # LCSC: DORABO DB125-2.54 series (budget option) + TE Connectivity Buchanan 282834 (quality option)
-    ("2.54mm", 2): [("282834-2", "TE Connectivity"), ("DB125-2.54-2P-GN-S", "DORABO")],
-    ("2.54mm", 3): [("282834-3", "TE Connectivity"), ("DB125-2.54-3P-GN-S", "DORABO")],
-    ("2.54mm", 4): [("282834-4", "TE Connectivity"), ("DB125-2.54-4P-GN-S", "DORABO")],
-    ("2.54mm", 5): [("282834-5", "TE Connectivity"), ("DB125-2.54-5P-GN-S", "DORABO")],
-    ("2.54mm", 6): [("282834-6", "TE Connectivity"), ("DB125-2.54-6P-GN-S", "DORABO")],
-    ("2.54mm", 7): [("282834-7", "TE Connectivity"), ("DB125-2.54-7P-GN-S", "DORABO")],
-    ("2.54mm", 8): [("282834-8", "TE Connectivity"), ("DB125-2.54-8P-GN-S", "DORABO")],
-    ("2.54mm", 9): [("282834-9", "TE Connectivity"), ("DB125-2.54-9P-GN-S", "DORABO")],
-    ("2.54mm", 10): [("1-282834-0", "TE Connectivity"), ("DB125-2.54-10P-GN-S", "DORABO")],
-    # 5.0mm pitch - TE Connectivity Buchanan 282836 series + DORABO DB128V-5.0 series
-    ("5.0mm", 2): [("282836-2", "TE Connectivity"), ("DB128V-5.0-2P-GN-S", "DORABO")],
-    ("5.0mm", 3): [("282836-3", "TE Connectivity"), ("DB128V-5.0-3P-GN-S", "DORABO")],
-    ("5.0mm", 4): [("282836-4", "TE Connectivity"), ("DB128V-5.0-4P-GN-S", "DORABO")],
-    ("5.0mm", 5): [("282836-5", "TE Connectivity"), ("DB128V-5.0-5P-GN-S", "DORABO")],
-    ("5.0mm", 6): [("282836-6", "TE Connectivity"), ("DB128V-5.0-6P-GN-S", "DORABO")],
-    ("5.0mm", 7): [("282836-7", "TE Connectivity"), ("DB128V-5.0-7P-GN-S", "DORABO")],
-    ("5.0mm", 8): [("282836-8", "TE Connectivity"), ("DB128V-5.0-8P-GN-S", "DORABO")],
-    ("5.0mm", 9): [("282836-9", "TE Connectivity"), ("DB128V-5.0-9P-GN-S", "DORABO")],
-    ("5.0mm", 10): [("1-282836-0", "TE Connectivity"), ("DB128V-5.0-10P-GN-S", "DORABO")],
-}
-
-
 def assign_house_resistor(c, series_by_pkg):
     """Assign house resistor MPNs."""
     resistance = Resistance(prop(c, ["resistance", "Resistance"]))
@@ -1593,23 +1566,6 @@ def assign_house_crystal(c, house_crystals_by_pkg):
     _no_match_warn("crystal", c, pkg)
 
 
-def assign_house_terminal_block(c, house_terminal_blocks):
-    """Assign house terminal block MPNs."""
-    pins_req = prop(c, ["pins", "Pins"])
-    pitch_req = prop(c, ["pitch", "Pitch"])
-
-    # O(1) lookup using tuple key
-    key = (pitch_req, pins_req)
-    matches = house_terminal_blocks.get(key, [])
-
-    if matches:
-        set_from_matches(c, matches)
-        c.matcher = "assign_house_terminal_block"
-        return
-
-    _no_match_warn("terminal block", c)
-
-
 def assign_house_parts(c):
     """Single modifier that dispatches component matching by type."""
     # Skip if already has MPN
@@ -1639,9 +1595,5 @@ def assign_house_parts(c):
         assign_house_tvs(c, HOUSE_TVS_BY_PKG)
     elif c.type == "crystal":
         assign_house_crystal(c, HOUSE_CRYSTALS_BY_PKG)
-    elif c.type == "connector":
-        connector_type = prop(c, ["connector_type", "Connector_type"])
-        if connector_type == "Pin Header":
-            assign_house_pin_header(c, HOUSE_PH)
-        elif connector_type == "Terminal Block":
-            assign_house_terminal_block(c, HOUSE_TERMINAL_BLOCKS)
+    elif c.type == "connector" and prop(c, ["connector_type", "Connector_type"]) == "Pin Header":
+        assign_house_pin_header(c, HOUSE_PH)
