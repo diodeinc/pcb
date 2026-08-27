@@ -24,7 +24,7 @@ Led(name = "D1", color = led_color, package = package, A = led_anode, K = CTRL)
 const TEST_BOARD_ZEN: &str = r#"
 load("@stdlib/interfaces.zen", "Gpio")
 
-Layout(name="TestBoard", path="build/TestBoard", bom_profile=None)
+Layout(name="TestBoard", path="build/TestBoard")
 
 LedModule = Module("modules/LedModule.zen")
 Resistor = Module("@stdlib/generics/Resistor.zen")

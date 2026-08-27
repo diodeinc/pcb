@@ -131,8 +131,8 @@ warn("BOM warning", kind="bom.missing")
 
 // Tests for inline comment suppression
 const INLINE_SUPPRESS_BASIC_ZEN: &str = r#"
-warn("This should be suppressed", kind="bom.match_generic")  # suppress: bom.match_generic
-warn("This should not be suppressed", kind="bom.match_generic")
+warn("This should be suppressed", kind="test.match")  # suppress: test.match
+warn("This should not be suppressed", kind="test.match")
 "#;
 
 const INLINE_SUPPRESS_HIERARCHICAL_ZEN: &str = r#"
@@ -148,31 +148,31 @@ error("Error 1", suppress=True)  # suppress: errors
 "#;
 
 const INLINE_SUPPRESS_MULTIPLE_ZEN: &str = r#"
-warn("Should be suppressed", kind="bom.match_generic")  # suppress: bom.match_generic, electrical
+warn("Should be suppressed", kind="test.match")  # suppress: test.match, electrical
 warn("Should not be suppressed", kind="layout.spacing")
 "#;
 
 const INLINE_SUPPRESS_ALL_ZEN: &str = r#"
-warn("Suppressed by all", kind="bom.match_generic")  # suppress: all
+warn("Suppressed by all", kind="test.match")  # suppress: all
 error("Also suppressed", suppress=True, kind="electrical.voltage")  # suppress: all
 warn("Not suppressed", kind="layout.spacing")
 "#;
 
 const INLINE_SUPPRESS_CASE_INSENSITIVE_ZEN: &str = r#"
-warn("Suppressed", kind="bom.match_generic")  # SUPPRESS: bom.match_generic
+warn("Suppressed", kind="test.match")  # SUPPRESS: test.match
 warn("Also suppressed")  # suppress: WARNINGS
 "#;
 
 const INLINE_SUPPRESS_NO_SPACE_ZEN: &str = r#"
-warn("Suppressed without space", kind="bom.match_generic")  #suppress: bom.match_generic
+warn("Suppressed without space", kind="test.match")  #suppress: test.match
 warn("Suppressed with space", kind="electrical.voltage")  # suppress: electrical
 "#;
 
 // Tests for previous-line suppression
 const PREVIOUS_LINE_SUPPRESS_BASIC_ZEN: &str = r#"
-# suppress: bom.match_generic
-warn("This should be suppressed", kind="bom.match_generic")
-warn("This should not be suppressed", kind="bom.match_generic")
+# suppress: test.match
+warn("This should be suppressed", kind="test.match")
+warn("This should not be suppressed", kind="test.match")
 "#;
 
 const PREVIOUS_LINE_SUPPRESS_HIERARCHICAL_ZEN: &str = r#"
@@ -184,30 +184,30 @@ warn("Layout warning not suppressed", kind="layout.spacing")
 "#;
 
 const PREVIOUS_LINE_SUPPRESS_MULTIPLE_ZEN: &str = r#"
-# suppress: bom.match_generic, electrical.voltage
-warn("Should be suppressed by first pattern", kind="bom.match_generic")
+# suppress: test.match, electrical.voltage
+warn("Should be suppressed by first pattern", kind="test.match")
 # suppress: layout, warnings
 warn("Should be suppressed by warnings pattern")
 "#;
 
 const PREVIOUS_LINE_MIXED_WITH_INLINE_ZEN: &str = r#"
-# suppress: bom.match_generic
-warn("Suppressed by previous line", kind="bom.match_generic")
+# suppress: test.match
+warn("Suppressed by previous line", kind="test.match")
 warn("Suppressed by inline", kind="electrical.voltage")  # suppress: electrical
 warn("Not suppressed", kind="layout.spacing")
 "#;
 
 const PREVIOUS_LINE_WITH_COMMENT_ZEN: &str = r#"
 # This is a regular comment explaining the code
-# suppress: bom.match_generic
-warn("Should be suppressed", kind="bom.match_generic")
+# suppress: test.match
+warn("Should be suppressed", kind="test.match")
 "#;
 
 const PREVIOUS_LINE_MULTILINE_STATEMENT_ZEN: &str = r#"
-# suppress: bom.match_generic
+# suppress: test.match
 warn(
     "Should be suppressed",
-    kind="bom.match_generic"
+    kind="test.match"
 )
 "#;
 
@@ -996,7 +996,7 @@ fn test_inline_suppress_no_space_after_hash() {
 fn test_inline_suppress_combined_with_cli() {
     // Both inline and CLI suppression should work together
     let combined_zen = r#"
-warn("Suppressed by inline", kind="bom.match_generic")  # suppress: bom.match_generic
+warn("Suppressed by inline", kind="test.match")  # suppress: test.match
 warn("Suppressed by CLI", kind="electrical.voltage")
 warn("Not suppressed", kind="layout.spacing")
 "#;

@@ -52,7 +52,7 @@ expression: sb.snapshot_dir(staging_dir)
 
 load("@stdlib/interfaces.zen", "Gpio")
 
-Layout(name="TestBoard", path="build/TestBoard", bom_profile=None)
+Layout(name="TestBoard", path="build/TestBoard")
 
 LedModule = Module("modules/LedModule.zen")
 Resistor = Module("@stdlib/generics/Resistor.zen")

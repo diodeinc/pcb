@@ -23,4 +23,4 @@ Resistor(
     P2=nc,
 )
 
-Layout(name="Board", path="build/", bom_profile=None)
+Layout(name="Board", path="build/")

@@ -7,7 +7,7 @@ use pcb_test_utils::sandbox::Sandbox;
 use pcbc::kicad_schematic::KicadProject;
 
 const BOARD_ZEN: &str = r#"
-Project(name="ApplyTest", path="hardware", layout=False, bom_profile=None)
+Project(name="ApplyTest", path="hardware", layout=False)
 
 Resistor = Module("@stdlib/generics/Resistor.zen")
 
@@ -76,7 +76,10 @@ fn apply_schematic_creates_repairs_and_clears_build_diagnostics() {
 #[test]
 fn complete_apply_reports_schematic_and_layout_artifacts_consistently() {
     let mut sandbox = Sandbox::new().with_workspace();
-    sandbox.write("board.zen", BOARD_ZEN.replace("layout=False, ", ""));
+    sandbox.write(
+        "board.zen",
+        BOARD_ZEN.replace("layout=False", "layout=True"),
+    );
 
     let output = sandbox
         .run("pcbc", ["apply", "--no-open", "board.zen"])
@@ -94,7 +97,10 @@ fn complete_apply_reports_schematic_and_layout_artifacts_consistently() {
     );
 
     let mut json_sandbox = Sandbox::new().with_workspace();
-    json_sandbox.write("board.zen", BOARD_ZEN.replace("layout=False, ", ""));
+    json_sandbox.write(
+        "board.zen",
+        BOARD_ZEN.replace("layout=False", "layout=True"),
+    );
     let output = json_sandbox
         .run("pcbc", ["apply", "--no-open", "-f", "json", "board.zen"])
         .stdout_capture()

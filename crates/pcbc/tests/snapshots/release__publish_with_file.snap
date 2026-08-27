@@ -42,7 +42,7 @@ expression: sb.snapshot_dir(&staging_dir)
 === src/boards/TB0002.zen
 
 SimpleComponent = Module("modules/component.zen")
-Layout(name="TestBoard", path="build/TestBoard", bom_profile=None)
+Layout(name="TestBoard", path="build/TestBoard")
 vcc_3v3 = Net("VCC_3V3")
 gnd = Net("GND")
 SimpleComponent(name = "foo", P1 = vcc_3v3, P2 = gnd)

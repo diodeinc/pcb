@@ -34,7 +34,6 @@ pub struct CharacteristicsData {
     pub package: Option<String>,
     pub value: Option<String>,
     pub path: Option<String>,
-    pub matcher: Option<String>,
     pub alternatives: Vec<Alternative>,
     pub properties: BTreeMap<String, String>,
     pub component_type: Option<String>,
@@ -102,7 +101,6 @@ impl<'a> IpcAccessor<'a> {
                     "package" | "footprint" => data.package = Some(val_str),
                     "value" => data.value = Some(val_str),
                     "path" => data.path = Some(val_str),
-                    "matcher" => data.matcher = Some(val_str),
                     "alternatives" => {
                         if let Some(alternative) = parse_alternative_json(&val_str) {
                             data.alternatives.push(alternative);
@@ -121,6 +119,7 @@ impl<'a> IpcAccessor<'a> {
                     | "manufacturerpartnumber"
                     | "partnumber"
                     | "manufacturer"
+                    | "matcher"
                     | "prefix"
                     | "symbol_name"
                     | "symbol_path" => {}

@@ -19,4 +19,4 @@ Resistor(
     P2=P2,
 )
 
-Layout(name="Submodule", path="submodule/", bom_profile=None)
+Layout(name="Submodule", path="submodule/")

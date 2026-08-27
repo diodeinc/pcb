@@ -1623,7 +1623,6 @@ mod tests {
             generic_data: None,
             dnp: false,
             skip_bom: false,
-            matcher: None,
             properties: Default::default(),
         };
         let offer = || Offer {

@@ -35,4 +35,4 @@ Resistor(
     P2=P2,
 )
 
-Layout(name="Module", path="module/", bom_profile=None)
+Layout(name="Module", path="module/")

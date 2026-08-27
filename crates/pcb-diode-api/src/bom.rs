@@ -1170,7 +1170,6 @@ mod tests {
             })),
             dnp: false,
             skip_bom: false,
-            matcher: None,
             properties: BTreeMap::new(),
         };
         Bom::new(
