@@ -932,7 +932,7 @@ fn pack_generated_symbols(
         .map(|net| net.name.clone())
         .collect();
     let targets = connectivity_targets(netlist, placed, &all_nets)?;
-    let stair_indices = net_symbol_stair_indices(document, &targets, net_symbol_specs);
+    let stair_indices = net_symbol_stair_indices(document, &targets, net_symbol_specs, placed)?;
 
     for page_index in 0..document.pages.len() {
         let relocatable = relocatable_slots
@@ -1257,44 +1257,40 @@ fn component_envelope(
         for target in component_targets {
             groups.entry(target.spin).or_default().push(target);
         }
-        for group in groups.values_mut() {
-            group.sort_by(|left, right| {
-                left.point
-                    .x
-                    .total_cmp(&right.point.x)
-                    .then_with(|| left.point.y.total_cmp(&right.point.y))
-                    .then_with(|| left.number.cmp(&right.number))
-            });
-            let canonical = group[0];
-            let average_point = Point::new(
-                group.iter().map(|target| target.point.x).sum::<f64>() / group.len() as f64,
-                group.iter().map(|target| target.point.y).sum::<f64>() / group.len() as f64,
-            );
-            let mut placement_target = canonical.clone();
-            placement_target.point = average_point;
-            let pin = canonical.physical_pin(page_id);
-            let stair_index = stair_indices
-                .get(&(net_name.clone(), pin))
-                .copied()
-                .unwrap_or(0);
-            let connection = net_symbol_connection_point(
-                placed,
-                &placement_target,
-                spec.pin_outward_spin,
-                stair_index,
-            )?;
-            let symbol = build_net_symbol(spec, net_name, String::new(), connection)?;
-            if let Some(symbol_bounds) =
-                field_autoplace::symbol_visual_bounds(&symbol, &spec.definition)?
-            {
-                bounds.union(symbol_bounds);
-            }
-            for target in group {
-                let bend = net_symbol_wire_bend(target.point, connection, spec.pin_outward_spin);
-                bounds.union(
-                    field_autoplace::Bounds::from_points([target.point, bend, connection])
-                        .expect("net-symbol route has at least two points"),
+        for side_targets in groups.into_values() {
+            for group in adjacent_target_runs(placed, side_targets)? {
+                let canonical = group[0];
+                let average_point = Point::new(
+                    group.iter().map(|target| target.point.x).sum::<f64>() / group.len() as f64,
+                    group.iter().map(|target| target.point.y).sum::<f64>() / group.len() as f64,
                 );
+                let mut placement_target = canonical.clone();
+                placement_target.point = average_point;
+                let pin = canonical.physical_pin(page_id);
+                let stair_index = stair_indices
+                    .get(&(net_name.clone(), pin))
+                    .copied()
+                    .unwrap_or(0);
+                let connection = net_symbol_connection_point(
+                    placed,
+                    &placement_target,
+                    spec.pin_outward_spin,
+                    stair_index,
+                )?;
+                let symbol = build_net_symbol(spec, net_name, String::new(), connection)?;
+                if let Some(symbol_bounds) =
+                    field_autoplace::symbol_visual_bounds(&symbol, &spec.definition)?
+                {
+                    bounds.union(symbol_bounds);
+                }
+                for target in group {
+                    let bend =
+                        net_symbol_wire_bend(target.point, connection, spec.pin_outward_spin);
+                    bounds.union(
+                        field_autoplace::Bounds::from_points([target.point, bend, connection])
+                            .expect("net-symbol route has at least two points"),
+                    );
+                }
             }
         }
     }
@@ -1744,7 +1740,8 @@ fn sync_net_drivers(
     // a power symbol, current-sheet hierarchical endpoint, or local label in
     // that order without treating a deterministic UUID as ownership.
     let observed = reduce_with_provenance(document, PinVisibility::VisibleOnly)?;
-    let stair_indices = net_symbol_stair_indices(document, targets_by_net, net_symbol_specs);
+    let stair_indices =
+        net_symbol_stair_indices(document, targets_by_net, net_symbol_specs, placed)?;
 
     for (net_name, targets) in targets_by_net {
         let net_page_count = targets
@@ -1795,41 +1792,60 @@ fn sync_net_drivers(
             .map(|island| (island.clone(), island_group(island)))
             .collect::<BTreeMap<_, _>>();
 
-        let mut handled_islands = BTreeSet::new();
-        for (island, target_indices) in &targets_by_island {
+        let canonical_by_island = targets_by_island
+            .iter()
+            .map(|(island, target_indices)| {
+                let canonical = *target_indices
+                    .iter()
+                    .min_by_key(|index| (&targets[**index].slot, &targets[**index].number))
+                    .expect("a terminal island has a target");
+                (island.clone(), canonical)
+            })
+            .collect::<BTreeMap<_, _>>();
+        let driver_state = canonical_by_island
+            .iter()
+            .map(|(island, canonical)| {
+                let provenance = &observed.islands[island];
+                let target = &targets[*canonical];
+                let interface_names = page_contexts
+                    .get(&target.page_index)
+                    .and_then(|context| context.get(net_name));
+                let needs_global = net_page_count > 1
+                    && island_groups.iter().any(|(other, group)| {
+                        other.page_id != island.page_id && group != &island_groups[island]
+                    });
+                let has_driver = if needs_global {
+                    island_has_global_driver(document, target.page_index, provenance, net_name)
+                } else if net_symbol_specs.contains_key(net_name) {
+                    has_named_driver(provenance, net_name)
+                } else if let Some(interface_names) = interface_names {
+                    island_has_hierarchical_driver(
+                        document,
+                        target.page_index,
+                        provenance,
+                        interface_names,
+                    )
+                } else {
+                    has_named_driver(provenance, net_name)
+                };
+                (island.clone(), (needs_global, has_driver))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let mut handled_islands = driver_state
+            .iter()
+            .filter(|(_, (_, has_driver))| *has_driver)
+            .map(|(island, _)| island.clone())
+            .collect::<BTreeSet<_>>();
+        for island in targets_by_island.keys() {
             if handled_islands.contains(island) {
                 continue;
             }
-            let provenance = &observed.islands[island];
-            let canonical = *target_indices
-                .iter()
-                .min_by_key(|index| (&targets[**index].slot, &targets[**index].number))
-                .expect("a terminal island has a target");
+            let (needs_global, _) = driver_state[island];
+            let canonical = canonical_by_island[island];
             let target = &targets[canonical];
             let interface_names = page_contexts
                 .get(&target.page_index)
                 .and_then(|context| context.get(net_name));
-            let needs_global = net_page_count > 1
-                && island_groups.iter().any(|(other, group)| {
-                    other.page_id != island.page_id && group != &island_groups[island]
-                });
-            let has_driver = if needs_global {
-                island_has_global_driver(document, target.page_index, provenance, net_name)
-            } else if net_symbol_specs.contains_key(net_name) {
-                has_named_driver(provenance, net_name)
-            } else if let Some(interface_names) = interface_names {
-                island_has_hierarchical_driver(
-                    document,
-                    target.page_index,
-                    provenance,
-                    interface_names,
-                )
-            } else {
-                has_named_driver(provenance, net_name)
-            };
-            if has_driver {
-                continue;
-            }
             if let Some(spec) = net_symbol_specs.get(net_name) {
                 // Match the old schematic viewer: one power symbol serves every
                 // undriven pin for the same component, net, and component side.
@@ -1849,13 +1865,18 @@ fn sync_net_drivers(
                             .then_some((member_island.clone(), member))
                     })
                     .collect::<Vec<_>>();
-                group_targets.sort_by(|left, right| {
-                    left.1
-                        .point
-                        .x
-                        .total_cmp(&right.1.point.x)
-                        .then_with(|| left.1.point.y.total_cmp(&right.1.point.y))
-                        .then_with(|| left.1.number.cmp(&right.1.number))
+                let candidate_targets = group_targets
+                    .iter()
+                    .map(|(_, member)| *member)
+                    .collect::<Vec<_>>();
+                let group = adjacent_target_runs(&placed[&target.slot], candidate_targets)?
+                    .into_iter()
+                    .find(|group| group.iter().any(|member| std::ptr::eq(*member, target)))
+                    .expect("current target belongs to one adjacent run");
+                group_targets.retain(|(_, member)| {
+                    group
+                        .iter()
+                        .any(|candidate| std::ptr::eq(*candidate, *member))
                 });
                 for (member_island, _) in &group_targets {
                     handled_islands.insert(member_island.clone());
@@ -1920,23 +1941,96 @@ fn sync_net_drivers(
     Ok(())
 }
 
+fn adjacent_target_runs<'a>(
+    placed: &PlacedSymbol,
+    mut targets: Vec<&'a PinTarget>,
+) -> Result<Vec<Vec<&'a PinTarget>>> {
+    let Some(side) = targets.first().map(|target| target.spin) else {
+        return Ok(Vec::new());
+    };
+    debug_assert!(targets.iter().all(|target| target.spin == side));
+    let compare_points = |left: Point, right: Point| {
+        let primary = if matches!(side, LabelSpin::Left | LabelSpin::Right) {
+            left.y.total_cmp(&right.y)
+        } else {
+            left.x.total_cmp(&right.x)
+        };
+        primary
+            .then_with(|| left.x.total_cmp(&right.x))
+            .then_with(|| left.y.total_cmp(&right.y))
+    };
+    targets.sort_by(|left, right| {
+        compare_points(left.point, right.point).then_with(|| left.number.cmp(&right.number))
+    });
+
+    let mut visible_pins = placed
+        .definition
+        .placed_pins(&placed.symbol)?
+        .into_iter()
+        .filter(|pin| !pin.hidden && pin.outward_spin == side)
+        .collect::<Vec<_>>();
+    visible_pins.sort_by(|left, right| {
+        compare_points(left.point, right.point).then_with(|| left.number.cmp(&right.number))
+    });
+
+    let ranked = targets
+        .into_iter()
+        .map(|target| {
+            let matches = visible_pins
+                .iter()
+                .enumerate()
+                .filter(|(_, pin)| pin.number == target.number && pin.point == target.point)
+                .map(|(index, _)| index)
+                .collect::<Vec<_>>();
+            let [rank] = matches.as_slice() else {
+                bail!(
+                    "schematic pin '{}:{}' does not uniquely identify a visible component pin",
+                    target.slot.component_path(),
+                    target.number
+                );
+            };
+            let stacked = visible_pins
+                .iter()
+                .filter(|pin| pin.point == target.point)
+                .count()
+                > 1;
+            Ok((target, *rank, stacked))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut runs = Vec::<Vec<&PinTarget>>::new();
+    let mut previous: Option<(usize, bool)> = None;
+    for (target, rank, stacked) in ranked {
+        let joins_previous = previous.is_some_and(|(previous_rank, previous_stacked)| {
+            !stacked && !previous_stacked && rank == previous_rank + 1
+        });
+        if joins_previous {
+            runs.last_mut().expect("a previous run exists").push(target);
+        } else {
+            runs.push(vec![target]);
+        }
+        previous = Some((rank, stacked));
+    }
+    Ok(runs)
+}
+
 fn net_symbol_stair_indices(
     document: &SchDocument,
     targets_by_net: &BTreeMap<String, Vec<PinTarget>>,
     net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
-) -> BTreeMap<(String, PhysicalPinRef), usize> {
+    placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
+) -> Result<BTreeMap<(String, PhysicalPinRef), usize>> {
     type Slot = (usize, SymbolSlotKey, LabelSpin, LabelSpin);
     type GroupKey = (String, usize, SymbolSlotKey, LabelSpin, LabelSpin);
     type GroupMember = (PhysicalPinRef, Point, String);
     type Candidate = (String, Vec<GroupMember>);
 
-    let mut groups = BTreeMap::<GroupKey, Vec<GroupMember>>::new();
+    let mut groups = BTreeMap::<GroupKey, Vec<&PinTarget>>::new();
     for (net_name, targets) in targets_by_net {
         let Some(spec) = net_symbol_specs.get(net_name) else {
             continue;
         };
         for target in targets.iter().filter(|target| !target.hidden) {
-            let pin = target.physical_pin(&document.pages[target.page_index].id);
             groups
                 .entry((
                     net_name.clone(),
@@ -1946,16 +2040,28 @@ fn net_symbol_stair_indices(
                     spec.pin_outward_spin,
                 ))
                 .or_default()
-                .push((pin, target.point, target.number.clone()));
+                .push(target);
         }
     }
 
     let mut slots = BTreeMap::<Slot, Vec<Candidate>>::new();
     for ((net_name, page_index, slot, target_side, symbol_side), members) in groups {
-        slots
-            .entry((page_index, slot, target_side, symbol_side))
-            .or_default()
-            .push((net_name, members));
+        for run in adjacent_target_runs(&placed[&slot], members)? {
+            let run_members = run
+                .into_iter()
+                .map(|target| {
+                    (
+                        target.physical_pin(&document.pages[page_index].id),
+                        target.point,
+                        target.number.clone(),
+                    )
+                })
+                .collect();
+            slots
+                .entry((page_index, slot.clone(), target_side, symbol_side))
+                .or_default()
+                .push((net_name.clone(), run_members));
+        }
     }
 
     let mut indices = BTreeMap::new();
@@ -1986,7 +2092,7 @@ fn net_symbol_stair_indices(
             }
         }
     }
-    indices
+    Ok(indices)
 }
 
 fn net_symbol_connection_point(
@@ -2678,6 +2784,8 @@ mod tests {
                   (name "A") (number "3"))
                 (pin input line (at 2.54 0 180) (length 2.54)
                   (name "B") (number "4"))
+                (pin input line (at 2.54 -1.27 180) (length 2.54)
+                  (name "X") (number "6"))
                 (pin input line (at 2.54 -2.54 180) (length 2.54)
                   (name "C") (number "5"))))"#,
         )
@@ -2828,6 +2936,32 @@ mod tests {
         assert!(envelope.min_y <= bend.y && bend.y <= envelope.max_y);
         assert!(envelope.min_x <= connection.x && connection.x <= envelope.max_x);
         assert!(envelope.min_y <= connection.y && connection.y <= envelope.max_y);
+    }
+
+    #[test]
+    fn net_symbols_share_only_consecutive_visible_pins() {
+        let placed = multi_pad_symbol();
+        let item = placed.values().next().unwrap();
+        let target = |name: &str, number: &str| {
+            resolve_pin_targets(
+                &placed,
+                "MQ-7.MQ-7",
+                name,
+                &BTreeSet::from([number.to_string()]),
+            )
+            .unwrap()
+            .remove(0)
+        };
+        let first = target("B", "4");
+        let intervening = target("X", "6");
+        let last = target("C", "5");
+
+        let split = adjacent_target_runs(item, vec![&first, &last]).unwrap();
+        assert_eq!(split.len(), 2);
+
+        let shared = adjacent_target_runs(item, vec![&first, &intervening, &last]).unwrap();
+        assert_eq!(shared.len(), 1);
+        assert_eq!(shared[0].len(), 3);
     }
 
     #[test]

@@ -172,6 +172,74 @@ fn generated_net_symbols_form_a_wired_staircase() {
 }
 
 #[test]
+fn missing_driver_does_not_rewire_already_driven_adjacent_pins() {
+    let netlist = common::compile_fixture("net_symbol_staircase", "root.zen");
+    let mut document = plan_reconciliation(None, &netlist, "NetSymbolStaircase.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    let component = document.pages[0]
+        .items
+        .iter()
+        .find_map(|item| match item {
+            SchItem::Symbol(symbol) if symbol.field_value("Path") == Some("STAIR") => Some(symbol),
+            _ => None,
+        })
+        .unwrap();
+    let pins = document.pages[0].library.definitions[&component.lib_id]
+        .placed_pins(component)
+        .unwrap();
+    let pin_point = |number: &str| pins.iter().find(|pin| pin.number == number).unwrap().point;
+    let missing = pin_point("4");
+    let driven = [pin_point("3"), pin_point("5")];
+    let incident_wires = |document: &SchDocument, point| {
+        document.pages[0]
+            .items
+            .iter()
+            .filter(
+                |item| matches!(item, SchItem::Wire(wire) if wire.a == point || wire.b == point),
+            )
+            .count()
+    };
+    let driven_before = driven.map(|point| incident_wires(&document, point));
+    let items_before = document.pages[0].items.len();
+    document.pages[0].items.retain(
+        |item| !matches!(item, SchItem::Wire(wire) if wire.a == missing || wire.b == missing),
+    );
+    assert!(document.pages[0].items.len() < items_before);
+
+    let repaired = plan_reconciliation(Some(&document), &netlist, "NetSymbolStaircase.kicad_sch")
+        .unwrap()
+        .apply(Some(&document))
+        .unwrap();
+
+    assert!(
+        inspect_schematic(&repaired, &netlist)
+            .unwrap()
+            .analysis
+            .is_equivalent()
+    );
+    assert_eq!(
+        driven.map(|point| incident_wires(&repaired, point)),
+        driven_before
+    );
+    assert_eq!(
+        repaired.pages[0]
+            .items
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item,
+                    SchItem::Symbol(symbol)
+                        if symbol.field_value("Value") == Some("GROUND_SHARED")
+                )
+            })
+            .count(),
+        2
+    );
+}
+
+#[test]
 fn root_interfaces_use_hierarchical_labels_directly_on_component_pins() {
     let netlist = common::compile_fixture("hierarchy", "root_interface.zen");
     let document = plan_reconciliation(None, &netlist, "RootInterface.kicad_sch")
