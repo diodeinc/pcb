@@ -273,7 +273,7 @@ pub enum LabelShape {
     Rectangle,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
 pub enum LabelSpin {
     Left,
     Up,

@@ -7,7 +7,7 @@ use pcb_sexpr::Sexpr;
 use crate::{
     CONNECTION_GRID_MM, GEOMETRY_EPS_MM, Label, LabelKind, LabelShape, LabelSpin, Paper, Point,
     Rotation, SchDocument, SchItem, SchPage, Sheet, SheetPin, Symbol, SymbolDefinition,
-    SymbolField, SymbolSlotKey,
+    SymbolField, SymbolSlotKey, Wire,
     analysis::{ConnectivityInspection, SchematicIssue, SchematicIssueKey},
     component_slots,
     connectivity::{
@@ -25,6 +25,8 @@ const DEFAULT_TITLE_BLOCK_HEIGHT_MM: f64 = 34.0;
 const PACKING_MARGIN_CELLS: i32 = 5;
 const PACKING_CLEARANCE_CELLS: i32 = 2;
 const LABEL_SHAPE_LENGTH_MM: f64 = 2.54;
+const NET_SYMBOL_OFFSET_CELLS: f64 = 4.0;
+const NET_SYMBOL_STAIR_CELLS: f64 = 2.0;
 const ESTIMATED_LABEL_WIDTH_EM: f64 = 0.8;
 const SHEET_PIN_SPACING_MM: f64 = 5.08;
 const SHEET_MIN_WIDTH_MM: f64 = 50.8;
@@ -1656,12 +1658,19 @@ fn add_connectivity_drivers(
         &page_contexts,
         target_nets,
     )?;
-    sync_net_drivers(document, &anchors_by_net, net_symbol_specs, &page_contexts)
+    sync_net_drivers(
+        document,
+        &anchors_by_net,
+        placed,
+        net_symbol_specs,
+        &page_contexts,
+    )
 }
 
 fn sync_net_drivers(
     document: &mut SchDocument,
     targets_by_net: &BTreeMap<String, Vec<PinTarget>>,
+    placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
     net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
     page_contexts: &PageDriverContexts,
 ) -> Result<()> {
@@ -1669,6 +1678,7 @@ fn sync_net_drivers(
     // a power symbol, current-sheet hierarchical endpoint, or local label in
     // that order without treating a deterministic UUID as ownership.
     let observed = reduce_with_provenance(document, PinVisibility::VisibleOnly)?;
+    let stair_indices = net_symbol_stair_indices(document, targets_by_net, net_symbol_specs);
 
     for (net_name, targets) in targets_by_net {
         let net_page_count = targets
@@ -1752,8 +1762,28 @@ fn sync_net_drivers(
             }
             if let Some(spec) = net_symbol_specs.get(net_name) {
                 let id = available_deterministic_id(document, &target.net_symbol_key(net_name));
-                let symbol = build_net_symbol(spec, net_name, id, target.point)?;
+                let pin = target.physical_pin(&document.pages[target.page_index].id);
+                let stair_index = stair_indices
+                    .get(&(net_name.clone(), pin))
+                    .copied()
+                    .unwrap_or(0);
+                let connection_point = net_symbol_connection_point(
+                    &placed[&target.slot],
+                    target,
+                    spec.pin_outward_spin,
+                    stair_index,
+                )?;
+                let symbol = build_net_symbol(spec, net_name, id, connection_point)?;
+                let symbol_id = symbol.id.clone();
                 insert_net_symbol(document, target.page_index, symbol, &spec.definition)?;
+                insert_connection_wires(
+                    document,
+                    target.page_index,
+                    &symbol_id,
+                    target.point,
+                    connection_point,
+                    spec.pin_outward_spin,
+                );
             } else {
                 let id = available_deterministic_id(document, &target.label_key(net_name));
                 let mut label = driver_label(
@@ -1772,6 +1802,128 @@ fn sync_net_drivers(
     }
 
     Ok(())
+}
+
+fn net_symbol_stair_indices(
+    document: &SchDocument,
+    targets_by_net: &BTreeMap<String, Vec<PinTarget>>,
+    net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
+) -> BTreeMap<(String, PhysicalPinRef), usize> {
+    type Slot = (usize, SymbolSlotKey, LabelSpin, LabelSpin);
+    type Candidate = (String, PhysicalPinRef, Point, String);
+
+    let mut slots = BTreeMap::<Slot, Vec<Candidate>>::new();
+    for (net_name, targets) in targets_by_net {
+        let Some(spec) = net_symbol_specs.get(net_name) else {
+            continue;
+        };
+        for target in targets.iter().filter(|target| !target.hidden) {
+            let pin = target.physical_pin(&document.pages[target.page_index].id);
+            slots
+                .entry((
+                    target.page_index,
+                    target.slot.clone(),
+                    target.spin,
+                    spec.pin_outward_spin,
+                ))
+                .or_default()
+                .push((net_name.clone(), pin, target.point, target.number.clone()));
+        }
+    }
+
+    let mut indices = BTreeMap::new();
+    for ((_, _, target_side, _), candidates) in &mut slots {
+        candidates.sort_by(|left, right| {
+            let primary = if matches!(*target_side, LabelSpin::Left | LabelSpin::Right) {
+                left.2.y.total_cmp(&right.2.y)
+            } else {
+                left.2.x.total_cmp(&right.2.x)
+            };
+            primary
+                .then_with(|| left.2.x.total_cmp(&right.2.x))
+                .then_with(|| left.2.y.total_cmp(&right.2.y))
+                .then_with(|| left.0.cmp(&right.0))
+                .then_with(|| left.3.cmp(&right.3))
+        });
+        for (index, (net_name, pin, _, _)) in candidates.iter().enumerate() {
+            indices.insert((net_name.clone(), pin.clone()), index);
+        }
+    }
+    indices
+}
+
+fn net_symbol_connection_point(
+    placed: &PlacedSymbol,
+    target: &PinTarget,
+    symbol_pin_spin: LabelSpin,
+    stair_index: usize,
+) -> Result<Point> {
+    let bounds = field_autoplace::symbol_visual_bounds(&placed.symbol, &placed.definition)?
+        .unwrap_or_else(|| {
+            field_autoplace::Bounds::from_points([placed.symbol.at])
+                .expect("one point defines bounds")
+        });
+    let offset = NET_SYMBOL_OFFSET_CELLS * CONNECTION_GRID_MM;
+    let stair = stair_index as f64 * NET_SYMBOL_STAIR_CELLS * CONNECTION_GRID_MM;
+    let point = match target.spin {
+        LabelSpin::Left | LabelSpin::Right => {
+            let x = if target.spin == LabelSpin::Left {
+                bounds.min_x - offset - stair
+            } else {
+                bounds.max_x + offset + stair
+            };
+            let y = match symbol_pin_spin {
+                LabelSpin::Up => bounds.max_y + offset + stair,
+                LabelSpin::Bottom => bounds.min_y - offset - stair,
+                LabelSpin::Left | LabelSpin::Right => target.point.y + stair,
+            };
+            Point::new(x, y)
+        }
+        LabelSpin::Up => Point::new(target.point.x + stair, bounds.min_y - offset),
+        LabelSpin::Bottom => Point::new(target.point.x + stair, bounds.max_y + offset),
+    };
+    Ok(Point::new(
+        snap_connection_grid(point.x),
+        snap_connection_grid(point.y),
+    ))
+}
+
+fn snap_connection_grid(value: f64) -> f64 {
+    (value / CONNECTION_GRID_MM).round() * CONNECTION_GRID_MM
+}
+
+fn insert_connection_wires(
+    document: &mut SchDocument,
+    page_index: usize,
+    symbol_id: &str,
+    target: Point,
+    connection: Point,
+    symbol_pin_spin: LabelSpin,
+) {
+    let bend = if symbol_pin_spin.is_vertical() {
+        Point::new(connection.x, target.y)
+    } else {
+        Point::new(target.x, connection.y)
+    };
+    for (index, (a, b)) in [(target, bend), (bend, connection)].into_iter().enumerate() {
+        if points_coincide(a, b) {
+            continue;
+        }
+        let id = available_deterministic_id(
+            document,
+            &format!("zener:net-symbol-wire:{symbol_id}:{index}"),
+        );
+        document.pages[page_index].items.push(SchItem::Wire(Wire {
+            id,
+            a,
+            b,
+            unsupported: Vec::new(),
+        }));
+    }
+}
+
+fn points_coincide(left: Point, right: Point) -> bool {
+    (left.x - right.x).abs() <= GEOMETRY_EPS_MM && (left.y - right.y).abs() <= GEOMETRY_EPS_MM
 }
 
 type PageDriverContexts = BTreeMap<usize, BTreeMap<String, BTreeSet<String>>>;
@@ -2442,6 +2594,28 @@ mod tests {
 
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].number, "1");
+    }
+
+    #[test]
+    fn right_side_net_symbols_stair_outward_and_below() {
+        let placed = multi_pad_symbol();
+        let target = resolve_pin_targets(
+            &placed,
+            "MQ-7.MQ-7",
+            "B",
+            &BTreeSet::from(["4".to_string()]),
+        )
+        .unwrap()
+        .remove(0);
+        let item = &placed[&target.slot];
+
+        let first = net_symbol_connection_point(item, &target, LabelSpin::Up, 0).unwrap();
+        let second = net_symbol_connection_point(item, &target, LabelSpin::Up, 1).unwrap();
+
+        assert!((second.x - first.x - 2.0 * CONNECTION_GRID_MM).abs() < GEOMETRY_EPS_MM);
+        assert!((second.y - first.y - 2.0 * CONNECTION_GRID_MM).abs() < GEOMETRY_EPS_MM);
+        assert!(first.x > target.point.x);
+        assert!(first.y > target.point.y);
     }
 
     #[test]
