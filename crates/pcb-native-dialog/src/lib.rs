@@ -10,6 +10,28 @@ pub enum Choice {
     Cancel,
 }
 
+/// A native message dialog with one action and Cancel.
+pub struct ActionDialog<'a> {
+    pub title: &'a str,
+    pub message: &'a str,
+    pub action_label: &'a str,
+}
+
+impl ActionDialog<'_> {
+    pub fn show(&self) -> Result<bool> {
+        platform::show_action(self)
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    fn parse_choice(&self, value: &str) -> Result<bool> {
+        match value.trim() {
+            value if value == self.action_label || value == "OK" || value == "Yes" => Ok(true),
+            "Cancel" | "No" => Ok(false),
+            value => bail!("native dialog returned an unexpected choice: {value:?}"),
+        }
+    }
+}
+
 /// A three-way native dialog: a default confirm button, an alternative
 /// decline button, and Cancel.
 pub struct ConfirmDialog<'a> {
@@ -68,6 +90,44 @@ mod platform {
     use super::*;
     use anyhow::Context;
     use std::process::Command;
+
+    pub fn show_action(dialog: &ActionDialog) -> Result<bool> {
+        let action = applescript_string(dialog.action_label);
+        let show_dialog = format!(
+            "set dialogResult to display dialog (item 1 of argv) buttons {{\"Cancel\", {action}}} default button {action} cancel button \"Cancel\" with title {} with icon caution",
+            applescript_string(dialog.title),
+        );
+        let output = Command::new("osascript")
+            .args([
+                "-e",
+                "on run argv",
+                "-e",
+                "try",
+                "-e",
+                &show_dialog,
+                "-e",
+                "return button returned of dialogResult",
+                "-e",
+                "on error number -128",
+                "-e",
+                "return \"Cancel\"",
+                "-e",
+                "end try",
+                "-e",
+                "end run",
+                "--",
+            ])
+            .arg(dialog.message)
+            .output()
+            .context("failed to show the macOS dialog")?;
+        if !output.status.success() {
+            bail!(
+                "macOS dialog failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        dialog.parse_choice(&String::from_utf8_lossy(&output.stdout))
+    }
 
     pub fn show_confirm(dialog: &ConfirmDialog) -> Result<Choice> {
         let confirm = applescript_string(dialog.confirm_label);
@@ -133,6 +193,41 @@ mod platform {
     use super::*;
     use anyhow::Context;
     use std::process::Command;
+
+    pub fn show_action(dialog: &ActionDialog) -> Result<bool> {
+        let output = Command::new("zenity")
+            .arg("--question")
+            .arg(format!("--title={}", dialog.title))
+            .arg(format!("--ok-label={}", dialog.action_label))
+            .arg("--cancel-label=Cancel")
+            .arg("--text")
+            .arg(dialog.message)
+            .output();
+        match output {
+            Ok(output) if output.status.success() => return Ok(true),
+            Ok(output) if output.status.code() == Some(1) => return Ok(false),
+            _ => {}
+        }
+
+        let status = Command::new("kdialog")
+            .args([
+                "--title",
+                dialog.title,
+                "--yesno",
+                dialog.message,
+                "--yes-label",
+                dialog.action_label,
+                "--no-label",
+                "Cancel",
+            ])
+            .status()
+            .context("failed to show the action dialog with zenity or kdialog")?;
+        match status.code() {
+            Some(0) => Ok(true),
+            Some(1) => Ok(false),
+            code => bail!("kdialog action dialog failed with exit code {code:?}"),
+        }
+    }
 
     pub fn show_confirm(dialog: &ConfirmDialog) -> Result<Choice> {
         match show_zenity(dialog) {
@@ -217,6 +312,20 @@ mod platform {
 
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+    pub fn show_action(dialog: &ActionDialog) -> Result<bool> {
+        let message = format!("{}\n\nOK \u{2014} {}", dialog.message, dialog.action_label);
+        let output = message_box(dialog.title, &message, "OKCancel", "Warning")
+            .output()
+            .context("failed to show the Windows action dialog")?;
+        if !output.status.success() {
+            bail!(
+                "Windows dialog failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        dialog.parse_choice(&String::from_utf8_lossy(&output.stdout))
+    }
+
     fn message_box(title: &str, message: &str, buttons: &str, icon: &str) -> Command {
         let mut command = Command::new("powershell.exe");
         command
@@ -259,6 +368,10 @@ mod platform {
 #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
 mod platform {
     use super::*;
+
+    pub fn show_action(_dialog: &ActionDialog) -> Result<bool> {
+        bail!("native dialogs are not supported on this platform")
+    }
 
     pub fn show_confirm(_dialog: &ConfirmDialog) -> Result<Choice> {
         bail!("native dialogs are not supported on this platform")

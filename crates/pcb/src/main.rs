@@ -1054,6 +1054,7 @@ fn toolchain_list() -> Result<()> {
 fn toolchain_show(offline: bool) -> Result<()> {
     let (request, reason) = configured_toolchain_request(true)?;
     println!("shim: {}", env!("CARGO_PKG_VERSION"));
+    show_launcher_installation()?;
     println!("request: {}", format_request(&request));
     println!("reason: {reason}");
 
@@ -1061,6 +1062,20 @@ fn toolchain_show(offline: bool) -> Result<()> {
         ToolchainRequest::Nightly => show_nightly_toolchain(offline)?,
         ToolchainRequest::Local => show_local_toolchain(),
         _ => show_stable_toolchain(&request, offline)?,
+    }
+    Ok(())
+}
+
+fn show_launcher_installation() -> Result<()> {
+    let shim = std::env::current_exe().context("failed to locate current pcb shim executable")?;
+    let install_dir = shim
+        .parent()
+        .context("current pcb shim has no parent directory")?;
+    let launcher = install_dir.join(executable_name("pcb-launcher"));
+    if launcher.is_file() {
+        println!("launcher: installed ({})", launcher.display());
+    } else {
+        println!("launcher: not installed (expected {})", launcher.display());
     }
     Ok(())
 }
