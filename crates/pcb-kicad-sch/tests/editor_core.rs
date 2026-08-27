@@ -66,6 +66,25 @@ fn editor_core_plans_applies_analyzes_and_reopens_in_memory() {
 }
 
 #[test]
+fn reconciliation_drives_each_physical_pin_of_a_logical_terminal() {
+    let netlist = common::compile_fixture("multi_pad", "root.zen");
+    let document = plan_reconciliation(None, &netlist, "MultiPad.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+
+    let inspection = inspect_schematic(&document, &netlist).unwrap();
+    assert!(
+        inspection.analysis.is_equivalent(),
+        "{:#?}",
+        inspection.analysis.issues()
+    );
+
+    let unchanged = plan_reconciliation(Some(&document), &netlist, "MultiPad.kicad_sch").unwrap();
+    assert!(unchanged.is_empty(), "{:#?}", unchanged.edits());
+}
+
+#[test]
 fn root_interfaces_use_hierarchical_labels_directly_on_component_pins() {
     let netlist = common::compile_fixture("hierarchy", "root_interface.zen");
     let document = plan_reconciliation(None, &netlist, "RootInterface.kicad_sch")

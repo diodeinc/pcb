@@ -1,0 +1,13 @@
+(kicad_symbol_lib
+  (version 20251024)
+  (generator pcb)
+  (symbol "MULTI_PAD"
+    (symbol "MULTI_PAD_1_1"
+      (pin input line (at -5.08 2.54 0) (length 2.54)
+        (name "A") (number "1"))
+      (pin input line (at 5.08 2.54 180) (length 2.54)
+        (name "B") (number "2"))
+      (pin input line (at -5.08 -2.54 0) (length 2.54)
+        (name "A") (number "3"))
+      (pin input line (at 5.08 -2.54 180) (length 2.54)
+        (name "B") (number "4")))))

@@ -1,0 +1,16 @@
+"""Component whose logical terminals each fan out to two package pads."""
+
+Project(name="MultiPadComponent", path="kicad", layout=False)
+
+A = io("A", Net)
+B = io("B", Net)
+
+Component(
+    name="MULTI_PAD",
+    footprint="Package_DIP:DIP-4_W7.62mm",
+    symbol=Symbol(library="multi_pad.kicad_sym"),
+    pins={
+        "A": A,
+        "B": B,
+    },
+)

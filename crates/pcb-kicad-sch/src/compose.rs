@@ -12,7 +12,8 @@ use crate::{
     component_slots,
     connectivity::{
         ComponentIdentity, ConnectionOrigin, ConnectivityItemRef, IslandRef, PhysicalIsland,
-        PinVisibility, SymbolLocation, Terminal, named_connected_nets, reduce_with_provenance,
+        PhysicalPinRef, PinVisibility, SymbolLocation, Terminal, named_connected_nets,
+        reduce_with_provenance,
     },
     deterministic_uuid, field_autoplace, hierarchy, net_symbols,
     repair::{ConnectivityRepairPlan, plan_connectivity_repair, remove_items},
@@ -1453,21 +1454,16 @@ struct PlacedSymbol {
 struct PinTarget {
     page_index: usize,
     slot: SymbolSlotKey,
-    pin_name: String,
+    symbol_id: String,
     number: String,
-    pin_numbers: BTreeSet<String>,
     point: Point,
     spin: LabelSpin,
     hidden: bool,
 }
 
 impl PinTarget {
-    fn terminal(&self) -> Terminal {
-        Terminal::ComponentPin {
-            component: ComponentIdentity::ManagedPath(self.slot.component_path().to_string()),
-            pin_name: self.pin_name.clone(),
-            pin_numbers: self.pin_numbers.clone(),
-        }
+    fn physical_pin(&self, page_id: &str) -> PhysicalPinRef {
+        PhysicalPinRef::new(page_id, &self.symbol_id, &self.number, self.point)
     }
 
     fn label_key(&self, net_name: &str) -> String {
@@ -1685,16 +1681,11 @@ fn sync_net_drivers(
             if target.hidden {
                 continue;
             }
-            let terminal = target.terminal();
+            let pin = target.physical_pin(&document.pages[target.page_index].id);
             let islands = observed
                 .islands
                 .iter()
-                .filter(|(_, provenance)| {
-                    provenance
-                        .terminals
-                        .iter()
-                        .any(|found| terminal.matches(found))
-                })
+                .filter(|(_, provenance)| provenance.pins.contains(&pin))
                 .map(|(island, _)| island.clone())
                 .collect::<Vec<_>>();
             let [island] = islands.as_slice() else {
@@ -2328,9 +2319,8 @@ fn resolve_pin_targets(
                 let target = PinTarget {
                     page_index: placed.page_index,
                     slot: slot.clone(),
-                    pin_name: pin.name,
+                    symbol_id: placed.symbol.id.clone(),
                     number: pin.number,
-                    pin_numbers: pin.numbers,
                     point: pin.point,
                     spin: pin.outward_spin,
                     hidden: pin.hidden,

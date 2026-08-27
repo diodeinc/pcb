@@ -8,8 +8,8 @@ pub(crate) mod kicad;
 mod raw;
 mod zener;
 
-pub(crate) use kicad::reduce_with_provenance;
 pub use kicad::{ConnectivityItemRef, PhysicalConnectivity, PhysicalIsland, PinVisibility};
+pub(crate) use kicad::{PhysicalPinRef, reduce_with_provenance};
 pub(crate) use zener::{named_connected_nets, not_connected_terminals};
 
 pub use raw::{
