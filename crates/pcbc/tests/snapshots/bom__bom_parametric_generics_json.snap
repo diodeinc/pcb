@@ -142,6 +142,20 @@ Exit Code: 0
     }
   },
   {
+    "path": "J1.PH",
+    "designator": "J1",
+    "package": "PinHeader_1x02_P2.54mm_Vertical",
+    "value": "2.54mm 2 x 1 THT Vertical Male",
+    "description": "2.54mm 2 x 1 THT Vertical Male",
+    "component_type": "PinHeader",
+    "pitch": "2.54mm",
+    "rows": 1,
+    "pins": 2,
+    "orientation": "Vertical",
+    "gender": "Male",
+    "mount": "THT"
+  },
+  {
     "path": "L1.L",
     "designator": "L1",
     "package": "0603",

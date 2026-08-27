@@ -177,6 +177,7 @@ pub enum GenericComponent {
     FerriteBead(FerriteBead),
     Inductor(Inductor),
     Led(Led),
+    PinHeader(PinHeader),
     Rectifier(Rectifier),
     Resistor(Resistor),
     Tvs(Tvs),
@@ -284,6 +285,17 @@ pub struct Led {
     pub forward_voltage: Option<PhysicalValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub forward_current: Option<PhysicalValue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct PinHeader {
+    pub pitch: String,
+    pub rows: u32,
+    /// Number of pin positions per row.
+    pub pins: u32,
+    pub orientation: String,
+    pub gender: String,
+    pub mount: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -825,6 +837,16 @@ fn capacitor_meets_or_exceeds(a: &Capacitor, b: &Capacitor) -> bool {
         && meets_or_exceeds(&a.esr, &b.esr, |ea, eb| ea.nominal <= eb.nominal)
 }
 
+fn positive_integer_attr(instance: &crate::Instance, keys: &[&str]) -> Option<u32> {
+    keys.iter().find_map(|key| {
+        let crate::AttributeValue::Number(value) = instance.attributes.get(*key)? else {
+            return None;
+        };
+        (value.is_finite() && *value > 0.0 && value.fract() == 0.0 && *value <= u32::MAX as f64)
+            .then_some(*value as u32)
+    })
+}
+
 fn detect_generic_component(instance: &crate::Instance) -> Option<GenericComponent> {
     match instance.component_type()?.as_str() {
         "resistor" => {
@@ -895,6 +917,37 @@ fn detect_generic_component(instance: &crate::Instance) -> Option<GenericCompone
                         .physical_attr(&["forward_voltage", "Forward_voltage"]),
                     forward_current: instance
                         .physical_attr(&["forward_current", "Forward_current"]),
+                }));
+            }
+        }
+        "connector" => {
+            let is_pin_header = instance
+                .string_attr(&["connector_type", "Connector_type"])
+                .is_some_and(|value| value.eq_ignore_ascii_case("Pin Header"));
+            if is_pin_header
+                && let (
+                    Some(pitch),
+                    Some(rows),
+                    Some(pins),
+                    Some(orientation),
+                    Some(gender),
+                    Some(mount),
+                ) = (
+                    instance.string_attr(&["pitch", "Pitch"]),
+                    positive_integer_attr(instance, &["rows", "Rows"]),
+                    positive_integer_attr(instance, &["pins", "Pins"]),
+                    instance.string_attr(&["orientation", "Orientation"]),
+                    instance.string_attr(&["gender", "Gender"]),
+                    instance.string_attr(&["mount", "Mount"]),
+                )
+            {
+                return Some(GenericComponent::PinHeader(PinHeader {
+                    pitch,
+                    rows,
+                    pins,
+                    orientation,
+                    gender,
+                    mount,
                 }));
             }
         }
