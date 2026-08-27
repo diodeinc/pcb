@@ -2,4 +2,4 @@ MyModule = Module("Module.zen")
 
 MyModule(name="MyModule")
 
-Layout(name="Board", path="build/layout/", bom_profile=None)
+Layout(name="Board", path="build/layout/")

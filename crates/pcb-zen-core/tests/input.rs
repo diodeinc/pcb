@@ -1089,7 +1089,7 @@ fn errors_for_unspecified_non_generic_bom_component() {
 }
 
 #[test]
-fn errors_for_typed_components_without_house_bom_matching() {
+fn errors_for_components_without_api_bom_matching() {
     let eval_result = eval_zen(vec![(
         "test.zen".to_string(),
         r#"
@@ -1181,7 +1181,7 @@ fn errors_for_typed_components_without_house_bom_matching() {
         unspecified
             .iter()
             .all(|(_, body)| !body.contains("Component 'J1'")),
-        "expected pin header connector to be house-match eligible, got: {unspecified:?}"
+        "expected pin header connector to be API-match eligible, got: {unspecified:?}"
     );
 }
 
@@ -1258,7 +1258,7 @@ fn errors_for_legacy_mpn_without_manufacturer_as_underspecified() {
                 && body.contains("Component 'R3'")
                 && body.contains("missing manufacturer")
         }),
-        "expected mpn-only house-matchable generic to error as bom.underspecified, got: {categorized:?}"
+        "expected mpn-only API-matchable generic to error as bom.underspecified, got: {categorized:?}"
     );
     assert!(
         categorized.iter().any(|(severity, kind, body)| {

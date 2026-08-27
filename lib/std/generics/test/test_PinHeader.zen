@@ -1,9 +1,7 @@
 """Comprehensive test for PinHeader component."""
 
 load("../../interfaces.zen", "Net")
-load("../../properties.zen", "Layout")
 load("../PinHeader.zen", "Mount", "Pitch", "Orientation", "Gender")
-load("../../bom/match_generics.zen", "assign_house_parts")
 
 PinHeader = Module("../PinHeader.zen")
 
@@ -34,11 +32,13 @@ for orientation in Orientation.values():
                         gender_str = gender.value
                         orientation_str = orientation.value
                         mount_str = mount.value
-                        pin_prefix = (
-                            f"P_{mount_str}_{orientation_str}_{pitch_str}_{gender_str}_{rows}_{positions}".upper()
+                        pin_prefix = "_".join(
+                            ["P", mount_str, orientation_str, pitch_str, gender_str, str(rows), str(positions)]
+                        ).upper()
+                        pins = {"P{}".format(n): Net(pin_prefix + "_" + str(n)) for n in range(1, positions * rows + 1)}
+                        name = "_".join(
+                            ["J", mount_str, orientation_str, pitch_str, gender_str, str(positions) + "x" + str(rows)]
                         )
-                        pins = {"P{}".format(n): Net(f"{pin_prefix}_{n}") for n in range(1, positions * rows + 1)}
-                        name = f"J_{mount_str}_{orientation_str}_{pitch_str}_{gender_str}_{positions}x{rows}"
 
                         # Instantiate the component
                         PinHeader(
@@ -49,70 +49,5 @@ for orientation in Orientation.values():
                             orientation=orientation,
                             pitch=pitch,
                             gender=gender,
-                            mpn="TEST-" + name,
-                            manufacturer="Test",
                             **pins,
                         )
-
-
-PH_THT_254_SINGLE_ROW_PINS = [2, 3, 4, 5, 6, 8, 10, 15]
-PH_THT_254_DUAL_ROW_PINS = [2, 3, 4, 5, 10, 20]
-PH_THT_127_DUAL_ROW_PINS = [2, 4, 5, 10]
-
-PH_MATCH_CASES = [
-    ("2.54mm", rows, pins, "Vertical", "Male", "THT")
-    for rows in [1, 2]
-    for pins in {1: PH_THT_254_SINGLE_ROW_PINS, 2: PH_THT_254_DUAL_ROW_PINS}[rows]
-] + [("1.27mm", 2, pins, "Vertical", "Male", "THT") for pins in PH_THT_127_DUAL_ROW_PINS]
-
-for i, (pitch, rows, pins, orientation, gender, mount) in enumerate(PH_MATCH_CASES):
-    match_pins = {"P{}".format(n): Net("PH_MATCH_{}_{}".format(i, n)) for n in range(1, pins * rows + 1)}
-    PinHeader(
-        name="PH_MATCH_" + str(i),
-        mount=mount,
-        pins=pins,
-        rows=rows,
-        orientation=orientation,
-        pitch=pitch,
-        gender=gender,
-        **match_pins,
-    )
-
-PH_NO_MATCH_CASES = [
-    ("2.54mm", 1, 4, "Vertical", "Male", "SMD"),
-    ("2.54mm", 1, 4, "Horizontal", "Male", "THT"),
-    ("2.54mm", 1, 4, "Vertical", "Female", "THT"),
-]
-
-for i, (pitch, rows, pins, orientation, gender, mount) in enumerate(PH_NO_MATCH_CASES):
-    no_match_pins = {"P{}".format(n): Net("PH_NO_MATCH_{}_{}".format(i, n)) for n in range(1, pins * rows + 1)}
-    PinHeader(
-        name="PH_NO_MATCH_" + str(i),
-        mount=mount,
-        pins=pins,
-        rows=rows,
-        orientation=orientation,
-        pitch=pitch,
-        gender=gender,
-        **no_match_pins,
-    )
-
-
-def _check_house_parts(c):
-    if hasattr(c, "mpn") and c.mpn:
-        return
-    if not hasattr(c, "type") or c.type != "connector":
-        return
-
-    assign_house_parts(c)
-
-    mount = c.properties["mount"].value
-    orientation = c.properties["orientation"].value
-    gender = c.properties["gender"].value
-    should_match = mount == "THT" and orientation == "Vertical" and gender == "Male"
-    matched = hasattr(c, "mpn") and c.mpn
-    if bool(matched) != should_match:
-        error("Unexpected pin header house match for " + c.value)
-
-
-builtin.add_component_modifier(_check_house_parts)

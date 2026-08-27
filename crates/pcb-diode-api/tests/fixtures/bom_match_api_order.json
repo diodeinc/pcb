@@ -31,7 +31,8 @@
         }
       ],
       "stockAvailable": 5,
-      "datasheetUrl": "https://example.com/selected.pdf"
+      "datasheetUrl": "https://example.com/selected.pdf",
+      "partCollections": ["extended"]
     },
     "alternate-offer": {
       "id": "alternate-offer",
@@ -47,7 +48,8 @@
         }
       ],
       "stockAvailable": 500,
-      "datasheetUrl": "https://example.com/alternate.pdf"
+      "datasheetUrl": "https://example.com/alternate.pdf",
+      "partCollections": ["house"]
     }
   }
 }

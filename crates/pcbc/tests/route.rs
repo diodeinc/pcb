@@ -11,7 +11,7 @@ LoadCap = Module("@stdlib/generics/Capacitor.zen")
 vcc = Net("VCC")
 gnd = Net("GND")
 LoadCap(name = "C1", value = "100nF", package = "0402", P1 = vcc, P2 = gnd)
-Layout(name="TestBoard", path="build/TestBoard", bom_profile=None)
+Layout(name="TestBoard", path="build/TestBoard")
 "#;
 
 /// Unlike `BOARD_WITH_LAYOUT_ZEN`, has nets that actually need a routed
@@ -27,7 +27,7 @@ n3 = Net("N3")
 Resistor(name = "R1", value = "1k", package = "0402", P1 = n1, P2 = n2)
 Resistor(name = "R2", value = "1k", package = "0402", P1 = n2, P2 = n3)
 
-Layout(name="TestBoard", path="build/TestBoard", bom_profile=None)
+Layout(name="TestBoard", path="build/TestBoard")
 "#;
 
 fn scaffold_layout(sandbox: &mut Sandbox) {

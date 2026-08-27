@@ -23,7 +23,7 @@ fn test_path_function_local_mixed() {
         "boards/LocalPathTest.zen",
         r#"
 # Test various Path() scenarios locally
-Layout(name="LocalPathTest", path="build/LocalPathTest", bom_profile=None)
+Layout(name="LocalPathTest", path="build/LocalPathTest")
 
 existing_file = Path("existing.toml")
 nonexistent_file = Path("missing.toml", allow_not_exist=True)

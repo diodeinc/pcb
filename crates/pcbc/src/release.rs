@@ -1623,7 +1623,6 @@ mod tests {
             generic_data: None,
             dnp: false,
             skip_bom: false,
-            matcher: None,
             properties: Default::default(),
         };
         let offer = || Offer {
@@ -1636,6 +1635,7 @@ mod tests {
             mpn: None,
             manufacturer: None,
             datasheet_url: None,
+            part_collections: Vec::new(),
         };
 
         let resistor = part("Yageo", "RC0603FR-0710KL");

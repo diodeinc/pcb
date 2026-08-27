@@ -54,7 +54,7 @@ impl DiagnosticsPass for SuppressPass {
                 "errors" => matches!(diag.severity, EvalSeverity::Error),
                 _ => {
                     // Check innermost diagnostic for categorization, since that's where
-                    // the kind is set (e.g., from warn(kind="bom.match_generic"))
+                    // the kind is set (e.g., from warn(kind="test.match"))
                     let innermost = diag.innermost();
                     innermost
                         .downcast_error_ref::<CategorizedDiagnostic>()
@@ -415,18 +415,15 @@ mod tests {
     #[test]
     fn test_suppress_pass_checks_innermost_diagnostic() {
         // Create an innermost diagnostic with a categorized kind
-        let innermost = Diagnostic::new(
-            "No house cap for 10uF 1206",
-            EvalSeverity::Warning,
-            Path::new("test.zen"),
-        )
-        .with_source_error(Some(
-            crate::lang::error::CategorizedDiagnostic::new(
-                "No house cap for 10uF 1206".to_string(),
-                "bom.match_generic".to_string(),
-            )
-            .unwrap(),
-        ));
+        let innermost =
+            Diagnostic::new("Test warning", EvalSeverity::Warning, Path::new("test.zen"))
+                .with_source_error(Some(
+                    crate::lang::error::CategorizedDiagnostic::new(
+                        "Test warning".to_string(),
+                        "test.match".to_string(),
+                    )
+                    .unwrap(),
+                ));
 
         // Wrap it in a parent diagnostic (simulating module boundaries)
         let parent = Diagnostic::new(
@@ -440,8 +437,8 @@ mod tests {
             diagnostics: vec![parent],
         };
 
-        // Apply suppress pass with "bom.match_generic"
-        let suppress_pass = SuppressPass::new(vec!["bom.match_generic".to_string()]);
+        // Apply suppress pass with "test.match"
+        let suppress_pass = SuppressPass::new(vec!["test.match".to_string()]);
         suppress_pass.apply(&mut diagnostics);
 
         // The diagnostic should be suppressed
@@ -450,12 +447,12 @@ mod tests {
 
     #[test]
     fn test_suppress_pass_hierarchical_matching() {
-        // Create a diagnostic with "bom.match_generic" kind
-        let diag = Diagnostic::new("No house cap", EvalSeverity::Warning, Path::new("test.zen"))
+        // Create a diagnostic with "test.match" kind
+        let diag = Diagnostic::new("Test warning", EvalSeverity::Warning, Path::new("test.zen"))
             .with_source_error(Some(
                 crate::lang::error::CategorizedDiagnostic::new(
-                    "No house cap".to_string(),
-                    "bom.match_generic".to_string(),
+                    "Test warning".to_string(),
+                    "test.match".to_string(),
                 )
                 .unwrap(),
             ));
@@ -464,8 +461,8 @@ mod tests {
             diagnostics: vec![diag],
         };
 
-        // Apply suppress pass with parent kind "bom" (should match "bom.match_generic")
-        let suppress_pass = SuppressPass::new(vec!["bom".to_string()]);
+        // Apply suppress pass with parent kind "test" (should match "test.match")
+        let suppress_pass = SuppressPass::new(vec!["test".to_string()]);
         suppress_pass.apply(&mut diagnostics);
 
         // The diagnostic should be suppressed via hierarchical matching

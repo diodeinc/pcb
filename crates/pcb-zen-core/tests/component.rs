@@ -652,7 +652,7 @@ snapshot_eval!(component_inherits_reference_prefix, {
 // outside of modifiers is not allowed. Mutation must happen in modifier functions.
 
 #[test]
-fn simulation_uses_default_bom_profile() {
+fn simulation_leaves_generic_part_unassigned() {
     let component = eval_single_root_component(
         r#"
         load("@stdlib/properties.zen", "Simulation")
@@ -674,49 +674,12 @@ fn simulation_uses_default_bom_profile() {
     "#,
     );
 
-    assert!(
-        component.mpn().is_some(),
-        "expected default simulation BOM profile to assign a house part"
-    );
-    assert!(
-        component.manufacturer().is_some(),
-        "expected default simulation BOM profile to assign a manufacturer"
-    );
+    assert_eq!(component.mpn(), None);
+    assert_eq!(component.manufacturer(), None);
 }
 
 #[test]
-fn simulation_can_disable_bom_profile() {
-    let component = eval_single_root_component(
-        r#"
-        load("@stdlib/properties.zen", "Simulation")
-
-        Component(
-            name = "R1",
-            prefix = "R",
-            footprint = "0603",
-            pin_defs = {"1": "1", "2": "2"},
-            pins = {"1": Net("A"), "2": Net("B")},
-            properties = {"package": "0603", "resistance": "10k"},
-            type = "resistor",
-        )
-
-        Simulation(
-            name = "sim",
-            setup = "* noop",
-            bom_profile = None,
-        )
-    "#,
-    );
-
-    assert_eq!(
-        component.mpn(),
-        None,
-        "expected bom_profile=None to skip simulation-time house matching"
-    );
-}
-
-#[test]
-fn simulation_modifiers_run_before_bom_profile() {
+fn simulation_applies_component_modifiers() {
     let component = eval_single_root_component(
         r#"
         load("@stdlib/properties.zen", "Simulation")
@@ -1564,42 +1527,6 @@ snapshot_eval!(module_schematic_invalid, {
         )
     "#
 });
-
-#[test]
-fn component_modifier_match_component_ignores_electrical_checks() {
-    let result = common::eval_zen(vec![(
-        "test.zen".to_string(),
-        r#"
-        load("@stdlib/bom/helpers.zen", "match_component")
-
-        builtin.add_component_modifier(
-            match_component(
-                match={"resistance": "10k"},
-                parts=("RC0603FR-0710KL", "Yageo"),
-            )
-        )
-
-        Component(
-            name = "R1",
-            footprint = "0603",
-            pin_defs = {"1": "1", "2": "2"},
-            pins = {"1": Net("A"), "2": Net("B")},
-            properties = {"resistance": "10k"},
-        )
-
-        def check_ok(module):
-            return
-
-        builtin.add_electrical_check(
-            name = "noop",
-            check_fn = check_ok,
-        )
-    "#
-        .to_string(),
-    )]);
-
-    assert!(result.is_success(), "eval failed: {:?}", result.diagnostics);
-}
 
 fn legacy_property_diagnostics(
     diagnostics: &pcb_zen_core::Diagnostics,

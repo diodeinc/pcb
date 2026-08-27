@@ -20,4 +20,4 @@ Submodule(
 )
 
 # Set the layout path for test expectations
-Layout(name="Main", path="build/main_layout", bom_profile=None)
+Layout(name="Main", path="build/main_layout")

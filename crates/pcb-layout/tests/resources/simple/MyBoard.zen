@@ -14,4 +14,4 @@ BMI270(
     I2C=i2c,
 )
 
-Layout(name="MyBoard", path="build/", bom_profile=None)
+Layout(name="MyBoard", path="build/")

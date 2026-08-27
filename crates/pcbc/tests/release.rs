@@ -30,7 +30,7 @@ Led(name = "D1", color = led_color, package = package, A = led_anode, K = CTRL)
 const TEST_BOARD_ZEN: &str = r#"
 load("@stdlib/interfaces.zen", "Gpio")
 
-Layout(name="TestBoard", path="build/TestBoard", bom_profile=None)
+Layout(name="TestBoard", path="build/TestBoard")
 
 LedModule = Module("modules/LedModule.zen")
 Resistor = Module("@stdlib/generics/Resistor.zen")
@@ -108,7 +108,7 @@ const TEST_KICAD_MOD: &str = r#"(footprint "test"
 
 const SIMPLE_BOARD_ZEN: &str = r#"
 SimpleComponent = Module("modules/component.zen")
-Layout(name="TestBoard", path="build/TestBoard", bom_profile=None)
+Layout(name="TestBoard", path="build/TestBoard")
 vcc_3v3 = Net("VCC_3V3")
 gnd = Net("GND")
 SimpleComponent(name = "foo", P1 = vcc_3v3, P2 = gnd)
@@ -476,7 +476,7 @@ name = "TestBoard"
             "boards/TestBoard.zen",
             r#"
 Resistor = Module("github.com/mycompany/components/Resistor/Resistor.zen")
-Layout(name="TestBoard", path="build/TestBoard", bom_profile=None)
+Layout(name="TestBoard", path="build/TestBoard")
 Resistor(name = "foo", P1 = Net("VCC_3V3"), P2 = Net("GND"))
 "#,
         )

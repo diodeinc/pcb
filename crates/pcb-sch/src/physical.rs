@@ -4543,13 +4543,13 @@ mod tests {
             let heap = module.heap();
             let mut eval = Evaluator::new(&module);
 
-            // Test case from the regression: 4.7uF ±10% (house part) should fit within 4.7uF requirement
-            let house_part = heap.alloc(physical_value(4.7e-6, 0.1, PhysicalUnit::Farads)); // 4.7uF ±10%
+            // Test case from the regression: 4.7uF ±10% should fit within a 4.7uF requirement.
+            let candidate = heap.alloc(physical_value(4.7e-6, 0.1, PhysicalUnit::Farads));
             let requirement = heap.alloc_str("4.7uF"); // 4.7uF (no tolerance = 0%)
 
-            // within() should check if house_part fits within requirement
+            // within() should check if the candidate fits within the requirement.
             let result = eval.eval_function(
-                house_part.get_attr("within", heap).unwrap().unwrap(),
+                candidate.get_attr("within", heap).unwrap().unwrap(),
                 &[requirement.to_value()],
                 &[],
             );

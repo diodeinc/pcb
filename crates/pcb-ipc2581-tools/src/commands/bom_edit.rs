@@ -2,7 +2,6 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use pcb_sch::bom::{BomMatchingKey, BomMatchingRule, Capacitor, GenericComponent, Resistor};
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -48,14 +47,6 @@ struct ResolvedSelection<'a> {
 struct BomHydration {
     oem_design_number: String,
     supplier: Option<(String, String)>,
-}
-
-type AlternativesMap = HashMap<String, HashMap<VmpnKey, ipc2581::types::AvlVmpn>>;
-
-#[derive(Debug, Clone, Hash, Eq, PartialEq)]
-struct VmpnKey {
-    mpn: String,
-    manufacturer: String,
 }
 
 #[derive(Debug, Default)]
@@ -291,77 +282,6 @@ fn resolve_selections<'a>(
     Ok(deduplicated)
 }
 
-fn extract_generic_component(
-    ipc: &ipc2581::Ipc2581,
-    item: &ipc2581::types::BomItem,
-) -> Option<(GenericComponent, String)> {
-    let chars = item.characteristics.as_ref()?;
-    let mut fields: HashMap<String, String> = chars
-        .textuals
-        .iter()
-        .filter_map(|textual| {
-            Some((
-                ipc.resolve(textual.name?).to_lowercase(),
-                ipc.resolve(textual.value?).to_string(),
-            ))
-        })
-        .collect();
-
-    let package = fields.remove("package")?;
-    let value = fields
-        .remove("capacitance")
-        .or_else(|| fields.remove("resistance"))
-        .or_else(|| fields.remove("value"))?;
-
-    match fields.get("type")?.as_str() {
-        "capacitor" => Some((
-            GenericComponent::Capacitor(Capacitor {
-                capacitance: value.parse().ok()?,
-                dielectric: None,
-                esr: None,
-                voltage: None,
-            }),
-            package,
-        )),
-        "resistor" => Some((
-            GenericComponent::Resistor(Resistor {
-                resistance: value.parse().ok()?,
-                voltage: None,
-                power: None,
-            }),
-            package,
-        )),
-        component_type => {
-            eprintln!(
-                "Unsupported type '{}' for {}",
-                component_type,
-                ipc.resolve(item.oem_design_number_ref)
-            );
-            None
-        }
-    }
-}
-
-fn matches_rule_key(
-    ipc: &ipc2581::Ipc2581,
-    item: &ipc2581::types::BomItem,
-    key: &BomMatchingKey,
-    mpn: Option<&String>,
-) -> bool {
-    match key {
-        BomMatchingKey::Mpn(rule_mpn) => mpn == Some(rule_mpn),
-        BomMatchingKey::Path(paths) => item.ref_des_list.iter().any(|ref_des| {
-            let designator = ipc.resolve(ref_des.name);
-            paths.iter().any(|path| path == designator)
-        }),
-        BomMatchingKey::Generic(generic_key) => {
-            extract_generic_component(ipc, item).is_some_and(|(component, package)| {
-                package == generic_key.package && component.matches(&generic_key.component)
-            })
-        }
-    }
-}
-
 fn reintern_symbol(
     ipc: &ipc2581::Ipc2581,
     interner: &mut ipc2581::Interner,
@@ -560,59 +480,6 @@ fn apply_selection(
     })
 }
 
-fn load_existing_alternatives(
-    ipc: &ipc2581::Ipc2581,
-    interner: &mut ipc2581::Interner,
-) -> AlternativesMap {
-    let Some(avl) = ipc.avl() else {
-        return HashMap::new();
-    };
-
-    avl.items
-        .iter()
-        .map(|item| {
-            (
-                ipc.resolve(item.oem_design_number).to_string(),
-                item.vmpn_list
-                    .iter()
-                    .filter_map(|vmpn| {
-                        let mpn = ipc.resolve(vmpn.mpns.first()?.name).to_string();
-                        let manufacturer = ipc
-                            .resolve_enterprise(vmpn.vendors.first()?.enterprise_ref)?
-                            .to_string();
-                        Some((
-                            VmpnKey { mpn, manufacturer },
-                            reintern_vmpn(ipc, interner, vmpn),
-                        ))
-                    })
-                    .collect(),
-            )
-        })
-        .collect()
-}
-
-fn create_legacy_avl_items(
-    alternatives: AlternativesMap,
-    interner: &mut ipc2581::Interner,
-) -> Vec<ipc2581::types::AvlItem> {
-    alternatives
-        .into_iter()
-        .map(|(oem_design_number, alternatives)| {
-            let mut vmpn_list: Vec<_> = alternatives.into_values().collect();
-            vmpn_list.sort_by(ipc2581::types::AvlVmpn::cmp_priority);
-            if let Some(first) = vmpn_list.first_mut() {
-                first.chosen = Some(true);
-            }
-
-            ipc2581::types::AvlItem {
-                oem_design_number: interner.intern(&oem_design_number),
-                vmpn_list,
-                spec_refs: Vec::new(),
-            }
-        })
-        .collect()
-}
-
 fn write_avl(
     content: &str,
     avl: ipc2581::types::Avl,
@@ -687,98 +554,6 @@ pub fn execute_selections(file: &Path, selections_file: &Path, output: &Path) ->
         if resolved.len() == 1 { "" } else { "s" },
         output
     );
-    Ok(())
-}
-
-pub fn execute_rules(file: &Path, rules_file: &Path, output: Option<&Path>) -> Result<()> {
-    eprintln!("Warning: --rules is deprecated; use --selections instead");
-
-    let content = file_utils::load_ipc_file(file)?;
-    let ipc = ipc2581::Ipc2581::parse(&content)?;
-    let rules: Vec<BomMatchingRule> =
-        serde_json::from_str(&std::fs::read_to_string(rules_file).context("Read rules file")?)
-            .context("Parse rules JSON")?;
-    let bom = ipc.bom().ok_or_else(|| anyhow::anyhow!("No BOM section"))?;
-
-    let mut interner = ipc2581::Interner::new();
-    let mut enterprise_registry = EnterpriseRegistry::from_ipc(&ipc);
-    let mut alternatives = load_existing_alternatives(&ipc, &mut interner);
-    let accessor = crate::accessors::IpcAccessor::new(&ipc);
-
-    for item in &bom.items {
-        let oem_design_number = ipc.resolve(item.oem_design_number_ref).to_string();
-        let mpn = accessor.lookup_avl(item.oem_design_number_ref).primary_mpn;
-
-        for rule in &rules {
-            if !matches_rule_key(&ipc, item, &rule.key, mpn.as_ref()) {
-                continue;
-            }
-
-            let alternatives = alternatives.entry(oem_design_number.clone()).or_default();
-            for source in &rule.sources {
-                let mpn = source.manufacturer_pn.as_ref().ok_or_else(|| {
-                    anyhow::anyhow!("Source missing MPN for OEM: {oem_design_number}")
-                })?;
-                let manufacturer = source.manufacturer.as_ref().ok_or_else(|| {
-                    anyhow::anyhow!("Source missing manufacturer for OEM: {oem_design_number}")
-                })?;
-                let enterprise_id = enterprise_registry.get_or_create_enterprise_id(manufacturer);
-
-                alternatives.insert(
-                    VmpnKey {
-                        mpn: mpn.clone(),
-                        manufacturer: manufacturer.clone(),
-                    },
-                    create_vmpn(
-                        &mut interner,
-                        mpn,
-                        &enterprise_id,
-                        source.rank,
-                        Some(true),
-                        None,
-                    ),
-                );
-            }
-        }
-    }
-
-    if alternatives.is_empty() {
-        eprintln!("Warning: No BOM items found");
-        return Ok(());
-    }
-
-    let items = create_legacy_avl_items(alternatives, &mut interner);
-    let num_items = items.len();
-    let num_alternatives: usize = items.iter().map(|item| item.vmpn_list.len()).sum();
-    let avl = ipc2581::types::Avl {
-        name: interner.intern("BOM_Alternatives"),
-        header: Some(ipc2581::types::AvlHeader {
-            title: interner.intern("BOM Alternatives"),
-            source: interner.intern("pcb"),
-            author: interner.intern("BOM Add Tool"),
-            datetime: interner.intern(&chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S").to_string()),
-            version: 1,
-            comment: None,
-            mod_ref: None,
-        }),
-        items,
-    };
-    let comment = format!(
-        "BOM alternatives added ({} items, {} total alternatives)",
-        num_items, num_alternatives
-    );
-    let output = output.unwrap_or(file);
-    write_avl(
-        &content,
-        avl,
-        &interner,
-        &enterprise_registry,
-        &[],
-        output,
-        &comment,
-    )?;
-
-    eprintln!("Added BOM alternatives to {:?}", output);
     Ok(())
 }
 

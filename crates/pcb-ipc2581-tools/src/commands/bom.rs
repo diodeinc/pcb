@@ -115,7 +115,6 @@ fn extract_bom_from_ipc(accessor: &IpcAccessor) -> Result<Bom> {
                 package,
                 value,
                 path: component_path,
-                matcher,
                 alternatives: textual_alternatives,
                 properties,
                 ..
@@ -152,7 +151,6 @@ fn extract_bom_from_ipc(accessor: &IpcAccessor) -> Result<Bom> {
                 generic_data,
                 dnp: false, // Will be set per ref_des
                 skip_bom: false,
-                matcher: matcher.clone(),
                 properties: properties.clone(),
             };
 
@@ -210,7 +208,6 @@ fn extract_bom_from_ipc(accessor: &IpcAccessor) -> Result<Bom> {
                 generic_data: None,
                 dnp: false,
                 skip_bom: false,
-                matcher: None,
                 properties: std::collections::BTreeMap::new(),
             };
 

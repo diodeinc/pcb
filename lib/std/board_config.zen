@@ -1,6 +1,5 @@
 load("units.zen", "Impedance")
 load("properties.zen", "Layout")
-load("bom/match_generics.zen", "assign_house_parts")
 
 # Enum Types
 CopperWeight = enum("0.5oz", "1oz", "2oz")
@@ -392,7 +391,6 @@ def Board(
     via_dimensions: list | None = None,
     default: bool = False,
     modifiers: list | None = None,
-    bom_profile=assign_house_parts,
 ):
     """Define a PCB board with an optional board configuration.
 
@@ -464,7 +462,6 @@ def Board(
         name=name,
         path=layout_path,
         modifiers=modifiers,
-        bom_profile=bom_profile,
     )
 
 

@@ -24,4 +24,4 @@ for i in range(2):
         },
     )
 
-Layout(name="MultiPads", path="build/main_layout", bom_profile=None)
+Layout(name="MultiPads", path="build/main_layout")

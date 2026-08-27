@@ -353,7 +353,7 @@ fn test_bom_kicad_fallback_json() {
     let kicad_pro = fs::read_to_string(test_dir.join("layout.kicad_pro")).unwrap();
 
     let zen_file = r#"
-Layout(name="kicad-bom", path="layout", bom_profile=None)
+Layout(name="kicad-bom", path="layout")
 "#;
 
     let output = Sandbox::new()

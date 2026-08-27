@@ -1,8 +1,6 @@
 """Comprehensive test for Resistor component."""
 
 load("../../interfaces.zen", "Net")
-load("../../properties.zen", "Layout")
-load("../../bom/match_generics.zen", "assign_house_parts")
 
 Resistor = Module("../Resistor.zen")
 
@@ -32,38 +30,3 @@ Resistor(
     P1=Net(name + "_P1"),
     P2=Net(name + "_P2"),
 )
-
-for value in ["10kOhm", "47kOhm", "100kOhm"]:
-    name = "R_0201_MATCH_" + value
-    Resistor(
-        name=name,
-        value=value,
-        voltage="25V",
-        package="0201",
-        P1=Net(name + "_P1"),
-        P2=Net(name + "_P2"),
-    )
-
-match_10m_name = "R_0402_MATCH_10M"
-Resistor(
-    name=match_10m_name,
-    value="10MOhm",
-    voltage="50V",
-    package="0402",
-    P1=Net(match_10m_name + "_P1"),
-    P2=Net(match_10m_name + "_P2"),
-)
-
-
-def _check_house_parts(c):
-    assign_house_parts(c)
-
-    if not hasattr(c, "type") or c.type != "resistor":
-        return
-    if c.properties["package"].value != "0402" or c.properties["resistance"].value != 10000000.0:
-        return
-    if c.mpn != "CRCW040210M0FKED":
-        error("Expected 10MΩ 0402 resistor to match CRCW040210M0FKED, got " + str(c.mpn))
-
-
-builtin.add_component_modifier(_check_house_parts)

@@ -35,4 +35,4 @@ Resistor(
     dnp=True,
 )
 
-Layout(name="MyBoard", path="build/", bom_profile=None)
+Layout(name="MyBoard", path="build/")

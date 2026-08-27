@@ -11,7 +11,7 @@ pcb-version = "0.4"
 const BOARD_ZEN: &str = r#"
 SimpleComponent = Module("modules/component.zen")
 
-Layout(name="TestBoard", path="build/TestBoard", bom_profile=None)
+Layout(name="TestBoard", path="build/TestBoard")
 
 vcc_3v3 = Net("VCC_3V3")
 gnd = Net("GND")

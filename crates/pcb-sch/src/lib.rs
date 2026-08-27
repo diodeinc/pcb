@@ -758,10 +758,6 @@ impl Instance {
         // Check for the standardized boolean "skip_pos" attribute
         self.boolean_attr(&["skip_pos"]).unwrap_or(false)
     }
-
-    pub fn matcher(&self) -> Option<String> {
-        self.string_attr(&["Matcher", "matcher"])
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

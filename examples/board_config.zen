@@ -287,7 +287,7 @@ def Board(
         default=default,
         config=config,
     )
-    Layout(name=name, path=layout_path, hints=layout_hints, bom_profile=None)
+    Layout(name=name, path=layout_path, hints=layout_hints)
 
 
 # Standard Base Configurations

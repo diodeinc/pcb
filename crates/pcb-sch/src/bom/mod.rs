@@ -6,5 +6,6 @@ pub use core::*;
 
 // Re-export availability types and sourcing quantity
 pub use availability::{
-    Availability, AvailabilitySummary, BOARD_QUANTITY, Offer, SourcingStockClass,
+    Availability, AvailabilitySummary, BOARD_QUANTITY, BomMatchStatus, Offer, PartCollection,
+    SourcingStockClass,
 };

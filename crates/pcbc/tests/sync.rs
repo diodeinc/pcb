@@ -235,7 +235,7 @@ fn test_sync_local_only_workspace_builds() {
         .write(
             "board.zen",
             r#"
-Layout(name="LocalOnly", path="build/LocalOnly", bom_profile=None)
+Layout(name="LocalOnly", path="build/LocalOnly")
 
 vcc = Net("VCC")
 gnd = Net("GND")

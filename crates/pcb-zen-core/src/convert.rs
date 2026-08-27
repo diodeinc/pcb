@@ -448,7 +448,7 @@ impl ModuleConverter {
                         "Component '{name}' is included in the BOM but is missing manufacturer information. Specify `part=Part(...)`."
                     ),
                 ),
-                None if Self::is_house_bom_match_eligible(instance) => continue,
+                None if Self::is_api_bom_match_eligible(instance) => continue,
                 None => (
                     "bom.unspecified",
                     format!(
@@ -465,7 +465,7 @@ impl ModuleConverter {
         }
     }
 
-    fn is_house_bom_match_eligible(instance: &Instance) -> bool {
+    fn is_api_bom_match_eligible(instance: &Instance) -> bool {
         match instance.component_type().as_deref() {
             Some(
                 "resistor" | "capacitor" | "led" | "ferrite_bead" | "inductor" | "rectifier"

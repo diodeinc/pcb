@@ -6,9 +6,10 @@ use terminal_hyperlink::Hyperlink as _;
 use urlencoding::encode as urlencode;
 
 use crate::bom::availability::BOARD_QUANTITY;
-use crate::bom::{AvailabilitySummary, Bom, SourcingStockClass};
+use crate::bom::{AvailabilitySummary, Bom, PartCollection, SourcingStockClass};
 
 const NO_MATCH_LABEL: &str = "No match (unknown part)";
+const NO_MATCH_DATA_LABEL: &str = "No match data";
 
 /// Create a cell with quantity and percentage (percentage in grey)
 fn qty_with_percentage_cell(qty: usize, percentage: f64) -> Cell {
@@ -17,30 +18,6 @@ fn qty_with_percentage_cell(qty: usize, percentage: f64) -> Cell {
         qty,
         format!("({:>5.1}%)", percentage).dimmed()
     ))
-}
-
-/// Fill in missing value from availability data, returning (value, is_autofilled)
-fn autofill_from_availability<'a>(
-    original: &'a str,
-    availability: &'a Option<String>,
-) -> (&'a str, bool) {
-    if original.is_empty() {
-        availability
-            .as_ref()
-            .map(|s| (s.as_str(), true))
-            .unwrap_or((original, false))
-    } else {
-        (original, false)
-    }
-}
-
-/// Apply dimmed+italic styling if autofilled
-fn style_if_autofilled(value: &str, is_autofilled: bool) -> String {
-    if is_autofilled && !value.is_empty() {
-        value.dimmed().italic().to_string()
-    } else {
-        value.to_string()
-    }
 }
 
 /// Configure a summary table with standard layout
@@ -98,32 +75,44 @@ fn summary_row(
     ]
 }
 
-/// Apply styling to a cell based on component flags
-fn styled_cell(content: impl ToString, is_dnp: bool, is_house: bool) -> Cell {
+fn collection_color(collection: Option<PartCollection>) -> Option<Color> {
+    match collection {
+        Some(PartCollection::House) => Some(Color::Blue),
+        Some(PartCollection::Extended) => Some(Color::Cyan),
+        None => None,
+    }
+}
+
+/// Apply styling to a cell based on component flags.
+fn styled_cell(content: impl ToString, is_dnp: bool, collection: Option<PartCollection>) -> Cell {
     let cell = Cell::new(content);
-    match (is_dnp, is_house) {
-        (true, _) => cell.fg(Color::DarkGrey),
-        (false, true) => cell.fg(Color::Blue),
-        (false, false) => cell,
+    if is_dnp {
+        cell.fg(Color::DarkGrey)
+    } else if let Some(color) = collection_color(collection) {
+        cell.fg(color)
+    } else {
+        cell
     }
 }
 
 /// Map the selected planner result to its presentation color.
 fn color_for_status(
     is_dnp: bool,
-    no_match: bool,
+    no_match: Option<bool>,
     sourceability: Option<SourcingStockClass>,
 ) -> Option<Color> {
     if is_dnp {
         Some(Color::DarkGrey)
-    } else if no_match {
-        Some(Color::Magenta)
     } else {
-        sourceability.map(|sourceability| match sourceability {
-            SourcingStockClass::Plenty => Color::Green,
-            SourcingStockClass::Limited | SourcingStockClass::Unknown => Color::Yellow,
-            SourcingStockClass::Insufficient => Color::Red,
-        })
+        match no_match {
+            None => Some(Color::Grey),
+            Some(true) => Some(Color::Magenta),
+            Some(false) => sourceability.map(|sourceability| match sourceability {
+                SourcingStockClass::Plenty => Color::Green,
+                SourcingStockClass::Limited | SourcingStockClass::Unknown => Color::Yellow,
+                SourcingStockClass::Insufficient => Color::Red,
+            }),
+        }
     }
 }
 
@@ -131,7 +120,7 @@ fn color_for_status(
 fn styled_status_cell(
     content: impl ToString,
     is_dnp: bool,
-    no_match: bool,
+    no_match: Option<bool>,
     sourceability: Option<SourcingStockClass>,
 ) -> Cell {
     let cell = Cell::new(content);
@@ -194,8 +183,6 @@ struct RegionDisplayData {
     price_boards: Option<f64>,
     sourceability: Option<SourcingStockClass>,
     lcsc_ids: Vec<(String, String)>,
-    mpn: Option<String>,
-    manufacturer: Option<String>,
 }
 
 impl RegionDisplayData {
@@ -223,8 +210,6 @@ impl RegionDisplayData {
             price_boards,
             sourceability: Some(a.stock_class),
             lcsc_ids: a.lcsc_part_ids.clone(),
-            mpn: a.mpn.clone(),
-            manufacturer: a.manufacturer.clone(),
         }
     }
 
@@ -302,8 +287,14 @@ impl Bom {
                 Cell::new("■").fg(Color::Magenta),
                 Cell::new(NO_MATCH_LABEL),
             ]);
+            legend_table.add_row(vec![
+                Cell::new("■").fg(Color::Cyan),
+                Cell::new("Extended component"),
+                Cell::new("  "),
+                Cell::new("■").fg(Color::Grey),
+                Cell::new(NO_MATCH_DATA_LABEL),
+            ]);
         } else {
-            // Keep the established offline legend, where no live sourcing data is rendered.
             legend_table.add_row(vec![
                 Cell::new("■").fg(Color::Green),
                 Cell::new("Plenty available / easy to source"),
@@ -331,126 +322,81 @@ impl Bom {
         let mut matched_qty = 0;
         let mut no_match_count = 0;
         let mut no_match_qty = 0;
+        let mut no_match_data_count = 0;
+        let mut no_match_data_qty = 0;
         let mut dnp_count = 0;
         let mut dnp_qty = 0;
         let mut house_count = 0;
         let mut house_qty = 0;
-        let mut non_house_count = 0;
-        let mut non_house_qty = 0;
+        let mut extended_count = 0;
+        let mut extended_qty = 0;
+        let mut unclassified_count = 0;
+        let mut unclassified_qty = 0;
 
         let mut table = Table::new();
         table.load_preset(comfy_table::presets::UTF8_FULL_CONDENSED);
         table.set_content_arrangement(comfy_table::ContentArrangement::DynamicFullWidth);
 
-        let json: serde_json::Value = serde_json::from_str(&self.grouped_json()).unwrap();
-        let mut entries: Vec<&serde_json::Value> = json.as_array().unwrap().iter().collect();
+        let mut entries = self.grouped_entries();
         // Sort entries: non-DNP first (sorted by first designator), then DNP items (sorted by first designator)
         entries.sort_by(|a, b| {
-            let a_dnp = a.get("dnp").and_then(|v| v.as_bool()).unwrap_or(false);
-            let b_dnp = b.get("dnp").and_then(|v| v.as_bool()).unwrap_or(false);
-
-            // DNP status takes priority (non-DNP before DNP)
-            match a_dnp.cmp(&b_dnp) {
-                std::cmp::Ordering::Equal => {
-                    // Within same DNP status, sort by first designator naturally
-                    let a_first_designator = a["designators"]
-                        .as_array()
-                        .and_then(|arr| arr.first())
-                        .and_then(|d| d.as_str())
-                        .unwrap_or("");
-
-                    let b_first_designator = b["designators"]
-                        .as_array()
-                        .and_then(|arr| arr.first())
-                        .and_then(|d| d.as_str())
-                        .unwrap_or("");
-
-                    natord::compare(a_first_designator, b_first_designator)
-                }
-                other => other,
-            }
+            a.entry.dnp.cmp(&b.entry.dnp).then_with(|| {
+                a.designators
+                    .iter()
+                    .next()
+                    .cmp(&b.designators.iter().next())
+            })
         });
 
-        for entry in entries {
-            let designators_vec: Vec<&str> = entry["designators"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|d| d.as_str().unwrap())
-                .collect();
+        for grouped in entries {
+            let designators_vec: Vec<&str> =
+                grouped.designators.iter().map(AsRef::as_ref).collect();
 
             // Designators already naturally sorted by BTreeSet<NaturalString>
             let qty = designators_vec.len();
             let designators = designators_vec.join(",");
+            let entry = &grouped.entry;
 
-            // Priority: component's own fields, then first offer, then empty
-            let original_mpn = entry["mpn"]
-                .as_str()
-                .filter(|s| !s.is_empty())
-                .or_else(|| {
-                    entry
-                        .get("offers")?
-                        .as_array()?
-                        .first()?
-                        .get("manufacturer_pn")?
-                        .as_str()
-                })
+            let mpn = entry
+                .mpn
+                .as_deref()
+                .filter(|value| !value.is_empty())
                 .unwrap_or_default();
-
-            let original_manufacturer = entry["manufacturer"]
-                .as_str()
-                .filter(|s| !s.is_empty())
-                .or_else(|| {
-                    entry
-                        .get("offers")?
-                        .as_array()?
-                        .first()?
-                        .get("manufacturer")?
-                        .as_str()
-                })
+            let manufacturer = entry
+                .manufacturer
+                .as_deref()
+                .filter(|value| !value.is_empty())
                 .unwrap_or_default();
-
-            // Use description field if available, otherwise use value
-            let description = entry["description"]
-                .as_str()
-                .or_else(|| entry["value"].as_str())
+            let description = entry
+                .description
+                .as_deref()
+                .or(entry.value.as_deref())
                 .unwrap_or_default();
+            let is_dnp = entry.dnp;
 
-            // Check if this is DNP
-            let is_dnp = entry.get("dnp").and_then(|v| v.as_bool()).unwrap_or(false);
-
-            // Check if this is a house part (assign_house_resistor or assign_house_capacitor)
-            let is_house_part = entry
-                .get("matcher")
-                .and_then(|m| m.as_str())
-                .map(|m| m.starts_with("assign_house_"))
-                .unwrap_or(false);
-
-            // Get all paths for this grouped entry and aggregate availability
-            let paths: Vec<&String> = self
+            let mut paths: Vec<&String> = self
                 .designators
                 .iter()
                 .filter(|(_, d)| designators_vec.contains(&d.as_str()))
                 .map(|(p, _)| p)
                 .collect();
+            paths.sort_unstable();
 
-            // Get per-region availability from first matching path
-            let avail = paths.iter().find_map(|path| self.availability.get(*path));
-            let no_match = avail.is_some_and(|a| a.no_match);
+            // A grouped row is sourceable only when every represented line has match data.
+            let availabilities = paths
+                .iter()
+                .map(|path| self.availability.get(*path))
+                .collect::<Option<Vec<_>>>();
+            let avail = availabilities
+                .as_deref()
+                .and_then(|availabilities| availabilities.first().copied());
+            let no_match = avail.map(|availability| availability.no_match);
+            let collection = avail.and_then(|availability| availability.selected_part_collection());
 
             let us_data =
                 RegionDisplayData::from_region_avail(avail.and_then(|a| a.us.as_ref()), qty);
             let global_data =
                 RegionDisplayData::from_region_avail(avail.and_then(|a| a.global.as_ref()), qty);
-
-            // Use US offer data for MPN/Manufacturer autofill
-            let avail_mpn = us_data.mpn.clone();
-            let avail_manufacturer = us_data.manufacturer.clone();
-
-            // Fill in missing MPN/manufacturer from availability data
-            let (mpn, is_mpn_autofilled) = autofill_from_availability(original_mpn, &avail_mpn);
-            let (manufacturer, is_manufacturer_autofilled) =
-                autofill_from_availability(original_manufacturer, &avail_manufacturer);
 
             let line_sourceability =
                 line_sourceability(us_data.sourceability, global_data.sourceability);
@@ -460,57 +406,59 @@ impl Bom {
                 if is_dnp {
                     dnp_count += 1;
                     dnp_qty += qty;
-                } else if no_match {
+                } else if avail.is_none() {
+                    no_match_data_count += 1;
+                    no_match_data_qty += qty;
+                } else if matches!(no_match, Some(true)) {
                     no_match_count += 1;
                     no_match_qty += qty;
                 } else {
                     matched_count += 1;
                     matched_qty += qty;
 
-                    // Track house vs non-house (excluding DNP)
-                    if is_house_part {
-                        house_count += 1;
-                        house_qty += qty;
-                    } else {
-                        non_house_count += 1;
-                        non_house_qty += qty;
+                    match collection {
+                        Some(PartCollection::House) => {
+                            house_count += 1;
+                            house_qty += qty;
+                        }
+                        Some(PartCollection::Extended) => {
+                            extended_count += 1;
+                            extended_qty += qty;
+                        }
+                        None => {
+                            unclassified_count += 1;
+                            unclassified_qty += qty;
+                        }
                     }
                 }
             }
 
             // Create qty and designators cells
-            let qty_cell = styled_cell(format!("{:>4}", qty), is_dnp, false);
+            let qty_cell = styled_cell(format!("{:>4}", qty), is_dnp, None);
             let designators_cell = (if has_availability {
                 styled_status_cell(designators.as_str(), is_dnp, no_match, line_sourceability)
             } else {
-                styled_cell(designators.as_str(), is_dnp, false)
+                styled_cell(designators.as_str(), is_dnp, None)
             })
             .set_delimiter(',');
 
-            // MPN: create hyperlink and style if auto-filled
             let mpn_display = if mpn.is_empty() {
                 String::new()
             } else {
-                let link = hyperlink(
+                hyperlink(
                     &format!(
                         "https://www.digikey.com/en/products/result?keywords={}",
                         urlencode(mpn)
                     ),
                     mpn,
-                );
-                style_if_autofilled(&link, is_mpn_autofilled)
+                )
             };
-            let mpn_cell = styled_cell(mpn_display, is_dnp, is_house_part);
+            let mpn_cell = styled_cell(mpn_display, is_dnp, collection);
 
-            // Manufacturer: style if auto-filled
-            let manufacturer_cell = styled_cell(
-                style_if_autofilled(manufacturer, is_manufacturer_autofilled),
-                is_dnp,
-                false,
-            );
+            let manufacturer_cell = styled_cell(manufacturer, is_dnp, None);
             let package_cell =
-                styled_cell(entry["package"].as_str().unwrap_or_default(), is_dnp, false);
-            let description_cell = styled_cell(description, is_dnp, false);
+                styled_cell(entry.package.as_deref().unwrap_or_default(), is_dnp, None);
+            let description_cell = styled_cell(description, is_dnp, None);
 
             // Build row
             let mut row = vec![qty_cell];
@@ -557,8 +505,8 @@ impl Bom {
 
             // Add price columns (US and Global)
             if has_availability {
-                row.push(styled_cell(us_data.format_price(), is_dnp, false));
-                row.push(styled_cell(global_data.format_price(), is_dnp, false));
+                row.push(styled_cell(us_data.format_price(), is_dnp, None));
+                row.push(styled_cell(global_data.format_price(), is_dnp, None));
             }
 
             row.push(description_cell);
@@ -644,8 +592,8 @@ impl Bom {
             let mut summary_table = Table::new();
             configure_summary_table(&mut summary_table);
 
-            let total_count = matched_count + no_match_count + dnp_count;
-            let total_with_dnp = matched_qty + no_match_qty + dnp_qty;
+            let total_count = matched_count + no_match_count + no_match_data_count + dnp_count;
+            let total_with_dnp = matched_qty + no_match_qty + no_match_data_qty + dnp_qty;
 
             summary_table.add_row(summary_row(
                 Color::White,
@@ -664,6 +612,14 @@ impl Bom {
                 total_with_dnp,
             ));
             summary_table.add_row(summary_row(
+                Color::Grey,
+                NO_MATCH_DATA_LABEL,
+                no_match_data_count,
+                total_count,
+                no_match_data_qty,
+                total_with_dnp,
+            ));
+            summary_table.add_row(summary_row(
                 Color::DarkGrey,
                 "DNP (Do Not Populate)",
                 dnp_count,
@@ -674,34 +630,42 @@ impl Bom {
 
             writeln!(writer, "{summary_table}")?;
 
-            let house_total_count = house_count + non_house_count;
-            let house_total_qty = house_qty + non_house_qty;
+            let collection_total_count = house_count + extended_count + unclassified_count;
+            let collection_total_qty = house_qty + extended_qty + unclassified_qty;
 
-            if house_total_count > 0 {
+            if collection_total_count > 0 {
                 writeln!(writer)?;
-                writeln!(writer, "House Component Summary:")?;
+                writeln!(writer, "Part Collection Summary:")?;
 
-                let mut house_table = Table::new();
-                configure_summary_table(&mut house_table);
+                let mut collection_table = Table::new();
+                configure_summary_table(&mut collection_table);
 
-                house_table.add_row(summary_row(
+                collection_table.add_row(summary_row(
                     Color::Blue,
                     "House component",
                     house_count,
-                    house_total_count,
+                    collection_total_count,
                     house_qty,
-                    house_total_qty,
+                    collection_total_qty,
                 ));
-                house_table.add_row(summary_row(
+                collection_table.add_row(summary_row(
+                    Color::Cyan,
+                    "Extended component",
+                    extended_count,
+                    collection_total_count,
+                    extended_qty,
+                    collection_total_qty,
+                ));
+                collection_table.add_row(summary_row(
                     Color::White,
-                    "Non-house component",
-                    non_house_count,
-                    house_total_count,
-                    non_house_qty,
-                    house_total_qty,
+                    "Unclassified component",
+                    unclassified_count,
+                    collection_total_count,
+                    unclassified_qty,
+                    collection_total_qty,
                 ));
 
-                writeln!(writer, "{house_table}")?;
+                writeln!(writer, "{collection_table}")?;
             }
         }
         Ok(())
@@ -718,7 +682,7 @@ mod tests {
     #[test]
     fn no_match_status_is_magenta() {
         assert_eq!(
-            color_for_status(false, true, Some(SourcingStockClass::Plenty)),
+            color_for_status(false, Some(true), Some(SourcingStockClass::Plenty)),
             Some(Color::Magenta)
         );
     }
@@ -726,26 +690,27 @@ mod tests {
     #[test]
     fn api_stock_classes_map_to_sourceability_colors() {
         assert_eq!(
-            color_for_status(false, false, Some(SourcingStockClass::Plenty)),
+            color_for_status(false, Some(false), Some(SourcingStockClass::Plenty)),
             Some(Color::Green)
         );
         assert_eq!(
-            color_for_status(false, false, Some(SourcingStockClass::Limited)),
+            color_for_status(false, Some(false), Some(SourcingStockClass::Limited)),
             Some(Color::Yellow)
         );
         assert_eq!(
-            color_for_status(false, false, Some(SourcingStockClass::Insufficient)),
+            color_for_status(false, Some(false), Some(SourcingStockClass::Insufficient)),
             Some(Color::Red)
         );
         assert_eq!(
-            color_for_status(false, false, Some(SourcingStockClass::Unknown)),
+            color_for_status(false, Some(false), Some(SourcingStockClass::Unknown)),
             Some(Color::Yellow)
         );
     }
 
     #[test]
-    fn missing_region_is_uncolored_and_existing_region_drives_line() {
-        assert_eq!(color_for_status(false, false, None), None);
+    fn missing_match_data_is_grey_but_missing_region_is_uncolored() {
+        assert_eq!(color_for_status(false, None, None), Some(Color::Grey));
+        assert_eq!(color_for_status(false, Some(false), None), None);
         assert_eq!(
             line_sourceability(Some(SourcingStockClass::Plenty), None),
             Some(SourcingStockClass::Plenty)
@@ -775,7 +740,6 @@ mod tests {
                 generic_data: None,
                 dnp: false,
                 skip_bom: false,
-                matcher: None,
                 properties: Default::default(),
             },
         );
@@ -796,6 +760,6 @@ mod tests {
         assert!(rendered.contains("Legend:"));
         assert!(rendered.contains(NO_MATCH_LABEL));
         assert!(!rendered.contains("NaN"));
-        assert!(!rendered.contains("House Component Summary:"));
+        assert!(!rendered.contains("Part Collection Summary:"));
     }
 }

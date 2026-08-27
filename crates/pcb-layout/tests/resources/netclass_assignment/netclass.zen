@@ -68,5 +68,4 @@ Board(
     name="netclass_test",
     layout_path="module/",
     layers=4,
-    bom_profile=None,
 )
