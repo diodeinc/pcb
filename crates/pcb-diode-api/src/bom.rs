@@ -10,8 +10,8 @@ use std::{
 use pcb_sch::{
     AttributeValue, InstanceKind, Schematic,
     bom::{
-        Availability, AvailabilitySummary, BOARD_QUANTITY, BomMatchStatus, Offer, PartCollection,
-        SourcingStockClass,
+        Availability, AvailabilitySummary, BOARD_QUANTITY, BomEntry, BomMatchStatus, Offer,
+        PartCollection, SourcingStockClass,
     },
 };
 use pcb_zen_core::{attrs, lang::part::PartValue};
@@ -538,6 +538,22 @@ fn prepare_bom_match_for_paths(
         );
     }
 
+    let mut identical_entries = HashMap::<&BomEntry, (&str, &Availability)>::new();
+    for (path, candidate) in &availability {
+        let entry = bom.entries.get(path).expect("validated BOM response path");
+        if !entry.has_stable_aggregation_identity() {
+            continue;
+        }
+        if let Some((first_path, first)) = identical_entries.get(entry) {
+            anyhow::ensure!(
+                *first == candidate,
+                "BOM match response disagreed for identical entries {first_path} and {path}"
+            );
+        } else {
+            identical_entries.insert(entry, (path, candidate));
+        }
+    }
+
     Ok(PreparedBomResponse {
         prepared: PreparedBomMatch { availability },
         retry_paths,
@@ -552,19 +568,19 @@ fn prepare_bom_match(
     prepare_bom_match_for_paths(bom, match_response, &expected_paths)?.into_complete()
 }
 
-struct CachedBomLine {
+struct CachedBomGroup {
     prepared: PreparedBomMatch,
     fresh: bool,
 }
 
-fn load_cached_bom_line(
+fn load_cached_bom_group(
     cache: Option<&WriteThroughCache>,
     key: &str,
     bom: &pcb_sch::bom::Bom,
-    path: &str,
+    paths: &[String],
     ttl: Duration,
     now: i64,
-) -> Result<Option<CachedBomLine>> {
+) -> Result<Option<CachedBomGroup>> {
     let Some(cache) = cache else {
         return Ok(None);
     };
@@ -572,9 +588,9 @@ fn load_cached_bom_line(
         return Ok(None);
     };
     let response = serde_json::from_slice(&cached.value)?;
-    let expected_paths = HashSet::from([path.to_string()]);
+    let expected_paths = paths.iter().cloned().collect();
     let prepared = prepare_bom_match_for_paths(bom, &response, &expected_paths)?.into_complete()?;
-    Ok(Some(CachedBomLine {
+    Ok(Some(CachedBomGroup {
         prepared,
         fresh: cached.is_fresh(ttl, now),
     }))
@@ -586,29 +602,92 @@ fn bom_request_entries(bom: &pcb_sch::bom::Bom) -> Result<Vec<serde_json::Value>
     serde_json::from_str(&request_bom.ungrouped_json()).context("Failed to parse BOM JSON")
 }
 
-struct BomMatchRequestLine {
-    path: String,
-    entry: serde_json::Value,
-    cache_key: String,
-    cached: Option<CachedBomLine>,
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum BomMatchGroupKey {
+    Part {
+        manufacturer: String,
+        mpn: String,
+        dnp: bool,
+        skip_bom: bool,
+    },
+    Entry(Box<BomEntry>),
+    Path(String),
 }
 
-fn bom_match_request_lines(
-    url: &str,
+fn normalized_part(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_uppercase)
+}
+
+/// A conservative pre-match version of the API planner's grouping key.
+/// Lines the API may plan together always share this key. The API may split a
+/// group further when its discovered offer sets differ.
+fn bom_match_group_key(path: &str, entry: &BomEntry) -> BomMatchGroupKey {
+    match (
+        normalized_part(entry.manufacturer.as_deref()),
+        normalized_part(entry.mpn.as_deref()),
+    ) {
+        (Some(manufacturer), Some(mpn)) => BomMatchGroupKey::Part {
+            manufacturer,
+            mpn,
+            dnp: entry.dnp,
+            skip_bom: entry.skip_bom,
+        },
+        _ if entry.has_stable_aggregation_identity() => {
+            BomMatchGroupKey::Entry(Box::new(entry.clone()))
+        }
+        _ => BomMatchGroupKey::Path(path.to_string()),
+    }
+}
+
+struct BomMatchRequestGroup {
+    paths: Vec<String>,
     entries: Vec<serde_json::Value>,
-) -> Result<Vec<BomMatchRequestLine>> {
-    entries
+    cache_key: String,
+    cached: Option<CachedBomGroup>,
+}
+
+fn bom_match_request_groups(
+    url: &str,
+    bom: &pcb_sch::bom::Bom,
+) -> Result<Vec<BomMatchRequestGroup>> {
+    let mut groups = Vec::<(Vec<String>, Vec<serde_json::Value>)>::new();
+    let mut group_indices = HashMap::<BomMatchGroupKey, usize>::new();
+
+    for entry in bom_request_entries(bom)? {
+        let path = entry
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .context("BOM entry omitted its path")?
+            .to_string();
+        let key = bom_match_group_key(
+            &path,
+            bom.entries
+                .get(&path)
+                .context("BOM entry path was not present in the BOM")?,
+        );
+        let group_index = match group_indices.get(&key) {
+            Some(index) => *index,
+            None => {
+                let index = groups.len();
+                group_indices.insert(key, index);
+                groups.push((Vec::new(), Vec::new()));
+                index
+            }
+        };
+        groups[group_index].0.push(path);
+        groups[group_index].1.push(entry);
+    }
+
+    groups
         .into_iter()
-        .map(|entry| {
-            let path = entry
-                .get("path")
-                .and_then(serde_json::Value::as_str)
-                .context("BOM entry omitted its path")?
-                .to_string();
-            let request = bom_match_request(std::slice::from_ref(&entry));
-            Ok(BomMatchRequestLine {
-                path,
-                entry,
+        .map(|(paths, entries)| {
+            let request = bom_match_request(&entries);
+            Ok(BomMatchRequestGroup {
+                paths,
+                entries,
                 cache_key: cache_key(&(url, request))?,
                 cached: None,
             })
@@ -616,40 +695,45 @@ fn bom_match_request_lines(
         .collect()
 }
 
-fn split_completed_bom_match_response(
+fn serialize_completed_bom_match_group(
     response: &MatchBomResponse,
-) -> Result<HashMap<String, Vec<u8>>> {
-    response
+    paths: &[String],
+) -> Result<Vec<u8>> {
+    let expected_paths = paths.iter().map(String::as_str).collect::<HashSet<_>>();
+    let results = response
         .results
         .iter()
-        .filter(|line| line.match_status != BomMatchStatus::NeedsRetry)
-        .map(|line| {
-            let path = line
-                .design_entry
+        .filter(|line| {
+            line.design_entry
                 .path
                 .as_deref()
-                .expect("validated BOM match response path");
-            let offers = line
-                .offer_ids
-                .iter()
-                .map(|offer_id| {
-                    (
-                        offer_id.clone(),
-                        response
-                            .offers
-                            .get(offer_id)
-                            .expect("validated BOM match response offer")
-                            .clone(),
-                    )
-                })
-                .collect();
-            let response = MatchBomResponse {
-                results: vec![line.clone()],
-                offers,
-            };
-            Ok((path.to_string(), serde_json::to_vec(&response)?))
+                .is_some_and(|path| expected_paths.contains(path))
         })
-        .collect()
+        .cloned()
+        .collect::<Vec<_>>();
+    anyhow::ensure!(
+        results.len() == paths.len(),
+        "BOM match response omitted a cache group result"
+    );
+    anyhow::ensure!(
+        results
+            .iter()
+            .all(|line| line.match_status != BomMatchStatus::NeedsRetry),
+        "Cannot cache an incomplete BOM match group"
+    );
+
+    let mut offers = HashMap::new();
+    for offer_id in results.iter().flat_map(|line| &line.offer_ids) {
+        offers.insert(
+            offer_id.clone(),
+            response
+                .offers
+                .get(offer_id)
+                .expect("validated BOM match response offer")
+                .clone(),
+        );
+    }
+    serde_json::to_vec(&MatchBomResponse { results, offers }).map_err(Into::into)
 }
 
 /// Fetch BOM matching results from the API and populate availability data
@@ -730,13 +814,13 @@ fn prepare_bom_match_with_cache(
     now: i64,
 ) -> Result<PreparedBomMatch> {
     let url = bom_match_url(ctx.api_base_url(), strict);
-    let mut lines = bom_match_request_lines(&url, bom_request_entries(bom)?)?;
-    for line in &mut lines {
-        line.cached = match load_cached_bom_line(
+    let mut groups = bom_match_request_groups(&url, bom)?;
+    for group in &mut groups {
+        group.cached = match load_cached_bom_group(
             cache.as_deref(),
-            &line.cache_key,
+            &group.cache_key,
             bom,
-            &line.path,
+            &group.paths,
             options.cache_ttl,
             now,
         ) {
@@ -750,36 +834,36 @@ fn prepare_bom_match_with_cache(
 
     let mut prepared = PreparedBomMatch::default();
     if options.mode == BomMatchMode::Offline {
-        for line in lines {
-            if let Some(cached) = line.cached {
+        for group in groups {
+            if let Some(cached) = group.cached {
                 prepared.extend(cached.prepared);
             }
         }
         return Ok(prepared);
     }
 
-    let mut refresh_lines = Vec::new();
-    for mut line in lines {
-        match line.cached.take() {
+    let mut refresh_groups = Vec::new();
+    for mut group in groups {
+        match group.cached.take() {
             Some(cached) if cached.fresh => prepared.extend(cached.prepared),
             cached => {
-                line.cached = cached;
-                refresh_lines.push(line);
+                group.cached = cached;
+                refresh_groups.push(group);
             }
         }
     }
 
-    if refresh_lines.is_empty() {
+    if refresh_groups.is_empty() {
         return Ok(prepared);
     }
 
-    let refresh_entries = refresh_lines
+    let refresh_entries = refresh_groups
         .iter()
-        .map(|line| line.entry.clone())
+        .flat_map(|group| group.entries.iter().cloned())
         .collect::<Vec<_>>();
-    let expected_paths = refresh_lines
+    let expected_paths = refresh_groups
         .iter()
-        .map(|line| line.path.clone())
+        .flat_map(|group| group.paths.iter().cloned())
         .collect::<HashSet<_>>();
     let live = call_bom_match_api(
         ctx,
@@ -789,20 +873,33 @@ fn prepare_bom_match_with_cache(
         strict,
     )
     .and_then(|response| {
-        let prepared = prepare_bom_match_for_paths(bom, &response, &expected_paths)?;
-        let mut response_lines = split_completed_bom_match_response(&response)?;
-        let writes = refresh_lines
+        let mut prepared = prepare_bom_match_for_paths(bom, &response, &expected_paths)?;
+        let retry_paths = prepared.retry_paths.clone();
+        let unresolved_paths = refresh_groups
             .iter()
-            .filter(|line| !prepared.retry_paths.contains(&line.path))
-            .map(|line| {
-                (
-                    line.cache_key.clone(),
-                    response_lines
-                        .remove(&line.path)
-                        .expect("validated completed BOM match response path"),
-                )
+            .filter(|group| group.paths.iter().any(|path| retry_paths.contains(path)))
+            .flat_map(|group| group.paths.iter().cloned())
+            .collect::<HashSet<_>>();
+        for path in &unresolved_paths {
+            prepared.prepared.availability.remove(path);
+        }
+        prepared.retry_paths = unresolved_paths;
+
+        let writes = refresh_groups
+            .iter()
+            .filter(|group| {
+                !group
+                    .paths
+                    .iter()
+                    .any(|path| prepared.retry_paths.contains(path))
             })
-            .collect::<Vec<_>>();
+            .map(|group| {
+                Ok((
+                    group.cache_key.clone(),
+                    serialize_completed_bom_match_group(&response, &group.paths)?,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
         if let Some(cache) = cache
             && let Err(error) = cache.store_many(&writes)
         {
@@ -819,15 +916,21 @@ fn prepare_bom_match_with_cache(
         }
         Err(error) => (
             PreparedBomMatch::default(),
-            refresh_lines.iter().map(|line| line.path.clone()).collect(),
+            refresh_groups
+                .iter()
+                .flat_map(|group| group.paths.iter().cloned())
+                .collect(),
             Some(error),
         ),
     };
 
     prepared.extend(live_prepared);
-    for line in refresh_lines {
-        if unresolved_paths.contains(&line.path)
-            && let Some(cached) = line.cached
+    for group in refresh_groups {
+        if group
+            .paths
+            .iter()
+            .any(|path| unresolved_paths.contains(path))
+            && let Some(cached) = group.cached
         {
             prepared.extend(cached.prepared);
         }
@@ -843,8 +946,8 @@ fn prepare_bom_match_with_cache(
 
 /// Opportunistically hydrate a schematic from BOM matches.
 ///
-/// Online mode refreshes stale and missing cache lines. Any failure falls back
-/// to stale cache data, while unresolved components remain unchanged.
+/// Online mode refreshes stale and missing cache groups. Any failure falls back
+/// to stale group data, while unresolved components remain unchanged.
 pub fn hydrate_schematic_from_bom(
     source_path: &Path,
     schematic: &mut Schematic,
@@ -1209,30 +1312,49 @@ mod tests {
             .unwrap()
     }
 
-    fn compatible_response_for(path: &str, offer_id: &str, mpn: &str) -> serde_json::Value {
+    fn compatible_response_for_lines(lines: &[(&str, &str, &str)]) -> serde_json::Value {
+        let results = lines
+            .iter()
+            .copied()
+            .map(|(path, offer_id, _)| {
+                serde_json::json!({
+                    "designEntry": {"path": path},
+                    "offerIds": [offer_id],
+                    "offerStockClasses": {(offer_id): "PLENTY"},
+                    "match": "MATCH_COMPATIBLE",
+                    "selectedOfferId": offer_id
+                })
+            })
+            .collect::<Vec<_>>();
+        let offers = lines
+            .iter()
+            .copied()
+            .map(|(_, offer_id, mpn)| {
+                (
+                    offer_id.to_string(),
+                    serde_json::json!({
+                        "id": offer_id,
+                        "geography": "US",
+                        "distributor": "testdist",
+                        "distributorPartId": "DIST-1",
+                        "mpn": mpn,
+                        "manufacturer": "API Manufacturer",
+                        "priceBreaks": [{"qty": 1, "price": 0.25}],
+                        "stockAvailable": 100,
+                        "datasheetUrl": format!("https://example.com/{mpn}.pdf"),
+                        "partCollections": ["house"]
+                    }),
+                )
+            })
+            .collect::<serde_json::Map<_, _>>();
         serde_json::json!({
-            "results": [{
-                "designEntry": {"path": path},
-                "offerIds": [offer_id],
-                "offerStockClasses": {(offer_id): "PLENTY"},
-                "match": "MATCH_COMPATIBLE",
-                "selectedOfferId": offer_id
-            }],
-            "offers": {
-                (offer_id): {
-                    "id": offer_id,
-                    "geography": "US",
-                    "distributor": "testdist",
-                    "distributorPartId": "DIST-1",
-                    "mpn": mpn,
-                    "manufacturer": "API Manufacturer",
-                    "priceBreaks": [{"qty": 1, "price": 0.25}],
-                    "stockAvailable": 100,
-                    "datasheetUrl": format!("https://example.com/{mpn}.pdf"),
-                    "partCollections": ["house"]
-                }
-            }
+            "results": results,
+            "offers": offers
         })
+    }
+
+    fn compatible_response_for(path: &str, offer_id: &str, mpn: &str) -> serde_json::Value {
+        compatible_response_for_lines(&[(path, offer_id, mpn)])
     }
 
     fn compatible_response() -> serde_json::Value {
@@ -1259,6 +1381,43 @@ mod tests {
         bom.designators
             .insert("root.U2".to_string(), "U2".to_string());
         bom
+    }
+
+    fn test_bom_with_distinct_second_line() -> Bom {
+        let mut bom = test_bom_with_second_line();
+        let second = bom.entries.get_mut("root.U2").unwrap();
+        second.value = Some("20kOhm".to_string());
+        second.generic_data = Some(GenericComponent::Resistor(Resistor {
+            resistance: "20kOhm".parse().unwrap(),
+            voltage: None,
+            power: None,
+        }));
+        bom
+    }
+
+    fn test_identityless_bom() -> Bom {
+        let entry = BomEntry {
+            mpn: None,
+            alternatives: Vec::new(),
+            manufacturer: None,
+            package: None,
+            value: None,
+            description: None,
+            generic_data: None,
+            dnp: false,
+            skip_bom: false,
+            properties: BTreeMap::from([("empty".to_string(), " ".to_string())]),
+        };
+        Bom::new(
+            HashMap::from([
+                ("root.U1".to_string(), entry.clone()),
+                ("root.U2".to_string(), entry),
+            ]),
+            HashMap::from([
+                ("root.U1".to_string(), "U1".to_string()),
+                ("root.U2".to_string(), "U2".to_string()),
+            ]),
+        )
     }
 
     fn cache_for(tempdir: &tempfile::TempDir) -> WriteThroughCache {
@@ -1629,6 +1788,32 @@ mod tests {
     }
 
     #[test]
+    fn identical_entries_require_one_consistent_match() {
+        let bom = test_bom_with_second_line();
+        let response = serde_json::from_value(compatible_response_for_lines(&[
+            ("root.U1", "house-offer", "HOUSE-MPN"),
+            ("root.U2", "extended-offer", "EXTENDED-MPN"),
+        ]))
+        .unwrap();
+
+        let error = prepare_bom_match(&bom, &response).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("BOM match response disagreed for identical entries")
+        );
+    }
+
+    #[test]
+    fn identityless_entries_keep_path_specific_cache_groups() {
+        let groups = bom_match_request_groups("https://example.com", &test_identityless_bom())
+            .expect("identityless BOM should serialize");
+
+        assert_eq!(groups.len(), 2);
+        assert!(groups.iter().all(|group| group.paths.len() == 1));
+    }
+
+    #[test]
     fn cache_policy_is_fresh_then_live_with_one_stale_fallback() {
         let server = MockServer::start();
         let mut success = server.mock(|when, then| {
@@ -1781,7 +1966,7 @@ mod tests {
         let mut cache = cache_for(&tempdir);
         let context = WorkspaceContext::from_api_base_url(server.base_url());
         let now = unix_now().unwrap();
-        let mut bom = test_bom_with_second_line();
+        let mut bom = test_bom_with_distinct_second_line();
         let entries = bom_request_entries(&bom).unwrap();
 
         let mut initial_response = compatible_response();
@@ -1823,7 +2008,7 @@ mod tests {
                 .json_body(bom_match_request(&[retry_entry]));
             then.status(200).json_body(retry_response("root.U2"));
         });
-        let mut cached = test_bom_with_second_line();
+        let mut cached = test_bom_with_distinct_second_line();
         match_bom_with_cache(
             &context,
             None,
@@ -1844,7 +2029,7 @@ mod tests {
     }
 
     #[test]
-    fn cache_reads_and_refreshes_individual_bom_lines() {
+    fn cache_refreshes_identical_parts_as_one_planner_group() {
         let server = MockServer::start();
         let tempdir = tempfile::tempdir().unwrap();
         let mut cache = cache_for(&tempdir);
@@ -1884,20 +2069,13 @@ mod tests {
             now + 100,
         )
         .unwrap();
-        assert_eq!(
-            partial_offline.entries["root.U1"].mpn.as_deref(),
-            Some("API-MPN")
-        );
+        assert!(partial_offline.entries["root.U1"].mpn.is_none());
         assert!(partial_offline.entries["root.U2"].mpn.is_none());
         initial.assert_calls(1);
 
-        let mut online_bom = test_bom_with_second_line();
-        let refresh_entry = bom_request_entries(&online_bom)
-            .unwrap()
-            .into_iter()
-            .find(|entry| entry["path"] == "root.U2")
-            .unwrap();
-        let refresh_request = bom_match_request(&[refresh_entry]);
+        let grouped_bom = test_bom_with_second_line();
+        let grouped_entries = bom_request_entries(&grouped_bom).unwrap();
+        let refresh_request = bom_match_request(&grouped_entries);
         let mut failure = server.mock(|when, then| {
             when.method(POST)
                 .path("/api/boms/match")
@@ -1905,36 +2083,34 @@ mod tests {
                 .json_body(refresh_request.clone());
             then.status(503).body("offline");
         });
-        match_bom_with_cache(
-            &context,
-            None,
-            &mut online_bom,
-            true,
-            match_options(BomMatchMode::Online),
-            Some(&mut cache),
-            now + 100,
-        )
-        .unwrap();
-        assert_eq!(
-            online_bom.entries["root.U1"].mpn.as_deref(),
-            Some("API-MPN")
+        let mut failed = test_bom_with_second_line();
+        assert!(
+            match_bom_with_cache(
+                &context,
+                None,
+                &mut failed,
+                true,
+                match_options(BomMatchMode::Online),
+                Some(&mut cache),
+                now + 100,
+            )
+            .is_err()
         );
-        assert!(online_bom.entries["root.U2"].mpn.is_none());
+        assert!(failed.availability.is_empty());
         failure.assert_calls(1);
         failure.delete();
 
-        online_bom = test_bom_with_second_line();
         let refresh = server.mock(|when, then| {
             when.method(POST)
                 .path("/api/boms/match")
                 .query_param("strict", "true")
                 .json_body(refresh_request);
-            then.status(200).json_body(compatible_response_for(
-                "root.U2",
-                "second-offer",
-                "API-MPN-2",
-            ));
+            then.status(200).json_body(compatible_response_for_lines(&[
+                ("root.U1", "selected-offer", "API-MPN"),
+                ("root.U2", "selected-offer", "API-MPN"),
+            ]));
         });
+        let mut online_bom = grouped_bom;
         match_bom_with_cache(
             &context,
             None,
@@ -1952,8 +2128,25 @@ mod tests {
         );
         assert_eq!(
             online_bom.entries["root.U2"].mpn.as_deref(),
-            Some("API-MPN-2")
+            Some("API-MPN")
         );
+        assert_eq!(
+            online_bom.availability["root.U1"],
+            online_bom.availability["root.U2"]
+        );
+
+        let mut offline = test_bom_with_second_line();
+        match_bom_with_cache(
+            &context,
+            None,
+            &mut offline,
+            true,
+            match_options(BomMatchMode::Offline),
+            Some(&mut cache),
+            now + 1_000,
+        )
+        .unwrap();
+        assert_eq!(offline.availability.len(), 2);
         initial.assert_calls(1);
         refresh.assert_calls(1);
     }

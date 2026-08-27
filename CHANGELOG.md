@@ -10,6 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- Match generics only through the BOM API, keep cached group selections consistent, and preserve House and Extended provenance in BOM output.
 - Better error handling in launcher.
 
 ## [0.4.38] - 2026-08-27
@@ -20,7 +21,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
-- Match generics only through the BOM API, preserve match provenance in JSON, and color selected House and Extended parts in tables.
 - Send structured pin-header parameters to the BOM matcher.
 - Hydrate schematics from cached BOM matches, with online refresh for stale or missing entries.
 - Added cross-platform `diode://` links that open sandbox layouts in KiCad with live sync and native recovery prompts.

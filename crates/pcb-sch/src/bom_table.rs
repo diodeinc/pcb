@@ -83,15 +83,6 @@ fn collection_color(collection: Option<PartCollection>) -> Option<Color> {
     }
 }
 
-fn common_part_collection(
-    mut collections: impl Iterator<Item = Option<PartCollection>>,
-) -> Option<PartCollection> {
-    let collection = collections.next()??;
-    collections
-        .all(|candidate| candidate == Some(collection))
-        .then_some(collection)
-}
-
 /// Apply styling to a cell based on component flags.
 fn styled_cell(content: impl ToString, is_dnp: bool, collection: Option<PartCollection>) -> Cell {
     let cell = Cell::new(content);
@@ -383,12 +374,13 @@ impl Bom {
                 .unwrap_or_default();
             let is_dnp = entry.dnp;
 
-            let paths: Vec<&String> = self
+            let mut paths: Vec<&String> = self
                 .designators
                 .iter()
                 .filter(|(_, d)| designators_vec.contains(&d.as_str()))
                 .map(|(p, _)| p)
                 .collect();
+            paths.sort_unstable();
 
             // A grouped row is sourceable only when every represented line has match data.
             let availabilities = paths
@@ -399,13 +391,7 @@ impl Bom {
                 .as_deref()
                 .and_then(|availabilities| availabilities.first().copied());
             let no_match = avail.map(|availability| availability.no_match);
-            let collection = availabilities.as_deref().and_then(|availabilities| {
-                common_part_collection(
-                    availabilities
-                        .iter()
-                        .map(|availability| availability.selected_part_collection()),
-                )
-            });
+            let collection = avail.and_then(|availability| availability.selected_part_collection());
 
             let us_data =
                 RegionDisplayData::from_region_avail(avail.and_then(|a| a.us.as_ref()), qty);
@@ -692,20 +678,6 @@ mod tests {
 
     use super::*;
     use crate::bom::{Availability, BomEntry};
-
-    #[test]
-    fn grouped_collection_requires_consistent_provenance() {
-        assert_eq!(
-            common_part_collection([Some(PartCollection::House); 2].into_iter()),
-            Some(PartCollection::House)
-        );
-        assert_eq!(
-            common_part_collection(
-                [Some(PartCollection::House), Some(PartCollection::Extended),].into_iter()
-            ),
-            None
-        );
-    }
 
     #[test]
     fn no_match_status_is_magenta() {

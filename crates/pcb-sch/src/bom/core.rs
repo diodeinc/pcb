@@ -95,6 +95,31 @@ pub struct BomEntry {
     pub properties: BTreeMap<String, String>,
 }
 
+impl BomEntry {
+    /// Whether this entry can be grouped independently of its instance path.
+    ///
+    /// DNP and BOM-exclusion flags describe an instance, but do not identify a
+    /// component. An entry containing only those flags must remain path-specific.
+    pub fn has_stable_aggregation_identity(&self) -> bool {
+        [
+            self.mpn.as_deref(),
+            self.manufacturer.as_deref(),
+            self.package.as_deref(),
+            self.value.as_deref(),
+            self.description.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|value| !value.trim().is_empty())
+            || !self.alternatives.is_empty()
+            || self.generic_data.is_some()
+            || self
+                .properties
+                .values()
+                .any(|value| !value.trim().is_empty())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UngroupedBomEntry {
     pub path: String,
@@ -322,18 +347,20 @@ impl Bom {
 
     #[cfg(feature = "table")]
     pub(crate) fn grouped_entries(&self) -> Vec<GroupedBomEntry> {
-        // Group entries by their BomEntry content
-        let mut groups = HashMap::<BomEntry, BTreeSet<NaturalString>>::new();
+        // Path-only entries do not identify a common component and must not be
+        // collapsed into one row.
+        let mut groups = HashMap::<(BomEntry, Option<String>), BTreeSet<NaturalString>>::new();
 
         for (path, entry) in &self.entries {
-            let group = groups.entry(entry.clone()).or_default();
+            let instance_path = (!entry.has_stable_aggregation_identity()).then(|| path.clone());
+            let group = groups.entry((entry.clone(), instance_path)).or_default();
             group.insert(self.designators[path].clone().into());
         }
 
         // Convert to vec
         let mut grouped_entries = groups
             .into_iter()
-            .map(|(entry, designators)| GroupedBomEntry { entry, designators })
+            .map(|((entry, _), designators)| GroupedBomEntry { entry, designators })
             .collect::<Vec<_>>();
 
         grouped_entries.sort_by(|a, b| {
@@ -656,6 +683,35 @@ mod tests {
         let truncated = trim_description(Some("Ω".repeat(101))).unwrap();
         assert_eq!(truncated, format!("{} ...", "Ω".repeat(96)));
         assert_eq!(truncated.chars().count(), 100);
+    }
+
+    #[cfg(feature = "table")]
+    #[test]
+    fn identityless_entries_remain_separate_table_rows() {
+        let entry = BomEntry {
+            mpn: None,
+            alternatives: Vec::new(),
+            manufacturer: None,
+            package: None,
+            value: None,
+            description: None,
+            generic_data: None,
+            dnp: false,
+            skip_bom: false,
+            properties: BTreeMap::new(),
+        };
+        let bom = Bom::new(
+            HashMap::from([
+                ("root.U1".to_string(), entry.clone()),
+                ("root.U2".to_string(), entry),
+            ]),
+            HashMap::from([
+                ("root.U1".to_string(), "U1".to_string()),
+                ("root.U2".to_string(), "U2".to_string()),
+            ]),
+        );
+
+        assert_eq!(bom.grouped_entries().len(), 2);
     }
 
     #[test]
