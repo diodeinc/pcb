@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Post-clone orb setup for the pcb repo. Runs before the agent starts.
+# Orb setup for the pcb repo. Runs once in a fresh clone before the agent starts.
 # See https://ampcode.com/manual/orbs for the contract.
 set -euo pipefail
 
@@ -9,8 +9,54 @@ log() {
   printf '[orb setup %s +%ss] %s\n' "$(date -Is)" "$SECONDS" "$*" >&2
 }
 
-# rust-toolchain.toml selects the repository's pinned toolchain here.
+# --- Rust toolchain (pinned to stable by rust-toolchain.toml) ----------------
+if ! command -v rustup >/dev/null 2>&1; then
+  log 'Installing Rust toolchain'
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+    | sh -s -- -y --default-toolchain stable --profile minimal
+  # shellcheck disable=SC1091
+  source "$HOME/.cargo/env"
+  log 'Installed Rust toolchain'
+fi
 log 'Installing Rust components'
 rustup component add clippy rustfmt
 log 'Installed Rust components'
+
+# --- cargo-nextest (official prebuilt binary; stay on the 0.9 series) --------
+if ! cargo nextest --version >/dev/null 2>&1; then
+  log 'Installing cargo-nextest'
+  mkdir -p "${CARGO_HOME:-$HOME/.cargo}/bin"
+  curl -LsSf https://get.nexte.st/0.9/linux \
+    | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
+  log 'Installed cargo-nextest'
+fi
+
+# --- uv (standalone installer; installs to ~/.local/bin) ---------------------
+if ! command -v uv >/dev/null 2>&1; then
+  log 'Installing uv'
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  log 'Installed uv'
+fi
+
+# --- Diode KiCad 10 (signed APT repository) ---------------------------------
+KICAD_APT_URL=https://kicad-mirror.api.diode.computer/apt
+KICAD_KEYRING=/usr/share/keyrings/diode-kicad-archive-keyring.asc
+
+# shellcheck disable=SC1091
+. /etc/os-release
+
+log 'Installing Diode KiCad from signed APT repository'
+curl -fsSL "$KICAD_APT_URL/diode-kicad-archive-keyring.asc" \
+  | sudo tee "$KICAD_KEYRING" >/dev/null
+printf 'deb [arch=%s signed-by=%s] %s %s main\n' \
+  "$(dpkg --print-architecture)" "$KICAD_KEYRING" "$KICAD_APT_URL" "$VERSION_CODENAME" \
+  | sudo tee /etc/apt/sources.list.d/diode-kicad.list >/dev/null
+sudo apt-get update -qq
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq kicad
+
+# Fail setup immediately if the command-line tools or Python bindings are not
+# usable; otherwise the problem surfaces much later as pcb-layout test failures.
+log 'Verifying KiCad command-line tools and Python bindings'
+kicad-cli --version >/dev/null
+/usr/bin/python3 -c 'import pcbnew'
 log "Orb setup complete in ${SECONDS}s"
