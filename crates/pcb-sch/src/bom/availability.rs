@@ -5,6 +5,29 @@ use serde::{Deserialize, Serialize};
 /// Board quantity sent to the sourcing planner and used for price presentation.
 pub const BOARD_QUANTITY: i32 = 5;
 
+/// Match result returned by the BOM service.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum BomMatchStatus {
+    #[serde(rename = "MATCH_EXACT")]
+    Exact,
+    #[serde(rename = "MATCH_COMPATIBLE")]
+    Compatible,
+    #[serde(rename = "MATCH_FUZZY")]
+    Fuzzy,
+    #[serde(rename = "MATCH_NEEDS_RETRY")]
+    NeedsRetry,
+    #[serde(rename = "MATCH_FAILED")]
+    Failed,
+}
+
+/// Preferred-part collection assigned by the BOM service.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum PartCollection {
+    House,
+    Extended,
+}
+
 /// Stock classification computed by the API sourcing planner.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
@@ -19,6 +42,9 @@ pub enum SourcingStockClass {
 /// Pricing and availability data for a component
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Availability {
+    /// How the BOM service matched this line.
+    #[serde(rename = "match", skip_serializing_if = "Option::is_none")]
+    pub match_status: Option<BomMatchStatus>,
     /// Best US availability summary (price @ stock)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub us: Option<AvailabilitySummary>,
@@ -43,6 +69,45 @@ impl Availability {
             .iter()
             .find(|offer| offer.id.as_deref() == Some(selected_offer_id))
     }
+
+    pub fn selected_part_collection(&self) -> Option<PartCollection> {
+        let collections = &self.selected_offer()?.part_collections;
+        if collections.contains(&PartCollection::House) {
+            Some(PartCollection::House)
+        } else if collections.contains(&PartCollection::Extended) {
+            Some(PartCollection::Extended)
+        } else {
+            None
+        }
+    }
+
+    pub fn compatible_part(&self) -> Option<(&str, &str)> {
+        if self.match_status != Some(BomMatchStatus::Compatible) {
+            return None;
+        }
+
+        let offer = self.selected_offer()?;
+        Some((
+            offer.mpn.as_deref()?.trim(),
+            offer.manufacturer.as_deref()?.trim(),
+        ))
+        .filter(|(mpn, manufacturer)| !mpn.is_empty() && !manufacturer.is_empty())
+    }
+
+    pub fn selected_datasheet_url(&self) -> Option<&str> {
+        if !matches!(
+            self.match_status,
+            Some(BomMatchStatus::Exact | BomMatchStatus::Compatible)
+        ) {
+            return None;
+        }
+
+        self.selected_offer()?
+            .datasheet_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|url| !url.is_empty())
+    }
 }
 
 /// Compact availability summary for a region
@@ -63,12 +128,6 @@ pub struct AvailabilitySummary {
     /// LCSC part IDs for hyperlinks (internal only)
     #[serde(skip, default)]
     pub lcsc_part_ids: Vec<(String, String)>,
-    /// MPN from the offer (internal only)
-    #[serde(skip, default)]
-    pub mpn: Option<String>,
-    /// Manufacturer from the offer (internal only)
-    #[serde(skip, default)]
-    pub manufacturer: Option<String>,
 }
 
 /// Distributor offer with live pricing/stock data
@@ -88,4 +147,6 @@ pub struct Offer {
     pub manufacturer: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub datasheet_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub part_collections: Vec<PartCollection>,
 }

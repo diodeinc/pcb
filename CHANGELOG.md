@@ -20,6 +20,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- Preserve BOM match provenance in JSON and color API-selected House and Extended parts in tables.
 - Send structured pin-header parameters to the BOM matcher.
 - Limit automatic pin-header matching to male vertical through-hole parts.
 - Hydrate schematics from cached BOM matches, with online refresh for stale or missing entries.

@@ -1636,6 +1636,7 @@ mod tests {
             mpn: None,
             manufacturer: None,
             datasheet_url: None,
+            part_collections: Vec::new(),
         };
 
         let resistor = part("Yageo", "RC0603FR-0710KL");

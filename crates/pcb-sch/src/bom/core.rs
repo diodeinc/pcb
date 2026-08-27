@@ -488,7 +488,8 @@ impl Bom {
         serde_json::to_string_pretty(&entries).unwrap()
     }
 
-    pub fn grouped_json(&self) -> String {
+    #[cfg(feature = "table")]
+    pub(crate) fn grouped_entries(&self) -> Vec<GroupedBomEntry> {
         // Group entries by their BomEntry content
         let mut groups = HashMap::<BomEntry, BTreeSet<NaturalString>>::new();
 
@@ -519,9 +520,7 @@ impl Bom {
         });
 
         // Apply generic BOM consolidation pass
-        grouped_entries = Self::consolidate_generic_entries(grouped_entries);
-
-        serde_json::to_string_pretty(&grouped_entries).unwrap()
+        Self::consolidate_generic_entries(grouped_entries)
     }
 
     /// Filter out components that have skip_bom=true

@@ -9,7 +9,10 @@ use std::{
 
 use pcb_sch::{
     AttributeValue, InstanceKind, Schematic,
-    bom::{Availability, AvailabilitySummary, BOARD_QUANTITY, Offer, SourcingStockClass},
+    bom::{
+        Availability, AvailabilitySummary, BOARD_QUANTITY, BomMatchStatus, Offer, PartCollection,
+        SourcingStockClass,
+    },
 };
 use pcb_zen_core::{attrs, lang::part::PartValue};
 
@@ -98,6 +101,8 @@ struct ComponentOffer {
     product_url: Option<String>,
     #[serde(rename = "datasheetUrl", skip_serializing_if = "Option::is_none")]
     datasheet_url: Option<String>,
+    #[serde(rename = "partCollections", default)]
+    part_collections: Vec<PartCollection>,
 }
 
 impl ComponentOffer {
@@ -124,6 +129,7 @@ impl ComponentOffer {
             mpn: self.mpn.clone(),
             manufacturer: self.manufacturer.clone(),
             datasheet_url: self.datasheet_url.clone(),
+            part_collections: self.part_collections.clone(),
         }
     }
 }
@@ -132,20 +138,6 @@ impl ComponentOffer {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct DesignBomEntry {
     path: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-enum BomMatchStatus {
-    #[serde(rename = "MATCH_EXACT")]
-    Exact,
-    #[serde(rename = "MATCH_COMPATIBLE")]
-    Compatible,
-    #[serde(rename = "MATCH_FUZZY")]
-    Fuzzy,
-    #[serde(rename = "MATCH_NEEDS_RETRY")]
-    NeedsRetry,
-    #[serde(rename = "MATCH_FAILED")]
-    Failed,
 }
 
 /// BOM Line - represents a single line in the matched BOM response
@@ -187,13 +179,6 @@ struct MatchBomResponse {
 #[derive(Debug, Default)]
 struct PreparedBomMatch {
     availability: HashMap<String, Availability>,
-    selected: HashMap<String, SelectedBomMetadata>,
-}
-
-#[derive(Debug, Default)]
-struct SelectedBomMetadata {
-    compatible_part: Option<(String, String)>,
-    datasheet_url: Option<String>,
 }
 
 struct PreparedBomResponse {
@@ -214,20 +199,19 @@ impl PreparedBomResponse {
 impl PreparedBomMatch {
     fn extend(&mut self, other: Self) {
         self.availability.extend(other.availability);
-        self.selected.extend(other.selected);
     }
 
     fn apply(self, bom: &mut pcb_sch::bom::Bom) {
-        for (path, selected) in self.selected {
-            let Some((mpn, manufacturer)) = selected.compatible_part else {
+        for (path, availability) in &self.availability {
+            let Some((mpn, manufacturer)) = availability.compatible_part() else {
                 continue;
             };
             let entry = bom
                 .entries
-                .get_mut(&path)
+                .get_mut(path)
                 .expect("validated BOM selection path");
-            entry.mpn = Some(mpn);
-            entry.manufacturer = Some(manufacturer);
+            entry.mpn = Some(mpn.to_string());
+            entry.manufacturer = Some(manufacturer.to_string());
         }
         bom.availability = self.availability;
     }
@@ -241,7 +225,7 @@ impl PreparedBomMatch {
             }
 
             let path = instance_ref.instance_path.join(".");
-            let Some(selected) = self.selected.get(&path) else {
+            let Some(availability) = self.availability.get(&path) else {
                 continue;
             };
 
@@ -269,28 +253,27 @@ impl PreparedBomMatch {
                     .and_then(|value| value.as_str().map(str::to_owned))
                     .is_some_and(|value| !value.trim().is_empty());
 
-            let projected_datasheet = selected
-                .datasheet_url
-                .as_ref()
+            let projected_datasheet = availability
+                .selected_datasheet_url()
                 .filter(|_| !has_authored_datasheet);
             let mut changed = false;
 
-            if let Some((mpn, manufacturer)) = &selected.compatible_part
+            if let Some((mpn, manufacturer)) = availability.compatible_part()
                 && !has_authored_identity
             {
                 let part = PartValue::new(
-                    mpn.clone(),
-                    manufacturer.clone(),
+                    mpn.to_string(),
+                    manufacturer.to_string(),
                     Vec::new(),
-                    projected_datasheet.cloned(),
+                    projected_datasheet.map(str::to_string),
                 );
 
                 instance
                     .attributes
-                    .insert(attrs::MPN.into(), AttributeValue::String(mpn.clone()));
+                    .insert(attrs::MPN.into(), AttributeValue::String(mpn.to_string()));
                 instance.attributes.insert(
                     attrs::MANUFACTURER.into(),
-                    AttributeValue::String(manufacturer.clone()),
+                    AttributeValue::String(manufacturer.to_string()),
                 );
                 instance.attributes.insert(
                     attrs::PART.into(),
@@ -302,7 +285,7 @@ impl PreparedBomMatch {
             if let Some(datasheet) = projected_datasheet {
                 instance.attributes.insert(
                     attrs::DATASHEET.into(),
-                    AttributeValue::String(datasheet.clone()),
+                    AttributeValue::String(datasheet.to_string()),
                 );
                 changed = true;
             }
@@ -373,8 +356,6 @@ fn build_availability_summary(
             .as_ref()
             .map(|pbs| pbs.iter().map(|pb| (pb.qty, pb.price)).collect()),
         lcsc_part_ids,
-        mpn: offer.mpn.clone().filter(|s| !s.is_empty()),
-        manufacturer: offer.manufacturer.clone().filter(|s| !s.is_empty()),
     }
 }
 
@@ -453,7 +434,6 @@ fn prepare_bom_match_for_paths(
 
     let mut seen_paths = HashSet::with_capacity(expected_paths.len());
     let mut availability = HashMap::with_capacity(expected_paths.len());
-    let mut selected = HashMap::new();
     let mut retry_paths = HashSet::new();
 
     for bom_line in &match_response.results {
@@ -502,46 +482,19 @@ fn prepare_bom_match_for_paths(
                 .get(selected_offer_id)
                 .with_context(|| format!("BOM match response omitted offer {selected_offer_id}"))?;
 
-            let compatible_part = if bom_line.match_status == BomMatchStatus::Compatible {
-                let mpn = selected_offer
+            if bom_line.match_status == BomMatchStatus::Compatible {
+                selected_offer
                     .mpn
                     .as_deref()
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .context("Selected compatible offer omitted its MPN")?;
-                let manufacturer = selected_offer
+                selected_offer
                     .manufacturer
                     .as_deref()
                     .map(str::trim)
                     .filter(|value| !value.is_empty())
                     .context("Selected compatible offer omitted its manufacturer")?;
-                Some((mpn.to_string(), manufacturer.to_string()))
-            } else {
-                None
-            };
-
-            let datasheet_url = if matches!(
-                bom_line.match_status,
-                BomMatchStatus::Exact | BomMatchStatus::Compatible
-            ) {
-                selected_offer
-                    .datasheet_url
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(str::to_owned)
-            } else {
-                None
-            };
-
-            if compatible_part.is_some() || datasheet_url.is_some() {
-                selected.insert(
-                    path.to_string(),
-                    SelectedBomMetadata {
-                        compatible_part,
-                        datasheet_url,
-                    },
-                );
             }
         }
 
@@ -575,6 +528,7 @@ fn prepare_bom_match_for_paths(
         availability.insert(
             path.to_string(),
             Availability {
+                match_status: Some(bom_line.match_status),
                 us,
                 global,
                 no_match: bom_line_no_match(bom_line),
@@ -585,10 +539,7 @@ fn prepare_bom_match_for_paths(
     }
 
     Ok(PreparedBomResponse {
-        prepared: PreparedBomMatch {
-            availability,
-            selected,
-        },
+        prepared: PreparedBomMatch { availability },
         retry_paths,
     })
 }
@@ -1070,6 +1021,7 @@ fn fetch_pricing_grouped_batch_once(
         *slot = build_search_availability(
             &offers,
             bom_line.selected_offer_id.as_deref(),
+            bom_line.match_status,
             bom_line_no_match(bom_line),
         );
     }
@@ -1120,6 +1072,7 @@ fn fetch_pricing_batch_once(
         *slot = build_search_availability(
             &offers,
             bom_line.selected_offer_id.as_deref(),
+            bom_line.match_status,
             bom_line_no_match(&bom_line),
         );
     }
@@ -1130,6 +1083,7 @@ fn fetch_pricing_batch_once(
 fn build_search_availability(
     offers: &[&ComponentOffer],
     selected_offer_id: Option<&str>,
+    match_status: BomMatchStatus,
     no_match: bool,
 ) -> Availability {
     let (_, us) = summarize_region(offers, Geography::Us, 1, 1);
@@ -1142,6 +1096,7 @@ fn build_search_availability(
     let selected_offer_id = retained_selected_offer_id(&offers, selected_offer_id);
 
     Availability {
+        match_status: Some(match_status),
         us,
         global,
         no_match,
@@ -1180,6 +1135,7 @@ mod tests {
             stock_available: Some(100),
             product_url: None,
             datasheet_url: Some(format!("https://example.com/{id}.pdf")),
+            part_collections: Vec::new(),
         }
     }
 
@@ -1273,7 +1229,8 @@ mod tests {
                     "manufacturer": "API Manufacturer",
                     "priceBreaks": [{"qty": 1, "price": 0.25}],
                     "stockAvailable": 100,
-                    "datasheetUrl": format!("https://example.com/{mpn}.pdf")
+                    "datasheetUrl": format!("https://example.com/{mpn}.pdf"),
+                    "partCollections": ["house"]
                 }
             }
         })
@@ -1369,7 +1326,8 @@ mod tests {
         let mut uk_offer = offer("uk-offer", &[(1, 1.0)]);
         uk_offer.geography = Geography::Uk;
 
-        let availability = build_search_availability(&[&uk_offer], None, false);
+        let availability =
+            build_search_availability(&[&uk_offer], None, BomMatchStatus::Exact, false);
 
         assert!(availability.us.is_none());
         assert!(availability.global.is_none());
@@ -1388,14 +1346,22 @@ mod tests {
             .filter_map(|id| response.offers.get(id))
             .collect();
 
-        let availability =
-            build_search_availability(&offers, line.selected_offer_id.as_deref(), false);
+        let availability = build_search_availability(
+            &offers,
+            line.selected_offer_id.as_deref(),
+            line.match_status,
+            false,
+        );
 
         assert_eq!(availability.us.as_ref().unwrap().stock, 5);
         assert_eq!(availability.us.as_ref().unwrap().price, Some(10.0));
         assert_eq!(
             availability.selected_offer_id.as_deref(),
             Some("selected-offer")
+        );
+        assert_eq!(
+            availability.selected_part_collection(),
+            Some(PartCollection::Extended)
         );
         assert_eq!(
             availability
@@ -1449,6 +1415,21 @@ mod tests {
         assert_eq!(
             selected_offer.datasheet_url.as_deref(),
             Some("https://example.com/API-MPN.pdf")
+        );
+        assert_eq!(
+            bom.availability["root.U1"].match_status,
+            Some(BomMatchStatus::Compatible)
+        );
+        assert_eq!(
+            bom.availability["root.U1"].selected_part_collection(),
+            Some(PartCollection::House)
+        );
+
+        let json: serde_json::Value = serde_json::from_str(&bom.ungrouped_json()).unwrap();
+        assert_eq!(json[0]["availability"]["match"], "MATCH_COMPATIBLE");
+        assert_eq!(
+            json[0]["availability"]["offers"][0]["part_collections"],
+            serde_json::json!(["house"])
         );
     }
 
