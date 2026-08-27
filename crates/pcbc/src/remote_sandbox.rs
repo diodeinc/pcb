@@ -115,6 +115,7 @@ struct LocalLayout {
     pcb_file: PathBuf,
     sync_session: Option<SyncSession>,
     restored_from_recovery: bool,
+    attached_editor_pid: Option<u32>,
 }
 
 #[derive(Default)]
@@ -129,6 +130,41 @@ enum SyncOutcome {
         reason: RecoverableStopReason,
         error: anyhow::Error,
     },
+}
+
+enum EditorSession {
+    Spawned(pcb_kicad::PcbnewSession),
+    Attached(u32),
+}
+
+impl EditorSession {
+    fn id(&self) -> u32 {
+        match self {
+            Self::Spawned(session) => session.id(),
+            Self::Attached(pid) => *pid,
+        }
+    }
+
+    fn is_running(&mut self) -> Result<bool> {
+        match self {
+            Self::Spawned(session) => Ok(session.try_wait()?.is_none()),
+            Self::Attached(pid) => Ok(editor_process_is_running(*pid)),
+        }
+    }
+}
+
+#[derive(Debug)]
+enum RecoverableSession {
+    Ready(SyncSession),
+    EditorOpen { session: SyncSession, pid: u32 },
+}
+
+impl RecoverableSession {
+    fn updated_at(&self) -> DateTime<Utc> {
+        match self {
+            Self::Ready(session) | Self::EditorOpen { session, .. } => session.manifest.updated_at,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -204,6 +240,9 @@ fn open_layout_and_sync(
         .sync_session
         .clone()
         .context("Remote sync session was not initialized")?;
+    // Start watching before recovery upload so saves made in an already-open
+    // KiCad window during the upload are queued for the sync loop.
+    let watcher = LocalLayoutWatcher::new(&local.local_layout_dir)?;
     restore_recovered_layout_if_needed(client, uri, local, &mut sync_session, &status)
         .with_context(|| {
             format!(
@@ -212,14 +251,19 @@ fn open_layout_and_sync(
             )
         })?;
     let running = install_shutdown_flag()?;
-    status.set_message(format!("Opening {}...", local.pcb_file.display()));
-    let watcher = LocalLayoutWatcher::new(&local.local_layout_dir)?;
-    let mut session = match pcb_kicad::open_pcbnew_session(&local.pcb_file) {
-        Ok(session) => session,
-        Err(err) => {
-            sync_session.mark_complete()?;
-            return Err(err);
-        }
+    status.set_message(match local.attached_editor_pid {
+        Some(_) => format!("Resuming sync for {}...", local.pcb_file.display()),
+        None => format!("Opening {}...", local.pcb_file.display()),
+    });
+    let mut session = match local.attached_editor_pid {
+        Some(pid) => EditorSession::Attached(pid),
+        None => match pcb_kicad::open_pcbnew_session(&local.pcb_file) {
+            Ok(session) => EditorSession::Spawned(session),
+            Err(err) => {
+                sync_session.mark_complete()?;
+                return Err(err);
+            }
+        },
     };
     sync_session.mark_active(session.id())?;
     status.set_message(format!(
@@ -281,15 +325,15 @@ fn run_local_sync_loop(
     uri: &SandboxFileUri,
     local: &LocalLayout,
     lock: &SandboxLockGuard,
-    session: &mut pcb_kicad::PcbnewSession,
+    session: &mut EditorSession,
     watcher: &LocalLayoutWatcher,
     running: &AtomicBool,
     status: &pcb_ui::Spinner,
 ) -> SyncOutcome {
     loop {
-        match session.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) => {}
+        match session.is_running() {
+            Ok(true) => {}
+            Ok(false) => break,
             Err(err) => return recoverable_outcome(RecoverableStopReason::SyncFailed, err),
         }
         if !running.load(Ordering::SeqCst) {
@@ -478,14 +522,28 @@ fn sync_layout_down(
     let relative_pcb = remote_relative_path(&remote_layout_dir, &remote_pcb_file)?;
 
     let mut recovered_session = None;
+    let mut attached_editor_pid = None;
     if let Some(status) = restore_status
-        && let Some(session) = latest_recoverable_session(&cache_root)?
+        && let Some(recovery) = latest_recoverable_session(&cache_root)?
     {
-        match prompt_restore_recovery(status, &session)? {
-            Some(RecoveryChoice::Restore) => recovered_session = Some(session),
-            Some(RecoveryChoice::Discard) => mark_recoverable_sessions_prompt_seen(&cache_root),
-            Some(RecoveryChoice::Cancel) => return Ok(None),
-            None => {}
+        match recovery {
+            RecoverableSession::Ready(session) => {
+                match prompt_restore_recovery(status, &session)? {
+                    Some(RecoveryChoice::Restore) => recovered_session = Some(session),
+                    Some(RecoveryChoice::Discard) => {
+                        mark_recoverable_sessions_prompt_seen(&cache_root)
+                    }
+                    Some(RecoveryChoice::Cancel) => return Ok(None),
+                    None => {}
+                }
+            }
+            RecoverableSession::EditorOpen { session, pid } => {
+                if !prompt_resume_existing_editor(status, &session)? {
+                    return Ok(None);
+                }
+                recovered_session = Some(session);
+                attached_editor_pid = Some(pid);
+            }
         }
     }
 
@@ -524,6 +582,7 @@ fn sync_layout_down(
         pcb_file,
         sync_session,
         restored_from_recovery,
+        attached_editor_pid,
     }))
 }
 
@@ -760,11 +819,18 @@ impl SyncSession {
     }
 }
 
-fn latest_recoverable_session(cache_root: &Path) -> Result<Option<SyncSession>> {
+fn latest_recoverable_session(cache_root: &Path) -> Result<Option<RecoverableSession>> {
+    latest_recoverable_session_with(cache_root, editor_process_is_running)
+}
+
+fn latest_recoverable_session_with(
+    cache_root: &Path,
+    editor_is_running: impl Fn(u32) -> bool,
+) -> Result<Option<RecoverableSession>> {
     if !cache_root.exists() {
         return Ok(None);
     }
-    let mut latest: Option<SyncSession> = None;
+    let mut latest: Option<RecoverableSession> = None;
     for entry in fs::read_dir(cache_root)
         .with_context(|| format!("Failed to read {}", cache_root.display()))?
     {
@@ -775,30 +841,66 @@ fn latest_recoverable_session(cache_root: &Path) -> Result<Option<SyncSession>> 
         let Ok(session) = SyncSession::load(entry.path()) else {
             continue;
         };
-        if matches!(
+        let live_editor_pid = if matches!(
             session.manifest.state,
             SyncSessionState::Active | SyncSessionState::Recoverable
-        ) && session
-            .manifest
-            .editor_pid
-            .is_some_and(editor_process_is_running)
-        {
-            bail!(
-                "KiCad is still open for {}. Close that KiCad window before opening this board again.",
-                session.manifest.layout_file.display()
-            );
-        }
-        if !is_recovery_candidate(&session.manifest) {
-            continue;
-        }
+        ) {
+            session
+                .manifest
+                .editor_pid
+                .filter(|pid| editor_is_running(*pid))
+        } else {
+            None
+        };
+        let recovery = match live_editor_pid {
+            Some(pid) => RecoverableSession::EditorOpen { session, pid },
+            None if is_recovery_candidate(&session.manifest) => RecoverableSession::Ready(session),
+            None => continue,
+        };
         if latest
             .as_ref()
-            .is_none_or(|current| session.manifest.updated_at > current.manifest.updated_at)
+            .is_none_or(|current| recovery.updated_at() > current.updated_at())
         {
-            latest = Some(session);
+            latest = Some(recovery);
         }
     }
     Ok(latest)
+}
+
+fn prompt_resume_existing_editor(status: &pcb_ui::Spinner, session: &SyncSession) -> Result<bool> {
+    let board = session
+        .manifest
+        .layout_file
+        .file_name()
+        .unwrap_or(session.manifest.layout_file.as_os_str())
+        .to_string_lossy();
+    let message = format!(
+        "{board} is already open in KiCad, but remote sync stopped.\n\n\
+         Resume syncing the open local board to the sandbox?"
+    );
+    if std::env::var_os(URL_LAUNCHER_ENV).is_some() {
+        return status.suspend(|| {
+            pcb_native_dialog::ActionDialog {
+                title: "Resume KiCad sync?",
+                message: &message,
+                action_label: "Resume Sync",
+            }
+            .show()
+        });
+    }
+    if !crate::tty::is_interactive() {
+        eprintln!(
+            "KiCad is still open for {}. Re-run interactively to resume sync.",
+            session.manifest.layout_file.display()
+        );
+        return Ok(false);
+    }
+    status.suspend(|| {
+        Ok(Confirm::new(&message)
+            .with_default(true)
+            .prompt()
+            .unwrap_or(false))
+    })
 }
 
 fn prompt_restore_recovery(
@@ -1066,7 +1168,12 @@ fn shell_quote(value: &str) -> String {
 mod tests {
     use super::*;
 
-    fn write_session_manifest(cache_root: &Path, state: SyncSessionState, editor_pid: Option<u32>) {
+    fn write_session_manifest(
+        cache_root: &Path,
+        state: SyncSessionState,
+        editor_pid: Option<u32>,
+        prompt_seen: bool,
+    ) {
         let local_layout_dir = cache_root.join("session");
         fs::create_dir(&local_layout_dir).unwrap();
         let layout_file = local_layout_dir.join("layout.kicad_pcb");
@@ -1082,7 +1189,7 @@ mod tests {
             state,
             stop_reason: None,
             editor_pid,
-            prompt_seen: false,
+            prompt_seen,
             started_at: now,
             updated_at: now,
         };
@@ -1093,30 +1200,24 @@ mod tests {
         .unwrap();
     }
 
-    #[cfg(unix)]
     #[test]
-    fn refuses_open_while_tracked_editor_is_running() {
+    fn finds_restored_open_editor_session_for_sync_resume() {
         let cache = tempfile::tempdir().unwrap();
-        let sleep = ["/bin/sleep", "/usr/bin/sleep"]
-            .into_iter()
-            .find(|path| Path::new(path).is_file())
-            .expect("sleep binary");
-        let editor = cache.path().join("pcbnew");
-        fs::copy(sleep, &editor).unwrap();
-        let mut editor = std::process::Command::new(&editor)
-            .arg("30")
-            .spawn()
-            .unwrap();
+        let editor_pid = 42;
         write_session_manifest(
             cache.path(),
-            SyncSessionState::Recoverable,
-            Some(editor.id()),
+            SyncSessionState::Active,
+            Some(editor_pid),
+            true,
         );
 
-        let error = latest_recoverable_session(cache.path()).unwrap_err();
-        let _ = editor.kill();
-        let _ = editor.wait();
-        assert!(error.to_string().contains("KiCad is still open"));
+        let recovery = latest_recoverable_session_with(cache.path(), |pid| pid == editor_pid)
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            recovery,
+            RecoverableSession::EditorOpen { pid, .. } if pid == editor_pid
+        ));
     }
 
     #[test]
@@ -1128,10 +1229,13 @@ mod tests {
             cache.path(),
             SyncSessionState::Recoverable,
             Some(std::process::id()),
+            false,
         );
 
-        let session = latest_recoverable_session(cache.path()).unwrap();
-        assert!(session.is_some());
+        let recovery = latest_recoverable_session_with(cache.path(), |_| false)
+            .unwrap()
+            .unwrap();
+        assert!(matches!(recovery, RecoverableSession::Ready(_)));
     }
 
     #[test]

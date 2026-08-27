@@ -3,11 +3,28 @@
 use anyhow::{Context, Result, bail};
 use pcb_diode_uri::{SandboxFileUri, is_trusted_api_host};
 use std::fs::{self, File, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 
 const LAUNCHER_LOG_MAX_BYTES: u64 = 1024 * 1024;
+const LAUNCH_ERROR_OUTPUT_MAX_BYTES: usize = 8 * 1024;
+const NOT_AUTHENTICATED_FRAGMENT: &str = "not authenticated";
+
+#[derive(Debug)]
+struct PcbCommandFailed {
+    pcb: PathBuf,
+    status: ExitStatus,
+    output_summary: Option<String>,
+}
+
+impl std::fmt::Display for PcbCommandFailed {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{} failed: {}", self.pcb.display(), self.status)
+    }
+}
+
+impl std::error::Error for PcbCommandFailed {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LauncherToolchain {
@@ -116,16 +133,85 @@ fn install_protocol_handler(toolchain: LauncherToolchain) -> Result<()> {
 
 fn launch_pcb(uri: &str, toolchain: LauncherToolchain) -> Result<()> {
     let result = launch_pcb_inner(uri, toolchain);
-    if let Err(error) = &result {
-        report_launch_error(error);
+    let Err(error) = &result else {
+        return result;
+    };
+    append_launcher_error(error);
+    let summary = launch_error_summary(error);
+    if is_not_authenticated(&summary) {
+        let dialog = pcb_native_dialog::ActionDialog {
+            title: "Log in to open in KiCad",
+            message: "PCB is not authenticated. Log in, then open this board again.",
+            action_label: "Log In",
+        };
+        match dialog.show() {
+            Ok(true) => {
+                let login = spawn_auth_login(toolchain);
+                if let Err(error) = &login {
+                    report_launch_error(error);
+                }
+                return login;
+            }
+            Ok(false) => return result,
+            Err(dialog_error) => append_launcher_error(&dialog_error),
+        }
     }
+    show_launch_error(&summary);
     result
+}
+
+fn is_not_authenticated(summary: &str) -> bool {
+    summary
+        .to_ascii_lowercase()
+        .contains(NOT_AUTHENTICATED_FRAGMENT)
+}
+
+fn launch_error_summary(error: &anyhow::Error) -> String {
+    error
+        .downcast_ref::<PcbCommandFailed>()
+        .and_then(|failure| failure.output_summary.as_deref())
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("{error:#}"))
 }
 
 fn report_launch_error(error: &anyhow::Error) {
     append_launcher_error(error);
-    let message = format!("{error:#}\n\nDetails: {}", launcher_log_path().display());
+    show_launch_error(&launch_error_summary(error));
+}
+
+fn show_launch_error(summary: &str) {
+    let message = format!("{summary}\n\nDetails: {}", launcher_log_path().display());
     pcb_native_dialog::show_error("Open in KiCad failed", &message);
+}
+
+fn spawn_auth_login(toolchain: LauncherToolchain) -> Result<()> {
+    let pcb = sibling_pcb_executable()?;
+    let mut log = open_launcher_log()?;
+    let stdout = log
+        .try_clone()
+        .context("failed to clone the launcher log handle")?;
+    writeln!(log, "\n--- pcb auth login started by pcb-launcher ---")
+        .context("failed to write the launcher log")?;
+    let mut command = Command::new(&pcb);
+    command
+        .arg(toolchain.override_arg())
+        .args(["auth", "login"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(log));
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    command
+        .spawn()
+        .with_context(|| format!("failed to start `{}` auth login", pcb.display()))?;
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]
@@ -151,7 +237,7 @@ fn launch_pcb_inner(uri: &str, toolchain: LauncherToolchain) -> Result<()> {
         .unwrap_or_default();
     writeln!(log, "\n--- pcb-launcher invocation at unix {now} ---")
         .context("failed to write the launcher log")?;
-    let stdout = log
+    let stdout_log = log
         .try_clone()
         .context("failed to clone the launcher log handle")?;
     let mut command = Command::new(&pcb);
@@ -161,8 +247,8 @@ fn launch_pcb_inner(uri: &str, toolchain: LauncherToolchain) -> Result<()> {
         .arg(uri)
         .env("PCB_URL_LAUNCHER", "1")
         .stdin(Stdio::null())
-        .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(log));
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
 
     #[cfg(target_os = "windows")]
     {
@@ -175,17 +261,86 @@ fn launch_pcb_inner(uri: &str, toolchain: LauncherToolchain) -> Result<()> {
     let mut child = command
         .spawn()
         .with_context(|| format!("failed to start {}", pcb.display()))?;
+    let stdout = child
+        .stdout
+        .take()
+        .context("failed to capture pcb stdout")?;
+    let stderr = child
+        .stderr
+        .take()
+        .context("failed to capture pcb stderr")?;
+    let stdout_thread = std::thread::spawn(move || stream_command_output(stdout, stdout_log));
+    let stderr_thread = std::thread::spawn(move || stream_command_output(stderr, log));
     // Keep the protocol handler alive while pcb opens KiCad. This preserves
     // browser-launched children on Windows and lets every platform surface a
     // non-zero exit instead of silently discarding it.
     let status = child
         .wait()
         .with_context(|| format!("failed to wait for {}", pcb.display()))?;
+    let stdout = stdout_thread
+        .join()
+        .map_err(|_| anyhow::anyhow!("pcb stdout reader panicked"))?
+        .context("failed to read pcb stdout")?;
+    let stderr = stderr_thread
+        .join()
+        .map_err(|_| anyhow::anyhow!("pcb stderr reader panicked"))?
+        .context("failed to read pcb stderr")?;
     if !status.success() {
-        bail!("{} failed: {status}", pcb.display());
+        return Err(PcbCommandFailed {
+            pcb,
+            status,
+            output_summary: command_output_summary(&stdout, &stderr),
+        }
+        .into());
     }
 
     Ok(())
+}
+
+fn stream_command_output(mut reader: impl Read, mut log: File) -> std::io::Result<Vec<u8>> {
+    let mut tail = Vec::new();
+    let mut buffer = [0; 4096];
+    let mut log_error = None;
+    loop {
+        let count = reader.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        if log_error.is_none()
+            && let Err(error) = log.write_all(&buffer[..count])
+        {
+            // Continue draining the pipe so a log failure cannot block pcb.
+            log_error = Some(error);
+        }
+        tail.extend_from_slice(&buffer[..count]);
+        if tail.len() > LAUNCH_ERROR_OUTPUT_MAX_BYTES {
+            tail.drain(..tail.len() - LAUNCH_ERROR_OUTPUT_MAX_BYTES);
+        }
+    }
+    match log_error {
+        Some(error) => Err(error),
+        None => Ok(tail),
+    }
+}
+
+fn command_output_summary(stdout: &[u8], stderr: &[u8]) -> Option<String> {
+    let stderr = clean_command_output(stderr);
+    let stdout = clean_command_output(stdout);
+    let summary = if stderr.is_empty() { stdout } else { stderr };
+    (!summary.is_empty()).then_some(summary)
+}
+
+fn clean_command_output(output: &[u8]) -> String {
+    let stripped = strip_ansi_escapes::strip(output);
+    let cleaned: String = String::from_utf8_lossy(&stripped)
+        .chars()
+        .filter(|character| !character.is_control() || matches!(character, '\n' | '\t'))
+        .collect();
+    cleaned
+        .trim()
+        .strip_prefix("Error: ")
+        .unwrap_or(cleaned.trim())
+        .to_owned()
 }
 
 fn validate_uri(uri: &str) -> Result<()> {
@@ -625,8 +780,8 @@ mod macos {
 #[cfg(test)]
 mod tests {
     use super::{
-        LauncherCommand, LauncherToolchain, escape_desktop_exec_path, parse_launcher_args,
-        validate_uri,
+        LauncherCommand, LauncherToolchain, command_output_summary, escape_desktop_exec_path,
+        is_not_authenticated, parse_launcher_args, validate_uri,
     };
     use std::ffi::OsString;
     use std::path::Path;
@@ -698,6 +853,30 @@ mod tests {
         assert_eq!(
             escape_desktop_exec_path(Path::new("/tmp/a\\b\"c`d$e%f")),
             "/tmp/a\\\\\\\\b\\\\\"c\\\\`d\\\\$e%%f"
+        );
+    }
+
+    #[test]
+    fn cleans_and_classifies_command_errors() {
+        let summary = command_output_summary(
+            b"ignored stdout\n",
+            b"\x1b[31mError: Remote sync stopped.\x1b[0m\r\nSandbox lock was reclaimed.\n",
+        );
+
+        assert_eq!(
+            summary.as_deref(),
+            Some("Remote sync stopped.\nSandbox lock was reclaimed.")
+        );
+        assert!(is_not_authenticated(
+            "warning: latest check failed\nError: Not authenticated. Run `pcb auth login`."
+        ));
+    }
+
+    #[test]
+    fn uses_stdout_when_a_failed_command_has_no_stderr() {
+        assert_eq!(
+            command_output_summary(b"Error: useful output\n", b"").as_deref(),
+            Some("useful output")
         );
     }
 
