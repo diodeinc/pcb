@@ -474,11 +474,16 @@ fn escape_desktop_exec_path(path: &Path) -> String {
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn run_checked(command: &mut Command, description: &str) -> Result<()> {
-    let status = command
-        .status()
+    let output = command
+        .output()
         .with_context(|| format!("failed to {description}"))?;
-    if !status.success() {
-        bail!("failed to {description}: {status}");
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let details = stderr.trim();
+        if details.is_empty() {
+            bail!("failed to {description}: {}", output.status);
+        }
+        bail!("failed to {description}: {details}");
     }
     Ok(())
 }
