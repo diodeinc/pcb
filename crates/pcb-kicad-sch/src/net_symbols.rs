@@ -5,7 +5,7 @@ use pcb_sch::{ATTR_SYMBOL_FORMAT_VERSION, AttributeValue, InstanceKind, Schemati
 use serde_json::{Map, Value};
 
 use crate::{
-    Point, Rotation, Symbol, SymbolDefinition,
+    LabelSpin, Point, Rotation, Symbol, SymbolDefinition,
     component_slots::{self, SYMBOL_PATH_ATTR, SYMBOL_VALUE_ATTR, validate_symbol_library_version},
     connectivity::named_connected_nets,
     symbol,
@@ -17,6 +17,7 @@ pub(crate) struct NetSymbolSpec {
     pub definition: SymbolDefinition,
     pub unit: u32,
     pub pin_offset: Point,
+    pub pin_outward_spin: LabelSpin,
 }
 
 pub(crate) fn specs(netlist: &Schematic) -> Result<BTreeMap<String, NetSymbolSpec>> {
@@ -68,6 +69,7 @@ pub(crate) fn specs(netlist: &Schematic) -> Result<BTreeMap<String, NetSymbolSpe
                     definition,
                     unit: *unit,
                     pin_offset: pin.point,
+                    pin_outward_spin: pin.outward_spin,
                 },
             ))
         })

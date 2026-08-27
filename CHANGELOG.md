@@ -17,6 +17,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Hydrate schematics from cached BOM matches, with online refresh for stale or missing entries.
 - Added cross-platform `diode://` links that open sandbox layouts in KiCad with live sync and native recovery prompts.
 - The interposer mate constellation is S13: uniform 2×3 blocks with corner mate-detect loops.
+- Orient newly generated missing schematic symbols from attached net-symbol pin directions.
 
 ## [0.4.37] - 2026-08-26
 

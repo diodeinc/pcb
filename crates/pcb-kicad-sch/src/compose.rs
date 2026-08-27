@@ -154,15 +154,24 @@ pub(crate) fn reconcile_document(
                 .with_context(|| format!("placement page '{page_id}' is absent"))
         })
         .transpose()?;
+    let net_symbol_specs = net_symbols::specs(netlist)?;
     for slot in &project_slots {
+        let selected = selected_existing.get(slot);
+        let page_index = if let Some(selected) = selected {
+            selected.page_index
+        } else if let Some(placement_page) = placement_page {
+            placement_page
+        } else {
+            hierarchy.page_for_new_component(slot.component_path())?
+        };
         project_component_slot(
             &mut document,
             netlist,
             &instances,
             slot,
-            selected_existing.get(slot),
-            placement_page,
-            &hierarchy,
+            selected,
+            page_index,
+            &net_symbol_specs,
         )?;
     }
     if complete {
@@ -172,7 +181,6 @@ pub(crate) fn reconcile_document(
     let mut placed = placed_symbols_from_document(&document, &expected_slots)?;
     pack_generated_symbols(&mut document, netlist, &mut placed, &relocatable_slots)?;
 
-    let net_symbol_specs = net_symbols::specs(netlist)?;
     add_hierarchy_connectivity(
         &mut document,
         netlist,
@@ -384,8 +392,8 @@ fn project_component_slot(
     instances: &BTreeMap<String, &Instance>,
     slot: &SymbolSlotKey,
     selected: Option<&ExistingSymbol>,
-    placement_page: Option<usize>,
-    hierarchy: &hierarchy::HierarchyPlan,
+    page_index: usize,
+    net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
 ) -> Result<()> {
     let instance = instances.get(slot.component_path()).with_context(|| {
         format!(
@@ -400,13 +408,6 @@ fn project_component_slot(
                 slot.component_path()
             )
         })?;
-    let page_index = if let Some(selected) = selected {
-        selected.page_index
-    } else if let Some(placement_page) = placement_page {
-        placement_page
-    } else {
-        hierarchy.page_for_new_component(slot.component_path())?
-    };
 
     if document.pages.iter().any(|page| {
         page.items.iter().any(|item| {
@@ -422,7 +423,10 @@ fn project_component_slot(
 
     let previous = selected.map(|selected| &selected.symbol);
     let at = previous.map(|symbol| symbol.at).unwrap_or_default();
-    let rotation = previous.map(|symbol| symbol.rotation).unwrap_or_default();
+    let rotation = match previous {
+        Some(symbol) => symbol.rotation,
+        None => initial_component_rotation(netlist, slot, &definition, net_symbol_specs)?,
+    };
     let mirror = previous.and_then(|symbol| symbol.mirror);
     let symbol =
         build_component_symbol(instance, slot, &definition, at, rotation, mirror, previous)?;
@@ -464,6 +468,112 @@ fn project_component_slot(
             .push(SchItem::Symbol(symbol));
     }
     Ok(())
+}
+
+fn initial_component_rotation(
+    netlist: &Schematic,
+    slot: &SymbolSlotKey,
+    definition: &SymbolDefinition,
+    net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
+) -> Result<Rotation> {
+    let unplaced = Symbol {
+        id: String::new(),
+        lib_id: definition.lib_id.clone(),
+        unit: slot.unit(),
+        body_style: 1,
+        at: Point::default(),
+        rotation: Rotation::default(),
+        mirror: None,
+        fields_autoplaced: false,
+        fields: BTreeMap::new(),
+        pins: Vec::new(),
+        unsupported: Vec::new(),
+    };
+    let pins = symbol::ParsedSymbolDefinition::parse(definition)?.placed_pins(&unplaced)?;
+    let mut constraints = Vec::new();
+    for net in named_connected_nets(netlist) {
+        let Some(spec) = net_symbol_specs.get(&net.name) else {
+            continue;
+        };
+        for port in &net.ports {
+            let Some((component_ref, pin_name)) = netlist.component_ref_and_pin_for_port(port)
+            else {
+                continue;
+            };
+            if crate::canonical_component_path(&component_ref.instance_path).as_deref()
+                != Some(slot.component_path())
+            {
+                continue;
+            }
+            let pin_numbers = component_slots::port_pad_numbers(netlist, port);
+            let mut matches = pins.iter().filter(|pin| {
+                !pin.hidden
+                    && ((!pin_name.is_empty() && !pin.name.is_empty() && pin.name == pin_name)
+                        || !pin.numbers.is_disjoint(&pin_numbers))
+            });
+            if let Some(pin) = matches.next()
+                && matches.next().is_none()
+            {
+                constraints.push((pin.outward_spin, spec.pin_outward_spin));
+            }
+        }
+    }
+
+    let rotations = [
+        Rotation::Deg0,
+        Rotation::Deg90,
+        Rotation::Deg180,
+        Rotation::Deg270,
+    ];
+    // Opposite outward directions put the component and net-symbol bodies on
+    // opposite sides of their shared connection point.
+    let scores = rotations.map(|rotation| {
+        let score = constraints
+            .iter()
+            .filter(|(pin_spin, net_spin)| {
+                rotate_spin(*pin_spin, rotation) == opposite_spin(*net_spin)
+            })
+            .count();
+        (rotation, score)
+    });
+
+    let best_score = scores
+        .iter()
+        .map(|(_, score)| *score)
+        .max()
+        .expect("four candidate rotations");
+    let mut best = scores
+        .into_iter()
+        .filter(|(_, score)| *score == best_score)
+        .map(|(rotation, _)| rotation);
+    let rotation = best.next().expect("at least one best rotation");
+    // A non-unique optimum is less informative than the stable default.
+    Ok(if best.next().is_none() {
+        rotation
+    } else {
+        Rotation::default()
+    })
+}
+
+fn rotate_spin(mut spin: LabelSpin, rotation: Rotation) -> LabelSpin {
+    for _ in 0..rotation.degrees() / 90 {
+        spin = match spin {
+            LabelSpin::Left => LabelSpin::Bottom,
+            LabelSpin::Up => LabelSpin::Left,
+            LabelSpin::Right => LabelSpin::Up,
+            LabelSpin::Bottom => LabelSpin::Right,
+        };
+    }
+    spin
+}
+
+fn opposite_spin(spin: LabelSpin) -> LabelSpin {
+    match spin {
+        LabelSpin::Left => LabelSpin::Right,
+        LabelSpin::Up => LabelSpin::Bottom,
+        LabelSpin::Right => LabelSpin::Left,
+        LabelSpin::Bottom => LabelSpin::Up,
+    }
 }
 
 fn remove_component_slot(document: &mut SchDocument, slot: &SymbolSlotKey) {
