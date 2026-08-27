@@ -172,7 +172,7 @@ fn generated_net_symbols_form_a_wired_staircase() {
 }
 
 #[test]
-fn missing_driver_does_not_rewire_already_driven_adjacent_pins() {
+fn driven_pin_splits_missing_net_symbol_runs_into_distinct_stairs() {
     let netlist = common::compile_fixture("net_symbol_staircase", "root.zen");
     let mut document = plan_reconciliation(None, &netlist, "NetSymbolStaircase.kicad_sch")
         .unwrap()
@@ -190,8 +190,8 @@ fn missing_driver_does_not_rewire_already_driven_adjacent_pins() {
         .placed_pins(component)
         .unwrap();
     let pin_point = |number: &str| pins.iter().find(|pin| pin.number == number).unwrap().point;
-    let missing = pin_point("4");
-    let driven = [pin_point("3"), pin_point("5")];
+    let missing = [pin_point("3"), pin_point("5")];
+    let driven = pin_point("4");
     let incident_wires = |document: &SchDocument, point| {
         document.pages[0]
             .items
@@ -201,12 +201,12 @@ fn missing_driver_does_not_rewire_already_driven_adjacent_pins() {
             )
             .count()
     };
-    let driven_before = driven.map(|point| incident_wires(&document, point));
     let items_before = document.pages[0].items.len();
-    document.pages[0].items.retain(
-        |item| !matches!(item, SchItem::Wire(wire) if wire.a == missing || wire.b == missing),
-    );
+    document.pages[0].items.retain(|item| {
+        !matches!(item, SchItem::Wire(wire) if missing.contains(&wire.a) || missing.contains(&wire.b))
+    });
     assert!(document.pages[0].items.len() < items_before);
+    let driven_before = incident_wires(&document, driven);
 
     let repaired = plan_reconciliation(Some(&document), &netlist, "NetSymbolStaircase.kicad_sch")
         .unwrap()
@@ -219,24 +219,25 @@ fn missing_driver_does_not_rewire_already_driven_adjacent_pins() {
             .analysis
             .is_equivalent()
     );
-    assert_eq!(
-        driven.map(|point| incident_wires(&repaired, point)),
-        driven_before
-    );
-    assert_eq!(
-        repaired.pages[0]
-            .items
-            .iter()
-            .filter(|item| {
-                matches!(
-                    item,
-                    SchItem::Symbol(symbol)
-                        if symbol.field_value("Value") == Some("GROUND_SHARED")
-                )
-            })
-            .count(),
-        2
-    );
+    assert_eq!(incident_wires(&repaired, driven), driven_before);
+    let mut connection_points = repaired.pages[0]
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            SchItem::Symbol(symbol) if symbol.field_value("Value") == Some("GROUND_SHARED") => {
+                let definition = &repaired.pages[0].library.definitions[&symbol.lib_id];
+                Some(definition.placed_pins(symbol).unwrap()[0].point)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    connection_points.sort_by(|left, right| {
+        left.x
+            .total_cmp(&right.x)
+            .then_with(|| left.y.total_cmp(&right.y))
+    });
+    connection_points.dedup();
+    assert_eq!(connection_points.len(), 3);
 }
 
 #[test]
