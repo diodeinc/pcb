@@ -1588,7 +1588,7 @@ impl EvalContext {
                         }
                     }
 
-                    let signature = extra
+                    let signature: Vec<ParameterInfo> = extra
                         .module
                         .signature()
                         .iter()
@@ -1626,6 +1626,22 @@ impl EvalContext {
                             }
                         })
                         .collect();
+
+                    let mut unknown_inputs: Vec<_> = self
+                        .json_inputs
+                        .keys()
+                        .filter(|name| !signature.iter().any(|param| param.name == **name))
+                        .cloned()
+                        .collect();
+                    unknown_inputs.sort();
+                    if !unknown_inputs.is_empty() {
+                        diagnostics.push(Diagnostic::new(
+                            format!("Unknown root input(s): {}", unknown_inputs.join(", ")),
+                            EvalSeverity::Error,
+                            source_path,
+                        ));
+                    }
+
                     // Process pending children after parent is frozen
                     let module_path = extra.module.path().clone();
                     let is_root = module_path.segments.is_empty();

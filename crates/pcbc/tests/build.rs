@@ -395,6 +395,23 @@ fn test_build_with_config_overrides() {
 }
 
 #[test]
+fn test_build_rejects_unknown_config_override() {
+    let output = Sandbox::new()
+        .with_workspace()
+        .write("board.zen", CONFIGURABLE_BUILD_ZEN)
+        .snapshot_run(
+            "pcbc",
+            ["build", "--config", "frequency=100MHz", "board.zen"],
+        );
+
+    assert!(output.contains("Exit Code: 1"), "{output}");
+    assert!(
+        output.contains("Unknown root input(s): frequency"),
+        "{output}"
+    );
+}
+
+#[test]
 fn test_diodes_build() {
     let output = Sandbox::new()
         .with_workspace()
