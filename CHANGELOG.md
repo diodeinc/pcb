@@ -10,7 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
-- Use API-only generic matching with consistent group caching and House/Extended provenance.
+- Use API-only generic matching with path-independent group caching and House/Extended provenance.
 - Better error handling in launcher.
 
 ## [0.4.38] - 2026-08-27
