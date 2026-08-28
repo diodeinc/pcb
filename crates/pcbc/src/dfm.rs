@@ -16,12 +16,17 @@ pub struct DfmArgs {
     /// Built-in PDK name or fabrication PDK TOML path (built-ins: standard)
     #[arg(long)]
     pub pdk: PathBuf,
+
+    /// Disable network access (offline mode) - only use vendored dependencies
+    #[arg(long = "offline")]
+    pub offline: bool,
 }
 
 pub fn execute(args: DfmArgs) -> Result<()> {
     let layout_args = LayoutArgs {
         file: args.file.clone(),
         no_open: true,
+        offline: args.offline,
         ..Default::default()
     };
     let design = crate::layout::prepare_design(&layout_args)?;
