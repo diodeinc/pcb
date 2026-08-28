@@ -434,12 +434,9 @@ pub fn execute(args: BuildArgs) -> Result<()> {
 
     let zen_files = build_input.collect_zen_files(&resolution.workspace_info)?;
 
-    let bom_match_mode = if args.offline {
-        pcb_diode_api::BomMatchMode::Offline
-    } else {
-        pcb_diode_api::BomMatchMode::Online
-    };
-    let eval_state = BuildEvalState::new(resolution).with_bom_hydration(bom_match_mode);
+    // Keep builds cache-only until backend TTL support makes refreshes cheap.
+    let eval_state =
+        BuildEvalState::new(resolution).with_bom_hydration(pcb_diode_api::BomMatchMode::Offline);
 
     // Process each .zen file
     let deny_warnings = args.deny.contains(&"warnings".to_string());
