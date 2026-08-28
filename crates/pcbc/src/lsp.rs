@@ -13,7 +13,7 @@ pub fn execute(_args: LspArgs) -> anyhow::Result<()> {
             pcb_diode_api::hydrate_schematic_from_bom(
                 source_path,
                 schematic,
-                pcb_diode_api::BomMatchMode::Offline,
+                pcb_diode_api::BomMatchMode::Online,
             );
         },
     )
