@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- Restored the public `@stdlib/bom/helpers.zen` `match_component()` helper for user-defined BOM modifiers.
+
 ## [0.4.39] - 2026-08-28
 
 ### Changed

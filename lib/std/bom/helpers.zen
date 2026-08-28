@@ -1,0 +1,69 @@
+"""Compatibility helpers for user-defined BOM matching."""
+
+
+def prop(c, names):
+    """Get a property by name and unwrap enums."""
+    for k in names:
+        if k in c.properties:
+            v = c.properties[k]
+            return v.value if type(v) == "enum" else v
+    return None
+
+
+def set_from_matches(c, matches):
+    """Set the primary part and alternatives from a list of matches."""
+    if not matches:
+        return
+
+    def _to_part(match):
+        if type(match) == "tuple":
+            return builtin.Part(mpn=match[0], manufacturer=match[1])
+        return builtin.Part(
+            mpn=match["mpn"],
+            manufacturer=match["manufacturer"],
+            datasheet=match.get("datasheet"),
+        )
+
+    c.part = _to_part(matches[0])
+    if len(matches) > 1:
+        c.alternatives = [_to_part(match) for match in matches[1:]]
+
+
+def match_component(match: dict, parts: tuple | list, matcher: str = "match_component"):
+    """Create a component modifier that assigns parts when properties match.
+
+    Args:
+        match: Dict of property names to values to match.
+        parts: A single (mpn, manufacturer) tuple or a list of tuples or part dicts.
+        matcher: Matcher provenance recorded on the matched component.
+
+    Returns:
+        A function that can be registered as a component modifier.
+    """
+
+    def modifier(c):
+        # Component modifiers run on all direct children, including non-components.
+        if not hasattr(c, "mpn"):
+            return
+
+        if c.mpn:
+            return
+
+        for key, expected_value in match.items():
+            actual_value = prop(c, [key])
+            if actual_value == None:
+                return
+            if hasattr(actual_value, "matches"):
+                if not actual_value.matches(expected_value):
+                    return
+            elif actual_value != expected_value:
+                return
+
+        parts_list = [parts] if type(parts) == "tuple" else parts
+        if len(parts_list) == 0:
+            return
+
+        set_from_matches(c, parts_list)
+        c.matcher = matcher
+
+    return modifier
