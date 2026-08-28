@@ -587,7 +587,10 @@ fn load_cached_bom_group(
     let Some(cached) = cache.load(key)? else {
         return Ok(None);
     };
-    let response = serde_json::from_slice(&cached.value)?;
+    let mut response: MatchBomResponse = serde_json::from_slice(&cached.value)?;
+    for (line, path) in response.results.iter_mut().zip(paths) {
+        line.design_entry.path = Some(path.clone());
+    }
     let expected_paths = paths.iter().cloned().collect();
     let prepared = prepare_bom_match_for_paths(bom, &response, &expected_paths)?.into_complete()?;
     Ok(Some(CachedBomGroup {
@@ -642,6 +645,18 @@ fn bom_match_group_key(path: &str, entry: &BomEntry) -> BomMatchGroupKey {
     }
 }
 
+/// Remove instance-only correlation fields from stable cache identities.
+fn bom_match_cache_entry(
+    request_entry: serde_json::Value,
+    entry: &BomEntry,
+) -> Result<serde_json::Value> {
+    Ok(if entry.has_stable_aggregation_identity() {
+        serde_json::to_value(entry)?
+    } else {
+        request_entry
+    })
+}
+
 struct BomMatchRequestGroup {
     paths: Vec<String>,
     entries: Vec<serde_json::Value>,
@@ -684,10 +699,28 @@ fn bom_match_request_groups(
     groups
         .into_iter()
         .map(|(paths, entries)| {
-            let request = bom_match_request(&entries);
+            let mut lines = paths
+                .into_iter()
+                .zip(entries)
+                .map(|(path, entry)| {
+                    let cache_entry = bom_match_cache_entry(
+                        entry.clone(),
+                        bom.entries.get(&path).expect("validated BOM request path"),
+                    )?;
+                    let sort_key = serde_json::to_vec(&cache_entry)?;
+                    Ok((sort_key, path, entry, cache_entry))
+                })
+                .collect::<Result<Vec<_>>>()?;
+            lines.sort_by(|left, right| left.0.cmp(&right.0));
+
+            let canonical_entries = lines
+                .iter()
+                .map(|(_, _, _, entry)| entry.clone())
+                .collect::<Vec<_>>();
+            let request = bom_match_request(&canonical_entries);
             Ok(BomMatchRequestGroup {
-                paths,
-                entries,
+                paths: lines.iter().map(|(_, path, _, _)| path.clone()).collect(),
+                entries: lines.into_iter().map(|(_, _, entry, _)| entry).collect(),
                 cache_key: cache_key(&(url, request))?,
                 cached: None,
             })
@@ -699,28 +732,19 @@ fn serialize_completed_bom_match_group(
     response: &MatchBomResponse,
     paths: &[String],
 ) -> Result<Vec<u8>> {
-    let expected_paths = paths.iter().map(String::as_str).collect::<HashSet<_>>();
-    let results = response
-        .results
+    let results = paths
         .iter()
-        .filter(|line| {
-            line.design_entry
-                .path
-                .as_deref()
-                .is_some_and(|path| expected_paths.contains(path))
+        .map(|path| {
+            let mut line = response
+                .results
+                .iter()
+                .find(|line| line.design_entry.path.as_ref() == Some(path))
+                .expect("validated BOM match response path")
+                .clone();
+            line.design_entry.path = None;
+            line
         })
-        .cloned()
         .collect::<Vec<_>>();
-    anyhow::ensure!(
-        results.len() == paths.len(),
-        "BOM match response omitted a cache group result"
-    );
-    anyhow::ensure!(
-        results
-            .iter()
-            .all(|line| line.match_status != BomMatchStatus::NeedsRetry),
-        "Cannot cache an incomplete BOM match group"
-    );
 
     let mut offers = HashMap::new();
     for offer_id in results.iter().flat_map(|line| &line.offer_ids) {
@@ -1281,6 +1305,14 @@ mod tests {
         )
     }
 
+    fn test_bom_at(path: &str, designator: &str) -> Bom {
+        let entry = test_bom().entries.remove("root.U1").unwrap();
+        Bom::new(
+            HashMap::from([(path.to_string(), entry)]),
+            HashMap::from([(path.to_string(), designator.to_string())]),
+        )
+    }
+
     fn test_schematic() -> Schematic {
         let module = ModuleRef::new("/tmp/root.zen", "Root");
         let instance_ref = InstanceRef::new(module.clone(), vec!["root".into(), "U1".into()]);
@@ -1814,6 +1846,28 @@ mod tests {
     }
 
     #[test]
+    fn cache_identity_uses_sourcing_group_not_instances() {
+        let first = bom_match_request_groups(
+            "https://example.com/api/boms/match?strict=true",
+            &test_bom_at("root.U1", "U1"),
+        )
+        .unwrap();
+        let renamed = bom_match_request_groups(
+            "https://example.com/api/boms/match?strict=true",
+            &test_bom_at("nested.R99", "R99"),
+        )
+        .unwrap();
+        let doubled = bom_match_request_groups(
+            "https://example.com/api/boms/match?strict=true",
+            &test_bom_with_second_line(),
+        )
+        .unwrap();
+
+        assert_eq!(first[0].cache_key, renamed[0].cache_key);
+        assert_ne!(first[0].cache_key, doubled[0].cache_key);
+    }
+
+    #[test]
     fn cache_policy_is_fresh_then_live_with_one_stale_fallback() {
         let server = MockServer::start();
         let mut success = server.mock(|when, then| {
@@ -1855,7 +1909,7 @@ mod tests {
         assert_eq!(network.entries["root.U1"].mpn.as_deref(), Some("API-MPN"));
         success.assert_calls(1);
 
-        let mut fresh = test_bom();
+        let mut fresh = test_bom_at("nested.R99", "R99");
         match_bom_with_cache(
             &context,
             None,
@@ -1866,9 +1920,9 @@ mod tests {
             now + 100,
         )
         .unwrap();
-        assert_eq!(fresh.entries["root.U1"].mpn.as_deref(), Some("API-MPN"));
+        assert_eq!(fresh.entries["nested.R99"].mpn.as_deref(), Some("API-MPN"));
         assert_eq!(
-            fresh.availability["root.U1"]
+            fresh.availability["nested.R99"]
                 .selected_offer()
                 .and_then(|offer| offer.datasheet_url.as_deref()),
             Some("https://example.com/API-MPN.pdf")
