@@ -1,7 +1,12 @@
 """Tests for general utility functions."""
 
 load("../units.zen", "Capacitance", "Resistance")
-load("../utils.zen", "e3", "e6", "e12", "e24", "e48", "e96", "e192")
+load("../utils.zen", "E_SERIES", "e3", "e6", "e12", "e24", "e48", "e96", "e192")
+
+check(len(E_SERIES["E48"]) == 48, "E48 should contain 48 values")
+check(len(E_SERIES["E192"]) == 192, "E192 should contain 192 values")
+check(e48(Resistance("115ohm")) == Resistance("115ohm"), "E48 should preserve 115 ohm")
+check(e192(Resistance("740.3kohm")) == Resistance("741kohm"), "E192 should snap 740.3 kohm to 741 kohm")
 
 for series_name, snap in [
     ("E3", e3),
