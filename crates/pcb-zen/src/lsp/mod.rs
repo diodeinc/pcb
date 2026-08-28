@@ -58,6 +58,7 @@ pub struct LspEvalContext {
     inner: EvalContext,
     builtin_docs: HashMap<LspUri, String>,
     file_provider: Arc<dyn FileProvider>,
+    offline: bool,
     resolution_cache: RwLock<HashMap<PathBuf, Arc<ResolutionResult>>>,
     workspace_root_cache: RwLock<HashMap<PathBuf, PathBuf>>,
     open_files: Arc<RwLock<HashMap<PathBuf, String>>>,
@@ -190,6 +191,7 @@ impl Default for LspEvalContext {
             inner,
             builtin_docs,
             file_provider,
+            offline: false,
             resolution_cache: RwLock::new(HashMap::new()),
             workspace_root_cache: RwLock::new(HashMap::new()),
             open_files,
@@ -202,6 +204,11 @@ impl Default for LspEvalContext {
 }
 
 impl LspEvalContext {
+    pub fn set_offline(mut self, offline: bool) -> Self {
+        self.offline = offline;
+        self
+    }
+
     fn diagnostic_target_uri(path: &str) -> Option<lsp_types::Uri> {
         if path.is_empty() {
             return None;
@@ -493,7 +500,7 @@ impl LspEvalContext {
         }
 
         let mut resolution = match crate::get_workspace_info(&self.file_provider, &workspace_root)
-            .and_then(|ws| crate::resolve_workspace_dependencies(ws, &workspace_root, false))
+            .and_then(|ws| crate::resolve_workspace_dependencies(ws, &workspace_root, self.offline))
         {
             Ok(resolution) => resolution,
             Err(err) => {

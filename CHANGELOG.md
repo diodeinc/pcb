@@ -11,7 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - Use API-only generic matching with path-independent group caching and House/Extended provenance.
-- Add offline dependency resolution and BOM hydration to `pcb dfm`.
+- Add offline dependency resolution and BOM hydration to `pcb dfm` and `pcb lsp`.
 - Refresh stale or missing BOM matches during LSP evaluation.
 - Better error handling in launcher.
 

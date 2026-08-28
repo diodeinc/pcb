@@ -79,10 +79,11 @@ pub fn lsp_with_eager(eager: bool) -> anyhow::Result<()> {
     pcb_starlark_lsp::server::stdio_server(ctx).map_err(Into::into)
 }
 
-/// Start the LSP server with `eager`, a custom request handler, and a
-/// post-evaluation schematic hydrator.
+/// Start the LSP server with dependency resolution mode, a custom request
+/// handler, and a post-evaluation schematic hydrator.
 pub fn lsp_with_custom_request_handler<F, H>(
     eager: bool,
+    offline: bool,
     handler: F,
     hydrator: H,
 ) -> anyhow::Result<()>
@@ -95,6 +96,7 @@ where
 {
     let ctx = lsp::LspEvalContext::default()
         .set_eager(eager)
+        .set_offline(offline)
         .with_custom_request_handler(handler)
         .with_schematic_hydrator(hydrator);
     pcb_starlark_lsp::server::stdio_server(ctx).map_err(Into::into)
