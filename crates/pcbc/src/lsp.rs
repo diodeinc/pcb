@@ -1,20 +1,27 @@
 use clap::Args;
 
 #[derive(Args)]
-pub struct LspArgs {}
+pub struct LspArgs {
+    /// Disable network access; use vendored dependencies and cached BOM matches
+    #[arg(long = "offline")]
+    pub offline: bool,
+}
 
 const RESOLVE_DATASHEET_METHOD: &str = "pcb/resolveDatasheet";
 
-pub fn execute(_args: LspArgs) -> anyhow::Result<()> {
+pub fn execute(args: LspArgs) -> anyhow::Result<()> {
+    let offline = args.offline;
+    let bom_match_mode = if args.offline {
+        pcb_diode_api::BomMatchMode::Offline
+    } else {
+        pcb_diode_api::BomMatchMode::Online
+    };
     pcb_zen::lsp_with_custom_request_handler(
         false,
-        handle_custom_request,
-        |source_path, schematic| {
-            pcb_diode_api::hydrate_schematic_from_bom(
-                source_path,
-                schematic,
-                pcb_diode_api::BomMatchMode::Online,
-            );
+        offline,
+        move |method, params| handle_custom_request(method, params, offline),
+        move |source_path, schematic| {
+            pcb_diode_api::hydrate_schematic_from_bom(source_path, schematic, bom_match_mode);
         },
     )
 }
@@ -22,9 +29,13 @@ pub fn execute(_args: LspArgs) -> anyhow::Result<()> {
 fn handle_custom_request(
     method: &str,
     params: &serde_json::Value,
+    offline: bool,
 ) -> anyhow::Result<Option<serde_json::Value>> {
     if method != RESOLVE_DATASHEET_METHOD {
         return Ok(None);
+    }
+    if offline {
+        anyhow::bail!("{RESOLVE_DATASHEET_METHOD} is unavailable in offline mode");
     }
 
     let input = pcb_diode_api::datasheet::parse_resolve_request(Some(params))?;
@@ -40,7 +51,7 @@ mod tests {
 
     #[test]
     fn custom_request_handler_ignores_other_methods() {
-        let result = handle_custom_request("pcb/somethingElse", &json!({})).unwrap();
+        let result = handle_custom_request("pcb/somethingElse", &json!({}), false).unwrap();
         assert!(result.is_none());
     }
 }
