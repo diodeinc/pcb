@@ -130,15 +130,6 @@ mod refdes_alloc {
         pub(super) number: u32,
     }
 
-    const KNOWN_PREFIXES: &[&str] = &[
-        "A", "C", "D", "F", "FB", "IC", "J", "K", "L", "LED", "MH", "P", "Q", "R", "RV", "SW",
-        "TP", "U", "X", "Y",
-    ];
-
-    fn is_known_prefix(prefix: &str) -> bool {
-        KNOWN_PREFIXES.contains(&prefix)
-    }
-
     fn parse_refdes_like(s: &str) -> Option<ParsedRefdes> {
         // Uppercase letters + digits, no leading zeros (e.g. R1, IC10, LED12, R1000).
         if s.len() < 2 {
@@ -186,9 +177,6 @@ mod refdes_alloc {
         let first_digit = s.find(|c: char| c.is_ascii_digit())?;
         let (prefix, digits) = s.split_at(first_digit);
         if !(1..=3).contains(&prefix.len()) || !(1..=4).contains(&digits.len()) {
-            return None;
-        }
-        if !is_known_prefix(prefix) {
             return None;
         }
         parse_refdes_like(s)
@@ -909,8 +897,8 @@ impl Schematic {
         // (e.g. `foo.R22.part`) and matches the component's prefix, honor it when safe.
         //
         // Safety rules:
-        // - Only accept 1-3 uppercase letters + 1-3 digits, no leading zeros.
-        // - Only accept known prefixes (hard-coded, conservative list).
+        // - Only accept 1-3 uppercase letters + 1-4 digits, no leading zeros.
+        // - Require the hint prefix to match the component's prefix.
         // - If multiple components hint the same refdes, drop those hints and auto-assign.
         // - If a single component contains multiple matching hints, treat it as ambiguous.
 
@@ -1520,11 +1508,11 @@ mod tests {
     }
 
     #[test]
-    fn assign_refdes_unknown_prefix_ignores_hint() {
+    fn assign_refdes_accepts_custom_prefix_hint() {
         let mut schematic = Schematic::new();
         let mod_ref = ModuleRef::from_path(Path::new("/test.pmod"), "TestModule");
 
-        // Unknown prefix "ZZ" should not accept hint ZZ99; allocator should assign ZZ1/ZZ2 instead.
+        // A custom component prefix can carry an unambiguous matching hint.
         let a_ref = InstanceRef::new(
             mod_ref.clone(),
             vec!["foo".into(), "ZZ99".into(), "x".into()],
@@ -1539,8 +1527,9 @@ mod tests {
         let ref_map = schematic.assign_reference_designators();
         let a = ref_map.get(&a_ref).unwrap();
         let b = ref_map.get(&b_ref).unwrap();
-        assert_ne!(a, "ZZ99");
+        assert_eq!(a, "ZZ99");
         assert_ne!(b, "ZZ99");
+        assert_eq!(b, "ZZ1");
     }
 
     #[test]
