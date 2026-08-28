@@ -15,6 +15,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Refresh stale or missing BOM matches during LSP evaluation.
 - Keep `pcb build` BOM hydration cache-only.
 - Better error handling in launcher.
+- Reference designator hints now support custom uppercase component prefixes.
 
 ## [0.4.38] - 2026-08-27
 
