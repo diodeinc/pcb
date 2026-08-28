@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- Complete the E48 and E192 standard value tables used by `e48()` and `e192()`.
+
 ## [0.4.40] - 2026-08-28
 
 ### Fixed
