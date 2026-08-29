@@ -459,6 +459,12 @@ fn initial_component_rotation(
         unsupported: Vec::new(),
     };
     let pins = symbol::ParsedSymbolDefinition::parse(definition)?.placed_pins(&unplaced)?;
+    // Orientation inference is useful for simple passives, but rotating a
+    // larger authored symbol to favor its generated net symbols makes the
+    // whole schematic harder to scan.
+    if pins.len() != 2 {
+        return Ok(Rotation::default());
+    }
     let mut constraints = Vec::new();
     for net in named_connected_nets(netlist) {
         let Some(spec) = net_symbol_specs.get(&net.name) else {
