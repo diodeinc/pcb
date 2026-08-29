@@ -3,7 +3,8 @@ mod common;
 use std::collections::BTreeSet;
 
 use pcb_kicad_sch::{
-    Label, LabelKind, Point, SchDocument, SchItem, SchPage, Symbol, SymbolDefinition,
+    FieldHorizontalJustify, FieldJustify, FieldVerticalJustify, Label, LabelKind, Point,
+    SchDocument, SchItem, SchPage, Symbol, SymbolDefinition,
     analysis::{SchematicIssue, SchematicIssueKey, inspect_schematic},
     connectivity::{PhysicalConnectivity, PinVisibility},
     deterministic_uuid,
@@ -431,6 +432,38 @@ fn generated_hierarchy_connects_sheet_ports_with_orthogonal_routes() {
             .iter()
             .all(|wire| wire.a.x == wire.b.x || wire.a.y == wire.b.y)
     );
+    let root = document
+        .pages
+        .iter()
+        .find(|page| document.root_page_ids.contains(&page.id))
+        .unwrap();
+    for sheet in root.items.iter().filter_map(|item| match item {
+        SchItem::Sheet(sheet) => Some(sheet),
+        _ => None,
+    }) {
+        let at = sheet.at.unwrap();
+        let size = sheet.size.unwrap();
+        let name = sheet.name.as_ref().unwrap();
+        assert_eq!(size, Point::new(38.1, 15.24));
+        assert_eq!(name.at.x, at.x);
+        assert!(name.at.y < at.y);
+        assert_eq!(
+            name.justify,
+            Some(FieldJustify::new(
+                Some(FieldHorizontalJustify::Left),
+                Some(FieldVerticalJustify::Bottom),
+            ))
+        );
+        assert_eq!(sheet.file.at.x, at.x);
+        assert!(sheet.file.at.y > at.y + size.y);
+        assert_eq!(
+            sheet.file.justify,
+            Some(FieldJustify::new(
+                Some(FieldHorizontalJustify::Left),
+                Some(FieldVerticalJustify::Top),
+            ))
+        );
+    }
     for page in &document.pages {
         let labels = page.items.iter().filter_map(|item| match item {
             SchItem::Label(label) => Some(label),

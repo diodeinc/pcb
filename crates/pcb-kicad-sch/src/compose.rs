@@ -5,9 +5,9 @@ use pcb_sch::{ATTR_SCHEMATIC_PATH, Instance, InstanceKind, Schematic};
 use pcb_sexpr::Sexpr;
 
 use crate::{
-    CONNECTION_GRID_MM, GEOMETRY_EPS_MM, Label, LabelKind, LabelShape, LabelSpin, Paper, Point,
-    Rotation, SchDocument, SchItem, SchPage, Sheet, SheetPin, Symbol, SymbolDefinition,
-    SymbolField, SymbolSlotKey, Wire,
+    CONNECTION_GRID_MM, FieldHorizontalJustify, FieldJustify, FieldVerticalJustify,
+    GEOMETRY_EPS_MM, Label, LabelKind, LabelShape, LabelSpin, Paper, Point, Rotation, SchDocument,
+    SchItem, SchPage, Sheet, SheetPin, Symbol, SymbolDefinition, SymbolField, SymbolSlotKey, Wire,
     analysis::{ConnectivityInspection, SchematicIssue, SchematicIssueKey},
     component_slots,
     connectivity::{
@@ -26,8 +26,9 @@ const NET_SYMBOL_OFFSET_CELLS: f64 = 4.0;
 const NET_SYMBOL_STAIR_CELLS: f64 = 4.0;
 const ESTIMATED_LABEL_WIDTH_EM: f64 = 0.8;
 const SHEET_PIN_SPACING_MM: f64 = 5.08;
-const SHEET_MIN_WIDTH_MM: f64 = 50.8;
-const SHEET_MIN_HEIGHT_MM: f64 = 20.32;
+const SHEET_MIN_WIDTH_MM: f64 = 38.1;
+const SHEET_MIN_HEIGHT_MM: f64 = 15.24;
+const SHEET_FIELD_OFFSET_MM: f64 = 0.7112;
 const PLACEMENT_BLOCK_GAP_CELLS: i32 = 4;
 const CONTEXT_LABEL_GAP_CELLS: i32 = 1;
 const CAPACITOR_BANK_BUS_OFFSET_CELLS: f64 = 2.0;
@@ -767,7 +768,7 @@ fn materialize_hierarchy(
             bail!("hierarchy planner produced a non-contiguous child page index");
         }
         let ports = module_ports(netlist, &sheet_plan.instance_ref)?;
-        let height = SHEET_MIN_HEIGHT_MM.max((ports.len() as f64 + 2.0) * SHEET_PIN_SPACING_MM);
+        let height = SHEET_MIN_HEIGHT_MM.max((ports.len() as f64 + 1.0) * SHEET_PIN_SPACING_MM);
         let size = Point::new(SHEET_MIN_WIDTH_MM, height);
         let at = place_sheet(document, sheet_plan.parent_page, size)?;
         let name = sheet_plan
@@ -775,6 +776,8 @@ fn materialize_hierarchy(
             .rsplit('.')
             .next()
             .expect("canonical module path is non-empty");
+        let pin_span = ports.len().saturating_sub(1) as f64 * SHEET_PIN_SPACING_MM;
+        let first_pin_y = at.y + (height - pin_span) / 2.0;
         let pins = ports
             .iter()
             .enumerate()
@@ -784,19 +787,27 @@ fn materialize_hierarchy(
                     sheet_plan.module_path
                 )),
                 name: port_name.clone(),
-                at: Point::new(at.x, at.y + (index as f64 + 2.0) * SHEET_PIN_SPACING_MM),
+                at: Point::new(at.x, first_pin_y + index as f64 * SHEET_PIN_SPACING_MM),
                 rotation: Rotation::Deg180,
                 shape: LabelShape::Bidirectional,
                 unsupported: Vec::new(),
             })
             .collect();
         let mut name_field = SymbolField::new("Sheetname", name, at);
-        name_field.at.y -= 0.7112;
+        name_field.at.y -= SHEET_FIELD_OFFSET_MM;
+        name_field.justify = Some(FieldJustify::new(
+            Some(FieldHorizontalJustify::Left),
+            Some(FieldVerticalJustify::Bottom),
+        ));
         // The sheet reference is parent-relative (KiCad resolves Sheetfile
         // against the referencing page's directory), so the new page lives in
         // the parent page's directory and the reference stays the bare name.
         let mut file_field = SymbolField::new("Sheetfile", &sheet_plan.file_name, at);
-        file_field.at.y += height + 0.7112;
+        file_field.at.y += height + SHEET_FIELD_OFFSET_MM;
+        file_field.justify = Some(FieldJustify::new(
+            Some(FieldHorizontalJustify::Left),
+            Some(FieldVerticalJustify::Top),
+        ));
         let child_file_name = match document.pages[sheet_plan.parent_page]
             .file_name
             .as_deref()
@@ -837,6 +848,10 @@ fn generated_sheet_style() -> Vec<Sexpr> {
         Sexpr::list(vec![Sexpr::symbol("in_bom"), Sexpr::symbol("yes")]),
         Sexpr::list(vec![Sexpr::symbol("on_board"), Sexpr::symbol("yes")]),
         Sexpr::list(vec![Sexpr::symbol("dnp"), Sexpr::symbol("no")]),
+        Sexpr::list(vec![
+            Sexpr::symbol("fields_autoplaced"),
+            Sexpr::symbol("yes"),
+        ]),
         Sexpr::list(vec![
             Sexpr::symbol("stroke"),
             Sexpr::list(vec![Sexpr::symbol("width"), Sexpr::float(0.1524)]),
