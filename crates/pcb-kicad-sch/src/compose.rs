@@ -5,9 +5,9 @@ use pcb_sch::{ATTR_SCHEMATIC_PATH, Instance, InstanceKind, Schematic};
 use pcb_sexpr::Sexpr;
 
 use crate::{
-    CONNECTION_GRID_MM, GEOMETRY_EPS_MM, Label, LabelKind, LabelShape, LabelSpin, Point, Rotation,
-    SchDocument, SchItem, SchPage, Sheet, SheetPin, Symbol, SymbolDefinition, SymbolField,
-    SymbolSlotKey, Wire,
+    CONNECTION_GRID_MM, GEOMETRY_EPS_MM, Label, LabelKind, LabelShape, LabelSpin, Paper, Point,
+    Rotation, SchDocument, SchItem, SchPage, Sheet, SheetPin, Symbol, SymbolDefinition,
+    SymbolField, SymbolSlotKey, Wire,
     analysis::{ConnectivityInspection, SchematicIssue, SchematicIssueKey},
     component_slots,
     connectivity::{
@@ -68,6 +68,7 @@ pub(crate) fn reconcile_document(
     if document.pages.is_empty() {
         bail!("KiCad schematic project has no pages");
     }
+    let preserved_page_count = if creating { 0 } else { document.pages.len() };
     let default_page = document
         .root_page_ids
         .iter()
@@ -188,6 +189,7 @@ pub(crate) fn reconcile_document(
         &mut placed,
         &relocatable_slots,
         &net_symbol_specs,
+        preserved_page_count,
     )?;
 
     add_hierarchy_connectivity(
@@ -891,6 +893,7 @@ fn pack_generated_symbols(
     placed: &mut BTreeMap<SymbolSlotKey, PlacedSymbol>,
     relocatable_slots: &BTreeSet<SymbolSlotKey>,
     net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
+    preserved_page_count: usize,
 ) -> Result<()> {
     if relocatable_slots.is_empty() {
         return Ok(());
@@ -937,19 +940,33 @@ fn pack_generated_symbols(
         if relocatable.is_empty() {
             continue;
         }
+        let page_blocks = blocks
+            .iter()
+            .filter(|block| block.page_index == page_index)
+            .collect::<Vec<_>>();
+        let (grid_bounds, block_offsets) = if page_index >= preserved_page_count {
+            arrange_new_page_blocks(&mut document.pages[page_index], &page_blocks)?
+        } else {
+            let usable = GridPacker::for_page(&document.pages[page_index].paper)?.usable_bounds();
+            let arrangement = arrange_placement_blocks(&page_blocks, usable);
+            if !placement_grid_fits(arrangement.0, usable) {
+                bail!(
+                    "generated component batch does not fit existing schematic page {}",
+                    document.pages[page_index]
+                        .file_name
+                        .as_deref()
+                        .unwrap_or(&document.pages[page_index].id)
+                );
+            }
+            arrangement
+        };
+
         let mut packer = GridPacker::for_page(&document.pages[page_index].paper)?;
         let relocatable_ids = relocatable
             .iter()
             .map(|slot| slot.symbol_id())
             .collect::<BTreeSet<_>>();
         occupy_page_items_except(&mut packer, &document.pages[page_index], &relocatable_ids)?;
-
-        let page_blocks = blocks
-            .iter()
-            .filter(|block| block.page_index == page_index)
-            .collect::<Vec<_>>();
-        let (grid_bounds, block_offsets) =
-            arrange_placement_blocks(&page_blocks, packer.usable_bounds());
         let grid_origin = packer.place_anchored(grid_bounds);
         for (block, block_offset) in page_blocks.into_iter().zip(block_offsets) {
             let block_origin = grid_origin.translated(block_offset);
@@ -962,6 +979,52 @@ fn pack_generated_symbols(
 
     add_capacitor_bank_wires(document, netlist, placed, &blocks)?;
     Ok(())
+}
+
+fn arrange_new_page_blocks(
+    page: &mut SchPage,
+    blocks: &[&PlacementBlock],
+) -> Result<(GridRect, Vec<GridPoint>)> {
+    for paper in placement_paper_candidates(&page.paper) {
+        let usable = GridPacker::for_page(&paper)?.usable_bounds();
+        let arrangement = arrange_placement_blocks(blocks, usable);
+        if placement_grid_fits(arrangement.0, usable) {
+            page.paper = paper;
+            return Ok(arrangement);
+        }
+    }
+    bail!(
+        "generated component batch is too large for automatic schematic placement on {}",
+        page.file_name.as_deref().unwrap_or(&page.id)
+    )
+}
+
+fn placement_paper_candidates(current: &Paper) -> Vec<Paper> {
+    let mut candidates = vec![current.clone()];
+    let Paper::Named { name, portrait } = current else {
+        return candidates;
+    };
+    let larger: &[&str] = match name.as_str() {
+        "A5" => &["A4", "A3", "A2", "A1", "A0"],
+        "A4" => &["A3", "A2", "A1", "A0"],
+        "A3" => &["A2", "A1", "A0"],
+        "A2" => &["A1", "A0"],
+        "A1" => &["A0"],
+        "A" | "USLetter" => &["B", "C", "D", "E"],
+        "B" | "USLedger" => &["C", "D", "E"],
+        "C" => &["D", "E"],
+        "D" => &["E"],
+        _ => return candidates,
+    };
+    candidates.extend(larger.iter().map(|name| Paper::Named {
+        name: (*name).to_string(),
+        portrait: *portrait,
+    }));
+    candidates
+}
+
+fn placement_grid_fits(bounds: GridRect, usable: GridRect) -> bool {
+    bounds.width() <= usable.width() && bounds.height() <= usable.height()
 }
 
 #[derive(Debug)]
@@ -3140,6 +3203,44 @@ mod tests {
                 .len(),
             2
         );
+    }
+
+    #[test]
+    fn new_page_grows_to_fit_its_placement_grid() {
+        let blocks = [
+            test_placement_block(
+                "a",
+                GridRect {
+                    min_x: 0,
+                    min_y: 0,
+                    max_x: 180,
+                    max_y: 100,
+                },
+            ),
+            test_placement_block(
+                "b",
+                GridRect {
+                    min_x: 0,
+                    min_y: 0,
+                    max_x: 180,
+                    max_y: 100,
+                },
+            ),
+        ];
+        let blocks = blocks.iter().collect::<Vec<_>>();
+        let mut page = SchPage::new("large");
+
+        let (bounds, _) = arrange_new_page_blocks(&mut page, &blocks).unwrap();
+
+        assert_eq!(
+            page.paper,
+            Paper::Named {
+                name: "A3".to_string(),
+                portrait: false,
+            }
+        );
+        let usable = GridPacker::for_page(&page.paper).unwrap().usable_bounds();
+        assert!(placement_grid_fits(bounds, usable));
     }
 
     fn multi_pad_symbol() -> BTreeMap<SymbolSlotKey, PlacedSymbol> {

@@ -10,7 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
-- Generate compact rectangular symbol-anchor grids that account for rendered fields, compose new component batches alongside existing schematic content, group parallel capacitors into shared wired banks and unused interface labels into regular blocks, and limit net-aware rotation to two-terminal symbols.
+- Generate compact rectangular symbol-anchor grids that account for rendered fields, compose new component batches alongside existing schematic content, grow fresh pages to fit their generated content, group parallel capacitors into shared wired banks and unused interface labels into regular blocks, and limit net-aware rotation to two-terminal symbols.
 
 ### Fixed
 
