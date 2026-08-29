@@ -512,7 +512,7 @@ fn complete_reconciliation_prefers_hierarchy_for_cross_page_interface_nets() {
 }
 
 #[test]
-fn hierarchy_net_symbols_use_component_driver_placement() {
+fn hierarchy_net_symbols_share_component_driver_placement() {
     let netlist = common::compile_fixture("hierarchy", "root_power_hierarchy.zen");
     let document = plan_reconciliation(None, &netlist, "PowerHierarchy.kicad_sch")
         .unwrap()
@@ -531,33 +531,39 @@ fn hierarchy_net_symbols_use_component_driver_placement() {
             _ => None,
         })
         .expect("generated child sheet has a pin");
-    let sheet_driver = root
+    let sheet_wire = root
         .items
         .iter()
         .find_map(|item| match item {
-            SchItem::Label(label) if label.text == "POWER" => Some(label),
+            SchItem::Wire(wire) if wire.a == sheet_pin => Some(wire),
+            SchItem::Wire(wire) if wire.b == sheet_pin => Some(wire),
             _ => None,
         })
-        .expect("sheet pin gets a hierarchy bridge driver");
-    let power_symbol = root
+        .expect("sheet pin is wired to its net symbol");
+    let bend = if sheet_wire.a == sheet_pin {
+        sheet_wire.b
+    } else {
+        sheet_wire.a
+    };
+    let sheet_power_symbol = root
         .items
         .iter()
         .find_map(|item| match item {
-            SchItem::Symbol(symbol) if symbol.field_value("Value") == Some("POWER") => Some(symbol),
+            SchItem::Symbol(symbol)
+                if symbol.field_value("Value") == Some("POWER")
+                    && root.items.iter().any(|item| {
+                        matches!(item, SchItem::Wire(wire)
+                            if (wire.a == bend && wire.b == symbol.at)
+                                || (wire.b == bend && wire.a == symbol.at))
+                    }) =>
+            {
+                Some(symbol)
+            }
             _ => None,
         })
-        .expect("root component gets its regular power driver");
+        .expect("sheet pin gets an offset power symbol");
 
-    assert_ne!(sheet_driver.at, sheet_pin);
-    assert!(root.items.iter().any(|item| {
-        matches!(item, SchItem::Wire(wire)
-            if (wire.a == sheet_pin && wire.b == sheet_driver.at)
-                || (wire.b == sheet_pin && wire.a == sheet_driver.at))
-    }));
-    assert_ne!(power_symbol.at, sheet_pin);
-    assert!(root.items.iter().any(|item| {
-        matches!(item, SchItem::Wire(wire) if wire.a == power_symbol.at || wire.b == power_symbol.at)
-    }));
+    assert_ne!(sheet_power_symbol.at, sheet_pin);
 
     let child = document
         .pages

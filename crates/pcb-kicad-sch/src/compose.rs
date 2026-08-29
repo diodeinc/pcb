@@ -193,7 +193,13 @@ pub(crate) fn reconcile_document(
         preserved_page_count,
     )?;
 
-    add_hierarchy_connectivity(&mut document, netlist, &placed, &hierarchy)?;
+    add_hierarchy_connectivity(
+        &mut document,
+        netlist,
+        &placed,
+        &net_symbol_specs,
+        &hierarchy,
+    )?;
 
     // A projected component's expected connectivity is already known from the
     // netlist. Attach its pins now, after placement, instead of rediscovering
@@ -1992,6 +1998,7 @@ fn add_hierarchy_connectivity(
     document: &mut SchDocument,
     netlist: &Schematic,
     placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
+    net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
     plan: &hierarchy::HierarchyPlan,
 ) -> Result<()> {
     if plan.sheets.is_empty() {
@@ -2034,30 +2041,54 @@ fn add_hierarchy_connectivity(
                 (pin.at, spin)
             })
             .collect::<Vec<_>>();
+        let mut parent_net_symbol_stairs = BTreeMap::<(LabelSpin, LabelSpin), usize>::new();
 
         for ((net_name, port_name), (parent_pin, parent_spin)) in
             ports.into_iter().zip(parent_anchors)
         {
             let key = format!("{}:{port_name}", sheet_plan.module_path);
-            let parent_driver =
-                driver_connection_point(parent_bounds, parent_pin, parent_spin, parent_spin, 0);
             let parent_driver_key = format!("zener:module-parent-driver:{key}:{net_name}");
-            upsert_contextual_driver(
-                document,
-                &page_contexts,
-                sheet_plan.parent_page,
-                &net_name,
-                (parent_driver, parent_spin),
-                &parent_driver_key,
-            )?;
-            insert_connection_wires(
-                document,
-                sheet_plan.parent_page,
-                &deterministic_uuid(parent_driver_key),
-                parent_pin,
-                parent_driver,
-                parent_spin,
-            );
+            if let Some(spec) = net_symbol_specs.get(&net_name) {
+                let stair_index = parent_net_symbol_stairs
+                    .entry((parent_spin, spec.pin_outward_spin))
+                    .and_modify(|index| *index += 1)
+                    .or_default();
+                let connection = driver_connection_point(
+                    parent_bounds,
+                    parent_pin,
+                    parent_spin,
+                    spec.pin_outward_spin,
+                    *stair_index,
+                );
+                insert_net_symbol_driver(
+                    document,
+                    sheet_plan.parent_page,
+                    spec,
+                    &net_name,
+                    &parent_driver_key,
+                    connection,
+                    &[parent_pin],
+                )?;
+            } else {
+                let parent_driver =
+                    driver_connection_point(parent_bounds, parent_pin, parent_spin, parent_spin, 0);
+                upsert_contextual_driver(
+                    document,
+                    &page_contexts,
+                    sheet_plan.parent_page,
+                    &net_name,
+                    (parent_driver, parent_spin),
+                    &parent_driver_key,
+                )?;
+                insert_connection_wires(
+                    document,
+                    sheet_plan.parent_page,
+                    &deterministic_uuid(parent_driver_key),
+                    parent_pin,
+                    parent_driver,
+                    parent_spin,
+                );
+            }
 
             let child_target = canonical_target(&targets, &net_name, sheet_plan.child_page);
             let child_anchor = if let Some(target) = child_target {
@@ -2214,20 +2245,21 @@ fn sync_net_drivers(
             spec.pin_outward_spin,
             run.stair_index,
         )?;
-        let id = available_deterministic_id(document, &target.net_symbol_key(&run.net_name));
-        let symbol = build_net_symbol(spec, &run.net_name, id, connection_point)?;
-        let symbol_id = symbol.id.clone();
-        insert_net_symbol(document, run.page_index, symbol, &spec.definition)?;
-        for member in run.targets {
-            insert_connection_wires(
-                document,
-                member.page_index,
-                &symbol_id,
-                member.point,
-                connection_point,
-                spec.pin_outward_spin,
-            );
-        }
+        let key = target.net_symbol_key(&run.net_name);
+        let target_points = run
+            .targets
+            .iter()
+            .map(|member| member.point)
+            .collect::<Vec<_>>();
+        insert_net_symbol_driver(
+            document,
+            run.page_index,
+            spec,
+            &run.net_name,
+            &key,
+            connection_point,
+            &target_points,
+        )?;
     }
 
     let observed = reduce_with_provenance(document, PinVisibility::VisibleOnly)?;
@@ -2254,6 +2286,32 @@ fn sync_net_drivers(
         )?;
     }
 
+    Ok(())
+}
+
+fn insert_net_symbol_driver(
+    document: &mut SchDocument,
+    page_index: usize,
+    spec: &net_symbols::NetSymbolSpec,
+    net_name: &str,
+    key: &str,
+    connection: Point,
+    targets: &[Point],
+) -> Result<()> {
+    let id = available_deterministic_id(document, key);
+    let symbol = build_net_symbol(spec, net_name, id, connection)?;
+    let symbol_id = symbol.id.clone();
+    insert_net_symbol(document, page_index, symbol, &spec.definition)?;
+    for target in targets {
+        insert_connection_wires(
+            document,
+            page_index,
+            &symbol_id,
+            *target,
+            connection,
+            spec.pin_outward_spin,
+        );
+    }
     Ok(())
 }
 
