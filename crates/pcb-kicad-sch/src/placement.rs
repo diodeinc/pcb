@@ -100,6 +100,7 @@ pub(crate) struct GridPacker {
     width: usize,
     occupied: Vec<bool>,
     placed_cluster: Option<GridRect>,
+    placement_points: Vec<GridPoint>,
 }
 
 impl GridPacker {
@@ -121,8 +122,9 @@ impl GridPacker {
             width,
             occupied: vec![false; width * height],
             placed_cluster: None,
+            placement_points: Vec::new(),
         };
-        packer.occupy(GridRect::from_bounds(
+        packer.occupy_reserved(GridRect::from_bounds(
             Bounds::from_points([
                 Point::new(
                     width_mm - DEFAULT_TITLE_BLOCK_WIDTH_MM,
@@ -136,6 +138,14 @@ impl GridPacker {
     }
 
     pub(crate) fn occupy(&mut self, rect: GridRect) {
+        self.occupy_reserved(rect);
+        self.placed_cluster = Some(
+            self.placed_cluster
+                .map_or(rect, |cluster| cluster.union(rect)),
+        );
+    }
+
+    fn occupy_reserved(&mut self, rect: GridRect) {
         let rect = rect.expanded(PACKING_CLEARANCE_CELLS);
         let min_x = rect.min_x.max(self.usable.min_x);
         let min_y = rect.min_y.max(self.usable.min_y);
@@ -150,8 +160,8 @@ impl GridPacker {
     }
 
     /// Place one generated block. The first block prefers the page center;
-    /// later blocks prefer the smallest near-square cluster, matching the PCB
-    /// layout packer's behavior instead of independently orbiting the center.
+    /// later blocks try exposed corners and choose the smallest near-square
+    /// cluster, matching the PCB layout HierPlace algorithm.
     pub(crate) fn place(&mut self, relative: GridRect) -> GridPoint {
         let min_anchor_x = self.usable.min_x - relative.min_x;
         let min_anchor_y = self.usable.min_y - relative.min_y;
@@ -163,12 +173,73 @@ impl GridPacker {
             return anchor;
         }
         let occupied = self.occupancy_prefix();
+        if self.placement_points.is_empty() {
+            if let Some(anchor) = self.placed_cluster {
+                self.add_placement_points(anchor);
+            } else {
+                let centered = relative.translated(self.centered_anchor(relative));
+                self.placement_points.push(GridPoint {
+                    x: centered.min_x,
+                    y: centered.max_y,
+                });
+            }
+        }
+
+        let mut best = None;
+        for (index, point) in self.placement_points.iter().enumerate() {
+            // Placement points are candidate bottom-left corners, as in
+            // HierPlace. Convert one back to this block's symbol anchor.
+            let anchor = GridPoint {
+                x: point.x - relative.min_x,
+                y: point.y - relative.max_y,
+            };
+            let candidate = relative.translated(anchor);
+            if candidate.min_x < self.usable.min_x
+                || candidate.min_y < self.usable.min_y
+                || candidate.max_x > self.usable.max_x
+                || candidate.max_y > self.usable.max_y
+                || self.occupied_cells(candidate, &occupied) != 0
+            {
+                continue;
+            }
+            let cluster = self
+                .placed_cluster
+                .map_or(candidate, |placed| placed.union(candidate));
+            let rank = (cluster.compactness(), index);
+            if best.is_none_or(|(best_rank, _)| rank < best_rank) {
+                best = Some((rank, anchor));
+            }
+        }
+
+        let anchor = best.map(|(_, anchor)| anchor).unwrap_or_else(|| {
+            self.exhaustive_fallback(
+                relative,
+                &occupied,
+                min_anchor_x,
+                min_anchor_y,
+                max_anchor_x,
+                max_anchor_y,
+            )
+        });
+        self.record_placement(relative.translated(anchor));
+        anchor
+    }
+
+    fn exhaustive_fallback(
+        &self,
+        relative: GridRect,
+        occupied: &[u32],
+        min_anchor_x: i32,
+        min_anchor_y: i32,
+        max_anchor_x: i32,
+        max_anchor_y: i32,
+    ) -> GridPoint {
         let mut best = None;
         for y in min_anchor_y..=max_anchor_y {
             for x in min_anchor_x..=max_anchor_x {
                 let anchor = GridPoint { x, y };
                 let candidate = relative.translated(anchor);
-                let overlap = self.occupied_cells(candidate, &occupied);
+                let overlap = self.occupied_cells(candidate, occupied);
                 let cluster = self
                     .placed_cluster
                     .map_or(candidate, |placed| placed.union(candidate));
@@ -186,17 +257,29 @@ impl GridPacker {
                 }
             }
         }
-        let anchor = best.expect("a non-empty anchor range has a candidate").1;
-        self.record_placement(relative.translated(anchor));
-        anchor
+        best.expect("a non-empty anchor range has a candidate").1
     }
 
     fn record_placement(&mut self, rect: GridRect) {
-        self.occupy(rect);
+        self.occupy_reserved(rect);
         self.placed_cluster = Some(
             self.placed_cluster
                 .map_or(rect, |cluster| cluster.union(rect)),
         );
+        self.add_placement_points(rect);
+    }
+
+    fn add_placement_points(&mut self, rect: GridRect) {
+        self.placement_points.extend([
+            GridPoint {
+                x: rect.min_x,
+                y: rect.min_y - PACKING_CLEARANCE_CELLS,
+            },
+            GridPoint {
+                x: rect.max_x + PACKING_CLEARANCE_CELLS,
+                y: rect.max_y,
+            },
+        ]);
     }
 
     fn centered_anchor(&self, relative: GridRect) -> GridPoint {
@@ -337,5 +420,53 @@ mod tests {
         let cluster = packer.placed_cluster.unwrap();
         assert!(cluster.width() <= 12);
         assert!(cluster.height() <= 12);
+    }
+
+    #[test]
+    fn later_blocks_start_at_exposed_corners() {
+        let mut packer = GridPacker::for_page(&Paper::default()).unwrap();
+        let relative = GridRect {
+            min_x: -2,
+            min_y: -2,
+            max_x: 3,
+            max_y: 4,
+        };
+        let first = relative.translated(packer.place(relative));
+        let second = relative.translated(packer.place(relative));
+
+        let above_left =
+            second.min_x == first.min_x && second.max_y == first.min_y - PACKING_CLEARANCE_CELLS;
+        let right_bottom =
+            second.min_x == first.max_x + PACKING_CLEARANCE_CELLS && second.max_y == first.max_y;
+        assert!(
+            above_left || right_bottom,
+            "first={first:?} second={second:?}"
+        );
+    }
+
+    #[test]
+    fn existing_content_is_one_corner_anchor() {
+        let mut packer = GridPacker::for_page(&Paper::default()).unwrap();
+        let existing = GridRect {
+            min_x: 90,
+            min_y: 70,
+            max_x: 110,
+            max_y: 90,
+        };
+        packer.occupy(existing);
+        let relative = GridRect {
+            min_x: 0,
+            min_y: 0,
+            max_x: 5,
+            max_y: 5,
+        };
+
+        let placed = relative.translated(packer.place(relative));
+
+        let above_left = placed.min_x == existing.min_x
+            && placed.max_y == existing.min_y - PACKING_CLEARANCE_CELLS;
+        let right_bottom = placed.min_x == existing.max_x + PACKING_CLEARANCE_CELLS
+            && placed.max_y == existing.max_y;
+        assert!(above_left || right_bottom, "placed={placed:?}");
     }
 }
