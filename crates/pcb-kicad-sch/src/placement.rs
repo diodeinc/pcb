@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use anyhow::{Result, bail};
 
 use crate::{CONNECTION_GRID_MM, GEOMETRY_EPS_MM, Paper, Point, field_autoplace::Bounds};
@@ -100,6 +102,7 @@ pub(crate) struct GridPacker {
     width: usize,
     occupied: Vec<bool>,
     placed_cluster: Option<GridRect>,
+    placement_anchors: Vec<GridPoint>,
 }
 
 impl GridPacker {
@@ -121,6 +124,7 @@ impl GridPacker {
             width,
             occupied: vec![false; width * height],
             placed_cluster: None,
+            placement_anchors: Vec::new(),
         };
         packer.occupy(GridRect::from_bounds(
             Bounds::from_points([
@@ -149,21 +153,47 @@ impl GridPacker {
         }
     }
 
-    /// Place one generated block. The first block prefers the page center;
-    /// later blocks prefer the smallest near-square cluster, matching the PCB
-    /// layout packer's behavior instead of independently orbiting the center.
+    pub(crate) fn occupy_anchored(&mut self, rect: GridRect, anchor: Point) {
+        self.occupy(rect);
+        self.placement_anchors.push(GridPoint {
+            x: (anchor.x / CONNECTION_GRID_MM).round() as i32,
+            y: (anchor.y / CONNECTION_GRID_MM).round() as i32,
+        });
+    }
+
     pub(crate) fn place(&mut self, relative: GridRect) -> GridPoint {
+        self.place_internal(relative, false)
+    }
+
+    /// Place a component block, preferring rows or columns through existing
+    /// component symbol anchors before falling back to the unrestricted grid.
+    pub(crate) fn place_anchored(&mut self, relative: GridRect) -> GridPoint {
+        self.place_internal(relative, true)
+    }
+
+    fn place_internal(&mut self, relative: GridRect, align_anchor: bool) -> GridPoint {
         let min_anchor_x = self.usable.min_x - relative.min_x;
         let min_anchor_y = self.usable.min_y - relative.min_y;
         let max_anchor_x = self.usable.max_x - relative.max_x;
         let max_anchor_y = self.usable.max_y - relative.max_y;
         if max_anchor_x < min_anchor_x || max_anchor_y < min_anchor_y {
             let anchor = self.centered_anchor(relative);
-            self.record_placement(relative.translated(anchor));
+            self.record_placement(relative.translated(anchor), align_anchor.then_some(anchor));
             return anchor;
         }
         let occupied = self.occupancy_prefix();
-        let mut best = None;
+        let aligned_x = self
+            .placement_anchors
+            .iter()
+            .map(|anchor| anchor.x)
+            .collect::<BTreeSet<_>>();
+        let aligned_y = self
+            .placement_anchors
+            .iter()
+            .map(|anchor| anchor.y)
+            .collect::<BTreeSet<_>>();
+        let mut best_aligned = None;
+        let mut best_fallback = None;
         for y in min_anchor_y..=max_anchor_y {
             for x in min_anchor_x..=max_anchor_x {
                 let anchor = GridPoint { x, y };
@@ -181,22 +211,33 @@ impl GridPacker {
                     y,
                     x,
                 );
-                if best.is_none_or(|(best_rank, _)| rank < best_rank) {
-                    best = Some((rank, anchor));
+                if align_anchor
+                    && overlap == 0
+                    && (aligned_x.contains(&x) || aligned_y.contains(&y))
+                    && best_aligned.is_none_or(|(best_rank, _)| rank < best_rank)
+                {
+                    best_aligned = Some((rank, anchor));
+                }
+                if best_fallback.is_none_or(|(best_rank, _)| rank < best_rank) {
+                    best_fallback = Some((rank, anchor));
                 }
             }
         }
-        let anchor = best.expect("a non-empty anchor range has a candidate").1;
-        self.record_placement(relative.translated(anchor));
+        let anchor = best_aligned
+            .or(best_fallback)
+            .expect("a non-empty anchor range has a candidate")
+            .1;
+        self.record_placement(relative.translated(anchor), align_anchor.then_some(anchor));
         anchor
     }
 
-    fn record_placement(&mut self, rect: GridRect) {
+    fn record_placement(&mut self, rect: GridRect, anchor: Option<GridPoint>) {
         self.occupy(rect);
         self.placed_cluster = Some(
             self.placed_cluster
                 .map_or(rect, |cluster| cluster.union(rect)),
         );
+        self.placement_anchors.extend(anchor);
     }
 
     fn centered_anchor(&self, relative: GridRect) -> GridPoint {
@@ -337,5 +378,76 @@ mod tests {
         let cluster = packer.placed_cluster.unwrap();
         assert!(cluster.width() <= 12);
         assert!(cluster.height() <= 12);
+    }
+
+    #[test]
+    fn asymmetric_envelopes_align_on_symbol_anchors() {
+        let mut packer = GridPacker::for_page(&Paper::default()).unwrap();
+        let symbol_with_decoration_above = GridRect {
+            min_x: -2,
+            min_y: -8,
+            max_x: 2,
+            max_y: 2,
+        };
+        let symbol_with_decoration_below = GridRect {
+            min_x: -2,
+            min_y: -2,
+            max_x: 2,
+            max_y: 8,
+        };
+
+        let first = packer.place_anchored(symbol_with_decoration_above);
+        let second = packer.place_anchored(symbol_with_decoration_below);
+
+        assert_eq!(first.y, second.y);
+    }
+
+    #[test]
+    fn new_blocks_align_with_existing_symbol_anchors() {
+        let mut packer = GridPacker::for_page(&Paper::default()).unwrap();
+        let existing_anchor = GridPoint { x: 100, y: 80 };
+        packer.occupy_anchored(
+            GridRect {
+                min_x: 96,
+                min_y: 76,
+                max_x: 104,
+                max_y: 84,
+            },
+            existing_anchor.to_point(),
+        );
+
+        let placed = packer.place_anchored(GridRect {
+            min_x: -2,
+            min_y: -2,
+            max_x: 2,
+            max_y: 2,
+        });
+
+        assert!(placed.x == existing_anchor.x || placed.y == existing_anchor.y);
+    }
+
+    #[test]
+    fn non_component_blocks_ignore_symbol_anchor_lines() {
+        let mut packer = GridPacker::for_page(&Paper::default()).unwrap();
+        let existing_anchor = GridPoint { x: 20, y: 20 };
+        packer.occupy_anchored(
+            GridRect {
+                min_x: 16,
+                min_y: 16,
+                max_x: 24,
+                max_y: 24,
+            },
+            existing_anchor.to_point(),
+        );
+
+        let placed = packer.place(GridRect {
+            min_x: -2,
+            min_y: -2,
+            max_x: 2,
+            max_y: 2,
+        });
+
+        assert_ne!(placed.x, existing_anchor.x);
+        assert_ne!(placed.y, existing_anchor.y);
     }
 }

@@ -945,7 +945,7 @@ fn pack_generated_symbols(
 
         let page_blocks = blocks.iter().filter(|block| block.page_index == page_index);
         for block in page_blocks {
-            let origin = packer.place(block.bounds);
+            let origin = packer.place_anchored(block.bounds);
             for member in &block.members {
                 let anchor = origin.translated(member.offset);
                 move_placed_symbol(document, placed, &member.slot, anchor.to_point())?;
@@ -1293,7 +1293,7 @@ fn occupy_page_items_except(
                     continue;
                 };
                 if let Some(bounds) = field_autoplace::symbol_visual_bounds(symbol, definition)? {
-                    packer.occupy(GridRect::from_bounds(bounds));
+                    packer.occupy_anchored(GridRect::from_bounds(bounds), symbol.at);
                 }
             }
             SchItem::Sheet(sheet) => {
@@ -1789,7 +1789,7 @@ fn relocate_symbol(
             })
             .translated(-symbol.at.x, -symbol.at.y),
     );
-    let new_at = packer.place(relative).to_point();
+    let new_at = packer.place_anchored(relative).to_point();
     let delta = Point::new(new_at.x - symbol.at.x, new_at.y - symbol.at.y);
     symbol.at = new_at;
     for field in symbol.fields.values_mut() {
