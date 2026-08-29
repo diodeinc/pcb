@@ -1,6 +1,6 @@
 mod common;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use pcb_kicad_sch::{
     LabelShape, Point, Rotation, SchDocument, SchItem, SchPage, Sheet, SheetPin, Symbol,
@@ -124,6 +124,62 @@ fn selected_issue_repair_preserves_an_unrelated_existing_issue() {
         .apply(Some(&document))
         .unwrap();
     assert_eq!(selected_all, complete);
+}
+
+#[test]
+fn added_component_batch_docks_without_moving_existing_symbols() {
+    let before = common::compile_fixture("analysis", "incremental_before.zen");
+    let after = common::compile_fixture("analysis", "incremental_after.zen");
+    let document = plan_reconciliation(None, &before, "Incremental.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    let existing = managed_symbol_positions(&document);
+    let inspection = inspect_schematic(&document, &after).unwrap();
+    let missing = inspection
+        .issues
+        .iter()
+        .filter(|issue| matches!(issue.issue, SchematicIssue::MissingSymbol { .. }))
+        .map(|issue| issue.key.clone())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(missing.len(), 3);
+
+    let repaired = plan_repairs(&document, &after, &inspection, missing)
+        .unwrap()
+        .apply(Some(&document))
+        .unwrap();
+    let all = managed_symbol_positions(&repaired);
+
+    assert_eq!(all.len(), 6);
+    for (path, at) in &existing {
+        assert_eq!(all[path], *at, "existing symbol {path} moved");
+    }
+    let added = all
+        .iter()
+        .filter(|(path, _)| !existing.contains_key(*path))
+        .map(|(_, at)| *at)
+        .collect::<Vec<_>>();
+    assert_eq!(added.len(), 3);
+    assert!(added.iter().enumerate().any(|(index, left)| {
+        added[index + 1..]
+            .iter()
+            .any(|right| left.x == right.x || left.y == right.y)
+    }));
+    assert!(added.iter().any(|new| {
+        existing
+            .values()
+            .any(|old| new.x == old.x || new.y == old.y)
+    }));
+    let nearest_existing_mm = added
+        .iter()
+        .flat_map(|new| {
+            existing
+                .values()
+                .map(move |old| (new.x - old.x).abs() + (new.y - old.y).abs())
+        })
+        .reduce(f64::min)
+        .unwrap();
+    assert!(nearest_existing_mm <= 50.8, "{nearest_existing_mm}");
 }
 
 #[test]
@@ -275,6 +331,12 @@ fn managed_symbols(document: &SchDocument) -> impl Iterator<Item = &Symbol> {
             SchItem::Symbol(symbol) if symbol.field_value("Path").is_some() => Some(symbol),
             _ => None,
         })
+}
+
+fn managed_symbol_positions(document: &SchDocument) -> BTreeMap<String, Point> {
+    managed_symbols(document)
+        .map(|symbol| (symbol.field_value("Path").unwrap().to_string(), symbol.at))
+        .collect()
 }
 
 fn first_managed_mut(document: &mut SchDocument) -> &mut Symbol {

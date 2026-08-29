@@ -155,10 +155,18 @@ impl GridPacker {
 
     pub(crate) fn occupy_anchored(&mut self, rect: GridRect, anchor: Point) {
         self.occupy(rect);
+        self.placed_cluster = Some(
+            self.placed_cluster
+                .map_or(rect, |cluster| cluster.union(rect)),
+        );
         self.placement_anchors.push(GridPoint {
             x: (anchor.x / CONNECTION_GRID_MM).round() as i32,
             y: (anchor.y / CONNECTION_GRID_MM).round() as i32,
         });
+    }
+
+    pub(crate) fn usable_bounds(&self) -> GridRect {
+        self.usable
     }
 
     pub(crate) fn place(&mut self, relative: GridRect) -> GridPoint {
@@ -406,15 +414,13 @@ mod tests {
     fn new_blocks_align_with_existing_symbol_anchors() {
         let mut packer = GridPacker::for_page(&Paper::default()).unwrap();
         let existing_anchor = GridPoint { x: 100, y: 80 };
-        packer.occupy_anchored(
-            GridRect {
-                min_x: 96,
-                min_y: 76,
-                max_x: 104,
-                max_y: 84,
-            },
-            existing_anchor.to_point(),
-        );
+        let existing = GridRect {
+            min_x: 96,
+            min_y: 76,
+            max_x: 104,
+            max_y: 84,
+        };
+        packer.occupy_anchored(existing, existing_anchor.to_point());
 
         let placed = packer.place_anchored(GridRect {
             min_x: -2,
@@ -424,6 +430,7 @@ mod tests {
         });
 
         assert!(placed.x == existing_anchor.x || placed.y == existing_anchor.y);
+        assert!(placed.x < 130 && placed.y < 110);
     }
 
     #[test]

@@ -944,11 +944,17 @@ fn pack_generated_symbols(
             .collect::<BTreeSet<_>>();
         occupy_page_items_except(&mut packer, &document.pages[page_index], &relocatable_ids)?;
 
-        let page_blocks = blocks.iter().filter(|block| block.page_index == page_index);
-        for block in page_blocks {
-            let origin = packer.place_anchored(block.bounds);
+        let page_blocks = blocks
+            .iter()
+            .filter(|block| block.page_index == page_index)
+            .collect::<Vec<_>>();
+        let (grid_bounds, block_offsets) =
+            arrange_placement_blocks(&page_blocks, packer.usable_bounds());
+        let grid_origin = packer.place_anchored(grid_bounds);
+        for (block, block_offset) in page_blocks.into_iter().zip(block_offsets) {
+            let block_origin = grid_origin.translated(block_offset);
             for member in &block.members {
-                let anchor = origin.translated(member.offset);
+                let anchor = block_origin.translated(member.offset);
                 move_placed_symbol(document, placed, &member.slot, anchor.to_point())?;
             }
         }
@@ -977,6 +983,79 @@ struct PlacementBlock {
     members: Vec<PlacementMember>,
     bounds: GridRect,
     capacitor_bank: Option<CapacitorBank>,
+}
+
+fn arrange_placement_blocks(
+    blocks: &[&PlacementBlock],
+    usable: GridRect,
+) -> (GridRect, Vec<GridPoint>) {
+    // Pick one page-shaped shelf grid for the whole generated cohort. Placing
+    // the grid as a unit avoids the radial pattern produced by repeatedly
+    // extending a centered cluster one block at a time.
+    (1..=blocks.len())
+        .map(|columns| {
+            let (bounds, offsets) = placement_grid_with_columns(blocks, columns);
+            let overflow_x = (bounds.width() - usable.width()).max(0);
+            let overflow_y = (bounds.height() - usable.height()).max(0);
+            let aspect_error = (i64::from(bounds.width()) * i64::from(usable.height())
+                - i64::from(bounds.height()) * i64::from(usable.width()))
+            .abs();
+            let rank = (
+                i64::from(overflow_x) + i64::from(overflow_y),
+                aspect_error,
+                bounds.area(),
+                columns,
+            );
+            (rank, bounds, offsets)
+        })
+        .min_by_key(|(rank, _, _)| *rank)
+        .map(|(_, bounds, offsets)| (bounds, offsets))
+        .expect("a placement page has at least one block")
+}
+
+fn placement_grid_with_columns(
+    blocks: &[&PlacementBlock],
+    columns: usize,
+) -> (GridRect, Vec<GridPoint>) {
+    debug_assert!(!blocks.is_empty());
+    debug_assert!((1..=blocks.len()).contains(&columns));
+    let rows = blocks.len().div_ceil(columns);
+    let mut row_min = vec![i32::MAX; rows];
+    let mut row_max = vec![i32::MIN; rows];
+    for (index, block) in blocks.iter().enumerate() {
+        let row = index / columns;
+        row_min[row] = row_min[row].min(block.bounds.min_y);
+        row_max[row] = row_max[row].max(block.bounds.max_y);
+    }
+
+    let mut row_origins = vec![0; rows];
+    for row in 1..rows {
+        row_origins[row] =
+            row_origins[row - 1] + row_max[row - 1] - row_min[row] + PLACEMENT_BLOCK_GAP_CELLS;
+    }
+
+    let mut offsets: Vec<GridPoint> = Vec::with_capacity(blocks.len());
+    for (index, block) in blocks.iter().enumerate() {
+        let row = index / columns;
+        let x = if index % columns == 0 {
+            0
+        } else {
+            let previous = blocks[index - 1];
+            offsets[index - 1].x + previous.bounds.max_x - block.bounds.min_x
+                + PLACEMENT_BLOCK_GAP_CELLS
+        };
+        offsets.push(GridPoint {
+            x,
+            y: row_origins[row],
+        });
+    }
+    let bounds = blocks
+        .iter()
+        .zip(&offsets)
+        .map(|(block, offset)| block.bounds.translated(*offset))
+        .reduce(GridRect::union)
+        .expect("a placement grid has blocks");
+    (bounds, offsets)
 }
 
 fn placement_blocks(
@@ -1294,7 +1373,12 @@ fn occupy_page_items_except(
                     continue;
                 };
                 if let Some(bounds) = field_autoplace::symbol_visual_bounds(symbol, definition)? {
-                    packer.occupy_anchored(GridRect::from_bounds(bounds), symbol.at);
+                    let bounds = GridRect::from_bounds(bounds);
+                    if symbol.field_value("Path").is_some() {
+                        packer.occupy_anchored(bounds, symbol.at);
+                    } else {
+                        packer.occupy(bounds);
+                    }
                 }
             }
             SchItem::Sheet(sheet) => {
@@ -2951,6 +3035,112 @@ fn resolve_pin_targets(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_placement_block(key: &str, bounds: GridRect) -> PlacementBlock {
+        PlacementBlock {
+            key: key.to_string(),
+            page_index: 0,
+            members: Vec::new(),
+            bounds,
+            capacitor_bank: None,
+        }
+    }
+
+    #[test]
+    fn placement_grid_aligns_block_origins_in_rows() {
+        let blocks = [
+            test_placement_block(
+                "a",
+                GridRect {
+                    min_x: -2,
+                    min_y: -8,
+                    max_x: 3,
+                    max_y: 2,
+                },
+            ),
+            test_placement_block(
+                "b",
+                GridRect {
+                    min_x: -4,
+                    min_y: -2,
+                    max_x: 6,
+                    max_y: 7,
+                },
+            ),
+            test_placement_block(
+                "c",
+                GridRect {
+                    min_x: -1,
+                    min_y: -3,
+                    max_x: 2,
+                    max_y: 4,
+                },
+            ),
+            test_placement_block(
+                "d",
+                GridRect {
+                    min_x: -3,
+                    min_y: -1,
+                    max_x: 5,
+                    max_y: 3,
+                },
+            ),
+        ];
+        let blocks = blocks.iter().collect::<Vec<_>>();
+
+        let (_, offsets) = placement_grid_with_columns(&blocks, 2);
+
+        assert_eq!(offsets[0].y, offsets[1].y);
+        assert_eq!(offsets[2].y, offsets[3].y);
+        assert_eq!(offsets[0].x, offsets[2].x);
+        assert_ne!(
+            offsets[1].x, offsets[3].x,
+            "each row should use its members' actual widths"
+        );
+    }
+
+    #[test]
+    fn placement_grid_chooses_a_page_shaped_matrix() {
+        let blocks = (0..6)
+            .map(|index| {
+                test_placement_block(
+                    &index.to_string(),
+                    GridRect {
+                        min_x: -2,
+                        min_y: -2,
+                        max_x: 2,
+                        max_y: 2,
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        let blocks = blocks.iter().collect::<Vec<_>>();
+        let usable = GridRect {
+            min_x: 0,
+            min_y: 0,
+            max_x: 200,
+            max_y: 140,
+        };
+
+        let (_, offsets) = arrange_placement_blocks(&blocks, usable);
+
+        assert_eq!(
+            offsets
+                .iter()
+                .map(|offset| offset.x)
+                .collect::<BTreeSet<_>>()
+                .len(),
+            3
+        );
+        assert_eq!(
+            offsets
+                .iter()
+                .map(|offset| offset.y)
+                .collect::<BTreeSet<_>>()
+                .len(),
+            2
+        );
+    }
 
     fn multi_pad_symbol() -> BTreeMap<SymbolSlotKey, PlacedSymbol> {
         let definition = SymbolDefinition::from_kicad_symbol_sexpr(
