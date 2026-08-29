@@ -54,10 +54,11 @@ pub(crate) fn autoplace_symbol_fields(
 
     let mut changed = false;
     let mut cursor_y = field_box.min_y;
+    let rotation_deg = match symbol.rotation {
+        Rotation::Deg0 | Rotation::Deg180 => 0.0,
+        Rotation::Deg90 | Rotation::Deg270 => 90.0,
+    };
     for layout in layouts {
-        let Some(field) = symbol.fields.get_mut(&layout.name) else {
-            continue;
-        };
         let placement_justify = field_justify(selection);
         let position = field_position(
             selection.side,
@@ -66,10 +67,9 @@ pub(crate) fn autoplace_symbol_fields(
             placement_justify,
             &mut cursor_y,
         );
-        let justify = stored_field_justify(symbol.mirror, placement_justify);
-        let rotation_deg = match symbol.rotation {
-            Rotation::Deg0 | Rotation::Deg180 => 0.0,
-            Rotation::Deg90 | Rotation::Deg270 => 90.0,
+        let justify = stored_field_justify(symbol, rotation_deg, placement_justify);
+        let Some(field) = symbol.fields.get_mut(&layout.name) else {
+            continue;
         };
         changed |= field.at != position
             || field.rotation_deg != rotation_deg
@@ -201,18 +201,13 @@ pub(crate) fn symbol_visual_bounds(
         .values()
         .filter(|field| !field.hidden && !field.value.trim().is_empty())
     {
-        // KiCad stores property angles inside the symbol transform. Include
-        // that transform so a 180-degree display angle also reverses the
-        // field's visual justification even though its text remains upright.
-        let display_rotation_deg = field.rotation_deg + symbol.rotation.degrees() as f64;
-        let field_bounds = text_bounds(
-            field.at,
-            display_rotation_deg,
+        let field_bounds = field_text_bounds(
+            symbol,
+            field,
             field.value.chars().count().max(1) as f64
                 * field.effects.font_size.x.abs()
                 * ESTIMATED_TEXT_WIDTH_EM,
             field.effects.font_size.y.abs(),
-            field.justify.unwrap_or(FieldJustify::centered()),
         );
         match &mut bounds {
             Some(bounds) => bounds.union(field_bounds),
@@ -244,13 +239,13 @@ impl Symbol {
     }
 }
 
-fn text_bounds(
-    at: Point,
-    rotation_deg: f64,
+fn field_text_bounds(
+    symbol: &Symbol,
+    field: &crate::SymbolField,
     width: f64,
     height: f64,
-    justify: FieldJustify,
 ) -> Bounds {
+    let justify = field.justify.unwrap_or(FieldJustify::centered());
     let (min_x, max_x) = match justify.horizontal {
         Some(FieldHorizontalJustify::Left) => (0.0, width),
         Some(FieldHorizontalJustify::Right) => (-width, 0.0),
@@ -261,8 +256,6 @@ fn text_bounds(
         Some(FieldVerticalJustify::Bottom) => (-height, 0.0),
         Some(FieldVerticalJustify::Center) | None => (-height * 0.5, height * 0.5),
     };
-    let radians = rotation_deg.to_radians();
-    let (sin, cos) = radians.sin_cos();
     Bounds::from_points(
         [
             Point::new(min_x, min_y),
@@ -271,13 +264,20 @@ fn text_bounds(
             Point::new(max_x, max_y),
         ]
         .map(|point| {
-            Point::new(
-                at.x + point.x * cos - point.y * sin,
-                at.y + point.x * sin + point.y * cos,
-            )
+            let point = transform_field_vector(point, symbol, field.rotation_deg);
+            Point::new(field.at.x + point.x, field.at.y + point.y)
         }),
     )
     .expect("text bounds have four corners")
+}
+
+fn transform_field_vector(point: Point, symbol: &Symbol, field_rotation_deg: f64) -> Point {
+    let radians = field_rotation_deg.to_radians();
+    let (sin, cos) = radians.sin_cos();
+    symbol::transform_vector(
+        Point::new(point.x * cos - point.y * sin, point.x * sin + point.y * cos),
+        symbol,
+    )
 }
 
 fn movable_field_layouts(symbol: &Symbol) -> Vec<FieldLayout> {
@@ -548,8 +548,14 @@ fn field_justify(selection: SideSelection) -> FieldJustify {
     FieldJustify::new(Some(horizontal), Some(FieldVerticalJustify::Center))
 }
 
-fn stored_field_justify(mirror: Option<MirrorAxis>, justify: FieldJustify) -> FieldJustify {
-    if mirror.is_none() {
+fn stored_field_justify(
+    symbol: &Symbol,
+    field_rotation_deg: f64,
+    justify: FieldJustify,
+) -> FieldJustify {
+    let text_axis = transform_field_vector(Point::new(1.0, 0.0), symbol, field_rotation_deg);
+    debug_assert!(text_axis.y.abs() <= GEOMETRY_EPS_MM);
+    if text_axis.x >= 0.0 {
         return justify;
     }
     FieldJustify::new(
@@ -669,8 +675,34 @@ mod tests {
         let bounds = symbol_visual_bounds(&symbol, &definition).unwrap().unwrap();
 
         assert!(bounds.width() > bounds.height() * 5.0);
-        assert!((bounds.max_x - value_at.x).abs() < GEOMETRY_EPS_MM);
-        assert!(bounds.min_x < value_at.x);
+        assert!((bounds.min_x - value_at.x).abs() < GEOMETRY_EPS_MM);
+        assert!(bounds.max_x > value_at.x);
+    }
+
+    #[test]
+    fn upside_down_symbol_fields_keep_their_outward_justification() {
+        let definition = SymbolDefinition::from_kicad_symbol_sexpr(
+            r#"(symbol "Test:IC"
+              (symbol "IC_1_1"
+                (rectangle (start -5 -2) (end 5 2))))"#,
+        )
+        .unwrap();
+        let mut symbol = test_symbol(Point::new(10.0, 20.0), Rotation::Deg180, None);
+
+        assert!(autoplace_symbol_fields(&mut symbol, &definition).unwrap());
+
+        for field in symbol.fields.values() {
+            assert_eq!(
+                field.justify,
+                Some(FieldJustify::new(
+                    Some(FieldHorizontalJustify::Right),
+                    Some(FieldVerticalJustify::Center),
+                ))
+            );
+            let bounds = field_text_bounds(&symbol, field, 2.0, 1.0);
+            assert!((bounds.min_x - field.at.x).abs() < GEOMETRY_EPS_MM);
+            assert!(bounds.max_x > field.at.x);
+        }
     }
 
     fn test_symbol(at: Point, rotation: Rotation, mirror: Option<MirrorAxis>) -> Symbol {

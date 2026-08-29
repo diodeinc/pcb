@@ -516,7 +516,7 @@ fn matches_body_style(section: u32, selected: u32) -> bool {
     section == 0 || section == selected
 }
 
-pub(crate) fn transform_point(mut point: Point, symbol: &Symbol) -> Point {
+pub(crate) fn transform_vector(mut point: Point, symbol: &Symbol) -> Point {
     // KiCad composes the symbol matrix as rotation * mirror, so the mirror is
     // applied to the library-local point before the rotation.
     point = match symbol.mirror {
@@ -530,6 +530,11 @@ pub(crate) fn transform_point(mut point: Point, symbol: &Symbol) -> Point {
         Rotation::Deg180 => Point::new(-point.x, -point.y),
         Rotation::Deg270 => Point::new(-point.y, point.x),
     };
+    point
+}
+
+pub(crate) fn transform_point(point: Point, symbol: &Symbol) -> Point {
+    let point = transform_vector(point, symbol);
     Point::new(symbol.at.x + point.x, symbol.at.y + point.y)
 }
 
