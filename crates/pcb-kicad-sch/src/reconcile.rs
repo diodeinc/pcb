@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 
 use anyhow::{Context, Result, bail};
 use pcb_sch::Schematic;
+use serde::{Deserialize, Serialize};
 
 use crate::{
     SchDocument, SchPage, SymbolSlotKey,
@@ -12,7 +13,7 @@ use crate::{
 };
 
 /// One exact change to the typed schematic document.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum DocumentEdit {
     SetRootPages {
         before: Vec<String>,
@@ -30,7 +31,7 @@ pub enum DocumentEdit {
 }
 
 /// One independently verified reconciliation suggestion.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DocumentPatch {
     edits: Vec<DocumentEdit>,
 }
@@ -51,7 +52,7 @@ impl DocumentPatch {
 }
 
 /// An ordered set of independently applicable, mutually compatible patches.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReconciliationPlan {
     patches: Vec<DocumentPatch>,
 }

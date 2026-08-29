@@ -5,25 +5,26 @@ use crate::{Junction, Point, SchItem, SchPage, Wire, deterministic_uuid};
 const IU_PER_MM: f64 = 10_000.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct PointKey {
-    pub(crate) x: i64,
-    pub(crate) y: i64,
+pub struct PointKey {
+    pub x: i64,
+    pub y: i64,
 }
 
 impl PointKey {
-    pub(crate) fn from_point(point: Point) -> Self {
+    pub fn from_point(point: Point) -> Self {
         Self {
             x: (point.x * IU_PER_MM).round() as i64,
             y: (point.y * IU_PER_MM).round() as i64,
         }
     }
 
-    pub(crate) fn to_point(self) -> Point {
+    pub fn to_point(self) -> Point {
         Point::new(self.x as f64 / IU_PER_MM, self.y as f64 / IU_PER_MM)
     }
 }
 
-pub(crate) fn reconcile_page_wires(
+/// Recompute explicit KiCad junctions after replacing a page's wire geometry.
+pub fn reconcile_page_wires(
     page: &mut SchPage,
     wires: Vec<Wire>,
     affected_original_points: &BTreeSet<PointKey>,
@@ -49,7 +50,20 @@ pub(crate) fn reconcile_page_wires(
     replace_page_wires_and_junctions(page, wires, junctions)
 }
 
-fn derive_junctions(
+/// Recompute junctions for the page's existing wires without changing them.
+pub fn reconcile_page_junctions(page: &mut SchPage) -> bool {
+    let wires = page
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            SchItem::Wire(wire) => Some(wire.clone()),
+            _ => None,
+        })
+        .collect();
+    reconcile_page_wires(page, wires, &BTreeSet::new(), &BTreeSet::new())
+}
+
+pub fn derive_junctions(
     page_id: &str,
     wires: &[Wire],
     original: &BTreeMap<PointKey, Junction>,
@@ -84,7 +98,7 @@ fn derive_junctions(
         .collect()
 }
 
-fn branch_points_with_candidates(
+pub fn branch_points_with_candidates(
     wires: &[Wire],
     additional_candidates: impl IntoIterator<Item = PointKey>,
 ) -> BTreeSet<PointKey> {
@@ -119,7 +133,7 @@ fn incident_directions(wires: &[Wire], point: PointKey) -> BTreeSet<(i8, i8)> {
     directions
 }
 
-fn replace_page_wires_and_junctions(
+pub fn replace_page_wires_and_junctions(
     page: &mut SchPage,
     wires: Vec<Wire>,
     junctions: Vec<Junction>,
@@ -173,7 +187,7 @@ fn replace_page_wires_and_junctions(
     true
 }
 
-fn point_on_segment(point: PointKey, a: PointKey, b: PointKey) -> bool {
+pub fn point_on_segment(point: PointKey, a: PointKey, b: PointKey) -> bool {
     let cross = (b.x - a.x) * (point.y - a.y) - (b.y - a.y) * (point.x - a.x);
     cross == 0
         && point.x >= a.x.min(b.x)
