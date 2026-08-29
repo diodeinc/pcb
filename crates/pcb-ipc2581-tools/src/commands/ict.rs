@@ -10,7 +10,6 @@
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -48,7 +47,7 @@ pub fn execute(file: &Path, options: &IctOptions) -> Result<()> {
     if let Some(output) = &options.output {
         fs::write(output, csv)?;
     } else {
-        io::stdout().write_all(csv.as_bytes())?;
+        pcb_ui::write_stdout(|stdout| stdout.write_all(csv.as_bytes()))?;
     }
 
     Ok(())

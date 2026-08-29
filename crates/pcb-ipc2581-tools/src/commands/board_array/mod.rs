@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-use std::io::{self, Write};
 use std::path::Path;
 
 use super::board_array_auto::{
@@ -439,7 +438,7 @@ fn print_copper_balance_summary(report: Option<&CopperBalanceReport>) {
 
 fn write_board_array_output(output: &Path, content: &str) -> Result<()> {
     if output.as_os_str() == "-" {
-        io::stdout().lock().write_all(content.as_bytes())?;
+        pcb_ui::write_stdout(|stdout| stdout.write_all(content.as_bytes()))?;
         eprintln!("✓ Created IPC-2581 board array on stdout");
     } else {
         file_utils::save_ipc_file(output, content)?;

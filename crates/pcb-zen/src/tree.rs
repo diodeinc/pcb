@@ -46,6 +46,5 @@ where
     F: FnMut(&Id) -> (String, Vec<Id>),
 {
     let tree = build_tree(root_label, roots, visit);
-    print!("{}", tree);
-    Ok(())
+    pcb_ui::write_stdout(|stdout| write!(stdout, "{tree}"))
 }

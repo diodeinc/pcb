@@ -1,7 +1,6 @@
 //! PDK-driven manufacturability checks for IPC-2581 geometry.
 
 use std::borrow::Cow;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -229,10 +228,8 @@ fn write_report(output: Option<&Path>, report: &str) -> Result<()> {
     match output {
         Some(path) => std::fs::write(path, format!("{report}\n"))
             .with_context(|| format!("failed to write DFM report to {}", path.display())),
-        None => {
-            let mut stdout = std::io::stdout().lock();
-            writeln!(stdout, "{report}").context("failed to write DFM report to stdout")
-        }
+        None => pcb_ui::write_stdout(|stdout| writeln!(stdout, "{report}"))
+            .context("failed to write DFM report to stdout"),
     }
 }
 

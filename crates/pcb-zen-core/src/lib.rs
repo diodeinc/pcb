@@ -1,3 +1,7 @@
+// Use pipe-safe replacements for standard printing macros in CLI output paths.
+#[macro_use(eprintln)]
+extern crate anstream;
+
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
