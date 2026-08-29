@@ -186,13 +186,21 @@ fn wrap(tag: &str, inner: JsonValue) -> JsonValue {
 /// Walk a signature parameter's default value (Net or Interface, possibly nested) and return the
 /// path of field names leading to a net whose name equals `target_net_name`. Returns `Some(vec![])`
 /// when the value itself is a matching net.
-fn find_net_field_path(value: FrozenValue, target_net_name: &str) -> Option<Vec<String>> {
+fn find_net_field_path(
+    value: FrozenValue,
+    target_net_name: &str,
+    ignore_ascii_case: bool,
+) -> Option<Vec<String>> {
     if let Some(net) = value.downcast_ref::<FrozenNetValue>() {
-        return (net.name() == target_net_name).then(Vec::new);
+        let matches = net.name() == target_net_name
+            || (ignore_ascii_case && net.name().eq_ignore_ascii_case(target_net_name));
+        return matches.then(Vec::new);
     }
     let interface = value.downcast_ref::<FrozenInterfaceValue>()?;
     for (field_name, field_value) in interface.fields().iter() {
-        if let Some(mut path) = find_net_field_path(*field_value, target_net_name) {
+        if let Some(mut path) =
+            find_net_field_path(*field_value, target_net_name, ignore_ascii_case)
+        {
             path.insert(0, field_name.clone());
             return Some(path);
         }
@@ -950,9 +958,39 @@ impl ModuleConverter {
     ) -> Option<String> {
         let (net_part, suffix) = key.rsplit_once('.').unwrap_or((key, "1"));
 
-        if let Some(symbol_key) =
-            self.find_descendant_override_net_symbol_key(net_part, suffix, instance_ref)
-        {
+        // Older schematic comments included the source symbol name after the
+        // net name (`VCC_3V3_VCC.1`). Prefer the modern spelling, then peel
+        // trailing underscore segments and resolve each candidate normally.
+        let mut candidate = net_part;
+        let mut legacy = false;
+        loop {
+            if let Some(symbol_key) =
+                self.resolve_net_symbol_key(candidate, suffix, module, instance_ref, legacy)
+            {
+                return Some(symbol_key);
+            }
+            let Some((prefix, _)) = candidate.rsplit_once('_') else {
+                return None;
+            };
+            candidate = prefix;
+            legacy = true;
+        }
+    }
+
+    fn resolve_net_symbol_key(
+        &self,
+        net_part: &str,
+        suffix: &str,
+        module: &FrozenModuleValue,
+        instance_ref: &InstanceRef,
+        ignore_ascii_case: bool,
+    ) -> Option<String> {
+        if let Some(symbol_key) = self.find_descendant_override_net_symbol_key(
+            net_part,
+            suffix,
+            instance_ref,
+            ignore_ascii_case,
+        ) {
             return Some(symbol_key);
         }
 
@@ -964,7 +1002,8 @@ impl ModuleConverter {
             let Some(default_value) = param.default_value else {
                 continue;
             };
-            let Some(field_path) = find_net_field_path(default_value, net_part) else {
+            let Some(field_path) = find_net_field_path(default_value, net_part, ignore_ascii_case)
+            else {
                 continue;
             };
             let Some(actual_value) = param.actual_value else {
@@ -992,15 +1031,14 @@ impl ModuleConverter {
         };
 
         // Check if this internal net exists in our net mappings
-        if self
-            .net_to_info
+        self.net_to_info
             .values()
-            .any(|info| info.name.as_deref() == Some(&fq_name))
-        {
-            Some(format!("sym:{}#{}", fq_name, suffix))
-        } else {
-            None
-        }
+            .filter_map(|info| info.name.as_deref())
+            .find(|name| {
+                *name == fq_name
+                    || (ignore_ascii_case && name.eq_ignore_ascii_case(fq_name.as_str()))
+            })
+            .map(|name| format!("sym:{}#{}", name, suffix))
     }
 
     fn find_descendant_override_net_symbol_key(
@@ -1008,6 +1046,7 @@ impl ModuleConverter {
         net_part: &str,
         suffix: &str,
         instance_ref: &InstanceRef,
+        ignore_ascii_case: bool,
     ) -> Option<String> {
         let segments: Vec<&str> = net_part.split('.').collect();
         if segments.len() < 2 {
@@ -1034,12 +1073,19 @@ impl ModuleConverter {
             // keys use global net names (e.g. a descendant's local `IN_GD.0` comment
             // converts to `sym:VBUS_RAW#0` when the parent connects `IN_GD=VBUS_RAW`).
             let rest = segments[split_idx..].join(".");
-            if self
+            if let Some(actual_name) = self
                 .net_to_info
                 .values()
-                .any(|info| info.name.as_deref() == Some(rest.as_str()))
+                .filter_map(|info| info.name.as_deref())
+                .find(|name| {
+                    *name == rest || (ignore_ascii_case && name.eq_ignore_ascii_case(rest.as_str()))
+                })
             {
-                return Some(format!("sym:{}#{}", net_part, suffix));
+                let descendant_path = segments[..split_idx].join(".");
+                return Some(format!(
+                    "sym:{}.{}#{}",
+                    descendant_path, actual_name, suffix
+                ));
             }
         }
 

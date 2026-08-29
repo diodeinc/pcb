@@ -174,6 +174,37 @@ fn test_netlist_simple_board_with_positions() {
 }
 
 #[test]
+fn legacy_power_symbol_comment_preserves_position() {
+    let mut sandbox = Sandbox::new().with_workspace();
+    sandbox.write(
+        "board.zen",
+        r#"
+Project(name="LegacyPowerPosition", path="kicad", layout=False)
+VCC = io(Power)
+# pcb:sch vcc_VCC.1 x=12.5000 y=34.7500 rot=90
+"#,
+    );
+    let output = sandbox.snapshot_run("pcbc", ["build", "board.zen", "--netlist"]);
+    let json_start = output.find('{').expect("netlist JSON in output");
+    let json_end = output.rfind('}').expect("netlist JSON in output");
+    let netlist: serde_json::Value =
+        serde_json::from_str(&output[json_start..=json_end]).expect("netlist parses as JSON");
+    let positions = netlist["instances"]
+        .as_object()
+        .unwrap()
+        .iter()
+        .find_map(|(path, instance)| {
+            path.ends_with(":<root>")
+                .then_some(&instance["symbol_positions"])
+        })
+        .expect("root instance present");
+
+    assert_eq!(positions["sym:VCC#1"]["x"], 12.5);
+    assert_eq!(positions["sym:VCC#1"]["y"], 34.75);
+    assert_eq!(positions["sym:VCC#1"]["rotation"], 90);
+}
+
+#[test]
 fn test_netlist_hierarchical_board_with_positions() {
     let mut sandbox = Sandbox::new();
     sandbox

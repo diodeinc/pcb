@@ -10,6 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- Preserve legacy schematic net-symbol positions and require external power IOs to have a net symbol or hierarchical label.
 - Complete the E48 and E192 standard value tables used by `e48()` and `e192()`.
 - `pcb build --config` now rejects unknown root configuration keys.
 

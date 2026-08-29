@@ -256,7 +256,8 @@ pub fn inspect_schematic(
     document: &SchDocument,
     netlist: &Schematic,
 ) -> anyhow::Result<ConnectivityInspection> {
-    let expected = expected_reconcilable_connectivity(document, netlist)?;
+    let mut expected = expected_reconcilable_connectivity(document, netlist)?;
+    add_symbol_port_fallbacks(document, netlist, &mut expected)?;
     let physical = observed_reconcilable_connectivity(document, netlist)?;
     let analysis = analyze_connectivity(&expected, &physical.graph);
     let issues = analysis
@@ -271,6 +272,50 @@ pub fn inspect_schematic(
         physical,
         issues,
     })
+}
+
+fn add_symbol_port_fallbacks(
+    document: &SchDocument,
+    netlist: &Schematic,
+    expected: &mut ConnectivityGraph,
+) -> anyhow::Result<()> {
+    let Some(root) = &netlist.root_ref else {
+        return Ok(());
+    };
+    let ports = crate::root_interface::symbol_ports_by_net(netlist, root)?;
+    for (net_name, interface_names) in ports {
+        let root_items = document
+            .pages
+            .iter()
+            .filter(|page| document.root_page_ids.contains(&page.id))
+            .flat_map(|page| &page.items)
+            .collect::<Vec<_>>();
+        let has_net_symbol = root_items.iter().any(|item| {
+            matches!(item, SchItem::Symbol(symbol)
+                if symbol.field_value("Path").is_none()
+                    && symbol.field_value("Value") == Some(net_name.as_str()))
+        });
+        let Some(group) = expected
+            .groups
+            .iter_mut()
+            .find(|group| logical_name(group) == Some(net_name.as_str()))
+        else {
+            continue;
+        };
+        for interface_name in interface_names {
+            let has_hierarchical_label = root_items.iter().any(|item| {
+                matches!(item, SchItem::Label(label)
+                    if matches!(label.kind, crate::LabelKind::Hierarchical { .. })
+                        && label.text == interface_name)
+            });
+            if !has_net_symbol || has_hierarchical_label {
+                group.terminals.insert(Terminal::InterfacePort {
+                    name: interface_name,
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn issue_context(
