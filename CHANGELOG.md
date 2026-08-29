@@ -81,6 +81,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Return JSON-compatible WASM evaluation results with JavaScript numbers and `null`.
 - Include standalone board outlines in Gerber exports.
 - Inherit symbol descriptions for non-generic BOM components.
+- Keep generated symbol fields correctly justified when their parent symbol is rotated or mirrored.
 - Require external power IOs to have a net symbol or hierarchical label.
 - Complete the E48 and E192 standard value tables used by `e48()` and `e192()`.
 - `pcb build --config` now rejects unknown root configuration keys.
