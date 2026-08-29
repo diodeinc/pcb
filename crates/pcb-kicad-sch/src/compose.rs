@@ -223,6 +223,7 @@ pub(crate) fn reconcile_document(
             &net_symbol_specs,
             default_page,
             &projected_nets,
+            complete,
         )?;
     }
 
@@ -269,6 +270,7 @@ pub(crate) fn reconcile_document(
             &net_symbol_specs,
             default_page,
             plan,
+            complete,
         )?;
     }
 
@@ -1892,6 +1894,7 @@ fn apply_connectivity_repair(
     net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
     root_page: usize,
     plan: ConnectivityRepairPlan,
+    prefer_hierarchy: bool,
 ) -> Result<()> {
     remove_items(document, &plan.removals)?;
     for location in &plan.relocate_symbols {
@@ -1904,6 +1907,7 @@ fn apply_connectivity_repair(
         net_symbol_specs,
         root_page,
         &plan.reconnect_nets,
+        prefer_hierarchy,
     )?;
     Ok(())
 }
@@ -2046,6 +2050,7 @@ fn add_connectivity_drivers(
     net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
     root_page: usize,
     target_nets: &BTreeSet<String>,
+    prefer_hierarchy: bool,
 ) -> Result<()> {
     let anchors_by_net = connectivity_targets(netlist, placed, target_nets)?;
     let page_contexts = page_driver_contexts(document, netlist, root_page)?;
@@ -2062,6 +2067,7 @@ fn add_connectivity_drivers(
         placed,
         net_symbol_specs,
         &page_contexts,
+        prefer_hierarchy,
     )?;
     ensure_symbol_root_endpoints(
         document,
@@ -2127,12 +2133,12 @@ fn sync_net_drivers(
     placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
     net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
     page_contexts: &PageDriverContexts,
+    prefer_hierarchy: bool,
 ) -> Result<()> {
     // Adopt any exact existing contextual driver. For an unnamed island, add
     // a power symbol, current-sheet hierarchical endpoint, or local label in
     // that order without treating a deterministic UUID as ownership.
     let net_symbol_runs = plan_net_symbol_runs(document, targets_by_net, net_symbol_specs, placed)?;
-    let observed = reduce_with_provenance(document, PinVisibility::VisibleOnly)?;
 
     for run in net_symbol_runs {
         let spec = &net_symbol_specs[&run.net_name];
@@ -2159,17 +2165,54 @@ fn sync_net_drivers(
         }
     }
 
+    let observed = reduce_with_provenance(document, PinVisibility::VisibleOnly)?;
+    sync_label_drivers(
+        document,
+        targets_by_net,
+        net_symbol_specs,
+        page_contexts,
+        &observed,
+        prefer_hierarchy,
+    )?;
+    if prefer_hierarchy {
+        // Full reconciliation first gives every known interface path its
+        // narrow hierarchical driver. Only a genuinely unresolved
+        // cross-page split falls back to the repair strategy of global labels.
+        let observed = reduce_with_provenance(document, PinVisibility::VisibleOnly)?;
+        sync_label_drivers(
+            document,
+            targets_by_net,
+            net_symbol_specs,
+            page_contexts,
+            &observed,
+            false,
+        )?;
+    }
+
+    Ok(())
+}
+
+fn sync_label_drivers(
+    document: &mut SchDocument,
+    targets_by_net: &BTreeMap<String, Vec<PinTarget>>,
+    net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
+    page_contexts: &PageDriverContexts,
+    observed: &PhysicalConnectivity,
+    prefer_hierarchy: bool,
+) -> Result<()> {
     for (net_name, targets) in targets_by_net {
         if net_symbol_specs.contains_key(net_name) {
             continue;
         }
-        for driver_island in net_driver_islands(document, targets, &observed)? {
+        for driver_island in net_driver_islands(document, targets, observed)? {
             let target = &targets[driver_island.canonical_target];
             let provenance = &observed.islands[&driver_island.island];
             let interface_names = page_contexts
                 .get(&target.page_index)
                 .and_then(|context| context.get(net_name));
-            let has_driver = if driver_island.needs_global {
+            let globally_bridge =
+                driver_island.needs_global && (!prefer_hierarchy || interface_names.is_none());
+            let has_driver = if globally_bridge {
                 island_has_global_driver(document, target.page_index, provenance, net_name)
             } else if let Some(interface_names) = interface_names {
                 island_has_hierarchical_driver(
@@ -2187,12 +2230,12 @@ fn sync_net_drivers(
             let id = available_deterministic_id(document, &target.label_key(net_name));
             let mut label = driver_label(
                 net_name,
-                if driver_island.needs_global {
+                if globally_bridge {
                     None
                 } else {
                     interface_names
                 },
-                driver_island.needs_global,
+                globally_bridge,
                 id,
                 target.point,
             );

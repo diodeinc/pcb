@@ -443,6 +443,32 @@ fn generated_hierarchy_connects_sheet_ports_without_label_bridges() {
 }
 
 #[test]
+fn complete_reconciliation_prefers_hierarchy_for_cross_page_interface_nets() {
+    let netlist = common::compile_fixture("hierarchy", "root_multi_island_interface.zen");
+    let document = plan_reconciliation(None, &netlist, "MultiIslandInterface.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+
+    let temp_labels = document
+        .pages
+        .iter()
+        .flat_map(|page| &page.items)
+        .filter_map(|item| match item {
+            SchItem::Label(label) if label.text == "TEMP" => Some(label),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(temp_labels.len() >= 2, "labels={temp_labels:#?}");
+    assert!(
+        temp_labels
+            .iter()
+            .all(|label| matches!(label.kind, LabelKind::Hierarchical { .. })),
+        "labels={temp_labels:#?}"
+    );
+}
+
+#[test]
 fn missing_symbols_use_attached_net_symbol_orientation() {
     let mut netlist = common::compile_fixture("analysis", "initial_orientation.zen");
     netlist.net_mut("VCC_LIKE_NAME").unwrap().properties.insert(

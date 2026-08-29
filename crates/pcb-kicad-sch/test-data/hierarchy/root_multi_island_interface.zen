@@ -1,0 +1,15 @@
+"""Root interface net shared by several parent islands and one child page."""
+
+Project(name="MultiIslandInterface", path="kicad", layout=False)
+
+Filter = Module("filter.zen")
+Resistor = Module("@stdlib/generics/Resistor.zen")
+
+TEMP = io("TEMP", Net)
+RETURN_A = Net("RETURN_A")
+RETURN_B = Net("RETURN_B")
+SINK = Net("SINK")
+
+Resistor(name="R1", value="1kohms", package="0402", P1=TEMP, P2=RETURN_A)
+Resistor(name="R2", value="2kohms", package="0402", P1=TEMP, P2=RETURN_B)
+Filter(name="CHILD", resistance="3kohms", INPUT=TEMP, OUTPUT=SINK)
