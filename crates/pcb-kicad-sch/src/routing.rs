@@ -160,6 +160,7 @@ fn route_candidate(
     policy: RoutingPolicy,
 ) -> Result<Option<RouteOutcome>> {
     let mut input = RouterInput::new();
+    let mut ports = BTreeMap::<String, Port>::new();
     let mut connector_specs = BTreeMap::new();
     let mut pages_with_routes = BTreeSet::new();
 
@@ -196,8 +197,18 @@ fn route_candidate(
             input.add_existing_segment(segment);
         }
         for planned in page_connectors {
-            input.add_port(planned.source.clone());
-            input.add_port(planned.target.clone());
+            for port in [&planned.source, &planned.target] {
+                if let Some(existing) = ports.get(&port.id) {
+                    if !router_points_coincide(existing.position, port.position)
+                        || existing.visibility != port.visibility
+                        || existing.obstacle_id != port.obstacle_id
+                    {
+                        anyhow::bail!("route port '{}' has conflicting geometry", port.id);
+                    }
+                } else {
+                    ports.insert(port.id.clone(), port.clone());
+                }
+            }
             input.add_connector(Connector::with_net(
                 &planned.id,
                 &planned.source.id,
@@ -209,6 +220,9 @@ fn route_candidate(
     }
     if connector_specs.is_empty() {
         return Ok(None);
+    }
+    for port in ports.into_values() {
+        input.add_port(port);
     }
 
     let output = OrthoRouter::with_defaults().route(&input);
@@ -623,15 +637,23 @@ fn plan_net_connections(
             continue;
         }
         let id = format!("route:{page_id}:{net_name}:{left}:{right}");
+        let source_point = PointKey::from_point(closest.from.point);
+        let target_point = PointKey::from_point(closest.to.point);
         let source = route_port(
             page_index,
-            format!("{id}:source"),
+            format!(
+                "route-port:{page_id}:{net_name}:{left}:{}:{}",
+                source_point.x, source_point.y
+            ),
             &closest.from,
             closest.to.point,
         );
         let target = route_port(
             page_index,
-            format!("{id}:target"),
+            format!(
+                "route-port:{page_id}:{net_name}:{right}:{}:{}",
+                target_point.x, target_point.y
+            ),
             &closest.to,
             closest.from.point,
         );
@@ -1037,6 +1059,7 @@ mod tests {
         ];
         let connectors = plan_net_connections(0, "page", "NET", &groups, RoutingPolicy::default());
         assert_eq!(connectors.len(), groups.len() - 1);
+        assert_eq!(connectors[0].target.id, connectors[1].source.id);
     }
 
     #[test]

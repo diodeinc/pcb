@@ -8,3 +8,4 @@ POWER = io(Power("POWER"))
 SIGNAL = Net("SIGNAL")
 
 Resistor(name="R1", value="1kohms", package="0402", P1=POWER, P2=SIGNAL)
+Resistor(name="R2", value="2kohms", package="0402", P1=POWER, P2=SIGNAL)

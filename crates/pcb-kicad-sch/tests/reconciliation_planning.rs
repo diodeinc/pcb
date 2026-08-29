@@ -5,6 +5,7 @@ use std::collections::BTreeSet;
 use pcb_kicad_sch::{
     Label, Point, SchDocument, SchItem, Symbol,
     analysis::{SchematicIssue, inspect_schematic},
+    connectivity::ConnectivityItemRef,
     reconcile::{DocumentEdit, plan_component_placement, plan_reconciliation},
     routing::{RoutingPolicy, plan_wire_reroute},
 };
@@ -179,7 +180,7 @@ fn page_patches_are_safe_and_compose_in_either_order() {
 fn reconciliation_routes_to_an_existing_power_symbol_instead_of_duplicating_it() {
     let netlist = common::compile_fixture("hierarchy", "root_symbol_interface.zen");
     let mut document = generated_document(&netlist, "ExistingPowerSymbol.kicad_sch");
-    let (power_id, original_at) = document.pages[0]
+    let (power_id, power_at) = document.pages[0]
         .items
         .iter()
         .find_map(|item| match item {
@@ -189,21 +190,34 @@ fn reconciliation_routes_to_an_existing_power_symbol_instead_of_duplicating_it()
             _ => None,
         })
         .expect("generated POWER symbol");
-    let moved_at = Point::new(original_at.x + 10.16, original_at.y);
+    let inspection = inspect_schematic(&document, &netlist).unwrap();
+    let power_wire_ids = inspection.analysis.nets["POWER"]
+        .islands
+        .iter()
+        .flat_map(|island| &inspection.physical.islands[island].items)
+        .filter_map(|item| match item {
+            ConnectivityItemRef::Wire { id, .. } => Some(id.clone()),
+            _ => None,
+        })
+        .collect::<BTreeSet<_>>();
+    assert!(!power_wire_ids.is_empty());
+    document.pages[0]
+        .items
+        .retain(|item| !matches!(item, SchItem::Wire(wire) if power_wire_ids.contains(&wire.id)));
+    assert_eq!(
+        inspect_schematic(&document, &netlist)
+            .unwrap()
+            .analysis
+            .nets["POWER"]
+            .connected_islands
+            .len(),
+        3
+    );
     let wire_count_before = document.pages[0]
         .items
         .iter()
         .filter(|item| matches!(item, SchItem::Wire(_)))
         .count();
-    let power = document.pages[0]
-        .items
-        .iter_mut()
-        .find_map(|item| match item {
-            SchItem::Symbol(symbol) if symbol.id == power_id => Some(symbol),
-            _ => None,
-        })
-        .unwrap();
-    move_symbol(power, moved_at);
 
     let repaired = plan_reconciliation(Some(&document), &netlist, "ExistingPowerSymbol.kicad_sch")
         .unwrap()
@@ -219,7 +233,7 @@ fn reconciliation_routes_to_an_existing_power_symbol_instead_of_duplicating_it()
         .collect::<Vec<_>>();
     assert_eq!(power_symbols.len(), 1);
     assert_eq!(power_symbols[0].id, power_id);
-    assert_eq!(power_symbols[0].at, moved_at);
+    assert_eq!(power_symbols[0].at, power_at);
     assert!(
         repaired.pages[0]
             .items

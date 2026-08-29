@@ -523,7 +523,9 @@ fn complete_reconciliation_prefers_hierarchy_for_cross_page_interface_nets() {
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert!(temp_labels.len() >= 2, "labels={temp_labels:#?}");
+    // Parent-page islands route to the shared sheet pin, so the root needs one
+    // TEMP endpoint; the child page exposes its module-local INPUT separately.
+    assert_eq!(temp_labels.len(), 1, "labels={temp_labels:#?}");
     assert!(
         temp_labels
             .iter()
