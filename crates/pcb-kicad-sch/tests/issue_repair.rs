@@ -151,6 +151,7 @@ fn added_component_batch_docks_without_moving_existing_symbols() {
     let all = managed_symbol_positions(&repaired);
 
     assert_eq!(all.len(), 6);
+    assert_eq!(repaired.pages[0].paper, document.pages[0].paper);
     for (path, at) in &existing {
         assert_eq!(all[path], *at, "existing symbol {path} moved");
     }
