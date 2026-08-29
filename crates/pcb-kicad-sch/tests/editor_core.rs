@@ -114,7 +114,9 @@ fn parallel_capacitors_form_one_regular_wired_bank() {
     assert_eq!(bank.len(), 3);
     assert_eq!(bank[0].1.y, bank[1].1.y);
     assert_eq!(bank[1].1.y, bank[2].1.y);
-    assert_eq!(bank[1].1.x - bank[0].1.x, bank[2].1.x - bank[1].1.x);
+    let first_spacing = bank[1].1.x - bank[0].1.x;
+    let second_spacing = bank[2].1.x - bank[1].1.x;
+    assert!((first_spacing - second_spacing).abs() <= 1.0e-9);
 
     for (net_name, expected) in [("VCC", 1), ("GROUND", 2)] {
         assert_eq!(
