@@ -421,6 +421,9 @@ fn missing_symbols_use_attached_net_symbol_orientation() {
     // orientation; both cases retain the deterministic default.
     assert_eq!(rotation("R_TIED.R"), pcb_kicad_sch::Rotation::Deg0);
     assert_eq!(rotation("R_NONE.R"), pcb_kicad_sch::Rotation::Deg0);
+    // Larger symbols retain the orientation authored by their library even
+    // when every attached net symbol would favor the same rotation.
+    assert_eq!(rotation("U_LARGE"), pcb_kicad_sch::Rotation::Deg0);
 }
 
 #[test]

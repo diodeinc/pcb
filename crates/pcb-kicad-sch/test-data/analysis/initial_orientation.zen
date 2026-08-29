@@ -4,11 +4,13 @@ Project(name="InitialOrientation", path="kicad", layout=False)
 
 Resistor = Module("@stdlib/generics/Resistor.zen")
 
+SIDE_DRIVER = Ground("VCC_LIKE_NAME")
+
 Resistor(
     name="R_SINGLE",
     value="1kohms",
     package="0402",
-    P1=Ground("VCC_LIKE_NAME"),
+    P1=SIDE_DRIVER,
     P2=Net("SINGLE_SIGNAL"),
 )
 Resistor(
@@ -31,4 +33,16 @@ Resistor(
     package="0402",
     P1=Net("NONE_A"),
     P2=Net("NONE_B"),
+)
+
+Component(
+    name="U_LARGE",
+    footprint="Package_DIP:DIP-8_W7.62mm",
+    symbol=Symbol(library="large_symbol.kicad_sym"),
+    pins={
+        "A": SIDE_DRIVER,
+        "B": SIDE_DRIVER,
+        "C": SIDE_DRIVER,
+    },
+    skip_bom=True,
 )
