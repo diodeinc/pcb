@@ -273,6 +273,14 @@ fn property_string<'v>(properties_map: &SmallMap<String, Value<'v>>, key: &str) 
         .and_then(|v| v.unpack_str().and_then(non_empty_string))
 }
 
+fn first_property_string<'v>(
+    properties_map: &SmallMap<String, Value<'v>>,
+    keys: &[&str],
+) -> Option<String> {
+    keys.iter()
+        .find_map(|key| property_string(properties_map, key))
+}
+
 fn non_empty_string(value: &str) -> Option<String> {
     if value.trim().is_empty() {
         None
@@ -2122,37 +2130,26 @@ where
                 symbol_datasheet.as_deref(),
             );
 
-            // If description is not explicitly provided, try to get it from properties, then symbol properties
-            // Skip empty strings - prefer None over empty
+            // Consolidate ctype: check kwarg, then legacy properties (type, Type)
+            let final_ctype = ctype
+                .and_then(|v| v.unpack_str().and_then(non_empty_string))
+                .or_else(|| first_property_string(&properties_map, &["type", "Type"]));
+
+            let symbol_description = final_symbol
+                .properties()
+                .get("Description")
+                .and_then(|value| non_empty_string(value));
+            let value_description = first_property_string(&properties_map, &["value", "Value"]);
+            // Typed components use their parameterized value as the useful BOM description.
+            let fallback_description = if final_ctype.is_some() {
+                value_description.or(symbol_description)
+            } else {
+                symbol_description.or(value_description)
+            };
             let final_description = description_val
-                .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
-                .or_else(|| {
-                    properties_map
-                        .get("description")
-                        .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
-                })
-                .or_else(|| {
-                    properties_map
-                        .get("Description")
-                        .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
-                })
-                .or_else(|| {
-                    properties_map
-                        .get("value")
-                        .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
-                })
-                .or_else(|| {
-                    properties_map
-                        .get("Value")
-                        .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
-                })
-                .or_else(|| {
-                    final_symbol
-                        .properties()
-                        .get("Description")
-                        .filter(|s| !s.is_empty())
-                        .map(|s| s.to_owned())
-                });
+                .and_then(|v| v.unpack_str().and_then(non_empty_string))
+                .or_else(|| first_property_string(&properties_map, &["description", "Description"]))
+                .or(fallback_description);
 
             // Consolidate DNP: module dnp (highest priority), then kwarg, then component properties
             let final_dnp = if module_has_dnp {
@@ -2189,20 +2186,6 @@ where
                         .map(|s| s.to_owned())
                 })
                 .unwrap_or_else(|| "U".to_owned());
-
-            // Consolidate ctype: check kwarg, then legacy properties (type, Type)
-            let final_ctype = ctype
-                .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
-                .or_else(|| {
-                    properties_map
-                        .get("type")
-                        .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
-                })
-                .or_else(|| {
-                    properties_map
-                        .get("Type")
-                        .and_then(|v| v.unpack_str().map(|s| s.to_owned()))
-                });
 
             remove_consolidated_component_properties(&mut properties_map);
 
