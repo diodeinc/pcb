@@ -17,6 +17,7 @@ pub mod identity;
 pub mod kicad;
 pub mod model;
 mod net_symbols;
+mod placement;
 pub mod reconcile;
 mod repair;
 mod root_interface;

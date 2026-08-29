@@ -84,6 +84,60 @@ fn reconciliation_drives_each_physical_pin_of_a_logical_terminal() {
 }
 
 #[test]
+fn parallel_capacitors_form_one_regular_wired_bank() {
+    let netlist = common::compile_fixture("analysis", "capacitor_bank.zen");
+    let document = plan_reconciliation(None, &netlist, "CapacitorBank.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+
+    assert!(
+        inspect_schematic(&document, &netlist)
+            .unwrap()
+            .analysis
+            .is_equivalent()
+    );
+    let page = &document.pages[0];
+    let mut bank = page
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            SchItem::Symbol(symbol)
+                if matches!(symbol.field_value("Path"), Some("C1.C" | "C2.C" | "C3.C")) =>
+            {
+                Some((symbol.field_value("Path").unwrap(), symbol.at))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    bank.sort_by_key(|(path, _)| *path);
+    assert_eq!(bank.len(), 3);
+    assert_eq!(bank[0].1.y, bank[1].1.y);
+    assert_eq!(bank[1].1.y, bank[2].1.y);
+    assert_eq!(bank[1].1.x - bank[0].1.x, bank[2].1.x - bank[1].1.x);
+
+    for (net_name, expected) in [("VCC", 1), ("GROUND", 2)] {
+        assert_eq!(
+            page.items
+                .iter()
+                .filter(|item| matches!(
+                    item,
+                    SchItem::Symbol(symbol)
+                        if symbol.field_value("Path").is_none()
+                            && symbol.field_value("Value") == Some(net_name)
+                ))
+                .count(),
+            expected,
+            "the shared bank rail should need one {net_name} symbol; C4 needs its own GROUND"
+        );
+    }
+
+    let unchanged =
+        plan_reconciliation(Some(&document), &netlist, "CapacitorBank.kicad_sch").unwrap();
+    assert!(unchanged.is_empty(), "{:#?}", unchanged.edits());
+}
+
+#[test]
 fn generated_net_symbols_form_a_wired_staircase() {
     let netlist = common::compile_fixture("net_symbol_staircase", "root.zen");
     let document = plan_reconciliation(None, &netlist, "NetSymbolStaircase.kicad_sch")

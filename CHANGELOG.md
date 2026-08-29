@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- Generate compact grid-based schematic placement blocks that account for rendered fields and group parallel capacitors into shared wired banks.
+
 ### Fixed
 
 - Fetch remote tags before `pcb publish` determines a board version bump.

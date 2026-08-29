@@ -247,11 +247,15 @@ fn materialize_test_stdlib(workspace: &Path) {
     let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../lib/std");
     for relative in [
         "pcb.toml",
+        "kicad-symbols/Device.kicad_symdir/C_Small.kicad_sym",
         "kicad-symbols/Device.kicad_symdir/R_Small.kicad_sym",
         "kicad-symbols/power.kicad_symdir/GND.kicad_sym",
         "kicad-symbols/power.kicad_symdir/VCC.kicad_sym",
+        "kicad-footprints/Capacitor_SMD.pretty/C_0402_1005Metric.kicad_mod",
+        "kicad-footprints/Capacitor_SMD.pretty/C_0603_1608Metric.kicad_mod",
         "kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod",
         "kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod",
+        "generics/spice/Capacitor.lib",
         "generics/spice/Resistor.lib",
     ] {
         let destination = target.join(relative);

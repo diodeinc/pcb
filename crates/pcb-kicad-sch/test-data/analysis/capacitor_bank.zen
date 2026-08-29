@@ -1,0 +1,16 @@
+"""Default-placement regression design with one parallel capacitor bank."""
+
+Project(name="CapacitorBank", path="kicad", layout=False)
+
+Capacitor = Module("@stdlib/generics/Capacitor.zen")
+
+VCC = Power("VCC")
+GROUND = Ground("GROUND")
+SIGNAL = Net("SIGNAL")
+
+Capacitor(name="C1", value="100nF", package="0402", P1=VCC, P2=GROUND)
+Capacitor(name="C2", value="100nF", package="0402", P1=VCC, P2=GROUND)
+Capacitor(name="C3", value="100nF", package="0402", P1=VCC, P2=GROUND)
+
+# This capacitor has a different net pair and must remain a fallback block.
+Capacitor(name="C4", value="100nF", package="0402", P1=SIGNAL, P2=GROUND)
