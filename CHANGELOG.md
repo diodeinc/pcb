@@ -10,7 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
-- Generate compact grid-based schematic placement blocks that account for rendered fields, group parallel capacitors into shared wired banks, and limit net-aware rotation to two-terminal symbols.
+- Generate compact symbol-anchor-aligned schematic grids that account for rendered fields, group parallel capacitors into shared wired banks, and limit net-aware rotation to two-terminal symbols.
 
 ### Fixed
 
