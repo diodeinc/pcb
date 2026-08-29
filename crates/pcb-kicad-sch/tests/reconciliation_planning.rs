@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use pcb_kicad_sch::{
     Label, Point, SchDocument, SchItem, Symbol,
     analysis::{SchematicIssue, inspect_schematic},
-    reconcile::{DocumentEdit, plan_reconciliation},
+    reconcile::{DocumentEdit, plan_component_placement, plan_reconciliation},
     routing::{RoutingPolicy, plan_wire_reroute},
 };
 use pcb_sch::Schematic;
@@ -71,6 +71,61 @@ fn one_missing_symbol_is_one_applicable_patch() {
         plan_reconciliation(Some(&repaired), &netlist, "SingleMissing.kicad_sch")
             .unwrap()
             .is_empty()
+    );
+}
+
+#[test]
+fn component_placement_selects_one_of_two_missing_symbols_on_the_same_page() {
+    let netlist = common::compile_fixture("analysis", "simple.zen");
+    let document = generated_document(&netlist, "TwoMissing.kicad_sch");
+    let mut missing = document.clone();
+    missing.pages[0].items.retain(
+        |item| !matches!(item, SchItem::Symbol(symbol) if symbol.field_value("Path").is_some()),
+    );
+    let inspection = inspect_schematic(&missing, &netlist).unwrap();
+    let missing_slots = inspection
+        .issues
+        .iter()
+        .filter_map(|issue| match &issue.issue {
+            SchematicIssue::MissingSymbol { slot } => Some(slot.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(missing_slots.len(), 2);
+
+    let plan = plan_reconciliation(Some(&missing), &netlist, "TwoMissing.kicad_sch").unwrap();
+    assert_eq!(plan.patches().len(), 1);
+    let repaired = plan.apply_one(Some(&missing), 0).unwrap();
+    assert!(
+        missing_slots
+            .iter()
+            .all(|slot| managed_symbol(&repaired, slot.component_path()).id == slot.symbol_id())
+    );
+
+    let first_patch = plan_component_placement(&missing, &netlist, &missing_slots[0]).unwrap();
+    let first = first_patch.apply(Some(&missing)).unwrap();
+    assert_eq!(
+        managed_symbol(&first, missing_slots[0].component_path()).id,
+        missing_slots[0].symbol_id()
+    );
+    assert!(first.pages.iter().flat_map(|page| &page.items).all(|item| {
+        !matches!(item, SchItem::Symbol(symbol) if symbol.field_value("Path") == Some(missing_slots[1].component_path()))
+    }));
+    let first_inspection = inspect_schematic(&first, &netlist).unwrap();
+    assert!(!first_inspection.issues.iter().any(|issue| {
+        matches!(&issue.issue, SchematicIssue::MissingSymbol { slot } if slot == &missing_slots[0])
+    }));
+    assert!(first_inspection.issues.iter().any(|issue| {
+        matches!(&issue.issue, SchematicIssue::MissingSymbol { slot } if slot == &missing_slots[1])
+    }));
+
+    let second_patch = plan_component_placement(&first, &netlist, &missing_slots[1]).unwrap();
+    let complete = second_patch.apply(Some(&first)).unwrap();
+    assert!(
+        inspect_schematic(&complete, &netlist)
+            .unwrap()
+            .analysis
+            .is_equivalent()
     );
 }
 

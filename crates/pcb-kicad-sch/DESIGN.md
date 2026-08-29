@@ -41,6 +41,12 @@ coupled edits remain in one patch. `apply_one` supports an editor preview and
 do not retain issue selections or before/after inspection snapshots, and the
 planner does not read or write files.
 
+`reconcile::plan_component_placement` is the sole narrow exception for the
+interactive PLACE command: it projects one explicitly selected missing symbol
+with the normal hierarchy, placement, and connectivity strategies while
+leaving other missing symbols untouched. It is not a generic issue-selection
+planner and accepts no page or position override.
+
 Physical routing is part of this shared core rather than a second editor repair
 model. Reconciliation extracts endpoints from physical islands, routes every
 eligible net through the shared orthogonal router, preserves existing segments,

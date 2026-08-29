@@ -6,7 +6,7 @@ use anyhow::{Context, Result, bail};
 use pcb_sch::Schematic;
 
 use crate::{
-    SchDocument, SchPage,
+    SchDocument, SchPage, SymbolSlotKey,
     analysis::{ConnectivityInspection, SchematicIssue, SchematicIssueKey, inspect_schematic},
     component_slots, compose,
 };
@@ -176,6 +176,65 @@ pub fn plan_reconciliation(
         bail!("reconciliation patches do not reproduce their verified document");
     }
     Ok(plan)
+}
+
+/// Place one explicitly selected missing component using PCB's normal
+/// hierarchy, placement, and connectivity strategies.
+///
+/// This is the narrow interactive PLACE operation. It deliberately leaves all
+/// other existing issues untouched and is not an issue-scoped reconciliation
+/// planner.
+pub fn plan_component_placement(
+    document: &SchDocument,
+    netlist: &Schematic,
+    slot: &SymbolSlotKey,
+) -> Result<DocumentPatch> {
+    component_slots::validate_symbol_library_versions(netlist)?;
+    let inspection_before = inspect_schematic(document, netlist)?;
+    let missing_key = SchematicIssueKey::MissingSymbol(slot.clone());
+    if !inspection_before
+        .issues
+        .iter()
+        .any(|issue| issue.key == missing_key)
+    {
+        bail!("component slot '{slot}' is not currently missing");
+    }
+
+    let desired = compose::place_component(document, netlist, slot)?;
+    let inspection_after = inspect_schematic(&desired, netlist)?;
+    if inspection_after
+        .issues
+        .iter()
+        .any(|issue| issue.key == missing_key)
+    {
+        bail!("component placement did not add slot '{slot}'");
+    }
+    let baseline = inspection_before
+        .issues
+        .iter()
+        .map(|issue| coarse_issue_key(&issue.key))
+        .collect::<BTreeSet<_>>();
+    let new_issues = inspection_after
+        .issues
+        .iter()
+        .filter(|issue| !baseline.contains(&coarse_issue_key(&issue.key)))
+        .collect::<Vec<_>>();
+    if !new_issues.is_empty() {
+        bail!(
+            "component placement would introduce unrelated issues: {}",
+            issue_summaries(new_issues.iter().map(|issue| &issue.issue))
+        );
+    }
+
+    let edits = document_edits(document, &desired)?;
+    if edits.is_empty() {
+        bail!("component placement for slot '{slot}' produced no edits");
+    }
+    let patch = DocumentPatch::new(edits);
+    if patch.apply(Some(document))? != desired {
+        bail!("component placement patch does not reproduce its verified document");
+    }
+    Ok(patch)
 }
 
 fn issue_summaries<'a>(issues: impl Iterator<Item = &'a SchematicIssue>) -> String {

@@ -90,32 +90,7 @@ pub(crate) fn reconcile_document(
         .cloned()
         .collect::<BTreeSet<_>>();
 
-    // Hierarchy ownership comes from every managed symbol in the document,
-    // including symbols that no longer exist in the target netlist. A stale
-    // symbol still proves that its module already has a schematic page.
-    let existing_component_pages = existing_slots.iter().fold(
-        BTreeMap::<String, BTreeSet<usize>>::new(),
-        |mut pages, (slot, candidates)| {
-            pages
-                .entry(slot.component_path().to_string())
-                .or_default()
-                .extend(candidates.iter().map(|candidate| candidate.page_index));
-            pages
-        },
-    );
-    let linked_modules = linked_modules(netlist)?;
-    let existing_page_ids = document
-        .pages
-        .iter()
-        .map(|page| page.id.clone())
-        .collect::<Vec<_>>();
-    let hierarchy = hierarchy::plan(
-        linked_modules,
-        existing_component_pages,
-        &existing_page_ids,
-        default_page,
-        document.pages.len(),
-    )?;
+    let hierarchy = plan_hierarchy(&document, netlist, &existing_slots, default_page, None)?;
     materialize_hierarchy(&mut document, netlist, &hierarchy)?;
 
     let retained_power_symbols = power_symbol_locations(&document)?;
@@ -208,6 +183,140 @@ pub(crate) fn reconcile_document(
 
     prune_unused_symbol_definitions(&mut document);
     Ok(document)
+}
+
+/// Project one explicitly selected missing component without reconciling the
+/// document's other issues. This uses the same hierarchy, placement, routing,
+/// and driver materialization as global reconciliation.
+pub(crate) fn place_component(
+    existing: &SchDocument,
+    netlist: &Schematic,
+    slot: &SymbolSlotKey,
+) -> Result<SchDocument> {
+    if existing.pages.is_empty() {
+        bail!("KiCad schematic project has no pages");
+    }
+    let mut document = existing.clone();
+    let preserved_page_count = document.pages.len();
+    let default_page = document
+        .root_page_ids
+        .iter()
+        .find_map(|id| document.pages.iter().position(|page| &page.id == id))
+        .context("KiCad schematic project has no loaded root page")?;
+    let expected_slots = component_slots::component_symbol_slots(netlist)?
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    if !expected_slots.contains(slot) {
+        bail!("component slot '{slot}' is absent from the netlist");
+    }
+
+    let existing_slots = existing_slot_locations(&document);
+    if existing_slots.contains_key(slot) {
+        bail!("component slot '{slot}' is already placed");
+    }
+    let project_slots = BTreeSet::from([slot.clone()]);
+    let hierarchy = plan_hierarchy(
+        &document,
+        netlist,
+        &existing_slots,
+        default_page,
+        Some(&project_slots),
+    )?;
+    materialize_hierarchy(&mut document, netlist, &hierarchy)?;
+
+    let instances = component_instances(netlist)?;
+    let net_symbol_specs = net_symbols::specs(netlist)?;
+    let page_index = hierarchy.page_for_new_component(slot.component_path())?;
+    project_component_slot(
+        &mut document,
+        netlist,
+        &instances,
+        slot,
+        None,
+        page_index,
+        &net_symbol_specs,
+    )?;
+    let mut placed = placed_symbols_from_document(&document, &expected_slots)?;
+    pack_generated_symbols(
+        &mut document,
+        netlist,
+        &mut placed,
+        &project_slots,
+        &net_symbol_specs,
+        preserved_page_count,
+    )?;
+    add_hierarchy_connectivity(
+        &mut document,
+        netlist,
+        &placed,
+        &net_symbol_specs,
+        &hierarchy,
+    )?;
+
+    let all_nets = named_connected_nets(netlist)
+        .map(|net| net.name.clone())
+        .collect::<BTreeSet<_>>();
+    let reconnect_nets = connectivity_targets(netlist, &placed, &all_nets)?
+        .into_iter()
+        .filter(|(_, targets)| targets.iter().any(|target| target.slot == *slot))
+        .map(|(net_name, _)| net_name)
+        .collect();
+    apply_connectivity_repair(
+        &mut document,
+        netlist,
+        &mut placed,
+        &net_symbol_specs,
+        default_page,
+        ConnectivityRepairPlan {
+            removals: BTreeSet::new(),
+            relocate_symbols: BTreeSet::new(),
+            reconnect_nets,
+        },
+        true,
+    )?;
+    Ok(document)
+}
+
+fn plan_hierarchy(
+    document: &SchDocument,
+    netlist: &Schematic,
+    existing_slots: &BTreeMap<SymbolSlotKey, Vec<ExistingSymbol>>,
+    default_page: usize,
+    project_slots: Option<&BTreeSet<SymbolSlotKey>>,
+) -> Result<hierarchy::HierarchyPlan> {
+    // Hierarchy ownership comes from every managed symbol in the document,
+    // including symbols that no longer exist in the target netlist. A stale
+    // symbol still proves that its module already has a schematic page.
+    let existing_component_pages = existing_slots.iter().fold(
+        BTreeMap::<String, BTreeSet<usize>>::new(),
+        |mut pages, (slot, candidates)| {
+            pages
+                .entry(slot.component_path().to_string())
+                .or_default()
+                .extend(candidates.iter().map(|candidate| candidate.page_index));
+            pages
+        },
+    );
+    let mut linked_modules = linked_modules(netlist)?;
+    if let Some(project_slots) = project_slots {
+        linked_modules.retain(|module| {
+            project_slots
+                .iter()
+                .any(|slot| hierarchy::is_descendant(slot.component_path(), &module.path))
+        });
+    }
+    let existing_page_ids = document
+        .pages
+        .iter()
+        .map(|page| page.id.clone())
+        .collect::<Vec<_>>();
+    hierarchy::plan(
+        linked_modules,
+        existing_component_pages,
+        &existing_page_ids,
+        default_page,
+        document.pages.len(),
+    )
 }
 
 struct RepairTargets {
