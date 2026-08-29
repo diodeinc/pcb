@@ -274,8 +274,13 @@ fn field_text_bounds(
 fn transform_field_vector(point: Point, symbol: &Symbol, field_rotation_deg: f64) -> Point {
     let radians = field_rotation_deg.to_radians();
     let (sin, cos) = radians.sin_cos();
+    // KiCad angles rotate clockwise in page coordinates, whose Y axis points
+    // down. Apply that field-local rotation before the parent symbol matrix.
     symbol::transform_vector(
-        Point::new(point.x * cos - point.y * sin, point.x * sin + point.y * cos),
+        Point::new(
+            point.x * cos + point.y * sin,
+            -point.x * sin + point.y * cos,
+        ),
         symbol,
     )
 }
@@ -651,7 +656,7 @@ mod tests {
         assert_eq!(
             symbol.field("Reference").unwrap().justify,
             Some(FieldJustify::new(
-                Some(FieldHorizontalJustify::Right),
+                Some(FieldHorizontalJustify::Left),
                 Some(FieldVerticalJustify::Center),
             ))
         );
@@ -675,8 +680,50 @@ mod tests {
         let bounds = symbol_visual_bounds(&symbol, &definition).unwrap().unwrap();
 
         assert!(bounds.width() > bounds.height() * 5.0);
-        assert!((bounds.min_x - value_at.x).abs() < GEOMETRY_EPS_MM);
-        assert!(bounds.max_x > value_at.x);
+        assert!((bounds.max_x - value_at.x).abs() < GEOMETRY_EPS_MM);
+        assert!(bounds.min_x < value_at.x);
+    }
+
+    #[test]
+    fn field_baseline_follows_kicad_page_rotation() {
+        for (rotation, field_rotation_deg, expected_x) in [
+            (Rotation::Deg0, 0.0, 1.0),
+            (Rotation::Deg90, 90.0, -1.0),
+            (Rotation::Deg180, 0.0, -1.0),
+            (Rotation::Deg270, 90.0, 1.0),
+        ] {
+            let symbol = test_symbol(Point::default(), rotation, None);
+            let baseline =
+                transform_field_vector(Point::new(1.0, 0.0), &symbol, field_rotation_deg);
+            assert!((baseline.x - expected_x).abs() < GEOMETRY_EPS_MM);
+            assert!(baseline.y.abs() < GEOMETRY_EPS_MM);
+        }
+    }
+
+    #[test]
+    fn quarter_turn_symbol_fields_keep_their_outward_justification() {
+        let definition = SymbolDefinition::from_kicad_symbol_sexpr(
+            r#"(symbol "Test:IC"
+              (symbol "IC_1_1"
+                (rectangle (start -5 -2) (end 5 2))))"#,
+        )
+        .unwrap();
+        let mut symbol = test_symbol(Point::new(10.0, 20.0), Rotation::Deg90, None);
+
+        assert!(autoplace_symbol_fields(&mut symbol, &definition).unwrap());
+
+        for field in symbol.fields.values() {
+            assert_eq!(
+                field.justify,
+                Some(FieldJustify::new(
+                    Some(FieldHorizontalJustify::Right),
+                    Some(FieldVerticalJustify::Center),
+                ))
+            );
+            let bounds = field_text_bounds(&symbol, field, 2.0, 1.0);
+            assert!((bounds.min_x - field.at.x).abs() < GEOMETRY_EPS_MM);
+            assert!(bounds.max_x > field.at.x);
+        }
     }
 
     #[test]
