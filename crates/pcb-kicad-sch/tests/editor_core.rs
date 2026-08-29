@@ -349,6 +349,64 @@ fn root_interfaces_use_hierarchical_labels_directly_on_component_pins() {
 }
 
 #[test]
+fn interface_only_endpoints_form_one_regular_label_block() {
+    let netlist = common::compile_fixture("hierarchy", "unused_root_interface.zen");
+    let document = plan_reconciliation(None, &netlist, "UnusedRootInterface.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    let mut labels = document.pages[0]
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            SchItem::Label(label) => Some(label),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    labels.sort_by(|left, right| left.text.cmp(&right.text));
+
+    assert_eq!(labels.len(), 6);
+    assert!(
+        labels
+            .iter()
+            .all(|label| matches!(label.kind, LabelKind::Hierarchical { .. }))
+    );
+    assert!(labels.iter().all(|label| label.at.x == labels[0].at.x));
+    let row_spacing = labels[1].at.y - labels[0].at.y;
+    assert!(row_spacing > 0.0);
+    assert!(
+        labels
+            .windows(2)
+            .all(|pair| ((pair[1].at.y - pair[0].at.y) - row_spacing).abs() < 1e-9)
+    );
+    assert!(
+        inspect_schematic(&document, &netlist)
+            .unwrap()
+            .analysis
+            .is_equivalent()
+    );
+}
+
+#[test]
+fn interface_only_net_missing_its_label_reports_missing_port() {
+    let netlist = common::compile_fixture("hierarchy", "unused_root_interface.zen");
+    let mut document = plan_reconciliation(None, &netlist, "UnusedRootInterface.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    document.pages[0]
+        .items
+        .retain(|item| !matches!(item, SchItem::Label(label) if label.text == "UNUSED_3"));
+
+    let inspection = inspect_schematic(&document, &netlist).unwrap();
+    assert!(matches!(
+        inspection.analysis.issues(),
+        [SchematicIssue::MissingPort { net_name, ports, .. }]
+            if net_name == "UNUSED_3" && ports == &["UNUSED_3".to_string()]
+    ));
+}
+
+#[test]
 fn generated_hierarchy_connects_sheet_ports_without_label_bridges() {
     let netlist = common::compile_fixture("hierarchy", "root.zen");
     let document = plan_reconciliation(None, &netlist, "Hierarchy.kicad_sch")

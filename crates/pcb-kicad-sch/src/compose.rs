@@ -29,6 +29,7 @@ const SHEET_PIN_SPACING_MM: f64 = 5.08;
 const SHEET_MIN_WIDTH_MM: f64 = 50.8;
 const SHEET_MIN_HEIGHT_MM: f64 = 20.32;
 const PLACEMENT_BLOCK_GAP_CELLS: i32 = 4;
+const CONTEXT_LABEL_GAP_CELLS: i32 = 1;
 const CAPACITOR_BANK_BUS_OFFSET_CELLS: f64 = 2.0;
 
 pub(crate) fn reconcile_document(
@@ -1303,7 +1304,9 @@ fn occupy_page_items_except(
                     packer.occupy(GridRect::from_bounds(bounds));
                 }
             }
-            SchItem::Label(label) => packer.occupy(point_rect(label.at)),
+            SchItem::Label(label) => {
+                packer.occupy(GridRect::from_bounds(label_visual_bounds(label)))
+            }
             SchItem::Wire(wire) => {
                 let bounds = field_autoplace::Bounds::from_points([wire.a, wire.b])
                     .expect("wire has two endpoints");
@@ -1369,12 +1372,25 @@ fn component_envelope(
 }
 
 fn net_label_bounds(net_name: &str, target: &PinTarget) -> field_autoplace::Bounds {
+    estimated_label_bounds(target.point, target.spin, estimated_label_width(net_name))
+}
+
+fn label_visual_bounds(label: &Label) -> field_autoplace::Bounds {
+    let length = match label.kind {
+        LabelKind::Local => estimated_label_width(&label.text),
+        LabelKind::Global { .. } | LabelKind::Hierarchical { .. } | LabelKind::Directive { .. } => {
+            estimated_shaped_label_width(&label.text)
+        }
+    };
+    estimated_label_bounds(label.at, label.spin, length)
+}
+
+fn estimated_label_bounds(at: Point, spin: LabelSpin, length: f64) -> field_autoplace::Bounds {
     let text_height = crate::TextEffects::default().font_size.y.abs();
-    let length = estimated_label_width(net_name);
     let half_height = text_height * 0.5;
     // Extend `length` along the spin direction, +/- half a text height on the
     // perpendicular axis.
-    let (dx, dy): (f64, f64) = match target.spin {
+    let (dx, dy): (f64, f64) = match spin {
         LabelSpin::Left => (-1.0, 0.0),
         LabelSpin::Right => (1.0, 0.0),
         LabelSpin::Up => (0.0, -1.0),
@@ -1382,11 +1398,8 @@ fn net_label_bounds(net_name: &str, target: &PinTarget) -> field_autoplace::Boun
     };
     let (px, py) = (dy.abs() * half_height, dx.abs() * half_height);
     field_autoplace::Bounds::from_points([
-        Point::new(target.point.x - px, target.point.y - py),
-        Point::new(
-            target.point.x + dx * length + px,
-            target.point.y + dy * length + py,
-        ),
+        Point::new(at.x - px, at.y - py),
+        Point::new(at.x + dx * length + px, at.y + dy * length + py),
     ])
     .expect("two points define label bounds")
 }
@@ -2404,31 +2417,25 @@ fn ensure_context_endpoints(
 ) -> Result<()> {
     for (&page_index, context) in page_contexts {
         let page_id = document.pages[page_index].id.clone();
+        let mut free_labels = Vec::new();
         for (net_name, interface_names) in context {
             if !target_nets.contains(net_name) || net_symbol_specs.contains_key(net_name) {
                 continue;
             }
             // Anchor at a pin, else at a sheet pin carrying the interface
-            // (the net reaches this page only through a subsheet), else at a
-            // free spot.
-            let (anchor, spin) = match canonical_target(targets_by_net, net_name, page_index)
+            // (the net reaches this page only through a subsheet). Collect
+            // interface-only endpoints and place them as one regular block.
+            let attached = canonical_target(targets_by_net, net_name, page_index)
                 .map(|target| (target.point, target.spin))
-                .or_else(|| sheet_pin_anchor(document, page_index, interface_names))
-            {
-                Some(anchor) => anchor,
-                None => (
-                    place_context_label(
-                        document,
-                        page_index,
-                        interface_names.first().map_or(net_name, String::as_str),
-                    )?,
-                    LabelSpin::Right,
-                ),
-            };
+                .or_else(|| sheet_pin_anchor(document, page_index, interface_names));
             for interface_name in interface_names {
                 if page_has_hierarchical_label(document, page_index, interface_name) {
                     continue;
                 }
+                let Some((anchor, spin)) = attached else {
+                    free_labels.push((net_name, interface_name));
+                    continue;
+                };
                 let mut label = Label::new(
                     deterministic_uuid(format!(
                         "zener:context-endpoint:{page_id}:{net_name}:{interface_name}"
@@ -2442,6 +2449,26 @@ fn ensure_context_endpoints(
                 label.spin = spin;
                 upsert_label(document, page_index, label)?;
             }
+        }
+
+        let texts = free_labels
+            .iter()
+            .map(|(_, interface_name)| interface_name.as_str())
+            .collect::<Vec<_>>();
+        let anchors = place_context_label_group(document, page_index, &texts)?;
+        for ((net_name, interface_name), anchor) in free_labels.into_iter().zip(anchors) {
+            let mut label = Label::new(
+                deterministic_uuid(format!(
+                    "zener:context-endpoint:{page_id}:{net_name}:{interface_name}"
+                )),
+                interface_name,
+                anchor,
+            );
+            label.kind = LabelKind::Hierarchical {
+                shape: LabelShape::Bidirectional,
+            };
+            label.spin = LabelSpin::Right;
+            upsert_label(document, page_index, label)?;
         }
     }
     Ok(())
@@ -2699,6 +2726,51 @@ fn place_context_label(document: &SchDocument, page_index: usize, text: &str) ->
         .expect("interface label has two corners"),
     );
     Ok(packer.place(relative).to_point())
+}
+
+fn place_context_label_group(
+    document: &SchDocument,
+    page_index: usize,
+    texts: &[&str],
+) -> Result<Vec<Point>> {
+    if texts.is_empty() {
+        return Ok(Vec::new());
+    }
+    let bounds = texts
+        .iter()
+        .map(|text| {
+            GridRect::from_bounds(estimated_label_bounds(
+                Point::default(),
+                LabelSpin::Right,
+                estimated_shaped_label_width(text),
+            ))
+        })
+        .collect::<Vec<_>>();
+    let row_height = bounds
+        .iter()
+        .map(|bounds| bounds.height())
+        .max()
+        .expect("label group is non-empty")
+        + CONTEXT_LABEL_GAP_CELLS;
+    let offsets = (0..texts.len())
+        .map(|index| GridPoint {
+            x: 0,
+            y: index as i32 * row_height,
+        })
+        .collect::<Vec<_>>();
+    let group_bounds = bounds
+        .iter()
+        .zip(&offsets)
+        .map(|(bounds, offset)| bounds.translated(*offset))
+        .reduce(GridRect::union)
+        .expect("label group is non-empty");
+    let mut packer = GridPacker::for_page(&document.pages[page_index].paper)?;
+    occupy_page_items(&mut packer, &document.pages[page_index])?;
+    let group_anchor = packer.place(group_bounds);
+    Ok(offsets
+        .into_iter()
+        .map(|offset| offset.translated(group_anchor).to_point())
+        .collect())
 }
 
 fn estimated_label_width(text: &str) -> f64 {
