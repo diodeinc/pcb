@@ -3,10 +3,6 @@
 //! This crate parses `.zen` files from a package directory, extracts docstrings
 //! and module signatures, and generates markdown documentation.
 
-// Use pipe-safe replacements for standard printing macros in CLI output paths.
-#[macro_use(eprintln)]
-extern crate anstream;
-
 mod parser;
 mod render;
 mod signature;

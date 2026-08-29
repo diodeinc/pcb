@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -122,7 +123,9 @@ fn render_png(
             output.display()
         );
     } else {
-        pcb_ui::write_stdout(|stdout| stdout.write_all(&png))
+        std::io::stdout()
+            .lock()
+            .write_all(&png)
             .context("Failed to write PNG to stdout")?;
     }
 

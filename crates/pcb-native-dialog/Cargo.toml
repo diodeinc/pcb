@@ -9,4 +9,3 @@ authors = { workspace = true }
 
 [dependencies]
 anyhow = { workspace = true }
-anstream = { workspace = true }

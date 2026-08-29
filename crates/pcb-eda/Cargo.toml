@@ -9,7 +9,6 @@ description = "EDA tool integration for PCB design"
 
 [dependencies]
 anyhow = { workspace = true }
-anstream = { workspace = true }
 serde = { workspace = true }
 pcb-sexpr = { workspace = true }
 tracing = { workspace = true }

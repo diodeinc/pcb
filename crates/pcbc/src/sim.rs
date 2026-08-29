@@ -108,7 +108,7 @@ fn simulate_one(
 
     // --netlist: print to stdout and return (skip ngspice)
     if args.netlist {
-        pcb_ui::write_stdout(|stdout| stdout.write_all(&buf))?;
+        std::io::stdout().write_all(&buf)?;
         return Ok(true);
     }
 

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::io::{self, Write};
 use std::path::Path;
 
 use anyhow::Context;
@@ -76,12 +77,15 @@ pub fn execute(file: &Path, format: OutputFormat, offline: bool) -> Result<()> {
         spinner.finish();
     }
 
-    pcb_ui::write_stdout(|writer| match format {
+    let mut writer = io::stdout().lock();
+    match format {
         OutputFormat::Json => {
-            write!(writer, "{}", bom.ungrouped_json())
+            write!(writer, "{}", bom.ungrouped_json())?;
         }
-        OutputFormat::Text => bom.write_table(writer),
-    })?;
+        OutputFormat::Text => {
+            bom.write_table(writer)?;
+        }
+    };
 
     Ok(())
 }

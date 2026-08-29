@@ -49,8 +49,8 @@ pub(crate) fn log(x: &str) {
 pub(crate) fn send(x: Value) {
     let s = x.to_string();
     log(&format!("SEND: {}", s));
-    pcb_ui::write_stdout(|stdout| write!(stdout, "Content-Length: {}\r\n\r\n{}", s.len(), s))
-        .unwrap()
+    print!("Content-Length: {}\r\n\r\n{}", s.len(), s);
+    io::stdout().flush().unwrap()
 }
 
 pub(crate) fn read() -> Value {

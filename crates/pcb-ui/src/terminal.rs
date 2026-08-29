@@ -1,5 +1,3 @@
-use std::io::{self, Write};
-
 use terminal_size::terminal_size as get_size;
 use unicode_width::UnicodeWidthChar;
 
@@ -37,24 +35,7 @@ pub fn get_terminal_size() -> Option<TerminalSize> {
 
 /// Clear the current line
 pub fn clear_line() {
-    anstream::print!("\r\x1b[K");
-}
-
-/// Write primary command output to stdout.
-///
-/// A downstream consumer closing the pipe is normal termination; all other
-/// write and flush errors are returned to the caller.
-pub fn write_stdout(write: impl FnOnce(&mut dyn Write) -> io::Result<()>) -> io::Result<()> {
-    let stdout = io::stdout();
-    let mut stdout = stdout.lock();
-    ignore_broken_pipe(write(&mut stdout).and_then(|()| stdout.flush()))
-}
-
-fn ignore_broken_pipe(result: io::Result<()>) -> io::Result<()> {
-    match result {
-        Err(error) if error.kind() == io::ErrorKind::BrokenPipe => Ok(()),
-        result => result,
-    }
+    print!("\r\x1b[K");
 }
 
 /// Calculate the display width of a string, accounting for Unicode characters
@@ -123,17 +104,6 @@ pub enum Alignment {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn ignores_broken_pipe() {
-        assert!(ignore_broken_pipe(Err(io::ErrorKind::BrokenPipe.into())).is_ok());
-    }
-
-    #[test]
-    fn preserves_other_output_errors() {
-        let result = ignore_broken_pipe(Err(io::ErrorKind::WriteZero.into()));
-        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::WriteZero);
-    }
 
     #[test]
     fn test_text_width() {

@@ -1,7 +1,6 @@
 mod apply;
 mod auth_git;
 mod bom;
-mod broken_pipe;
 mod build;
 mod dfm;
 mod doc;

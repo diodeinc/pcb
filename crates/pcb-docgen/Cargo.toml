@@ -6,7 +6,6 @@ description = "Generate documentation from Zener source files"
 
 [dependencies]
 anyhow = "1"
-anstream = { workspace = true }
 pcb-zen = { path = "../pcb-zen" }
 pcb-zen-core = { path = "../pcb-zen-core" }
 starlark = { workspace = true }

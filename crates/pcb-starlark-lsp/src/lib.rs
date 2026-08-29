@@ -18,10 +18,6 @@
 //! The server that allows IDEs to evaluate and interpret starlark code according
 //! to the [Language Server Protocol](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.18/specification/).
 
-// Use pipe-safe replacements for standard printing macros in CLI output paths.
-#[macro_use(eprintln)]
-extern crate anstream;
-
 // Lints that don't necessarily make sense
 #[allow(clippy::needless_lifetimes)]
 #[allow(clippy::type_complexity)]

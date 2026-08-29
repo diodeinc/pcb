@@ -51,7 +51,6 @@ pcb-ipc2581-tools = { path = "crates/pcb-ipc2581-tools" }
 pcb-docgen = { path = "crates/pcb-docgen" }
 
 anyhow = "1.0"
-anstream = "1.0"
 atomicwrites = "0.4"
 arboard = { version = "3.6", default-features = false }
 ariadne = { version = "0.6", features = ["auto-color"] }

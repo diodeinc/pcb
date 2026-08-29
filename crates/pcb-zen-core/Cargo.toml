@@ -24,7 +24,6 @@ table = ["pcb-sch/table"]
 
 [dependencies]
 allocative = { workspace = true }
-anstream = { workspace = true }
 pagable = { workspace = true }
 
 starlark = { workspace = true }

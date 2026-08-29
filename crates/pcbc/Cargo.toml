@@ -23,7 +23,6 @@ path = "tests/integration.rs"
 
 [dependencies]
 anyhow = { workspace = true }
-anstream = { workspace = true }
 atomicwrites = { workspace = true }
 clap = { workspace = true }
 glam = { workspace = true }

@@ -1,7 +1,3 @@
-// Use pipe-safe replacements for the standard printing macros in CLI command modules.
-#[macro_use(println, eprint, eprintln)]
-extern crate anstream;
-
 use anyhow::{Context, Result};
 use rusqlite::auto_extension::{RawAutoExtension, register_auto_extension};
 

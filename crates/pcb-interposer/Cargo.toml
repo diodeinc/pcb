@@ -10,7 +10,6 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 anyhow = { workspace = true }
-anstream = { workspace = true }
 ipc2581 = { workspace = true }
 pcb-ir = { workspace = true }
 pcb-kicad = { workspace = true }

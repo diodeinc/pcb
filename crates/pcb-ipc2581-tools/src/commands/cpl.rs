@@ -1,5 +1,6 @@
 use std::cmp::Ordering;
 use std::fs;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -33,7 +34,7 @@ pub fn execute(file: &Path, options: &CplOptions) -> Result<()> {
     if let Some(output) = &options.output {
         fs::write(output, cpl)?;
     } else {
-        pcb_ui::write_stdout(|stdout| stdout.write_all(cpl.as_bytes()))?;
+        io::stdout().write_all(cpl.as_bytes())?;
     }
 
     Ok(())

@@ -17,7 +17,6 @@ name = "integration"
 path = "tests/integration.rs"
 
 [dependencies]
-anstream = { workspace = true }
 dupe = { workspace = true }
 
 starlark = { workspace = true }

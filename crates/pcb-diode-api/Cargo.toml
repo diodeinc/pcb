@@ -12,7 +12,6 @@ tempfile = { workspace = true }
 
 [dependencies]
 anyhow = { workspace = true }
-anstream = { workspace = true }
 atomicwrites = { workspace = true }
 arboard = { workspace = true }
 base64 = { workspace = true }

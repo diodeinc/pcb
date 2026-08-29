@@ -12,7 +12,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Complete the E48 and E192 standard value tables used by `e48()` and `e192()`.
 - `pcb build --config` now rejects unknown root configuration keys.
-- PCB commands now exit cleanly when an output pipe closes early.
 
 ## [0.4.40] - 2026-08-28
 

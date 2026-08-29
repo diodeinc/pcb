@@ -1,9 +1,5 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
-// Use pipe-safe replacements for the standard printing macros throughout the launcher.
-#[macro_use(eprintln)]
-extern crate anstream;
-
 use anyhow::{Context, Result, bail};
 use pcb_diode_uri::{SandboxFileUri, is_trusted_api_host};
 use std::fs::{self, File, OpenOptions};

@@ -1,7 +1,3 @@
-// Use pipe-safe replacements for the standard printing macros in CLI command modules.
-#[macro_use(print, println, eprintln)]
-extern crate anstream;
-
 use clap::ValueEnum;
 use ipc2581::Mode;
 

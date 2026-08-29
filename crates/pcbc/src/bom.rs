@@ -1,3 +1,4 @@
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use crate::build::create_diagnostics_passes;
@@ -145,10 +146,11 @@ pub fn execute(args: BomArgs) -> Result<()> {
     }
     spinner.finish();
 
-    pcb_ui::write_stdout(|writer| match args.format {
-        BomFormat::Json => write!(writer, "{}", bom.ungrouped_json()),
-        BomFormat::Table => bom.write_table(writer),
-    })?;
+    let mut writer = io::stdout().lock();
+    match args.format {
+        BomFormat::Json => write!(writer, "{}", bom.ungrouped_json())?,
+        BomFormat::Table => bom.write_table(writer)?,
+    };
 
     Ok(())
 }
