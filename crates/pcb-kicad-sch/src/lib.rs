@@ -21,8 +21,10 @@ mod placement;
 pub mod reconcile;
 mod repair;
 mod root_interface;
+pub mod routing;
 mod source;
 mod symbol;
+mod wire_junctions;
 
 pub mod analysis;
 mod compose;

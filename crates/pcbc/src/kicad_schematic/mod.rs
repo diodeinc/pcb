@@ -107,7 +107,7 @@ fn apply_existing(project: KicadProject, netlist: &Schematic) -> Result<Schemati
     if plan.is_empty() {
         return Ok(unchanged(project, root_schematic));
     }
-    let desired = plan.apply(Some(&project.document))?;
+    let desired = plan.apply_all(Some(&project.document))?;
 
     let mut writes = Vec::new();
     let existing_page_ids = project
@@ -236,7 +236,7 @@ fn initialize_project(project_file: PathBuf, netlist: &Schematic) -> Result<Sche
         .and_then(|name| name.to_str())
         .context("generated schematic filename is not UTF-8")?;
     let plan = plan_reconciliation(None, netlist, file_name)?;
-    let document = plan.apply(None)?;
+    let document = plan.apply_all(None)?;
     let schematic_files = desired_file_paths(&directory, &document)?;
     let mut unique_paths = std::collections::BTreeSet::new();
     for path in &schematic_files {

@@ -34,13 +34,9 @@ fn apply_schematic_creates_repairs_and_clears_build_diagnostics() {
     assert!(project.project_file.is_file());
     assert_eq!(project.schematic_files.len(), 1);
 
-    let page = &mut project.document.pages[0];
-    let label_index = page
+    project.document.pages[0]
         .items
-        .iter()
-        .position(|item| matches!(item, SchItem::Label(label) if label.text == "MID"))
-        .expect("generated MID label");
-    page.items.remove(label_index);
+        .retain(|item| !matches!(item, SchItem::Wire(_)));
     fs::write(
         &project.schematic_files[0],
         project.document.to_kicad_sch().unwrap(),

@@ -1,10 +1,9 @@
 mod common;
-use std::collections::BTreeSet;
 
 use pcb_kicad_sch::{
-    LabelKind, Point, SchItem, SchPage, Sheet, SymbolField,
+    Label, LabelKind, Point, SchItem, SchPage, Sheet, SymbolField,
     analysis::{SchematicIssue, inspect_schematic},
-    reconcile::{plan_reconciliation, plan_repairs},
+    reconcile::plan_reconciliation,
 };
 
 /// A user may reorganize managed content onto their own sheets: as long as
@@ -15,7 +14,7 @@ fn user_reorganized_page_stays_reconcilable() {
     let netlist = common::compile_fixture("analysis", "simple.zen");
     let baseline = plan_reconciliation(None, &netlist, "simple.kicad_sch")
         .unwrap()
-        .apply(None)
+        .apply_all(None)
         .unwrap();
     let mut document = baseline.clone();
     // Move the entire circuit onto a user-created page.
@@ -42,7 +41,7 @@ fn user_reorganized_page_stays_reconcilable() {
     })));
     let plan = plan_reconciliation(Some(&document), &netlist, "simple.kicad_sch")
         .unwrap_or_else(|error| panic!("reorganized page must reconcile: {error:#}"));
-    let applied = plan.apply(Some(&document)).unwrap();
+    let applied = plan.apply_all(Some(&document)).unwrap();
     let after = inspect_schematic(&applied, &netlist).unwrap();
     assert!(after.issues.is_empty(), "{:#?}", after.issues);
 }
@@ -57,52 +56,72 @@ fn cross_page_net_with_stale_page_scoped_drivers_repairs_to_global() {
     let netlist = common::compile_fixture("analysis", "simple.zen");
     let baseline = plan_reconciliation(None, &netlist, "simple.kicad_sch")
         .unwrap()
-        .apply(None)
+        .apply_all(None)
         .unwrap();
     let mut document = baseline.clone();
 
-    // Move R2 — symbol and the labels on its pins — onto a user-created page.
-    let r2_pins = document.pages[0]
+    // Reduce the generated topology to local labels directly on every managed
+    // pin, then move R2 and its labels to a user-created page. MID retains one
+    // stale page-scoped driver on each side of the split.
+    let r2 = document.pages[0]
         .items
         .iter()
         .find_map(|item| match item {
             SchItem::Symbol(symbol) if symbol.field_value("Path") == Some("R2.R") => {
-                let definition = document.pages[0].library.definitions.get(&symbol.lib_id)?;
-                Some(
-                    definition
-                        .placed_pins(symbol)
-                        .ok()?
-                        .into_iter()
-                        .map(|pin| pin.point)
-                        .collect::<Vec<_>>(),
-                )
+                Some(symbol.clone())
             }
             _ => None,
         })
         .expect("baseline places R2");
-    let root = &mut document.pages[0];
-    let mut moved = Vec::new();
-    root.items.retain(|item| {
-        let take = match item {
-            SchItem::Symbol(symbol) => symbol.field_value("Path") == Some("R2.R"),
-            SchItem::Label(label) => r2_pins.contains(&label.at),
-            _ => false,
-        };
-        if take {
-            moved.push(item.clone());
-        }
-        !take
+    let r2_id = r2.id.clone();
+    let baseline_inspection = inspect_schematic(&baseline, &netlist).unwrap();
+    let managed_symbol_ids = document.pages[0]
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            SchItem::Symbol(symbol) if symbol.field_value("Path").is_some() => {
+                Some(symbol.id.clone())
+            }
+            _ => None,
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    let pin_labels = baseline_inspection
+        .analysis
+        .nets
+        .values()
+        .flat_map(|net| {
+            net.islands
+                .iter()
+                .filter_map(|island| baseline_inspection.physical.islands.get(island))
+                .flat_map(|island| &island.symbol_pins)
+                .filter(|pin| managed_symbol_ids.contains(pin.symbol_id()))
+                .map(|pin| (pin.symbol_id().to_string(), net.name.clone(), pin.point()))
+        })
+        .collect::<Vec<_>>();
+    assert!(pin_labels.iter().any(|(_, name, _)| name == "MID"));
+    document.pages[0].items.retain(|item| {
+        matches!(item, SchItem::Symbol(symbol) if symbol.field_value("Path").is_some() && symbol.id != r2_id)
     });
-    assert!(
-        moved
+    document.pages[0].items.extend(
+        pin_labels
             .iter()
-            .any(|item| matches!(item, SchItem::Label(label) if label.text == "MID")),
-        "the moved cluster keeps its stale MID driver"
+            .filter(|(symbol_id, _, _)| symbol_id != &r2_id)
+            .map(|(symbol_id, name, at)| {
+                SchItem::Label(Label::new(format!("local-{symbol_id}-{name}"), name, *at))
+            }),
     );
     let mut user_page = SchPage::new("user-page");
     user_page.file_name = Some("user.kicad_sch".to_string());
     user_page.library = document.pages[0].library.clone();
-    user_page.items = moved;
+    user_page.items.push(SchItem::Symbol(r2));
+    user_page.items.extend(
+        pin_labels
+            .iter()
+            .filter(|(symbol_id, _, _)| symbol_id == &r2_id)
+            .map(|(symbol_id, name, at)| {
+                SchItem::Label(Label::new(format!("local-{symbol_id}-{name}"), name, *at))
+            }),
+    );
     document.pages.push(user_page);
     document.pages[0].items.push(SchItem::Sheet(Box::new(Sheet {
         id: "user-sheet".to_string(),
@@ -119,19 +138,13 @@ fn cross_page_net_with_stale_page_scoped_drivers_repairs_to_global() {
     })));
 
     let inspection = inspect_schematic(&document, &netlist).unwrap();
-    let key = inspection
-        .issues
-        .iter()
-        .find(|issue| {
+    assert!(inspection.issues.iter().any(|issue| {
             matches!(&issue.issue, SchematicIssue::DisconnectedNet { net_name, .. } if net_name == "MID")
-        })
-        .expect("MID is disconnected across the two pages")
-        .key
-        .clone();
+        }), "MID is disconnected across the two pages");
 
-    let repaired = plan_repairs(&document, &netlist, &inspection, BTreeSet::from([key]))
+    let repaired = plan_reconciliation(Some(&document), &netlist, "simple.kicad_sch")
         .unwrap_or_else(|error| panic!("cross-page MID must repair: {error:#}"))
-        .apply(Some(&document))
+        .apply_all(Some(&document))
         .unwrap();
 
     let after = inspect_schematic(&repaired, &netlist).unwrap();

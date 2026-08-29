@@ -32,9 +32,22 @@ structure.
 ## Shared core
 
 `reconcile::plan_reconciliation` is the single semantic entrypoint for both
-`pcb apply` and interactive editors. It accepts typed in-memory inputs, returns
-exact reversible document edits, and verifies the resulting document before it
-returns. It does not read or write files.
+`pcb apply` and interactive editors. It inspects and solves the complete issue
+set as one global problem, then returns only an ordered set of exact
+`DocumentPatch` suggestions. Each suggestion is verified against the original
+document, mutually compatible with the others, and applicable independently;
+coupled edits remain in one patch. `apply_one` supports an editor preview and
+`apply_all` produces the globally verified document used by `pcb apply`. Plans
+do not retain issue selections or before/after inspection snapshots, and the
+planner does not read or write files.
+
+Physical routing is part of this shared core rather than a second editor repair
+model. Reconciliation extracts endpoints from physical islands, routes every
+eligible net through the shared orthogonal router, preserves existing segments,
+materializes deterministic KiCad wires and junctions, and falls back to scoped
+labels or net symbols when a physical route is unsuitable. Editors can call
+`routing::plan_wire_reroute` for explicit selected-item reroutes without
+invoking semantic reconciliation.
 
 The `pcbc` persistence adapter resolves linked project paths, converts the
 verified typed result into minimal source patches, writes them atomically,

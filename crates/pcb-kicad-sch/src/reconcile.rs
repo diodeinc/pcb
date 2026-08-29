@@ -11,7 +11,7 @@ use crate::{
     component_slots, compose,
 };
 
-/// One exact, reversible change to the typed schematic document.
+/// One exact change to the typed schematic document.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DocumentEdit {
     SetRootPages {
@@ -29,46 +29,61 @@ pub enum DocumentEdit {
     },
 }
 
-/// A verified reconciliation decision with no filesystem side effects.
+/// One independently verified reconciliation suggestion.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ReconciliationPlan {
+pub struct DocumentPatch {
     edits: Vec<DocumentEdit>,
-    initial_inspection: InitialInspection,
-    inspection_after: ConnectivityInspection,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum InitialInspection {
-    NoDocument,
-    Available(ConnectivityInspection),
-    Invalid { message: String },
-}
+impl DocumentPatch {
+    pub(crate) fn new(edits: Vec<DocumentEdit>) -> Self {
+        Self { edits }
+    }
 
-impl ReconciliationPlan {
     pub fn edits(&self) -> &[DocumentEdit] {
         &self.edits
     }
 
-    pub fn initial_inspection(&self) -> &InitialInspection {
-        &self.initial_inspection
-    }
-
-    pub fn inspection_after(&self) -> &ConnectivityInspection {
-        &self.inspection_after
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.edits.is_empty()
-    }
-
-    /// Apply this plan to the exact document from which it was created.
+    /// Apply this patch to the exact document for which it was planned.
     pub fn apply(&self, document: Option<&SchDocument>) -> Result<SchDocument> {
         apply_document_edits(document.unwrap_or(&SchDocument::default()), &self.edits)
     }
+}
 
-    /// Reverse this plan from the exact document produced by [`Self::apply`].
-    pub fn revert(&self, document: &SchDocument) -> Result<SchDocument> {
-        revert_document_edits(document, &self.edits)
+/// An ordered set of independently applicable, mutually compatible patches.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReconciliationPlan {
+    patches: Vec<DocumentPatch>,
+}
+
+impl ReconciliationPlan {
+    pub fn patches(&self) -> &[DocumentPatch] {
+        &self.patches
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.patches.is_empty()
+    }
+
+    /// Apply one suggestion to the exact document for which the plan was built.
+    pub fn apply_one(
+        &self,
+        document: Option<&SchDocument>,
+        patch_index: usize,
+    ) -> Result<SchDocument> {
+        self.patches
+            .get(patch_index)
+            .with_context(|| format!("reconciliation patch index {patch_index} is absent"))?
+            .apply(document)
+    }
+
+    /// Apply every suggestion in deterministic order.
+    pub fn apply_all(&self, document: Option<&SchDocument>) -> Result<SchDocument> {
+        let mut result = document.cloned().unwrap_or_default();
+        for patch in &self.patches {
+            result = patch.apply(Some(&result))?;
+        }
+        Ok(result)
     }
 }
 
@@ -78,7 +93,7 @@ fn apply_document_edits(document: &SchDocument, edits: &[DocumentEdit]) -> Resul
         match edit {
             DocumentEdit::SetRootPages { before, after } => {
                 if &result.root_page_ids != before {
-                    bail!("reconciliation plan root pages do not match the input document");
+                    bail!("reconciliation patch root pages do not match the input document");
                 }
                 result.root_page_ids.clone_from(after);
             }
@@ -110,135 +125,238 @@ fn apply_document_edits(document: &SchDocument, edits: &[DocumentEdit]) -> Resul
     Ok(result)
 }
 
-fn revert_document_edits(document: &SchDocument, edits: &[DocumentEdit]) -> Result<SchDocument> {
-    let mut result = document.clone();
-    for edit in edits.iter().rev() {
-        match edit {
-            DocumentEdit::SetRootPages { before, after } => {
-                if &result.root_page_ids != after {
-                    bail!("reconciliation plan root pages do not match the repaired document");
-                }
-                result.root_page_ids.clone_from(before);
-            }
-            DocumentEdit::InsertPage { index, page } => {
-                let found = result
-                    .pages
-                    .get(*index)
-                    .with_context(|| format!("reconciliation page index {index} is absent"))?;
-                if found != page {
-                    bail!(
-                        "reconciliation inserted page '{}' does not match the repaired document",
-                        page.id
-                    );
-                }
-                result.pages.remove(*index);
-            }
-            DocumentEdit::ReplacePage {
-                index,
-                before,
-                after,
-            } => {
-                let found = result
-                    .pages
-                    .get_mut(*index)
-                    .with_context(|| format!("reconciliation page index {index} is absent"))?;
-                if found != after {
-                    bail!(
-                        "reconciliation page '{}' does not match the repaired document",
-                        after.id
-                    );
-                }
-                found.clone_from(before);
-            }
-        }
-    }
-    Ok(result)
-}
-
-/// Build and verify the exact document edits needed to match a Zener netlist.
+/// Globally plan and verify every change needed to match a Zener netlist.
 ///
-/// This is the semantic core used by both `pcb apply` and interactive clients.
-/// It is pure: callers decide whether and how to persist the returned plan.
+/// Planning is pure. The complete issue set is solved together, then the
+/// verified result is partitioned into independently safe suggestions.
 pub fn plan_reconciliation(
     document: Option<&SchDocument>,
     netlist: &Schematic,
     root_file_name: &str,
 ) -> Result<ReconciliationPlan> {
     component_slots::validate_symbol_library_versions(netlist)?;
-    let initial_inspection = match document {
-        None => InitialInspection::NoDocument,
-        Some(document) => match inspect_schematic(document, netlist) {
-            Ok(inspection) => InitialInspection::Available(inspection),
-            Err(error) => InitialInspection::Invalid {
-                message: format!("{error:#}"),
-            },
-        },
-    };
-    build_plan(
+    let inspection_before = document
+        .map(|document| inspect_schematic(document, netlist))
+        .transpose()
+        .ok()
+        .flatten();
+    let desired = compose::reconcile_document(
         document,
         netlist,
         Some(root_file_name),
-        None,
-        None,
-        initial_inspection,
-    )
+        inspection_before.as_ref(),
+    )?;
+    let inspection_after = inspect_schematic(&desired, netlist)?;
+    if !inspection_after.analysis.is_equivalent() {
+        bail!(
+            "planned schematic is not netlist-equivalent: {}",
+            issue_summaries(inspection_after.analysis.issues().iter())
+        );
+    }
+
+    let before = document.cloned().unwrap_or_default();
+    let edits = document_edits(&before, &desired)?;
+    let patches = if document.is_none() {
+        (!edits.is_empty())
+            .then_some(DocumentPatch { edits })
+            .into_iter()
+            .collect()
+    } else if let Some(inspection_before) = inspection_before.as_ref() {
+        partition_patches(&before, netlist, inspection_before, edits)?
+    } else {
+        // An invalid source document has no trustworthy per-patch electrical
+        // baseline. Keep its globally verified recovery atomic.
+        (!edits.is_empty())
+            .then_some(DocumentPatch { edits })
+            .into_iter()
+            .collect()
+    };
+    let plan = ReconciliationPlan { patches };
+    if plan.apply_all(document)? != desired {
+        bail!("reconciliation patches do not reproduce their verified document");
+    }
+    Ok(plan)
 }
 
-/// Build and verify one exact repair plan for a set of current issues.
-///
-/// A per-issue repair passes a singleton set. Multiple selected issues use the
-/// same planner and mutation policy; selection changes only the repair scope.
-/// `inspection` must be the snapshot from which the selected keys were read.
-pub fn plan_repairs(
+fn issue_summaries<'a>(issues: impl Iterator<Item = &'a SchematicIssue>) -> String {
+    issues
+        .map(SchematicIssue::summary)
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+#[derive(Clone)]
+struct PatchGroup {
+    edits: Vec<(usize, DocumentEdit)>,
+}
+
+impl PatchGroup {
+    fn patch(&self) -> DocumentPatch {
+        DocumentPatch {
+            edits: self.edits.iter().map(|(_, edit)| edit.clone()).collect(),
+        }
+    }
+
+    fn merge(mut self, other: Self) -> Self {
+        self.edits.extend(other.edits);
+        self.edits.sort_by_key(|(order, _)| *order);
+        self
+    }
+}
+
+fn partition_patches(
     document: &SchDocument,
     netlist: &Schematic,
-    inspection: &ConnectivityInspection,
-    selected_issue_keys: BTreeSet<SchematicIssueKey>,
-) -> Result<ReconciliationPlan> {
-    plan_repairs_impl(document, netlist, inspection, selected_issue_keys, None)
+    inspection_before: &ConnectivityInspection,
+    edits: Vec<DocumentEdit>,
+) -> Result<Vec<DocumentPatch>> {
+    let mut structural = Vec::new();
+    let mut groups = Vec::new();
+    for (order, edit) in edits.into_iter().enumerate() {
+        match edit {
+            DocumentEdit::SetRootPages { .. } | DocumentEdit::InsertPage { .. } => {
+                structural.push((order, edit));
+            }
+            DocumentEdit::ReplacePage { .. } => groups.push(PatchGroup {
+                edits: vec![(order, edit)],
+            }),
+        }
+    }
+    if !structural.is_empty() {
+        groups.insert(0, PatchGroup { edits: structural });
+    }
+
+    let baseline = inspection_before
+        .issues
+        .iter()
+        .map(|issue| coarse_issue_key(&issue.key))
+        .collect::<BTreeSet<_>>();
+
+    loop {
+        let unsafe_index = groups
+            .iter()
+            .position(|group| !patch_is_safe(document, netlist, &baseline, &group.patch()));
+        let Some(index) = unsafe_index else {
+            break;
+        };
+        if groups.len() == 1 {
+            bail!("globally verified reconciliation patch is not independently safe");
+        }
+
+        let safe_partner = (0..groups.len())
+            .filter(|other| *other != index)
+            .find(|other| {
+                let merged = groups[index].clone().merge(groups[*other].clone());
+                patch_is_safe(document, netlist, &baseline, &merged.patch())
+            });
+        let other = safe_partner.unwrap_or_else(|| {
+            if index + 1 < groups.len() {
+                index + 1
+            } else {
+                index - 1
+            }
+        });
+        merge_groups(&mut groups, index, other);
+    }
+
+    // Individually safe changes can still interact through global labels or
+    // hierarchy. Merge any pair whose composition is not safe in either order.
+    loop {
+        let mut incompatible = None;
+        'pairs: for left in 0..groups.len() {
+            for right in (left + 1)..groups.len() {
+                let left_patch = groups[left].patch();
+                let right_patch = groups[right].patch();
+                if !patches_are_compatible(document, netlist, &baseline, &left_patch, &right_patch)
+                {
+                    incompatible = Some((left, right));
+                    break 'pairs;
+                }
+            }
+        }
+        let Some((left, right)) = incompatible else {
+            break;
+        };
+        merge_groups(&mut groups, left, right);
+    }
+
+    groups.sort_by_key(|group| group.edits[0].0);
+    let patches = groups
+        .into_iter()
+        .map(|group| group.patch())
+        .collect::<Vec<_>>();
+    let mut applied = document.clone();
+    for patch in &patches {
+        applied = patch.apply(Some(&applied))?;
+    }
+    let inspection = inspect_schematic(&applied, netlist)?;
+    if !inspection.analysis.is_equivalent() {
+        bail!(
+            "applying all reconciliation patches is not netlist-equivalent: {}",
+            issue_summaries(inspection.analysis.issues().iter())
+        );
+    }
+    Ok(patches)
 }
 
-/// Like [`plan_repairs`], but new symbols for the selected missing-symbol
-/// issues are placed on `placement_page_id` instead of their module's page.
-/// Net drivers adapt (a net that now spans pages gets global labels), and the
-/// usual plan verification still applies.
-pub fn plan_repairs_on_page(
+fn merge_groups(groups: &mut Vec<PatchGroup>, left: usize, right: usize) {
+    let (first, second) = if left < right {
+        (left, right)
+    } else {
+        (right, left)
+    };
+    let right = groups.remove(second);
+    let left = groups.remove(first);
+    groups.insert(first, left.merge(right));
+}
+
+fn patch_is_safe(
     document: &SchDocument,
     netlist: &Schematic,
-    inspection: &ConnectivityInspection,
-    selected_issue_keys: BTreeSet<SchematicIssueKey>,
-    placement_page_id: &str,
-) -> Result<ReconciliationPlan> {
-    plan_repairs_impl(
-        document,
-        netlist,
-        inspection,
-        selected_issue_keys,
-        Some(placement_page_id),
-    )
+    baseline: &BTreeSet<SchematicIssueKey>,
+    patch: &DocumentPatch,
+) -> bool {
+    patch
+        .apply(Some(document))
+        .and_then(|candidate| inspect_schematic(&candidate, netlist))
+        .is_ok_and(|inspection| {
+            inspection
+                .issues
+                .iter()
+                .all(|issue| baseline.contains(&coarse_issue_key(&issue.key)))
+        })
 }
 
-fn plan_repairs_impl(
+fn patches_are_compatible(
     document: &SchDocument,
     netlist: &Schematic,
-    inspection: &ConnectivityInspection,
-    selected_issue_keys: BTreeSet<SchematicIssueKey>,
-    placement_page_id: Option<&str>,
-) -> Result<ReconciliationPlan> {
-    component_slots::validate_symbol_library_versions(netlist)?;
-    build_plan(
-        Some(document),
-        netlist,
-        None,
-        Some(&selected_issue_keys),
-        placement_page_id,
-        InitialInspection::Available(inspection.clone()),
-    )
+    baseline: &BTreeSet<SchematicIssueKey>,
+    left: &DocumentPatch,
+    right: &DocumentPatch,
+) -> bool {
+    for (first, second) in [(left, right), (right, left)] {
+        let Ok(first_document) = first.apply(Some(document)) else {
+            return false;
+        };
+        let Ok(combined) = second.apply(Some(&first_document)) else {
+            return false;
+        };
+        let Ok(inspection) = inspect_schematic(&combined, netlist) else {
+            return false;
+        };
+        if inspection
+            .issues
+            .iter()
+            .any(|issue| !baseline.contains(&coarse_issue_key(&issue.key)))
+        {
+            return false;
+        }
+    }
+    true
 }
 
-/// The key with volatile item fingerprints stripped, for before/after
-/// identity comparisons.
-fn coarse_key(key: &SchematicIssueKey) -> SchematicIssueKey {
+/// Strip volatile item fingerprints for before/after issue identity checks.
+pub(crate) fn coarse_issue_key(key: &SchematicIssueKey) -> SchematicIssueKey {
     let mut key = key.clone();
     match &mut key {
         SchematicIssueKey::UnexpectedNet { items, .. }
@@ -253,95 +371,6 @@ fn coarse_key(key: &SchematicIssueKey) -> SchematicIssueKey {
         | SchematicIssueKey::MissingPort(_) => {}
     }
     key
-}
-
-fn issue_summaries<'a>(issues: impl Iterator<Item = &'a SchematicIssue>) -> String {
-    issues
-        .map(|issue| issue.summary())
-        .collect::<Vec<_>>()
-        .join("; ")
-}
-
-fn build_plan(
-    document: Option<&SchDocument>,
-    netlist: &Schematic,
-    root_file_name: Option<&str>,
-    issue_selection: Option<&BTreeSet<SchematicIssueKey>>,
-    placement_page_id: Option<&str>,
-    initial_inspection: InitialInspection,
-) -> Result<ReconciliationPlan> {
-    let inspection_before = match &initial_inspection {
-        InitialInspection::Available(inspection) => Some(inspection),
-        InitialInspection::NoDocument | InitialInspection::Invalid { .. } => None,
-    };
-    let desired = compose::reconcile_document(
-        document,
-        netlist,
-        root_file_name,
-        issue_selection,
-        placement_page_id,
-        inspection_before,
-    )?;
-    let inspection_after = inspect_schematic(&desired, netlist)?;
-    match issue_selection {
-        None => {
-            if !inspection_after.analysis.is_equivalent() {
-                bail!(
-                    "planned schematic is not netlist-equivalent: {}",
-                    issue_summaries(inspection_after.analysis.issues().iter())
-                );
-            }
-        }
-        Some(selected_keys) => {
-            let before = inspection_before
-                .context("repairing selected issues requires an existing schematic document")?;
-            for key in selected_keys {
-                if !before.issues.iter().any(|issue| &issue.key == key) {
-                    bail!("schematic issue {key:?} is not present");
-                }
-                if inspection_after
-                    .issues
-                    .iter()
-                    .any(|issue| coarse_key(&issue.key) == coarse_key(key))
-                {
-                    bail!("planned repair did not resolve schematic issue {key:?}");
-                }
-            }
-            // Compare without item fingerprints: a pre-existing issue whose
-            // affected islands shifted is still the same issue, not a new one
-            // this repair introduced.
-            let before_keys = before
-                .issues
-                .iter()
-                .map(|issue| coarse_key(&issue.key))
-                .collect::<std::collections::BTreeSet<_>>();
-            let new_issues = inspection_after
-                .issues
-                .iter()
-                .filter(|issue| !before_keys.contains(&coarse_key(&issue.key)))
-                .collect::<Vec<_>>();
-            if !new_issues.is_empty() {
-                bail!(
-                    "planned repair would introduce unrelated issues: {}",
-                    issue_summaries(new_issues.iter().map(|context| &context.issue))
-                );
-            }
-        }
-    }
-    let edits = document_edits(document.unwrap_or(&SchDocument::default()), &desired)?;
-    let plan = ReconciliationPlan {
-        edits,
-        initial_inspection,
-        inspection_after,
-    };
-    let applied = plan.apply(document)?;
-    if applied != desired {
-        bail!("reconciliation plan does not reproduce its verified document");
-    }
-    if plan.revert(&applied)? != document.cloned().unwrap_or_default() {
-        bail!("reconciliation plan does not reverse to its input document");
-    }
-    Ok(plan)
 }
 
 fn document_edits(before: &SchDocument, after: &SchDocument) -> Result<Vec<DocumentEdit>> {
@@ -382,7 +411,7 @@ mod tests {
     use crate::{SchPage, root_page_id};
 
     #[test]
-    fn document_edits_are_exact_and_reversible_at_the_page_boundary() {
+    fn document_patches_apply_exact_page_changes() {
         let before = SchDocument {
             root_page_ids: vec!["old-root".to_string()],
             pages: vec![SchPage::new("old-root")],
@@ -393,9 +422,9 @@ mod tests {
             root_page_ids: vec![root_page_id()],
             pages: vec![first, SchPage::new("child")],
         };
-        let edits = document_edits(&before, &after).unwrap();
-        let applied = apply_document_edits(&before, &edits).unwrap();
-        assert_eq!(applied, after);
-        assert_eq!(revert_document_edits(&applied, &edits).unwrap(), before);
+        let patch = DocumentPatch {
+            edits: document_edits(&before, &after).unwrap(),
+        };
+        assert_eq!(patch.apply(Some(&before)).unwrap(), after);
     }
 }

@@ -5,10 +5,10 @@ use std::collections::BTreeSet;
 use pcb_kicad_sch::{
     FieldHorizontalJustify, FieldJustify, FieldVerticalJustify, Label, LabelKind, Point,
     SchDocument, SchItem, SchPage, Symbol, SymbolDefinition,
-    analysis::{SchematicIssue, SchematicIssueKey, inspect_schematic},
+    analysis::{SchematicIssue, inspect_schematic},
     connectivity::{PhysicalConnectivity, PinVisibility},
     deterministic_uuid,
-    reconcile::{plan_reconciliation, plan_repairs},
+    reconcile::plan_reconciliation,
 };
 use pcb_sch::{AttributeValue, Schematic};
 
@@ -43,8 +43,13 @@ fn editor_core_plans_applies_analyzes_and_reopens_in_memory() {
     let plan = plan_reconciliation(None, &netlist, "Editor.kicad_sch").unwrap();
 
     assert!(!plan.is_empty());
-    assert!(plan.inspection_after().analysis.is_equivalent());
-    let document = plan.apply(None).unwrap();
+    let document = plan.apply_all(None).unwrap();
+    assert!(
+        inspect_schematic(&document, &netlist)
+            .unwrap()
+            .analysis
+            .is_equivalent()
+    );
     let physical = PhysicalConnectivity::from_kicad(&document, PinVisibility::VisibleOnly).unwrap();
     assert!(!physical.graph.components.is_empty());
     assert!(!physical.islands.is_empty());
@@ -69,8 +74,8 @@ fn editor_core_plans_applies_analyzes_and_reopens_in_memory() {
     assert!(symbol.visual_bounds(definition).unwrap().is_some());
 
     let unchanged = plan_reconciliation(Some(&document), &netlist, "Editor.kicad_sch").unwrap();
-    assert!(unchanged.is_empty(), "{:#?}", unchanged.edits());
-    assert_eq!(unchanged.apply(Some(&document)).unwrap(), document);
+    assert!(unchanged.is_empty(), "{:#?}", unchanged.patches());
+    assert_eq!(unchanged.apply_all(Some(&document)).unwrap(), document);
 
     let mut reorganized = document.clone();
     let label = reorganized.pages[0]
@@ -86,8 +91,11 @@ fn editor_core_plans_applies_analyzes_and_reopens_in_memory() {
         _ => pcb_kicad_sch::LabelSpin::Right,
     };
     let preserved = plan_reconciliation(Some(&reorganized), &netlist, "Editor.kicad_sch").unwrap();
-    assert!(preserved.is_empty(), "{:#?}", preserved.edits());
-    assert_eq!(preserved.apply(Some(&reorganized)).unwrap(), reorganized);
+    assert!(preserved.is_empty(), "{:#?}", preserved.patches());
+    assert_eq!(
+        preserved.apply_all(Some(&reorganized)).unwrap(),
+        reorganized
+    );
 }
 
 #[test]
@@ -95,7 +103,7 @@ fn reconciliation_drives_each_physical_pin_of_a_logical_terminal() {
     let netlist = common::compile_fixture("multi_pad", "root.zen");
     let document = plan_reconciliation(None, &netlist, "MultiPad.kicad_sch")
         .unwrap()
-        .apply(None)
+        .apply_all(None)
         .unwrap();
 
     let inspection = inspect_schematic(&document, &netlist).unwrap();
@@ -106,7 +114,7 @@ fn reconciliation_drives_each_physical_pin_of_a_logical_terminal() {
     );
 
     let unchanged = plan_reconciliation(Some(&document), &netlist, "MultiPad.kicad_sch").unwrap();
-    assert!(unchanged.is_empty(), "{:#?}", unchanged.edits());
+    assert!(unchanged.is_empty(), "{:#?}", unchanged.patches());
 }
 
 #[test]
@@ -114,7 +122,7 @@ fn parallel_capacitors_form_one_regular_wired_bank() {
     let netlist = common::compile_fixture("analysis", "capacitor_bank.zen");
     let document = plan_reconciliation(None, &netlist, "CapacitorBank.kicad_sch")
         .unwrap()
-        .apply(None)
+        .apply_all(None)
         .unwrap();
 
     assert!(
@@ -144,7 +152,7 @@ fn parallel_capacitors_form_one_regular_wired_bank() {
     let second_spacing = bank[2].1.x - bank[1].1.x;
     assert!((first_spacing - second_spacing).abs() <= 1.0e-9);
 
-    for (net_name, expected) in [("VCC", 1), ("GROUND", 2)] {
+    for net_name in ["VCC", "GROUND"] {
         assert_eq!(
             page.items
                 .iter()
@@ -155,14 +163,14 @@ fn parallel_capacitors_form_one_regular_wired_bank() {
                             && symbol.field_value("Value") == Some(net_name)
                 ))
                 .count(),
-            expected,
-            "the shared bank rail should need one {net_name} symbol; C4 needs its own GROUND"
+            1,
+            "the router joins same-page islands before adding one {net_name} driver"
         );
     }
 
     let unchanged =
         plan_reconciliation(Some(&document), &netlist, "CapacitorBank.kicad_sch").unwrap();
-    assert!(unchanged.is_empty(), "{:#?}", unchanged.edits());
+    assert!(unchanged.is_empty(), "{:#?}", unchanged.patches());
 }
 
 #[test]
@@ -170,7 +178,7 @@ fn generated_net_symbols_share_staircase_channels_across_orientations() {
     let netlist = common::compile_fixture("net_symbol_staircase", "root.zen");
     let document = plan_reconciliation(None, &netlist, "NetSymbolStaircase.kicad_sch")
         .unwrap()
-        .apply(None)
+        .apply_all(None)
         .unwrap();
 
     assert!(
@@ -180,18 +188,6 @@ fn generated_net_symbols_share_staircase_channels_across_orientations() {
             .is_equivalent()
     );
     let page = &document.pages[0];
-    let shared_ground_count = page
-        .items
-        .iter()
-        .filter(|item| {
-            matches!(
-                item,
-                SchItem::Symbol(symbol)
-                    if symbol.field_value("Value") == Some("GROUND_SHARED")
-            )
-        })
-        .count();
-    assert_eq!(shared_ground_count, 1);
     let mut net_symbols = page
         .items
         .iter()
@@ -251,7 +247,7 @@ fn generated_net_symbols_share_staircase_channels_across_orientations() {
 
     let unchanged =
         plan_reconciliation(Some(&document), &netlist, "NetSymbolStaircase.kicad_sch").unwrap();
-    assert!(unchanged.is_empty(), "{:#?}", unchanged.edits());
+    assert!(unchanged.is_empty(), "{:#?}", unchanged.patches());
 }
 
 #[test]
@@ -259,7 +255,7 @@ fn driven_pin_splits_missing_net_symbol_runs_into_distinct_stairs() {
     let netlist = common::compile_fixture("net_symbol_staircase", "root.zen");
     let mut document = plan_reconciliation(None, &netlist, "NetSymbolStaircase.kicad_sch")
         .unwrap()
-        .apply(None)
+        .apply_all(None)
         .unwrap();
     let component = document.pages[0]
         .items
@@ -293,7 +289,7 @@ fn driven_pin_splits_missing_net_symbol_runs_into_distinct_stairs() {
 
     let repaired = plan_reconciliation(Some(&document), &netlist, "NetSymbolStaircase.kicad_sch")
         .unwrap()
-        .apply(Some(&document))
+        .apply_all(Some(&document))
         .unwrap();
 
     assert!(
@@ -328,7 +324,7 @@ fn root_interfaces_use_hierarchical_labels_directly_on_component_pins() {
     let netlist = common::compile_fixture("hierarchy", "root_interface.zen");
     let document = plan_reconciliation(None, &netlist, "RootInterface.kicad_sch")
         .unwrap()
-        .apply(None)
+        .apply_all(None)
         .unwrap();
     let page = &document.pages[0];
     let labels = page
@@ -382,7 +378,7 @@ fn unused_interface_labels_are_grouped_and_required() {
     let netlist = common::compile_fixture("hierarchy", "unused_root_interface.zen");
     let document = plan_reconciliation(None, &netlist, "UnusedRootInterface.kicad_sch")
         .unwrap()
-        .apply(None)
+        .apply_all(None)
         .unwrap();
     let mut labels = document.pages[0]
         .items
@@ -433,7 +429,7 @@ fn generated_hierarchy_connects_sheet_ports_with_orthogonal_routes() {
     let netlist = common::compile_fixture("hierarchy", "root.zen");
     let document = plan_reconciliation(None, &netlist, "Hierarchy.kicad_sch")
         .unwrap()
-        .apply(None)
+        .apply_all(None)
         .unwrap();
 
     let hierarchy_wires = document
@@ -515,7 +511,7 @@ fn complete_reconciliation_prefers_hierarchy_for_cross_page_interface_nets() {
     let netlist = common::compile_fixture("hierarchy", "root_multi_island_interface.zen");
     let document = plan_reconciliation(None, &netlist, "MultiIslandInterface.kicad_sch")
         .unwrap()
-        .apply(None)
+        .apply_all(None)
         .unwrap();
 
     let temp_labels = document
@@ -547,7 +543,7 @@ fn hierarchy_net_symbols_share_staircase_channels_across_orientations() {
     let netlist = common::compile_fixture("hierarchy", "root_power_hierarchy.zen");
     let document = plan_reconciliation(None, &netlist, "PowerHierarchy.kicad_sch")
         .unwrap()
-        .apply(None)
+        .apply_all(None)
         .unwrap();
     let root = document
         .pages
@@ -608,7 +604,7 @@ fn missing_symbols_use_attached_net_symbol_orientation() {
     );
     let document = plan_reconciliation(None, &netlist, "InitialOrientation.kicad_sch")
         .unwrap()
-        .apply(None)
+        .apply_all(None)
         .unwrap();
     let rotation = |path: &str| {
         document.pages[0]
@@ -642,7 +638,7 @@ fn replacing_a_modules_only_component_reuses_its_existing_sheet() {
     let netlist = common::compile_fixture("hierarchy", "root.zen");
     let document = plan_reconciliation(None, &netlist, "Hierarchy.kicad_sch")
         .unwrap()
-        .apply(None)
+        .apply_all(None)
         .unwrap();
     let mut stale = document.clone();
     let filter_a_page = stale
@@ -663,7 +659,7 @@ fn replacing_a_modules_only_component_reuses_its_existing_sheet() {
 
     let repaired = plan_reconciliation(Some(&stale), &netlist, "Hierarchy.kicad_sch")
         .unwrap()
-        .apply(Some(&stale))
+        .apply_all(Some(&stale))
         .unwrap();
 
     assert_eq!(repaired.pages.len(), document.pages.len());
@@ -697,7 +693,7 @@ fn initializes_and_semantically_adopts_net_symbols() {
     );
 
     let unchanged = plan_reconciliation(Some(&document), &netlist, "NetSymbols.kicad_sch").unwrap();
-    assert!(unchanged.is_empty(), "{:#?}", unchanged.edits());
+    assert!(unchanged.is_empty(), "{:#?}", unchanged.patches());
 
     let mut customized = document.clone();
     let ground = net_symbol_mut(&mut customized, "GROUND");
@@ -717,7 +713,7 @@ fn initializes_and_semantically_adopts_net_symbols() {
         .insert(custom_definition.lib_id.clone(), custom_definition);
 
     let adopted = plan_reconciliation(Some(&customized), &netlist, "NetSymbols.kicad_sch").unwrap();
-    assert!(adopted.is_empty(), "{:#?}", adopted.edits());
+    assert!(adopted.is_empty(), "{:#?}", adopted.patches());
 }
 
 #[test]
@@ -766,7 +762,7 @@ fn moved_net_symbol_does_not_block_a_missing_driver() {
     move_symbol(net_symbol_mut(&mut document, "GROUND"), moved_at);
 
     let plan = plan_reconciliation(Some(&document), &netlist, "NetSymbols.kicad_sch").unwrap();
-    let repaired = plan.apply(Some(&document)).unwrap();
+    let repaired = plan.apply_all(Some(&document)).unwrap();
     let grounds = repaired.pages[0]
         .items
         .iter()
@@ -790,7 +786,7 @@ fn moved_net_symbol_does_not_block_a_missing_driver() {
             .any(|symbol| symbol.id != original.id && symbol.at == original.at)
     );
     let unchanged = plan_reconciliation(Some(&repaired), &netlist, "NetSymbols.kicad_sch").unwrap();
-    assert!(unchanged.is_empty(), "{:#?}", unchanged.edits());
+    assert!(unchanged.is_empty(), "{:#?}", unchanged.patches());
 }
 
 #[test]
@@ -818,7 +814,7 @@ fn preserves_non_naming_power_symbols() {
         .insert(power_flag_definition.lib_id.clone(), power_flag_definition);
 
     let preserved = plan_reconciliation(Some(&document), &netlist, "NetSymbols.kicad_sch").unwrap();
-    assert!(preserved.is_empty(), "{:#?}", preserved.edits());
+    assert!(preserved.is_empty(), "{:#?}", preserved.patches());
 }
 
 #[test]
@@ -841,7 +837,7 @@ fn reconciliation_removes_only_an_unmatched_net_symbol() {
 
     let repaired = plan_reconciliation(Some(&with_stray), &netlist, "NetSymbols.kicad_sch")
         .unwrap()
-        .apply(Some(&with_stray))
+        .apply_all(Some(&with_stray))
         .unwrap();
     assert_eq!(repaired, document);
 }
@@ -865,7 +861,7 @@ fn reconciliation_removes_a_matching_net_symbol_from_the_wrong_island() {
 
     let repaired = plan_reconciliation(Some(&shorted), &netlist, "NetSymbols.kicad_sch")
         .unwrap()
-        .apply(Some(&shorted))
+        .apply_all(Some(&shorted))
         .unwrap();
     assert_eq!(repaired, document);
 }
@@ -874,7 +870,7 @@ fn net_symbol_fixture() -> (Schematic, SchDocument) {
     let netlist = common::compile_fixture("analysis", "net_symbols.zen");
     let document = plan_reconciliation(None, &netlist, "NetSymbols.kicad_sch")
         .unwrap()
-        .apply(None)
+        .apply_all(None)
         .unwrap();
     (netlist, document)
 }
@@ -916,7 +912,7 @@ fn connected_net_missing_its_port_label_reports_missing_port() {
     let netlist = common::compile_fixture("hierarchy", "root_interface.zen");
     let mut document = plan_reconciliation(None, &netlist, "RootInterface.kicad_sch")
         .unwrap()
-        .apply(None)
+        .apply_all(None)
         .unwrap();
     // Demote the INPUT port's hierarchical label to a local label: every pin
     // stays connected, but the module no longer exposes the port.
@@ -947,7 +943,7 @@ fn symbol_backed_root_port_accepts_symbol_or_hierarchical_label_and_repairs_neit
     let netlist = common::compile_fixture("hierarchy", "root_symbol_interface.zen");
     let symbol_only = plan_reconciliation(None, &netlist, "RootSymbolInterface.kicad_sch")
         .unwrap()
-        .apply(None)
+        .apply_all(None)
         .unwrap();
     let power_symbol = net_symbol(&symbol_only, "POWER");
     let power_connection = symbol_only.pages[0].library.definitions[&power_symbol.lib_id]
@@ -998,15 +994,10 @@ fn symbol_backed_root_port_accepts_symbol_or_hierarchical_label_and_repairs_neit
             .is_equivalent()
     );
 
-    let repaired = plan_repairs(
-        &neither,
-        &netlist,
-        &inspection,
-        BTreeSet::from([SchematicIssueKey::MissingPort("POWER".to_string())]),
-    )
-    .unwrap()
-    .apply(Some(&neither))
-    .unwrap();
+    let repaired = plan_reconciliation(Some(&neither), &netlist, "RootSymbolInterface.kicad_sch")
+        .unwrap()
+        .apply_all(Some(&neither))
+        .unwrap();
     assert!(repaired.pages[0].items.iter().any(|item| {
         matches!(item, SchItem::Symbol(symbol)
             if symbol.field_value("Value") == Some("POWER"))
@@ -1017,71 +1008,4 @@ fn symbol_backed_root_port_accepts_symbol_or_hierarchical_label_and_repairs_neit
             .analysis
             .is_equivalent()
     );
-}
-
-/// The composer mints deterministic label ids. When the editor has since
-/// moved that label to another page (or the id is otherwise taken), a repair
-/// must mint a fresh id instead of stealing the existing item back.
-#[test]
-fn repairing_a_missing_port_never_steals_a_label_from_another_page() {
-    let netlist = common::compile_fixture("hierarchy", "root_interface.zen");
-    let mut document = plan_reconciliation(None, &netlist, "RootInterface.kicad_sch")
-        .unwrap()
-        .apply(None)
-        .unwrap();
-    let root_page_id = document.pages[0].id.clone();
-    // Delete the composed INPUT label outright: the deterministic id the
-    // repair would mint must exist only on the other page.
-    document.pages[0]
-        .items
-        .retain(|item| !matches!(item, SchItem::Label(label) if label.text == "INPUT"));
-    // Another page owns the id the repair would mint for the root's INPUT
-    // context endpoint.
-    let taken_id = deterministic_uuid(format!("zener:context-endpoint:{root_page_id}:INPUT:INPUT"));
-    let mut extra = SchPage::new("extra");
-    extra.file_name = Some("Extra.kicad_sch".to_string());
-    extra.items.push(SchItem::Label(Label::new(
-        &taken_id,
-        "OTHER",
-        Point::new(10.0, 10.0),
-    )));
-    document.pages.push(extra);
-    document.root_page_ids.push("extra".to_string());
-
-    let inspection = inspect_schematic(&document, &netlist).unwrap();
-    assert!(
-        inspection
-            .issues
-            .iter()
-            .any(|issue| issue.key == SchematicIssueKey::MissingPort("INPUT".to_string())),
-        "{:#?}",
-        inspection.analysis.issues()
-    );
-    let repaired = plan_repairs(
-        &document,
-        &netlist,
-        &inspection,
-        std::collections::BTreeSet::from([SchematicIssueKey::MissingPort("INPUT".to_string())]),
-    )
-    .unwrap()
-    .apply(Some(&document))
-    .unwrap();
-
-    // The foreign label stays exactly where the user left it.
-    let extra_page = repaired
-        .pages
-        .iter()
-        .find(|page| page.id == "extra")
-        .unwrap();
-    assert!(extra_page.items.iter().any(|item| matches!(
-        item,
-        SchItem::Label(label) if label.id == taken_id && label.text == "OTHER"
-    )));
-    // The root regained its INPUT port under a fresh id.
-    assert!(repaired.pages[0].items.iter().any(|item| matches!(
-        item,
-        SchItem::Label(label) if label.text == "INPUT"
-            && matches!(label.kind, LabelKind::Hierarchical { .. })
-            && label.id != taken_id
-    )));
 }

@@ -8,7 +8,7 @@ use crate::{
     CONNECTION_GRID_MM, FieldHorizontalJustify, FieldJustify, FieldVerticalJustify,
     GEOMETRY_EPS_MM, Label, LabelKind, LabelShape, LabelSpin, Paper, Point, Rotation, SchDocument,
     SchItem, SchPage, Sheet, SheetPin, Symbol, SymbolDefinition, SymbolField, SymbolSlotKey, Wire,
-    analysis::{ConnectivityInspection, SchematicIssue, SchematicIssueKey},
+    analysis::{ConnectivityInspection, SchematicIssue},
     component_slots,
     connectivity::{
         ConnectionOrigin, ConnectivityItemRef, IslandRef, PhysicalConnectivity, PhysicalIsland,
@@ -37,16 +37,8 @@ pub(crate) fn reconcile_document(
     existing: Option<&SchDocument>,
     netlist: &Schematic,
     root_file_name: Option<&str>,
-    issue_selection: Option<&BTreeSet<SchematicIssueKey>>,
-    placement_page_id: Option<&str>,
     inspection_before: Option<&ConnectivityInspection>,
 ) -> Result<SchDocument> {
-    if issue_selection.is_some_and(BTreeSet::is_empty) {
-        return existing
-            .cloned()
-            .context("repairing selected issues requires an existing document");
-    }
-    let complete = issue_selection.is_none();
     // The generated document is not a canonical representation. Any existing
     // KiCad organization is valid when its connectivity matches the netlist;
     // managed symbol identities are the only reconciliation metadata we may
@@ -81,11 +73,10 @@ pub(crate) fn reconcile_document(
         .into_iter()
         .collect::<BTreeSet<_>>();
     let RepairTargets {
-        project_slots,
         remove_slots,
         remove_locations,
-        connectivity: selected_connectivity,
-    } = repair_targets(issue_selection, inspection_before, &expected_slots)?;
+    } = repair_targets(inspection_before);
+    let project_slots = expected_slots.clone();
     let instances = component_instances(netlist)?;
     let mut selected_existing = BTreeMap::new();
     for slot in &project_slots {
@@ -113,18 +104,6 @@ pub(crate) fn reconcile_document(
         },
     );
     let linked_modules = linked_modules(netlist)?;
-    let linked_modules = if complete {
-        linked_modules
-    } else {
-        linked_modules
-            .into_iter()
-            .filter(|module| {
-                project_slots
-                    .iter()
-                    .any(|slot| hierarchy::is_descendant(slot.component_path(), &module.path))
-            })
-            .collect()
-    };
     let existing_page_ids = document
         .pages
         .iter()
@@ -139,33 +118,18 @@ pub(crate) fn reconcile_document(
     )?;
     materialize_hierarchy(&mut document, netlist, &hierarchy)?;
 
-    let retained_power_symbols = if complete {
-        power_symbol_locations(&document)?
-    } else {
-        BTreeSet::new()
-    };
+    let retained_power_symbols = power_symbol_locations(&document)?;
     for slot in &remove_slots {
         remove_component_slot(&mut document, slot);
     }
     for location in &remove_locations {
         remove_symbol_location(&mut document, location);
     }
-    let placement_page = placement_page_id
-        .map(|page_id| {
-            document
-                .pages
-                .iter()
-                .position(|page| page.id == page_id)
-                .with_context(|| format!("placement page '{page_id}' is absent"))
-        })
-        .transpose()?;
     let net_symbol_specs = net_symbols::specs(netlist)?;
     for slot in &project_slots {
         let selected = selected_existing.get(slot);
         let page_index = if let Some(selected) = selected {
             selected.page_index
-        } else if let Some(placement_page) = placement_page {
-            placement_page
         } else {
             hierarchy.page_for_new_component(slot.component_path())?
         };
@@ -179,9 +143,7 @@ pub(crate) fn reconcile_document(
             &net_symbol_specs,
         )?;
     }
-    if complete {
-        retain_expected_and_power_symbols(&mut document, &expected_slots, &retained_power_symbols);
-    }
+    retain_expected_and_power_symbols(&mut document, &expected_slots, &retained_power_symbols);
 
     let mut placed = placed_symbols_from_document(&document, &expected_slots)?;
     pack_generated_symbols(
@@ -201,69 +163,21 @@ pub(crate) fn reconcile_document(
         &hierarchy,
     )?;
 
-    // A projected component's expected connectivity is already known from the
-    // netlist. Attach its pins now, after placement, instead of rediscovering
-    // their disconnections as a second set of schematic issues.
-    let all_nets = named_connected_nets(netlist)
-        .map(|net| net.name.clone())
-        .collect::<BTreeSet<_>>();
-    let projected_nets = connectivity_targets(netlist, &placed, &all_nets)?
-        .into_iter()
-        .filter(|(_, targets)| {
-            targets
-                .iter()
-                .any(|target| relocatable_slots.contains(&target.slot))
-        })
-        .map(|(net_name, _)| net_name)
-        .collect::<BTreeSet<_>>();
-    if !projected_nets.is_empty() {
-        add_connectivity_drivers(
-            &mut document,
-            netlist,
-            &placed,
-            &net_symbol_specs,
-            default_page,
-            &projected_nets,
-            complete,
-        )?;
-    }
-
-    let current = crate::analysis::inspect_schematic(&document, netlist)?;
-    let repair_keys = if complete {
-        current
-            .issues
-            .iter()
-            .map(|issue| issue.key.clone())
-            .collect::<BTreeSet<_>>()
-    } else {
-        let before_keys = inspection_before
-            .into_iter()
-            .flat_map(|inspection| &inspection.issues)
-            .map(|issue| issue.key.clone())
-            .collect::<BTreeSet<_>>();
-        // Any selected mutation (projection or removal) shifts issue keys, so
-        // connectivity issues that appear only after the mutation belong to
-        // this repair's scope.
-        let document_mutated =
-            !project_slots.is_empty() || !remove_slots.is_empty() || !remove_locations.is_empty();
-        current
-            .issues
-            .iter()
-            .filter(|issue| {
-                selected_connectivity.contains(&issue.key)
-                    || (document_mutated
-                        && !before_keys.contains(&issue.key)
-                        && is_connectivity_issue(&issue.issue))
-            })
-            .map(|issue| issue.key.clone())
-            .collect::<BTreeSet<_>>()
-    };
-    if creating || !repair_keys.is_empty() {
-        let mut plan = plan_connectivity_repair(&document, netlist, &current, &repair_keys)?;
-        if creating {
+    // Some global repairs expose the next discrepancy only after their
+    // coupled edits are applied (for example upgrading one side of a
+    // cross-page net can expose another stale page-scoped driver). Solve to a
+    // fixed point instead of encoding issue-order dependencies.
+    for pass in 0..32 {
+        let current = crate::analysis::inspect_schematic(&document, netlist)?;
+        if current.issues.is_empty() && !(creating && pass == 0) {
+            break;
+        }
+        let mut plan = plan_connectivity_repair(&document, netlist, &current)?;
+        if creating && pass == 0 {
             plan.reconnect_nets
                 .extend(named_connected_nets(netlist).map(|net| net.name.clone()));
         }
+        let before = document.clone();
         apply_connectivity_repair(
             &mut document,
             netlist,
@@ -271,70 +185,45 @@ pub(crate) fn reconcile_document(
             &net_symbol_specs,
             default_page,
             plan,
-            complete,
+            true,
         )?;
+        if document == before {
+            if current.issues.is_empty() {
+                break;
+            }
+            bail!(
+                "global schematic reconciliation made no progress on: {}",
+                current
+                    .issues
+                    .iter()
+                    .map(|issue| issue.issue.summary())
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            );
+        }
+        if pass == 31 {
+            bail!("global schematic reconciliation did not converge");
+        }
     }
 
-    // Library cleanup is a whole-document concern; a scoped repair must not
-    // touch pages outside its selection.
-    if complete {
-        prune_unused_symbol_definitions(&mut document);
-    }
+    prune_unused_symbol_definitions(&mut document);
     Ok(document)
 }
 
-fn is_connectivity_issue(issue: &SchematicIssue) -> bool {
-    matches!(
-        issue,
-        SchematicIssue::DisconnectedNet { .. }
-            | SchematicIssue::MissingPort { .. }
-            | SchematicIssue::UnexpectedNet { .. }
-            | SchematicIssue::UnexpectedConnection { .. }
-            | SchematicIssue::Shorted { .. }
-    )
-}
-
 struct RepairTargets {
-    project_slots: BTreeSet<SymbolSlotKey>,
     remove_slots: BTreeSet<SymbolSlotKey>,
     remove_locations: BTreeSet<SymbolLocation>,
-    connectivity: BTreeSet<SchematicIssueKey>,
 }
 
-fn repair_targets(
-    issue_selection: Option<&BTreeSet<SchematicIssueKey>>,
-    inspection: Option<&ConnectivityInspection>,
-    expected_slots: &BTreeSet<SymbolSlotKey>,
-) -> Result<RepairTargets> {
-    let mut project_slots = if issue_selection.is_none() {
-        expected_slots.clone()
-    } else {
-        BTreeSet::new()
-    };
+fn repair_targets(inspection: Option<&ConnectivityInspection>) -> RepairTargets {
     let mut remove_slots = BTreeSet::new();
     let mut remove_locations = BTreeSet::new();
-    let mut selected_connectivity = BTreeSet::new();
     if let Some(inspection) = inspection {
-        let selected = match issue_selection {
-            Some(keys) => keys
-                .iter()
-                .map(|key| {
-                    inspection
-                        .issues
-                        .iter()
-                        .find(|issue| &issue.key == key)
-                        .with_context(|| format!("schematic issue {key:?} is not present"))
-                })
-                .collect::<Result<Vec<_>>>()?,
-            None => inspection.issues.iter().collect(),
-        };
-        for context in selected {
+        for context in &inspection.issues {
             match &context.issue {
-                SchematicIssue::MissingSymbol { slot }
-                | SchematicIssue::DuplicateSymbol { slot, .. }
-                | SchematicIssue::MismatchedSymbolId { slot, .. } => {
-                    project_slots.insert(slot.clone());
-                }
+                SchematicIssue::MissingSymbol { .. }
+                | SchematicIssue::DuplicateSymbol { .. }
+                | SchematicIssue::MismatchedSymbolId { .. } => {}
                 SchematicIssue::UnexpectedSymbol { slot, .. } => {
                     remove_slots.insert(slot.clone());
                 }
@@ -345,20 +234,14 @@ fn repair_targets(
                 | SchematicIssue::MissingPort { .. }
                 | SchematicIssue::UnexpectedNet { .. }
                 | SchematicIssue::UnexpectedConnection { .. }
-                | SchematicIssue::Shorted { .. } => {
-                    selected_connectivity.insert(context.key.clone());
-                }
+                | SchematicIssue::Shorted { .. } => {}
             }
         }
-    } else if issue_selection.is_some() {
-        bail!("repairing selected issues requires a valid inspection");
     }
-    Ok(RepairTargets {
-        project_slots,
+    RepairTargets {
         remove_slots,
         remove_locations,
-        connectivity: selected_connectivity,
-    })
+    }
 }
 
 fn project_component_slot(
@@ -1921,6 +1804,10 @@ fn apply_connectivity_repair(
     for location in &plan.relocate_symbols {
         relocate_symbol(document, placed, location)?;
     }
+    // Route every physically realizable same-page connection in one global
+    // geometry pass. Semantic drivers then cover only the remaining islands,
+    // including cross-page and long-span connections.
+    crate::routing::route_disconnected_nets(document, netlist, &plan.reconnect_nets)?;
     add_connectivity_drivers(
         document,
         netlist,

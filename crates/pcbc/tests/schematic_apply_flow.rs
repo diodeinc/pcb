@@ -1,11 +1,11 @@
 use super::schematic_apply_common as common;
 
-use std::{collections::BTreeSet, fs};
+use std::fs;
 
 use pcb_kicad_sch::{
     Label, LabelKind, LabelShape, LabelSpin, PinInstance, Point, SchItem, SymbolDefinition, Wire,
     analysis::{SchematicIssue, inspect_schematic},
-    reconcile::plan_repairs,
+    reconcile::plan_reconciliation,
 };
 use pcb_sch::{ATTR_SCHEMATIC_PATH, ATTR_SYMBOL_FORMAT_VERSION, AttributeValue};
 use pcb_sexpr::Sexpr;
@@ -507,25 +507,22 @@ fn preserves_equivalent_user_connectivity_without_normalizing_labels() {
     apply_linked_schematic(&netlist).unwrap().unwrap();
 
     let mut project = KicadProject::load(&project_dir).unwrap();
-    let anchors = project.document.pages[0]
+    let mut duplicate_label = project.document.pages[0]
         .items
         .iter()
-        .filter_map(|item| match item {
+        .find_map(|item| match item {
             SchItem::Label(label)
                 if label.text == "MID" && matches!(label.kind, LabelKind::Local) =>
             {
-                Some(label.at)
+                Some(label.clone())
             }
             _ => None,
         })
-        .collect::<Vec<_>>();
-    assert_eq!(anchors.len(), 2);
-    project.document.pages[0].items.push(SchItem::Wire(Wire {
-        id: "mid-island-wire".to_string(),
-        a: anchors[0],
-        b: anchors[1],
-        unsupported: Vec::new(),
-    }));
+        .expect("generated MID label");
+    duplicate_label.id = "user-mid-label".to_string();
+    project.document.pages[0]
+        .items
+        .push(SchItem::Label(duplicate_label));
     fs::write(
         &project.schematic_files[0],
         project.document.to_kicad_sch().unwrap(),
@@ -539,7 +536,7 @@ fn preserves_equivalent_user_connectivity_without_normalizing_labels() {
         repaired.document.pages[0]
             .items
             .iter()
-            .any(|item| matches!(item, SchItem::Wire(wire) if wire.id == "mid-island-wire"))
+            .any(|item| matches!(item, SchItem::Label(label) if label.id == "user-mid-label"))
     );
     assert_eq!(
         repaired.document.pages[0]
@@ -863,7 +860,12 @@ fn repairs_a_disconnected_net_without_removing_remaining_wires() {
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(repaired_wire_ids, remaining_wire_ids);
+    assert!(
+        remaining_wire_ids
+            .iter()
+            .all(|id| repaired_wire_ids.contains(id))
+    );
+    assert!(repaired_wire_ids.len() > remaining_wire_ids.len());
     let analysis = inspect_schematic(&repaired.document, &netlist)
         .unwrap()
         .analysis;
@@ -990,7 +992,7 @@ fn removes_a_short_without_rebuilding_unaffected_nets() {
 }
 
 #[test]
-fn ambiguous_short_uses_the_same_repair_as_the_shared_issue_planner() {
+fn ambiguous_short_uses_the_same_global_reconciliation_plan() {
     let workspace = tempfile::tempdir().unwrap();
     let project_dir = workspace.path().join("hardware");
     let netlist = linked_fixture(&project_dir);
@@ -1020,19 +1022,23 @@ fn ambiguous_short_uses_the_same_repair_as_the_shared_issue_planner() {
     }
 
     let inspection = inspect_schematic(&project.document, &netlist).unwrap();
-    let short = inspection
-        .issues
-        .iter()
-        .find(|issue| matches!(issue.issue, SchematicIssue::Shorted { .. }))
-        .expect("ambiguous short");
-    let expected = plan_repairs(
-        &project.document,
+    assert!(
+        inspection
+            .issues
+            .iter()
+            .any(|issue| matches!(issue.issue, SchematicIssue::Shorted { .. }))
+    );
+    let expected = plan_reconciliation(
+        Some(&project.document),
         &netlist,
-        &inspection,
-        BTreeSet::from([short.key.clone()]),
+        project.schematic_files[0]
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap(),
     )
     .unwrap()
-    .apply(Some(&project.document))
+    .apply_all(Some(&project.document))
     .unwrap();
     fs::write(
         &project.schematic_files[0],

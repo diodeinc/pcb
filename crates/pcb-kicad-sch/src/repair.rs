@@ -8,8 +8,8 @@ use pcb_sch::Schematic;
 use crate::{
     SchDocument, SchItem, SchPage,
     analysis::{
-        ConnectivityInspection, SchematicIssue, SchematicIssueKey, analyze_connectivity,
-        issue_context, logical_name, observed_reconcilable_connectivity,
+        ConnectivityInspection, SchematicIssue, analyze_connectivity, logical_name,
+        observed_reconcilable_connectivity,
     },
     connectivity::{
         ComponentIdentity, ConnectivityGraph, ConnectivityItemRef, PhysicalIsland, SymbolLocation,
@@ -32,32 +32,15 @@ pub(crate) fn plan_connectivity_repair(
     document: &SchDocument,
     netlist: &Schematic,
     inspection: &ConnectivityInspection,
-    selected_keys: &BTreeSet<SchematicIssueKey>,
 ) -> Result<ConnectivityRepairPlan> {
     let expected = &inspection.expected;
     let observed = &inspection.physical;
     let mut removals = BTreeSet::new();
     let mut relocate_symbols = BTreeSet::new();
-    let selected = inspection
-        .issues
-        .iter()
-        .filter(|issue| selected_keys.contains(&issue.key))
-        .collect::<Vec<_>>();
-    if selected.len() != selected_keys.len() {
-        let found = selected
-            .iter()
-            .map(|issue| issue.key.clone())
-            .collect::<BTreeSet<_>>();
-        let missing = selected_keys.difference(&found).collect::<Vec<_>>();
-        bail!("schematic issues are not present: {missing:?}");
-    }
-    let selected_items = selected
-        .iter()
-        .flat_map(|issue| issue.items.iter().cloned())
-        .collect::<BTreeSet<_>>();
+    let issues = inspection.issues.iter().collect::<Vec<_>>();
     let mut reconnect_nets = BTreeSet::new();
 
-    for context in &selected {
+    for context in &issues {
         match &context.issue {
             SchematicIssue::DisconnectedNet { net_name, .. }
             | SchematicIssue::MissingPort { net_name, .. } => {
@@ -118,15 +101,10 @@ pub(crate) fn plan_connectivity_repair(
         let current_analysis = analyze_connectivity(expected, &current_observed.graph);
         let current_problems = repair_problem_counts(current_analysis.issues());
         let Some(issue) = current_analysis.issues().iter().find(|issue| {
-            if !matches!(
+            matches!(
                 issue,
                 SchematicIssue::Shorted { .. } | SchematicIssue::UnexpectedConnection { .. }
-            ) {
-                return false;
-            }
-            let context = issue_context((*issue).clone(), &current_observed.islands);
-            selected.iter().any(|selected| &selected.issue == *issue)
-                || !context.items.is_disjoint(&selected_items)
+            )
         }) else {
             break;
         };
