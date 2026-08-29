@@ -1,0 +1,18 @@
+[package]
+name = "pcb-route-native"
+version = "0.1.0"
+edition = { workspace = true }
+repository = { workspace = true }
+homepage = { workspace = true }
+authors = { workspace = true }
+description = "Native Rust routing-grid model and (eventually) autorouter for .kicad_pcb boards"
+license = "MIT OR Apache-2.0"
+keywords = ["pcb", "routing", "eda", "autorouter"]
+categories = ["hardware-support"]
+
+[dependencies]
+pcb-sexpr = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }

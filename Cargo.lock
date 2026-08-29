@@ -4402,6 +4402,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pcb-route-native"
+version = "0.1.0"
+dependencies = [
+ "insta",
+ "pcb-sexpr",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "pcb-sch"
 version = "0.4.40"
 dependencies = [

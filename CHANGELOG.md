@@ -8,10 +8,9 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
-### Fixed
+### Added
 
-- Complete the E48 and E192 standard value tables used by `e48()` and `e192()`.
-- `pcb build --config` now rejects unknown root configuration keys.
+- New `pcb-route-native` crate: rasterizes a parsed `.kicad_pcb` board into a single-layer obstacle/keepout/free routing grid. First step toward a native Rust autorouter; no pathfinding yet.
 
 ## [0.4.40] - 2026-08-28
 
