@@ -192,13 +192,7 @@ pub(crate) fn reconcile_document(
         preserved_page_count,
     )?;
 
-    add_hierarchy_connectivity(
-        &mut document,
-        netlist,
-        &placed,
-        &net_symbol_specs,
-        &hierarchy,
-    )?;
+    add_hierarchy_connectivity(&mut document, netlist, &placed, &hierarchy)?;
 
     // A projected component's expected connectivity is already known from the
     // netlist. Attach its pins now, after placement, instead of rediscovering
@@ -1983,7 +1977,6 @@ fn add_hierarchy_connectivity(
     document: &mut SchDocument,
     netlist: &Schematic,
     placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
-    net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
     plan: &hierarchy::HierarchyPlan,
 ) -> Result<()> {
     if plan.sheets.is_empty() {
@@ -2009,35 +2002,92 @@ fn add_hierarchy_connectivity(
                 _ => None,
             })
             .context("materialized hierarchy sheet is absent from its parent page")?;
-        let parent_anchors = sheet.pins.iter().map(|pin| pin.at).collect::<Vec<_>>();
+        let parent_bounds = sheet
+            .bounds()
+            .and_then(|(min, max)| field_autoplace::Bounds::from_points([min, max]))
+            .context("materialized hierarchy sheet has no bounds")?;
+        let parent_anchors = sheet
+            .pins
+            .iter()
+            .map(|pin| {
+                let spin = match pin.rotation {
+                    Rotation::Deg0 => LabelSpin::Right,
+                    Rotation::Deg90 => LabelSpin::Up,
+                    Rotation::Deg180 => LabelSpin::Left,
+                    Rotation::Deg270 => LabelSpin::Bottom,
+                };
+                (pin.at, spin)
+            })
+            .collect::<Vec<_>>();
 
-        for ((net_name, port_name), parent_pin) in ports.into_iter().zip(parent_anchors) {
+        for ((net_name, port_name), (parent_pin, parent_spin)) in
+            ports.into_iter().zip(parent_anchors)
+        {
             let key = format!("{}:{port_name}", sheet_plan.module_path);
+            let parent_driver =
+                driver_connection_point(parent_bounds, parent_pin, parent_spin, parent_spin, 0);
+            let parent_driver_key = format!("zener:module-parent-driver:{key}:{net_name}");
             upsert_contextual_driver(
                 document,
-                net_symbol_specs,
                 &page_contexts,
                 sheet_plan.parent_page,
                 &net_name,
-                (parent_pin, LabelSpin::Left),
-                &format!("zener:module-parent-driver:{key}:{net_name}"),
+                (parent_driver, parent_spin),
+                &parent_driver_key,
             )?;
+            insert_connection_wires(
+                document,
+                sheet_plan.parent_page,
+                &deterministic_uuid(parent_driver_key),
+                parent_pin,
+                parent_driver,
+                parent_spin,
+            );
 
-            let child_anchor = canonical_target(&targets, &net_name, sheet_plan.child_page)
-                .map(|target| (target.point, target.spin))
-                .unwrap_or((
+            let child_target = canonical_target(&targets, &net_name, sheet_plan.child_page);
+            let child_anchor = if let Some(target) = child_target {
+                let placed = &placed[&target.slot];
+                let bounds =
+                    field_autoplace::symbol_geometry_bounds(&placed.symbol, &placed.definition)?
+                        .unwrap_or_else(|| {
+                            field_autoplace::Bounds::from_points([placed.symbol.at])
+                                .expect("one point defines bounds")
+                        });
+                // Keep the hierarchy bridge perpendicular to the ordinary net
+                // symbol's route so both endpoints remain legible.
+                let spin = match target.spin {
+                    LabelSpin::Left | LabelSpin::Right => LabelSpin::Up,
+                    LabelSpin::Up | LabelSpin::Bottom => LabelSpin::Left,
+                };
+                (
+                    driver_connection_point(bounds, target.point, spin, spin, 0),
+                    spin,
+                )
+            } else {
+                (
                     place_context_label(document, sheet_plan.child_page, &port_name)?,
                     LabelSpin::Right,
-                ));
+                )
+            };
+            let child_driver_key = format!("zener:module-child-driver:{key}:{net_name}");
             upsert_contextual_driver(
                 document,
-                net_symbol_specs,
                 &page_contexts,
                 sheet_plan.child_page,
                 &net_name,
                 child_anchor,
-                &format!("zener:module-child-driver:{key}:{net_name}"),
+                &child_driver_key,
             )?;
+            if let Some(target) = child_target {
+                insert_connection_wires(
+                    document,
+                    sheet_plan.child_page,
+                    &deterministic_uuid(child_driver_key),
+                    target.point,
+                    child_anchor.0,
+                    child_anchor.1,
+                );
+            }
         }
     }
     Ok(())
@@ -2444,29 +2494,42 @@ fn net_symbol_connection_point(
             field_autoplace::Bounds::from_points([placed.symbol.at])
                 .expect("one point defines bounds")
         });
+    Ok(driver_connection_point(
+        bounds,
+        target.point,
+        target.spin,
+        symbol_pin_spin,
+        stair_index,
+    ))
+}
+
+fn driver_connection_point(
+    bounds: field_autoplace::Bounds,
+    target: Point,
+    target_spin: LabelSpin,
+    driver_spin: LabelSpin,
+    stair_index: usize,
+) -> Point {
     let offset = NET_SYMBOL_OFFSET_CELLS * CONNECTION_GRID_MM;
     let stair = stair_index as f64 * NET_SYMBOL_STAIR_CELLS * CONNECTION_GRID_MM;
-    let point = match target.spin {
+    let point = match target_spin {
         LabelSpin::Left | LabelSpin::Right => {
-            let x = if target.spin == LabelSpin::Left {
+            let x = if target_spin == LabelSpin::Left {
                 bounds.min_x - offset - stair
             } else {
                 bounds.max_x + offset + stair
             };
-            let y = match symbol_pin_spin {
+            let y = match driver_spin {
                 LabelSpin::Up => bounds.max_y + offset + stair,
                 LabelSpin::Bottom => bounds.min_y - offset - stair,
-                LabelSpin::Left | LabelSpin::Right => target.point.y + stair,
+                LabelSpin::Left | LabelSpin::Right => target.y + stair,
             };
             Point::new(x, y)
         }
-        LabelSpin::Up => Point::new(target.point.x + stair, bounds.min_y - offset),
-        LabelSpin::Bottom => Point::new(target.point.x + stair, bounds.max_y + offset),
+        LabelSpin::Up => Point::new(target.x + stair, bounds.min_y - offset),
+        LabelSpin::Bottom => Point::new(target.x + stair, bounds.max_y + offset),
     };
-    Ok(Point::new(
-        snap_connection_grid(point.x),
-        snap_connection_grid(point.y),
-    ))
+    Point::new(snap_connection_grid(point.x), snap_connection_grid(point.y))
 }
 
 fn snap_connection_grid(value: f64) -> f64 {
@@ -2706,7 +2769,6 @@ fn canonical_target<'a>(
 
 fn upsert_contextual_driver(
     document: &mut SchDocument,
-    net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
     page_contexts: &PageDriverContexts,
     page_index: usize,
     net_name: &str,
@@ -2714,15 +2776,12 @@ fn upsert_contextual_driver(
     key: &str,
 ) -> Result<()> {
     let (at, spin) = anchor;
-    if let Some(spec) = net_symbol_specs.get(net_name) {
-        let symbol = build_net_symbol(spec, net_name, deterministic_uuid(key), at)?;
-        return insert_net_symbol(document, page_index, symbol, &spec.definition);
-    }
     let interface_names = page_contexts
         .get(&page_index)
         .and_then(|context| context.get(net_name));
-    // Hierarchy drivers bridge pages through their sheet pins, so they never
-    // need a global label.
+    // Hierarchy construction establishes only the parent/child label bridge.
+    // Net symbols are added later by the ordinary component-driver path, which
+    // gives them the same offset routes and collision bounds as every symbol.
     let mut label = driver_label(
         net_name,
         interface_names,

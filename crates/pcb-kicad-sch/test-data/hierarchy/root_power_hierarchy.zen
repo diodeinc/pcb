@@ -1,0 +1,13 @@
+"""Power net shared by a root component and a linked child module."""
+
+Project(name="PowerHierarchy", path="kicad", layout=False)
+
+Filter = Module("filter.zen")
+Resistor = Module("@stdlib/generics/Resistor.zen")
+
+POWER = io(Power("POWER"))
+RETURN = Net("RETURN")
+SINK = Net("SINK")
+
+Resistor(name="R_ROOT", value="1kohms", package="0402", P1=POWER, P2=RETURN)
+Filter(name="CHILD", resistance="2kohms", INPUT=POWER, OUTPUT=SINK)

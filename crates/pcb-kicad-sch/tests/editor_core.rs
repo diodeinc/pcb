@@ -409,18 +409,28 @@ fn interface_only_net_missing_its_label_reports_missing_port() {
 }
 
 #[test]
-fn generated_hierarchy_connects_sheet_ports_without_label_bridges() {
+fn generated_hierarchy_connects_sheet_ports_with_orthogonal_routes() {
     let netlist = common::compile_fixture("hierarchy", "root.zen");
     let document = plan_reconciliation(None, &netlist, "Hierarchy.kicad_sch")
         .unwrap()
         .apply(None)
         .unwrap();
 
-    assert!(document.pages.iter().all(|page| {
-        page.items
+    let hierarchy_wires = document
+        .pages
+        .iter()
+        .flat_map(|page| &page.items)
+        .filter_map(|item| match item {
+            SchItem::Wire(wire) => Some(wire),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(!hierarchy_wires.is_empty());
+    assert!(
+        hierarchy_wires
             .iter()
-            .all(|item| !matches!(item, SchItem::Wire(_)))
-    }));
+            .all(|wire| wire.a.x == wire.b.x || wire.a.y == wire.b.y)
+    );
     for page in &document.pages {
         let labels = page.items.iter().filter_map(|item| match item {
             SchItem::Label(label) => Some(label),
@@ -466,6 +476,95 @@ fn complete_reconciliation_prefers_hierarchy_for_cross_page_interface_nets() {
             .all(|label| matches!(label.kind, LabelKind::Hierarchical { .. })),
         "labels={temp_labels:#?}"
     );
+}
+
+#[test]
+fn hierarchy_net_symbols_use_component_driver_placement() {
+    let netlist = common::compile_fixture("hierarchy", "root_power_hierarchy.zen");
+    let document = plan_reconciliation(None, &netlist, "PowerHierarchy.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    let root = document
+        .pages
+        .iter()
+        .find(|page| document.root_page_ids.contains(&page.id))
+        .unwrap();
+    let sheet_pin = root
+        .items
+        .iter()
+        .find_map(|item| match item {
+            SchItem::Sheet(sheet) => sheet.pins.first().map(|pin| pin.at),
+            _ => None,
+        })
+        .expect("generated child sheet has a pin");
+    let sheet_driver = root
+        .items
+        .iter()
+        .find_map(|item| match item {
+            SchItem::Label(label) if label.text == "POWER" => Some(label),
+            _ => None,
+        })
+        .expect("sheet pin gets a hierarchy bridge driver");
+    let power_symbol = root
+        .items
+        .iter()
+        .find_map(|item| match item {
+            SchItem::Symbol(symbol) if symbol.field_value("Value") == Some("POWER") => Some(symbol),
+            _ => None,
+        })
+        .expect("root component gets its regular power driver");
+
+    assert_ne!(sheet_driver.at, sheet_pin);
+    assert!(root.items.iter().any(|item| {
+        matches!(item, SchItem::Wire(wire)
+            if (wire.a == sheet_pin && wire.b == sheet_driver.at)
+                || (wire.b == sheet_pin && wire.a == sheet_driver.at))
+    }));
+    assert_ne!(power_symbol.at, sheet_pin);
+    assert!(root.items.iter().any(|item| {
+        matches!(item, SchItem::Wire(wire) if wire.a == power_symbol.at || wire.b == power_symbol.at)
+    }));
+
+    let child = document
+        .pages
+        .iter()
+        .find(|page| !document.root_page_ids.contains(&page.id))
+        .unwrap();
+    let child_driver = child
+        .items
+        .iter()
+        .find_map(|item| match item {
+            SchItem::Label(label) if label.text == "INPUT" => Some(label),
+            _ => None,
+        })
+        .expect("child component gets a hierarchy bridge driver");
+    let child_power_symbol = child
+        .items
+        .iter()
+        .find_map(|item| match item {
+            SchItem::Symbol(symbol) if symbol.field_value("Value") == Some("POWER") => Some(symbol),
+            _ => None,
+        })
+        .expect("child component gets its regular power driver");
+    let power_wire = child
+        .items
+        .iter()
+        .find_map(|item| match item {
+            SchItem::Wire(wire)
+                if wire.a == child_power_symbol.at || wire.b == child_power_symbol.at =>
+            {
+                Some(wire)
+            }
+            _ => None,
+        })
+        .expect("child power symbol is connected");
+    assert_ne!(child_driver.at, power_wire.a);
+    assert_ne!(child_driver.at, power_wire.b);
+    assert!(child.items.iter().any(|item| {
+        matches!(item, SchItem::Wire(wire)
+            if wire.a == child_driver.at || wire.b == child_driver.at)
+    }));
 }
 
 #[test]
