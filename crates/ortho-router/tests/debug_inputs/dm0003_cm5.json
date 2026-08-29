@@ -1,0 +1,1169 @@
+{
+  "obstacles": [
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.JST_BATT.SM02B-SRSS-TB_LF__SN_",
+      "bounds": {
+        "min_x": 113.3,
+        "min_y": 2666.0,
+        "max_x": 343.90000000000003,
+        "max_y": 2744.2
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.MountingHole_1.MH",
+      "bounds": {
+        "min_x": -318.5,
+        "min_y": 1815.1000000000001,
+        "max_x": -291.09999999999997,
+        "max_y": 1867.8999999999999
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF",
+      "bounds": {
+        "min_x": 1065.8000000000002,
+        "min_y": 1319.8000000000002,
+        "max_x": 1321.8000000000002,
+        "max_y": 2617.2000000000003
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF",
+      "bounds": {
+        "min_x": 100.60000000000001,
+        "min_y": 1319.8000000000002,
+        "max_x": 356.59999999999997,
+        "max_y": 2617.2000000000003
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.MountingHole_2.MH",
+      "bounds": {
+        "min_x": -318.5,
+        "min_y": 1865.9,
+        "max_x": -291.09999999999997,
+        "max_y": 1918.6999999999998
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.MountingHole_4.MH",
+      "bounds": {
+        "min_x": -318.5,
+        "min_y": 1967.5000000000002,
+        "max_x": -291.09999999999997,
+        "max_y": 2020.3
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.MountingHole_3.MH",
+      "bounds": {
+        "min_x": -318.5,
+        "min_y": 1916.7000000000003,
+        "max_x": -291.09999999999997,
+        "max_y": 1969.5
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.1",
+      "bounds": {
+        "min_x": 456.20000000000005,
+        "min_y": 2742.2,
+        "max_x": 483.6,
+        "max_y": 2769.6
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_5v.1",
+      "bounds": {
+        "min_x": -72.12,
+        "min_y": 2272.3,
+        "max_x": -54.88,
+        "max_y": 2299.7
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_3v3pi.1",
+      "bounds": {
+        "min_x": 473.97999999999996,
+        "min_y": 2348.5,
+        "max_x": 491.22,
+        "max_y": 2375.8999999999996
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5.BATT.1",
+      "bounds": {
+        "min_x": 588.28,
+        "min_y": 2246.9,
+        "max_x": 605.52,
+        "max_y": 2274.2999999999997
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.2",
+      "bounds": {
+        "min_x": 1180.1,
+        "min_y": 2678.7,
+        "max_x": 1207.5,
+        "max_y": 2706.1
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_1v8.1",
+      "bounds": {
+        "min_x": 499.37999999999994,
+        "min_y": 2399.3,
+        "max_x": 516.62,
+        "max_y": 2426.7
+      }
+    }
+  ],
+  "ports": [
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.76@76",
+      "position": {
+        "x": 356.59999999999997,
+        "y": 2286.0
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5.BATT.1.",
+      "position": {
+        "x": 596.9,
+        "y": 2274.3
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5.BATT.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.JST_BATT.SM02B-SRSS-TB_LF__SN_.1@1",
+      "position": {
+        "x": 343.9,
+        "y": 2692.4
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.JST_BATT.SM02B-SRSS-TB_LF__SN_"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.88@88",
+      "position": {
+        "x": 356.59999999999997,
+        "y": 2438.4
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_1v8.1.",
+      "position": {
+        "x": 508.0,
+        "y": 2426.7
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_1v8.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.90@90",
+      "position": {
+        "x": 356.59999999999997,
+        "y": 2463.8
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.84@84",
+      "position": {
+        "x": 356.59999999999997,
+        "y": 2387.6
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_3v3pi.1.",
+      "position": {
+        "x": 482.59999999999997,
+        "y": 2375.9
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_3v3pi.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.86@86",
+      "position": {
+        "x": 356.59999999999997,
+        "y": 2413.0
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.77@77",
+      "position": {
+        "x": 100.60000000000001,
+        "y": 2311.3999999999996
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_5v.1.",
+      "position": {
+        "x": -63.5,
+        "y": 2299.7
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_5v.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.79@79",
+      "position": {
+        "x": 100.60000000000001,
+        "y": 2336.8
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.81@81",
+      "position": {
+        "x": 100.60000000000001,
+        "y": 2362.2
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.83@83",
+      "position": {
+        "x": 100.60000000000001,
+        "y": 2387.6
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.85@85",
+      "position": {
+        "x": 100.60000000000001,
+        "y": 2413.0
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.87@87",
+      "position": {
+        "x": 100.60000000000001,
+        "y": 2438.4
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.13@13",
+      "position": {
+        "x": 100.60000000000001,
+        "y": 1498.6000000000001
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.1.",
+      "position": {
+        "x": 469.90000000000003,
+        "y": 2742.2
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.14@14",
+      "position": {
+        "x": 356.59999999999997,
+        "y": 1498.6000000000001
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.1@1",
+      "position": {
+        "x": 100.60000000000001,
+        "y": 1346.2
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.22@22",
+      "position": {
+        "x": 356.59999999999997,
+        "y": 1600.2
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.23@23",
+      "position": {
+        "x": 100.60000000000001,
+        "y": 1625.6
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.2@2",
+      "position": {
+        "x": 356.59999999999997,
+        "y": 1346.2
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.32@32",
+      "position": {
+        "x": 356.59999999999997,
+        "y": 1727.2
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.33@33",
+      "position": {
+        "x": 100.60000000000001,
+        "y": 1752.6
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.42@42",
+      "position": {
+        "x": 356.59999999999997,
+        "y": 1854.2000000000003
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.43@43",
+      "position": {
+        "x": 100.60000000000001,
+        "y": 1879.6000000000001
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.52@52",
+      "position": {
+        "x": 356.59999999999997,
+        "y": 1981.2
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.53@53",
+      "position": {
+        "x": 100.60000000000001,
+        "y": 2006.6000000000004
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.59@59",
+      "position": {
+        "x": 100.60000000000001,
+        "y": 2082.8
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.60@60",
+      "position": {
+        "x": 356.59999999999997,
+        "y": 2082.8
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.65@65",
+      "position": {
+        "x": 100.60000000000001,
+        "y": 2159.0
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.66@66",
+      "position": {
+        "x": 356.59999999999997,
+        "y": 2159.0
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.71@71",
+      "position": {
+        "x": 100.60000000000001,
+        "y": 2235.2000000000003
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.74@74",
+      "position": {
+        "x": 356.59999999999997,
+        "y": 2260.6
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.7@7",
+      "position": {
+        "x": 100.60000000000001,
+        "y": 1422.4
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.8@8",
+      "position": {
+        "x": 356.59999999999997,
+        "y": 1422.4
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.98@98",
+      "position": {
+        "x": 356.59999999999997,
+        "y": 2565.4
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.13@13",
+      "position": {
+        "x": 1065.8000000000002,
+        "y": 1498.6000000000001
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.2.",
+      "position": {
+        "x": 1193.8,
+        "y": 2678.7
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.2"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.14@14",
+      "position": {
+        "x": 1321.8000000000002,
+        "y": 1498.6000000000001
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.19@19",
+      "position": {
+        "x": 1065.8000000000002,
+        "y": 1574.8000000000002
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.20@20",
+      "position": {
+        "x": 1321.8000000000002,
+        "y": 1574.8000000000002
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.25@25",
+      "position": {
+        "x": 1065.8000000000002,
+        "y": 1651.0000000000002
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.26@26",
+      "position": {
+        "x": 1321.8000000000002,
+        "y": 1651.0000000000002
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.31@31",
+      "position": {
+        "x": 1065.8000000000002,
+        "y": 1727.2
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.32@32",
+      "position": {
+        "x": 1321.8000000000002,
+        "y": 1727.2
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.37@37",
+      "position": {
+        "x": 1065.8000000000002,
+        "y": 1803.4
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.38@38",
+      "position": {
+        "x": 1321.8000000000002,
+        "y": 1803.4
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.44@44",
+      "position": {
+        "x": 1321.8000000000002,
+        "y": 1879.6000000000001
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.50@50",
+      "position": {
+        "x": 1321.8000000000002,
+        "y": 1955.8000000000002
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.55@55",
+      "position": {
+        "x": 1065.8000000000002,
+        "y": 2032.0
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.56@56",
+      "position": {
+        "x": 1321.8000000000002,
+        "y": 2032.0
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.61@61",
+      "position": {
+        "x": 1065.8000000000002,
+        "y": 2108.2
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.62@62",
+      "position": {
+        "x": 1321.8000000000002,
+        "y": 2108.2
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.67@67",
+      "position": {
+        "x": 1065.8000000000002,
+        "y": 2184.4
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.68@68",
+      "position": {
+        "x": 1321.8000000000002,
+        "y": 2184.4
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.73@73",
+      "position": {
+        "x": 1065.8000000000002,
+        "y": 2260.6
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.74@74",
+      "position": {
+        "x": 1321.8000000000002,
+        "y": 2260.6
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.79@79",
+      "position": {
+        "x": 1065.8000000000002,
+        "y": 2336.8
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.7@7",
+      "position": {
+        "x": 1065.8000000000002,
+        "y": 1422.4
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.80@80",
+      "position": {
+        "x": 1321.8000000000002,
+        "y": 2336.8
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.85@85",
+      "position": {
+        "x": 1065.8000000000002,
+        "y": 2413.0
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.86@86",
+      "position": {
+        "x": 1321.8000000000002,
+        "y": 2413.0
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.8@8",
+      "position": {
+        "x": 1321.8000000000002,
+        "y": 1422.4
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.91@91",
+      "position": {
+        "x": 1065.8000000000002,
+        "y": 2489.2000000000003
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.92@92",
+      "position": {
+        "x": 1321.8000000000002,
+        "y": 2489.2000000000003
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.97@97",
+      "position": {
+        "x": 1065.8000000000002,
+        "y": 2565.4
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.98@98",
+      "position": {
+        "x": 1321.8000000000002,
+        "y": 2565.4
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.JST_BATT.SM02B-SRSS-TB_LF__SN_.2@2",
+      "position": {
+        "x": 343.9,
+        "y": 2717.8
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.JST_BATT.SM02B-SRSS-TB_LF__SN_"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.JST_BATT.SM02B-SRSS-TB_LF__SN_.MP1@3",
+      "position": {
+        "x": 113.3,
+        "y": 2692.4
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.JST_BATT.SM02B-SRSS-TB_LF__SN_"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.JST_BATT.SM02B-SRSS-TB_LF__SN_.MP2@4",
+      "position": {
+        "x": 113.3,
+        "y": 2717.8
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.JST_BATT.SM02B-SRSS-TB_LF__SN_"
+    }
+  ],
+  "connectors": [
+    {
+      "id": "connector_CM5.BATT_edge_0_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.76@76",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5.BATT.1.",
+      "net_id": "CM5.BATT"
+    },
+    {
+      "id": "connector_CM5.BATT_edge_1_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.JST_BATT.SM02B-SRSS-TB_LF__SN_.1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5.BATT.1.",
+      "net_id": "CM5.BATT"
+    },
+    {
+      "id": "connector_io_1v8_edge_2_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.88@88",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_1v8.1.",
+      "net_id": "io_1v8"
+    },
+    {
+      "id": "connector_io_1v8_edge_3_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.90@90",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_1v8.1.",
+      "net_id": "io_1v8"
+    },
+    {
+      "id": "connector_io_3v3pi_edge_4_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.84@84",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_3v3pi.1.",
+      "net_id": "io_3v3pi"
+    },
+    {
+      "id": "connector_io_3v3pi_edge_5_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.86@86",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_3v3pi.1.",
+      "net_id": "io_3v3pi"
+    },
+    {
+      "id": "connector_io_5v_edge_6_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.77@77",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_5v.1.",
+      "net_id": "io_5v"
+    },
+    {
+      "id": "connector_io_5v_edge_7_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.79@79",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_5v.1.",
+      "net_id": "io_5v"
+    },
+    {
+      "id": "connector_io_5v_edge_8_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.81@81",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_5v.1.",
+      "net_id": "io_5v"
+    },
+    {
+      "id": "connector_io_5v_edge_9_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.83@83",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_5v.1.",
+      "net_id": "io_5v"
+    },
+    {
+      "id": "connector_io_5v_edge_10_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.85@85",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_5v.1.",
+      "net_id": "io_5v"
+    },
+    {
+      "id": "connector_io_5v_edge_11_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.87@87",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_5v.1.",
+      "net_id": "io_5v"
+    },
+    {
+      "id": "connector_io_gnd_edge_12_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.13@13",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.1.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_13_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.14@14",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.1.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_14_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.1.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_15_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.22@22",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.1.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_16_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.23@23",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.1.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_17_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.1.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_18_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.32@32",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.1.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_19_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.33@33",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.1.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_20_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.42@42",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.1.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_21_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.43@43",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.1.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_22_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.52@52",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.1.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_23_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.53@53",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.1.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_24_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.59@59",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.1.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_25_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.60@60",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.1.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_26_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.65@65",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.1.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_27_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.66@66",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.1.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_28_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.71@71",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.1.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_29_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.74@74",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.1.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_30_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.7@7",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.1.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_31_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.8@8",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.1.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_32_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J1_CM5.10164227-1001A1RLF.98@98",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.1.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_33_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.13@13",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.2.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_34_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.14@14",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.2.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_35_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.19@19",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.2.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_36_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.20@20",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.2.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_37_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.25@25",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.2.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_38_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.26@26",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.2.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_39_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.31@31",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.2.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_40_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.32@32",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.2.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_41_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.37@37",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.2.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_42_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.38@38",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.2.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_43_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.44@44",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.2.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_44_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.50@50",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.2.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_45_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.55@55",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.2.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_46_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.56@56",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.2.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_47_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.61@61",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.2.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_48_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.62@62",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.2.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_49_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.67@67",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.2.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_50_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.68@68",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.2.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_51_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.73@73",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.2.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_52_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.74@74",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.2.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_53_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.79@79",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.2.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_54_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.7@7",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.2.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_55_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.80@80",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.2.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_56_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.85@85",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.2.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_57_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.86@86",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.2.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_58_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.8@8",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.2.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_59_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.91@91",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.2.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_60_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.92@92",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.2.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_61_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.97@97",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.2.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_62_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5IO.J2_CM5.10164227-1001A1RLF.98@98",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.2.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_63_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.JST_BATT.SM02B-SRSS-TB_LF__SN_.2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.1.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_64_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.JST_BATT.SM02B-SRSS-TB_LF__SN_.MP1@3",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.1.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_65_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.JST_BATT.SM02B-SRSS-TB_LF__SN_.MP2@4",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.io_gnd.1.",
+      "net_id": "io_gnd"
+    }
+  ]
+}

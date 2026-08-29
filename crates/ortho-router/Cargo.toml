@@ -19,4 +19,6 @@ serde_json = { workspace = true }
 web-time = { workspace = true }
 
 [dev-dependencies]
+env_logger = { workspace = true }
+insta = { workspace = true, features = ["glob"] }
 tempfile = { workspace = true }

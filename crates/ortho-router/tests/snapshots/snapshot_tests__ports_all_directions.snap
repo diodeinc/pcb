@@ -1,0 +1,20 @@
+---
+source: projects/editor/crates/ortho-router/tests/snapshot_tests.rs
+expression: svg
+---
+<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160" viewBox="70 70 160 160">
+  <rect x="70" y="70" width="160" height="160" fill="white"/>
+  <g id="obstacles">
+    <rect x="100" y="100" width="100" height="100" fill="#e0e0e0" stroke="#333333" stroke-width="1" data-id="obs1"/>
+  </g>
+  <g id="ports">
+    <circle cx="150" cy="100" r="4" fill="#4a90d9" stroke="#2d5a87" stroke-width="1" data-id="p_top"/>
+    <line x1="150" y1="100" x2="150" y2="90" stroke="#2d5a87" stroke-width="1.5" stroke-linecap="round"/>
+    <circle cx="150" cy="200" r="4" fill="#4a90d9" stroke="#2d5a87" stroke-width="1" data-id="p_bottom"/>
+    <line x1="150" y1="200" x2="150" y2="210" stroke="#2d5a87" stroke-width="1.5" stroke-linecap="round"/>
+    <circle cx="100" cy="150" r="4" fill="#4a90d9" stroke="#2d5a87" stroke-width="1" data-id="p_left"/>
+    <line x1="100" y1="150" x2="90" y2="150" stroke="#2d5a87" stroke-width="1.5" stroke-linecap="round"/>
+    <circle cx="200" cy="150" r="4" fill="#4a90d9" stroke="#2d5a87" stroke-width="1" data-id="p_right"/>
+    <line x1="200" y1="150" x2="210" y2="150" stroke="#2d5a87" stroke-width="1.5" stroke-linecap="round"/>
+  </g>
+</svg>

@@ -1,0 +1,11 @@
+---
+source: projects/editor/crates/ortho-router/tests/snapshot_tests.rs
+expression: svg
+---
+<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160" viewBox="-30 -30 160 160">
+  <rect x="-30" y="-30" width="160" height="160" fill="white"/>
+  <g id="obstacles">
+  </g>
+  <g id="ports">
+  </g>
+</svg>

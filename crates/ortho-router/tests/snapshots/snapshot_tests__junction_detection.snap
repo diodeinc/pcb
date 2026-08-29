@@ -1,0 +1,24 @@
+---
+source: projects/editor/crates/ortho-router/tests/snapshot_tests.rs
+expression: svg
+---
+<svg xmlns="http://www.w3.org/2000/svg" width="280" height="140" viewBox="0 70 280 140">
+  <rect x="0" y="70" width="280" height="140" fill="white"/>
+  <g id="obstacles">
+  </g>
+  <g id="routes">
+    <path d="M 25.4 101.6 L 254 101.6" fill="none" stroke="#e74c3c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-id="bus_main"/>
+    <path d="M 139.7 177.79999999999998 L 139.7 101.6 L 254 101.6" fill="none" stroke="#e74c3c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-id="bus_branch"/>
+  </g>
+  <g id="junctions">
+    <circle cx="139.7" cy="101.6" r="3" fill="#e74c3c"/>
+  </g>
+  <g id="ports">
+    <circle cx="30" cy="100" r="4" fill="#e74c3c" stroke="#a1352a" stroke-width="1" data-id="bus_left"/>
+    <line x1="30" y1="100" x2="40" y2="100" stroke="#a1352a" stroke-width="1.5" stroke-linecap="round"/>
+    <circle cx="250" cy="100" r="4" fill="#e74c3c" stroke="#a1352a" stroke-width="1" data-id="bus_right"/>
+    <line x1="250" y1="100" x2="240" y2="100" stroke="#a1352a" stroke-width="1.5" stroke-linecap="round"/>
+    <circle cx="140" cy="180" r="4" fill="#e74c3c" stroke="#a1352a" stroke-width="1" data-id="branch_bottom"/>
+    <line x1="140" y1="180" x2="140" y2="170" stroke="#a1352a" stroke-width="1.5" stroke-linecap="round"/>
+  </g>
+</svg>

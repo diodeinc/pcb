@@ -1,0 +1,32 @@
+---
+source: projects/editor/crates/ortho-router/tests/snapshot_tests.rs
+expression: svg
+---
+<svg xmlns="http://www.w3.org/2000/svg" width="260" height="220" viewBox="0 10 260 220">
+  <rect x="0" y="10" width="260" height="220" fill="white"/>
+  <g id="obstacles">
+    <rect x="30" y="60" width="60" height="100" fill="#e0e0e0" stroke="#333333" stroke-width="1" data-id="source"/>
+    <rect x="180" y="40" width="50" height="40" fill="#e0e0e0" stroke="#333333" stroke-width="1" data-id="dest1"/>
+    <rect x="180" y="100" width="50" height="40" fill="#e0e0e0" stroke="#333333" stroke-width="1" data-id="dest2"/>
+    <rect x="180" y="160" width="50" height="40" fill="#e0e0e0" stroke="#333333" stroke-width="1" data-id="dest3"/>
+  </g>
+  <g id="routes">
+    <path d="M 88.89999999999999 76.19999999999999 L 139.7 76.19999999999999 L 139.7 63.5 L 177.79999999999998 63.5" fill="none" stroke="#e74c3c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-id="bus1"/>
+    <path d="M 88.9 114.3 L 177.8 114.3" fill="none" stroke="#e74c3c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-id="bus2"/>
+    <path d="M 88.89999999999999 139.7 L 139.7 139.7 L 139.7 177.79999999999998 L 177.79999999999998 177.79999999999998" fill="none" stroke="#e74c3c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-id="bus3"/>
+  </g>
+  <g id="ports">
+    <circle cx="90" cy="80" r="4" fill="#e74c3c" stroke="#a1352a" stroke-width="1" data-id="src_out1"/>
+    <line x1="90" y1="80" x2="100" y2="80" stroke="#a1352a" stroke-width="1.5" stroke-linecap="round"/>
+    <circle cx="90" cy="110" r="4" fill="#e74c3c" stroke="#a1352a" stroke-width="1" data-id="src_out2"/>
+    <line x1="90" y1="110" x2="100" y2="110" stroke="#a1352a" stroke-width="1.5" stroke-linecap="round"/>
+    <circle cx="90" cy="140" r="4" fill="#e74c3c" stroke="#a1352a" stroke-width="1" data-id="src_out3"/>
+    <line x1="90" y1="140" x2="100" y2="140" stroke="#a1352a" stroke-width="1.5" stroke-linecap="round"/>
+    <circle cx="180" cy="60" r="4" fill="#e74c3c" stroke="#a1352a" stroke-width="1" data-id="dest1_in"/>
+    <line x1="180" y1="60" x2="170" y2="60" stroke="#a1352a" stroke-width="1.5" stroke-linecap="round"/>
+    <circle cx="180" cy="120" r="4" fill="#e74c3c" stroke="#a1352a" stroke-width="1" data-id="dest2_in"/>
+    <line x1="180" y1="120" x2="170" y2="120" stroke="#a1352a" stroke-width="1.5" stroke-linecap="round"/>
+    <circle cx="180" cy="180" r="4" fill="#e74c3c" stroke="#a1352a" stroke-width="1" data-id="dest3_in"/>
+    <line x1="180" y1="180" x2="170" y2="180" stroke="#a1352a" stroke-width="1.5" stroke-linecap="round"/>
+  </g>
+</svg>

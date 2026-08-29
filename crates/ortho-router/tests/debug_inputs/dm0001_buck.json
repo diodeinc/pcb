@@ -1,0 +1,743 @@
+{
+  "obstacles": [
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.C_SMALL_SIGNAL.C",
+      "bounds": {
+        "min_x": 202.2,
+        "min_y": 512.08,
+        "max_x": 280.4,
+        "max_y": 554.72
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.R_FB2.R",
+      "bounds": {
+        "min_x": 636.54,
+        "min_y": 202.2,
+        "max_x": 658.8599999999999,
+        "max_y": 280.4
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.COUT1.C",
+      "bounds": {
+        "min_x": -186.42000000000002,
+        "min_y": 164.1,
+        "max_x": -143.78,
+        "max_y": 242.3
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.L7986TR.L7986TR",
+      "bounds": {
+        "min_x": 202.2,
+        "min_y": 49.800000000000004,
+        "max_x": 509.00000000000006,
+        "max_y": 305.8
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.R_SMALL_SIGNAL_2.R",
+      "bounds": {
+        "min_x": 684.8000000000001,
+        "min_y": 166.64000000000001,
+        "max_x": 763.0,
+        "max_y": 188.96
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.R_SMALL_SIGNAL.R",
+      "bounds": {
+        "min_x": 443.49999999999994,
+        "min_y": 522.24,
+        "max_x": 521.7,
+        "max_y": 544.56
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.CINPUT1.C",
+      "bounds": {
+        "min_x": 969.28,
+        "min_y": 151.4,
+        "max_x": 1011.9200000000001,
+        "max_y": 229.60000000000002
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.R_FB1.R",
+      "bounds": {
+        "min_x": 636.54,
+        "min_y": 87.89999999999999,
+        "max_x": 658.8599999999999,
+        "max_y": 166.1
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.C_SMALL_SIGNAL_2.C",
+      "bounds": {
+        "min_x": 766.0799999999999,
+        "min_y": 87.89999999999999,
+        "max_x": 808.72,
+        "max_y": 166.1
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.CINPUT2.C",
+      "bounds": {
+        "min_x": 829.5799999999999,
+        "min_y": 151.4,
+        "max_x": 872.22,
+        "max_y": 229.60000000000002
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.C_COMP.C",
+      "bounds": {
+        "min_x": 316.5,
+        "min_y": 423.18000000000006,
+        "max_x": 394.70000000000005,
+        "max_y": 465.82000000000005
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.D1",
+      "bounds": {
+        "min_x": 38.10000000000001,
+        "min_y": 203.2,
+        "max_x": 165.09999999999997,
+        "max_y": 279.4
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.L_BUCK.LPS4018-333MRC",
+      "bounds": {
+        "min_x": -115.3,
+        "min_y": 100.49999999999999,
+        "max_x": -11.700000000000003,
+        "max_y": 112.5
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.R_FSW.R",
+      "bounds": {
+        "min_x": 560.34,
+        "min_y": 202.2,
+        "max_x": 582.6600000000001,
+        "max_y": 280.4
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.VPLUS.2",
+      "bounds": {
+        "min_x": 92.98,
+        "min_y": -1.0000000000000009,
+        "max_x": 110.22,
+        "max_y": 26.400000000000002
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.VPLUS.1",
+      "bounds": {
+        "min_x": 842.2800000000001,
+        "min_y": -1.0000000000000009,
+        "max_x": 859.52,
+        "max_y": 26.400000000000002
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.V10V.1",
+      "bounds": {
+        "min_x": -173.72,
+        "min_y": -1.0000000000000009,
+        "max_x": -156.48000000000002,
+        "max_y": 26.400000000000002
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.V10V.2",
+      "bounds": {
+        "min_x": 639.0799999999999,
+        "min_y": -1.0000000000000009,
+        "max_x": 656.3199999999999,
+        "max_y": 26.400000000000002
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.GND.1",
+      "bounds": {
+        "min_x": 341.90000000000003,
+        "min_y": 329.20000000000005,
+        "max_x": 369.29999999999995,
+        "max_y": 356.6000000000001
+      }
+    }
+  ],
+  "ports": [
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.C_COMP.C.P1@1",
+      "position": {
+        "x": 316.5,
+        "y": 444.5
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.C_COMP.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.C_SMALL_SIGNAL.C.P2@2",
+      "position": {
+        "x": 202.2,
+        "y": 533.4000000000001
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.C_SMALL_SIGNAL.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.L7986TR.L7986TR.COMP@5",
+      "position": {
+        "x": 202.2,
+        "y": 177.8
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.L7986TR.L7986TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.R_FB1.R.P2@2",
+      "position": {
+        "x": 647.6999999999999,
+        "y": 166.1
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.R_FB1.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.R_FB2.R.P1@1",
+      "position": {
+        "x": 647.6999999999999,
+        "y": 202.2
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.R_FB2.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.R_SMALL_SIGNAL_2.R.P2@2",
+      "position": {
+        "x": 684.8000000000001,
+        "y": 177.8
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.R_SMALL_SIGNAL_2.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.L7986TR.L7986TR.FB@6",
+      "position": {
+        "x": 509.00000000000006,
+        "y": 177.8
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.L7986TR.L7986TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.C_COMP.C.P2@2",
+      "position": {
+        "x": 394.7,
+        "y": 444.5
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.C_COMP.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.R_SMALL_SIGNAL.R.P1@1",
+      "position": {
+        "x": 521.7,
+        "y": 533.4000000000001
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.R_SMALL_SIGNAL.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.L7986TR.L7986TR.FSW@7",
+      "position": {
+        "x": 509.00000000000006,
+        "y": 152.40000000000003
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.L7986TR.L7986TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.R_FSW.R.P1@1",
+      "position": {
+        "x": 571.5,
+        "y": 202.2
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.R_FSW.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.L7986TR.L7986TR.OUT_1@1",
+      "position": {
+        "x": 202.2,
+        "y": 76.2
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.L7986TR.L7986TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.L7986TR.L7986TR.OUT_2@2",
+      "position": {
+        "x": 202.2,
+        "y": 101.6
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.L7986TR.L7986TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.D1.K_1",
+      "position": {
+        "x": 38.10000000000001,
+        "y": 254.0
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.D1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.D1.K_2",
+      "position": {
+        "x": 165.09999999999997,
+        "y": 228.6
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.D1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.L_BUCK.LPS4018-333MRC.1@1",
+      "position": {
+        "x": -11.7,
+        "y": 101.6
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.L_BUCK.LPS4018-333MRC"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.C_SMALL_SIGNAL.C.P1@1",
+      "position": {
+        "x": 280.4,
+        "y": 533.4000000000001
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.C_SMALL_SIGNAL.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.R_SMALL_SIGNAL.R.P2@2",
+      "position": {
+        "x": 443.49999999999994,
+        "y": 533.4000000000001
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.R_SMALL_SIGNAL.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.C_SMALL_SIGNAL_2.C.P2@2",
+      "position": {
+        "x": 787.4,
+        "y": 166.1
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.C_SMALL_SIGNAL_2.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.R_SMALL_SIGNAL_2.R.P1@1",
+      "position": {
+        "x": 763.0,
+        "y": 177.8
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.R_SMALL_SIGNAL_2.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.CINPUT1.C.P2@2",
+      "position": {
+        "x": 990.6,
+        "y": 229.60000000000002
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.CINPUT1.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.GND.1.",
+      "position": {
+        "x": 355.6,
+        "y": 329.20000000000005
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.GND.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.CINPUT2.C.P2@2",
+      "position": {
+        "x": 850.9000000000001,
+        "y": 229.60000000000002
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.CINPUT2.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.COUT1.C.P2@2",
+      "position": {
+        "x": -165.10000000000002,
+        "y": 242.3
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.COUT1.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.D1.A",
+      "position": {
+        "x": 38.10000000000001,
+        "y": 228.6
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.D1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.L7986TR.L7986TR.EP@11",
+      "position": {
+        "x": 355.6,
+        "y": 305.8
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.L7986TR.L7986TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.L7986TR.L7986TR.GND@8",
+      "position": {
+        "x": 509.00000000000006,
+        "y": 127.0
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.L7986TR.L7986TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.R_FB2.R.P2@2",
+      "position": {
+        "x": 647.6999999999999,
+        "y": 280.4
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.R_FB2.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.R_FSW.R.P2@2",
+      "position": {
+        "x": 571.5,
+        "y": 280.4
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.R_FSW.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.COUT1.C.P1@1",
+      "position": {
+        "x": -165.10000000000002,
+        "y": 164.1
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.COUT1.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.V10V.1.",
+      "position": {
+        "x": -165.10000000000002,
+        "y": 26.400000000000002
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.V10V.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.C_SMALL_SIGNAL_2.C.P1@1",
+      "position": {
+        "x": 787.4,
+        "y": 87.89999999999999
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.C_SMALL_SIGNAL_2.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.V10V.2.",
+      "position": {
+        "x": 647.6999999999999,
+        "y": 26.400000000000002
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.V10V.2"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.L_BUCK.LPS4018-333MRC.2@2",
+      "position": {
+        "x": -115.3,
+        "y": 101.6
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.L_BUCK.LPS4018-333MRC"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.R_FB1.R.P1@1",
+      "position": {
+        "x": 647.6999999999999,
+        "y": 87.89999999999999
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.R_FB1.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.CINPUT1.C.P1@1",
+      "position": {
+        "x": 990.6,
+        "y": 151.4
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.CINPUT1.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.VPLUS.1.",
+      "position": {
+        "x": 850.9000000000001,
+        "y": 26.400000000000002
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.VPLUS.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.CINPUT2.C.P1@1",
+      "position": {
+        "x": 850.9000000000001,
+        "y": 151.4
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.CINPUT2.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.L7986TR.L7986TR.EN@4",
+      "position": {
+        "x": 202.2,
+        "y": 152.40000000000003
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.L7986TR.L7986TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.VPLUS.2.",
+      "position": {
+        "x": 101.6,
+        "y": 26.400000000000002
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.VPLUS.2"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.L7986TR.L7986TR.VCC_1@9",
+      "position": {
+        "x": 509.00000000000006,
+        "y": 101.6
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.L7986TR.L7986TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.L7986TR.L7986TR.VCC_2@10",
+      "position": {
+        "x": 509.00000000000006,
+        "y": 76.2
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.L7986TR.L7986TR"
+    }
+  ],
+  "connectors": [
+    {
+      "id": "connector_Buck.COMP_cluster_0_mst_0_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.C_COMP.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.C_SMALL_SIGNAL.C.P2@2",
+      "net_id": "Buck.COMP"
+    },
+    {
+      "id": "connector_Buck.COMP_cluster_0_mst_1_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.C_COMP.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.L7986TR.L7986TR.COMP@5",
+      "net_id": "Buck.COMP"
+    },
+    {
+      "id": "connector_Buck.FB_cluster_1_mst_0_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.R_FB1.R.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.R_FB2.R.P1@1",
+      "net_id": "Buck.FB"
+    },
+    {
+      "id": "connector_Buck.FB_cluster_1_mst_1_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.R_FB1.R.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.R_SMALL_SIGNAL_2.R.P2@2",
+      "net_id": "Buck.FB"
+    },
+    {
+      "id": "connector_Buck.FB_cluster_1_mst_2_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.L7986TR.L7986TR.FB@6",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.R_FB1.R.P2@2",
+      "net_id": "Buck.FB"
+    },
+    {
+      "id": "connector_Buck.FB_cluster_1_mst_3_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.C_COMP.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.R_SMALL_SIGNAL.R.P1@1",
+      "net_id": "Buck.FB"
+    },
+    {
+      "id": "connector_Buck.FB_cluster_1_mst_4_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.C_COMP.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.L7986TR.L7986TR.FB@6",
+      "net_id": "Buck.FB"
+    },
+    {
+      "id": "connector_Buck.FSW_cluster_2_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.L7986TR.L7986TR.FSW@7",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.R_FSW.R.P1@1",
+      "net_id": "Buck.FSW"
+    },
+    {
+      "id": "connector_Buck.OUT_cluster_3_mst_0_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.L7986TR.L7986TR.OUT_1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.L7986TR.L7986TR.OUT_2@2",
+      "net_id": "Buck.OUT"
+    },
+    {
+      "id": "connector_Buck.OUT_cluster_3_mst_1_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.D1.K_1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.D1.K_2",
+      "net_id": "Buck.OUT"
+    },
+    {
+      "id": "connector_Buck.OUT_cluster_3_mst_2_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.D1.K_2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.L7986TR.L7986TR.OUT_2@2",
+      "net_id": "Buck.OUT"
+    },
+    {
+      "id": "connector_Buck.OUT_cluster_3_mst_3_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.D1.K_1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.L_BUCK.LPS4018-333MRC.1@1",
+      "net_id": "Buck.OUT"
+    },
+    {
+      "id": "connector_Buck.R_SMALL_SIGNAL_cluster_4_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.C_SMALL_SIGNAL.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.R_SMALL_SIGNAL.R.P2@2",
+      "net_id": "Buck.R_SMALL_SIGNAL"
+    },
+    {
+      "id": "connector_Buck.R_SMALL_SIGNAL_2_cluster_5_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.C_SMALL_SIGNAL_2.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.R_SMALL_SIGNAL_2.R.P1@1",
+      "net_id": "Buck.R_SMALL_SIGNAL_2"
+    },
+    {
+      "id": "connector_GND_edge_0_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.CINPUT1.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_1_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.CINPUT2.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_2_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.COUT1.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_3_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.D1.A",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_4_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.L7986TR.L7986TR.EP@11",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_5_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.L7986TR.L7986TR.GND@8",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_6_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.R_FB2.R.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_7_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.R_FSW.R.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_V10V_edge_8_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.COUT1.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.V10V.1.",
+      "net_id": "V10V"
+    },
+    {
+      "id": "connector_V10V_edge_9_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.C_SMALL_SIGNAL_2.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.V10V.2.",
+      "net_id": "V10V"
+    },
+    {
+      "id": "connector_V10V_edge_10_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.L_BUCK.LPS4018-333MRC.2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.V10V.1.",
+      "net_id": "V10V"
+    },
+    {
+      "id": "connector_V10V_edge_11_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.R_FB1.R.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.V10V.2.",
+      "net_id": "V10V"
+    },
+    {
+      "id": "connector_VPLUS_edge_12_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.CINPUT1.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.VPLUS.1.",
+      "net_id": "VPLUS"
+    },
+    {
+      "id": "connector_VPLUS_edge_13_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.CINPUT2.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.VPLUS.1.",
+      "net_id": "VPLUS"
+    },
+    {
+      "id": "connector_VPLUS_edge_14_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.L7986TR.L7986TR.EN@4",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.VPLUS.2.",
+      "net_id": "VPLUS"
+    },
+    {
+      "id": "connector_VPLUS_edge_15_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.L7986TR.L7986TR.VCC_1@9",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.VPLUS.1.",
+      "net_id": "VPLUS"
+    },
+    {
+      "id": "connector_VPLUS_edge_16_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.L7986TR.L7986TR.VCC_2@10",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.Buck.VPLUS.1.",
+      "net_id": "VPLUS"
+    }
+  ]
+}

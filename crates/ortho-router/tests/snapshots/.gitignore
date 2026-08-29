@@ -1,0 +1,3 @@
+# SVG files are generated for easy viewing but not committed
+# The .snap files are the source of truth for regression testing
+svg/

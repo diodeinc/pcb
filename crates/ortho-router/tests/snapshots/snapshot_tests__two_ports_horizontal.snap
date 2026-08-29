@@ -1,0 +1,18 @@
+---
+source: projects/editor/crates/ortho-router/tests/snapshot_tests.rs
+expression: svg
+---
+<svg xmlns="http://www.w3.org/2000/svg" width="260" height="60" viewBox="20 70 260 60">
+  <rect x="20" y="70" width="260" height="60" fill="white"/>
+  <g id="obstacles">
+  </g>
+  <g id="routes">
+    <path d="M 50.8 101.6 L 254 101.6" fill="none" stroke="#d94a4a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-id="c1"/>
+  </g>
+  <g id="ports">
+    <circle cx="50" cy="100" r="4" fill="#4a90d9" stroke="#2d5a87" stroke-width="1" data-id="p1"/>
+    <line x1="50" y1="100" x2="60" y2="100" stroke="#2d5a87" stroke-width="1.5" stroke-linecap="round"/>
+    <circle cx="250" cy="100" r="4" fill="#4a90d9" stroke="#2d5a87" stroke-width="1" data-id="p2"/>
+    <line x1="250" y1="100" x2="240" y2="100" stroke="#2d5a87" stroke-width="1.5" stroke-linecap="round"/>
+  </g>
+</svg>

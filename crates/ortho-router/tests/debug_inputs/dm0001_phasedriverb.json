@@ -1,0 +1,830 @@
+{
+  "obstacles": [
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.D_BEMF_CLAMP.D",
+      "bounds": {
+        "min_x": 583.2,
+        "min_y": 367.30000000000007,
+        "max_x": 610.6,
+        "max_y": 445.5
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_BEMF.R",
+      "bounds": {
+        "min_x": 725.4399999999999,
+        "min_y": 456.20000000000005,
+        "max_x": 747.76,
+        "max_y": 534.4
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_Phase.R",
+      "bounds": {
+        "min_x": 979.44,
+        "min_y": 570.5,
+        "max_x": 1001.76,
+        "max_y": 648.7
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Lo_Fet",
+      "bounds": {
+        "min_x": 1003.3000000000002,
+        "min_y": 381.0,
+        "max_x": 1130.3000000000002,
+        "max_y": 533.4
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Hi_Fet",
+      "bounds": {
+        "min_x": 876.3000000000001,
+        "min_y": 190.5,
+        "max_x": 1003.3,
+        "max_y": 342.9
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_Gate_Hi.R",
+      "bounds": {
+        "min_x": 875.3,
+        "min_y": 115.83999999999997,
+        "max_x": 953.4999999999999,
+        "max_y": 138.16
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_SHUNT.R",
+      "bounds": {
+        "min_x": 1106.44,
+        "min_y": 570.5,
+        "max_x": 1128.76,
+        "max_y": 648.7
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_Gate_Hi_PD.R",
+      "bounds": {
+        "min_x": 1030.24,
+        "min_y": 227.60000000000002,
+        "max_x": 1052.56,
+        "max_y": 305.8
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_OUT.R",
+      "bounds": {
+        "min_x": 824.5,
+        "min_y": 534.94,
+        "max_x": 902.6999999999999,
+        "max_y": 557.26
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_Gate_Lo_PD.R",
+      "bounds": {
+        "min_x": 1157.24,
+        "min_y": 418.1,
+        "max_x": 1179.56,
+        "max_y": 496.29999999999995
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.U1",
+      "bounds": {
+        "min_x": 698.5000000000001,
+        "min_y": 101.60000000000002,
+        "max_x": 825.5,
+        "max_y": 228.6
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.C_Phase.C",
+      "bounds": {
+        "min_x": 969.28,
+        "min_y": 672.1000000000001,
+        "max_x": 1011.9200000000001,
+        "max_y": 750.3000000000001
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_Gate_Lo.R",
+      "bounds": {
+        "min_x": 1027.7,
+        "min_y": 141.23999999999998,
+        "max_x": 1105.9,
+        "max_y": 163.56
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.D_BEMF.D",
+      "bounds": {
+        "min_x": 722.8999999999999,
+        "min_y": 367.30000000000007,
+        "max_x": 750.3,
+        "max_y": 445.5
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.V10V.1",
+      "bounds": {
+        "min_x": 588.28,
+        "min_y": 49.800000000000004,
+        "max_x": 605.52,
+        "max_y": 77.19999999999999
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.VPLUS.1",
+      "bounds": {
+        "min_x": 842.2800000000001,
+        "min_y": 49.800000000000004,
+        "max_x": 859.52,
+        "max_y": 77.19999999999999
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.GND.1",
+      "bounds": {
+        "min_x": 1103.9,
+        "min_y": 773.7,
+        "max_x": 1131.3000000000002,
+        "max_y": 801.1
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.V3V3.1",
+      "bounds": {
+        "min_x": 588.28,
+        "min_y": 303.8,
+        "max_x": 605.52,
+        "max_y": 331.20000000000005
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.GND.2",
+      "bounds": {
+        "min_x": 583.2,
+        "min_y": 202.2,
+        "max_x": 610.6,
+        "max_y": 229.60000000000002
+      }
+    }
+  ],
+  "ports": [
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_BEMF.R.P2@2",
+      "position": {
+        "x": 736.5999999999999,
+        "y": 534.4
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_BEMF.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_OUT.R.P2@2",
+      "position": {
+        "x": 824.5,
+        "y": 546.1
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_OUT.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.D_BEMF_CLAMP.D.A@2",
+      "position": {
+        "x": 596.9,
+        "y": 445.5
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.D_BEMF_CLAMP.D"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.C_Phase.C.P2@2",
+      "position": {
+        "x": 990.6,
+        "y": 750.3
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.C_Phase.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.GND.1.",
+      "position": {
+        "x": 1117.6000000000001,
+        "y": 773.7
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.GND.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_SHUNT.R.P2@2",
+      "position": {
+        "x": 1117.6000000000001,
+        "y": 648.7
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_SHUNT.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.U1.GND",
+      "position": {
+        "x": 698.5000000000001,
+        "y": 152.40000000000003
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.U1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.GND.2.",
+      "position": {
+        "x": 596.9,
+        "y": 202.2
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.GND.2"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Hi_Fet.S_2",
+      "position": {
+        "x": 1003.3,
+        "y": 266.70000000000005
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Hi_Fet"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Hi_Fet.S_3",
+      "position": {
+        "x": 1003.3,
+        "y": 292.1
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Hi_Fet"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Lo_Fet.D_2",
+      "position": {
+        "x": 1003.3000000000002,
+        "y": 431.8
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Lo_Fet"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Lo_Fet.D_3",
+      "position": {
+        "x": 1003.3000000000002,
+        "y": 457.2
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Lo_Fet"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Lo_Fet.D_4",
+      "position": {
+        "x": 1003.3000000000002,
+        "y": 482.59999999999997
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Lo_Fet"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Hi_Fet.S_1",
+      "position": {
+        "x": 1003.3,
+        "y": 241.3
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Hi_Fet"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Lo_Fet.D_1",
+      "position": {
+        "x": 1003.3000000000002,
+        "y": 406.4
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Lo_Fet"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Lo_Fet.D_5",
+      "position": {
+        "x": 1003.3000000000002,
+        "y": 508.0
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Lo_Fet"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_Gate_Hi_PD.R.P2@2",
+      "position": {
+        "x": 1041.4,
+        "y": 305.8
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_Gate_Hi_PD.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_Phase.R.P1@1",
+      "position": {
+        "x": 990.6,
+        "y": 570.5
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_Phase.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_OUT.R.P1@1",
+      "position": {
+        "x": 902.6999999999999,
+        "y": 546.1
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_OUT.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.U1.OUT",
+      "position": {
+        "x": 825.5,
+        "y": 177.8
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.U1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.D_BEMF.D.A@2",
+      "position": {
+        "x": 736.5999999999999,
+        "y": 445.5
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.D_BEMF.D"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_BEMF.R.P1@1",
+      "position": {
+        "x": 736.5999999999999,
+        "y": 456.20000000000005
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_BEMF.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Hi_Fet.G",
+      "position": {
+        "x": 1003.3,
+        "y": 215.90000000000003
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Hi_Fet"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_Gate_Hi_PD.R.P1@1",
+      "position": {
+        "x": 1041.4,
+        "y": 227.60000000000002
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_Gate_Hi_PD.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_Gate_Hi.R.P2@2",
+      "position": {
+        "x": 953.5,
+        "y": 127.0
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_Gate_Hi.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_Gate_Hi.R.P1@1",
+      "position": {
+        "x": 875.3,
+        "y": 127.0
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_Gate_Hi.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.U1.HVG",
+      "position": {
+        "x": 825.5,
+        "y": 127.00000000000001
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.U1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Lo_Fet.G",
+      "position": {
+        "x": 1130.3,
+        "y": 406.4
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Lo_Fet"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_Gate_Lo_PD.R.P1@1",
+      "position": {
+        "x": 1168.4,
+        "y": 418.1
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_Gate_Lo_PD.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_Gate_Lo.R.P2@2",
+      "position": {
+        "x": 1105.9,
+        "y": 152.4
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_Gate_Lo.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_Gate_Lo.R.P1@1",
+      "position": {
+        "x": 1027.7,
+        "y": 152.4
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_Gate_Lo.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.U1.LVG",
+      "position": {
+        "x": 825.5,
+        "y": 152.40000000000003
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.U1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.C_Phase.C.P1@1",
+      "position": {
+        "x": 990.6,
+        "y": 672.1000000000001
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.C_Phase.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_Phase.R.P2@2",
+      "position": {
+        "x": 990.6,
+        "y": 648.7
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_Phase.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.U1.VCC",
+      "position": {
+        "x": 698.5000000000001,
+        "y": 127.00000000000001
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.U1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.V10V.1.",
+      "position": {
+        "x": 596.9,
+        "y": 77.2
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.V10V.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.D_BEMF_CLAMP.D.K@1",
+      "position": {
+        "x": 596.9,
+        "y": 367.30000000000007
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.D_BEMF_CLAMP.D"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.V3V3.1.",
+      "position": {
+        "x": 596.9,
+        "y": 331.20000000000005
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.V3V3.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Hi_Fet.D_1",
+      "position": {
+        "x": 876.3000000000001,
+        "y": 215.90000000000003
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Hi_Fet"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.VPLUS.1.",
+      "position": {
+        "x": 850.9000000000001,
+        "y": 77.2
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.VPLUS.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Hi_Fet.D_2",
+      "position": {
+        "x": 876.3000000000001,
+        "y": 241.3
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Hi_Fet"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Hi_Fet.D_3",
+      "position": {
+        "x": 876.3000000000001,
+        "y": 266.70000000000005
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Hi_Fet"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Hi_Fet.D_4",
+      "position": {
+        "x": 876.3000000000001,
+        "y": 292.1
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Hi_Fet"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Hi_Fet.D_5",
+      "position": {
+        "x": 876.3000000000001,
+        "y": 317.50000000000006
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Hi_Fet"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Lo_Fet.S_1",
+      "position": {
+        "x": 1130.3,
+        "y": 431.8
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Lo_Fet"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Lo_Fet.S_2",
+      "position": {
+        "x": 1130.3,
+        "y": 457.2
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Lo_Fet"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Lo_Fet.S_3",
+      "position": {
+        "x": 1130.3,
+        "y": 482.59999999999997
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Lo_Fet"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_Gate_Lo_PD.R.P2@2",
+      "position": {
+        "x": 1168.4,
+        "y": 496.29999999999995
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_Gate_Lo_PD.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_SHUNT.R.P1@1",
+      "position": {
+        "x": 1117.6000000000001,
+        "y": 570.5
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_SHUNT.R"
+    }
+  ],
+  "connectors": [
+    {
+      "id": "connector_BEMF2_cluster_0_mst_0_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_BEMF.R.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_OUT.R.P2@2",
+      "net_id": "BEMF2"
+    },
+    {
+      "id": "connector_BEMF2_cluster_0_mst_1_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.D_BEMF_CLAMP.D.A@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_BEMF.R.P2@2",
+      "net_id": "BEMF2"
+    },
+    {
+      "id": "connector_GND_edge_0_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.C_Phase.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_1_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_SHUNT.R.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_2_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.U1.GND",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.GND.2.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_PHASE_B_cluster_1_mst_0_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Hi_Fet.S_2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Hi_Fet.S_3",
+      "net_id": "PHASE_B"
+    },
+    {
+      "id": "connector_PHASE_B_cluster_1_mst_1_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Lo_Fet.D_2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Lo_Fet.D_3",
+      "net_id": "PHASE_B"
+    },
+    {
+      "id": "connector_PHASE_B_cluster_1_mst_2_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Lo_Fet.D_3",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Lo_Fet.D_4",
+      "net_id": "PHASE_B"
+    },
+    {
+      "id": "connector_PHASE_B_cluster_1_mst_3_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Hi_Fet.S_1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Hi_Fet.S_2",
+      "net_id": "PHASE_B"
+    },
+    {
+      "id": "connector_PHASE_B_cluster_1_mst_4_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Lo_Fet.D_1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Lo_Fet.D_2",
+      "net_id": "PHASE_B"
+    },
+    {
+      "id": "connector_PHASE_B_cluster_1_mst_5_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Lo_Fet.D_4",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Lo_Fet.D_5",
+      "net_id": "PHASE_B"
+    },
+    {
+      "id": "connector_PHASE_B_cluster_1_mst_6_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Hi_Fet.S_3",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_Gate_Hi_PD.R.P2@2",
+      "net_id": "PHASE_B"
+    },
+    {
+      "id": "connector_PHASE_B_cluster_1_mst_7_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Lo_Fet.D_5",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_Phase.R.P1@1",
+      "net_id": "PHASE_B"
+    },
+    {
+      "id": "connector_PHASE_B_cluster_1_mst_8_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_OUT.R.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_Phase.R.P1@1",
+      "net_id": "PHASE_B"
+    },
+    {
+      "id": "connector_PHASE_B_cluster_1_mst_9_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Lo_Fet.D_1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_Gate_Hi_PD.R.P2@2",
+      "net_id": "PHASE_B"
+    },
+    {
+      "id": "connector_PHASE_B_cluster_1_mst_10_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Hi_Fet.S_1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.U1.OUT",
+      "net_id": "PHASE_B"
+    },
+    {
+      "id": "connector_PhaseDriverB.D_BEMF_cluster_2_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.D_BEMF.D.A@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_BEMF.R.P1@1",
+      "net_id": "PhaseDriverB.D_BEMF"
+    },
+    {
+      "id": "connector_PhaseDriverB.HI_GATE_cluster_3_mst_0_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Hi_Fet.G",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_Gate_Hi_PD.R.P1@1",
+      "net_id": "PhaseDriverB.HI_GATE"
+    },
+    {
+      "id": "connector_PhaseDriverB.HI_GATE_cluster_3_mst_1_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Hi_Fet.G",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_Gate_Hi.R.P2@2",
+      "net_id": "PhaseDriverB.HI_GATE"
+    },
+    {
+      "id": "connector_PhaseDriverB.HVG_cluster_4_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_Gate_Hi.R.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.U1.HVG",
+      "net_id": "PhaseDriverB.HVG"
+    },
+    {
+      "id": "connector_PhaseDriverB.LO_GATE_cluster_5_mst_0_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Lo_Fet.G",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_Gate_Lo_PD.R.P1@1",
+      "net_id": "PhaseDriverB.LO_GATE"
+    },
+    {
+      "id": "connector_PhaseDriverB.LO_GATE_cluster_5_mst_1_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Lo_Fet.G",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_Gate_Lo.R.P2@2",
+      "net_id": "PhaseDriverB.LO_GATE"
+    },
+    {
+      "id": "connector_PhaseDriverB.LVG_cluster_6_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_Gate_Lo.R.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.U1.LVG",
+      "net_id": "PhaseDriverB.LVG"
+    },
+    {
+      "id": "connector_PhaseDriverB.RC_NODE_cluster_7_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.C_Phase.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_Phase.R.P2@2",
+      "net_id": "PhaseDriverB.RC_NODE"
+    },
+    {
+      "id": "connector_V10V_edge_3_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.U1.VCC",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.V10V.1.",
+      "net_id": "V10V"
+    },
+    {
+      "id": "connector_V3V3_edge_4_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.D_BEMF_CLAMP.D.K@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.V3V3.1.",
+      "net_id": "V3V3"
+    },
+    {
+      "id": "connector_VPLUS_edge_5_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Hi_Fet.D_1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.VPLUS.1.",
+      "net_id": "VPLUS"
+    },
+    {
+      "id": "connector_VPLUS_edge_6_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Hi_Fet.D_2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.VPLUS.1.",
+      "net_id": "VPLUS"
+    },
+    {
+      "id": "connector_VPLUS_edge_7_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Hi_Fet.D_3",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.VPLUS.1.",
+      "net_id": "VPLUS"
+    },
+    {
+      "id": "connector_VPLUS_edge_8_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Hi_Fet.D_4",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.VPLUS.1.",
+      "net_id": "VPLUS"
+    },
+    {
+      "id": "connector_VPLUS_edge_9_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Hi_Fet.D_5",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.VPLUS.1.",
+      "net_id": "VPLUS"
+    },
+    {
+      "id": "connector_VSHUNTP_B_cluster_8_mst_0_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Lo_Fet.S_1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Lo_Fet.S_2",
+      "net_id": "VSHUNTP_B"
+    },
+    {
+      "id": "connector_VSHUNTP_B_cluster_8_mst_1_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Lo_Fet.S_2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Lo_Fet.S_3",
+      "net_id": "VSHUNTP_B"
+    },
+    {
+      "id": "connector_VSHUNTP_B_cluster_8_mst_2_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Lo_Fet.S_3",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_Gate_Lo_PD.R.P2@2",
+      "net_id": "VSHUNTP_B"
+    },
+    {
+      "id": "connector_VSHUNTP_B_cluster_8_mst_3_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.Lo_Fet.S_3",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.PhaseDriverB.R_SHUNT.R.P1@1",
+      "net_id": "VSHUNTP_B"
+    }
+  ]
+}

@@ -2843,12 +2843,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "86f0f8fee8c926415c58d6ae43a08523a26faccb2323f5e6b644fe7dd4ef6b82"
 dependencies = [
  "console",
+ "globset",
  "once_cell",
  "regex",
  "serde",
  "similar 2.7.0",
  "strip-ansi-escapes",
  "tempfile",
+ "walkdir",
 ]
 
 [[package]]
@@ -3946,6 +3948,8 @@ dependencies = [
 name = "ortho-router"
 version = "0.4.40"
 dependencies = [
+ "env_logger",
+ "insta",
  "log",
  "ordered-float 4.6.0",
  "rstar",

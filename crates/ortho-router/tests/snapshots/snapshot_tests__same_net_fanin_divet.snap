@@ -1,0 +1,33 @@
+---
+source: projects/editor/crates/ortho-router/tests/snapshot_tests.rs
+expression: svg
+---
+<svg xmlns="http://www.w3.org/2000/svg" width="387" height="468" viewBox="215 70 387 468">
+  <rect x="215" y="70" width="387" height="468" fill="white"/>
+  <g id="obstacles">
+    <rect x="245" y="100" width="18" height="28" fill="#e0e0e0" stroke="#333333" stroke-width="1" data-id="V5V_Symbol"/>
+    <rect x="270" y="210" width="80" height="180" fill="#e0e0e0" stroke="#333333" stroke-width="1" data-id="Blocker"/>
+    <rect x="381" y="127" width="153" height="77" fill="#e0e0e0" stroke="#333333" stroke-width="1" data-id="Ldo_5V"/>
+    <rect x="381" y="241" width="153" height="77" fill="#e0e0e0" stroke="#333333" stroke-width="1" data-id="Ldo_3V3"/>
+    <rect x="343" y="406" width="229" height="102" fill="#e0e0e0" stroke="#333333" stroke-width="1" data-id="HallEncoder"/>
+  </g>
+  <g id="routes">
+    <path d="M 254 127 L 254 177.79999999999998 L 381 177.79999999999998" fill="none" stroke="#d94a4a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-id="v5v_ldo5v_out"/>
+    <path d="M 254 127 L 254 177.79999999999998 L 368.29999999999995 177.79999999999998 L 368.29999999999995 266.7 L 381 266.7" fill="none" stroke="#d94a4a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-id="v5v_to_ldo3v3"/>
+    <path d="M 254 127 L 254 431.79999999999995 L 342.9 431.79999999999995" fill="none" stroke="#d94a4a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-id="v5v_to_hall"/>
+  </g>
+  <g id="junctions">
+    <circle cx="254" cy="177.8" r="3" fill="#333333"/>
+    <circle cx="368.3" cy="177.8" r="3" fill="#333333"/>
+  </g>
+  <g id="ports">
+    <circle cx="254" cy="128" r="4" fill="#4a90d9" stroke="#2d5a87" stroke-width="1" data-id="V5V"/>
+    <line x1="254" y1="128" x2="254" y2="138" stroke="#2d5a87" stroke-width="1.5" stroke-linecap="round"/>
+    <circle cx="381" cy="177.8" r="4" fill="#4a90d9" stroke="#2d5a87" stroke-width="1" data-id="Ldo_5V_Out"/>
+    <line x1="381" y1="177.8" x2="371" y2="177.8" stroke="#2d5a87" stroke-width="1.5" stroke-linecap="round"/>
+    <circle cx="381" cy="266.7" r="4" fill="#4a90d9" stroke="#2d5a87" stroke-width="1" data-id="Ldo_3V3_In"/>
+    <line x1="381" y1="266.7" x2="371" y2="266.7" stroke="#2d5a87" stroke-width="1.5" stroke-linecap="round"/>
+    <circle cx="343" cy="431.8" r="4" fill="#4a90d9" stroke="#2d5a87" stroke-width="1" data-id="Hall_V5V"/>
+    <line x1="343" y1="431.8" x2="333" y2="431.8" stroke="#2d5a87" stroke-width="1.5" stroke-linecap="round"/>
+  </g>
+</svg>

@@ -1,0 +1,27 @@
+---
+source: projects/editor/crates/ortho-router/tests/snapshot_tests.rs
+expression: svg
+---
+<svg xmlns="http://www.w3.org/2000/svg" width="280" height="160" viewBox="0 20 280 160">
+  <rect x="0" y="20" width="280" height="160" fill="white"/>
+  <g id="obstacles">
+  </g>
+  <g id="routes">
+    <path d="M 25.4 101.6 L 139.7 101.6 L 139.7 50.8 L 254 50.8" fill="none" stroke="#e74c3c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-id="fanout1"/>
+    <path d="M 25.4 101.6 L 254 101.6" fill="none" stroke="#e74c3c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-id="fanout2"/>
+    <path d="M 25.4 101.6 L 139.7 101.6 L 139.7 152.39999999999998 L 254 152.39999999999998" fill="none" stroke="#e74c3c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-id="fanout3"/>
+  </g>
+  <g id="junctions">
+    <circle cx="139.7" cy="101.6" r="3" fill="#e74c3c"/>
+  </g>
+  <g id="ports">
+    <circle cx="30" cy="100" r="4" fill="#e74c3c" stroke="#a1352a" stroke-width="1" data-id="source"/>
+    <line x1="30" y1="100" x2="40" y2="100" stroke="#a1352a" stroke-width="1.5" stroke-linecap="round"/>
+    <circle cx="250" cy="50" r="4" fill="#e74c3c" stroke="#a1352a" stroke-width="1" data-id="dest1"/>
+    <line x1="250" y1="50" x2="240" y2="50" stroke="#a1352a" stroke-width="1.5" stroke-linecap="round"/>
+    <circle cx="250" cy="100" r="4" fill="#e74c3c" stroke="#a1352a" stroke-width="1" data-id="dest2"/>
+    <line x1="250" y1="100" x2="240" y2="100" stroke="#a1352a" stroke-width="1.5" stroke-linecap="round"/>
+    <circle cx="250" cy="150" r="4" fill="#e74c3c" stroke="#a1352a" stroke-width="1" data-id="dest3"/>
+    <line x1="250" y1="150" x2="240" y2="150" stroke="#a1352a" stroke-width="1.5" stroke-linecap="round"/>
+  </g>
+</svg>

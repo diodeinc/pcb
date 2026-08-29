@@ -1,0 +1,3026 @@
+{
+  "obstacles": [
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE3.C",
+      "bounds": {
+        "min_x": -605.52,
+        "min_y": -6058.9,
+        "max_x": -562.88,
+        "max_y": -5980.700000000001
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE8.C",
+      "bounds": {
+        "min_x": -1278.6200000000001,
+        "min_y": -5792.200000000001,
+        "max_x": -1235.98,
+        "max_y": -5714.000000000002
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE7.C",
+      "bounds": {
+        "min_x": -1138.92,
+        "min_y": -5792.200000000001,
+        "max_x": -1096.28,
+        "max_y": -5714.000000000002
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE9.C",
+      "bounds": {
+        "min_x": -1405.6200000000001,
+        "min_y": -5792.200000000001,
+        "max_x": -1362.98,
+        "max_y": -5714.000000000002
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.R_ZQ1.R",
+      "bounds": {
+        "min_x": -112.75999999999999,
+        "min_y": -5271.5,
+        "max_x": -90.44,
+        "max_y": -5193.300000000001
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD1_DECOUPLE3.C",
+      "bounds": {
+        "min_x": -605.52,
+        "min_y": -5563.6,
+        "max_x": -562.88,
+        "max_y": -5485.4000000000015
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE2.C",
+      "bounds": {
+        "min_x": -478.52,
+        "min_y": -5792.200000000001,
+        "max_x": -435.88,
+        "max_y": -5714.000000000002
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD1_DECOUPLE4.C",
+      "bounds": {
+        "min_x": -745.22,
+        "min_y": -5563.6,
+        "max_x": -702.5799999999999,
+        "max_y": -5485.4000000000015
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE2.C",
+      "bounds": {
+        "min_x": -478.52,
+        "min_y": -6058.9,
+        "max_x": -435.88,
+        "max_y": -5980.700000000001
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE3.C",
+      "bounds": {
+        "min_x": -605.52,
+        "min_y": -5792.200000000001,
+        "max_x": -562.88,
+        "max_y": -5714.000000000002
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE5.C",
+      "bounds": {
+        "min_x": -872.22,
+        "min_y": -5792.200000000001,
+        "max_x": -829.5799999999999,
+        "max_y": -5714.000000000002
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.R_ZQ0.R",
+      "bounds": {
+        "min_x": -11.160000000000005,
+        "min_y": -5271.5,
+        "max_x": 11.160000000000005,
+        "max_y": -5193.300000000001
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE4.C",
+      "bounds": {
+        "min_x": -745.22,
+        "min_y": -5792.200000000001,
+        "max_x": -702.5799999999999,
+        "max_y": -5714.000000000002
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE1.C",
+      "bounds": {
+        "min_x": -351.52,
+        "min_y": -5792.200000000001,
+        "max_x": -308.88,
+        "max_y": -5714.000000000002
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE1.C",
+      "bounds": {
+        "min_x": -351.52,
+        "min_y": -6058.9,
+        "max_x": -308.88,
+        "max_y": -5980.700000000001
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B",
+      "bounds": {
+        "min_x": 570.5,
+        "min_y": -5322.3,
+        "max_x": 1004.3000000000001,
+        "max_y": -2754.9
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE4.C",
+      "bounds": {
+        "min_x": -745.22,
+        "min_y": -6058.9,
+        "max_x": -702.5799999999999,
+        "max_y": -5980.700000000001
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD1_DECOUPLE2.C",
+      "bounds": {
+        "min_x": -478.52,
+        "min_y": -5563.6,
+        "max_x": -435.88,
+        "max_y": -5485.4000000000015
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE6.C",
+      "bounds": {
+        "min_x": -999.2200000000001,
+        "min_y": -6046.2,
+        "max_x": -956.58,
+        "max_y": -5968.0
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD1_DECOUPLE1.C",
+      "bounds": {
+        "min_x": -351.52,
+        "min_y": -5563.6,
+        "max_x": -308.88,
+        "max_y": -5485.4000000000015
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE5.C",
+      "bounds": {
+        "min_x": -872.22,
+        "min_y": -6058.9,
+        "max_x": -829.5799999999999,
+        "max_y": -5980.700000000001
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE6.C",
+      "bounds": {
+        "min_x": -999.2200000000001,
+        "min_y": -5792.200000000001,
+        "max_x": -956.58,
+        "max_y": -5714.000000000002
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L15A_1P8V.2",
+      "bounds": {
+        "min_x": 1197.88,
+        "min_y": -5385.8,
+        "max_x": 1215.12,
+        "max_y": -5358.4
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.20",
+      "bounds": {
+        "min_x": -864.6000000000001,
+        "min_y": -5944.6,
+        "max_x": -837.2,
+        "max_y": -5917.200000000001
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.14",
+      "bounds": {
+        "min_x": -1271.0,
+        "min_y": -5677.900000000001,
+        "max_x": -1243.6,
+        "max_y": -5650.5
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.17",
+      "bounds": {
+        "min_x": -470.9,
+        "min_y": -5944.6,
+        "max_x": -443.5,
+        "max_y": -5917.200000000001
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.16",
+      "bounds": {
+        "min_x": -343.9,
+        "min_y": -5944.6,
+        "max_x": -316.5,
+        "max_y": -5917.200000000001
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.4",
+      "bounds": {
+        "min_x": -110.22,
+        "min_y": -5360.4,
+        "max_x": -92.97999999999999,
+        "max_y": -5333.0
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.9",
+      "bounds": {
+        "min_x": -597.9,
+        "min_y": -5677.900000000001,
+        "max_x": -570.5,
+        "max_y": -5650.5
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.12",
+      "bounds": {
+        "min_x": -991.6000000000001,
+        "min_y": -5677.900000000001,
+        "max_x": -964.2,
+        "max_y": -5650.5
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.19",
+      "bounds": {
+        "min_x": -737.6,
+        "min_y": -5944.6,
+        "max_x": -710.1999999999999,
+        "max_y": -5917.200000000001
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L15A_1P8V.3",
+      "bounds": {
+        "min_x": -338.82000000000005,
+        "min_y": -5627.1,
+        "max_x": -321.58000000000004,
+        "max_y": -5599.700000000001
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L2A_1P128V.2",
+      "bounds": {
+        "min_x": 1032.78,
+        "min_y": -5385.8,
+        "max_x": 1050.02,
+        "max_y": -5358.4
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.7",
+      "bounds": {
+        "min_x": -343.9,
+        "min_y": -5690.6,
+        "max_x": -316.5,
+        "max_y": -5663.200000000001
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.2",
+      "bounds": {
+        "min_x": 1040.3999999999999,
+        "min_y": -2718.8000000000006,
+        "max_x": 1067.8,
+        "max_y": -2691.4000000000005
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.18",
+      "bounds": {
+        "min_x": -597.9,
+        "min_y": -5944.6,
+        "max_x": -570.5,
+        "max_y": -5917.200000000001
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.2",
+      "bounds": {
+        "min_x": 1350.2800000000002,
+        "min_y": -5385.8,
+        "max_x": 1367.52,
+        "max_y": -5358.4
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.3",
+      "bounds": {
+        "min_x": -343.9,
+        "min_y": -5449.300000000001,
+        "max_x": -316.5,
+        "max_y": -5421.9000000000015
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.11",
+      "bounds": {
+        "min_x": -864.6000000000001,
+        "min_y": -5677.900000000001,
+        "max_x": -837.2,
+        "max_y": -5650.5
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.3",
+      "bounds": {
+        "min_x": -338.82000000000005,
+        "min_y": -5855.700000000001,
+        "max_x": -321.58000000000004,
+        "max_y": -5828.300000000001
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.6",
+      "bounds": {
+        "min_x": -737.6,
+        "min_y": -5449.300000000001,
+        "max_x": -710.1999999999999,
+        "max_y": -5421.9000000000015
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.1",
+      "bounds": {
+        "min_x": 507.0,
+        "min_y": -2718.8000000000006,
+        "max_x": 534.4,
+        "max_y": -2691.4000000000005
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.1",
+      "bounds": {
+        "min_x": 397.78,
+        "min_y": -5385.8,
+        "max_x": 415.02,
+        "max_y": -5358.4
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.15",
+      "bounds": {
+        "min_x": -1398.0,
+        "min_y": -5677.900000000001,
+        "max_x": -1370.6,
+        "max_y": -5650.5
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.13",
+      "bounds": {
+        "min_x": -1131.3000000000002,
+        "min_y": -5677.900000000001,
+        "max_x": -1103.9,
+        "max_y": -5650.5
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L15A_1P8V.1",
+      "bounds": {
+        "min_x": 232.68,
+        "min_y": -5385.8,
+        "max_x": 249.91999999999996,
+        "max_y": -5358.4
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.4",
+      "bounds": {
+        "min_x": -470.9,
+        "min_y": -5449.300000000001,
+        "max_x": -443.5,
+        "max_y": -5421.9000000000015
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.8",
+      "bounds": {
+        "min_x": -470.9,
+        "min_y": -5677.900000000001,
+        "max_x": -443.5,
+        "max_y": -5650.5
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.5",
+      "bounds": {
+        "min_x": -597.9,
+        "min_y": -5449.300000000001,
+        "max_x": -570.5,
+        "max_y": -5421.9000000000015
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L2A_1P128V.1",
+      "bounds": {
+        "min_x": -338.82000000000005,
+        "min_y": -6109.700000000001,
+        "max_x": -321.58000000000004,
+        "max_y": -6082.300000000001
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.10",
+      "bounds": {
+        "min_x": -737.6,
+        "min_y": -5677.900000000001,
+        "max_x": -710.1999999999999,
+        "max_y": -5650.5
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.21",
+      "bounds": {
+        "min_x": -991.6000000000001,
+        "min_y": -5944.6,
+        "max_x": -964.2,
+        "max_y": -5917.200000000001
+      }
+    }
+  ],
+  "ports": [
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD1_DECOUPLE1.C.P2@2",
+      "position": {
+        "x": -330.20000000000005,
+        "y": -5485.400000000001
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD1_DECOUPLE1.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.3.",
+      "position": {
+        "x": -330.20000000000005,
+        "y": -5449.300000000001
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD1_DECOUPLE2.C.P2@2",
+      "position": {
+        "x": -457.2,
+        "y": -5485.400000000001
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD1_DECOUPLE2.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.4.",
+      "position": {
+        "x": -457.2,
+        "y": -5449.300000000001
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.4"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD1_DECOUPLE3.C.P2@2",
+      "position": {
+        "x": -584.2,
+        "y": -5485.400000000001
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD1_DECOUPLE3.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.5.",
+      "position": {
+        "x": -584.2,
+        "y": -5449.300000000001
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.5"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD1_DECOUPLE4.C.P2@2",
+      "position": {
+        "x": -723.9,
+        "y": -5485.400000000001
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD1_DECOUPLE4.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.6.",
+      "position": {
+        "x": -723.9,
+        "y": -5449.300000000001
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.6"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE1.C.P2@2",
+      "position": {
+        "x": -330.20000000000005,
+        "y": -5980.700000000001
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE1.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.16.",
+      "position": {
+        "x": -330.20000000000005,
+        "y": -5944.6
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.16"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE2.C.P2@2",
+      "position": {
+        "x": -457.2,
+        "y": -5980.700000000001
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE2.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.17.",
+      "position": {
+        "x": -457.2,
+        "y": -5944.6
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.17"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE3.C.P2@2",
+      "position": {
+        "x": -584.2,
+        "y": -5980.700000000001
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE3.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.18.",
+      "position": {
+        "x": -584.2,
+        "y": -5944.6
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.18"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE4.C.P2@2",
+      "position": {
+        "x": -723.9,
+        "y": -5980.700000000001
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE4.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.19.",
+      "position": {
+        "x": -723.9,
+        "y": -5944.6
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.19"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE5.C.P2@2",
+      "position": {
+        "x": -850.9000000000001,
+        "y": -5980.700000000001
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE5.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.20.",
+      "position": {
+        "x": -850.9000000000001,
+        "y": -5944.6
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.20"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE6.C.P2@2",
+      "position": {
+        "x": -977.9000000000001,
+        "y": -5968.000000000001
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE6.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.21.",
+      "position": {
+        "x": -977.9000000000001,
+        "y": -5944.6
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.21"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE1.C.P2@2",
+      "position": {
+        "x": -330.20000000000005,
+        "y": -5714.000000000001
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE1.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.7.",
+      "position": {
+        "x": -330.20000000000005,
+        "y": -5690.6
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.7"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE2.C.P2@2",
+      "position": {
+        "x": -457.2,
+        "y": -5714.000000000001
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE2.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.8.",
+      "position": {
+        "x": -457.2,
+        "y": -5677.900000000001
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.8"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE3.C.P2@2",
+      "position": {
+        "x": -584.2,
+        "y": -5714.000000000001
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE3.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.9.",
+      "position": {
+        "x": -584.2,
+        "y": -5677.900000000001
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.9"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE4.C.P2@2",
+      "position": {
+        "x": -723.9,
+        "y": -5714.000000000001
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE4.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.10.",
+      "position": {
+        "x": -723.9,
+        "y": -5677.900000000001
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.10"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE5.C.P2@2",
+      "position": {
+        "x": -850.9000000000001,
+        "y": -5714.000000000001
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE5.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.11.",
+      "position": {
+        "x": -850.9000000000001,
+        "y": -5677.900000000001
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.11"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE6.C.P2@2",
+      "position": {
+        "x": -977.9000000000001,
+        "y": -5714.000000000001
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE6.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.12.",
+      "position": {
+        "x": -977.9000000000001,
+        "y": -5677.900000000001
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.12"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE7.C.P2@2",
+      "position": {
+        "x": -1117.6000000000001,
+        "y": -5714.000000000001
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE7.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.13.",
+      "position": {
+        "x": -1117.6000000000001,
+        "y": -5677.900000000001
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.13"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE8.C.P2@2",
+      "position": {
+        "x": -1257.3,
+        "y": -5714.000000000001
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE8.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.14.",
+      "position": {
+        "x": -1257.3,
+        "y": -5677.900000000001
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.14"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE9.C.P2@2",
+      "position": {
+        "x": -1384.3000000000002,
+        "y": -5714.000000000001
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE9.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.15.",
+      "position": {
+        "x": -1384.3000000000002,
+        "y": -5677.900000000001
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.15"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VDD2_1@A4",
+      "position": {
+        "x": 570.5,
+        "y": -5219.700000000001
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VDD2_2@A9",
+      "position": {
+        "x": 570.5,
+        "y": -5143.5
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VDD2_3@K12",
+      "position": {
+        "x": 570.5,
+        "y": -2781.3
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.1.",
+      "position": {
+        "x": 520.7,
+        "y": -2718.8000000000006
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_10@E8",
+      "position": {
+        "x": 570.5,
+        "y": -4152.900000000001
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_11@E12",
+      "position": {
+        "x": 570.5,
+        "y": -4051.3
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_12@G1",
+      "position": {
+        "x": 570.5,
+        "y": -3771.9000000000005
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_13@G3",
+      "position": {
+        "x": 570.5,
+        "y": -3721.1000000000004
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_14@G5",
+      "position": {
+        "x": 570.5,
+        "y": -3670.3
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_15@G8",
+      "position": {
+        "x": 570.5,
+        "y": -3644.9
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_16@G10",
+      "position": {
+        "x": 570.5,
+        "y": -3594.1000000000004
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_17@G12",
+      "position": {
+        "x": 570.5,
+        "y": -3543.3
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_18@J1",
+      "position": {
+        "x": 570.5,
+        "y": -3263.9000000000005
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_19@J3",
+      "position": {
+        "x": 570.5,
+        "y": -3213.1000000000004
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_1@A3",
+      "position": {
+        "x": 570.5,
+        "y": -5245.1
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_20@J10",
+      "position": {
+        "x": 570.5,
+        "y": -3086.1000000000004
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_21@J12",
+      "position": {
+        "x": 570.5,
+        "y": -3035.3
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_22@K2",
+      "position": {
+        "x": 570.5,
+        "y": -2984.5000000000005
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_23@K4",
+      "position": {
+        "x": 570.5,
+        "y": -2933.7
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_24@K9",
+      "position": {
+        "x": 570.5,
+        "y": -2857.5
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_25@K11",
+      "position": {
+        "x": 570.5,
+        "y": -2806.7000000000007
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_26@N2",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -5270.500000000001
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_27@N4",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -5219.700000000001
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_28@N9",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -5143.5
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_29@N11",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -5092.700000000001
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_2@A10",
+      "position": {
+        "x": 570.5,
+        "y": -5118.1
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_30@P1",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -5041.900000000001
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_31@P3",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -4991.1
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_32@P10",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -4864.1
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_33@P12",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -4813.3
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_34@T3",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -4483.1
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_35@T5",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -4432.3
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_36@T8",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -4406.900000000001
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.2.",
+      "position": {
+        "x": 1054.1,
+        "y": -2718.8000000000006
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.2"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_37@T10",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -4356.1
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_38@T12",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -4305.3
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_39@V5",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -3924.3000000000006
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_3@C5",
+      "position": {
+        "x": 570.5,
+        "y": -4686.3
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_40@V8",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -3898.9000000000005
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_41@V12",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -3797.3
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_42@W2",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -3746.5000000000005
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_43@W4",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -3695.7000000000007
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_44@W11",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -3568.7
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_45@Y5",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -3416.3
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_46@Y8",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -3390.9000000000005
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_47@Y12",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -3289.3000000000006
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_48@AB3",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -2959.1000000000004
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_49@AB5",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -2908.3
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_4@C12",
+      "position": {
+        "x": 570.5,
+        "y": -4559.300000000001
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_50@AB8",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -2882.9
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_51@AB10",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -2832.1000000000004
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_5@D2",
+      "position": {
+        "x": 570.5,
+        "y": -4508.5
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_6@D4",
+      "position": {
+        "x": 570.5,
+        "y": -4457.700000000001
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_7@D9",
+      "position": {
+        "x": 570.5,
+        "y": -4381.5
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_8@D11",
+      "position": {
+        "x": 570.5,
+        "y": -4330.700000000001
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_9@E5",
+      "position": {
+        "x": 570.5,
+        "y": -4178.3
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_SS_1@C1",
+      "position": {
+        "x": 570.5,
+        "y": -4787.900000000001
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_SS_2@C8",
+      "position": {
+        "x": 570.5,
+        "y": -4660.900000000001
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_SS_3@E1",
+      "position": {
+        "x": 570.5,
+        "y": -4279.9
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_SS_4@T1",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -4533.9
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_SS_5@V1",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -4025.9000000000005
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_SS_6@W9",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -3619.5000000000005
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_SS_7@Y1",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -3517.9
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD1_DECOUPLE1.C.P1@1",
+      "position": {
+        "x": -330.20000000000005,
+        "y": -5563.6
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD1_DECOUPLE1.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L15A_1P8V.3.",
+      "position": {
+        "x": -330.20000000000005,
+        "y": -5599.700000000001
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L15A_1P8V.3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD1_DECOUPLE2.C.P1@1",
+      "position": {
+        "x": -457.2,
+        "y": -5563.6
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD1_DECOUPLE2.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD1_DECOUPLE3.C.P1@1",
+      "position": {
+        "x": -584.2,
+        "y": -5563.6
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD1_DECOUPLE3.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD1_DECOUPLE4.C.P1@1",
+      "position": {
+        "x": -723.9,
+        "y": -5563.6
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD1_DECOUPLE4.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD1_1@F1",
+      "position": {
+        "x": 570.5,
+        "y": -4025.9000000000005
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L15A_1P8V.1.",
+      "position": {
+        "x": 241.29999999999998,
+        "y": -5358.400000000001
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L15A_1P8V.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD1_2@F12",
+      "position": {
+        "x": 570.5,
+        "y": -3797.3
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD1_3@G4",
+      "position": {
+        "x": 570.5,
+        "y": -3695.7000000000007
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD1_4@G9",
+      "position": {
+        "x": 570.5,
+        "y": -3619.5000000000005
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD1_5@T4",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -4457.700000000001
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L15A_1P8V.2.",
+      "position": {
+        "x": 1206.5,
+        "y": -5358.400000000001
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L15A_1P8V.2"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD1_6@T9",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -4381.5
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD1_7@U1",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -4279.9
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD1_8@U12",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -4051.3
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE1.C.P1@1",
+      "position": {
+        "x": -330.20000000000005,
+        "y": -6058.9
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE1.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L2A_1P128V.1.",
+      "position": {
+        "x": -330.20000000000005,
+        "y": -6082.3
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L2A_1P128V.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE2.C.P1@1",
+      "position": {
+        "x": -457.2,
+        "y": -6058.9
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE2.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE3.C.P1@1",
+      "position": {
+        "x": -584.2,
+        "y": -6058.9
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE3.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE4.C.P1@1",
+      "position": {
+        "x": -723.9,
+        "y": -6058.9
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE4.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE5.C.P1@1",
+      "position": {
+        "x": -850.9000000000001,
+        "y": -6058.9
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE5.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE6.C.P1@1",
+      "position": {
+        "x": -977.9000000000001,
+        "y": -6046.2
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE6.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.ODT_CA_A@G2",
+      "position": {
+        "x": 570.5,
+        "y": -3746.5000000000005
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L2A_1P128V.2.",
+      "position": {
+        "x": 1041.4,
+        "y": -5358.400000000001
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L2A_1P128V.2"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.ODT_CA_B@T2",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -4508.5
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_10@N1",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -5295.900000000001
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_11@N3",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -5245.1
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_12@N10",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -5118.1
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_13@N12",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -5067.3
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_14@R1",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -4787.900000000001
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_15@R5",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -4686.3
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_16@R8",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -4660.900000000001
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_17@R12",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -4559.300000000001
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_18@U5",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -4178.3
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_19@U8",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -4152.900000000001
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_1@F5",
+      "position": {
+        "x": 570.5,
+        "y": -3924.3000000000006
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_20@AB4",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -2933.7
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_21@AB9",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -2857.5
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_2@F8",
+      "position": {
+        "x": 570.5,
+        "y": -3898.9000000000005
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_3@H1",
+      "position": {
+        "x": 570.5,
+        "y": -3517.9
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_4@H5",
+      "position": {
+        "x": 570.5,
+        "y": -3416.3
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_5@H8",
+      "position": {
+        "x": 570.5,
+        "y": -3390.9000000000005
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_6@H12",
+      "position": {
+        "x": 570.5,
+        "y": -3289.3000000000006
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_7@K1",
+      "position": {
+        "x": 570.5,
+        "y": -3009.9
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_8@K3",
+      "position": {
+        "x": 570.5,
+        "y": -2959.1000000000004
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_9@K10",
+      "position": {
+        "x": 570.5,
+        "y": -2832.1000000000004
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE1.C.P1@1",
+      "position": {
+        "x": -330.20000000000005,
+        "y": -5792.200000000001
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE1.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.3.",
+      "position": {
+        "x": -330.20000000000005,
+        "y": -5828.3
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE2.C.P1@1",
+      "position": {
+        "x": -457.2,
+        "y": -5792.200000000001
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE2.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE3.C.P1@1",
+      "position": {
+        "x": -584.2,
+        "y": -5792.200000000001
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE3.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE4.C.P1@1",
+      "position": {
+        "x": -723.9,
+        "y": -5792.200000000001
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE4.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE5.C.P1@1",
+      "position": {
+        "x": -850.9000000000001,
+        "y": -5792.200000000001
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE5.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE6.C.P1@1",
+      "position": {
+        "x": -977.9000000000001,
+        "y": -5792.200000000001
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE6.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE7.C.P1@1",
+      "position": {
+        "x": -1117.6000000000001,
+        "y": -5792.200000000001
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE7.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE8.C.P1@1",
+      "position": {
+        "x": -1257.3,
+        "y": -5792.200000000001
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE8.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE9.C.P1@1",
+      "position": {
+        "x": -1384.3000000000002,
+        "y": -5792.200000000001
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE9.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DDQ_10@F10",
+      "position": {
+        "x": 570.5,
+        "y": -3848.1000000000004
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.1.",
+      "position": {
+        "x": 406.4,
+        "y": -5358.400000000001
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DDQ_11@U3",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -4229.1
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.2.",
+      "position": {
+        "x": 1358.9,
+        "y": -5358.400000000001
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.2"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DDQ_12@U10",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -4102.1
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DDQ_13@W1",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -3771.9000000000005
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DDQ_14@W5",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -3670.3
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DDQ_15@W8",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -3644.9
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DDQ_16@W12",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -3543.3
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DDQ_17@AA3",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -3213.1000000000004
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DDQ_18@AA5",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -3162.3
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DDQ_19@AA8",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -3136.9000000000005
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DDQ_1@B3",
+      "position": {
+        "x": 570.5,
+        "y": -4991.1
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DDQ_20@AA10",
+      "position": {
+        "x": 1004.3000000000001,
+        "y": -3086.1000000000004
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DDQ_2@B5",
+      "position": {
+        "x": 570.5,
+        "y": -4940.3
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DDQ_3@B8",
+      "position": {
+        "x": 570.5,
+        "y": -4914.9
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DDQ_4@B10",
+      "position": {
+        "x": 570.5,
+        "y": -4864.1
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DDQ_5@D1",
+      "position": {
+        "x": 570.5,
+        "y": -4533.9
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DDQ_6@D5",
+      "position": {
+        "x": 570.5,
+        "y": -4432.3
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DDQ_7@D8",
+      "position": {
+        "x": 570.5,
+        "y": -4406.900000000001
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DDQ_8@D12",
+      "position": {
+        "x": 570.5,
+        "y": -4305.3
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DDQ_9@F3",
+      "position": {
+        "x": 570.5,
+        "y": -3975.1
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.R_ZQ0.R.P2@2",
+      "position": {
+        "x": -4.788368984666151e-15,
+        "y": -5271.5
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.R_ZQ0.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.4.",
+      "position": {
+        "x": -101.6,
+        "y": -5333.0
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.4"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.R_ZQ1.R.P2@2",
+      "position": {
+        "x": -101.6,
+        "y": -5271.5
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.R_ZQ1.R"
+    }
+  ],
+  "connectors": [
+    {
+      "id": "connector_GND_edge_0_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD1_DECOUPLE1.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.3.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_1_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD1_DECOUPLE2.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.4.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_2_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD1_DECOUPLE3.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.5.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_3_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD1_DECOUPLE4.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.6.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_4_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE1.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.16.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_5_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE2.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.17.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_6_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE3.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.18.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_7_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE4.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.19.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_8_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE5.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.20.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_9_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE6.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.21.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_10_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE1.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.7.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_11_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE2.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.8.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_12_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE3.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.9.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_13_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE4.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.10.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_14_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE5.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.11.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_15_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE6.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.12.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_16_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE7.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.13.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_17_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE8.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.14.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_18_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE9.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.15.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_19_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VDD2_1@A4",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.3.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_20_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VDD2_2@A9",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.3.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_21_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VDD2_3@K12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_22_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_10@E8",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_23_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_11@E12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_24_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_12@G1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_25_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_13@G3",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_26_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_14@G5",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_27_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_15@G8",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_28_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_16@G10",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_29_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_17@G12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_30_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_18@J1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_31_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_19@J3",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_32_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_1@A3",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.3.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_33_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_20@J10",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_34_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_21@J12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_35_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_22@K2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_36_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_23@K4",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_37_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_24@K9",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_38_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_25@K11",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_39_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_26@N2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.3.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_40_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_27@N4",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.3.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_41_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_28@N9",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.3.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_42_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_29@N11",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.3.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_43_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_2@A10",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.3.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_44_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_30@P1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.3.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_45_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_31@P3",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.3.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_46_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_32@P10",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.3.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_47_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_33@P12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.3.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_48_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_34@T3",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.3.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_49_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_35@T5",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.3.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_50_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_36@T8",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.2.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_51_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_37@T10",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.2.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_52_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_38@T12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.2.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_53_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_39@V5",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.2.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_54_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_3@C5",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.3.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_55_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_40@V8",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.2.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_56_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_41@V12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.2.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_57_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_42@W2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.2.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_58_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_43@W4",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.2.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_59_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_44@W11",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.2.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_60_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_45@Y5",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.2.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_61_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_46@Y8",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.2.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_62_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_47@Y12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.2.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_63_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_48@AB3",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.2.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_64_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_49@AB5",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.2.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_65_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_4@C12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.3.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_66_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_50@AB8",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.2.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_67_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_51@AB10",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.2.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_68_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_5@D2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.3.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_69_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_6@D4",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.3.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_70_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_7@D9",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.3.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_71_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_8@D11",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.3.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_72_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.VSS_9@E5",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_73_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_SS_1@C1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.3.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_74_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_SS_2@C8",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.3.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_75_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_SS_3@E1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.3.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_76_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_SS_4@T1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.3.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_77_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_SS_5@V1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.2.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_78_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_SS_6@W9",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.2.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_79_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_SS_7@Y1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.GND.2.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_VREG_L15A_1P8V_edge_80_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD1_DECOUPLE1.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L15A_1P8V.3.",
+      "net_id": "VREG_L15A_1P8V"
+    },
+    {
+      "id": "connector_VREG_L15A_1P8V_edge_81_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD1_DECOUPLE2.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L15A_1P8V.3.",
+      "net_id": "VREG_L15A_1P8V"
+    },
+    {
+      "id": "connector_VREG_L15A_1P8V_edge_82_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD1_DECOUPLE3.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L15A_1P8V.3.",
+      "net_id": "VREG_L15A_1P8V"
+    },
+    {
+      "id": "connector_VREG_L15A_1P8V_edge_83_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD1_DECOUPLE4.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L15A_1P8V.3.",
+      "net_id": "VREG_L15A_1P8V"
+    },
+    {
+      "id": "connector_VREG_L15A_1P8V_edge_84_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD1_1@F1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L15A_1P8V.1.",
+      "net_id": "VREG_L15A_1P8V"
+    },
+    {
+      "id": "connector_VREG_L15A_1P8V_edge_85_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD1_2@F12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L15A_1P8V.1.",
+      "net_id": "VREG_L15A_1P8V"
+    },
+    {
+      "id": "connector_VREG_L15A_1P8V_edge_86_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD1_3@G4",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L15A_1P8V.1.",
+      "net_id": "VREG_L15A_1P8V"
+    },
+    {
+      "id": "connector_VREG_L15A_1P8V_edge_87_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD1_4@G9",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L15A_1P8V.1.",
+      "net_id": "VREG_L15A_1P8V"
+    },
+    {
+      "id": "connector_VREG_L15A_1P8V_edge_88_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD1_5@T4",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L15A_1P8V.2.",
+      "net_id": "VREG_L15A_1P8V"
+    },
+    {
+      "id": "connector_VREG_L15A_1P8V_edge_89_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD1_6@T9",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L15A_1P8V.2.",
+      "net_id": "VREG_L15A_1P8V"
+    },
+    {
+      "id": "connector_VREG_L15A_1P8V_edge_90_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD1_7@U1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L15A_1P8V.2.",
+      "net_id": "VREG_L15A_1P8V"
+    },
+    {
+      "id": "connector_VREG_L15A_1P8V_edge_91_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD1_8@U12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L15A_1P8V.2.",
+      "net_id": "VREG_L15A_1P8V"
+    },
+    {
+      "id": "connector_VREG_L2A_1P128V_edge_92_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE1.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L2A_1P128V.1.",
+      "net_id": "VREG_L2A_1P128V"
+    },
+    {
+      "id": "connector_VREG_L2A_1P128V_edge_93_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE2.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L2A_1P128V.1.",
+      "net_id": "VREG_L2A_1P128V"
+    },
+    {
+      "id": "connector_VREG_L2A_1P128V_edge_94_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE3.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L2A_1P128V.1.",
+      "net_id": "VREG_L2A_1P128V"
+    },
+    {
+      "id": "connector_VREG_L2A_1P128V_edge_95_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE4.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L2A_1P128V.1.",
+      "net_id": "VREG_L2A_1P128V"
+    },
+    {
+      "id": "connector_VREG_L2A_1P128V_edge_96_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE5.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L2A_1P128V.1.",
+      "net_id": "VREG_L2A_1P128V"
+    },
+    {
+      "id": "connector_VREG_L2A_1P128V_edge_97_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD2_DECOUPLE6.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L2A_1P128V.1.",
+      "net_id": "VREG_L2A_1P128V"
+    },
+    {
+      "id": "connector_VREG_L2A_1P128V_edge_98_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.ODT_CA_A@G2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L2A_1P128V.2.",
+      "net_id": "VREG_L2A_1P128V"
+    },
+    {
+      "id": "connector_VREG_L2A_1P128V_edge_99_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.ODT_CA_B@T2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L2A_1P128V.2.",
+      "net_id": "VREG_L2A_1P128V"
+    },
+    {
+      "id": "connector_VREG_L2A_1P128V_edge_100_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_10@N1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L2A_1P128V.2.",
+      "net_id": "VREG_L2A_1P128V"
+    },
+    {
+      "id": "connector_VREG_L2A_1P128V_edge_101_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_11@N3",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L2A_1P128V.2.",
+      "net_id": "VREG_L2A_1P128V"
+    },
+    {
+      "id": "connector_VREG_L2A_1P128V_edge_102_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_12@N10",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L2A_1P128V.2.",
+      "net_id": "VREG_L2A_1P128V"
+    },
+    {
+      "id": "connector_VREG_L2A_1P128V_edge_103_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_13@N12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L2A_1P128V.2.",
+      "net_id": "VREG_L2A_1P128V"
+    },
+    {
+      "id": "connector_VREG_L2A_1P128V_edge_104_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_14@R1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L2A_1P128V.2.",
+      "net_id": "VREG_L2A_1P128V"
+    },
+    {
+      "id": "connector_VREG_L2A_1P128V_edge_105_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_15@R5",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L2A_1P128V.2.",
+      "net_id": "VREG_L2A_1P128V"
+    },
+    {
+      "id": "connector_VREG_L2A_1P128V_edge_106_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_16@R8",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L2A_1P128V.2.",
+      "net_id": "VREG_L2A_1P128V"
+    },
+    {
+      "id": "connector_VREG_L2A_1P128V_edge_107_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_17@R12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L2A_1P128V.2.",
+      "net_id": "VREG_L2A_1P128V"
+    },
+    {
+      "id": "connector_VREG_L2A_1P128V_edge_108_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_18@U5",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L2A_1P128V.2.",
+      "net_id": "VREG_L2A_1P128V"
+    },
+    {
+      "id": "connector_VREG_L2A_1P128V_edge_109_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_19@U8",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L2A_1P128V.2.",
+      "net_id": "VREG_L2A_1P128V"
+    },
+    {
+      "id": "connector_VREG_L2A_1P128V_edge_110_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_1@F5",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L2A_1P128V.2.",
+      "net_id": "VREG_L2A_1P128V"
+    },
+    {
+      "id": "connector_VREG_L2A_1P128V_edge_111_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_20@AB4",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L2A_1P128V.2.",
+      "net_id": "VREG_L2A_1P128V"
+    },
+    {
+      "id": "connector_VREG_L2A_1P128V_edge_112_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_21@AB9",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L2A_1P128V.2.",
+      "net_id": "VREG_L2A_1P128V"
+    },
+    {
+      "id": "connector_VREG_L2A_1P128V_edge_113_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_2@F8",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L2A_1P128V.2.",
+      "net_id": "VREG_L2A_1P128V"
+    },
+    {
+      "id": "connector_VREG_L2A_1P128V_edge_114_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_3@H1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L2A_1P128V.2.",
+      "net_id": "VREG_L2A_1P128V"
+    },
+    {
+      "id": "connector_VREG_L2A_1P128V_edge_115_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_4@H5",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L2A_1P128V.2.",
+      "net_id": "VREG_L2A_1P128V"
+    },
+    {
+      "id": "connector_VREG_L2A_1P128V_edge_116_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_5@H8",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L2A_1P128V.2.",
+      "net_id": "VREG_L2A_1P128V"
+    },
+    {
+      "id": "connector_VREG_L2A_1P128V_edge_117_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_6@H12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L2A_1P128V.2.",
+      "net_id": "VREG_L2A_1P128V"
+    },
+    {
+      "id": "connector_VREG_L2A_1P128V_edge_118_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_7@K1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L2A_1P128V.2.",
+      "net_id": "VREG_L2A_1P128V"
+    },
+    {
+      "id": "connector_VREG_L2A_1P128V_edge_119_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_8@K3",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L2A_1P128V.2.",
+      "net_id": "VREG_L2A_1P128V"
+    },
+    {
+      "id": "connector_VREG_L2A_1P128V_edge_120_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DD2_9@K10",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L2A_1P128V.2.",
+      "net_id": "VREG_L2A_1P128V"
+    },
+    {
+      "id": "connector_VREG_L3A_0P6V_edge_121_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE1.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.3.",
+      "net_id": "VREG_L3A_0P6V"
+    },
+    {
+      "id": "connector_VREG_L3A_0P6V_edge_122_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE2.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.3.",
+      "net_id": "VREG_L3A_0P6V"
+    },
+    {
+      "id": "connector_VREG_L3A_0P6V_edge_123_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE3.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.3.",
+      "net_id": "VREG_L3A_0P6V"
+    },
+    {
+      "id": "connector_VREG_L3A_0P6V_edge_124_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE4.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.3.",
+      "net_id": "VREG_L3A_0P6V"
+    },
+    {
+      "id": "connector_VREG_L3A_0P6V_edge_125_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE5.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.3.",
+      "net_id": "VREG_L3A_0P6V"
+    },
+    {
+      "id": "connector_VREG_L3A_0P6V_edge_126_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE6.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.3.",
+      "net_id": "VREG_L3A_0P6V"
+    },
+    {
+      "id": "connector_VREG_L3A_0P6V_edge_127_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE7.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.3.",
+      "net_id": "VREG_L3A_0P6V"
+    },
+    {
+      "id": "connector_VREG_L3A_0P6V_edge_128_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE8.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.3.",
+      "net_id": "VREG_L3A_0P6V"
+    },
+    {
+      "id": "connector_VREG_L3A_0P6V_edge_129_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.C_VDD3_DECOUPLE9.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.3.",
+      "net_id": "VREG_L3A_0P6V"
+    },
+    {
+      "id": "connector_VREG_L3A_0P6V_edge_130_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DDQ_10@F10",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.1.",
+      "net_id": "VREG_L3A_0P6V"
+    },
+    {
+      "id": "connector_VREG_L3A_0P6V_edge_131_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DDQ_11@U3",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.2.",
+      "net_id": "VREG_L3A_0P6V"
+    },
+    {
+      "id": "connector_VREG_L3A_0P6V_edge_132_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DDQ_12@U10",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.2.",
+      "net_id": "VREG_L3A_0P6V"
+    },
+    {
+      "id": "connector_VREG_L3A_0P6V_edge_133_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DDQ_13@W1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.2.",
+      "net_id": "VREG_L3A_0P6V"
+    },
+    {
+      "id": "connector_VREG_L3A_0P6V_edge_134_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DDQ_14@W5",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.2.",
+      "net_id": "VREG_L3A_0P6V"
+    },
+    {
+      "id": "connector_VREG_L3A_0P6V_edge_135_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DDQ_15@W8",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.2.",
+      "net_id": "VREG_L3A_0P6V"
+    },
+    {
+      "id": "connector_VREG_L3A_0P6V_edge_136_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DDQ_16@W12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.2.",
+      "net_id": "VREG_L3A_0P6V"
+    },
+    {
+      "id": "connector_VREG_L3A_0P6V_edge_137_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DDQ_17@AA3",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.2.",
+      "net_id": "VREG_L3A_0P6V"
+    },
+    {
+      "id": "connector_VREG_L3A_0P6V_edge_138_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DDQ_18@AA5",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.2.",
+      "net_id": "VREG_L3A_0P6V"
+    },
+    {
+      "id": "connector_VREG_L3A_0P6V_edge_139_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DDQ_19@AA8",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.2.",
+      "net_id": "VREG_L3A_0P6V"
+    },
+    {
+      "id": "connector_VREG_L3A_0P6V_edge_140_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DDQ_1@B3",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.1.",
+      "net_id": "VREG_L3A_0P6V"
+    },
+    {
+      "id": "connector_VREG_L3A_0P6V_edge_141_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DDQ_20@AA10",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.2.",
+      "net_id": "VREG_L3A_0P6V"
+    },
+    {
+      "id": "connector_VREG_L3A_0P6V_edge_142_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DDQ_2@B5",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.1.",
+      "net_id": "VREG_L3A_0P6V"
+    },
+    {
+      "id": "connector_VREG_L3A_0P6V_edge_143_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DDQ_3@B8",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.1.",
+      "net_id": "VREG_L3A_0P6V"
+    },
+    {
+      "id": "connector_VREG_L3A_0P6V_edge_144_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DDQ_4@B10",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.1.",
+      "net_id": "VREG_L3A_0P6V"
+    },
+    {
+      "id": "connector_VREG_L3A_0P6V_edge_145_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DDQ_5@D1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.1.",
+      "net_id": "VREG_L3A_0P6V"
+    },
+    {
+      "id": "connector_VREG_L3A_0P6V_edge_146_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DDQ_6@D5",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.1.",
+      "net_id": "VREG_L3A_0P6V"
+    },
+    {
+      "id": "connector_VREG_L3A_0P6V_edge_147_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DDQ_7@D8",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.1.",
+      "net_id": "VREG_L3A_0P6V"
+    },
+    {
+      "id": "connector_VREG_L3A_0P6V_edge_148_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DDQ_8@D12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.1.",
+      "net_id": "VREG_L3A_0P6V"
+    },
+    {
+      "id": "connector_VREG_L3A_0P6V_edge_149_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.LPDDR4X.MT53E512M32D1ZW-046_AUT_B.V_DDQ_9@F3",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.1.",
+      "net_id": "VREG_L3A_0P6V"
+    },
+    {
+      "id": "connector_VREG_L3A_0P6V_edge_150_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.R_ZQ0.R.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.4.",
+      "net_id": "VREG_L3A_0P6V"
+    },
+    {
+      "id": "connector_VREG_L3A_0P6V_edge_151_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.R_ZQ1.R.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X.VREG_L3A_0P6V.4.",
+      "net_id": "VREG_L3A_0P6V"
+    }
+  ]
+}

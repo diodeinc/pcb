@@ -1,0 +1,551 @@
+{
+  "obstacles": [
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.Voltage_Clamp.RCLAMP0502BATCT",
+      "bounds": {
+        "min_x": 926.1,
+        "min_y": 341.9,
+        "max_x": 1004.3000000000001,
+        "max_y": 445.5
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.C_VBUS1.C",
+      "bounds": {
+        "min_x": 1261.38,
+        "min_y": 202.2,
+        "max_x": 1304.0200000000002,
+        "max_y": 280.4
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.C_VBUS2.C",
+      "bounds": {
+        "min_x": 1439.18,
+        "min_y": 202.2,
+        "max_x": 1481.8200000000002,
+        "max_y": 280.4
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector",
+      "bounds": {
+        "min_x": 583.2,
+        "min_y": 37.09999999999997,
+        "max_x": 839.2,
+        "max_y": 445.5
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.R_VBUS.R",
+      "bounds": {
+        "min_x": 1106.44,
+        "min_y": 202.2,
+        "max_x": 1128.76,
+        "max_y": 280.4
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_gnd.1",
+      "bounds": {
+        "min_x": 951.4999999999999,
+        "min_y": 506.99999999999994,
+        "max_x": 978.8999999999999,
+        "max_y": 534.4
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_5v.1",
+      "bounds": {
+        "min_x": 956.58,
+        "min_y": -51.8,
+        "max_x": 973.82,
+        "max_y": -24.399999999999995
+      }
+    }
+  ],
+  "ports": [
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector.D-@A7",
+      "position": {
+        "x": 839.2,
+        "y": 190.5
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector.D-@B7",
+      "position": {
+        "x": 839.2,
+        "y": 215.9
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector.D-@B7",
+      "position": {
+        "x": 839.2,
+        "y": 215.9
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.Voltage_Clamp.RCLAMP0502BATCT.K1@1",
+      "position": {
+        "x": 939.8,
+        "y": 341.9
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.Voltage_Clamp.RCLAMP0502BATCT"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector.D+@A6",
+      "position": {
+        "x": 839.2,
+        "y": 241.29999999999998
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector.D+@B6",
+      "position": {
+        "x": 839.2,
+        "y": 266.7
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector.D+@B6",
+      "position": {
+        "x": 839.2,
+        "y": 266.7
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.Voltage_Clamp.RCLAMP0502BATCT.K2@2",
+      "position": {
+        "x": 990.6,
+        "y": 341.9
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.Voltage_Clamp.RCLAMP0502BATCT"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.C_VBUS1.C.P1@1",
+      "position": {
+        "x": 1282.7,
+        "y": 202.2
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.C_VBUS1.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_5v.1.",
+      "position": {
+        "x": 965.1999999999999,
+        "y": -24.4
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_5v.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.C_VBUS2.C.P1@1",
+      "position": {
+        "x": 1460.5,
+        "y": 202.2
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.C_VBUS2.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_5v.1.",
+      "position": {
+        "x": 965.1999999999999,
+        "y": -24.4
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_5v.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.R_VBUS.R.P1@1",
+      "position": {
+        "x": 1117.6000000000001,
+        "y": 202.2
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.R_VBUS.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_5v.1.",
+      "position": {
+        "x": 965.1999999999999,
+        "y": -24.4
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_5v.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector.VBUS@A4",
+      "position": {
+        "x": 839.2,
+        "y": 63.49999999999998
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_5v.1.",
+      "position": {
+        "x": 965.1999999999999,
+        "y": -24.4
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_5v.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector.VBUS@A9",
+      "position": {
+        "x": 839.2,
+        "y": 63.49999999999998
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_5v.1.",
+      "position": {
+        "x": 965.1999999999999,
+        "y": -24.4
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_5v.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector.VBUS@B4",
+      "position": {
+        "x": 839.2,
+        "y": 63.49999999999998
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_5v.1.",
+      "position": {
+        "x": 965.1999999999999,
+        "y": -24.4
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_5v.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector.VBUS@B9",
+      "position": {
+        "x": 839.2,
+        "y": 63.49999999999998
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_5v.1.",
+      "position": {
+        "x": 965.1999999999999,
+        "y": -24.4
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_5v.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.C_VBUS1.C.P2@2",
+      "position": {
+        "x": 1282.7,
+        "y": 280.4
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.C_VBUS1.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_gnd.1.",
+      "position": {
+        "x": 965.1999999999999,
+        "y": 506.99999999999994
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_gnd.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.C_VBUS2.C.P2@2",
+      "position": {
+        "x": 1460.5,
+        "y": 280.4
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.C_VBUS2.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_gnd.1.",
+      "position": {
+        "x": 965.1999999999999,
+        "y": 506.99999999999994
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_gnd.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.R_VBUS.R.P2@2",
+      "position": {
+        "x": 1117.6000000000001,
+        "y": 280.4
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.R_VBUS.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_gnd.1.",
+      "position": {
+        "x": 965.1999999999999,
+        "y": 506.99999999999994
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_gnd.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector.GND@A1",
+      "position": {
+        "x": 685.8,
+        "y": 445.5
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_gnd.1.",
+      "position": {
+        "x": 965.1999999999999,
+        "y": 506.99999999999994
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_gnd.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector.GND@A12",
+      "position": {
+        "x": 685.8,
+        "y": 445.5
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_gnd.1.",
+      "position": {
+        "x": 965.1999999999999,
+        "y": 506.99999999999994
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_gnd.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector.GND@B1",
+      "position": {
+        "x": 685.8,
+        "y": 445.5
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_gnd.1.",
+      "position": {
+        "x": 965.1999999999999,
+        "y": 506.99999999999994
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_gnd.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector.GND@B12",
+      "position": {
+        "x": 685.8,
+        "y": 445.5
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_gnd.1.",
+      "position": {
+        "x": 965.1999999999999,
+        "y": 506.99999999999994
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_gnd.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector.SHIELD@S1",
+      "position": {
+        "x": 609.6,
+        "y": 445.5
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_gnd.1.",
+      "position": {
+        "x": 965.1999999999999,
+        "y": 506.99999999999994
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_gnd.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.Voltage_Clamp.RCLAMP0502BATCT.A@3",
+      "position": {
+        "x": 965.1999999999999,
+        "y": 445.5
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.Voltage_Clamp.RCLAMP0502BATCT"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_gnd.1.",
+      "position": {
+        "x": 965.1999999999999,
+        "y": 506.99999999999994
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_gnd.1"
+    }
+  ],
+  "connectors": [
+    {
+      "id": "connector_USB_PI_D_N_cluster_0_mst_0_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector.D-@A7",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector.D-@B7",
+      "net_id": "USB_PI_D_N"
+    },
+    {
+      "id": "connector_USB_PI_D_N_cluster_0_mst_1_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector.D-@B7",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.Voltage_Clamp.RCLAMP0502BATCT.K1@1",
+      "net_id": "USB_PI_D_N"
+    },
+    {
+      "id": "connector_USB_PI_D_P_cluster_1_mst_0_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector.D+@A6",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector.D+@B6",
+      "net_id": "USB_PI_D_P"
+    },
+    {
+      "id": "connector_USB_PI_D_P_cluster_1_mst_1_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector.D+@B6",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.Voltage_Clamp.RCLAMP0502BATCT.K2@2",
+      "net_id": "USB_PI_D_P"
+    },
+    {
+      "id": "connector_io_5v_edge_0_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.C_VBUS1.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_5v.1.",
+      "net_id": "io_5v"
+    },
+    {
+      "id": "connector_io_5v_edge_1_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.C_VBUS2.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_5v.1.",
+      "net_id": "io_5v"
+    },
+    {
+      "id": "connector_io_5v_edge_2_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.R_VBUS.R.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_5v.1.",
+      "net_id": "io_5v"
+    },
+    {
+      "id": "connector_io_5v_edge_3_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector.VBUS@A4",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_5v.1.",
+      "net_id": "io_5v"
+    },
+    {
+      "id": "connector_io_5v_edge_4_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector.VBUS@A9",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_5v.1.",
+      "net_id": "io_5v"
+    },
+    {
+      "id": "connector_io_5v_edge_5_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector.VBUS@B4",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_5v.1.",
+      "net_id": "io_5v"
+    },
+    {
+      "id": "connector_io_5v_edge_6_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector.VBUS@B9",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_5v.1.",
+      "net_id": "io_5v"
+    },
+    {
+      "id": "connector_io_gnd_edge_7_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.C_VBUS1.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_gnd.1.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_8_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.C_VBUS2.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_gnd.1.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_9_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.R_VBUS.R.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_gnd.1.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_10_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector.GND@A1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_gnd.1.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_11_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector.GND@A12",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_gnd.1.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_12_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector.GND@B1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_gnd.1.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_13_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector.GND@B12",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_gnd.1.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_14_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.USB_Connector.SHIELD@S1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_gnd.1.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_15_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.Voltage_Clamp.RCLAMP0502BATCT.A@3",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_gnd.1.",
+      "net_id": "io_gnd"
+    }
+  ]
+}

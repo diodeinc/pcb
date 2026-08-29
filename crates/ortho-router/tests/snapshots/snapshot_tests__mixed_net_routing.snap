@@ -1,0 +1,30 @@
+---
+source: projects/editor/crates/ortho-router/tests/snapshot_tests.rs
+expression: svg
+---
+<svg xmlns="http://www.w3.org/2000/svg" width="270" height="140" viewBox="20 30 270 140">
+  <rect x="20" y="30" width="270" height="140" fill="white"/>
+  <g id="obstacles">
+    <rect x="50" y="60" width="60" height="80" fill="#e0e0e0" stroke="#333333" stroke-width="1" data-id="comp1"/>
+    <rect x="200" y="60" width="60" height="80" fill="#e0e0e0" stroke="#333333" stroke-width="1" data-id="comp2"/>
+  </g>
+  <g id="routes">
+    <path d="M 114.3 76.19999999999999 L 203.2 76.19999999999999" fill="none" stroke="#e74c3c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-id="net1_a"/>
+    <path d="M 114.3 114.3 L 203.2 114.3" fill="none" stroke="#e74c3c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-id="net1_b"/>
+    <path d="M 114.3 101.6 L 203.2 101.6" fill="none" stroke="#3498db" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-id="net2"/>
+  </g>
+  <g id="ports">
+    <circle cx="110" cy="80" r="4" fill="#e74c3c" stroke="#a1352a" stroke-width="1" data-id="comp1_out1"/>
+    <line x1="110" y1="80" x2="120" y2="80" stroke="#a1352a" stroke-width="1.5" stroke-linecap="round"/>
+    <circle cx="110" cy="100" r="4" fill="#3498db" stroke="#246a99" stroke-width="1" data-id="comp1_out2"/>
+    <line x1="110" y1="100" x2="120" y2="100" stroke="#246a99" stroke-width="1.5" stroke-linecap="round"/>
+    <circle cx="110" cy="120" r="4" fill="#e74c3c" stroke="#a1352a" stroke-width="1" data-id="comp1_out3"/>
+    <line x1="110" y1="120" x2="120" y2="120" stroke="#a1352a" stroke-width="1.5" stroke-linecap="round"/>
+    <circle cx="200" cy="80" r="4" fill="#e74c3c" stroke="#a1352a" stroke-width="1" data-id="comp2_in1"/>
+    <line x1="200" y1="80" x2="190" y2="80" stroke="#a1352a" stroke-width="1.5" stroke-linecap="round"/>
+    <circle cx="200" cy="100" r="4" fill="#3498db" stroke="#246a99" stroke-width="1" data-id="comp2_in2"/>
+    <line x1="200" y1="100" x2="190" y2="100" stroke="#246a99" stroke-width="1.5" stroke-linecap="round"/>
+    <circle cx="200" cy="120" r="4" fill="#e74c3c" stroke="#a1352a" stroke-width="1" data-id="comp2_in3"/>
+    <line x1="200" y1="120" x2="190" y2="120" stroke="#a1352a" stroke-width="1.5" stroke-linecap="round"/>
+  </g>
+</svg>

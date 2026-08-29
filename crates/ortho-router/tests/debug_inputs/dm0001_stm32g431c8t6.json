@@ -1,0 +1,776 @@
+{
+  "obstacles": [
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDD1.C",
+      "bounds": {
+        "min_x": 1324.88,
+        "min_y": -293.09999999999997,
+        "max_x": 1367.5200000000002,
+        "max_y": -214.89999999999998
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.FB_VDDA.FB",
+      "bounds": {
+        "min_x": 1751.6,
+        "min_y": 606.314,
+        "max_x": 1829.7999999999997,
+        "max_y": 663.6859999999999
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6",
+      "bounds": {
+        "min_x": 1345.2,
+        "min_y": -178.8,
+        "max_x": 1804.3999999999999,
+        "max_y": 508.99999999999994
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_nRST.C",
+      "bounds": {
+        "min_x": 1223.28,
+        "min_y": 214.89999999999998,
+        "max_x": 1265.92,
+        "max_y": 293.09999999999997
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDD2.C",
+      "bounds": {
+        "min_x": 1997.98,
+        "min_y": 100.60000000000001,
+        "max_x": 2040.6200000000001,
+        "max_y": 178.8
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.R_HSE.R",
+      "bounds": {
+        "min_x": 1129.3000000000002,
+        "min_y": 141.23999999999998,
+        "max_x": 1207.5,
+        "max_y": 163.56
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDD3.C",
+      "bounds": {
+        "min_x": 2163.08,
+        "min_y": 100.60000000000001,
+        "max_x": 2205.7200000000003,
+        "max_y": 178.8
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDD4.C",
+      "bounds": {
+        "min_x": 1870.9799999999998,
+        "min_y": 659.4,
+        "max_x": 1913.62,
+        "max_y": 737.5999999999999
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDDA.C",
+      "bounds": {
+        "min_x": 1578.88,
+        "min_y": 659.4,
+        "max_x": 1621.5200000000002,
+        "max_y": 737.5999999999999
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDDA2.C",
+      "bounds": {
+        "min_x": 1667.78,
+        "min_y": 659.4,
+        "max_x": 1710.42,
+        "max_y": 737.5999999999999
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.Y_HSE.CSTNE8M00GH5C000R0",
+      "bounds": {
+        "min_x": 849.9,
+        "min_y": 126.00000000000001,
+        "max_x": 1055.1,
+        "max_y": 229.60000000000002
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.V3V3.1",
+      "bounds": {
+        "min_x": 2175.78,
+        "min_y": 11.7,
+        "max_x": 2193.02,
+        "max_y": 39.1
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.V3V3.2",
+      "bounds": {
+        "min_x": 1921.78,
+        "min_y": 595.9000000000001,
+        "max_x": 1939.02,
+        "max_y": 623.3000000000001
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.GND.1",
+      "bounds": {
+        "min_x": 1230.9,
+        "min_y": 329.20000000000005,
+        "max_x": 1258.3000000000002,
+        "max_y": 356.6000000000001
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.V3V3.3",
+      "bounds": {
+        "min_x": 1337.5800000000002,
+        "min_y": -356.6,
+        "max_x": 1354.8200000000002,
+        "max_y": -329.2
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.GND.3",
+      "bounds": {
+        "min_x": 1586.5,
+        "min_y": 773.7,
+        "max_x": 1613.9,
+        "max_y": 801.1
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.GND.4",
+      "bounds": {
+        "min_x": 2005.6,
+        "min_y": 227.59999999999997,
+        "max_x": 2033.0,
+        "max_y": 255.0
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.GND.2",
+      "bounds": {
+        "min_x": 1332.5,
+        "min_y": -178.8,
+        "max_x": 1359.9,
+        "max_y": -151.39999999999998
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.GND.5",
+      "bounds": {
+        "min_x": 1078.5,
+        "min_y": 164.1,
+        "max_x": 1105.8999999999999,
+        "max_y": 191.5
+      }
+    }
+  ],
+  "ports": [
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDD1.C.P2@2",
+      "position": {
+        "x": 1346.2,
+        "y": -214.89999999999998
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDD1.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.GND.2.",
+      "position": {
+        "x": 1346.2,
+        "y": -178.8
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.GND.2"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDD2.C.P2@2",
+      "position": {
+        "x": 2019.3000000000002,
+        "y": 178.8
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDD2.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.GND.4.",
+      "position": {
+        "x": 2019.3000000000002,
+        "y": 227.59999999999997
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.GND.4"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDD3.C.P2@2",
+      "position": {
+        "x": 2184.4,
+        "y": 178.8
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDD3.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDD4.C.P2@2",
+      "position": {
+        "x": 1892.3,
+        "y": 737.5999999999999
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDD4.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.GND.3.",
+      "position": {
+        "x": 1600.2,
+        "y": 773.7
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.GND.3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDDA.C.P2@2",
+      "position": {
+        "x": 1600.2,
+        "y": 737.5999999999999
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDDA.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDDA2.C.P2@2",
+      "position": {
+        "x": 1689.1,
+        "y": 737.5999999999999
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDDA2.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_nRST.C.P2@2",
+      "position": {
+        "x": 1244.6000000000001,
+        "y": 293.09999999999997
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_nRST.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.GND.1.",
+      "position": {
+        "x": 1244.6000000000001,
+        "y": 329.20000000000005
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.GND.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6.PA3@11",
+      "position": {
+        "x": 1345.2,
+        "y": 304.79999999999995
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6.PA5@13",
+      "position": {
+        "x": 1422.4,
+        "y": 509.0
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6.PB2@18",
+      "position": {
+        "x": 1549.4,
+        "y": 509.0
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6.VSSA@19",
+      "position": {
+        "x": 1574.8000000000002,
+        "y": 509.0
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6.VSS_1@23",
+      "position": {
+        "x": 1676.4,
+        "y": 509.0
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6.VSS_2@35",
+      "position": {
+        "x": 1804.4,
+        "y": 76.19999999999999
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6.VSS_3@47",
+      "position": {
+        "x": 1447.8,
+        "y": -178.8
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.Y_HSE.CSTNE8M00GH5C000R0.GND@2",
+      "position": {
+        "x": 1055.1,
+        "y": 177.8
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.Y_HSE.CSTNE8M00GH5C000R0"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.GND.5.",
+      "position": {
+        "x": 1078.5,
+        "y": 177.8
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.GND.5"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.R_HSE.R.P2@2",
+      "position": {
+        "x": 1207.5,
+        "y": 152.4
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.R_HSE.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6.PF0_-_OSC_IN@5",
+      "position": {
+        "x": 1345.2,
+        "y": 152.40000000000003
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6.VDDA@21",
+      "position": {
+        "x": 1625.6,
+        "y": 509.0
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6.VREF+@20",
+      "position": {
+        "x": 1600.2,
+        "y": 509.0
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDDA2.C.P1@1",
+      "position": {
+        "x": 1689.1,
+        "y": 659.4
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDDA2.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.FB_VDDA.FB.P2@2",
+      "position": {
+        "x": 1751.6,
+        "y": 635.0
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.FB_VDDA.FB"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDDA.C.P1@1",
+      "position": {
+        "x": 1600.2,
+        "y": 659.4
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDDA.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.R_HSE.R.P1@1",
+      "position": {
+        "x": 1129.3000000000002,
+        "y": 152.4
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.R_HSE.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.Y_HSE.CSTNE8M00GH5C000R0.INPUT@1",
+      "position": {
+        "x": 1055.1,
+        "y": 152.4
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.Y_HSE.CSTNE8M00GH5C000R0"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6.PF1_-_OSC_OUT@6",
+      "position": {
+        "x": 1345.2,
+        "y": 177.79999999999995
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.Y_HSE.CSTNE8M00GH5C000R0.OUTPUT@3",
+      "position": {
+        "x": 1055.1,
+        "y": 203.2
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.Y_HSE.CSTNE8M00GH5C000R0"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDD1.C.P1@1",
+      "position": {
+        "x": 1346.2,
+        "y": -293.09999999999997
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDD1.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.V3V3.3.",
+      "position": {
+        "x": 1346.2,
+        "y": -329.20000000000005
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.V3V3.3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDD2.C.P1@1",
+      "position": {
+        "x": 2019.3000000000002,
+        "y": 100.60000000000001
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDD2.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.V3V3.1.",
+      "position": {
+        "x": 2184.4,
+        "y": 39.1
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.V3V3.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDD3.C.P1@1",
+      "position": {
+        "x": 2184.4,
+        "y": 100.60000000000001
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDD3.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDD4.C.P1@1",
+      "position": {
+        "x": 1892.3,
+        "y": 659.4
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDD4.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.V3V3.2.",
+      "position": {
+        "x": 1930.3999999999999,
+        "y": 623.3000000000001
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.V3V3.2"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.FB_VDDA.FB.P1@1",
+      "position": {
+        "x": 1829.8,
+        "y": 635.0
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.FB_VDDA.FB"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6.VBAT@1",
+      "position": {
+        "x": 1345.2,
+        "y": 50.8
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6.VDD_1@24",
+      "position": {
+        "x": 1701.8000000000002,
+        "y": 509.0
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6.VDD_2@36",
+      "position": {
+        "x": 1804.4,
+        "y": 50.8
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6.VDD_3@48",
+      "position": {
+        "x": 1422.4,
+        "y": -178.8
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_nRST.C.P1@1",
+      "position": {
+        "x": 1244.6000000000001,
+        "y": 214.89999999999998
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_nRST.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6.PG10_-_NRST@7",
+      "position": {
+        "x": 1345.2,
+        "y": 203.2
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6"
+    }
+  ],
+  "connectors": [
+    {
+      "id": "connector_GND_edge_0_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDD1.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.GND.2.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_1_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDD2.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.GND.4.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_2_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDD3.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.GND.4.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_3_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDD4.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.GND.3.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_4_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDDA.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.GND.3.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_5_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDDA2.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.GND.3.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_6_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_nRST.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_7_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6.PA3@11",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_8_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6.PA5@13",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_9_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6.PB2@18",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.GND.3.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_10_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6.VSSA@19",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.GND.3.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_11_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6.VSS_1@23",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.GND.3.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_12_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6.VSS_2@35",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.GND.4.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_13_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6.VSS_3@47",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.GND.2.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_14_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.Y_HSE.CSTNE8M00GH5C000R0.GND@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.GND.5.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_STM32G431C8T6.R_XIN_cluster_0_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.R_HSE.R.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6.PF0_-_OSC_IN@5",
+      "net_id": "STM32G431C8T6.R_XIN"
+    },
+    {
+      "id": "connector_STM32G431C8T6.VDDA_cluster_1_mst_0_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6.VDDA@21",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6.VREF+@20",
+      "net_id": "STM32G431C8T6.VDDA"
+    },
+    {
+      "id": "connector_STM32G431C8T6.VDDA_cluster_1_mst_1_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDDA2.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.FB_VDDA.FB.P2@2",
+      "net_id": "STM32G431C8T6.VDDA"
+    },
+    {
+      "id": "connector_STM32G431C8T6.VDDA_cluster_1_mst_2_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDDA.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDDA2.C.P1@1",
+      "net_id": "STM32G431C8T6.VDDA"
+    },
+    {
+      "id": "connector_STM32G431C8T6.VDDA_cluster_1_mst_3_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDDA.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6.VREF+@20",
+      "net_id": "STM32G431C8T6.VDDA"
+    },
+    {
+      "id": "connector_STM32G431C8T6.XIN_cluster_2_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.R_HSE.R.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.Y_HSE.CSTNE8M00GH5C000R0.INPUT@1",
+      "net_id": "STM32G431C8T6.XIN"
+    },
+    {
+      "id": "connector_STM32G431C8T6.XOUT_cluster_3_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6.PF1_-_OSC_OUT@6",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.Y_HSE.CSTNE8M00GH5C000R0.OUTPUT@3",
+      "net_id": "STM32G431C8T6.XOUT"
+    },
+    {
+      "id": "connector_V3V3_edge_15_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDD1.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.V3V3.3.",
+      "net_id": "V3V3"
+    },
+    {
+      "id": "connector_V3V3_edge_16_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDD2.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.V3V3.1.",
+      "net_id": "V3V3"
+    },
+    {
+      "id": "connector_V3V3_edge_17_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDD3.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.V3V3.1.",
+      "net_id": "V3V3"
+    },
+    {
+      "id": "connector_V3V3_edge_18_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_VDD4.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.V3V3.2.",
+      "net_id": "V3V3"
+    },
+    {
+      "id": "connector_V3V3_edge_19_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.FB_VDDA.FB.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.V3V3.2.",
+      "net_id": "V3V3"
+    },
+    {
+      "id": "connector_V3V3_edge_20_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6.VBAT@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.V3V3.3.",
+      "net_id": "V3V3"
+    },
+    {
+      "id": "connector_V3V3_edge_21_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6.VDD_1@24",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.V3V3.2.",
+      "net_id": "V3V3"
+    },
+    {
+      "id": "connector_V3V3_edge_22_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6.VDD_2@36",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.V3V3.1.",
+      "net_id": "V3V3"
+    },
+    {
+      "id": "connector_V3V3_edge_23_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6.VDD_3@48",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.V3V3.3.",
+      "net_id": "V3V3"
+    },
+    {
+      "id": "connector_nRST_cluster_4_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.C_nRST.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0001/DM0001.zen:<root>.STM32G431C8T6.U1.STM32G431C8T6.PG10_-_NRST@7",
+      "net_id": "nRST"
+    }
+  ]
+}

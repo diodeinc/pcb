@@ -1,0 +1,3374 @@
+{
+  "obstacles": [
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_OSC_1.C",
+      "bounds": {
+        "min_x": -4174.22,
+        "min_y": -1398.0,
+        "max_x": -4131.58,
+        "max_y": -1319.8000000000002
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE14.C",
+      "bounds": {
+        "min_x": -6790.419999999999,
+        "min_y": 11.7,
+        "max_x": -6747.780000000001,
+        "max_y": 89.9
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.TP_MCU_JTAG_NJTRST_PB4.TP",
+      "bounds": {
+        "min_x": -4402.820000000001,
+        "min_y": -702.0400000000001,
+        "max_x": -4385.58,
+        "max_y": -659.4000000000001
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_MCU_OSC32_IN.R",
+      "bounds": {
+        "min_x": -3656.06,
+        "min_y": -1613.8999999999999,
+        "max_x": -3633.7400000000002,
+        "max_y": -1535.6999999999998
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.TP_LED_MATRIX_11.TP",
+      "bounds": {
+        "min_x": -4275.820000000001,
+        "min_y": -460.74000000000007,
+        "max_x": -4258.58,
+        "max_y": -418.1
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE13.C",
+      "bounds": {
+        "min_x": -6650.72,
+        "min_y": 11.7,
+        "max_x": -6608.080000000002,
+        "max_y": 89.9
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_MCU_SPI3_CLK.R",
+      "bounds": {
+        "min_x": -5487.4,
+        "min_y": -1382.7600000000002,
+        "max_x": -5409.200000000001,
+        "max_y": -1360.44
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_OSC_32K_2.C",
+      "bounds": {
+        "min_x": -3501.1200000000003,
+        "min_y": -1398.0,
+        "max_x": -3458.4800000000005,
+        "max_y": -1319.8000000000002
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.TP_MCU_JTAG_TDI.TP",
+      "bounds": {
+        "min_x": -4402.820000000001,
+        "min_y": -460.74000000000007,
+        "max_x": -4385.58,
+        "max_y": -418.1
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_MCU_VREFP_DECOUPLE2.C",
+      "bounds": {
+        "min_x": -6231.619999999999,
+        "min_y": -242.3,
+        "max_x": -6188.98,
+        "max_y": -164.10000000000002
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.TP_MCU_JTAG_SWDIO.TP",
+      "bounds": {
+        "min_x": -4402.820000000001,
+        "min_y": -282.93999999999994,
+        "max_x": -4385.58,
+        "max_y": -240.29999999999995
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_MCU_OSC_OUT.R",
+      "bounds": {
+        "min_x": -3948.16,
+        "min_y": -1550.3999999999999,
+        "max_x": -3925.84,
+        "max_y": -1472.1999999999998
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_IC_SWITCH_DECOUPLE.C",
+      "bounds": {
+        "min_x": -5520.419999999999,
+        "min_y": -1220.2,
+        "max_x": -5477.780000000001,
+        "max_y": -1142.0
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_Select_IC_SWITCH.R",
+      "bounds": {
+        "min_x": -5586.459999999999,
+        "min_y": -1182.1,
+        "max_x": -5564.139999999999,
+        "max_y": -1103.9
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_MCU_SPI3_MOSI.R",
+      "bounds": {
+        "min_x": -5474.700000000001,
+        "min_y": -747.76,
+        "max_x": -5396.500000000002,
+        "max_y": -725.44
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_VREG_L15A_1P8V_DECOUPLE1.C",
+      "bounds": {
+        "min_x": -6422.12,
+        "min_y": 532.4,
+        "max_x": -6379.480000000001,
+        "max_y": 610.6
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_MCU_OSC_IN.R",
+      "bounds": {
+        "min_x": -4164.06,
+        "min_y": -1550.3999999999999,
+        "max_x": -4141.740000000001,
+        "max_y": -1472.1999999999998
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.IC_SWITCH.74LVC1G3157DW-7",
+      "bounds": {
+        "min_x": -5919.200000000001,
+        "min_y": -1309.1,
+        "max_x": -5612.4,
+        "max_y": -1205.5
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_MCU_SPI3_RDY.R",
+      "bounds": {
+        "min_x": -4623.8,
+        "min_y": 496.84,
+        "max_x": -4545.599999999999,
+        "max_y": 519.16
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_MCU_SPI3_MISO.R",
+      "bounds": {
+        "min_x": -5474.700000000001,
+        "min_y": -722.36,
+        "max_x": -5396.500000000002,
+        "max_y": -700.04
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_VCOIN2.C",
+      "bounds": {
+        "min_x": -5926.819999999999,
+        "min_y": 532.4,
+        "max_x": -5884.18,
+        "max_y": 610.6
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE8.C",
+      "bounds": {
+        "min_x": -6790.419999999999,
+        "min_y": 214.89999999999998,
+        "max_x": -6747.780000000001,
+        "max_y": 293.09999999999997
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_SOC_MCU_LPUART1_RX.R",
+      "bounds": {
+        "min_x": -4560.3,
+        "min_y": -1535.1600000000003,
+        "max_x": -4482.099999999999,
+        "max_y": -1512.8400000000001
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE15.C",
+      "bounds": {
+        "min_x": -6091.92,
+        "min_y": -483.6,
+        "max_x": -6049.280000000001,
+        "max_y": -405.4000000000001
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE2.C",
+      "bounds": {
+        "min_x": -6091.92,
+        "min_y": 532.4,
+        "max_x": -6049.280000000001,
+        "max_y": 610.6
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE6.C",
+      "bounds": {
+        "min_x": -6511.0199999999995,
+        "min_y": 214.89999999999998,
+        "max_x": -6468.380000000001,
+        "max_y": 293.09999999999997
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.Crystal_16MHz.Y",
+      "bounds": {
+        "min_x": -4077.7000000000003,
+        "min_y": -1461.5,
+        "max_x": -3999.5,
+        "max_y": -1357.8999999999999
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE12.C",
+      "bounds": {
+        "min_x": -6511.0199999999995,
+        "min_y": 11.7,
+        "max_x": -6468.380000000001,
+        "max_y": 89.9
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_SOC_MCU_LPUART1_TX.R",
+      "bounds": {
+        "min_x": -4547.6,
+        "min_y": -1179.56,
+        "max_x": -4469.4,
+        "max_y": -1157.24
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE7.C",
+      "bounds": {
+        "min_x": -6650.72,
+        "min_y": 214.89999999999998,
+        "max_x": -6608.080000000002,
+        "max_y": 293.09999999999997
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE3.C",
+      "bounds": {
+        "min_x": -6091.92,
+        "min_y": 214.89999999999998,
+        "max_x": -6049.280000000001,
+        "max_y": 293.09999999999997
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_MCU_VREFP_DECOUPLE1.C",
+      "bounds": {
+        "min_x": -6091.92,
+        "min_y": -242.3,
+        "max_x": -6049.280000000001,
+        "max_y": -164.10000000000002
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE5.C",
+      "bounds": {
+        "min_x": -6371.32,
+        "min_y": 214.89999999999998,
+        "max_x": -6328.68,
+        "max_y": 293.09999999999997
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_OSC_2.C",
+      "bounds": {
+        "min_x": -3958.3199999999997,
+        "min_y": -1398.0,
+        "max_x": -3915.6799999999994,
+        "max_y": -1319.8000000000002
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_MCU_OSC32_OUT.R",
+      "bounds": {
+        "min_x": -3529.06,
+        "min_y": -1613.8999999999999,
+        "max_x": -3506.7400000000002,
+        "max_y": -1535.6999999999998
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.TP_MCU_JTAG_SWCLK.TP",
+      "bounds": {
+        "min_x": -4275.820000000001,
+        "min_y": -702.0400000000001,
+        "max_x": -4258.58,
+        "max_y": -659.4000000000001
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_VREG_L15A_1P8V_DECOUPLE2.C",
+      "bounds": {
+        "min_x": -6561.819999999999,
+        "min_y": 532.4,
+        "max_x": -6519.18,
+        "max_y": 610.6
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_SOC_MCU_LPUART1_CTS.R",
+      "bounds": {
+        "min_x": -4547.6,
+        "min_y": -1154.1599999999999,
+        "max_x": -4469.4,
+        "max_y": -1131.84
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR",
+      "bounds": {
+        "min_x": -5296.900000000001,
+        "min_y": -1563.1,
+        "max_x": -4736.1,
+        "max_y": 623.2999999999997
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_VCOIN.C",
+      "bounds": {
+        "min_x": -5787.12,
+        "min_y": 532.4,
+        "max_x": -5744.480000000001,
+        "max_y": 610.6
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_OSC_32K_1.C",
+      "bounds": {
+        "min_x": -3704.32,
+        "min_y": -1398.0,
+        "max_x": -3661.6800000000003,
+        "max_y": -1319.8000000000002
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE11.C",
+      "bounds": {
+        "min_x": -6371.32,
+        "min_y": 11.7,
+        "max_x": -6328.68,
+        "max_y": 89.9
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_VREG_L15A_1P8V_DECOUPLE3.C",
+      "bounds": {
+        "min_x": -6701.5199999999995,
+        "min_y": 532.4,
+        "max_x": -6658.880000000001,
+        "max_y": 610.6
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_SOC_MCU_LPUART1_RTS.R",
+      "bounds": {
+        "min_x": -4547.6,
+        "min_y": -849.3600000000001,
+        "max_x": -4469.4,
+        "max_y": -827.0400000000002
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE10.C",
+      "bounds": {
+        "min_x": -6231.619999999999,
+        "min_y": 11.7,
+        "max_x": -6188.98,
+        "max_y": 89.9
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_MCU_SPI3_CS_N.R",
+      "bounds": {
+        "min_x": -5461.999999999999,
+        "min_y": -87.36000000000001,
+        "max_x": -5383.799999999999,
+        "max_y": -65.04
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE4.C",
+      "bounds": {
+        "min_x": -6231.619999999999,
+        "min_y": 214.89999999999998,
+        "max_x": -6188.98,
+        "max_y": 293.09999999999997
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE1.C",
+      "bounds": {
+        "min_x": -6218.919999999999,
+        "min_y": 532.4,
+        "max_x": -6176.280000000001,
+        "max_y": 610.6
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.Crystal_32KHz.Y",
+      "bounds": {
+        "min_x": -3620.5,
+        "min_y": -1436.1,
+        "max_x": -3542.2999999999993,
+        "max_y": -1383.3000000000002
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_OSC_32K.R",
+      "bounds": {
+        "min_x": -3620.5,
+        "min_y": -1509.7600000000002,
+        "max_x": -3542.2999999999993,
+        "max_y": -1487.44
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE9.C",
+      "bounds": {
+        "min_x": -6091.92,
+        "min_y": 11.7,
+        "max_x": -6049.280000000001,
+        "max_y": 89.9
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.13",
+      "bounds": {
+        "min_x": -5360.4,
+        "min_y": -1481.82,
+        "max_x": -5333.0,
+        "max_y": -1464.58
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.13",
+      "bounds": {
+        "min_x": -5779.5,
+        "min_y": 646.7,
+        "max_x": -5752.1,
+        "max_y": 674.1
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.22",
+      "bounds": {
+        "min_x": -6503.400000000001,
+        "min_y": 316.5,
+        "max_x": -6476.0,
+        "max_y": 343.90000000000003
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.4",
+      "bounds": {
+        "min_x": -4649.2,
+        "min_y": -13.700000000000006,
+        "max_x": -4621.799999999999,
+        "max_y": 13.7
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.20",
+      "bounds": {
+        "min_x": -6693.9,
+        "min_y": 646.7,
+        "max_x": -6666.5,
+        "max_y": 674.1
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.29",
+      "bounds": {
+        "min_x": -6363.7,
+        "min_y": 100.60000000000001,
+        "max_x": -6336.299999999999,
+        "max_y": 128.0
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.33",
+      "bounds": {
+        "min_x": -6224.0,
+        "min_y": -127.99999999999999,
+        "max_x": -6196.6,
+        "max_y": -100.59999999999998
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.38",
+      "bounds": {
+        "min_x": -3493.5,
+        "min_y": -1309.1,
+        "max_x": -3466.1,
+        "max_y": -1281.7
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.41",
+      "bounds": {
+        "min_x": -3950.7,
+        "min_y": -1283.7,
+        "max_x": -3923.2999999999997,
+        "max_y": -1256.3000000000002
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.9",
+      "bounds": {
+        "min_x": -5335.0,
+        "min_y": -237.21999999999997,
+        "max_x": -5307.6,
+        "max_y": -219.97999999999996
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.9",
+      "bounds": {
+        "min_x": -5347.7,
+        "min_y": -1182.1000000000001,
+        "max_x": -5320.299999999999,
+        "max_y": -1154.7
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.VCOIN.1",
+      "bounds": {
+        "min_x": -5347.7,
+        "min_y": -872.2199999999999,
+        "max_x": -5320.299999999999,
+        "max_y": -854.98
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.14",
+      "bounds": {
+        "min_x": -5919.2,
+        "min_y": 646.7,
+        "max_x": -5891.799999999999,
+        "max_y": 674.1
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.32",
+      "bounds": {
+        "min_x": -6084.300000000001,
+        "min_y": -140.7,
+        "max_x": -6056.9000000000015,
+        "max_y": -113.29999999999998
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.3",
+      "bounds": {
+        "min_x": -4649.2,
+        "min_y": 87.89999999999999,
+        "max_x": -4621.799999999999,
+        "max_y": 115.30000000000001
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.8",
+      "bounds": {
+        "min_x": -5347.7,
+        "min_y": -1131.3000000000002,
+        "max_x": -5320.299999999999,
+        "max_y": -1103.9
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.39",
+      "bounds": {
+        "min_x": -4052.3,
+        "min_y": -1283.7,
+        "max_x": -4024.9,
+        "max_y": -1256.3000000000002
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.17",
+      "bounds": {
+        "min_x": -5507.719999999999,
+        "min_y": -1334.5,
+        "max_x": -5490.48,
+        "max_y": -1307.1000000000001
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.16",
+      "bounds": {
+        "min_x": -6211.3,
+        "min_y": 646.7,
+        "max_x": -6183.9,
+        "max_y": 674.1
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.31",
+      "bounds": {
+        "min_x": -6084.300000000001,
+        "min_y": 100.60000000000001,
+        "max_x": -6056.9000000000015,
+        "max_y": 128.0
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.VREG_L15A_1P8V.1",
+      "bounds": {
+        "min_x": -5360.4,
+        "min_y": -1405.62,
+        "max_x": -5333.0,
+        "max_y": -1388.38
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.35",
+      "bounds": {
+        "min_x": -5982.7,
+        "min_y": -1169.4,
+        "max_x": -5955.299999999999,
+        "max_y": -1142.0000000000002
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.8",
+      "bounds": {
+        "min_x": -5335.0,
+        "min_y": 448.58,
+        "max_x": -5307.6,
+        "max_y": 465.82000000000005
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.12",
+      "bounds": {
+        "min_x": -5360.4,
+        "min_y": -1354.82,
+        "max_x": -5333.0,
+        "max_y": -1337.58
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.26",
+      "bounds": {
+        "min_x": -6782.799999999999,
+        "min_y": 100.60000000000001,
+        "max_x": -6755.4,
+        "max_y": 128.0
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.2",
+      "bounds": {
+        "min_x": -4649.2,
+        "min_y": 189.5,
+        "max_x": -4621.799999999999,
+        "max_y": 216.90000000000003
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.21",
+      "bounds": {
+        "min_x": -6363.7,
+        "min_y": 316.5,
+        "max_x": -6336.299999999999,
+        "max_y": 343.90000000000003
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.37",
+      "bounds": {
+        "min_x": -5512.799999999999,
+        "min_y": -1080.5,
+        "max_x": -5485.4,
+        "max_y": -1053.1000000000001
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.34",
+      "bounds": {
+        "min_x": -6084.300000000001,
+        "min_y": -382.0,
+        "max_x": -6056.9000000000015,
+        "max_y": -354.59999999999997
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.MCU_VREFP.1",
+      "bounds": {
+        "min_x": -4649.2,
+        "min_y": -389.62,
+        "max_x": -4621.799999999999,
+        "max_y": -372.38
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.11",
+      "bounds": {
+        "min_x": -5360.4,
+        "min_y": -1278.62,
+        "max_x": -5333.0,
+        "max_y": -1261.38
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.1",
+      "bounds": {
+        "min_x": -5347.7,
+        "min_y": 62.5,
+        "max_x": -5320.299999999999,
+        "max_y": 89.9
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.16",
+      "bounds": {
+        "min_x": -6079.22,
+        "min_y": -534.4,
+        "max_x": -6061.980000000001,
+        "max_y": -506.99999999999994
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.12",
+      "bounds": {
+        "min_x": -5347.7,
+        "min_y": 138.70000000000002,
+        "max_x": -5320.299999999999,
+        "max_y": 166.1
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.5",
+      "bounds": {
+        "min_x": -4649.2,
+        "min_y": -699.5,
+        "max_x": -4621.799999999999,
+        "max_y": -672.0999999999999
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.40",
+      "bounds": {
+        "min_x": -4166.6,
+        "min_y": -1283.7,
+        "max_x": -4139.200000000001,
+        "max_y": -1256.3000000000002
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.6",
+      "bounds": {
+        "min_x": -4649.2,
+        "min_y": -775.7,
+        "max_x": -4621.799999999999,
+        "max_y": -748.3
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.MCU_VREFP.2",
+      "bounds": {
+        "min_x": -6079.22,
+        "min_y": -318.5,
+        "max_x": -6061.980000000001,
+        "max_y": -291.09999999999997
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.17",
+      "bounds": {
+        "min_x": -6414.5,
+        "min_y": 646.7,
+        "max_x": -6387.1,
+        "max_y": 674.1
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.4",
+      "bounds": {
+        "min_x": -4661.900000000001,
+        "min_y": 321.58000000000004,
+        "max_x": -4634.5,
+        "max_y": 338.82000000000005
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.36",
+      "bounds": {
+        "min_x": -5589.0,
+        "min_y": -1080.5,
+        "max_x": -5561.6,
+        "max_y": -1053.1000000000001
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.18",
+      "bounds": {
+        "min_x": -6084.300000000001,
+        "min_y": 316.5,
+        "max_x": -6056.9000000000015,
+        "max_y": 343.90000000000003
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.2",
+      "bounds": {
+        "min_x": -4649.2,
+        "min_y": -364.22,
+        "max_x": -4621.799999999999,
+        "max_y": -346.98
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.10",
+      "bounds": {
+        "min_x": -6079.22,
+        "min_y": 468.9,
+        "max_x": -6061.980000000001,
+        "max_y": 496.3
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.23",
+      "bounds": {
+        "min_x": -6643.1,
+        "min_y": 316.5,
+        "max_x": -6615.700000000001,
+        "max_y": 343.90000000000003
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.10",
+      "bounds": {
+        "min_x": -5347.7,
+        "min_y": -1029.7,
+        "max_x": -5320.299999999999,
+        "max_y": -1002.3
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.7",
+      "bounds": {
+        "min_x": -5347.7,
+        "min_y": 92.98,
+        "max_x": -5320.299999999999,
+        "max_y": 110.22
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.6",
+      "bounds": {
+        "min_x": -4661.900000000001,
+        "min_y": 550.1800000000001,
+        "max_x": -4634.5,
+        "max_y": 567.4200000000001
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.11",
+      "bounds": {
+        "min_x": -5347.7,
+        "min_y": -953.5000000000001,
+        "max_x": -5320.299999999999,
+        "max_y": -926.1
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.15",
+      "bounds": {
+        "min_x": -6079.22,
+        "min_y": -51.8,
+        "max_x": -6061.980000000001,
+        "max_y": -24.4
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.VREG_L15A_1P8V.2",
+      "bounds": {
+        "min_x": -4674.6,
+        "min_y": -1100.82,
+        "max_x": -4647.200000000001,
+        "max_y": -1083.58
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.19",
+      "bounds": {
+        "min_x": -6554.2,
+        "min_y": 646.7,
+        "max_x": -6526.799999999999,
+        "max_y": 674.1
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.7",
+      "bounds": {
+        "min_x": -4661.900000000001,
+        "min_y": -1359.9,
+        "max_x": -4634.5,
+        "max_y": -1332.5
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.30",
+      "bounds": {
+        "min_x": -6224.0,
+        "min_y": 100.60000000000001,
+        "max_x": -6196.6,
+        "max_y": 128.0
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.15",
+      "bounds": {
+        "min_x": -6084.300000000001,
+        "min_y": 646.7,
+        "max_x": -6056.9000000000015,
+        "max_y": 674.1
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.3",
+      "bounds": {
+        "min_x": -4649.2,
+        "min_y": -745.2199999999999,
+        "max_x": -4621.799999999999,
+        "max_y": -727.98
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.24",
+      "bounds": {
+        "min_x": -6782.799999999999,
+        "min_y": 316.5,
+        "max_x": -6755.4,
+        "max_y": 343.90000000000003
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.5",
+      "bounds": {
+        "min_x": -4661.900000000001,
+        "min_y": 423.17999999999995,
+        "max_x": -4634.5,
+        "max_y": 440.41999999999996
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.MCU_VREFP.3",
+      "bounds": {
+        "min_x": -6003.02,
+        "min_y": -1359.8999999999999,
+        "max_x": -5985.780000000001,
+        "max_y": -1332.5
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.VREG_L15A_1P8V.3",
+      "bounds": {
+        "min_x": -6409.42,
+        "min_y": 468.9,
+        "max_x": -6392.18,
+        "max_y": 496.3
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.25",
+      "bounds": {
+        "min_x": -6224.0,
+        "min_y": 316.5,
+        "max_x": -6196.6,
+        "max_y": 343.90000000000003
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.27",
+      "bounds": {
+        "min_x": -6643.1,
+        "min_y": 100.60000000000001,
+        "max_x": -6615.700000000001,
+        "max_y": 128.0
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.1",
+      "bounds": {
+        "min_x": -5360.4,
+        "min_y": -1202.4199999999998,
+        "max_x": -5333.0,
+        "max_y": -1185.1799999999998
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.14",
+      "bounds": {
+        "min_x": -6079.22,
+        "min_y": 151.4,
+        "max_x": -6061.980000000001,
+        "max_y": 178.8
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.42",
+      "bounds": {
+        "min_x": -3696.7000000000003,
+        "min_y": -1309.1,
+        "max_x": -3669.3,
+        "max_y": -1281.7
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.VCOIN.2",
+      "bounds": {
+        "min_x": -5774.42,
+        "min_y": 468.9,
+        "max_x": -5757.18,
+        "max_y": 496.3
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.28",
+      "bounds": {
+        "min_x": -6503.400000000001,
+        "min_y": 100.60000000000001,
+        "max_x": -6476.0,
+        "max_y": 128.0
+      }
+    }
+  ],
+  "ports": [
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_IC_SWITCH_DECOUPLE.C.P2@2",
+      "position": {
+        "x": -5499.099999999999,
+        "y": -1142.0
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_IC_SWITCH_DECOUPLE.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.37.",
+      "position": {
+        "x": -5499.099999999999,
+        "y": -1080.5
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.37"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_MCU_VREFP_DECOUPLE1.C.P2@2",
+      "position": {
+        "x": -6070.6,
+        "y": -164.1
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_MCU_VREFP_DECOUPLE1.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.32.",
+      "position": {
+        "x": -6070.6,
+        "y": -140.7
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.32"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_MCU_VREFP_DECOUPLE2.C.P2@2",
+      "position": {
+        "x": -6210.299999999999,
+        "y": -164.1
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_MCU_VREFP_DECOUPLE2.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.33.",
+      "position": {
+        "x": -6210.299999999999,
+        "y": -127.99999999999999
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.33"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_OSC_1.C.P2@2",
+      "position": {
+        "x": -4152.900000000001,
+        "y": -1319.8000000000002
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_OSC_1.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.40.",
+      "position": {
+        "x": -4152.900000000001,
+        "y": -1283.7
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.40"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_OSC_2.C.P2@2",
+      "position": {
+        "x": -3937.0,
+        "y": -1319.8000000000002
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_OSC_2.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.41.",
+      "position": {
+        "x": -3937.0,
+        "y": -1283.7
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.41"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_OSC_32K_1.C.P2@2",
+      "position": {
+        "x": -3683.0,
+        "y": -1319.8000000000002
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_OSC_32K_1.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.42.",
+      "position": {
+        "x": -3683.0,
+        "y": -1309.1
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.42"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_OSC_32K_2.C.P2@2",
+      "position": {
+        "x": -3479.8,
+        "y": -1319.8000000000002
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_OSC_32K_2.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.38.",
+      "position": {
+        "x": -3479.8,
+        "y": -1309.1
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.38"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE1.C.P2@2",
+      "position": {
+        "x": -6197.6,
+        "y": 610.6
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE1.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.16.",
+      "position": {
+        "x": -6197.6,
+        "y": 646.7
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.16"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE10.C.P2@2",
+      "position": {
+        "x": -6210.299999999999,
+        "y": 89.9
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE10.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.30.",
+      "position": {
+        "x": -6210.299999999999,
+        "y": 100.60000000000001
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.30"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE11.C.P2@2",
+      "position": {
+        "x": -6350.0,
+        "y": 89.9
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE11.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.29.",
+      "position": {
+        "x": -6350.0,
+        "y": 100.60000000000001
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.29"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE12.C.P2@2",
+      "position": {
+        "x": -6489.700000000001,
+        "y": 89.9
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE12.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.28.",
+      "position": {
+        "x": -6489.700000000001,
+        "y": 100.60000000000001
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.28"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE13.C.P2@2",
+      "position": {
+        "x": -6629.400000000001,
+        "y": 89.9
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE13.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.27.",
+      "position": {
+        "x": -6629.400000000001,
+        "y": 100.60000000000001
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.27"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE14.C.P2@2",
+      "position": {
+        "x": -6769.099999999999,
+        "y": 89.9
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE14.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.26.",
+      "position": {
+        "x": -6769.099999999999,
+        "y": 100.60000000000001
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.26"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE15.C.P2@2",
+      "position": {
+        "x": -6070.6,
+        "y": -405.4000000000001
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE15.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.34.",
+      "position": {
+        "x": -6070.6,
+        "y": -382.0
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.34"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE2.C.P2@2",
+      "position": {
+        "x": -6070.6,
+        "y": 610.6
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE2.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.15.",
+      "position": {
+        "x": -6070.6,
+        "y": 646.7
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.15"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE3.C.P2@2",
+      "position": {
+        "x": -6070.6,
+        "y": 293.09999999999997
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE3.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.18.",
+      "position": {
+        "x": -6070.6,
+        "y": 316.5
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.18"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE4.C.P2@2",
+      "position": {
+        "x": -6210.299999999999,
+        "y": 293.09999999999997
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE4.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.25.",
+      "position": {
+        "x": -6210.299999999999,
+        "y": 316.5
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.25"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE5.C.P2@2",
+      "position": {
+        "x": -6350.0,
+        "y": 293.09999999999997
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE5.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.21.",
+      "position": {
+        "x": -6350.0,
+        "y": 316.5
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.21"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE6.C.P2@2",
+      "position": {
+        "x": -6489.700000000001,
+        "y": 293.09999999999997
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE6.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.22.",
+      "position": {
+        "x": -6489.700000000001,
+        "y": 316.5
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.22"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE7.C.P2@2",
+      "position": {
+        "x": -6629.400000000001,
+        "y": 293.09999999999997
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE7.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.23.",
+      "position": {
+        "x": -6629.400000000001,
+        "y": 316.5
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.23"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE8.C.P2@2",
+      "position": {
+        "x": -6769.099999999999,
+        "y": 293.09999999999997
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE8.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.24.",
+      "position": {
+        "x": -6769.099999999999,
+        "y": 316.5
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.24"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE9.C.P2@2",
+      "position": {
+        "x": -6070.6,
+        "y": 89.9
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE9.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.31.",
+      "position": {
+        "x": -6070.6,
+        "y": 100.60000000000001
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.31"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_VCOIN.C.P2@2",
+      "position": {
+        "x": -5765.8,
+        "y": 610.6
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_VCOIN.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.13.",
+      "position": {
+        "x": -5765.8,
+        "y": 646.7
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.13"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_VCOIN2.C.P2@2",
+      "position": {
+        "x": -5905.5,
+        "y": 610.6
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_VCOIN2.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.14.",
+      "position": {
+        "x": -5905.5,
+        "y": 646.7
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.14"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_VREG_L15A_1P8V_DECOUPLE1.C.P2@2",
+      "position": {
+        "x": -6400.8,
+        "y": 610.6
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_VREG_L15A_1P8V_DECOUPLE1.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.17.",
+      "position": {
+        "x": -6400.8,
+        "y": 646.7
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.17"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_VREG_L15A_1P8V_DECOUPLE2.C.P2@2",
+      "position": {
+        "x": -6540.5,
+        "y": 610.6
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_VREG_L15A_1P8V_DECOUPLE2.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.19.",
+      "position": {
+        "x": -6540.5,
+        "y": 646.7
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.19"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_VREG_L15A_1P8V_DECOUPLE3.C.P2@2",
+      "position": {
+        "x": -6680.2,
+        "y": 610.6
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_VREG_L15A_1P8V_DECOUPLE3.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.20.",
+      "position": {
+        "x": -6680.2,
+        "y": 646.7
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.20"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.Crystal_16MHz.Y.2@2",
+      "position": {
+        "x": -4038.6000000000004,
+        "y": -1461.5
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.Crystal_16MHz.Y"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.39.",
+      "position": {
+        "x": -4038.6000000000004,
+        "y": -1283.7
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.39"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.Crystal_16MHz.Y.4@4",
+      "position": {
+        "x": -4038.6000000000004,
+        "y": -1357.8999999999999
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.Crystal_16MHz.Y"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.IC_SWITCH.74LVC1G3157DW-7.GND@2",
+      "position": {
+        "x": -5919.200000000001,
+        "y": -1257.3
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.IC_SWITCH.74LVC1G3157DW-7"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.35.",
+      "position": {
+        "x": -5969.0,
+        "y": -1169.4
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.35"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_Select_IC_SWITCH.R.P2@2",
+      "position": {
+        "x": -5575.299999999999,
+        "y": -1103.9
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_Select_IC_SWITCH.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.36.",
+      "position": {
+        "x": -5575.299999999999,
+        "y": -1080.5
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.36"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VSSA@K2",
+      "position": {
+        "x": -4736.1,
+        "y": -698.5000000000002
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.5.",
+      "position": {
+        "x": -4649.2,
+        "y": -685.8
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.5"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VSS_10@M7",
+      "position": {
+        "x": -4736.1,
+        "y": 88.89999999999986
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.3.",
+      "position": {
+        "x": -4649.2,
+        "y": 101.6
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VSS_11@M11",
+      "position": {
+        "x": -4736.1,
+        "y": 190.49999999999983
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.2.",
+      "position": {
+        "x": -4649.2,
+        "y": 203.2
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.2"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VSS_1@B2",
+      "position": {
+        "x": -5296.900000000001,
+        "y": -1181.1000000000001
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.9.",
+      "position": {
+        "x": -5320.299999999999,
+        "y": -1168.4
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.9"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VSS_2@B4",
+      "position": {
+        "x": -5296.900000000001,
+        "y": -1130.3000000000002
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.8.",
+      "position": {
+        "x": -5320.299999999999,
+        "y": -1117.6000000000001
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.8"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VSS_3@B8",
+      "position": {
+        "x": -5296.900000000001,
+        "y": -1028.7
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.10.",
+      "position": {
+        "x": -5320.299999999999,
+        "y": -1016.0
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.10"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VSS_4@B11",
+      "position": {
+        "x": -5296.900000000001,
+        "y": -952.5
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.11.",
+      "position": {
+        "x": -5320.299999999999,
+        "y": -939.8000000000001
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.11"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VSS_5@E12",
+      "position": {
+        "x": -5296.900000000001,
+        "y": 63.49999999999994
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.1.",
+      "position": {
+        "x": -5320.299999999999,
+        "y": 76.2
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VSS_6@F2",
+      "position": {
+        "x": -5296.900000000001,
+        "y": 139.6999999999997
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.12.",
+      "position": {
+        "x": -5320.299999999999,
+        "y": 152.4
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.12"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VSS_7@H2",
+      "position": {
+        "x": -4736.1,
+        "y": -1358.9
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.7.",
+      "position": {
+        "x": -4661.900000000001,
+        "y": -1346.2
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.7"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VSS_8@J12",
+      "position": {
+        "x": -4736.1,
+        "y": -774.7000000000003
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.6.",
+      "position": {
+        "x": -4649.2,
+        "y": -762.0
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.6"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VSS_9@M3",
+      "position": {
+        "x": -4736.1,
+        "y": -12.700000000000102
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.4.",
+      "position": {
+        "x": -4649.2,
+        "y": 1.8369701987210312e-16
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.4"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_SOC_MCU_LPUART1_RTS.R.P2@2",
+      "position": {
+        "x": -4547.6,
+        "y": -838.2
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_SOC_MCU_LPUART1_RTS.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.PG5@J9",
+      "position": {
+        "x": -4736.1,
+        "y": -850.9000000000003
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_SOC_MCU_LPUART1_CTS.R.P2@2",
+      "position": {
+        "x": -4547.6,
+        "y": -1143.0
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_SOC_MCU_LPUART1_CTS.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.PG6@H10",
+      "position": {
+        "x": -4736.1,
+        "y": -1155.7000000000003
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_SOC_MCU_LPUART1_TX.R.P2@2",
+      "position": {
+        "x": -4547.6,
+        "y": -1168.4
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_SOC_MCU_LPUART1_TX.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.PG8@H9",
+      "position": {
+        "x": -4736.1,
+        "y": -1181.1000000000001
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_SOC_MCU_LPUART1_RX.R.P2@2",
+      "position": {
+        "x": -4560.3,
+        "y": -1524.0
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_SOC_MCU_LPUART1_RX.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.PG7@G8",
+      "position": {
+        "x": -4736.1,
+        "y": -1536.7000000000003
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_MCU_SPI3_CLK.R.P2@2",
+      "position": {
+        "x": -5409.200000000001,
+        "y": -1371.6
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_MCU_SPI3_CLK.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.PG9@A7",
+      "position": {
+        "x": -5296.900000000001,
+        "y": -1384.3000000000002
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_MCU_SPI3_CS_N.R.P2@2",
+      "position": {
+        "x": -5383.8,
+        "y": -76.20000000000002
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_MCU_SPI3_CS_N.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.PG12@E6",
+      "position": {
+        "x": -5296.900000000001,
+        "y": -88.90000000000015
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_MCU_SPI3_MISO.R.P2@2",
+      "position": {
+        "x": -5396.500000000001,
+        "y": -711.2
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_MCU_SPI3_MISO.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.PG10@C7",
+      "position": {
+        "x": -5296.900000000001,
+        "y": -723.9000000000001
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_MCU_SPI3_MOSI.R.P1@1",
+      "position": {
+        "x": -5396.500000000001,
+        "y": -736.5999999999999
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_MCU_SPI3_MOSI.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.PB5@C6",
+      "position": {
+        "x": -5296.900000000001,
+        "y": -749.3000000000001
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_MCU_SPI3_RDY.R.P2@2",
+      "position": {
+        "x": -4623.8,
+        "y": 508.0
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_MCU_SPI3_RDY.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.PG13@N10",
+      "position": {
+        "x": -4736.1,
+        "y": 495.2999999999997
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.IC_SWITCH.74LVC1G3157DW-7.SELECT@6",
+      "position": {
+        "x": -5612.4,
+        "y": -1282.7
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.IC_SWITCH.74LVC1G3157DW-7"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_Select_IC_SWITCH.R.P1@1",
+      "position": {
+        "x": -5575.299999999999,
+        "y": -1182.1
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_Select_IC_SWITCH.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_OSC_1.C.P1@1",
+      "position": {
+        "x": -4152.900000000001,
+        "y": -1398.0
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_OSC_1.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_MCU_OSC_IN.R.P2@2",
+      "position": {
+        "x": -4152.900000000001,
+        "y": -1472.2
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_MCU_OSC_IN.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.Crystal_16MHz.Y.1@1",
+      "position": {
+        "x": -4077.7000000000003,
+        "y": -1409.7
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.Crystal_16MHz.Y"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_OSC_2.C.P1@1",
+      "position": {
+        "x": -3937.0,
+        "y": -1398.0
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_OSC_2.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.Crystal_16MHz.Y.3@3",
+      "position": {
+        "x": -3999.5,
+        "y": -1409.7
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.Crystal_16MHz.Y"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_MCU_OSC_OUT.R.P2@2",
+      "position": {
+        "x": -3937.0,
+        "y": -1472.2
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_MCU_OSC_OUT.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_MCU_OSC32_IN.R.P2@2",
+      "position": {
+        "x": -3644.9,
+        "y": -1535.6999999999998
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_MCU_OSC32_IN.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_OSC_32K.R.P1@1",
+      "position": {
+        "x": -3620.5,
+        "y": -1498.6000000000001
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_OSC_32K.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_OSC_32K_1.C.P1@1",
+      "position": {
+        "x": -3683.0,
+        "y": -1398.0
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_OSC_32K_1.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.Crystal_32KHz.Y.1@1",
+      "position": {
+        "x": -3620.5,
+        "y": -1409.7
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.Crystal_32KHz.Y"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_MCU_OSC32_OUT.R.P2@2",
+      "position": {
+        "x": -3517.9,
+        "y": -1535.6999999999998
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_MCU_OSC32_OUT.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_OSC_32K.R.P2@2",
+      "position": {
+        "x": -3542.2999999999997,
+        "y": -1498.6000000000001
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_OSC_32K.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_OSC_32K_2.C.P1@1",
+      "position": {
+        "x": -3479.8,
+        "y": -1398.0
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_OSC_32K_2.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.Crystal_32KHz.Y.2@2",
+      "position": {
+        "x": -3542.2999999999997,
+        "y": -1409.7
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.Crystal_32KHz.Y"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_MCU_VREFP_DECOUPLE1.C.P1@1",
+      "position": {
+        "x": -6070.6,
+        "y": -242.3
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_MCU_VREFP_DECOUPLE1.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.MCU_VREFP.2.",
+      "position": {
+        "x": -6070.6,
+        "y": -291.1
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.MCU_VREFP.2"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_MCU_VREFP_DECOUPLE2.C.P1@1",
+      "position": {
+        "x": -6210.299999999999,
+        "y": -242.3
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_MCU_VREFP_DECOUPLE2.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.IC_SWITCH.74LVC1G3157DW-7.B0@3",
+      "position": {
+        "x": -5919.200000000001,
+        "y": -1231.9
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.IC_SWITCH.74LVC1G3157DW-7"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.MCU_VREFP.3.",
+      "position": {
+        "x": -5994.400000000001,
+        "y": -1332.5
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.MCU_VREFP.3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VREF+@L1",
+      "position": {
+        "x": -4736.1,
+        "y": -393.70000000000016
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.MCU_VREFP.1.",
+      "position": {
+        "x": -4649.2,
+        "y": -381.0
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.MCU_VREFP.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_IC_SWITCH_DECOUPLE.C.P1@1",
+      "position": {
+        "x": -5499.099999999999,
+        "y": -1220.2
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_IC_SWITCH_DECOUPLE.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.17.",
+      "position": {
+        "x": -5499.099999999999,
+        "y": -1307.1000000000001
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.17"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE1.C.P1@1",
+      "position": {
+        "x": -6197.6,
+        "y": 532.4
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE1.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.10.",
+      "position": {
+        "x": -6070.6,
+        "y": 496.3
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.10"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE10.C.P1@1",
+      "position": {
+        "x": -6210.299999999999,
+        "y": 11.7
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE10.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.15.",
+      "position": {
+        "x": -6070.6,
+        "y": -24.4
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.15"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE11.C.P1@1",
+      "position": {
+        "x": -6350.0,
+        "y": 11.7
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE11.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE12.C.P1@1",
+      "position": {
+        "x": -6489.700000000001,
+        "y": 11.7
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE12.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE13.C.P1@1",
+      "position": {
+        "x": -6629.400000000001,
+        "y": 11.7
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE13.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE14.C.P1@1",
+      "position": {
+        "x": -6769.099999999999,
+        "y": 11.7
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE14.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE15.C.P1@1",
+      "position": {
+        "x": -6070.6,
+        "y": -483.6
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE15.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.16.",
+      "position": {
+        "x": -6070.6,
+        "y": -506.99999999999994
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.16"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE2.C.P1@1",
+      "position": {
+        "x": -6070.6,
+        "y": 532.4
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE2.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE3.C.P1@1",
+      "position": {
+        "x": -6070.6,
+        "y": 214.89999999999998
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE3.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.14.",
+      "position": {
+        "x": -6070.6,
+        "y": 178.8
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.14"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE4.C.P1@1",
+      "position": {
+        "x": -6210.299999999999,
+        "y": 214.89999999999998
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE4.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE5.C.P1@1",
+      "position": {
+        "x": -6350.0,
+        "y": 214.89999999999998
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE5.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE6.C.P1@1",
+      "position": {
+        "x": -6489.700000000001,
+        "y": 214.89999999999998
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE6.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE7.C.P1@1",
+      "position": {
+        "x": -6629.400000000001,
+        "y": 214.89999999999998
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE7.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE8.C.P1@1",
+      "position": {
+        "x": -6769.099999999999,
+        "y": 214.89999999999998
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE8.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE9.C.P1@1",
+      "position": {
+        "x": -6070.6,
+        "y": 11.7
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE9.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.IC_SWITCH.74LVC1G3157DW-7.A@4",
+      "position": {
+        "x": -5612.4,
+        "y": -1231.9
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.IC_SWITCH.74LVC1G3157DW-7"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.IC_SWITCH.74LVC1G3157DW-7.VCC@5",
+      "position": {
+        "x": -5612.4,
+        "y": -1257.3
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.IC_SWITCH.74LVC1G3157DW-7"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VDDA@L2",
+      "position": {
+        "x": -4736.1,
+        "y": -368.3000000000001
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.2.",
+      "position": {
+        "x": -4649.2,
+        "y": -355.6
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.2"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VDDUSB@E13",
+      "position": {
+        "x": -5296.900000000001,
+        "y": 88.89999999999986
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.7.",
+      "position": {
+        "x": -5320.299999999999,
+        "y": 101.6
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.7"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VDD_10@N12",
+      "position": {
+        "x": -4736.1,
+        "y": 546.0999999999999
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.6.",
+      "position": {
+        "x": -4661.900000000001,
+        "y": 558.8000000000001
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.6"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VDD_1@A3",
+      "position": {
+        "x": -5296.900000000001,
+        "y": -1485.9
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.13.",
+      "position": {
+        "x": -5333.0,
+        "y": -1473.1999999999998
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.13"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VDD_2@A8",
+      "position": {
+        "x": -5296.900000000001,
+        "y": -1358.9
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.12.",
+      "position": {
+        "x": -5333.0,
+        "y": -1346.2
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.12"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VDD_3@A11",
+      "position": {
+        "x": -5296.900000000001,
+        "y": -1282.7
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.11.",
+      "position": {
+        "x": -5333.0,
+        "y": -1270.0
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.11"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VDD_4@B1",
+      "position": {
+        "x": -5296.900000000001,
+        "y": -1206.5
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.1.",
+      "position": {
+        "x": -5333.0,
+        "y": -1193.8
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VDD_5@D13",
+      "position": {
+        "x": -5296.900000000001,
+        "y": -241.30000000000024
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.9.",
+      "position": {
+        "x": -5307.6,
+        "y": -228.6
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.9"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VDD_6@G1",
+      "position": {
+        "x": -5296.900000000001,
+        "y": 444.4999999999999
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.8.",
+      "position": {
+        "x": -5307.6,
+        "y": 457.2
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.8"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VDD_7@J13",
+      "position": {
+        "x": -4736.1,
+        "y": -749.3000000000001
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.3.",
+      "position": {
+        "x": -4649.2,
+        "y": -736.5999999999999
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VDD_8@N3",
+      "position": {
+        "x": -4736.1,
+        "y": 317.4999999999997
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.4.",
+      "position": {
+        "x": -4661.900000000001,
+        "y": 330.20000000000005
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.4"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VDD_9@N7",
+      "position": {
+        "x": -4736.1,
+        "y": 419.09999999999997
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.5.",
+      "position": {
+        "x": -4661.900000000001,
+        "y": 431.8
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.5"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_VCOIN.C.P1@1",
+      "position": {
+        "x": -5765.8,
+        "y": 532.4
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_VCOIN.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.VCOIN.2.",
+      "position": {
+        "x": -5765.8,
+        "y": 496.3
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.VCOIN.2"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_VCOIN2.C.P1@1",
+      "position": {
+        "x": -5905.5,
+        "y": 532.4
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_VCOIN2.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VBAT@C1",
+      "position": {
+        "x": -5296.900000000001,
+        "y": -876.3
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.VCOIN.1.",
+      "position": {
+        "x": -5320.299999999999,
+        "y": -863.6
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.VCOIN.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_VREG_L15A_1P8V_DECOUPLE1.C.P1@1",
+      "position": {
+        "x": -6400.8,
+        "y": 532.4
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_VREG_L15A_1P8V_DECOUPLE1.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.VREG_L15A_1P8V.3.",
+      "position": {
+        "x": -6400.8,
+        "y": 496.3
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.VREG_L15A_1P8V.3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_VREG_L15A_1P8V_DECOUPLE2.C.P1@1",
+      "position": {
+        "x": -6540.5,
+        "y": 532.4
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_VREG_L15A_1P8V_DECOUPLE2.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_VREG_L15A_1P8V_DECOUPLE3.C.P1@1",
+      "position": {
+        "x": -6680.2,
+        "y": 532.4
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_VREG_L15A_1P8V_DECOUPLE3.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VDDIO2_1@A6",
+      "position": {
+        "x": -5296.900000000001,
+        "y": -1409.7000000000003
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.VREG_L15A_1P8V.1.",
+      "position": {
+        "x": -5333.0,
+        "y": -1397.0
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.VREG_L15A_1P8V.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VDDIO2_2@H12",
+      "position": {
+        "x": -4736.1,
+        "y": -1104.9
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.VREG_L15A_1P8V.2.",
+      "position": {
+        "x": -4674.6,
+        "y": -1092.2
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.VREG_L15A_1P8V.2"
+    }
+  ],
+  "connectors": [
+    {
+      "id": "connector_GND_edge_0_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_IC_SWITCH_DECOUPLE.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.37.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_1_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_MCU_VREFP_DECOUPLE1.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.32.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_2_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_MCU_VREFP_DECOUPLE2.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.33.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_3_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_OSC_1.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.40.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_4_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_OSC_2.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.41.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_5_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_OSC_32K_1.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.42.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_6_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_OSC_32K_2.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.38.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_7_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE1.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.16.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_8_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE10.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.30.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_9_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE11.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.29.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_10_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE12.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.28.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_11_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE13.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.27.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_12_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE14.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.26.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_13_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE15.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.34.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_14_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE2.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.15.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_15_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE3.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.18.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_16_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE4.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.25.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_17_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE5.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.21.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_18_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE6.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.22.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_19_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE7.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.23.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_20_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE8.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.24.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_21_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE9.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.31.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_22_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_VCOIN.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.13.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_23_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_VCOIN2.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.14.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_24_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_VREG_L15A_1P8V_DECOUPLE1.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.17.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_25_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_VREG_L15A_1P8V_DECOUPLE2.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.19.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_26_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_VREG_L15A_1P8V_DECOUPLE3.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.20.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_27_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.Crystal_16MHz.Y.2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.39.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_28_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.Crystal_16MHz.Y.4@4",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.39.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_29_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.IC_SWITCH.74LVC1G3157DW-7.GND@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.35.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_30_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_Select_IC_SWITCH.R.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.36.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_31_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VSSA@K2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.5.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_32_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VSS_10@M7",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.3.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_33_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VSS_11@M11",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.2.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_34_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VSS_1@B2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.9.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_35_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VSS_2@B4",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.8.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_36_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VSS_3@B8",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.10.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_37_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VSS_4@B11",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.11.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_38_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VSS_5@E12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_39_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VSS_6@F2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.12.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_40_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VSS_7@H2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.7.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_41_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VSS_8@J12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.6.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_42_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VSS_9@M3",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.GND.4.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_MCU.MCU_SOC_LPUART1_CTS_cluster_0_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_SOC_MCU_LPUART1_RTS.R.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.PG5@J9",
+      "net_id": "MCU.MCU_SOC_LPUART1_CTS"
+    },
+    {
+      "id": "connector_MCU.MCU_SOC_LPUART1_RTS_cluster_1_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_SOC_MCU_LPUART1_CTS.R.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.PG6@H10",
+      "net_id": "MCU.MCU_SOC_LPUART1_RTS"
+    },
+    {
+      "id": "connector_MCU.MCU_SOC_LPUART1_RX_cluster_2_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_SOC_MCU_LPUART1_TX.R.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.PG8@H9",
+      "net_id": "MCU.MCU_SOC_LPUART1_RX"
+    },
+    {
+      "id": "connector_MCU.MCU_SOC_LPUART1_TX_cluster_3_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_SOC_MCU_LPUART1_RX.R.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.PG7@G8",
+      "net_id": "MCU.MCU_SOC_LPUART1_TX"
+    },
+    {
+      "id": "connector_MCU.MCU_SPI3_CLK_R_cluster_4_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_MCU_SPI3_CLK.R.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.PG9@A7",
+      "net_id": "MCU.MCU_SPI3_CLK_R"
+    },
+    {
+      "id": "connector_MCU.MCU_SPI3_CS_N_R_cluster_5_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_MCU_SPI3_CS_N.R.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.PG12@E6",
+      "net_id": "MCU.MCU_SPI3_CS_N_R"
+    },
+    {
+      "id": "connector_MCU.MCU_SPI3_MISO_R_cluster_6_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_MCU_SPI3_MISO.R.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.PG10@C7",
+      "net_id": "MCU.MCU_SPI3_MISO_R"
+    },
+    {
+      "id": "connector_MCU.MCU_SPI3_MOSI_R_cluster_7_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_MCU_SPI3_MOSI.R.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.PB5@C6",
+      "net_id": "MCU.MCU_SPI3_MOSI_R"
+    },
+    {
+      "id": "connector_MCU.MCU_SPI3_RDY_R_cluster_8_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_MCU_SPI3_RDY.R.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.PG13@N10",
+      "net_id": "MCU.MCU_SPI3_RDY_R"
+    },
+    {
+      "id": "connector_MCU.MCU_VREF_EN_cluster_9_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.IC_SWITCH.74LVC1G3157DW-7.SELECT@6",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_Select_IC_SWITCH.R.P1@1",
+      "net_id": "MCU.MCU_VREF_EN"
+    },
+    {
+      "id": "connector_MCU.OSC_16M_IN_cluster_10_mst_0_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_OSC_1.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_MCU_OSC_IN.R.P2@2",
+      "net_id": "MCU.OSC_16M_IN"
+    },
+    {
+      "id": "connector_MCU.OSC_16M_IN_cluster_10_mst_1_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_OSC_1.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.Crystal_16MHz.Y.1@1",
+      "net_id": "MCU.OSC_16M_IN"
+    },
+    {
+      "id": "connector_MCU.OSC_16M_OUT_cluster_11_mst_0_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_OSC_2.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.Crystal_16MHz.Y.3@3",
+      "net_id": "MCU.OSC_16M_OUT"
+    },
+    {
+      "id": "connector_MCU.OSC_16M_OUT_cluster_11_mst_1_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_OSC_2.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_MCU_OSC_OUT.R.P2@2",
+      "net_id": "MCU.OSC_16M_OUT"
+    },
+    {
+      "id": "connector_MCU.OSC_32K_IN_cluster_12_mst_0_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_MCU_OSC32_IN.R.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_OSC_32K.R.P1@1",
+      "net_id": "MCU.OSC_32K_IN"
+    },
+    {
+      "id": "connector_MCU.OSC_32K_IN_cluster_12_mst_1_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_OSC_32K_1.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.Crystal_32KHz.Y.1@1",
+      "net_id": "MCU.OSC_32K_IN"
+    },
+    {
+      "id": "connector_MCU.OSC_32K_IN_cluster_12_mst_2_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.Crystal_32KHz.Y.1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_OSC_32K.R.P1@1",
+      "net_id": "MCU.OSC_32K_IN"
+    },
+    {
+      "id": "connector_MCU.OSC_32K_OUT_cluster_13_mst_0_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_MCU_OSC32_OUT.R.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_OSC_32K.R.P2@2",
+      "net_id": "MCU.OSC_32K_OUT"
+    },
+    {
+      "id": "connector_MCU.OSC_32K_OUT_cluster_13_mst_1_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_OSC_32K_2.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.Crystal_32KHz.Y.2@2",
+      "net_id": "MCU.OSC_32K_OUT"
+    },
+    {
+      "id": "connector_MCU.OSC_32K_OUT_cluster_13_mst_2_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.Crystal_32KHz.Y.2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.R_OSC_32K.R.P2@2",
+      "net_id": "MCU.OSC_32K_OUT"
+    },
+    {
+      "id": "connector_MCU_VREFP_edge_43_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_MCU_VREFP_DECOUPLE1.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.MCU_VREFP.2.",
+      "net_id": "MCU_VREFP"
+    },
+    {
+      "id": "connector_MCU_VREFP_edge_44_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_MCU_VREFP_DECOUPLE2.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.MCU_VREFP.2.",
+      "net_id": "MCU_VREFP"
+    },
+    {
+      "id": "connector_MCU_VREFP_edge_45_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.IC_SWITCH.74LVC1G3157DW-7.B0@3",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.MCU_VREFP.3.",
+      "net_id": "MCU_VREFP"
+    },
+    {
+      "id": "connector_MCU_VREFP_edge_46_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VREF+@L1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.MCU_VREFP.1.",
+      "net_id": "MCU_VREFP"
+    },
+    {
+      "id": "connector_PWR_3P3V_edge_47_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_IC_SWITCH_DECOUPLE.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.17.",
+      "net_id": "PWR_3P3V"
+    },
+    {
+      "id": "connector_PWR_3P3V_edge_48_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE1.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.10.",
+      "net_id": "PWR_3P3V"
+    },
+    {
+      "id": "connector_PWR_3P3V_edge_49_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE10.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.15.",
+      "net_id": "PWR_3P3V"
+    },
+    {
+      "id": "connector_PWR_3P3V_edge_50_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE11.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.15.",
+      "net_id": "PWR_3P3V"
+    },
+    {
+      "id": "connector_PWR_3P3V_edge_51_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE12.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.15.",
+      "net_id": "PWR_3P3V"
+    },
+    {
+      "id": "connector_PWR_3P3V_edge_52_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE13.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.15.",
+      "net_id": "PWR_3P3V"
+    },
+    {
+      "id": "connector_PWR_3P3V_edge_53_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE14.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.15.",
+      "net_id": "PWR_3P3V"
+    },
+    {
+      "id": "connector_PWR_3P3V_edge_54_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE15.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.16.",
+      "net_id": "PWR_3P3V"
+    },
+    {
+      "id": "connector_PWR_3P3V_edge_55_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE2.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.10.",
+      "net_id": "PWR_3P3V"
+    },
+    {
+      "id": "connector_PWR_3P3V_edge_56_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE3.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.14.",
+      "net_id": "PWR_3P3V"
+    },
+    {
+      "id": "connector_PWR_3P3V_edge_57_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE4.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.14.",
+      "net_id": "PWR_3P3V"
+    },
+    {
+      "id": "connector_PWR_3P3V_edge_58_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE5.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.14.",
+      "net_id": "PWR_3P3V"
+    },
+    {
+      "id": "connector_PWR_3P3V_edge_59_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE6.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.14.",
+      "net_id": "PWR_3P3V"
+    },
+    {
+      "id": "connector_PWR_3P3V_edge_60_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE7.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.14.",
+      "net_id": "PWR_3P3V"
+    },
+    {
+      "id": "connector_PWR_3P3V_edge_61_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE8.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.14.",
+      "net_id": "PWR_3P3V"
+    },
+    {
+      "id": "connector_PWR_3P3V_edge_62_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_PWR_3P3V_DECOUPLE9.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.15.",
+      "net_id": "PWR_3P3V"
+    },
+    {
+      "id": "connector_PWR_3P3V_edge_63_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.IC_SWITCH.74LVC1G3157DW-7.A@4",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.17.",
+      "net_id": "PWR_3P3V"
+    },
+    {
+      "id": "connector_PWR_3P3V_edge_64_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.IC_SWITCH.74LVC1G3157DW-7.VCC@5",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.17.",
+      "net_id": "PWR_3P3V"
+    },
+    {
+      "id": "connector_PWR_3P3V_edge_65_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VDDA@L2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.2.",
+      "net_id": "PWR_3P3V"
+    },
+    {
+      "id": "connector_PWR_3P3V_edge_66_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VDDUSB@E13",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.7.",
+      "net_id": "PWR_3P3V"
+    },
+    {
+      "id": "connector_PWR_3P3V_edge_67_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VDD_10@N12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.6.",
+      "net_id": "PWR_3P3V"
+    },
+    {
+      "id": "connector_PWR_3P3V_edge_68_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VDD_1@A3",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.13.",
+      "net_id": "PWR_3P3V"
+    },
+    {
+      "id": "connector_PWR_3P3V_edge_69_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VDD_2@A8",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.12.",
+      "net_id": "PWR_3P3V"
+    },
+    {
+      "id": "connector_PWR_3P3V_edge_70_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VDD_3@A11",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.11.",
+      "net_id": "PWR_3P3V"
+    },
+    {
+      "id": "connector_PWR_3P3V_edge_71_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VDD_4@B1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.1.",
+      "net_id": "PWR_3P3V"
+    },
+    {
+      "id": "connector_PWR_3P3V_edge_72_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VDD_5@D13",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.9.",
+      "net_id": "PWR_3P3V"
+    },
+    {
+      "id": "connector_PWR_3P3V_edge_73_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VDD_6@G1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.8.",
+      "net_id": "PWR_3P3V"
+    },
+    {
+      "id": "connector_PWR_3P3V_edge_74_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VDD_7@J13",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.3.",
+      "net_id": "PWR_3P3V"
+    },
+    {
+      "id": "connector_PWR_3P3V_edge_75_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VDD_8@N3",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.4.",
+      "net_id": "PWR_3P3V"
+    },
+    {
+      "id": "connector_PWR_3P3V_edge_76_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VDD_9@N7",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.PWR_3P3V.5.",
+      "net_id": "PWR_3P3V"
+    },
+    {
+      "id": "connector_VCOIN_edge_77_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_VCOIN.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.VCOIN.2.",
+      "net_id": "VCOIN"
+    },
+    {
+      "id": "connector_VCOIN_edge_78_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_VCOIN2.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.VCOIN.2.",
+      "net_id": "VCOIN"
+    },
+    {
+      "id": "connector_VCOIN_edge_79_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VBAT@C1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.VCOIN.1.",
+      "net_id": "VCOIN"
+    },
+    {
+      "id": "connector_VREG_L15A_1P8V_edge_80_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_VREG_L15A_1P8V_DECOUPLE1.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.VREG_L15A_1P8V.3.",
+      "net_id": "VREG_L15A_1P8V"
+    },
+    {
+      "id": "connector_VREG_L15A_1P8V_edge_81_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_VREG_L15A_1P8V_DECOUPLE2.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.VREG_L15A_1P8V.3.",
+      "net_id": "VREG_L15A_1P8V"
+    },
+    {
+      "id": "connector_VREG_L15A_1P8V_edge_82_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.C_VREG_L15A_1P8V_DECOUPLE3.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.VREG_L15A_1P8V.3.",
+      "net_id": "VREG_L15A_1P8V"
+    },
+    {
+      "id": "connector_VREG_L15A_1P8V_edge_83_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VDDIO2_1@A6",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.VREG_L15A_1P8V.1.",
+      "net_id": "VREG_L15A_1P8V"
+    },
+    {
+      "id": "connector_VREG_L15A_1P8V_edge_84_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.STM32U585AII6TR.STM32U585AII6TR.VDDIO2_2@H12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU.VREG_L15A_1P8V.2.",
+      "net_id": "VREG_L15A_1P8V"
+    }
+  ]
+}

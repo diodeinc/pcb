@@ -1,0 +1,2729 @@
+{
+  "obstacles": [
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_EMMC1_VDDI_1UF.C",
+      "bounds": {
+        "min_x": -2396.2200000000003,
+        "min_y": -1271.0,
+        "max_x": -2353.58,
+        "max_y": -1192.8000000000002
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.R_SDC1_RCLK.R",
+      "bounds": {
+        "min_x": -2576.56,
+        "min_y": -991.5999999999999,
+        "max_x": -2554.24,
+        "max_y": -913.4
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_VREG_L20A_2P96V_2P2UF_2.C",
+      "bounds": {
+        "min_x": -2739.1200000000003,
+        "min_y": -1550.3999999999999,
+        "max_x": -2696.4800000000005,
+        "max_y": -1472.1999999999998
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_VREG_L14A_1P8V_1UF.C",
+      "bounds": {
+        "min_x": -2459.7200000000003,
+        "min_y": -1550.3999999999999,
+        "max_x": -2417.08,
+        "max_y": -1472.1999999999998
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_VREG_L20A_2P96V_2P2UF_1.C",
+      "bounds": {
+        "min_x": -2878.82,
+        "min_y": -1550.3999999999999,
+        "max_x": -2836.1800000000003,
+        "max_y": -1472.1999999999998
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.R_SDC1_CMD.R",
+      "bounds": {
+        "min_x": -2474.96,
+        "min_y": -991.5999999999999,
+        "max_x": -2452.64,
+        "max_y": -913.4
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01",
+      "bounds": {
+        "min_x": -1867.8999999999999,
+        "min_y": -1398.0,
+        "max_x": -1637.2999999999997,
+        "max_y": 585.1999999999998
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_VREG_L20A_2P96V_100NF.C",
+      "bounds": {
+        "min_x": -3018.5200000000004,
+        "min_y": -1550.3999999999999,
+        "max_x": -2975.88,
+        "max_y": -1472.1999999999998
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_VREG_L14A_1P8V_2P2UF.C",
+      "bounds": {
+        "min_x": -2586.7200000000003,
+        "min_y": -1550.3999999999999,
+        "max_x": -2544.08,
+        "max_y": -1472.1999999999998
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_EMMC1_VDDI_100NF.C",
+      "bounds": {
+        "min_x": -2586.7200000000003,
+        "min_y": -1271.0,
+        "max_x": -2544.08,
+        "max_y": -1192.8000000000002
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.VREG_L14A_1P8V.4",
+      "bounds": {
+        "min_x": -2574.0200000000004,
+        "min_y": -1613.8999999999999,
+        "max_x": -2556.78,
+        "max_y": -1586.5
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.VREG_L20A_2P96V.5",
+      "bounds": {
+        "min_x": -3005.8200000000006,
+        "min_y": -1613.8999999999999,
+        "max_x": -2988.58,
+        "max_y": -1586.5
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.VREG_L14A_1P8V.2",
+      "bounds": {
+        "min_x": -1519.9199999999998,
+        "min_y": -1499.6,
+        "max_x": -1502.6799999999998,
+        "max_y": -1472.2
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.10",
+      "bounds": {
+        "min_x": -2579.1000000000004,
+        "min_y": -864.5999999999999,
+        "max_x": -2551.7000000000003,
+        "max_y": -837.1999999999999
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.5",
+      "bounds": {
+        "min_x": -2452.1,
+        "min_y": -1436.1,
+        "max_x": -2424.7,
+        "max_y": -1408.7
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.4",
+      "bounds": {
+        "min_x": -2579.1000000000004,
+        "min_y": -1156.7,
+        "max_x": -2551.7000000000003,
+        "max_y": -1129.3000000000002
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.VREG_L15A_1P8V.1",
+      "bounds": {
+        "min_x": -2472.42,
+        "min_y": -1067.8,
+        "max_x": -2455.1800000000003,
+        "max_y": -1040.4
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.2",
+      "bounds": {
+        "min_x": -1537.7,
+        "min_y": 595.9,
+        "max_x": -1510.3,
+        "max_y": 623.3
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.7",
+      "bounds": {
+        "min_x": -2731.5000000000005,
+        "min_y": -1436.1,
+        "max_x": -2704.1000000000004,
+        "max_y": -1408.7
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.VREG_L14A_1P8V.1",
+      "bounds": {
+        "min_x": -2078.72,
+        "min_y": -1499.6,
+        "max_x": -2061.48,
+        "max_y": -1472.2
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.9",
+      "bounds": {
+        "min_x": -3010.9000000000005,
+        "min_y": -1436.1,
+        "max_x": -2983.5000000000005,
+        "max_y": -1408.7
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.1",
+      "bounds": {
+        "min_x": -1982.2,
+        "min_y": 608.6,
+        "max_x": -1954.8,
+        "max_y": 636.0
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.6",
+      "bounds": {
+        "min_x": -2579.1000000000004,
+        "min_y": -1436.1,
+        "max_x": -2551.7000000000003,
+        "max_y": -1408.7
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.VREG_L20A_2P96V.2",
+      "bounds": {
+        "min_x": -1431.02,
+        "min_y": -1461.4999999999998,
+        "max_x": -1413.7800000000002,
+        "max_y": -1434.1
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.8",
+      "bounds": {
+        "min_x": -2871.2,
+        "min_y": -1436.1,
+        "max_x": -2843.7999999999997,
+        "max_y": -1408.7
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.3",
+      "bounds": {
+        "min_x": -2045.6999999999998,
+        "min_y": -864.5999999999999,
+        "max_x": -2018.2999999999997,
+        "max_y": -837.1999999999999
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.VREG_L20A_2P96V.1",
+      "bounds": {
+        "min_x": -2154.92,
+        "min_y": -1461.4999999999998,
+        "max_x": -2137.6800000000003,
+        "max_y": -1434.1
+      }
+    }
+  ],
+  "ports": [
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_EMMC1_VDDI_100NF.C.P2@2",
+      "position": {
+        "x": -2565.4,
+        "y": -1192.8
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_EMMC1_VDDI_100NF.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.4.",
+      "position": {
+        "x": -2565.4,
+        "y": -1156.7
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.4"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_EMMC1_VDDI_1UF.C.P2@2",
+      "position": {
+        "x": -2374.9,
+        "y": -1192.8
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_EMMC1_VDDI_1UF.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_VREG_L14A_1P8V_1UF.C.P2@2",
+      "position": {
+        "x": -2438.4,
+        "y": -1472.2
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_VREG_L14A_1P8V_1UF.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.5.",
+      "position": {
+        "x": -2438.4,
+        "y": -1436.1
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.5"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_VREG_L14A_1P8V_2P2UF.C.P2@2",
+      "position": {
+        "x": -2565.4,
+        "y": -1472.2
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_VREG_L14A_1P8V_2P2UF.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.6.",
+      "position": {
+        "x": -2565.4,
+        "y": -1436.1
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.6"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_VREG_L20A_2P96V_100NF.C.P2@2",
+      "position": {
+        "x": -2997.2000000000003,
+        "y": -1472.2
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_VREG_L20A_2P96V_100NF.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.9.",
+      "position": {
+        "x": -2997.2000000000003,
+        "y": -1436.1
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.9"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_VREG_L20A_2P96V_2P2UF_1.C.P2@2",
+      "position": {
+        "x": -2857.5,
+        "y": -1472.2
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_VREG_L20A_2P96V_2P2UF_1.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.8.",
+      "position": {
+        "x": -2857.5,
+        "y": -1436.1
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.8"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_VREG_L20A_2P96V_2P2UF_2.C.P2@2",
+      "position": {
+        "x": -2717.8,
+        "y": -1472.2
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_VREG_L20A_2P96V_2P2UF_2.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.7.",
+      "position": {
+        "x": -2717.8,
+        "y": -1436.1
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.7"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VSF@E10",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": 76.19999999999997
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.1.",
+      "position": {
+        "x": -1968.5,
+        "y": 608.6
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VSF@E7",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -0.0
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VSF@E8",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": 25.39999999999999
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VSF@E9",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": 50.79999999999998
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VSF@F10",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": 279.4
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VSF@G10",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": 482.6
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VSF@H10",
+      "position": {
+        "x": -1637.3,
+        "y": 444.5
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.2.",
+      "position": {
+        "x": -1524.0,
+        "y": 595.9
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.2"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VSF@K10",
+      "position": {
+        "x": -1637.3,
+        "y": -63.500000000000085
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VSS@A6",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -1244.6
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.3.",
+      "position": {
+        "x": -2032.0,
+        "y": -864.5999999999999
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VSS@G5",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": 457.2
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VSS@H5",
+      "position": {
+        "x": -1637.3,
+        "y": 469.9
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VSS@J5",
+      "position": {
+        "x": -1637.3,
+        "y": 266.70000000000005
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VSS@K8",
+      "position": {
+        "x": -1637.3,
+        "y": -12.700000000000031
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VSSQ@C4",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -584.2
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VSSQ@N2",
+      "position": {
+        "x": -1637.3,
+        "y": -698.5000000000001
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VSSQ@N5",
+      "position": {
+        "x": -1637.3,
+        "y": -774.7000000000002
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VSSQ@P4",
+      "position": {
+        "x": -1637.3,
+        "y": -1104.8999999999999
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VSSQ@P6",
+      "position": {
+        "x": -1637.3,
+        "y": -1155.7
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.R_SDC1_RCLK.R.P2@2",
+      "position": {
+        "x": -2565.4,
+        "y": -913.4000000000001
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.R_SDC1_RCLK.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.10.",
+      "position": {
+        "x": -2565.4,
+        "y": -864.5999999999999
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.10"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_VREG_L14A_1P8V_1UF.C.P1@1",
+      "position": {
+        "x": -2438.4,
+        "y": -1550.3999999999999
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_VREG_L14A_1P8V_1UF.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.VREG_L14A_1P8V.4.",
+      "position": {
+        "x": -2565.4,
+        "y": -1586.5
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.VREG_L14A_1P8V.4"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_VREG_L14A_1P8V_2P2UF.C.P1@1",
+      "position": {
+        "x": -2565.4,
+        "y": -1550.3999999999999
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_VREG_L14A_1P8V_2P2UF.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VCCQ@C6",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -533.4000000000001
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.VREG_L14A_1P8V.1.",
+      "position": {
+        "x": -2070.1,
+        "y": -1472.2
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.VREG_L14A_1P8V.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VCCQ@M4",
+      "position": {
+        "x": -1637.3,
+        "y": -393.70000000000005
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.VREG_L14A_1P8V.2.",
+      "position": {
+        "x": -1511.3,
+        "y": -1472.2
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.VREG_L14A_1P8V.2"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VCCQ@N4",
+      "position": {
+        "x": -1637.3,
+        "y": -749.3
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VCCQ@P3",
+      "position": {
+        "x": -1637.3,
+        "y": -1079.5
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VCCQ@P5",
+      "position": {
+        "x": -1637.3,
+        "y": -1130.3000000000002
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.R_SDC1_CMD.R.P1@1",
+      "position": {
+        "x": -2463.8,
+        "y": -991.5999999999999
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.R_SDC1_CMD.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.VREG_L15A_1P8V.1.",
+      "position": {
+        "x": -2463.8,
+        "y": -1040.4
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.VREG_L15A_1P8V.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_VREG_L20A_2P96V_100NF.C.P1@1",
+      "position": {
+        "x": -2997.2000000000003,
+        "y": -1550.3999999999999
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_VREG_L20A_2P96V_100NF.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.VREG_L20A_2P96V.5.",
+      "position": {
+        "x": -2997.2000000000003,
+        "y": -1586.5
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.VREG_L20A_2P96V.5"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_VREG_L20A_2P96V_2P2UF_1.C.P1@1",
+      "position": {
+        "x": -2857.5,
+        "y": -1550.3999999999999
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_VREG_L20A_2P96V_2P2UF_1.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_VREG_L20A_2P96V_2P2UF_2.C.P1@1",
+      "position": {
+        "x": -2717.8,
+        "y": -1550.3999999999999
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_VREG_L20A_2P96V_2P2UF_2.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VCC@E6",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -25.39999999999999
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.VREG_L20A_2P96V.1.",
+      "position": {
+        "x": -2146.3,
+        "y": -1434.1
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.VREG_L20A_2P96V.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VCC@J10",
+      "position": {
+        "x": -1637.3,
+        "y": 241.29999999999995
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.VREG_L20A_2P96V.2.",
+      "position": {
+        "x": -1422.4,
+        "y": -1434.1
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.VREG_L20A_2P96V.2"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VCC@K9",
+      "position": {
+        "x": -1637.3,
+        "y": -38.10000000000002
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@A8",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -1193.7999999999997
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@A9",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -1168.4
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@P13",
+      "position": {
+        "x": -1637.3,
+        "y": -1333.5000000000002
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@P14",
+      "position": {
+        "x": -1637.3,
+        "y": -1358.8999999999999
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@P8",
+      "position": {
+        "x": -1637.3,
+        "y": -1206.5000000000002
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@P9",
+      "position": {
+        "x": -1637.3,
+        "y": -1231.8999999999999
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@A10",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -1143.0
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@A11",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -1117.6000000000001
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@A13",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -1066.8
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@A14",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -1041.4
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@B11",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -762.0
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@B12",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -736.6000000000001
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@B14",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -685.8
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@C1",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -660.4000000000001
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@B8",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -838.2
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@B9",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -812.8000000000002
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@C14",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -330.19999999999993
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@D1",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -304.80000000000007
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@F12",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": 304.80000000000007
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@F13",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": 330.19999999999993
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@G13",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": 533.4000000000001
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@G14",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": 558.8
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@H14",
+      "position": {
+        "x": -1637.3,
+        "y": 368.29999999999995
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@J1",
+      "position": {
+        "x": -1637.3,
+        "y": 342.9000000000001
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@L13",
+      "position": {
+        "x": -1637.3,
+        "y": -266.70000000000005
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@L14",
+      "position": {
+        "x": -1637.3,
+        "y": -292.0999999999999
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@M13",
+      "position": {
+        "x": -1637.3,
+        "y": -622.3000000000001
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@M14",
+      "position": {
+        "x": -1637.3,
+        "y": -647.6999999999999
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@M3",
+      "position": {
+        "x": -1637.3,
+        "y": -368.29999999999995
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@M2",
+      "position": {
+        "x": -1637.3,
+        "y": -342.9000000000001
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@N10",
+      "position": {
+        "x": -1637.3,
+        "y": -901.7
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@N11",
+      "position": {
+        "x": -1637.3,
+        "y": -927.0999999999999
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@N13",
+      "position": {
+        "x": -1637.3,
+        "y": -977.9000000000001
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@N14",
+      "position": {
+        "x": -1637.3,
+        "y": -1003.3
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@P1",
+      "position": {
+        "x": -1637.3,
+        "y": -1028.6999999999998
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@N8",
+      "position": {
+        "x": -1637.3,
+        "y": -850.9000000000002
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@N9",
+      "position": {
+        "x": -1637.3,
+        "y": -876.3000000000001
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@C10",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -431.80000000000007
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@C9",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -457.2
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@C12",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -380.99999999999994
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@C13",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -355.6
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@D12",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -203.20000000000007
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@D4",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -228.6
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@D14",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -152.39999999999995
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@E1",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -127.00000000000003
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@D2",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -279.4
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@D3",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -254.00000000000006
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@F14",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": 355.6
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@G1",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": 380.99999999999994
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@H12",
+      "position": {
+        "x": -1637.3,
+        "y": 419.09999999999997
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@H13",
+      "position": {
+        "x": -1637.3,
+        "y": 393.70000000000005
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@H2",
+      "position": {
+        "x": -1637.3,
+        "y": 520.6999999999999
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@H3",
+      "position": {
+        "x": -1637.3,
+        "y": 495.3
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@K12",
+      "position": {
+        "x": -1637.3,
+        "y": -88.9
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@K13",
+      "position": {
+        "x": -1637.3,
+        "y": -114.29999999999993
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@L1",
+      "position": {
+        "x": -1637.3,
+        "y": -165.10000000000005
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@L2",
+      "position": {
+        "x": -1637.3,
+        "y": -190.49999999999997
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@L12",
+      "position": {
+        "x": -1637.3,
+        "y": -241.29999999999995
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@L3",
+      "position": {
+        "x": -1637.3,
+        "y": -215.90000000000003
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@B1",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -1016.0000000000001
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@B10",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -787.4
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@B13",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -711.1999999999999
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@B7",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -863.6
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@C7",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -508.0
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@C8",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -482.6
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@E14",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": 152.40000000000003
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@F1",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": 177.8
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@F2",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": 203.2
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@J14",
+      "position": {
+        "x": -1637.3,
+        "y": 165.09999999999997
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@K1",
+      "position": {
+        "x": -1637.3,
+        "y": 139.7
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@M10",
+      "position": {
+        "x": -1637.3,
+        "y": -546.1
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@M11",
+      "position": {
+        "x": -1637.3,
+        "y": -571.5
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@M9",
+      "position": {
+        "x": -1637.3,
+        "y": -520.7
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@M12",
+      "position": {
+        "x": -1637.3,
+        "y": -596.9
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@N12",
+      "position": {
+        "x": -1637.3,
+        "y": -952.4999999999999
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@N6",
+      "position": {
+        "x": -1637.3,
+        "y": -800.1
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@N7",
+      "position": {
+        "x": -1637.3,
+        "y": -825.5
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@K2",
+      "position": {
+        "x": -1637.3,
+        "y": 114.3
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@K3",
+      "position": {
+        "x": -1637.3,
+        "y": 88.9
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@E13",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": 127.00000000000003
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@F3",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": 228.6
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@J12",
+      "position": {
+        "x": -1637.3,
+        "y": 215.89999999999998
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@J13",
+      "position": {
+        "x": -1637.3,
+        "y": 190.49999999999997
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@C11",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -406.4
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@G2",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": 406.4
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@M7",
+      "position": {
+        "x": -1637.3,
+        "y": -469.9
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@M8",
+      "position": {
+        "x": -1637.3,
+        "y": -495.3
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@D13",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -177.8
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@E2",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -101.59999999999997
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@E12",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": 101.59999999999997
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@E3",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -76.1999999999999
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@K14",
+      "position": {
+        "x": -1637.3,
+        "y": -139.7
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@A12",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -1092.2
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@G12",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": 508.0
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@H1",
+      "position": {
+        "x": -1637.3,
+        "y": 546.1
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@J2",
+      "position": {
+        "x": -1637.3,
+        "y": 317.5
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@J3",
+      "position": {
+        "x": -1637.3,
+        "y": 292.0999999999999
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@M1",
+      "position": {
+        "x": -1637.3,
+        "y": -317.5
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@N1",
+      "position": {
+        "x": -1637.3,
+        "y": -673.1
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@P11",
+      "position": {
+        "x": -1637.3,
+        "y": -1282.6999999999998
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@P12",
+      "position": {
+        "x": -1637.3,
+        "y": -1308.1
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@A1",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -1371.6000000000004
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@A2",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -1346.2
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@P2",
+      "position": {
+        "x": -1637.3,
+        "y": -1054.1000000000001
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@C3",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -609.5999999999999
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@C5",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -558.8
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@N3",
+      "position": {
+        "x": -1637.3,
+        "y": -723.9
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_EMMC1_VDDI_100NF.C.P1@1",
+      "position": {
+        "x": -2565.4,
+        "y": -1271.0
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_EMMC1_VDDI_100NF.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_EMMC1_VDDI_1UF.C.P1@1",
+      "position": {
+        "x": -2374.9,
+        "y": -1271.0
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_EMMC1_VDDI_1UF.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.RFU@P10",
+      "position": {
+        "x": -1637.3,
+        "y": -1257.3
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.RFU@P7",
+      "position": {
+        "x": -1637.3,
+        "y": -1181.1
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.RFU@A7",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -1219.2
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.RFU@K6",
+      "position": {
+        "x": -1637.3,
+        "y": 38.10000000000002
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.RFU@K7",
+      "position": {
+        "x": -1637.3,
+        "y": 12.69999999999996
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.RFU@E5",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": -50.79999999999998
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.RFU@F5",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": 254.00000000000006
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.RFU@G3",
+      "position": {
+        "x": -1867.8999999999999,
+        "y": 431.79999999999995
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01"
+    }
+  ],
+  "connectors": [
+    {
+      "id": "connector_GND_edge_0_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_EMMC1_VDDI_100NF.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.4.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_1_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_EMMC1_VDDI_1UF.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.4.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_2_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_VREG_L14A_1P8V_1UF.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.5.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_3_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_VREG_L14A_1P8V_2P2UF.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.6.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_4_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_VREG_L20A_2P96V_100NF.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.9.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_5_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_VREG_L20A_2P96V_2P2UF_1.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.8.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_6_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_VREG_L20A_2P96V_2P2UF_2.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.7.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_7_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VSF@E10",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_8_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VSF@E7",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_9_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VSF@E8",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_10_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VSF@E9",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_11_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VSF@F10",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_12_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VSF@G10",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_13_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VSF@H10",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.2.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_14_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VSF@K10",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.2.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_15_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VSS@A6",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.3.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_16_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VSS@G5",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_17_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VSS@H5",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.2.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_18_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VSS@J5",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.2.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_19_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VSS@K8",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.2.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_20_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VSSQ@C4",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.3.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_21_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VSSQ@N2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.3.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_22_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VSSQ@N5",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.3.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_23_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VSSQ@P4",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.3.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_24_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VSSQ@P6",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.3.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_25_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.R_SDC1_RCLK.R.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.GND.10.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_VREG_L14A_1P8V_edge_26_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_VREG_L14A_1P8V_1UF.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.VREG_L14A_1P8V.4.",
+      "net_id": "VREG_L14A_1P8V"
+    },
+    {
+      "id": "connector_VREG_L14A_1P8V_edge_27_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_VREG_L14A_1P8V_2P2UF.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.VREG_L14A_1P8V.4.",
+      "net_id": "VREG_L14A_1P8V"
+    },
+    {
+      "id": "connector_VREG_L14A_1P8V_edge_28_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VCCQ@C6",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.VREG_L14A_1P8V.1.",
+      "net_id": "VREG_L14A_1P8V"
+    },
+    {
+      "id": "connector_VREG_L14A_1P8V_edge_29_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VCCQ@M4",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.VREG_L14A_1P8V.2.",
+      "net_id": "VREG_L14A_1P8V"
+    },
+    {
+      "id": "connector_VREG_L14A_1P8V_edge_30_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VCCQ@N4",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.VREG_L14A_1P8V.2.",
+      "net_id": "VREG_L14A_1P8V"
+    },
+    {
+      "id": "connector_VREG_L14A_1P8V_edge_31_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VCCQ@P3",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.VREG_L14A_1P8V.2.",
+      "net_id": "VREG_L14A_1P8V"
+    },
+    {
+      "id": "connector_VREG_L14A_1P8V_edge_32_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VCCQ@P5",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.VREG_L14A_1P8V.2.",
+      "net_id": "VREG_L14A_1P8V"
+    },
+    {
+      "id": "connector_VREG_L15A_1P8V_edge_33_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.R_SDC1_CMD.R.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.VREG_L15A_1P8V.1.",
+      "net_id": "VREG_L15A_1P8V"
+    },
+    {
+      "id": "connector_VREG_L20A_2P96V_edge_34_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_VREG_L20A_2P96V_100NF.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.VREG_L20A_2P96V.5.",
+      "net_id": "VREG_L20A_2P96V"
+    },
+    {
+      "id": "connector_VREG_L20A_2P96V_edge_35_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_VREG_L20A_2P96V_2P2UF_1.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.VREG_L20A_2P96V.5.",
+      "net_id": "VREG_L20A_2P96V"
+    },
+    {
+      "id": "connector_VREG_L20A_2P96V_edge_36_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_VREG_L20A_2P96V_2P2UF_2.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.VREG_L20A_2P96V.5.",
+      "net_id": "VREG_L20A_2P96V"
+    },
+    {
+      "id": "connector_VREG_L20A_2P96V_edge_37_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VCC@E6",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.VREG_L20A_2P96V.1.",
+      "net_id": "VREG_L20A_2P96V"
+    },
+    {
+      "id": "connector_VREG_L20A_2P96V_edge_38_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VCC@J10",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.VREG_L20A_2P96V.2.",
+      "net_id": "VREG_L20A_2P96V"
+    },
+    {
+      "id": "connector_VREG_L20A_2P96V_edge_39_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.VCC@K9",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.VREG_L20A_2P96V.2.",
+      "net_id": "VREG_L20A_2P96V"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_0_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@A8",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@A9",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_1_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@P13",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@P14",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_2_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@P8",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@P9",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_3_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@A10",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@A11",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_4_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@A13",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@A14",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_5_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@B11",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@B12",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_6_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@B14",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@C1",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_7_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@B8",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@B9",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_8_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@C14",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@D1",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_9_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@F12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@F13",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_10_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@G13",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@G14",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_11_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@H14",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@J1",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_12_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@L13",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@L14",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_13_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@M13",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@M14",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_14_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@M3",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@M2",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_15_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@N10",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@N11",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_16_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@N13",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@N14",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_17_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@N14",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@P1",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_18_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@N8",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@N9",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_19_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@C10",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@C9",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_20_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@C12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@C13",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_21_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@D12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@D4",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_22_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@D14",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@E1",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_23_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@D2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@D3",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_24_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@F14",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@G1",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_25_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@H12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@H13",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_26_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@H2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@H3",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_27_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@K12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@K13",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_28_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@L1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@L2",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_29_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@L12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@L3",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_30_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@A14",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@B1",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_31_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@B10",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@B11",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_32_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@B13",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@B14",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_33_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@B7",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@B8",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_34_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@C7",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@C8",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_35_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@E14",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@F1",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_36_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@F1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@F2",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_37_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@J14",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@K1",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_38_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@M10",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@M11",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_39_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@M10",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@M9",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_40_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@M11",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@M12",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_41_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@N10",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@N9",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_42_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@N11",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@N12",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_43_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@N6",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@N7",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_44_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@K1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@K2",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_45_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@K2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@K3",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_46_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@E13",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@E14",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_47_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@F2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@F3",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_48_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@J12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@J13",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_49_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@J13",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@J14",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_50_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@C11",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@C12",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_51_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@C8",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@C9",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_52_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@G1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@G2",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_53_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@M7",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@M8",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_54_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@M8",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@M9",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_55_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@D12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@D13",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_56_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@D13",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@D14",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_57_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@D3",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@D4",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_58_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@E1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@E2",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_59_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@E12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@E13",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_60_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@E2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@E3",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_61_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@K13",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@K14",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_62_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@K14",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@L1",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_63_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@L2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@L3",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_64_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@A10",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@A9",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_65_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@A11",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@A12",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_66_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@A12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@A13",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_67_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@C10",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@C11",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_68_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@C13",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@C14",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_69_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@D1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@D2",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_70_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@F13",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@F14",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_71_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@G12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@G13",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_72_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@H1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@H2",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_73_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@H13",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@H14",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_74_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@J1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@J2",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_75_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@J2",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@J3",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_76_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@L12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@L13",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_77_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@L14",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@M1",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_78_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@M1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@M2",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_79_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@M12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@M13",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_80_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@M14",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@N1",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_81_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@P11",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@P12",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_82_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@B10",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@B9",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_83_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@B12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@B13",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_84_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@N12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@N13",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_85_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@N7",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@N8",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_86_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@A1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@A2",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_87_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@P1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@P2",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_88_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@P12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@P13",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_89_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@C3",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@C5",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_90_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@C5",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@C7",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_91_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@N1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@N3",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_92_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@P11",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@P9",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_93_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@C1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@C3",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_94_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@J12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@J3",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_95_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@H12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@H3",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_96_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@N3",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@N6",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_97_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@F12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@F3",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_98_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@G12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@G2",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_99_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@M3",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@M7",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_100_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@B1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@B7",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_101_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@P8",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@P2",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_102_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@A8",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@A2",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_103_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@E12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@E3",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_104_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@K12",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@K3",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC16G_WW28_GA01.NC_cluster_0_mst_105_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@A13",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.NC@P2",
+      "net_id": "eMMC.EMMC16G_WW28_GA01.NC"
+    },
+    {
+      "id": "connector_eMMC.EMMC1_VDDI_cluster_1_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_EMMC1_VDDI_100NF.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.C_EMMC1_VDDI_1UF.C.P1@1",
+      "net_id": "eMMC.EMMC1_VDDI"
+    },
+    {
+      "id": "connector_eMMC.NC_cluster_2_mst_0_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.RFU@P10",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.RFU@P7",
+      "net_id": "eMMC.NC"
+    },
+    {
+      "id": "connector_eMMC.NC_cluster_2_mst_1_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.RFU@A7",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.RFU@P10",
+      "net_id": "eMMC.NC"
+    },
+    {
+      "id": "connector_eMMC.NC_cluster_3_mst_0_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.RFU@K6",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.RFU@K7",
+      "net_id": "eMMC.NC"
+    },
+    {
+      "id": "connector_eMMC.NC_cluster_3_mst_1_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.RFU@E5",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.RFU@K7",
+      "net_id": "eMMC.NC"
+    },
+    {
+      "id": "connector_eMMC.NC_cluster_4_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.RFU@F5",
+      "target_port_id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC.EMMC16G_WW28_GA01.EMMC16G-WW28-GA01.RFU@G3",
+      "net_id": "eMMC.NC"
+    }
+  ]
+}

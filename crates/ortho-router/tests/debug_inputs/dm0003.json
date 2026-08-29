@@ -1,0 +1,992 @@
+{
+  "obstacles": [
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.IO",
+      "bounds": {
+        "min_x": 749.3,
+        "min_y": 558.8,
+        "max_x": 1003.3,
+        "max_y": 812.8
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.HEART_LOGO.Heart_Logo",
+      "bounds": {
+        "min_x": 856.76,
+        "min_y": 1009.332,
+        "max_x": 870.3679999999999,
+        "max_y": 1022.949
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.DSI_CSI",
+      "bounds": {
+        "min_x": -888.9999999999999,
+        "min_y": 901.6999999999998,
+        "max_x": -507.9999999999999,
+        "max_y": 1130.2999999999997
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.HDMI",
+      "bounds": {
+        "min_x": -838.1999999999999,
+        "min_y": 584.2,
+        "max_x": -533.3999999999999,
+        "max_y": 787.4000000000001
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.R_GPIO_VREF_3V3.R",
+      "bounds": {
+        "min_x": -354.06,
+        "min_y": 253.0,
+        "max_x": -331.74,
+        "max_y": 331.2
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.Ethernet",
+      "bounds": {
+        "min_x": 736.5999999999999,
+        "min_y": 342.9,
+        "max_x": 1016.0,
+        "max_y": 520.7
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.R_GPIO_VREF_1V8.R",
+      "bounds": {
+        "min_x": -417.56,
+        "min_y": 253.0,
+        "max_x": -395.24,
+        "max_y": 331.2
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.R_EEPROM_WP.R",
+      "bounds": {
+        "min_x": 509.54,
+        "min_y": 1078.5,
+        "max_x": 531.86,
+        "max_y": 1156.7
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_3PI",
+      "bounds": {
+        "min_x": -1536.6999999999998,
+        "min_y": 558.8000000000001,
+        "max_x": -1206.4999999999998,
+        "max_y": 711.2
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5",
+      "bounds": {
+        "min_x": -63.49999999999998,
+        "min_y": 215.90000000000003,
+        "max_x": 393.7,
+        "max_y": 1282.7000000000003
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.Version.Version",
+      "bounds": {
+        "min_x": 735.6,
+        "min_y": 862.6,
+        "max_x": 991.6,
+        "max_y": 953.5
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.DIODE_LOGO.Diode_Logo",
+      "bounds": {
+        "min_x": 852.607,
+        "min_y": 1032.269,
+        "max_x": 874.593,
+        "max_y": 1050.53
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CAT_LOGO.Cat_Logo",
+      "bounds": {
+        "min_x": 856.76,
+        "min_y": 983.932,
+        "max_x": 870.3679999999999,
+        "max_y": 997.549
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.BOOT_SWITCH.MK-11C04-G013",
+      "bounds": {
+        "min_x": -1525.0,
+        "min_y": 786.4,
+        "max_x": -1269.0,
+        "max_y": 890.0
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI",
+      "bounds": {
+        "min_x": -1498.6,
+        "min_y": 381.0,
+        "max_x": -1244.6,
+        "max_y": 482.6
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2",
+      "bounds": {
+        "min_x": -838.1999999999999,
+        "min_y": 381.0,
+        "max_x": -457.19999999999993,
+        "max_y": 558.8
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_3v3pi.4",
+      "bounds": {
+        "min_x": -1634.22,
+        "min_y": 507.0,
+        "max_x": -1616.98,
+        "max_y": 534.4
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.3",
+      "bounds": {
+        "min_x": -1105.9,
+        "min_y": 989.6000000000001,
+        "max_x": -1078.5,
+        "max_y": 1017.0000000000001
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_5v.3",
+      "bounds": {
+        "min_x": 524.78,
+        "min_y": 278.4,
+        "max_x": 542.02,
+        "max_y": 305.79999999999995
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_1v8.1",
+      "bounds": {
+        "min_x": -288.02,
+        "min_y": 87.89999999999999,
+        "max_x": -270.78,
+        "max_y": 115.3
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.7",
+      "bounds": {
+        "min_x": -1410.6999999999998,
+        "min_y": 938.8000000000001,
+        "max_x": -1383.2999999999997,
+        "max_y": 966.2
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_3v3pi.1",
+      "bounds": {
+        "min_x": -211.82,
+        "min_y": 62.5,
+        "max_x": -194.57999999999998,
+        "max_y": 89.9
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_3v3pi.3",
+      "bounds": {
+        "min_x": -1100.82,
+        "min_y": 862.6,
+        "max_x": -1083.58,
+        "max_y": 890.0
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.4",
+      "bounds": {
+        "min_x": -1042.4,
+        "min_y": 786.4,
+        "max_x": -1015.0000000000001,
+        "max_y": 813.8
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.1",
+      "bounds": {
+        "min_x": -305.8,
+        "min_y": 405.4,
+        "max_x": -278.40000000000003,
+        "max_y": 432.79999999999995
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.2",
+      "bounds": {
+        "min_x": 570.5,
+        "min_y": 684.8000000000001,
+        "max_x": 597.9,
+        "max_y": 712.2
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_5v.2",
+      "bounds": {
+        "min_x": -1062.7199999999998,
+        "min_y": 291.1,
+        "max_x": -1045.4799999999998,
+        "max_y": 318.5
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_3v3pi.2",
+      "bounds": {
+        "min_x": 550.1800000000001,
+        "min_y": 316.5,
+        "max_x": 567.4200000000001,
+        "max_y": 343.9
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_5v.1",
+      "bounds": {
+        "min_x": -122.92,
+        "min_y": 37.099999999999994,
+        "max_x": -105.68,
+        "max_y": 64.5
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.5",
+      "bounds": {
+        "min_x": -1715.5,
+        "min_y": 684.8000000000001,
+        "max_x": -1688.1,
+        "max_y": 712.2
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_5v.4",
+      "bounds": {
+        "min_x": -1659.62,
+        "min_y": 341.9,
+        "max_x": -1642.3799999999999,
+        "max_y": 369.29999999999995
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.6",
+      "bounds": {
+        "min_x": 507.0,
+        "min_y": 1180.1000000000001,
+        "max_x": 534.4,
+        "max_y": 1207.5000000000002
+      }
+    }
+  ],
+  "ports": [
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.EEPROM_nWP",
+      "position": {
+        "x": 393.70000000000005,
+        "y": 1054.1000000000001
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.R_EEPROM_WP.R.P1@1",
+      "position": {
+        "x": 520.7,
+        "y": 1078.5
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.R_EEPROM_WP.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.R_GPIO_VREF_3V3.R.P1@1",
+      "position": {
+        "x": -342.9,
+        "y": 331.20000000000005
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.R_GPIO_VREF_3V3.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.R_GPIO_VREF_1V8.R.P1@1",
+      "position": {
+        "x": -406.4,
+        "y": 331.20000000000005
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.R_GPIO_VREF_1V8.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.GPIO_VREF",
+      "position": {
+        "x": -63.49999999999998,
+        "y": 342.9000000000001
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.R_GPIO_VREF_3V3.R.P1@1",
+      "position": {
+        "x": -342.9,
+        "y": 331.20000000000005
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.R_GPIO_VREF_3V3.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5_1V8",
+      "position": {
+        "x": -63.49999999999998,
+        "y": 292.1000000000001
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_1v8.1.",
+      "position": {
+        "x": -279.40000000000003,
+        "y": 115.3
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_1v8.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.R_GPIO_VREF_1V8.R.P2@2",
+      "position": {
+        "x": -406.4,
+        "y": 253.0
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.R_GPIO_VREF_1V8.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_1v8.1.",
+      "position": {
+        "x": -279.40000000000003,
+        "y": 115.3
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_1v8.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5_3V3",
+      "position": {
+        "x": -63.49999999999998,
+        "y": 266.70000000000016
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_3v3pi.1.",
+      "position": {
+        "x": -203.2,
+        "y": 89.9
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_3v3pi.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.DSI_CSI.io_3v3pi",
+      "position": {
+        "x": -888.9999999999999,
+        "y": 927.0999999999999
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.DSI_CSI"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_3v3pi.3.",
+      "position": {
+        "x": -1092.2,
+        "y": 890.0
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_3v3pi.3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.Ethernet.io_3v3pi",
+      "position": {
+        "x": 736.5999999999999,
+        "y": 368.29999999999995
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.Ethernet"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_3v3pi.2.",
+      "position": {
+        "x": 558.8000000000001,
+        "y": 343.9
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_3v3pi.2"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.IO.io_3v3pi",
+      "position": {
+        "x": 749.3,
+        "y": 609.5999999999999
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.IO"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_3v3pi.2.",
+      "position": {
+        "x": 558.8000000000001,
+        "y": 343.9
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_3v3pi.2"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.R_GPIO_VREF_3V3.R.P2@2",
+      "position": {
+        "x": -342.9,
+        "y": 253.0
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.R_GPIO_VREF_3V3.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_3v3pi.1.",
+      "position": {
+        "x": -203.2,
+        "y": 89.9
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_3v3pi.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_3PI.V3V3",
+      "position": {
+        "x": -1536.6999999999998,
+        "y": 609.6
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_3PI"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_3v3pi.4.",
+      "position": {
+        "x": -1625.6,
+        "y": 534.4000000000001
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_3v3pi.4"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5_5V_IN",
+      "position": {
+        "x": -63.49999999999998,
+        "y": 241.3000000000001
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_5v.1.",
+      "position": {
+        "x": -114.3,
+        "y": 64.5
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_5v.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.HDMI.io_5v",
+      "position": {
+        "x": -838.1999999999999,
+        "y": 609.5999999999999
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.HDMI"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_5v.2.",
+      "position": {
+        "x": -1054.1,
+        "y": 318.5
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_5v.2"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.IO.io_5v",
+      "position": {
+        "x": 749.3,
+        "y": 584.2
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.IO"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_5v.3.",
+      "position": {
+        "x": 533.4000000000001,
+        "y": 305.8
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_5v.3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.io_5v",
+      "position": {
+        "x": -838.1999999999999,
+        "y": 406.4
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_5v.2.",
+      "position": {
+        "x": -1054.1,
+        "y": 318.5
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_5v.2"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_3PI.V5V",
+      "position": {
+        "x": -1536.6999999999998,
+        "y": 584.2
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_3PI"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_5v.4.",
+      "position": {
+        "x": -1651.0,
+        "y": 369.3
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_5v.4"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_5v",
+      "position": {
+        "x": -1498.6,
+        "y": 406.4
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_5v.4.",
+      "position": {
+        "x": -1651.0,
+        "y": 369.3
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_5v.4"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.BOOT_SWITCH.MK-11C04-G013.MP1@4",
+      "position": {
+        "x": -1525.0,
+        "y": 812.8
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.BOOT_SWITCH.MK-11C04-G013"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.7.",
+      "position": {
+        "x": -1397.0,
+        "y": 938.8000000000001
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.7"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.BOOT_SWITCH.MK-11C04-G013.MP2@5",
+      "position": {
+        "x": -1525.0,
+        "y": 838.2
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.BOOT_SWITCH.MK-11C04-G013"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.7.",
+      "position": {
+        "x": -1397.0,
+        "y": 938.8000000000001
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.7"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.BOOT_SWITCH.MK-11C04-G013.NO@1",
+      "position": {
+        "x": -1269.0,
+        "y": 812.8
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.BOOT_SWITCH.MK-11C04-G013"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.7.",
+      "position": {
+        "x": -1397.0,
+        "y": 938.8000000000001
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.7"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.GND",
+      "position": {
+        "x": -63.49999999999998,
+        "y": 317.5000000000001
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.1.",
+      "position": {
+        "x": -292.1,
+        "y": 405.4
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.DSI_CSI.io_gnd",
+      "position": {
+        "x": -888.9999999999999,
+        "y": 952.5
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.DSI_CSI"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.3.",
+      "position": {
+        "x": -1092.2,
+        "y": 989.6000000000001
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.Ethernet.io_gnd",
+      "position": {
+        "x": 736.5999999999999,
+        "y": 393.7
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.Ethernet"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.2.",
+      "position": {
+        "x": 584.2,
+        "y": 684.8000000000001
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.2"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.HDMI.io_gnd",
+      "position": {
+        "x": -838.1999999999999,
+        "y": 635.0
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.HDMI"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.4.",
+      "position": {
+        "x": -1028.7,
+        "y": 786.4
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.4"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.IO.io_gnd",
+      "position": {
+        "x": 749.3,
+        "y": 635.0
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.IO"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.2.",
+      "position": {
+        "x": 584.2,
+        "y": 684.8000000000001
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.2"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.io_gnd",
+      "position": {
+        "x": -838.1999999999999,
+        "y": 431.8
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.4.",
+      "position": {
+        "x": -1028.7,
+        "y": 786.4
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.4"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.R_EEPROM_WP.R.P2@2",
+      "position": {
+        "x": 520.7,
+        "y": 1156.7
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.R_EEPROM_WP.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.6.",
+      "position": {
+        "x": 520.7,
+        "y": 1180.1000000000001
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.6"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_3PI.GND",
+      "position": {
+        "x": -1536.6999999999998,
+        "y": 635.0
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_3PI"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.5.",
+      "position": {
+        "x": -1701.8000000000002,
+        "y": 684.8000000000001
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.5"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_gnd",
+      "position": {
+        "x": -1498.6,
+        "y": 431.8
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.5.",
+      "position": {
+        "x": -1701.8000000000002,
+        "y": 684.8000000000001
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.5"
+    }
+  ],
+  "connectors": [
+    {
+      "id": "connector_EEPROM_nWP_cluster_0_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.EEPROM_nWP",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.R_EEPROM_WP.R.P1@1",
+      "net_id": "EEPROM_nWP"
+    },
+    {
+      "id": "connector_gpio_vref_cluster_1_mst_0_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.R_GPIO_VREF_3V3.R.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.R_GPIO_VREF_1V8.R.P1@1",
+      "net_id": "gpio_vref"
+    },
+    {
+      "id": "connector_gpio_vref_cluster_1_mst_1_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.GPIO_VREF",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.R_GPIO_VREF_3V3.R.P1@1",
+      "net_id": "gpio_vref"
+    },
+    {
+      "id": "connector_io_1v8_edge_0_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5_1V8",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_1v8.1.",
+      "net_id": "io_1v8"
+    },
+    {
+      "id": "connector_io_1v8_edge_1_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.R_GPIO_VREF_1V8.R.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_1v8.1.",
+      "net_id": "io_1v8"
+    },
+    {
+      "id": "connector_io_3v3pi_edge_2_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5_3V3",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_3v3pi.1.",
+      "net_id": "io_3v3pi"
+    },
+    {
+      "id": "connector_io_3v3pi_edge_3_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.DSI_CSI.io_3v3pi",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_3v3pi.3.",
+      "net_id": "io_3v3pi"
+    },
+    {
+      "id": "connector_io_3v3pi_edge_4_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.Ethernet.io_3v3pi",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_3v3pi.2.",
+      "net_id": "io_3v3pi"
+    },
+    {
+      "id": "connector_io_3v3pi_edge_5_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.IO.io_3v3pi",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_3v3pi.2.",
+      "net_id": "io_3v3pi"
+    },
+    {
+      "id": "connector_io_3v3pi_edge_6_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.R_GPIO_VREF_3V3.R.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_3v3pi.1.",
+      "net_id": "io_3v3pi"
+    },
+    {
+      "id": "connector_io_3v3pi_edge_7_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_3PI.V3V3",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_3v3pi.4.",
+      "net_id": "io_3v3pi"
+    },
+    {
+      "id": "connector_io_5v_edge_8_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.CM5_5V_IN",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_5v.1.",
+      "net_id": "io_5v"
+    },
+    {
+      "id": "connector_io_5v_edge_9_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.HDMI.io_5v",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_5v.2.",
+      "net_id": "io_5v"
+    },
+    {
+      "id": "connector_io_5v_edge_10_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.IO.io_5v",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_5v.3.",
+      "net_id": "io_5v"
+    },
+    {
+      "id": "connector_io_5v_edge_11_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.io_5v",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_5v.2.",
+      "net_id": "io_5v"
+    },
+    {
+      "id": "connector_io_5v_edge_12_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_3PI.V5V",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_5v.4.",
+      "net_id": "io_5v"
+    },
+    {
+      "id": "connector_io_5v_edge_13_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_5v",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_5v.4.",
+      "net_id": "io_5v"
+    },
+    {
+      "id": "connector_io_gnd_edge_14_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.BOOT_SWITCH.MK-11C04-G013.MP1@4",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.7.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_15_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.BOOT_SWITCH.MK-11C04-G013.MP2@5",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.7.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_16_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.BOOT_SWITCH.MK-11C04-G013.NO@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.7.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_17_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.CM5.GND",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.1.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_18_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.DSI_CSI.io_gnd",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.3.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_19_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.Ethernet.io_gnd",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.2.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_20_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.HDMI.io_gnd",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.4.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_21_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.IO.io_gnd",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.2.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_22_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.io_gnd",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.4.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_23_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.R_EEPROM_WP.R.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.6.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_24_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_3PI.GND",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.5.",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_edge_25_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.USB_PI.io_gnd",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.io_gnd.5.",
+      "net_id": "io_gnd"
+    }
+  ]
+}

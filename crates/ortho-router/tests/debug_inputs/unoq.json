@@ -1,0 +1,132 @@
+{
+  "obstacles": [
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MH1.MH",
+      "bounds": {
+        "min_x": 1091.1999999999998,
+        "min_y": -2121.9,
+        "max_x": 1118.6,
+        "max_y": -2069.1000000000004
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.UKCA_LOGO.UKCA_LOGO",
+      "bounds": {
+        "min_x": 760.704,
+        "min_y": -2537.6679999999997,
+        "max_x": 789.233,
+        "max_y": -2516.9029999999993
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MH2.MH",
+      "bounds": {
+        "min_x": 1370.6,
+        "min_y": -2121.9,
+        "max_x": 1398.0,
+        "max_y": -2069.1000000000004
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MH4.MH",
+      "bounds": {
+        "min_x": 1230.9,
+        "min_y": -2032.9999999999998,
+        "max_x": 1258.3000000000002,
+        "max_y": -1980.2
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.DC_DC",
+      "bounds": {
+        "min_x": -3556.0,
+        "min_y": 990.6,
+        "max_x": -3098.7999999999997,
+        "max_y": 1143.0
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LPDDR4X",
+      "bounds": {
+        "min_x": -1435.1,
+        "min_y": -6146.800000000001,
+        "max_x": 1435.1,
+        "max_y": -2641.600000000001
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.QUALCOMM_LOGO.QUALCOMM_LOGO",
+      "bounds": {
+        "min_x": 886.621,
+        "min_y": -2301.1769999999997,
+        "max_x": 916.7790000000001,
+        "max_y": -2271.7349999999997
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.LED",
+      "bounds": {
+        "min_x": -6642.1,
+        "min_y": 800.1000000000001,
+        "max_x": -4076.7000000000007,
+        "max_y": 3670.3
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.IO",
+      "bounds": {
+        "min_x": -6032.5,
+        "min_y": -6159.5,
+        "max_x": -1638.3000000000002,
+        "max_y": -2019.2999999999993
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MH3.MH",
+      "bounds": {
+        "min_x": 1205.5,
+        "min_y": -2121.9,
+        "max_x": 1232.9,
+        "max_y": -2069.1000000000004
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.UNOQ_LOGO.UNOQ_LOGO",
+      "bounds": {
+        "min_x": 988.441,
+        "min_y": -2530.598,
+        "max_x": 1018.1590000000001,
+        "max_y": -2499.624
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.MCU",
+      "bounds": {
+        "min_x": -6819.9,
+        "min_y": -1638.2999999999997,
+        "max_x": -3365.499999999999,
+        "max_y": 723.9000000000001
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.eMMC",
+      "bounds": {
+        "min_x": -3073.3999999999996,
+        "min_y": -1663.7,
+        "max_x": -1346.1999999999998,
+        "max_y": 673.1000000000001
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/arduino/boards/unoQ/unoQ.zen:<root>.UNOQ_LOGO_B.UNOQ_LOGO",
+      "bounds": {
+        "min_x": 6335.141,
+        "min_y": 1063.502,
+        "max_x": 6364.859,
+        "max_y": 1094.476
+      }
+    }
+  ],
+  "ports": [],
+  "connectors": []
+}

@@ -1,0 +1,1310 @@
+{
+  "obstacles": [
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.C_CRYSTAL.C",
+      "bounds": {
+        "min_x": 1058.18,
+        "min_y": 837.2,
+        "max_x": 1100.8200000000002,
+        "max_y": 915.4
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.C_VOUT2.C",
+      "bounds": {
+        "min_x": -465.82,
+        "min_y": 583.2,
+        "max_x": -423.18000000000006,
+        "max_y": 661.4
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3",
+      "bounds": {
+        "min_x": 62.5,
+        "min_y": 49.80000000000004,
+        "max_x": 572.5,
+        "max_y": 1017.0000000000001
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.C_VOUT1.C",
+      "bounds": {
+        "min_x": -630.92,
+        "min_y": 583.2,
+        "max_x": -588.28,
+        "max_y": 661.4
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.R_EN.R",
+      "bounds": {
+        "min_x": -887.4599999999999,
+        "min_y": 608.6,
+        "max_x": -865.1399999999999,
+        "max_y": 686.8
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.LED_Activity.LED",
+      "bounds": {
+        "min_x": 641.6200000000001,
+        "min_y": 214.89999999999998,
+        "max_x": 671.5600000000002,
+        "max_y": 267.7
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.R_Activity.R",
+      "bounds": {
+        "min_x": 649.24,
+        "min_y": 405.4000000000001,
+        "max_x": 671.56,
+        "max_y": 483.6
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.C_VIN.C",
+      "bounds": {
+        "min_x": -1088.1200000000001,
+        "min_y": 583.2,
+        "max_x": -1045.48,
+        "max_y": 661.4
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.Buck",
+      "bounds": {
+        "min_x": -812.8,
+        "min_y": 520.7,
+        "max_x": -660.3999999999999,
+        "max_y": 622.3
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.Crystal.ASEK_32_768KHZ_L_R_T",
+      "bounds": {
+        "min_x": 672.0999999999999,
+        "min_y": 761.0,
+        "max_x": 1055.1,
+        "max_y": 839.2
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.C_VOUT3.C",
+      "bounds": {
+        "min_x": -300.72,
+        "min_y": 583.2,
+        "max_x": -258.08,
+        "max_y": 661.4
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIE_M2.m2_3v3.1",
+      "bounds": {
+        "min_x": 308.88,
+        "min_y": -51.8,
+        "max_x": 326.12,
+        "max_y": -24.4
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIE_M2.m2_3v3.3",
+      "bounds": {
+        "min_x": -288.02,
+        "min_y": 494.3,
+        "max_x": -270.78000000000003,
+        "max_y": 521.7
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIE_M2.m2_3v3.2",
+      "bounds": {
+        "min_x": 1070.88,
+        "min_y": 697.5,
+        "max_x": 1088.12,
+        "max_y": 724.9
+      }
+    }
+  ],
+  "ports": [
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.DAS/~{DSS}/~{LED1}@10",
+      "position": {
+        "x": 572.5,
+        "y": 635.0
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.R_Activity.R.P1@1",
+      "position": {
+        "x": 660.4000000000001,
+        "y": 483.6
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.R_Activity.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@34",
+      "position": {
+        "x": 572.5,
+        "y": 330.19999999999993
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@36",
+      "position": {
+        "x": 572.5,
+        "y": 304.80000000000007
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@44",
+      "position": {
+        "x": 572.5,
+        "y": 228.6
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@46",
+      "position": {
+        "x": 572.5,
+        "y": 203.20000000000007
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@56",
+      "position": {
+        "x": 572.5,
+        "y": 152.39999999999995
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@58",
+      "position": {
+        "x": 572.5,
+        "y": 127.00000000000003
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@22",
+      "position": {
+        "x": 572.5,
+        "y": 482.6
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@24",
+      "position": {
+        "x": 572.5,
+        "y": 457.20000000000005
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@24",
+      "position": {
+        "x": 572.5,
+        "y": 457.20000000000005
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@26",
+      "position": {
+        "x": 572.5,
+        "y": 431.80000000000007
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@28",
+      "position": {
+        "x": 572.5,
+        "y": 406.4
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@30",
+      "position": {
+        "x": 572.5,
+        "y": 381.0
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@30",
+      "position": {
+        "x": 572.5,
+        "y": 381.0
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@32",
+      "position": {
+        "x": 572.5,
+        "y": 355.6
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@36",
+      "position": {
+        "x": 572.5,
+        "y": 304.80000000000007
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@40",
+      "position": {
+        "x": 572.5,
+        "y": 279.4000000000001
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@8",
+      "position": {
+        "x": 572.5,
+        "y": 533.4000000000001
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@6",
+      "position": {
+        "x": 572.5,
+        "y": 558.8000000000001
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@6",
+      "position": {
+        "x": 572.5,
+        "y": 558.8000000000001
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@67",
+      "position": {
+        "x": 572.5,
+        "y": 584.2
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@20",
+      "position": {
+        "x": 572.5,
+        "y": 508.00000000000006
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@22",
+      "position": {
+        "x": 572.5,
+        "y": 482.6
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@20",
+      "position": {
+        "x": 572.5,
+        "y": 508.00000000000006
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@8",
+      "position": {
+        "x": 572.5,
+        "y": 533.4000000000001
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@40",
+      "position": {
+        "x": 572.5,
+        "y": 279.4000000000001
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@42",
+      "position": {
+        "x": 572.5,
+        "y": 254.00000000000006
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@42",
+      "position": {
+        "x": 572.5,
+        "y": 254.00000000000006
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@44",
+      "position": {
+        "x": 572.5,
+        "y": 228.6
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@46",
+      "position": {
+        "x": 572.5,
+        "y": 203.20000000000007
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@48",
+      "position": {
+        "x": 572.5,
+        "y": 177.8
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@48",
+      "position": {
+        "x": 572.5,
+        "y": 177.8
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@56",
+      "position": {
+        "x": 572.5,
+        "y": 152.39999999999995
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@26",
+      "position": {
+        "x": 572.5,
+        "y": 431.80000000000007
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@28",
+      "position": {
+        "x": 572.5,
+        "y": 406.4
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@32",
+      "position": {
+        "x": 572.5,
+        "y": 355.6
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@34",
+      "position": {
+        "x": 572.5,
+        "y": 330.19999999999993
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.LED_Activity.LED.K@1",
+      "position": {
+        "x": 660.4000000000001,
+        "y": 267.7
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.LED_Activity.LED"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.R_Activity.R.P2@2",
+      "position": {
+        "x": 660.4000000000001,
+        "y": 405.4000000000001
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.R_Activity.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.Buck.vout",
+      "position": {
+        "x": -660.3999999999999,
+        "y": 546.1
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.Buck"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIE_M2.m2_3v3.3.",
+      "position": {
+        "x": -279.40000000000003,
+        "y": 521.7
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIE_M2.m2_3v3.3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.C_CRYSTAL.C.P1@1",
+      "position": {
+        "x": 1079.5,
+        "y": 837.2
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.C_CRYSTAL.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIE_M2.m2_3v3.2.",
+      "position": {
+        "x": 1079.5,
+        "y": 724.9
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIE_M2.m2_3v3.2"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.C_VOUT1.C.P1@1",
+      "position": {
+        "x": -609.6,
+        "y": 583.2
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.C_VOUT1.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIE_M2.m2_3v3.3.",
+      "position": {
+        "x": -279.40000000000003,
+        "y": 521.7
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIE_M2.m2_3v3.3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.C_VOUT2.C.P1@1",
+      "position": {
+        "x": -444.5,
+        "y": 583.2
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.C_VOUT2.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIE_M2.m2_3v3.3.",
+      "position": {
+        "x": -279.40000000000003,
+        "y": 521.7
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIE_M2.m2_3v3.3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.C_VOUT3.C.P1@1",
+      "position": {
+        "x": -279.40000000000003,
+        "y": 583.2
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.C_VOUT3.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIE_M2.m2_3v3.3.",
+      "position": {
+        "x": -279.40000000000003,
+        "y": 521.7
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIE_M2.m2_3v3.3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.Crystal.ASEK_32_768KHZ_L_R_T.TRI-STATE@1",
+      "position": {
+        "x": 1055.1,
+        "y": 787.4
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.Crystal.ASEK_32_768KHZ_L_R_T"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIE_M2.m2_3v3.2.",
+      "position": {
+        "x": 1079.5,
+        "y": 724.9
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIE_M2.m2_3v3.2"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.Crystal.ASEK_32_768KHZ_L_R_T.VDD@4",
+      "position": {
+        "x": 1055.1,
+        "y": 812.8
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.Crystal.ASEK_32_768KHZ_L_R_T"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIE_M2.m2_3v3.2.",
+      "position": {
+        "x": 1079.5,
+        "y": 724.9
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIE_M2.m2_3v3.2"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.LED_Activity.LED.A@2",
+      "position": {
+        "x": 660.4000000000001,
+        "y": 214.89999999999998
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.LED_Activity.LED"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIE_M2.m2_3v3.1.",
+      "position": {
+        "x": 317.5,
+        "y": -24.4
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIE_M2.m2_3v3.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.Crystal.ASEK_32_768KHZ_L_R_T.OUTPUT@3",
+      "position": {
+        "x": 672.0999999999999,
+        "y": 812.8
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.Crystal.ASEK_32_768KHZ_L_R_T"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.SUSCLK@68",
+      "position": {
+        "x": 572.5,
+        "y": 812.8
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.Buck.enable",
+      "position": {
+        "x": -812.8,
+        "y": 596.9
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.Buck"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.R_EN.R.P1@1",
+      "position": {
+        "x": -876.3,
+        "y": 608.6
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.R_EN.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.Buck.vin",
+      "position": {
+        "x": -812.8,
+        "y": 546.1
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.Buck"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.C_VIN.C.P1@1",
+      "position": {
+        "x": -1066.8000000000002,
+        "y": 583.2
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.C_VIN.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.Buck.gnd",
+      "position": {
+        "x": -660.3999999999999,
+        "y": 571.5
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.Buck"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.C_VOUT1.C.P2@2",
+      "position": {
+        "x": -609.6,
+        "y": 661.4
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.C_VOUT1.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.C_VOUT2.C.P2@2",
+      "position": {
+        "x": -444.5,
+        "y": 661.4
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.C_VOUT2.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.C_VOUT3.C.P2@2",
+      "position": {
+        "x": -279.40000000000003,
+        "y": 661.4
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.C_VOUT3.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.C_VOUT1.C.P2@2",
+      "position": {
+        "x": -609.6,
+        "y": 661.4
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.C_VOUT1.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.C_VOUT2.C.P2@2",
+      "position": {
+        "x": -444.5,
+        "y": 661.4
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.C_VOUT2.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.R_EN.R.P2@2",
+      "position": {
+        "x": -876.3,
+        "y": 686.8
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.R_EN.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.C_VIN.C.P2@2",
+      "position": {
+        "x": -1066.8000000000002,
+        "y": 661.4
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.C_VIN.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.Buck.gnd",
+      "position": {
+        "x": -660.3999999999999,
+        "y": 571.5
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.Buck"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.R_EN.R.P2@2",
+      "position": {
+        "x": -876.3,
+        "y": 686.8
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.R_EN.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@1",
+      "position": {
+        "x": 317.5,
+        "y": 1017.0
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@15",
+      "position": {
+        "x": 317.5,
+        "y": 1017.0
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@1",
+      "position": {
+        "x": 317.5,
+        "y": 1017.0
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@21",
+      "position": {
+        "x": 317.5,
+        "y": 1017.0
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@1",
+      "position": {
+        "x": 317.5,
+        "y": 1017.0
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@27",
+      "position": {
+        "x": 317.5,
+        "y": 1017.0
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@1",
+      "position": {
+        "x": 317.5,
+        "y": 1017.0
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@3",
+      "position": {
+        "x": 317.5,
+        "y": 1017.0
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@1",
+      "position": {
+        "x": 317.5,
+        "y": 1017.0
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@33",
+      "position": {
+        "x": 317.5,
+        "y": 1017.0
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@1",
+      "position": {
+        "x": 317.5,
+        "y": 1017.0
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@39",
+      "position": {
+        "x": 317.5,
+        "y": 1017.0
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@1",
+      "position": {
+        "x": 317.5,
+        "y": 1017.0
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@45",
+      "position": {
+        "x": 317.5,
+        "y": 1017.0
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@1",
+      "position": {
+        "x": 317.5,
+        "y": 1017.0
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@51",
+      "position": {
+        "x": 317.5,
+        "y": 1017.0
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@1",
+      "position": {
+        "x": 317.5,
+        "y": 1017.0
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@57",
+      "position": {
+        "x": 317.5,
+        "y": 1017.0
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@1",
+      "position": {
+        "x": 317.5,
+        "y": 1017.0
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@71",
+      "position": {
+        "x": 317.5,
+        "y": 1017.0
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@1",
+      "position": {
+        "x": 317.5,
+        "y": 1017.0
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@73",
+      "position": {
+        "x": 317.5,
+        "y": 1017.0
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@1",
+      "position": {
+        "x": 317.5,
+        "y": 1017.0
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@75",
+      "position": {
+        "x": 317.5,
+        "y": 1017.0
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@1",
+      "position": {
+        "x": 317.5,
+        "y": 1017.0
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@9",
+      "position": {
+        "x": 317.5,
+        "y": 1017.0
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3"
+    }
+  ],
+  "connectors": [
+    {
+      "id": "connector_PCIE_M2.DAS_DSS_LED1_cluster_0_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.DAS/~{DSS}/~{LED1}@10",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.R_Activity.R.P1@1",
+      "net_id": "PCIE_M2.DAS_DSS_LED1"
+    },
+    {
+      "id": "connector_PCIE_M2.NC_15_cluster_1_mst_0_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@34",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@36",
+      "net_id": "PCIE_M2.NC_15"
+    },
+    {
+      "id": "connector_PCIE_M2.NC_15_cluster_1_mst_1_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@44",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@46",
+      "net_id": "PCIE_M2.NC_15"
+    },
+    {
+      "id": "connector_PCIE_M2.NC_15_cluster_1_mst_2_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@56",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@58",
+      "net_id": "PCIE_M2.NC_15"
+    },
+    {
+      "id": "connector_PCIE_M2.NC_15_cluster_1_mst_3_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@22",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@24",
+      "net_id": "PCIE_M2.NC_15"
+    },
+    {
+      "id": "connector_PCIE_M2.NC_15_cluster_1_mst_4_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@24",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@26",
+      "net_id": "PCIE_M2.NC_15"
+    },
+    {
+      "id": "connector_PCIE_M2.NC_15_cluster_1_mst_5_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@28",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@30",
+      "net_id": "PCIE_M2.NC_15"
+    },
+    {
+      "id": "connector_PCIE_M2.NC_15_cluster_1_mst_6_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@30",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@32",
+      "net_id": "PCIE_M2.NC_15"
+    },
+    {
+      "id": "connector_PCIE_M2.NC_15_cluster_1_mst_7_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@36",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@40",
+      "net_id": "PCIE_M2.NC_15"
+    },
+    {
+      "id": "connector_PCIE_M2.NC_15_cluster_1_mst_8_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@8",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@6",
+      "net_id": "PCIE_M2.NC_15"
+    },
+    {
+      "id": "connector_PCIE_M2.NC_15_cluster_1_mst_9_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@6",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@67",
+      "net_id": "PCIE_M2.NC_15"
+    },
+    {
+      "id": "connector_PCIE_M2.NC_15_cluster_1_mst_10_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@20",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@22",
+      "net_id": "PCIE_M2.NC_15"
+    },
+    {
+      "id": "connector_PCIE_M2.NC_15_cluster_1_mst_11_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@20",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@8",
+      "net_id": "PCIE_M2.NC_15"
+    },
+    {
+      "id": "connector_PCIE_M2.NC_15_cluster_1_mst_12_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@40",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@42",
+      "net_id": "PCIE_M2.NC_15"
+    },
+    {
+      "id": "connector_PCIE_M2.NC_15_cluster_1_mst_13_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@42",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@44",
+      "net_id": "PCIE_M2.NC_15"
+    },
+    {
+      "id": "connector_PCIE_M2.NC_15_cluster_1_mst_14_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@46",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@48",
+      "net_id": "PCIE_M2.NC_15"
+    },
+    {
+      "id": "connector_PCIE_M2.NC_15_cluster_1_mst_15_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@48",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@56",
+      "net_id": "PCIE_M2.NC_15"
+    },
+    {
+      "id": "connector_PCIE_M2.NC_15_cluster_1_mst_16_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@26",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@28",
+      "net_id": "PCIE_M2.NC_15"
+    },
+    {
+      "id": "connector_PCIE_M2.NC_15_cluster_1_mst_17_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@32",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.NC@34",
+      "net_id": "PCIE_M2.NC_15"
+    },
+    {
+      "id": "connector_PCIE_M2.R_Activity_cluster_2_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.LED_Activity.LED.K@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.R_Activity.R.P2@2",
+      "net_id": "PCIE_M2.R_Activity"
+    },
+    {
+      "id": "connector_PCIE_M2.m2_3v3_edge_0_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.Buck.vout",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIE_M2.m2_3v3.3.",
+      "net_id": "PCIE_M2.m2_3v3"
+    },
+    {
+      "id": "connector_PCIE_M2.m2_3v3_edge_1_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.C_CRYSTAL.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIE_M2.m2_3v3.2.",
+      "net_id": "PCIE_M2.m2_3v3"
+    },
+    {
+      "id": "connector_PCIE_M2.m2_3v3_edge_2_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.C_VOUT1.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIE_M2.m2_3v3.3.",
+      "net_id": "PCIE_M2.m2_3v3"
+    },
+    {
+      "id": "connector_PCIE_M2.m2_3v3_edge_3_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.C_VOUT2.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIE_M2.m2_3v3.3.",
+      "net_id": "PCIE_M2.m2_3v3"
+    },
+    {
+      "id": "connector_PCIE_M2.m2_3v3_edge_4_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.C_VOUT3.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIE_M2.m2_3v3.3.",
+      "net_id": "PCIE_M2.m2_3v3"
+    },
+    {
+      "id": "connector_PCIE_M2.m2_3v3_edge_5_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.Crystal.ASEK_32_768KHZ_L_R_T.TRI-STATE@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIE_M2.m2_3v3.2.",
+      "net_id": "PCIE_M2.m2_3v3"
+    },
+    {
+      "id": "connector_PCIE_M2.m2_3v3_edge_6_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.Crystal.ASEK_32_768KHZ_L_R_T.VDD@4",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIE_M2.m2_3v3.2.",
+      "net_id": "PCIE_M2.m2_3v3"
+    },
+    {
+      "id": "connector_PCIE_M2.m2_3v3_edge_7_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.LED_Activity.LED.A@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIE_M2.m2_3v3.1.",
+      "net_id": "PCIE_M2.m2_3v3"
+    },
+    {
+      "id": "connector_PCIE_M2.susclk_cluster_3_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.Crystal.ASEK_32_768KHZ_L_R_T.OUTPUT@3",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.SUSCLK@68",
+      "net_id": "PCIE_M2.susclk"
+    },
+    {
+      "id": "connector_PCIE_PI_PWR_EN_cluster_4_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.Buck.enable",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.R_EN.R.P1@1",
+      "net_id": "PCIE_PI_PWR_EN"
+    },
+    {
+      "id": "connector_io_5v_cluster_5_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.Buck.vin",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.C_VIN.C.P1@1",
+      "net_id": "io_5v"
+    },
+    {
+      "id": "connector_io_gnd_cluster_6_mst_0_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.Buck.gnd",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.C_VOUT1.C.P2@2",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_cluster_6_mst_1_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.C_VOUT2.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.C_VOUT3.C.P2@2",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_cluster_6_mst_2_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.C_VOUT1.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.C_VOUT2.C.P2@2",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_cluster_6_mst_3_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.R_EN.R.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.C_VIN.C.P2@2",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_cluster_6_mst_4_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.Buck.gnd",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.R_EN.R.P2@2",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_cluster_7_mst_0_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@15",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_cluster_7_mst_1_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@21",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_cluster_7_mst_2_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@27",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_cluster_7_mst_3_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@3",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_cluster_7_mst_4_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@33",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_cluster_7_mst_5_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@39",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_cluster_7_mst_6_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@45",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_cluster_7_mst_7_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@51",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_cluster_7_mst_8_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@57",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_cluster_7_mst_9_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@71",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_cluster_7_mst_10_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@73",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_cluster_7_mst_11_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@75",
+      "net_id": "io_gnd"
+    },
+    {
+      "id": "connector_io_gnd_cluster_7_mst_12_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/demo/boards/DM0003/DM0003.zen:<root>.PCIE_M2.PCIe_Connector.1-2199119-3.GND@9",
+      "net_id": "io_gnd"
+    }
+  ]
+}

@@ -1,0 +1,563 @@
+{
+  "obstacles": [
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_2.C_IN.C",
+      "bounds": {
+        "min_x": 80.28,
+        "min_y": 291.1,
+        "max_x": 122.91999999999999,
+        "max_y": 369.30000000000007
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_2.C_OUT.C",
+      "bounds": {
+        "min_x": 380.0,
+        "min_y": 397.7800000000001,
+        "max_x": 458.20000000000005,
+        "max_y": 440.4200000000001
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_2.GALI_S66",
+      "bounds": {
+        "min_x": 127.0,
+        "min_y": 393.7,
+        "max_x": 279.40000000000003,
+        "max_y": 469.90000000000003
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_1.C_IN.C",
+      "bounds": {
+        "min_x": 80.27999999999999,
+        "min_y": 138.70000000000002,
+        "max_x": 122.92000000000002,
+        "max_y": 216.90000000000003
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_1.C_OUT.C",
+      "bounds": {
+        "min_x": 392.69999999999993,
+        "min_y": 105.67999999999998,
+        "max_x": 470.9,
+        "max_y": 148.32
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_1.GALI_S66",
+      "bounds": {
+        "min_x": 127.0,
+        "min_y": 76.19999999999999,
+        "max_x": 279.40000000000003,
+        "max_y": 152.4
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.EP2RKUx.EP2RKU",
+      "bounds": {
+        "min_x": -63.5,
+        "min_y": 203.2,
+        "max_x": 88.9,
+        "max_y": 279.4
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.NT_GALI_S66_1.NT",
+      "bounds": {
+        "min_x": 316.5,
+        "min_y": 214.89999999999998,
+        "max_x": 369.3,
+        "max_y": 216.9
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.NOISE_SOURCE.D1.GC6002-17",
+      "bounds": {
+        "min_x": -267.7,
+        "min_y": 113.30000000000001,
+        "max_x": -240.29999999999995,
+        "max_y": 216.9
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.NOISE_SOURCE.CAP.C",
+      "bounds": {
+        "min_x": -229.60000000000002,
+        "min_y": 232.67999999999998,
+        "max_x": -151.40000000000003,
+        "max_y": 275.32
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.NOISE_SOURCE.LOAD.R",
+      "bounds": {
+        "min_x": -265.15999999999997,
+        "min_y": 380.0,
+        "max_x": -242.83999999999997,
+        "max_y": 458.20000000000005
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.NOISE_SOURCE.CHOKE.L",
+      "bounds": {
+        "min_x": -255.0,
+        "min_y": 278.4,
+        "max_x": -246.677,
+        "max_y": 356.5999999999999
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.NT_GALI_S66_2.NT",
+      "bounds": {
+        "min_x": 316.5,
+        "min_y": 367.29999999999995,
+        "max_x": 369.3,
+        "max_y": 369.29999999999995
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.VIN.1",
+      "bounds": {
+        "min_x": -262.61999999999995,
+        "min_y": 24.4,
+        "max_x": -245.38,
+        "max_y": 51.8
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.VBIAS_1.2",
+      "bounds": {
+        "min_x": 308.88,
+        "min_y": 37.099999999999994,
+        "max_x": 326.12,
+        "max_y": 64.5
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.VBIAS_2.1",
+      "bounds": {
+        "min_x": 296.18,
+        "min_y": 240.3,
+        "max_x": 313.41999999999996,
+        "max_y": 267.70000000000005
+      }
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GND.1",
+      "bounds": {
+        "min_x": -267.7,
+        "min_y": 481.59999999999997,
+        "max_x": -240.29999999999995,
+        "max_y": 509.0
+      }
+    }
+  ],
+  "ports": [
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_1.C_IN.C.P2@2",
+      "position": {
+        "x": 101.6,
+        "y": 138.70000000000002
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_1.C_IN.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_1.GALI_S66.RF_IN",
+      "position": {
+        "x": 127.0,
+        "y": 127.0
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_1.GALI_S66"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_1.C_OUT.C.P1@1",
+      "position": {
+        "x": 392.69999999999993,
+        "y": 127.0
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_1.C_OUT.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_1.GALI_S66.RF_OUT",
+      "position": {
+        "x": 279.40000000000003,
+        "y": 101.6
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_1.GALI_S66"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_2.C_IN.C.P2@2",
+      "position": {
+        "x": 101.6,
+        "y": 369.30000000000007
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_2.C_IN.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_2.GALI_S66.RF_IN",
+      "position": {
+        "x": 127.0,
+        "y": 444.5
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_2.GALI_S66"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_2.C_OUT.C.P1@1",
+      "position": {
+        "x": 380.0,
+        "y": 419.1
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_2.C_OUT.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_2.GALI_S66.RF_OUT",
+      "position": {
+        "x": 279.40000000000003,
+        "y": 419.09999999999997
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_2.GALI_S66"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.EP2RKUx.EP2RKU.GND",
+      "position": {
+        "x": -63.5,
+        "y": 228.6
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.EP2RKUx.EP2RKU"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GND.1.",
+      "position": {
+        "x": -254.0,
+        "y": 481.59999999999997
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GND.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_1.GALI_S66.GND",
+      "position": {
+        "x": 127.0,
+        "y": 101.6
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_1.GALI_S66"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_2.GALI_S66.GND",
+      "position": {
+        "x": 127.0,
+        "y": 419.09999999999997
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_2.GALI_S66"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.NOISE_SOURCE.LOAD.R.P2@2",
+      "position": {
+        "x": -254.0,
+        "y": 458.20000000000005
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.NOISE_SOURCE.LOAD.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.EP2RKUx.EP2RKU.RF_IN",
+      "position": {
+        "x": -63.5,
+        "y": 254.0
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.EP2RKUx.EP2RKU"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.NOISE_SOURCE.CAP.C.P1@1",
+      "position": {
+        "x": -151.4,
+        "y": 254.0
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.NOISE_SOURCE.CAP.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.EP2RKUx.EP2RKU.RF_OUT1",
+      "position": {
+        "x": 88.9,
+        "y": 228.6
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.EP2RKUx.EP2RKU"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_1.C_IN.C.P1@1",
+      "position": {
+        "x": 101.6,
+        "y": 216.9
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_1.C_IN.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.EP2RKUx.EP2RKU.RF_OUT2",
+      "position": {
+        "x": 88.9,
+        "y": 254.0
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.EP2RKUx.EP2RKU"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_2.C_IN.C.P1@1",
+      "position": {
+        "x": 101.6,
+        "y": 291.1
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_2.C_IN.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.NOISE_SOURCE.CHOKE.L.2@2",
+      "position": {
+        "x": -254.0,
+        "y": 356.59999999999997
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.NOISE_SOURCE.CHOKE.L"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.NOISE_SOURCE.LOAD.R.P1@1",
+      "position": {
+        "x": -254.0,
+        "y": 380.0
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.NOISE_SOURCE.LOAD.R"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.NOISE_SOURCE.CAP.C.P2@2",
+      "position": {
+        "x": -229.60000000000002,
+        "y": 254.0
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.NOISE_SOURCE.CAP.C"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.NOISE_SOURCE.CHOKE.L.1@1",
+      "position": {
+        "x": -254.0,
+        "y": 278.4
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.NOISE_SOURCE.CHOKE.L"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.NOISE_SOURCE.D1.GC6002-17.A@A",
+      "position": {
+        "x": -254.0,
+        "y": 216.9
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.NOISE_SOURCE.D1.GC6002-17"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_1.GALI_S66.VBIAS",
+      "position": {
+        "x": 279.40000000000003,
+        "y": 127.0
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_1.GALI_S66"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.VBIAS_1.2.",
+      "position": {
+        "x": 317.5,
+        "y": 64.5
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.VBIAS_1.2"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.NT_GALI_S66_1.NT.1@1",
+      "position": {
+        "x": 316.5,
+        "y": 215.9
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.NT_GALI_S66_1.NT"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_2.GALI_S66.VBIAS",
+      "position": {
+        "x": 279.40000000000003,
+        "y": 444.5
+      },
+      "visibility": 8,
+      "obstacle_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_2.GALI_S66"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.VBIAS_2.1.",
+      "position": {
+        "x": 304.8,
+        "y": 267.70000000000005
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.VBIAS_2.1"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.NT_GALI_S66_2.NT.1@1",
+      "position": {
+        "x": 316.5,
+        "y": 368.29999999999995
+      },
+      "visibility": 4,
+      "obstacle_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.NT_GALI_S66_2.NT"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.NOISE_SOURCE.D1.GC6002-17.K@K",
+      "position": {
+        "x": -254.0,
+        "y": 113.30000000000001
+      },
+      "visibility": 1,
+      "obstacle_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.NOISE_SOURCE.D1.GC6002-17"
+    },
+    {
+      "id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.VIN.1.",
+      "position": {
+        "x": -254.0,
+        "y": 51.8
+      },
+      "visibility": 2,
+      "obstacle_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.VIN.1"
+    }
+  ],
+  "connectors": [
+    {
+      "id": "connector_GALI_S66_1.AMP_RF_IN_cluster_0_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_1.C_IN.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_1.GALI_S66.RF_IN",
+      "net_id": "GALI_S66_1.AMP_RF_IN"
+    },
+    {
+      "id": "connector_GALI_S66_1.AMP_RF_OUT_cluster_1_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_1.C_OUT.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_1.GALI_S66.RF_OUT",
+      "net_id": "GALI_S66_1.AMP_RF_OUT"
+    },
+    {
+      "id": "connector_GALI_S66_2.AMP_RF_IN_cluster_2_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_2.C_IN.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_2.GALI_S66.RF_IN",
+      "net_id": "GALI_S66_2.AMP_RF_IN"
+    },
+    {
+      "id": "connector_GALI_S66_2.AMP_RF_OUT_cluster_3_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_2.C_OUT.C.P1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_2.GALI_S66.RF_OUT",
+      "net_id": "GALI_S66_2.AMP_RF_OUT"
+    },
+    {
+      "id": "connector_GND_edge_0_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.EP2RKUx.EP2RKU.GND",
+      "target_port_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_1_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_1.GALI_S66.GND",
+      "target_port_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_2_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_2.GALI_S66.GND",
+      "target_port_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_GND_edge_3_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.NOISE_SOURCE.LOAD.R.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GND.1.",
+      "net_id": "GND"
+    },
+    {
+      "id": "connector_NOISE_cluster_4_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.EP2RKUx.EP2RKU.RF_IN",
+      "target_port_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.NOISE_SOURCE.CAP.C.P1@1",
+      "net_id": "NOISE"
+    },
+    {
+      "id": "connector_NOISE_1_cluster_5_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.EP2RKUx.EP2RKU.RF_OUT1",
+      "target_port_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_1.C_IN.C.P1@1",
+      "net_id": "NOISE_1"
+    },
+    {
+      "id": "connector_NOISE_2_cluster_6_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.EP2RKUx.EP2RKU.RF_OUT2",
+      "target_port_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_2.C_IN.C.P1@1",
+      "net_id": "NOISE_2"
+    },
+    {
+      "id": "connector_NOISE_SOURCE.CHOKE_NODE_cluster_7_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.NOISE_SOURCE.CHOKE.L.2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.NOISE_SOURCE.LOAD.R.P1@1",
+      "net_id": "NOISE_SOURCE.CHOKE_NODE"
+    },
+    {
+      "id": "connector_NOISE_SOURCE.NOISE_NODE_cluster_8_mst_0_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.NOISE_SOURCE.CAP.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.NOISE_SOURCE.CHOKE.L.1@1",
+      "net_id": "NOISE_SOURCE.NOISE_NODE"
+    },
+    {
+      "id": "connector_NOISE_SOURCE.NOISE_NODE_cluster_8_mst_1_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.NOISE_SOURCE.CAP.C.P2@2",
+      "target_port_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.NOISE_SOURCE.D1.GC6002-17.A@A",
+      "net_id": "NOISE_SOURCE.NOISE_NODE"
+    },
+    {
+      "id": "connector_VBIAS_1_edge_4_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_1.GALI_S66.VBIAS",
+      "target_port_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.VBIAS_1.2.",
+      "net_id": "VBIAS_1"
+    },
+    {
+      "id": "connector_VBIAS_1_edge_5_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.NT_GALI_S66_1.NT.1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.VBIAS_1.2.",
+      "net_id": "VBIAS_1"
+    },
+    {
+      "id": "connector_VBIAS_2_edge_6_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.GALI_S66_2.GALI_S66.VBIAS",
+      "target_port_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.VBIAS_2.1.",
+      "net_id": "VBIAS_2"
+    },
+    {
+      "id": "connector_VBIAS_2_edge_7_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.NT_GALI_S66_2.NT.1@1",
+      "target_port_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.VBIAS_2.1.",
+      "net_id": "VBIAS_2"
+    },
+    {
+      "id": "connector_VIN_edge_8_simple",
+      "source_port_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.NOISE_SOURCE.D1.GC6002-17.K@K",
+      "target_port_id": "/Users/lenny/code/diode/clients/boeing/modules/NoiseCircuit.zen:<root>.VIN.1.",
+      "net_id": "VIN"
+    }
+  ]
+}
