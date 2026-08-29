@@ -166,7 +166,7 @@ fn parallel_capacitors_form_one_regular_wired_bank() {
 }
 
 #[test]
-fn generated_net_symbols_form_a_wired_staircase() {
+fn generated_net_symbols_share_staircase_channels_across_orientations() {
     let netlist = common::compile_fixture("net_symbol_staircase", "root.zen");
     let document = plan_reconciliation(None, &netlist, "NetSymbolStaircase.kicad_sch")
         .unwrap()
@@ -197,7 +197,7 @@ fn generated_net_symbols_form_a_wired_staircase() {
         .iter()
         .filter_map(|item| match item {
             SchItem::Symbol(symbol)
-                if matches!(symbol.field_value("Value"), Some("GROUND_A" | "GROUND_Z")) =>
+                if matches!(symbol.field_value("Value"), Some("POWER_A" | "GROUND_Z")) =>
             {
                 let definition = &page.library.definitions[&symbol.lib_id];
                 Some((
@@ -212,6 +212,7 @@ fn generated_net_symbols_form_a_wired_staircase() {
     assert_eq!(net_symbols.len(), 2);
     let connection_points = [net_symbols[0].1, net_symbols[1].1];
     assert_ne!(connection_points[0], connection_points[1]);
+    assert_ne!(connection_points[0].x, connection_points[1].x);
     let wire_count = page
         .items
         .iter()
@@ -542,7 +543,7 @@ fn complete_reconciliation_prefers_hierarchy_for_cross_page_interface_nets() {
 }
 
 #[test]
-fn hierarchy_net_symbols_share_component_driver_placement() {
+fn hierarchy_net_symbols_share_staircase_channels_across_orientations() {
     let netlist = common::compile_fixture("hierarchy", "root_power_hierarchy.zen");
     let document = plan_reconciliation(None, &netlist, "PowerHierarchy.kicad_sch")
         .unwrap()
@@ -553,29 +554,37 @@ fn hierarchy_net_symbols_share_component_driver_placement() {
         .iter()
         .find(|page| document.root_page_ids.contains(&page.id))
         .unwrap();
-    let sheet_pin = root
+    let sheet = root
         .items
         .iter()
         .find_map(|item| match item {
-            SchItem::Sheet(sheet) => sheet.pins.first().map(|pin| pin.at),
+            SchItem::Sheet(sheet) => Some(sheet),
             _ => None,
         })
-        .expect("generated child sheet has a pin");
-    let sheet_power_symbol = root
-        .items
-        .iter()
-        .find_map(|item| match item {
-            SchItem::Symbol(symbol)
-                if symbol.field_value("Value") == Some("POWER")
-                    && connected_by_wires(root, sheet_pin, symbol.at) =>
-            {
-                Some(symbol)
-            }
-            _ => None,
-        })
-        .expect("sheet pin gets an offset power symbol");
-
-    assert_ne!(sheet_power_symbol.at, sheet_pin);
+        .expect("generated child sheet exists");
+    let mut connections = Vec::new();
+    for (port_name, net_name) in [("INPUT", "POWER"), ("OUTPUT", "GROUND")] {
+        let sheet_pin = sheet
+            .pins
+            .iter()
+            .find(|pin| pin.name == port_name)
+            .unwrap()
+            .at;
+        let connection = root
+            .items
+            .iter()
+            .find_map(|item| match item {
+                SchItem::Symbol(symbol) if symbol.field_value("Value") == Some(net_name) => {
+                    let definition = &root.library.definitions[&symbol.lib_id];
+                    let connection = definition.placed_pins(symbol).unwrap()[0].point;
+                    connected_by_wires(root, sheet_pin, connection).then_some(connection)
+                }
+                _ => None,
+            })
+            .expect("sheet pin gets an offset net symbol");
+        connections.push(connection);
+    }
+    assert_ne!(connections[0].x, connections[1].x);
     assert!(
         inspect_schematic(&document, &netlist)
             .unwrap()

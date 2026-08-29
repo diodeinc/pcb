@@ -6,8 +6,8 @@ Filter = Module("filter.zen")
 Resistor = Module("@stdlib/generics/Resistor.zen")
 
 POWER = io(Power("POWER"))
+GROUND = io(Ground("GROUND"))
 RETURN = Net("RETURN")
-SINK = Net("SINK")
 
 Resistor(name="R_ROOT", value="1kohms", package="0402", P1=POWER, P2=RETURN)
-Filter(name="CHILD", resistance="2kohms", INPUT=POWER, OUTPUT=SINK)
+Filter(name="CHILD", resistance="2kohms", INPUT=POWER, OUTPUT=GROUND)

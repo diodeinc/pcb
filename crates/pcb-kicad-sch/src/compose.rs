@@ -2041,7 +2041,9 @@ fn add_hierarchy_connectivity(
                 (pin.at, spin)
             })
             .collect::<Vec<_>>();
-        let mut parent_net_symbol_stairs = BTreeMap::<(LabelSpin, LabelSpin), usize>::new();
+        // One lane sequence per sheet side prevents opposite-facing power
+        // symbols from projecting coincident routes.
+        let mut parent_net_symbol_stairs = BTreeMap::<LabelSpin, usize>::new();
 
         for ((net_name, port_name), (parent_pin, parent_spin)) in
             ports.into_iter().zip(parent_anchors)
@@ -2050,7 +2052,7 @@ fn add_hierarchy_connectivity(
             let parent_driver_key = format!("zener:module-parent-driver:{key}:{net_name}");
             if let Some(spec) = net_symbol_specs.get(&net_name) {
                 let stair_index = parent_net_symbol_stairs
-                    .entry((parent_spin, spec.pin_outward_spin))
+                    .entry(parent_spin)
                     .and_modify(|index| *index += 1)
                     .or_default();
                 let connection = driver_connection_point(
@@ -2472,7 +2474,7 @@ fn plan_net_symbol_runs(
             missing.push((net_name, target));
         }
     }
-    arrange_net_symbol_runs(missing, net_symbol_specs, placed)
+    arrange_net_symbol_runs(missing, placed)
 }
 
 fn plan_projected_net_symbol_runs(
@@ -2490,27 +2492,26 @@ fn plan_projected_net_symbol_runs(
                 .filter(|target| !target.hidden && projected_slots.contains(&target.slot))
                 .map(move |target| (net_name, target))
         });
-    arrange_net_symbol_runs(missing, net_symbol_specs, placed)
+    arrange_net_symbol_runs(missing, placed)
 }
 
 fn arrange_net_symbol_runs<'a>(
     missing: impl IntoIterator<Item = (&'a String, &'a PinTarget)>,
-    net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
     placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
 ) -> Result<Vec<NetSymbolRun>> {
-    type Slot = (usize, SymbolSlotKey, LabelSpin, LabelSpin);
-    type GroupKey = (String, usize, SymbolSlotKey, LabelSpin, LabelSpin);
+    // Lanes belong to a component side, not the net symbol's orientation.
+    // Separate orientation buckets would both start at lane zero and overlap.
+    type Slot = (usize, SymbolSlotKey, LabelSpin);
+    type GroupKey = (String, usize, SymbolSlotKey, LabelSpin);
 
     let mut groups = BTreeMap::<GroupKey, Vec<&PinTarget>>::new();
     for (net_name, target) in missing {
-        let spec = &net_symbol_specs[net_name];
         groups
             .entry((
                 net_name.clone(),
                 target.page_index,
                 target.slot.clone(),
                 target.spin,
-                spec.pin_outward_spin,
             ))
             .or_default()
             .push(target);
@@ -2518,7 +2519,7 @@ fn arrange_net_symbol_runs<'a>(
 
     let mut runs = Vec::<NetSymbolRun>::new();
     let mut slots = BTreeMap::<Slot, Vec<usize>>::new();
-    for ((net_name, page_index, slot, target_side, symbol_side), members) in groups {
+    for ((net_name, page_index, slot, target_side), members) in groups {
         for members in adjacent_target_runs(&placed[&slot], members)? {
             let run_index = runs.len();
             runs.push(NetSymbolRun {
@@ -2529,13 +2530,13 @@ fn arrange_net_symbol_runs<'a>(
                 stair_index: 0,
             });
             slots
-                .entry((page_index, slot.clone(), target_side, symbol_side))
+                .entry((page_index, slot.clone(), target_side))
                 .or_default()
                 .push(run_index);
         }
     }
 
-    for ((_, _, target_side, _), run_indices) in &mut slots {
+    for ((_, _, target_side), run_indices) in &mut slots {
         run_indices.sort_by(|left, right| {
             let left_point = runs[*left].placement_target().point;
             let right_point = runs[*right].placement_target().point;
