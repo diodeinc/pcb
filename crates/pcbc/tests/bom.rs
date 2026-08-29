@@ -410,3 +410,59 @@ fn test_bom_module_dnp_propagation() {
         .snapshot_run("pcbc", ["bom", "boards/ModuleDnp.zen", "-f", "json"]);
     assert_snapshot!("bom_module_dnp_json", output);
 }
+
+#[test]
+fn bom_json_uses_symbol_description_for_untyped_component() {
+    const SYMBOL: &str = r#"(kicad_symbol_lib (version 20231120) (generator kicad_symbol_editor)
+  (symbol "TCXO"
+    (property "Reference" "U" (at 0 0 0) (effects (font (size 1.27 1.27))))
+    (property "Value" "TCXO" (at 0 0 0) (effects (font (size 1.27 1.27))))
+    (property "Footprint" "" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+    (property "Datasheet" "" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+    (property "Description" "Temperature-compensated crystal oscillator" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+    (property "Manufacturer_Name" "Acme" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+    (property "Manufacturer_Part_Number" "ACME-TCXO-32" (at 0 0 0) (effects (font (size 1.27 1.27)) hide))
+    (symbol "TCXO_1_1"
+      (pin input line (at -2.54 0 0) (length 2.54)
+        (name "EN" (effects (font (size 1.27 1.27))))
+        (number "1" (effects (font (size 1.27 1.27))))))))"#;
+    const BOARD: &str = r#"enable = Net("ENABLE")
+Component(
+    name = "oscillator",
+    symbol = Symbol(library = "TCXO.kicad_sym"),
+    footprint = "Package_DirectFET:DirectFET_L4",
+    properties = {"value": "32MHz"},
+    pins = {"EN": enable},
+)
+"#;
+
+    let mut sandbox = Sandbox::new();
+    sandbox
+        .write("pcb.toml", "[workspace]\n")
+        .write("TCXO.kicad_sym", SYMBOL)
+        .write("TCXO.zen", BOARD);
+
+    let output = sandbox
+        .run("pcbc", ["bom", "TCXO.zen", "-f", "json"])
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .expect("BOM command should run");
+    assert!(
+        output.status.success(),
+        "BOM command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let bom: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("BOM output should be valid JSON");
+    let entry = &bom[0];
+    assert_eq!(entry["value"], "32MHz");
+    assert_eq!(
+        entry["description"],
+        "Temperature-compensated crystal oscillator"
+    );
+    assert_eq!(entry["manufacturer"], "Acme");
+    assert_eq!(entry["mpn"], "ACME-TCXO-32");
+}
