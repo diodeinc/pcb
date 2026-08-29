@@ -1,0 +1,10 @@
+"""Root schematic with a symbol-backed external endpoint."""
+
+Project(name="RootSymbolInterface", path="kicad", layout=False)
+
+Resistor = Module("@stdlib/generics/Resistor.zen")
+
+POWER = io(Power("POWER"))
+SIGNAL = Net("SIGNAL")
+
+Resistor(name="R1", value="1kohms", package="0402", P1=POWER, P2=SIGNAL)
