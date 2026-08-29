@@ -10,7 +10,7 @@ use super::{
     ConnectivityGraph, IslandRef, SymbolLocation, Terminal,
 };
 use crate::{
-    Label, LabelKind, Point, SchDocument, SchItem, SchPage, Symbol, SymbolSlotKey,
+    Label, LabelKind, LabelSpin, Point, SchDocument, SchItem, SchPage, Symbol, SymbolSlotKey,
     identity::normalize_schematic_path,
     symbol::{self, PowerScope},
 };
@@ -44,35 +44,63 @@ pub struct PhysicalIsland {
     pub named_drivers: BTreeMap<String, BTreeSet<ConnectivityItemRef>>,
     pub names: BTreeSet<String>,
     pub terminals: BTreeSet<Terminal>,
-    pub(crate) pins: BTreeSet<PhysicalPinRef>,
+    /// Placed symbol pins that physically participate in this island.
+    ///
+    /// Unlike [`Terminal`], these attachments include named-driver power
+    /// symbols and retain the exact geometry needed by schematic editors.
+    pub symbol_pins: BTreeSet<SymbolPinAttachment>,
 }
 
-/// Exact identity of one placed KiCad symbol pin.
+/// Exact physical identity and geometry of one placed KiCad symbol pin.
 ///
 /// This stays separate from [`Terminal`]: terminals describe semantic
-/// equivalence, while reconciliation needs to distinguish physical pins that
-/// share one logical name.
+/// equivalence, while physical consumers need to distinguish and route pins
+/// that may share one logical name.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct PhysicalPinRef {
+pub struct SymbolPinAttachment {
     page_id: String,
     symbol_id: String,
     number: String,
     point: GridPoint,
+    outward_spin: LabelSpin,
 }
 
-impl PhysicalPinRef {
+impl SymbolPinAttachment {
     pub(crate) fn new(
         page_id: impl Into<String>,
         symbol_id: impl Into<String>,
         number: impl Into<String>,
         point: Point,
+        outward_spin: LabelSpin,
     ) -> Self {
         Self {
             page_id: page_id.into(),
             symbol_id: symbol_id.into(),
             number: number.into(),
             point: point.into(),
+            outward_spin,
         }
+    }
+
+    pub fn page_id(&self) -> &str {
+        &self.page_id
+    }
+
+    pub fn symbol_id(&self) -> &str {
+        &self.symbol_id
+    }
+
+    pub fn number(&self) -> &str {
+        &self.number
+    }
+
+    /// Pin position in KiCad schematic-page millimeters.
+    pub fn point(&self) -> Point {
+        self.point.into()
+    }
+
+    pub fn outward_spin(&self) -> LabelSpin {
+        self.outward_spin
     }
 }
 
@@ -484,7 +512,13 @@ fn collect_symbol(
                     merge_by_name: true,
                 }),
                 terminal: None,
-                pin: None,
+                pin: Some(SymbolPinAttachment::new(
+                    &page.id,
+                    &placed.id,
+                    &pin.number,
+                    pin.point,
+                    pin.outward_spin,
+                )),
                 hierarchy: None,
                 internal_links: BTreeSet::new(),
                 source: Some(ConnectivityItemRef::Symbol {
@@ -545,11 +579,12 @@ fn collect_symbol(
                 pin_name,
                 pin_numbers: pin.numbers.clone(),
             }),
-            pin: Some(PhysicalPinRef::new(
+            pin: Some(SymbolPinAttachment::new(
                 &page.id,
                 &placed.id,
                 &pin.number,
                 pin.point,
+                pin.outward_spin,
             )),
             hierarchy: None,
             internal_links: internal_link_keys(
@@ -701,12 +736,21 @@ impl From<Point> for GridPoint {
     }
 }
 
+impl From<GridPoint> for Point {
+    fn from(point: GridPoint) -> Self {
+        Self::new(
+            point.x as f64 / SCH_IU_PER_MM,
+            point.y as f64 / SCH_IU_PER_MM,
+        )
+    }
+}
+
 #[derive(Debug, Clone)]
 struct Connectable {
     geometry: Geometry,
     driver: Option<NameDriver>,
     terminal: Option<Terminal>,
-    pin: Option<PhysicalPinRef>,
+    pin: Option<SymbolPinAttachment>,
     hierarchy: Option<HierarchyEndpoint>,
     internal_links: BTreeSet<String>,
     source: Option<ConnectivityItemRef>,
@@ -901,7 +945,7 @@ fn connection_groups(
                 if let Some(source) = &item.source {
                     provenance.items.insert(source.clone());
                 }
-                provenance.pins.extend(item.pin);
+                provenance.symbol_pins.extend(item.pin);
                 if let Some(driver) = item.driver {
                     if driver.role == DriverNameRole::NetName {
                         names.insert(driver.name.clone());

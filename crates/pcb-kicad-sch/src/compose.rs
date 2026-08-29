@@ -12,7 +12,7 @@ use crate::{
     component_slots,
     connectivity::{
         ConnectionOrigin, ConnectivityItemRef, IslandRef, PhysicalConnectivity, PhysicalIsland,
-        PhysicalPinRef, PinVisibility, SymbolLocation, named_connected_nets,
+        PinVisibility, SymbolLocation, SymbolPinAttachment, named_connected_nets,
         reduce_with_provenance,
     },
     deterministic_uuid, field_autoplace, hierarchy, net_symbols,
@@ -1774,8 +1774,14 @@ struct PinTarget {
 }
 
 impl PinTarget {
-    fn physical_pin(&self, page_id: &str) -> PhysicalPinRef {
-        PhysicalPinRef::new(page_id, &self.symbol_id, &self.number, self.point)
+    fn physical_pin(&self, page_id: &str) -> SymbolPinAttachment {
+        SymbolPinAttachment::new(
+            page_id,
+            &self.symbol_id,
+            &self.number,
+            self.point,
+            self.spin,
+        )
     }
 
     fn label_key(&self, net_name: &str) -> String {
@@ -1846,7 +1852,7 @@ fn net_driver_islands(
         let islands = observed
             .islands
             .iter()
-            .filter(|(_, provenance)| provenance.pins.contains(&pin))
+            .filter(|(_, provenance)| provenance.symbol_pins.contains(&pin))
             .map(|(island, _)| island.clone())
             .collect::<Vec<_>>();
         let [island] = islands.as_slice() else {

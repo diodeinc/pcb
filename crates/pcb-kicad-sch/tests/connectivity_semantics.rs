@@ -4,10 +4,11 @@ use std::collections::BTreeSet;
 
 use common::kicad_builder::{KicadBuilder, TestPin};
 use pcb_kicad_sch::{
-    SchItem,
+    LabelSpin, Point, SchItem,
     analysis::analyze_connectivity,
     connectivity::{
-        ComponentIdentity, ConnectionGroup, ConnectionOrigin, ConnectivityGraph, Terminal,
+        ComponentIdentity, ConnectionGroup, ConnectionOrigin, ConnectivityGraph,
+        PhysicalConnectivity, PinVisibility, Terminal,
     },
 };
 
@@ -333,6 +334,44 @@ fn local_and_global_power_symbols_have_different_scope() {
         groups,
         vec![names(&["GLOBAL"]), names(&["LOCAL"]), names(&["LOCAL"]),]
     );
+}
+
+#[test]
+fn named_driver_island_exposes_its_power_symbol_pin_attachment() {
+    let mut builder = KicadBuilder::new();
+    builder
+        .define_symbol_raw(
+            r#"(symbol "power:VOUT" (power global)
+              (symbol "VOUT_1_1"
+                (pin power_in line (at 0 0 0) (length 0)
+                  (name "VOUT") (number "1"))))"#,
+        )
+        .placed_symbol("power:VOUT", None, Some("VOUT"), (12.3456, 23.4567));
+    let document = builder.build();
+    let symbol_id = document.pages[0]
+        .items
+        .iter()
+        .find_map(|item| match item {
+            SchItem::Symbol(symbol) => Some(symbol.id.as_str()),
+            _ => None,
+        })
+        .unwrap();
+
+    let physical = PhysicalConnectivity::from_kicad(&document, PinVisibility::VisibleOnly).unwrap();
+    let island = physical
+        .islands
+        .values()
+        .find(|island| island.named_drivers.contains_key("VOUT"))
+        .unwrap();
+    assert_eq!(island.symbol_pins.len(), 1, "{island:#?}");
+    let pin = island.symbol_pins.first().unwrap();
+
+    assert!(island.terminals.is_empty());
+    assert_eq!(pin.page_id(), "root");
+    assert_eq!(pin.symbol_id(), symbol_id);
+    assert_eq!(pin.number(), "1");
+    assert_eq!(pin.point(), Point::new(12.3456, 23.4567));
+    assert_eq!(pin.outward_spin(), LabelSpin::Left);
 }
 
 #[test]
