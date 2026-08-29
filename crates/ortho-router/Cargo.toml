@@ -1,0 +1,22 @@
+[package]
+name = "ortho-router"
+version = { workspace = true }
+edition = "2021"
+repository = { workspace = true }
+homepage = { workspace = true }
+authors = { workspace = true }
+description = "Pure orthogonal routing engine for schematic diagrams"
+license = "MIT"
+
+[dependencies]
+log = { workspace = true }
+ordered-float = { workspace = true }
+rstar = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-time = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

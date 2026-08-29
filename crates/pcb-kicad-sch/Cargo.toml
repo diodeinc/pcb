@@ -9,6 +9,7 @@ description = "Pure KiCad schematic document model and connectivity analysis"
 
 [dependencies]
 anyhow = { workspace = true }
+ortho-router = { workspace = true }
 pcb-sch = { workspace = true }
 pcb-sexpr = { workspace = true, features = ["serde"] }
 serde = { workspace = true }

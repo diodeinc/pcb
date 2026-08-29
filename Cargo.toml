@@ -49,6 +49,7 @@ pcb-diode-uri = { path = "crates/pcb-diode-uri" }
 pcb-native-dialog = { path = "crates/pcb-native-dialog" }
 pcb-ipc2581-tools = { path = "crates/pcb-ipc2581-tools", default-features = false }
 pcb-docgen = { path = "crates/pcb-docgen" }
+ortho-router = { path = "crates/ortho-router" }
 
 anyhow = "1.0"
 anstream = "1.0"
@@ -74,6 +75,7 @@ log = "0.4.34"
 minijinja = "2.24"
 notify = "8.2"
 open = "5.4.2"
+ordered-float = "4"
 path-slash = "0.2.1"
 termtree = "1"
 regex = "1.12.4"
@@ -140,6 +142,7 @@ textwrap = "0.16"
 unicode-width = "0.2.2"
 urlencoding = "2.1"
 wasm-bindgen = "0.2.127"
+web-time = "1.1"
 zip = { version = "8", default-features = false, features = ["deflate"] }
 fslock = "0.2"
 rust_decimal = { version = "1.42", features = ["serde", "serde-with-str"] }
@@ -160,6 +163,7 @@ blake3 = "1.8"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 r2d2 = "0.8"
 r2d2_sqlite = "0.35"
+rstar = "0.12"
 unicode-normalization = "0.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
