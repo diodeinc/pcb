@@ -257,7 +257,7 @@ pub fn inspect_schematic(
     netlist: &Schematic,
 ) -> anyhow::Result<ConnectivityInspection> {
     let mut expected = expected_reconcilable_connectivity(document, netlist)?;
-    add_symbol_port_fallbacks(document, netlist, &mut expected)?;
+    apply_symbol_or_label_endpoint_requirements(document, netlist, &mut expected)?;
     let physical = observed_reconcilable_connectivity(document, netlist)?;
     let analysis = analyze_connectivity(&expected, &physical.graph);
     let issues = analysis
@@ -274,7 +274,7 @@ pub fn inspect_schematic(
     })
 }
 
-fn add_symbol_port_fallbacks(
+fn apply_symbol_or_label_endpoint_requirements(
     document: &SchDocument,
     netlist: &Schematic,
     expected: &mut ConnectivityGraph,
