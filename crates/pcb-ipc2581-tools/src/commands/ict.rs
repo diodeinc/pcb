@@ -12,8 +12,6 @@ use std::collections::BTreeMap;
 #[cfg(feature = "cli")]
 use std::fs;
 #[cfg(feature = "cli")]
-use std::io::{self, Write};
-#[cfg(feature = "cli")]
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -56,7 +54,7 @@ pub fn execute(file: &Path, options: &IctOptions) -> Result<()> {
     if let Some(output) = &options.output {
         fs::write(output, csv)?;
     } else {
-        io::stdout().write_all(csv.as_bytes())?;
+        pcb_ui::write_stdout(|stdout| stdout.write_all(csv.as_bytes()))?;
     }
 
     Ok(())

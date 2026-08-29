@@ -58,6 +58,39 @@ fn test_pcb_info_empty_workspace() {
 }
 
 #[test]
+fn test_pcb_info_exits_cleanly_when_output_pipe_closes() {
+    let mut sandbox = Sandbox::new();
+    let board_manifest = format!(
+        "[board]\nname = \"LargeBoard\"\npath = \"board.zen\"\ndescription = \"{}\"\n",
+        "x".repeat(2 * 1024 * 1024)
+    );
+    sandbox
+        .write("pcb.toml", WORKSPACE_PCB_TOML)
+        .write("boards/large/pcb.toml", board_manifest);
+
+    let command = format!(
+        "\"{}\" info | head -n 1 >/dev/null",
+        env!("CARGO_BIN_EXE_pcbc")
+    );
+    let output = sandbox
+        .cmd("bash", ["-o", "pipefail", "-c", &command])
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .expect("run pcb info through head");
+
+    assert!(
+        output.status.success(),
+        "pcb info failed after its output pipe closed: {output:?}"
+    );
+    assert!(
+        !String::from_utf8_lossy(&output.stderr).contains("panicked"),
+        "pcb info panicked after its output pipe closed: {output:?}"
+    );
+}
+
+#[test]
 fn test_pcb_info_single_board() {
     let output = Sandbox::new()
         .write("pcb.toml", WORKSPACE_PCB_TOML)

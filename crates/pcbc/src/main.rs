@@ -2,6 +2,10 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
+// Use pipe-safe replacements for the standard printing macros throughout the CLI.
+#[macro_use(print, println, eprint, eprintln)]
+extern crate anstream;
+
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use env_logger::Env;

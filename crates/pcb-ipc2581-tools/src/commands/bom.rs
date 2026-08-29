@@ -1,8 +1,6 @@
 #[cfg(feature = "cli")]
 use std::collections::HashMap;
 #[cfg(feature = "cli")]
-use std::io::{self, Write};
-#[cfg(feature = "cli")]
 use std::path::Path;
 
 #[cfg(feature = "cli")]
@@ -79,15 +77,12 @@ pub fn execute(file: &Path, format: OutputFormat, offline: bool) -> Result<()> {
         spinner.finish();
     }
 
-    let mut writer = io::stdout().lock();
-    match format {
+    pcb_ui::write_stdout(|writer| match format {
         OutputFormat::Json => {
-            write!(writer, "{}", bom.ungrouped_json())?;
+            write!(writer, "{}", bom.ungrouped_json())
         }
-        OutputFormat::Text => {
-            bom.write_table(writer)?;
-        }
-    };
+        OutputFormat::Text => bom.write_table(writer),
+    })?;
 
     Ok(())
 }

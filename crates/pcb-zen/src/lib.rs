@@ -1,3 +1,7 @@
+// Use pipe-safe replacements for standard printing macros in CLI output paths.
+#[macro_use(eprintln)]
+extern crate anstream;
+
 pub mod ast_utils;
 pub mod cache_index;
 pub mod diagnostics;

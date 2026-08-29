@@ -14,6 +14,10 @@
 //! full-sheet GND pours. Pogo placement and routing are later,
 //! panel-specific passes.
 
+// Use pipe-safe replacements for standard printing macros in CLI output paths.
+#[macro_use(eprintln)]
+extern crate anstream;
+
 pub mod contacts;
 pub mod emit;
 pub mod panel;

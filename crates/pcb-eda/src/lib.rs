@@ -1,3 +1,7 @@
+// Use pipe-safe replacements for standard printing macros in CLI output paths.
+#[macro_use(eprintln)]
+extern crate anstream;
+
 pub mod kicad;
 
 use anyhow::Result;

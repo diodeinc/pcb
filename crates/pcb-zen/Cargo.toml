@@ -17,6 +17,7 @@ name = "integration"
 path = "tests/integration.rs"
 
 [dependencies]
+anstream = { workspace = true }
 starlark = { workspace = true }
 pcb-starlark-lsp = { workspace = true }
 starlark_syntax = { workspace = true }

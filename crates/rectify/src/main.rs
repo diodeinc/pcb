@@ -1,6 +1,10 @@
 //! `pcb rectify` — infer and patch KiCad footprint 3D model rotate/offset from
 //! STEP geometry. Rust port of `research/pose3d/solver.py`.
 
+// Use pipe-safe replacements for the standard printing macros throughout the CLI.
+#[macro_use(println, eprintln)]
+extern crate anstream;
+
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};

@@ -13,6 +13,7 @@ license = "Apache-2.0"
 
 [dependencies]
 anyhow = { workspace = true }
+anstream = { workspace = true }
 derivative = { workspace = true }
 dupe = { workspace = true }
 derive_more = { workspace = true }
