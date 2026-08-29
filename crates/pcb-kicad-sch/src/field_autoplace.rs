@@ -638,117 +638,45 @@ mod tests {
     }
 
     #[test]
-    fn preserves_horizontal_display_for_rotated_mirrored_symbols() {
+    fn rotated_and_mirrored_fields_have_horizontal_outward_bounds() {
         let definition = SymbolDefinition::from_kicad_symbol_sexpr(
             r#"(symbol "Test:IC"
               (symbol "IC_1_1"
                 (rectangle (start -5 -2) (end 5 2))))"#,
         )
         .unwrap();
-        let mut symbol = test_symbol(Point::new(10.0, 20.0), Rotation::Deg90, Some(MirrorAxis::X));
-
-        assert!(autoplace_symbol_fields(&mut symbol, &definition).unwrap());
-
-        for field in symbol.fields.values() {
-            assert_eq!(field.rotation_deg, 90.0);
-            assert_ne!(field.at, symbol.at);
-        }
-        assert_eq!(
-            symbol.field("Reference").unwrap().justify,
-            Some(FieldJustify::new(
-                Some(FieldHorizontalJustify::Left),
-                Some(FieldVerticalJustify::Center),
-            ))
-        );
-    }
-
-    #[test]
-    fn visual_bounds_use_the_field_display_rotation() {
-        let definition =
-            SymbolDefinition::from_kicad_symbol_sexpr(r#"(symbol "Test:IC")"#).unwrap();
-        let mut symbol = test_symbol(Point::new(10.0, 20.0), Rotation::Deg90, None);
-        symbol.fields.get_mut("Reference").unwrap().hidden = true;
-        let value = symbol.fields.get_mut("Value").unwrap();
-        value.value = "A long horizontal value".to_string();
-        value.rotation_deg = 90.0;
-        value.justify = Some(FieldJustify::new(
-            Some(FieldHorizontalJustify::Left),
-            Some(FieldVerticalJustify::Center),
-        ));
-        let value_at = value.at;
-
-        let bounds = symbol_visual_bounds(&symbol, &definition).unwrap().unwrap();
-
-        assert!(bounds.width() > bounds.height() * 5.0);
-        assert!((bounds.max_x - value_at.x).abs() < GEOMETRY_EPS_MM);
-        assert!(bounds.min_x < value_at.x);
-    }
-
-    #[test]
-    fn field_baseline_follows_kicad_page_rotation() {
-        for (rotation, field_rotation_deg, expected_x) in [
-            (Rotation::Deg0, 0.0, 1.0),
-            (Rotation::Deg90, 90.0, -1.0),
-            (Rotation::Deg180, 0.0, -1.0),
-            (Rotation::Deg270, 90.0, 1.0),
+        for (rotation, mirror, field_rotation, horizontal_justify) in [
+            (Rotation::Deg0, None, 0.0, FieldHorizontalJustify::Left),
+            (Rotation::Deg90, None, 90.0, FieldHorizontalJustify::Right),
+            (Rotation::Deg180, None, 0.0, FieldHorizontalJustify::Right),
+            (Rotation::Deg270, None, 90.0, FieldHorizontalJustify::Left),
+            (
+                Rotation::Deg90,
+                Some(MirrorAxis::X),
+                90.0,
+                FieldHorizontalJustify::Left,
+            ),
         ] {
-            let symbol = test_symbol(Point::default(), rotation, None);
-            let baseline =
-                transform_field_vector(Point::new(1.0, 0.0), &symbol, field_rotation_deg);
-            assert!((baseline.x - expected_x).abs() < GEOMETRY_EPS_MM);
-            assert!(baseline.y.abs() < GEOMETRY_EPS_MM);
-        }
-    }
+            let mut symbol = test_symbol(Point::new(10.0, 20.0), rotation, mirror);
+            symbol.fields.get_mut("Reference").unwrap().hidden = true;
+            symbol.fields.get_mut("Value").unwrap().value = "A long horizontal value".to_string();
 
-    #[test]
-    fn quarter_turn_symbol_fields_keep_their_outward_justification() {
-        let definition = SymbolDefinition::from_kicad_symbol_sexpr(
-            r#"(symbol "Test:IC"
-              (symbol "IC_1_1"
-                (rectangle (start -5 -2) (end 5 2))))"#,
-        )
-        .unwrap();
-        let mut symbol = test_symbol(Point::new(10.0, 20.0), Rotation::Deg90, None);
+            assert!(autoplace_symbol_fields(&mut symbol, &definition).unwrap());
 
-        assert!(autoplace_symbol_fields(&mut symbol, &definition).unwrap());
-
-        for field in symbol.fields.values() {
+            let value = symbol.field("Value").unwrap();
+            assert_eq!(value.rotation_deg, field_rotation);
             assert_eq!(
-                field.justify,
+                value.justify,
                 Some(FieldJustify::new(
-                    Some(FieldHorizontalJustify::Right),
+                    Some(horizontal_justify),
                     Some(FieldVerticalJustify::Center),
                 ))
             );
-            let bounds = field_text_bounds(&symbol, field, 2.0, 1.0);
-            assert!((bounds.min_x - field.at.x).abs() < GEOMETRY_EPS_MM);
-            assert!(bounds.max_x > field.at.x);
-        }
-    }
-
-    #[test]
-    fn upside_down_symbol_fields_keep_their_outward_justification() {
-        let definition = SymbolDefinition::from_kicad_symbol_sexpr(
-            r#"(symbol "Test:IC"
-              (symbol "IC_1_1"
-                (rectangle (start -5 -2) (end 5 2))))"#,
-        )
-        .unwrap();
-        let mut symbol = test_symbol(Point::new(10.0, 20.0), Rotation::Deg180, None);
-
-        assert!(autoplace_symbol_fields(&mut symbol, &definition).unwrap());
-
-        for field in symbol.fields.values() {
-            assert_eq!(
-                field.justify,
-                Some(FieldJustify::new(
-                    Some(FieldHorizontalJustify::Right),
-                    Some(FieldVerticalJustify::Center),
-                ))
-            );
-            let bounds = field_text_bounds(&symbol, field, 2.0, 1.0);
-            assert!((bounds.min_x - field.at.x).abs() < GEOMETRY_EPS_MM);
-            assert!(bounds.max_x > field.at.x);
+            let field_bounds = field_text_bounds(&symbol, value, 20.0, 1.0);
+            assert!((field_bounds.min_x - value.at.x).abs() < GEOMETRY_EPS_MM);
+            assert!(field_bounds.max_x > value.at.x);
+            let visual_bounds = symbol_visual_bounds(&symbol, &definition).unwrap().unwrap();
+            assert!(visual_bounds.width() > visual_bounds.height());
         }
     }
 

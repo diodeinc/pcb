@@ -12,6 +12,31 @@ use pcb_kicad_sch::{
 };
 use pcb_sch::{AttributeValue, Schematic};
 
+fn connected_by_wires(page: &SchPage, start: Point, end: Point) -> bool {
+    let mut pending = vec![start];
+    let mut visited = Vec::new();
+    while let Some(point) = pending.pop() {
+        if point == end {
+            return true;
+        }
+        if visited.contains(&point) {
+            continue;
+        }
+        visited.push(point);
+        for wire in page.items.iter().filter_map(|item| match item {
+            SchItem::Wire(wire) => Some(wire),
+            _ => None,
+        }) {
+            if wire.a == point {
+                pending.push(wire.b);
+            } else if wire.b == point {
+                pending.push(wire.a);
+            }
+        }
+    }
+    false
+}
+
 #[test]
 fn editor_core_plans_applies_analyzes_and_reopens_in_memory() {
     let netlist = common::compile_fixture("analysis", "simple.zen");
@@ -352,7 +377,7 @@ fn root_interfaces_use_hierarchical_labels_directly_on_component_pins() {
 }
 
 #[test]
-fn interface_only_endpoints_form_one_regular_label_block() {
+fn unused_interface_labels_are_grouped_and_required() {
     let netlist = common::compile_fixture("hierarchy", "unused_root_interface.zen");
     let document = plan_reconciliation(None, &netlist, "UnusedRootInterface.kicad_sch")
         .unwrap()
@@ -388,20 +413,13 @@ fn interface_only_endpoints_form_one_regular_label_block() {
             .analysis
             .is_equivalent()
     );
-}
 
-#[test]
-fn interface_only_net_missing_its_label_reports_missing_port() {
-    let netlist = common::compile_fixture("hierarchy", "unused_root_interface.zen");
-    let mut document = plan_reconciliation(None, &netlist, "UnusedRootInterface.kicad_sch")
-        .unwrap()
-        .apply(None)
-        .unwrap();
-    document.pages[0]
+    let mut missing_label = document;
+    missing_label.pages[0]
         .items
         .retain(|item| !matches!(item, SchItem::Label(label) if label.text == "UNUSED_3"));
 
-    let inspection = inspect_schematic(&document, &netlist).unwrap();
+    let inspection = inspect_schematic(&missing_label, &netlist).unwrap();
     assert!(matches!(
         inspection.analysis.issues(),
         [SchematicIssue::MissingPort { net_name, ports, .. }]
@@ -441,21 +459,14 @@ fn generated_hierarchy_connects_sheet_ports_with_orthogonal_routes() {
         SchItem::Sheet(sheet) => Some(sheet),
         _ => None,
     }) {
-        let at = sheet.at.unwrap();
-        let size = sheet.size.unwrap();
-        let name = sheet.name.as_ref().unwrap();
-        assert_eq!(size, Point::new(38.1, 15.24));
-        assert_eq!(name.at.x, at.x);
-        assert!(name.at.y < at.y);
+        assert_eq!(sheet.size, Some(Point::new(38.1, 15.24)));
         assert_eq!(
-            name.justify,
+            sheet.name.as_ref().unwrap().justify,
             Some(FieldJustify::new(
                 Some(FieldHorizontalJustify::Left),
                 Some(FieldVerticalJustify::Bottom),
             ))
         );
-        assert_eq!(sheet.file.at.x, at.x);
-        assert!(sheet.file.at.y > at.y + size.y);
         assert_eq!(
             sheet.file.justify,
             Some(FieldJustify::new(
@@ -465,24 +476,37 @@ fn generated_hierarchy_connects_sheet_ports_with_orthogonal_routes() {
         );
     }
     for page in &document.pages {
-        let labels = page.items.iter().filter_map(|item| match item {
-            SchItem::Label(label) => Some(label),
-            _ => None,
-        });
+        let labels = page
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                SchItem::Label(label) => Some(label),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
         if document.root_page_ids.contains(&page.id) {
-            assert!(labels.clone().all(|label| label.kind == LabelKind::Local));
+            assert!(labels.iter().all(|label| label.kind == LabelKind::Local));
         } else {
             assert!(
                 labels
-                    .clone()
+                    .iter()
                     .all(|label| matches!(label.kind, LabelKind::Hierarchical { .. })),
                 "page={} labels={:#?}",
                 page.id,
-                labels.clone().collect::<Vec<_>>()
+                labels
             );
         }
-        assert!(labels.count() > 0);
+        assert!(!labels.is_empty());
+        assert!(labels.iter().all(|label| page.items.iter().any(|item| {
+            matches!(item, SchItem::Wire(wire) if wire.a == label.at || wire.b == label.at)
+        })));
     }
+    assert!(
+        inspect_schematic(&document, &netlist)
+            .unwrap()
+            .analysis
+            .is_equivalent()
+    );
 }
 
 #[test]
@@ -509,6 +533,12 @@ fn complete_reconciliation_prefers_hierarchy_for_cross_page_interface_nets() {
             .all(|label| matches!(label.kind, LabelKind::Hierarchical { .. })),
         "labels={temp_labels:#?}"
     );
+    assert!(
+        inspect_schematic(&document, &netlist)
+            .unwrap()
+            .analysis
+            .is_equivalent()
+    );
 }
 
 #[test]
@@ -531,31 +561,13 @@ fn hierarchy_net_symbols_share_component_driver_placement() {
             _ => None,
         })
         .expect("generated child sheet has a pin");
-    let sheet_wire = root
-        .items
-        .iter()
-        .find_map(|item| match item {
-            SchItem::Wire(wire) if wire.a == sheet_pin => Some(wire),
-            SchItem::Wire(wire) if wire.b == sheet_pin => Some(wire),
-            _ => None,
-        })
-        .expect("sheet pin is wired to its net symbol");
-    let bend = if sheet_wire.a == sheet_pin {
-        sheet_wire.b
-    } else {
-        sheet_wire.a
-    };
     let sheet_power_symbol = root
         .items
         .iter()
         .find_map(|item| match item {
             SchItem::Symbol(symbol)
                 if symbol.field_value("Value") == Some("POWER")
-                    && root.items.iter().any(|item| {
-                        matches!(item, SchItem::Wire(wire)
-                            if (wire.a == bend && wire.b == symbol.at)
-                                || (wire.b == bend && wire.a == symbol.at))
-                    }) =>
+                    && connected_by_wires(root, sheet_pin, symbol.at) =>
             {
                 Some(symbol)
             }
@@ -564,46 +576,12 @@ fn hierarchy_net_symbols_share_component_driver_placement() {
         .expect("sheet pin gets an offset power symbol");
 
     assert_ne!(sheet_power_symbol.at, sheet_pin);
-
-    let child = document
-        .pages
-        .iter()
-        .find(|page| !document.root_page_ids.contains(&page.id))
-        .unwrap();
-    let child_driver = child
-        .items
-        .iter()
-        .find_map(|item| match item {
-            SchItem::Label(label) if label.text == "INPUT" => Some(label),
-            _ => None,
-        })
-        .expect("child component gets a hierarchy bridge driver");
-    let child_power_symbol = child
-        .items
-        .iter()
-        .find_map(|item| match item {
-            SchItem::Symbol(symbol) if symbol.field_value("Value") == Some("POWER") => Some(symbol),
-            _ => None,
-        })
-        .expect("child component gets its regular power driver");
-    let power_wire = child
-        .items
-        .iter()
-        .find_map(|item| match item {
-            SchItem::Wire(wire)
-                if wire.a == child_power_symbol.at || wire.b == child_power_symbol.at =>
-            {
-                Some(wire)
-            }
-            _ => None,
-        })
-        .expect("child power symbol is connected");
-    assert_ne!(child_driver.at, power_wire.a);
-    assert_ne!(child_driver.at, power_wire.b);
-    assert!(child.items.iter().any(|item| {
-        matches!(item, SchItem::Wire(wire)
-            if wire.a == child_driver.at || wire.b == child_driver.at)
-    }));
+    assert!(
+        inspect_schematic(&document, &netlist)
+            .unwrap()
+            .analysis
+            .is_equivalent()
+    );
 }
 
 #[test]

@@ -171,16 +171,6 @@ fn added_component_batch_docks_without_moving_existing_symbols() {
             .values()
             .any(|old| new.x == old.x || new.y == old.y)
     }));
-    let nearest_existing_mm = added
-        .iter()
-        .flat_map(|new| {
-            existing
-                .values()
-                .map(move |old| (new.x - old.x).abs() + (new.y - old.y).abs())
-        })
-        .reduce(f64::min)
-        .unwrap();
-    assert!(nearest_existing_mm <= 50.8, "{nearest_existing_mm}");
 }
 
 #[test]

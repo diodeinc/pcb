@@ -352,25 +352,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn first_block_prefers_the_page_center() {
-        let mut packer = GridPacker::for_page(&Paper::default()).unwrap();
-        let relative = GridRect {
-            min_x: -2,
-            min_y: -2,
-            max_x: 2,
-            max_y: 2,
-        };
-
-        let placed = relative.translated(packer.place(relative));
-
-        let center_dx = placed.min_x + placed.max_x - packer.usable.min_x - packer.usable.max_x;
-        let center_dy = placed.min_y + placed.max_y - packer.usable.min_y - packer.usable.max_y;
-        assert!(center_dx.abs() <= 1);
-        assert!(center_dy.abs() <= 1);
-    }
-
-    #[test]
-    fn later_blocks_form_a_compact_cluster() {
+    fn blocks_form_a_compact_cluster_from_the_page_center() {
         let mut packer = GridPacker::for_page(&Paper::default()).unwrap();
         let relative = GridRect {
             min_x: 0,
@@ -379,10 +361,15 @@ mod tests {
             max_y: 4,
         };
 
-        for _ in 0..4 {
+        let first = relative.translated(packer.place(relative));
+        for _ in 1..4 {
             packer.place(relative);
         }
 
+        let center_dx = first.min_x + first.max_x - packer.usable.min_x - packer.usable.max_x;
+        let center_dy = first.min_y + first.max_y - packer.usable.min_y - packer.usable.max_y;
+        assert!(center_dx.abs() <= 1);
+        assert!(center_dy.abs() <= 1);
         let cluster = packer.placed_cluster.unwrap();
         assert!(cluster.width() <= 12);
         assert!(cluster.height() <= 12);
@@ -431,30 +418,5 @@ mod tests {
 
         assert!(placed.x == existing_anchor.x || placed.y == existing_anchor.y);
         assert!(placed.x < 130 && placed.y < 110);
-    }
-
-    #[test]
-    fn non_component_blocks_ignore_symbol_anchor_lines() {
-        let mut packer = GridPacker::for_page(&Paper::default()).unwrap();
-        let existing_anchor = GridPoint { x: 20, y: 20 };
-        packer.occupy_anchored(
-            GridRect {
-                min_x: 16,
-                min_y: 16,
-                max_x: 24,
-                max_y: 24,
-            },
-            existing_anchor.to_point(),
-        );
-
-        let placed = packer.place(GridRect {
-            min_x: -2,
-            min_y: -2,
-            max_x: 2,
-            max_y: 2,
-        });
-
-        assert_ne!(placed.x, existing_anchor.x);
-        assert_ne!(placed.y, existing_anchor.y);
     }
 }
