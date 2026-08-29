@@ -68,6 +68,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Add self-contained DFM JSON reports with native geometry and PDK source.
 - Add WASM APIs for IPC-2581 import, export, and DFM.
 
+### Changed
+
+- Generate compact grid-based schematic placement blocks that account for rendered fields and group parallel capacitors into shared wired banks.
+
 ### Fixed
 
 - Isolate KiCad CLI temp directories so concurrent ODB exports do not collide.

@@ -16,7 +16,7 @@ use crate::{
 const FIELD_ROW_SPACING_MM: f64 = 2.54;
 const HPADDING_MM: f64 = 0.635;
 const VPADDING_MM: f64 = 0.381;
-const ESTIMATED_TEXT_WIDTH_EM: f64 = 0.6;
+const ESTIMATED_TEXT_WIDTH_EM: f64 = 1.0;
 
 pub(crate) fn autoplace_symbol_fields(
     symbol: &mut Symbol,
@@ -201,9 +201,13 @@ pub(crate) fn symbol_visual_bounds(
         .values()
         .filter(|field| !field.hidden && !field.value.trim().is_empty())
     {
+        // KiCad stores property angles inside the symbol transform. Include
+        // that transform so a 180-degree display angle also reverses the
+        // field's visual justification even though its text remains upright.
+        let display_rotation_deg = field.rotation_deg + symbol.rotation.degrees() as f64;
         let field_bounds = text_bounds(
             field.at,
-            field.rotation_deg,
+            display_rotation_deg,
             field.value.chars().count().max(1) as f64
                 * field.effects.font_size.x.abs()
                 * ESTIMATED_TEXT_WIDTH_EM,
@@ -645,6 +649,28 @@ mod tests {
                 Some(FieldVerticalJustify::Center),
             ))
         );
+    }
+
+    #[test]
+    fn visual_bounds_use_the_field_display_rotation() {
+        let definition =
+            SymbolDefinition::from_kicad_symbol_sexpr(r#"(symbol "Test:IC")"#).unwrap();
+        let mut symbol = test_symbol(Point::new(10.0, 20.0), Rotation::Deg90, None);
+        symbol.fields.get_mut("Reference").unwrap().hidden = true;
+        let value = symbol.fields.get_mut("Value").unwrap();
+        value.value = "A long horizontal value".to_string();
+        value.rotation_deg = 90.0;
+        value.justify = Some(FieldJustify::new(
+            Some(FieldHorizontalJustify::Left),
+            Some(FieldVerticalJustify::Center),
+        ));
+        let value_at = value.at;
+
+        let bounds = symbol_visual_bounds(&symbol, &definition).unwrap().unwrap();
+
+        assert!(bounds.width() > bounds.height() * 5.0);
+        assert!((bounds.max_x - value_at.x).abs() < GEOMETRY_EPS_MM);
+        assert!(bounds.min_x < value_at.x);
     }
 
     fn test_symbol(at: Point, rotation: Rotation, mirror: Option<MirrorAxis>) -> Symbol {

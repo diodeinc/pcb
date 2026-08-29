@@ -5,9 +5,9 @@ use pcb_sch::{ATTR_SCHEMATIC_PATH, Instance, InstanceKind, Schematic};
 use pcb_sexpr::Sexpr;
 
 use crate::{
-    CONNECTION_GRID_MM, GEOMETRY_EPS_MM, Label, LabelKind, LabelShape, LabelSpin, Paper, Point,
-    Rotation, SchDocument, SchItem, SchPage, Sheet, SheetPin, Symbol, SymbolDefinition,
-    SymbolField, SymbolSlotKey, Wire,
+    CONNECTION_GRID_MM, GEOMETRY_EPS_MM, Label, LabelKind, LabelShape, LabelSpin, Point, Rotation,
+    SchDocument, SchItem, SchPage, Sheet, SheetPin, Symbol, SymbolDefinition, SymbolField,
+    SymbolSlotKey, Wire,
     analysis::{ConnectivityInspection, SchematicIssue, SchematicIssueKey},
     component_slots,
     connectivity::{
@@ -16,21 +16,20 @@ use crate::{
         reduce_with_provenance,
     },
     deterministic_uuid, field_autoplace, hierarchy, net_symbols,
+    placement::{GridPacker, GridPoint, GridRect, point_rect},
     repair::{ConnectivityRepairPlan, plan_connectivity_repair, remove_items},
     root_interface, root_page_id, symbol,
 };
 
-const DEFAULT_TITLE_BLOCK_WIDTH_MM: f64 = 110.0;
-const DEFAULT_TITLE_BLOCK_HEIGHT_MM: f64 = 34.0;
-const PACKING_MARGIN_CELLS: i32 = 5;
-const PACKING_CLEARANCE_CELLS: i32 = 2;
 const LABEL_SHAPE_LENGTH_MM: f64 = 2.54;
 const NET_SYMBOL_OFFSET_CELLS: f64 = 4.0;
-const NET_SYMBOL_STAIR_CELLS: f64 = 2.0;
+const NET_SYMBOL_STAIR_CELLS: f64 = 4.0;
 const ESTIMATED_LABEL_WIDTH_EM: f64 = 0.8;
 const SHEET_PIN_SPACING_MM: f64 = 5.08;
 const SHEET_MIN_WIDTH_MM: f64 = 50.8;
 const SHEET_MIN_HEIGHT_MM: f64 = 20.32;
+const PLACEMENT_BLOCK_GAP_CELLS: i32 = 4;
+const CAPACITOR_BANK_BUS_OFFSET_CELLS: f64 = 2.0;
 
 pub(crate) fn reconcile_document(
     existing: Option<&SchDocument>,
@@ -763,7 +762,7 @@ fn materialize_hierarchy(
             bail!("hierarchy planner produced a non-contiguous child page index");
         }
         let ports = module_ports(netlist, &sheet_plan.instance_ref)?;
-        let height = SHEET_MIN_HEIGHT_MM.max((ports.len() as f64 + 1.0) * SHEET_PIN_SPACING_MM);
+        let height = SHEET_MIN_HEIGHT_MM.max((ports.len() as f64 + 2.0) * SHEET_PIN_SPACING_MM);
         let size = Point::new(SHEET_MIN_WIDTH_MM, height);
         let at = place_sheet(document, sheet_plan.parent_page, size)?;
         let name = sheet_plan
@@ -780,7 +779,7 @@ fn materialize_hierarchy(
                     sheet_plan.module_path
                 )),
                 name: port_name.clone(),
-                at: Point::new(at.x, at.y + (index as f64 + 1.0) * SHEET_PIN_SPACING_MM),
+                at: Point::new(at.x, at.y + (index as f64 + 2.0) * SHEET_PIN_SPACING_MM),
                 rotation: Rotation::Deg180,
                 shape: LabelShape::Bidirectional,
                 unsupported: Vec::new(),
@@ -896,6 +895,28 @@ fn pack_generated_symbols(
     let net_symbol_runs =
         plan_projected_net_symbol_runs(&targets, relocatable_slots, net_symbol_specs, placed)?;
 
+    let bounds_by_slot = relocatable_slots
+        .iter()
+        .map(|slot| {
+            Ok((
+                slot.clone(),
+                GridRect::from_bounds(component_envelope(
+                    &placed[slot],
+                    &targets,
+                    net_symbol_specs,
+                    &net_symbol_runs,
+                )?),
+            ))
+        })
+        .collect::<Result<BTreeMap<_, _>>>()?;
+    let blocks = placement_blocks(
+        netlist,
+        placed,
+        relocatable_slots,
+        &targets,
+        &bounds_by_slot,
+    )?;
+
     for page_index in 0..document.pages.len() {
         let relocatable = relocatable_slots
             .iter()
@@ -916,30 +937,338 @@ fn pack_generated_symbols(
             .collect::<BTreeSet<_>>();
         occupy_page_items_except(&mut packer, &document.pages[page_index], &relocatable_ids)?;
 
-        let mut items = relocatable
-            .into_iter()
-            .map(|slot| {
-                let bounds = GridRect::from_bounds(component_envelope(
-                    &placed[&slot],
-                    &targets,
-                    net_symbol_specs,
-                    &net_symbol_runs,
-                )?);
-                Ok((slot, bounds))
+        let page_blocks = blocks.iter().filter(|block| block.page_index == page_index);
+        for block in page_blocks {
+            let origin = packer.place(block.bounds);
+            for member in &block.members {
+                let anchor = origin.translated(member.offset);
+                move_placed_symbol(document, placed, &member.slot, anchor.to_point())?;
+            }
+        }
+    }
+
+    add_capacitor_bank_wires(document, netlist, placed, &blocks)?;
+    Ok(())
+}
+
+#[derive(Debug)]
+struct PlacementMember {
+    slot: SymbolSlotKey,
+    offset: GridPoint,
+}
+
+#[derive(Debug)]
+struct CapacitorBank {
+    key: String,
+    nets: [String; 2],
+}
+
+#[derive(Debug)]
+struct PlacementBlock {
+    key: String,
+    page_index: usize,
+    members: Vec<PlacementMember>,
+    bounds: GridRect,
+    capacitor_bank: Option<CapacitorBank>,
+}
+
+fn placement_blocks(
+    netlist: &Schematic,
+    placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
+    relocatable_slots: &BTreeSet<SymbolSlotKey>,
+    targets: &BTreeMap<String, Vec<PinTarget>>,
+    bounds_by_slot: &BTreeMap<SymbolSlotKey, GridRect>,
+) -> Result<Vec<PlacementBlock>> {
+    let instances = component_instances(netlist)?;
+    let slots_by_component = relocatable_slots.iter().cloned().fold(
+        BTreeMap::<String, Vec<SymbolSlotKey>>::new(),
+        |mut components, slot| {
+            components
+                .entry(slot.component_path().to_string())
+                .or_default()
+                .push(slot);
+            components
+        },
+    );
+
+    // Recognize topology, not names: two or more simple capacitors spanning
+    // the same pair of nets form one visual bank. Requiring every symbol slot
+    // of a component to be new prevents a repair from reorganizing user work.
+    let mut bank_candidates = BTreeMap::<(usize, String, String), Vec<SymbolSlotKey>>::new();
+    for (component_path, slots) in &slots_by_component {
+        let Some(instance) = instances.get(component_path) else {
+            continue;
+        };
+        if instance.component_type().as_deref() != Some("capacitor") || slots.len() != 1 {
+            continue;
+        }
+        let all_slots_are_relocatable = placed
+            .keys()
+            .filter(|slot| slot.component_path() == component_path)
+            .all(|slot| relocatable_slots.contains(slot));
+        if !all_slots_are_relocatable {
+            continue;
+        }
+        let connected_nets = targets
+            .iter()
+            .filter(|(_, net_targets)| {
+                net_targets
+                    .iter()
+                    .any(|target| !target.hidden && target.slot.component_path() == component_path)
             })
-            .collect::<Result<Vec<_>>>()?;
-        items.sort_by(|(left_slot, left), (right_slot, right)| {
-            right
-                .area()
-                .cmp(&left.area())
-                .then_with(|| left_slot.cmp(right_slot))
+            .map(|(net_name, _)| net_name.clone())
+            .collect::<BTreeSet<_>>();
+        let mut connected_nets = connected_nets.into_iter();
+        let (Some(first), Some(second), None) = (
+            connected_nets.next(),
+            connected_nets.next(),
+            connected_nets.next(),
+        ) else {
+            continue;
+        };
+        let page_index = placed[&slots[0]].page_index;
+        bank_candidates
+            .entry((page_index, first, second))
+            .or_default()
+            .push(slots[0].clone());
+    }
+
+    let mut claimed = BTreeSet::new();
+    let mut blocks = Vec::new();
+    for ((page_index, first, second), mut slots) in bank_candidates {
+        if slots.len() < 2 {
+            continue;
+        }
+        slots.sort();
+        claimed.extend(slots.iter().cloned());
+        let key = format!("capacitor-bank:{page_index}:{first}:{second}");
+        let mut block = row_placement_block(key.clone(), page_index, slots, bounds_by_slot);
+        // Shared rail buses sit just outside the component pins. The projected
+        // net-symbol envelopes generally reserve more room, but keep the block
+        // contract explicit for nets without symbols as well.
+        block.bounds = block
+            .bounds
+            .expanded(CAPACITOR_BANK_BUS_OFFSET_CELLS as i32);
+        block.capacitor_bank = Some(CapacitorBank {
+            key,
+            nets: [first, second],
         });
-        for (slot, relative_bounds) in items {
-            let anchor = packer.place(relative_bounds);
-            move_placed_symbol(document, placed, &slot, anchor.to_point())?;
+        blocks.push(block);
+    }
+
+    // The fallback groups all units of one component into a small regular
+    // block. Most components have one unit, so these become singleton blocks.
+    for (component_path, mut slots) in slots_by_component {
+        slots.retain(|slot| !claimed.contains(slot));
+        if slots.is_empty() {
+            continue;
+        }
+        slots.sort();
+        let page_index = placed[&slots[0]].page_index;
+        blocks.push(grid_placement_block(
+            format!("component:{component_path}"),
+            page_index,
+            slots,
+            bounds_by_slot,
+        ));
+    }
+
+    blocks.sort_by(|left, right| {
+        right
+            .bounds
+            .area()
+            .cmp(&left.bounds.area())
+            .then_with(|| left.key.cmp(&right.key))
+    });
+    Ok(blocks)
+}
+
+fn row_placement_block(
+    key: String,
+    page_index: usize,
+    slots: Vec<SymbolSlotKey>,
+    bounds_by_slot: &BTreeMap<SymbolSlotKey, GridRect>,
+) -> PlacementBlock {
+    placement_block(key, page_index, slots, bounds_by_slot, usize::MAX)
+}
+
+fn grid_placement_block(
+    key: String,
+    page_index: usize,
+    slots: Vec<SymbolSlotKey>,
+    bounds_by_slot: &BTreeMap<SymbolSlotKey, GridRect>,
+) -> PlacementBlock {
+    let columns = (1..)
+        .find(|columns| columns * columns >= slots.len())
+        .expect("a finite component has a square grid");
+    placement_block(key, page_index, slots, bounds_by_slot, columns)
+}
+
+fn placement_block(
+    key: String,
+    page_index: usize,
+    slots: Vec<SymbolSlotKey>,
+    bounds_by_slot: &BTreeMap<SymbolSlotKey, GridRect>,
+    max_columns: usize,
+) -> PlacementBlock {
+    let cell_width = slots
+        .iter()
+        .map(|slot| bounds_by_slot[slot].width())
+        .max()
+        .expect("placement block has members")
+        + PLACEMENT_BLOCK_GAP_CELLS;
+    let cell_height = slots
+        .iter()
+        .map(|slot| bounds_by_slot[slot].height())
+        .max()
+        .expect("placement block has members")
+        + PLACEMENT_BLOCK_GAP_CELLS;
+    let columns = max_columns.min(slots.len());
+    let mut block_bounds = None;
+    let members = slots
+        .into_iter()
+        .enumerate()
+        .map(|(index, slot)| {
+            let bounds = bounds_by_slot[&slot];
+            let offset = GridPoint {
+                x: (index % columns) as i32 * cell_width,
+                y: (index / columns) as i32 * cell_height,
+            };
+            let member_bounds = bounds.translated(offset);
+            block_bounds = Some(
+                block_bounds.map_or(member_bounds, |block: GridRect| block.union(member_bounds)),
+            );
+            PlacementMember { slot, offset }
+        })
+        .collect();
+    PlacementBlock {
+        key,
+        page_index,
+        members,
+        bounds: block_bounds.expect("placement block has bounds"),
+        capacitor_bank: None,
+    }
+}
+
+fn add_capacitor_bank_wires(
+    document: &mut SchDocument,
+    netlist: &Schematic,
+    placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
+    blocks: &[PlacementBlock],
+) -> Result<()> {
+    let bank_nets = blocks
+        .iter()
+        .filter_map(|block| block.capacitor_bank.as_ref())
+        .flat_map(|bank| bank.nets.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    if bank_nets.is_empty() {
+        return Ok(());
+    }
+    let targets = connectivity_targets(netlist, placed, &bank_nets)?;
+    for block in blocks {
+        let Some(bank) = &block.capacitor_bank else {
+            continue;
+        };
+        let member_slots = block
+            .members
+            .iter()
+            .map(|member| member.slot.clone())
+            .collect::<BTreeSet<_>>();
+        let rail_targets = bank
+            .nets
+            .iter()
+            .map(|net_name| {
+                let selected = targets[net_name]
+                    .iter()
+                    .filter(|target| !target.hidden && member_slots.contains(&target.slot))
+                    .collect::<Vec<_>>();
+                let one_per_member = selected.len() == member_slots.len()
+                    && member_slots.iter().all(|slot| {
+                        selected
+                            .iter()
+                            .filter(|target| &target.slot == slot)
+                            .count()
+                            == 1
+                    });
+                one_per_member.then_some(selected)
+            })
+            .collect::<Option<Vec<_>>>();
+        let Some(rail_targets) = rail_targets else {
+            continue;
+        };
+        let sides = rail_targets
+            .iter()
+            .map(|targets| {
+                let side = targets[0].spin;
+                targets
+                    .iter()
+                    .all(|target| target.spin == side)
+                    .then_some(side)
+            })
+            .collect::<Option<Vec<_>>>();
+        let Some(sides) = sides else {
+            continue;
+        };
+        // A horizontal capacitor row has safe, conventional shared buses only
+        // when the two terminals point vertically in opposite directions.
+        if !sides[0].is_vertical() || sides[1] != opposite_spin(sides[0]) {
+            continue;
+        }
+        for ((net_name, targets), side) in bank.nets.iter().zip(rail_targets).zip(sides) {
+            for (index, (a, b)) in capacitor_bank_wire_segments(&targets, side)
+                .into_iter()
+                .enumerate()
+            {
+                if points_coincide(a, b) {
+                    continue;
+                }
+                let id = available_deterministic_id(
+                    document,
+                    &format!("zener:{}:{net_name}:wire:{index}", bank.key),
+                );
+                document.pages[block.page_index]
+                    .items
+                    .push(SchItem::Wire(Wire {
+                        id,
+                        a,
+                        b,
+                        unsupported: Vec::new(),
+                    }));
+            }
         }
     }
     Ok(())
+}
+
+fn capacitor_bank_wire_segments(targets: &[&PinTarget], side: LabelSpin) -> Vec<(Point, Point)> {
+    debug_assert!(side.is_vertical());
+    let bus_y = if side == LabelSpin::Up {
+        targets
+            .iter()
+            .map(|target| target.point.y)
+            .min_by(f64::total_cmp)
+            .expect("capacitor bank rail has targets")
+            - CAPACITOR_BANK_BUS_OFFSET_CELLS * CONNECTION_GRID_MM
+    } else {
+        targets
+            .iter()
+            .map(|target| target.point.y)
+            .max_by(f64::total_cmp)
+            .expect("capacitor bank rail has targets")
+            + CAPACITOR_BANK_BUS_OFFSET_CELLS * CONNECTION_GRID_MM
+    };
+    let mut bus_points = targets
+        .iter()
+        .map(|target| Point::new(target.point.x, bus_y))
+        .collect::<Vec<_>>();
+    bus_points.sort_by(|left, right| left.x.total_cmp(&right.x));
+    targets
+        .iter()
+        .map(|target| (target.point, Point::new(target.point.x, bus_y)))
+        // Split the bus at every branch. KiCad connectivity treats endpoints
+        // as joins without needing generated junction markers.
+        .chain(bus_points.windows(2).map(|points| (points[0], points[1])))
+        .collect()
 }
 
 fn occupy_page_items(packer: &mut GridPacker, page: &SchPage) -> Result<()> {
@@ -980,214 +1309,6 @@ fn occupy_page_items_except(
         }
     }
     Ok(())
-}
-
-fn point_rect(point: Point) -> GridRect {
-    GridRect {
-        min_x: grid_floor(point.x),
-        min_y: grid_floor(point.y),
-        max_x: grid_ceil(point.x).max(grid_floor(point.x) + 1),
-        max_y: grid_ceil(point.y).max(grid_floor(point.y) + 1),
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct GridPoint {
-    x: i32,
-    y: i32,
-}
-
-impl GridPoint {
-    fn to_point(self) -> Point {
-        Point::new(
-            self.x as f64 * CONNECTION_GRID_MM,
-            self.y as f64 * CONNECTION_GRID_MM,
-        )
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct GridRect {
-    min_x: i32,
-    min_y: i32,
-    max_x: i32,
-    max_y: i32,
-}
-
-impl GridRect {
-    fn from_bounds(bounds: field_autoplace::Bounds) -> Self {
-        let min_x = grid_floor(bounds.min_x);
-        let min_y = grid_floor(bounds.min_y);
-        Self {
-            min_x,
-            min_y,
-            max_x: grid_ceil(bounds.max_x).max(min_x + 1),
-            max_y: grid_ceil(bounds.max_y).max(min_y + 1),
-        }
-    }
-
-    fn translated(self, point: GridPoint) -> Self {
-        Self {
-            min_x: self.min_x + point.x,
-            min_y: self.min_y + point.y,
-            max_x: self.max_x + point.x,
-            max_y: self.max_y + point.y,
-        }
-    }
-
-    fn expanded(self, amount: i32) -> Self {
-        Self {
-            min_x: self.min_x - amount,
-            min_y: self.min_y - amount,
-            max_x: self.max_x + amount,
-            max_y: self.max_y + amount,
-        }
-    }
-
-    fn area(self) -> i64 {
-        i64::from(self.max_x - self.min_x) * i64::from(self.max_y - self.min_y)
-    }
-}
-
-struct GridPacker {
-    usable: GridRect,
-    width: usize,
-    occupied: Vec<bool>,
-}
-
-impl GridPacker {
-    fn for_page(paper: &Paper) -> Result<Self> {
-        let (width_mm, height_mm) = paper_dimensions(paper)?;
-        let usable = GridRect {
-            min_x: PACKING_MARGIN_CELLS,
-            min_y: PACKING_MARGIN_CELLS,
-            max_x: grid_floor(width_mm) - PACKING_MARGIN_CELLS,
-            max_y: grid_floor(height_mm) - PACKING_MARGIN_CELLS,
-        };
-        if usable.max_x <= usable.min_x || usable.max_y <= usable.min_y {
-            bail!("schematic page is too small for automatic placement");
-        }
-        let width = (usable.max_x - usable.min_x) as usize;
-        let height = (usable.max_y - usable.min_y) as usize;
-        let mut packer = Self {
-            usable,
-            width,
-            occupied: vec![false; width * height],
-        };
-        packer.occupy(GridRect::from_bounds(
-            field_autoplace::Bounds::from_points([
-                Point::new(
-                    width_mm - DEFAULT_TITLE_BLOCK_WIDTH_MM,
-                    height_mm - DEFAULT_TITLE_BLOCK_HEIGHT_MM,
-                ),
-                Point::new(width_mm, height_mm),
-            ])
-            .expect("title block has two corners"),
-        ));
-        Ok(packer)
-    }
-
-    fn occupy(&mut self, rect: GridRect) {
-        let rect = rect.expanded(PACKING_CLEARANCE_CELLS);
-        let min_x = rect.min_x.max(self.usable.min_x);
-        let min_y = rect.min_y.max(self.usable.min_y);
-        let max_x = rect.max_x.min(self.usable.max_x);
-        let max_y = rect.max_y.min(self.usable.max_y);
-        for y in min_y..max_y {
-            for x in min_x..max_x {
-                let index = self.index(x, y);
-                self.occupied[index] = true;
-            }
-        }
-    }
-
-    fn place(&mut self, relative: GridRect) -> GridPoint {
-        let min_anchor_x = self.usable.min_x - relative.min_x;
-        let min_anchor_y = self.usable.min_y - relative.min_y;
-        let max_anchor_x = self.usable.max_x - relative.max_x;
-        let max_anchor_y = self.usable.max_y - relative.max_y;
-        if max_anchor_x < min_anchor_x || max_anchor_y < min_anchor_y {
-            let anchor = self.centered_anchor(relative);
-            self.occupy(relative.translated(anchor));
-            return anchor;
-        }
-        let occupied = self.occupancy_prefix();
-        let mut best = None;
-        for y in min_anchor_y..=max_anchor_y {
-            for x in min_anchor_x..=max_anchor_x {
-                let anchor = GridPoint { x, y };
-                let candidate = relative.translated(anchor);
-                let overlap = self.occupied_cells(candidate, &occupied);
-                let rank = (overlap, self.distance_from_center_squared(candidate), y, x);
-                if best.is_none_or(|(best_rank, _)| rank < best_rank) {
-                    best = Some((rank, anchor));
-                }
-            }
-        }
-        let anchor = best.expect("a non-empty anchor range has a candidate").1;
-        self.occupy(relative.translated(anchor));
-        anchor
-    }
-
-    fn centered_anchor(&self, relative: GridRect) -> GridPoint {
-        let x2 = i64::from(self.usable.min_x) + i64::from(self.usable.max_x)
-            - i64::from(relative.min_x)
-            - i64::from(relative.max_x);
-        let y2 = i64::from(self.usable.min_y) + i64::from(self.usable.max_y)
-            - i64::from(relative.min_y)
-            - i64::from(relative.max_y);
-        GridPoint {
-            x: x2.div_euclid(2) as i32,
-            y: y2.div_euclid(2) as i32,
-        }
-    }
-
-    fn distance_from_center_squared(&self, rect: GridRect) -> i64 {
-        let dx = i64::from(rect.min_x) + i64::from(rect.max_x)
-            - i64::from(self.usable.min_x)
-            - i64::from(self.usable.max_x);
-        let dy = i64::from(rect.min_y) + i64::from(rect.max_y)
-            - i64::from(self.usable.min_y)
-            - i64::from(self.usable.max_y);
-        dx * dx + dy * dy
-    }
-
-    fn occupancy_prefix(&self) -> Vec<u32> {
-        let height = self.occupied.len() / self.width;
-        let stride = self.width + 1;
-        let mut prefix = vec![0; stride * (height + 1)];
-        for y in 0..height {
-            let mut row = 0;
-            for x in 0..self.width {
-                row += u32::from(self.occupied[y * self.width + x]);
-                prefix[(y + 1) * stride + x + 1] = prefix[y * stride + x + 1] + row;
-            }
-        }
-        prefix
-    }
-
-    fn occupied_cells(&self, rect: GridRect, prefix: &[u32]) -> u32 {
-        let x0 = (rect.min_x - self.usable.min_x) as usize;
-        let y0 = (rect.min_y - self.usable.min_y) as usize;
-        let x1 = (rect.max_x - self.usable.min_x) as usize;
-        let y1 = (rect.max_y - self.usable.min_y) as usize;
-        let stride = self.width + 1;
-        prefix[y1 * stride + x1] + prefix[y0 * stride + x0]
-            - prefix[y0 * stride + x1]
-            - prefix[y1 * stride + x0]
-    }
-
-    fn index(&self, x: i32, y: i32) -> usize {
-        (y - self.usable.min_y) as usize * self.width + (x - self.usable.min_x) as usize
-    }
-}
-
-fn grid_floor(value: f64) -> i32 {
-    ((value + GEOMETRY_EPS_MM) / CONNECTION_GRID_MM).floor() as i32
-}
-
-fn grid_ceil(value: f64) -> i32 {
-    ((value - GEOMETRY_EPS_MM) / CONNECTION_GRID_MM).ceil() as i32
 }
 
 fn component_envelope(
@@ -2583,35 +2704,6 @@ fn estimated_shaped_label_width(text: &str) -> f64 {
     estimated_label_width(text) + LABEL_SHAPE_LENGTH_MM
 }
 
-fn paper_dimensions(paper: &Paper) -> Result<(f64, f64)> {
-    let (mut width, mut height) = match paper {
-        Paper::Custom {
-            width_mm,
-            height_mm,
-        } => (*width_mm, *height_mm),
-        Paper::Named { name, .. } => match name.as_str() {
-            "A0" => (1189.0, 841.0),
-            "A1" => (841.0, 594.0),
-            "A2" => (594.0, 420.0),
-            "A3" => (420.0, 297.0),
-            "A4" => (297.0, 210.0),
-            "A5" => (210.0, 148.0),
-            "A" | "USLetter" => (279.4, 215.9),
-            "B" | "USLedger" => (431.8, 279.4),
-            "C" => (558.8, 431.8),
-            "D" => (863.6, 558.8),
-            "E" => (1117.6, 863.6),
-            "USLegal" => (355.6, 215.9),
-            "GERBER" => (812.8, 812.8),
-            _ => bail!("unsupported KiCad paper size '{name}' for interface placement"),
-        },
-    };
-    if matches!(paper, Paper::Named { portrait: true, .. }) {
-        std::mem::swap(&mut width, &mut height);
-    }
-    Ok((width, height))
-}
-
 fn contains_id(document: &SchDocument, id: &str) -> bool {
     document
         .pages
@@ -2890,8 +2982,14 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        assert!((second.x - first.x - 2.0 * CONNECTION_GRID_MM).abs() < GEOMETRY_EPS_MM);
-        assert!((second.y - first.y - 2.0 * CONNECTION_GRID_MM).abs() < GEOMETRY_EPS_MM);
+        assert!(
+            (second.x - first.x - NET_SYMBOL_STAIR_CELLS * CONNECTION_GRID_MM).abs()
+                < GEOMETRY_EPS_MM
+        );
+        assert!(
+            (second.y - first.y - NET_SYMBOL_STAIR_CELLS * CONNECTION_GRID_MM).abs()
+                < GEOMETRY_EPS_MM
+        );
         assert!((first.x - bounds.max_x - 4.0 * CONNECTION_GRID_MM).abs() < GEOMETRY_EPS_MM);
         assert!(first.x > target.point.x);
         assert!(first.y > target.point.y);
@@ -3030,23 +3128,5 @@ mod tests {
             resolve_pin_targets(&placed, "R_EN.R", "2", &BTreeSet::from(["2".to_string()]))
                 .expect("unplaced component contributes no anchors");
         assert!(targets.is_empty());
-    }
-
-    #[test]
-    fn grid_packer_prefers_the_page_center() {
-        let mut packer = GridPacker::for_page(&Paper::default()).unwrap();
-        let relative = GridRect {
-            min_x: -2,
-            min_y: -2,
-            max_x: 2,
-            max_y: 2,
-        };
-
-        let placed = relative.translated(packer.place(relative));
-
-        let center_dx = placed.min_x + placed.max_x - packer.usable.min_x - packer.usable.max_x;
-        let center_dy = placed.min_y + placed.max_y - packer.usable.min_y - packer.usable.max_y;
-        assert!(center_dx.abs() <= 1);
-        assert!(center_dy.abs() <= 1);
     }
 }
