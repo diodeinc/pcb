@@ -17,12 +17,40 @@ pub struct DfmArgs {
     #[arg(long)]
     pub pdk: PathBuf,
 
+    /// Output report path. Omit to write JSON to stdout.
+    #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
+    pub output: Option<PathBuf>,
+
+    /// Include full vector artwork for the standalone DFM viewer.
+    #[arg(long)]
+    pub include_geometry: bool,
+
     /// Disable network access (offline mode) - only use vendored dependencies
     #[arg(long = "offline")]
     pub offline: bool,
 }
 
 pub fn execute(args: DfmArgs) -> Result<()> {
+    let options = commands::dfm::CheckOptions {
+        pdk: args.pdk.clone(),
+        waivers: None,
+        output: args.output.clone(),
+        layout_target: LayoutTarget::Board,
+        include_geometry: args.include_geometry,
+    };
+    let (_temporary_dir, ipc_path) = match export_layout(&args) {
+        Ok(exported) => exported,
+        Err(error) => {
+            commands::dfm::write_error_report(&args.file, &options, &error)
+                .with_context(|| format!("DFM check was incomplete: {error:#}"))?;
+            return Err(error);
+        }
+    };
+
+    commands::dfm::execute_check(&ipc_path, &options)
+}
+
+fn export_layout(args: &DfmArgs) -> Result<(tempfile::TempDir, PathBuf)> {
     let layout_args = LayoutArgs {
         file: args.file.clone(),
         no_open: true,
@@ -40,13 +68,5 @@ pub fn execute(args: DfmArgs) -> Result<()> {
     let ipc_path = temporary_dir.path().join("ipc2581.xml");
     crate::release::export_ipc2581(pcb_file, &ipc_path)?;
 
-    commands::dfm::execute_check(
-        &ipc_path,
-        &commands::dfm::CheckOptions {
-            pdk: args.pdk,
-            waivers: None,
-            output: None,
-            layout_target: LayoutTarget::Board,
-        },
-    )
+    Ok((temporary_dir, ipc_path))
 }

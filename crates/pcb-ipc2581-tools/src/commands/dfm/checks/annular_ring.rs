@@ -32,18 +32,22 @@
 //! over the boundary segments, searched only to `r + A_min` since farther
 //! boundaries cannot violate.
 
-use pcb_ir::geom::BBox;
-use pcb_ir::geom::dfm::Distance;
+use pcb_ir::geom::dfm::{BBoxIndex, Distance, circular_region};
+use pcb_ir::geom::region::difference_rings;
+use pcb_ir::geom::{BBox, ContourSet, FillRule, Point};
 use rayon::prelude::*;
 
 use crate::commands::dfm::design::{CopperLayer, Design, Hole, HoleClass, HoleLand, Land};
-use crate::commands::dfm::report::{Evidence, SourceLocator, Subject};
+use crate::commands::dfm::report::{
+    Evidence, EvidenceDisplay, MeasurementKind, SourceLocator, Subject,
+};
 
-use super::{Evaluation, Measured, hole_subject, holes_of_class, layers};
+use super::{Evaluation, Measured, MeasuredSite, hole_subject, holes_of_class, layers, violates};
 
 /// One copper layer on which a hole has a ring to measure.
 struct RingSubject<'a> {
     copper: &'a CopperLayer,
+    ring_index: &'a BBoxIndex,
     land: Option<&'a Land>,
     in_copper: bool,
 }
@@ -53,6 +57,24 @@ pub(super) fn evaluate(limit_mm: f64, class: HoleClass, design: &Design) -> Eval
     let copper_layers = &design.copper_layers;
     let hole_lands = &design.hole_lands;
     let boundaries = &design.copper_boundaries;
+    let ring_indices = copper_layers
+        .par_iter()
+        .map(|layer| {
+            BBoxIndex::new(
+                layer
+                    .image
+                    .rings
+                    .iter()
+                    .map(|ring| {
+                        ring.iter().fold(BBox::empty(), |mut bbox, &[x, y]| {
+                            bbox.include_point(Point::new(x, y));
+                            bbox
+                        })
+                    })
+                    .collect(),
+            )
+        })
+        .collect::<Vec<_>>();
     let centers = holes
         .iter()
         .map(|(_, hole)| hole.center)
@@ -82,6 +104,7 @@ pub(super) fn evaluate(limit_mm: f64, class: HoleClass, design: &Design) -> Eval
                         copper_index,
                         RingSubject {
                             copper,
+                            ring_index: &ring_indices[copper_index],
                             land,
                             in_copper,
                         },
@@ -96,13 +119,41 @@ pub(super) fn evaluate(limit_mm: f64, class: HoleClass, design: &Design) -> Eval
                     (subject, enclosure)
                 })
                 .collect::<Vec<_>>();
-            let worst = enclosures
+            let mut worst = enclosures
                 .iter()
                 .filter_map(|(subject, enclosure)| enclosure.map(|enclosure| (subject, enclosure)))
                 .min_by(|(_, left), (_, right)| left.mm.total_cmp(&right.mm))
                 .map(|(subject, enclosure)| {
                     measured(design, hole, subject, enclosure, radius + limit_mm)
                 });
+            if let Some(worst) = &mut worst {
+                worst.sites = enclosures.iter().filter_map(|(subject, enclosure)| {
+                    let enclosure = (*enclosure).filter(|distance| violates(distance, limit_mm))?;
+                    let mut detail = measured(design, hole, subject, enclosure, radius + limit_mm);
+                    let required = circular_region(hole.center, radius + limit_mm);
+                    detail.evidence.push(Evidence {
+                        display: Some(EvidenceDisplay::CircleMinusLayer {
+                            center: hole.center.into(),
+                            diameter: 2.0 * (radius + limit_mm),
+                            layer: subject.copper.layer.name.clone(),
+                        }),
+                        ..Evidence::region("missing_copper", &missing_copper(
+                            &required, &subject.copper.image, subject.ring_index,
+                        ))
+                    });
+                    let mut site = MeasuredSite::new(
+                        enclosure, detail.bbox, detail.layers, detail.evidence,
+                        if subject.in_copper { MeasurementKind::RadialEnclosure } else { MeasurementKind::MissingCopper },
+                    );
+                    site.subjects = detail.subjects;
+                    if !subject.in_copper {
+                        site.note = Some("Required copper is absent at the drill center; this layer has zero enclosure.".to_owned());
+                    } else if enclosure.mm < 0.0 {
+                        site.note = Some("The drilled hole breaches the copper boundary; the annular enclosure is signed.".to_owned());
+                    }
+                    Some(site)
+                }).collect();
+            }
             (enclosures.len(), worst)
         })
         .collect::<Vec<_>>();
@@ -114,6 +165,23 @@ pub(super) fn evaluate(limit_mm: f64, class: HoleClass, design: &Design) -> Eval
             .filter_map(|(_, measured)| measured)
             .collect(),
     }
+}
+
+/// A ring whose bounds miss the required disk cannot change material inside
+/// it. Retaining complete intersecting rings (including enclosing planes and
+/// their holes) preserves polarity while avoiding a full-panel boolean for
+/// each individual annular finding.
+fn missing_copper(required: &ContourSet, copper: &ContourSet, index: &BBoxIndex) -> ContourSet {
+    let rings = index
+        .query(required.bbox)
+        .into_iter()
+        .map(|id| copper.rings[id].clone())
+        .collect();
+    ContourSet::new(
+        difference_rings(required.rings.clone(), rings),
+        FillRule::NonZero,
+        required.tolerance,
+    )
 }
 
 fn measured(
@@ -146,6 +214,8 @@ fn measured(
                 feature_index: Some(land.source_feature_index),
                 instance_index: None,
             }),
+            provenance: Some(land.provenance.clone()),
+            ..Subject::default()
         },
     );
     let land_evidence = subject
@@ -167,6 +237,7 @@ fn measured(
         .into_iter()
         .chain(land_evidence)
         .collect(),
+        sites: Vec::new(),
     }
 }
 
@@ -294,5 +365,110 @@ minimum_pth_annular_ring = "0.2 mm"
         let measured = &evaluation.measured[0];
         assert_eq!(measured.layers[1].name, "L1");
         assert_eq!(measured.distance.mm, 0.0);
+    }
+
+    #[test]
+    fn all_failing_terminal_layers_have_independent_geometry_sites() {
+        let evaluation = evaluate_pth(&board(4, &[], None));
+        assert_eq!(evaluation.measured.len(), 1, "retain one finding per hole");
+        let finding = &evaluation.measured[0];
+        assert_eq!(finding.sites.len(), 2);
+        assert_eq!(
+            finding.layers[1].name, "L0",
+            "retain the original worst-layer representative"
+        );
+        assert_eq!(
+            finding
+                .sites
+                .iter()
+                .map(|site| site.layers[1].name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["L0", "L3"]
+        );
+        assert!(finding.sites.iter().all(|site| {
+            matches!(site.measurement_kind, MeasurementKind::MissingCopper)
+                && site
+                    .evidence
+                    .iter()
+                    .any(|evidence| evidence.role == "missing_copper" && !evidence.paths.is_empty())
+        }));
+        for site in &finding.sites {
+            let evidence = site
+                .evidence
+                .iter()
+                .find(|evidence| evidence.role == "missing_copper")
+                .unwrap();
+            let Some(EvidenceDisplay::CircleMinusLayer {
+                center,
+                diameter,
+                layer,
+            }) = &evidence.display
+            else {
+                panic!("missing copper retains its analytic construction");
+            };
+            assert_eq!((center.x, center.y), (0.0, 0.0));
+            assert!((*diameter - 1.4).abs() < 1e-12);
+            assert_eq!(
+                layer, &site.layers[1].name,
+                "each site cuts its own copper layer"
+            );
+            let envelope = site
+                .evidence
+                .iter()
+                .find(|evidence| evidence.role == "required_copper_envelope")
+                .unwrap();
+            assert_eq!(Some(*diameter), envelope.diameter);
+            assert_eq!(
+                site.distance.mm, 0.0,
+                "display leaves the measurement unchanged"
+            );
+        }
+    }
+
+    #[test]
+    fn local_missing_copper_keeps_enclosing_planes_holes_and_repainted_islands() {
+        use pcb_ir::geom::tol;
+        let rectangle = |x0, y0, x1, y1| {
+            ContourSet::rectangle(
+                BBox {
+                    min: Point::new(x0, y0),
+                    max: Point::new(x1, y1),
+                },
+                tol::REGION_MM,
+            )
+        };
+        let copper = rectangle(-100.0, -100.0, 100.0, 100.0)
+            .difference(&rectangle(-0.4, -0.4, 0.4, 0.4))
+            .union(&rectangle(-0.1, -0.1, 0.1, 0.1))
+            .union(&rectangle(200.0, 200.0, 201.0, 201.0));
+        let required = circular_region(Point::ZERO, 0.6);
+        let bounds = copper
+            .rings
+            .iter()
+            .map(|ring| {
+                ring.iter().fold(BBox::empty(), |mut bbox, &[x, y]| {
+                    bbox.include_point(Point::new(x, y));
+                    bbox
+                })
+            })
+            .collect();
+        let index = BBoxIndex::new(bounds);
+        assert!(index.query(required.bbox).len() < copper.rings.len());
+        let local = missing_copper(&required, &copper, &index);
+        let complete = required.difference(&copper);
+        assert!(local.difference(&complete).is_empty());
+        assert!(complete.difference(&local).is_empty());
+        assert!(
+            !local.contains_point(Point::ZERO),
+            "repainted island supplies copper"
+        );
+        assert!(
+            local.contains_point(Point::new(0.3, 0.0)),
+            "hole remains missing copper"
+        );
+        assert!(
+            !local.contains_point(Point::new(0.5, 0.0)),
+            "enclosing plane is retained"
+        );
     }
 }

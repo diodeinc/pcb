@@ -5248,7 +5248,13 @@ mod tests {
     fn repeated_panel_traces_keep_distinct_source_sets_after_processing() {
         let ipc = ipc2581::Ipc2581::parse(panel_trace_fixture())
             .expect("synthetic panel fixture should parse");
-        let mut doc = extract_layer(&ipc, "TOP").expect("panel layer should extract");
+        let imported = import_design(&ipc).expect("panel should import");
+        let mut doc = imported
+            .materialize_layer(
+                imported.layer_id("TOP").unwrap(),
+                ArtworkScope::ArrayFlattened,
+            )
+            .expect("panel layer should extract");
         crate::dialects::ipc::process::compose_for_rendering(&mut doc);
 
         let layer = &doc.layers[0];
@@ -5265,6 +5271,15 @@ mod tests {
         assert_eq!(traces[1].source.set_index, 1);
         assert_eq!(traces[0].source_instance, Some(0));
         assert_eq!(traces[1].source_instance, Some(1));
+        let first = feature_occurrence_id(traces[0]).unwrap();
+        let second = feature_occurrence_id(traces[1]).unwrap();
+        assert_eq!(first.feature, second.feature);
+        let definition = imported.feature_definition(first.feature).unwrap();
+        assert_eq!(definition.source.set_index, 0);
+        assert_eq!(
+            definition.source.feature_index,
+            traces[0].source.feature_index
+        );
     }
 
     #[test]

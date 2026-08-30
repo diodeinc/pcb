@@ -18,6 +18,7 @@ mod design;
 mod pdk;
 mod report;
 mod rules;
+mod scene;
 mod waivers;
 
 #[derive(Debug)]
@@ -26,6 +27,7 @@ pub struct CheckOptions {
     pub waivers: Option<PathBuf>,
     pub output: Option<PathBuf>,
     pub layout_target: LayoutTarget,
+    pub include_geometry: bool,
 }
 
 /// PDK source bytes plus the stable identity echoed into reports.
@@ -42,6 +44,66 @@ struct LoadedWaivers {
 }
 
 pub fn execute_check(file: &Path, options: &CheckOptions) -> Result<()> {
+    let (report, rendered) = match check_and_render(file, options) {
+        Ok(checked) => checked,
+        Err(error) => {
+            write_error_report(file, options, &error)
+                .with_context(|| format!("DFM check was incomplete: {error:#}"))?;
+            return Err(error);
+        }
+    };
+    write_report(options.output.as_deref(), &rendered)?;
+
+    let summary = &report.summary;
+    if summary.errors > 0 {
+        bail!(
+            "DFM check failed with {} error finding(s){}",
+            summary.errors,
+            annotations(summary)
+        );
+    }
+    eprintln!(
+        "✓ DFM check passed ({} rule(s){})",
+        summary.rules_configured,
+        annotations(summary)
+    );
+    Ok(())
+}
+
+/// Geometry exports always replace the requested artifact with an explicit
+/// incomplete report when preparation fails. Ordinary diagnostic JSON keeps
+/// its historical behavior: preparation errors do not emit a report.
+pub fn write_error_report(
+    file: &Path,
+    options: &CheckOptions,
+    error: &anyhow::Error,
+) -> Result<()> {
+    if options.include_geometry {
+        let incomplete = serde_json::json!({
+            "schema_version": report::REPORT_SCHEMA_VERSION,
+            "generated_at": generation_time().to_rfc3339(),
+            "verdict": "incomplete",
+            "tool": report::ToolIdentity {
+                name: "pcb",
+                version: env!("CARGO_PKG_VERSION"),
+            },
+            "input": { "path": file.display().to_string() },
+            "pdk": { "path": options.pdk.display().to_string() },
+            "layout_target": match options.layout_target {
+                LayoutTarget::Board => "board",
+                LayoutTarget::BoardArray => "board_array",
+            },
+            "error": { "message": format!("{error:#}") },
+        });
+        write_report(
+            options.output.as_deref(),
+            &serde_json::to_string_pretty(&incomplete)?,
+        )?;
+    }
+    Ok(())
+}
+
+fn check_and_render(file: &Path, options: &CheckOptions) -> Result<(report::DfmReport, String)> {
     let input_bytes = std::fs::read(file)
         .with_context(|| format!("failed to read IPC-2581 file {}", file.display()))?;
     let loaded_pdk = load_pdk(&options.pdk)?;
@@ -91,7 +153,7 @@ pub fn execute_check(file: &Path, options: &CheckOptions) -> Result<()> {
 
     let summary = summarize(&checked);
     let failed = summary.errors > 0;
-    let report = report::DfmReport {
+    let mut report = report::DfmReport {
         schema_version: report::REPORT_SCHEMA_VERSION,
         generated_at: generated_at.to_rfc3339(),
         verdict: if failed {
@@ -113,6 +175,7 @@ pub fn execute_check(file: &Path, options: &CheckOptions) -> Result<()> {
             LayoutTarget::Board => "board",
             LayoutTarget::BoardArray => "board_array",
         },
+        layout: design.report_layout(),
         coordinate_system: report::CoordinateSystem {
             unit: "mm",
             axes: "x_right_y_up",
@@ -132,25 +195,14 @@ pub fn execute_check(file: &Path, options: &CheckOptions) -> Result<()> {
         summary,
         rules: checked.rules,
         findings: checked.findings,
+        scene: None,
     };
 
-    let rendered = serde_json::to_string_pretty(&report)?;
-    write_report(options.output.as_deref(), &rendered)?;
-
-    let summary = &report.summary;
-    if failed {
-        bail!(
-            "DFM check failed with {} error finding(s){}",
-            summary.errors,
-            annotations(summary)
-        );
+    if options.include_geometry {
+        report.scene = Some(scene::export(&report, &design)?);
     }
-    eprintln!(
-        "✓ DFM check passed ({} rule(s){})",
-        summary.rules_configured,
-        annotations(summary)
-    );
-    Ok(())
+    let rendered = serde_json::to_string_pretty(&report)?;
+    Ok((report, rendered))
 }
 
 fn load_pdk(reference: &Path) -> Result<LoadedPdk> {
@@ -229,7 +281,8 @@ fn summarize(checked: &checks::Results) -> report::Summary {
 
 fn write_report(output: Option<&Path>, report: &str) -> Result<()> {
     match output {
-        Some(path) => std::fs::write(path, format!("{report}\n"))
+        Some(path) => std::fs::File::create(path)
+            .and_then(|mut file| writeln!(file, "{report}"))
             .with_context(|| format!("failed to write DFM report to {}", path.display())),
         None => {
             let mut stdout = std::io::stdout().lock();

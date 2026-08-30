@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Add a standalone DFM viewer with grouped findings, native vector evidence, and synchronized views via `--include-geometry` JSON reports.
+
 ### Fixed
 
 - Inherit symbol descriptions for non-generic BOM components.

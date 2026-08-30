@@ -1,3 +1,4 @@
+use pcb_ir::geom::region::ContourSet;
 use pcb_ir::geom::{BBox, Point};
 use serde::Serialize;
 
@@ -16,10 +17,35 @@ pub struct DfmReport {
     pub pdk: PdkIdentity,
     pub layout_target: &'static str,
     pub coordinate_system: CoordinateSystem,
+    /// The actual checked frame and its hierarchy, not a second layout model.
+    pub layout: LayoutContext,
     pub waivers: Option<WaiversApplied>,
     pub summary: Summary,
     pub rules: Vec<RuleResult>,
     pub findings: Vec<Finding>,
+    /// Optional full-scene artwork for the standalone viewer. Diagnostic JSON
+    /// remains lightweight unless geometry was explicitly requested.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scene: Option<Scene>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Scene {
+    pub schema_version: u32,
+    /// Full checked layout extent in the report's millimeter, Y-up frame.
+    pub bounds: ReportBBox,
+    pub passes: Vec<ScenePass>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ScenePass {
+    pub label: String,
+    pub feature: &'static str,
+    pub layer: Option<String>,
+    pub color: &'static str,
+    /// One full vector image in world coordinates. The SVG root applies the
+    /// usual Y display flip; finding sites never crop or duplicate this image.
+    pub svg: String,
 }
 
 /// The waiver file applied to this run and what came of every entry.
@@ -86,6 +112,39 @@ pub struct CoordinateSystem {
     pub origin: &'static str,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct LayoutContext {
+    pub kind: &'static str,
+    pub selected_step: Option<String>,
+    pub coordinate_frame: &'static str,
+    pub bounding_box: Option<ReportBBox>,
+    pub instances: Vec<LayoutOccurrence>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LayoutOccurrence {
+    pub index: u32,
+    pub parent_index: Option<u32>,
+    pub step: String,
+    pub kind: &'static str,
+    pub purpose: &'static str,
+    /// Child-local to checked-root affine matrix [a, b, c, d, tx, ty].
+    pub transform: [f64; 6],
+    pub bounding_box: Option<ReportBBox>,
+    pub repeat_index_x: u32,
+    pub repeat_index_y: u32,
+}
+
+/// Explicit rule-to-view mapping. Features are semantic composed passes, never
+/// source primitive filters that could change the material being measured.
+#[derive(Debug, Clone, Serialize)]
+pub struct ViewRecipe {
+    pub kind: &'static str,
+    pub title: &'static str,
+    pub spatial: bool,
+    pub features: Vec<&'static str>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct Summary {
     pub rules_configured: usize,
@@ -121,6 +180,8 @@ pub struct RuleResult {
     pub finding_count: usize,
     pub waived_count: usize,
     pub skip_reason: Option<String>,
+    pub view: ViewRecipe,
+    pub tier: &'static str,
 }
 
 impl RuleResult {
@@ -140,6 +201,12 @@ impl RuleResult {
             finding_count: 0,
             waived_count: 0,
             skip_reason: None,
+            view: rule.kind.view_recipe(),
+            tier: if rule.id.ends_with(".preferred") {
+                "preferred"
+            } else {
+                "required"
+            },
         }
     }
 
@@ -210,6 +277,39 @@ pub struct Finding {
     pub layers: Vec<LayerRef>,
     pub subjects: Vec<Subject>,
     pub evidence: Vec<Evidence>,
+    /// Check-owned connected regions/layers. The finding remains the waiver unit.
+    pub sites: Vec<Site>,
+    /// Presentation-only identity for proven equivalent repeated causes.
+    pub group_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MeasurementKind {
+    Diameter,
+    NominalWidth,
+    InscribedWidth,
+    Clearance,
+    RadialEnclosure,
+    Overlap,
+    MissingCopper,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Site {
+    pub id: String,
+    pub measurement: Measurement,
+    pub measurement_kind: MeasurementKind,
+    pub uncertainty_mm: f64,
+    pub witnesses: Vec<Witness>,
+    /// Check-owned region of interest in the checked frame. The viewer adds
+    /// camera padding; contextual source bounds may extend beyond this region.
+    pub bounding_box: ReportBBox,
+    pub layers: Vec<LayerRef>,
+    pub subjects: Vec<Subject>,
+    pub evidence: Vec<Evidence>,
+    /// Explains candidate geometry, assumed spans, or special measurement states.
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -221,7 +321,7 @@ pub enum Severity {
 
 /// The one measurement that gates a finding. The quantity, method, unit, and
 /// comparison live on the finding's rule.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 pub enum Measurement {
     Distance {
@@ -313,6 +413,15 @@ pub struct ReportBBox {
     pub max: ReportPoint,
 }
 
+impl ReportBBox {
+    pub fn as_bbox(self) -> BBox {
+        BBox::new(
+            Point::new(self.min.x, self.min.y),
+            Point::new(self.max.x, self.max.y),
+        )
+    }
+}
+
 impl From<BBox> for ReportBBox {
     fn from(bbox: BBox) -> Self {
         Self {
@@ -340,6 +449,17 @@ pub struct Subject {
     pub net: Option<String>,
     pub padstack_ref: Option<String>,
     pub source: Option<SourceLocator>,
+    /// Definition-local source coordinates plus its physical occurrence. `source`
+    /// retains the historical flattened locator for compatibility.
+    pub provenance: Option<SourceLocator>,
+    pub drill_span: Option<DrillSpan>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DrillSpan {
+    pub first_copper_index: u16,
+    pub last_copper_index: u16,
+    pub interpretation: &'static str,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -360,6 +480,47 @@ pub struct Evidence {
     pub start: Option<ReportPoint>,
     pub end: Option<ReportPoint>,
     pub bounding_box: Option<ReportBBox>,
+    /// Closed rings for `region`, open point sequences for `path`. Region rings
+    /// use the same nonzero winding as the checked composed material.
+    pub paths: Vec<Vec<ReportPoint>>,
+    /// Optional native construction for display. The measured paths above,
+    /// witness points, and uncertainty remain the check's authoritative data.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display: Option<EvidenceDisplay>,
+}
+
+/// Compact display geometry in the report's millimeter, Y-up frame. These
+/// constructions retain source curves without fitting or smoothing measured
+/// polygons, and never participate in measurements or diagnostic identity.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum EvidenceDisplay {
+    /// Independently filled native SVG paths, union-composited by the viewer.
+    Path {
+        paths: Vec<String>,
+        fill_rule: &'static str,
+    },
+    /// A physical-width round-capped, round-joined stroke of these paths.
+    RoundStroke {
+        paths: Vec<Vec<ReportPoint>>,
+        width_mm: f64,
+    },
+    /// Required circular copper minus the named native copper layer image.
+    CircleMinusLayer {
+        center: ReportPoint,
+        diameter: f64,
+        layer: String,
+    },
+    CircleIntersection {
+        first: DisplayCircle,
+        second: DisplayCircle,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct DisplayCircle {
+    pub center: ReportPoint,
+    pub diameter: f64,
 }
 
 impl Evidence {
@@ -388,6 +549,20 @@ impl Evidence {
             role,
             kind: "bounds",
             bounding_box: Some(bounding_box.into()),
+            ..Self::default()
+        }
+    }
+
+    pub fn region(role: &'static str, region: &ContourSet) -> Self {
+        Self {
+            role,
+            kind: "region",
+            bounding_box: (!region.is_empty()).then(|| region.bbox.into()),
+            paths: region
+                .rings
+                .iter()
+                .map(|ring| ring.iter().map(|&[x, y]| ReportPoint { x, y }).collect())
+                .collect(),
             ..Self::default()
         }
     }

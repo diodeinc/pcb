@@ -10,7 +10,7 @@ use anyhow::{Result, bail};
 
 use super::design::HoleClass;
 use super::pdk::{Length, Limit as LengthLimit, Pdk};
-use super::report::Severity;
+use super::report::{Severity, ViewRecipe};
 
 #[derive(Debug, Clone)]
 pub(super) struct Rule {
@@ -167,6 +167,80 @@ const NONE: Pools = Pools {
 };
 
 impl RuleKind {
+    pub fn view_recipe(self) -> ViewRecipe {
+        let (kind, title, spatial, features): (_, _, _, &[_]) = match self {
+            Self::CopperLayerCount => (
+                "copper_layer_count",
+                "Copper layer count",
+                false,
+                &["stackup"],
+            ),
+            Self::HoleDiameter(_) => (
+                "hole_diameter",
+                "Hole diameter",
+                true,
+                &["drills", "board_outlines"],
+            ),
+            Self::SlotWidth => (
+                "slot_width",
+                "Slot width",
+                true,
+                &["drills", "board_outlines"],
+            ),
+            Self::HolePairClearance => (
+                "hole_clearance",
+                "Hole-to-hole clearance",
+                true,
+                &["drills", "board_outlines"],
+            ),
+            Self::AnnularRing(_) => (
+                "annular_ring",
+                "Annular ring",
+                true,
+                &["copper", "drills", "board_outlines"],
+            ),
+            Self::LineworkToCopperClearance(Linework::BoardEdge) => (
+                "board_edge_clearance",
+                "Board-edge clearance",
+                true,
+                &["copper", "board_outlines"],
+            ),
+            Self::LineworkToCopperClearance(Linework::VScore) => (
+                "vscore_clearance",
+                "V-score clearance",
+                true,
+                &["copper", "scores", "board_outlines"],
+            ),
+            Self::BoardArrayPairClearance => {
+                ("array_spacing", "Array spacing", true, &["array_outlines"])
+            }
+            Self::CopperFeatureWidth => (
+                "copper_width",
+                "Copper width",
+                true,
+                &["copper", "board_outlines"],
+            ),
+            Self::CopperClearance => (
+                "copper_clearance",
+                "Copper clearance",
+                true,
+                &["copper", "board_outlines"],
+            ),
+            Self::SoldermaskWeb => (
+                "soldermask_web",
+                "Soldermask web",
+                true,
+                &["mask_openings", "board_outlines"],
+            ),
+        };
+        ViewRecipe {
+            kind,
+            title,
+            spatial,
+            features: features.to_vec(),
+        }
+    }
+
     pub fn semantics(self) -> Semantics {
         match self {
             Self::CopperLayerCount => Semantics {

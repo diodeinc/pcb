@@ -24,15 +24,17 @@
 
 use std::ops::Range;
 
-use pcb_ir::geom::dfm::Distance;
+use pcb_ir::geom::dfm::{ClearanceSite, Distance, linework_clearance_sites, linework_envelope};
 use pcb_ir::geom::region::ring_edges;
 use pcb_ir::geom::{BBox, Point};
 
 use crate::commands::dfm::design::{BoardOutline, CopperLayer, Design};
-use crate::commands::dfm::report::{Evidence, LayerRef, SourceLocator, Subject};
+use crate::commands::dfm::report::{
+    Evidence, EvidenceDisplay, LayerRef, MeasurementKind, ReportPoint, SourceLocator, Subject,
+};
 use crate::commands::dfm::rules::Linework;
 
-use super::{Evaluation, Measured, layers};
+use super::{Evaluation, Measured, MeasuredSite, layers, violates};
 
 /// One reference item: a V-score centerline or a board outline, as a range
 /// of bare segments plus its report identity.
@@ -70,6 +72,7 @@ fn linework_items(linework: Linework, design: &Design) -> LineworkPool {
                     role: "reference",
                     kind: "vscore_centerline",
                     name: Some(score.layer.name.clone()),
+                    provenance: Some(score.provenance.clone()),
                     ..Subject::default()
                 },
                 evidence: Evidence::segment("vscore_centerline", score.start, score.end),
@@ -125,12 +128,28 @@ pub(super) fn evaluate(limit_mm: f64, linework: Linework, design: &Design) -> Ev
                     })
                     .min_by(|left, right| left.mm.total_cmp(&right.mm))?;
                 let distance = nearest.also_flattened(item.flattened_boundaries);
+                let site_layers = layers(item.layer.iter().chain([&copper.layer]));
+                let sites = if violates(&distance, limit_mm) {
+                    linework_clearance_sites(
+                        &segments[item.segments.clone()],
+                        &copper.image,
+                        &boundaries[copper_index],
+                        limit_mm,
+                        item.flattened_boundaries,
+                    )
+                    .into_iter()
+                    .map(|site| report_site(site, site_layers.clone(), limit_mm))
+                    .collect()
+                } else {
+                    Vec::new()
+                };
                 Some(Measured {
                     distance,
                     bbox: BBox::from_point(distance.first).union(BBox::from_point(distance.second)),
                     layers: layers(item.layer.iter().chain([&copper.layer])),
                     subjects: vec![item.subject.clone(), copper_subject(copper)],
                     evidence: vec![item.evidence.clone()],
+                    sites,
                 })
             })
         })
@@ -139,6 +158,88 @@ pub(super) fn evaluate(limit_mm: f64, linework: Linework, design: &Design) -> Ev
         checked: copper_layers.len() * items.len(),
         measured,
     }
+}
+
+/// All clearance families share the same local path/constraint construction;
+/// the rule and inherited subjects give these boundaries their physical roles.
+pub(super) fn report_site(
+    geometry: ClearanceSite,
+    layers: Vec<LayerRef>,
+    limit_mm: f64,
+) -> MeasuredSite {
+    let mut evidence = [
+        ("first_boundary", &geometry.first_paths),
+        ("second_boundary", &geometry.second_paths),
+    ]
+    .into_iter()
+    .filter(|(_, paths)| !paths.is_empty())
+    .map(|(role, paths)| Evidence {
+        role,
+        kind: "path",
+        paths: joined_boundary_paths(paths),
+        ..Evidence::default()
+    })
+    .collect::<Vec<_>>();
+    let band = linework_envelope(&geometry.first_paths, limit_mm);
+    if !band.is_empty() {
+        evidence.push(Evidence {
+            display: Some(EvidenceDisplay::RoundStroke {
+                paths: joined_boundary_paths(&geometry.first_paths),
+                width_mm: 2.0 * limit_mm,
+            }),
+            ..Evidence::region("required_clearance_band", &band)
+        });
+    }
+    let overlaps = !geometry.overlap.is_empty();
+    if overlaps {
+        evidence.push(Evidence::region("overlap_region", &geometry.overlap));
+    }
+    let bbox = if band.is_empty() {
+        geometry.bbox
+    } else {
+        geometry.bbox.union(band.bbox)
+    };
+    let mut site = MeasuredSite::new(
+        geometry.distance,
+        bbox,
+        layers,
+        evidence,
+        if geometry.distance.mm == 0.0 {
+            MeasurementKind::Overlap
+        } else {
+            MeasurementKind::Clearance
+        },
+    );
+    if overlaps {
+        site.note = Some("The filled regions overlap; their clearance is zero.".to_owned());
+    } else if geometry.distance.mm == 0.0 {
+        site.note = Some("The subjects touch or intersect; their clearance is zero.".to_owned());
+    } else {
+        site.note = Some("Highlighted boundary spans are below the limit after accounting for geometric uncertainty.".to_owned());
+    }
+    site
+}
+
+/// Consecutive open paths that share an exact endpoint describe the same
+/// directed segments as one polyline. Retain every vertex and discontinuity;
+/// only the duplicate junction coordinate and path container disappear.
+fn joined_boundary_paths(paths: &[Vec<Point>]) -> Vec<Vec<ReportPoint>> {
+    let mut joined: Vec<Vec<ReportPoint>> = Vec::new();
+    let mut previous_end = None;
+    for path in paths {
+        let continuation = !path.is_empty() && previous_end == path.first().copied();
+        if !continuation {
+            joined.push(Vec::new());
+        }
+        joined.last_mut().expect("a path was started").extend(
+            path.iter()
+                .skip(usize::from(continuation))
+                .copied()
+                .map(ReportPoint::from),
+        );
+        previous_end = path.last().copied();
+    }
+    joined
 }
 
 fn copper_subject(copper: &CopperLayer) -> Subject {
@@ -162,6 +263,92 @@ fn outline_subject(outline: &BoardOutline, role: &'static str) -> Subject {
             feature_index: None,
             instance_index: outline.instance_index,
         }),
+        provenance: Some(SourceLocator {
+            step: Some(outline.name.clone()),
+            layer: None,
+            set_index: None,
+            feature_index: None,
+            instance_index: outline.instance_index,
+        }),
         ..Subject::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clearance_display_keeps_certified_spans_and_an_exact_round_stroke() {
+        let first_paths = vec![
+            vec![Point::new(1.0, 2.0), Point::new(3.0, 2.0)],
+            vec![Point::new(3.0, 2.0), Point::new(3.0, 4.0)],
+            vec![Point::new(8.0, 8.0), Point::new(9.0, 9.0)],
+        ];
+        let geometry = ClearanceSite {
+            distance: Distance::flattened(0.1, Point::new(3.0, 2.0), Point::new(3.1, 2.0), 1),
+            bbox: BBox::new(Point::new(1.0, 2.0), Point::new(9.0, 9.0)),
+            first_paths,
+            second_paths: vec![vec![Point::new(3.1, 2.0), Point::new(3.1, 4.0)]],
+            overlap: pcb_ir::geom::ContourSet::empty(pcb_ir::geom::tol::REGION_MM),
+        };
+        let site = report_site(geometry, Vec::new(), 0.2);
+        let band = site
+            .evidence
+            .iter()
+            .find(|evidence| evidence.role == "required_clearance_band")
+            .unwrap();
+        let Some(EvidenceDisplay::RoundStroke { paths, width_mm }) = &band.display else {
+            panic!("clearance band must retain its exact stroke construction");
+        };
+        assert_eq!(
+            *width_mm, 0.4,
+            "the band extends the full limit on each side"
+        );
+        assert_eq!(paths.len(), 2, "disconnected spans must stay disconnected");
+        assert_eq!(
+            paths[0].iter().map(|p| (p.x, p.y)).collect::<Vec<_>>(),
+            vec![(1.0, 2.0), (3.0, 2.0), (3.0, 4.0)]
+        );
+        assert_eq!(
+            paths[1].iter().map(|p| (p.x, p.y)).collect::<Vec<_>>(),
+            vec![(8.0, 8.0), (9.0, 9.0)]
+        );
+        assert!(
+            !band.paths.is_empty(),
+            "measured polygon evidence remains available"
+        );
+        assert_eq!(site.distance.mm, 0.1);
+        assert_eq!(site.distance.uncertainty_mm, pcb_ir::geom::tol::FLATTEN_MM);
+    }
+
+    #[test]
+    fn boundary_path_joining_preserves_directed_segments_and_discontinuities() {
+        let point = |x| Point::new(x, 0.0);
+        let paths = vec![
+            vec![point(0.0), point(1.0)],
+            vec![point(1.0), point(2.0)],
+            vec![point(4.0), point(5.0)],
+            vec![point(5.0), point(4.0)],
+            vec![point(4.0 + 1e-12), point(6.0)],
+        ];
+        let joined = joined_boundary_paths(&paths)
+            .into_iter()
+            .map(|path| {
+                path.into_iter()
+                    .map(|p| Point::new(p.x, p.y))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(joined.len(), 3);
+        assert_eq!(joined[0], vec![point(0.0), point(1.0), point(2.0)]);
+        assert_eq!(joined[1], vec![point(4.0), point(5.0), point(4.0)]);
+        let segments = |paths: &[Vec<Point>]| {
+            paths
+                .iter()
+                .flat_map(|path| path.windows(2).map(|pair| (pair[0], pair[1])))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(segments(&paths), segments(&joined));
     }
 }

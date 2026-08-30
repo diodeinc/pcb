@@ -179,23 +179,36 @@ fn vscore_route_reliefs_inner(
 pub fn vscore_lines_for<Symbol: PartialEq, LayerFunction>(
     doc: &Document<Symbol, LayerFunction>,
 ) -> Vec<VScoreLine> {
+    vscore_feature_lines_for(doc)
+        .into_iter()
+        .map(|(_, line)| line)
+        .collect()
+}
+
+/// Physical score centerlines with their source feature indices, preserving
+/// provenance for diagnostics while sharing the same operation interpretation.
+pub fn vscore_feature_lines_for<Symbol: PartialEq, LayerFunction>(
+    doc: &Document<Symbol, LayerFunction>,
+) -> Vec<(usize, VScoreLine)> {
     let mut lines = Vec::new();
-    for feature in doc
+    for (feature_index, feature) in doc
         .features
         .iter()
-        .filter(|feature| is_vcut_operation_feature(doc, feature) || feature.is_score())
+        .enumerate()
+        .filter(|(_, feature)| is_vcut_operation_feature(doc, feature) || feature.is_score())
     {
+        let mut feature_lines = Vec::new();
         for &placement in doc.placements_for_feature(feature) {
             for path in feature.paths.slice(&doc.arena.paths) {
                 if path.paint.kind() != PaintKind::Stroke {
                     continue;
                 }
-                let line_start = lines.len();
+                let line_start = feature_lines.len();
                 for contour in doc.arena.contours(path.contours) {
-                    append_contour_line_segments(doc.arena.cmds(*contour), &mut lines);
+                    append_contour_line_segments(doc.arena.cmds(*contour), &mut feature_lines);
                 }
                 let scale = placement.m00.hypot(placement.m10);
-                for line in &mut lines[line_start..] {
+                for line in &mut feature_lines[line_start..] {
                     line.start = placement.transform_point(line.start);
                     line.end = placement.transform_point(line.end);
                     if feature.stroke_width > 0.0 {
@@ -204,6 +217,7 @@ pub fn vscore_lines_for<Symbol: PartialEq, LayerFunction>(
                 }
             }
         }
+        lines.extend(feature_lines.into_iter().map(|line| (feature_index, line)));
     }
     lines
 }

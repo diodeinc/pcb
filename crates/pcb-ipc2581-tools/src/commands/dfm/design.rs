@@ -15,11 +15,12 @@ use ipc2581::Symbol;
 use ipc2581::types::LayerFunction;
 use pcb_ir::dialects::ipc::{
     ArtworkLowering, ArtworkObjectKind, ArtworkScope, Feature, FeatureDomain, FeatureKind,
-    FeatureSpan, LayoutStepKind, PlatingKind, ProfileOccurrenceRole, lower_layer_to_artwork_with,
-    profile_occurrences_for,
+    FeatureSpan, LayoutPurpose, LayoutStepKind, PlatingKind, ProfileOccurrenceRole, ProfileSet,
+    lower_layer_to_artwork_with, profile_occurrences_for,
 };
 use pcb_ir::dialects::{LayerRole, Side, artwork};
-use pcb_ir::geom::dfm::{Distance, RegionBoundaryIndex, min_width};
+use pcb_ir::geom::dfm::{Distance, RegionBoundaryIndex, WidthDisk, min_width_disk};
+use pcb_ir::geom::path::ContourBuf;
 use pcb_ir::geom::region::Ring;
 use pcb_ir::geom::{BBox, ContourSet, FillRule, Point, Polarity, Span, tol};
 use rayon::prelude::*;
@@ -33,7 +34,7 @@ use pcb_ir::import::ipc2581::{
 };
 use pcb_ir::import::physical::{Association, LandId, PhysicalHole};
 
-use super::report::LayerRef;
+use super::report::{DrillSpan, LayerRef, LayoutContext, LayoutOccurrence, SourceLocator};
 use super::rules::{self, Rule};
 
 pub(super) struct Design<'a> {
@@ -118,6 +119,87 @@ impl<'a> Design<'a> {
 
     pub fn resolve(&self, symbol: Option<Symbol>) -> Option<String> {
         symbol.map(|symbol| self.imported.resolve(symbol).to_owned())
+    }
+
+    pub fn report_layout(&self) -> LayoutContext {
+        let layout = &self.imported.geometry;
+        let graph = &layout.layout;
+        let board = self.scope == ArtworkScope::Board;
+        let selected = if board {
+            graph
+                .steps
+                .iter()
+                .find(|step| step.kind == LayoutStepKind::Board)
+        } else {
+            graph
+                .root_step
+                .and_then(|index| graph.steps.get(index as usize))
+        };
+        let bounds = profile_occurrences_for(
+            layout,
+            if board {
+                ProfileSet::BoardOutlines
+            } else {
+                ProfileSet::RootOnly
+            },
+        )
+        .into_iter()
+        .map(|occurrence| occurrence.profile.bbox.transformed(occurrence.transform))
+        .fold(BBox::empty(), BBox::union);
+        LayoutContext {
+            kind: selected.map_or("unknown", |step| match (step.kind, step.purpose) {
+                (_, LayoutPurpose::FabricationPanel) => "fab_panel",
+                (LayoutStepKind::Board, _) => "board",
+                (LayoutStepKind::Panel, _) => "board_array",
+                (kind, _) => step_kind(kind),
+            }),
+            selected_step: selected
+                .map(|step| self.imported.resolve(step.source_step_ref).to_owned()),
+            coordinate_frame: if board {
+                "selected_board"
+            } else {
+                "root_layout"
+            },
+            bounding_box: (!bounds.is_empty()).then(|| bounds.into()),
+            instances: if board {
+                Vec::new()
+            } else {
+                graph
+                    .instances
+                    .iter()
+                    .enumerate()
+                    .map(|(index, instance)| {
+                        let step = &graph.steps[instance.child_step as usize];
+                        let t = instance.transform;
+                        LayoutOccurrence {
+                            index: index as u32,
+                            parent_index: instance.parent_instance,
+                            step: self.imported.resolve(instance.source_step_ref).to_owned(),
+                            kind: step_kind(step.kind),
+                            purpose: match step.purpose {
+                                LayoutPurpose::Product => "product",
+                                LayoutPurpose::FabricationPanel => "fabrication_panel",
+                            },
+                            transform: [t.m00, t.m10, t.m01, t.m11, t.m02, t.m12],
+                            bounding_box: (!instance.bbox.is_empty()).then(|| instance.bbox.into()),
+                            repeat_index_x: instance.repeat_index_x,
+                            repeat_index_y: instance.repeat_index_y,
+                        }
+                    })
+                    .collect()
+            },
+        }
+    }
+}
+
+fn step_kind(kind: LayoutStepKind) -> &'static str {
+    match kind {
+        LayoutStepKind::Board => "board",
+        LayoutStepKind::Panel => "panel",
+        LayoutStepKind::Coupon => "coupon",
+        LayoutStepKind::Tooling => "tooling",
+        LayoutStepKind::Ic => "ic",
+        LayoutStepKind::Unknown => "unknown",
     }
 }
 
@@ -240,6 +322,8 @@ pub(super) struct Hole {
     /// Inclusive ordinal range over the copper stackup the drill spans. A
     /// through-board or unstated span covers every copper layer.
     pub copper_span: (u16, u16),
+    pub drill_span: DrillSpan,
+    pub provenance: SourceLocator,
     pub step: Option<Symbol>,
     pub padstack: Option<Symbol>,
     pub net: Option<Symbol>,
@@ -282,6 +366,13 @@ pub(super) struct HoleLand {
 #[derive(Debug, Clone)]
 pub(super) struct Slot {
     pub width: Distance,
+    pub width_disk: WidthDisk,
+    pub nominal_width_mm: Option<f64>,
+    pub outline: ContourSet,
+    /// Source contours in world coordinates, retained for display only. The
+    /// physical cavity is their independently filled union, like `outline`.
+    pub native_outline: Vec<ContourBuf>,
+    pub provenance: SourceLocator,
     pub bbox: BBox,
     pub layer: LayerRef,
     pub step: Option<Symbol>,
@@ -303,6 +394,7 @@ pub(super) struct Land {
     pub pin: Option<Symbol>,
     pub source_set_index: u32,
     pub source_feature_index: u32,
+    pub provenance: SourceLocator,
 }
 
 #[derive(Debug)]
@@ -375,6 +467,16 @@ pub(super) struct MaskLayer {
     pub layer: LayerRef,
     /// The composed image of the mask openings.
     pub image: ContourSet,
+    /// Final openings grouped by their physical source occurrence. A web is
+    /// the complement of these images, so its two walls can have two owners.
+    pub owners: Vec<MaskOwner>,
+}
+
+#[derive(Debug)]
+pub(super) struct MaskOwner {
+    pub step: Option<Symbol>,
+    pub instance_index: Option<u32>,
+    pub image: ContourSet,
 }
 
 #[derive(Debug, Clone)]
@@ -382,6 +484,7 @@ pub(super) struct Score {
     pub start: Point,
     pub end: Point,
     pub layer: LayerRef,
+    pub provenance: SourceLocator,
 }
 
 #[derive(Debug, Clone)]
@@ -456,6 +559,12 @@ fn collect_drilled(
                         layer: layer_ref(layer_name, source_layer.layer_function, None),
                         copper_span: copper_span(feature.intent.span, &imported.layer_definitions)
                             .unwrap_or(whole_stack),
+                        drill_span: drill_span(
+                            feature.intent.span,
+                            &imported.layer_definitions,
+                            whole_stack,
+                        ),
+                        provenance: feature_provenance(imported, layer_name, feature),
                         step: feature.source_step_ref,
                         padstack: feature.padstack_ref,
                         net: feature.net,
@@ -471,11 +580,19 @@ fn collect_drilled(
                     );
                     let contours = document.placed_feature_contours(feature);
                     let outline = ContourSet::from_filled_contours(&contours, tol::REGION_MM);
-                    let Some(measured) = min_width(&outline) else {
+                    let Some(width_disk) = min_width_disk(&outline) else {
                         bail!("{at} has no measurable outline");
                     };
                     slots.push(Slot {
-                        width: slot_width(feature.outer_diameter, measured).with_context(|| at)?,
+                        width: slot_width(feature.outer_diameter, width_disk.width)
+                            .with_context(|| at)?,
+                        width_disk,
+                        nominal_width_mm: (feature.outer_diameter > 0.0
+                            && feature.outer_diameter.is_finite())
+                        .then_some(feature.outer_diameter),
+                        outline,
+                        native_outline: contours,
+                        provenance: feature_provenance(imported, layer_name, feature),
                         bbox: feature.bbox,
                         layer: layer_ref(layer_name, source_layer.layer_function, None),
                         step: feature.source_step_ref,
@@ -566,6 +683,46 @@ fn copper_span(span: FeatureSpan<Symbol>, layers: &[ipc2581::types::Layer]) -> O
     Some((first?, last?))
 }
 
+fn drill_span(
+    span: FeatureSpan<Symbol>,
+    layers: &[ipc2581::types::Layer],
+    whole_stack: (u16, u16),
+) -> DrillSpan {
+    let resolved = copper_span(span, layers);
+    let (first_copper_index, last_copper_index) = resolved.unwrap_or(whole_stack);
+    DrillSpan {
+        first_copper_index,
+        last_copper_index,
+        interpretation: match span {
+            FeatureSpan::ThroughBoard => "declared_through_board",
+            _ if resolved.is_some() => "declared_layer_span",
+            _ => "assumed_whole_stack",
+        },
+    }
+}
+
+fn feature_provenance(
+    imported: &ImportedDesign,
+    layer: &str,
+    feature: &Feature<Symbol>,
+) -> SourceLocator {
+    let occurrence = feature_occurrence_id(feature)
+        .expect("materialized DFM feature must retain its occurrence identity");
+    let source = imported
+        .feature_definition(occurrence.feature)
+        .expect("materialized DFM feature must reference its imported definition")
+        .source;
+    SourceLocator {
+        step: feature
+            .source_step_ref
+            .map(|step| imported.resolve(step).to_owned()),
+        layer: Some(layer.to_owned()),
+        set_index: Some(source.set_index),
+        feature_index: Some(source.feature_index),
+        instance_index: feature.source_instance,
+    }
+}
+
 fn hole_class(plating: PlatingKind) -> Option<HoleClass> {
     match plating {
         PlatingKind::Via | PlatingKind::ViaCapped => Some(HoleClass::Via),
@@ -608,41 +765,64 @@ impl ArtworkLowering<Symbol, Option<ConductorId>> for CopperAttributionLowering 
 fn compose_attributed_copper(
     document: &mut GeometryDocument,
 ) -> Result<(ContourSet, Vec<CopperConductor>)> {
+    let composed =
+        compose_attributed_image(document, LayerRole::Copper, &mut CopperAttributionLowering)?;
+    let image = ContourSet::new(composed.image, FillRule::NonZero, tol::REGION_MM);
+    let conductors = composed
+        .owners
+        .into_iter()
+        .map(|(id, rings)| CopperConductor {
+            id,
+            image: ContourSet::new(rings, FillRule::NonZero, tol::REGION_MM),
+        })
+        .collect();
+    Ok((image, conductors))
+}
+
+/// Both copper and soldermask use the canonical ordered paint fold. Source
+/// ownership survives clear features and cutouts, rather than being inferred
+/// afterward from a feature's bounds or an enclosing board profile.
+fn compose_attributed_image<Owner: Clone + Eq + std::hash::Hash>(
+    document: &mut GeometryDocument,
+    role: LayerRole,
+    lowering: &mut impl ArtworkLowering<Symbol, Option<Owner>>,
+) -> Result<artwork::AttributedImage<Owner>> {
     pcb_ir::dialects::ipc::process::normalize_for_artwork(document);
     pcb_ir::dialects::ipc::validate_artwork_ready(document)
-        .map_err(|error| anyhow::anyhow!("copper layer is not artwork-ready: {error}"))?;
+        .map_err(|error| anyhow::anyhow!("layer is not artwork-ready: {error}"))?;
     let layer = document
         .layers
         .first()
-        .context("extracted copper document has no layer")?;
+        .context("extracted artwork document has no layer")?;
     let header = artwork::Layer {
         name: layer.name.clone(),
-        role: LayerRole::Copper,
+        role,
         side: Side::None,
         objects: Span::EMPTY,
         bbox: layer.bbox,
         meta: layer.layer_function,
     };
-    let attributed_artwork =
-        lower_layer_to_artwork_with(document, 0, header, &mut CopperAttributionLowering);
-    let (mut composed, _) = artwork::compose_attributed(&attributed_artwork, |owner| *owner);
+    let attributed_artwork = lower_layer_to_artwork_with(document, 0, header, lowering);
+    let (mut composed, _) = artwork::compose_attributed(&attributed_artwork, Clone::clone);
     let composed = composed
         .pop()
-        .context("attributed copper composition produced no layer")?;
-    let image = ContourSet::new(composed.image, FillRule::NonZero, tol::REGION_MM);
-    let conductors = composed
+        .context("attributed artwork composition produced no layer")?;
+    let owners = composed
         .owners
         .into_iter()
         .map(|(id, rings)| {
-            Ok(CopperConductor {
-                id: id.context(
-                    "structural artwork instance survived copper ownership materialization",
+            Ok((
+                id.context(
+                    "structural artwork instance survived source ownership materialization",
                 )?,
-                image: ContourSet::new(rings, FillRule::NonZero, tol::REGION_MM),
-            })
+                rings,
+            ))
         })
         .collect::<Result<Vec<_>>>()?;
-    Ok((image, conductors))
+    Ok(artwork::AttributedImage {
+        image: composed.image,
+        owners,
+    })
 }
 
 fn conductor_order(
@@ -731,6 +911,7 @@ fn collect_copper_layers(
                     pin: pin_ref.map(|pin| pin.pin),
                     source_set_index: feature.source.set_index,
                     source_feature_index: feature.source.feature_index,
+                    provenance: feature_provenance(imported, name, feature),
                 });
             }
             let (image, mut conductors) = compose_attributed_copper(&mut document)?;
@@ -784,6 +965,18 @@ fn stack_side(ordinal: usize, total: usize) -> &'static str {
     }
 }
 
+struct MaskAttributionLowering;
+
+impl ArtworkLowering<Symbol, Option<(Option<Symbol>, Option<u32>)>> for MaskAttributionLowering {
+    fn object_meta(
+        &mut self,
+        feature: &Feature<Symbol>,
+        _kind: ArtworkObjectKind,
+    ) -> Option<(Option<Symbol>, Option<u32>)> {
+        Some((feature.source_step_ref, feature.source_instance))
+    }
+}
+
 fn collect_mask_layers(imported: &ImportedDesign, scope: ArtworkScope) -> Result<Vec<MaskLayer>> {
     imported
         .layer_definitions
@@ -794,16 +987,37 @@ fn collect_mask_layers(imported: &ImportedDesign, scope: ArtworkScope) -> Result
         .into_par_iter()
         .map(|(layer_index, layer)| {
             let name = imported.resolve(layer.name);
-            let document = imported
+            let mut document = imported
                 .materialize_layer(LayerId(layer_index as u32), scope)
                 .with_context(|| format!("failed to extract soldermask layer '{name}'"))?;
+            // Keep the historical all-material fold bit-for-bit for measurements
+            // and waiver IDs. Grouping boolean operations by source occurrence
+            // can shift snapped vertices by nanometers. The separate attributed
+            // fold supplies source labels only; it never replaces this image.
+            let image =
+                crate::copper_balance::composed_copper_image_from_document(document.clone());
+            pcb_ir::dialects::ipc::process::expand_feature_placement_groups(&mut document);
+            let composed = compose_attributed_image(
+                &mut document,
+                LayerRole::Soldermask,
+                &mut MaskAttributionLowering,
+            )?;
             Ok(MaskLayer {
                 layer: layer_ref(
                     name,
                     layer.layer_function,
                     side_label(layers::ir_side(layer.side)),
                 ),
-                image: crate::copper_balance::composed_copper_image_from_document(document),
+                image,
+                owners: composed
+                    .owners
+                    .into_iter()
+                    .map(|((step, instance_index), rings)| MaskOwner {
+                        step,
+                        instance_index,
+                        image: ContourSet::new(rings, FillRule::NonZero, tol::REGION_MM),
+                    })
+                    .collect(),
             })
         })
         .collect()
@@ -884,12 +1098,17 @@ fn collect_scores(imported: &ImportedDesign, scope: ArtworkScope) -> Result<Vec<
     {
         let document = imported.materialize_layer(LayerId(layer_index as u32), scope)?;
         scores.extend(
-            pcb_ir::dialects::ipc::relief::vscore_lines_for(&document)
+            pcb_ir::dialects::ipc::relief::vscore_feature_lines_for(&document)
                 .into_iter()
-                .map(|line| Score {
+                .map(|(feature_index, line)| Score {
                     start: line.start,
                     end: line.end,
                     layer: layer_ref(imported.resolve(layer.name), layer.layer_function, None),
+                    provenance: feature_provenance(
+                        imported,
+                        imported.resolve(layer.name),
+                        &document.features[feature_index],
+                    ),
                 }),
         );
     }
@@ -1002,6 +1221,76 @@ mod tests {
     use super::*;
     use crate::ipc2581::Ipc2581;
 
+    #[test]
+    fn mask_owners_preserve_composed_openings_and_repeat_identity() {
+        let rectangle = |polarity, min, max| {
+            format!(
+                r#"<Set polarity="{polarity}"><Features><UserSpecial><Contour><Polygon>
+                <PolyBegin x="{min}" y="{min}"/>
+                <PolyStepSegment x="{max}" y="{min}"/>
+                <PolyStepSegment x="{max}" y="{max}"/>
+                <PolyStepSegment x="{min}" y="{max}"/>
+            </Polygon></Contour></UserSpecial></Features></Set>"#
+            )
+        };
+        let source = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="panel"/><LayerRef name="F.Mask"/>
+  </Content>
+  <Ecad><CadHeader units="MILLIMETER"/><CadData>
+    <Layer name="F.Mask" layerFunction="SOLDERMASK" side="TOP" polarity="POSITIVE"/>
+    <Step name="board" type="BOARD">
+      <LayerFeature layerRef="F.Mask">{}{}{}</LayerFeature>
+    </Step>
+    <Step name="panel" type="PALLET">
+      <StepRepeat stepRef="board" x="10" y="20" nx="2" ny="1" dx="10" dy="0"/>
+    </Step>
+  </CadData></Ecad>
+</IPC-2581>"#,
+            rectangle("POSITIVE", 0.0, 4.0),
+            rectangle("NEGATIVE", 1.0, 3.0),
+            rectangle("POSITIVE", 1.8, 2.2),
+        );
+        let ipc = Ipc2581::parse(&source).unwrap();
+        let imported = import_design(&ipc).unwrap();
+        let document = imported
+            .materialize_layer(
+                imported.layer_id("F.Mask").unwrap(),
+                ArtworkScope::ArrayFlattened,
+            )
+            .unwrap();
+        let previous = crate::copper_balance::composed_copper_image_from_document(document);
+        let layer = collect_mask_layers(&imported, ArtworkScope::ArrayFlattened)
+            .unwrap()
+            .remove(0);
+        assert_eq!(
+            layer.image.rings, previous.rings,
+            "source attribution must not change the measured image"
+        );
+        assert_eq!(layer.owners.len(), 2);
+        let mut instances = HashSet::new();
+        for (owner, x) in layer.owners.iter().zip([10.0, 20.0]) {
+            assert_eq!(owner.step.map(|step| imported.resolve(step)), Some("board"));
+            assert!(instances.insert(owner.instance_index.unwrap()));
+            assert!(owner.image.contains_point(Point::new(x + 0.5, 20.5)));
+            assert!(
+                !owner.image.contains_point(Point::new(x + 1.5, 21.5)),
+                "clear set removes the opening"
+            );
+            assert!(
+                owner.image.contains_point(Point::new(x + 2.0, 22.0)),
+                "later positive set repaints the opening"
+            );
+            assert!(
+                owner.image.bbox.max.x < x + 5.0,
+                "owners do not absorb neighboring repeats"
+            );
+        }
+    }
+
     fn slot_fixture(shape: &str) -> Ipc2581 {
         Ipc2581::parse(&format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -1045,6 +1334,29 @@ mod tests {
             slots[0].width.uncertainty_mm, 0.0,
             "a stated width is exact"
         );
+        let native = &slots[0].native_outline;
+        assert!(
+            native
+                .iter()
+                .flat_map(|contour| &contour.cmds)
+                .any(|command| {
+                    matches!(
+                        command.op,
+                        pcb_ir::geom::path::PathOp::ArcTo | pcb_ir::geom::path::PathOp::CubicTo
+                    )
+                }),
+            "native slot outlines retain source curves"
+        );
+        assert_eq!(
+            native
+                .iter()
+                .map(|contour| contour.bbox)
+                .fold(BBox::empty(), BBox::union),
+            slots[0].bbox
+        );
+        let reconstructed = ContourSet::from_filled_contours(native, tol::REGION_MM);
+        assert!(reconstructed.difference(&slots[0].outline).is_empty());
+        assert!(slots[0].outline.difference(&reconstructed).is_empty());
 
         let outline = slot_fixture(
             r#"<Outline>
@@ -1070,6 +1382,19 @@ mod tests {
         assert!(
             width.uncertainty_mm > 0.0,
             "a measured outline carries uncertainty"
+        );
+        assert!(
+            slots[0]
+                .native_outline
+                .iter()
+                .flat_map(|contour| &contour.cmds)
+                .all(|command| {
+                    !matches!(
+                        command.op,
+                        pcb_ir::geom::path::PathOp::ArcTo | pcb_ir::geom::path::PathOp::CubicTo
+                    )
+                }),
+            "actual source polygons must not be smoothed into curves"
         );
     }
 

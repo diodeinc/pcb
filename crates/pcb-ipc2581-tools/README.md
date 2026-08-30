@@ -54,6 +54,10 @@ pcb ipc dfm check fabrication-panel.xml \
 Pass a path such as `--pdk ./fab-process.toml` to use a custom PDK. Exact
 built-in names take precedence, so prefix a same-named file with `./`.
 
+Use `--include-geometry -o board.dfm.json` to include full vector artwork for
+the [standalone DFM viewer](../../apps/dfm-viewer). The default JSON remains a
+lightweight diagnostic record.
+
 See the [DFM format reference](docs/dfm.md) and
 [`pdks/standard.toml`](pdks/standard.toml) for the PDK and JSON report contracts.
 

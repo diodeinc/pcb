@@ -216,6 +216,9 @@ enum DfmCommands {
         /// Output report path. Omit to write JSON to stdout.
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
         output: Option<PathBuf>,
+        /// Include full vector artwork for the standalone DFM viewer.
+        #[arg(long)]
+        include_geometry: bool,
     },
 }
 
@@ -553,6 +556,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                 waivers,
                 layout_target,
                 output,
+                include_geometry,
             } => commands::dfm::execute_check(
                 &file,
                 &commands::dfm::CheckOptions {
@@ -560,6 +564,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                     waivers,
                     output,
                     layout_target,
+                    include_geometry,
                 },
             ),
         },
