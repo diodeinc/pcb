@@ -1970,6 +1970,22 @@ fn append_layout_repeats(
             repeat,
         );
 
+        // Bound expansion where it happens, including nested repeats. Empty
+        // repeats keep their metadata without iterating a potentially huge ny.
+        if repeat.nx == 0 || repeat.ny == 0 {
+            continue;
+        }
+        if stack.len() >= 64 {
+            bail!("IPC layout nesting exceeds the limit of 64 Steps");
+        }
+        if (repeat.nx as usize)
+            .checked_mul(repeat.ny as usize)
+            .and_then(|count| doc.layout.instances.len().checked_add(count))
+            .is_none_or(|count| count > 100_000)
+        {
+            bail!("IPC layout exceeds the limit of 100000 Step instances");
+        }
+
         let mut pending_panel_instances = Vec::new();
         for iy in 0..repeat.ny {
             for ix in 0..repeat.nx {
@@ -5125,6 +5141,28 @@ mod tests {
         assert_eq!(doc.layout.instances.len(), 2);
         assert_eq!(panel_step_count(&doc), 1);
         assert_eq!(board_instance_count(&doc), 2);
+    }
+
+    #[test]
+    fn layout_expansion_bounds_large_repeats_and_skips_empty_repeats() {
+        for (nx, ny) in [
+            (u32::MAX, 1),
+            (u32::MAX, u32::MAX),
+            (0, u32::MAX),
+            (u32::MAX, 0),
+        ] {
+            let xml = panel_layer_fixture()
+                .replace("nx=\"2\" ny=\"1\"", &format!("nx=\"{nx}\" ny=\"{ny}\""));
+            let ipc = Ipc2581::parse(&xml).unwrap();
+            let result = extract_layout(&ipc);
+            if nx == 0 || ny == 0 {
+                let layout = result.unwrap();
+                assert_eq!(layout.layout.repeats.len(), 1);
+                assert!(layout.layout.instances.is_empty());
+            } else {
+                assert!(result.unwrap_err().to_string().contains("limit"));
+            }
+        }
     }
 
     #[test]

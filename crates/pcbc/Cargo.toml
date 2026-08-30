@@ -34,7 +34,7 @@ pcb-layout = { workspace = true }
 pcb-sim = { workspace = true }
 pcb-diode-api = { workspace = true }
 pcb-docgen = { workspace = true }
-pcb-ipc2581-tools = { workspace = true }
+pcb-ipc2581-tools = { workspace = true, features = ["cli"] }
 pcb-interposer = { path = "../pcb-interposer" }
 pcb-eda = { workspace = true }
 pcb-sexpr = { workspace = true }

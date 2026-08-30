@@ -13,6 +13,7 @@ pub use write::{
 };
 
 use parse::Parser;
+#[cfg(not(target_family = "wasm"))]
 use std::path::Path;
 use thiserror::Error;
 
@@ -55,6 +56,7 @@ impl GerberX2 {
         parser.parse()
     }
 
+    #[cfg(not(target_family = "wasm"))]
     pub fn parse_file(path: impl AsRef<Path>) -> Result<Self> {
         let source = std::fs::read_to_string(path)?;
         Self::parse(&source)

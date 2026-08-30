@@ -1,15 +1,20 @@
+#[cfg(feature = "cli")]
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+#[cfg(feature = "cli")]
+use anyhow::Context;
+use anyhow::{Result, bail};
 use pcb_ir::dialects::ipc::{ProfileSet, profile_occurrences_for};
 
 use crate::LayoutTarget;
 use crate::geometry;
 use crate::ipc2581::Ipc2581;
+#[cfg(feature = "cli")]
 use crate::utils::file as file_utils;
 
 /// Options for exporting IPC-2581 profile outlines.
 #[derive(Debug, Clone)]
+#[cfg(feature = "cli")]
 pub struct OutlineOptions {
     pub output: PathBuf,
     pub layout_target: LayoutTarget,
@@ -19,20 +24,11 @@ pub struct OutlineOptions {
 }
 
 /// Export Step/Profile outlines as a DXF file.
+#[cfg(feature = "cli")]
 pub fn execute(input_file: &Path, options: &OutlineOptions) -> Result<()> {
     let content = file_utils::load_ipc_file(input_file)?;
     let ipc = Ipc2581::parse(&content)?;
-    let layout = geometry::extract_layout(&ipc)?;
-    let profile_set = if options.nested_outlines {
-        ProfileSet::LayoutBoundaries
-    } else {
-        options.layout_target.artwork_scope().profile_set()
-    };
-    if profile_occurrences_for(&layout, profile_set).is_empty() {
-        bail!("IPC-2581 primary step and repeated child steps have no board Profile outline");
-    }
-
-    let dxf = geometry::dxf::render_profile_set_dxf(&layout, profile_set);
+    let dxf = export_dxf(&ipc, options.layout_target, options.nested_outlines)?;
     std::fs::write(&options.output, dxf)
         .with_context(|| format!("Failed to write DXF to {}", options.output.display()))?;
     println!(
@@ -40,6 +36,25 @@ pub fn execute(input_file: &Path, options: &OutlineOptions) -> Result<()> {
         options.output.display()
     );
     Ok(())
+}
+
+/// Export Step/Profile outlines as in-memory DXF text.
+pub fn export_dxf(
+    ipc: &Ipc2581,
+    layout_target: LayoutTarget,
+    nested_outlines: bool,
+) -> Result<String> {
+    let layout = geometry::extract_layout(ipc)?;
+    let profile_set = if nested_outlines {
+        ProfileSet::LayoutBoundaries
+    } else {
+        layout_target.artwork_scope().profile_set()
+    };
+    if profile_occurrences_for(&layout, profile_set).is_empty() {
+        bail!("IPC-2581 primary step and repeated child steps have no board Profile outline");
+    }
+
+    Ok(geometry::dxf::render_profile_set_dxf(&layout, profile_set))
 }
 
 #[cfg(test)]

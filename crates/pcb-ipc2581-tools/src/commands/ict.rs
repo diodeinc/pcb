@@ -9,9 +9,13 @@
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
+#[cfg(feature = "cli")]
 use std::fs;
+#[cfg(feature = "cli")]
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+#[cfg(feature = "cli")]
+use std::path::Path;
+use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 use ipc2581::Ipc2581;
@@ -43,6 +47,7 @@ pub struct IctContact {
     pub path: String,
 }
 
+#[cfg(feature = "cli")]
 pub fn execute(file: &Path, options: &IctOptions) -> Result<()> {
     let ipc = Ipc2581::parse_file(file)?;
     let contacts = extract_contacts(&ipc)?;
@@ -62,7 +67,8 @@ pub fn extract_contacts(ipc: &Ipc2581) -> Result<Vec<IctContact>> {
     extract_contacts_from_design(ipc, &imported)
 }
 
-fn extract_contacts_from_design(
+/// Extract contacts while reusing a previously imported design.
+pub fn extract_contacts_from_design(
     ipc: &Ipc2581,
     imported: &ImportedDesign,
 ) -> Result<Vec<IctContact>> {

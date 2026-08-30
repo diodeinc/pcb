@@ -113,12 +113,7 @@ fn native_artwork(
 ) -> Result<
     pcb_ir::dialects::artwork::Document<ipc2581::types::LayerFunction, Option<ipc2581::Symbol>>,
 > {
-    let layer_id = design
-        .imported
-        .layer_id(layer)
-        .with_context(|| format!("DFM scene references unknown layer {layer}"))?;
-    let mut geometry = design.imported.materialize_layer(layer_id, design.scope)?;
-    pcb_ir::dialects::ipc::process::normalize_for_artwork(&mut geometry);
+    let geometry = geometry::render::prepare_layer(design.imported, layer, design.scope)?;
     Ok(geometry::render::layer_artwork(
         &geometry,
         false,

@@ -1,16 +1,35 @@
+use anyhow::Context;
 use ipc2581::Symbol;
 
 pub use crate::layers::layer_role;
 use ipc2581::types::LayerFunction;
 use pcb_ir::dialects::artwork::{Geometry, Object, PaintOrder, PaintStage};
-use pcb_ir::dialects::ipc::{ProfileSet, profile_occurrences_for};
+use pcb_ir::dialects::ipc::{ArtworkScope, ProfileSet, profile_occurrences_for};
 use pcb_ir::dialects::{LayerRole, Side, mask};
 use pcb_ir::geom::{BBox, Paint, Polarity, Span, StrokeStyle};
+use pcb_ir::import::ipc2581::ImportedDesign;
 
 type GeometryDocument = pcb_ir::dialects::ipc::Document<Symbol, LayerFunction>;
 type ArtworkDocument = pcb_ir::dialects::artwork::Document<LayerFunction, Option<Symbol>>;
 
 const DISPLAY_PROFILE_STROKE_WIDTH_MM: f64 = 0.1;
+
+/// Materialize and normalize a layer using the same artwork rules as Gerber export.
+pub fn prepare_layer(
+    imported: &ImportedDesign,
+    layer_name: &str,
+    view: ArtworkScope,
+) -> anyhow::Result<GeometryDocument> {
+    let layer = imported
+        .layer_id(layer_name)
+        .with_context(|| format!("IPC-2581 layer '{layer_name}' was not found"))?;
+    let mut geometry = imported.materialize_layer(layer, view)?;
+    pcb_ir::dialects::ipc::process::normalize_for_artwork(&mut geometry);
+    pcb_ir::dialects::ipc::validate_artwork_ready(&geometry)
+        .map_err(anyhow::Error::msg)
+        .with_context(|| format!("IPC-2581 layer '{layer_name}' is not artwork-ready"))?;
+    Ok(geometry)
+}
 
 pub fn render_layer_svg(
     geometry: &GeometryDocument,
@@ -30,6 +49,7 @@ pub fn render_layer_png(
     pcb_ir::render::artwork_png(&artwork, &pcb_ir::render::RenderOptions::default())
 }
 
+#[cfg(feature = "cli")]
 pub fn render_layer_terminal(
     geometry: &GeometryDocument,
     include_profiles: bool,

@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+#[cfg(feature = "cli")]
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -10,11 +11,13 @@ use serde::Serialize;
 use crate::UnitFormat;
 use crate::accessors::{ColorInfo, IpcAccessor, StackupLayerType, SurfaceFinishInfo};
 use crate::geometry;
+#[cfg(feature = "cli")]
 use crate::utils::file as file_utils;
 
 type GeometryDocument =
     pcb_ir::dialects::ipc::Document<ipc2581::Symbol, ipc2581::types::LayerFunction>;
 
+#[cfg(feature = "cli")]
 pub fn execute(
     input_file: &Path,
     output_file: Option<&Path>,

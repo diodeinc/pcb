@@ -23,6 +23,7 @@ use pcb_ir::geom::dfm::{Distance, RegionBoundaryIndex, WidthDisk, min_width_disk
 use pcb_ir::geom::path::ContourBuf;
 use pcb_ir::geom::region::Ring;
 use pcb_ir::geom::{BBox, ContourSet, FillRule, Point, Polarity, Span, tol};
+#[cfg(not(target_family = "wasm"))]
 use rayon::prelude::*;
 
 use crate::geometry::GeometryDocument;
@@ -90,8 +91,11 @@ impl<'a> Design<'a> {
                 collect_physical_stackup(imported).map(Some)
             })?,
             copper_boundaries: when(pools.copper_boundaries, || {
-                Ok(copper_layers
-                    .par_iter()
+                #[cfg(not(target_family = "wasm"))]
+                let layers = copper_layers.par_iter();
+                #[cfg(target_family = "wasm")]
+                let layers = copper_layers.iter();
+                Ok(layers
                     .map(|layer| RegionBoundaryIndex::new(&layer.image, boundary_search_mm))
                     .collect())
             })?,
@@ -878,8 +882,11 @@ fn collect_copper_layers(
         .filter(|(_, layer)| layers::is_copper(layer.layer_function))
         .collect::<Vec<_>>();
     let total = copper_layers.len();
+    #[cfg(not(target_family = "wasm"))]
+    let copper_layers = copper_layers.into_par_iter();
+    #[cfg(target_family = "wasm")]
+    let copper_layers = copper_layers.into_iter();
     copper_layers
-        .into_par_iter()
         .enumerate()
         .map(|(ordinal, (layer_index, layer))| {
             let name = imported.resolve(layer.name);
@@ -978,13 +985,17 @@ impl ArtworkLowering<Symbol, Option<(Option<Symbol>, Option<u32>)>> for MaskAttr
 }
 
 fn collect_mask_layers(imported: &ImportedDesign, scope: ArtworkScope) -> Result<Vec<MaskLayer>> {
-    imported
+    let layers = imported
         .layer_definitions
         .iter()
         .enumerate()
         .filter(|(_, layer)| layer.layer_function == LayerFunction::Soldermask)
-        .collect::<Vec<_>>()
-        .into_par_iter()
+        .collect::<Vec<_>>();
+    #[cfg(not(target_family = "wasm"))]
+    let layers = layers.into_par_iter();
+    #[cfg(target_family = "wasm")]
+    let layers = layers.into_iter();
+    layers
         .map(|(layer_index, layer)| {
             let name = imported.resolve(layer.name);
             let mut document = imported

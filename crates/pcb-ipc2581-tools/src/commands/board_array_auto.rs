@@ -1,7 +1,5 @@
 use std::cmp::Ordering;
 
-use clap::ValueEnum;
-
 use super::board_array::BoardMarginMm;
 use crate::utils::format::fmt_num;
 
@@ -14,7 +12,8 @@ const AUTO_SHEETS: [AutoSheetSize; 4] = [
 const AUTO_MIN_EDGE_RAIL_MM: f64 = 5.0;
 const AUTO_MAX_GRID_COUNT: u32 = 10;
 
-#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AutoSheetSize {
     A7,
     A6,

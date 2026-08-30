@@ -47,27 +47,26 @@ pub(super) fn generate_automatic_fab_panel_copper_balance(
         .iter()
         .map(|layer| ipc.resolve(layer.name).to_string())
         .collect::<Vec<_>>();
+    let extract = |layer_name: &String| {
+        composed_copper_image(ipc, layer_name)
+            .map(|image| (layer_name.clone(), image.intersection(&usable_region)))
+    };
+    #[cfg(not(target_family = "wasm"))]
     let copper_images = std::thread::scope(|scope| {
         let extractions = layer_names
             .iter()
-            .map(|layer_name| {
-                scope.spawn(|| {
-                    composed_copper_image(ipc, layer_name)
-                        .map(|image| image.intersection(&usable_region))
-                })
-            })
+            .map(|layer_name| scope.spawn(|| extract(layer_name)))
             .collect::<Vec<_>>();
-        layer_names
-            .iter()
-            .zip(extractions)
-            .map(|(layer_name, extraction)| {
-                let image = extraction
-                    .join()
-                    .expect("copper-image extraction panicked")?;
-                Ok((layer_name.clone(), image))
-            })
+        extractions
+            .into_iter()
+            .map(|extraction| extraction.join().expect("copper-image extraction panicked"))
             .collect::<Result<Vec<_>>>()
     })?;
+    #[cfg(target_family = "wasm")]
+    let copper_images = layer_names
+        .iter()
+        .map(extract)
+        .collect::<Result<Vec<_>>>()?;
     // Copper found outside the placed panels joins the shared obstacle set,
     // so unexpected overhang shrinks the certified safe region for every
     // layer instead of failing the solve. Each layer keeps its own overhang:

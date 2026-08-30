@@ -1,15 +1,21 @@
 //! Report estimated panel bow and twist.
 
+#[cfg(feature = "cli")]
 use std::path::Path;
 
+#[cfg(feature = "cli")]
 use anyhow::{Context, Result};
 
+#[cfg(feature = "cli")]
 use crate::ipc2581::Ipc2581;
-use crate::warp::{self, WarpAnalysis};
+#[cfg(feature = "cli")]
+use crate::warp;
+use crate::warp::WarpAnalysis;
 
 /// Bow beyond which IPC-6012 rejects a board carrying surface-mount parts.
 const SURFACE_MOUNT_LIMIT_PERCENT: f64 = 0.75;
 
+#[cfg(feature = "cli")]
 pub fn execute(file: &Path, report: Option<&Path>) -> Result<()> {
     let xml = std::fs::read_to_string(file)
         .with_context(|| format!("failed to read {}", file.display()))?;

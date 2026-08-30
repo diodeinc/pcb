@@ -71,11 +71,23 @@ pub struct ToolIdentity {
     pub version: &'static str,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct FileIdentity {
     pub path: String,
     pub sha256: String,
     pub size_bytes: u64,
+}
+
+impl FileIdentity {
+    /// Identify the original input bytes, before decoding or decompression.
+    /// `path` is a caller-provided label and is never opened by this method.
+    pub fn new(path: impl Into<String>, bytes: &[u8]) -> Self {
+        Self {
+            path: path.into(),
+            sha256: super::sha256(bytes),
+            size_bytes: bytes.len() as u64,
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -92,7 +104,7 @@ pub struct PdkIdentity {
 }
 
 impl PdkIdentity {
-    pub fn from_pdk(pdk: &Pdk, path: String, sha256: String, source: String) -> Self {
+    pub(super) fn from_pdk(pdk: &Pdk, path: String, sha256: String, source: String) -> Self {
         Self {
             id: pdk.pdk.id.clone(),
             name: pdk.pdk.name.clone(),
@@ -186,7 +198,7 @@ pub struct RuleResult {
 }
 
 impl RuleResult {
-    pub fn new(rule: &Rule) -> Self {
+    pub(super) fn new(rule: &Rule) -> Self {
         let semantics = rule.kind.semantics();
         Self {
             id: rule.id.clone(),

@@ -1,9 +1,11 @@
-pub(super) struct BuiltinPdk {
+/// A bundled process definition, addressable by its exact `name`.
+#[derive(serde::Serialize)]
+pub struct BuiltinPdk {
     pub name: &'static str,
     pub source: &'static str,
 }
 
-const BUILTIN_PDKS: &[BuiltinPdk] = &[BuiltinPdk {
+pub(super) const BUILTIN_PDKS: &[BuiltinPdk] = &[BuiltinPdk {
     name: "standard",
     source: include_str!("../../../pdks/standard.toml"),
 }];
