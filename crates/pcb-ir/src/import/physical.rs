@@ -134,14 +134,28 @@ struct FeatureEvidence {
 }
 
 impl ImportedDesign {
+    /// Derive physical copper lands without materializing unrelated physical
+    /// layers.
+    pub fn physical_lands(&self, scope: ArtworkScope) -> Result<Vec<PhysicalLand>> {
+        let components = self.component_occurrences(scope)?;
+        self.derive_physical_lands(scope, &components)
+    }
+
+    /// Derive drilled openings and their copper-land relationships without
+    /// materializing paste or mask layers.
+    pub fn physical_holes(&self, scope: ArtworkScope) -> Result<Vec<PhysicalHole>> {
+        let lands = self.physical_lands(scope)?;
+        self.derive_physical_holes(scope, &lands)
+    }
+
     /// Derive physical lands, final paste islands, mask openings, and drilled
     /// openings without reinterpreting source XML or duplicating geometry.
     pub fn physical_view(&self, scope: ArtworkScope) -> Result<PhysicalView> {
         let components = self.component_occurrences(scope)?;
-        let lands = self.physical_lands(scope, &components)?;
+        let lands = self.derive_physical_lands(scope, &components)?;
         let paste_islands = self.paste_islands(scope, &components, &lands)?;
         let mask_openings = self.mask_openings(scope, &lands)?;
-        let holes = self.physical_holes(scope, &lands)?;
+        let holes = self.derive_physical_holes(scope, &lands)?;
         Ok(PhysicalView {
             lands,
             paste_islands,
@@ -150,7 +164,7 @@ impl ImportedDesign {
         })
     }
 
-    fn physical_lands(
+    fn derive_physical_lands(
         &self,
         scope: ArtworkScope,
         components: &[ComponentOccurrence],
@@ -285,7 +299,7 @@ impl ImportedDesign {
         Ok(openings)
     }
 
-    fn physical_holes(
+    fn derive_physical_holes(
         &self,
         scope: ArtworkScope,
         lands: &[PhysicalLand],
@@ -587,7 +601,32 @@ mod tests {
     use ipc2581::Ipc2581;
 
     use super::*;
+    use crate::geom::path::{ContourBuf, PathCmd};
+    use crate::geom::{LineCap, Paint, StrokeStyle};
     use crate::import::ipc2581::import_design;
+
+    #[test]
+    fn domain_queries_do_not_materialize_unrelated_layers() {
+        let ipc = Ipc2581::parse(physical_fixture()).unwrap();
+        let mut imported = import_design(&ipc).unwrap();
+        make_paste_artwork_invalid(&mut imported);
+
+        assert_eq!(
+            imported.physical_lands(ArtworkScope::Board).unwrap().len(),
+            4
+        );
+        assert_eq!(
+            imported.physical_holes(ArtworkScope::Board).unwrap().len(),
+            1
+        );
+        assert!(
+            imported
+                .physical_view(ArtworkScope::Board)
+                .unwrap_err()
+                .to_string()
+                .contains("mixes Fill and Stroke paths")
+        );
+    }
 
     #[test]
     fn derives_component_owned_paste_and_explicit_land_relationships() {
@@ -664,6 +703,37 @@ mod tests {
             physical.holes[0].lands[0].land,
             Association::Resolved(_)
         ));
+    }
+
+    fn make_paste_artwork_invalid(imported: &mut ImportedDesign) {
+        let paste = imported.layer_id("PASTE").unwrap();
+        let source_layer = imported
+            .step_layers
+            .iter()
+            .find(|layer| layer.layer == paste)
+            .unwrap()
+            .document_layer as usize;
+        let feature = imported.geometry.layers[source_layer].features.start as usize;
+        let start = imported.geometry.arena.paths.len() as u32;
+        imported.geometry.push_path(
+            Paint::Fill {
+                rule: FillRule::NonZero,
+            },
+            [ContourBuf::new(vec![
+                PathCmd::move_to(Point::new(0.0, 0.0)),
+                PathCmd::line_to(Point::new(1.0, 0.0)),
+                PathCmd::line_to(Point::new(1.0, 1.0)),
+                PathCmd::close(),
+            ])],
+        );
+        imported.geometry.push_path(
+            Paint::Stroke(StrokeStyle::new(0.1, LineCap::Round)),
+            [ContourBuf::new(vec![
+                PathCmd::move_to(Point::new(0.0, 0.0)),
+                PathCmd::line_to(Point::new(1.0, 1.0)),
+            ])],
+        );
+        imported.geometry.features[feature].paths = Span::new(start, 2);
     }
 
     fn physical_fixture() -> &'static str {

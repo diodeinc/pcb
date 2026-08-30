@@ -152,8 +152,8 @@ fn extract_contacts_from_design(
             }
         }
     }
-    let physical = imported.physical_view(ArtworkScope::Board)?;
-    for land in &physical.lands {
+    let lands = imported.physical_lands(ArtworkScope::Board)?;
+    for land in &lands {
         let component = match &land.component {
             Association::Resolved(component) => *component,
             Association::Unresolved => continue,

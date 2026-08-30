@@ -31,7 +31,7 @@ use pcb_ir::import::ipc2581::import_design;
 use pcb_ir::import::ipc2581::{
     FeatureOccurrenceId, ImportedDesign, LayerId, feature_occurrence_id,
 };
-use pcb_ir::import::physical::{Association, LandId, PhysicalView};
+use pcb_ir::import::physical::{Association, LandId, PhysicalHole};
 
 use super::report::LayerRef;
 use super::rules::{self, Rule};
@@ -95,8 +95,8 @@ impl<'a> Design<'a> {
                     .collect())
             })?,
             hole_lands: when(pools.hole_lands, || {
-                let physical = imported.physical_view(scope)?;
-                link_lands(&holes, &copper_layers, &physical)
+                let physical_holes = imported.physical_holes(scope)?;
+                link_lands(&holes, &copper_layers, &physical_holes)
             })?,
             mask_layers: when(pools.masks, || collect_mask_layers(imported, scope))?,
             scores: when(pools.scores, || collect_scores(imported, scope))?,
@@ -815,10 +815,9 @@ fn collect_mask_layers(imported: &ImportedDesign, scope: ArtworkScope) -> Result
 fn link_lands(
     holes: &[Hole],
     copper_layers: &[CopperLayer],
-    physical: &PhysicalView,
+    physical_holes: &[PhysicalHole],
 ) -> Result<Vec<Vec<HoleLand>>> {
-    let physical_holes = physical
-        .holes
+    let physical_holes = physical_holes
         .iter()
         .map(|hole| (hole.id.0, hole))
         .collect::<HashMap<_, _>>();
