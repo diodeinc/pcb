@@ -330,6 +330,14 @@ pub fn expand_feature_placement_groups<S: Clone, L>(doc: &mut Document<S, L>) {
             {
                 let placement = doc.feature_placements[placement_index as usize];
                 for mut instance in instances {
+                    instance.source_placement = Some(
+                        instance
+                            .source_placement
+                            .map(|source_start| {
+                                source_start + placement_index - group.placements.start
+                            })
+                            .unwrap_or(placement_index),
+                    );
                     materialize_feature_placement(doc, &mut instance, placement);
                     expanded.push(instance);
                 }
@@ -1140,6 +1148,7 @@ mod tests {
             source: SourceRef {
                 set_index: 7,
                 feature_index: 0,
+                definition: None,
             },
             paths: Span::new(0, 1),
             ..copper_trace_feature()
@@ -1155,6 +1164,7 @@ mod tests {
             source: SourceRef {
                 set_index: 7,
                 feature_index: 1,
+                definition: None,
             },
             paths: Span::new(1, 1),
             ..copper_trace_feature()
@@ -1170,6 +1180,7 @@ mod tests {
             source: SourceRef {
                 set_index: 8,
                 feature_index: 0,
+                definition: None,
             },
             paths: Span::new(2, 1),
             ..copper_trace_feature()
@@ -1615,6 +1626,8 @@ mod tests {
             layer: 0,
             source_set_index: 0,
             source_geometry_ref: None,
+            component_ref: None,
+            geometry_usage: None,
             net: None,
             polarity: Polarity::Dark,
             spec_refs: Span::EMPTY,
@@ -1625,6 +1638,8 @@ mod tests {
             layer: 0,
             source_set_index: 1,
             source_geometry_ref: None,
+            component_ref: None,
+            geometry_usage: None,
             net: None,
             polarity: Polarity::Dark,
             spec_refs: Span::EMPTY,

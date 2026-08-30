@@ -1,33 +1,36 @@
 use anyhow::{Context, Result};
-use ipc2581::Ipc2581;
 use ipc2581::types::LayerFunction;
 use pcb_ir::dialects::ipc::ArtworkScope;
 use pcb_ir::dialects::nc;
+use pcb_ir::import::ipc2581::{ImportedDesign, LayerId};
 
-use crate::geometry;
 use crate::manufacturing::{ManufacturingFile, ManufacturingFileKind};
 use crate::xnc::{XncAttribute, XncBuilder, XncUnit, write_xnc};
 
-pub fn build_xnc_drill_files(ipc: &Ipc2581, view: ArtworkScope) -> Result<Vec<ManufacturingFile>> {
-    let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
-    let copper_layers = copper_layer_refs(&ecad.cad_data.layers);
+pub(crate) fn build_xnc_drill_files_from_design(
+    imported: &ImportedDesign,
+    view: ArtworkScope,
+) -> Result<Vec<ManufacturingFile>> {
+    let copper_layers = copper_layer_refs(&imported.layer_definitions);
     let mut nc = nc::Document::new();
 
-    for layer in &ecad.cad_data.layers {
+    for (layer_index, layer) in imported.layer_definitions.iter().enumerate() {
         if !matches!(
             layer.layer_function,
             LayerFunction::Drill | LayerFunction::Rout
         ) {
             continue;
         }
-        let layer_name = ipc.resolve(layer.name);
-        let doc = geometry::extract_layer_for_view(ipc, layer_name, view).with_context(|| {
-            format!("failed to extract IPC-2581 drill/rout layer '{layer_name}'")
-        })?;
+        let layer_name = imported.resolve(layer.name);
+        let doc = imported
+            .materialize_layer(LayerId(layer_index as u32), view)
+            .with_context(|| {
+                format!("failed to extract IPC-2581 drill/rout layer '{layer_name}'")
+            })?;
         pcb_ir::dialects::ipc::lower_to_nc(&doc, &mut nc).map_err(anyhow::Error::msg)?;
     }
 
-    xnc_files_from_nc(ipc, &nc, &copper_layers)
+    xnc_files_from_nc(imported, &nc, &copper_layers)
 }
 
 fn copper_layer_refs(layers: &[ipc2581::types::ecad::Layer]) -> Vec<ipc2581::Symbol> {
@@ -51,7 +54,7 @@ enum XncSpanKey {
 }
 
 fn xnc_files_from_nc(
-    ipc: &Ipc2581,
+    imported: &ImportedDesign,
     nc: &nc::Document<ipc2581::Symbol>,
     copper_layers: &[ipc2581::Symbol],
 ) -> Result<Vec<ManufacturingFile>> {
@@ -66,7 +69,7 @@ fn xnc_files_from_nc(
             .entry(key)
             .or_insert_with(|| XncBuilder::new(XncUnit::Metric, vec![file_function]));
         let tool_attributes = xnc_tool_attributes(object);
-        let object_attributes = xnc_object_attributes(ipc, object);
+        let object_attributes = xnc_object_attributes(imported, object);
         match &object.geometry {
             nc::Geometry::Drill { at, diameter } => {
                 builder.add_drill(*diameter, *at, tool_attributes, object_attributes)?;
@@ -152,17 +155,20 @@ fn xnc_tool_attributes(object: &nc::Object<ipc2581::Symbol>) -> Vec<XncAttribute
     vec![XncAttribute::tool("AperFunction", fields)]
 }
 
-fn xnc_object_attributes(ipc: &Ipc2581, object: &nc::Object<ipc2581::Symbol>) -> Vec<XncAttribute> {
+fn xnc_object_attributes(
+    imported: &ImportedDesign,
+    object: &nc::Object<ipc2581::Symbol>,
+) -> Vec<XncAttribute> {
     let mut attributes = Vec::new();
     if let Some(net) = object.net {
-        attributes.push(XncAttribute::object("N", [ipc.resolve(net)]));
+        attributes.push(XncAttribute::object("N", [imported.resolve(net)]));
     }
     if let Some(component) = object.component {
-        attributes.push(XncAttribute::object("C", [ipc.resolve(component)]));
+        attributes.push(XncAttribute::object("C", [imported.resolve(component)]));
         if let Some(pin) = object.pin {
             attributes.push(XncAttribute::object(
                 "P",
-                [ipc.resolve(component), ipc.resolve(pin)],
+                [imported.resolve(component), imported.resolve(pin)],
             ));
         }
     }

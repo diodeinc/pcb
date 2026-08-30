@@ -5,6 +5,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use pcb_ir::import::ipc2581::import_design;
 use sha2::{Digest, Sha256};
 
 use crate::LayoutTarget;
@@ -79,7 +80,8 @@ pub fn execute_check(file: &Path, options: &CheckOptions) -> Result<()> {
     let generated_at = generation_time();
     let content = file_utils::ipc_text(file, &input_bytes)?;
     let ipc = Ipc2581::parse(&content).context("failed to parse IPC-2581 file")?;
-    let design = design::Design::extract(&ipc, options.layout_target.artwork_scope(), &rules)?;
+    let imported = import_design(&ipc).context("failed to import IPC-2581 physical design")?;
+    let design = design::Design::extract(&imported, options.layout_target.artwork_scope(), &rules)?;
     let checked = checks::run(
         &rules,
         &design,
@@ -325,7 +327,8 @@ minimum_board_array_spacing = "300 mil"
         let ipc = Ipc2581::parse(xml).unwrap();
         let pdk = pdk::Pdk::parse(pdk_source).unwrap();
         let rules = rules::lower(&pdk).unwrap();
-        let design = design::Design::extract(&ipc, scope, &rules).unwrap();
+        let imported = import_design(&ipc).unwrap();
+        let design = design::Design::extract(&imported, scope, &rules).unwrap();
         checks::run(
             &rules,
             &design,
@@ -440,8 +443,9 @@ minimum_board_array_spacing = "300 mil"
         .unwrap();
         let pdk = pdk::Pdk::parse(PDK).unwrap();
         let rules = rules::lower(&pdk).unwrap();
+        let imported = import_design(&ipc).unwrap();
 
-        let error = design::Design::extract(&ipc, ArtworkScope::Board, &rules)
+        let error = design::Design::extract(&imported, ArtworkScope::Board, &rules)
             .err()
             .unwrap();
 

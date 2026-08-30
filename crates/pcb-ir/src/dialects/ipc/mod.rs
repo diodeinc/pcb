@@ -39,8 +39,8 @@ pub use document::{Document, Layer};
 pub use feature::{
     CopperBalanceKind, CopperBalanceVoid, Feature, FeatureBucket, FeatureDomain, FeatureFlags,
     FeatureIntent, FeatureKind, FeatureMaterial, FeatureOperation, FeaturePlacementGroup,
-    FeatureRole, FeatureSet, FeatureSpan, FiducialKind, PinRef, PlatingKind, PrimitiveRef,
-    SourceRef,
+    FeatureRole, FeatureSet, FeatureSpan, FiducialKind, GeometryUsage, PinRef, PlatingKind,
+    PrimitiveRef, SourceRef,
 };
 pub use layout::{
     LayoutGraph, LayoutInstance, LayoutMargins, LayoutPurpose, LayoutRepeat, LayoutStep,

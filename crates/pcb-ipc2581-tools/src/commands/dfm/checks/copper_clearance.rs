@@ -199,7 +199,8 @@ minimum_copper_clearance = "0.15 mm"
         let ipc = Ipc2581::parse(xml).unwrap();
         let pdk = Pdk::parse(PDK).unwrap();
         let rules = rules::lower(&pdk).unwrap();
-        let design = Design::extract(&ipc, ArtworkScope::Board, &rules).unwrap();
+        let imported = pcb_ir::import::ipc2581::import_design(&ipc).unwrap();
+        let design = Design::extract(&imported, ArtworkScope::Board, &rules).unwrap();
         checks::run(
             &rules,
             &design,
@@ -254,8 +255,9 @@ minimum_copper_clearance = "0.15 mm"
         let ipc = Ipc2581::parse(&xml).unwrap();
         let pdk = Pdk::parse(PDK).unwrap();
         let rules = rules::lower(&pdk).unwrap();
+        let imported = pcb_ir::import::ipc2581::import_design(&ipc).unwrap();
 
-        let error = Design::extract(&ipc, ArtworkScope::Board, &rules)
+        let error = Design::extract(&imported, ArtworkScope::Board, &rules)
             .err()
             .expect("unattributed copper must fail closed");
         assert!(

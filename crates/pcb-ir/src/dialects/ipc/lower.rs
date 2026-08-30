@@ -11,7 +11,7 @@ use crate::dialects::ipc::feature::{
     Feature, FeatureBucket, FeatureKind, FeatureOperation, FeatureRole, FeatureSpan, PlatingKind,
     PrimitiveRef,
 };
-use crate::dialects::ipc::layout::{LayoutPurpose, LayoutStepKind, StepProfile};
+use crate::dialects::ipc::layout::{LayoutPurpose, StepProfile};
 use crate::dialects::ipc::{Document, relief};
 use crate::dialects::{LayerRole, Side};
 use crate::dialects::{artwork, nc};
@@ -415,10 +415,9 @@ pub fn paint_order<Symbol>(feature: &Feature<Symbol>) -> artwork::PaintOrder {
 
 /// Lower drill and rout features into an NC document.
 ///
-/// Holes become drills; simple oval slots become slots. Route-operation slots
-/// that are not simple ovals are skipped (they are routed, not drilled), as
-/// are route slots defined outside board steps; any other non-oval slot is an
-/// error because it cannot be represented in NC output.
+/// Holes become drills and simple oval slots become slots. Any other slot is
+/// an explicit error: callers must never mistake silently omitted material
+/// removal for a complete manufacturing program.
 pub fn lower_to_nc<Symbol: Copy, LayerFunction>(
     doc: &Document<Symbol, LayerFunction>,
     nc: &mut nc::Document<Symbol>,
@@ -437,15 +436,7 @@ pub fn lower_to_nc<Symbol: Copy, LayerFunction>(
                     )?);
                 }
                 FeatureKind::Slot => {
-                    if feature.intent.operation == FeatureOperation::Route
-                        && feature.source_step_kind != LayoutStepKind::Board
-                    {
-                        continue;
-                    }
                     let Some((diameter, start, end)) = nc_linear_slot(feature) else {
-                        if feature.intent.operation == FeatureOperation::Route {
-                            continue;
-                        }
                         return Err(format!(
                             "cannot export slot on layer '{}' to NC because it is not a simple oval slot",
                             layer.name

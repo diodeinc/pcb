@@ -1,5 +1,4 @@
 pub mod dxf;
-mod extract;
 pub mod render;
 
 use anyhow::{Context, Result, bail};
@@ -13,9 +12,10 @@ use pcb_ir::dialects::ipc::{
     },
 };
 use pcb_ir::geom::{BBox, ContourBuf, ContourSet, Point, Polarity};
+use pcb_ir::import::ipc2581::{ImportedDesign, LayerId, import_design};
 
-pub use extract::{extract_layer, extract_layer_for_view, extract_layout};
-pub(crate) use extract::{extract_step_layer_local, is_panel_step, step_repeat_transform};
+pub use pcb_ir::import::ipc2581::{extract_layer, extract_layer_for_view, extract_layout};
+pub(crate) use pcb_ir::import::ipc2581::{is_panel_step, step_repeat_transform};
 
 pub(crate) type GeometryDocument =
     pcb_ir::dialects::ipc::Document<ipc2581::Symbol, ipc2581::types::LayerFunction>;
@@ -26,16 +26,30 @@ pub fn vscore_lines(
     ipc: &Ipc2581,
     scope: ArtworkScope,
 ) -> Result<Vec<(ipc2581::Symbol, LayerFunction, VScoreLine)>> {
-    let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
+    let imported = import_design(ipc)?;
+    vscore_lines_from_design(&imported, scope)
+}
+
+pub fn vscore_lines_from_design(
+    imported: &ImportedDesign,
+    scope: ArtworkScope,
+) -> Result<Vec<(ipc2581::Symbol, LayerFunction, VScoreLine)>> {
     let mut lines = Vec::new();
-    for source_layer in ecad.cad_data.layers.iter().filter(|layer| {
-        matches!(
-            layer.layer_function,
-            LayerFunction::VCut | LayerFunction::Score
-        )
-    }) {
-        let layer_name = ipc.resolve(source_layer.name);
-        let doc = extract_layer_for_view(ipc, layer_name, scope)
+    for (layer_index, source_layer) in
+        imported
+            .layer_definitions
+            .iter()
+            .enumerate()
+            .filter(|(_, layer)| {
+                matches!(
+                    layer.layer_function,
+                    LayerFunction::VCut | LayerFunction::Score
+                )
+            })
+    {
+        let layer_name = imported.resolve(source_layer.name);
+        let doc = imported
+            .materialize_layer(LayerId(layer_index as u32), scope)
             .with_context(|| format!("failed to extract IPC-2581 V-score layer '{layer_name}'"))?;
         lines.extend(
             vscore_lines_for(&doc)
@@ -51,6 +65,15 @@ pub fn board_array_vscore_lines(ipc: &Ipc2581) -> Result<Vec<VScoreLine>> {
         .into_iter()
         .map(|(_, _, line)| line)
         .collect())
+}
+
+pub fn board_array_vscore_lines_from_design(imported: &ImportedDesign) -> Result<Vec<VScoreLine>> {
+    Ok(
+        vscore_lines_from_design(imported, ArtworkScope::ArrayFlattened)?
+            .into_iter()
+            .map(|(_, _, line)| line)
+            .collect(),
+    )
 }
 
 pub fn board_array_fabrication_profile(
@@ -70,7 +93,29 @@ pub fn board_array_fabrication_profile_with_debug(
     BoardArrayFabricationProfile,
     pcb_ir::dialects::ipc::relief::VScoreReliefDebug,
 )> {
-    let relief_features = board_array_relief_features(ipc, score_lines)?;
+    let imported = import_design(ipc)?;
+    board_array_fabrication_profile_from_design_with_debug(&imported, layout, score_lines)
+}
+
+pub fn board_array_fabrication_profile_from_design(
+    imported: &ImportedDesign,
+    layout: &GeometryDocument,
+    score_lines: &[VScoreLine],
+) -> Result<BoardArrayFabricationProfile> {
+    let (profile, _) =
+        board_array_fabrication_profile_from_design_with_debug(imported, layout, score_lines)?;
+    Ok(profile)
+}
+
+pub fn board_array_fabrication_profile_from_design_with_debug(
+    imported: &ImportedDesign,
+    layout: &GeometryDocument,
+    score_lines: &[VScoreLine],
+) -> Result<(
+    BoardArrayFabricationProfile,
+    pcb_ir::dialects::ipc::relief::VScoreReliefDebug,
+)> {
+    let relief_features = board_array_relief_features(imported, score_lines)?;
     Ok(pcb_ir::dialects::ipc::board_array_fabrication_profile(
         layout,
         score_lines,
@@ -82,14 +127,14 @@ pub fn board_array_fabrication_profile_with_debug(
 }
 
 fn board_array_relief_features(
-    ipc: &Ipc2581,
+    imported: &ImportedDesign,
     score_lines: &[VScoreLine],
 ) -> Result<BoardArrayReliefFeatures> {
     if score_lines.is_empty() {
         return Ok(BoardArrayReliefFeatures::default());
     }
 
-    let (cutouts, envelopes) = collect_relief_feature_candidates(ipc)?;
+    let (cutouts, envelopes) = collect_relief_feature_candidates(imported)?;
     let mut score_blockers = Vec::new();
     for cutout in cutouts
         .into_iter()
@@ -124,20 +169,20 @@ fn board_array_relief_features(
 }
 
 fn collect_relief_feature_candidates(
-    ipc: &Ipc2581,
+    imported: &ImportedDesign,
 ) -> Result<(Vec<ReliefFeatureCandidate>, Vec<ReliefFeatureCandidate>)> {
-    let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
     let mut cutouts = Vec::new();
     let mut envelopes = Vec::new();
 
-    for layer in ecad
-        .cad_data
-        .layers
+    for (layer_index, layer) in imported
+        .layer_definitions
         .iter()
-        .filter(|layer| relief_feature_layer(layer.layer_function))
+        .enumerate()
+        .filter(|(_, layer)| relief_feature_layer(layer.layer_function))
     {
-        let layer_name = ipc.resolve(layer.name);
-        let doc = extract_layer_for_view(ipc, layer_name, ArtworkScope::ArrayFlattened)
+        let layer_name = imported.resolve(layer.name);
+        let doc = imported
+            .materialize_layer(LayerId(layer_index as u32), ArtworkScope::ArrayFlattened)
             .with_context(|| format!("failed to extract IPC-2581 layer '{layer_name}'"))?;
         for feature in &doc.features {
             if is_through_cutout(feature) {
