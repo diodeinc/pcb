@@ -13,13 +13,16 @@ use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use ipc2581::Ipc2581;
+use pcb_ir::dialects::ipc::ArtworkScope;
 use pcb_ir::dialects::placement::PlacementSide;
+use pcb_ir::import::ipc2581::{ImportedDesign, import_design};
+use pcb_ir::import::physical::Association;
 
 use crate::accessors::IpcAccessor;
 use crate::commands::cpl::CplSideFilter;
-use crate::placement::extract_single_board_placements;
+use crate::placement::extract_single_board_placements_from_design;
 
 #[derive(Debug, Clone)]
 pub struct IctOptions {
@@ -55,6 +58,14 @@ pub fn execute(file: &Path, options: &IctOptions) -> Result<()> {
 }
 
 pub fn extract_contacts(ipc: &Ipc2581) -> Result<Vec<IctContact>> {
+    let imported = import_design(ipc)?;
+    extract_contacts_from_design(ipc, &imported)
+}
+
+fn extract_contacts_from_design(
+    ipc: &Ipc2581,
+    imported: &ImportedDesign,
+) -> Result<Vec<IctContact>> {
     let accessor = IpcAccessor::new(ipc);
 
     // Designator → (ict role, zen path) from the BOM.
@@ -88,59 +99,94 @@ pub fn extract_contacts(ipc: &Ipc2581) -> Result<Vec<IctContact>> {
         }
     }
 
-    // (designator, pin) → net and pad location. Exports carry connectivity
-    // either as LogicalNet pin lists or as per-layer pad Sets (KiCad's
-    // flavor); pad Sets also give the exact pad position, which beats the
-    // component origin.
+    // (designator, pin) → net and physical land location. Logical nets seed
+    // connectivity when artwork omits per-pad nets; canonical physical lands
+    // then provide exact board-local positions and ownership.
     #[derive(Default, Clone)]
     struct PinInfo {
         net: String,
         at: Option<(f64, f64)>,
     }
     let mut pins: BTreeMap<(String, String), PinInfo> = BTreeMap::new();
-    if let Some(ecad) = ipc.ecad() {
-        for step in &ecad.cad_data.steps {
-            for net in &step.logical_nets {
-                for pin_ref in &net.pin_refs {
-                    let Some(component_ref) = pin_ref.component_ref else {
+    for step in &imported.steps {
+        for net in &step.logical_nets {
+            for pin_ref in &net.pin_refs {
+                let Some(component_ref) = pin_ref.component_ref else {
+                    continue;
+                };
+                let key = (
+                    imported.resolve(component_ref).to_string(),
+                    imported.resolve(pin_ref.pin).to_string(),
+                );
+                pins.entry(key).or_default().net = imported.resolve(net.name).to_string();
+            }
+        }
+        // Some assembly exports identify a test-point pad and location but
+        // omit the padstack needed to form physical artwork. Retain that
+        // source location as a fallback; a resolved physical land below
+        // remains authoritative when one exists.
+        for layer_feature in &step.layer_features {
+            for set in &layer_feature.sets {
+                for feature in &set.features {
+                    let ipc2581::types::SetFeature::Pad(pad) = feature else {
+                        continue;
+                    };
+                    let Some(pin_ref) = &pad.pin_ref else {
+                        continue;
+                    };
+                    let (Some(component_ref), Some(x), Some(y)) =
+                        (pin_ref.component_ref, pad.x, pad.y)
+                    else {
                         continue;
                     };
                     let key = (
-                        ipc.resolve(component_ref).to_string(),
-                        ipc.resolve(pin_ref.pin).to_string(),
+                        imported.resolve(component_ref).to_string(),
+                        imported.resolve(pin_ref.pin).to_string(),
                     );
-                    pins.entry(key).or_default().net = ipc.resolve(net.name).to_string();
-                }
-            }
-            for layer_feature in &step.layer_features {
-                for set in &layer_feature.sets {
-                    let Some(net) = set.net else { continue };
-                    for feature in &set.features {
-                        let ipc2581::types::SetFeature::Pad(pad) = feature else {
-                            continue;
-                        };
-                        let Some(pin_ref) = &pad.pin_ref else {
-                            continue;
-                        };
-                        let Some(component_ref) = pin_ref.component_ref else {
-                            continue;
-                        };
-                        let key = (
-                            ipc.resolve(component_ref).to_string(),
-                            ipc.resolve(pin_ref.pin).to_string(),
-                        );
-                        let info = pins.entry(key).or_default();
-                        info.net = ipc.resolve(net).to_string();
-                        if let (Some(x), Some(y)) = (pad.x, pad.y) {
-                            info.at = Some((x, y));
-                        }
+                    let info = pins.entry(key).or_default();
+                    if let Some(net) = set.net {
+                        info.net = imported.resolve(net).to_string();
                     }
+                    info.at = Some((x, y));
                 }
             }
         }
     }
+    let physical = imported.physical_view(ArtworkScope::Board)?;
+    for land in &physical.lands {
+        let component = match &land.component {
+            Association::Resolved(component) => *component,
+            Association::Unresolved => continue,
+            Association::Ambiguous(candidates) => bail!(
+                "ICT land has ambiguous component ownership ({} candidates)",
+                candidates.len()
+            ),
+            Association::Conflicting(candidates) => bail!(
+                "ICT land has conflicting component ownership ({} candidates)",
+                candidates.len()
+            ),
+        };
+        let Some(pin) = land.pin else {
+            continue;
+        };
+        let component = imported
+            .component_definition(component.component)
+            .expect("physical land component references a canonical definition");
+        let Some(reference) = component.source.ref_des else {
+            continue;
+        };
+        let key = (
+            imported.resolve(reference).to_string(),
+            imported.resolve(pin).to_string(),
+        );
+        let info = pins.entry(key).or_default();
+        if let Some(net) = land.net {
+            info.net = imported.resolve(net).to_string();
+        }
+        info.at = Some((land.at.x, land.at.y));
+    }
 
-    let placements = extract_single_board_placements(&accessor)?;
+    let placements = extract_single_board_placements_from_design(&accessor, imported)?;
     let mut contacts = Vec::new();
     for component in &placements.components {
         let Some((ict, path)) = roles.get(&component.designator) else {

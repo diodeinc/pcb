@@ -415,6 +415,10 @@ impl ContourSet {
         self.rings.is_empty()
     }
 
+    pub fn bbox(&self) -> BBox {
+        self.bbox
+    }
+
     /// Net enclosed area.
     pub fn area(&self) -> f64 {
         rings_area(&self.rings)
@@ -633,6 +637,73 @@ impl ContourSet {
             .chunks_exact(STRATA * STRATA)
             .map(|tile| tile.iter().sum::<f64>() / (STRATA * STRATA) as f64)
             .collect()
+    }
+
+    /// Portions of `start..end` covered by the region, in query direction.
+    ///
+    /// The region boundary is covered. Point-only contacts are omitted.
+    pub fn segment_spans(&self, start: Point, end: Point) -> Vec<(Point, Point)> {
+        let direction = end - start;
+        let length = direction.length();
+        if self.is_empty() || !start.is_finite() || !end.is_finite() || length == 0.0 {
+            return Vec::new();
+        }
+
+        let epsilon = self.tolerance.max(tol::EPSILON_MM);
+        let parameter_epsilon = (epsilon / length).min(1.0);
+        let cross = |left: Point, right: Point| left.x * right.y - left.y * right.x;
+        let mut breaks = vec![0.0, 1.0];
+        for (edge_start, edge_end) in self.rings.iter().flat_map(ring_edges) {
+            let edge = edge_end - edge_start;
+            let offset = edge_start - start;
+            let denominator = cross(direction, edge);
+            let parallel_epsilon = f64::EPSILON * length * edge.length() * 8.0;
+            if denominator.abs() <= parallel_epsilon {
+                // A coincident edge contributes both ends of its overlap. The
+                // midpoint classification below then includes that boundary.
+                if cross(direction, offset).abs() <= epsilon * length {
+                    let length_squared = length * length;
+                    for point in [edge_start, edge_end] {
+                        let t = ((point - start).x * direction.x + (point - start).y * direction.y)
+                            / length_squared;
+                        if t >= -parameter_epsilon && t <= 1.0 + parameter_epsilon {
+                            breaks.push(t.clamp(0.0, 1.0));
+                        }
+                    }
+                }
+                continue;
+            }
+
+            let t = cross(offset, edge) / denominator;
+            let u = cross(offset, direction) / denominator;
+            if t >= -parameter_epsilon
+                && t <= 1.0 + parameter_epsilon
+                && u >= -parameter_epsilon
+                && u <= 1.0 + parameter_epsilon
+            {
+                breaks.push(t.clamp(0.0, 1.0));
+            }
+        }
+
+        breaks.sort_by(f64::total_cmp);
+        breaks.dedup_by(|left, right| (*left - *right).abs() <= parameter_epsilon);
+        let point_at = |t: f64| start + direction * t;
+        let mut spans: Vec<(Point, Point)> = Vec::new();
+        for interval in breaks.windows(2) {
+            let (from, to) = (interval[0], interval[1]);
+            if to - from <= parameter_epsilon || !self.contains_point(point_at((from + to) / 2.0)) {
+                continue;
+            }
+            let next = (point_at(from), point_at(to));
+            if let Some(previous) = spans.last_mut()
+                && previous.1.distance_to(next.0) <= epsilon
+            {
+                previous.1 = next.1;
+            } else {
+                spans.push(next);
+            }
+        }
+        spans
     }
 
     /// Whether the regularized region contains the point, including its boundary.
@@ -2291,6 +2362,100 @@ mod tests {
         assert!(region.contains_disk(Point::new(2.0, 2.0), 2.0));
         assert!(!region.contains_disk(Point::new(2.0, 2.0), 2.01));
         assert!(!region.contains_disk(Point::new(3.5, 5.0), 0.6));
+    }
+
+    fn assert_spans(actual: Vec<(Point, Point)>, expected: &[((f64, f64), (f64, f64))]) {
+        assert_eq!(actual.len(), expected.len(), "{actual:?}");
+        for ((start, end), &(from, to)) in actual.iter().zip(expected) {
+            assert!(
+                start.distance_to(Point::new(from.0, from.1)) <= 1e-8,
+                "{actual:?}"
+            );
+            assert!(
+                end.distance_to(Point::new(to.0, to.1)) <= 1e-8,
+                "{actual:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn segment_spans_preserve_holes_and_clip_to_the_query() {
+        let outer = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), tol::REGION_MM);
+        let hole = ContourSet::rectangle(rect(4.0, 2.0, 6.0, 8.0), tol::REGION_MM);
+        let ring = outer.difference(&hole);
+
+        assert_spans(
+            ring.segment_spans(Point::new(-2.0, 5.0), Point::new(12.0, 5.0)),
+            &[((0.0, 5.0), (4.0, 5.0)), ((6.0, 5.0), (10.0, 5.0))],
+        );
+        assert_spans(
+            ring.segment_spans(Point::new(2.0, 5.0), Point::new(9.0, 5.0)),
+            &[((2.0, 5.0), (4.0, 5.0)), ((6.0, 5.0), (9.0, 5.0))],
+        );
+    }
+
+    #[test]
+    fn segment_spans_preserve_disconnected_and_concave_regions() {
+        let left = ContourSet::rectangle(rect(0.0, 0.0, 2.0, 2.0), tol::REGION_MM);
+        let concave = ContourSet::new(
+            vec![vec![
+                [4.0, 0.0],
+                [8.0, 0.0],
+                [8.0, 1.0],
+                [5.0, 1.0],
+                [5.0, 2.0],
+                [4.0, 2.0],
+            ]],
+            FillRule::NonZero,
+            tol::REGION_MM,
+        );
+        assert_spans(
+            left.union(&concave)
+                .segment_spans(Point::new(-1.0, 1.5), Point::new(9.0, 1.5)),
+            &[((0.0, 1.5), (2.0, 1.5)), ((4.0, 1.5), (5.0, 1.5))],
+        );
+    }
+
+    #[test]
+    fn segment_spans_follow_reversed_arbitrary_direction() {
+        let square = ContourSet::rectangle(rect(0.0, 0.0, 4.0, 4.0), tol::REGION_MM);
+        assert_spans(
+            square.segment_spans(Point::new(6.0, 6.0), Point::new(-2.0, -2.0)),
+            &[((4.0, 4.0), (0.0, 0.0))],
+        );
+    }
+
+    #[test]
+    fn segment_spans_include_boundary_but_not_tangencies() {
+        let square = ContourSet::rectangle(rect(0.0, 0.0, 4.0, 4.0), tol::REGION_MM);
+        assert_spans(
+            square.segment_spans(Point::new(-1.0, 0.0), Point::new(3.0, 0.0)),
+            &[((0.0, 0.0), (3.0, 0.0))],
+        );
+        assert!(
+            square
+                .segment_spans(Point::new(-1.0, 1.0), Point::new(1.0, -1.0))
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn segment_spans_omit_degenerate_and_sub_tolerance_intervals() {
+        let square = ContourSet::rectangle(rect(0.0, 0.0, 4.0, 4.0), tol::EPSILON_MM);
+        assert!(
+            square
+                .segment_spans(Point::new(1.0, 1.0), Point::new(1.0, 1.0))
+                .is_empty()
+        );
+        assert!(
+            square
+                .segment_spans(Point::new(-1e-10, 2.0), Point::new(0.0, 2.0))
+                .is_empty()
+        );
+        assert_spans(
+            square.segment_spans(Point::new(-1e-5, 2.0), Point::new(1e-5, 2.0)),
+            &[((0.0, 2.0), (1e-5, 2.0))],
+        );
     }
 
     #[test]

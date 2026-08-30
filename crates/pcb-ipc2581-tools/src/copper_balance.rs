@@ -54,16 +54,6 @@ pub(crate) fn copper_balance_attribute_value(kind: CopperBalanceKind) -> &'stati
     }
 }
 
-pub(crate) fn parse_copper_balance_attribute(value: &str) -> Result<CopperBalanceKind> {
-    match value {
-        "plane" => Ok(CopperBalanceKind::Plane),
-        "full_void" => Ok(CopperBalanceKind::FullVoid),
-        "edge_void" => Ok(CopperBalanceKind::EdgeVoid),
-        "boundary_web" => Ok(CopperBalanceKind::BoundaryWeb),
-        _ => bail!("unknown diode.copper_balance value '{value}'"),
-    }
-}
-
 /// Maximum violation area tolerated when certifying a balancing region.
 pub const CERTIFICATE_AREA_TOLERANCE_MM2: f64 = 1e-4;
 

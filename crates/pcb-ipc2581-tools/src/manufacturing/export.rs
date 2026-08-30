@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use gerberx2::GerberLayer;
 use ipc2581::Ipc2581;
 use pcb_ir::dialects::ipc::ArtworkScope;
+use pcb_ir::import::ipc2581::{ImportedDesign, import_design};
 use zip::{ZipWriter, write::FileOptions};
 
 use crate::{gerber, ipc2581 as ipc};
@@ -48,23 +49,25 @@ pub fn build_manufacturing_package(
     ipc: &Ipc2581,
     view: ArtworkScope,
 ) -> Result<ManufacturingPackage> {
-    build_manufacturing_package_inner(ipc, view, None)
+    let imported = import_design(ipc)?;
+    build_manufacturing_package_inner(&imported, view, None)
 }
 
 pub fn build_manufacturing_package_with_options(
     ipc: &Ipc2581,
     options: &ManufacturingExportOptions,
 ) -> Result<ManufacturingPackage> {
-    build_manufacturing_package_inner(ipc, options.view, options.relief_debug_dir.as_deref())
+    let imported = import_design(ipc)?;
+    build_manufacturing_package_inner(&imported, options.view, options.relief_debug_dir.as_deref())
 }
 
 fn build_manufacturing_package_inner(
-    ipc: &Ipc2581,
+    imported: &ImportedDesign,
     view: ArtworkScope,
     relief_debug_dir: Option<&Path>,
 ) -> Result<ManufacturingPackage> {
-    let mut files = gerber::build_gerber_x2_files_with_options(
-        ipc,
+    let mut files = gerber::build_gerber_x2_files_from_design_with_options(
+        imported,
         view,
         &gerber::GerberExportOptions {
             relief_debug_dir: relief_debug_dir.map(Path::to_path_buf),
@@ -77,7 +80,9 @@ fn build_manufacturing_package_inner(
         contents: file.contents,
     })
     .collect::<Vec<_>>();
-    files.extend(super::drill::build_xnc_drill_files(ipc, view)?);
+    files.extend(super::drill::build_xnc_drill_files_from_design(
+        imported, view,
+    )?);
 
     Ok(ManufacturingPackage { files })
 }

@@ -27,6 +27,8 @@ pub struct Feature<Symbol> {
     /// Materialized occurrence of `source_step_ref` in the layout graph.
     /// `None` identifies geometry owned directly by the root step.
     pub source_instance: Option<u32>,
+    /// Materialized placement within an IPC `Features` container.
+    pub source_placement: Option<u32>,
     pub source_step_kind: LayoutStepKind,
     /// Index into `doc.feature_sets`, when the feature came from a set.
     pub set: Option<u32>,
@@ -88,6 +90,7 @@ impl<Symbol> Feature<Symbol> {
             source_layer_ref: None,
             source_step_ref: None,
             source_instance: None,
+            source_placement: None,
             source_step_kind: LayoutStepKind::Unknown,
             set: None,
             placement_group: None,
@@ -381,6 +384,8 @@ pub struct CopperBalanceVoid {
 pub struct SourceRef {
     pub set_index: u32,
     pub feature_index: u32,
+    /// Stable feature-definition index in a whole imported design.
+    pub definition: Option<u32>,
 }
 
 /// One IPC `Set` of features on a layer.
@@ -389,6 +394,8 @@ pub struct FeatureSet<Symbol> {
     pub layer: u32,
     pub source_set_index: u32,
     pub source_geometry_ref: Option<Symbol>,
+    pub component_ref: Option<Symbol>,
+    pub geometry_usage: Option<GeometryUsage>,
     pub net: Option<Symbol>,
     pub polarity: Polarity,
     /// Spans `doc.spec_refs`.
@@ -396,6 +403,17 @@ pub struct FeatureSet<Symbol> {
     /// Spans `doc.features`.
     pub features: Span,
     pub bbox: BBox,
+}
+
+/// Intended use declared by IPC `Set/geometryUsage`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum GeometryUsage {
+    Thieving,
+    ThermalRelief,
+    Text,
+    Teardrop,
+    Graphic,
+    None,
 }
 
 /// Shared placements for one IPC `Features` container.

@@ -260,8 +260,9 @@ minimum_pth_annular_ring = "0.2 mm"
 
     fn evaluate_pth(ipc: &Ipc2581) -> Evaluation {
         let rule = rule();
+        let imported = pcb_ir::import::ipc2581::import_design(ipc).unwrap();
         let design =
-            Design::extract(ipc, ArtworkScope::Board, std::slice::from_ref(&rule)).unwrap();
+            Design::extract(&imported, ArtworkScope::Board, std::slice::from_ref(&rule)).unwrap();
         evaluate(rule.limit.length().millimeters(), HoleClass::Pth, &design)
     }
 

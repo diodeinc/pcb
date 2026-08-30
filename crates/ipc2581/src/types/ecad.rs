@@ -1,6 +1,7 @@
 use super::{Units, UserPrimitive};
 use crate::Symbol;
 use std::collections::HashMap;
+use std::str::FromStr;
 
 /// CadHeader defines units and specifications for the ECAD section
 ///
@@ -301,10 +302,39 @@ pub struct LayerFeature {
 pub struct FeatureSet {
     pub net: Option<Symbol>,      // Net name from Set element
     pub geometry: Option<Symbol>, // Reference to PadStackDef or other geometry definition
+    pub component_ref: Option<Symbol>,
+    pub geometry_usage: Option<GeometryUsage>,
     pub polarity: Option<Polarity>,
     pub spec_refs: Vec<Symbol>,
     pub features: Vec<SetFeature>,
     pub nonstandard_attributes: Vec<NonstandardAttribute>,
+}
+
+/// Intended use of geometry in a feature set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GeometryUsage {
+    Thieving,
+    ThermalRelief,
+    Text,
+    Teardrop,
+    Graphic,
+    None,
+}
+
+impl FromStr for GeometryUsage {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "THIEVING" => Ok(Self::Thieving),
+            "THERMAL_RELIEF" => Ok(Self::ThermalRelief),
+            "TEXT" => Ok(Self::Text),
+            "TEARDROP" => Ok(Self::Teardrop),
+            "GRAPHIC" => Ok(Self::Graphic),
+            "NONE" => Ok(Self::None),
+            _ => Err(format!("Unknown geometryUsage: {}", s)),
+        }
+    }
 }
 
 impl FeatureSet {
