@@ -185,9 +185,8 @@ pub(crate) fn reconcile_document(
     Ok(document)
 }
 
-/// Project one explicitly selected missing component without reconciling the
-/// document's other issues. This uses the same hierarchy, placement, routing,
-/// and driver materialization as global reconciliation.
+/// Project one explicitly selected missing component without repairing its
+/// connectivity or reconciling the document's other issues.
 pub(crate) fn place_component(
     existing: &SchDocument,
     netlist: &Schematic,
@@ -244,35 +243,6 @@ pub(crate) fn place_component(
         &project_slots,
         &net_symbol_specs,
         preserved_page_count,
-    )?;
-    add_hierarchy_connectivity(
-        &mut document,
-        netlist,
-        &placed,
-        &net_symbol_specs,
-        &hierarchy,
-    )?;
-
-    let all_nets = named_connected_nets(netlist)
-        .map(|net| net.name.clone())
-        .collect::<BTreeSet<_>>();
-    let reconnect_nets = connectivity_targets(netlist, &placed, &all_nets)?
-        .into_iter()
-        .filter(|(_, targets)| targets.iter().any(|target| target.slot == *slot))
-        .map(|(net_name, _)| net_name)
-        .collect();
-    apply_connectivity_repair(
-        &mut document,
-        netlist,
-        &mut placed,
-        &net_symbol_specs,
-        default_page,
-        ConnectivityRepairPlan {
-            removals: BTreeSet::new(),
-            relocate_symbols: BTreeSet::new(),
-            reconnect_nets,
-        },
-        true,
     )?;
     Ok(document)
 }

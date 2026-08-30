@@ -76,13 +76,11 @@ fn one_missing_symbol_is_one_applicable_patch() {
 }
 
 #[test]
-fn component_placement_selects_one_of_two_missing_symbols_on_the_same_page() {
+fn component_placement_inserts_one_symbol_without_connectivity_repairs() {
     let netlist = common::compile_fixture("analysis", "simple.zen");
     let document = generated_document(&netlist, "TwoMissing.kicad_sch");
     let mut missing = document.clone();
-    missing.pages[0].items.retain(
-        |item| !matches!(item, SchItem::Symbol(symbol) if symbol.field_value("Path").is_some()),
-    );
+    missing.pages[0].items.clear();
     let inspection = inspect_schematic(&missing, &netlist).unwrap();
     let missing_slots = inspection
         .issues
@@ -105,6 +103,7 @@ fn component_placement_selects_one_of_two_missing_symbols_on_the_same_page() {
 
     let first_patch = plan_component_placement(&missing, &netlist, &missing_slots[0]).unwrap();
     let first = first_patch.apply(Some(&missing)).unwrap();
+    assert_eq!(first.pages[0].items.len(), 1);
     assert_eq!(
         managed_symbol(&first, missing_slots[0].component_path()).id,
         missing_slots[0].symbol_id()
@@ -119,9 +118,23 @@ fn component_placement_selects_one_of_two_missing_symbols_on_the_same_page() {
     assert!(first_inspection.issues.iter().any(|issue| {
         matches!(&issue.issue, SchematicIssue::MissingSymbol { slot } if slot == &missing_slots[1])
     }));
+    assert!(
+        !first_inspection.analysis.is_equivalent(),
+        "placement leaves connectivity repair to reconciliation"
+    );
 
     let second_patch = plan_component_placement(&first, &netlist, &missing_slots[1]).unwrap();
-    let complete = second_patch.apply(Some(&first)).unwrap();
+    let placed = second_patch.apply(Some(&first)).unwrap();
+    assert_eq!(placed.pages[0].items.len(), 2);
+    assert!(
+        !inspect_schematic(&placed, &netlist)
+            .unwrap()
+            .analysis
+            .is_equivalent()
+    );
+
+    let repair = plan_reconciliation(Some(&placed), &netlist, "TwoMissing.kicad_sch").unwrap();
+    let complete = repair.apply_all(Some(&placed)).unwrap();
     assert!(
         inspect_schematic(&complete, &netlist)
             .unwrap()

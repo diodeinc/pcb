@@ -180,11 +180,11 @@ pub fn plan_reconciliation(
 }
 
 /// Place one explicitly selected missing component using PCB's normal
-/// hierarchy, placement, and connectivity strategies.
+/// hierarchy and placement strategies.
 ///
-/// This is the narrow interactive PLACE operation. It deliberately leaves all
-/// other existing issues untouched and is not an issue-scoped reconciliation
-/// planner.
+/// This is the narrow interactive PLACE operation, not an issue-scoped
+/// reconciliation planner. It deliberately leaves both the component's
+/// connectivity and all other existing issues for [`plan_reconciliation`].
 pub fn plan_component_placement(
     document: &SchDocument,
     netlist: &Schematic,
@@ -209,22 +209,6 @@ pub fn plan_component_placement(
         .any(|issue| issue.key == missing_key)
     {
         bail!("component placement did not add slot '{slot}'");
-    }
-    let baseline = inspection_before
-        .issues
-        .iter()
-        .map(|issue| coarse_issue_key(&issue.key))
-        .collect::<BTreeSet<_>>();
-    let new_issues = inspection_after
-        .issues
-        .iter()
-        .filter(|issue| !baseline.contains(&coarse_issue_key(&issue.key)))
-        .collect::<Vec<_>>();
-    if !new_issues.is_empty() {
-        bail!(
-            "component placement would introduce unrelated issues: {}",
-            issue_summaries(new_issues.iter().map(|issue| &issue.issue))
-        );
     }
 
     let edits = document_edits(document, &desired)?;
