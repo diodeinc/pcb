@@ -98,7 +98,6 @@ ratatui-image = { version = "11.0", default-features = false, features = ["cross
 
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 csv = "1.4"
-debugserver-types = "0.5.0"
 derivative = "2.2"
 fixedbitset = "0.5"
 globset = "0.4.18"

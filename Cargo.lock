@@ -4510,9 +4510,7 @@ version = "0.4.40"
 dependencies = [
  "anyhow",
  "ariadne",
- "debugserver-types",
  "dirs",
- "dupe",
  "fslock",
  "globset",
  "hex",
