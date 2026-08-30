@@ -166,6 +166,18 @@ fn generated_net_symbols_form_a_wired_staircase() {
         })
         .count();
     assert_eq!(shared_ground_count, 1);
+    assert_eq!(
+        page.items
+            .iter()
+            .filter(|item| matches!(
+                item,
+                SchItem::Symbol(symbol)
+                    if symbol.field_value("Value") == Some("GROUND_SPLIT")
+            ))
+            .count(),
+        2,
+        "separate pin banks should receive separate ground symbols"
+    );
     let mut net_symbols = page
         .items
         .iter()
@@ -191,7 +203,7 @@ fn generated_net_symbols_form_a_wired_staircase() {
         .iter()
         .filter(|item| matches!(item, SchItem::Wire(_)))
         .count();
-    assert!((5..=10).contains(&wire_count), "{wire_count}");
+    assert!((5..=14).contains(&wire_count), "{wire_count}");
     assert!(page.items.iter().all(|item| match item {
         SchItem::Wire(wire) => wire.a.x == wire.b.x || wire.a.y == wire.b.y,
         _ => true,

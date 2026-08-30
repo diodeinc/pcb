@@ -80,6 +80,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Keep the language server running when LSP request or notification parameters are malformed.
 - Return JSON-compatible WASM evaluation results with JavaScript numbers and `null`.
 - Include standalone board outlines in Gerber exports.
+- Keep generated net-symbol staircases from crossing adjacent component pins.
 - Inherit symbol descriptions for non-generic BOM components.
 - Keep generated symbol fields correctly justified when their parent symbol is rotated or mirrored.
 - Require external power IOs to have a net symbol or hierarchical label.

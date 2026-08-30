@@ -1507,7 +1507,7 @@ fn component_envelope(
                 bounds.union(symbol_bounds);
             }
             for target in &run.targets {
-                let bend = net_symbol_wire_bend(target.point, connection, spec.pin_outward_spin);
+                let bend = net_symbol_wire_bend(target.point, connection, target.spin);
                 bounds.union(
                     field_autoplace::Bounds::from_points([target.point, bend, connection])
                         .expect("net-symbol route has at least two points"),
@@ -2154,7 +2154,7 @@ fn sync_net_drivers(
                 &symbol_id,
                 member.point,
                 connection_point,
-                spec.pin_outward_spin,
+                member.spin,
             );
         }
     }
@@ -2206,14 +2206,15 @@ fn sync_net_drivers(
     Ok(())
 }
 
-fn adjacent_target_runs<'a>(
+fn adjacent_target_runs<'a, T>(
     placed: &PlacedSymbol,
-    mut targets: Vec<&'a PinTarget>,
-) -> Result<Vec<Vec<&'a PinTarget>>> {
-    let Some(side) = targets.first().map(|target| target.spin) else {
+    mut targets: Vec<T>,
+    pin_target: impl Fn(&T) -> &'a PinTarget,
+) -> Result<Vec<Vec<T>>> {
+    let Some(side) = targets.first().map(|target| pin_target(target).spin) else {
         return Ok(Vec::new());
     };
-    debug_assert!(targets.iter().all(|target| target.spin == side));
+    debug_assert!(targets.iter().all(|target| pin_target(target).spin == side));
     let compare_points = |left: Point, right: Point| {
         let primary = if matches!(side, LabelSpin::Left | LabelSpin::Right) {
             left.y.total_cmp(&right.y)
@@ -2225,6 +2226,8 @@ fn adjacent_target_runs<'a>(
             .then_with(|| left.y.total_cmp(&right.y))
     };
     targets.sort_by(|left, right| {
+        let left = pin_target(left);
+        let right = pin_target(right);
         compare_points(left.point, right.point).then_with(|| left.number.cmp(&right.number))
     });
 
@@ -2240,7 +2243,8 @@ fn adjacent_target_runs<'a>(
 
     let ranked = targets
         .into_iter()
-        .map(|target| {
+        .map(|item| {
+            let target = pin_target(&item);
             let matches = visible_pins
                 .iter()
                 .enumerate()
@@ -2259,11 +2263,11 @@ fn adjacent_target_runs<'a>(
                 .filter(|pin| pin.point == target.point)
                 .count()
                 > 1;
-            Ok((target, *rank, stacked))
+            Ok((item, *rank, stacked))
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let mut runs = Vec::<Vec<&PinTarget>>::new();
+    let mut runs = Vec::<Vec<T>>::new();
     let mut previous: Option<(usize, bool)> = None;
     for (target, rank, stacked) in ranked {
         let joins_previous = previous.is_some_and(|(previous_rank, previous_stacked)| {
@@ -2353,7 +2357,7 @@ fn arrange_net_symbol_runs<'a>(
     let mut runs = Vec::<NetSymbolRun>::new();
     let mut slots = BTreeMap::<Slot, Vec<usize>>::new();
     for ((net_name, page_index, slot, target_side, symbol_side), members) in groups {
-        for members in adjacent_target_runs(&placed[&slot], members)? {
+        for members in adjacent_target_runs(&placed[&slot], members, |target| *target)? {
             let run_index = runs.len();
             runs.push(NetSymbolRun {
                 net_name: net_name.clone(),
@@ -2369,22 +2373,34 @@ fn arrange_net_symbol_runs<'a>(
         }
     }
 
-    for ((_, _, target_side, _), run_indices) in &mut slots {
-        run_indices.sort_by(|left, right| {
-            let left_point = runs[*left].placement_target().point;
-            let right_point = runs[*right].placement_target().point;
-            let primary = if matches!(*target_side, LabelSpin::Left | LabelSpin::Right) {
-                left_point.y.total_cmp(&right_point.y)
-            } else {
-                left_point.x.total_cmp(&right_point.x)
-            };
-            primary
-                .then_with(|| left_point.x.total_cmp(&right_point.x))
-                .then_with(|| left_point.y.total_cmp(&right_point.y))
-                .then_with(|| runs[*left].net_name.cmp(&runs[*right].net_name))
-        });
-        for (stair_index, run_index) in run_indices.iter().enumerate() {
-            runs[*run_index].stair_index = stair_index;
+    for ((_, slot, _, _), run_indices) in &slots {
+        let banks = {
+            let indexed_targets = run_indices
+                .iter()
+                .flat_map(|run_index| {
+                    runs[*run_index]
+                        .targets
+                        .iter()
+                        .map(move |target| (*run_index, target))
+                })
+                .collect::<Vec<_>>();
+            adjacent_target_runs(&placed[slot], indexed_targets, |(_, target)| *target)?
+                .into_iter()
+                .map(|bank| {
+                    let mut bank_runs = Vec::new();
+                    for (run_index, _) in bank {
+                        if !bank_runs.contains(&run_index) {
+                            bank_runs.push(run_index);
+                        }
+                    }
+                    bank_runs
+                })
+                .collect::<Vec<_>>()
+        };
+        for bank_runs in banks {
+            for (stair_index, run_index) in bank_runs.into_iter().enumerate() {
+                runs[run_index].stair_index = stair_index;
+            }
         }
     }
     Ok(runs)
@@ -2417,8 +2433,8 @@ fn net_symbol_connection_point(
             };
             Point::new(x, y)
         }
-        LabelSpin::Up => Point::new(target.point.x + stair, bounds.min_y - offset),
-        LabelSpin::Bottom => Point::new(target.point.x + stair, bounds.max_y + offset),
+        LabelSpin::Up => Point::new(target.point.x + stair, bounds.min_y - offset - stair),
+        LabelSpin::Bottom => Point::new(target.point.x + stair, bounds.max_y + offset + stair),
     };
     Ok(Point::new(
         snap_connection_grid(point.x),
@@ -2436,9 +2452,9 @@ fn insert_connection_wires(
     symbol_id: &str,
     target: Point,
     connection: Point,
-    symbol_pin_spin: LabelSpin,
+    target_spin: LabelSpin,
 ) {
-    let bend = net_symbol_wire_bend(target, connection, symbol_pin_spin);
+    let bend = net_symbol_wire_bend(target, connection, target_spin);
     for (index, (a, b)) in [(target, bend), (bend, connection)].into_iter().enumerate() {
         if points_coincide(a, b) {
             continue;
@@ -2456,11 +2472,11 @@ fn insert_connection_wires(
     }
 }
 
-fn net_symbol_wire_bend(target: Point, connection: Point, symbol_pin_spin: LabelSpin) -> Point {
-    if symbol_pin_spin.is_vertical() {
-        Point::new(connection.x, target.y)
-    } else {
+fn net_symbol_wire_bend(target: Point, connection: Point, target_spin: LabelSpin) -> Point {
+    if target_spin.is_vertical() {
         Point::new(target.x, connection.y)
+    } else {
+        Point::new(connection.x, target.y)
     }
 }
 
@@ -3412,7 +3428,7 @@ mod tests {
 
         let envelope = component_envelope(item, &targets, &specs, &runs).unwrap();
         let connection = net_symbol_connection_point(item, &second, LabelSpin::Up, 1).unwrap();
-        let bend = net_symbol_wire_bend(second.point, connection, LabelSpin::Up);
+        let bend = net_symbol_wire_bend(second.point, connection, second.spin);
         let symbol = build_net_symbol(&spec, "SECOND", String::new(), connection).unwrap();
         let symbol_bounds = field_autoplace::symbol_visual_bounds(&symbol, &spec.definition)
             .unwrap()
@@ -3446,12 +3462,59 @@ mod tests {
         let intervening = target("X", "6");
         let last = target("C", "5");
 
-        let split = adjacent_target_runs(item, vec![&first, &last]).unwrap();
+        let split = adjacent_target_runs(item, vec![&first, &last], |target| *target).unwrap();
         assert_eq!(split.len(), 2);
 
-        let shared = adjacent_target_runs(item, vec![&first, &intervening, &last]).unwrap();
+        let shared =
+            adjacent_target_runs(item, vec![&first, &intervening, &last], |target| *target)
+                .unwrap();
         assert_eq!(shared.len(), 1);
         assert_eq!(shared[0].len(), 3);
+    }
+
+    #[test]
+    fn net_symbol_stairs_restart_for_separate_pin_banks() {
+        let placed = multi_pad_symbol();
+        let slot = placed.keys().next().unwrap().clone();
+        let target = |name: &str, number: &str| {
+            resolve_pin_targets(
+                &placed,
+                "MQ-7.MQ-7",
+                name,
+                &BTreeSet::from([number.to_string()]),
+            )
+            .unwrap()
+            .remove(0)
+        };
+        let first = target("B", "4");
+        let last = target("C", "5");
+        let spec = ground_net_symbol_spec();
+        let targets = BTreeMap::from([
+            ("FIRST".to_string(), vec![first]),
+            ("LAST".to_string(), vec![last]),
+        ]);
+        let specs = BTreeMap::from([
+            ("FIRST".to_string(), spec.clone()),
+            ("LAST".to_string(), spec),
+        ]);
+
+        let runs =
+            plan_projected_net_symbol_runs(&targets, &BTreeSet::from([slot]), &specs, &placed)
+                .unwrap();
+
+        assert_eq!(runs.len(), 2);
+        assert!(runs.iter().all(|run| run.stair_index == 0));
+    }
+
+    #[test]
+    fn vertical_pin_routes_escape_before_stairing_sideways() {
+        let target = Point::new(10.0, 10.0);
+        let connection = Point::new(15.0, 0.0);
+
+        assert_eq!(
+            net_symbol_wire_bend(target, connection, LabelSpin::Up),
+            Point::new(10.0, 0.0)
+        );
     }
 
     #[test]
