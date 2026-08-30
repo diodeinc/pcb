@@ -39,6 +39,13 @@ Never run `cargo insta accept` without explicit user approval.
 - In `.zen` files, remember Zener is Starlark-based, not Python: do not use f-strings.
 - Language behavior may come from the pinned `diodeinc/starlark-rust` fork in `Cargo.toml`; check that fork when local code does not explain Starlark behavior.
 
+## CLI Output
+
+- Use `anstream`'s `print!`, `println!`, `eprint!`, and `eprintln!` replacements for incidental CLI text so a closed output pipe does not panic.
+- For primary, structured, protocol, or binary stdout (such as JSON, CSV, tables, XML, and images), keep renderers fallible over `std::io::Write` and call them through `pcb_ui::write_stdout` at the CLI boundary. It treats only `BrokenPipe` as successful termination and preserves other I/O errors.
+- Do not add a process-wide `BrokenPipe` catch or custom printer wrapper; PCB also uses unrelated child-process and network pipes whose failures must remain visible.
+- Gate `anstream`, `pcb-ui`, and their macro imports behind the CLI feature in crates that also support non-CLI or WASM builds.
+
 ## Documentation Rules
 
 - For user-visible changes, add one succinct `CHANGELOG.md` entry under `Unreleased` per logical change.
