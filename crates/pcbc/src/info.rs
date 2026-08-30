@@ -9,6 +9,7 @@ use pcb_zen_core::resolution::ResolutionResult;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::env;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 #[derive(Args, Debug)]
@@ -94,11 +95,14 @@ pub fn execute(args: InfoArgs) -> Result<()> {
     match args.format {
         OutputFormat::Human => {
             let external_dependencies = external_dependencies(&workspace_info, &resolution)?;
-            print_human_readable(&workspace_info, &external_dependencies);
+            pcb_ui::write_stdout(|stdout| {
+                print_human_readable(stdout, &workspace_info, &external_dependencies)
+            })?;
         }
         OutputFormat::Json => {
             populate_package_file_discovery(&mut workspace_info)?;
-            print_json(&info_json(&workspace_info, &resolution)?)?;
+            let json = serde_json::to_string_pretty(&info_json(&workspace_info, &resolution)?)?;
+            pcb_ui::write_stdout(|stdout| writeln!(stdout, "{json}"))?;
         }
     }
 
@@ -308,21 +312,22 @@ fn discover_package_files(package_dir: &Path) -> Result<(Vec<PathBuf>, Vec<Symbo
 }
 
 fn print_human_readable(
+    writer: &mut (impl Write + ?Sized),
     ws: &WorkspaceInfo,
     external_dependencies: &BTreeMap<String, PackageMetadata>,
-) {
+) -> io::Result<()> {
     // Header
-    println!("{}", "Workspace".with_style(Style::Blue).bold());
-    println!("Root: {}", ws.root.display());
+    writeln!(writer, "{}", "Workspace".with_style(Style::Blue).bold())?;
+    writeln!(writer, "Root: {}", ws.root.display())?;
 
     if let Some(repo) = ws.repository() {
-        println!("Repository: {}", repo.with_style(Style::Cyan));
+        writeln!(writer, "Repository: {}", repo.with_style(Style::Cyan))?;
     }
     if let Some(pcb_version) = ws.pcb_version() {
-        println!("Toolchain: pcb >= {}", pcb_version);
+        writeln!(writer, "Toolchain: pcb >= {}", pcb_version)?;
     }
 
-    println!();
+    writeln!(writer)?;
 
     // Separate boards from other packages
     let all_packages = ws.all_packages();
@@ -336,13 +341,14 @@ fn print_human_readable(
 
     // Boards section (like V1)
     if boards.is_empty() {
-        println!("No boards discovered");
+        writeln!(writer, "No boards discovered")?;
     } else {
-        println!(
+        writeln!(
+            writer,
             "{} ({})",
             "Boards".with_style(Style::Blue).bold(),
             boards.len()
-        );
+        )?;
 
         for pkg in &boards {
             if let Some(board) = &pkg.config.board {
@@ -364,10 +370,16 @@ fn print_human_readable(
                 // Use package version (which is board version for board packages)
                 let version_str = format_version(&pkg.version, false);
 
-                println!("  {} {} - {}", board.name.bold(), version_str, zen_path);
+                writeln!(
+                    writer,
+                    "  {} {} - {}",
+                    board.name.bold(),
+                    version_str,
+                    zen_path
+                )?;
 
                 if !board.description.is_empty() {
-                    println!("    {}", board.description);
+                    writeln!(writer, "    {}", board.description)?;
                 }
             }
         }
@@ -375,33 +387,40 @@ fn print_human_readable(
 
     // Packages section (non-boards)
     if !other_packages.is_empty() {
-        println!();
-        println!(
+        writeln!(writer)?;
+        writeln!(
+            writer,
             "{} ({})",
             "Packages".with_style(Style::Blue).bold(),
             other_packages.len()
-        );
+        )?;
 
         for pkg in &other_packages {
-            print_package_line(pkg);
+            print_package_line(writer, pkg)?;
         }
     }
 
     if !external_dependencies.is_empty() {
-        println!();
-        println!(
+        writeln!(writer)?;
+        writeln!(
+            writer,
             "{} ({})",
             "External dependencies".with_style(Style::Blue).bold(),
             external_dependencies.len()
-        );
+        )?;
 
         for (coord, dep) in external_dependencies {
-            print_external_dependency_line(coord, dep);
+            print_external_dependency_line(writer, coord, dep)?;
         }
     }
+
+    Ok(())
 }
 
-fn print_package_line(pkg: &WorkspacePackage) {
+fn print_package_line(
+    writer: &mut (impl Write + ?Sized),
+    pkg: &WorkspacePackage,
+) -> io::Result<()> {
     let is_root = pkg.rel_path.as_os_str().is_empty();
 
     // Package name (last segment of relative path, or "root")
@@ -446,29 +465,35 @@ fn print_package_line(pkg: &WorkspacePackage) {
         format!(" {}", rel_path.dimmed())
     };
 
-    println!(
+    writeln!(
+        writer,
         "  {} {}{}{}{}",
         name.bold(),
         version_str,
         root_str,
         path_str,
         extras_str
-    );
+    )
 }
 
-fn print_external_dependency_line(coord: &str, dep: &PackageMetadata) {
+fn print_external_dependency_line(
+    writer: &mut (impl Write + ?Sized),
+    coord: &str,
+    dep: &PackageMetadata,
+) -> io::Result<()> {
     let module_path = coord.rsplit_once('@').map_or(coord, |(path, _)| path);
     let version = dep.version.as_deref().unwrap_or("unknown");
     let source = dep.source.as_str();
     let path = dep.rel_path.to_string_lossy();
 
-    println!(
+    writeln!(
+        writer,
         "  {} {} {} {}",
         module_path.bold(),
         format!("(v{version})").green(),
         format!("[{source}]").dimmed(),
         path.dimmed()
-    );
+    )
 }
 
 impl PackageSource {
@@ -481,12 +506,6 @@ impl PackageSource {
             PackageSource::Other => "other",
         }
     }
-}
-
-fn print_json<T: Serialize>(info: &T) -> Result<()> {
-    let json = serde_json::to_string_pretty(info)?;
-    println!("{json}");
-    Ok(())
 }
 
 /// Format version string with dirty indicator

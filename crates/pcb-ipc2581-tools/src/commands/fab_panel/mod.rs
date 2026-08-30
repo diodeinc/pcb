@@ -2,8 +2,6 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 #[cfg(feature = "cli")]
-use std::io::{self, Write};
-#[cfg(feature = "cli")]
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -259,7 +257,7 @@ pub fn execute(
         }
     }
     if output.as_os_str() == "-" {
-        io::stdout().lock().write_all(creation.xml.as_bytes())?;
+        pcb_ui::write_stdout(|stdout| stdout.write_all(creation.xml.as_bytes()))?;
         eprintln!("✓ Created IPC-2581 fabrication panel on stdout");
     } else {
         file_utils::save_ipc_file(output, &creation.xml)?;

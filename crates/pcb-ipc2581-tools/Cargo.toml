@@ -9,6 +9,7 @@ authors.workspace = true
 [features]
 default = ["cli"]
 cli = [
+    "dep:anstream",
     "dep:clap",
     "dep:colored",
     "dep:comfy-table",
@@ -23,6 +24,7 @@ cli = [
 
 [dependencies]
 anyhow = { workspace = true }
+anstream = { workspace = true, optional = true }
 chrono = { workspace = true }
 clap = { workspace = true, optional = true }
 colored = { workspace = true, optional = true }

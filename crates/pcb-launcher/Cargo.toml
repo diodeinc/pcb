@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = { workspace = true }
+anstream = { workspace = true }
 dirs = { workspace = true }
 pcb-diode-uri = { workspace = true }
 pcb-native-dialog = { workspace = true }

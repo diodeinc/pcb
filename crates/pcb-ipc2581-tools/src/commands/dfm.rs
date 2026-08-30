@@ -411,9 +411,7 @@ fn write_report(options: &CheckOptions, report: &impl Serialize) -> Result<()> {
                 .with_context(|| format!("failed to replace DFM report {}", path.display()))?;
             Ok(())
         }
-        None => std::io::stdout()
-            .lock()
-            .write_all(&bytes)
+        None => pcb_ui::write_stdout(|stdout| stdout.write_all(&bytes))
             .context("failed to write DFM report to stdout"),
     }
 }

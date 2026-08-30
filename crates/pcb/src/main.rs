@@ -1,3 +1,7 @@
+// Use pipe-safe replacements for the standard printing macros throughout the CLI.
+#[macro_use(println, eprintln)]
+extern crate anstream;
+
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use semver::Version;

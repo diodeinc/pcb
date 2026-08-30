@@ -378,7 +378,7 @@ mod platform {
     }
 
     pub fn show_error(title: &str, message: &str) {
-        eprintln!("{title}: {message}");
+        anstream::eprintln!("{title}: {message}");
     }
 }
 
