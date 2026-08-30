@@ -1,7 +1,8 @@
 # DFM PDK, waiver, and report formats
 
-`pcb ipc dfm check` turns fabrication capabilities from a built-in or file-backed
-TOML PDK into geometry checks over an IPC-2581 design and writes one JSON report.
+`pcb ipc dfm check` checks an IPC-2581 design against a built-in or file-backed
+TOML fabrication PDK. It writes one self-contained JSON report with diagnostics,
+native vector geometry, and the exact PDK source for external viewers.
 
 ## PDK
 
@@ -88,13 +89,16 @@ high-level pass is never allowed to suppress a later authoritative failure.
 | V-score and board-edge clearance | Materialized line/profile geometry against final composed copper | Indexed copper boundaries |
 | Board-array spacing | Materialized filled array profiles | Bounding boxes prune pairs already proven clear |
 
-Geometric checks produce one signed-distance measurement per subject, between
-two witness points and carrying the uncertainty of the flattened boundaries it
-was measured against (one flattening tolerance per tessellated curve; zero for
-stated primitives and analytic shapes). The engine fails a minimum only when
-the distance falls short beyond its own uncertainty, so curve tessellation by
-itself cannot manufacture a violation. Layer-count checks instead compare one
-exact integer with the configured minimum or maximum.
+Geometric checks produce an aggregate measurement per subject and retain its
+failing measured sites. Measurements carry the uncertainty of the flattened
+boundaries they were measured against (one flattening tolerance per tessellated
+curve; zero for stated primitives and analytic shapes). A pair of witness
+points does not always encode a length: widths, diameters, and annular
+enclosures retain their own measurement constructions. The engine fails a
+minimum only when the measured value falls short beyond its own uncertainty,
+so curve tessellation by itself cannot manufacture a violation. Layer-count
+checks instead compare one exact integer with the configured minimum or
+maximum.
 
 Morphological opening and closing are deliberately candidate stages for width
 and soldermask-web checks. Each candidate residue is measured on the medial
@@ -188,44 +192,58 @@ silently.
 ## CLI
 
 ```bash
-pcb ipc dfm check fabrication-panel.xml \
-  --pdk standard \
-  --waivers waivers.toml \
-  --layout-target board-array \
-  --output dfm-report.json
+pcb ipc dfm check board.xml --pdk standard -o board.dfm.json
+pcb dfm board.zen --pdk standard -o board.dfm.json
 ```
 
-`--pdk` accepts an exact built-in name or a TOML file path. `standard` is
-bundled with `pcb`; use a path such as `./standard` when a file has the same
-name as a built-in. Reports identify built-ins with paths such as
-`builtin:standard`. Custom PDK files otherwise use the same parser, rules, and
-report pipeline.
+`pcb dfm` prepares and synchronizes the board's KiCad layout before exporting
+temporary IPC-2581 and checking the canonical board. Use `pcb ipc dfm check`
+to inspect existing manufacturing files without changing their source layout.
 
-`--layout-target` is `board` or `board-array` and defaults to `board-array`.
-Omit `--output` to write JSON to stdout. The report is written before the
-command returns a failing status, and the exit status fails only on unwaived
-error findings. Set `SOURCE_DATE_EPOCH` to make `generated_at` — and with it
-the whole report — reproducible. Waiver expiry is evaluated against that same
-timestamp on purpose: expiry makes the verdict time-dependent, so pinning the
-time must pin expiry too, or a reproduced report could not reproduce its
-verdict. A pipeline that pins an old epoch is choosing to reproduce that
-date's verdict, expired waivers included.
+`--pdk` accepts an exact built-in name or a TOML path. `standard` is bundled
+with `pcb` and reported as `builtin:standard`; use `./standard` to select a
+same-named file. Both use the same parser and checks. `--layout-target` accepts
+`board` or `board-array` and defaults to `board-array`. Add
+`--waivers waivers.toml` to apply a [waiver file](#waivers).
+
+Output is UTF-8 JSON on stdout unless `-o` / `--output` is supplied. The
+recommended suffix is `.dfm.json`. Every complete report includes the native
+scene and PDK source for viewing without companion files. PCB generates no
+DFM HTML or viewer application.
+
+A completed report is written before the command returns a failing status.
+Only unwaived error findings fail its verdict. Preparation and output errors
+also return a failing status. Preparation errors emit an explicit
+[incomplete report](#incomplete-reports). File output is replaced atomically,
+including incomplete reports. I/O, serialization, or size-limit failures can
+prevent output and leave a previous artifact untouched; callers must check exit
+status. Output must not overwrite a source or use a KiCad board path.
+
+`SOURCE_DATE_EPOCH` fixes both `generated_at` and the date used for waiver
+expiry. Pinning an old epoch reproduces that date's verdict, including waivers
+that would have expired today. The same input bytes, source labels, options,
+and epoch produce identical JSON. A separate `.zen` layout/export operation
+may change its IPC bytes or temporary source label.
 
 ## JSON report
 
-The report is a self-contained record of what was checked:
+A complete report has these fields:
 
 - `schema_version`: integer report schema version.
 - `generated_at`: RFC 3339 generation time.
-- `verdict`: `pass` or `fail`; fails exactly when unwaived error-severity
-  findings exist.
-- `tool`, `input`, `pdk`, and `waivers`: producer version plus input paths
-  and SHA-256 identities; `waivers` also carries applied, expired, and
-  unmatched entries and is `null` when no waiver file was given.
+- `verdict`: `pass` or `fail`.
+- `tool`: producer name and version.
+- `input`: original IPC input path, SHA-256, and byte size.
+- `pdk`: resolved kit metadata, path, exact TOML `source`, and SHA-256.
+- `waivers`: file path and SHA-256 plus applied, expired, and unmatched entries;
+  `null` when no waiver file was given. See [source identity](#source-identity).
 - `layout_target`: `board` or `board_array`.
+- `layout`: the selected step, actual layout kind, checked coordinate frame,
+  bounds, and physical occurrences. Occurrences retain their parent, source
+  step, repeat indices, and transform into the checked frame; see
+  [coordinates and topology](#coordinates-and-topology).
 - `coordinate_system`: the unit, axis convention, and origin for all report
-  geometry. Version 1 uses millimeters, `x_right_y_up`, and
-  `ipc_2581_design`.
+  geometry: `mm`, `x_right_y_up`, and `ipc_2581_design` in version 1.
 - `summary`: rule counts by status and finding counts by severity and
   waiver state.
 - `rules`: one result per lowered rule: its id (the capability path, plus
@@ -233,35 +251,179 @@ The report is a self-contained record of what was checked:
   status (`pass`, `warning`, `fail`, or `skipped`), skip reason, and the
   measurement contract shared by all of its findings — `subject` (what one
   checked unit is), `quantity`, `method`, `comparison` (`minimum` or
-  `maximum`), and `checked`, the number of measurements evaluated.
+  `maximum`), and `checked`, the number of measurements evaluated. `view`
+  specifies the diagnostic family, whether it is spatial, and its semantic
+  rendering features; `tier` distinguishes required and preferred limits.
 - `findings`: violations in deterministic rule/location order.
+- `scene`: required native artwork for the complete checked layout; see
+  [native scene](#native-scene).
 
-Each finding is intentionally a fat record:
+`rule.finding_count` includes waived findings, and `waived_count` counts that
+subset. A rule whose findings are all waived reports `pass`; active findings
+determine `warning` or `fail` from rule severity. Skipped rules retain `skipped`
+and their reason rather than becoming a pass from zero counts. Similarly,
+`summary.findings` includes all findings, `summary.waived` counts the waived
+subset, and `summary.errors`/`warnings` count only unwaived findings. A complete
+verdict fails exactly when `summary.errors > 0`.
 
-- `id` is a content hash of what the finding is about — its rule, subjects,
-  layers, and measured location. It is deterministic for a given input, and
-  it survives design revisions exactly as long as those identifying facts
-  are unchanged. A violation whose representative point moves is a new
-  finding with a new id; its old waiver then surfaces as `unmatched` for
-  re-review. The measured value is deliberately not part of the identity:
-  a waived violation that shrinks or grows in place keeps its waiver.
+### Source identity
+
+`pdk.source` is required in complete reports. It contains the exact resolved
+UTF-8 TOML used for evaluation, including comments, unit spelling, CRLF line
+endings, and any final newline. Built-in and file-backed PDKs follow the same
+contract. Do not reserialize TOML or normalize text. `pdk.sha256` is the SHA-256
+of the UTF-8 bytes of that decoded JSON string, encoded as 64 lowercase
+hexadecimal characters. Consumers verify this hash; a checksum detects
+corruption, not authenticity or fabrication approval.
+
+`input.sha256` and `size_bytes` identify the original on-disk IPC input bytes,
+including compression for a `.xml.zst` input. For `pcb dfm`, they identify its
+temporary exported IPC input. The XML is not included. Waiver source is also
+not included: its hash, applied/expired/unmatched entries, and each finding's
+waiver fields preserve what was applied.
+
+All `path` fields are descriptive provenance. They may be absolute,
+`builtin:standard`, or no-longer-existing temporary paths. Input and waiver
+hashes identify absent source files; never fetch paths or open files on the
+consumer's machine to render or validate the report.
+
+### Findings
+
+- `id` hashes the rule, subjects, layers, and measured location. It remains
+  stable while those facts are unchanged. Moving the representative point
+  creates a new finding; its old waiver becomes `unmatched`. The measured
+  value, added sites, presentation grouping, and extended provenance do not
+  affect identity: a violation that shrinks or grows in place keeps its waiver.
 - `rule_id`, `severity`, `title`, and `message` identify and explain the
   violation; `waived` and `waiver_reason` record acceptance.
 - `measurement` carries `actual_mm`, `required_mm`, and signed `margin_mm` for
   geometry, or the corresponding `actual_count`, `required_count`, and
-  `margin_count` for discrete counts. A nonnegative margin passes.
+  `margin_count` for discrete counts. A nonnegative margin satisfies the limit.
+  Signed annular enclosure can be negative. Do not clamp measurements or
+  recompute the verdict from rounded display values.
 - `location` carries a representative point, bounding box, and role-labelled
-  geometric witnesses.
+  witnesses. Nonspatial findings use `{point: null, bounding_box: null,
+  witnesses: []}`, never a null `location`.
 - `layers` identify every involved manufacturing layer: name, IPC-2581
   layer function, and `side` (`top`, `inner`, `bottom`) where the stackup
   determines it.
 - `subjects` preserve role, kind, component, pin, net, padstack, and source
-  indices when IPC-2581 provides them. Unavailable fields remain `null` so
-  consumers see one stable shape.
-- `evidence` is a fat geometry record. `kind` and `role` identify the
-  evidence; circle, segment, and bounds fields are populated as applicable
-  and otherwise remain `null`.
+  indices when IPC-2581 provides them. `provenance` identifies the source
+  definition and physical occurrence separately from the legacy flattened
+  `source` locator; `drill_span` records the applicable copper-layer span.
+  Unavailable fields remain `null` so consumers see one stable shape.
+- `evidence` records `kind`, `role`, and applicable circle, segment, or bounds
+  fields; unused fields remain `null`. `paths` contains closed region rings or
+  open paths, preserving the checked material's winding and holes. Optional
+  `display` retains native constructions for rendering, as specified below.
+- `sites` retain individual failing regions or layers with their measurement,
+  `measurement_kind`, `witnesses`, uncertainty, bounds, layers, subjects, and
+  evidence. Nonspatial findings use `sites: []`. Site bounds describe the
+  finding; viewers add their own camera padding. Witness-point separation is
+  not necessarily the measured width or diameter.
+- `group_key`, when available, groups proven equivalent causes for display.
+  It does not replace the finding id or change the waiver unit. Every finding
+  and physical occurrence remains accessible.
 
-Within schema version 1, new fields and new `kind`, `role`,
-`status`, rule, and method values may be added. Removing or changing the
-meaning of an existing field requires a new schema version.
+Check-owned sites, measurements, witnesses, and evidence paths are authoritative.
+The optional `evidence.display` construction uses the same world millimeters:
+
+| `kind` | Fields and rendering |
+| --- | --- |
+| `path` | SVG `paths` and `fill_rule`; fill each path separately, then union |
+| `round_stroke` | Centerline `paths` and physical `width_mm`; round caps and joins |
+| `circle_intersection` | `first` and `second` circles, each with `center` and `diameter` |
+| `circle_minus_layer` | `center`, `diameter`, and exact copper `layer`; subtract that layer's composed native image from the circle |
+
+Display constructions do not affect finding, site, or repeat-group identity.
+`circle_minus_layer` needs its named scene pass even when the pass is hidden as
+artwork. A missing required operand makes the scene invalid. Do not fit curves
+to measured polygons, invent precision by changing tessellation tolerance, or
+infer an inscribed width or radial enclosure from witness separation.
+
+### Coordinates and topology
+
+All geometry uses millimeters with X right and Y up. `layout.kind` distinguishes
+`board`, `board_array`, and `fab_panel`; the `board_array` target also selects
+fabrication panels. Board scope uses the canonical board's local frame
+(`selected_board`). Array and fabrication-panel scope use `root_layout`,
+including nested repeats. A canonical board check does not certify every
+design in a mixed fabrication panel.
+
+Each occurrence's cumulative `[a,b,c,d,tx,ty]` transform maps definition-local
+coordinates to the checked frame: `x' = a*x + c*y + tx`,
+`y' = b*x + d*y + ty`. Site, evidence, and scene coordinates are already placed;
+do not transform them again. A parent occurrence filter includes descendants.
+
+### Native scene
+
+Every complete report contains a scene, including reports with only nonspatial
+checks. Scene version 1 contains `schema_version: 1`, full-layout `bounds`, and
+`passes`.
+Each pass has `label`, semantic `feature`, exact `layer` name or `null` for shared
+context, display `color`, and a full-layout native `svg` string. All passes
+share the same viewport; sites never crop or duplicate the artwork.
+
+Select passes using the rule's `view.features` and the selected **site's** exact
+layer names, including shared `layer: null` passes. Finding-level layers are
+only a summary. Every spatial site requires a matching pass for each feature
+except `stackup`. An empty pass represents empty context; an absent required
+pass makes the export incomplete. A scene with no spatial findings may have
+an empty pass list.
+
+The SVG root applies one PCB IR display Y flip. When inserting its contents
+into a shared world-coordinate scene, remove that flip and apply the viewer's
+camera convention. Preserve nested rotations, mirrors, aperture instances,
+ordered polarity, masks, nonzero winding, holes, and final cutouts. Namespace
+IDs and fragment references per compiled pass/view.
+
+The report is the scene authority. Render its native SVG and check-owned
+evidence; do not infer geometry from messages or screenshots, rerun DFM, or
+recreate the verdict in a second geometry engine. Measurements, IDs, waivers,
+and checked scope do not depend on display constructions.
+
+### Incomplete reports
+
+An incomplete report has `verdict: "incomplete"`, `schema_version`,
+`generated_at`, `tool`, `input: {path}`, `pdk: {path}`, `layout_target`, and
+`error: {message}`. It has no `summary`, `rules`, `findings`, or `scene`. Consumers
+must handle this verdict before requiring complete-report fields; it is never
+a pass, a clean board, or a skipped check. Its minimal `pdk` has no source or
+hash, even if a PDK was read before the failure.
+
+### Reader limits and safety
+
+Producer and consumer enforce these inclusive limits (1 MiB = 1,048,576 bytes):
+
+| Resource | Limit |
+| --- | --- |
+| UTF-8 JSON report | 128 MiB |
+| UTF-8 bytes of decoded `pdk.source` | 1 MiB |
+
+Readers check file size before allocating or parsing. Decode strict UTF-8 and
+parse in a worker so cancellation and malformed input do not block the UI. Validate
+versions, finite numbers, ordered bounds, supported coordinate frames, unique
+IDs, references, and aggregate counts before rendering. Bound JSON/geometry
+complexity and SVG reference traversal independently of byte size.
+
+All JSON, TOML, and SVG are untrusted even when the PDK hash matches. Parse SVG
+into an inert allowlisted tree; never inject uploaded markup as HTML. Reject
+scripts, event handlers, foreign objects, styles, entities, external resources,
+and nonlocal fragment references. Show an explicit invalid or unsupported
+report error when safe rendering is unavailable.
+
+Reports can contain private board data, local paths, components, nets, PDK
+comments, and waiver reasons. A file picker or drop action authorizes local
+inspection only, not backend uploads or telemetry. Do not log payloads, persist
+uploads silently, or keep hidden copies after replacement. Terminate workers,
+release buffers/object URLs, and ignore stale async results when a new file
+replaces the current load.
+
+### Schema evolution
+
+Report and scene versions are independent; both currently use integer `1`.
+New fields and new `kind`, `role`, `status`, rule, and method values may be
+added within a version. Unknown optional fields can be ignored; unknown required
+semantics must produce an explicit unsupported state, never a guessed rendering
+or fabricated pass. Removing or changing existing field meanings requires a
+new schema version.

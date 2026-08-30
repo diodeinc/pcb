@@ -5,7 +5,7 @@
 //! it was measured against. Deciding whether a distance violates a limit is
 //! the caller's policy, via [`Distance::certainly_below`].
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::geom::bbox::BBox;
 use crate::geom::dist;
@@ -14,6 +14,87 @@ use crate::geom::region::{ContourSet, Ring, TwoSidedResidualComponent, ring_edge
 use crate::geom::tol;
 
 pub use crate::geom::dist::Distance;
+
+/// Exact candidate index over ring or shape bounds. Large enclosing rings
+/// remain queryable even when none of their boundary segments cross a small
+/// region of interest. The returned IDs retain the source ordering.
+#[derive(Debug)]
+pub struct BBoxIndex {
+    bounds: Vec<BBox>,
+    cells: HashMap<(i64, i64), Vec<usize>>,
+    enclosing: Vec<usize>,
+    pitch: f64,
+}
+
+impl BBoxIndex {
+    pub fn new(bounds: Vec<BBox>) -> Self {
+        let total = bounds.iter().copied().fold(BBox::empty(), BBox::union);
+        let pitch = if total.is_empty() {
+            2.0
+        } else {
+            (total.width().max(total.height()) / 64.0).max(2.0)
+        };
+        let mut index = Self {
+            bounds,
+            cells: HashMap::new(),
+            enclosing: Vec::new(),
+            pitch,
+        };
+        for (id, bbox) in index.bounds.iter().enumerate() {
+            if bbox.is_empty() {
+                continue;
+            }
+            let (x0, y0, x1, y1) = index.cells_for(*bbox);
+            if (x1 - x0 + 1).saturating_mul(y1 - y0 + 1) > 256 {
+                index.enclosing.push(id);
+                continue;
+            }
+            for x in x0..=x1 {
+                for y in y0..=y1 {
+                    index.cells.entry((x, y)).or_default().push(id);
+                }
+            }
+        }
+        index
+    }
+
+    fn cells_for(&self, bbox: BBox) -> (i64, i64, i64, i64) {
+        let cell = |value: f64| (value / self.pitch).floor() as i64;
+        (
+            cell(bbox.min.x),
+            cell(bbox.min.y),
+            cell(bbox.max.x),
+            cell(bbox.max.y),
+        )
+    }
+
+    pub fn query(&self, bbox: BBox) -> Vec<usize> {
+        if bbox.is_empty() {
+            return Vec::new();
+        }
+        let (x0, y0, x1, y1) = self.cells_for(bbox);
+        if (x1 - x0 + 1).saturating_mul(y1 - y0 + 1) > 4096 {
+            return self
+                .bounds
+                .iter()
+                .enumerate()
+                .filter_map(|(id, bounds)| bounds.intersects(bbox).then_some(id))
+                .collect();
+        }
+        let mut candidates = self.enclosing.clone();
+        for x in x0..=x1 {
+            for y in y0..=y1 {
+                if let Some(ids) = self.cells.get(&(x, y)) {
+                    candidates.extend(ids);
+                }
+            }
+        }
+        candidates.sort_unstable();
+        candidates.dedup();
+        candidates.retain(|&id| self.bounds[id].intersects(bbox));
+        candidates
+    }
+}
 
 /// Uniform-grid index over a region's boundary segments.
 ///
@@ -81,6 +162,23 @@ impl RegionBoundaryIndex {
             })
             .filter(|distance| distance.mm <= max_distance_mm + tol::EPSILON_MM)
             .min_by(|left, right| left.mm.total_cmp(&right.mm))
+    }
+
+    /// Parameter intervals along a segment within `distance_mm` of the
+    /// indexed boundary. Unlike a nearest-point query, these certify the
+    /// complete covered extent, including gaps between disjoint boundaries.
+    pub fn segment_boundary_intervals(
+        &self,
+        start: Point,
+        end: Point,
+        distance_mm: f64,
+    ) -> Vec<(f64, f64)> {
+        merge_intervals(
+            indexed_edges_near(self, start, end, distance_mm)
+                .into_iter()
+                .flat_map(|(a, b)| segment_capsule_intervals(start, end, a, b, distance_mm))
+                .collect(),
+        )
     }
 
     /// The radial material enclosure of a circular cutout whose center lies
@@ -235,6 +333,411 @@ fn closest_ring_edges(first: &[Ring], second: &[Ring]) -> Option<Distance> {
         .min_by(|left, right| left.mm.total_cmp(&right.mm))
 }
 
+/// A connected local clearance failure. The paths are the participating
+/// boundary portions, not whole-subject bounds. `overlap` is actual shared
+/// material, and is empty for a gap or point/line contact.
+#[derive(Debug, Clone)]
+pub struct ClearanceSite {
+    pub distance: Distance,
+    pub bbox: BBox,
+    pub first_paths: Vec<Vec<Point>>,
+    pub second_paths: Vec<Vec<Point>>,
+    pub overlap: ContourSet,
+}
+
+/// All connected sub-minimum portions of linework against a filled image.
+/// Segment/capsule intersection gives the actual start and stop of each
+/// failing span in the flattened representation. The reach excludes the
+/// measurement uncertainty, so the highlighted spans are certainly below
+/// the limit, not the larger broad-phase search envelope.
+pub fn linework_clearance_sites(
+    lines: &[(Point, Point)],
+    material: &ContourSet,
+    index: &RegionBoundaryIndex,
+    minimum_mm: f64,
+    flattened_linework: u32,
+) -> Vec<ClearanceSite> {
+    let flattened = flattened_linework + 1;
+    let reach = minimum_mm - f64::from(flattened) * tol::FLATTEN_MM - 1e-6;
+    if reach <= 0.0 || material.is_empty() {
+        return Vec::new();
+    }
+    let mut pending = Vec::with_capacity(lines.len());
+    let mut midpoints = Vec::new();
+    for &(start, end) in lines {
+        let edges = indexed_edges_near(index, start, end, reach);
+        let near = merge_intervals(
+            edges
+                .iter()
+                .flat_map(|&(a, b)| segment_capsule_intervals(start, end, a, b, reach))
+                .collect(),
+        );
+        // A segment can run deep inside material, beyond every boundary
+        // capsule. Gaps between capsule intervals cannot cross a boundary,
+        // so one batched containment test per gap settles that entire span.
+        let gaps = interval_complement(&near);
+        let delta = end - start;
+        let midpoint_offset = midpoints.len();
+        midpoints.extend(gaps.iter().map(|&(a, b)| start + delta * ((a + b) / 2.0)));
+        pending.push((start, end, near, gaps, midpoint_offset));
+    }
+    // One sweep for the whole reference item, not one walk of a panel's
+    // complete copper image for every little boundary segment.
+    let inside = material.contains_points_batch(&midpoints);
+    let mut spans = Vec::new();
+    for (start, end, near, gaps, midpoint_offset) in pending {
+        let delta = end - start;
+        let intervals = merge_intervals(
+            near.into_iter()
+                .chain(
+                    gaps.into_iter()
+                        .zip(inside[midpoint_offset..].iter().copied())
+                        .filter_map(|(interval, inside)| inside.then_some(interval)),
+                )
+                .collect(),
+        );
+        for (a, b) in intervals {
+            let (a, b) = (start + delta * a, start + delta * b);
+            spans.push((a, b));
+        }
+    }
+    let endpoints = spans.iter().flat_map(|&(a, b)| [a, b]).collect::<Vec<_>>();
+    let endpoint_inside = material.contains_points_batch(&endpoints);
+    connected_line_groups(&spans)
+        .into_iter()
+        .filter_map(|group| {
+            let mut nearest: Option<Distance> = None;
+            let mut first_paths = Vec::new();
+            let mut second_intervals: BTreeMap<u32, Vec<(f64, f64)>> = BTreeMap::new();
+            let mut bbox = BBox::empty();
+            for span_index in group {
+                let (start, end) = spans[span_index];
+                first_paths.push(vec![start, end]);
+                bbox.include_point(start);
+                bbox.include_point(end);
+                let distance = if endpoint_inside[2 * span_index] {
+                    Some(Distance::flattened(0.0, start, start, flattened))
+                } else if endpoint_inside[2 * span_index + 1] {
+                    Some(Distance::flattened(0.0, end, end, flattened))
+                } else {
+                    index
+                        .segment_nearest_within(start, end, minimum_mm)
+                        .map(|distance| distance.also_flattened(flattened_linework))
+                };
+                if let Some(distance) = distance
+                    && nearest.is_none_or(|best| distance.mm < best.mm)
+                {
+                    nearest = Some(distance);
+                }
+                for edge_id in indexed_edge_ids_near(index, start, end, reach) {
+                    let (a, b) = index.segments[edge_id as usize];
+                    second_intervals
+                        .entry(edge_id)
+                        .or_default()
+                        .extend(segment_capsule_intervals(a, b, start, end, reach));
+                }
+            }
+            // A long source edge can be close to many consecutive reference
+            // spans. Preserve its exact union once, keyed by authoritative
+            // segment identity rather than rounded point coordinates.
+            let second_paths = second_intervals
+                .into_iter()
+                .flat_map(|(edge_id, intervals)| {
+                    let (start, end) = index.segments[edge_id as usize];
+                    let delta = end - start;
+                    merge_intervals(intervals)
+                        .into_iter()
+                        .map(move |(low, high)| vec![start + delta * low, start + delta * high])
+                })
+                .collect::<Vec<_>>();
+            for point in second_paths.iter().flatten() {
+                bbox.include_point(*point);
+            }
+            let distance = nearest?;
+            bbox.include_point(distance.first);
+            bbox.include_point(distance.second);
+            Some(ClearanceSite {
+                distance,
+                bbox,
+                first_paths,
+                second_paths,
+                overlap: ContourSet::empty(material.tolerance),
+            })
+        })
+        .collect()
+}
+
+/// Local sites between two filled regions. Intersection components supply
+/// explicit overlap geometry, including containment with no near boundary.
+pub fn region_clearance_sites(
+    first: &ContourSet,
+    second: &ContourSet,
+    minimum_mm: f64,
+) -> Vec<ClearanceSite> {
+    let lines = first.rings.iter().flat_map(ring_edges).collect::<Vec<_>>();
+    let index = RegionBoundaryIndex::new(second, minimum_mm);
+    let mut sites = linework_clearance_sites(&lines, second, &index, minimum_mm, 1);
+    for overlap in first.intersection(second).connected_components() {
+        let Some(point) = overlap
+            .rings
+            .first()
+            .and_then(|ring| ring.first())
+            .map(|&[x, y]| Point::new(x, y))
+        else {
+            continue;
+        };
+        let mut joined = ClearanceSite {
+            distance: Distance::flattened(0.0, point, point, 2),
+            bbox: overlap.bbox,
+            first_paths: Vec::new(),
+            second_paths: Vec::new(),
+            overlap,
+        };
+        let overlap_boundary = RegionBoundaryIndex::new(&joined.overlap, tol::REGION_MM);
+        let mut position = 0;
+        while position < sites.len() {
+            let touches = sites[position].first_paths.iter().any(|path| {
+                path.windows(2).any(|pair| {
+                    !crate::geom::region::segment_inside_intervals(
+                        &joined.overlap,
+                        pair[0],
+                        pair[1],
+                    )
+                    .is_empty()
+                        || joined.overlap.contains_point(pair[0])
+                        || joined.overlap.contains_point(pair[1])
+                        || overlap_boundary
+                            .segment_nearest_within(pair[0], pair[1], tol::REGION_MM)
+                            .is_some()
+                })
+            });
+            if !touches {
+                position += 1;
+                continue;
+            }
+            let site = sites.remove(position);
+            joined.bbox = joined.bbox.union(site.bbox);
+            joined.first_paths.extend(site.first_paths);
+            joined.second_paths.extend(site.second_paths);
+            joined.overlap = joined.overlap.union(&site.overlap);
+        }
+        sites.push(joined);
+    }
+    sites
+}
+
+/// A local required-clearance band around the supplied reference paths.
+pub fn linework_envelope(paths: &[Vec<Point>], radius_mm: f64) -> ContourSet {
+    use crate::geom::path::{ContourBuf, PathCmd};
+    use crate::geom::{Paint, PathArena, StrokeStyle};
+    let contours = paths
+        .iter()
+        .filter(|path| path.len() >= 2)
+        .map(|path| {
+            ContourBuf::new(
+                std::iter::once(PathCmd::move_to(path[0]))
+                    .chain(path[1..].iter().copied().map(PathCmd::line_to))
+                    .collect(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut arena = PathArena::default();
+    let path = arena.push_path(Paint::Stroke(StrokeStyle::round(2.0 * radius_mm)), contours);
+    ContourSet::from_painted_paths(
+        &arena,
+        std::iter::once(&arena.paths[path as usize]),
+        tol::REGION_MM,
+    )
+}
+
+/// Circular material in the same flattened representation as check images.
+/// Analytic diameter/radial measurements should continue to use the circle
+/// parameters; this region is for boolean evidence such as missing copper.
+pub fn circular_region(center: Point, radius_mm: f64) -> ContourSet {
+    let Some(circle) = crate::geom::shapes::circle(2.0 * radius_mm) else {
+        return ContourSet::empty(tol::REGION_MM);
+    };
+    let circle =
+        crate::geom::path::transform_cmds(circle.cmds, crate::geom::Affine2::translation(center));
+    ContourSet::from_filled_contours(&[circle], tol::REGION_MM)
+}
+
+fn indexed_edges_near(
+    index: &RegionBoundaryIndex,
+    start: Point,
+    end: Point,
+    reach: f64,
+) -> Vec<(Point, Point)> {
+    indexed_edge_ids_near(index, start, end, reach)
+        .into_iter()
+        .map(|id| index.segments[id as usize])
+        .collect()
+}
+
+fn indexed_edge_ids_near(
+    index: &RegionBoundaryIndex,
+    start: Point,
+    end: Point,
+    reach: f64,
+) -> Vec<u32> {
+    let mut ids = corridor_cells(start, end, reach, index.cell_size_mm)
+        .filter_map(|cell| index.cells.get(&cell))
+        .flatten()
+        .copied()
+        .collect::<Vec<_>>();
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
+fn linear_interval(value: f64, slope: f64, minimum: f64, maximum: f64) -> Option<(f64, f64)> {
+    if slope.abs() <= f64::EPSILON {
+        return (value >= minimum && value <= maximum).then_some((0.0, 1.0));
+    }
+    let (a, b) = ((minimum - value) / slope, (maximum - value) / slope);
+    let interval = (a.min(b).max(0.0), a.max(b).min(1.0));
+    (interval.0 < interval.1).then_some(interval)
+}
+
+fn intersect_interval(first: (f64, f64), second: (f64, f64)) -> Option<(f64, f64)> {
+    let interval = (first.0.max(second.0), first.1.min(second.1));
+    (interval.0 < interval.1).then_some(interval)
+}
+
+fn segment_disk_interval(
+    start: Point,
+    end: Point,
+    center: Point,
+    radius: f64,
+) -> Option<(f64, f64)> {
+    let delta = end - start;
+    let relative = start - center;
+    let a = delta.x * delta.x + delta.y * delta.y;
+    let c = relative.x * relative.x + relative.y * relative.y - radius * radius;
+    if a <= f64::EPSILON {
+        return (c < 0.0).then_some((0.0, 1.0));
+    }
+    let b = 2.0 * (relative.x * delta.x + relative.y * delta.y);
+    let discriminant = b * b - 4.0 * a * c;
+    if discriminant <= 0.0 {
+        return None;
+    }
+    let root = discriminant.sqrt();
+    intersect_interval(
+        ((-b - root) / (2.0 * a), (-b + root) / (2.0 * a)),
+        (0.0, 1.0),
+    )
+}
+
+/// Parameters where a moving point is within `radius` of a closed segment.
+/// The capsule is an infinite strip clipped to the segment plus its end disks.
+fn segment_capsule_intervals(
+    start: Point,
+    end: Point,
+    a: Point,
+    b: Point,
+    radius: f64,
+) -> Vec<(f64, f64)> {
+    let mut intervals = [
+        segment_disk_interval(start, end, a, radius),
+        segment_disk_interval(start, end, b, radius),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    let edge = b - a;
+    let length = edge.length();
+    if length > tol::EPSILON_MM {
+        let direction = edge / length;
+        let delta = end - start;
+        let relative = start - a;
+        let projection = relative.x * direction.x + relative.y * direction.y;
+        let along = delta.x * direction.x + delta.y * direction.y;
+        let perpendicular = relative.x * direction.y - relative.y * direction.x;
+        let across = delta.x * direction.y - delta.y * direction.x;
+        if let (Some(along), Some(across)) = (
+            linear_interval(projection, along, 0.0, length),
+            linear_interval(perpendicular, across, -radius, radius),
+        ) && let Some(interval) = intersect_interval(along, across)
+        {
+            intervals.push(interval);
+        }
+    }
+    merge_intervals(intervals)
+}
+
+fn merge_intervals(mut intervals: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
+    intervals.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut merged: Vec<(f64, f64)> = Vec::new();
+    for interval in intervals {
+        if let Some(last) = merged.last_mut()
+            && interval.0 <= last.1 + f64::EPSILON
+        {
+            last.1 = last.1.max(interval.1);
+            continue;
+        }
+        merged.push(interval);
+    }
+    merged
+}
+
+fn interval_complement(intervals: &[(f64, f64)]) -> Vec<(f64, f64)> {
+    let mut result = Vec::new();
+    let mut previous = 0.0;
+    for &(start, end) in intervals {
+        if start > previous {
+            result.push((previous, start));
+        }
+        previous = previous.max(end);
+    }
+    if previous < 1.0 {
+        result.push((previous, 1.0));
+    }
+    result
+}
+
+fn connected_line_groups(lines: &[(Point, Point)]) -> Vec<Vec<usize>> {
+    let mut parents = (0..lines.len()).collect::<Vec<_>>();
+    let mut endpoints: HashMap<(i64, i64), Vec<(Point, usize)>> = HashMap::new();
+    fn root(parents: &mut [usize], mut id: usize) -> usize {
+        while parents[id] != id {
+            parents[id] = parents[parents[id]];
+            id = parents[id];
+        }
+        id
+    }
+    for (id, &(first, second)) in lines.iter().enumerate() {
+        for point in [first, second] {
+            let key = (
+                (point.x / tol::REGION_MM).round() as i64,
+                (point.y / tol::REGION_MM).round() as i64,
+            );
+            for x in key.0 - 1..=key.0 + 1 {
+                for y in key.1 - 1..=key.1 + 1 {
+                    for &(other_point, other) in endpoints.get(&(x, y)).into_iter().flatten() {
+                        if point.distance_to(other_point) <= tol::REGION_MM {
+                            let (a, b) = (root(&mut parents, id), root(&mut parents, other));
+                            parents[a] = b;
+                        }
+                    }
+                }
+            }
+            endpoints.entry(key).or_default().push((point, id));
+        }
+    }
+    let mut positions = HashMap::new();
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    for id in 0..lines.len() {
+        let owner = root(&mut parents, id);
+        let position = *positions.entry(owner).or_insert_with(|| {
+            groups.push(Vec::new());
+            groups.len() - 1
+        });
+        groups[position].push(id);
+    }
+    groups
+}
+
 /// One contiguous sub-minimum piece of material or clearance.
 ///
 /// A feature narrower than the fabrication minimum disappears under a
@@ -252,6 +755,31 @@ pub struct ThinPiece {
     pub width: Distance,
     /// Approximate longitudinal extent (half the residue perimeter).
     pub length_mm: f64,
+    /// Guarded morphology residue; context, not an exact failure footprint.
+    pub candidate: ContourSet,
+    /// The actual maximal disk that produced `width`, not a disk inferred
+    /// from the midpoint of its generally non-opposite tangencies.
+    pub disk: WidthDisk,
+    /// Connected confirmed sub-minimum portions, each with its own minimum.
+    pub sites: Vec<ThinSite>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct WidthDisk {
+    pub center: Point,
+    pub radius_mm: f64,
+    pub width: Distance,
+}
+
+#[derive(Debug, Clone)]
+pub struct ThinSite {
+    pub bbox: BBox,
+    pub disk: WidthDisk,
+    pub axis: Vec<Vec<Point>>,
+    /// Actual source-boundary contacts along the verified axis. A vertex
+    /// contact is a zero-length segment; these also retain isolated disk
+    /// tangencies so occurrence attribution can prove the entire construction.
+    pub walls: Vec<(Point, Point)>,
 }
 
 /// Opening and closing use tessellated round offsets. Widening the candidate
@@ -288,11 +816,15 @@ pub fn thin_gaps(region: &ContourSet, min_gap_mm: f64) -> Vec<ThinPiece> {
 /// whole region makes every piece of it a candidate. `None` when no two
 /// branches face each other (an empty region, or a single point).
 pub fn min_width(region: &ContourSet) -> Option<Distance> {
+    min_width_disk(region).map(|disk| disk.width)
+}
+
+pub fn min_width_disk(region: &ContourSet) -> Option<WidthDisk> {
     let erase_all = 2.0 * region.bbox.width().max(region.bbox.height());
     thin_features(region, erase_all)
         .into_iter()
-        .map(|piece| piece.width)
-        .min_by(|left, right| left.mm.total_cmp(&right.mm))
+        .map(|piece| piece.disk)
+        .min_by(|left, right| left.width.mm.total_cmp(&right.width.mm))
 }
 
 /// Convert the conservative opening/closing candidates into authoritative
@@ -304,11 +836,168 @@ fn pieces(components: Vec<TwoSidedResidualComponent>, minimum_mm: f64) -> Vec<Th
     let mut pieces = components
         .into_iter()
         .filter(|component| component.width.certainly_below(minimum_mm))
-        .map(|component| ThinPiece {
-            bbox: component.region.bbox,
-            area_mm2: component.region.area(),
-            width: component.width,
-            length_mm: region_perimeter(&component.region) / 2.0,
+        .map(|component| {
+            let narrow_axis = component
+                .axis
+                .iter()
+                .flat_map(|axis| {
+                    let reach =
+                        (minimum_mm - 2.0 * tol::FLATTEN_MM - 2.0 * axis.uncertainty_mm - 1e-6)
+                            / 2.0;
+                    if reach <= 0.0 {
+                        return Vec::new();
+                    }
+                    let first = segment_capsule_intervals(
+                        axis.start,
+                        axis.end,
+                        axis.first_wall.0,
+                        axis.first_wall.1,
+                        reach,
+                    );
+                    let second = segment_capsule_intervals(
+                        axis.start,
+                        axis.end,
+                        axis.second_wall.0,
+                        axis.second_wall.1,
+                        reach,
+                    );
+                    let delta = axis.end - axis.start;
+                    first
+                        .iter()
+                        .flat_map(|&first| {
+                            second
+                                .iter()
+                                .filter_map(move |&second| intersect_interval(first, second))
+                        })
+                        .map(|(start, end)| {
+                            let (start, end) =
+                                (axis.start + delta * start, axis.start + delta * end);
+                            let at = |t| start + (end - start) * t;
+                            let radius_at = |t| {
+                                let center = at(t);
+                                (dist::point_segment(center, axis.first_wall.0, axis.first_wall.1)
+                                    .0
+                                    + dist::point_segment(
+                                        center,
+                                        axis.second_wall.0,
+                                        axis.second_wall.1,
+                                    )
+                                    .0)
+                                    / 2.0
+                            };
+                            let (mut low, mut high) = (0.0, 1.0);
+                            for _ in 0..40 {
+                                let a = (2.0 * low + high) / 3.0;
+                                let b = (low + 2.0 * high) / 3.0;
+                                if radius_at(a) < radius_at(b) {
+                                    high = b;
+                                } else {
+                                    low = a;
+                                }
+                            }
+                            let t = [0.0, (low + high) / 2.0, 1.0]
+                                .into_iter()
+                                .min_by(|&a, &b| radius_at(a).total_cmp(&radius_at(b)))
+                                .unwrap();
+                            let center = at(t);
+                            let radius_mm = radius_at(t);
+                            let first =
+                                dist::point_segment(center, axis.first_wall.0, axis.first_wall.1).1;
+                            let second =
+                                dist::point_segment(center, axis.second_wall.0, axis.second_wall.1)
+                                    .1;
+                            let walls = [axis.first_wall, axis.second_wall].map(|(a, b)| {
+                                (
+                                    dist::point_segment(start, a, b).1,
+                                    dist::point_segment(end, a, b).1,
+                                )
+                            });
+                            let mut width = Distance::flattened(2.0 * radius_mm, first, second, 2);
+                            width.uncertainty_mm += 2.0 * axis.uncertainty_mm;
+                            (
+                                (start, end),
+                                WidthDisk {
+                                    center,
+                                    radius_mm,
+                                    width,
+                                },
+                                walls,
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            let lines = narrow_axis
+                .iter()
+                .map(|(line, _, _)| *line)
+                .collect::<Vec<_>>();
+            let mut sites = connected_line_groups(&lines)
+                .into_iter()
+                .map(|group| {
+                    let disk = group
+                        .iter()
+                        .map(|&index| narrow_axis[index].1)
+                        .min_by(|left, right| left.width.mm.total_cmp(&right.width.mm))
+                        .unwrap();
+                    let mut bbox = BBox::from_point(disk.center).expand(disk.radius_mm);
+                    let mut walls = group
+                        .iter()
+                        .flat_map(|&index| narrow_axis[index].2)
+                        .collect::<Vec<_>>();
+                    walls.extend([
+                        (disk.width.first, disk.width.first),
+                        (disk.width.second, disk.width.second),
+                    ]);
+                    for &(start, end) in &walls {
+                        bbox.include_point(start);
+                        bbox.include_point(end);
+                    }
+                    let axis = group
+                        .into_iter()
+                        .map(|index| {
+                            let (start, end) = lines[index];
+                            bbox.include_point(start);
+                            bbox.include_point(end);
+                            vec![start, end]
+                        })
+                        .collect();
+                    ThinSite {
+                        bbox,
+                        disk,
+                        axis,
+                        walls,
+                    }
+                })
+                .collect::<Vec<_>>();
+            let disk = WidthDisk {
+                center: component.disk.center,
+                radius_mm: component.disk.radius,
+                width: component.width,
+            };
+            // A width can live at an isolated Voronoi vertex (for example a
+            // small island). Keep its real construction even without an axis.
+            if !lines.iter().any(|&(start, end)| {
+                dist::point_segment(disk.center, start, end).0 <= tol::FLATTEN_MM
+            }) {
+                sites.push(ThinSite {
+                    bbox: BBox::from_point(disk.center).expand(disk.radius_mm),
+                    disk,
+                    axis: Vec::new(),
+                    walls: vec![
+                        (disk.width.first, disk.width.first),
+                        (disk.width.second, disk.width.second),
+                    ],
+                });
+            }
+            ThinPiece {
+                bbox: component.region.bbox,
+                area_mm2: component.region.area(),
+                width: component.width,
+                length_mm: region_perimeter(&component.region) / 2.0,
+                disk,
+                sites,
+                candidate: component.region,
+            }
         })
         .collect::<Vec<_>>();
     pieces.sort_by(|a, b| b.area_mm2.total_cmp(&a.area_mm2));
@@ -346,6 +1035,135 @@ mod tests {
             FillRule::NonZero,
             tol::REGION_MM,
         )
+    }
+
+    #[test]
+    fn clearance_sites_locate_every_disconnected_span_with_threshold_endpoints() {
+        let material = rect_region(2.0, 0.1, 3.0, 1.0).union(&rect_region(7.0, 0.1, 8.0, 1.0));
+        let sites = linework_clearance_sites(
+            &[(Point::new(0.0, 0.0), Point::new(10.0, 0.0))],
+            &material,
+            &RegionBoundaryIndex::new(&material, 0.3),
+            0.3,
+            0,
+        );
+        assert_eq!(sites.len(), 2);
+        let reach = 0.3 - tol::FLATTEN_MM - 1e-6;
+        let extension = (reach * reach - 0.1_f64.powi(2)).sqrt();
+        for (site, left) in sites.iter().zip([2.0, 7.0]) {
+            assert!((site.distance.mm - 0.1).abs() < 1e-9);
+            assert_eq!(site.first_paths.len(), 1);
+            assert!((site.first_paths[0][0].x - (left - extension)).abs() < 1e-9);
+            assert!((site.first_paths[0][1].x - (left + 1.0 + extension)).abs() < 1e-9);
+            assert!(!site.second_paths.is_empty());
+        }
+    }
+
+    #[test]
+    fn clearance_sites_include_segments_deep_inside_material() {
+        let material = rect_region(0.0, 0.0, 10.0, 10.0);
+        let line = (Point::new(2.0, 5.0), Point::new(8.0, 5.0));
+        let sites = linework_clearance_sites(
+            &[line],
+            &material,
+            &RegionBoundaryIndex::new(&material, 0.2),
+            0.2,
+            0,
+        );
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].distance.mm, 0.0);
+        assert_eq!(sites[0].first_paths, vec![vec![line.0, line.1]]);
+    }
+
+    #[test]
+    fn clearance_sites_merge_repeated_contacts_on_the_same_source_edge() {
+        let material =
+            ContourSet::from_filled_contours(&[rect_at(0.0, 0.0, 1.0, 1.0)], tol::REGION_MM);
+        let index = RegionBoundaryIndex::new(&material, 0.2);
+        let sites = linework_clearance_sites(
+            &[
+                (Point::new(0.0, -0.1), Point::new(0.5, -0.1)),
+                (Point::new(0.5, -0.1), Point::new(1.0, -0.1)),
+            ],
+            &material,
+            &index,
+            0.2,
+            1,
+        );
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].first_paths.len(), 2);
+        assert_eq!(
+            sites[0].second_paths.len(),
+            3,
+            "bottom edge and two short side contacts, each once"
+        );
+        let bottom = sites[0]
+            .second_paths
+            .iter()
+            .filter(|path| path.iter().all(|point| point.y.abs() < 1e-8))
+            .collect::<Vec<_>>();
+        assert_eq!(bottom.len(), 1);
+        assert!((bottom[0][0].distance_to(bottom[0][1]) - 1.0).abs() < 1e-8);
+    }
+
+    #[test]
+    fn a_degenerate_reference_point_still_has_a_spatial_site() {
+        let material = rect_region(0.0, 0.0, 1.0, 1.0);
+        let point = Point::new(0.5, 0.5);
+        let sites = linework_clearance_sites(
+            &[(point, point)],
+            &material,
+            &RegionBoundaryIndex::new(&material, 0.2),
+            0.2,
+            0,
+        );
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].distance.mm, 0.0);
+        assert_eq!(sites[0].bbox.min, point);
+        assert_eq!(sites[0].bbox.max, point);
+    }
+
+    #[test]
+    fn region_sites_do_not_hide_two_gaps_between_the_same_connected_pair() {
+        let first = rect_region(0.0, 0.0, 10.0, 1.0);
+        let second = rect_region(2.0, 1.1, 3.0, 4.0)
+            .union(&rect_region(7.0, 1.1, 8.0, 4.0))
+            .union(&rect_region(2.0, 3.0, 8.0, 4.0));
+        assert_eq!(second.connected_components().len(), 1);
+        let sites = region_clearance_sites(&first, &second, 0.2);
+        assert_eq!(sites.len(), 2);
+        let authoritative = region_clearance(&first, &second).unwrap().mm;
+        assert!(
+            (authoritative - 0.1).abs() < 1e-8,
+            "boolean composition snaps coordinates"
+        );
+        assert!(
+            sites
+                .iter()
+                .all(|site| (site.distance.mm - authoritative).abs() < 1e-12)
+        );
+        assert!(sites.iter().all(|site| site.bbox.width() < 2.0));
+    }
+
+    #[test]
+    fn region_sites_keep_contained_overlap_without_a_near_outer_boundary() {
+        let first = rect_region(-5.0, -5.0, 5.0, 5.0);
+        let second = rect_region(-0.5, -0.5, 0.5, 0.5);
+        let sites = region_clearance_sites(&first, &second, 0.2);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].distance.mm, 0.0);
+        assert!((sites[0].overlap.area() - 1.0).abs() < 1e-9);
+        assert!((sites[0].bbox.width() - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn region_sites_merge_boundary_spans_with_their_shared_overlap() {
+        let first = rect_region(0.0, 0.0, 2.0, 2.0);
+        let second = rect_region(1.0, 0.5, 3.0, 1.5);
+        let sites = region_clearance_sites(&first, &second, 0.2);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].distance.mm, 0.0);
+        assert!((sites[0].overlap.area() - 1.0).abs() < 1e-9);
     }
 
     #[test]
@@ -492,6 +1310,19 @@ mod tests {
             piece.width.mm
         );
         assert!(piece.length_mm > 1.5, "length {}", piece.length_mm);
+        assert!((piece.disk.radius_mm * 2.0 - piece.width.mm).abs() < 1e-12);
+        let points = piece
+            .sites
+            .iter()
+            .flat_map(|site| &site.axis)
+            .flatten()
+            .collect::<Vec<_>>();
+        assert!(
+            !points.is_empty(),
+            "the full narrow spur has a verified axis"
+        );
+        assert!(points.iter().any(|point| point.x < 10.2));
+        assert!(points.iter().any(|point| point.x > 11.8));
     }
 
     #[test]
@@ -629,6 +1460,17 @@ mod tests {
         assert!(
             width.first.x > 11.5 && width.second.x > 11.5,
             "witnesses at the tip"
+        );
+        let piece = &findings[0];
+        assert!((piece.disk.radius_mm * 2.0 - width.mm).abs() < 1e-12);
+        assert!(
+            piece
+                .sites
+                .iter()
+                .flat_map(|site| &site.axis)
+                .flatten()
+                .all(|point| point.x > 11.65),
+            "the confirmed axis must not inherit the guarded candidate's wider extent"
         );
     }
 

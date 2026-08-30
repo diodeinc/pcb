@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Add self-contained DFM JSON reports with native geometry and PDK source.
+
 ### Fixed
 
 - Inherit symbol descriptions for non-generic BOM components.

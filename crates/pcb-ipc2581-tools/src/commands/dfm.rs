@@ -4,8 +4,9 @@ use std::borrow::Cow;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use pcb_ir::import::ipc2581::import_design;
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::LayoutTarget;
@@ -18,7 +19,11 @@ mod design;
 mod pdk;
 mod report;
 mod rules;
+mod scene;
 mod waivers;
+
+const MAX_REPORT_BYTES: usize = 128 * 1024 * 1024;
+const MAX_PDK_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug)]
 pub struct CheckOptions {
@@ -41,9 +46,116 @@ struct LoadedWaivers {
     file: waivers::WaiverFile,
 }
 
+/// Reject an invalid destination before any layout preparation or output write.
+pub fn validate_output(file: &Path, options: &CheckOptions) -> Result<()> {
+    let Some(output) = options.output.as_deref() else {
+        return Ok(());
+    };
+    let output_canonical = output.canonicalize().ok();
+    // A .zen preparation error can occur before its layout path is resolved.
+    // Reject board-file destinations up front so even an incomplete report
+    // cannot replace that source, including through a differently named symlink.
+    for target in [Some(output), output_canonical.as_deref()]
+        .into_iter()
+        .flatten()
+    {
+        ensure!(
+            !target
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("kicad_pcb")),
+            "DFM report output would overwrite a KiCad layout: {}",
+            target.display()
+        );
+    }
+    let pdk_file = options
+        .pdk
+        .to_str()
+        .and_then(builtin_pdks::find)
+        .is_none()
+        .then_some(options.pdk.as_path());
+    for source in [Some(file), pdk_file, options.waivers.as_deref()]
+        .into_iter()
+        .flatten()
+    {
+        ensure!(
+            output != source
+                && !output_canonical.as_ref().is_some_and(|output| source
+                    .canonicalize()
+                    .as_ref()
+                    .ok()
+                    == Some(output)),
+            "DFM report output would overwrite source {}",
+            source.display()
+        );
+    }
+    Ok(())
+}
+
 pub fn execute_check(file: &Path, options: &CheckOptions) -> Result<()> {
+    validate_output(file, options)?;
+    let report = match build_report(file, options) {
+        Ok(checked) => checked,
+        Err(error) => {
+            write_error_report(file, options, &error)
+                .with_context(|| format!("DFM check was incomplete: {error:#}"))?;
+            return Err(error);
+        }
+    };
+    write_report(options, &report)?;
+
+    let summary = &report.summary;
+    if summary.errors > 0 {
+        bail!(
+            "DFM check failed with {} error finding(s){}",
+            summary.errors,
+            annotations(summary)
+        );
+    }
+    eprintln!(
+        "✓ DFM check passed ({} rule(s){})",
+        summary.rules_configured,
+        annotations(summary)
+    );
+    Ok(())
+}
+
+/// Preparation failures produce an incomplete report, never a passing result.
+/// This also handles `.zen` layout/export errors before the IPC input exists.
+pub fn write_error_report(
+    file: &Path,
+    options: &CheckOptions,
+    error: &anyhow::Error,
+) -> Result<()> {
+    validate_output(file, options)?;
+    let incomplete = serde_json::json!({
+        "schema_version": report::REPORT_SCHEMA_VERSION,
+        "generated_at": generation_time().to_rfc3339(),
+        "verdict": "incomplete",
+        "tool": report::ToolIdentity {
+            name: "pcb",
+            version: env!("CARGO_PKG_VERSION"),
+        },
+        "input": { "path": file.display().to_string() },
+        "pdk": { "path": options.pdk.display().to_string() },
+        "layout_target": match options.layout_target {
+            LayoutTarget::Board => "board",
+            LayoutTarget::BoardArray => "board_array",
+        },
+        "error": { "message": format!("{error:#}") },
+    });
+    write_report(options, &incomplete)
+}
+
+fn build_report(file: &Path, options: &CheckOptions) -> Result<report::DfmReport> {
     let input_bytes = std::fs::read(file)
         .with_context(|| format!("failed to read IPC-2581 file {}", file.display()))?;
+    let input = report::FileIdentity {
+        path: file.display().to_string(),
+        sha256: sha256(&input_bytes),
+        size_bytes: input_bytes.len() as u64,
+    };
+    let content = file_utils::ipc_text(file, &input_bytes)?;
     let loaded_pdk = load_pdk(&options.pdk)?;
     let pdk_source = std::str::from_utf8(&loaded_pdk.bytes)
         .with_context(|| format!("PDK {} is not UTF-8", loaded_pdk.path))?;
@@ -78,8 +190,9 @@ pub fn execute_check(file: &Path, options: &CheckOptions) -> Result<()> {
         .transpose()?;
 
     let generated_at = generation_time();
-    let content = file_utils::ipc_text(file, &input_bytes)?;
     let ipc = Ipc2581::parse(&content).context("failed to parse IPC-2581 file")?;
+    drop(content);
+    drop(input_bytes);
     let imported = import_design(&ipc).context("failed to import IPC-2581 physical design")?;
     let design = design::Design::extract(&imported, options.layout_target.artwork_scope(), &rules)?;
     let checked = checks::run(
@@ -91,7 +204,9 @@ pub fn execute_check(file: &Path, options: &CheckOptions) -> Result<()> {
 
     let summary = summarize(&checked);
     let failed = summary.errors > 0;
-    let report = report::DfmReport {
+    let layout = design.report_layout();
+    let scene = scene::export(&design, &layout, &checked.rules, &checked.findings)?;
+    Ok(report::DfmReport {
         schema_version: report::REPORT_SCHEMA_VERSION,
         generated_at: generated_at.to_rfc3339(),
         verdict: if failed {
@@ -103,16 +218,18 @@ pub fn execute_check(file: &Path, options: &CheckOptions) -> Result<()> {
             name: "pcb",
             version: env!("CARGO_PKG_VERSION"),
         },
-        input: report::FileIdentity {
-            path: file.display().to_string(),
-            sha256: sha256(&input_bytes),
-            size_bytes: input_bytes.len() as u64,
-        },
-        pdk: report::PdkIdentity::from_pdk(&pdk, loaded_pdk.path, sha256(&loaded_pdk.bytes)),
+        input,
+        pdk: report::PdkIdentity::from_pdk(
+            &pdk,
+            loaded_pdk.path,
+            sha256(&loaded_pdk.bytes),
+            pdk_source.to_owned(),
+        ),
         layout_target: match options.layout_target {
             LayoutTarget::Board => "board",
             LayoutTarget::BoardArray => "board_array",
         },
+        layout,
         coordinate_system: report::CoordinateSystem {
             unit: "mm",
             axes: "x_right_y_up",
@@ -132,41 +249,31 @@ pub fn execute_check(file: &Path, options: &CheckOptions) -> Result<()> {
         summary,
         rules: checked.rules,
         findings: checked.findings,
-    };
-
-    let rendered = serde_json::to_string_pretty(&report)?;
-    write_report(options.output.as_deref(), &rendered)?;
-
-    let summary = &report.summary;
-    if failed {
-        bail!(
-            "DFM check failed with {} error finding(s){}",
-            summary.errors,
-            annotations(summary)
-        );
-    }
-    eprintln!(
-        "✓ DFM check passed ({} rule(s){})",
-        summary.rules_configured,
-        annotations(summary)
-    );
-    Ok(())
+        scene,
+    })
 }
 
 fn load_pdk(reference: &Path) -> Result<LoadedPdk> {
-    if let Some(pdk) = reference.to_str().and_then(builtin_pdks::find) {
-        return Ok(LoadedPdk {
+    let loaded = if let Some(pdk) = reference.to_str().and_then(builtin_pdks::find) {
+        LoadedPdk {
             path: format!("builtin:{}", pdk.name),
             bytes: Cow::Borrowed(pdk.source.as_bytes()),
-        });
-    }
-
-    let bytes = std::fs::read(reference)
-        .with_context(|| format!("failed to read PDK file {}", reference.display()))?;
-    Ok(LoadedPdk {
-        path: reference.display().to_string(),
-        bytes: Cow::Owned(bytes),
-    })
+        }
+    } else {
+        LoadedPdk {
+            path: reference.display().to_string(),
+            bytes: Cow::Owned(
+                std::fs::read(reference)
+                    .with_context(|| format!("failed to read PDK file {}", reference.display()))?,
+            ),
+        }
+    };
+    ensure!(
+        loaded.bytes.len() <= MAX_PDK_BYTES,
+        "PDK {} exceeds the {MAX_PDK_BYTES} byte limit",
+        loaded.path
+    );
+    Ok(loaded)
 }
 
 /// The non-verdict counts worth surfacing next to the pass/fail line.
@@ -227,14 +334,39 @@ fn summarize(checked: &checks::Results) -> report::Summary {
     }
 }
 
-fn write_report(output: Option<&Path>, report: &str) -> Result<()> {
-    match output {
-        Some(path) => std::fs::write(path, format!("{report}\n"))
-            .with_context(|| format!("failed to write DFM report to {}", path.display())),
-        None => {
-            let mut stdout = std::io::stdout().lock();
-            writeln!(stdout, "{report}").context("failed to write DFM report to stdout")
+fn write_report(options: &CheckOptions, report: &impl Serialize) -> Result<()> {
+    let mut bytes = serde_json::to_vec_pretty(report)?;
+    bytes.push(b'\n');
+    ensure!(
+        bytes.len() <= MAX_REPORT_BYTES,
+        "DFM report exceeds the {MAX_REPORT_BYTES} byte limit"
+    );
+    match options.output.as_deref() {
+        Some(path) => {
+            // Replace only after serialization and the complete write succeed.
+            let parent = path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."));
+            let mut temporary = tempfile::NamedTempFile::new_in(parent)
+                .with_context(|| format!("failed to create DFM report in {}", parent.display()))?;
+            temporary
+                .write_all(&bytes)
+                .with_context(|| format!("failed to write DFM report to {}", path.display()))?;
+            temporary
+                .as_file()
+                .sync_all()
+                .context("failed to flush DFM report to disk")?;
+            temporary
+                .persist(path)
+                .map_err(|error| error.error)
+                .with_context(|| format!("failed to replace DFM report {}", path.display()))?;
+            Ok(())
         }
+        None => std::io::stdout()
+            .lock()
+            .write_all(&bytes)
+            .context("failed to write DFM report to stdout"),
     }
 }
 
@@ -372,6 +504,70 @@ minimum_board_array_spacing = "300 mil"
 
         assert_eq!(loaded.path, path.display().to_string());
         assert_eq!(&*loaded.bytes, PDK.as_bytes());
+    }
+
+    #[test]
+    fn rejects_oversize_pdk_source() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("oversize.toml");
+        std::fs::write(&path, vec![b' '; MAX_PDK_BYTES + 1]).unwrap();
+
+        let error = load_pdk(&path).err().unwrap();
+
+        assert!(error.to_string().contains("exceeds the 1048576 byte limit"));
+    }
+
+    #[test]
+    fn report_serialization_failure_preserves_existing_output() {
+        struct Unserializable;
+        impl Serialize for Unserializable {
+            fn serialize<S: serde::Serializer>(
+                &self,
+                _serializer: S,
+            ) -> std::result::Result<S::Ok, S::Error> {
+                Err(serde::ser::Error::custom("serialization failed"))
+            }
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("report.dfm.json");
+        std::fs::write(&output, b"previous report").unwrap();
+        let options = CheckOptions {
+            pdk: "standard".into(),
+            waivers: None,
+            output: Some(output.clone()),
+            layout_target: LayoutTarget::Board,
+        };
+
+        let error = write_report(&options, &Unserializable).unwrap_err();
+
+        assert!(error.to_string().contains("serialization failed"));
+        assert_eq!(std::fs::read(output).unwrap(), b"previous report");
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn report_persistence_failure_preserves_destination_and_cleans_temporary_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("report.dfm.json");
+        std::fs::create_dir(&output).unwrap();
+        std::fs::write(output.join("sentinel"), b"untouched").unwrap();
+        let options = CheckOptions {
+            pdk: "standard".into(),
+            waivers: None,
+            output: Some(output.clone()),
+            layout_target: LayoutTarget::Board,
+        };
+
+        let error =
+            write_report(&options, &serde_json::json!({"verdict": "incomplete"})).unwrap_err();
+
+        assert!(error.to_string().contains("failed to replace DFM report"));
+        assert_eq!(
+            std::fs::read(output.join("sentinel")).unwrap(),
+            b"untouched"
+        );
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
     }
 
     #[test]

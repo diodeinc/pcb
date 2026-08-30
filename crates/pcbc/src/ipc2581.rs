@@ -213,7 +213,7 @@ enum DfmCommands {
         /// What to check: the canonical board, or the file's root step with every repeat materialized.
         #[arg(long, default_value = "board-array")]
         layout_target: LayoutTarget,
-        /// Output report path. Omit to write JSON to stdout.
+        /// Output self-contained JSON report path. Omit to write to stdout.
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
         output: Option<PathBuf>,
     },

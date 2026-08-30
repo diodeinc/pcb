@@ -638,12 +638,11 @@ mod tests {
         let u1_pin = imported
             .components
             .iter()
-            .find_map(|component| {
-                (component
+            .find(|component| {
+                component
                     .source
                     .ref_des
-                    .is_some_and(|reference| imported.resolve(reference) == "U1"))
-                .then_some(component)
+                    .is_some_and(|reference| imported.resolve(reference) == "U1")
             })
             .unwrap();
         let u1 = u1_pin.source.ref_des.unwrap();
