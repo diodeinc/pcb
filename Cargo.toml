@@ -10,19 +10,19 @@ homepage = "https://github.com/diodeinc/pcb"
 authors = ["Diode Computers, Inc. <founders@diode.computer>"]
 
 [workspace.dependencies]
-glam = "0.33"
+glam = "0.33.6"
 starlark = { git = "https://github.com/diodeinc/starlark-rust", rev = "c3d776bcd0bf074b00fc059d7700b82ab8dcc010", default-features = false }
 starlark_map = { git = "https://github.com/diodeinc/starlark-rust", rev = "c3d776bcd0bf074b00fc059d7700b82ab8dcc010", default-features = false }
 starlark_syntax = { git = "https://github.com/diodeinc/starlark-rust", rev = "c3d776bcd0bf074b00fc059d7700b82ab8dcc010", default-features = false }
 allocative = { git = "https://github.com/diodeinc/starlark-rust", rev = "c3d776bcd0bf074b00fc059d7700b82ab8dcc010", default-features = false }
 pagable = { git = "https://github.com/diodeinc/starlark-rust", rev = "c3d776bcd0bf074b00fc059d7700b82ab8dcc010", default-features = false }
 
-ruff_python_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.16.1" }
-ruff_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.16.1" }
+ruff_python_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.16.5" }
+ruff_formatter = { git = "https://github.com/astral-sh/ruff", tag = "0.16.5" }
 
 mimalloc = "0.1"
 
-similar = "3"
+similar = "3.2"
 
 ipc2581 = { path = "crates/ipc2581", version = "0.3.3" }
 pcb-intern = { path = "crates/pcb-intern", version = "0.1.0" }
@@ -56,7 +56,7 @@ atomicwrites = "0.4"
 arboard = { version = "3.6", default-features = false }
 ariadne = { version = "0.6", features = ["auto-color"] }
 chrono = { version = "0.4", features = ["serde"] }
-clap = { version = "4", features = ["derive", "wrap_help"] }
+clap = { version = "4.6.6", features = ["derive", "wrap_help"] }
 colored = "3"
 derive_more = { version = "2.1.1", features = ["full"] }
 dirs = "6"
@@ -69,10 +69,10 @@ itertools = "0.15"
 heck = "0.5.0"
 hex = "0.4"
 httpmock = "0.8"
-log = "0.4"
-minijinja = "2.21"
+log = "0.4.34"
+minijinja = "2.24"
 notify = "8.2"
-open = "5"
+open = "5.4.2"
 path-slash = "0.2.1"
 termtree = "1"
 regex = "1.12.4"
@@ -80,16 +80,16 @@ natord = "1.0.9"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tempfile = "3.27.0"
-thiserror = "2"
+thiserror = "2.0.20"
 toml = "1"
 toml_edit = "0.25"
-uuid = { version = "1.23", features = ["v4", "v5", "js"] }
+uuid = { version = "1.26", features = ["v4", "v5", "js"] }
 walkdir = "2.5"
 deunicode = "1.6"
 insta = { version = "1.48", features = ["yaml", "filters", "json"] }
 assert_cmd = "2.2"
 assert_fs = "1.1"
-base64 = "0.23"
+base64 = "0.23.1"
 console_error_panic_hook = "0.1"
 console_log = "1.0.0"
 crossterm = "0.29"
@@ -101,8 +101,10 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 csv = "1.4"
 derivative = "2.2"
 fixedbitset = "0.5"
-getrandom = { version = "0.3", features = ["wasm_js"] }
-globset = "0.4.18"
+# Enable the JS backend for boostvoronoi -> cpp_map -> rand 0.9, which uses
+# getrandom 0.3. Moving this to 0.4 would leave that WASM dependency unconfigured.
+getrandom = { version = "0.3.4", features = ["wasm_js"] }
+globset = "0.4.20"
 lsp-server = "0.10.0"
 lsp-types = "0.97.0"
 maplit = "1.0.2"
@@ -114,7 +116,7 @@ percent-encoding = "2.3"
 petgraph = "0.8"
 rayon = "1.12"
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "http2", "json", "multipart", "rustls", "system-proxy"] }
-ureq = { version = "3", default-features = false, features = ["rustls"] }
+ureq = { version = "3.4", default-features = false, features = ["rustls"] }
 rand = "0.10"
 js-sys = "0.3"
 serde-wasm-bindgen = "0.6"
@@ -129,22 +131,22 @@ ruzstd = "0.9"
 terminal_size = "0.4.4"
 terminal_hyperlink = "0.1"
 uppsala = "0.9.0"
-termimad = "0.35"
+termimad = "0.35.2"
 # regex-fancy (pure Rust, and fancy-regex is already in the tree via pagable)
 # rather than regex-onig, which compiles Oniguruma from C via onig_sys.
 syntect = { version = "5", default-features = false, features = ["default-syntaxes", "default-themes", "regex-fancy"] }
 textwrap = "0.16"
 unicode-width = "0.2.2"
 urlencoding = "2.1"
-wasm-bindgen = "0.2.126"
+wasm-bindgen = "0.2.127"
 zip = { version = "8", default-features = false, features = ["deflate"] }
 fslock = "0.2"
 rust_decimal = { version = "1.42", features = ["serde", "serde-with-str"] }
 rust_decimal_macros = "1.40"
-comfy-table = { version = "7.2", features = ["custom_styling"] }
+comfy-table = { version = "8", features = ["custom_styling"] }
 url = "2.5"
-ignore = "0.4"
-i_overlay = "8"
+ignore = "0.4.33"
+i_overlay = "8.1"
 boostvoronoi = "0.12.1"
 sha2 = "0.11"
 semver = { version = "1.0", features = ["serde"] }
@@ -152,8 +154,9 @@ kurbo = "0.13"
 resvg = { version = "0.48", default-features = false }
 zstd = "0.13"
 jiff = "0.2"
+# The Starlark fork requires exactly 1.8.2 for its hashing integration.
 blake3 = "1.8"
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
 r2d2 = "0.8"
 r2d2_sqlite = "0.35"
 unicode-normalization = "0.1"
@@ -162,7 +165,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tracing-chrome = "0.7"
 
 # rectify: STEP tessellation (foxtrot), raster grids, and FFT numerics
-triangulate = { git = "https://github.com/diodeinc/foxtrot.git", rev = "e74e9446dc8acf78d3f09ef2b59dfd90a493fac8" }
+triangulate = { git = "https://github.com/diodeinc/foxtrot.git", rev = "5e5aa2fb924e4e595b116e4867ad09be5f58e76a" }
 ndarray = "0.17"
 rustfft = "6.4"
 num-complex = "0.4"

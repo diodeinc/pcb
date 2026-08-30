@@ -354,7 +354,7 @@ fn output_table(results: &[TestResult]) {
     }
 
     let mut table = Table::new();
-    table.load_preset(UTF8_FULL_CONDENSED);
+    table.load_style(UTF8_FULL_CONDENSED);
 
     // Set header
     table.set_header(vec![
