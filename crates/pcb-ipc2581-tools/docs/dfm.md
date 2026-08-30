@@ -1,9 +1,8 @@
 # DFM PDK, waiver, and report formats
 
-`pcb ipc dfm check` turns fabrication capabilities from a built-in or file-backed
-TOML PDK into geometry checks over an IPC-2581 design and writes JSON. Optional
-full-scene vector geometry makes the same report interactive in the standalone
-[DFM viewer](../../../apps/dfm-viewer).
+`pcb ipc dfm check` checks an IPC-2581 design against a built-in or file-backed
+TOML fabrication PDK. It writes diagnostic JSON or a portable
+[report bundle](dfm-bundle.md) for external viewers.
 
 ## PDK
 
@@ -194,119 +193,60 @@ silently.
 
 ```bash
 pcb ipc dfm check fabrication-panel.xml \
-  --pdk standard \
-  --waivers waivers.toml \
-  --layout-target board-array \
-  --output dfm-report.json
+  --pdk standard --waivers waivers.toml \
+  --layout-target board-array --output dfm-report.json
+
+pcb dfm board.zen --pdk standard --format bundle --output board.dfm.tar.zst
 ```
-
-For an interactive report, include vector geometry and load the JSON in the
-standalone viewer:
-
-```bash
-pcb ipc dfm check fabrication-panel.xml \
-  --pdk standard \
-  --layout-target board-array \
-  --include-geometry --output panel.dfm.json
-
-pcb dfm board.zen --pdk standard --include-geometry --output board.dfm.json
-
-# From the repository root:
-npm --prefix apps/dfm-viewer ci
-npm --prefix apps/dfm-viewer run dev
-```
-
-Open the local URL printed by Vite and load the generated JSON. The viewer is
-built separately from the Rust CLI; exporting a report never requires Node.js.
 
 `pcb dfm` prepares and synchronizes the board's KiCad layout before exporting
 temporary IPC-2581 and checking the canonical board. Use `pcb ipc dfm check`
 to inspect existing manufacturing files without changing their source layout.
 
-`--pdk` accepts an exact built-in name or a TOML file path. `standard` is
-bundled with `pcb`; use a path such as `./standard` when a file has the same
-name as a built-in. Reports identify built-ins with paths such as
-`builtin:standard`. Custom PDK files otherwise use the same parser, rules, and
-report pipeline.
+`--pdk` accepts an exact built-in name or a TOML path. `standard` is bundled
+with `pcb` and reported as `builtin:standard`; use `./standard` to select a
+same-named file. Both use the same parser and checks. `--layout-target` accepts
+`board` or `board-array` and defaults to `board-array`.
 
-`--layout-target` is `board` or `board-array` and defaults to `board-array`.
-Omit `--output` to write JSON to stdout. Ordinary JSON stays lightweight and
-does not render artwork. `--include-geometry` adds a `scene` without changing
-findings, measurements, stable finding ids, waivers, scope, or verdict.
+`--format json` is the default and writes to stdout when `--output` is omitted.
+`--include-geometry` adds the native scene; otherwise JSON contains diagnostics
+without artwork. `--format bundle` requires `--output` and always includes the
+scene, checked IPC XML, resolved PDK, and optional waivers. See the
+[bundle contract](dfm-bundle.md) for archive layout and limits. Neither format
+requires Node.js or a browser to produce. Including geometry does not change
+findings, measurements, IDs, waivers, scope, or verdict.
 
 A completed report is written before the command returns a failing status.
-Its verdict fails only on unwaived error findings. Input, configuration,
-extraction, and output errors also return a failing status. With
-`--include-geometry`, preparation errors write an explicit `incomplete` JSON
-report instead of leaving a stale successful artifact. Ordinary diagnostic
-JSON preserves its existing error behavior and emits no report on preparation
-failure.
+Only unwaived error findings fail its verdict. Preparation and output errors
+also return a failing status. Preparation errors emit an explicit
+[incomplete report](#incomplete-reports) when geometry or bundle output was
+requested; ordinary JSON emits no report in that case. Bundles retain any
+captured inputs and replace output atomically. I/O, serialization, or size-limit
+failures can prevent output, leaving a previous artifact untouched; callers must
+check exit status. Report output must not overwrite a source or use a KiCad
+board path.
 
-Set `SOURCE_DATE_EPOCH` to make `generated_at` — and with it
-the whole report — reproducible. Waiver expiry is evaluated against that same
-timestamp on purpose: expiry makes the verdict time-dependent, so pinning the
-time must pin expiry too, or a reproduced report could not reproduce its
-verdict. A pipeline that pins an old epoch is choosing to reproduce that
-date's verdict, expired waivers included.
-
-## Standalone viewer
-
-The viewer is a lightweight Vite web app that loads a local report JSON file.
-Report data stays in the browser; there is no board-upload service. A report
-without `scene` still carries all diagnostic data, and the viewer explains that
-`--include-geometry` is needed for artwork.
-
-Findings are grouped by diagnostic family, with individual findings and sites
-available for navigation. Repeated groups keep waived and active findings
-separate. Selecting a site updates its detail view, measurement, relevant
-layers, and source information. Counts without a physical location use a
-stackup explanation instead of a fabricated board marker.
-
-Both the main view and minimap use the same full vector scene. The main view
-starts near the finding, then allows panning and zooming across the entire
-board, array, or fabrication panel. The minimap distinguishes the finding's
-fixed location from the live main-view bounds. Both views have scale bars
-computed from their current camera and display size.
-
-The native PCB IR rendering stack preserves source arcs, stroke styles,
-polarity, holes, and final cutouts. It exports each semantic layer once, never
-a raster overview or cropped copy per finding. Physical outlines remain true
-paths. Checks supply native display recipes where the construction is known:
-routed-slot contours, round clearance bands, overlapping circles, and required
-copper minus a native copper layer. These use SVG curves, strokes, and masks
-instead of increasing tessellation across the layout. Material definitions
-are reused while navigating and evidence effects are bounded to the viewport.
-Original measured paths and their flattening uncertainty remain independent
-of this display geometry; arbitrary polygons are never smoothed. The required
-and actual dimensions describe a distance, diameter, width disk, or count as
-specified by the check; the camera cannot change those measurements.
-
-The report retains passed and skipped rules, skip reasons, waived findings,
-and stale waiver information. A board view selects one canonical source board;
-it does not certify every board design in a mixed fabrication panel. A
-`board-array` view includes the root layout and every nested occurrence. The
-report's selected scope and occurrence information distinguish board findings
-from array or panel support geometry. Filtering by an occurrence includes its
-descendants, so selecting an array retains the findings on its nested boards.
+`SOURCE_DATE_EPOCH` fixes both `generated_at` and the date used for waiver
+expiry. Pinning an old epoch reproduces that date's verdict, including waivers
+that would have expired today.
 
 ## JSON report
 
-The report is a self-contained record of what was checked:
+A complete report has these fields:
 
 - `schema_version`: integer report schema version.
 - `generated_at`: RFC 3339 generation time.
-- `verdict`: `pass` or `fail`; fails exactly when unwaived error-severity
-  findings exist.
+- `verdict`: `pass` or `fail`.
 - `tool`, `input`, `pdk`, and `waivers`: producer version plus input paths
   and SHA-256 identities; `waivers` also carries applied, expired, and
   unmatched entries and is `null` when no waiver file was given.
 - `layout_target`: `board` or `board_array`.
 - `layout`: the selected step, actual layout kind, checked coordinate frame,
   bounds, and physical occurrences. Occurrences retain their parent, source
-  step, repeat indices, and transform into the checked frame.
+  step, repeat indices, and transform into the checked frame; see
+  [coordinates and topology](#coordinates-and-topology).
 - `coordinate_system`: the unit, axis convention, and origin for all report
-  geometry. Version 1 uses millimeters, `x_right_y_up`, and
-  `ipc_2581_design`.
+  geometry: `mm`, `x_right_y_up`, and `ipc_2581_design` in version 1.
 - `summary`: rule counts by status and finding counts by severity and
   waiver state.
 - `rules`: one result per lowered rule: its id (the capability path, plus
@@ -318,33 +258,34 @@ The report is a self-contained record of what was checked:
   specifies the diagnostic family, whether it is spatial, and its semantic
   rendering features; `tier` distinguishes required and preferred limits.
 - `findings`: violations in deterministic rule/location order.
-- `scene`: present only with `--include-geometry`. Version 1 contains
-  `schema_version: 1`, full-scene `bounds`, and `passes`. Each pass has a
-  `label`, semantic `feature`, exact `layer` name or `null` for shared profiles,
-  display `color`, and a full `svg` string. Match a site's `layers` and its
-  rule's `view.features` to select passes. SVG paths use world millimeters with
-  one root Y display flip; all passes share the same viewport. Native artwork
-  can contain local aperture and mask references. Evidence and finding bounds
-  remain separate from this shared display scene.
+- `scene`: present in bundles and with `--include-geometry` JSON; see
+  [native scene](#native-scene).
 
-Each finding is intentionally a fat record:
+`rule.finding_count` includes waived findings, and `waived_count` counts that
+subset. A rule whose findings are all waived reports `pass`; active findings
+determine `warning` or `fail` from rule severity. Skipped rules retain `skipped`
+and their reason rather than becoming a pass from zero counts. Similarly,
+`summary.findings` includes all findings, `summary.waived` counts the waived
+subset, and `summary.errors`/`warnings` count only unwaived findings. A complete
+verdict fails exactly when `summary.errors > 0`.
 
-- `id` is a content hash of what the finding is about — its rule, subjects,
-  layers, and measured location. It is deterministic for a given input, and
-  it survives design revisions exactly as long as those identifying facts
-  are unchanged. A violation whose representative point moves is a new
-  finding with a new id; its old waiver then surfaces as `unmatched` for
-  re-review. The measured value is deliberately not part of the identity:
-  a waived violation that shrinks or grows in place keeps its waiver.
-  Added sites, presentation grouping, and extended provenance do not change
-  the legacy finding identity.
+### Findings
+
+- `id` hashes the rule, subjects, layers, and measured location. It remains
+  stable while those facts are unchanged. Moving the representative point
+  creates a new finding; its old waiver becomes `unmatched`. The measured
+  value, added sites, presentation grouping, and extended provenance do not
+  affect identity: a violation that shrinks or grows in place keeps its waiver.
 - `rule_id`, `severity`, `title`, and `message` identify and explain the
   violation; `waived` and `waiver_reason` record acceptance.
 - `measurement` carries `actual_mm`, `required_mm`, and signed `margin_mm` for
   geometry, or the corresponding `actual_count`, `required_count`, and
-  `margin_count` for discrete counts. A nonnegative margin passes.
+  `margin_count` for discrete counts. A nonnegative margin satisfies the limit.
+  Signed annular enclosure can be negative. Do not clamp measurements or
+  recompute the verdict from rounded display values.
 - `location` carries a representative point, bounding box, and role-labelled
-  geometric witnesses.
+  witnesses. Nonspatial findings use `{point: null, bounding_box: null,
+  witnesses: []}`, never a null `location`.
 - `layers` identify every involved manufacturing layer: name, IPC-2581
   layer function, and `side` (`top`, `inner`, `bottom`) where the stackup
   determines it.
@@ -353,35 +294,83 @@ Each finding is intentionally a fat record:
   definition and physical occurrence separately from the legacy flattened
   `source` locator; `drill_span` records the applicable copper-layer span.
   Unavailable fields remain `null` so consumers see one stable shape.
-- `evidence` is a fat geometry record. `kind` and `role` identify the
-  evidence; circle, segment, and bounds fields are populated as applicable
-  and otherwise remain `null`. `paths` contains closed region rings or open
-  paths; regions retain the checked material's winding and holes.
-  Optional `display` gives the check's native rendering construction, in the
-  same world millimeters, without replacing those measured paths:
-  `path` carries independent SVG `paths` and an explicit `fill_rule` (fill each
-  separately, then union); `round_stroke` carries centerline `paths` and the
-  physical `width_mm` with round caps/joins; `circle_intersection` carries
-  `first` and `second` circles (`center`, `diameter`); `circle_minus_layer`
-  carries `center`, `diameter`, and the exact copper `layer` name. The last
-  recipe requires that layer's scene pass; without it, use the original paths.
-  Display recipes do not participate in finding, site, or repeat identities.
+- `evidence` records `kind`, `role`, and applicable circle, segment, or bounds
+  fields; unused fields remain `null`. `paths` contains closed region rings or
+  open paths, preserving the checked material's winding and holes. Optional
+  `display` retains native constructions for rendering, as specified below.
 - `sites` retain individual failing regions or layers with their measurement,
   `measurement_kind`, `witnesses`, uncertainty, bounds, layers, subjects, and
-  evidence.
-  Nonspatial count findings have no sites. Site bounds describe the finding,
-  not a padded camera window. Witness-point separation is not necessarily
-  the measured width or diameter; render the specified construction.
+  evidence. Nonspatial findings use `sites: []`. Site bounds describe the
+  finding; viewers add their own camera padding. Witness-point separation is
+  not necessarily the measured width or diameter.
 - `group_key`, when available, groups proven equivalent causes for display.
   It does not replace the finding id or change the waiver unit. Every finding
   and physical occurrence remains accessible.
 
-Within schema version 1, new fields and new `kind`, `role`,
-`status`, rule, and method values may be added. Removing or changing the
-meaning of an existing field requires a new schema version.
+Check-owned sites, measurements, witnesses, and evidence paths are authoritative.
+The optional `evidence.display` construction uses the same world millimeters:
 
-An incomplete geometry export has `verdict: "incomplete"`, `schema_version`,
+| `kind` | Fields and rendering |
+| --- | --- |
+| `path` | SVG `paths` and `fill_rule`; fill each path separately, then union |
+| `round_stroke` | Centerline `paths` and physical `width_mm`; round caps and joins |
+| `circle_intersection` | `first` and `second` circles, each with `center` and `diameter` |
+| `circle_minus_layer` | `center`, `diameter`, and exact copper `layer`; subtract that layer's composed native image from the circle |
+
+Display constructions do not affect finding, site, or repeat-group identity.
+`circle_minus_layer` needs its named scene pass even when the pass is hidden as
+artwork. JSON without a scene can use the measured paths; a supplied scene
+missing a required operand is invalid. Do not fit curves to measured polygons,
+invent precision by changing tessellation tolerance, or infer an inscribed
+width or radial enclosure from witness separation.
+
+### Coordinates and topology
+
+All geometry uses millimeters with X right and Y up. `layout.kind` distinguishes
+`board`, `board_array`, and `fab_panel`; the `board_array` target also selects
+fabrication panels. Board scope uses the canonical board's local frame
+(`selected_board`). Array and fabrication-panel scope use `root_layout`,
+including nested repeats. A canonical board check does not certify every
+design in a mixed fabrication panel.
+
+Each occurrence's cumulative `[a,b,c,d,tx,ty]` transform maps definition-local
+coordinates to the checked frame: `x' = a*x + c*y + tx`,
+`y' = b*x + d*y + ty`. Site, evidence, and scene coordinates are already placed;
+do not transform them again. A parent occurrence filter includes descendants.
+
+### Native scene
+
+Scene version 1 contains `schema_version: 1`, full-layout `bounds`, and `passes`.
+Each pass has `label`, semantic `feature`, exact `layer` name or `null` for shared
+context, display `color`, and a full-layout native `svg` string. All passes
+share the same viewport; sites never crop or duplicate the artwork.
+
+Select passes using the rule's `view.features` and the selected **site's** exact
+layer names, including shared `layer: null` passes. Finding-level layers are
+only a summary. Every spatial site requires a matching pass for each feature
+except `stackup`. An empty pass represents empty context; an absent required
+pass makes the export incomplete. A scene with no spatial findings may have
+an empty pass list.
+
+The SVG root applies one PCB IR display Y flip. When inserting its contents
+into a shared world-coordinate scene, remove that flip and apply the viewer's
+camera convention. Preserve nested rotations, mirrors, aperture instances,
+ordered polarity, masks, nonzero winding, holes, and final cutouts. Namespace
+IDs and fragment references per compiled pass/view.
+
+### Incomplete reports
+
+An incomplete geometry or bundle export has `verdict: "incomplete"`, `schema_version`,
 `generated_at`, `tool`, `input: {path}`, `pdk: {path}`, `layout_target`, and
-`error: {message}`. It deliberately has no `summary`, `rules`, `findings`, or
-`scene`, since the checker did not establish a complete result. Consumers must
-handle that verdict before interpreting the complete-report fields.
+`error: {message}`. It has no `summary`, `rules`, `findings`, or `scene`. Consumers
+must handle this verdict before requiring complete-report fields; it is never
+a pass, a clean board, or a skipped check.
+
+### Schema evolution
+
+Report and scene versions are independent; both currently use integer `1`.
+New fields and new `kind`, `role`, `status`, rule, and method values may be
+added within a version. Unknown optional fields can be ignored; unknown required
+semantics must produce an explicit unsupported state, never a guessed rendering
+or fabricated pass. Removing or changing existing field meanings requires a
+new schema version.

@@ -1,4 +1,4 @@
-//! Full-scene vector artwork for the standalone diagnostic viewer.
+//! Full-scene vector data for external diagnostic viewers.
 //!
 //! The native PCB IR renderer retains arcs, polarity, apertures, and cutouts.
 //! Every semantic layer is exported once in world millimeters. Check-owned
@@ -15,7 +15,7 @@ use pcb_ir::geom::{Affine2, BBox, FillRule, Point, shapes};
 use pcb_ir::render::RenderOptions;
 
 use super::design::Design;
-use super::report::{DfmReport, LayerRef, ReportBBox, Scene, ScenePass, ViewRecipe};
+use super::report::{DfmReport, LayerRef, ReportBBox, Scene, ScenePass};
 use crate::geometry;
 
 struct GeometryPass {
@@ -155,8 +155,10 @@ pub(super) fn export(report: &DfmReport, design: &Design<'_>) -> Result<Scene> {
                 .filter(|&&feature| feature != "stackup")
             {
                 ensure!(
-                    sources.iter().any(|source| source.feature == *feature
-                        && pass_applies(source, &rule.view, &site.layers)),
+                    sources
+                        .iter()
+                        .any(|source| source.feature == *feature
+                            && pass_applies(source, &site.layers)),
                     "DFM site {} has no matching {} context in its declared layers",
                     site.id,
                     feature
@@ -191,12 +193,11 @@ pub(super) fn export(report: &DfmReport, design: &Design<'_>) -> Result<Scene> {
     })
 }
 
-fn pass_applies(source: &GeometryPass, view: &ViewRecipe, layers: &[LayerRef]) -> bool {
-    view.features.contains(&source.feature)
-        && source
-            .layer
-            .as_ref()
-            .is_none_or(|layer| layers.iter().any(|candidate| candidate.name == *layer))
+fn pass_applies(source: &GeometryPass, layers: &[LayerRef]) -> bool {
+    source
+        .layer
+        .as_ref()
+        .is_none_or(|layer| layers.iter().any(|candidate| candidate.name == *layer))
 }
 
 fn scene_bounds(layout: Option<ReportBBox>, sources: &[GeometryPass]) -> BBox {
@@ -486,20 +487,14 @@ mod tests {
             Some("F.Cu".into()),
             bounds,
         );
-        let view = ViewRecipe {
-            kind: "copper_width",
-            title: "Copper width",
-            spatial: true,
-            features: vec!["copper", "board_outlines"],
-        };
         let layer = |name: &str| LayerRef {
             name: name.into(),
             function: "CONDUCTOR".into(),
             side: None,
         };
-        assert!(pass_applies(&pass, &view, &[layer("F.Cu")]));
-        assert!(!pass_applies(&pass, &view, &[layer("B.Cu")]));
-        assert!(!pass_applies(&pass, &view, &[]));
+        assert!(pass_applies(&pass, &[layer("F.Cu")]));
+        assert!(!pass_applies(&pass, &[layer("B.Cu")]));
+        assert!(!pass_applies(&pass, &[]));
         assert_eq!(scene_bounds(None, &[pass]), bounds);
     }
 }

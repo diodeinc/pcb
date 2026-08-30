@@ -216,7 +216,15 @@ enum DfmCommands {
         /// Output report path. Omit to write JSON to stdout.
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
         output: Option<PathBuf>,
-        /// Include full vector artwork for the standalone DFM viewer.
+        /// Diagnostic JSON or a portable .dfm.tar.zst bundle (requires --output).
+        #[arg(
+            long,
+            value_enum,
+            default_value = "json",
+            requires_if("bundle", "output")
+        )]
+        format: commands::dfm::ReportFormat,
+        /// Include full vector geometry in JSON. Bundles always include it.
         #[arg(long)]
         include_geometry: bool,
     },
@@ -556,6 +564,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                 waivers,
                 layout_target,
                 output,
+                format,
                 include_geometry,
             } => commands::dfm::execute_check(
                 &file,
@@ -564,6 +573,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                     waivers,
                     output,
                     layout_target,
+                    format,
                     include_geometry,
                 },
             ),

@@ -4,8 +4,10 @@ use std::borrow::Cow;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
+use clap::ValueEnum;
 use pcb_ir::import::ipc2581::import_design;
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::LayoutTarget;
@@ -13,6 +15,7 @@ use crate::ipc2581::Ipc2581;
 use crate::utils::file as file_utils;
 
 mod builtin_pdks;
+mod bundle;
 mod checks;
 mod design;
 mod pdk;
@@ -21,13 +24,27 @@ mod rules;
 mod scene;
 mod waivers;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+pub enum ReportFormat {
+    #[default]
+    Json,
+    Bundle,
+}
+
 #[derive(Debug)]
 pub struct CheckOptions {
     pub pdk: PathBuf,
     pub waivers: Option<PathBuf>,
     pub output: Option<PathBuf>,
     pub layout_target: LayoutTarget,
+    pub format: ReportFormat,
     pub include_geometry: bool,
+}
+
+impl CheckOptions {
+    fn includes_geometry(&self) -> bool {
+        self.include_geometry || self.format == ReportFormat::Bundle
+    }
 }
 
 /// PDK source bytes plus the stable identity echoed into reports.
@@ -43,16 +60,88 @@ struct LoadedWaivers {
     file: waivers::WaiverFile,
 }
 
+/// Capture the bytes used during preparation, including partial inputs when
+/// parsing fails. Bundling never rereads a source or depends on a temporary IPC
+/// file surviving after `pcb dfm` returns.
+#[derive(Default)]
+struct SourceFiles {
+    ipc_xml: Option<String>,
+    pdk: Option<LoadedPdk>,
+    waivers: Option<Vec<u8>>,
+}
+
+impl SourceFiles {
+    fn bundle_sources(&self) -> bundle::Sources<'_> {
+        bundle::Sources {
+            ipc_xml: self.ipc_xml.as_deref().map(str::as_bytes),
+            pdk: self.pdk.as_ref().map(|pdk| pdk.bytes.as_ref()),
+            waivers: self.waivers.as_deref(),
+        }
+    }
+}
+
+/// Reject an invalid destination before any layout preparation or output write.
+pub fn validate_output(file: &Path, options: &CheckOptions) -> Result<()> {
+    ensure!(
+        options.format != ReportFormat::Bundle || options.output.is_some(),
+        "--format bundle requires --output"
+    );
+    let Some(output) = options.output.as_deref() else {
+        return Ok(());
+    };
+    let output_canonical = output.canonicalize().ok();
+    // A .zen preparation error can occur before its layout path is resolved.
+    // Reject board-file destinations up front so even an incomplete report
+    // cannot replace that source, including through a differently named symlink.
+    for target in [Some(output), output_canonical.as_deref()]
+        .into_iter()
+        .flatten()
+    {
+        ensure!(
+            !target
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("kicad_pcb")),
+            "DFM report output would overwrite a KiCad layout: {}",
+            target.display()
+        );
+    }
+    let pdk_file = options
+        .pdk
+        .to_str()
+        .and_then(builtin_pdks::find)
+        .is_none()
+        .then_some(options.pdk.as_path());
+    for source in [Some(file), pdk_file, options.waivers.as_deref()]
+        .into_iter()
+        .flatten()
+    {
+        ensure!(
+            output != source
+                && !output_canonical.as_ref().is_some_and(|output| source
+                    .canonicalize()
+                    .as_ref()
+                    .ok()
+                    == Some(output)),
+            "DFM report output would overwrite source {}",
+            source.display()
+        );
+    }
+    Ok(())
+}
+
 pub fn execute_check(file: &Path, options: &CheckOptions) -> Result<()> {
-    let (report, rendered) = match check_and_render(file, options) {
+    validate_output(file, options)?;
+    let mut sources = SourceFiles::default();
+    let report = match build_report(file, options, &mut sources) {
         Ok(checked) => checked,
         Err(error) => {
-            write_error_report(file, options, &error)
+            write_incomplete_report(file, options, &error, &sources)
                 .with_context(|| format!("DFM check was incomplete: {error:#}"))?;
             return Err(error);
         }
     };
-    write_report(options.output.as_deref(), &rendered)?;
+    write_report(options, &report, &sources)?;
 
     let summary = &report.summary;
     if summary.errors > 0 {
@@ -70,15 +159,26 @@ pub fn execute_check(file: &Path, options: &CheckOptions) -> Result<()> {
     Ok(())
 }
 
-/// Geometry exports always replace the requested artifact with an explicit
-/// incomplete report when preparation fails. Ordinary diagnostic JSON keeps
-/// its historical behavior: preparation errors do not emit a report.
+/// Report preparation failures before the IPC input exists, such as `.zen`
+/// layout/export errors. Such incomplete bundles intentionally have no sources.
 pub fn write_error_report(
     file: &Path,
     options: &CheckOptions,
     error: &anyhow::Error,
 ) -> Result<()> {
-    if options.include_geometry {
+    validate_output(file, options)?;
+    write_incomplete_report(file, options, error, &SourceFiles::default())
+}
+
+/// Geometry JSON and bundles distinguish incomplete runs from completed DFM
+/// failures. Ordinary diagnostic JSON retains its no-report-on-error behavior.
+fn write_incomplete_report(
+    file: &Path,
+    options: &CheckOptions,
+    error: &anyhow::Error,
+    sources: &SourceFiles,
+) -> Result<()> {
+    if options.includes_geometry() {
         let incomplete = serde_json::json!({
             "schema_version": report::REPORT_SCHEMA_VERSION,
             "generated_at": generation_time().to_rfc3339(),
@@ -95,18 +195,28 @@ pub fn write_error_report(
             },
             "error": { "message": format!("{error:#}") },
         });
-        write_report(
-            options.output.as_deref(),
-            &serde_json::to_string_pretty(&incomplete)?,
-        )?;
+        write_report(options, &incomplete, sources)?;
     }
     Ok(())
 }
 
-fn check_and_render(file: &Path, options: &CheckOptions) -> Result<(report::DfmReport, String)> {
+fn build_report(
+    file: &Path,
+    options: &CheckOptions,
+    sources: &mut SourceFiles,
+) -> Result<report::DfmReport> {
     let input_bytes = std::fs::read(file)
         .with_context(|| format!("failed to read IPC-2581 file {}", file.display()))?;
-    let loaded_pdk = load_pdk(&options.pdk)?;
+    let input = report::FileIdentity {
+        path: file.display().to_string(),
+        sha256: sha256(&input_bytes),
+        size_bytes: input_bytes.len() as u64,
+    };
+    let content = sources
+        .ipc_xml
+        .insert(file_utils::ipc_text(file, &input_bytes)?.into_owned());
+    drop(input_bytes);
+    let loaded_pdk = sources.pdk.insert(load_pdk(&options.pdk)?);
     let pdk_source = std::str::from_utf8(&loaded_pdk.bytes)
         .with_context(|| format!("PDK {} is not UTF-8", loaded_pdk.path))?;
     let pdk = pdk::Pdk::parse(pdk_source)
@@ -125,23 +235,24 @@ fn check_and_render(file: &Path, options: &CheckOptions) -> Result<(report::DfmR
         .waivers
         .as_deref()
         .map(|path| -> Result<LoadedWaivers> {
-            let bytes = std::fs::read(path)
-                .with_context(|| format!("failed to read waiver file {}", path.display()))?;
-            let source = std::str::from_utf8(&bytes)
+            let bytes = sources.waivers.insert(
+                std::fs::read(path)
+                    .with_context(|| format!("failed to read waiver file {}", path.display()))?,
+            );
+            let source = std::str::from_utf8(bytes)
                 .with_context(|| format!("waiver file {} is not UTF-8", path.display()))?;
             let file = waivers::WaiverFile::parse(source)
                 .with_context(|| format!("failed to parse waiver file {}", path.display()))?;
             Ok(LoadedWaivers {
                 path: path.display().to_string(),
-                sha256: sha256(&bytes),
+                sha256: sha256(bytes),
                 file,
             })
         })
         .transpose()?;
 
     let generated_at = generation_time();
-    let content = file_utils::ipc_text(file, &input_bytes)?;
-    let ipc = Ipc2581::parse(&content).context("failed to parse IPC-2581 file")?;
+    let ipc = Ipc2581::parse(content).context("failed to parse IPC-2581 file")?;
     let imported = import_design(&ipc).context("failed to import IPC-2581 physical design")?;
     let design = design::Design::extract(&imported, options.layout_target.artwork_scope(), &rules)?;
     let checked = checks::run(
@@ -165,12 +276,12 @@ fn check_and_render(file: &Path, options: &CheckOptions) -> Result<(report::DfmR
             name: "pcb",
             version: env!("CARGO_PKG_VERSION"),
         },
-        input: report::FileIdentity {
-            path: file.display().to_string(),
-            sha256: sha256(&input_bytes),
-            size_bytes: input_bytes.len() as u64,
-        },
-        pdk: report::PdkIdentity::from_pdk(&pdk, loaded_pdk.path, sha256(&loaded_pdk.bytes)),
+        input,
+        pdk: report::PdkIdentity::from_pdk(
+            &pdk,
+            loaded_pdk.path.clone(),
+            sha256(&loaded_pdk.bytes),
+        ),
         layout_target: match options.layout_target {
             LayoutTarget::Board => "board",
             LayoutTarget::BoardArray => "board_array",
@@ -198,11 +309,10 @@ fn check_and_render(file: &Path, options: &CheckOptions) -> Result<(report::DfmR
         scene: None,
     };
 
-    if options.include_geometry {
+    if options.includes_geometry() {
         report.scene = Some(scene::export(&report, &design)?);
     }
-    let rendered = serde_json::to_string_pretty(&report)?;
-    Ok((report, rendered))
+    Ok(report)
 }
 
 fn load_pdk(reference: &Path) -> Result<LoadedPdk> {
@@ -279,8 +389,23 @@ fn summarize(checked: &checks::Results) -> report::Summary {
     }
 }
 
-fn write_report(output: Option<&Path>, report: &str) -> Result<()> {
-    match output {
+fn write_report(
+    options: &CheckOptions,
+    report: &impl Serialize,
+    sources: &SourceFiles,
+) -> Result<()> {
+    let report = serde_json::to_string_pretty(report)?;
+    if options.format == ReportFormat::Bundle {
+        return bundle::write(
+            options
+                .output
+                .as_deref()
+                .context("--format bundle requires --output")?,
+            report.as_bytes(),
+            sources.bundle_sources(),
+        );
+    }
+    match options.output.as_deref() {
         Some(path) => std::fs::File::create(path)
             .and_then(|mut file| writeln!(file, "{report}"))
             .with_context(|| format!("failed to write DFM report to {}", path.display())),

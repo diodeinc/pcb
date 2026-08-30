@@ -15,8 +15,6 @@ fp-info-cache
 
 # Node
 node_modules
-apps/dfm-viewer/dist
-apps/dfm-viewer/public/local
 
 # Python
 __pycache__

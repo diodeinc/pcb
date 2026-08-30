@@ -23,8 +23,8 @@ pub struct DfmReport {
     pub summary: Summary,
     pub rules: Vec<RuleResult>,
     pub findings: Vec<Finding>,
-    /// Optional full-scene artwork for the standalone viewer. Diagnostic JSON
-    /// remains lightweight unless geometry was explicitly requested.
+    /// Full-scene artwork for external viewers. Bundles always include it;
+    /// ordinary JSON stays lightweight unless geometry was requested.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scene: Option<Scene>,
 }

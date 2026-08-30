@@ -21,7 +21,16 @@ pub struct DfmArgs {
     #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
     pub output: Option<PathBuf>,
 
-    /// Include full vector artwork for the standalone DFM viewer.
+    /// Diagnostic JSON or a portable .dfm.tar.zst bundle (requires --output).
+    #[arg(
+        long,
+        value_enum,
+        default_value = "json",
+        requires_if("bundle", "output")
+    )]
+    pub format: commands::dfm::ReportFormat,
+
+    /// Include full vector geometry in JSON. Bundles always include it.
     #[arg(long)]
     pub include_geometry: bool,
 
@@ -36,8 +45,10 @@ pub fn execute(args: DfmArgs) -> Result<()> {
         waivers: None,
         output: args.output.clone(),
         layout_target: LayoutTarget::Board,
+        format: args.format,
         include_geometry: args.include_geometry,
     };
+    commands::dfm::validate_output(&args.file, &options)?;
     let (_temporary_dir, ipc_path) = match export_layout(&args) {
         Ok(exported) => exported,
         Err(error) => {

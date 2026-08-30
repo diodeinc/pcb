@@ -11,7 +11,7 @@ alias provides the same commands.
 | `html` | Export an HTML board summary. |
 | `outline` | Export a KiCad-compatible DXF outline. |
 | `render` | Render one layer as terminal graphics, SVG, or PNG. |
-| `dfm check` | Check IPC-2581 geometry against a fabrication PDK and emit JSON. |
+| `dfm check` | Check IPC-2581 geometry against a fabrication PDK and emit JSON or a report bundle. |
 | `gerber` | Export fabrication layers and drill files. |
 | `view` | Export a filtered IPC-2581 function-mode document. |
 | `board-array create` | Create a rectangular board array. |
@@ -54,12 +54,13 @@ pcb ipc dfm check fabrication-panel.xml \
 Pass a path such as `--pdk ./fab-process.toml` to use a custom PDK. Exact
 built-in names take precedence, so prefix a same-named file with `./`.
 
-Use `--include-geometry -o board.dfm.json` to include full vector artwork for
-the [standalone DFM viewer](../../apps/dfm-viewer). The default JSON remains a
-lightweight diagnostic record.
+Use `--format bundle -o board.dfm.tar.zst` for a portable
+[report bundle](docs/dfm-bundle.md) with diagnostic JSON, native artwork,
+checked IPC XML, the PDK, and optional waivers. JSON remains the default;
+`--include-geometry` embeds the same scene for external viewers.
 
-See the [DFM format reference](docs/dfm.md) and
-[`pdks/standard.toml`](pdks/standard.toml) for the PDK and JSON report contracts.
+See the [PDK, waiver, and JSON formats](docs/dfm.md) and the
+[standard PDK](pdks/standard.toml) for details.
 
 `fab-panel create` supports the common 12 by 18, 16 by 18, 18 by 24, and 21 by
 24 inch fabrication panel sizes through `--panel-size`. The default is 18 by 24

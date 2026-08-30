@@ -10,7 +10,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
-- Add a standalone DFM viewer with grouped findings, native vector evidence, and synchronized views via `--include-geometry` JSON reports.
+- Add finding sites, native geometry, and instance provenance to DFM JSON.
+- Add portable DFM report bundles via `--format bundle`.
 
 ### Fixed
 

@@ -25,6 +25,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 rayon = { workspace = true }
 sha2 = { workspace = true }
+tar = { workspace = true }
+tempfile = { workspace = true }
 toml = { workspace = true }
 uppsala = { workspace = true }
 uuid = { workspace = true, features = ["serde"] }
@@ -32,6 +34,3 @@ zstd = { workspace = true }
 pcb-diode-api = { workspace = true }
 pcb-ui = { workspace = true }
 zip = { workspace = true }
-
-[dev-dependencies]
-tempfile = { workspace = true }

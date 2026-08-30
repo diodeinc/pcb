@@ -4301,6 +4301,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "tar",
  "tempfile",
  "toml",
  "uppsala",
@@ -4666,6 +4667,7 @@ dependencies = [
  "starlark",
  "starlark_syntax",
  "syntect",
+ "tar",
  "tempfile",
  "termimad",
  "thiserror 2.0.19",
@@ -4676,6 +4678,7 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "zip",
+ "zstd",
 ]
 
 [[package]]

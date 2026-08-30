@@ -146,7 +146,7 @@ pub(super) fn evaluate(limit_mm: f64, linework: Linework, design: &Design) -> Ev
                 Some(Measured {
                     distance,
                     bbox: BBox::from_point(distance.first).union(BBox::from_point(distance.second)),
-                    layers: layers(item.layer.iter().chain([&copper.layer])),
+                    layers: site_layers,
                     subjects: vec![item.subject.clone(), copper_subject(copper)],
                     evidence: vec![item.evidence.clone()],
                     sites,

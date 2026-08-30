@@ -1,6 +1,6 @@
 #![cfg(not(target_os = "windows"))]
 
-use std::path::Path;
+use std::{collections::BTreeMap, ffi::OsStr, io::Read, path::Path, process::Output};
 
 use pcb_ipc2581_tools::commands::{
     EdgeInsetsMm,
@@ -9,6 +9,21 @@ use pcb_ipc2581_tools::commands::{
 };
 use pcb_test_utils::sandbox::Sandbox;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
+
+fn run_pcbc<I>(sandbox: &mut Sandbox, args: I) -> Output
+where
+    I: IntoIterator,
+    I::Item: AsRef<OsStr>,
+{
+    sandbox
+        .run("pcbc", args)
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .expect("pcbc command should execute")
+}
 
 const PCB_TOML: &str = include_str!("../../pcb-layout/tests/resources/simple/pcb.toml");
 const BOARD_ZEN: &str = include_str!("../../pcb-layout/tests/resources/simple/MyBoard.zen");
@@ -28,13 +43,7 @@ fn dfm_resolves_zen_exports_temporary_ipc_and_checks_standard_pdk() {
         .write("eda/BMI270.kicad_mod", FOOTPRINT)
         .write("eda/BMI270.kicad_sym", SYMBOL);
 
-    let output = sandbox
-        .run("pcbc", ["dfm", "MyBoard.zen", "--pdk", "standard"])
-        .stdout_capture()
-        .stderr_capture()
-        .unchecked()
-        .run()
-        .expect("DFM command should run");
+    let output = run_pcbc(&mut sandbox, ["dfm", "MyBoard.zen", "--pdk", "standard"]);
     let report: Value =
         serde_json::from_slice(&output.stdout).expect("stdout should contain only the DFM report");
 
@@ -54,26 +63,22 @@ fn dfm_resolves_zen_exports_temporary_ipc_and_checks_standard_pdk() {
     assert!(!Path::new(report["input"]["path"].as_str().unwrap()).exists());
     assert!(!sandbox.default_cwd().join(".pcb/releases").exists());
 
-    let scene_output = sandbox
-        .run(
-            "pcbc",
-            [
-                "dfm",
-                "MyBoard.zen",
-                "--pdk",
-                "standard",
-                "--include-geometry",
-                "--output",
-                "report.dfm.json",
-            ],
-        )
-        .stdout_capture()
-        .stderr_capture()
-        .unchecked()
-        .run()
-        .expect("DFM geometry command should run");
-    assert!(scene_output.stdout.is_empty());
-    let scene_report = read_report(&sandbox, "report.dfm.json");
+    let bundle_output = run_pcbc(
+        &mut sandbox,
+        [
+            "dfm",
+            "MyBoard.zen",
+            "--pdk",
+            "standard",
+            "--format",
+            "bundle",
+            "--output",
+            "report.dfm.tar.zst",
+        ],
+    );
+    assert!(bundle_output.stdout.is_empty());
+    let bundle = read_bundle(&sandbox, "report.dfm.tar.zst");
+    let scene_report = &bundle.report;
     assert!(report.get("scene").is_none());
     assert_eq!(scene_report["scene"]["schema_version"], 1);
     assert_eq!(scene_report["pdk"], report["pdk"]);
@@ -81,6 +86,18 @@ fn dfm_resolves_zen_exports_temporary_ipc_and_checks_standard_pdk() {
     assert_eq!(scene_report["layout_target"], "board");
     assert_eq!(scene_report["layout"]["coordinate_frame"], "selected_board");
     assert!(!Path::new(scene_report["input"]["path"].as_str().unwrap()).exists());
+    let xml = &bundle.files["source/design.ipc2581.xml"];
+    pcb_ipc2581_tools::ipc2581::Ipc2581::parse(std::str::from_utf8(xml).unwrap())
+        .expect("the temporary checked XML must survive as a usable bundle source");
+    assert_eq!(scene_report["input"]["sha256"], sha256(xml));
+    assert_eq!(scene_report["input"]["size_bytes"], xml.len());
+    let standard_pdk = include_bytes!("../../pcb-ipc2581-tools/pdks/standard.toml");
+    assert_eq!(
+        bundle.files["source/pdk.toml"].as_slice(),
+        standard_pdk.as_slice()
+    );
+    assert_eq!(scene_report["pdk"]["sha256"], sha256(standard_pdk));
+    assert_eq!(bundle.files.len(), 4);
 }
 
 const IPC_BOARD: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -154,30 +171,75 @@ fn read_report(sandbox: &Sandbox, path: &str) -> Value {
     serde_json::from_str(&json).expect("output should contain a JSON report")
 }
 
+struct Bundle {
+    files: BTreeMap<String, Vec<u8>>,
+    report: Value,
+}
+
+fn sha256(bytes: &[u8]) -> String {
+    hex::encode(Sha256::digest(bytes))
+}
+
+/// Read through independent archive libraries and verify that the manifest
+/// inventories the actual bytes emitted by the CLI, including partial sources.
+fn read_bundle(sandbox: &Sandbox, path: &str) -> Bundle {
+    let compressed = std::fs::read(sandbox.default_cwd().join(path)).unwrap();
+    let decoder = zstd::stream::read::Decoder::new(compressed.as_slice()).unwrap();
+    let mut archive = tar::Archive::new(decoder);
+    let mut files = BTreeMap::new();
+    let mut paths = Vec::new();
+    for entry in archive.entries().unwrap() {
+        let mut entry = entry.unwrap();
+        let path = entry.path().unwrap().to_str().unwrap().to_owned();
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes).unwrap();
+        assert!(files.insert(path.clone(), bytes).is_none());
+        paths.push(path);
+    }
+    assert_eq!(paths.first().map(String::as_str), Some("manifest.json"));
+    assert_eq!(paths.get(1).map(String::as_str), Some("report.json"));
+    let manifest: Value = serde_json::from_slice(&files["manifest.json"]).unwrap();
+    assert_eq!(manifest["format"], "pcb-dfm-report");
+    assert_eq!(manifest["schema_version"], 1);
+    assert_eq!(manifest["report"], "report.json");
+    let inventory = manifest["files"].as_array().unwrap();
+    assert_eq!(inventory.len(), paths.len() - 1);
+    for (file, path) in inventory.iter().zip(&paths[1..]) {
+        assert_eq!(file["path"], path.as_str());
+        assert_eq!(file["size_bytes"], files[path].len());
+        assert_eq!(file["sha256"], sha256(&files[path]));
+        assert_eq!(
+            file["media_type"],
+            match path.as_str() {
+                "report.json" => "application/json",
+                "source/design.ipc2581.xml" => "application/xml",
+                "source/pdk.toml" | "source/waivers.toml" => "application/toml",
+                _ => panic!("unexpected bundle member: {path}"),
+            }
+        );
+    }
+    let report = serde_json::from_slice(&files["report.json"]).unwrap();
+    Bundle { files, report }
+}
+
 #[test]
 fn ipc_dfm_geometry_supports_stdout_without_changing_plain_json_error_behavior() {
     let mut sandbox = Sandbox::new();
     sandbox
         .write("board.xml", IPC_BOARD)
         .write("pdk.toml", REPORT_PDK);
-    let output = sandbox
-        .run(
-            "pcbc",
-            [
-                "ipc",
-                "dfm",
-                "check",
-                "board.xml",
-                "--pdk",
-                "pdk.toml",
-                "--include-geometry",
-            ],
-        )
-        .stdout_capture()
-        .stderr_capture()
-        .unchecked()
-        .run()
-        .unwrap();
+    let output = run_pcbc(
+        &mut sandbox,
+        [
+            "ipc",
+            "dfm",
+            "check",
+            "board.xml",
+            "--pdk",
+            "pdk.toml",
+            "--include-geometry",
+        ],
+    );
     assert!(!output.status.success());
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["verdict"], "fail");
@@ -188,13 +250,7 @@ fn ipc_dfm_geometry_supports_stdout_without_changing_plain_json_error_behavior()
         if include_geometry {
             arguments.push("--include-geometry");
         }
-        let output = sandbox
-            .run("pcbc", arguments)
-            .stdout_capture()
-            .stderr_capture()
-            .unchecked()
-            .run()
-            .unwrap();
+        let output = run_pcbc(&mut sandbox, arguments);
         assert!(!output.status.success());
         if include_geometry {
             let report: Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -214,41 +270,29 @@ fn ipc_dfm_geometry_preserves_json_and_waivers_and_shares_full_scene() {
         .write("board.xml", IPC_BOARD)
         .write("pdk.toml", REPORT_PDK);
 
-    let json_output = sandbox
-        .run(
-            "pcbc",
-            ["ipc", "dfm", "check", "board.xml", "--pdk", "pdk.toml"],
-        )
-        .stdout_capture()
-        .stderr_capture()
-        .unchecked()
-        .run()
-        .unwrap();
+    let json_output = run_pcbc(
+        &mut sandbox,
+        ["ipc", "dfm", "check", "board.xml", "--pdk", "pdk.toml"],
+    );
     assert!(!json_output.status.success());
     let expected: Value = serde_json::from_slice(&json_output.stdout).unwrap();
     assert_eq!(expected["verdict"], "fail");
     assert!(expected["summary"]["findings"].as_u64().unwrap() >= 2);
 
-    let scene_output = sandbox
-        .run(
-            "pcbc",
-            [
-                "ipc",
-                "dfm",
-                "check",
-                "board.xml",
-                "--pdk",
-                "pdk.toml",
-                "--include-geometry",
-                "--output",
-                "report.dfm.json",
-            ],
-        )
-        .stdout_capture()
-        .stderr_capture()
-        .unchecked()
-        .run()
-        .unwrap();
+    let scene_output = run_pcbc(
+        &mut sandbox,
+        [
+            "ipc",
+            "dfm",
+            "check",
+            "board.xml",
+            "--pdk",
+            "pdk.toml",
+            "--include-geometry",
+            "--output",
+            "report.dfm.json",
+        ],
+    );
     assert!(!scene_output.status.success());
     assert!(scene_output.stdout.is_empty());
     assert!(expected.get("scene").is_none());
@@ -306,27 +350,22 @@ fn ipc_dfm_geometry_preserves_json_and_waivers_and_shares_full_scene() {
         })
         .collect::<String>();
     sandbox.write("waivers.toml", waivers);
-    let waived_output = sandbox
-        .run(
-            "pcbc",
-            [
-                "ipc",
-                "dfm",
-                "check",
-                "board.xml",
-                "--pdk",
-                "pdk.toml",
-                "--include-geometry",
-                "--output",
-                "waived.dfm.json",
-                "--waivers",
-                "waivers.toml",
-            ],
-        )
-        .stdout_capture()
-        .stderr_capture()
-        .run()
-        .unwrap();
+    let waived_output = run_pcbc(
+        &mut sandbox,
+        [
+            "ipc",
+            "dfm",
+            "check",
+            "board.xml",
+            "--pdk",
+            "pdk.toml",
+            "--include-geometry",
+            "--output",
+            "waived.dfm.json",
+            "--waivers",
+            "waivers.toml",
+        ],
+    );
     assert!(waived_output.status.success());
     let waived = read_report(&sandbox, "waived.dfm.json");
     assert_eq!(waived["scene"], scene);
@@ -340,6 +379,298 @@ fn ipc_dfm_geometry_preserves_json_and_waivers_and_shares_full_scene() {
             .iter()
             .all(|finding| finding["waived"] == true)
     );
+}
+
+#[test]
+fn ipc_dfm_bundles_preserve_checked_bytes_and_compressed_input_identity() {
+    // Comments and CRLFs must survive; archiving a reserialized source is not
+    // equivalent to capturing the exact input used for this check.
+    let xml = format!("{}\r\n", IPC_BOARD.replace('\n', "\r\n"));
+    let pdk = format!(
+        "# Retain this source comment\r\n{}",
+        REPORT_PDK.replace('\n', "\r\n")
+    );
+    let compressed = zstd::encode_all(xml.as_bytes(), 3).unwrap();
+    let mut sandbox = Sandbox::new();
+    sandbox
+        .env("SOURCE_DATE_EPOCH", "1787702400")
+        .write("board.xml", &xml)
+        .write("board.xml.zst", &compressed)
+        .write("pdk.toml", &pdk);
+    let baseline = run_pcbc(
+        &mut sandbox,
+        ["ipc", "dfm", "check", "board.xml", "--pdk", "pdk.toml"],
+    );
+    assert!(!baseline.status.success());
+    let baseline: Value = serde_json::from_slice(&baseline.stdout).unwrap();
+    let findings = baseline["findings"].as_array().unwrap();
+    assert!(findings.len() >= 2);
+    let waiver = format!(
+        "# Only one finding is waived\r\n[[waiver]]\r\nfinding = \"{}\"\r\nreason = \"Accepted for this fixture\"\r\n",
+        findings[0]["id"].as_str().unwrap()
+    );
+    sandbox.write("waivers.toml", &waiver);
+
+    for (input, input_bytes) in [
+        ("board.xml", xml.as_bytes()),
+        ("board.xml.zst", compressed.as_slice()),
+    ] {
+        let mut arguments = vec![
+            "ipc",
+            "dfm",
+            "check",
+            input,
+            "--pdk",
+            "pdk.toml",
+            "--waivers",
+            "waivers.toml",
+        ];
+        let mut json_arguments = arguments.clone();
+        json_arguments.extend(["--format", "json", "--include-geometry"]);
+        let json_output = run_pcbc(&mut sandbox, json_arguments);
+        assert!(!json_output.status.success());
+        let expected: Value = serde_json::from_slice(&json_output.stdout).unwrap();
+
+        arguments.extend(["--format", "bundle", "--output", "report.dfm.tar.zst"]);
+        let output = run_pcbc(&mut sandbox, &arguments);
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let bundle = read_bundle(&sandbox, "report.dfm.tar.zst");
+        assert_eq!(bundle.report, expected);
+        // Plain JSON's final newline is stdout framing, outside the serialized
+        // report object embedded in the bundle.
+        assert_eq!(
+            bundle.files["report.json"].as_slice(),
+            json_output.stdout.strip_suffix(b"\n").unwrap()
+        );
+        assert_eq!(bundle.report["verdict"], "fail");
+        assert_eq!(bundle.report["summary"]["waived"], 1);
+        assert_eq!(bundle.report["waivers"]["applied"], 1);
+        assert_eq!(bundle.report["scene"]["schema_version"], 1);
+        assert_eq!(
+            bundle.report["scene"]["passes"].as_array().unwrap().len(),
+            3
+        );
+        assert_eq!(bundle.files.len(), 5);
+        assert_eq!(bundle.files["source/design.ipc2581.xml"], xml.as_bytes());
+        assert_eq!(bundle.files["source/pdk.toml"], pdk.as_bytes());
+        assert_eq!(bundle.files["source/waivers.toml"], waiver.as_bytes());
+        assert_eq!(bundle.report["input"]["path"], input);
+        assert_eq!(bundle.report["input"]["sha256"], sha256(input_bytes));
+        assert_eq!(bundle.report["input"]["size_bytes"], input_bytes.len());
+        assert_eq!(bundle.report["pdk"]["sha256"], sha256(pdk.as_bytes()));
+        assert_eq!(
+            bundle.report["waivers"]["sha256"],
+            sha256(waiver.as_bytes())
+        );
+        if input.ends_with(".zst") {
+            assert_ne!(bundle.report["input"]["sha256"], sha256(xml.as_bytes()));
+        }
+
+        let archive = std::fs::read(sandbox.default_cwd().join("report.dfm.tar.zst")).unwrap();
+        // Explicit geometry is redundant with bundle format. Neither it nor
+        // replacing an existing output may perturb a reproducible archive.
+        arguments.push("--include-geometry");
+        let repeated = run_pcbc(&mut sandbox, arguments);
+        assert!(!repeated.status.success());
+        assert!(repeated.stdout.is_empty());
+        assert_eq!(
+            std::fs::read(sandbox.default_cwd().join("report.dfm.tar.zst")).unwrap(),
+            archive
+        );
+    }
+}
+
+#[test]
+fn ipc_dfm_bundle_replaces_stale_report_with_incomplete_partial_sources() {
+    let bad_pdk = REPORT_PDK.replace(
+        "minimum_board_edge_clearance",
+        "minimum_bord_edge_clearance",
+    );
+    let mut sandbox = Sandbox::new();
+    sandbox
+        .write("board.xml", IPC_BOARD)
+        .write("pdk.toml", REPORT_PDK)
+        .write("bad-pdk.toml", &bad_pdk)
+        .write("bad-waivers.toml", "[[waiver]]\nfinding = ");
+    let complete = run_pcbc(
+        &mut sandbox,
+        [
+            "ipc",
+            "dfm",
+            "check",
+            "board.xml",
+            "--pdk",
+            "pdk.toml",
+            "--format",
+            "bundle",
+            "--output",
+            "report.dfm.tar.zst",
+        ],
+    );
+    assert!(!complete.status.success());
+    assert_eq!(
+        read_bundle(&sandbox, "report.dfm.tar.zst").report["verdict"],
+        "fail"
+    );
+    let stale = std::fs::read(sandbox.default_cwd().join("report.dfm.tar.zst")).unwrap();
+
+    for (input, pdk, waivers, expected_error, sources) in [
+        (
+            "missing.xml",
+            "pdk.toml",
+            None,
+            "failed to read IPC-2581",
+            &[][..],
+        ),
+        (
+            "board.xml",
+            "missing-pdk.toml",
+            None,
+            "failed to read PDK",
+            &[("source/design.ipc2581.xml", "board.xml")][..],
+        ),
+        (
+            "board.xml",
+            "bad-pdk.toml",
+            None,
+            "failed to parse PDK",
+            &[
+                ("source/design.ipc2581.xml", "board.xml"),
+                ("source/pdk.toml", "bad-pdk.toml"),
+            ][..],
+        ),
+        (
+            "board.xml",
+            "pdk.toml",
+            Some("bad-waivers.toml"),
+            "failed to parse waiver file",
+            &[
+                ("source/design.ipc2581.xml", "board.xml"),
+                ("source/pdk.toml", "pdk.toml"),
+                ("source/waivers.toml", "bad-waivers.toml"),
+            ][..],
+        ),
+    ] {
+        sandbox.write("report.dfm.tar.zst", &stale);
+        let mut arguments = vec![
+            "ipc",
+            "dfm",
+            "check",
+            input,
+            "--pdk",
+            pdk,
+            "--format",
+            "bundle",
+            "--output",
+            "report.dfm.tar.zst",
+        ];
+        if let Some(waivers) = waivers {
+            arguments.extend(["--waivers", waivers]);
+        }
+        let output = run_pcbc(&mut sandbox, arguments);
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let bundle = read_bundle(&sandbox, "report.dfm.tar.zst");
+        assert_eq!(bundle.report["verdict"], "incomplete");
+        assert_eq!(bundle.report["input"]["path"], input);
+        assert_eq!(bundle.report["pdk"]["path"], pdk);
+        assert!(
+            bundle.report["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains(expected_error)
+        );
+        for field in ["summary", "rules", "findings", "scene"] {
+            assert!(bundle.report.get(field).is_none(), "unexpected {field}");
+        }
+        assert_eq!(bundle.files.len(), 2 + sources.len());
+        for (member, source) in sources {
+            assert_eq!(
+                bundle.files[*member],
+                std::fs::read(sandbox.default_cwd().join(source)).unwrap()
+            );
+        }
+    }
+}
+
+#[test]
+fn dfm_bundle_requires_safe_output_before_reading_or_preparing_inputs() {
+    let sources = [
+        ("board.xml", IPC_BOARD),
+        ("pdk.toml", REPORT_PDK),
+        ("waivers.toml", "# No waivers\n"),
+        ("MyBoard.zen", "This must not be evaluated\n"),
+        (
+            "layout.kicad_pcb",
+            "Existing layout must remain untouched\n",
+        ),
+        ("other.KICAD_PCB", "Upper-case board extension\n"),
+    ];
+    let mut sandbox = Sandbox::new();
+    for (path, bytes) in sources {
+        sandbox.write(path, bytes);
+    }
+    let mut ipc_destinations = vec!["board.xml", "./board.xml", "pdk.toml", "waivers.toml"];
+    let mut zen_destinations = vec![
+        "MyBoard.zen",
+        "./MyBoard.zen",
+        "pdk.toml",
+        "layout.kicad_pcb",
+        "other.KICAD_PCB",
+    ];
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink("pdk.toml", sandbox.default_cwd().join("pdk-alias.toml"))
+            .unwrap();
+        ipc_destinations.push("pdk-alias.toml");
+        std::os::unix::fs::symlink(
+            "layout.kicad_pcb",
+            sandbox.default_cwd().join("layout-report.tar.zst"),
+        )
+        .unwrap();
+        zen_destinations.push("layout-report.tar.zst");
+    }
+    for (mut arguments, destinations) in [
+        (
+            vec![
+                "ipc",
+                "dfm",
+                "check",
+                "board.xml",
+                "--waivers",
+                "waivers.toml",
+            ],
+            ipc_destinations,
+        ),
+        (vec!["dfm", "MyBoard.zen", "--offline"], zen_destinations),
+    ] {
+        arguments.extend(["--pdk", "pdk.toml", "--format", "bundle"]);
+        let missing_output = run_pcbc(&mut sandbox, &arguments);
+        assert_eq!(missing_output.status.code(), Some(2));
+        assert!(missing_output.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&missing_output.stderr).contains("--output"));
+        for destination in destinations {
+            let mut arguments = arguments.clone();
+            arguments.extend(["--output", destination]);
+            let output = run_pcbc(&mut sandbox, arguments);
+            assert!(!output.status.success());
+            assert!(output.stdout.is_empty());
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains("DFM report output would overwrite"),
+                "{stderr}"
+            );
+            for (source, bytes) in sources {
+                assert_eq!(
+                    std::fs::read(sandbox.default_cwd().join(source)).unwrap(),
+                    bytes.as_bytes(),
+                    "{source} changed when output was {destination}"
+                );
+            }
+        }
+    }
+    assert!(!sandbox.default_cwd().join("build").exists());
 }
 
 #[test]
@@ -410,28 +741,22 @@ fn ipc_dfm_geometry_distinguishes_canonical_board_arrays_and_mixed_fab_scope() {
         ),
     ] {
         let path = format!("{input}-{scope}.dfm.json");
-        let output = sandbox
-            .run(
-                "pcbc",
-                [
-                    "ipc",
-                    "dfm",
-                    "check",
-                    input,
-                    "--pdk",
-                    "pdk.toml",
-                    "--layout-target",
-                    scope,
-                    "--include-geometry",
-                    "--output",
-                    &path,
-                ],
-            )
-            .stdout_capture()
-            .stderr_capture()
-            .unchecked()
-            .run()
-            .unwrap();
+        let output = run_pcbc(
+            &mut sandbox,
+            [
+                "ipc",
+                "dfm",
+                "check",
+                input,
+                "--pdk",
+                "pdk.toml",
+                "--layout-target",
+                scope,
+                "--include-geometry",
+                "--output",
+                &path,
+            ],
+        );
         assert!(!output.status.success());
         let report = read_report(&sandbox, &path);
         assert_eq!(report["scene"]["schema_version"], 1);
@@ -500,26 +825,20 @@ fn ipc_dfm_scene_reports_incomplete_input_and_extraction_errors() {
     ] {
         let output_path = format!("{input}.dfm.json");
         sandbox.write(&output_path, r#"{"verdict":"pass"}"#);
-        let output = sandbox
-            .run(
-                "pcbc",
-                [
-                    "ipc",
-                    "dfm",
-                    "check",
-                    input,
-                    "--pdk",
-                    pdk,
-                    "--include-geometry",
-                    "--output",
-                    &output_path,
-                ],
-            )
-            .stdout_capture()
-            .stderr_capture()
-            .unchecked()
-            .run()
-            .unwrap();
+        let output = run_pcbc(
+            &mut sandbox,
+            [
+                "ipc",
+                "dfm",
+                "check",
+                input,
+                "--pdk",
+                pdk,
+                "--include-geometry",
+                "--output",
+                &output_path,
+            ],
+        );
         assert!(!output.status.success());
         assert!(output.stdout.is_empty());
         let incomplete = read_report(&sandbox, &output_path);
@@ -537,35 +856,46 @@ fn ipc_dfm_scene_reports_incomplete_input_and_extraction_errors() {
 }
 
 #[test]
-fn zen_dfm_scene_reports_preparation_errors() {
+fn zen_dfm_geometry_and_bundle_report_preparation_errors() {
     let mut sandbox = Sandbox::new();
-    let output = sandbox
-        .run(
-            "pcbc",
+    for (format, path) in [
+        ("json", "report.dfm.json"),
+        ("bundle", "report.dfm.tar.zst"),
+    ] {
+        let output = run_pcbc(
+            &mut sandbox,
             [
                 "dfm",
                 "missing.zen",
                 "--pdk",
                 "standard",
+                "--format",
+                format,
                 "--include-geometry",
                 "--output",
-                "report.dfm.json",
+                path,
                 "--offline",
             ],
-        )
-        .stdout_capture()
-        .stderr_capture()
-        .unchecked()
-        .run()
-        .unwrap();
-    assert!(!output.status.success());
-    let incomplete = read_report(&sandbox, "report.dfm.json");
-    assert_eq!(incomplete["verdict"], "incomplete");
-    assert_eq!(incomplete["input"]["path"], "missing.zen");
-    assert!(
-        incomplete["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("missing.zen")
-    );
+        );
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let incomplete = if format == "bundle" {
+            let bundle = read_bundle(&sandbox, path);
+            assert_eq!(bundle.files.len(), 2, "no source was prepared");
+            bundle.report
+        } else {
+            read_report(&sandbox, path)
+        };
+        assert_eq!(incomplete["verdict"], "incomplete");
+        assert_eq!(incomplete["input"]["path"], "missing.zen");
+        assert!(
+            incomplete["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("missing.zen")
+        );
+        for field in ["summary", "rules", "findings", "scene"] {
+            assert!(incomplete.get(field).is_none(), "unexpected {field}");
+        }
+    }
 }
