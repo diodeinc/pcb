@@ -1,8 +1,8 @@
 # DFM PDK, waiver, and report formats
 
 `pcb ipc dfm check` checks an IPC-2581 design against a built-in or file-backed
-TOML fabrication PDK. It writes diagnostic JSON or a portable
-[report bundle](dfm-bundle.md) for external viewers.
+TOML fabrication PDK. It writes one self-contained JSON report with diagnostics,
+native vector geometry, and the exact PDK source for external viewers.
 
 ## PDK
 
@@ -192,11 +192,8 @@ silently.
 ## CLI
 
 ```bash
-pcb ipc dfm check fabrication-panel.xml \
-  --pdk standard --waivers waivers.toml \
-  --layout-target board-array --output dfm-report.json
-
-pcb dfm board.zen --pdk standard --format bundle --output board.dfm.tar.zst
+pcb ipc dfm check board.xml --pdk standard -o board.dfm.json
+pcb dfm board.zen --pdk standard -o board.dfm.json
 ```
 
 `pcb dfm` prepares and synchronizes the board's KiCad layout before exporting
@@ -206,29 +203,27 @@ to inspect existing manufacturing files without changing their source layout.
 `--pdk` accepts an exact built-in name or a TOML path. `standard` is bundled
 with `pcb` and reported as `builtin:standard`; use `./standard` to select a
 same-named file. Both use the same parser and checks. `--layout-target` accepts
-`board` or `board-array` and defaults to `board-array`.
+`board` or `board-array` and defaults to `board-array`. Add
+`--waivers waivers.toml` to apply a [waiver file](#waivers).
 
-`--format json` is the default and writes to stdout when `--output` is omitted.
-`--include-geometry` adds the native scene; otherwise JSON contains diagnostics
-without artwork. `--format bundle` requires `--output` and always includes the
-scene, checked IPC XML, resolved PDK, and optional waivers. See the
-[bundle contract](dfm-bundle.md) for archive layout and limits. Neither format
-requires Node.js or a browser to produce. Including geometry does not change
-findings, measurements, IDs, waivers, scope, or verdict.
+Output is UTF-8 JSON on stdout unless `-o` / `--output` is supplied. The
+recommended suffix is `.dfm.json`. Every complete report includes the native
+scene and PDK source for viewing without companion files. PCB generates no
+DFM HTML or viewer application.
 
 A completed report is written before the command returns a failing status.
 Only unwaived error findings fail its verdict. Preparation and output errors
 also return a failing status. Preparation errors emit an explicit
-[incomplete report](#incomplete-reports) when geometry or bundle output was
-requested; ordinary JSON emits no report in that case. Bundles retain any
-captured inputs and replace output atomically. I/O, serialization, or size-limit
-failures can prevent output, leaving a previous artifact untouched; callers must
-check exit status. Report output must not overwrite a source or use a KiCad
-board path.
+[incomplete report](#incomplete-reports). File output is replaced atomically,
+including incomplete reports. I/O, serialization, or size-limit failures can
+prevent output and leave a previous artifact untouched; callers must check exit
+status. Output must not overwrite a source or use a KiCad board path.
 
 `SOURCE_DATE_EPOCH` fixes both `generated_at` and the date used for waiver
 expiry. Pinning an old epoch reproduces that date's verdict, including waivers
-that would have expired today.
+that would have expired today. The same input bytes, source labels, options,
+and epoch produce identical JSON. A separate `.zen` layout/export operation
+may change its IPC bytes or temporary source label.
 
 ## JSON report
 
@@ -237,9 +232,11 @@ A complete report has these fields:
 - `schema_version`: integer report schema version.
 - `generated_at`: RFC 3339 generation time.
 - `verdict`: `pass` or `fail`.
-- `tool`, `input`, `pdk`, and `waivers`: producer version plus input paths
-  and SHA-256 identities; `waivers` also carries applied, expired, and
-  unmatched entries and is `null` when no waiver file was given.
+- `tool`: producer name and version.
+- `input`: original IPC input path, SHA-256, and byte size.
+- `pdk`: resolved kit metadata, path, exact TOML `source`, and SHA-256.
+- `waivers`: file path and SHA-256 plus applied, expired, and unmatched entries;
+  `null` when no waiver file was given. See [source identity](#source-identity).
 - `layout_target`: `board` or `board_array`.
 - `layout`: the selected step, actual layout kind, checked coordinate frame,
   bounds, and physical occurrences. Occurrences retain their parent, source
@@ -258,7 +255,7 @@ A complete report has these fields:
   specifies the diagnostic family, whether it is spatial, and its semantic
   rendering features; `tier` distinguishes required and preferred limits.
 - `findings`: violations in deterministic rule/location order.
-- `scene`: present in bundles and with `--include-geometry` JSON; see
+- `scene`: required native artwork for the complete checked layout; see
   [native scene](#native-scene).
 
 `rule.finding_count` includes waived findings, and `waived_count` counts that
@@ -268,6 +265,27 @@ and their reason rather than becoming a pass from zero counts. Similarly,
 `summary.findings` includes all findings, `summary.waived` counts the waived
 subset, and `summary.errors`/`warnings` count only unwaived findings. A complete
 verdict fails exactly when `summary.errors > 0`.
+
+### Source identity
+
+`pdk.source` is required in complete reports. It contains the exact resolved
+UTF-8 TOML used for evaluation, including comments, unit spelling, CRLF line
+endings, and any final newline. Built-in and file-backed PDKs follow the same
+contract. Do not reserialize TOML or normalize text. `pdk.sha256` is the SHA-256
+of the UTF-8 bytes of that decoded JSON string, encoded as 64 lowercase
+hexadecimal characters. Consumers verify this hash; a checksum detects
+corruption, not authenticity or fabrication approval.
+
+`input.sha256` and `size_bytes` identify the original on-disk IPC input bytes,
+including compression for a `.xml.zst` input. For `pcb dfm`, they identify its
+temporary exported IPC input. The XML is not included. Waiver source is also
+not included: its hash, applied/expired/unmatched entries, and each finding's
+waiver fields preserve what was applied.
+
+All `path` fields are descriptive provenance. They may be absolute,
+`builtin:standard`, or no-longer-existing temporary paths. Input and waiver
+hashes identify absent source files; never fetch paths or open files on the
+consumer's machine to render or validate the report.
 
 ### Findings
 
@@ -319,10 +337,9 @@ The optional `evidence.display` construction uses the same world millimeters:
 
 Display constructions do not affect finding, site, or repeat-group identity.
 `circle_minus_layer` needs its named scene pass even when the pass is hidden as
-artwork. JSON without a scene can use the measured paths; a supplied scene
-missing a required operand is invalid. Do not fit curves to measured polygons,
-invent precision by changing tessellation tolerance, or infer an inscribed
-width or radial enclosure from witness separation.
+artwork. A missing required operand makes the scene invalid. Do not fit curves
+to measured polygons, invent precision by changing tessellation tolerance, or
+infer an inscribed width or radial enclosure from witness separation.
 
 ### Coordinates and topology
 
@@ -340,7 +357,9 @@ do not transform them again. A parent occurrence filter includes descendants.
 
 ### Native scene
 
-Scene version 1 contains `schema_version: 1`, full-layout `bounds`, and `passes`.
+Every complete report contains a scene, including reports with only nonspatial
+checks. Scene version 1 contains `schema_version: 1`, full-layout `bounds`, and
+`passes`.
 Each pass has `label`, semantic `feature`, exact `layer` name or `null` for shared
 context, display `color`, and a full-layout native `svg` string. All passes
 share the same viewport; sites never crop or duplicate the artwork.
@@ -358,13 +377,47 @@ camera convention. Preserve nested rotations, mirrors, aperture instances,
 ordered polarity, masks, nonzero winding, holes, and final cutouts. Namespace
 IDs and fragment references per compiled pass/view.
 
+The report is the scene authority. Render its native SVG and check-owned
+evidence; do not infer geometry from messages or screenshots, rerun DFM, or
+recreate the verdict in a second geometry engine. Measurements, IDs, waivers,
+and checked scope do not depend on display constructions.
+
 ### Incomplete reports
 
-An incomplete geometry or bundle export has `verdict: "incomplete"`, `schema_version`,
+An incomplete report has `verdict: "incomplete"`, `schema_version`,
 `generated_at`, `tool`, `input: {path}`, `pdk: {path}`, `layout_target`, and
 `error: {message}`. It has no `summary`, `rules`, `findings`, or `scene`. Consumers
 must handle this verdict before requiring complete-report fields; it is never
-a pass, a clean board, or a skipped check.
+a pass, a clean board, or a skipped check. Its minimal `pdk` has no source or
+hash, even if a PDK was read before the failure.
+
+### Reader limits and safety
+
+Producer and consumer enforce these inclusive limits (1 MiB = 1,048,576 bytes):
+
+| Resource | Limit |
+| --- | --- |
+| UTF-8 JSON report | 128 MiB |
+| UTF-8 bytes of decoded `pdk.source` | 1 MiB |
+
+Readers check file size before allocating or parsing. Decode strict UTF-8 and
+parse in a worker so cancellation and malformed input do not block the UI. Validate
+versions, finite numbers, ordered bounds, supported coordinate frames, unique
+IDs, references, and aggregate counts before rendering. Bound JSON/geometry
+complexity and SVG reference traversal independently of byte size.
+
+All JSON, TOML, and SVG are untrusted even when the PDK hash matches. Parse SVG
+into an inert allowlisted tree; never inject uploaded markup as HTML. Reject
+scripts, event handlers, foreign objects, styles, entities, external resources,
+and nonlocal fragment references. Show an explicit invalid or unsupported
+report error when safe rendering is unavailable.
+
+Reports can contain private board data, local paths, components, nets, PDK
+comments, and waiver reasons. A file picker or drop action authorizes local
+inspection only, not backend uploads or telemetry. Do not log payloads, persist
+uploads silently, or keep hidden copies after replacement. Terminate workers,
+release buffers/object URLs, and ignore stale async results when a new file
+replaces the current load.
 
 ### Schema evolution
 

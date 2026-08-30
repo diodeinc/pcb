@@ -91,5 +91,4 @@ httpmock = { workspace = true }
 insta = { workspace = true }
 tempfile = { workspace = true }
 pcb-test-utils = { workspace = true }
-tar = { workspace = true }
 zstd = { workspace = true }

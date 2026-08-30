@@ -213,20 +213,9 @@ enum DfmCommands {
         /// What to check: the canonical board, or the file's root step with every repeat materialized.
         #[arg(long, default_value = "board-array")]
         layout_target: LayoutTarget,
-        /// Output report path. Omit to write JSON to stdout.
+        /// Output self-contained JSON report path. Omit to write to stdout.
         #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
         output: Option<PathBuf>,
-        /// Diagnostic JSON or a portable .dfm.tar.zst bundle (requires --output).
-        #[arg(
-            long,
-            value_enum,
-            default_value = "json",
-            requires_if("bundle", "output")
-        )]
-        format: commands::dfm::ReportFormat,
-        /// Include full vector geometry in JSON. Bundles always include it.
-        #[arg(long)]
-        include_geometry: bool,
     },
 }
 
@@ -564,8 +553,6 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                 waivers,
                 layout_target,
                 output,
-                format,
-                include_geometry,
             } => commands::dfm::execute_check(
                 &file,
                 &commands::dfm::CheckOptions {
@@ -573,8 +560,6 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                     waivers,
                     output,
                     layout_target,
-                    format,
-                    include_geometry,
                 },
             ),
         },

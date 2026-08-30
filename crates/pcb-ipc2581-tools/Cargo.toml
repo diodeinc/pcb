@@ -25,7 +25,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 rayon = { workspace = true }
 sha2 = { workspace = true }
-tar = { workspace = true }
 tempfile = { workspace = true }
 toml = { workspace = true }
 uppsala = { workspace = true }

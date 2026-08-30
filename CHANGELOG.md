@@ -10,8 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
-- Add finding sites, native geometry, and instance provenance to DFM JSON.
-- Add portable DFM report bundles via `--format bundle`.
+- Add self-contained DFM JSON reports with native geometry and PDK source.
 
 ### Fixed
 

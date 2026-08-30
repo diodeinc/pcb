@@ -11,7 +11,7 @@ alias provides the same commands.
 | `html` | Export an HTML board summary. |
 | `outline` | Export a KiCad-compatible DXF outline. |
 | `render` | Render one layer as terminal graphics, SVG, or PNG. |
-| `dfm check` | Check IPC-2581 geometry against a fabrication PDK and emit JSON or a report bundle. |
+| `dfm check` | Check IPC-2581 geometry against a fabrication PDK and emit self-contained JSON. |
 | `gerber` | Export fabrication layers and drill files. |
 | `view` | Export a filtered IPC-2581 function-mode document. |
 | `board-array create` | Create a rectangular board array. |
@@ -54,10 +54,8 @@ pcb ipc dfm check fabrication-panel.xml \
 Pass a path such as `--pdk ./fab-process.toml` to use a custom PDK. Exact
 built-in names take precedence, so prefix a same-named file with `./`.
 
-Use `--format bundle -o board.dfm.tar.zst` for a portable
-[report bundle](docs/dfm-bundle.md) with diagnostic JSON, native artwork,
-checked IPC XML, the PDK, and optional waivers. JSON remains the default;
-`--include-geometry` embeds the same scene for external viewers.
+Complete JSON reports contain diagnostics, native vector artwork, and the exact
+PDK source for external viewers. PCB does not generate DFM HTML or host a viewer.
 
 See the [PDK, waiver, and JSON formats](docs/dfm.md) and the
 [standard PDK](pdks/standard.toml) for details.

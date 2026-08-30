@@ -15,7 +15,7 @@ use pcb_ir::geom::{Affine2, BBox, FillRule, Point, shapes};
 use pcb_ir::render::RenderOptions;
 
 use super::design::Design;
-use super::report::{DfmReport, LayerRef, ReportBBox, Scene, ScenePass};
+use super::report::{Finding, LayerRef, LayoutContext, ReportBBox, RuleResult, Scene, ScenePass};
 use crate::geometry;
 
 struct GeometryPass {
@@ -126,12 +126,16 @@ fn native_artwork(
     ))
 }
 
-pub(super) fn export(report: &DfmReport, design: &Design<'_>) -> Result<Scene> {
-    let sources = scene_passes(report, design);
-    let mut bounds = scene_bounds(report.layout.bounding_box, &sources);
-    for finding in &report.findings {
-        let rule = report
-            .rules
+pub(super) fn export(
+    design: &Design<'_>,
+    layout: &LayoutContext,
+    rules: &[RuleResult],
+    findings: &[Finding],
+) -> Result<Scene> {
+    let sources = scene_passes(rules, design);
+    let mut bounds = scene_bounds(layout.bounding_box, &sources);
+    for finding in findings {
+        let rule = rules
             .iter()
             .find(|rule| rule.id == finding.rule_id)
             .context("DFM finding references an absent rule")?;
@@ -207,10 +211,9 @@ fn scene_bounds(layout: Option<ReportBBox>, sources: &[GeometryPass]) -> BBox {
     )
 }
 
-fn scene_passes(report: &DfmReport, design: &Design<'_>) -> Vec<GeometryPass> {
+fn scene_passes(rules: &[RuleResult], design: &Design<'_>) -> Vec<GeometryPass> {
     let layout = &design.imported.geometry;
-    let wanted = report
-        .rules
+    let wanted = rules
         .iter()
         .flat_map(|rule| rule.view.features.iter().copied())
         .collect::<BTreeSet<_>>();

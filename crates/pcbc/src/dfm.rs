@@ -17,22 +17,9 @@ pub struct DfmArgs {
     #[arg(long)]
     pub pdk: PathBuf,
 
-    /// Output report path. Omit to write JSON to stdout.
+    /// Output self-contained JSON report path. Omit to write to stdout.
     #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
     pub output: Option<PathBuf>,
-
-    /// Diagnostic JSON or a portable .dfm.tar.zst bundle (requires --output).
-    #[arg(
-        long,
-        value_enum,
-        default_value = "json",
-        requires_if("bundle", "output")
-    )]
-    pub format: commands::dfm::ReportFormat,
-
-    /// Include full vector geometry in JSON. Bundles always include it.
-    #[arg(long)]
-    pub include_geometry: bool,
 
     /// Disable network access (offline mode) - only use vendored dependencies
     #[arg(long = "offline")]
@@ -45,8 +32,6 @@ pub fn execute(args: DfmArgs) -> Result<()> {
         waivers: None,
         output: args.output.clone(),
         layout_target: LayoutTarget::Board,
-        format: args.format,
-        include_geometry: args.include_geometry,
     };
     commands::dfm::validate_output(&args.file, &options)?;
     let (_temporary_dir, ipc_path) = match export_layout(&args) {

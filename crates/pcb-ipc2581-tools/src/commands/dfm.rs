@@ -5,7 +5,6 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
-use clap::ValueEnum;
 use pcb_ir::import::ipc2581::import_design;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -15,7 +14,6 @@ use crate::ipc2581::Ipc2581;
 use crate::utils::file as file_utils;
 
 mod builtin_pdks;
-mod bundle;
 mod checks;
 mod design;
 mod pdk;
@@ -24,12 +22,8 @@ mod rules;
 mod scene;
 mod waivers;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
-pub enum ReportFormat {
-    #[default]
-    Json,
-    Bundle,
-}
+const MAX_REPORT_BYTES: usize = 128 * 1024 * 1024;
+const MAX_PDK_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug)]
 pub struct CheckOptions {
@@ -37,14 +31,6 @@ pub struct CheckOptions {
     pub waivers: Option<PathBuf>,
     pub output: Option<PathBuf>,
     pub layout_target: LayoutTarget,
-    pub format: ReportFormat,
-    pub include_geometry: bool,
-}
-
-impl CheckOptions {
-    fn includes_geometry(&self) -> bool {
-        self.include_geometry || self.format == ReportFormat::Bundle
-    }
 }
 
 /// PDK source bytes plus the stable identity echoed into reports.
@@ -60,32 +46,8 @@ struct LoadedWaivers {
     file: waivers::WaiverFile,
 }
 
-/// Capture the bytes used during preparation, including partial inputs when
-/// parsing fails. Bundling never rereads a source or depends on a temporary IPC
-/// file surviving after `pcb dfm` returns.
-#[derive(Default)]
-struct SourceFiles {
-    ipc_xml: Option<String>,
-    pdk: Option<LoadedPdk>,
-    waivers: Option<Vec<u8>>,
-}
-
-impl SourceFiles {
-    fn bundle_sources(&self) -> bundle::Sources<'_> {
-        bundle::Sources {
-            ipc_xml: self.ipc_xml.as_deref().map(str::as_bytes),
-            pdk: self.pdk.as_ref().map(|pdk| pdk.bytes.as_ref()),
-            waivers: self.waivers.as_deref(),
-        }
-    }
-}
-
 /// Reject an invalid destination before any layout preparation or output write.
 pub fn validate_output(file: &Path, options: &CheckOptions) -> Result<()> {
-    ensure!(
-        options.format != ReportFormat::Bundle || options.output.is_some(),
-        "--format bundle requires --output"
-    );
     let Some(output) = options.output.as_deref() else {
         return Ok(());
     };
@@ -132,16 +94,15 @@ pub fn validate_output(file: &Path, options: &CheckOptions) -> Result<()> {
 
 pub fn execute_check(file: &Path, options: &CheckOptions) -> Result<()> {
     validate_output(file, options)?;
-    let mut sources = SourceFiles::default();
-    let report = match build_report(file, options, &mut sources) {
+    let report = match build_report(file, options) {
         Ok(checked) => checked,
         Err(error) => {
-            write_incomplete_report(file, options, &error, &sources)
+            write_error_report(file, options, &error)
                 .with_context(|| format!("DFM check was incomplete: {error:#}"))?;
             return Err(error);
         }
     };
-    write_report(options, &report, &sources)?;
+    write_report(options, &report)?;
 
     let summary = &report.summary;
     if summary.errors > 0 {
@@ -159,52 +120,34 @@ pub fn execute_check(file: &Path, options: &CheckOptions) -> Result<()> {
     Ok(())
 }
 
-/// Report preparation failures before the IPC input exists, such as `.zen`
-/// layout/export errors. Such incomplete bundles intentionally have no sources.
+/// Preparation failures produce an incomplete report, never a passing result.
+/// This also handles `.zen` layout/export errors before the IPC input exists.
 pub fn write_error_report(
     file: &Path,
     options: &CheckOptions,
     error: &anyhow::Error,
 ) -> Result<()> {
     validate_output(file, options)?;
-    write_incomplete_report(file, options, error, &SourceFiles::default())
+    let incomplete = serde_json::json!({
+        "schema_version": report::REPORT_SCHEMA_VERSION,
+        "generated_at": generation_time().to_rfc3339(),
+        "verdict": "incomplete",
+        "tool": report::ToolIdentity {
+            name: "pcb",
+            version: env!("CARGO_PKG_VERSION"),
+        },
+        "input": { "path": file.display().to_string() },
+        "pdk": { "path": options.pdk.display().to_string() },
+        "layout_target": match options.layout_target {
+            LayoutTarget::Board => "board",
+            LayoutTarget::BoardArray => "board_array",
+        },
+        "error": { "message": format!("{error:#}") },
+    });
+    write_report(options, &incomplete)
 }
 
-/// Geometry JSON and bundles distinguish incomplete runs from completed DFM
-/// failures. Ordinary diagnostic JSON retains its no-report-on-error behavior.
-fn write_incomplete_report(
-    file: &Path,
-    options: &CheckOptions,
-    error: &anyhow::Error,
-    sources: &SourceFiles,
-) -> Result<()> {
-    if options.includes_geometry() {
-        let incomplete = serde_json::json!({
-            "schema_version": report::REPORT_SCHEMA_VERSION,
-            "generated_at": generation_time().to_rfc3339(),
-            "verdict": "incomplete",
-            "tool": report::ToolIdentity {
-                name: "pcb",
-                version: env!("CARGO_PKG_VERSION"),
-            },
-            "input": { "path": file.display().to_string() },
-            "pdk": { "path": options.pdk.display().to_string() },
-            "layout_target": match options.layout_target {
-                LayoutTarget::Board => "board",
-                LayoutTarget::BoardArray => "board_array",
-            },
-            "error": { "message": format!("{error:#}") },
-        });
-        write_report(options, &incomplete, sources)?;
-    }
-    Ok(())
-}
-
-fn build_report(
-    file: &Path,
-    options: &CheckOptions,
-    sources: &mut SourceFiles,
-) -> Result<report::DfmReport> {
+fn build_report(file: &Path, options: &CheckOptions) -> Result<report::DfmReport> {
     let input_bytes = std::fs::read(file)
         .with_context(|| format!("failed to read IPC-2581 file {}", file.display()))?;
     let input = report::FileIdentity {
@@ -212,11 +155,8 @@ fn build_report(
         sha256: sha256(&input_bytes),
         size_bytes: input_bytes.len() as u64,
     };
-    let content = sources
-        .ipc_xml
-        .insert(file_utils::ipc_text(file, &input_bytes)?.into_owned());
-    drop(input_bytes);
-    let loaded_pdk = sources.pdk.insert(load_pdk(&options.pdk)?);
+    let content = file_utils::ipc_text(file, &input_bytes)?;
+    let loaded_pdk = load_pdk(&options.pdk)?;
     let pdk_source = std::str::from_utf8(&loaded_pdk.bytes)
         .with_context(|| format!("PDK {} is not UTF-8", loaded_pdk.path))?;
     let pdk = pdk::Pdk::parse(pdk_source)
@@ -235,24 +175,24 @@ fn build_report(
         .waivers
         .as_deref()
         .map(|path| -> Result<LoadedWaivers> {
-            let bytes = sources.waivers.insert(
-                std::fs::read(path)
-                    .with_context(|| format!("failed to read waiver file {}", path.display()))?,
-            );
-            let source = std::str::from_utf8(bytes)
+            let bytes = std::fs::read(path)
+                .with_context(|| format!("failed to read waiver file {}", path.display()))?;
+            let source = std::str::from_utf8(&bytes)
                 .with_context(|| format!("waiver file {} is not UTF-8", path.display()))?;
             let file = waivers::WaiverFile::parse(source)
                 .with_context(|| format!("failed to parse waiver file {}", path.display()))?;
             Ok(LoadedWaivers {
                 path: path.display().to_string(),
-                sha256: sha256(bytes),
+                sha256: sha256(&bytes),
                 file,
             })
         })
         .transpose()?;
 
     let generated_at = generation_time();
-    let ipc = Ipc2581::parse(content).context("failed to parse IPC-2581 file")?;
+    let ipc = Ipc2581::parse(&content).context("failed to parse IPC-2581 file")?;
+    drop(content);
+    drop(input_bytes);
     let imported = import_design(&ipc).context("failed to import IPC-2581 physical design")?;
     let design = design::Design::extract(&imported, options.layout_target.artwork_scope(), &rules)?;
     let checked = checks::run(
@@ -264,7 +204,9 @@ fn build_report(
 
     let summary = summarize(&checked);
     let failed = summary.errors > 0;
-    let mut report = report::DfmReport {
+    let layout = design.report_layout();
+    let scene = scene::export(&design, &layout, &checked.rules, &checked.findings)?;
+    Ok(report::DfmReport {
         schema_version: report::REPORT_SCHEMA_VERSION,
         generated_at: generated_at.to_rfc3339(),
         verdict: if failed {
@@ -279,14 +221,15 @@ fn build_report(
         input,
         pdk: report::PdkIdentity::from_pdk(
             &pdk,
-            loaded_pdk.path.clone(),
+            loaded_pdk.path,
             sha256(&loaded_pdk.bytes),
+            pdk_source.to_owned(),
         ),
         layout_target: match options.layout_target {
             LayoutTarget::Board => "board",
             LayoutTarget::BoardArray => "board_array",
         },
-        layout: design.report_layout(),
+        layout,
         coordinate_system: report::CoordinateSystem {
             unit: "mm",
             axes: "x_right_y_up",
@@ -306,29 +249,31 @@ fn build_report(
         summary,
         rules: checked.rules,
         findings: checked.findings,
-        scene: None,
-    };
-
-    if options.includes_geometry() {
-        report.scene = Some(scene::export(&report, &design)?);
-    }
-    Ok(report)
+        scene,
+    })
 }
 
 fn load_pdk(reference: &Path) -> Result<LoadedPdk> {
-    if let Some(pdk) = reference.to_str().and_then(builtin_pdks::find) {
-        return Ok(LoadedPdk {
+    let loaded = if let Some(pdk) = reference.to_str().and_then(builtin_pdks::find) {
+        LoadedPdk {
             path: format!("builtin:{}", pdk.name),
             bytes: Cow::Borrowed(pdk.source.as_bytes()),
-        });
-    }
-
-    let bytes = std::fs::read(reference)
-        .with_context(|| format!("failed to read PDK file {}", reference.display()))?;
-    Ok(LoadedPdk {
-        path: reference.display().to_string(),
-        bytes: Cow::Owned(bytes),
-    })
+        }
+    } else {
+        LoadedPdk {
+            path: reference.display().to_string(),
+            bytes: Cow::Owned(
+                std::fs::read(reference)
+                    .with_context(|| format!("failed to read PDK file {}", reference.display()))?,
+            ),
+        }
+    };
+    ensure!(
+        loaded.bytes.len() <= MAX_PDK_BYTES,
+        "PDK {} exceeds the {MAX_PDK_BYTES} byte limit",
+        loaded.path
+    );
+    Ok(loaded)
 }
 
 /// The non-verdict counts worth surfacing next to the pass/fail line.
@@ -389,30 +334,39 @@ fn summarize(checked: &checks::Results) -> report::Summary {
     }
 }
 
-fn write_report(
-    options: &CheckOptions,
-    report: &impl Serialize,
-    sources: &SourceFiles,
-) -> Result<()> {
-    let report = serde_json::to_string_pretty(report)?;
-    if options.format == ReportFormat::Bundle {
-        return bundle::write(
-            options
-                .output
-                .as_deref()
-                .context("--format bundle requires --output")?,
-            report.as_bytes(),
-            sources.bundle_sources(),
-        );
-    }
+fn write_report(options: &CheckOptions, report: &impl Serialize) -> Result<()> {
+    let mut bytes = serde_json::to_vec_pretty(report)?;
+    bytes.push(b'\n');
+    ensure!(
+        bytes.len() <= MAX_REPORT_BYTES,
+        "DFM report exceeds the {MAX_REPORT_BYTES} byte limit"
+    );
     match options.output.as_deref() {
-        Some(path) => std::fs::File::create(path)
-            .and_then(|mut file| writeln!(file, "{report}"))
-            .with_context(|| format!("failed to write DFM report to {}", path.display())),
-        None => {
-            let mut stdout = std::io::stdout().lock();
-            writeln!(stdout, "{report}").context("failed to write DFM report to stdout")
+        Some(path) => {
+            // Replace only after serialization and the complete write succeed.
+            let parent = path
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."));
+            let mut temporary = tempfile::NamedTempFile::new_in(parent)
+                .with_context(|| format!("failed to create DFM report in {}", parent.display()))?;
+            temporary
+                .write_all(&bytes)
+                .with_context(|| format!("failed to write DFM report to {}", path.display()))?;
+            temporary
+                .as_file()
+                .sync_all()
+                .context("failed to flush DFM report to disk")?;
+            temporary
+                .persist(path)
+                .map_err(|error| error.error)
+                .with_context(|| format!("failed to replace DFM report {}", path.display()))?;
+            Ok(())
         }
+        None => std::io::stdout()
+            .lock()
+            .write_all(&bytes)
+            .context("failed to write DFM report to stdout"),
     }
 }
 
@@ -550,6 +504,70 @@ minimum_board_array_spacing = "300 mil"
 
         assert_eq!(loaded.path, path.display().to_string());
         assert_eq!(&*loaded.bytes, PDK.as_bytes());
+    }
+
+    #[test]
+    fn rejects_oversize_pdk_source() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("oversize.toml");
+        std::fs::write(&path, vec![b' '; MAX_PDK_BYTES + 1]).unwrap();
+
+        let error = load_pdk(&path).err().unwrap();
+
+        assert!(error.to_string().contains("exceeds the 1048576 byte limit"));
+    }
+
+    #[test]
+    fn report_serialization_failure_preserves_existing_output() {
+        struct Unserializable;
+        impl Serialize for Unserializable {
+            fn serialize<S: serde::Serializer>(
+                &self,
+                _serializer: S,
+            ) -> std::result::Result<S::Ok, S::Error> {
+                Err(serde::ser::Error::custom("serialization failed"))
+            }
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("report.dfm.json");
+        std::fs::write(&output, b"previous report").unwrap();
+        let options = CheckOptions {
+            pdk: "standard".into(),
+            waivers: None,
+            output: Some(output.clone()),
+            layout_target: LayoutTarget::Board,
+        };
+
+        let error = write_report(&options, &Unserializable).unwrap_err();
+
+        assert!(error.to_string().contains("serialization failed"));
+        assert_eq!(std::fs::read(output).unwrap(), b"previous report");
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn report_persistence_failure_preserves_destination_and_cleans_temporary_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("report.dfm.json");
+        std::fs::create_dir(&output).unwrap();
+        std::fs::write(output.join("sentinel"), b"untouched").unwrap();
+        let options = CheckOptions {
+            pdk: "standard".into(),
+            waivers: None,
+            output: Some(output.clone()),
+            layout_target: LayoutTarget::Board,
+        };
+
+        let error =
+            write_report(&options, &serde_json::json!({"verdict": "incomplete"})).unwrap_err();
+
+        assert!(error.to_string().contains("failed to replace DFM report"));
+        assert_eq!(
+            std::fs::read(output.join("sentinel")).unwrap(),
+            b"untouched"
+        );
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
     }
 
     #[test]

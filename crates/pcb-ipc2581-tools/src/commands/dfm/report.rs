@@ -23,10 +23,8 @@ pub struct DfmReport {
     pub summary: Summary,
     pub rules: Vec<RuleResult>,
     pub findings: Vec<Finding>,
-    /// Full-scene artwork for external viewers. Bundles always include it;
-    /// ordinary JSON stays lightweight unless geometry was requested.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub scene: Option<Scene>,
+    /// Full native artwork for external diagnostic viewers.
+    pub scene: Scene,
 }
 
 #[derive(Debug, Serialize)]
@@ -89,10 +87,12 @@ pub struct PdkIdentity {
     pub process: Option<String>,
     pub path: String,
     pub sha256: String,
+    /// Exact resolved UTF-8 PDK TOML used by this check, without reserialization.
+    pub source: String,
 }
 
 impl PdkIdentity {
-    pub fn from_pdk(pdk: &Pdk, path: String, sha256: String) -> Self {
+    pub fn from_pdk(pdk: &Pdk, path: String, sha256: String, source: String) -> Self {
         Self {
             id: pdk.pdk.id.clone(),
             name: pdk.pdk.name.clone(),
@@ -101,6 +101,7 @@ impl PdkIdentity {
             process: pdk.pdk.process.clone(),
             path,
             sha256,
+            source,
         }
     }
 }
