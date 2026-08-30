@@ -71,7 +71,7 @@ pub struct ToolIdentity {
     pub version: &'static str,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct FileIdentity {
     pub path: String,
     pub sha256: String,

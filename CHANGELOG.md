@@ -11,10 +11,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - Add self-contained DFM JSON reports with native geometry and PDK source.
-- Support WASM builds for IPC and IR tooling.
+- Add WASM APIs for IPC-2581 import, export, and DFM.
 
 ### Fixed
 
+- Include standalone board outlines in Gerber exports.
 - Inherit symbol descriptions for non-generic BOM components.
 - Require external power IOs to have a net symbol or hierarchical label.
 - Complete the E48 and E192 standard value tables used by `e48()` and `e192()`.

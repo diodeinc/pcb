@@ -47,11 +47,13 @@ pub enum UnitFormat {
 /// outlines. `board-array` is the root step of the file with every repeat
 /// materialized, and is identical to `board` for a plain board file.
 #[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum LayoutTarget {
     /// The canonical source board, as if it were fabricated alone.
     Board,
     /// The file's root step with every nested repeat materialized.
+    #[default]
     #[cfg_attr(feature = "cli", value(name = "board-array", alias = "panel"))]
     BoardArray,
 }
@@ -66,7 +68,8 @@ impl LayoutTarget {
 }
 
 #[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum ViewMode {
     Bom,
     Assembly,

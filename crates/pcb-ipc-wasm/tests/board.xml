@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="designer">
+    <FunctionMode mode="ASSEMBLY"/>
+    <StepRef name="board"/>
+    <LayerRef name="TOP"/>
+    <LayerRef name="BOTTOM"/>
+    <LayerRef name="F.Mask"/>
+    <LayerRef name="B.Mask"/>
+    <LayerRef name="DRILL"/>
+    <BomRef name="bom"/>
+    <DictionaryStandard units="MILLIMETER">
+      <EntryStandard id="land"><Circle diameter="2"/></EntryStandard>
+    </DictionaryStandard>
+  </Content>
+  <LogisticHeader>
+    <Role id="designer" roleFunction="DESIGNER"/>
+    <Enterprise id="enterprise" name="Example" code="EXAMPLE"/>
+    <Person name="designer" enterpriseRef="enterprise" roleRef="designer"/>
+  </LogisticHeader>
+  <HistoryRecord number="1" origination="2026-08-01T00:00:00Z" software="test" lastChange="2026-08-01T00:00:00Z">
+    <FileRevision fileRevisionId="1" comment="WASM integration fixture">
+      <SoftwarePackage name="test" vendor="test" revision="1">
+        <Certification certificationStatus="SELFTEST"/>
+      </SoftwarePackage>
+    </FileRevision>
+  </HistoryRecord>
+  <Bom name="bom">
+    <BomHeader assembly="board" revision="1"><StepRef name="board"/></BomHeader>
+    <BomItem OEMDesignNumberRef="TEST-PART" quantity="1" category="ELECTRICAL" pinCount="1">
+      <RefDes name="J1" packageRef="connector" populate="true" layerRef="TOP"/>
+      <Characteristics category="ELECTRICAL"><Textual definitionSource="test" textualCharacteristicName="Value" textualCharacteristicValue="Connector"/><Textual definitionSource="test" textualCharacteristicName="Package" textualCharacteristicValue="connector"/></Characteristics>
+    </BomItem>
+  </Bom>
+  <Ecad name="wasm-test">
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Layer name="CORE" layerFunction="DIELECTRIC" side="INTERNAL" polarity="POSITIVE"/>
+      <Layer name="BOTTOM" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>
+      <Layer name="F.Mask" layerFunction="SOLDERMASK" side="TOP" polarity="POSITIVE"/>
+      <Layer name="B.Mask" layerFunction="SOLDERMASK" side="BOTTOM" polarity="POSITIVE"/>
+      <Layer name="DRILL" layerFunction="DRILL" side="ALL" polarity="POSITIVE"><Span fromLayer="TOP" toLayer="BOTTOM"/></Layer>
+      <Stackup name="Primary" overallThickness="1.57" tolPlus="0" tolMinus="0" whereMeasured="METAL" stackupStatus="PROPOSED">
+        <StackupGroup name="Primary_Group" thickness="1.57" tolPlus="0" tolMinus="0">
+          <StackupLayer layerOrGroupRef="TOP" thickness="0.035" tolPlus="0" tolMinus="0" sequence="0"/>
+          <StackupLayer layerOrGroupRef="CORE" thickness="1.5" tolPlus="0" tolMinus="0" sequence="1"/>
+          <StackupLayer layerOrGroupRef="BOTTOM" thickness="0.035" tolPlus="0" tolMinus="0" sequence="2"/>
+        </StackupGroup>
+      </Stackup>
+      <Step name="board" type="BOARD">
+        <PadStackDef name="padstack">
+          <PadstackPadDef layerRef="TOP" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="land"/></PadstackPadDef>
+          <PadstackPadDef layerRef="BOTTOM" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="land"/></PadstackPadDef>
+          <PadstackPadDef layerRef="F.Mask" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="land"/></PadstackPadDef>
+          <PadstackPadDef layerRef="B.Mask" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="land"/></PadstackPadDef>
+        </PadStackDef>
+        <Datum x="0" y="0"/>
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="30" y="0"/>
+            <PolyStepSegment x="30" y="20"/>
+            <PolyStepSegment x="0" y="20"/>
+            <PolyStepSegment x="0" y="0"/>
+          </Polygon>
+        </Profile>
+        <Package name="connector" type="OTHER" pinOne="1" pinOneOrientation="OTHER">
+          <Outline><Polygon><PolyBegin x="-1" y="-1"/><PolyStepSegment x="1" y="-1"/><PolyStepSegment x="1" y="1"/><PolyStepSegment x="-1" y="1"/><PolyStepSegment x="-1" y="-1"/></Polygon><LineDesc lineWidth="0.1" lineEnd="ROUND"/></Outline>
+        </Package>
+        <Component refDes="J1" packageRef="connector" part="TEST-PART" layerRef="TOP" mountType="THMT">
+          <Location x="5" y="5"/>
+        </Component>
+        <LayerFeature layerRef="TOP">
+          <Set net="GND"><Pad padstackDefRef="padstack"><Location x="5" y="5"/><StandardPrimitiveRef id="land"/><PinRef componentRef="J1" pin="1"/></Pad></Set>
+          <Set net="GND"><Features><Line startX="10" startY="10" endX="20" endY="10"><LineDesc lineWidth="0.1" lineEnd="ROUND"/></Line></Features></Set>
+        </LayerFeature>
+        <LayerFeature layerRef="BOTTOM">
+          <Set net="GND"><Pad padstackDefRef="padstack"><Location x="5" y="5"/><StandardPrimitiveRef id="land"/><PinRef componentRef="J1" pin="1"/></Pad></Set>
+        </LayerFeature>
+        <LayerFeature layerRef="F.Mask">
+          <Set><Pad padstackDefRef="padstack"><Location x="5" y="5"/><StandardPrimitiveRef id="land"/><PinRef componentRef="J1" pin="1"/></Pad></Set>
+          <Set><Pad padstackDefRef="padstack"><Location x="7.1" y="5"/><StandardPrimitiveRef id="land"/></Pad></Set>
+        </LayerFeature>
+        <LayerFeature layerRef="B.Mask">
+          <Set><Pad padstackDefRef="padstack"><Location x="5" y="5"/><StandardPrimitiveRef id="land"/><PinRef componentRef="J1" pin="1"/></Pad></Set>
+        </LayerFeature>
+        <LayerFeature layerRef="DRILL">
+          <Set net="GND"><Hole name="H1" diameter="1" platingStatus="PLATED" x="5" y="5" plusTol="0" minusTol="0"/></Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>

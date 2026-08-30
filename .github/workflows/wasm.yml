@@ -20,7 +20,7 @@ permissions:
 
 jobs:
   ipc:
-    name: Portable IPC libraries
+    name: IPC, IR, and DFM runtime
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 30
     steps:
@@ -34,8 +34,25 @@ jobs:
           target: wasm32-unknown-unknown
           cache-bin: false
 
+      - uses: taiki-e/install-action@b6b84cf49ebfe0176417bdce007c624f0db37f20 # v2.86.2
+        with:
+          tool: wasm-pack
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+
       - name: Check portable Rust libraries
         run: cargo check --locked --target wasm32-unknown-unknown -p ipc2581 -p pcb-ir -p gerberx2 -p pcb-ipc2581-tools --no-default-features
+
+      - name: Build IPC WASM package
+        run: ./bin/build-wasm-bundle.sh ipc
+
+      - name: Exercise IPC and DFM in JavaScript
+        run: node crates/pcb-ipc-wasm/scripts/smoke.mjs
+
+      - name: Check TypeScript API usage
+        run: npx --yes --package typescript@5.9.3 tsc --noEmit --strict --module nodenext --moduleResolution nodenext --target es2022 --lib es2022,dom crates/pcb-ipc-wasm/scripts/typecheck.ts
 
   wasm:
     name: Evaluate publish bundles

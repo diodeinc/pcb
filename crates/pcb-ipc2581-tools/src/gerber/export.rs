@@ -89,6 +89,18 @@ pub(crate) fn build_gerber_x2_files_from_design_with_options(
     view: ArtworkScope,
     options: &GerberExportOptions,
 ) -> Result<Vec<GerberX2File>> {
+    // With no repeated instances, a board-array request denotes this board
+    // itself. Use the board path so its Step/Profile remains authoritative
+    // even when the source has no BOARD_OUTLINE layer artwork.
+    let view = if view == ArtworkScope::ArrayFlattened
+        && imported.geometry.layout.repeats.is_empty()
+        && pcb_ir::dialects::ipc::root_step(&imported.geometry)
+            .is_some_and(|(_, step)| step.kind == pcb_ir::dialects::ipc::LayoutStepKind::Board)
+    {
+        ArtworkScope::Board
+    } else {
+        view
+    };
     let mut files = Vec::new();
     let plans = export_layer_plans(imported, &imported.layer_definitions);
     let has_profile_plan = plans
@@ -2311,6 +2323,72 @@ mod tests {
         assert!(edge_cuts.contents.contains("%TA.AperFunction,Profile*%"));
         assert!(edge_cuts.contents.contains("%ADD10C,0.05*%"));
         gerberx2::GerberX2::parse(&edge_cuts.contents).unwrap();
+    }
+
+    #[test]
+    fn standalone_profile_export_matches_both_layout_targets() {
+        for outline_layer in [
+            "",
+            r#"<Layer name="Edge.Cuts" layerFunction="BOARD_OUTLINE" side="ALL" polarity="POSITIVE"/>"#,
+        ] {
+            let ipc = ipc::Ipc2581::parse(&format!(
+                r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner"><FunctionMode mode="FABRICATION"/><StepRef name="board"/></Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      {outline_layer}
+      <Step name="board" type="BOARD">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="10" y="0"/>
+            <PolyStepSegment x="10" y="5"/>
+            <PolyStepSegment x="0" y="5"/>
+            <PolyStepSegment x="0" y="0"/>
+          </Polygon>
+          <Cutout>
+            <PolyBegin x="2" y="2"/>
+            <PolyStepSegment x="3" y="2"/>
+            <PolyStepSegment x="3" y="3"/>
+            <PolyStepSegment x="2" y="3"/>
+            <PolyStepSegment x="2" y="2"/>
+          </Cutout>
+        </Profile>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+            ))
+            .unwrap();
+            let board = build_manufacturing_package(&ipc, ArtworkScope::Board).unwrap();
+            let array = build_manufacturing_package(&ipc, ArtworkScope::ArrayFlattened).unwrap();
+            assert_eq!(
+                board
+                    .files
+                    .iter()
+                    .map(|f| (&f.filename, &f.contents))
+                    .collect::<Vec<_>>(),
+                array
+                    .files
+                    .iter()
+                    .map(|f| (&f.filename, &f.contents))
+                    .collect::<Vec<_>>(),
+            );
+            let profile = &array
+                .files
+                .iter()
+                .find(|f| f.filename == "Edge_Cuts.gm1")
+                .unwrap()
+                .contents;
+            assert!(profile.contains("%TF.FileFunction,Profile,NP*%"));
+            assert!(profile.contains("%TF.Part,Single*%"));
+            let parsed = gerberx2::GerberX2::parse(profile).unwrap();
+            let geometry = gerberx2::geometry::extract_document(&parsed);
+            geometry.validate().unwrap();
+            assert_eq!(geometry.layers[0].objects.count, 8);
+        }
     }
 
     #[test]

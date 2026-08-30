@@ -1,0 +1,22 @@
+schema_version = 1
+
+[pdk]
+id = "wasm-test"
+name = "WASM integration process"
+revision = "1"
+
+[capabilities.stackup]
+minimum_copper_layer_count = 2
+maximum_copper_layer_count = 4
+
+[capabilities.drilling]
+minimum_pth_hole_diameter = "1.2 mm"
+minimum_hole_to_hole_clearance = "0.2 mm"
+
+[capabilities.copper]
+minimum_feature_width = "0.2 mm"
+minimum_pth_annular_ring = "0.2 mm"
+minimum_board_edge_clearance = "0.25 mm"
+
+[capabilities.soldermask]
+minimum_web = "0.2 mm"

@@ -44,7 +44,7 @@ fn dfm_resolves_zen_exports_temporary_ipc_and_checks_standard_pdk() {
         .write("eda/BMI270.kicad_sym", SYMBOL);
 
     let output = run_pcbc(&mut sandbox, ["dfm", "MyBoard.zen", "--pdk", "standard"]);
-    let report: Value =
+    let mut report: Value =
         serde_json::from_slice(&output.stdout).expect("stdout should contain only the DFM report");
 
     assert_eq!(report["pdk"]["path"], "builtin:standard");
@@ -81,10 +81,17 @@ fn dfm_resolves_zen_exports_temporary_ipc_and_checks_standard_pdk() {
     );
     assert!(file_output.stdout.is_empty());
     assert_eq!(file_output.status.code(), output.status.code());
-    let file_report = read_report(&sandbox, "report.dfm.json");
+    let mut file_report = read_report(&sandbox, "report.dfm.json");
     assert!(!Path::new(file_report["input"]["path"].as_str().unwrap()).exists());
-    // Each .zen invocation exports a new temporary IPC file. The checked
-    // geometry, fabrication settings, and diagnostics must still agree.
+    // Each .zen run asks KiCad for new IPC, which can reorder independent
+    // features. Compare scene metadata here; the fixed-IPC test below checks
+    // exact SVG parity as well as the full checked geometry.
+    for generated in [&mut report, &mut file_report] {
+        for pass in generated["scene"]["passes"].as_array_mut().unwrap() {
+            let svg = pass.as_object_mut().unwrap().remove("svg").unwrap();
+            assert!(svg.as_str().unwrap().starts_with("<svg "));
+        }
+    }
     for field in [
         "pdk",
         "layout_target",

@@ -19,8 +19,10 @@ use crate::accessors::IpcAccessor;
 use crate::placement::extract_single_board_placements;
 
 #[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum CplSideFilter {
+    #[default]
     Both,
     Top,
     Bottom,
