@@ -16,7 +16,7 @@ use starlark::{
     errors::{EvalMessage, EvalSeverity},
     eval::{Evaluator, FileLoader},
     syntax::{AstModule, Dialect},
-    values::{FrozenHeapName, FrozenValue, Heap, Value, ValueLike},
+    values::{FrozenHeapName, FrozenValue, Value, ValueLike},
 };
 use starlark::{codemap::ResolvedSpan, collections::SmallMap};
 use starlark_syntax::syntax::{
@@ -1107,40 +1107,6 @@ pub struct EvalContext {
     json_inputs: SmallMap<String, serde_json::Value>,
 }
 
-/// Helper to recursively convert JSON to heap values
-fn json_value_to_heap_value<'v>(json: &serde_json::Value, heap: Heap<'v>) -> Value<'v> {
-    use starlark::values::dict::AllocDict;
-    match json {
-        serde_json::Value::Null => Value::new_none(),
-        serde_json::Value::Bool(b) => Value::new_bool(*b),
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                heap.alloc(i as i32)
-            } else if let Some(f) = n.as_f64() {
-                heap.alloc(starlark::values::float::StarlarkFloat(f))
-            } else {
-                panic!("Invalid number")
-            }
-        }
-        serde_json::Value::String(s) => heap.alloc_str(s).to_value(),
-        serde_json::Value::Array(arr) => {
-            let mut values = Vec::new();
-            for item in arr {
-                values.push(json_value_to_heap_value(item, heap));
-            }
-            heap.alloc(values)
-        }
-        serde_json::Value::Object(obj) => {
-            let mut pairs = Vec::new();
-            for (k, v) in obj {
-                let val = json_value_to_heap_value(v, heap);
-                pairs.push((heap.alloc_str(k).to_value(), val));
-            }
-            heap.alloc(AllocDict(pairs))
-        }
-    }
-}
-
 impl EvalContext {
     /// Create a new EvalContext with a fresh session.
     ///
@@ -1377,7 +1343,7 @@ impl EvalContext {
                 module_value.add_input(name.clone(), value.to_value());
             }
             for (name, json) in self.json_inputs.iter() {
-                module_value.add_input(name.clone(), json_value_to_heap_value(json, heap));
+                module_value.add_input(name.clone(), heap.alloc(json));
             }
             let parent_modifiers = self
                 .pending_parent_component_modifiers

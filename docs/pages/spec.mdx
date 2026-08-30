@@ -53,22 +53,14 @@ TPS54331 = Module("code.diode.computer/diode/registry/components/TPS54331/TPS543
 The toolchain supplies the virtual `@stdlib` package. Do not declare it in
 `[dependencies]`.
 
-Remote package URLs omit versions. Declare each version in `pcb.toml` so import
-statements remain stable across upgrades:
+Remote package URLs omit versions. Declare each version in `pcb.toml`:
 
 ```toml
 [dependencies]
 "code.diode.computer/diode/registry/components/TPS54331" = "1.0"
 ```
 
-### Dependency resolution
-
-Remote package URLs do not include versions. Declare versions in `pcb.toml`, then
-run `pcb sync` to reconcile imports and hydrate dependency manifests. `@stdlib`
-is toolchain-managed and implicit.
-
-See [Packages](/pages/packages) for version resolution, package manifests, and
-dependency commands.
+See [Packages](/pages/packages) for version resolution and `pcb sync`.
 
 ### Repository layouts
 
@@ -108,16 +100,14 @@ path = "MainBoard.zen"
 description = "Replace with concise board description."
 ```
 
-- `name`: Optional Diode workspace name override for board release uploads. When omitted, publish uses the first path segment of `repository`, such as `myorg` from `github.com/myorg/MainBoard`.
-- `repository`: Git remote URL (used to derive package URLs for publishing)
-- `pcb-version`: Required `pcbc` toolchain lane, such as `"0.3"`, `"0.4"`, or `"nightly"`. `pcb` selects the newest patch in a semver lane, installing it if needed. Project commands use this lane. `pcb auth` and `pcb migrate` use latest stable; `pcb migrate` updates this field after successful migrations. An explicit `+<toolchain>` override always wins.
-- `endpoint`: Optional Diode host suffix used for workspace-scoped app/API URLs. `"diode.computer"` resolves to `app.diode.computer` and `api.diode.computer`.
-- `[board]`: Defines the repository's buildable board with `name`, entry `path`, and a short `description`
+- `name`: Optional Diode workspace name override for board release uploads. When omitted, publish uses the first path segment of `repository`.
+- `repository`: Git remote URL used to derive package URLs
+- `pcb-version`: Required toolchain lane (`"0.3"`, `"0.4"`, or `"nightly"`)
+- `endpoint`: Optional Diode host suffix for workspace-scoped app/API URLs
+- `[board]`: The repository's buildable board (`name`, entry `path`, `description`)
 
-Older workspace formats are no longer supported. Update legacy manifests and
-imports before building with the current toolchain.
 Only the workspace root `pcb.toml` may contain a `[workspace]` section.
-Board dependencies are also declared in the root manifest's `[dependencies]` table.
+Board dependencies are declared in the root manifest's `[dependencies]` table.
 
 #### Registry repository
 
@@ -210,9 +200,6 @@ If a net constructor omits `name`, the assigned variable name is used when avail
 CLK = Net()       # equivalent to Net("CLK")
 VDD = Power()     # equivalent to Power("VDD")
 ```
-
-If the explicit name duplicates the inferred assignment name, Zener reports
-style advice because the explicit name is redundant.
 
 Explicit constructor names still win. Regular nets must either have a name or be
 assigned where a name can be inferred:
@@ -501,8 +488,6 @@ For example, `io(Power(voltage="1.8V - 3.6V"))` requires any supplied `Power` ne
 Use `direction` only for one-way signal or power flow. Leave shared rails such
 as `GND` as plain `io()` declarations.
 
-When the explicit `name` matches the assigned variable name, omitting it is the preferred style and emits no redundancy advice.
-
 `input(name, typ_or_template, ...)` and `output(name, typ_or_template, ...)` are equivalent to `io(...)` with `direction="input"` or `direction="output"` respectively, and they also support omitted explicit names when assigned to top-level variables.
 
 ```python
@@ -539,9 +524,7 @@ output_voltage = config(
 )
 ```
 
-Values passed by the parent are automatically converted to the declared type when possible. String inputs can coerce to primitives (`"true"` → `True`, `"42"` → `42`, `"3.3"` → `3.3`), physical quantities (`"10k"` → `Resistance("10k")`), and enum variants (`"0603"` → `Package("0603")`). This is why `Resistor(name="R1", value="10k", package="0603", ...)` works even though `value` expects `Resistance` and `package` expects `Package`. When `allowed` is present, both the allowed set and the provided value are normalized through that same coercion path before membership is checked, and physical values are surfaced using their canonical formatting.
-
-As with `io()`, repeating the assigned variable name as an explicit `config()` name is redundant and triggers a style advice.
+Parent values convert to the declared type when possible. Strings coerce to primitives (`"true"` → `True`, `"42"` → `42`, `"3.3"` → `3.3`), physical quantities (`"10k"` → `Resistance("10k")`), and enum variants (`"0603"` → `Package("0603")`). When `allowed` is present, both the allowed set and the provided value use that same coercion path before membership is checked.
 
 ### Write a module
 
@@ -662,8 +645,6 @@ r = e96(Resistance("4.8k"))  # → 4.87kΩ (nearest E96 value)
 ## Schematic position comments
 
 Zener supports persisted schematic placement metadata in trailing comment blocks.
-These comments are consumed by tooling and surfaced in netlist output.
-**Do not edit these comments directly.**
 
 Canonical line format:
 
