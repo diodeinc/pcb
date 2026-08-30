@@ -1,17 +1,25 @@
 use std::cmp::Ordering;
+#[cfg(feature = "cli")]
 use std::fs;
+#[cfg(feature = "cli")]
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+#[cfg(feature = "cli")]
+use std::path::Path;
+use std::path::PathBuf;
 
+#[cfg(feature = "cli")]
 use anyhow::Result;
-use clap::ValueEnum;
+#[cfg(feature = "cli")]
 use ipc2581::Ipc2581;
 use pcb_ir::dialects::placement::{Document as PlacementDocument, Placement, PlacementSide};
 
+#[cfg(feature = "cli")]
 use crate::accessors::IpcAccessor;
+#[cfg(feature = "cli")]
 use crate::placement::extract_single_board_placements;
 
-#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CplSideFilter {
     Both,
     Top,
@@ -25,6 +33,7 @@ pub struct CplOptions {
     pub exclude_dnp: bool,
 }
 
+#[cfg(feature = "cli")]
 pub fn execute(file: &Path, options: &CplOptions) -> Result<()> {
     let ipc = Ipc2581::parse_file(file)?;
     let accessor = IpcAccessor::new(&ipc);

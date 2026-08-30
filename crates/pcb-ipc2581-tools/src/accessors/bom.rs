@@ -1,10 +1,16 @@
 use std::collections::BTreeMap;
 
 use ipc2581::types::{BomCategory, Characteristics};
-use pcb_sch::bom::Alternative;
 use serde::{Deserialize, Serialize};
 
 use super::IpcAccessor;
+
+/// A manufacturer-qualified alternative from IPC characteristics or AVL data.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Alternative {
+    pub mpn: String,
+    pub manufacturer: String,
+}
 
 /// BOM statistics
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,7 +35,7 @@ impl BomStats {
 /// This is an intermediate representation that decouples raw IPC-2581
 /// data from the output format. Commands can use this to build their
 /// own domain-specific models.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Serialize)]
 pub struct CharacteristicsData {
     pub package: Option<String>,
     pub value: Option<String>,

@@ -15,12 +15,14 @@ pcb-sexpr = { workspace = true }
 
 [dependencies]
 anyhow = { workspace = true }
-base64 = { workspace = true }
 boostvoronoi = { workspace = true }
 i_overlay = { workspace = true }
 ipc2581 = { workspace = true }
 kurbo = { workspace = true }
 resvg = { workspace = true }
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+base64 = { workspace = true }
 terminal_size = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

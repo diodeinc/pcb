@@ -30,6 +30,7 @@ pub fn render_layer_png(
     pcb_ir::render::artwork_png(&artwork, &pcb_ir::render::RenderOptions::default())
 }
 
+#[cfg(feature = "cli")]
 pub fn render_layer_terminal(
     geometry: &GeometryDocument,
     include_profiles: bool,

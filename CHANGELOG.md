@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - Add self-contained DFM JSON reports with native geometry and PDK source.
+- Support WASM builds for IPC and IR tooling.
 
 ### Fixed
 

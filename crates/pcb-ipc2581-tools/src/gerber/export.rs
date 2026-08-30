@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
+#[cfg(feature = "cli")]
 use std::fmt::Write as _;
+#[cfg(feature = "cli")]
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -18,18 +20,25 @@ use pcb_ir::dialects::artwork::{
     Aperture, ApertureShape, Geometry as ArtworkGeometry, GridRepeat, Object as ArtworkObject,
     PaintOrder, PaintStage,
 };
+#[cfg(feature = "cli")]
+use pcb_ir::dialects::ipc::relief;
 use pcb_ir::dialects::ipc::{
     ArtworkLowering, ArtworkObjectKind, ArtworkScope, CopperBalanceKind, Feature, FeatureBucket,
     FeatureDomain, FeatureOperation, FeatureRole, FiducialKind, LayoutPurpose, PlatingKind,
     PrimitiveRef, ProfileSet, lower_layer_to_artwork_objects_with, lower_layer_to_artwork_with,
-    profile_occurrences_for, relief,
+    profile_occurrences_for,
 };
 use pcb_ir::dialects::{LayerRole, Side as IrSide};
-use pcb_ir::geom::path::{ContourBuf, PathCmd, PathOp};
+use pcb_ir::geom::path::ContourBuf;
+#[cfg(feature = "cli")]
+use pcb_ir::geom::path::{PathCmd, PathOp};
 use pcb_ir::geom::{
-    Affine2, Arc, BBox, LineCap, LineJoin, LinePattern, Paint, Point, Polarity, Span, StrokeStyle,
+    Affine2, BBox, LineCap, LineJoin, LinePattern, Paint, Point, Polarity, Span, StrokeStyle,
 };
 use pcb_ir::import::ipc2581::{ImportedDesign, LayerId, import_design};
+
+#[cfg(feature = "cli")]
+use pcb_ir::geom::Arc;
 
 type IpcGeometryDocument = pcb_ir::dialects::ipc::Document<ipc2581::Symbol, LayerFunction>;
 
@@ -810,6 +819,11 @@ fn board_array_profile_gerber_files(
 ) -> Result<Vec<GerberX2File>> {
     let doc = &imported.geometry;
     let score_lines = geometry::board_array_vscore_lines_from_design(imported)?;
+    #[cfg(not(feature = "cli"))]
+    if relief_debug_dir.is_some() {
+        bail!("filesystem debug output requires the cli feature");
+    }
+    #[cfg(feature = "cli")]
     let profile = if let Some(debug_dir) = relief_debug_dir {
         let (profile, relief_debug) =
             geometry::board_array_fabrication_profile_from_design_with_debug(
@@ -822,6 +836,9 @@ fn board_array_profile_gerber_files(
     } else {
         geometry::board_array_fabrication_profile_from_design(imported, doc, &score_lines)?
     };
+    #[cfg(not(feature = "cli"))]
+    let profile =
+        geometry::board_array_fabrication_profile_from_design(imported, doc, &score_lines)?;
     if profile.purpose == LayoutPurpose::Product {
         let mut contour_groups = profile.array_outlines;
         contour_groups.push(profile.material_removal);
@@ -899,6 +916,7 @@ fn profile_gerber_file(
     }))
 }
 
+#[cfg(feature = "cli")]
 fn write_vscore_relief_debug(output_dir: &Path, debug: &relief::VScoreReliefDebug) -> Result<()> {
     let Some(svg) = render_vscore_relief_debug_svg(debug) else {
         return Ok(());
@@ -918,6 +936,7 @@ fn write_vscore_relief_debug(output_dir: &Path, debug: &relief::VScoreReliefDebu
     })
 }
 
+#[cfg(feature = "cli")]
 fn render_vscore_relief_debug_svg(debug: &relief::VScoreReliefDebug) -> Option<String> {
     if debug.entries.is_empty() {
         return None;
@@ -1041,6 +1060,7 @@ fn render_vscore_relief_debug_svg(debug: &relief::VScoreReliefDebug) -> Option<S
 }
 
 #[derive(Debug, Clone, Copy)]
+#[cfg(feature = "cli")]
 struct DebugSvgPathStyle {
     class_name: &'static str,
     fill: &'static str,
@@ -1049,6 +1069,7 @@ struct DebugSvgPathStyle {
     extra_attrs: &'static str,
 }
 
+#[cfg(feature = "cli")]
 fn write_debug_path(
     svg: &mut String,
     entry_index: usize,
@@ -1066,6 +1087,7 @@ fn write_debug_path(
     .unwrap();
 }
 
+#[cfg(feature = "cli")]
 fn debug_path_data(payloads: &[ContourBuf]) -> Option<String> {
     let mut data = String::new();
     for payload in payloads {
@@ -1074,6 +1096,7 @@ fn debug_path_data(payloads: &[ContourBuf]) -> Option<String> {
     (!data.is_empty()).then_some(data)
 }
 
+#[cfg(feature = "cli")]
 fn append_debug_path_cmds(data: &mut String, cmds: &[PathCmd]) {
     let mut current = Point::default();
     for cmd in cmds {
@@ -1112,6 +1135,7 @@ fn append_debug_path_cmds(data: &mut String, cmds: &[PathCmd]) {
     }
 }
 
+#[cfg(feature = "cli")]
 fn write_debug_arc(data: &mut String, start: Point, end: Point, center: Point, clockwise: bool) {
     let radius = start.distance_to(center);
     if radius <= 1e-9 {
@@ -1132,6 +1156,7 @@ fn write_debug_arc(data: &mut String, start: Point, end: Point, center: Point, c
     write_debug_svg_arc(data, radius, large_arc, sweep_flag, end);
 }
 
+#[cfg(feature = "cli")]
 fn write_debug_svg_arc(data: &mut String, radius: f64, large_arc: u8, sweep_flag: u8, end: Point) {
     write!(
         data,
@@ -1144,12 +1169,14 @@ fn write_debug_svg_arc(data: &mut String, radius: f64, large_arc: u8, sweep_flag
     .unwrap();
 }
 
+#[cfg(feature = "cli")]
 fn payloads_bbox(payloads: &[ContourBuf]) -> BBox {
     payloads
         .iter()
         .fold(BBox::empty(), |bbox, payload| bbox.union(payload.bbox))
 }
 
+#[cfg(feature = "cli")]
 fn debug_num(value: f64) -> String {
     let mut text = format!("{value:.6}");
     while text.contains('.') && text.ends_with('0') {
@@ -1602,10 +1629,10 @@ fn fiducial_aperture_function(feature: &Feature<ipc2581::Symbol>) -> Vec<String>
 mod tests {
     use super::*;
     use crate::ipc2581 as ipc;
-    use crate::manufacturing::{
-        ManufacturingExportOptions, ManufacturingFileKind, build_manufacturing_package,
-        export_manufacturing_package,
-    };
+    #[cfg(feature = "cli")]
+    use crate::manufacturing::{ManufacturingExportOptions, export_manufacturing_package};
+    use crate::manufacturing::{ManufacturingFileKind, build_manufacturing_package};
+    #[cfg(feature = "cli")]
     use std::io::{Cursor, Read};
 
     #[test]
@@ -2743,6 +2770,7 @@ mod tests {
         assert!(npth.contents.contains("X3.0Y4.0"));
     }
 
+    #[cfg(feature = "cli")]
     #[test]
     fn gerber_export_writes_zip_when_output_has_zip_extension() {
         let ipc = ipc::Ipc2581::parse(
@@ -3110,6 +3138,7 @@ mod tests {
         assert!(score.contents.contains("%TA.AperFunction,Other,Score*%"));
     }
 
+    #[cfg(feature = "cli")]
     #[test]
     fn real_board_export_parseback_and_svg_paths_smoke() {
         let compressed = include_bytes!("../../../ipc2581/tests/data/DM0002-IPC-2518.xml.zst");

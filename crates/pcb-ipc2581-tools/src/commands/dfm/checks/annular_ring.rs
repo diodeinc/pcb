@@ -35,6 +35,7 @@
 use pcb_ir::geom::dfm::{BBoxIndex, Distance, circular_region};
 use pcb_ir::geom::region::difference_rings;
 use pcb_ir::geom::{BBox, ContourSet, FillRule, Point};
+#[cfg(not(target_family = "wasm"))]
 use rayon::prelude::*;
 
 use crate::commands::dfm::design::{CopperLayer, Design, Hole, HoleClass, HoleLand, Land};
@@ -57,8 +58,12 @@ pub(super) fn evaluate(limit_mm: f64, class: HoleClass, design: &Design) -> Eval
     let copper_layers = &design.copper_layers;
     let hole_lands = &design.hole_lands;
     let boundaries = &design.copper_boundaries;
-    let ring_indices = copper_layers
-        .par_iter()
+    #[cfg(not(target_family = "wasm"))]
+    let layers = copper_layers.par_iter();
+    #[cfg(target_family = "wasm")]
+    let layers = copper_layers.iter();
+    let ring_indices = layers
+        .clone()
         .map(|layer| {
             BBoxIndex::new(
                 layer
@@ -79,13 +84,15 @@ pub(super) fn evaluate(limit_mm: f64, class: HoleClass, design: &Design) -> Eval
         .iter()
         .map(|(_, hole)| hole.center)
         .collect::<Vec<_>>();
-    let contains = copper_layers
-        .par_iter()
+    let contains = layers
         .map(|layer| layer.image.contains_points_batch(&centers))
         .collect::<Vec<_>>();
 
+    #[cfg(not(target_family = "wasm"))]
+    let holes = holes.par_iter();
+    #[cfg(target_family = "wasm")]
+    let holes = holes.iter();
     let per_hole = holes
-        .par_iter()
         .enumerate()
         .map(|(position, &(hole_index, hole))| {
             let radius = hole.diameter_mm / 2.0;

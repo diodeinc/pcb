@@ -132,3 +132,18 @@ layout.
 ```bash
 cargo test -p pcb-ipc2581-tools
 ```
+
+## In-memory library and WebAssembly
+
+Disable the default `cli` feature for `wasm32-unknown-unknown`. This excludes
+terminal output, network availability lookups, native Zstandard, and file
+command wrappers; native CLI behavior remains enabled by default.
+
+Import/export and DFM use the same implementations in both environments.
+`manufacturing::build_manufacturing_package_from_design` reuses an imported
+design; the resulting package exposes individual files and `to_zip()` for an
+in-memory archive.
+
+```bash
+cargo check -p pcb-ipc2581-tools --no-default-features --target wasm32-unknown-unknown
+```

@@ -12,6 +12,7 @@ pub use uppsala::XmlWriter;
 
 use checksum::validate_checksum;
 use parse::Parser;
+#[cfg(not(target_family = "wasm"))]
 use std::path::Path;
 use std::sync::LazyLock;
 use thiserror::Error;
@@ -82,6 +83,7 @@ pub fn validate(xml: &str) -> Result<()> {
 }
 
 /// Validate an IPC-2581 XML file against the vendored IPC-2581C XML Schema.
+#[cfg(not(target_family = "wasm"))]
 pub fn validate_file(path: impl AsRef<Path>) -> Result<()> {
     let xml = std::fs::read_to_string(path)?;
     validate(&xml)
@@ -107,6 +109,7 @@ impl Ipc2581 {
     }
 
     /// Validate an IPC-2581 XML file against the vendored IPC-2581C XML Schema.
+    #[cfg(not(target_family = "wasm"))]
     pub fn validate_file(path: impl AsRef<Path>) -> Result<()> {
         validate_file(path)
     }
@@ -148,6 +151,7 @@ impl Ipc2581 {
     }
 
     /// Parse IPC-2581 from file
+    #[cfg(not(target_family = "wasm"))]
     pub fn parse_file(path: impl AsRef<Path>) -> Result<Self> {
         let xml = std::fs::read_to_string(path)?;
         Self::parse(&xml)

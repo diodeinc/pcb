@@ -1,26 +1,34 @@
 use std::collections::{BTreeMap, BTreeSet};
+#[cfg(feature = "cli")]
 use std::path::Path;
 
+#[cfg(feature = "cli")]
+use crate::accessors::{BoardArrayInfo, StackupLayerType, SurfaceFinishInfo};
+#[cfg(feature = "cli")]
 use anyhow::Result;
+#[cfg(feature = "cli")]
 use colored::Colorize;
+#[cfg(feature = "cli")]
 use comfy_table::presets::UTF8_FULL_CONDENSED;
+#[cfg(feature = "cli")]
 use comfy_table::{Cell, Color, Table};
 use serde::Serialize;
 use serde_json::json;
 
-use crate::accessors::{
-    BoardArrayInfo, ColorInfo, DrillHoleType, DrillStats, IpcAccessor, StackupLayerType,
-    SurfaceFinishInfo,
-};
+use crate::accessors::{ColorInfo, DrillHoleType, DrillStats, IpcAccessor};
+#[cfg(feature = "cli")]
 use crate::utils::{file as file_utils, units};
+#[cfg(feature = "cli")]
 use crate::{OutputFormat, UnitFormat};
 
 /// Format a drill diameter in both mm and mils
+#[cfg(feature = "cli")]
 fn format_diameter(mm: f64) -> String {
     let mils = mm / 0.0254;
     format!("{:.3}mm ({:.1} mil)", mm, mils)
 }
 
+#[cfg(feature = "cli")]
 pub fn execute(file: &Path, format: OutputFormat, units: UnitFormat) -> Result<()> {
     let content = file_utils::load_ipc_file(file)?;
     let ipc = ipc2581::Ipc2581::parse(&content)?;
@@ -33,9 +41,8 @@ pub fn execute(file: &Path, format: OutputFormat, units: UnitFormat) -> Result<(
 }
 
 /// Format color with unicode block swatch
+#[cfg(feature = "cli")]
 fn format_color_with_swatch(color: &ColorInfo) -> String {
-    use colored::Colorize;
-
     let swatch = if let Some((r, g, b)) = color.rgb_color() {
         "■".truecolor(r, g, b)
     } else {
@@ -50,8 +57,8 @@ fn format_color_with_swatch(color: &ColorInfo) -> String {
 }
 
 /// Format surface finish with color swatch for well-known finishes
+#[cfg(feature = "cli")]
 fn format_surface_finish_with_swatch(finish: &SurfaceFinishInfo) -> String {
-    use colored::Colorize;
     let (r, g, b) = finish.rgb_color();
     let swatch = "■".truecolor(r, g, b);
     format!("{} {}", swatch, finish.name)
@@ -145,6 +152,7 @@ fn canonical_soldermask_kind(color: Option<&ColorInfo>) -> SoldermaskKind {
     SoldermaskKind::Other
 }
 
+#[cfg(feature = "cli")]
 fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
     // Board Summary header
     println!("{}", "Board Summary".bold());
@@ -523,6 +531,7 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "cli")]
 fn print_board_array_summary(
     board_array: &BoardArrayInfo,
     accessor: &IpcAccessor,
@@ -581,6 +590,7 @@ fn print_board_array_summary(
     println!();
 }
 
+#[cfg(feature = "cli")]
 fn print_drill_distribution(title: &str, drills: &DrillStats) {
     println!("{}", title.bold());
     let mut drill_table = Table::new();
@@ -649,7 +659,14 @@ fn drill_stats_json(drills: &DrillStats) -> serde_json::Value {
     })
 }
 
+#[cfg(feature = "cli")]
 fn output_json(accessor: &IpcAccessor) -> Result<()> {
+    println!("{}", serde_json::to_string_pretty(&info_json(accessor))?);
+    Ok(())
+}
+
+/// Extract the same board, assembly, and fabrication summary emitted by `ipc info --format json`.
+pub fn info_json(accessor: &IpcAccessor) -> serde_json::Value {
     let ipc = accessor.ipc();
     let content = ipc.content();
     let layer_side_map: BTreeMap<_, _> = ipc
@@ -929,6 +946,5 @@ fn output_json(accessor: &IpcAccessor) -> Result<()> {
 
     info["component_placements"] = json!(component_placements);
 
-    println!("{}", serde_json::to_string_pretty(&info)?);
-    Ok(())
+    info
 }

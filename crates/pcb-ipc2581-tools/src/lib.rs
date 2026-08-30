@@ -1,4 +1,3 @@
-use clap::ValueEnum;
 use ipc2581::Mode;
 
 pub mod accessors;
@@ -19,20 +18,23 @@ pub mod xnc;
 // Re-export ipc2581 for external use
 pub use ipc2581;
 
-#[derive(ValueEnum, Debug, Clone, Copy)]
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
+#[derive(Debug, Clone, Copy)]
 pub enum OutputFormat {
     Text,
     Json,
 }
 
-#[derive(ValueEnum, Debug, Clone, Copy)]
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
+#[derive(Debug, Clone, Copy)]
 pub enum RenderFormat {
     Auto,
     Svg,
     Png,
 }
 
-#[derive(ValueEnum, Debug, Clone, Copy)]
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
+#[derive(Debug, Clone, Copy)]
 pub enum UnitFormat {
     Mm,
     Mil,
@@ -44,12 +46,13 @@ pub enum UnitFormat {
 /// One vocabulary, one default, for every command that produces artwork or
 /// outlines. `board-array` is the root step of the file with every repeat
 /// materialized, and is identical to `board` for a plain board file.
-#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LayoutTarget {
     /// The canonical source board, as if it were fabricated alone.
     Board,
     /// The file's root step with every nested repeat materialized.
-    #[value(name = "board-array", alias = "panel")]
+    #[cfg_attr(feature = "cli", value(name = "board-array", alias = "panel"))]
     BoardArray,
 }
 
@@ -62,7 +65,8 @@ impl LayoutTarget {
     }
 }
 
-#[derive(ValueEnum, Debug, Clone, Copy)]
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
+#[derive(Debug, Clone, Copy)]
 pub enum ViewMode {
     Bom,
     Assembly,

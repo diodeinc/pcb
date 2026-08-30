@@ -19,6 +19,24 @@ permissions:
   packages: read
 
 jobs:
+  ipc:
+    name: Portable IPC libraries
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
+        with:
+          target: wasm32-unknown-unknown
+          cache-bin: false
+
+      - name: Check portable Rust libraries
+        run: cargo check --locked --target wasm32-unknown-unknown -p ipc2581 -p pcb-ir -p gerberx2 -p pcb-ipc2581-tools --no-default-features
+
   wasm:
     name: Evaluate publish bundles
     runs-on: blacksmith-16vcpu-ubuntu-2404

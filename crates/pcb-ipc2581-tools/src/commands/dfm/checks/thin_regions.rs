@@ -33,59 +33,63 @@ use pcb_ir::geom::dfm::{
     RegionBoundaryIndex, ThinPiece, circular_region, thin_features, thin_gaps,
 };
 use pcb_ir::geom::{BBox, ContourSet, Point, tol};
+#[cfg(not(target_family = "wasm"))]
 use rayon::prelude::*;
 
 use super::{Evaluation, Measured, MeasuredSite};
-use crate::commands::dfm::design::{CopperConductor, Design, MaskOwner};
+use crate::commands::dfm::design::{CopperConductor, CopperLayer, Design, MaskLayer, MaskOwner};
 use crate::commands::dfm::report::{Evidence, LayerRef, MeasurementKind, SourceLocator, Subject};
 
 pub(super) fn copper_feature_width(limit_mm: f64, design: &Design) -> Evaluation {
+    let measure = |layer: &CopperLayer| {
+        thin_features(&layer.image, limit_mm)
+            .into_iter()
+            .map(move |piece| {
+                let mut measured = measured_piece(&piece, limit_mm, &layer.layer, "copper_image");
+                // Prove ownership against final composed material. A bounding box
+                // is only a broad phase; overlapping owners remain ambiguous.
+                let construction =
+                    piece
+                        .sites
+                        .iter()
+                        .fold(piece.candidate.clone(), |region, site| {
+                            region.union(&circular_region(site.disk.center, site.disk.radius_mm))
+                        });
+                let owner = unique_copper_owner(&construction, &layer.conductors);
+                if let Some(owner) = owner {
+                    measured.subjects[0].provenance =
+                        copper_subject(design, owner, &layer.layer).provenance;
+                }
+                for (geometry, site) in piece.sites.iter().zip(&mut measured.sites) {
+                    let local_owner = owner.or_else(|| {
+                        let local = piece
+                            .candidate
+                            .intersection(&ContourSet::rectangle(
+                                geometry.bbox.expand(limit_mm / 2.0),
+                                tol::REGION_MM,
+                            ))
+                            .union(&circular_region(
+                                geometry.disk.center,
+                                geometry.disk.radius_mm,
+                            ));
+                        unique_copper_owner(&local, &layer.conductors)
+                    });
+                    if let Some(owner) = local_owner {
+                        site.subjects = vec![copper_subject(design, owner, &layer.layer)];
+                    }
+                }
+                measured
+            })
+            .collect::<Vec<_>>()
+    };
+    #[cfg(not(target_family = "wasm"))]
     let measured = design
         .copper_layers
         .par_iter()
-        .flat_map_iter(|layer| {
-            thin_features(&layer.image, limit_mm)
-                .into_iter()
-                .map(move |piece| {
-                    let mut measured =
-                        measured_piece(&piece, limit_mm, &layer.layer, "copper_image");
-                    // Prove ownership against final composed material. A bounding box
-                    // is only a broad phase; overlapping owners remain ambiguous.
-                    let construction =
-                        piece
-                            .sites
-                            .iter()
-                            .fold(piece.candidate.clone(), |region, site| {
-                                region
-                                    .union(&circular_region(site.disk.center, site.disk.radius_mm))
-                            });
-                    let owner = unique_copper_owner(&construction, &layer.conductors);
-                    if let Some(owner) = owner {
-                        measured.subjects[0].provenance =
-                            copper_subject(design, owner, &layer.layer).provenance;
-                    }
-                    for (geometry, site) in piece.sites.iter().zip(&mut measured.sites) {
-                        let local_owner = owner.or_else(|| {
-                            let local = piece
-                                .candidate
-                                .intersection(&ContourSet::rectangle(
-                                    geometry.bbox.expand(limit_mm / 2.0),
-                                    tol::REGION_MM,
-                                ))
-                                .union(&circular_region(
-                                    geometry.disk.center,
-                                    geometry.disk.radius_mm,
-                                ));
-                            unique_copper_owner(&local, &layer.conductors)
-                        });
-                        if let Some(owner) = local_owner {
-                            site.subjects = vec![copper_subject(design, owner, &layer.layer)];
-                        }
-                    }
-                    measured
-                })
-        })
+        .flat_map_iter(measure)
         .collect();
+    #[cfg(target_family = "wasm")]
+    let measured = design.copper_layers.iter().flat_map(measure).collect();
     Evaluation {
         checked: design.copper_layers.len(),
         measured,
@@ -93,51 +97,55 @@ pub(super) fn copper_feature_width(limit_mm: f64, design: &Design) -> Evaluation
 }
 
 pub(super) fn soldermask_web(limit_mm: f64, design: &Design) -> Evaluation {
+    let measure = |layer: &MaskLayer| {
+        let boundaries = layer
+            .owners
+            .iter()
+            .map(|owner| {
+                (
+                    owner.image.bbox,
+                    RegionBoundaryIndex::new(&owner.image, limit_mm),
+                )
+            })
+            .collect::<Vec<_>>();
+        thin_gaps(&layer.image, limit_mm)
+            .into_iter()
+            .map(move |piece| {
+                let mut measured =
+                    measured_piece(&piece, limit_mm, &layer.layer, "soldermask_image");
+                let mut aggregate_owner = None;
+                let mut one_owner = true;
+                for (geometry, site) in piece.sites.iter().zip(&mut measured.sites) {
+                    let Some(owners) = wall_owners(&geometry.walls, &boundaries) else {
+                        one_owner = false;
+                        continue;
+                    };
+                    if owners.len() != 1 || aggregate_owner.is_some_and(|owner| owners[0] != owner)
+                    {
+                        one_owner = false;
+                    }
+                    aggregate_owner = aggregate_owner.or_else(|| owners.first().copied());
+                    site.subjects = owners
+                        .into_iter()
+                        .map(|index| mask_subject(design, &layer.owners[index], &layer.layer))
+                        .collect();
+                }
+                if one_owner && let Some(index) = aggregate_owner {
+                    measured.subjects[0].provenance =
+                        mask_subject(design, &layer.owners[index], &layer.layer).provenance;
+                }
+                measured
+            })
+            .collect::<Vec<_>>()
+    };
+    #[cfg(not(target_family = "wasm"))]
     let measured = design
         .mask_layers
         .par_iter()
-        .flat_map_iter(|layer| {
-            let boundaries = layer
-                .owners
-                .iter()
-                .map(|owner| {
-                    (
-                        owner.image.bbox,
-                        RegionBoundaryIndex::new(&owner.image, limit_mm),
-                    )
-                })
-                .collect::<Vec<_>>();
-            thin_gaps(&layer.image, limit_mm)
-                .into_iter()
-                .map(move |piece| {
-                    let mut measured =
-                        measured_piece(&piece, limit_mm, &layer.layer, "soldermask_image");
-                    let mut aggregate_owner = None;
-                    let mut one_owner = true;
-                    for (geometry, site) in piece.sites.iter().zip(&mut measured.sites) {
-                        let Some(owners) = wall_owners(&geometry.walls, &boundaries) else {
-                            one_owner = false;
-                            continue;
-                        };
-                        if owners.len() != 1
-                            || aggregate_owner.is_some_and(|owner| owners[0] != owner)
-                        {
-                            one_owner = false;
-                        }
-                        aggregate_owner = aggregate_owner.or_else(|| owners.first().copied());
-                        site.subjects = owners
-                            .into_iter()
-                            .map(|index| mask_subject(design, &layer.owners[index], &layer.layer))
-                            .collect();
-                    }
-                    if one_owner && let Some(index) = aggregate_owner {
-                        measured.subjects[0].provenance =
-                            mask_subject(design, &layer.owners[index], &layer.layer).provenance;
-                    }
-                    measured
-                })
-        })
+        .flat_map_iter(measure)
         .collect();
+    #[cfg(target_family = "wasm")]
+    let measured = design.mask_layers.iter().flat_map(measure).collect();
     Evaluation {
         checked: design.mask_layers.len(),
         measured,

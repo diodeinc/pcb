@@ -1,5 +1,7 @@
 use std::collections::HashSet;
+#[cfg(feature = "cli")]
 use std::io::{self, Write};
+#[cfg(feature = "cli")]
 use std::path::Path;
 
 use super::board_array_auto::{
@@ -10,6 +12,7 @@ use crate::copper_balance::CopperBalanceReport;
 use crate::generated::GeneratedLayerFeature;
 use crate::geometry;
 use crate::ipc2581::Ipc2581;
+#[cfg(feature = "cli")]
 use crate::utils::file as file_utils;
 use crate::utils::format::fmt_num;
 use anyhow::{Context, Result, bail};
@@ -403,6 +406,7 @@ struct VcutLine {
     end_y_mm: f64,
 }
 
+#[cfg(feature = "cli")]
 pub fn execute(
     input: &Path,
     output: &Path,
@@ -416,6 +420,7 @@ pub fn execute(
     Ok(())
 }
 
+#[cfg(feature = "cli")]
 pub fn execute_auto(
     input: &Path,
     output: &Path,
@@ -429,6 +434,7 @@ pub fn execute_auto(
     Ok(())
 }
 
+#[cfg(feature = "cli")]
 fn print_copper_balance_summary(report: Option<&CopperBalanceReport>) {
     if let Some(report) = report {
         for line in report.summary_lines() {
@@ -437,6 +443,7 @@ fn print_copper_balance_summary(report: Option<&CopperBalanceReport>) {
     }
 }
 
+#[cfg(feature = "cli")]
 fn write_board_array_output(output: &Path, content: &str) -> Result<()> {
     if output.as_os_str() == "-" {
         io::stdout().lock().write_all(content.as_bytes())?;

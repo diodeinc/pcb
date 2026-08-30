@@ -6,10 +6,12 @@
 
 mod png;
 mod svg;
+#[cfg(not(target_family = "wasm"))]
 mod term;
 
 pub use png::{artwork_png, png};
 pub use svg::{artwork_svg, svg, svg_path_data};
+#[cfg(not(target_family = "wasm"))]
 pub use term::{artwork_to_terminal, can_render_to_terminal, to_terminal, write_kitty_png};
 
 use crate::dialects::{artwork, mask};

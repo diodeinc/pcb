@@ -1,30 +1,163 @@
 //! PDK-driven manufacturability checks for IPC-2581 geometry.
 
-use std::borrow::Cow;
-use std::io::Write;
-use std::path::{Path, PathBuf};
+#[cfg(feature = "cli")]
+use std::{
+    io::Write,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result, bail, ensure};
+use pcb_ir::import::ipc2581::ImportedDesign;
+#[cfg(any(feature = "cli", test))]
 use pcb_ir::import::ipc2581::import_design;
+#[cfg(feature = "cli")]
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::LayoutTarget;
+#[cfg(any(feature = "cli", test))]
 use crate::ipc2581::Ipc2581;
+#[cfg(feature = "cli")]
 use crate::utils::file as file_utils;
 
 mod builtin_pdks;
 mod checks;
 mod design;
 mod pdk;
-mod report;
+pub mod report;
 mod rules;
 mod scene;
 mod waivers;
 
+#[cfg(feature = "cli")]
 const MAX_REPORT_BYTES: usize = 128 * 1024 * 1024;
 const MAX_PDK_BYTES: usize = 1024 * 1024;
 
+pub use builtin_pdks::BuiltinPdk;
+pub use report::DfmReport;
+
+/// UTF-8 source and the caller-provided identity echoed into a report.
+/// `path` is a label; the in-memory API never reads it from a filesystem.
+#[derive(Debug, Clone, Copy)]
+pub struct TextSource<'a> {
+    pub path: &'a str,
+    pub source: &'a str,
+}
+
+/// A bundled PDK name or a caller-provided TOML document.
+#[derive(Debug)]
+pub enum PdkSource<'a> {
+    Builtin(&'a str),
+    Toml(TextSource<'a>),
+}
+
+/// Inputs to one DFM run over an already imported physical design.
+///
+/// The host supplies the source identity and timestamp so this API performs
+/// no filesystem, environment, or clock access. Waivers expire on the UTC
+/// date of `generated_at`; supplying the same inputs yields the same report.
+#[derive(Debug)]
+pub struct CheckRequest<'a> {
+    pub input: report::FileIdentity,
+    pub pdk: PdkSource<'a>,
+    pub waivers: Option<TextSource<'a>>,
+    pub layout_target: LayoutTarget,
+    pub generated_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// The bundled PDKs, including their exact TOML source.
+pub fn builtin_pdks() -> &'static [BuiltinPdk] {
+    builtin_pdks::BUILTIN_PDKS
+}
+
+/// Run DFM in memory, reusing the canonical imported design.
+///
+/// Manufacturing violations are successful results with a `fail` verdict;
+/// only invalid inputs or geometry that cannot be checked return an error.
+pub fn check(imported: &ImportedDesign, request: CheckRequest<'_>) -> Result<DfmReport> {
+    let (pdk_path, pdk_source) = match request.pdk {
+        PdkSource::Builtin(name) => {
+            let pdk = builtin_pdks::find(name)
+                .with_context(|| format!("unknown built-in PDK '{name}'"))?;
+            (format!("builtin:{}", pdk.name), pdk.source)
+        }
+        PdkSource::Toml(source) => (source.path.to_owned(), source.source),
+    };
+    ensure!(
+        pdk_source.len() <= MAX_PDK_BYTES,
+        "PDK {pdk_path} exceeds the {MAX_PDK_BYTES} byte limit"
+    );
+    let pdk =
+        pdk::Pdk::parse(pdk_source).with_context(|| format!("failed to parse PDK {pdk_path}"))?;
+    let rules = rules::lower(&pdk).with_context(|| format!("failed to lower PDK {pdk_path}"))?;
+    if rules.is_empty() {
+        bail!("PDK {pdk_path} configures no DFM rules; add at least one capability");
+    }
+    let waivers = request
+        .waivers
+        .map(|source| {
+            waivers::WaiverFile::parse(source.source)
+                .with_context(|| format!("failed to parse waiver file {}", source.path))
+        })
+        .transpose()?;
+
+    let design = design::Design::extract(imported, request.layout_target.artwork_scope(), &rules)?;
+    let checked = checks::run(
+        &rules,
+        &design,
+        waivers.as_ref(),
+        request.generated_at.date_naive(),
+    );
+    let summary = summarize(&checked);
+    let layout = design.report_layout();
+    let scene = scene::export(&design, &layout, &checked.rules, &checked.findings)?;
+    Ok(DfmReport {
+        schema_version: report::REPORT_SCHEMA_VERSION,
+        generated_at: request.generated_at.to_rfc3339(),
+        verdict: if summary.errors > 0 {
+            report::Verdict::Fail
+        } else {
+            report::Verdict::Pass
+        },
+        tool: report::ToolIdentity {
+            name: "pcb",
+            version: env!("CARGO_PKG_VERSION"),
+        },
+        input: request.input,
+        pdk: report::PdkIdentity::from_pdk(
+            &pdk,
+            pdk_path,
+            sha256(pdk_source.as_bytes()),
+            pdk_source.to_owned(),
+        ),
+        layout_target: match request.layout_target {
+            LayoutTarget::Board => "board",
+            LayoutTarget::BoardArray => "board_array",
+        },
+        layout,
+        coordinate_system: report::CoordinateSystem {
+            unit: "mm",
+            axes: "x_right_y_up",
+            origin: "ipc_2581_design",
+        },
+        waivers: checked
+            .waivers
+            .zip(request.waivers)
+            .map(|(outcome, source)| report::WaiversApplied {
+                path: source.path.to_owned(),
+                sha256: sha256(source.source.as_bytes()),
+                applied: outcome.applied,
+                expired: outcome.expired,
+                unmatched: outcome.unmatched,
+            }),
+        summary,
+        rules: checked.rules,
+        findings: checked.findings,
+        scene,
+    })
+}
+
+#[cfg(feature = "cli")]
 #[derive(Debug)]
 pub struct CheckOptions {
     pub pdk: PathBuf,
@@ -33,20 +166,8 @@ pub struct CheckOptions {
     pub layout_target: LayoutTarget,
 }
 
-/// PDK source bytes plus the stable identity echoed into reports.
-struct LoadedPdk {
-    path: String,
-    bytes: Cow<'static, [u8]>,
-}
-
-/// A parsed waiver file plus the identity the report echoes back.
-struct LoadedWaivers {
-    path: String,
-    sha256: String,
-    file: waivers::WaiverFile,
-}
-
 /// Reject an invalid destination before any layout preparation or output write.
+#[cfg(feature = "cli")]
 pub fn validate_output(file: &Path, options: &CheckOptions) -> Result<()> {
     let Some(output) = options.output.as_deref() else {
         return Ok(());
@@ -92,6 +213,7 @@ pub fn validate_output(file: &Path, options: &CheckOptions) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "cli")]
 pub fn execute_check(file: &Path, options: &CheckOptions) -> Result<()> {
     validate_output(file, options)?;
     let report = match build_report(file, options) {
@@ -122,6 +244,7 @@ pub fn execute_check(file: &Path, options: &CheckOptions) -> Result<()> {
 
 /// Preparation failures produce an incomplete report, never a passing result.
 /// This also handles `.zen` layout/export errors before the IPC input exists.
+#[cfg(feature = "cli")]
 pub fn write_error_report(
     file: &Path,
     options: &CheckOptions,
@@ -147,136 +270,59 @@ pub fn write_error_report(
     write_report(options, &incomplete)
 }
 
-fn build_report(file: &Path, options: &CheckOptions) -> Result<report::DfmReport> {
+#[cfg(feature = "cli")]
+fn build_report(file: &Path, options: &CheckOptions) -> Result<DfmReport> {
     let input_bytes = std::fs::read(file)
         .with_context(|| format!("failed to read IPC-2581 file {}", file.display()))?;
-    let input = report::FileIdentity {
-        path: file.display().to_string(),
-        sha256: sha256(&input_bytes),
-        size_bytes: input_bytes.len() as u64,
+    let input = report::FileIdentity::new(file.display().to_string(), &input_bytes);
+    let pdk_path = options.pdk.display().to_string();
+    let pdk_source = if builtin_pdks::find(&pdk_path).is_none() {
+        let bytes = std::fs::read(&options.pdk)
+            .with_context(|| format!("failed to read PDK file {pdk_path}"))?;
+        Some(String::from_utf8(bytes).with_context(|| format!("PDK {pdk_path} is not UTF-8"))?)
+    } else {
+        None
     };
-    let content = file_utils::ipc_text(file, &input_bytes)?;
-    let loaded_pdk = load_pdk(&options.pdk)?;
-    let pdk_source = std::str::from_utf8(&loaded_pdk.bytes)
-        .with_context(|| format!("PDK {} is not UTF-8", loaded_pdk.path))?;
-    let pdk = pdk::Pdk::parse(pdk_source)
-        .with_context(|| format!("failed to parse PDK {}", loaded_pdk.path))?;
-
-    let rules =
-        rules::lower(&pdk).with_context(|| format!("failed to lower PDK {}", loaded_pdk.path))?;
-    if rules.is_empty() {
-        bail!(
-            "PDK {} configures no DFM rules; add at least one capability",
-            loaded_pdk.path
-        );
-    }
-
     let waivers = options
         .waivers
         .as_deref()
-        .map(|path| -> Result<LoadedWaivers> {
+        .map(|path| -> Result<_> {
             let bytes = std::fs::read(path)
                 .with_context(|| format!("failed to read waiver file {}", path.display()))?;
-            let source = std::str::from_utf8(&bytes)
+            let source = String::from_utf8(bytes)
                 .with_context(|| format!("waiver file {} is not UTF-8", path.display()))?;
-            let file = waivers::WaiverFile::parse(source)
-                .with_context(|| format!("failed to parse waiver file {}", path.display()))?;
-            Ok(LoadedWaivers {
-                path: path.display().to_string(),
-                sha256: sha256(&bytes),
-                file,
-            })
+            Ok((path.display().to_string(), source))
         })
         .transpose()?;
 
     let generated_at = generation_time();
+    let content = file_utils::ipc_text(file, &input_bytes)?;
     let ipc = Ipc2581::parse(&content).context("failed to parse IPC-2581 file")?;
     drop(content);
     drop(input_bytes);
     let imported = import_design(&ipc).context("failed to import IPC-2581 physical design")?;
-    let design = design::Design::extract(&imported, options.layout_target.artwork_scope(), &rules)?;
-    let checked = checks::run(
-        &rules,
-        &design,
-        waivers.as_ref().map(|loaded| &loaded.file),
-        generated_at.date_naive(),
-    );
-
-    let summary = summarize(&checked);
-    let failed = summary.errors > 0;
-    let layout = design.report_layout();
-    let scene = scene::export(&design, &layout, &checked.rules, &checked.findings)?;
-    Ok(report::DfmReport {
-        schema_version: report::REPORT_SCHEMA_VERSION,
-        generated_at: generated_at.to_rfc3339(),
-        verdict: if failed {
-            report::Verdict::Fail
-        } else {
-            report::Verdict::Pass
+    check(
+        &imported,
+        CheckRequest {
+            input,
+            pdk: match pdk_source.as_deref() {
+                Some(source) => PdkSource::Toml(TextSource {
+                    path: &pdk_path,
+                    source,
+                }),
+                None => PdkSource::Builtin(&pdk_path),
+            },
+            waivers: waivers
+                .as_ref()
+                .map(|(path, source)| TextSource { path, source }),
+            layout_target: options.layout_target,
+            generated_at,
         },
-        tool: report::ToolIdentity {
-            name: "pcb",
-            version: env!("CARGO_PKG_VERSION"),
-        },
-        input,
-        pdk: report::PdkIdentity::from_pdk(
-            &pdk,
-            loaded_pdk.path,
-            sha256(&loaded_pdk.bytes),
-            pdk_source.to_owned(),
-        ),
-        layout_target: match options.layout_target {
-            LayoutTarget::Board => "board",
-            LayoutTarget::BoardArray => "board_array",
-        },
-        layout,
-        coordinate_system: report::CoordinateSystem {
-            unit: "mm",
-            axes: "x_right_y_up",
-            origin: "ipc_2581_design",
-        },
-        waivers: checked
-            .waivers
-            .as_ref()
-            .zip(waivers.as_ref())
-            .map(|(outcome, loaded)| report::WaiversApplied {
-                path: loaded.path.clone(),
-                sha256: loaded.sha256.clone(),
-                applied: outcome.applied,
-                expired: outcome.expired.clone(),
-                unmatched: outcome.unmatched.clone(),
-            }),
-        summary,
-        rules: checked.rules,
-        findings: checked.findings,
-        scene,
-    })
-}
-
-fn load_pdk(reference: &Path) -> Result<LoadedPdk> {
-    let loaded = if let Some(pdk) = reference.to_str().and_then(builtin_pdks::find) {
-        LoadedPdk {
-            path: format!("builtin:{}", pdk.name),
-            bytes: Cow::Borrowed(pdk.source.as_bytes()),
-        }
-    } else {
-        LoadedPdk {
-            path: reference.display().to_string(),
-            bytes: Cow::Owned(
-                std::fs::read(reference)
-                    .with_context(|| format!("failed to read PDK file {}", reference.display()))?,
-            ),
-        }
-    };
-    ensure!(
-        loaded.bytes.len() <= MAX_PDK_BYTES,
-        "PDK {} exceeds the {MAX_PDK_BYTES} byte limit",
-        loaded.path
-    );
-    Ok(loaded)
+    )
 }
 
 /// The non-verdict counts worth surfacing next to the pass/fail line.
+#[cfg(feature = "cli")]
 fn annotations(summary: &report::Summary) -> String {
     let mut notes = String::new();
     if summary.rules_skipped > 0 {
@@ -293,6 +339,7 @@ fn annotations(summary: &report::Summary) -> String {
 
 /// Report generation time, honoring `SOURCE_DATE_EPOCH` so CI reports can be
 /// byte-stable.
+#[cfg(feature = "cli")]
 fn generation_time() -> chrono::DateTime<chrono::Utc> {
     std::env::var("SOURCE_DATE_EPOCH")
         .ok()
@@ -334,6 +381,7 @@ fn summarize(checked: &checks::Results) -> report::Summary {
     }
 }
 
+#[cfg(feature = "cli")]
 fn write_report(options: &CheckOptions, report: &impl Serialize) -> Result<()> {
     let mut bytes = serde_json::to_vec_pretty(report)?;
     bytes.push(b'\n');
@@ -451,34 +499,40 @@ minimum_board_edge_clearance = "0.5 mm"
 minimum_board_array_spacing = "300 mil"
 "#;
 
-    fn check(xml: &str, scope: ArtworkScope) -> checks::Results {
-        check_with_pdk(xml, scope, PDK)
+    fn check(xml: &str, target: LayoutTarget) -> DfmReport {
+        check_with_pdk(xml, target, PDK)
     }
 
-    fn check_with_pdk(xml: &str, scope: ArtworkScope, pdk_source: &str) -> checks::Results {
+    fn check_with_pdk(xml: &str, target: LayoutTarget, pdk_source: &str) -> DfmReport {
         let ipc = Ipc2581::parse(xml).unwrap();
-        let pdk = pdk::Pdk::parse(pdk_source).unwrap();
-        let rules = rules::lower(&pdk).unwrap();
         let imported = import_design(&ipc).unwrap();
-        let design = design::Design::extract(&imported, scope, &rules).unwrap();
-        checks::run(
-            &rules,
-            &design,
-            None,
-            NaiveDate::from_ymd_opt(2026, 8, 21).unwrap(),
+        super::check(
+            &imported,
+            CheckRequest {
+                input: report::FileIdentity::new("board.xml", xml.as_bytes()),
+                pdk: PdkSource::Toml(TextSource {
+                    path: "pdk.toml",
+                    source: pdk_source,
+                }),
+                waivers: None,
+                layout_target: target,
+                generated_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
+            },
         )
+        .unwrap()
     }
 
-    fn rule<'a>(results: &'a checks::Results, id: &str) -> &'a report::RuleResult {
+    fn rule<'a>(results: &'a DfmReport, id: &str) -> &'a report::RuleResult {
         results.rules.iter().find(|rule| rule.id == id).unwrap()
     }
 
     #[test]
     fn loads_the_embedded_standard_pdk() {
-        let loaded = load_pdk(Path::new("standard")).unwrap();
-        let parsed = pdk::Pdk::parse(std::str::from_utf8(&loaded.bytes).unwrap()).unwrap();
-
-        assert_eq!(loaded.path, "builtin:standard");
+        let builtin = builtin_pdks()
+            .iter()
+            .find(|pdk| pdk.name == "standard")
+            .unwrap();
+        let parsed = pdk::Pdk::parse(builtin.source).unwrap();
         assert_eq!(parsed.pdk.id, "standard");
         assert_eq!(parsed.pdk.name, "Standard");
         assert_eq!(parsed.pdk.manufacturer.as_deref(), Some("Diode"));
@@ -495,28 +549,141 @@ minimum_board_array_spacing = "300 mil"
     }
 
     #[test]
-    fn still_loads_a_pdk_from_a_file() {
+    fn in_memory_report_keeps_source_identity_and_waiver_dates() {
+        let imported = import_design(&Ipc2581::parse(BOARD).unwrap()).unwrap();
+        let pdk_source = PDK.replace(
+            "minimum_copper_layer_count = 2",
+            "minimum_copper_layer_count = 3",
+        );
+        let run = |waivers, day| {
+            super::check(
+                &imported,
+                CheckRequest {
+                    input: report::FileIdentity::new("board.xml", BOARD.as_bytes()),
+                    pdk: PdkSource::Toml(TextSource {
+                        path: "pdk.toml",
+                        source: &pdk_source,
+                    }),
+                    waivers,
+                    layout_target: LayoutTarget::Board,
+                    generated_at: NaiveDate::from_ymd_opt(2026, 8, day)
+                        .unwrap()
+                        .and_hms_opt(0, 0, 0)
+                        .unwrap()
+                        .and_utc(),
+                },
+            )
+            .unwrap()
+        };
+        let initial = run(None, 30);
+        assert!(matches!(initial.verdict, report::Verdict::Fail));
+        assert_eq!(initial.summary.errors, 1);
+        assert_eq!(initial.input.sha256, sha256(BOARD.as_bytes()));
+        assert_eq!(initial.pdk.sha256, sha256(pdk_source.as_bytes()));
+        assert_eq!(initial.generated_at, "2026-08-30T00:00:00+00:00");
+        let id = &initial.findings[0].id;
+        let source = format!(
+            r#"[[waiver]]
+finding = "{id}"
+reason = "approved by fab"
+expires = "2026-08-31"
+
+[[waiver]]
+finding = "dfm-stale"
+reason = "old finding"
+"#
+        );
+        let waivers = Some(TextSource {
+            path: "waivers.toml",
+            source: &source,
+        });
+        let active = run(waivers, 30);
+        assert!(matches!(active.verdict, report::Verdict::Pass));
+        assert_eq!(active.summary.errors, 0);
+        assert_eq!(active.summary.findings, 1);
+        assert_eq!(active.summary.waived, 1);
+        assert_eq!(active.findings[0].id, *id);
+        assert_eq!(
+            active.findings[0].waiver_reason.as_deref(),
+            Some("approved by fab")
+        );
+        assert!(active.findings[0].waived);
+        let applied = active.waivers.unwrap();
+        assert_eq!(applied.path, "waivers.toml");
+        assert_eq!(applied.sha256, sha256(source.as_bytes()));
+        assert_eq!(applied.applied, 1);
+        assert!(applied.expired.is_empty());
+        assert_eq!(applied.unmatched, ["dfm-stale"]);
+
+        let expired = run(waivers, 31);
+        assert!(matches!(expired.verdict, report::Verdict::Fail));
+        assert_eq!(expired.summary.errors, 1);
+        assert_eq!(expired.summary.waived, 0);
+        assert!(!expired.findings[0].waived);
+        assert_eq!(expired.waivers.unwrap().expired, std::slice::from_ref(id));
+    }
+
+    #[cfg(feature = "cli")]
+    #[test]
+    fn cli_report_matches_in_memory_report_for_compressed_input() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("custom.toml");
-        std::fs::write(&path, PDK).unwrap();
-
-        let loaded = load_pdk(&path).unwrap();
-
-        assert_eq!(loaded.path, path.display().to_string());
-        assert_eq!(&*loaded.bytes, PDK.as_bytes());
+        let input = directory.path().join("board.xml.zst");
+        let pdk = directory.path().join("custom.toml");
+        let output = directory.path().join("report.json");
+        let pdk_source = PDK.replace(
+            "minimum_copper_layer_count = 2",
+            "minimum_copper_layer_count = 3",
+        );
+        let bytes = zstd::encode_all(BOARD.as_bytes(), 0).unwrap();
+        std::fs::write(&input, &bytes).unwrap();
+        std::fs::write(&pdk, &pdk_source).unwrap();
+        let error = execute_check(
+            &input,
+            &CheckOptions {
+                pdk: pdk.clone(),
+                waivers: None,
+                output: Some(output.clone()),
+                layout_target: LayoutTarget::Board,
+            },
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("DFM check failed with 1 error finding(s)")
+        );
+        let cli: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
+        let mut report = check_with_pdk(BOARD, LayoutTarget::Board, &pdk_source);
+        report.input = report::FileIdentity::new(input.display().to_string(), &bytes);
+        report.pdk.path = pdk.display().to_string();
+        report.generated_at = cli["generated_at"].as_str().unwrap().to_owned();
+        assert_eq!(cli, serde_json::to_value(report).unwrap());
     }
 
     #[test]
     fn rejects_oversize_pdk_source() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("oversize.toml");
-        std::fs::write(&path, vec![b' '; MAX_PDK_BYTES + 1]).unwrap();
-
-        let error = load_pdk(&path).err().unwrap();
+        let imported = import_design(&Ipc2581::parse(BOARD).unwrap()).unwrap();
+        let source = " ".repeat(MAX_PDK_BYTES + 1);
+        let error = super::check(
+            &imported,
+            CheckRequest {
+                input: report::FileIdentity::new("board.xml", BOARD.as_bytes()),
+                pdk: PdkSource::Toml(TextSource {
+                    path: "oversize.toml",
+                    source: &source,
+                }),
+                waivers: None,
+                layout_target: LayoutTarget::Board,
+                generated_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
+            },
+        )
+        .unwrap_err();
 
         assert!(error.to_string().contains("exceeds the 1048576 byte limit"));
     }
 
+    #[cfg(feature = "cli")]
     #[test]
     fn report_serialization_failure_preserves_existing_output() {
         struct Unserializable;
@@ -546,6 +713,7 @@ minimum_board_array_spacing = "300 mil"
         assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
     }
 
+    #[cfg(feature = "cli")]
     #[test]
     fn report_persistence_failure_preserves_destination_and_cleans_temporary_file() {
         let directory = tempfile::tempdir().unwrap();
@@ -574,7 +742,7 @@ minimum_board_array_spacing = "300 mil"
     fn copper_layer_count_checks_both_bounds_from_the_physical_stackup() {
         let below_minimum = check_with_pdk(
             BOARD,
-            ArtworkScope::Board,
+            LayoutTarget::Board,
             &PDK.replace(
                 "minimum_copper_layer_count = 2",
                 "minimum_copper_layer_count = 3",
@@ -610,7 +778,7 @@ minimum_board_array_spacing = "300 mil"
 
         let above_maximum = check_with_pdk(
             BOARD,
-            ArtworkScope::Board,
+            LayoutTarget::Board,
             &PDK.replace(
                 "minimum_copper_layer_count = 2\nmaximum_copper_layer_count = 4",
                 "minimum_copper_layer_count = 1\nmaximum_copper_layer_count = 1",
@@ -675,9 +843,9 @@ minimum_board_array_spacing = "300 mil"
         .unwrap()
         .xml;
 
-        let board_results = check(BOARD, ArtworkScope::Board);
-        let array_results = check(&array, ArtworkScope::ArrayFlattened);
-        let fab_results = check(&fab, ArtworkScope::ArrayFlattened);
+        let board_results = check(BOARD, LayoutTarget::Board);
+        let array_results = check(&array, LayoutTarget::BoardArray);
+        let fab_results = check(&fab, LayoutTarget::BoardArray);
 
         let board_edge = "copper.minimum_board_edge_clearance";
         let vscore = "copper.minimum_vscore_to_copper_clearance";

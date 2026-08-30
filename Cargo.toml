@@ -47,7 +47,7 @@ pcb-sim = { path = "crates/pcb-sim" }
 pcb-diode-api = { path = "crates/pcb-diode-api" }
 pcb-diode-uri = { path = "crates/pcb-diode-uri" }
 pcb-native-dialog = { path = "crates/pcb-native-dialog" }
-pcb-ipc2581-tools = { path = "crates/pcb-ipc2581-tools" }
+pcb-ipc2581-tools = { path = "crates/pcb-ipc2581-tools", default-features = false }
 pcb-docgen = { path = "crates/pcb-docgen" }
 
 anyhow = "1.0"
@@ -146,7 +146,7 @@ boostvoronoi = "0.12.1"
 sha2 = "0.11"
 semver = { version = "1.0", features = ["serde"] }
 kurbo = "0.13"
-resvg = "0.48"
+resvg = { version = "0.48", default-features = false }
 zstd = "0.13"
 jiff = "0.2"
 blake3 = "1.8"

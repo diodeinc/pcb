@@ -16,7 +16,7 @@ pub use board::{
     BoardArrayBoardMargin, BoardArrayDimensions, BoardArrayGridInfo, BoardArrayInfo,
     BoardArrayMargins, BoardDimensions, StackupInfo,
 };
-pub use bom::{AvlLookup, BomStats, CharacteristicsData};
+pub use bom::{Alternative, AvlLookup, BomStats, CharacteristicsData};
 pub use components::ComponentStats;
 pub use drills::{DrillHoleType, DrillSize, DrillStats, DrillTypeDistribution};
 pub use layers::{LayerStats, NetStats};
