@@ -736,8 +736,10 @@ impl ContourSet {
                 })
             })
             .collect::<Vec<_>>();
-        self.contains_points(&subsamples)
-            .chunks_exact(STRATA * STRATA)
+        let coverage = self.contains_points(&subsamples);
+        let (tiles, _) = coverage.as_chunks::<{ STRATA * STRATA }>();
+        tiles
+            .iter()
             .map(|tile| tile.iter().sum::<f64>() / (STRATA * STRATA) as f64)
             .collect()
     }

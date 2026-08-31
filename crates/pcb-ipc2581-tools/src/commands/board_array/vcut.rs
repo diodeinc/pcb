@@ -227,7 +227,7 @@ pub(super) fn parse_kicad_stroke_glyph(raw: &str) -> KiCadStrokeGlyph {
     let mut strokes = Vec::new();
     let mut stroke = Vec::new();
 
-    for pair in bytes[2..].chunks_exact(2) {
+    for pair in bytes[2..].as_chunks::<2>().0 {
         if pair[0] == b' ' && pair[1] == b'R' {
             if stroke.len() >= 2 {
                 strokes.push(std::mem::take(&mut stroke));
