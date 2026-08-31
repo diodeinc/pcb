@@ -24,6 +24,10 @@ pub struct AuthTokens {
     pub refresh_token: String,
     pub expires_at: i64,
     pub email: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_endpoint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
 }
 
 impl AuthTokens {
@@ -107,12 +111,16 @@ fn save_tokens(
     refresh_token: &str,
     expires_at: i64,
     email: Option<&str>,
+    token_endpoint: Option<&str>,
+    client_id: Option<&str>,
 ) -> Result<()> {
     let tokens = AuthTokens {
         access_token: access_token.to_string(),
         refresh_token: refresh_token.to_string(),
         expires_at,
         email: email.map(|s| s.to_string()),
+        token_endpoint: token_endpoint.map(str::to_string),
+        client_id: client_id.map(str::to_string),
     };
     let contents = toml::to_string(&tokens)?;
 
@@ -147,6 +155,20 @@ struct RefreshResponse {
     expires_at: i64,
 }
 
+#[derive(Deserialize)]
+struct OAuthRefreshResponse {
+    access_token: String,
+    refresh_token: Option<String>,
+    expires_in: i64,
+}
+
+fn oauth_client() -> Result<Client> {
+    Ok(Client::builder()
+        .timeout(Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?)
+}
+
 fn refresh_tokens_with_context(ctx: &WorkspaceContext) -> Result<AuthTokens> {
     let lock_path = get_auth_file_path(ctx)?.with_extension("toml.lock");
     let mut lock = LockFile::open(&lock_path)?;
@@ -157,34 +179,76 @@ fn refresh_tokens_with_context(ctx: &WorkspaceContext) -> Result<AuthTokens> {
         return Ok(tokens);
     }
 
-    let url = format!("{}/api/auth/refresh", ctx.api_base_url());
-    let response = Client::new()
-        .post(&url)
-        .json(&RefreshRequest {
-            refresh_token: tokens.refresh_token.clone(),
-        })
-        .send()?;
-
-    if !response.status().is_success() {
-        anyhow::bail!("Token refresh failed: {}", response.status());
-    }
-
-    let refresh_response: RefreshResponse = response.json()?;
+    let refreshed = match (&tokens.token_endpoint, &tokens.client_id) {
+        (Some(token_endpoint), Some(client_id)) => {
+            let body = url::form_urlencoded::Serializer::new(String::new())
+                .append_pair("grant_type", "refresh_token")
+                .append_pair("refresh_token", &tokens.refresh_token)
+                .append_pair("client_id", client_id)
+                .finish();
+            let response = oauth_client()?
+                .post(token_endpoint)
+                .header(
+                    reqwest::header::CONTENT_TYPE,
+                    "application/x-www-form-urlencoded",
+                )
+                .body(body)
+                .send()?;
+            if !response.status().is_success() {
+                anyhow::bail!("Token refresh failed: {}", response.status());
+            }
+            let response: OAuthRefreshResponse = response.json()?;
+            if response.expires_in <= 0 {
+                anyhow::bail!("Invalid token expiry");
+            }
+            AuthTokens {
+                access_token: response.access_token,
+                refresh_token: response
+                    .refresh_token
+                    .unwrap_or(tokens.refresh_token.clone()),
+                expires_at: unix_now()?
+                    .checked_add(response.expires_in)
+                    .context("Token expiry is too large")?,
+                email: tokens.email.clone(),
+                token_endpoint: tokens.token_endpoint.clone(),
+                client_id: tokens.client_id.clone(),
+            }
+        }
+        (None, None) => {
+            let url = format!("{}/api/auth/refresh", ctx.api_base_url());
+            let response = Client::new()
+                .post(&url)
+                .json(&RefreshRequest {
+                    refresh_token: tokens.refresh_token.clone(),
+                })
+                .send()?;
+            if !response.status().is_success() {
+                anyhow::bail!("Token refresh failed: {}", response.status());
+            }
+            let response: RefreshResponse = response.json()?;
+            AuthTokens {
+                access_token: response.access_token,
+                refresh_token: response.refresh_token,
+                expires_at: response.expires_at,
+                email: tokens.email.clone(),
+                token_endpoint: None,
+                client_id: None,
+            }
+        }
+        _ => anyhow::bail!("Incomplete OAuth refresh configuration"),
+    };
 
     save_tokens(
         ctx,
-        &refresh_response.access_token,
-        &refresh_response.refresh_token,
-        refresh_response.expires_at,
-        tokens.email.as_deref(),
+        &refreshed.access_token,
+        &refreshed.refresh_token,
+        refreshed.expires_at,
+        refreshed.email.as_deref(),
+        refreshed.token_endpoint.as_deref(),
+        refreshed.client_id.as_deref(),
     )?;
 
-    Ok(AuthTokens {
-        access_token: refresh_response.access_token,
-        refresh_token: refresh_response.refresh_token,
-        expires_at: refresh_response.expires_at,
-        email: tokens.email,
-    })
+    Ok(refreshed)
 }
 
 pub fn refresh_tokens() -> Result<AuthTokens> {
@@ -325,10 +389,7 @@ struct TokenExchangeResponse {
 }
 
 pub fn login_with_context(ctx: &WorkspaceContext) -> Result<()> {
-    let client = Client::builder()
-        .timeout(Duration::from_secs(30))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()?;
+    let client = oauth_client()?;
     let pkce = Pkce::generate();
     let api_base_url = ctx.api_base_url().trim_end_matches('/');
     let start_url = format!("{api_base_url}/api/auth/device/start");
@@ -407,6 +468,8 @@ pub fn login_with_context(ctx: &WorkspaceContext) -> Result<()> {
         &tokens.refresh_token,
         expires_at,
         None,
+        Some(&authorization.token_endpoint),
+        Some(&authorization.client_id),
     )?;
     pcb_zen::git::clear_diodehub_credential_cache();
 
@@ -707,6 +770,8 @@ mod tests {
             "refresh-token",
             unix_now() - 3600,
             Some("user@example.com"),
+            None,
+            None,
         )
         .unwrap();
         let refresh_calls = Cell::new(0);
@@ -731,6 +796,8 @@ mod tests {
             "refresh-token",
             unix_now() - 3600,
             Some("user@example.com"),
+            None,
+            None,
         )
         .unwrap();
         let refresh_calls = Cell::new(0);
@@ -742,6 +809,8 @@ mod tests {
                 refresh_token: "refresh-token".to_string(),
                 expires_at: unix_now() + 3600,
                 email: Some("user@example.com".to_string()),
+                token_endpoint: None,
+                client_id: None,
             })
         })
         .unwrap();
@@ -760,6 +829,8 @@ mod tests {
             "refresh-token",
             unix_now() + 3600,
             Some("user@example.com"),
+            None,
+            None,
         )
         .unwrap();
         let refresh_calls = Cell::new(0);
