@@ -25,6 +25,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - `pcb build --config` now rejects unknown root configuration keys.
 - PCB commands now exit cleanly when an output pipe closes early.
 - JSON configuration inputs preserve signed and unsigned 64-bit integers.
+- `pcb fmt` now exits nonzero when a file fails to parse, read, or write in write, diff, and check modes.
 
 ## [0.4.40] - 2026-08-28
 
