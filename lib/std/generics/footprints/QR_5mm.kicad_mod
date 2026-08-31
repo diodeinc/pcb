@@ -3,7 +3,7 @@
 	(generator "pcbnew")
 	(generator_version "10.0")
 	(layer "F.Cu")
-	(descr "JLCPCB 2D barcode placeholder: 5x5mm solid silkscreen square, replaced by a serialized 2D barcode during fabrication")
+	(descr "5x5mm solid silkscreen square")
 	(tags "QR barcode serial JLCPCB")
 	(property "Reference" "REF**"
 		(at 0 -3.5 0)
