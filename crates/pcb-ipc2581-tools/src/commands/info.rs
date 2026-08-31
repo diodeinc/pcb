@@ -158,7 +158,7 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
     println!("{}", "Board Summary".bold());
 
     let mut summary_table = Table::new();
-    summary_table.load_preset(UTF8_FULL_CONDENSED);
+    summary_table.load_style(UTF8_FULL_CONDENSED);
     summary_table.set_content_arrangement(comfy_table::ContentArrangement::Dynamic);
     let layout = accessor.board_layout_info();
 
@@ -245,7 +245,7 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
 
         // Summary stackup table
         let mut summary_stackup = Table::new();
-        summary_stackup.load_preset(UTF8_FULL_CONDENSED);
+        summary_stackup.load_style(UTF8_FULL_CONDENSED);
         summary_stackup.set_content_arrangement(comfy_table::ContentArrangement::Dynamic);
 
         // Stackup name
@@ -327,7 +327,7 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
         println!("{summary_stackup}");
 
         let mut stackup_table = Table::new();
-        stackup_table.load_preset(UTF8_FULL_CONDENSED);
+        stackup_table.load_style(UTF8_FULL_CONDENSED);
         stackup_table.set_content_arrangement(comfy_table::ContentArrangement::Dynamic);
 
         // Header row
@@ -429,7 +429,7 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
             println!();
             println!("{}", "Materials".bold());
             let mut mat_table = Table::new();
-            mat_table.load_preset(UTF8_FULL_CONDENSED);
+            mat_table.load_style(UTF8_FULL_CONDENSED);
             mat_table.set_content_arrangement(comfy_table::ContentArrangement::Dynamic);
             mat_table.add_row(vec![
                 Cell::new("Dielectric").fg(Color::Cyan),
@@ -445,7 +445,7 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
             println!();
             println!("{}", "Impedance Control".bold());
             let mut imp_table = Table::new();
-            imp_table.load_preset(UTF8_FULL_CONDENSED);
+            imp_table.load_style(UTF8_FULL_CONDENSED);
             imp_table.set_content_arrangement(comfy_table::ContentArrangement::Dynamic);
             imp_table.add_row(vec![
                 Cell::new("Controlled").fg(Color::Cyan),
@@ -540,7 +540,7 @@ fn print_board_array_summary(
     println!("{}", "Board Array Summary".bold());
 
     let mut table = Table::new();
-    table.load_preset(UTF8_FULL_CONDENSED);
+    table.load_style(UTF8_FULL_CONDENSED);
     table.set_content_arrangement(comfy_table::ContentArrangement::Dynamic);
 
     if let Some(dimensions) = board_array.dimensions.as_ref() {
@@ -594,7 +594,7 @@ fn print_board_array_summary(
 fn print_drill_distribution(title: &str, drills: &DrillStats) {
     println!("{}", title.bold());
     let mut drill_table = Table::new();
-    drill_table.load_preset(UTF8_FULL_CONDENSED);
+    drill_table.load_style(UTF8_FULL_CONDENSED);
     drill_table.set_content_arrangement(comfy_table::ContentArrangement::Dynamic);
     drill_table.set_header(vec![
         Cell::new("Type"),
