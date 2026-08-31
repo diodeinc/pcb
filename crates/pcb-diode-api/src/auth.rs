@@ -488,9 +488,6 @@ fn wait_for_device_authorization(
     sleep_before_poll(deadline, interval)?;
     loop {
         let result = poll_device_authorization(client, poll_url, device_code)?;
-        if Instant::now() >= deadline {
-            anyhow::bail!("Authorization expired");
-        }
         match result {
             DevicePollResult::AuthorizationPending => {}
             DevicePollResult::SlowDown => interval = interval.saturating_add(5),
