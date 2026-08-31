@@ -881,15 +881,21 @@ pub fn info_json(accessor: &IpcAccessor) -> serde_json::Value {
 
             let avl_lookup = accessor.lookup_avl(item.oem_design_number_ref);
 
-            for ref_des in &item.ref_des_list {
+            for ref_des in item.reference_designators() {
                 let designator = ipc.resolve(ref_des.name).to_string();
                 if designator.is_empty() {
                     continue;
                 }
 
                 let fallback = component_map.get(&designator);
-                let bom_package = ipc.resolve(ref_des.package_ref).to_string();
-                let bom_layer = ipc.resolve(ref_des.layer_ref).to_string();
+                let bom_package = ref_des
+                    .package_ref
+                    .map(|package| ipc.resolve(package).to_string())
+                    .unwrap_or_default();
+                let bom_layer = ref_des
+                    .layer_ref
+                    .map(|layer| ipc.resolve(layer).to_string())
+                    .unwrap_or_default();
 
                 let package = if !bom_package.is_empty() {
                     bom_package
@@ -913,7 +919,7 @@ pub fn info_json(accessor: &IpcAccessor) -> serde_json::Value {
                     "designator": designator,
                     "package": package,
                     "mpn": mpn,
-                    "dnp": !ref_des.populate,
+                    "dnp": ref_des.populate == Some(false),
                     "layer_ref": layer_ref,
                     "mount_type": canonical_mount_type,
                     "side": side,

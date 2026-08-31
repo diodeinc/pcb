@@ -230,8 +230,7 @@ fn resolve_selections<'a>(
                         .items
                         .iter()
                         .filter(|item| {
-                            item.ref_des_list
-                                .iter()
+                            item.reference_designators()
                                 .any(|item_refdes| ipc.resolve(item_refdes.name) == refdes)
                         })
                         .collect();

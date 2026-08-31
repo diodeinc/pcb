@@ -55,9 +55,9 @@ pub fn polarity_attr(polarity: Polarity) -> &'static str {
 
 pub fn line_end_attr(line_end: LineEnd) -> &'static str {
     match line_end {
+        LineEnd::None => "NONE",
         LineEnd::Round => "ROUND",
         LineEnd::Square => "SQUARE",
-        LineEnd::Flat => "FLAT",
     }
 }
 
@@ -321,6 +321,13 @@ mod tests {
             line_property: None,
         };
         assert!(line(&mut writer, Units::Millimeter, &bad).is_err());
+    }
+
+    #[test]
+    fn line_end_uses_ipc2581c_values() {
+        assert_eq!(line_end_attr(LineEnd::None), "NONE");
+        assert_eq!(line_end_attr(LineEnd::Round), "ROUND");
+        assert_eq!(line_end_attr(LineEnd::Square), "SQUARE");
     }
 
     #[test]

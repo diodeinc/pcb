@@ -77,7 +77,7 @@ impl<'a> IpcAccessor<'a> {
             total_unique_parts += 1;
 
             // Count reference designators
-            for ref_des in &item.ref_des_list {
+            for ref_des in item.reference_designators() {
                 if self.ipc.resolve(ref_des.name).is_empty() {
                     continue;
                 }

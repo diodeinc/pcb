@@ -88,8 +88,11 @@ pub fn extract_contacts_from_design(
             else {
                 continue;
             };
-            for ref_des in &item.ref_des_list {
-                if !is_ict_package(ipc.resolve(ref_des.package_ref)) {
+            for ref_des in item.reference_designators() {
+                if !ref_des
+                    .package_ref
+                    .is_some_and(|package| is_ict_package(ipc.resolve(package)))
+                {
                     continue;
                 }
                 let designator = ipc.resolve(ref_des.name).to_string();

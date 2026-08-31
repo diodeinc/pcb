@@ -597,6 +597,7 @@ fn ipc_contour_feature(outer: &ContourBuf, cutout_contours: &[ContourBuf]) -> Re
                 line_desc: None,
                 line_desc_ref: None,
                 fill_desc: None,
+                fill_desc_ref: None,
             }],
         }),
         x: 0.0,
