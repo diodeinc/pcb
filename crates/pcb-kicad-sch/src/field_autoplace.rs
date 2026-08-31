@@ -234,6 +234,12 @@ pub(crate) fn symbol_geometry_bounds(
 }
 
 impl Symbol {
+    /// Recompute the positions of fields that still participate in automatic
+    /// placement, using the symbol's current orientation and definition.
+    pub fn autoplace_fields(&mut self, definition: &SymbolDefinition) -> Result<bool> {
+        autoplace_symbol_fields(self, definition)
+    }
+
     pub fn visual_bounds(&self, definition: &SymbolDefinition) -> Result<Option<Bounds>> {
         symbol_visual_bounds(self, definition)
     }
