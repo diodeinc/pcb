@@ -487,9 +487,8 @@ pub trait LspContext {
     }
 
     /// Handle custom LSP request messages that are not recognised by the core `starlark_lsp`
-    /// implementation. Implementations should return [`Some(Response)`] when the request
-    /// identified by `req.method` has been handled, or [`None`] to signal that the message is
-    /// unsupported and can be safely ignored.
+    /// implementation. Return [`Some(Response)`] when `req.method` is handled. Return [`None`]
+    /// if the method is unsupported; the server then replies with JSON-RPC `MethodNotFound`.
     fn handle_custom_request(
         &self,
         _req: &lsp_server::Request,
@@ -2009,6 +2008,12 @@ impl<T: LspContext> Backend<T> {
                     // Re-sync registrations immediately so subsequent
                     // external file edits are observed.
                     self.sync_watched_file_registrations();
+                } else {
+                    self.send_response(Response::new_err(
+                        req.id,
+                        ErrorCode::MethodNotFound as i32,
+                        format!("Method not found: {}", req.method),
+                    ));
                 }
             }
         }
@@ -2352,6 +2357,7 @@ mod tests {
     use crate::server::new_notification;
     use crate::test::TestServer;
     use crate::test::TestServerContext;
+    use crate::test::TestServerError;
 
     fn protocol_uri(uri: &Url) -> Uri {
         uri.as_str().parse().unwrap()
@@ -3887,6 +3893,46 @@ mod tests {
         let request_id = server.send_request(request)?;
         let response: String = server.get_response(request_id)?;
         assert_eq!(response, "echo:ping");
+        Ok(())
+    }
+
+    #[test]
+    fn unknown_requests_return_method_not_found() -> anyhow::Result<()> {
+        if is_wasm() {
+            return Ok(());
+        }
+
+        let mut server = TestServer::new()?;
+        for (id, method) in [
+            (RequestId::from(6), "pcb/unknownSmokeMethod"),
+            (
+                RequestId::from("unknown-request".to_owned()),
+                "$/unknownRequest",
+            ),
+        ] {
+            let request_id = server.send_request(Request {
+                id,
+                method: method.to_owned(),
+                params: serde_json::json!({}),
+            })?;
+            let error = server
+                .get_response::<serde_json::Value>(request_id)
+                .unwrap_err();
+            let TestServerError::ResponseError(error) = error.downcast()? else {
+                anyhow::bail!("expected an LSP error response");
+            };
+            assert_eq!(error.code, lsp_server::ErrorCode::MethodNotFound as i32);
+        }
+
+        let request_id = server.send_request(Request {
+            id: RequestId::from(7),
+            method: "starlark/echo".to_owned(),
+            params: serde_json::json!("still alive"),
+        })?;
+        assert_eq!(
+            server.get_response::<String>(request_id)?,
+            "echo:still alive"
+        );
         Ok(())
     }
 }
