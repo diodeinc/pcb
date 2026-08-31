@@ -191,14 +191,12 @@ pub fn embedded_file_checksum(data: &[u8]) -> String {
     let mut len = 0usize;
     let mut block = [0u8; 16];
 
-    let mut chunks = data.chunks_exact(16);
-    for chunk in &mut chunks {
-        block.copy_from_slice(chunk);
-        hash_mmh3_block(&mut h1, &mut h2, &block);
+    let (chunks, tail) = data.as_chunks::<16>();
+    for chunk in chunks {
+        hash_mmh3_block(&mut h1, &mut h2, chunk);
         len += 16;
     }
 
-    let tail = chunks.remainder();
     if !tail.is_empty() {
         block[..tail.len()].copy_from_slice(tail);
         let padding = 4 - (tail.len() + 4) % 4;
