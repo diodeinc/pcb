@@ -11,7 +11,7 @@ use std::fs::File;
 use std::io::{BufReader, Write};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
-use tempfile::NamedTempFile;
+use tempfile::{NamedTempFile, TempDir};
 
 fn expand_home(path: &str) -> String {
     path.replace(
@@ -384,7 +384,8 @@ impl KiCadCliBuilder {
     }
 
     /// Execute the KiCad CLI command
-    pub fn run(self) -> Result<()> {
+    pub fn run(mut self) -> Result<()> {
+        let _temp_dir = self.isolate_temp_dir()?;
         let kicad_cli = KiCadInstallation::discover().kicad_cli;
         let mut cmd = CommandRunner::new(&kicad_cli);
 
@@ -419,9 +420,10 @@ impl KiCadCliBuilder {
     }
 
     /// Execute the KiCad CLI command and return the output
-    pub fn output(self) -> Result<std::process::Output> {
+    pub fn output(mut self) -> Result<std::process::Output> {
+        let _temp_dir = self.isolate_temp_dir()?;
         let kicad_cli = KiCadInstallation::discover().kicad_cli;
-        let mut cmd = std::process::Command::new(&kicad_cli);
+        let mut cmd = Command::new(&kicad_cli);
 
         for arg in &self.args {
             cmd.arg(arg);
@@ -437,6 +439,15 @@ impl KiCadCliBuilder {
 
         cmd.output()
             .with_context(|| format!("Failed to execute KiCad CLI at {kicad_cli}"))
+    }
+
+    fn isolate_temp_dir(&mut self) -> Result<TempDir> {
+        let temp_dir = tempfile::tempdir().context("Failed to create KiCad temporary directory")?;
+        let path = temp_dir.path().to_string_lossy().into_owned();
+        for key in ["TMPDIR", "TMP", "TEMP"] {
+            self.env_vars.insert(key.to_owned(), path.clone());
+        }
+        Ok(temp_dir)
     }
 }
 
