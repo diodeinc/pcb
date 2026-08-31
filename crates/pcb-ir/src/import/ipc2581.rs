@@ -4299,9 +4299,9 @@ fn map_polarity(polarity: Polarity) -> GeometryPolarity {
 
 fn map_line_cap(line_end: LineEnd) -> LineCap {
     match line_end {
+        LineEnd::None => LineCap::Butt,
         LineEnd::Round => LineCap::Round,
         LineEnd::Square => LineCap::Square,
-        LineEnd::Flat => LineCap::Butt,
     }
 }
 
@@ -4695,7 +4695,7 @@ mod tests {
     <FunctionMode mode="FABRICATION"/>
     <DictionaryLineDesc units="MILLIMETER">
       <EntryLineDesc id="fine">
-        <LineDesc lineWidth="0.15" lineEnd="FLAT"/>
+        <LineDesc lineWidth="0.15" lineEnd="NONE"/>
       </EntryLineDesc>
     </DictionaryLineDesc>
   </Content>

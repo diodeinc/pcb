@@ -885,7 +885,7 @@ mod tests {
     <FunctionMode mode="ASSEMBLY"/>
     <BomRef name="assembly-bom"/>
     <DictionaryLineDesc units="INCH">
-      <EntryLineDesc id="line"><LineDesc lineWidth="0.005" lineEnd="ROUND"/></EntryLineDesc>
+      <EntryLineDesc id="line"><LineDesc lineWidth="0.005" lineEnd="NONE"/></EntryLineDesc>
     </DictionaryLineDesc>
     <DictionaryFont units="INCH">
       <EntryFont id="font">
@@ -1059,6 +1059,12 @@ mod tests {
             doc.resolve(doc.content().dictionary_firmware.entries[0].hex_encoded_binary),
             "00"
         );
+        assert_eq!(
+            doc.content().dictionary_line_desc.entries[0]
+                .line_desc
+                .line_end,
+            LineEnd::None
+        );
         let fonts = &doc.content().dictionary_font;
         assert_eq!(fonts.entries.len(), 2);
         let FontDefinition::Embedded(font) = &fonts.entries[0].definition else {
@@ -1131,6 +1137,7 @@ mod tests {
             xml.replace("fontSize=\"12\"", "fontSize=\"0\""),
             xml.replace("height=\"0.1\"", "height=\"-0.1\""),
             xml.replace("populate=\" true \"", "populate=\"yes\""),
+            xml.replace("lineEnd=\"NONE\"", "lineEnd=\"FLAT\""),
         ] {
             assert!(
                 Ipc2581::parse(&invalid).is_err(),

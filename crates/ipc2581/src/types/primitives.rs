@@ -257,9 +257,9 @@ pub enum LineDescGroup {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LineEnd {
+    None,
     Round,
     Square,
-    Flat,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

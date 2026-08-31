@@ -334,9 +334,9 @@ impl<'a> Parser<'a> {
 
     fn parse_line_end(&self, s: &str) -> Result<LineEnd> {
         match s {
+            "NONE" => Ok(LineEnd::None),
             "ROUND" => Ok(LineEnd::Round),
             "SQUARE" => Ok(LineEnd::Square),
-            "FLAT" => Ok(LineEnd::Flat),
             _ => Err(Ipc2581Error::InvalidAttribute(format!(
                 "Unknown lineEnd: {}",
                 s
