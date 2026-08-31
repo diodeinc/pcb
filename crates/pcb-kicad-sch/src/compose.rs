@@ -947,9 +947,10 @@ fn pack_generated_symbols(
         let (grid_bounds, block_offsets) = if page_index >= preserved_page_count {
             arrange_new_page_blocks(&mut document.pages[page_index], &page_blocks)?
         } else {
-            let usable = GridPacker::for_page(&document.pages[page_index].paper)?.usable_bounds();
+            let packer = GridPacker::for_page(&document.pages[page_index].paper)?;
+            let usable = packer.usable_bounds();
             let arrangement = arrange_placement_blocks(&page_blocks, usable);
-            if !placement_grid_fits(arrangement.0, usable) {
+            if !packer.can_place_without_overlap(arrangement.0) {
                 bail!(
                     "generated component batch does not fit existing schematic page {}",
                     document.pages[page_index]
@@ -986,9 +987,10 @@ fn arrange_new_page_blocks(
     blocks: &[&PlacementBlock],
 ) -> Result<(GridRect, Vec<GridPoint>)> {
     for paper in placement_paper_candidates(&page.paper) {
-        let usable = GridPacker::for_page(&paper)?.usable_bounds();
+        let packer = GridPacker::for_page(&paper)?;
+        let usable = packer.usable_bounds();
         let arrangement = arrange_placement_blocks(blocks, usable);
-        if placement_grid_fits(arrangement.0, usable) {
+        if packer.can_place_without_overlap(arrangement.0) {
             page.paper = paper;
             return Ok(arrangement);
         }
@@ -1021,10 +1023,6 @@ fn placement_paper_candidates(current: &Paper) -> Vec<Paper> {
         portrait: *portrait,
     }));
     candidates
-}
-
-fn placement_grid_fits(bounds: GridRect, usable: GridRect) -> bool {
-    bounds.width() <= usable.width() && bounds.height() <= usable.height()
 }
 
 #[derive(Debug)]
@@ -1260,36 +1258,42 @@ fn placement_block(
     bounds_by_slot: &BTreeMap<SymbolSlotKey, GridRect>,
     max_columns: usize,
 ) -> PlacementBlock {
-    let cell_width = slots
-        .iter()
-        .map(|slot| bounds_by_slot[slot].width())
-        .max()
-        .expect("placement block has members")
-        + PLACEMENT_BLOCK_GAP_CELLS;
-    let cell_height = slots
-        .iter()
-        .map(|slot| bounds_by_slot[slot].height())
-        .max()
-        .expect("placement block has members")
-        + PLACEMENT_BLOCK_GAP_CELLS;
     let columns = max_columns.min(slots.len());
+    let rows = slots.len().div_ceil(columns);
+    let mut row_min = vec![i32::MAX; rows];
+    let mut row_max = vec![i32::MIN; rows];
+    for (index, slot) in slots.iter().enumerate() {
+        let row = index / columns;
+        row_min[row] = row_min[row].min(bounds_by_slot[slot].min_y);
+        row_max[row] = row_max[row].max(bounds_by_slot[slot].max_y);
+    }
+    let mut row_origins = vec![0; rows];
+    for row in 1..rows {
+        row_origins[row] =
+            row_origins[row - 1] + row_max[row - 1] - row_min[row] + PLACEMENT_BLOCK_GAP_CELLS;
+    }
+
     let mut block_bounds = None;
-    let members = slots
-        .into_iter()
-        .enumerate()
-        .map(|(index, slot)| {
-            let bounds = bounds_by_slot[&slot];
-            let offset = GridPoint {
-                x: (index % columns) as i32 * cell_width,
-                y: (index / columns) as i32 * cell_height,
-            };
-            let member_bounds = bounds.translated(offset);
-            block_bounds = Some(
-                block_bounds.map_or(member_bounds, |block: GridRect| block.union(member_bounds)),
-            );
-            PlacementMember { slot, offset }
-        })
-        .collect();
+    let mut members: Vec<PlacementMember> = Vec::with_capacity(slots.len());
+    for (index, slot) in slots.into_iter().enumerate() {
+        let bounds = bounds_by_slot[&slot];
+        let row = index / columns;
+        let x = if index % columns == 0 {
+            0
+        } else {
+            let previous = &members[index - 1];
+            previous.offset.x + bounds_by_slot[&previous.slot].max_x - bounds.min_x
+                + PLACEMENT_BLOCK_GAP_CELLS
+        };
+        let offset = GridPoint {
+            x,
+            y: row_origins[row],
+        };
+        let member_bounds = bounds.translated(offset);
+        block_bounds =
+            Some(block_bounds.map_or(member_bounds, |block: GridRect| block.union(member_bounds)));
+        members.push(PlacementMember { slot, offset });
+    }
     PlacementBlock {
         key,
         page_index,
@@ -3126,6 +3130,59 @@ mod tests {
     }
 
     #[test]
+    fn placement_block_separates_opposing_asymmetric_envelopes() {
+        let slots = (0..4)
+            .map(|index| SymbolSlotKey::new(format!("U{index}"), 1).unwrap())
+            .collect::<Vec<_>>();
+        let bounds_by_slot = [
+            GridRect {
+                min_x: -1,
+                min_y: -1,
+                max_x: 8,
+                max_y: 8,
+            },
+            GridRect {
+                min_x: -8,
+                min_y: -1,
+                max_x: 1,
+                max_y: 8,
+            },
+            GridRect {
+                min_x: -1,
+                min_y: -8,
+                max_x: 8,
+                max_y: 1,
+            },
+            GridRect {
+                min_x: -8,
+                min_y: -8,
+                max_x: 1,
+                max_y: 1,
+            },
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, bounds)| (slots[index].clone(), bounds))
+        .collect::<BTreeMap<_, _>>();
+
+        let block = placement_block("component".to_string(), 0, slots, &bounds_by_slot, 2);
+        let member_bounds = block
+            .members
+            .iter()
+            .map(|member| bounds_by_slot[&member.slot].translated(member.offset))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            member_bounds[1].min_x - member_bounds[0].max_x,
+            PLACEMENT_BLOCK_GAP_CELLS
+        );
+        assert_eq!(
+            member_bounds[2].min_y - member_bounds[0].max_y,
+            PLACEMENT_BLOCK_GAP_CELLS
+        );
+    }
+
+    #[test]
     fn placement_grid_aligns_block_origins_in_rows() {
         let blocks = [
             test_placement_block(
@@ -3255,8 +3312,36 @@ mod tests {
                 portrait: false,
             }
         );
+        let packer = GridPacker::for_page(&page.paper).unwrap();
+        assert!(packer.can_place_without_overlap(bounds));
+    }
+
+    #[test]
+    fn new_page_grows_when_grid_would_cover_title_block() {
+        let mut page = SchPage::new("title-block");
         let usable = GridPacker::for_page(&page.paper).unwrap().usable_bounds();
-        assert!(placement_grid_fits(bounds, usable));
+        let blocks = [test_placement_block(
+            "full-page",
+            GridRect {
+                min_x: 0,
+                min_y: 0,
+                max_x: usable.width(),
+                max_y: usable.height(),
+            },
+        )];
+        let blocks = blocks.iter().collect::<Vec<_>>();
+
+        let (bounds, _) = arrange_new_page_blocks(&mut page, &blocks).unwrap();
+
+        assert_eq!(
+            page.paper,
+            Paper::Named {
+                name: "A3".to_string(),
+                portrait: false,
+            }
+        );
+        let packer = GridPacker::for_page(&page.paper).unwrap();
+        assert!(packer.can_place_without_overlap(bounds));
     }
 
     fn multi_pad_symbol() -> BTreeMap<SymbolSlotKey, PlacedSymbol> {

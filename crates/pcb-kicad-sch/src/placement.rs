@@ -169,6 +169,22 @@ impl GridPacker {
         self.usable
     }
 
+    pub(crate) fn can_place_without_overlap(&self, relative: GridRect) -> bool {
+        let min_anchor_x = self.usable.min_x - relative.min_x;
+        let min_anchor_y = self.usable.min_y - relative.min_y;
+        let max_anchor_x = self.usable.max_x - relative.max_x;
+        let max_anchor_y = self.usable.max_y - relative.max_y;
+        if max_anchor_x < min_anchor_x || max_anchor_y < min_anchor_y {
+            return false;
+        }
+        let occupied = self.occupancy_prefix();
+        (min_anchor_y..=max_anchor_y).any(|y| {
+            (min_anchor_x..=max_anchor_x).any(|x| {
+                self.occupied_cells(relative.translated(GridPoint { x, y }), &occupied) == 0
+            })
+        })
+    }
+
     pub(crate) fn place(&mut self, relative: GridRect) -> GridPoint {
         self.place_internal(relative, false)
     }
