@@ -32,6 +32,7 @@ use derive_more::Display;
 use dupe::Dupe;
 use dupe::OptionDupedExt;
 use lsp_server::Connection;
+use lsp_server::ErrorCode;
 use lsp_server::Message;
 use lsp_server::Notification;
 use lsp_server::ProtocolError;
@@ -90,10 +91,12 @@ use lsp_types::notification::DidCloseTextDocument;
 use lsp_types::notification::DidOpenTextDocument;
 use lsp_types::notification::DidSaveTextDocument;
 use lsp_types::notification::LogMessage;
+use lsp_types::notification::Notification as _;
 use lsp_types::notification::PublishDiagnostics;
 use lsp_types::request::Completion;
 use lsp_types::request::GotoDefinition;
 use lsp_types::request::HoverRequest;
+use lsp_types::request::Request as _;
 use percent_encoding::AsciiSet;
 use percent_encoding::CONTROLS;
 use percent_encoding::utf8_percent_encode;
@@ -1905,8 +1908,10 @@ impl<T: LspContext> Backend<T> {
         loop {
             match self.connection.receiver.try_recv() {
                 Ok(Message::Notification(notification)) => {
-                    if let Some(next_params) =
-                        as_notification::<DidChangeTextDocument>(&notification)
+                    if notification.method == DidChangeTextDocument::METHOD
+                        && let Ok(next_params) = serde_json::from_value::<DidChangeTextDocumentParams>(
+                            notification.params.clone(),
+                        )
                         && next_params.text_document.uri == uri
                     {
                         params = next_params;
@@ -1950,46 +1955,12 @@ impl<T: LspContext> Backend<T> {
             };
             match msg {
                 Message::Request(req) => {
-                    // TODO(nmj): Also implement DocumentSymbols so that some logic can
-                    //            be handled client side.
-                    if let Some(params) = as_request::<GotoDefinition>(&req) {
-                        self.goto_definition(req.id, params, &initialize_params);
-                    } else if let Some(params) = as_request::<StarlarkFileContentsRequest>(&req) {
-                        self.get_starlark_file_contents(req.id, params);
-                    } else if let Some(params) = as_request::<Completion>(&req) {
-                        self.completion(req.id, params, &initialize_params);
-                    } else if let Some(params) = as_request::<HoverRequest>(&req) {
-                        self.hover(req.id, params, &initialize_params);
-                    } else if self.connection.handle_shutdown(&req)? {
+                    if !self.handle_request(req, &initialize_params)? {
                         return Ok(());
-                    } else if let Some(resp) =
-                        self.context.handle_custom_request(&req, &initialize_params)
-                    {
-                        self.send_response(resp);
-                        // Custom requests (for example `zener/evaluate`) can
-                        // mutate watched-file subscriptions in the context.
-                        // Re-sync registrations immediately so subsequent
-                        // external file edits are observed.
-                        self.sync_watched_file_registrations();
                     }
-                    // Currently don't handle any other requests
                 }
-                Message::Notification(x) => {
-                    if let Some(params) = as_notification::<DidOpenTextDocument>(&x) {
-                        self.maybe_log_error(self.did_open(params));
-                    } else if let Some(params) = as_notification::<DidChangeTextDocument>(&x) {
-                        let params = self.coalesce_did_change(params, &mut pending);
-                        self.maybe_log_error(self.did_change(params));
-                    } else if let Some(params) = as_notification::<DidChangeWatchedFiles>(&x) {
-                        self.maybe_log_error(self.did_change_watched_files(params));
-                    } else if let Some(params) = as_notification::<DidSaveTextDocument>(&x) {
-                        self.maybe_log_error(self.did_save(params));
-                    } else if let Some(params) = as_notification::<DidCloseTextDocument>(&x) {
-                        self.maybe_log_error(self.did_close(params));
-                    } else {
-                        self.context
-                            .handle_custom_notification(&x, &initialize_params);
-                    }
+                Message::Notification(notification) => {
+                    self.handle_notification(notification, &initialize_params, &mut pending);
                 }
                 Message::Response(_) => {
                     // Don't expect any of these
@@ -1997,6 +1968,122 @@ impl<T: LspContext> Backend<T> {
             }
         }
         Ok(())
+    }
+
+    fn handle_request(
+        &self,
+        req: Request,
+        initialize_params: &InitializeParams,
+    ) -> Result<bool, ProtocolError> {
+        // TODO(nmj): Also implement DocumentSymbols so that some logic can
+        //            be handled client side.
+        match req.method.as_str() {
+            GotoDefinition::METHOD => {
+                self.with_request_params(req, |id, params| {
+                    self.goto_definition(id, params, initialize_params)
+                });
+            }
+            StarlarkFileContentsRequest::METHOD => {
+                self.with_request_params(req, |id, params| {
+                    self.get_starlark_file_contents(id, params)
+                });
+            }
+            Completion::METHOD => {
+                self.with_request_params(req, |id, params| {
+                    self.completion(id, params, initialize_params)
+                });
+            }
+            HoverRequest::METHOD => {
+                self.with_request_params(req, |id, params| {
+                    self.hover(id, params, initialize_params)
+                });
+            }
+            _ => {
+                if self.connection.handle_shutdown(&req)? {
+                    return Ok(false);
+                }
+                if let Some(resp) = self.context.handle_custom_request(&req, initialize_params) {
+                    self.send_response(resp);
+                    // Custom requests (for example `zener/evaluate`) can
+                    // mutate watched-file subscriptions in the context.
+                    // Re-sync registrations immediately so subsequent
+                    // external file edits are observed.
+                    self.sync_watched_file_registrations();
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    fn handle_notification(
+        &self,
+        notification: Notification,
+        initialize_params: &InitializeParams,
+        pending: &mut VecDeque<Message>,
+    ) {
+        match notification.method.as_str() {
+            DidOpenTextDocument::METHOD => {
+                self.with_notification_params(notification, |params| {
+                    self.maybe_log_error(self.did_open(params))
+                });
+            }
+            DidChangeTextDocument::METHOD => {
+                self.with_notification_params(notification, |params| {
+                    let params = self.coalesce_did_change(params, pending);
+                    self.maybe_log_error(self.did_change(params));
+                });
+            }
+            DidChangeWatchedFiles::METHOD => {
+                self.with_notification_params(notification, |params| {
+                    self.maybe_log_error(self.did_change_watched_files(params))
+                });
+            }
+            DidSaveTextDocument::METHOD => {
+                self.with_notification_params(notification, |params| {
+                    self.maybe_log_error(self.did_save(params))
+                });
+            }
+            DidCloseTextDocument::METHOD => {
+                self.with_notification_params(notification, |params| {
+                    self.maybe_log_error(self.did_close(params))
+                });
+            }
+            _ => self
+                .context
+                .handle_custom_notification(&notification, initialize_params),
+        }
+    }
+
+    fn with_request_params<P, F>(&self, req: Request, f: F)
+    where
+        P: DeserializeOwned,
+        F: FnOnce(RequestId, P),
+    {
+        match serde_json::from_value(req.params) {
+            Ok(params) => f(req.id, params),
+            Err(error) => self.send_response(Response::new_err(
+                req.id,
+                ErrorCode::InvalidParams as i32,
+                error.to_string(),
+            )),
+        }
+    }
+
+    fn with_notification_params<P, F>(&self, notification: Notification, f: F)
+    where
+        P: DeserializeOwned,
+        F: FnOnce(P),
+    {
+        match serde_json::from_value(notification.params) {
+            Ok(params) => f(params),
+            Err(error) => self.log_message(
+                MessageType::WARNING,
+                &format!(
+                    "Invalid notification\nMethod: {}\n error: {error}",
+                    notification.method
+                ),
+            ),
+        }
     }
 
     fn log_startup_information(&self, initialize_params: &InitializeParams, started_at: Instant) {
@@ -2193,42 +2280,6 @@ fn supported(value: bool) -> &'static str {
     if value { "supported" } else { "unsupported" }
 }
 
-fn as_notification<T>(x: &Notification) -> Option<T::Params>
-where
-    T: lsp_types::notification::Notification,
-    T::Params: DeserializeOwned,
-{
-    if x.method == T::METHOD {
-        let params = serde_json::from_value(x.params.clone()).unwrap_or_else(|err| {
-            panic!(
-                "Invalid notification\nMethod: {}\n error: {}",
-                x.method, err
-            )
-        });
-        Some(params)
-    } else {
-        None
-    }
-}
-
-fn as_request<T>(x: &Request) -> Option<T::Params>
-where
-    T: lsp_types::request::Request,
-    T::Params: DeserializeOwned,
-{
-    if x.method == T::METHOD {
-        let params = serde_json::from_value(x.params.clone()).unwrap_or_else(|err| {
-            panic!(
-                "Invalid request\n  method: {}\n  error: {}\n  request: {:?}\n",
-                x.method, err, x
-            )
-        });
-        Some(params)
-    } else {
-        None
-    }
-}
-
 /// Create a new `Notification` object with the correct name from the given params.
 pub(crate) fn new_notification<T>(params: T::Params) -> Notification
 where
@@ -2257,6 +2308,7 @@ mod tests {
     use std::path::PathBuf;
 
     use anyhow::Context;
+    use lsp_server::ErrorCode;
     use lsp_server::Request;
     use lsp_server::RequestId;
     use lsp_types::CompletionParams;
@@ -2453,6 +2505,48 @@ mod tests {
                 response
             )),
         }
+    }
+
+    #[test]
+    fn malformed_hover_and_did_open_do_not_crash_the_server() -> anyhow::Result<()> {
+        if is_wasm() {
+            return Ok(());
+        }
+
+        let uri = temp_file_uri("protocol.star");
+        let mut server = TestServer::new()?;
+        server.open_file(
+            uri.clone(),
+            "def hello():\n    \"Greeting.\"\n    pass\nhello()\n".to_owned(),
+        )?;
+
+        let hover_id = server.send_request(Request {
+            id: RequestId::from(1000),
+            method: "textDocument/hover".to_owned(),
+            params: serde_json::json!({}),
+        })?;
+        let error = server.get_response_error(hover_id)?;
+        assert_eq!(error.code, ErrorCode::InvalidParams as i32);
+
+        server.send_notification(lsp_server::Notification {
+            method: "textDocument/didOpen".to_owned(),
+            params: serde_json::json!({}),
+        })?;
+
+        let hover = server.new_request::<HoverRequest>(HoverParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier {
+                    uri: protocol_uri(&uri),
+                },
+                position: Position::new(3, 1),
+            },
+            work_done_progress_params: Default::default(),
+        });
+        let hover_id = server.send_request(hover)?;
+        let hover: Hover = server.get_response(hover_id)?;
+        assert!(!matches!(hover.contents, HoverContents::Array(contents) if contents.is_empty()));
+
+        Ok(())
     }
 
     #[test]

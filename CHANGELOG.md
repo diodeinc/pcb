@@ -15,6 +15,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- Keep the language server running when LSP request or notification parameters are malformed.
 - Include standalone board outlines in Gerber exports.
 - Inherit symbol descriptions for non-generic BOM components.
 - Require external power IOs to have a net symbol or hierarchical label.

@@ -576,6 +576,30 @@ impl TestServer {
 
     /// Receive messages from the server until either the response for the given request ID
     /// has been seen, or until there are no more messages and the receive method times out.
+    pub fn get_response_error(&mut self, id: RequestId) -> anyhow::Result<ResponseError> {
+        loop {
+            self.receive()?;
+
+            match self.responses.get(&id) {
+                Some(Response {
+                    response_result: Err(err),
+                    ..
+                }) => {
+                    break Ok(err.clone());
+                }
+                Some(Response {
+                    response_result: Ok(result),
+                    ..
+                }) => {
+                    break Err(anyhow::anyhow!(
+                        "expected an error response, got `{result:?}`"
+                    ));
+                }
+                None => {}
+            }
+        }
+    }
+
     pub fn get_response<T: DeserializeOwned>(&mut self, id: RequestId) -> anyhow::Result<T> {
         loop {
             self.receive()?;
