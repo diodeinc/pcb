@@ -12,6 +12,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Preserve IPC-2581 assembly BOM, package, pin, population, and supporting dictionary source facts in `pcb-ir` imports.
 
+### Changed
+
+- Use a device-style PKCE flow for `pcb auth login` so headless machines can authenticate securely.
+
 ## [0.4.41] - 2026-08-31
 
 ### Added
