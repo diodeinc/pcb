@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { spawnSync } from 'node:child_process'
+import assert from 'node:assert/strict'
 import { pathToFileURL } from 'node:url'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
@@ -243,6 +244,13 @@ try {
   if (!result.success) {
     console.error(JSON.stringify(result.diagnostics, null, 2))
     process.exitCode = 1
+  } else {
+    assert(result.schematic, 'Evaluation succeeded without a schematic')
+    const json = JSON.stringify(result)
+    assert(!json.includes('$serde_json::private::Number'), json)
+    for (const [name, net] of Object.entries(result.schematic.nets)) {
+      assert(Number.isSafeInteger(net.id), `Net ${name} must have an integer ID`)
+    }
   }
 
   console.log(JSON.stringify(args.json ? result : result.schematic, null, 2))
