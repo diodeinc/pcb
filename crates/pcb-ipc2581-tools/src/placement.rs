@@ -102,7 +102,7 @@ pub fn extract_single_board_placements_from_design(
             .or(component_package);
         let value = bom.and_then(|data| data.value.clone());
         let populate = match occurrence.population {
-            PopulationState::Unspecified => bom.map(|data| data.populate),
+            PopulationState::Unspecified => bom.and_then(|data| data.populate),
             PopulationState::Populate => Some(true),
             PopulationState::DoNotPopulate => Some(false),
             PopulationState::Conflicting => {
@@ -175,7 +175,7 @@ fn decompose_placement(transform: Affine2) -> Result<DecomposedPlacement> {
 struct BomPlacementData {
     value: Option<String>,
     package: Option<String>,
-    populate: bool,
+    populate: Option<bool>,
 }
 
 fn build_bom_lookup(accessor: &IpcAccessor<'_>) -> BTreeMap<String, BomPlacementData> {
@@ -193,13 +193,15 @@ fn build_bom_lookup(accessor: &IpcAccessor<'_>) -> BTreeMap<String, BomPlacement
             .map(|chars| accessor.extract_characteristics(chars))
             .unwrap_or_else(CharacteristicsData::default);
 
-        for ref_des in &item.ref_des_list {
+        for ref_des in item.reference_designators() {
             let designator = ipc.resolve(ref_des.name).to_string();
             if designator.is_empty() {
                 continue;
             }
 
-            let package = Some(ipc.resolve(ref_des.package_ref).to_string())
+            let package = ref_des
+                .package_ref
+                .map(|package| ipc.resolve(package).to_string())
                 .filter(|package| !package.is_empty())
                 .or_else(|| characteristics.package.clone());
 

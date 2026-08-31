@@ -27,11 +27,16 @@ pub struct ImportedDesign {
     strings: Interner,
     pub revision: String,
     pub content: ipc2581::types::Content,
+    pub logistic_header: Option<ipc2581::types::LogisticHeader>,
+    pub history_record: Option<ipc2581::types::HistoryRecord>,
+    pub boms: Vec<ipc2581::types::Bom>,
+    pub avl: Option<ipc2581::types::Avl>,
     pub geometry: GeometryDocument,
     pub layer_definitions: Vec<Layer>,
     pub stackups: Vec<ipc2581::types::Stackup>,
     pub steps: Vec<Step>,
     pub step_layers: Vec<StepLayer>,
+    pub packages: Vec<PackageDefinition>,
     pub components: Vec<ComponentDefinition>,
 }
 
@@ -94,6 +99,16 @@ pub fn feature_occurrence_id(feature: &GeometryFeature) -> Option<FeatureOccurre
 pub struct ComponentDefinitionId(pub u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct PackageDefinitionId(pub u32);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct BomReferenceId {
+    pub bom: u32,
+    pub item: u32,
+    pub designator: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ComponentOccurrenceId {
     pub component: ComponentDefinitionId,
     pub layout: LayoutOccurrenceId,
@@ -104,8 +119,17 @@ pub struct ComponentDefinition {
     pub step: u32,
     pub source_index: u32,
     pub source: ipc2581::types::Component,
+    pub package: Option<PackageDefinitionId>,
+    pub bom_references: Vec<BomReferenceId>,
     pub local_from_component: Affine2,
     pub population: PopulationState,
+}
+
+#[derive(Debug, Clone)]
+pub struct PackageDefinition {
+    pub step: u32,
+    pub source_index: u32,
+    pub source: ipc2581::types::Package,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -823,7 +847,26 @@ pub fn import_design(ipc: &Ipc2581) -> Result<ImportedDesign> {
     }
     crate::dialects::ipc::process::normalize_bounds(&mut geometry);
 
-    let population = population_states(ipc);
+    let mut packages = Vec::new();
+    let mut package_ids = HashMap::new();
+    for step in &ecad.cad_data.steps {
+        let step_id = geometry
+            .layout
+            .steps
+            .iter()
+            .position(|candidate| candidate.source_step_ref == step.name)
+            .context("package step is missing from the layout graph")? as u32;
+        for (source_index, package) in step.packages.iter().enumerate() {
+            let id = PackageDefinitionId(packages.len() as u32);
+            package_ids.insert(package.name, id);
+            packages.push(PackageDefinition {
+                step: step_id,
+                source_index: source_index as u32,
+                source: package.clone(),
+            });
+        }
+    }
+
     let mut components = Vec::new();
     for step in &ecad.cad_data.steps {
         let step_id = geometry
@@ -838,15 +881,22 @@ pub fn import_design(ipc: &Ipc2581) -> Result<ImportedDesign> {
                 Point::new(component.location.x, component.location.y),
                 component.xform,
             );
+            let package = component
+                .package_ref
+                .and_then(|reference| package_ids.get(&reference).copied());
+            let bom_references = component
+                .ref_des
+                .map(|reference| component_bom_references(ipc, step.name, reference))
+                .unwrap_or_default();
+            let population = population_state(ipc.boms(), &bom_references);
             components.push(ComponentDefinition {
                 step: step_id,
                 source_index: source_index as u32,
                 source: component.clone(),
+                package,
+                bom_references,
                 local_from_component: placement.transform,
-                population: component
-                    .ref_des
-                    .and_then(|reference| population.get(&reference).copied())
-                    .unwrap_or_default(),
+                population,
             });
         }
     }
@@ -855,43 +905,117 @@ pub fn import_design(ipc: &Ipc2581) -> Result<ImportedDesign> {
         strings: ipc.interner().clone(),
         revision: ipc.revision().to_owned(),
         content: ipc.content().clone(),
+        logistic_header: ipc.logistic_header().cloned(),
+        history_record: ipc.history_record().cloned(),
+        boms: ipc.boms().to_vec(),
+        avl: ipc.avl().cloned(),
         geometry,
         layer_definitions: ecad.cad_data.layers.clone(),
         stackups: ecad.cad_data.stackups.clone(),
         steps: ecad.cad_data.steps.clone(),
         step_layers,
+        packages,
         components,
     })
 }
 
-fn population_states(ipc: &Ipc2581) -> HashMap<Symbol, PopulationState> {
-    let mut states = HashMap::new();
-    let Some(bom) = ipc.bom() else {
-        return states;
-    };
-    for item in &bom.items {
-        for reference in &item.ref_des_list {
-            let incoming = if reference.populate {
+fn component_bom_references(
+    ipc: &Ipc2581,
+    source_step: Symbol,
+    component: Symbol,
+) -> Vec<BomReferenceId> {
+    let mut matches = Vec::new();
+    for (bom_index, bom) in ipc.boms().iter().enumerate() {
+        if bom.header.as_ref().is_some_and(|header| {
+            !header.step_refs.is_empty() && !header.step_refs.contains(&source_step)
+        }) {
+            continue;
+        }
+        for (item_index, item) in bom.items.iter().enumerate() {
+            for (designator_index, designator) in item.designators.iter().enumerate() {
+                let ipc2581::types::BomDesignator::Reference(reference) = designator else {
+                    continue;
+                };
+                if reference.name == component {
+                    matches.push(BomReferenceId {
+                        bom: bom_index as u32,
+                        item: item_index as u32,
+                        designator: designator_index as u32,
+                    });
+                }
+            }
+        }
+    }
+    matches
+}
+
+fn population_state(
+    boms: &[ipc2581::types::Bom],
+    references: &[BomReferenceId],
+) -> PopulationState {
+    references
+        .iter()
+        .filter_map(|id| bom_reference(boms, *id)?.populate)
+        .map(|populate| {
+            if populate {
                 PopulationState::Populate
             } else {
                 PopulationState::DoNotPopulate
-            };
-            states
-                .entry(reference.name)
-                .and_modify(|state| {
-                    if *state != incoming {
-                        *state = PopulationState::Conflicting;
-                    }
-                })
-                .or_insert(incoming);
-        }
+            }
+        })
+        .fold(
+            PopulationState::Unspecified,
+            |state, incoming| match state {
+                PopulationState::Unspecified => incoming,
+                PopulationState::Conflicting => PopulationState::Conflicting,
+                state if state == incoming => state,
+                PopulationState::Populate | PopulationState::DoNotPopulate => {
+                    PopulationState::Conflicting
+                }
+            },
+        )
+}
+
+fn bom_reference(
+    boms: &[ipc2581::types::Bom],
+    reference: BomReferenceId,
+) -> Option<&ipc2581::types::BomRefDes> {
+    let designator = boms
+        .get(reference.bom as usize)?
+        .items
+        .get(reference.item as usize)?
+        .designators
+        .get(reference.designator as usize)?;
+    match designator {
+        ipc2581::types::BomDesignator::Reference(reference) => Some(reference),
+        _ => None,
     }
-    states
 }
 
 impl ImportedDesign {
     pub fn resolve(&self, symbol: Symbol) -> &str {
         self.strings.resolve(symbol)
+    }
+
+    pub fn bom(&self) -> Option<&ipc2581::types::Bom> {
+        self.content
+            .bom_refs
+            .iter()
+            .find_map(|reference| self.boms.iter().find(|bom| bom.name == *reference))
+            .or_else(|| self.boms.first())
+    }
+
+    pub fn resolve_enterprise(&self, enterprise_ref: Symbol) -> Option<&str> {
+        let enterprise = self
+            .logistic_header
+            .as_ref()?
+            .enterprises
+            .iter()
+            .find(|enterprise| enterprise.id == enterprise_ref)?;
+        match enterprise.name.map(|name| self.resolve(name))? {
+            "Manufacturer" | "NONE" | "N/A" | "" => None,
+            name => Some(name),
+        }
     }
 
     pub fn layer_definition(&self, layer: LayerId) -> Option<&Layer> {
@@ -907,6 +1031,21 @@ impl ImportedDesign {
         component: ComponentDefinitionId,
     ) -> Option<&ComponentDefinition> {
         self.components.get(component.0 as usize)
+    }
+
+    pub fn package_definition(&self, package: PackageDefinitionId) -> Option<&PackageDefinition> {
+        self.packages.get(package.0 as usize)
+    }
+
+    pub fn bom_reference(&self, reference: BomReferenceId) -> Option<&ipc2581::types::BomRefDes> {
+        bom_reference(&self.boms, reference)
+    }
+
+    pub fn bom_item(&self, reference: BomReferenceId) -> Option<&ipc2581::types::BomItem> {
+        self.boms
+            .get(reference.bom as usize)?
+            .items
+            .get(reference.item as usize)
     }
 
     pub fn layer_id(&self, name: &str) -> Option<LayerId> {
@@ -4364,7 +4503,10 @@ mod tests {
         let circle = ipc2581::types::StandardPrimitive::Circle(ipc2581::types::Styled {
             shape: ipc2581::types::Circle { diameter: 1.0 },
             fill_property: Some(FillProperty::Hollow),
+            line_desc: None,
             line_desc_ref: None,
+            fill_desc: None,
+            fill_desc_ref: None,
         });
         let rect = ipc2581::types::StandardPrimitive::RectCenter(ipc2581::types::Styled {
             shape: ipc2581::types::RectCenter {
@@ -4374,7 +4516,10 @@ mod tests {
                 },
             },
             fill_property: Some(FillProperty::Void),
+            line_desc: None,
             line_desc_ref: None,
+            fill_desc: None,
+            fill_desc_ref: None,
         });
 
         assert_eq!(primitive_paint(&circle), PrimitivePaint::Hollow);
@@ -4403,7 +4548,10 @@ mod tests {
                 },
             },
             fill_property: None,
+            line_desc: None,
             line_desc_ref: None,
+            fill_desc: None,
+            fill_desc_ref: None,
         });
 
         let paint =
@@ -4504,9 +4652,14 @@ mod tests {
                 line_desc_ref: None,
                 fill_desc: Some(ipc2581::types::FillDesc {
                     fill_property: FillProperty::Hollow,
+                    line_width: None,
+                    pitch1: None,
+                    pitch2: None,
                     angle1: None,
                     angle2: None,
+                    color: None,
                 }),
+                fill_desc_ref: None,
             }],
         });
 
@@ -4568,6 +4721,7 @@ mod tests {
                     line_desc: None,
                     line_desc_ref: Some(entry.id),
                     fill_desc: None,
+                    fill_desc_ref: None,
                 },
                 ipc2581::types::UserShape {
                     shape: UserShapeType::Polyline(ipc2581::types::Polyline {
@@ -4581,6 +4735,7 @@ mod tests {
                     line_desc: None,
                     line_desc_ref: Some(entry.id),
                     fill_desc: None,
+                    fill_desc_ref: None,
                 },
             ],
         });
@@ -4626,6 +4781,7 @@ mod tests {
                     }),
                     line_desc_ref: None,
                     fill_desc: None,
+                    fill_desc_ref: None,
                 }],
             }),
             x: 10.0,
@@ -4674,6 +4830,7 @@ mod tests {
                         line_desc: None,
                         line_desc_ref: None,
                         fill_desc: None,
+                        fill_desc_ref: None,
                     },
                     ipc2581::types::UserShape {
                         shape: UserShapeType::Contour(ipc2581::types::Contour {
@@ -4683,6 +4840,7 @@ mod tests {
                         line_desc: None,
                         line_desc_ref: None,
                         fill_desc: None,
+                        fill_desc_ref: None,
                     },
                 ],
             }),
@@ -4738,6 +4896,7 @@ mod tests {
                         }),
                         line_desc_ref: None,
                         fill_desc: None,
+                        fill_desc_ref: None,
                     },
                     ipc2581::types::UserShape {
                         shape: UserShapeType::Contour(ipc2581::types::Contour {
@@ -4747,6 +4906,7 @@ mod tests {
                         line_desc: None,
                         line_desc_ref: None,
                         fill_desc: None,
+                        fill_desc_ref: None,
                     },
                 ],
             }),
@@ -4940,6 +5100,167 @@ mod tests {
                 .len(),
             3
         );
+    }
+
+    #[test]
+    fn imported_design_carries_global_bom_and_package_associations() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="ASSEMBLY"/>
+    <StepRef name="board-a"/>
+    <StepRef name="board-b"/>
+    <BomRef name="bom-a"/>
+    <BomRef name="bom-b"/>
+    <DictionaryLineDesc units="MILLIMETER">
+      <EntryLineDesc id="line"><LineDesc lineWidth="0" lineEnd="ROUND"/></EntryLineDesc>
+    </DictionaryLineDesc>
+  </Content>
+  <LogisticHeader>
+    <Role id="owner" roleFunction="OWNER"/>
+    <Enterprise id="maker" code="maker" name="Maker"/>
+    <Person name="Engineer" enterpriseRef="maker" roleRef="owner"/>
+  </LogisticHeader>
+  <HistoryRecord number="1" origination="2026-01-01T00:00:00Z" software="test" lastChange="2026-01-01T00:00:00Z">
+    <FileRevision fileRevisionId="1" comment="test">
+      <SoftwarePackage name="test" vendor="test" revision="1"><Certification certificationStatus="SELFTEST"/></SoftwarePackage>
+    </FileRevision>
+  </HistoryRecord>
+  <Bom name="bom-a">
+    <BomHeader assembly="a" revision="1"><StepRef name="board-a"/></BomHeader>
+    <BomItem OEMDesignNumberRef="part-a" quantity="1" category="ELECTRICAL">
+      <RefDes name="U1" packageRef="pkg-a" populate="0" layerRef="TOP"/>
+      <Characteristics category="ELECTRICAL"/>
+    </BomItem>
+  </Bom>
+  <Bom name="bom-b">
+    <BomHeader assembly="b" revision="1"><StepRef name="board-b"/></BomHeader>
+    <BomItem OEMDesignNumberRef="part-b" quantity="1" category="ELECTRICAL">
+      <RefDes name="U3" packageRef="pkg-b" layerRef="TOP"/>
+      <Characteristics category="ELECTRICAL"/>
+    </BomItem>
+  </Bom>
+  <Bom name="not-selected">
+    <BomHeader assembly="other" revision="1"><StepRef name="board-a"/></BomHeader>
+    <BomItem OEMDesignNumberRef="other" quantity="1" category="ELECTRICAL">
+      <RefDes name="U4" packageRef="pkg-a" populate="1" layerRef="TOP"/>
+      <Characteristics category="ELECTRICAL"/>
+    </BomItem>
+  </Bom>
+  <Ecad name="design">
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Step name="board-a" type="BOARD">
+        <Datum x="0" y="0"/>
+        <Package name="pkg-a" type="OTHER" pinOneOrientation="OTHER"><Outline><Polygon><PolyBegin x="0" y="0"/><PolyStepSegment x="0" y="0"/></Polygon><LineDescRef id="line"/></Outline></Package>
+        <Package name="shared-package" type="OTHER" pinOneOrientation="OTHER"><Outline><Polygon><PolyBegin x="0" y="0"/><PolyStepSegment x="0" y="0"/></Polygon><LineDescRef id="line"/></Outline></Package>
+        <Component refDes="U1" packageRef="pkg-a" part="part-a" layerRef="TOP" mountType="SMT"><Location x="1" y="1"/></Component>
+        <Component refDes="U4" packageRef="pkg-a" part="other" layerRef="TOP" mountType="SMT"><Location x="4" y="4"/></Component>
+      </Step>
+      <Step name="board-b" type="BOARD">
+        <Datum x="0" y="0"/>
+        <Package name="pkg-b" type="OTHER" pinOneOrientation="OTHER"><Outline><Polygon><PolyBegin x="0" y="0"/><PolyStepSegment x="0" y="0"/></Polygon><LineDescRef id="line"/></Outline></Package>
+        <Component refDes="U3" packageRef="pkg-b" part="part-b" layerRef="TOP" mountType="SMT"><Location x="2" y="2"/></Component>
+        <Component refDes="U1" packageRef="pkg-b" part="part-b-u1" layerRef="TOP" mountType="SMT"><Location x="2.5" y="2.5"/></Component>
+        <Component packageRef="shared-package" part="shared-part" layerRef="TOP" mountType="SMT"><Location x="3" y="3"/></Component>
+      </Step>
+    </CadData>
+  </Ecad>
+  <Avl name="parts">
+    <AvlHeader title="parts" source="test" author="test" datetime="2026-01-01T00:00:00Z" version="1"/>
+    <AvlItem OEMDesignNumber="part-a"/>
+  </Avl>
+</IPC-2581>"#;
+        ipc2581::validate(xml).expect("association fixture conforms to IPC-2581C");
+        let ipc = Ipc2581::parse(xml).unwrap();
+
+        let imported = import_design(&ipc).unwrap();
+        assert_eq!(imported.boms.len(), 3);
+        assert!(imported.logistic_header.is_some());
+        assert!(imported.avl.is_some());
+        assert_eq!(imported.packages.len(), 3);
+        assert_eq!(imported.components.len(), 5);
+
+        let a = imported
+            .components
+            .iter()
+            .find(|component| imported.resolve(component.source.part) == "part-a")
+            .unwrap();
+        assert_eq!(a.population, PopulationState::DoNotPopulate);
+        assert_eq!(a.bom_references.len(), 1);
+        let a_package = imported.package_definition(a.package.unwrap()).unwrap();
+        assert_eq!(imported.resolve(a_package.source.name), "pkg-a");
+        assert_eq!(
+            imported
+                .bom_reference(a.bom_references[0])
+                .unwrap()
+                .populate,
+            Some(false)
+        );
+        assert_eq!(
+            imported.resolve(
+                imported
+                    .bom_item(a.bom_references[0])
+                    .unwrap()
+                    .oem_design_number_ref
+            ),
+            "part-a"
+        );
+
+        let b = imported
+            .components
+            .iter()
+            .find(|component| imported.resolve(component.source.part) == "part-b")
+            .unwrap();
+        assert_eq!(b.population, PopulationState::Unspecified);
+        assert_eq!(b.bom_references.len(), 1);
+        assert_eq!(
+            imported
+                .bom_reference(b.bom_references[0])
+                .unwrap()
+                .populate,
+            None
+        );
+
+        let repeated_refdes = imported
+            .components
+            .iter()
+            .find(|component| imported.resolve(component.source.part) == "part-b-u1")
+            .unwrap();
+        assert_eq!(repeated_refdes.population, PopulationState::Unspecified);
+        assert!(repeated_refdes.bom_references.is_empty());
+
+        let unselected = imported
+            .components
+            .iter()
+            .find(|component| imported.resolve(component.source.part) == "other")
+            .unwrap();
+        assert_eq!(unselected.population, PopulationState::Populate);
+        assert_eq!(unselected.bom_references.len(), 1);
+        assert_eq!(
+            imported.resolve(
+                imported
+                    .bom_item(unselected.bom_references[0])
+                    .unwrap()
+                    .oem_design_number_ref
+            ),
+            "other"
+        );
+
+        let shared = imported
+            .components
+            .iter()
+            .find(|component| imported.resolve(component.source.part) == "shared-part")
+            .unwrap();
+        let shared_package = imported
+            .package_definition(shared.package.unwrap())
+            .unwrap();
+        assert_eq!(
+            imported.resolve(shared_package.source.name),
+            "shared-package"
+        );
+        assert_ne!(shared.step, shared_package.step);
     }
 
     #[test]
@@ -5651,7 +5972,10 @@ mod tests {
             shape: SlotShape::Primitive(StandardPrimitive::Circle(ipc2581::types::Styled {
                 shape: ipc2581::types::Circle { diameter: 1.0 },
                 fill_property: None,
+                line_desc: None,
                 line_desc_ref: None,
+                fill_desc: None,
+                fill_desc_ref: None,
             })),
             plating_status: PlatingStatus::NonPlated,
             z_axis_dim,

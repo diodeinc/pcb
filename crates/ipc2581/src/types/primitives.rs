@@ -1,3 +1,4 @@
+use super::Xform;
 use crate::Symbol;
 use std::str::FromStr;
 
@@ -20,7 +21,10 @@ pub struct Size {
 pub struct Styled<T> {
     pub shape: T,
     pub fill_property: Option<FillProperty>,
+    pub line_desc: Option<LineDesc>,
     pub line_desc_ref: Option<Symbol>,
+    pub fill_desc: Option<FillDesc>,
+    pub fill_desc_ref: Option<Symbol>,
 }
 
 /// Standard geometric primitives
@@ -244,6 +248,13 @@ pub struct LineDesc {
     pub line_property: Option<LineProperty>,
 }
 
+/// IPC-2581C `LineDescGroup` substitution content.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LineDescGroup {
+    Inline(LineDesc),
+    Ref(Symbol),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LineEnd {
     Round,
@@ -265,8 +276,12 @@ pub enum LineProperty {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FillDesc {
     pub fill_property: FillProperty,
+    pub line_width: Option<f64>,
+    pub pitch1: Option<f64>,
+    pub pitch2: Option<f64>,
     pub angle1: Option<f64>,
     pub angle2: Option<f64>,
+    pub color: Option<ColorGroup>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -284,6 +299,36 @@ pub struct Color {
     pub r: u8,
     pub g: u8,
     pub b: u8,
+}
+
+/// IPC-2581C `ColorGroup` substitution content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorGroup {
+    Color(Color),
+    Ref(Symbol),
+    Term {
+        name: Symbol,
+        comment: Option<Symbol>,
+    },
+}
+
+/// IPC-2581C text primitive, with dimensional coordinates normalized to millimeters.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Text {
+    pub text_string: Symbol,
+    pub font_size: u32,
+    /// Required source `fontSize` text, retained as source provenance.
+    pub font_size_raw: Symbol,
+    pub xform: Option<Xform>,
+    pub bounding_box: BoundingBox,
+    pub font_ref: Option<Symbol>,
+    pub color: Option<ColorGroup>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BoundingBox {
+    pub lower_left: Point,
+    pub upper_right: Point,
 }
 
 /// Reference to a dictionary entry
@@ -312,6 +357,7 @@ pub struct UserShape {
     pub line_desc: Option<LineDesc>,
     pub line_desc_ref: Option<Symbol>,
     pub fill_desc: Option<FillDesc>,
+    pub fill_desc_ref: Option<Symbol>,
 }
 
 /// Types of shapes that can appear in UserSpecial
