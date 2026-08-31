@@ -1,8 +1,6 @@
 Size = enum("5mm", "8mm", "10mm")
 
-size = config(
-    Size, default=Size("5mm"), optional=True, help="JLCPCB 2D barcode size (solid silkscreen square edge length)"
-)
+size = config(Size, default=Size("5mm"), optional=True, help="2D barcode size")
 properties = {
     "value": "QR_" + size.value,
     "size": size,
