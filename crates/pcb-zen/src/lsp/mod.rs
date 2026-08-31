@@ -437,27 +437,23 @@ impl LspEvalContext {
             .as_ref()
             .map(|output| output.signature.clone());
 
-        let schematic = eval_result
-            .output
-            .as_ref()
-            .and_then(|output| output.to_schematic().ok())
-            .map(|mut schematic| {
-                self.hydrate_schematic(path_buf, &mut schematic);
-                schematic
-            })
-            .and_then(|schematic| serde_json::to_value(&schematic).ok());
-
-        let diagnostics = eval_result
-            .diagnostics
-            .into_iter()
-            .map(|d| diagnostic_to_info(&d))
-            .collect();
+        let schematic_result = eval_result
+            .and_then(|output| output.to_schematic_with_diagnostics())
+            .inspect_mut(|schematic| self.hydrate_schematic(path_buf, schematic));
 
         Ok(ZenerEvaluateResponse {
-            success: eval_result.output.is_some(),
+            success: schematic_result.is_success(),
             parameters,
-            schematic,
-            diagnostics,
+            schematic: schematic_result
+                .output
+                .as_ref()
+                .filter(|_| schematic_result.is_success())
+                .and_then(|schematic| serde_json::to_value(schematic).ok()),
+            diagnostics: schematic_result
+                .diagnostics
+                .into_iter()
+                .map(|d| diagnostic_to_info(&d))
+                .collect(),
             content_hash: evaluated_content_hash,
         })
     }

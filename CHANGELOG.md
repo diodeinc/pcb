@@ -17,6 +17,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Isolate KiCad CLI temp directories so concurrent ODB exports do not collide.
 - Reply to unknown LSP requests with JSON-RPC `MethodNotFound` instead of leaving clients waiting.
+- Preserve schematic conversion diagnostics in LSP evaluation.
 - Keep the language server running when LSP request or notification parameters are malformed.
 - Return JSON-compatible WASM evaluation results with JavaScript numbers and `null`.
 - Include standalone board outlines in Gerber exports.

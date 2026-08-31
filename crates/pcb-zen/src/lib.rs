@@ -54,21 +54,8 @@ pub fn run(
     resolution_result: ResolutionResult,
     inputs: SmallMap<String, JsonValue>,
 ) -> WithDiagnostics<Schematic> {
-    let eval_result = eval(file, resolution_result, inputs);
-
-    // Handle evaluation failure
-    if eval_result.output.is_none() {
-        return WithDiagnostics {
-            output: None,
-            diagnostics: eval_result.diagnostics,
-        };
-    }
-
-    let eval_output = eval_result.output.unwrap();
-    let mut schematic_result = eval_output.to_schematic_with_diagnostics();
-    // Merge diagnostics from eval and schematic conversion
-    schematic_result.diagnostics.extend(eval_result.diagnostics);
-    schematic_result
+    eval(file, resolution_result, inputs)
+        .and_then(|eval_output| eval_output.to_schematic_with_diagnostics())
 }
 
 pub fn lsp() -> anyhow::Result<()> {
