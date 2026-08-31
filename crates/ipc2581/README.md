@@ -18,6 +18,11 @@ for layer in &document.ecad().unwrap().cad_data.layers {
 Call `validate_file` to validate a document against the vendored IPC-2581C XML
 schema before parsing it.
 
+The string APIs (`Ipc2581::parse`, `validate`, XML editing, and fragment
+writers) also work on `wasm32-unknown-unknown`, including XSD validation. File
+helpers are available only on native targets. No browser APIs or filesystem
+are needed to parse XML.
+
 ```bash
 cargo test -p ipc2581
 ```

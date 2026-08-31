@@ -287,7 +287,7 @@ fn rasterize_polygon_label_into(
         let y = grid_min_y + ((r as f64) + 0.5) * resolution_mm;
         for ring in &poly.rings {
             scanline_intersections(ring, y, &mut xs);
-            for span in xs.chunks_exact(2) {
+            for span in xs.as_chunks::<2>().0 {
                 let start = first_col_with_center_gt(span[0], grid_min_x, resolution_mm)
                     .max(col0 as isize)
                     .min(col1 as isize) as usize;

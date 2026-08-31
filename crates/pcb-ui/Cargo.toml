@@ -9,6 +9,7 @@ description = "Consistent UI components for Diode PCB tools"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+anstream = { workspace = true }
 indicatif = { workspace = true }
 colored = { workspace = true }
 terminal_size = { workspace = true }

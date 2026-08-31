@@ -23,7 +23,7 @@ pub use progress::{ProgressBar, ProgressBarBuilder};
 pub use spinner::{Spinner, SpinnerBuilder};
 pub use style::{Style, StyledText, icons};
 pub use terminal::{
-    Alignment, TerminalSize, clear_line, get_terminal_size, pad_text, truncate_text,
+    Alignment, TerminalSize, clear_line, get_terminal_size, pad_text, truncate_text, write_stdout,
 };
 
 // Re-export commonly used items from dependencies

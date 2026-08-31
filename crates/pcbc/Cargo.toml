@@ -23,6 +23,7 @@ path = "tests/integration.rs"
 
 [dependencies]
 anyhow = { workspace = true }
+anstream = { workspace = true }
 atomicwrites = { workspace = true }
 clap = { workspace = true }
 glam = { workspace = true }
@@ -34,7 +35,7 @@ pcb-layout = { workspace = true }
 pcb-sim = { workspace = true }
 pcb-diode-api = { workspace = true }
 pcb-docgen = { workspace = true }
-pcb-ipc2581-tools = { workspace = true }
+pcb-ipc2581-tools = { workspace = true, features = ["cli"] }
 pcb-interposer = { path = "../pcb-interposer" }
 pcb-eda = { workspace = true }
 pcb-sexpr = { workspace = true }
@@ -91,3 +92,4 @@ httpmock = { workspace = true }
 insta = { workspace = true }
 tempfile = { workspace = true }
 pcb-test-utils = { workspace = true }
+zstd = { workspace = true }

@@ -24,14 +24,14 @@ use std::collections::HashMap;
 use chrono::NaiveDate;
 use ipc2581::Symbol;
 use pcb_ir::dialects::ipc::ArtworkScope;
-use pcb_ir::geom::BBox;
 use pcb_ir::geom::dfm::Distance;
+use pcb_ir::geom::{Affine2, BBox, Point};
 use sha2::{Digest, Sha256};
 
 use super::design::{Design, Hole, HoleClass};
 use super::report::{
-    Evidence, Finding, LayerRef, Location, Measurement, RuleResult, RuleStatus, SourceLocator,
-    Subject, Witness,
+    Evidence, Finding, LayerRef, Location, Measurement, MeasurementKind, ReportBBox, ReportPoint,
+    RuleResult, RuleStatus, Site, SourceLocator, Subject, Witness,
 };
 use super::rules::{Comparison, Linework, Rule, RuleKind};
 use super::waivers::{self, WaiverFile, WaiverOutcome};
@@ -55,6 +55,39 @@ struct Measured {
     layers: Vec<LayerRef>,
     subjects: Vec<Subject>,
     evidence: Vec<Evidence>,
+    sites: Vec<MeasuredSite>,
+}
+
+/// Geometry of one connected failing region or one failing layer. It does not
+/// change the representative measurement or identity of its containing finding.
+struct MeasuredSite {
+    distance: Distance,
+    bbox: BBox,
+    layers: Vec<LayerRef>,
+    subjects: Vec<Subject>,
+    evidence: Vec<Evidence>,
+    measurement_kind: MeasurementKind,
+    note: Option<String>,
+}
+
+impl MeasuredSite {
+    fn new(
+        distance: Distance,
+        bbox: BBox,
+        layers: Vec<LayerRef>,
+        evidence: Vec<Evidence>,
+        measurement_kind: MeasurementKind,
+    ) -> Self {
+        Self {
+            distance,
+            bbox,
+            layers,
+            evidence,
+            measurement_kind,
+            subjects: Vec::new(),
+            note: None,
+        }
+    }
 }
 
 /// What one check did for one rule. `checked` is the number of subjects
@@ -133,7 +166,36 @@ pub(super) fn run(
         }
         results.rules.push(result);
     }
+    // Every exercised fixture also checks the reporting contract. A spatial
+    // failure without a local site must never masquerade as a stackup check.
+    #[cfg(test)]
+    for finding in &results.findings {
+        assert_eq!(
+            !finding.sites.is_empty(),
+            matches!(finding.measurement, Measurement::Distance { .. }),
+            "finding {} violates the spatial-site contract",
+            finding.rule_id,
+        );
+    }
     assign_ids(&mut results.findings);
+    for finding in &mut results.findings {
+        let instance = finding
+            .subjects
+            .first()
+            .and_then(|subject| subject.provenance.as_ref())
+            .and_then(|source| source.instance_index);
+        finding.group_key = instance
+            .and_then(|index| {
+                design
+                    .imported
+                    .geometry
+                    .layout
+                    .instances
+                    .get(index as usize)
+            })
+            .and_then(|instance| instance.transform.inverse())
+            .and_then(|inverse| repeat_group_key(finding, inverse));
+    }
     results.waivers = waiver_file.map(|file| waivers::apply(&mut results.findings, file, today));
 
     let mut per_rule: HashMap<&str, (usize, usize)> = HashMap::new();
@@ -209,8 +271,8 @@ fn evaluate(rule: &Rule, design: &Design) -> RuleEvaluation {
     let limit = || rule.limit.length().millimeters();
     match rule.kind {
         RuleKind::CopperLayerCount => RuleEvaluation::Count(layer_count::evaluate(design)),
-        RuleKind::HoleDiameter(class) => hole_diameter::evaluate(class, design).into(),
-        RuleKind::SlotWidth => slot_width::evaluate(design).into(),
+        RuleKind::HoleDiameter(class) => hole_diameter::evaluate(limit(), class, design).into(),
+        RuleKind::SlotWidth => slot_width::evaluate(limit(), design).into(),
         RuleKind::HolePairClearance => hole_pair_clearance::evaluate(limit(), design).into(),
         RuleKind::AnnularRing(class) => annular_ring::evaluate(limit(), class, design).into(),
         RuleKind::LineworkToCopperClearance(linework) => {
@@ -233,6 +295,30 @@ fn finding(rule: &Rule, measured: Measured) -> Finding {
         .witness_roles
         .expect("distance-valued rules define witness roles");
     let distance = measured.distance;
+    let sites = measured
+        .sites
+        .into_iter()
+        .filter(|site| violates(&site.distance, limit))
+        .map(|site| Site {
+            id: String::new(),
+            measurement: Measurement::minimum_distance(site.distance.mm, limit),
+            measurement_kind: site.measurement_kind,
+            uncertainty_mm: site.distance.uncertainty_mm,
+            witnesses: vec![
+                Witness::new(first_role, site.distance.first),
+                Witness::new(second_role, site.distance.second),
+            ],
+            bounding_box: site.bbox.into(),
+            layers: site.layers,
+            subjects: if site.subjects.is_empty() {
+                measured.subjects.clone()
+            } else {
+                site.subjects
+            },
+            evidence: site.evidence,
+            note: site.note,
+        })
+        .collect();
     let layer_names = measured
         .layers
         .iter()
@@ -267,6 +353,8 @@ fn finding(rule: &Rule, measured: Measured) -> Finding {
         layers: measured.layers,
         subjects: measured.subjects,
         evidence: measured.evidence,
+        sites,
+        group_key: None,
     }
 }
 
@@ -299,6 +387,8 @@ fn count_finding(rule: &Rule, measured: CountEvaluation, limit: u32) -> Finding 
         layers: measured.layers,
         subjects: measured.subjects,
         evidence: Vec::new(),
+        sites: Vec::new(),
+        group_key: None,
     }
 }
 
@@ -342,7 +432,7 @@ fn drilled_subject(
 }
 
 fn hole_subject(design: &Design, hole: &Hole, role: &'static str) -> Subject {
-    drilled_subject(
+    let mut subject = drilled_subject(
         design,
         role,
         hole.class.subject_kind(),
@@ -352,7 +442,68 @@ fn hole_subject(design: &Design, hole: &Hole, role: &'static str) -> Subject {
         &hole.layer,
         hole.source_set_index,
         hole.source_feature_index,
-    )
+    );
+    subject.provenance = Some(hole.provenance.clone());
+    subject.drill_span = Some(hole.drill_span.clone());
+    subject
+}
+
+/// This projection is the original v1 subject serialization, including field
+/// order and nulls. New diagnostic metadata must never silently re-key waivers.
+#[derive(serde::Serialize)]
+struct LegacySubject<'a> {
+    role: &'static str,
+    kind: &'static str,
+    name: &'a Option<String>,
+    reference_designator: &'a Option<String>,
+    pin: &'a Option<String>,
+    net: &'a Option<String>,
+    padstack_ref: &'a Option<String>,
+    source: &'a Option<SourceLocator>,
+}
+
+impl<'a> From<&'a Subject> for LegacySubject<'a> {
+    fn from(subject: &'a Subject) -> Self {
+        Self {
+            role: subject.role,
+            kind: subject.kind,
+            name: &subject.name,
+            reference_designator: &subject.reference_designator,
+            pin: &subject.pin,
+            net: &subject.net,
+            padstack_ref: &subject.padstack_ref,
+            source: &subject.source,
+        }
+    }
+}
+
+/// The original evidence record, excluding display-only constructions.
+/// Borrow the potentially large rings rather than cloning them to hash IDs.
+#[derive(serde::Serialize)]
+struct LegacyEvidence<'a> {
+    role: &'static str,
+    kind: &'static str,
+    center: &'a Option<ReportPoint>,
+    diameter: &'a Option<f64>,
+    start: &'a Option<ReportPoint>,
+    end: &'a Option<ReportPoint>,
+    bounding_box: &'a Option<ReportBBox>,
+    paths: &'a [Vec<ReportPoint>],
+}
+
+impl<'a> From<&'a Evidence> for LegacyEvidence<'a> {
+    fn from(evidence: &'a Evidence) -> Self {
+        Self {
+            role: evidence.role,
+            kind: evidence.kind,
+            center: &evidence.center,
+            diameter: &evidence.diameter,
+            start: &evidence.start,
+            end: &evidence.end,
+            bounding_box: &evidence.bounding_box,
+            paths: &evidence.paths,
+        }
+    }
 }
 
 /// The layers a finding spans, each named once.
@@ -379,7 +530,11 @@ fn assign_ids(findings: &mut [Finding]) {
     for finding in findings.iter_mut() {
         let fingerprint = serde_json::to_string(&(
             &finding.rule_id,
-            &finding.subjects,
+            finding
+                .subjects
+                .iter()
+                .map(LegacySubject::from)
+                .collect::<Vec<_>>(),
             &finding.layers,
             &finding.location.point,
         ))
@@ -395,7 +550,108 @@ fn assign_ids(findings: &mut [Finding]) {
         } else {
             format!("dfm-{short}-{repeat}")
         };
+        let mut sites_seen: HashMap<String, usize> = HashMap::new();
+        for site in &mut finding.sites {
+            let bytes = serde_json::to_vec(&(
+                &site.layers,
+                &site.measurement_kind,
+                &site.bounding_box,
+                site.evidence
+                    .iter()
+                    .map(LegacyEvidence::from)
+                    .collect::<Vec<_>>(),
+            ))
+            .expect("site identity serializes");
+            let digest = Sha256::digest(bytes);
+            let short = hex::encode(&digest[..6]);
+            let ordinal = sites_seen
+                .entry(short.clone())
+                .and_modify(|n| *n += 1)
+                .or_insert(1);
+            site.id = format!("{}-site-{short}", finding.id);
+            if *ordinal > 1 {
+                site.id.push_str(&format!("-{ordinal}"));
+            }
+        }
     }
+}
+
+/// Collapse only proven repeats of the same definition-local subjects, with
+/// the same measured failure geometry. Cross-occurrence or unattributed
+/// findings remain separate. This affects presentation only, never waivers.
+fn repeat_group_key(finding: &Finding, inverse: Affine2) -> Option<String> {
+    let instance = finding
+        .subjects
+        .first()?
+        .provenance
+        .as_ref()?
+        .instance_index?;
+    if finding.sites.is_empty() {
+        return None;
+    }
+    let quantize = |n: f64| {
+        let n = (n * 1_000_000.0).round() / 1_000_000.0;
+        if n == 0.0 { 0.0 } else { n }
+    };
+    let point = |p: super::report::ReportPoint| {
+        let p = inverse.transform_point(Point::new(p.x, p.y));
+        [quantize(p.x), quantize(p.y)]
+    };
+    let bounds = |b: super::report::ReportBBox| {
+        let b = b.as_bbox().transformed(inverse);
+        [
+            quantize(b.min.x),
+            quantize(b.min.y),
+            quantize(b.max.x),
+            quantize(b.max.y),
+        ]
+    };
+    let subject_identity = |subject: &Subject| {
+        let source = subject.provenance.as_ref()?;
+        if source.step.is_none() || source.instance_index != Some(instance) {
+            return None;
+        }
+        Some(serde_json::json!([
+            subject.role,
+            subject.kind,
+            subject.net,
+            subject.padstack_ref,
+            source.step,
+            source.layer,
+            source.set_index,
+            source.feature_index,
+            subject.drill_span
+        ]))
+    };
+    let subjects = finding
+        .subjects
+        .iter()
+        .map(subject_identity)
+        .collect::<Option<Vec<_>>>()?;
+    let sites = finding.sites.iter().map(|site| {
+        if site.subjects.is_empty() {
+            return None;
+        }
+        let subjects = site.subjects.iter().map(subject_identity).collect::<Option<Vec<_>>>()?;
+        let measurement = match site.measurement {
+            Measurement::Distance { actual_mm, required_mm, .. } => [quantize(actual_mm), quantize(required_mm)],
+            Measurement::Count { actual_count, required_count, .. } => [f64::from(actual_count), f64::from(required_count)],
+        };
+        let evidence = site.evidence.iter().map(|evidence| serde_json::json!({
+            "role": evidence.role, "kind": evidence.kind,
+            "center": evidence.center.map(point), "diameter": evidence.diameter.map(quantize),
+            "start": evidence.start.map(point), "end": evidence.end.map(point),
+            "bounds": evidence.bounding_box.map(bounds),
+            "paths": evidence.paths.iter().map(|path| path.iter().copied().map(point).collect::<Vec<_>>()).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>();
+        let witnesses = site.witnesses.iter().map(|witness| serde_json::json!([witness.role, point(witness.point)])).collect::<Vec<_>>();
+        Some(serde_json::json!([site.measurement_kind, measurement, quantize(site.uncertainty_mm), site.layers, subjects, witnesses, evidence, site.note]))
+    }).collect::<Option<Vec<_>>>()?;
+    let bytes = serde_json::to_vec(&(&finding.rule_id, subjects, sites)).ok()?;
+    Some(format!(
+        "cause-{}",
+        hex::encode(&Sha256::digest(bytes)[..10])
+    ))
 }
 
 fn compare_locations(left: &Location, right: &Location) -> Ordering {
@@ -433,6 +689,8 @@ mod tests {
             layers: Vec::new(),
             subjects: Vec::new(),
             evidence: Vec::new(),
+            sites: Vec::new(),
+            group_key: None,
         }
     }
 
@@ -457,5 +715,173 @@ mod tests {
         assign_ids(&mut three);
         assert_eq!(id_at(&two, 1.0), id_at(&three, 1.0));
         assert_eq!(id_at(&two, 2.0), id_at(&three, 2.0));
+    }
+
+    #[test]
+    fn visual_metadata_does_not_change_the_original_waiver_id() {
+        let mut finding = finding_at(1.0);
+        finding.subjects.push(Subject {
+            role: "hole",
+            kind: "via_hole",
+            ..Subject::default()
+        });
+        assign_ids(std::slice::from_mut(&mut finding));
+        // Independently computed from the pre-sites v1 JSON identity record.
+        assert_eq!(finding.id, "dfm-bee136ee7a39");
+        finding.subjects[0].provenance = Some(SourceLocator {
+            step: Some("board".into()),
+            layer: Some("DRILL".into()),
+            set_index: Some(3),
+            feature_index: Some(1),
+            instance_index: Some(7),
+        });
+        finding
+            .evidence
+            .push(Evidence::circle("hole", Point::new(1.0, 0.0), 0.1));
+        finding.sites.push(Site {
+            id: String::new(),
+            measurement: Measurement::minimum_distance(0.1, 0.2),
+            measurement_kind: MeasurementKind::Diameter,
+            uncertainty_mm: 0.0,
+            witnesses: Vec::new(),
+            bounding_box: BBox::from_point(Point::new(1.0, 0.0)).expand(0.05).into(),
+            layers: Vec::new(),
+            subjects: finding.subjects.clone(),
+            evidence: finding.evidence.clone(),
+            note: None,
+        });
+        assign_ids(std::slice::from_mut(&mut finding));
+        assert_eq!(finding.id, "dfm-bee136ee7a39");
+        assert!(finding.sites[0].id.starts_with("dfm-bee136ee7a39-site-"));
+    }
+
+    fn repeated_hole(offset: f64, instance: u32) -> Finding {
+        let center = Point::new(1.0 + offset, 2.0);
+        let subject = Subject {
+            role: "hole",
+            kind: "via_hole",
+            provenance: Some(SourceLocator {
+                step: Some("board".into()),
+                layer: Some("DRILL".into()),
+                set_index: Some(0),
+                feature_index: Some(4),
+                instance_index: Some(instance),
+            }),
+            ..Subject::default()
+        };
+        let mut finding = finding_at(center.x);
+        finding.subjects.push(subject.clone());
+        finding.sites.push(Site {
+            id: String::new(),
+            measurement: Measurement::minimum_distance(0.1, 0.2),
+            measurement_kind: MeasurementKind::Diameter,
+            uncertainty_mm: 0.0,
+            witnesses: Vec::new(),
+            bounding_box: BBox::from_point(center).expand(0.05).into(),
+            layers: Vec::new(),
+            subjects: vec![subject],
+            evidence: vec![Evidence::circle("hole", center, 0.1)],
+            note: None,
+        });
+        finding
+    }
+
+    #[test]
+    fn native_display_metadata_preserves_site_ids_waivers_and_repeat_groups() {
+        use super::super::report::{DisplayCircle, EvidenceDisplay};
+        let mut finding = repeated_hole(0.0, 4);
+        let evidence = &finding.sites[0].evidence[0];
+        assert_eq!(
+            serde_json::to_string(evidence).unwrap(),
+            serde_json::to_string(&LegacyEvidence::from(evidence)).unwrap(),
+            "the identity projection preserves the original field order and nulls"
+        );
+        assign_ids(std::slice::from_mut(&mut finding));
+        let original_finding = finding.id.clone();
+        let original_site = finding.sites[0].id.clone();
+        let original_group = repeat_group_key(&finding, Affine2::IDENTITY).unwrap();
+        let circle = DisplayCircle {
+            center: Point::new(1.0, 2.0).into(),
+            diameter: 0.1,
+        };
+        for display in [
+            EvidenceDisplay::Path {
+                paths: vec!["M1 2 A0.1 0.1 0 0 1 1.1 2.1 Z".into()],
+                fill_rule: "evenodd",
+            },
+            EvidenceDisplay::RoundStroke {
+                paths: vec![vec![Point::ZERO.into(), Point::new(1.0, 1.0).into()]],
+                width_mm: 0.2,
+            },
+            EvidenceDisplay::CircleMinusLayer {
+                center: circle.center,
+                diameter: circle.diameter,
+                layer: "F.Cu".into(),
+            },
+            EvidenceDisplay::CircleIntersection {
+                first: circle,
+                second: circle,
+            },
+        ] {
+            finding.sites[0].evidence[0].display = Some(display);
+            assign_ids(std::slice::from_mut(&mut finding));
+            assert_eq!(finding.id, original_finding);
+            assert_eq!(finding.sites[0].id, original_site);
+            assert_eq!(
+                repeat_group_key(&finding, Affine2::IDENTITY).as_deref(),
+                Some(original_group.as_str())
+            );
+        }
+    }
+
+    #[test]
+    fn grouping_requires_the_same_definition_and_local_failure() {
+        let first = repeated_hole(0.0, 0);
+        let mut repeated = repeated_hole(30.0, 1);
+        let local = Affine2::translation(Point::new(-30.0, 0.0));
+        assert_eq!(
+            repeat_group_key(&first, Affine2::IDENTITY),
+            repeat_group_key(&repeated, local)
+        );
+        repeated.sites[0].subjects[0].net = Some("different contributor".into());
+        assert_ne!(
+            repeat_group_key(&first, Affine2::IDENTITY),
+            repeat_group_key(&repeated, local),
+            "local geometry alone cannot establish the same source contributors"
+        );
+        repeated.sites[0].subjects[0].net = None;
+        repeated.sites[0].subjects[0]
+            .provenance
+            .as_mut()
+            .unwrap()
+            .instance_index = Some(0);
+        assert!(
+            repeat_group_key(&repeated, local).is_none(),
+            "a secondary site's cross-occurrence subject prevents grouping"
+        );
+        repeated.sites[0].subjects[0]
+            .provenance
+            .as_mut()
+            .unwrap()
+            .instance_index = Some(1);
+        repeated.subjects[0]
+            .provenance
+            .as_mut()
+            .unwrap()
+            .feature_index = Some(5);
+        assert_ne!(
+            repeat_group_key(&first, Affine2::IDENTITY),
+            repeat_group_key(&repeated, local)
+        );
+        repeated.subjects.push(first.subjects[0].clone());
+        assert!(
+            repeat_group_key(&repeated, local).is_none(),
+            "cross-occurrence findings cannot collapse into one board cause"
+        );
+        repeated.subjects[0].provenance = None;
+        assert!(
+            repeat_group_key(&repeated, local).is_none(),
+            "missing provenance cannot be guessed from position"
+        );
     }
 }

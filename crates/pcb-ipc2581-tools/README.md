@@ -11,7 +11,7 @@ alias provides the same commands.
 | `html` | Export an HTML board summary. |
 | `outline` | Export a KiCad-compatible DXF outline. |
 | `render` | Render one layer as terminal graphics, SVG, or PNG. |
-| `dfm check` | Check IPC-2581 geometry against a fabrication PDK and emit JSON. |
+| `dfm check` | Check IPC-2581 geometry against a fabrication PDK and emit self-contained JSON. |
 | `gerber` | Export fabrication layers and drill files. |
 | `view` | Export a filtered IPC-2581 function-mode document. |
 | `board-array create` | Create a rectangular board array. |
@@ -54,8 +54,11 @@ pcb ipc dfm check fabrication-panel.xml \
 Pass a path such as `--pdk ./fab-process.toml` to use a custom PDK. Exact
 built-in names take precedence, so prefix a same-named file with `./`.
 
-See the [DFM format reference](docs/dfm.md) and
-[`pdks/standard.toml`](pdks/standard.toml) for the PDK and JSON report contracts.
+Complete JSON reports contain diagnostics, native vector artwork, and the exact
+PDK source for external viewers. PCB does not generate DFM HTML or host a viewer.
+
+See the [PDK, waiver, and JSON formats](docs/dfm.md) and the
+[standard PDK](pdks/standard.toml) for details.
 
 `fab-panel create` supports the common 12 by 18, 16 by 18, 18 by 24, and 21 by
 24 inch fabrication panel sizes through `--panel-size`. The default is 18 by 24
@@ -128,4 +131,22 @@ layout.
 
 ```bash
 cargo test -p pcb-ipc2581-tools
+```
+
+## In-memory library and WebAssembly
+
+Disable the default `cli` feature for `wasm32-unknown-unknown`. This excludes
+terminal output, network availability lookups, native Zstandard, and file
+command wrappers; native CLI behavior remains enabled by default.
+
+Import/export and DFM use the same implementations in both environments.
+`manufacturing::build_manufacturing_package_from_design` reuses an imported
+design; the resulting package exposes individual files and `to_zip()` for an
+in-memory archive. `geometry::render::prepare_layer` prepares a layer for the
+shared SVG/PNG renderers.
+
+For browser and Node.js bindings, see [`pcb-ipc-wasm`](../pcb-ipc-wasm/README.md).
+
+```bash
+cargo check -p pcb-ipc2581-tools --no-default-features --target wasm32-unknown-unknown
 ```

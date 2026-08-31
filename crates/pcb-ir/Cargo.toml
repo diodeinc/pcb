@@ -14,9 +14,16 @@ categories = ["graphics", "rendering", "hardware-support"]
 pcb-sexpr = { workspace = true }
 
 [dependencies]
-base64 = { workspace = true }
+anyhow = { workspace = true }
 boostvoronoi = { workspace = true }
 i_overlay = { workspace = true }
+ipc2581 = { workspace = true }
 kurbo = { workspace = true }
 resvg = { workspace = true }
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+base64 = { workspace = true }
 terminal_size = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { workspace = true }

@@ -691,6 +691,21 @@ impl<T> WithDiagnostics<T> {
         }
     }
 
+    /// Continue with `f` when this result produced an output, merging diagnostics.
+    pub fn and_then<U>(mut self, f: impl FnOnce(T) -> WithDiagnostics<U>) -> WithDiagnostics<U> {
+        match self.output.take() {
+            Some(output) => {
+                let mut next = f(output);
+                next.diagnostics.extend(self.diagnostics);
+                next
+            }
+            None => WithDiagnostics {
+                diagnostics: self.diagnostics,
+                output: None,
+            },
+        }
+    }
+
     pub fn inspect_mut<O, F: FnOnce(&mut T) -> O>(mut self, f: F) -> Self {
         if let Some(output) = self.output.as_mut() {
             f(output);

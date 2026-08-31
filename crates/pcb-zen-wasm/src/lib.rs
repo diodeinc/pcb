@@ -523,6 +523,33 @@ mod tests {
     }
 
     #[test]
+    fn evaluation_json_uses_plain_numbers_and_null() {
+        let mut schematic = pcb_sch::Schematic::new();
+        schematic.add_net(pcb_sch::Net {
+            kind: "Net".into(),
+            id: 687,
+            name: "GND".into(),
+            ports: Vec::new(),
+            properties: HashMap::from([(
+                "count".into(),
+                pcb_sch::AttributeValue::Json(serde_json::json!(42)),
+            )]),
+        });
+        let json = serde_json::to_string(&EvaluationResult {
+            success: true,
+            parameters: None,
+            schematic: Some(schematic),
+            bom: Some(Vec::new()),
+            diagnostics: Vec::new(),
+        })
+        .unwrap();
+        assert!(!json.contains("$serde_json::private::Number"), "{json}");
+        assert!(json.contains(r#""id":687"#), "{json}");
+        assert!(json.contains(r#""Json":42"#), "{json}");
+        assert!(json.contains(r#""parameters":null"#), "{json}");
+    }
+
+    #[test]
     fn list_stdlib_root_includes_archive_top_level_entries() {
         let provider = provider(empty_zip_bytes());
         let root = wasm_stdlib_root();
@@ -815,24 +842,23 @@ pub fn evaluate_impl(
         serde_json::from_str(inputs_json).map_err(|e| format!("Failed to parse inputs: {e}"))?;
 
     let mut ctx = EvalContext::new(file_provider.clone(), resolution).set_source_path(main_path);
-    if !inputs.is_empty() {
-        ctx.set_json_inputs(starlark::collections::SmallMap::from_iter(inputs));
-    }
+    ctx.set_json_inputs(starlark::collections::SmallMap::from_iter(inputs));
 
-    let result = ctx.eval();
-    let schematic_opt = result.output.as_ref().and_then(|o| o.to_schematic().ok());
+    let (output, mut diagnostics) = ctx.eval().unpack();
+    let schematic = output.as_ref().and_then(|output| {
+        let converted = output.to_schematic_with_diagnostics();
+        diagnostics.extend(converted.diagnostics);
+        converted.output.filter(|_| !diagnostics.has_errors())
+    });
 
     Ok(EvaluationResult {
-        success: result.output.is_some(),
-        parameters: result.output.as_ref().map(|o| o.signature.clone()),
-        schematic: schematic_opt
+        success: schematic.is_some(),
+        parameters: output.map(|output| output.signature),
+        bom: schematic
             .as_ref()
-            .and_then(|s| serde_json::to_value(s).ok()),
-        bom: schematic_opt
-            .as_ref()
-            .and_then(|s| serde_json::from_str(&s.bom().ungrouped_json()).ok()),
-        diagnostics: result
-            .diagnostics
+            .map(|schematic| schematic.bom().ungrouped_entries()),
+        schematic,
+        diagnostics: diagnostics
             .into_iter()
             .map(|d| diagnostic_to_json(&d))
             .collect(),
@@ -850,10 +876,13 @@ pub fn evaluate(
     let result = evaluate_impl(bundle_bytes, stdlib_tar_zst_bytes, main_file, inputs_json)
         .map_err(|e| JsValue::from_str(&e))?;
 
-    let serializer = serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true);
-    result
-        .serialize(&serializer)
-        .map_err(|e| JsValue::from_str(&format!("Failed to serialize result: {e}")))
+    // Starlark enables serde_json/arbitrary_precision. JSON round-trip is the
+    // JS-compatible encoding: numbers, objects, and null. Values outside
+    // Number.MAX_SAFE_INTEGER follow ordinary JavaScript Number precision.
+    let json = serde_json::to_string(&result)
+        .map_err(|e| JsValue::from_str(&format!("Failed to serialize result: {e}")))?;
+    js_sys::JSON::parse(&json)
+        .map_err(|e| JsValue::from_str(&format!("Failed to parse result JSON: {e:?}")))
 }
 
 #[derive(Serialize, Deserialize)]
@@ -869,7 +898,7 @@ pub struct DiagnosticInfo {
 pub struct EvaluationResult {
     pub success: bool,
     pub parameters: Option<Vec<pcb_zen_core::lang::type_info::ParameterInfo>>,
-    pub schematic: Option<serde_json::Value>,
-    pub bom: Option<serde_json::Value>,
+    pub schematic: Option<pcb_sch::Schematic>,
+    pub bom: Option<Vec<pcb_sch::bom::UngroupedBomEntry>>,
     pub diagnostics: Vec<DiagnosticInfo>,
 }

@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
+#[cfg(feature = "cli")]
 use std::fmt::Write as _;
+#[cfg(feature = "cli")]
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -18,17 +20,25 @@ use pcb_ir::dialects::artwork::{
     Aperture, ApertureShape, Geometry as ArtworkGeometry, GridRepeat, Object as ArtworkObject,
     PaintOrder, PaintStage,
 };
+#[cfg(feature = "cli")]
+use pcb_ir::dialects::ipc::relief;
 use pcb_ir::dialects::ipc::{
     ArtworkLowering, ArtworkObjectKind, ArtworkScope, CopperBalanceKind, Feature, FeatureBucket,
     FeatureDomain, FeatureOperation, FeatureRole, FiducialKind, LayoutPurpose, PlatingKind,
     PrimitiveRef, ProfileSet, lower_layer_to_artwork_objects_with, lower_layer_to_artwork_with,
-    profile_occurrences_for, relief,
+    profile_occurrences_for,
 };
 use pcb_ir::dialects::{LayerRole, Side as IrSide};
-use pcb_ir::geom::path::{ContourBuf, PathCmd, PathOp};
+use pcb_ir::geom::path::ContourBuf;
+#[cfg(feature = "cli")]
+use pcb_ir::geom::path::{PathCmd, PathOp};
 use pcb_ir::geom::{
-    Affine2, Arc, BBox, LineCap, LineJoin, LinePattern, Paint, Point, Polarity, Span, StrokeStyle,
+    Affine2, BBox, LineCap, LineJoin, LinePattern, Paint, Point, Polarity, Span, StrokeStyle,
 };
+use pcb_ir::import::ipc2581::{ImportedDesign, LayerId, import_design};
+
+#[cfg(feature = "cli")]
+use pcb_ir::geom::Arc;
 
 type IpcGeometryDocument = pcb_ir::dialects::ipc::Document<ipc2581::Symbol, LayerFunction>;
 
@@ -70,17 +80,37 @@ pub fn build_gerber_x2_files_with_options(
     view: ArtworkScope,
     options: &GerberExportOptions,
 ) -> Result<Vec<GerberX2File>> {
-    let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
+    let imported = import_design(ipc)?;
+    build_gerber_x2_files_from_design_with_options(&imported, view, options)
+}
+
+pub(crate) fn build_gerber_x2_files_from_design_with_options(
+    imported: &ImportedDesign,
+    view: ArtworkScope,
+    options: &GerberExportOptions,
+) -> Result<Vec<GerberX2File>> {
+    // With no repeated instances, a board-array request denotes this board
+    // itself. Use the board path so its Step/Profile remains authoritative
+    // even when the source has no BOARD_OUTLINE layer artwork.
+    let view = if view == ArtworkScope::ArrayFlattened
+        && imported.geometry.layout.repeats.is_empty()
+        && pcb_ir::dialects::ipc::root_step(&imported.geometry)
+            .is_some_and(|(_, step)| step.kind == pcb_ir::dialects::ipc::LayoutStepKind::Board)
+    {
+        ArtworkScope::Board
+    } else {
+        view
+    };
     let mut files = Vec::new();
-    let plans = export_layer_plans(ipc, &ecad.cad_data.layers);
+    let plans = export_layer_plans(imported, &imported.layer_definitions);
     let has_profile_plan = plans
         .iter()
         .any(|plan| plan.role == GerberLayerRole::Profile);
-    let part = gerber_part_for_ipc_view(ipc, view)?;
+    let part = gerber_part_for_ipc_view(imported, view)?;
 
     for plan in &plans {
         let source_layer = plan.layer;
-        let layer_name = ipc.resolve(source_layer.name);
+        let layer_name = imported.resolve(source_layer.name);
         let spec = GerberArtworkSpec {
             role: plan.role,
             side: ir_side(source_layer.side),
@@ -88,15 +118,16 @@ pub fn build_gerber_x2_files_with_options(
             view,
         };
         let artwork = if view == ArtworkScope::ArrayFlattened {
-            hierarchical_artwork_from_ipc_layer(ipc, source_layer, layer_name, spec)?
+            hierarchical_artwork_from_ipc_layer(imported, plan.layer_id, layer_name, spec)?
         } else {
-            let mut doc = geometry::extract_layer_for_view(ipc, layer_name, view)
+            let mut doc = imported
+                .materialize_layer(plan.layer_id, view)
                 .with_context(|| format!("failed to extract IPC-2581 layer '{layer_name}'"))?;
             pcb_ir::dialects::ipc::process::normalize_for_artwork(&mut doc);
             if let Err(error) = pcb_ir::dialects::ipc::validate_artwork_ready(&doc) {
                 bail!("IPC-2581 layer '{layer_name}' is not artwork-ready: {error}");
             }
-            artwork_from_ipc_layer(ipc, &doc, 0, spec)?
+            artwork_from_ipc_layer(imported, &doc, 0, spec)?
         };
         if matches!(plan.role, GerberLayerRole::Vcut | GerberLayerRole::Score)
             && artwork.layers[0].objects.is_empty()
@@ -116,10 +147,10 @@ pub fn build_gerber_x2_files_with_options(
     }
     if view == ArtworkScope::ArrayFlattened {
         files.extend(board_array_profile_gerber_files(
-            ipc,
+            imported,
             options.relief_debug_dir.as_deref(),
         )?);
-    } else if !has_profile_plan && let Some(file) = synthetic_profile_gerber_file(ipc, view)? {
+    } else if !has_profile_plan && let Some(file) = synthetic_profile_gerber_file(imported, view)? {
         files.push(file);
     }
 
@@ -127,6 +158,7 @@ pub fn build_gerber_x2_files_with_options(
 }
 
 struct ExportLayerPlan<'a> {
+    layer_id: LayerId,
     layer: &'a Layer,
     role: GerberLayerRole,
     filename: String,
@@ -146,20 +178,23 @@ enum GerberLayerRole {
     Score,
 }
 
-fn export_layer_plans<'a>(ipc: &Ipc2581, layers: &'a [Layer]) -> Vec<ExportLayerPlan<'a>> {
+fn export_layer_plans<'a>(
+    imported: &ImportedDesign,
+    layers: &'a [Layer],
+) -> Vec<ExportLayerPlan<'a>> {
     let copper_count = copper_layer_count(layers);
     let mut copper_index = 0;
     let mut plans = Vec::new();
     let mut used_filenames = HashSet::new();
 
-    for layer in layers {
+    for (layer_index, layer) in layers.iter().enumerate() {
         let Some(role) = gerber_layer_role(layer.layer_function) else {
             continue;
         };
         if role == GerberLayerRole::Copper {
             copper_index += 1;
         }
-        let source_layer_name = ipc.resolve(layer.name);
+        let source_layer_name = imported.resolve(layer.name);
         let (filename, file_function) = layer_output(
             role,
             layer.side,
@@ -169,6 +204,7 @@ fn export_layer_plans<'a>(ipc: &Ipc2581, layers: &'a [Layer]) -> Vec<ExportLayer
         );
         let filename = allocate_filename(&mut used_filenames, &filename, source_layer_name);
         plans.push(ExportLayerPlan {
+            layer_id: LayerId(layer_index as u32),
             layer,
             role,
             filename,
@@ -400,18 +436,22 @@ impl GerberPart {
     }
 }
 
-fn primary_step(ipc: &Ipc2581) -> Result<&Step> {
-    let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
-    crate::steps::primary_step(ipc, &ecad.cad_data.steps)
+fn primary_step(imported: &ImportedDesign) -> Result<&Step> {
+    imported
+        .content
+        .step_refs
+        .first()
+        .and_then(|step_ref| imported.steps.iter().find(|step| step.name == *step_ref))
+        .or_else(|| imported.steps.first())
         .context("IPC-2581 ECAD section has no Step")
 }
 
-fn gerber_part_for_ipc_view(ipc: &Ipc2581, view: ArtworkScope) -> Result<GerberPart> {
-    let step = primary_step(ipc)?;
+fn gerber_part_for_ipc_view(imported: &ImportedDesign, view: ArtworkScope) -> Result<GerberPart> {
+    let step = primary_step(imported)?;
     Ok(
         if view == ArtworkScope::Board || !geometry::is_panel_step(step) {
             GerberPart::Single
-        } else if ipc.resolve(step.name) == crate::steps::FAB_PANEL_STEP_NAME {
+        } else if imported.resolve(step.name) == crate::steps::FAB_PANEL_STEP_NAME {
             GerberPart::FabricationPanel
         } else {
             GerberPart::Array
@@ -475,7 +515,7 @@ fn copper_layer_output(
 }
 
 fn artwork_from_ipc_layer(
-    ipc: &Ipc2581,
+    imported: &ImportedDesign,
     doc: &IpcGeometryDocument,
     layer_index: usize,
     spec: GerberArtworkSpec,
@@ -490,7 +530,7 @@ fn artwork_from_ipc_layer(
         meta: spec.meta,
     };
     let mut lowering = GerberLowering {
-        ipc,
+        imported,
         doc,
         role: spec.role,
         side: spec.side,
@@ -521,14 +561,12 @@ fn artwork_from_ipc_layer(
 /// panel remains a semantic hierarchy — and a Step without repeats lowers to
 /// plain flat artwork.
 fn hierarchical_artwork_from_ipc_layer(
-    ipc: &Ipc2581,
-    source_layer: &Layer,
+    imported: &ImportedDesign,
+    layer: LayerId,
     layer_name: &str,
     spec: GerberArtworkSpec,
 ) -> Result<GerberArtwork> {
-    let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
-    let root = crate::steps::primary_step(ipc, &ecad.cad_data.steps)
-        .context("IPC-2581 ECAD section has no Step")?;
+    let root = primary_step(imported)?;
     let mut artwork = GerberArtwork::new();
     let artwork_layer = artwork.push_layer(pcb_ir::dialects::artwork::Layer {
         name: layer_name.to_string(),
@@ -539,10 +577,8 @@ fn hierarchical_artwork_from_ipc_layer(
         meta: spec.meta,
     });
     let context = HierarchicalArtworkContext {
-        ipc,
-        steps: &ecad.cad_data.steps,
-        layers: &ecad.cad_data.layers,
-        source_layer,
+        imported,
+        layer,
         layer_name,
         role: spec.role,
         side: spec.side,
@@ -560,10 +596,8 @@ fn hierarchical_artwork_from_ipc_layer(
 }
 
 struct HierarchicalArtworkContext<'a> {
-    ipc: &'a Ipc2581,
-    steps: &'a [Step],
-    layers: &'a [Layer],
-    source_layer: &'a Layer,
+    imported: &'a ImportedDesign,
+    layer: LayerId,
     layer_name: &'a str,
     role: GerberLayerRole,
     side: IrSide,
@@ -579,7 +613,7 @@ fn build_step_artwork_block(
         Some(Some(block)) => return Ok(block),
         Some(None) => bail!(
             "StepRepeat cycle references Step '{}'",
-            context.ipc.resolve(step.name)
+            context.imported.resolve(step.name)
         ),
         None => {}
     }
@@ -604,13 +638,14 @@ fn build_step_artwork_objects(
         .iter()
         .map(|repeat| {
             let child_step = context
+                .imported
                 .steps
                 .iter()
                 .find(|candidate| candidate.name == repeat.step_ref)
                 .with_context(|| {
                     format!(
                         "StepRepeat references unknown Step '{}'",
-                        context.ipc.resolve(repeat.step_ref)
+                        context.imported.resolve(repeat.step_ref)
                     )
                 })?;
             let child = build_step_artwork_block(context, child_step, artwork, blocks)?;
@@ -618,31 +653,31 @@ fn build_step_artwork_objects(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let mut local = geometry::extract_step_layer_local(
-        context.ipc,
-        step,
-        context.layers,
-        context.source_layer,
-        context.layer_name,
-    )
-    .with_context(|| {
-        format!(
-            "failed to extract IPC-2581 Step '{}' layer '{}'",
-            context.ipc.resolve(step.name),
-            context.layer_name
-        )
-    })?;
+    let step_id = context
+        .imported
+        .step_id(step.name)
+        .context("source Step is missing from the canonical layout graph")?;
+    let mut local = context
+        .imported
+        .materialize_step_layer(step_id, context.layer)
+        .with_context(|| {
+            format!(
+                "failed to materialize IPC-2581 Step '{}' layer '{}'",
+                context.imported.resolve(step.name),
+                context.layer_name
+            )
+        })?;
     pcb_ir::dialects::ipc::process::normalize_for_artwork(&mut local);
     if let Err(error) = pcb_ir::dialects::ipc::validate_artwork_ready(&local) {
         bail!(
             "IPC-2581 Step '{}' layer '{}' is not artwork-ready: {error}",
-            context.ipc.resolve(step.name),
+            context.imported.resolve(step.name),
             context.layer_name
         );
     }
 
     let mut lowering = GerberLowering {
-        ipc: context.ipc,
+        imported: context.imported,
         doc: &local,
         role: context.role,
         side: context.side,
@@ -683,7 +718,7 @@ fn build_step_artwork_objects(
 /// primitives flash through standard apertures, traces are round-joined, and
 /// every object carries X2 attributes.
 struct GerberLowering<'a> {
-    ipc: &'a Ipc2581,
+    imported: &'a ImportedDesign,
     doc: &'a IpcGeometryDocument,
     role: GerberLayerRole,
     side: IrSide,
@@ -703,7 +738,7 @@ impl ArtworkLowering<ipc2581::Symbol, ObjectAttributes> for GerberLowering<'_> {
             let bbox = aperture.bbox().transformed(feature.transform);
             return Some((aperture, feature.transform, bbox));
         }
-        standard_flash_aperture(self.ipc, self.doc, feature)
+        standard_flash_aperture(self.imported, self.doc, feature)
     }
 
     fn stroke_style(&mut self, stroke: StrokeStyle) -> StrokeStyle {
@@ -735,7 +770,7 @@ impl ArtworkLowering<ipc2581::Symbol, ObjectAttributes> for GerberLowering<'_> {
         _kind: ArtworkObjectKind,
     ) -> ObjectAttributes {
         object_attributes(
-            self.ipc,
+            self.imported,
             self.doc,
             feature,
             self.role,
@@ -753,10 +788,10 @@ struct GerberArtworkSpec {
 }
 
 fn synthetic_profile_gerber_file(
-    ipc: &Ipc2581,
+    imported: &ImportedDesign,
     view: ArtworkScope,
 ) -> Result<Option<GerberX2File>> {
-    let doc = geometry::extract_layout(ipc)?;
+    let doc = &imported.geometry;
     let mut artwork = GerberArtwork::new();
     let artwork_layer = artwork.push_layer(pcb_ir::dialects::artwork::Layer {
         name: "Edge.Cuts".to_string(),
@@ -766,14 +801,14 @@ fn synthetic_profile_gerber_file(
         bbox: BBox::empty(),
         meta: layer_attributes(
             vec!["Profile".to_string(), "NP".to_string()],
-            gerber_part_for_ipc_view(ipc, view)?,
+            gerber_part_for_ipc_view(imported, view)?,
             GerberLayerRole::Profile,
         ),
     });
     append_profile_occurrences(
         &mut artwork,
         artwork_layer,
-        &doc,
+        doc,
         view.profile_set(),
         ProfileGerberStyle::default(),
     );
@@ -791,19 +826,31 @@ fn synthetic_profile_gerber_file(
 }
 
 fn board_array_profile_gerber_files(
-    ipc: &Ipc2581,
+    imported: &ImportedDesign,
     relief_debug_dir: Option<&Path>,
 ) -> Result<Vec<GerberX2File>> {
-    let doc = geometry::extract_layout(ipc)?;
-    let score_lines = geometry::board_array_vscore_lines(ipc)?;
+    let doc = &imported.geometry;
+    let score_lines = geometry::board_array_vscore_lines_from_design(imported)?;
+    #[cfg(not(feature = "cli"))]
+    if relief_debug_dir.is_some() {
+        bail!("filesystem debug output requires the cli feature");
+    }
+    #[cfg(feature = "cli")]
     let profile = if let Some(debug_dir) = relief_debug_dir {
         let (profile, relief_debug) =
-            geometry::board_array_fabrication_profile_with_debug(ipc, &doc, &score_lines)?;
+            geometry::board_array_fabrication_profile_from_design_with_debug(
+                imported,
+                doc,
+                &score_lines,
+            )?;
         write_vscore_relief_debug(debug_dir, &relief_debug)?;
         profile
     } else {
-        geometry::board_array_fabrication_profile(ipc, &doc, &score_lines)?
+        geometry::board_array_fabrication_profile_from_design(imported, doc, &score_lines)?
     };
+    #[cfg(not(feature = "cli"))]
+    let profile =
+        geometry::board_array_fabrication_profile_from_design(imported, doc, &score_lines)?;
     if profile.purpose == LayoutPurpose::Product {
         let mut contour_groups = profile.array_outlines;
         contour_groups.push(profile.material_removal);
@@ -881,6 +928,7 @@ fn profile_gerber_file(
     }))
 }
 
+#[cfg(feature = "cli")]
 fn write_vscore_relief_debug(output_dir: &Path, debug: &relief::VScoreReliefDebug) -> Result<()> {
     let Some(svg) = render_vscore_relief_debug_svg(debug) else {
         return Ok(());
@@ -900,6 +948,7 @@ fn write_vscore_relief_debug(output_dir: &Path, debug: &relief::VScoreReliefDebu
     })
 }
 
+#[cfg(feature = "cli")]
 fn render_vscore_relief_debug_svg(debug: &relief::VScoreReliefDebug) -> Option<String> {
     if debug.entries.is_empty() {
         return None;
@@ -1023,6 +1072,7 @@ fn render_vscore_relief_debug_svg(debug: &relief::VScoreReliefDebug) -> Option<S
 }
 
 #[derive(Debug, Clone, Copy)]
+#[cfg(feature = "cli")]
 struct DebugSvgPathStyle {
     class_name: &'static str,
     fill: &'static str,
@@ -1031,6 +1081,7 @@ struct DebugSvgPathStyle {
     extra_attrs: &'static str,
 }
 
+#[cfg(feature = "cli")]
 fn write_debug_path(
     svg: &mut String,
     entry_index: usize,
@@ -1048,6 +1099,7 @@ fn write_debug_path(
     .unwrap();
 }
 
+#[cfg(feature = "cli")]
 fn debug_path_data(payloads: &[ContourBuf]) -> Option<String> {
     let mut data = String::new();
     for payload in payloads {
@@ -1056,6 +1108,7 @@ fn debug_path_data(payloads: &[ContourBuf]) -> Option<String> {
     (!data.is_empty()).then_some(data)
 }
 
+#[cfg(feature = "cli")]
 fn append_debug_path_cmds(data: &mut String, cmds: &[PathCmd]) {
     let mut current = Point::default();
     for cmd in cmds {
@@ -1094,6 +1147,7 @@ fn append_debug_path_cmds(data: &mut String, cmds: &[PathCmd]) {
     }
 }
 
+#[cfg(feature = "cli")]
 fn write_debug_arc(data: &mut String, start: Point, end: Point, center: Point, clockwise: bool) {
     let radius = start.distance_to(center);
     if radius <= 1e-9 {
@@ -1114,6 +1168,7 @@ fn write_debug_arc(data: &mut String, start: Point, end: Point, center: Point, c
     write_debug_svg_arc(data, radius, large_arc, sweep_flag, end);
 }
 
+#[cfg(feature = "cli")]
 fn write_debug_svg_arc(data: &mut String, radius: f64, large_arc: u8, sweep_flag: u8, end: Point) {
     write!(
         data,
@@ -1126,12 +1181,14 @@ fn write_debug_svg_arc(data: &mut String, radius: f64, large_arc: u8, sweep_flag
     .unwrap();
 }
 
+#[cfg(feature = "cli")]
 fn payloads_bbox(payloads: &[ContourBuf]) -> BBox {
     payloads
         .iter()
         .fold(BBox::empty(), |bbox, payload| bbox.union(payload.bbox))
 }
 
+#[cfg(feature = "cli")]
 fn debug_num(value: f64) -> String {
     let mut text = format!("{value:.6}");
     while text.contains('.') && text.ends_with('0') {
@@ -1241,7 +1298,7 @@ fn ir_side(side: Option<IpcSide>) -> IrSide {
 }
 
 fn standard_flash_aperture(
-    ipc: &Ipc2581,
+    imported: &ImportedDesign,
     doc: &IpcGeometryDocument,
     feature: &Feature<ipc2581::Symbol>,
 ) -> Option<(Aperture, Affine2, BBox)> {
@@ -1249,7 +1306,7 @@ fn standard_flash_aperture(
         return None;
     }
 
-    let primitive = standard_primitive_for_feature(ipc, feature)?;
+    let primitive = standard_primitive_for_feature(imported, feature)?;
     if !standard_primitive_is_solid_fill(primitive) {
         return None;
     }
@@ -1351,13 +1408,14 @@ fn standard_flash_feature_is_eligible(feature: &Feature<ipc2581::Symbol>) -> boo
 }
 
 fn standard_primitive_for_feature<'a>(
-    ipc: &'a Ipc2581,
+    imported: &'a ImportedDesign,
     feature: &Feature<ipc2581::Symbol>,
 ) -> Option<&'a StandardPrimitive> {
     let Some(PrimitiveRef::Standard(primitive_ref)) = feature.primitive_ref else {
         return None;
     };
-    ipc.content()
+    imported
+        .content
         .dictionary_standard
         .entries
         .iter()
@@ -1434,7 +1492,7 @@ fn nearly_equal(left: f64, right: f64) -> bool {
 }
 
 fn object_attributes(
-    ipc: &Ipc2581,
+    imported: &ImportedDesign,
     doc: &IpcGeometryDocument,
     feature: &Feature<ipc2581::Symbol>,
     role: GerberLayerRole,
@@ -1456,15 +1514,17 @@ fn object_attributes(
         aperture_function,
         lower_flashes_to_regions: role == GerberLayerRole::Copper && !keeps_flashes,
         net: if carries_netlist {
-            feature.net.map(|symbol| ipc.resolve(symbol).to_string())
+            feature
+                .net
+                .map(|symbol| imported.resolve(symbol).to_string())
         } else {
             None
         },
         component: pin_ref
             .and_then(|pin_ref| pin_ref.component_ref)
-            .map(|symbol| ipc.resolve(symbol).to_string()),
+            .map(|symbol| imported.resolve(symbol).to_string()),
         pin: if carries_pins {
-            pin_ref.map(|pin_ref| ipc.resolve(pin_ref.pin).to_string())
+            pin_ref.map(|pin_ref| imported.resolve(pin_ref.pin).to_string())
         } else {
             None
         },
@@ -1581,10 +1641,10 @@ fn fiducial_aperture_function(feature: &Feature<ipc2581::Symbol>) -> Vec<String>
 mod tests {
     use super::*;
     use crate::ipc2581 as ipc;
-    use crate::manufacturing::{
-        ManufacturingExportOptions, ManufacturingFileKind, build_manufacturing_package,
-        export_manufacturing_package,
-    };
+    #[cfg(feature = "cli")]
+    use crate::manufacturing::{ManufacturingExportOptions, export_manufacturing_package};
+    use crate::manufacturing::{ManufacturingFileKind, build_manufacturing_package};
+    #[cfg(feature = "cli")]
     use std::io::{Cursor, Read};
 
     #[test]
@@ -2042,14 +2102,15 @@ mod tests {
       <Layer name="Edge.Cuts" layerFunction="BOARD_OUTLINE" side="ALL"/>
       <Layer name="Drill" layerFunction="DRILL" side="ALL"/>
       <Layer name="F.Cu_B.Cu_1" layerFunction="ROUT" side="ALL"/>
+      <Step name="board" type="BOARD"/>
     </CadData>
   </Ecad>
 </IPC-2581>"#,
         )
         .unwrap();
-        let layers = &ipc.ecad().unwrap().cad_data.layers;
+        let imported = import_design(&ipc).unwrap();
 
-        let filenames = export_layer_plans(&ipc, layers)
+        let filenames = export_layer_plans(&imported, &imported.layer_definitions)
             .into_iter()
             .map(|plan| plan.filename)
             .collect::<Vec<_>>();
@@ -2070,13 +2131,15 @@ mod tests {
       <Layer name="B.Fab" layerFunction="ASSEMBLY" side="BOTTOM"/>
       <Layer name="Assembly Notes" layerFunction="ASSEMBLY" side="NONE"/>
       <Layer name="Board Fab" layerFunction="BOARD_FAB" side="ALL"/>
+      <Step name="board" type="BOARD"/>
     </CadData>
   </Ecad>
 </IPC-2581>"#,
         )
         .unwrap();
 
-        let plans = export_layer_plans(&ipc, &ipc.ecad().unwrap().cad_data.layers);
+        let imported = import_design(&ipc).unwrap();
+        let plans = export_layer_plans(&imported, &imported.layer_definitions);
         let outputs = plans
             .iter()
             .map(|plan| (plan.filename.as_str(), plan.file_function.as_slice()))
@@ -2198,14 +2261,15 @@ mod tests {
       <Layer name="VCUT-B" layerFunction="V_CUT" side="NONE"/>
       <Layer name="SCORE-A" layerFunction="SCORE" side="NONE"/>
       <Layer name="SCORE-B" layerFunction="SCORE" side="NONE"/>
+      <Step name="board" type="BOARD"/>
     </CadData>
   </Ecad>
 </IPC-2581>"#,
         )
         .unwrap();
-        let layers = &ipc.ecad().unwrap().cad_data.layers;
+        let imported = import_design(&ipc).unwrap();
 
-        let filenames = export_layer_plans(&ipc, layers)
+        let filenames = export_layer_plans(&imported, &imported.layer_definitions)
             .into_iter()
             .map(|plan| plan.filename)
             .collect::<Vec<_>>();
@@ -2259,6 +2323,72 @@ mod tests {
         assert!(edge_cuts.contents.contains("%TA.AperFunction,Profile*%"));
         assert!(edge_cuts.contents.contains("%ADD10C,0.05*%"));
         gerberx2::GerberX2::parse(&edge_cuts.contents).unwrap();
+    }
+
+    #[test]
+    fn standalone_profile_export_matches_both_layout_targets() {
+        for outline_layer in [
+            "",
+            r#"<Layer name="Edge.Cuts" layerFunction="BOARD_OUTLINE" side="ALL" polarity="POSITIVE"/>"#,
+        ] {
+            let ipc = ipc::Ipc2581::parse(&format!(
+                r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner"><FunctionMode mode="FABRICATION"/><StepRef name="board"/></Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      {outline_layer}
+      <Step name="board" type="BOARD">
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="10" y="0"/>
+            <PolyStepSegment x="10" y="5"/>
+            <PolyStepSegment x="0" y="5"/>
+            <PolyStepSegment x="0" y="0"/>
+          </Polygon>
+          <Cutout>
+            <PolyBegin x="2" y="2"/>
+            <PolyStepSegment x="3" y="2"/>
+            <PolyStepSegment x="3" y="3"/>
+            <PolyStepSegment x="2" y="3"/>
+            <PolyStepSegment x="2" y="2"/>
+          </Cutout>
+        </Profile>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+            ))
+            .unwrap();
+            let board = build_manufacturing_package(&ipc, ArtworkScope::Board).unwrap();
+            let array = build_manufacturing_package(&ipc, ArtworkScope::ArrayFlattened).unwrap();
+            assert_eq!(
+                board
+                    .files
+                    .iter()
+                    .map(|f| (&f.filename, &f.contents))
+                    .collect::<Vec<_>>(),
+                array
+                    .files
+                    .iter()
+                    .map(|f| (&f.filename, &f.contents))
+                    .collect::<Vec<_>>(),
+            );
+            let profile = &array
+                .files
+                .iter()
+                .find(|f| f.filename == "Edge_Cuts.gm1")
+                .unwrap()
+                .contents;
+            assert!(profile.contains("%TF.FileFunction,Profile,NP*%"));
+            assert!(profile.contains("%TF.Part,Single*%"));
+            let parsed = gerberx2::GerberX2::parse(profile).unwrap();
+            let geometry = gerberx2::geometry::extract_document(&parsed);
+            geometry.validate().unwrap();
+            assert_eq!(geometry.layers[0].objects.count, 8);
+        }
     }
 
     #[test]
@@ -2718,6 +2848,7 @@ mod tests {
         assert!(npth.contents.contains("X3.0Y4.0"));
     }
 
+    #[cfg(feature = "cli")]
     #[test]
     fn gerber_export_writes_zip_when_output_has_zip_extension() {
         let ipc = ipc::Ipc2581::parse(
@@ -3085,6 +3216,7 @@ mod tests {
         assert!(score.contents.contains("%TA.AperFunction,Other,Score*%"));
     }
 
+    #[cfg(feature = "cli")]
     #[test]
     fn real_board_export_parseback_and_svg_paths_smoke() {
         let compressed = include_bytes!("../../../ipc2581/tests/data/DM0002-IPC-2518.xml.zst");

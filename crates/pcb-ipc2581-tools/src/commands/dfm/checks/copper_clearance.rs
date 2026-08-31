@@ -8,12 +8,12 @@
 //! or contained distinct-owner regions measure zero.
 
 use pcb_ir::geom::BBox;
-use pcb_ir::geom::dfm::region_clearance;
+use pcb_ir::geom::dfm::{region_clearance, region_clearance_sites};
 
 use crate::commands::dfm::design::{ConductorId, Design};
 use crate::commands::dfm::report::{Evidence, SourceLocator, Subject};
 
-use super::{Evaluation, Measured};
+use super::{Evaluation, Measured, linework_clearance, violates};
 
 struct Piece {
     conductor_index: usize,
@@ -86,6 +86,20 @@ pub(super) fn evaluate(limit_mm: f64, design: &Design) -> Evaluation {
                         Evidence::bounds("first_conductor_component", left.region.bbox),
                         Evidence::bounds("second_conductor_component", right.region.bbox),
                     ],
+                    sites: if violates(&distance, limit_mm) {
+                        region_clearance_sites(&left.region, &right.region, limit_mm)
+                            .into_iter()
+                            .map(|site| {
+                                linework_clearance::report_site(
+                                    site,
+                                    vec![layer.layer.clone()],
+                                    limit_mm,
+                                )
+                            })
+                            .collect()
+                    } else {
+                        Vec::new()
+                    },
                 });
             }
         }
@@ -117,6 +131,13 @@ fn conductor_subject(design: &Design, id: ConductorId, role: &'static str, layer
             step: design.resolve(id.step()),
             layer: Some(layer.to_owned()),
             set_index,
+            feature_index: None,
+            instance_index: id.instance(),
+        }),
+        provenance: matches!(id, ConductorId::Net { .. }).then(|| SourceLocator {
+            step: design.resolve(id.step()),
+            layer: Some(layer.to_owned()),
+            set_index: None,
             feature_index: None,
             instance_index: id.instance(),
         }),
@@ -199,7 +220,8 @@ minimum_copper_clearance = "0.15 mm"
         let ipc = Ipc2581::parse(xml).unwrap();
         let pdk = Pdk::parse(PDK).unwrap();
         let rules = rules::lower(&pdk).unwrap();
-        let design = Design::extract(&ipc, ArtworkScope::Board, &rules).unwrap();
+        let imported = pcb_ir::import::ipc2581::import_design(&ipc).unwrap();
+        let design = Design::extract(&imported, ArtworkScope::Board, &rules).unwrap();
         checks::run(
             &rules,
             &design,
@@ -254,8 +276,9 @@ minimum_copper_clearance = "0.15 mm"
         let ipc = Ipc2581::parse(&xml).unwrap();
         let pdk = Pdk::parse(PDK).unwrap();
         let rules = rules::lower(&pdk).unwrap();
+        let imported = pcb_ir::import::ipc2581::import_design(&ipc).unwrap();
 
-        let error = Design::extract(&ipc, ArtworkScope::Board, &rules)
+        let error = Design::extract(&imported, ArtworkScope::Board, &rules)
             .err()
             .expect("unattributed copper must fail closed");
         assert!(

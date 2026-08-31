@@ -16,15 +16,13 @@ pub fn write_zen_formatted(path: &Path, content: &str) -> Result<()> {
         .tempfile_in(dir)
         .with_context(|| format!("Failed to create temp file in {}", dir.display()))?;
 
-    tmp.write_all(content.as_bytes())
+    let formatted = RuffFormatter::default()
+        .format_source(content)
+        .with_context(|| format!("Failed to format generated {}", path.display()))?;
+    tmp.write_all(formatted.as_bytes())
         .with_context(|| format!("Failed to write temp file for {}", path.display()))?;
     tmp.flush()
         .with_context(|| format!("Failed to flush temp file for {}", path.display()))?;
-
-    let formatter = RuffFormatter::default();
-    formatter
-        .format_file(tmp.path())
-        .with_context(|| format!("Failed to format generated {}", path.display()))?;
 
     tmp.persist(path)
         .map(|_| ())

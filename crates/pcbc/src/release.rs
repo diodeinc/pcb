@@ -393,7 +393,7 @@ fn display_release_info(info: &ReleaseInfo) {
     );
     let mut table = comfy_table::Table::new();
     table
-        .load_preset(comfy_table::presets::UTF8_BORDERS_ONLY)
+        .load_style(comfy_table::presets::UTF8_BORDERS_ONLY)
         .set_content_arrangement(comfy_table::ContentArrangement::Dynamic);
 
     table.add_row(vec!["Release Type", "Full Release"]);

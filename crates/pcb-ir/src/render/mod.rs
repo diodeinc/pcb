@@ -6,10 +6,12 @@
 
 mod png;
 mod svg;
+#[cfg(not(target_family = "wasm"))]
 mod term;
 
 pub use png::{artwork_png, png};
-pub use svg::{artwork_svg, svg};
+pub use svg::{artwork_svg, svg, svg_path_data};
+#[cfg(not(target_family = "wasm"))]
 pub use term::{artwork_to_terminal, can_render_to_terminal, to_terminal, write_kitty_png};
 
 use crate::dialects::{artwork, mask};
@@ -23,6 +25,10 @@ pub struct RenderOptions {
     /// Layer indices to render, in paint order. `None` renders all layers.
     pub layers: Option<Vec<usize>>,
     pub size: SizeConstraint,
+    /// Exact viewport in the document's millimeter, Y-up coordinate system.
+    /// `None` fits the selected layers with the default padding. This changes
+    /// the camera only; callers should cull large documents before rendering.
+    pub viewport: Option<BBox>,
 }
 
 impl RenderOptions {
@@ -43,6 +49,25 @@ impl RenderOptions {
     pub fn with_size(mut self, size: SizeConstraint) -> Self {
         self.size = size;
         self
+    }
+
+    pub fn with_viewport(mut self, viewport: BBox) -> Self {
+        self.viewport = Some(viewport);
+        self
+    }
+
+    pub(crate) fn viewport_or(&self, fitted: BBox) -> BBox {
+        let Some(viewport) = self.viewport else {
+            return fitted;
+        };
+        assert!(
+            viewport.is_valid()
+                && !viewport.is_empty()
+                && viewport.width() > 0.0
+                && viewport.height() > 0.0,
+            "render viewport must be finite and have positive area"
+        );
+        viewport
     }
 }
 

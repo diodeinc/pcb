@@ -453,7 +453,7 @@ fn initializes_and_semantically_adopts_net_symbols() {
 }
 
 #[test]
-fn preserves_an_equivalent_label_instead_of_preferring_a_net_symbol() {
+fn local_label_does_not_replace_a_symbol_backed_root_endpoint() {
     let (netlist, mut document) = net_symbol_fixture();
     let ground_index = document.pages[0]
         .items
@@ -481,17 +481,13 @@ fn preserves_an_equivalent_label_instead_of_preferring_a_net_symbol() {
         "GROUND",
         ground_pin.point,
     )));
-    assert!(
+    assert!(matches!(
         inspect_schematic(&document, &netlist)
             .unwrap()
             .analysis
-            .is_equivalent()
-    );
-
-    let preserved = plan_reconciliation(Some(&document), &netlist, "NetSymbols.kicad_sch").unwrap();
-
-    assert!(preserved.is_empty(), "{:#?}", preserved.edits());
-    assert_eq!(preserved.apply(Some(&document)).unwrap(), document);
+            .issues(),
+        [SchematicIssue::MissingPort { net_name, .. }] if net_name == "GROUND"
+    ));
 }
 
 #[test]
@@ -675,6 +671,83 @@ fn connected_net_missing_its_port_label_reports_missing_port() {
         ),
         "{:#?}",
         inspection.analysis.issues()
+    );
+}
+
+#[test]
+fn symbol_backed_root_port_accepts_symbol_or_hierarchical_label_and_repairs_neither() {
+    let netlist = common::compile_fixture("hierarchy", "root_symbol_interface.zen");
+    let symbol_only = plan_reconciliation(None, &netlist, "RootSymbolInterface.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    let power_symbol = net_symbol(&symbol_only, "POWER");
+    let power_connection = symbol_only.pages[0].library.definitions[&power_symbol.lib_id]
+        .placed_pins(power_symbol)
+        .unwrap()[0]
+        .point;
+    assert!(
+        inspect_schematic(&symbol_only, &netlist)
+            .unwrap()
+            .analysis
+            .is_equivalent()
+    );
+
+    let mut neither = symbol_only.clone();
+    neither.pages[0].items.retain(|item| {
+        !matches!(item, SchItem::Symbol(symbol) if symbol.field_value("Value") == Some("POWER"))
+    });
+    let inspection = inspect_schematic(&neither, &netlist).unwrap();
+    assert!(matches!(
+        inspection.analysis.issues(),
+        [SchematicIssue::MissingPort { net_name, ports, .. }]
+            if net_name == "POWER" && ports == &["POWER".to_string()]
+    ));
+
+    let mut label_only = neither.clone();
+    let mut label = Label::new("power-port", "POWER", power_connection);
+    label.kind = LabelKind::Hierarchical {
+        shape: pcb_kicad_sch::LabelShape::Bidirectional,
+    };
+    label_only.pages[0].items.push(SchItem::Label(label));
+    let label_inspection = inspect_schematic(&label_only, &netlist).unwrap();
+    assert!(
+        label_inspection.analysis.is_equivalent(),
+        "{:#?}",
+        label_inspection.analysis.issues()
+    );
+
+    let mut dangling_label = neither.clone();
+    let mut label = Label::new("dangling-power-port", "POWER", Point::new(200.0, 200.0));
+    label.kind = LabelKind::Hierarchical {
+        shape: pcb_kicad_sch::LabelShape::Bidirectional,
+    };
+    dangling_label.pages[0].items.push(SchItem::Label(label));
+    assert!(
+        !inspect_schematic(&dangling_label, &netlist)
+            .unwrap()
+            .analysis
+            .is_equivalent()
+    );
+
+    let repaired = plan_repairs(
+        &neither,
+        &netlist,
+        &inspection,
+        BTreeSet::from([SchematicIssueKey::MissingPort("POWER".to_string())]),
+    )
+    .unwrap()
+    .apply(Some(&neither))
+    .unwrap();
+    assert!(repaired.pages[0].items.iter().any(|item| {
+        matches!(item, SchItem::Symbol(symbol)
+            if symbol.field_value("Value") == Some("POWER"))
+    }));
+    assert!(
+        inspect_schematic(&repaired, &netlist)
+            .unwrap()
+            .analysis
+            .is_equivalent()
     );
 }
 

@@ -23,12 +23,12 @@
 //! clear without walking its boundary segments; every pair counts as
 //! checked either way.
 
-use pcb_ir::geom::dfm::{Distance, region_clearance};
+use pcb_ir::geom::dfm::{Distance, region_clearance, region_clearance_sites};
 
 use crate::commands::dfm::design::{BoardArray, Design};
 use crate::commands::dfm::report::{Evidence, SourceLocator, Subject};
 
-use super::{Evaluation, Measured};
+use super::{Evaluation, Measured, linework_clearance, violates};
 
 pub(super) fn evaluate(limit_mm: f64, design: &Design) -> Evaluation {
     let arrays = &design.board_arrays;
@@ -48,19 +48,30 @@ pub(super) fn evaluate(limit_mm: f64, design: &Design) -> Evaluation {
             )
             .certainly_below(limit_mm)
         })
-        .map(|(first, second)| Measured {
-            distance: region_clearance(&first.region, &second.region)
-                .expect("board arrays are extracted with non-empty profiles"),
-            bbox: first.region.bbox.union(second.region.bbox),
-            layers: Vec::new(),
-            subjects: vec![
-                board_array_subject(first, "first"),
-                board_array_subject(second, "second"),
-            ],
-            evidence: vec![
-                Evidence::bounds("first_board_array", first.region.bbox),
-                Evidence::bounds("second_board_array", second.region.bbox),
-            ],
+        .map(|(first, second)| {
+            let distance = region_clearance(&first.region, &second.region)
+                .expect("board arrays are extracted with non-empty profiles");
+            Measured {
+                distance,
+                bbox: first.region.bbox.union(second.region.bbox),
+                layers: Vec::new(),
+                subjects: vec![
+                    board_array_subject(first, "first"),
+                    board_array_subject(second, "second"),
+                ],
+                evidence: vec![
+                    Evidence::bounds("first_board_array", first.region.bbox),
+                    Evidence::bounds("second_board_array", second.region.bbox),
+                ],
+                sites: if violates(&distance, limit_mm) {
+                    region_clearance_sites(&first.region, &second.region, limit_mm)
+                        .into_iter()
+                        .map(|site| linework_clearance::report_site(site, Vec::new(), limit_mm))
+                        .collect()
+                } else {
+                    Vec::new()
+                },
+            }
         })
         .collect();
     Evaluation {
@@ -75,6 +86,13 @@ fn board_array_subject(array: &BoardArray, role: &'static str) -> Subject {
         kind: "board_array_outline",
         name: Some(array.name.clone()),
         source: Some(SourceLocator {
+            step: Some(array.name.clone()),
+            layer: None,
+            set_index: None,
+            feature_index: None,
+            instance_index: Some(array.instance_index),
+        }),
+        provenance: Some(SourceLocator {
             step: Some(array.name.clone()),
             layer: None,
             set_index: None,

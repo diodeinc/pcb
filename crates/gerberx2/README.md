@@ -12,6 +12,10 @@ Gerber constructs without flattening native macros or block apertures.
 This crate contains no CLI or IPC-2581 conversion policy. Higher-level export
 and comparison logic belongs in the consuming crate.
 
+Parsing strings, extracting PCB IR artwork, and writing Gerber are available
+on `wasm32-unknown-unknown`. Only the native `parse_file` convenience method
+requires filesystem access.
+
 Run the tests with:
 
 ```bash

@@ -22,7 +22,7 @@ fn qty_with_percentage_cell(qty: usize, percentage: f64) -> Cell {
 
 /// Configure a summary table with standard layout
 fn configure_summary_table(table: &mut Table) {
-    table.load_preset(comfy_table::presets::UTF8_FULL_CONDENSED);
+    table.load_style(comfy_table::presets::UTF8_FULL_CONDENSED);
     table.set_content_arrangement(comfy_table::ContentArrangement::Disabled);
     table.set_header(vec!["", "Category", "Unique Parts", "Total Qty"]);
 
@@ -262,7 +262,7 @@ impl Bom {
         // Print legend in a compact table with 2 columns
         writeln!(writer, "Legend:")?;
         let mut legend_table = Table::new();
-        legend_table.load_preset(comfy_table::presets::NOTHING);
+        legend_table.load_style(comfy_table::presets::NOTHING);
         legend_table.set_content_arrangement(comfy_table::ContentArrangement::Disabled);
 
         if has_availability {
@@ -334,7 +334,7 @@ impl Bom {
         let mut unclassified_qty = 0;
 
         let mut table = Table::new();
-        table.load_preset(comfy_table::presets::UTF8_FULL_CONDENSED);
+        table.load_style(comfy_table::presets::UTF8_FULL_CONDENSED);
         table.set_content_arrangement(comfy_table::ContentArrangement::DynamicFullWidth);
 
         let mut entries = self.grouped_entries();

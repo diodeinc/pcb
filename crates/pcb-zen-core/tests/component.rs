@@ -49,6 +49,108 @@ fn frozen_net_id(value: FrozenValue) -> u64 {
         .net_id()
 }
 
+const DESCRIBED_SYMBOL: &str = r#"(kicad_symbol_lib
+  (version 20231120)
+  (generator "test")
+  (symbol "Described"
+    (property "Reference" "U")
+    (property "Value" "Described")
+    (property "Description" "Symbol description")
+    (property "Manufacturer_Name" "Acme")
+    (property "Manufacturer_Part_Number" "ACME-1")
+    (symbol "Described_1_1"
+      (pin passive line (at 0 0 0) (length 2.54) (name "P") (number "1"))
+    )
+  )
+)"#;
+
+#[test]
+fn untyped_component_prefers_symbol_description_over_value() {
+    let component = eval_single_root_component_with_files(vec![
+        ("described.kicad_sym", DESCRIBED_SYMBOL),
+        (
+            "test.zen",
+            r#"
+Component(
+    name = "U1",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"),
+    symbol = Symbol(library = "described.kicad_sym"),
+    pins = {"P": Net("P")},
+    properties = {"value": "32MHz"},
+)
+"#,
+        ),
+    ]);
+
+    assert_eq!(component.description(), Some("Symbol description"));
+}
+
+#[test]
+fn typed_component_prefers_value_over_symbol_description() {
+    let component = eval_single_root_component_with_files(vec![
+        ("described.kicad_sym", DESCRIBED_SYMBOL),
+        (
+            "test.zen",
+            r#"
+Component(
+    name = "R1",
+    type = "resistor",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"),
+    symbol = Symbol(library = "described.kicad_sym"),
+    pins = {"P": Net("P")},
+    properties = {"value": "1k"},
+)
+"#,
+        ),
+    ]);
+
+    assert_eq!(component.description(), Some("1k"));
+}
+
+#[test]
+fn explicit_description_overrides_typed_component_value() {
+    let component = eval_single_root_component_with_files(vec![
+        ("described.kicad_sym", DESCRIBED_SYMBOL),
+        (
+            "test.zen",
+            r#"
+Component(
+    name = "R1",
+    type = "resistor",
+    description = "Explicit description",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"),
+    symbol = Symbol(library = "described.kicad_sym"),
+    pins = {"P": Net("P")},
+    properties = {"value": "1k"},
+)
+"#,
+        ),
+    ]);
+
+    assert_eq!(component.description(), Some("Explicit description"));
+}
+
+#[test]
+fn typed_component_uses_symbol_description_without_value() {
+    let component = eval_single_root_component_with_files(vec![
+        ("described.kicad_sym", DESCRIBED_SYMBOL),
+        (
+            "test.zen",
+            r#"
+Component(
+    name = "R1",
+    type = "resistor",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0603_1608Metric.kicad_mod"),
+    symbol = Symbol(library = "described.kicad_sym"),
+    pins = {"P": Net("P")},
+)
+"#,
+        ),
+    ]);
+
+    assert_eq!(component.description(), Some("Symbol description"));
+}
+
 const EXPLICIT_JUMPER_SYMBOL: &str = r#"(kicad_symbol_lib
   (version 20251024)
   (generator "test")

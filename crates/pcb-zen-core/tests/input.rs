@@ -3,6 +3,7 @@ use pcb_zen_core::lang::error::CategorizedDiagnostic;
 use pcb_zen_core::lang::io_direction::IoDirection;
 use pcb_zen_core::lang::net::FrozenNetValue;
 use pcb_zen_core::{DiagnosticsPass, SortPass};
+use starlark::collections::SmallMap;
 use starlark::errors::EvalSeverity;
 use starlark::values::ValueLike;
 use std::path::PathBuf;
@@ -29,6 +30,49 @@ snapshot_eval!(config_default_implies_optional_in_signature, {
         led_color = config(str, default = "green")
     "#
 });
+
+#[test]
+fn json_config_preserves_numeric_inputs() {
+    for (typ, raw) in [
+        ("int", "0"),
+        ("int", "2147483647"),
+        ("int", "2147483648"),
+        ("int", "-2147483648"),
+        ("int", "-2147483649"),
+        ("int", "9007199254740991"),
+        ("int", "-9007199254740991"),
+        ("int", "9223372036854775807"),
+        ("int", "-9223372036854775808"),
+        ("int", "18446744073709551615"),
+        ("float", "-1.25"),
+        (
+            "dict",
+            r#"{"nested": {"values": [0, -2147483649, 18446744073709551615, -1.25, null, true, false, "μ"]}}"#,
+        ),
+    ] {
+        let mut files = stdlib_test_files();
+        files.insert("test.zen".to_string(), format!("value = config({typ})"));
+        let file_provider = Arc::new(InMemoryFileProvider::new(files));
+        let mut ctx = pcb_zen_core::EvalContext::new(file_provider, test_resolution())
+            .set_source_path(PathBuf::from("test.zen"))
+            .set_inject_prelude(false);
+        let input: serde_json::Value = serde_json::from_str(raw).unwrap();
+        ctx.set_json_inputs(SmallMap::from_iter([("value".to_string(), input.clone())]));
+
+        let result = ctx.eval();
+        assert!(
+            result.is_success(),
+            "{typ} input {raw} failed: {:?}",
+            result.diagnostics
+        );
+        let output = result.output.unwrap();
+        let value = output.star_module.get("value").unwrap();
+        assert_eq!(value.value().get_type(), typ, "input {raw}");
+        let actual: serde_json::Value =
+            serde_json::from_str(&value.value().to_json().unwrap()).unwrap();
+        assert_eq!(actual, input, "{typ} input {raw} changed during evaluation");
+    }
+}
 
 snapshot_eval!(io_template_infers_signature_and_default, {
     "test.zen" => r#"

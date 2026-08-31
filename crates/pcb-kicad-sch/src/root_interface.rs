@@ -157,6 +157,39 @@ pub(crate) fn ports_by_net(
     Ok(ports)
 }
 
+/// Root interface ports whose source default declares a net symbol. These
+/// may be represented by that symbol or by a hierarchical label.
+pub(crate) fn symbol_ports_by_net(
+    netlist: &Schematic,
+    module_ref: &InstanceRef,
+) -> Result<BTreeMap<String, BTreeSet<String>>> {
+    let module = netlist
+        .instances
+        .get(module_ref)
+        .with_context(|| format!("module instance '{module_ref}' is absent from the netlist"))?;
+    let Some(AttributeValue::Json(signature)) = module.attributes.get("__signature") else {
+        return Ok(BTreeMap::new());
+    };
+    let net_names = net_names_by_id(netlist)?;
+    let mut ports = BTreeMap::<String, BTreeSet<String>>::new();
+    visit_signature_nets(
+        signature,
+        &format!("module '{module_ref}'"),
+        true,
+        &net_names,
+        &mut |io_path, net_name, _value, default_value| {
+            if default_value.and_then(net_symbol_value).is_some() {
+                ports
+                    .entry(net_name.to_string())
+                    .or_default()
+                    .insert(io_path.to_string());
+            }
+            Ok(())
+        },
+    )?;
+    Ok(ports)
+}
+
 fn net_symbol_value(value: &Value) -> Option<&str> {
     let value = value.get("Net")?.get("properties")?.get("__symbol_value")?;
     value

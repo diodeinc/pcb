@@ -246,7 +246,7 @@ fn lookup_cache<const DIMS: usize>(
                 return Ok(None);
             }
             let mut embedding = [0f32; DIMS];
-            for (i, chunk) in bytes.chunks_exact(4).enumerate() {
+            for (i, chunk) in bytes.as_chunks::<4>().0.iter().enumerate() {
                 embedding[i] = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
             }
             Ok(Some(embedding))

@@ -12,6 +12,30 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - The stdlib `QR` generic now places a solid silkscreen square per JLCPCB's 2D barcode placeholder spec, with a `size` config (`5mm`, `8mm`, `10mm`; default `5mm`) replacing the previous fixed corner-bracket outline.
 
+## [0.4.41] - 2026-08-31
+
+### Added
+
+- Add self-contained DFM JSON reports with native geometry and PDK source.
+- Add WASM APIs for IPC-2581 import, export, and DFM.
+
+### Fixed
+
+- Isolate KiCad CLI temp directories so concurrent ODB exports do not collide.
+- Reply to unknown LSP requests with JSON-RPC `MethodNotFound` instead of leaving clients waiting.
+- Preserve schematic conversion diagnostics in LSP evaluation.
+- Keep the language server running when LSP request or notification parameters are malformed.
+- Return JSON-compatible WASM evaluation results with JavaScript numbers and `null`.
+- Include standalone board outlines in Gerber exports.
+- Inherit symbol descriptions for non-generic BOM components.
+- Require external power IOs to have a net symbol or hierarchical label.
+- Complete the E48 and E192 standard value tables used by `e48()` and `e192()`.
+- `pcb build --config` now rejects unknown root configuration keys.
+- PCB commands now exit cleanly when an output pipe closes early.
+- JSON configuration inputs preserve signed and unsigned 64-bit integers.
+- `pcb fmt` now exits nonzero when a file fails to parse, read, or write in write, diff, and check modes.
+- Keep SPICE example DC measurements after later analyses by storing them in ngspice's constant plot.
+
 ## [0.4.40] - 2026-08-28
 
 ### Fixed
@@ -1708,7 +1732,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.40...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.41...HEAD
+[0.4.41]: https://github.com/diodeinc/pcb/compare/v0.4.40...v0.4.41
 [0.4.40]: https://github.com/diodeinc/pcb/compare/v0.4.39...v0.4.40
 [0.4.39]: https://github.com/diodeinc/pcb/compare/v0.4.38...v0.4.39
 [0.4.38]: https://github.com/diodeinc/pcb/compare/v0.4.37...v0.4.38

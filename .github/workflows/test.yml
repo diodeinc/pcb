@@ -64,6 +64,10 @@ jobs:
               image: ghcr.io/diodeinc/kicad:10.0.5
               options: --user root
     steps:
+      - name: Enable Windows long paths
+        if: runner.os == 'Windows'
+        run: git config --global core.longpaths true
+
       - name: Cache APT packages (Ubuntu)
         if: matrix.config.name == 'Ubuntu'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -150,7 +154,7 @@ jobs:
           cache-bin: false
 
       - name: Install nextest
-        uses: taiki-e/install-action@b6b84cf49ebfe0176417bdce007c624f0db37f20 # v2.86.2
+        uses: taiki-e/install-action@1ed6d7be6168f6c9046541087ff549b6bc581fdf # v2.87.2
         with:
           tool: nextest
 

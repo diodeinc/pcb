@@ -348,7 +348,7 @@ fn output_component_response<T: for<'de> Deserialize<'de>>(
     print_pretty: impl FnOnce(&T),
 ) -> Result<()> {
     if matches!(format, ComponentOutputFormat::Json) {
-        write_component_json_response(&mut io::stdout(), &response.body)?;
+        pcb_ui::write_stdout(|stdout| write_component_json_response(stdout, &response.body))?;
         if response.status.is_success() {
             return Ok(());
         }
@@ -368,7 +368,7 @@ fn output_component_response<T: for<'de> Deserialize<'de>>(
     Ok(())
 }
 
-fn write_component_json_response(writer: &mut impl Write, body: &str) -> io::Result<()> {
+fn write_component_json_response(writer: &mut (impl Write + ?Sized), body: &str) -> io::Result<()> {
     writer.write_all(body.as_bytes())?;
     writer.flush()
 }

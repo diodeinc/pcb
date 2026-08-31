@@ -326,7 +326,7 @@ impl Bom {
         }
     }
 
-    pub fn ungrouped_json(&self) -> String {
+    pub fn ungrouped_entries(&self) -> Vec<UngroupedBomEntry> {
         let mut entries = self
             .entries
             .iter()
@@ -342,7 +342,11 @@ impl Bom {
             std::cmp::Ordering::Equal => natord::compare(&a.designator, &b.designator),
             other => other,
         });
-        serde_json::to_string_pretty(&entries).unwrap()
+        entries
+    }
+
+    pub fn ungrouped_json(&self) -> String {
+        serde_json::to_string_pretty(&self.ungrouped_entries()).unwrap()
     }
 
     #[cfg(feature = "table")]

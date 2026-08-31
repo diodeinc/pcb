@@ -18,6 +18,16 @@ pub struct Interner {
     full: Vec<String>,
 }
 
+impl Clone for Interner {
+    fn clone(&self) -> Self {
+        let mut clone = Self::with_capacity(self.vec.len().max(1));
+        for value in &self.vec {
+            clone.intern(value);
+        }
+        clone
+    }
+}
+
 impl Default for Interner {
     fn default() -> Self {
         Self::with_capacity(1024)
@@ -110,5 +120,20 @@ mod tests {
         for (index, symbol) in symbols.iter().enumerate() {
             assert_eq!(interner.resolve(*symbol), format!("symbol-{index}"));
         }
+    }
+
+    #[test]
+    fn clone_preserves_existing_symbol_identity_and_ownership() {
+        let mut interner = Interner::with_capacity(4);
+        let first = interner.intern("first");
+        let second = interner.intern("second-value-that-forces-growth");
+
+        let cloned = interner.clone();
+        drop(interner);
+
+        assert_eq!(cloned.resolve(first), "first");
+        assert_eq!(cloned.resolve(second), "second-value-that-forces-growth");
+        assert_eq!(cloned.get("first"), Some(first));
+        assert_eq!(cloned.get("second-value-that-forces-growth"), Some(second));
     }
 }

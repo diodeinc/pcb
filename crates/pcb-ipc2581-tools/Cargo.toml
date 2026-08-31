@@ -6,32 +6,60 @@ repository.workspace = true
 homepage.workspace = true
 authors.workspace = true
 
+[features]
+default = ["cli"]
+cli = [
+    "dep:anstream",
+    "dep:clap",
+    "dep:colored",
+    "dep:comfy-table",
+    "dep:pcb-diode-api",
+    "dep:pcb-sch",
+    "dep:pcb-ui",
+    "dep:tempfile",
+    "dep:uuid",
+    "dep:zstd",
+    "pcb-sch/table",
+]
+
 [dependencies]
 anyhow = { workspace = true }
+anstream = { workspace = true, optional = true }
 chrono = { workspace = true }
-clap = { workspace = true }
-colored = { workspace = true }
-comfy-table = { workspace = true }
+clap = { workspace = true, optional = true }
+colored = { workspace = true, optional = true }
+comfy-table = { workspace = true, optional = true }
 ipc2581 = { workspace = true }
 gerberx2 = { workspace = true }
 hex = { workspace = true }
-jiff = { workspace = true }
+jiff = { workspace = true, features = ["js"] }
 log = { workspace = true }
 minijinja = { workspace = true }
 natord = { workspace = true }
 pcb-ir = { workspace = true }
-pcb-sch = { workspace = true, features = ["table"] }
+pcb-sch = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-rayon = { workspace = true }
 sha2 = { workspace = true }
+tempfile = { workspace = true, optional = true }
 toml = { workspace = true }
 uppsala = { workspace = true }
-uuid = { workspace = true, features = ["serde"] }
-zstd = { workspace = true }
-pcb-diode-api = { workspace = true }
-pcb-ui = { workspace = true }
+uuid = { workspace = true, features = ["serde"], optional = true }
+zstd = { workspace = true, optional = true }
+pcb-diode-api = { workspace = true, optional = true }
+pcb-ui = { workspace = true, optional = true }
 zip = { workspace = true }
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+rayon = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+
+[[example]]
+name = "board_array_balancing_region"
+required-features = ["cli"]
+
+[[example]]
+name = "gerber_copper_svg"
+required-features = ["cli"]

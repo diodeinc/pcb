@@ -2109,6 +2109,13 @@ impl<'a> Parser<'a> {
     fn parse_feature_set(&mut self, node: &Node) -> Result<FeatureSet> {
         let net = self.attr(node, "net").map(|s| self.interner.intern(s));
         let geometry = self.attr(node, "geometry").map(|s| self.interner.intern(s));
+        let component_ref = self
+            .attr(node, "componentRef")
+            .map(|s| self.interner.intern(s));
+        let geometry_usage = self
+            .attr(node, "geometryUsage")
+            .map(|s| self.parse_enum_attr::<GeometryUsage>(s))
+            .transpose()?;
 
         // Parse polarity attribute
         let polarity = self.attr(node, "polarity").and_then(|s| match s {
@@ -2165,6 +2172,8 @@ impl<'a> Parser<'a> {
         Ok(FeatureSet {
             net,
             geometry,
+            component_ref,
+            geometry_usage,
             polarity,
             spec_refs,
             features,

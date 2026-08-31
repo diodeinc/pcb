@@ -10,7 +10,7 @@ pub fn png<LayerMeta>(
     doc: &mask::Document<LayerMeta>,
     options: &RenderOptions,
 ) -> Result<Vec<u8>, String> {
-    let bbox = crate::render::bbox(doc, options.layers.as_deref());
+    let bbox = options.viewport_or(crate::render::bbox(doc, options.layers.as_deref()));
     svg_to_png(&crate::render::svg(doc, &raster_options(options, bbox)))
 }
 
@@ -20,7 +20,7 @@ pub fn artwork_png<LayerMeta: Clone, ObjectMeta: Clone>(
     doc: &artwork::Document<LayerMeta, ObjectMeta>,
     options: &RenderOptions,
 ) -> Result<Vec<u8>, String> {
-    let bbox = crate::render::artwork_bbox(doc, options.layers.as_deref());
+    let bbox = options.viewport_or(crate::render::artwork_bbox(doc, options.layers.as_deref()));
     svg_to_png(&crate::render::artwork_svg(
         doc,
         &raster_options(options, bbox),
@@ -41,6 +41,7 @@ fn raster_options(options: &RenderOptions, bbox: BBox) -> RenderOptions {
     };
     RenderOptions {
         layers: options.layers.clone(),
+        viewport: options.viewport,
         size: SizeConstraint::Fixed {
             width_px,
             height_px,

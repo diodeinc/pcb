@@ -3,6 +3,7 @@ use anyhow::{Result, bail};
 pub mod board_array;
 pub mod board_array_auto;
 pub mod bom;
+#[cfg(feature = "cli")]
 pub mod bom_edit;
 pub mod cpl;
 pub mod dfm;
@@ -12,6 +13,7 @@ pub mod html_export;
 pub mod ict;
 pub mod info;
 pub mod outline;
+#[cfg(feature = "cli")]
 pub mod render;
 pub mod view;
 pub mod warp;

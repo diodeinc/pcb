@@ -6,17 +6,208 @@ use ipc2581::types::{
     PolyStep, SlotShape, StandardPrimitive, UserPrimitive, UserShapeType, Xform,
     ecad::{Layer, SetFeature, Step, StepRepeat, StepType},
 };
-use ipc2581::{Ipc2581, Symbol};
+use ipc2581::{Interner, Ipc2581, Symbol};
 
-use crate::steps;
-use pcb_ir::dialects::ipc::*;
-use pcb_ir::geom::Polarity as GeometryPolarity;
-use pcb_ir::geom::path::transform_cmds;
-use pcb_ir::geom::*;
+use crate::dialects::ipc::*;
+use crate::geom::Polarity as GeometryPolarity;
+use crate::geom::path::transform_cmds;
+use crate::geom::*;
 
-type GeometryDocument = pcb_ir::dialects::ipc::Document<Symbol, LayerFunction>;
-type GeometryLayer = pcb_ir::dialects::ipc::Layer<Symbol, LayerFunction>;
-type GeometryFeature = pcb_ir::dialects::ipc::Feature<Symbol>;
+pub type GeometryDocument = crate::dialects::ipc::Document<Symbol, LayerFunction>;
+type GeometryLayer = crate::dialects::ipc::Layer<Symbol, LayerFunction>;
+type GeometryFeature = crate::dialects::ipc::Feature<Symbol>;
+
+/// One self-contained, source-faithful IPC design.
+///
+/// Geometry is stored once in step-local coordinates. Layout and feature
+/// occurrences are derived by joining those definitions to the layout graph;
+/// final layer images are lowerings, not independent design state.
+#[derive(Debug, Clone)]
+pub struct ImportedDesign {
+    strings: Interner,
+    pub revision: String,
+    pub content: ipc2581::types::Content,
+    pub geometry: GeometryDocument,
+    pub layer_definitions: Vec<Layer>,
+    pub stackups: Vec<ipc2581::types::Stackup>,
+    pub steps: Vec<Step>,
+    pub step_layers: Vec<StepLayer>,
+    pub components: Vec<ComponentDefinition>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct LayerId(pub u32);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct StepLayer {
+    pub step: u32,
+    pub layer: LayerId,
+    pub document_layer: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum LayoutOccurrenceId {
+    Root,
+    Instance(u32),
+}
+
+impl LayoutOccurrenceId {
+    fn source_instance(self) -> Option<u32> {
+        match self {
+            Self::Root => None,
+            Self::Instance(instance) => Some(instance),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct FeatureDefinitionId(pub u32);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct FeatureOccurrenceId {
+    pub feature: FeatureDefinitionId,
+    pub layout: LayoutOccurrenceId,
+    pub placement: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct FeatureOccurrence {
+    pub id: FeatureOccurrenceId,
+    pub root_from_local: Affine2,
+    pub board: Option<LayoutOccurrenceId>,
+    pub root_from_board: Affine2,
+    pub board_from_local: Option<Affine2>,
+}
+
+pub fn feature_occurrence_id(feature: &GeometryFeature) -> Option<FeatureOccurrenceId> {
+    Some(FeatureOccurrenceId {
+        feature: FeatureDefinitionId(feature.source.definition?),
+        layout: feature
+            .source_instance
+            .map(LayoutOccurrenceId::Instance)
+            .unwrap_or(LayoutOccurrenceId::Root),
+        placement: feature.source_placement,
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ComponentDefinitionId(pub u32);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ComponentOccurrenceId {
+    pub component: ComponentDefinitionId,
+    pub layout: LayoutOccurrenceId,
+}
+
+#[derive(Debug, Clone)]
+pub struct ComponentDefinition {
+    pub step: u32,
+    pub source_index: u32,
+    pub source: ipc2581::types::Component,
+    pub local_from_component: Affine2,
+    pub population: PopulationState,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ComponentOccurrence {
+    pub id: ComponentOccurrenceId,
+    pub root_from_component: Affine2,
+    pub board: Option<LayoutOccurrenceId>,
+    pub root_from_board: Affine2,
+    pub board_from_component: Option<Affine2>,
+    pub population: PopulationState,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PopulationState {
+    #[default]
+    Unspecified,
+    Populate,
+    DoNotPopulate,
+    Conflicting,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct StepOccurrence {
+    step: u32,
+    layout: LayoutOccurrenceId,
+    root_from_step: Affine2,
+    board: Option<LayoutOccurrenceId>,
+    root_from_board: Affine2,
+}
+
+pub const FAB_PANEL_STEP_NAME: &str = "fab_panel";
+
+pub const COPPER_BALANCE_ATTRIBUTE_NAME: &str = "diode.copper_balance";
+pub const COPPER_BALANCE_LATTICE_ATTRIBUTE_NAME: &str = "diode.copper_balance_lattice";
+pub const COPPER_BALANCE_LATTICE_ORIGIN_X_ATTRIBUTE_NAME: &str =
+    "diode.copper_balance_lattice_origin_x_mm";
+pub const COPPER_BALANCE_LATTICE_ORIGIN_Y_ATTRIBUTE_NAME: &str =
+    "diode.copper_balance_lattice_origin_y_mm";
+pub const COPPER_BALANCE_LATTICE_PITCH_ATTRIBUTE_NAME: &str =
+    "diode.copper_balance_lattice_pitch_mm";
+pub const COPPER_BALANCE_VOID_RADIUS_ATTRIBUTE_NAME: &str = "diode.copper_balance_void_radius_mm";
+pub const COPPER_BALANCE_VOID_CORNER_RADIUS_ATTRIBUTE_NAME: &str =
+    "diode.copper_balance_void_corner_radius_mm";
+pub const COPPER_BALANCE_LATTICE_VALUE: &str = "staggered-hex-v1";
+
+fn primary_step<'a>(ipc: &Ipc2581, steps: &'a [Step]) -> Option<&'a Step> {
+    ipc.content()
+        .step_refs
+        .first()
+        .and_then(|step_ref| steps.iter().find(|step| step.name == *step_ref))
+        .or_else(|| steps.first())
+}
+
+pub fn is_copper(function: LayerFunction) -> bool {
+    matches!(
+        function,
+        LayerFunction::Conductor
+            | LayerFunction::CondFilm
+            | LayerFunction::CondFoil
+            | LayerFunction::Plane
+            | LayerFunction::Signal
+            | LayerFunction::Mixed
+    )
+}
+
+pub fn layer_role(function: LayerFunction) -> crate::dialects::LayerRole {
+    use crate::dialects::LayerRole;
+    if is_copper(function) {
+        return LayerRole::Copper;
+    }
+    match function {
+        LayerFunction::Solderpaste | LayerFunction::Pastemask => LayerRole::Paste,
+        LayerFunction::Soldermask => LayerRole::Soldermask,
+        LayerFunction::Silkscreen | LayerFunction::Legend => LayerRole::Legend,
+        LayerFunction::Drill => LayerRole::Drill,
+        LayerFunction::Rout
+        | LayerFunction::VCut
+        | LayerFunction::Score
+        | LayerFunction::EdgeChamfer
+        | LayerFunction::EdgePlating
+        | LayerFunction::BoardOutline => LayerRole::Profile,
+        LayerFunction::Assembly
+        | LayerFunction::BoardFab
+        | LayerFunction::Courtyard
+        | LayerFunction::Document
+        | LayerFunction::Graphic
+        | LayerFunction::Fixture
+        | LayerFunction::Probe
+        | LayerFunction::Rework => LayerRole::Mechanical,
+        _ => LayerRole::Other,
+    }
+}
+
+fn parse_copper_balance_attribute(value: &str) -> Result<CopperBalanceKind> {
+    match value {
+        "plane" => Ok(CopperBalanceKind::Plane),
+        "full_void" => Ok(CopperBalanceKind::FullVoid),
+        "edge_void" => Ok(CopperBalanceKind::EdgeVoid),
+        "boundary_web" => Ok(CopperBalanceKind::BoundaryWeb),
+        _ => bail!("unknown diode.copper_balance value '{value}'"),
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 struct ProfileRange {
@@ -180,7 +371,7 @@ fn push_spec_refs(doc: &mut GeometryDocument, spec_refs: &[Symbol]) -> Span {
 
 #[derive(Debug, Clone, Copy)]
 struct CopperBalanceMetadata {
-    kind: pcb_ir::dialects::ipc::CopperBalanceKind,
+    kind: CopperBalanceKind,
     void: Option<CopperBalanceVoidMetadata>,
 }
 
@@ -196,15 +387,6 @@ fn set_copper_balance_metadata(
     ipc: &Ipc2581,
     set: &ipc2581::types::FeatureSet,
 ) -> Result<Option<CopperBalanceMetadata>> {
-    use crate::copper_balance::{
-        COPPER_BALANCE_ATTRIBUTE_NAME, COPPER_BALANCE_LATTICE_ATTRIBUTE_NAME,
-        COPPER_BALANCE_LATTICE_ORIGIN_X_ATTRIBUTE_NAME,
-        COPPER_BALANCE_LATTICE_ORIGIN_Y_ATTRIBUTE_NAME,
-        COPPER_BALANCE_LATTICE_PITCH_ATTRIBUTE_NAME, COPPER_BALANCE_LATTICE_VALUE,
-        COPPER_BALANCE_VOID_CORNER_RADIUS_ATTRIBUTE_NAME,
-        COPPER_BALANCE_VOID_RADIUS_ATTRIBUTE_NAME,
-    };
-
     let kind = nonstandard_attribute(ipc, set, COPPER_BALANCE_ATTRIBUTE_NAME, "STRING")?;
     let auxiliary_attributes = [
         (COPPER_BALANCE_LATTICE_ATTRIBUTE_NAME, "STRING"),
@@ -224,8 +406,8 @@ fn set_copper_balance_metadata(
         }
         return Ok(None);
     };
-    let kind = crate::copper_balance::parse_copper_balance_attribute(kind)?;
-    let void = if kind == pcb_ir::dialects::ipc::CopperBalanceKind::FullVoid {
+    let kind = parse_copper_balance_attribute(kind)?;
+    let void = if kind == CopperBalanceKind::FullVoid {
         let lattice = required_nonstandard_attribute(
             ipc,
             set,
@@ -275,7 +457,7 @@ fn set_copper_balance_metadata(
         {
             bail!("copper-balance lattice and rounded-hex dimensions must be finite and positive");
         }
-        pcb_ir::geom::shapes::rounded_hexagon(metadata.radius_mm, metadata.corner_radius_mm, 0.0)
+        crate::geom::shapes::rounded_hexagon(metadata.radius_mm, metadata.corner_radius_mm, 0.0)
             .context("copper-balance rounded-hex dimensions are invalid")?;
         Some(metadata)
     } else {
@@ -353,6 +535,8 @@ fn push_feature_set_record(
         layer,
         source_set_index,
         source_geometry_ref: set.geometry,
+        component_ref: set.component_ref,
+        geometry_usage: set.geometry_usage.map(map_geometry_usage),
         net: set.net,
         polarity,
         spec_refs,
@@ -360,6 +544,17 @@ fn push_feature_set_record(
         bbox: BBox::empty(),
     });
     set_id
+}
+
+fn map_geometry_usage(usage: ipc2581::types::GeometryUsage) -> GeometryUsage {
+    match usage {
+        ipc2581::types::GeometryUsage::Thieving => GeometryUsage::Thieving,
+        ipc2581::types::GeometryUsage::ThermalRelief => GeometryUsage::ThermalRelief,
+        ipc2581::types::GeometryUsage::Text => GeometryUsage::Text,
+        ipc2581::types::GeometryUsage::Teardrop => GeometryUsage::Teardrop,
+        ipc2581::types::GeometryUsage::Graphic => GeometryUsage::Graphic,
+        ipc2581::types::GeometryUsage::None => GeometryUsage::None,
+    }
 }
 
 fn push_extracted_feature(
@@ -401,7 +596,7 @@ fn complete_feature_intent(layer: &Layer, feature: &mut GeometryFeature) {
     if feature.intent.span == FeatureSpan::Unknown {
         feature.intent.span = layer_intent.span;
     }
-    if feature.intent.side == pcb_ir::dialects::Side::None {
+    if feature.intent.side == crate::dialects::Side::None {
         feature.intent.side = layer_intent.side;
     }
     if feature.intent.role == FeatureRole::Unknown {
@@ -427,7 +622,7 @@ fn intent_for_layer(layer: &Layer) -> FeatureIntent<Symbol> {
 }
 
 fn domain_for_layer(function: LayerFunction) -> FeatureDomain {
-    if crate::layers::is_copper(function) {
+    if is_copper(function) {
         return FeatureDomain::Copper;
     }
     match function {
@@ -512,12 +707,12 @@ fn span_for_layer(layer: &Layer, domain: FeatureDomain) -> FeatureSpan<Symbol> {
     }
 }
 
-fn side_for_layer(side: Option<ipc2581::types::ecad::Side>) -> pcb_ir::dialects::Side {
+fn side_for_layer(side: Option<ipc2581::types::ecad::Side>) -> crate::dialects::Side {
     match side {
-        Some(ipc2581::types::ecad::Side::Top) => pcb_ir::dialects::Side::Top,
-        Some(ipc2581::types::ecad::Side::Bottom) => pcb_ir::dialects::Side::Bottom,
-        Some(ipc2581::types::ecad::Side::Internal) => pcb_ir::dialects::Side::Inner,
-        _ => pcb_ir::dialects::Side::None,
+        Some(ipc2581::types::ecad::Side::Top) => crate::dialects::Side::Top,
+        Some(ipc2581::types::ecad::Side::Bottom) => crate::dialects::Side::Bottom,
+        Some(ipc2581::types::ecad::Side::Internal) => crate::dialects::Side::Inner,
+        _ => crate::dialects::Side::None,
     }
 }
 
@@ -550,6 +745,605 @@ fn plating_kind(status: PlatingStatus) -> PlatingKind {
     }
 }
 
+/// Import the complete source design once, retaining step-local geometry.
+pub fn import_design(ipc: &Ipc2581) -> Result<ImportedDesign> {
+    let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
+    let mut geometry = extract_layout(ipc)?;
+
+    // The layout traversal only needs reachable steps, while the canonical
+    // document retains every source step definition.
+    for step in &ecad.cad_data.steps {
+        ensure_layout_step_for_step(&mut geometry, step);
+    }
+
+    let mut step_layers = Vec::new();
+    for step in &ecad.cad_data.steps {
+        let step_id = geometry
+            .layout
+            .steps
+            .iter()
+            .position(|candidate| candidate.source_step_ref == step.name)
+            .context("imported IPC step is missing from the layout graph")?
+            as u32;
+        for (layer_index, source_layer) in ecad.cad_data.layers.iter().enumerate() {
+            let layer_name = ipc.resolve(source_layer.name);
+            let local = extract_step_layer_local(
+                ipc,
+                step,
+                &ecad.cad_data.layers,
+                source_layer,
+                layer_name,
+            )?;
+            if local.features.is_empty() {
+                continue;
+            }
+
+            let document_layer = geometry.layers.len() as u32;
+            let set_start = geometry.feature_sets.len() as u32;
+            let feature_start = geometry.features.len() as u32;
+            let bbox = append_transformed_layer(
+                &mut geometry,
+                &local,
+                0,
+                Affine2::IDENTITY,
+                0,
+                None,
+                document_layer,
+            )?;
+            for definition in feature_start..geometry.features.len() as u32 {
+                let feature = &mut geometry.features[definition as usize];
+                feature.source.definition = Some(definition);
+                if let Some(group) = feature.placement_group {
+                    feature.source_placement = Some(
+                        geometry.feature_placement_groups[group as usize]
+                            .placements
+                            .start,
+                    );
+                }
+            }
+            let spec_refs = push_spec_refs(&mut geometry, &source_layer.spec_refs);
+            geometry.layers.push(GeometryLayer {
+                name: layer_name.to_owned(),
+                source_layer_ref: source_layer.name,
+                layer_function: source_layer.layer_function,
+                spec_refs,
+                sets: Span::new(set_start, geometry.feature_sets.len() as u32 - set_start),
+                features: Span::new(
+                    feature_start,
+                    geometry.features.len() as u32 - feature_start,
+                ),
+                bbox,
+            });
+            step_layers.push(StepLayer {
+                step: step_id,
+                layer: LayerId(layer_index as u32),
+                document_layer,
+            });
+        }
+    }
+    crate::dialects::ipc::process::normalize_bounds(&mut geometry);
+
+    let population = population_states(ipc);
+    let mut components = Vec::new();
+    for step in &ecad.cad_data.steps {
+        let step_id = geometry
+            .layout
+            .steps
+            .iter()
+            .position(|candidate| candidate.source_step_ref == step.name)
+            .context("component step is missing from the layout graph")?
+            as u32;
+        for (source_index, component) in step.components.iter().enumerate() {
+            let placement = ipc_placement(
+                Point::new(component.location.x, component.location.y),
+                component.xform,
+            );
+            components.push(ComponentDefinition {
+                step: step_id,
+                source_index: source_index as u32,
+                source: component.clone(),
+                local_from_component: placement.transform,
+                population: component
+                    .ref_des
+                    .and_then(|reference| population.get(&reference).copied())
+                    .unwrap_or_default(),
+            });
+        }
+    }
+
+    Ok(ImportedDesign {
+        strings: ipc.interner().clone(),
+        revision: ipc.revision().to_owned(),
+        content: ipc.content().clone(),
+        geometry,
+        layer_definitions: ecad.cad_data.layers.clone(),
+        stackups: ecad.cad_data.stackups.clone(),
+        steps: ecad.cad_data.steps.clone(),
+        step_layers,
+        components,
+    })
+}
+
+fn population_states(ipc: &Ipc2581) -> HashMap<Symbol, PopulationState> {
+    let mut states = HashMap::new();
+    let Some(bom) = ipc.bom() else {
+        return states;
+    };
+    for item in &bom.items {
+        for reference in &item.ref_des_list {
+            let incoming = if reference.populate {
+                PopulationState::Populate
+            } else {
+                PopulationState::DoNotPopulate
+            };
+            states
+                .entry(reference.name)
+                .and_modify(|state| {
+                    if *state != incoming {
+                        *state = PopulationState::Conflicting;
+                    }
+                })
+                .or_insert(incoming);
+        }
+    }
+    states
+}
+
+impl ImportedDesign {
+    pub fn resolve(&self, symbol: Symbol) -> &str {
+        self.strings.resolve(symbol)
+    }
+
+    pub fn layer_definition(&self, layer: LayerId) -> Option<&Layer> {
+        self.layer_definitions.get(layer.0 as usize)
+    }
+
+    pub fn feature_definition(&self, feature: FeatureDefinitionId) -> Option<&GeometryFeature> {
+        self.geometry.features.get(feature.0 as usize)
+    }
+
+    pub fn component_definition(
+        &self,
+        component: ComponentDefinitionId,
+    ) -> Option<&ComponentDefinition> {
+        self.components.get(component.0 as usize)
+    }
+
+    pub fn layer_id(&self, name: &str) -> Option<LayerId> {
+        self.layer_definitions
+            .iter()
+            .position(|layer| self.resolve(layer.name) == name)
+            .map(|index| LayerId(index as u32))
+    }
+
+    pub fn step_id(&self, source_step_ref: Symbol) -> Option<u32> {
+        self.geometry
+            .layout
+            .steps
+            .iter()
+            .position(|step| step.source_step_ref == source_step_ref)
+            .map(|index| index as u32)
+    }
+
+    /// Materialize one canonical step-local layer definition without layout
+    /// occurrences. This is the source-faithful input for hierarchical
+    /// manufacturing lowerings.
+    pub fn materialize_step_layer(&self, step: u32, layer: LayerId) -> Result<GeometryDocument> {
+        let definition = self
+            .layer_definition(layer)
+            .context("layer id is outside the imported design")?;
+        let step_definition = self
+            .geometry
+            .layout
+            .steps
+            .get(step as usize)
+            .context("step id is outside the imported design")?;
+        let step_layer = self
+            .step_layers
+            .iter()
+            .find(|candidate| candidate.step == step && candidate.layer == layer);
+
+        let mut target = GeometryDocument::new();
+        self.copy_step_layout_sidecar(&mut target, step);
+        target.diagnostics = self.geometry.diagnostics.clone();
+        target.specs = self.geometry.specs.clone();
+        target.spec_items = self.geometry.spec_items.clone();
+        target.spec_properties = self.geometry.spec_properties.clone();
+
+        let bbox = if let Some(step_layer) = step_layer {
+            append_transformed_layer(
+                &mut target,
+                &self.geometry,
+                step_layer.document_layer as usize,
+                Affine2::IDENTITY,
+                0,
+                None,
+                0,
+            )?
+        } else {
+            BBox::empty()
+        };
+        let spec_refs = push_spec_refs(&mut target, &definition.spec_refs);
+        target.layers.push(GeometryLayer {
+            name: self.resolve(definition.name).to_owned(),
+            source_layer_ref: definition.name,
+            layer_function: definition.layer_function,
+            spec_refs,
+            sets: Span::new(0, target.feature_sets.len() as u32),
+            features: Span::new(0, target.features.len() as u32),
+            bbox,
+        });
+        target.layout.steps[0].source_step_ref = step_definition.source_step_ref;
+        crate::dialects::ipc::process::normalize_bounds(&mut target);
+        Ok(target)
+    }
+
+    pub fn feature_occurrences(
+        &self,
+        layer: LayerId,
+        scope: ArtworkScope,
+    ) -> Result<Vec<FeatureOccurrence>> {
+        let step_occurrences = self.step_occurrences(scope)?;
+        let mut occurrences = Vec::new();
+        for step_occurrence in &step_occurrences {
+            let Some(step_layer) = self.step_layers.iter().find(|step_layer| {
+                step_layer.layer == layer && step_layer.step == step_occurrence.step
+            }) else {
+                continue;
+            };
+            let source_layer = &self.geometry.layers[step_layer.document_layer as usize];
+            for feature_index in source_layer.features.indices() {
+                let feature = &self.geometry.features[feature_index as usize];
+                match feature.placement_group {
+                    Some(group) => {
+                        let group = self.geometry.feature_placement_groups[group as usize];
+                        for placement in group.placements.indices() {
+                            let root_from_local = step_occurrence
+                                .root_from_step
+                                .concat(self.geometry.feature_placements[placement as usize]);
+                            occurrences.push(self.feature_occurrence(
+                                feature_index,
+                                Some(placement),
+                                *step_occurrence,
+                                root_from_local,
+                            ));
+                        }
+                    }
+                    None => occurrences.push(self.feature_occurrence(
+                        feature_index,
+                        None,
+                        *step_occurrence,
+                        step_occurrence.root_from_step,
+                    )),
+                }
+            }
+        }
+        Ok(occurrences)
+    }
+
+    fn feature_occurrence(
+        &self,
+        feature: u32,
+        placement: Option<u32>,
+        step: StepOccurrence,
+        root_from_local: Affine2,
+    ) -> FeatureOccurrence {
+        FeatureOccurrence {
+            id: FeatureOccurrenceId {
+                feature: FeatureDefinitionId(feature),
+                layout: step.layout,
+                placement,
+            },
+            root_from_local,
+            board: step.board,
+            root_from_board: step.root_from_board,
+            board_from_local: step
+                .board
+                .and_then(|_| step.root_from_board.inverse())
+                .map(|board_from_root| board_from_root.concat(root_from_local)),
+        }
+    }
+
+    pub fn feature_region(&self, occurrence: FeatureOccurrence) -> ContourSet {
+        let feature = &self.geometry.features[occurrence.id.feature.0 as usize];
+        ContourSet::from_placed_painted_paths(
+            &self.geometry.arena,
+            feature
+                .paths
+                .slice(&self.geometry.arena.paths)
+                .iter()
+                .map(|path| (path, occurrence.root_from_local)),
+            tol::REGION_MM,
+        )
+    }
+
+    pub fn component_occurrences(&self, scope: ArtworkScope) -> Result<Vec<ComponentOccurrence>> {
+        let steps = self.step_occurrences(scope)?;
+        let mut occurrences = Vec::new();
+        for (component_index, component) in self.components.iter().enumerate() {
+            for step in steps
+                .iter()
+                .filter(|occurrence| occurrence.step == component.step)
+            {
+                let root_from_component =
+                    step.root_from_step.concat(component.local_from_component);
+                occurrences.push(ComponentOccurrence {
+                    id: ComponentOccurrenceId {
+                        component: ComponentDefinitionId(component_index as u32),
+                        layout: step.layout,
+                    },
+                    root_from_component,
+                    board: step.board,
+                    root_from_board: step.root_from_board,
+                    board_from_component: step
+                        .board
+                        .and_then(|_| step.root_from_board.inverse())
+                        .map(|board_from_root| board_from_root.concat(root_from_component)),
+                    population: component.population,
+                });
+            }
+        }
+        Ok(occurrences)
+    }
+
+    pub fn materialize_layer(
+        &self,
+        layer: LayerId,
+        scope: ArtworkScope,
+    ) -> Result<GeometryDocument> {
+        let definition = self
+            .layer_definitions
+            .get(layer.0 as usize)
+            .context("layer id is outside the imported design")?;
+        let step_occurrences = self.step_occurrences(scope)?;
+        let mut target = GeometryDocument::new();
+        if matches!(scope, ArtworkScope::Board | ArtworkScope::ArrayLocal) {
+            if let Some(occurrence) = step_occurrences.first() {
+                self.copy_step_layout_sidecar(&mut target, occurrence.step);
+            }
+        } else {
+            self.copy_layout_sidecar(&mut target);
+        }
+        target.diagnostics = self.geometry.diagnostics.clone();
+        target.specs = self.geometry.specs.clone();
+        target.spec_items = self.geometry.spec_items.clone();
+        target.spec_properties = self.geometry.spec_properties.clone();
+        let feature_start = 0;
+        let set_start = 0;
+        let mut bbox = BBox::empty();
+        let mut source_set_offset = 0;
+        for occurrence in &step_occurrences {
+            let Some(step_layer) = self
+                .step_layers
+                .iter()
+                .find(|step_layer| step_layer.layer == layer && step_layer.step == occurrence.step)
+            else {
+                continue;
+            };
+            let source_layer = step_layer.document_layer as usize;
+            bbox = bbox.union(append_transformed_layer(
+                &mut target,
+                &self.geometry,
+                source_layer,
+                occurrence.root_from_step,
+                source_set_offset,
+                occurrence.layout.source_instance(),
+                0,
+            )?);
+            source_set_offset = source_set_offset
+                .checked_add(source_layer_set_span(&self.geometry, source_layer)?)
+                .context("layout contains too many source feature sets")?;
+        }
+        let spec_refs = push_spec_refs(&mut target, &definition.spec_refs);
+        target.layers.push(GeometryLayer {
+            name: self.resolve(definition.name).to_owned(),
+            source_layer_ref: definition.name,
+            layer_function: definition.layer_function,
+            spec_refs,
+            sets: Span::new(set_start, target.feature_sets.len() as u32),
+            features: Span::new(feature_start, target.features.len() as u32),
+            bbox,
+        });
+        crate::dialects::ipc::process::normalize_bounds(&mut target);
+        Ok(target)
+    }
+
+    fn copy_layout_sidecar(&self, target: &mut GeometryDocument) {
+        let mut copied_paths = HashMap::new();
+        let mut copy_path = |source: u32, target: &mut GeometryDocument| {
+            *copied_paths.entry(source).or_insert_with(|| {
+                let copied = target.arena.paths.len() as u32;
+                target
+                    .arena
+                    .append_path_from(&self.geometry.arena, source, Affine2::IDENTITY);
+                copied
+            })
+        };
+
+        target.profiles = self.geometry.profiles.clone();
+        target.profile_cutouts = self.geometry.profile_cutouts.clone();
+        for profile_index in 0..target.profiles.len() {
+            let source = target.profiles[profile_index].outer_path;
+            let copied = copy_path(source, target);
+            target.profiles[profile_index].outer_path = copied;
+        }
+        for cutout_index in 0..target.profile_cutouts.len() {
+            let source = target.profile_cutouts[cutout_index].path;
+            let copied = copy_path(source, target);
+            target.profile_cutouts[cutout_index].path = copied;
+        }
+        target.layout = self.geometry.layout.clone();
+    }
+
+    fn copy_step_layout_sidecar(&self, target: &mut GeometryDocument, step: u32) {
+        let source_step = &self.geometry.layout.steps[step as usize];
+        for profile_index in source_step.profiles.indices() {
+            let source_profile = &self.geometry.profiles[profile_index as usize];
+            let outer_path = target.arena.paths.len() as u32;
+            target.arena.append_path_from(
+                &self.geometry.arena,
+                source_profile.outer_path,
+                Affine2::IDENTITY,
+            );
+            let cutout_start = target.profile_cutouts.len() as u32;
+            for source_cutout in source_profile.cutouts.slice(&self.geometry.profile_cutouts) {
+                let path = target.arena.paths.len() as u32;
+                target.arena.append_path_from(
+                    &self.geometry.arena,
+                    source_cutout.path,
+                    Affine2::IDENTITY,
+                );
+                target.profile_cutouts.push(StepProfileCutout {
+                    path,
+                    bbox: source_cutout.bbox,
+                });
+            }
+            target.profiles.push(StepProfile {
+                outer_path,
+                cutouts: Span::new(
+                    cutout_start,
+                    target.profile_cutouts.len() as u32 - cutout_start,
+                ),
+                bbox: source_profile.bbox,
+            });
+        }
+        let mut step = source_step.clone();
+        step.profiles = Span::new(0, target.profiles.len() as u32);
+        target.layout.steps.push(step);
+        target.layout.root_step = Some(0);
+    }
+
+    pub fn composed_layer_image(&self, layer: LayerId, scope: ArtworkScope) -> Result<ContourSet> {
+        let definition = self
+            .layer_definitions
+            .get(layer.0 as usize)
+            .context("layer id is outside the imported design")?;
+        let mut document = self.materialize_layer(layer, scope)?;
+        crate::dialects::ipc::process::normalize_for_artwork(&mut document);
+        crate::dialects::ipc::validate_artwork_ready(&document).map_err(anyhow::Error::msg)?;
+        let artwork = crate::dialects::ipc::lower_layer_to_artwork(
+            &document,
+            0,
+            layer_role(definition.layer_function),
+            side_for_layer(definition.side),
+        );
+        let (mut images, _) = crate::dialects::artwork::compose_attributed(&artwork, |_| ());
+        Ok(images.pop().map_or_else(
+            || ContourSet::empty(tol::REGION_MM),
+            |image| ContourSet::new(image.image, FillRule::NonZero, tol::REGION_MM),
+        ))
+    }
+
+    fn step_occurrences(&self, scope: ArtworkScope) -> Result<Vec<StepOccurrence>> {
+        let root_step = self
+            .geometry
+            .layout
+            .root_step
+            .context("IPC-2581 primary step has no canonical layout root")?;
+        let root_definition = self
+            .geometry
+            .layout
+            .steps
+            .get(root_step as usize)
+            .context("canonical layout root references a missing step")?;
+        let root = StepOccurrence {
+            step: root_step,
+            layout: LayoutOccurrenceId::Root,
+            root_from_step: Affine2::IDENTITY,
+            board: (root_definition.kind == LayoutStepKind::Board)
+                .then_some(LayoutOccurrenceId::Root),
+            root_from_board: Affine2::IDENTITY,
+        };
+        if scope == ArtworkScope::ArrayLocal {
+            return Ok(vec![root]);
+        }
+
+        let mut occurrences = vec![root];
+        self.append_step_occurrences(root, scope == ArtworkScope::ArraySupport, &mut occurrences)?;
+        if scope != ArtworkScope::Board {
+            return Ok(occurrences);
+        }
+
+        let board = occurrences
+            .into_iter()
+            .find(|occurrence| {
+                self.geometry.layout.steps[occurrence.step as usize].kind == LayoutStepKind::Board
+            })
+            .with_context(|| {
+                format!(
+                    "IPC-2581 primary step '{}' does not reference a board step",
+                    self.resolve(root_definition.source_step_ref)
+                )
+            })?;
+        Ok(vec![StepOccurrence {
+            step: board.step,
+            layout: LayoutOccurrenceId::Root,
+            root_from_step: Affine2::IDENTITY,
+            board: Some(LayoutOccurrenceId::Root),
+            root_from_board: Affine2::IDENTITY,
+        }])
+    }
+
+    fn append_step_occurrences(
+        &self,
+        parent: StepOccurrence,
+        support_only: bool,
+        occurrences: &mut Vec<StepOccurrence>,
+    ) -> Result<()> {
+        for (repeat_index, repeat) in
+            self.geometry
+                .layout
+                .repeats
+                .iter()
+                .enumerate()
+                .filter(|(_, repeat)| {
+                    repeat.parent_step == parent.step
+                        && repeat.parent_instance == parent.layout.source_instance()
+                })
+        {
+            for instance_index in repeat.instances.indices() {
+                let instance = self
+                    .geometry
+                    .layout
+                    .instances
+                    .get(instance_index as usize)
+                    .context("layout repeat references a missing instance")?;
+                if instance.repeat != repeat_index as u32
+                    || instance.parent_instance != parent.layout.source_instance()
+                    || instance.child_step != repeat.child_step
+                {
+                    bail!("layout repeat and instance relationships are inconsistent");
+                }
+                let step = self
+                    .geometry
+                    .layout
+                    .steps
+                    .get(instance.child_step as usize)
+                    .context("layout instance references a missing step")?;
+                if support_only && step.kind == LayoutStepKind::Board {
+                    continue;
+                }
+                let layout = LayoutOccurrenceId::Instance(instance_index);
+                let (board, root_from_board) = if step.kind == LayoutStepKind::Board {
+                    (Some(layout), instance.transform)
+                } else {
+                    (parent.board, parent.root_from_board)
+                };
+                let occurrence = StepOccurrence {
+                    step: instance.child_step,
+                    layout,
+                    root_from_step: instance.transform,
+                    board,
+                    root_from_board,
+                };
+                occurrences.push(occurrence);
+                self.append_step_occurrences(occurrence, support_only, occurrences)?;
+            }
+        }
+        Ok(())
+    }
+}
+
 pub fn extract_layer(ipc: &Ipc2581, layer_name: &str) -> Result<GeometryDocument> {
     extract_layer_for_view(ipc, layer_name, ArtworkScope::ArrayFlattened)
 }
@@ -559,291 +1353,30 @@ pub fn extract_layer_for_view(
     layer_name: &str,
     view: ArtworkScope,
 ) -> Result<GeometryDocument> {
-    let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
-    let layer = ecad
-        .cad_data
-        .layers
-        .iter()
-        .find(|layer| ipc.resolve(layer.name) == layer_name)
+    let design = import_design(ipc)?;
+    let layer = design
+        .layer_id(layer_name)
         .with_context(|| format!("IPC-2581 layer '{layer_name}' was not found"))?;
-    let primary_step = steps::primary_step(ipc, &ecad.cad_data.steps)
-        .context("IPC-2581 ECAD section has no Step")?;
-
-    let step = match view {
-        ArtworkScope::Board => canonical_board_step(ipc, &ecad.cad_data.steps, primary_step)?,
-        ArtworkScope::ArrayLocal | ArtworkScope::ArraySupport | ArtworkScope::ArrayFlattened => {
-            primary_step
-        }
-    };
-
-    let panel_mode = match view {
-        ArtworkScope::ArraySupport => Some(PanelLayerMode::SupportOnly),
-        ArtworkScope::ArrayFlattened => Some(PanelLayerMode::Flattened),
-        ArtworkScope::Board | ArtworkScope::ArrayLocal => None,
-    };
-
-    let mut doc = match panel_mode.filter(|_| is_panel_step(step)) {
-        Some(mode) => extract_panel_layer(
-            ipc,
-            &ecad.cad_data.steps,
-            &ecad.cad_data.layers,
-            step,
-            layer,
-            layer_name,
-            mode,
-        )?,
-        None => extract_step_layer_local(ipc, step, &ecad.cad_data.layers, layer, layer_name)?,
-    };
-
-    if doc.layout.is_empty() {
-        match view {
-            ArtworkScope::Board | ArtworkScope::ArrayLocal | ArtworkScope::ArraySupport => {
-                append_step_only_layout_geometry(&mut doc, step)
-            }
-            ArtworkScope::ArrayFlattened => {
-                append_layout_geometry(&mut doc, ipc, &ecad.cad_data.steps, step)?
-            }
-        }
-    }
-    populate_ipc_specs(&mut doc, ipc);
-    pcb_ir::dialects::ipc::process::normalize_bounds(&mut doc);
-    Ok(doc)
-}
-
-fn canonical_board_step<'a>(
-    ipc: &Ipc2581,
-    steps: &'a [Step],
-    primary_step: &'a Step,
-) -> Result<&'a Step> {
-    if is_board_step(primary_step) {
-        return Ok(primary_step);
-    }
-
-    let mut stack = vec![primary_step.name];
-    if let Some(step) = first_reachable_board_step(ipc, steps, primary_step, &mut stack)? {
-        return Ok(step);
-    }
-
-    bail!(
-        "IPC-2581 primary step '{}' does not reference a board step",
-        ipc.resolve(primary_step.name)
-    )
-}
-
-fn first_reachable_board_step<'a>(
-    ipc: &Ipc2581,
-    steps: &'a [Step],
-    parent_step: &Step,
-    stack: &mut Vec<Symbol>,
-) -> Result<Option<&'a Step>> {
-    for repeat in &parent_step.step_repeats {
-        let source_step = steps
-            .iter()
-            .find(|step| step.name == repeat.step_ref)
-            .with_context(|| {
-                format!(
-                    "StepRepeat references unknown Step '{}'",
-                    ipc.resolve(repeat.step_ref)
-                )
-            })?;
-
-        if is_board_step(source_step) {
-            return Ok(Some(source_step));
-        }
-        if !is_panel_step(source_step) {
-            continue;
-        }
-        if stack.contains(&source_step.name) {
-            bail!(
-                "StepRepeat cycle references Step '{}'",
-                ipc.resolve(source_step.name)
-            );
-        }
-
-        stack.push(source_step.name);
-        let board_step = first_reachable_board_step(ipc, steps, source_step, stack)?;
-        stack.pop();
-        if board_step.is_some() {
-            return Ok(board_step);
-        }
-    }
-
-    Ok(None)
+    design.materialize_layer(layer, view)
 }
 
 pub fn extract_layout(ipc: &Ipc2581) -> Result<GeometryDocument> {
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
-    let step = steps::primary_step(ipc, &ecad.cad_data.steps)
-        .context("IPC-2581 ECAD section has no Step")?;
+    let step =
+        primary_step(ipc, &ecad.cad_data.steps).context("IPC-2581 ECAD section has no Step")?;
     let mut doc = GeometryDocument::new();
     append_layout_geometry(&mut doc, ipc, &ecad.cad_data.steps, step)?;
-    if ipc.resolve(step.name) == crate::steps::FAB_PANEL_STEP_NAME
+    if ipc.resolve(step.name) == FAB_PANEL_STEP_NAME
         && let Some(root_step) = doc.layout.root_step
     {
         doc.layout.steps[root_step as usize].purpose = LayoutPurpose::FabricationPanel;
     }
     populate_ipc_specs(&mut doc, ipc);
-    pcb_ir::dialects::ipc::process::normalize_bounds(&mut doc);
+    crate::dialects::ipc::process::normalize_bounds(&mut doc);
     Ok(doc)
 }
 
-fn extract_panel_layer(
-    ipc: &Ipc2581,
-    steps: &[Step],
-    layers: &[Layer],
-    panel: &Step,
-    layer: &Layer,
-    layer_name: &str,
-    mode: PanelLayerMode,
-) -> Result<GeometryDocument> {
-    let mut doc = GeometryDocument::new();
-    append_panel_geometry(&mut doc, ipc, steps, panel)?;
-    let root_layout_step = doc
-        .layout
-        .root_step
-        .context("panel layout has no root step")?;
-    let feature_start = doc.features.len() as u32;
-    let set_start = doc.feature_sets.len() as u32;
-    let mut layer_bbox = BBox::empty();
-    let mut append_state = LayerAppendState::default();
-
-    layer_bbox = layer_bbox.union(append_step_layer_tree(
-        &mut doc,
-        &mut append_state,
-        LayerMaterializeContext {
-            ipc,
-            steps,
-            layers,
-            layer,
-            layer_name,
-        },
-        LayerTreeOccurrence {
-            step: panel,
-            layout_step: root_layout_step,
-            source_instance: None,
-            transform: Affine2::identity(),
-        },
-        mode,
-    )?);
-
-    let feature_count = doc.features.len() as u32 - feature_start;
-    let set_count = doc.feature_sets.len() as u32 - set_start;
-    let spec_refs = push_spec_refs(&mut doc, &layer.spec_refs);
-    doc.layers.push(GeometryLayer {
-        name: layer_name.to_string(),
-        source_layer_ref: layer.name,
-        layer_function: layer.layer_function,
-        spec_refs,
-        sets: Span::new(set_start, set_count),
-        features: Span::new(feature_start, feature_count),
-        bbox: layer_bbox,
-    });
-
-    Ok(doc)
-}
-
-#[derive(Debug, Clone, Copy)]
-struct LayerMaterializeContext<'a> {
-    ipc: &'a Ipc2581,
-    steps: &'a [Step],
-    layers: &'a [Layer],
-    layer: &'a Layer,
-    layer_name: &'a str,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PanelLayerMode {
-    SupportOnly,
-    Flattened,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct LayerTreeOccurrence<'a> {
-    step: &'a Step,
-    layout_step: u32,
-    source_instance: Option<u32>,
-    transform: Affine2,
-}
-
-fn append_step_layer_tree(
-    doc: &mut GeometryDocument,
-    append_state: &mut LayerAppendState,
-    context: LayerMaterializeContext<'_>,
-    occurrence: LayerTreeOccurrence<'_>,
-    mode: PanelLayerMode,
-) -> Result<BBox> {
-    if mode == PanelLayerMode::SupportOnly && is_board_step(occurrence.step) {
-        return Ok(BBox::empty());
-    }
-
-    let step_doc = extract_step_layer_local(
-        context.ipc,
-        occurrence.step,
-        context.layers,
-        context.layer,
-        context.layer_name,
-    )?;
-    doc.diagnostics.extend(step_doc.diagnostics.iter().cloned());
-    let mut bbox = append_state.append_layer(
-        doc,
-        &step_doc,
-        0,
-        occurrence.transform,
-        occurrence.source_instance,
-    )?;
-
-    // Materialize from the canonical layout graph. This keeps the transform
-    // and occurrence identity attached to copied artwork instead of deriving
-    // them through an independent StepRepeat traversal.
-    let children = doc
-        .layout
-        .repeats
-        .iter()
-        .filter(|repeat| {
-            repeat.parent_step == occurrence.layout_step
-                && repeat.parent_instance == occurrence.source_instance
-        })
-        .flat_map(|repeat| repeat.instances.indices())
-        .map(|instance_index| {
-            let instance = &doc.layout.instances[instance_index as usize];
-            (
-                instance_index,
-                instance.child_step,
-                instance.source_step_ref,
-                instance.transform,
-            )
-        })
-        .collect::<Vec<_>>();
-
-    for (instance_index, child_layout_step, source_step_ref, instance_transform) in children {
-        let source_step = context
-            .steps
-            .iter()
-            .find(|step| step.name == source_step_ref)
-            .with_context(|| {
-                format!(
-                    "layout instance references unknown Step '{}'",
-                    context.ipc.resolve(source_step_ref)
-                )
-            })?;
-        bbox = bbox.union(append_step_layer_tree(
-            doc,
-            append_state,
-            context,
-            LayerTreeOccurrence {
-                step: source_step,
-                layout_step: child_layout_step,
-                source_instance: Some(instance_index),
-                transform: instance_transform,
-            },
-            mode,
-        )?);
-    }
-
-    Ok(bbox)
-}
-
-pub(crate) fn extract_step_layer_local(
+pub fn extract_step_layer_local(
     ipc: &Ipc2581,
     step: &Step,
     layers: &[Layer],
@@ -917,6 +1450,7 @@ pub(crate) fn extract_step_layer_local(
                 let source = SourceRef {
                     set_index: set_index as u32,
                     feature_index: feature_index as u32,
+                    definition: None,
                 };
                 let features = extract_set_feature(
                     &context,
@@ -968,6 +1502,7 @@ pub(crate) fn extract_step_layer_local(
                             SourceRef {
                                 set_index: set_index as u32,
                                 feature_index: feature_index as u32,
+                                definition: None,
                             },
                             set.geometry,
                             hole,
@@ -988,6 +1523,7 @@ pub(crate) fn extract_step_layer_local(
                             SourceRef {
                                 set_index: set_index as u32,
                                 feature_index: feature_index as u32,
+                                definition: None,
                             },
                             set.geometry,
                             slot,
@@ -1161,7 +1697,7 @@ fn validate_copper_balance_structure(
     }
     validate_copper_balance_void_shape(doc, feature, void)?;
 
-    let lattice = pcb_ir::geom::copper_balance::DenseCopperLattice {
+    let lattice = crate::geom::copper_balance::DenseCopperLattice {
         origin: void.lattice_origin,
         pitch_mm: void.lattice_pitch_mm,
     };
@@ -1190,13 +1726,13 @@ fn validate_copper_balance_void_shape(
     feature: &GeometryFeature,
     metadata: CopperBalanceVoidMetadata,
 ) -> Result<()> {
-    let actual = pcb_ir::dialects::ipc::contour_flash_aperture(doc, feature)
+    let actual = crate::dialects::ipc::contour_flash_aperture(doc, feature)
         .context("copper-balance void is not one filled rigid contour")?;
-    let pcb_ir::dialects::artwork::ApertureShape::Contour { outline, fill_rule } = actual else {
+    let crate::dialects::artwork::ApertureShape::Contour { outline, fill_rule } = actual else {
         bail!("copper-balance void did not lower to a contour aperture");
     };
     let expected =
-        pcb_ir::geom::shapes::rounded_hexagon(metadata.radius_mm, metadata.corner_radius_mm, 0.0)
+        crate::geom::shapes::rounded_hexagon(metadata.radius_mm, metadata.corner_radius_mm, 0.0)
             .context("copper-balance rounded-hex dimensions are invalid")?;
     let actual = ContourSet::from_contours(&[outline], fill_rule, 1e-5);
     let expected = ContourSet::from_contours(&[expected], FillRule::NonZero, 1e-5);
@@ -1209,7 +1745,7 @@ fn validate_copper_balance_void_shape(
     Ok(())
 }
 
-pub(crate) fn step_repeat_transform(repeat: &StepRepeat, ix: u32, iy: u32) -> Affine2 {
+pub fn step_repeat_transform(repeat: &StepRepeat, ix: u32, iy: u32) -> Affine2 {
     Affine2::placement(
         Point::new(
             repeat.x + ix as f64 * repeat.dx,
@@ -1219,38 +1755,6 @@ pub(crate) fn step_repeat_transform(repeat: &StepRepeat, ix: u32, iy: u32) -> Af
         Mirror::across_y(repeat.mirror),
         1.0,
     )
-}
-
-#[derive(Debug, Default)]
-struct LayerAppendState {
-    next_source_set_index: u32,
-}
-
-impl LayerAppendState {
-    fn append_layer(
-        &mut self,
-        target: &mut GeometryDocument,
-        source: &GeometryDocument,
-        layer_index: usize,
-        transform: Affine2,
-        source_instance: Option<u32>,
-    ) -> Result<BBox> {
-        let source_set_offset = self.next_source_set_index;
-        let source_set_span = source_layer_set_span(source, layer_index)?;
-        let bbox = append_transformed_layer(
-            target,
-            source,
-            layer_index,
-            transform,
-            source_set_offset,
-            source_instance,
-        )?;
-        self.next_source_set_index = self
-            .next_source_set_index
-            .checked_add(source_set_span)
-            .context("Panel contains too many repeated source feature sets")?;
-        Ok(bbox)
-    }
 }
 
 fn source_layer_set_span(source: &GeometryDocument, layer_index: usize) -> Result<u32> {
@@ -1273,6 +1777,7 @@ fn append_transformed_layer(
     transform: Affine2,
     source_set_offset: u32,
     source_instance: Option<u32>,
+    target_layer: u32,
 ) -> Result<BBox> {
     let layer = &source.layers[layer_index];
     let mut layer_bbox = BBox::empty();
@@ -1290,12 +1795,14 @@ fn append_transformed_layer(
         );
         let target_set = target.feature_sets.len() as u32;
         target.feature_sets.push(FeatureSet {
-            layer: 0,
+            layer: target_layer,
             source_set_index: source_set
                 .source_set_index
                 .checked_add(source_set_offset)
                 .context("Panel source feature set index overflow")?,
             source_geometry_ref: source_set.source_geometry_ref,
+            component_ref: source_set.component_ref,
+            geometry_usage: source_set.geometry_usage,
             net: source_set.net,
             polarity: source_set.polarity,
             spec_refs: Span::new(
@@ -1406,16 +1913,6 @@ fn append_layout_geometry(
     }
 }
 
-fn append_step_only_layout_geometry(doc: &mut GeometryDocument, primary_step: &Step) {
-    if is_panel_step(primary_step) {
-        let profiles = append_step_profile(doc, primary_step);
-        let step = push_or_update_layout_step(doc, primary_step, profiles);
-        doc.layout.root_step = Some(step);
-    } else if is_board_step(primary_step) {
-        doc.layout.root_step = Some(ensure_layout_step_for_step(doc, primary_step));
-    }
-}
-
 fn append_panel_geometry(
     doc: &mut GeometryDocument,
     ipc: &Ipc2581,
@@ -1472,6 +1969,22 @@ fn append_layout_repeats(
             source_step.name,
             repeat,
         );
+
+        // Bound expansion where it happens, including nested repeats. Empty
+        // repeats keep their metadata without iterating a potentially huge ny.
+        if repeat.nx == 0 || repeat.ny == 0 {
+            continue;
+        }
+        if stack.len() >= 64 {
+            bail!("IPC layout nesting exceeds the limit of 64 Steps");
+        }
+        if (repeat.nx as usize)
+            .checked_mul(repeat.ny as usize)
+            .and_then(|count| doc.layout.instances.len().checked_add(count))
+            .is_none_or(|count| count > 100_000)
+        {
+            bail!("IPC layout exceeds the limit of 100000 Step instances");
+        }
 
         let mut pending_panel_instances = Vec::new();
         for iy in 0..repeat.ny {
@@ -1635,7 +2148,7 @@ fn layout_step_kind(step: &Step) -> LayoutStepKind {
     }
 }
 
-pub(crate) fn is_panel_step(step: &Step) -> bool {
+pub fn is_panel_step(step: &Step) -> bool {
     matches!(step.step_type, Some(StepType::Pallet))
         || (step.step_type.is_none() && !step.step_repeats.is_empty())
 }
@@ -4379,6 +4892,188 @@ mod tests {
     }
 
     #[test]
+    fn imported_design_owns_strings_and_reuses_step_local_geometry() {
+        let imported = {
+            let ipc = ipc2581::Ipc2581::parse(panel_layer_fixture())
+                .expect("synthetic panel fixture should parse");
+            import_design(&ipc).expect("complete design should import")
+        };
+
+        let top = imported.layer_id("TOP").unwrap();
+        assert_eq!(
+            imported.resolve(imported.layer_definitions[top.0 as usize].name),
+            "TOP"
+        );
+        assert_eq!(imported.step_layers.len(), 2);
+        assert_eq!(
+            imported
+                .step_layers
+                .iter()
+                .map(|step_layer| {
+                    imported.geometry.layers[step_layer.document_layer as usize]
+                        .features
+                        .count
+                })
+                .sum::<u32>(),
+            2,
+            "the panel and board each retain one local feature definition"
+        );
+
+        let occurrences = imported
+            .feature_occurrences(top, ArtworkScope::ArrayFlattened)
+            .unwrap();
+        assert_eq!(occurrences.len(), 3);
+        assert_eq!(
+            occurrences
+                .iter()
+                .map(|occurrence| occurrence.id.feature)
+                .collect::<BTreeSet<_>>()
+                .len(),
+            2,
+            "repeated boards create occurrences, not cloned definitions"
+        );
+        assert_eq!(
+            occurrences
+                .iter()
+                .map(|occurrence| occurrence.id)
+                .collect::<BTreeSet<_>>()
+                .len(),
+            3
+        );
+    }
+
+    #[test]
+    fn board_scope_rejects_an_unreachable_board_definition() {
+        let ipc = Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner"><FunctionMode mode="FABRICATION"/><StepRef name="panel"/></Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP"/>
+      <Step name="unrelated-board" type="BOARD"/>
+      <Step name="panel" type="PALLET"/>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+        let imported = import_design(&ipc).unwrap();
+        let top = imported.layer_id("TOP").unwrap();
+
+        let error = imported
+            .materialize_layer(top, ArtworkScope::Board)
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("primary step 'panel' does not reference a board step"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn flattened_nested_panels_preserve_depth_first_paint_order() {
+        let ipc = Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="FABRICATION"/>
+    <StepRef name="root"/>
+    <DictionaryStandard units="MILLIMETER">
+      <EntryStandard id="dot"><Circle diameter="2"/></EntryStandard>
+    </DictionaryStandard>
+  </Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <LayerFeature layerRef="TOP">
+          <Set polarity="NEGATIVE"><Features><Location x="0" y="0"/><StandardPrimitiveRef id="dot"/></Features></Set>
+        </LayerFeature>
+      </Step>
+      <Step name="cell" type="PALLET">
+        <StepRepeat stepRef="board" x="10" y="0" nx="1" ny="1" dx="0" dy="0"/>
+        <LayerFeature layerRef="TOP">
+          <Set><Features><Location x="0" y="0"/><StandardPrimitiveRef id="dot"/></Features></Set>
+        </LayerFeature>
+      </Step>
+      <Step name="root" type="PALLET">
+        <StepRepeat stepRef="cell" x="0" y="0" nx="2" ny="1" dx="10" dy="0"/>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+        let imported = import_design(&ipc).unwrap();
+        let top = imported.layer_id("TOP").unwrap();
+        let document = imported
+            .materialize_layer(top, ArtworkScope::ArrayFlattened)
+            .unwrap();
+
+        assert_eq!(
+            document
+                .features
+                .iter()
+                .map(|feature| (feature.center.x, feature.polarity))
+                .collect::<Vec<_>>(),
+            vec![
+                (0.0, GeometryPolarity::Dark),
+                (10.0, GeometryPolarity::Clear),
+                (10.0, GeometryPolarity::Dark),
+                (20.0, GeometryPolarity::Clear),
+            ]
+        );
+        let image = imported
+            .composed_layer_image(top, ArtworkScope::ArrayFlattened)
+            .unwrap();
+        assert!(image.contains_point(Point::new(10.0, 0.0)));
+    }
+
+    #[test]
+    fn component_occurrence_ids_survive_mirrored_board_repeats() {
+        let ipc = Ipc2581::parse(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner"><FunctionMode mode="ASSEMBLY"/><StepRef name="panel"/></Content>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="COMPONENT_TOP" side="TOP"/>
+      <Step name="board" type="BOARD">
+        <Component refDes="U1" packageRef="pkg" part="part" layerRef="TOP" mountType="SMT">
+          <Location x="1" y="2"/>
+        </Component>
+      </Step>
+      <Step name="panel" type="PALLET">
+        <StepRepeat stepRef="board" x="10" y="20" nx="2" ny="1" dx="20" dy="0" mirror="true"/>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+        let imported = import_design(&ipc).unwrap();
+
+        let occurrences = imported
+            .component_occurrences(ArtworkScope::ArrayFlattened)
+            .unwrap();
+        assert_eq!(occurrences.len(), 2);
+        assert_ne!(occurrences[0].id, occurrences[1].id);
+        assert_eq!(occurrences[0].id.component, occurrences[1].id.component);
+        assert!((occurrences[0].root_from_component.m02 - 9.0).abs() < 1e-9);
+        assert!((occurrences[1].root_from_component.m02 - 29.0).abs() < 1e-9);
+        for occurrence in occurrences {
+            let board_local = occurrence.board_from_component.unwrap();
+            assert!((board_local.m02 - 1.0).abs() < 1e-9);
+            assert!((board_local.m12 - 2.0).abs() < 1e-9);
+        }
+    }
+
+    #[test]
     fn extracts_layer_for_geometry_view_board_or_board_array() {
         let ipc = ipc2581::Ipc2581::parse(panel_layer_fixture())
             .expect("synthetic panel fixture should parse");
@@ -4446,6 +5141,28 @@ mod tests {
         assert_eq!(doc.layout.instances.len(), 2);
         assert_eq!(panel_step_count(&doc), 1);
         assert_eq!(board_instance_count(&doc), 2);
+    }
+
+    #[test]
+    fn layout_expansion_bounds_large_repeats_and_skips_empty_repeats() {
+        for (nx, ny) in [
+            (u32::MAX, 1),
+            (u32::MAX, u32::MAX),
+            (0, u32::MAX),
+            (u32::MAX, 0),
+        ] {
+            let xml = panel_layer_fixture()
+                .replace("nx=\"2\" ny=\"1\"", &format!("nx=\"{nx}\" ny=\"{ny}\""));
+            let ipc = Ipc2581::parse(&xml).unwrap();
+            let result = extract_layout(&ipc);
+            if nx == 0 || ny == 0 {
+                let layout = result.unwrap();
+                assert_eq!(layout.layout.repeats.len(), 1);
+                assert!(layout.layout.instances.is_empty());
+            } else {
+                assert!(result.unwrap_err().to_string().contains("limit"));
+            }
+        }
     }
 
     #[test]
@@ -4537,13 +5254,15 @@ mod tests {
             .expect("synthetic nested panel fixture should parse");
         let mut doc = extract_layer_for_view(&ipc, "TOP", ArtworkScope::ArrayFlattened)
             .expect("nested panel layer should extract");
-        pcb_ir::dialects::ipc::process::normalize_for_artwork(&mut doc);
+        crate::dialects::ipc::process::normalize_for_artwork(&mut doc);
 
-        let svg = crate::geometry::render::render_layer_svg(
+        let artwork = crate::dialects::ipc::lower_layer_to_artwork(
             &doc,
-            false,
-            ArtworkScope::ArrayFlattened.profile_set(),
+            0,
+            crate::dialects::LayerRole::Copper,
+            crate::dialects::Side::None,
         );
+        let svg = crate::render::artwork_svg(&artwork, &crate::render::RenderOptions::default());
 
         // One drawn pad per board across both nested repeat levels.
         assert_eq!(svg.matches("<path d=").count(), 4, "{svg}");
@@ -4567,8 +5286,14 @@ mod tests {
     fn repeated_panel_traces_keep_distinct_source_sets_after_processing() {
         let ipc = ipc2581::Ipc2581::parse(panel_trace_fixture())
             .expect("synthetic panel fixture should parse");
-        let mut doc = extract_layer(&ipc, "TOP").expect("panel layer should extract");
-        pcb_ir::dialects::ipc::process::compose_for_rendering(&mut doc);
+        let imported = import_design(&ipc).expect("panel should import");
+        let mut doc = imported
+            .materialize_layer(
+                imported.layer_id("TOP").unwrap(),
+                ArtworkScope::ArrayFlattened,
+            )
+            .expect("panel layer should extract");
+        crate::dialects::ipc::process::compose_for_rendering(&mut doc);
 
         let layer = &doc.layers[0];
         let traces = layer
@@ -4584,6 +5309,15 @@ mod tests {
         assert_eq!(traces[1].source.set_index, 1);
         assert_eq!(traces[0].source_instance, Some(0));
         assert_eq!(traces[1].source_instance, Some(1));
+        let first = feature_occurrence_id(traces[0]).unwrap();
+        let second = feature_occurrence_id(traces[1]).unwrap();
+        assert_eq!(first.feature, second.feature);
+        let definition = imported.feature_definition(first.feature).unwrap();
+        assert_eq!(definition.source.set_index, 0);
+        assert_eq!(
+            definition.source.feature_index,
+            traces[0].source.feature_index
+        );
     }
 
     #[test]

@@ -139,7 +139,7 @@ fn render_summary_table(
 
     let mut table = Table::new();
     table
-        .load_preset(presets::UTF8_BORDERS_ONLY)
+        .load_style(presets::UTF8_BORDERS_ONLY)
         .set_content_arrangement(ContentArrangement::Dynamic);
 
     // Severity columns: (severity, header_name, color_fn)

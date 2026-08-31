@@ -59,26 +59,6 @@ impl FmtInclude {
     }
 }
 
-/// Format a single file using ruff formatter
-fn format_zen_file(formatter: &RuffFormatter, file_path: &Path, op: FmtOp) -> Result<bool> {
-    debug!("Formatting file: {}", file_path.display());
-
-    match op {
-        FmtOp::Check => formatter.check_file(file_path),
-        FmtOp::Diff => {
-            let diff = formatter.diff_file(file_path)?;
-            if !diff.is_empty() {
-                print!("{diff}");
-            }
-            Ok(true)
-        }
-        FmtOp::Write => {
-            formatter.format_file(file_path)?;
-            Ok(true)
-        }
-    }
-}
-
 /// Infer KiCad prettifier mode from file type.
 fn infer_kicad_mode(file_path: &Path) -> Option<FormatMode> {
     let file_name = file_path
@@ -148,47 +128,18 @@ impl FmtOp {
     }
 }
 
-/// Format a single KiCad S-expression file using the KiCad-style formatter.
-///
-/// Returns:
-/// - `true` in `--check` mode if the file needs formatting
-/// - `true` in other modes if processing succeeded
-fn format_kicad_file(file_path: &Path, op: FmtOp, mode: FormatMode) -> Result<bool> {
-    let source = fs::read_to_string(file_path)
-        .with_context(|| format!("Failed to read {}", file_path.display()))?;
-
-    pcb_sexpr::parse(&source)
-        .map_err(|e| anyhow::anyhow!(e))
-        .with_context(|| {
-            format!(
-                "Failed to parse KiCad S-expression file {}",
-                file_path.display()
-            )
-        })?;
-
-    let formatted = prettify(&source, mode);
-
-    match op {
-        FmtOp::Check => Ok(source != formatted),
-        FmtOp::Diff => {
-            if source != formatted {
-                let diff = TextDiff::from_lines(source.as_str(), formatted.as_str());
-                print!(
-                    "{}",
-                    diff.unified_diff().context_radius(3).header(
-                        &format!("old/{}", file_path.display()),
-                        &format!("new/{}", file_path.display())
-                    )
-                );
-            }
-            Ok(true)
-        }
-        FmtOp::Write => {
-            if source != formatted {
-                write_text_buffered(file_path, &formatted)
-                    .with_context(|| format!("Failed to write {}", file_path.display()))?;
-            }
-            Ok(true)
+fn formatted_source(formatter: &RuffFormatter, target: &FmtTarget, source: &str) -> Result<String> {
+    match target {
+        FmtTarget::Zen(path) => formatter
+            .format_source(source)
+            .with_context(|| format!("Failed to format {}", path.display())),
+        FmtTarget::Kicad { path, mode } => {
+            pcb_sexpr::parse(source)
+                .map_err(|e| anyhow::anyhow!(e))
+                .with_context(|| {
+                    format!("Failed to parse KiCad S-expression file {}", path.display())
+                })?;
+            Ok(prettify(source, *mode))
         }
     }
 }
@@ -198,6 +149,43 @@ fn write_text_buffered(path: &Path, text: &str) -> std::io::Result<()> {
     let mut writer = BufWriter::new(file);
     writer.write_all(text.as_bytes())?;
     writer.flush()
+}
+
+/// Format one file. Returns `true` in `--check` when the file needs formatting.
+fn format_target_file(formatter: &RuffFormatter, target: &FmtTarget, op: FmtOp) -> Result<bool> {
+    let path = target.path();
+    debug!("Formatting file: {}", path.display());
+    let source =
+        fs::read_to_string(path).with_context(|| format!("Failed to read {}", path.display()))?;
+    let formatted = formatted_source(formatter, target, &source)?;
+    let changed = source != formatted;
+
+    match op {
+        FmtOp::Check => Ok(changed),
+        FmtOp::Diff => {
+            if changed {
+                let diff = TextDiff::from_lines(source.as_str(), formatted.as_str());
+                pcb_ui::write_stdout(|stdout| {
+                    write!(
+                        stdout,
+                        "{}",
+                        diff.unified_diff().context_radius(3).header(
+                            &format!("old/{}", path.display()),
+                            &format!("new/{}", path.display())
+                        )
+                    )
+                })?;
+            }
+            Ok(false)
+        }
+        FmtOp::Write => {
+            if changed {
+                write_text_buffered(path, &formatted)
+                    .with_context(|| format!("Failed to write {}", path.display()))?;
+            }
+            Ok(false)
+        }
+    }
 }
 
 fn explicit_fmt_target(path: &Path) -> Result<Option<FmtTarget>> {
@@ -307,18 +295,11 @@ fn resolve_fmt_targets(args: &FmtArgs) -> Result<Vec<FmtTarget>> {
     Ok(targets)
 }
 
-fn format_target_file(formatter: &RuffFormatter, target: &FmtTarget, op: FmtOp) -> Result<bool> {
-    match target {
-        FmtTarget::Zen(path) => format_zen_file(formatter, path, op),
-        FmtTarget::Kicad { path, mode } => format_kicad_file(path, op, *mode),
-    }
-}
-
 fn process_targets(
     formatter: &RuffFormatter,
     targets: &[FmtTarget],
     op: FmtOp,
-) -> Result<(Vec<PathBuf>, usize)> {
+) -> (Vec<PathBuf>, usize) {
     let mut files_needing_format = Vec::new();
     let mut failed_count = 0usize;
 
@@ -333,8 +314,7 @@ fn process_targets(
         match format_target_file(formatter, target, op) {
             Ok(needs_formatting) => {
                 spinner.finish();
-
-                if op.is_check() && needs_formatting {
+                if needs_formatting {
                     println!(
                         "{} {} (needs formatting)",
                         pcb_ui::icons::warning(),
@@ -357,41 +337,35 @@ fn process_targets(
         }
     }
 
-    Ok((files_needing_format, failed_count))
+    (files_needing_format, failed_count)
 }
 
 pub fn execute(args: FmtArgs) -> Result<()> {
-    // Create a ruff formatter instance
     let formatter = RuffFormatter::default();
     let op = FmtOp::from_args(&args);
-
-    // Print version info in debug mode
     debug!("Using ruff formatter");
 
     let targets = resolve_fmt_targets(&args)?;
-    let (files_needing_format, failed_count) = process_targets(&formatter, &targets, op)?;
+    let (files_needing_format, failed_count) = process_targets(&formatter, &targets, op);
 
-    // Handle check mode results
-    if op.is_check() && (!files_needing_format.is_empty() || failed_count > 0) {
-        if !files_needing_format.is_empty() {
-            eprintln!("\n{} files need formatting.", files_needing_format.len());
-            eprintln!(
-                "\nRun 'pcb fmt {}' to format these files.",
-                files_needing_format
-                    .iter()
-                    .map(|p| p.to_string_lossy())
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            );
-        }
-
-        if failed_count > 0 {
-            eprintln!("\n{} files failed to format.", failed_count);
-        }
-
+    if !files_needing_format.is_empty() {
+        eprintln!("\n{} files need formatting.", files_needing_format.len());
+        eprintln!(
+            "\nRun 'pcb fmt {}' to format these files.",
+            files_needing_format
+                .iter()
+                .map(|p| p.to_string_lossy())
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+    }
+    if failed_count > 0 {
+        eprintln!("\n{failed_count} files failed to format.");
+        anyhow::bail!("Failed to format some files");
+    }
+    if op.is_check() && !files_needing_format.is_empty() {
         anyhow::bail!("Some files are not formatted correctly");
     }
-
     Ok(())
 }
 

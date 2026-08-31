@@ -15,7 +15,13 @@
 //! - [`render`] turns mask documents into SVG, PNG, or terminal output.
 //!
 //! All geometry is canonically in millimeters.
+//!
+//! All dialects, imports, geometry passes, and SVG/PNG renderers support
+//! `wasm32-unknown-unknown`. Copper balancing runs sequentially on WebAssembly;
+//! native builds retain parallel per-layer solves. Terminal renderers are
+//! available only on native targets. Rasterization requires no system fonts.
 
 pub mod dialects;
 pub mod geom;
+pub mod import;
 pub mod render;

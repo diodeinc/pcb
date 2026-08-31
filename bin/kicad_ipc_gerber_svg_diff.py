@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["pillow>=10", "numpy>=1.26", "scipy>=1.11"]
+# dependencies = ["pillow>=12.3.0", "numpy>=2.2.6", "scipy>=1.15.3"]
 # [tool.ty.analysis]
 # allowed-unresolved-imports = ["numpy", "PIL.**", "scipy.**"]
 # ///

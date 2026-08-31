@@ -1,5 +1,7 @@
-use std::collections::{HashMap, HashSet};
-use std::io::{self, Write};
+#[cfg(feature = "cli")]
+use std::collections::HashMap;
+use std::collections::HashSet;
+#[cfg(feature = "cli")]
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -12,13 +14,16 @@ use pcb_ir::geom::{BBox, Point};
 use super::EdgeInsetsMm;
 use crate::copper_balance::CopperBalanceReport;
 use crate::geometry;
+#[cfg(feature = "cli")]
 use crate::utils::file as file_utils;
 
 mod balance;
 mod packing;
 mod xml;
 
-use packing::{MAX_ITEM_COUNT, Size, pack};
+#[cfg(feature = "cli")]
+use packing::MAX_ITEM_COUNT;
+use packing::{Size, pack};
 
 const DEFAULT_EDGE_MARGIN_MM: EdgeInsetsMm = EdgeInsetsMm::new(50.8, 25.4, 50.8, 25.4);
 const DEFAULT_PANEL_GAP_MM: f64 = 7.62;
@@ -211,6 +216,7 @@ pub struct FabPanelCreation {
     pub copper_balance: Option<CopperBalanceReport>,
 }
 
+#[cfg(feature = "cli")]
 pub fn execute(
     inputs: &[PathBuf],
     output: &Path,
@@ -251,7 +257,7 @@ pub fn execute(
         }
     }
     if output.as_os_str() == "-" {
-        io::stdout().lock().write_all(creation.xml.as_bytes())?;
+        pcb_ui::write_stdout(|stdout| stdout.write_all(creation.xml.as_bytes()))?;
         eprintln!("✓ Created IPC-2581 fabrication panel on stdout");
     } else {
         file_utils::save_ipc_file(output, &creation.xml)?;
@@ -269,7 +275,7 @@ fn create_fab_panel_xml(source_xml: &[String], occurrences: &[usize]) -> Result<
         .map(|creation| creation.xml)
 }
 
-pub(crate) fn create_fab_panel(
+pub fn create_fab_panel(
     source_xml: &[String],
     occurrences: &[usize],
     spec: FabPanelSpec,
@@ -278,31 +284,35 @@ pub(crate) fn create_fab_panel(
     if occurrences.is_empty() {
         bail!("at least one assembly panel is required");
     }
-
     // Reduce every source to manufacturing content once, up front: assembling
     // already-stripped sources keeps the fabrication panel a pure composition
     // and avoids stripping the much larger composed document.
+    let strip = |(source_index, xml): (usize, &String)| {
+        super::fabrication::strip_non_manufacturing(xml).with_context(|| {
+            format!(
+                "failed to reduce assembly panel input {} to manufacturing content",
+                source_index + 1
+            )
+        })
+    };
+    #[cfg(not(target_family = "wasm"))]
     let source_xml = std::thread::scope(|scope| {
         let strips = source_xml
             .iter()
-            .map(|xml| scope.spawn(|| super::fabrication::strip_non_manufacturing(xml)))
+            .enumerate()
+            .map(|source| scope.spawn(move || strip(source)))
             .collect::<Vec<_>>();
         strips
             .into_iter()
-            .enumerate()
-            .map(|(source_index, strip)| {
-                strip
-                    .join()
-                    .expect("assembly panel stripping panicked")
-                    .with_context(|| {
-                        format!(
-                            "failed to reduce assembly panel input {} to manufacturing content",
-                            source_index + 1
-                        )
-                    })
-            })
+            .map(|strip| strip.join().expect("assembly panel stripping panicked"))
             .collect::<Result<Vec<_>>>()
     })?;
+    #[cfg(target_family = "wasm")]
+    let source_xml = source_xml
+        .iter()
+        .enumerate()
+        .map(strip)
+        .collect::<Result<Vec<_>>>()?;
 
     let stackups = source_xml
         .iter()

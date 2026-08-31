@@ -1,4 +1,3 @@
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -25,8 +24,8 @@ pub fn execute(input_file: &Path, options: &RenderOptions) -> Result<()> {
     let content = file_utils::load_ipc_file(input_file)?;
     let ipc = ipc2581::Ipc2581::parse(&content)?;
     let view = options.layout_target.artwork_scope();
-    let mut geometry = geometry::extract_layer_for_view(&ipc, &options.layer, view)?;
-    pcb_ir::dialects::ipc::process::normalize_for_artwork(&mut geometry);
+    let imported = pcb_ir::import::ipc2581::import_design(&ipc)?;
+    let geometry = geometry::render::prepare_layer(&imported, &options.layer, view)?;
 
     match target {
         RenderTarget::Svg => render_svg(&geometry, options, view)?,
@@ -123,9 +122,7 @@ fn render_png(
             output.display()
         );
     } else {
-        std::io::stdout()
-            .lock()
-            .write_all(&png)
+        pcb_ui::write_stdout(|stdout| stdout.write_all(&png))
             .context("Failed to write PNG to stdout")?;
     }
 

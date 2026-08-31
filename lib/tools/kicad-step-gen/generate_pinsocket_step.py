@@ -4,7 +4,7 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = [
-#   "kicad-library-generators[3d] @ git+https://gitlab.com/kicad/libraries/kicad-footprint-generator.git@1a927734a1f860a223ec0fd41d28ec3f4d323013",
+#   "kicad-library-generators[3d] @ git+https://gitlab.com/kicad/libraries/kicad-library-tools.git@5ff1b4f05a5addf83bbe5ce4581426f0888273db",
 # ]
 # [tool.ty.analysis]
 # allowed-unresolved-imports = ["cadquery", "OCP.**", "generators.**"]

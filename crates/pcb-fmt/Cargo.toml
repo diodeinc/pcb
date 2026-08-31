@@ -10,4 +10,3 @@ authors.workspace = true
 ruff_python_formatter = { workspace = true }
 ruff_formatter = { workspace = true }
 anyhow = { workspace = true }
-similar = { workspace = true }

@@ -1,10 +1,16 @@
+#[cfg(feature = "cli")]
 use std::path::Path;
 
-use anyhow::{Context, Result};
+#[cfg(feature = "cli")]
+use anyhow::Context;
+use anyhow::Result;
+#[cfg(feature = "cli")]
+use ipc2581::Ipc2581;
 use ipc2581::edit::{self, Doc};
-use ipc2581::{Ipc2581, Mode, XmlWriter};
+use ipc2581::{Mode, XmlWriter};
 
 use crate::ViewMode;
+#[cfg(feature = "cli")]
 use crate::utils::file as file_utils;
 
 /// Defines which sections to exclude for each mode
@@ -72,6 +78,7 @@ fn excluded_sections(mode: Mode) -> &'static [&'static str] {
     }
 }
 
+#[cfg(feature = "cli")]
 pub fn execute(input: &Path, mode: ViewMode, output: &Path) -> Result<()> {
     let content = file_utils::load_ipc_file(input)?;
     let mut filtered_xml = filter_by_mode(&content, mode)?;
@@ -95,7 +102,8 @@ pub fn execute(input: &Path, mode: ViewMode, output: &Path) -> Result<()> {
     Ok(())
 }
 
-fn filter_by_mode(xml: &str, mode: ViewMode) -> Result<String> {
+/// Project XML to a function mode, preserving retained content without adding a history record.
+pub fn filter_by_mode(xml: &str, mode: ViewMode) -> Result<String> {
     if matches!(mode, ViewMode::Fabrication) {
         return super::fabrication::strip_non_manufacturing(xml);
     }

@@ -65,6 +65,107 @@ pub fn rings_to_contours(rings: Vec<Ring>) -> Vec<ContourBuf> {
     rings.into_iter().filter_map(ring_to_contour).collect()
 }
 
+/// Parameter intervals of a segment inside a filled region. Boundary
+/// crossings supply exact split points in the flattened representation;
+/// midpoint containment then decides each interval, including cutouts.
+pub(crate) fn segment_inside_intervals(
+    region: &ContourSet,
+    start: Point,
+    end: Point,
+) -> Vec<(f64, f64)> {
+    let delta = end - start;
+    let length_squared = delta.x * delta.x + delta.y * delta.y;
+    if length_squared <= tol::EPSILON_MM * tol::EPSILON_MM {
+        return Vec::new();
+    }
+    let cross = |a: Point, b: Point| a.x * b.y - a.y * b.x;
+    let mut stations = vec![0.0, 1.0];
+    for (a, b) in region.rings.iter().flat_map(ring_edges) {
+        let edge = b - a;
+        let denominator = cross(delta, edge);
+        if denominator.abs() > tol::EPSILON_MM * delta.length().max(edge.length()) {
+            let t = cross(a - start, edge) / denominator;
+            let u = cross(a - start, delta) / denominator;
+            if (0.0..=1.0).contains(&t) && (0.0..=1.0).contains(&u) {
+                stations.push(t);
+            }
+        } else if cross(a - start, delta).abs() <= tol::EPSILON_MM * delta.length() {
+            for point in [a, b] {
+                let relative = point - start;
+                let t = (relative.x * delta.x + relative.y * delta.y) / length_squared;
+                if (0.0..=1.0).contains(&t) {
+                    stations.push(t);
+                }
+            }
+        }
+    }
+    stations.sort_by(f64::total_cmp);
+    stations.dedup_by(|left, right| (*left - *right).abs() <= f64::EPSILON);
+    let midpoints = stations
+        .windows(2)
+        .map(|pair| start + delta * ((pair[0] + pair[1]) / 2.0))
+        .collect::<Vec<_>>();
+    region
+        .contains_points_batch(&midpoints)
+        .into_iter()
+        .zip(stations.windows(2))
+        .filter_map(|(inside, pair)| inside.then_some((pair[0], pair[1])))
+        .collect()
+}
+
+/// Sublevel set of a continuous convex function on [0, 1]. The geometric
+/// uses here are sums of point-to-segment distances, so there is at most one
+/// interval and bisection locates its ends independently of render sampling.
+fn convex_sublevel_interval(value: impl Fn(f64) -> f64, limit: f64) -> Option<(f64, f64)> {
+    let (first, last) = (value(0.0), value(1.0));
+    if first <= limit && last <= limit {
+        return Some((0.0, 1.0));
+    }
+    let (mut low, mut high) = (0.0, 1.0);
+    for _ in 0..48 {
+        let a = (2.0 * low + high) / 3.0;
+        let b = (low + 2.0 * high) / 3.0;
+        if value(a) < value(b) {
+            high = b;
+        } else {
+            low = a;
+        }
+    }
+    let minimum = (low + high) / 2.0;
+    if value(minimum) >= limit {
+        return None;
+    }
+    let left = if first <= limit {
+        0.0
+    } else {
+        let (mut outside, mut inside) = (0.0, minimum);
+        for _ in 0..48 {
+            let middle = (outside + inside) / 2.0;
+            if value(middle) < limit {
+                inside = middle;
+            } else {
+                outside = middle;
+            }
+        }
+        inside
+    };
+    let right = if last <= limit {
+        1.0
+    } else {
+        let (mut inside, mut outside) = (minimum, 1.0);
+        for _ in 0..48 {
+            let middle = (inside + outside) / 2.0;
+            if value(middle) < limit {
+                inside = middle;
+            } else {
+                outside = middle;
+            }
+        }
+        inside
+    };
+    Some((left, right))
+}
+
 /// Regularize rings under the given fill rule into non-overlapping shapes.
 pub fn simplify_rings(rings: Vec<Ring>, fill_rule: FillRule) -> Vec<Ring> {
     flatten_shapes(simplify_shapes(rings, fill_rule))
@@ -285,6 +386,8 @@ pub struct DiskGapRegularization {
 pub(crate) struct TwoSidedResidualComponent {
     pub region: ContourSet,
     pub width: Distance,
+    pub disk: InscribedDisk,
+    pub axis: Vec<WidthAxisSegment>,
 }
 
 /// Failure to construct a narrow void's medial axis for gap regularization.
@@ -413,6 +516,10 @@ impl ContourSet {
 
     pub fn is_empty(&self) -> bool {
         self.rings.is_empty()
+    }
+
+    pub fn bbox(&self) -> BBox {
+        self.bbox
     }
 
     /// Net enclosed area.
@@ -629,10 +736,79 @@ impl ContourSet {
                 })
             })
             .collect::<Vec<_>>();
-        self.contains_points(&subsamples)
-            .chunks_exact(STRATA * STRATA)
+        let coverage = self.contains_points(&subsamples);
+        let (tiles, _) = coverage.as_chunks::<{ STRATA * STRATA }>();
+        tiles
+            .iter()
             .map(|tile| tile.iter().sum::<f64>() / (STRATA * STRATA) as f64)
             .collect()
+    }
+
+    /// Portions of `start..end` covered by the region, in query direction.
+    ///
+    /// The region boundary is covered. Point-only contacts are omitted.
+    pub fn segment_spans(&self, start: Point, end: Point) -> Vec<(Point, Point)> {
+        let direction = end - start;
+        let length = direction.length();
+        if self.is_empty() || !start.is_finite() || !end.is_finite() || length == 0.0 {
+            return Vec::new();
+        }
+
+        let epsilon = self.tolerance.max(tol::EPSILON_MM);
+        let parameter_epsilon = (epsilon / length).min(1.0);
+        let cross = |left: Point, right: Point| left.x * right.y - left.y * right.x;
+        let mut breaks = vec![0.0, 1.0];
+        for (edge_start, edge_end) in self.rings.iter().flat_map(ring_edges) {
+            let edge = edge_end - edge_start;
+            let offset = edge_start - start;
+            let denominator = cross(direction, edge);
+            let parallel_epsilon = f64::EPSILON * length * edge.length() * 8.0;
+            if denominator.abs() <= parallel_epsilon {
+                // A coincident edge contributes both ends of its overlap. The
+                // midpoint classification below then includes that boundary.
+                if cross(direction, offset).abs() <= epsilon * length {
+                    let length_squared = length * length;
+                    for point in [edge_start, edge_end] {
+                        let t = ((point - start).x * direction.x + (point - start).y * direction.y)
+                            / length_squared;
+                        if t >= -parameter_epsilon && t <= 1.0 + parameter_epsilon {
+                            breaks.push(t.clamp(0.0, 1.0));
+                        }
+                    }
+                }
+                continue;
+            }
+
+            let t = cross(offset, edge) / denominator;
+            let u = cross(offset, direction) / denominator;
+            if t >= -parameter_epsilon
+                && t <= 1.0 + parameter_epsilon
+                && u >= -parameter_epsilon
+                && u <= 1.0 + parameter_epsilon
+            {
+                breaks.push(t.clamp(0.0, 1.0));
+            }
+        }
+
+        breaks.sort_by(f64::total_cmp);
+        breaks.dedup_by(|left, right| (*left - *right).abs() <= parameter_epsilon);
+        let point_at = |t: f64| start + direction * t;
+        let mut spans: Vec<(Point, Point)> = Vec::new();
+        for interval in breaks.windows(2) {
+            let (from, to) = (interval[0], interval[1]);
+            if to - from <= parameter_epsilon || !self.contains_point(point_at((from + to) / 2.0)) {
+                continue;
+            }
+            let next = (point_at(from), point_at(to));
+            if let Some(previous) = spans.last_mut()
+                && previous.1.distance_to(next.0) <= epsilon
+            {
+                previous.1 = next.1;
+            } else {
+                spans.push(next);
+            }
+        }
+        spans
     }
 
     /// Whether the regularized region contains the point, including its boundary.
@@ -1155,10 +1331,12 @@ fn two_sided_residual_components(
         .into_iter()
         .filter_map(|component| {
             let sites = segments.near(component.bbox.expand(reach));
-            component_width(&sites, &component, reach, contact_tolerance).map(|width| {
+            component_width(&sites, &component, reach, contact_tolerance).map(|geometry| {
                 TwoSidedResidualComponent {
                     region: component,
-                    width,
+                    width: geometry.disk.width(),
+                    disk: geometry.disk,
+                    axis: geometry.axis,
                 }
             })
         })
@@ -1356,17 +1534,34 @@ fn convex_chain(sites: &[OrientedBoundarySegment]) -> bool {
 /// A maximal inscribed disk of the boundary's Voronoi diagram: its center,
 /// radius, and the two tangency points on distinct walls.
 #[derive(Debug, Clone, Copy)]
-struct InscribedDisk {
-    center: Point,
-    radius: f64,
-    first: Point,
-    second: Point,
+pub(crate) struct InscribedDisk {
+    pub center: Point,
+    pub radius: f64,
+    pub first: Point,
+    pub second: Point,
 }
 
 impl InscribedDisk {
     fn width(self) -> Distance {
         Distance::flattened(2.0 * self.radius, self.first, self.second, 2)
     }
+}
+
+/// One piece of the boundary medial axis, with the two walls defining it.
+/// Curved edges are polylines within the shared flattening tolerance. These
+/// are candidates until clipped to the residue and the requested width.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct WidthAxisSegment {
+    pub start: Point,
+    pub end: Point,
+    pub first_wall: (Point, Point),
+    pub second_wall: (Point, Point),
+    pub uncertainty_mm: f64,
+}
+
+struct ComponentWidth {
+    disk: InscribedDisk,
+    axis: Vec<WidthAxisSegment>,
 }
 
 /// The narrowest maximal inscribed disk of `sites` inside `component`, as a
@@ -1385,7 +1580,7 @@ fn component_width(
     component: &ContourSet,
     reach: f64,
     contact_tolerance: f64,
-) -> Option<Distance> {
+) -> Option<ComponentWidth> {
     if convex_chain(sites) {
         return None;
     }
@@ -1493,6 +1688,7 @@ fn component_width(
     // the apex of a parabola (reflex vertex against a segment) or of a
     // point–point bisector; plus where they cross the component boundary.
     let (mut on_axis, mut on_boundary) = (Vec::new(), Vec::new());
+    let mut axis = Vec::new();
     for edge in diagram.edges() {
         let twin = edge.twin().expect("diagram edge twin");
         let (first, first_point) = site_of(edge.cell().expect("diagram edge cell"));
@@ -1511,6 +1707,17 @@ fn component_width(
                 .into_iter()
                 .map(unquantize)
                 .collect::<Vec<_>>();
+        axis.extend(samples.windows(2).map(|pair| WidthAxisSegment {
+            start: pair[0],
+            end: pair[1],
+            first_wall: (sites[first].start, sites[first].end),
+            second_wall: (sites[second].start, sites[second].end),
+            uncertainty_mm: if edge.is_curved() {
+                tol::FLATTEN_MM
+            } else {
+                0.0
+            },
+        }));
         let foot = |point: Point, site: usize| {
             dist::point_segment(point, sites[site].start, sites[site].end).1
         };
@@ -1563,13 +1770,83 @@ fn component_width(
                     <= other.radius + tol::FLATTEN_MM
         })
     };
-    present
+    let minimum = present
         .iter()
         .filter(|disk| !pruned(disk))
-        .map(|disk| disk.width())
         // Below two grid units a width is snapping noise, not geometry.
-        .filter(|width| width.mm > 2.0 * contact_tolerance)
-        .min_by(|left, right| left.mm.total_cmp(&right.mm))
+        .filter(|disk| disk.width().mm > 2.0 * contact_tolerance)
+        .min_by(|left, right| left.width().mm.total_cmp(&right.width().mm))
+        .copied()?;
+    // Retain the actual interior axis, removing the portions rejected by the
+    // same maximal-disk pruning. Both containment inequalities are convex
+    // along a straight axis piece, so their endpoints can be located without
+    // turning the candidate's bounding box into a claimed violation region.
+    let axis = axis
+        .into_iter()
+        .flat_map(|segment| {
+            let delta = segment.end - segment.start;
+            let at = |t| segment.start + delta * t;
+            let radius = |t| {
+                let point = at(t);
+                (dist::point_segment(point, segment.first_wall.0, segment.first_wall.1).0
+                    + dist::point_segment(point, segment.second_wall.0, segment.second_wall.1).0)
+                    / 2.0
+            };
+            let mut retained = segment_inside_intervals(component, segment.start, segment.end);
+            for other in &present {
+                if retained.is_empty() {
+                    break;
+                }
+                if dist::point_segment(other.center, segment.start, segment.end).0
+                    > other.radius + tol::FLATTEN_MM
+                {
+                    continue;
+                }
+                let Some(larger) = convex_sublevel_interval(radius, other.radius - tol::EPSILON_MM)
+                else {
+                    continue;
+                };
+                let Some(contained) = convex_sublevel_interval(
+                    |t| at(t).distance_to(other.center) + radius(t),
+                    other.radius + tol::FLATTEN_MM,
+                ) else {
+                    continue;
+                };
+                let removed = (larger.0.max(contained.0), larger.1.min(contained.1));
+                if removed.0 >= removed.1 {
+                    continue;
+                }
+                retained = retained
+                    .into_iter()
+                    .flat_map(|(start, end)| {
+                        let mut pieces = Vec::with_capacity(2);
+                        if start < removed.0 {
+                            pieces.push((start, end.min(removed.0)));
+                        }
+                        if end > removed.1 {
+                            pieces.push((start.max(removed.1), end));
+                        }
+                        pieces
+                    })
+                    .collect();
+            }
+            retained
+                .into_iter()
+                .filter_map(move |(start, end)| {
+                    let (start, end) = (at(start), at(end));
+                    (start.distance_to(end) > contact_tolerance).then_some(WidthAxisSegment {
+                        start,
+                        end,
+                        ..segment
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    Some(ComponentWidth {
+        disk: minimum,
+        axis,
+    })
 }
 
 /// The closing residue kept only where two distinct source-boundary
@@ -2291,6 +2568,102 @@ mod tests {
         assert!(region.contains_disk(Point::new(2.0, 2.0), 2.0));
         assert!(!region.contains_disk(Point::new(2.0, 2.0), 2.01));
         assert!(!region.contains_disk(Point::new(3.5, 5.0), 0.6));
+    }
+
+    type ExpectedSpan = ((f64, f64), (f64, f64));
+
+    fn assert_spans(actual: Vec<(Point, Point)>, expected: &[ExpectedSpan]) {
+        assert_eq!(actual.len(), expected.len(), "{actual:?}");
+        for ((start, end), &(from, to)) in actual.iter().zip(expected) {
+            assert!(
+                start.distance_to(Point::new(from.0, from.1)) <= 1e-8,
+                "{actual:?}"
+            );
+            assert!(
+                end.distance_to(Point::new(to.0, to.1)) <= 1e-8,
+                "{actual:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn segment_spans_preserve_holes_and_clip_to_the_query() {
+        let outer = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), tol::REGION_MM);
+        let hole = ContourSet::rectangle(rect(4.0, 2.0, 6.0, 8.0), tol::REGION_MM);
+        let ring = outer.difference(&hole);
+
+        assert_spans(
+            ring.segment_spans(Point::new(-2.0, 5.0), Point::new(12.0, 5.0)),
+            &[((0.0, 5.0), (4.0, 5.0)), ((6.0, 5.0), (10.0, 5.0))],
+        );
+        assert_spans(
+            ring.segment_spans(Point::new(2.0, 5.0), Point::new(9.0, 5.0)),
+            &[((2.0, 5.0), (4.0, 5.0)), ((6.0, 5.0), (9.0, 5.0))],
+        );
+    }
+
+    #[test]
+    fn segment_spans_preserve_disconnected_and_concave_regions() {
+        let left = ContourSet::rectangle(rect(0.0, 0.0, 2.0, 2.0), tol::REGION_MM);
+        let concave = ContourSet::new(
+            vec![vec![
+                [4.0, 0.0],
+                [8.0, 0.0],
+                [8.0, 1.0],
+                [5.0, 1.0],
+                [5.0, 2.0],
+                [4.0, 2.0],
+            ]],
+            FillRule::NonZero,
+            tol::REGION_MM,
+        );
+        assert_spans(
+            left.union(&concave)
+                .segment_spans(Point::new(-1.0, 1.5), Point::new(9.0, 1.5)),
+            &[((0.0, 1.5), (2.0, 1.5)), ((4.0, 1.5), (5.0, 1.5))],
+        );
+    }
+
+    #[test]
+    fn segment_spans_follow_reversed_arbitrary_direction() {
+        let square = ContourSet::rectangle(rect(0.0, 0.0, 4.0, 4.0), tol::REGION_MM);
+        assert_spans(
+            square.segment_spans(Point::new(6.0, 6.0), Point::new(-2.0, -2.0)),
+            &[((4.0, 4.0), (0.0, 0.0))],
+        );
+    }
+
+    #[test]
+    fn segment_spans_include_boundary_but_not_tangencies() {
+        let square = ContourSet::rectangle(rect(0.0, 0.0, 4.0, 4.0), tol::REGION_MM);
+        assert_spans(
+            square.segment_spans(Point::new(-1.0, 0.0), Point::new(3.0, 0.0)),
+            &[((0.0, 0.0), (3.0, 0.0))],
+        );
+        assert!(
+            square
+                .segment_spans(Point::new(-1.0, 1.0), Point::new(1.0, -1.0))
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn segment_spans_omit_degenerate_and_sub_tolerance_intervals() {
+        let square = ContourSet::rectangle(rect(0.0, 0.0, 4.0, 4.0), tol::EPSILON_MM);
+        assert!(
+            square
+                .segment_spans(Point::new(1.0, 1.0), Point::new(1.0, 1.0))
+                .is_empty()
+        );
+        assert!(
+            square
+                .segment_spans(Point::new(-1e-10, 2.0), Point::new(0.0, 2.0))
+                .is_empty()
+        );
+        assert_spans(
+            square.segment_spans(Point::new(-1e-5, 2.0), Point::new(1e-5, 2.0)),
+            &[((0.0, 2.0), (1e-5, 2.0))],
+        );
     }
 
     #[test]

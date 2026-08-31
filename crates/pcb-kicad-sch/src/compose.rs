@@ -1775,7 +1775,63 @@ fn add_connectivity_drivers(
         placed,
         net_symbol_specs,
         &page_contexts,
+    )?;
+    ensure_symbol_root_endpoints(
+        document,
+        netlist,
+        &anchors_by_net,
+        net_symbol_specs,
+        root_page,
+        target_nets,
     )
+}
+
+fn ensure_symbol_root_endpoints(
+    document: &mut SchDocument,
+    netlist: &Schematic,
+    targets_by_net: &BTreeMap<String, Vec<PinTarget>>,
+    specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
+    root_page: usize,
+    target_nets: &BTreeSet<String>,
+) -> Result<()> {
+    let Some(root) = &netlist.root_ref else {
+        return Ok(());
+    };
+    for (net_name, interface_names) in root_interface::symbol_ports_by_net(netlist, root)? {
+        if !target_nets.contains(&net_name) {
+            continue;
+        }
+        let Some(spec) = specs.get(&net_name) else {
+            continue;
+        };
+        let has_net_symbol = document.pages[root_page].items.iter().any(|item| {
+            matches!(item, SchItem::Symbol(symbol)
+                    if symbol.field_value("Path").is_none()
+                        && symbol.field_value("Value") == Some(net_name.as_str()))
+        });
+        let has_all_hierarchical_labels = interface_names.iter().all(|interface_name| {
+            document.pages[root_page].items.iter().any(|item| {
+                matches!(item, SchItem::Label(label)
+                    if matches!(label.kind, LabelKind::Hierarchical { .. })
+                        && label.text == *interface_name)
+            })
+        });
+        if has_net_symbol || has_all_hierarchical_labels {
+            continue;
+        }
+        let at = canonical_target(targets_by_net, &net_name, root_page)
+            .map(|target| target.point)
+            .unwrap_or(place_context_label(document, root_page, &net_name)?);
+        let page_id = document.pages[root_page].id.clone();
+        let symbol = build_net_symbol(
+            spec,
+            &net_name,
+            deterministic_uuid(format!("zener:root-symbol-endpoint:{page_id}:{net_name}")),
+            at,
+        )?;
+        insert_net_symbol(document, root_page, symbol, &spec.definition)?;
+    }
+    Ok(())
 }
 
 fn sync_net_drivers(

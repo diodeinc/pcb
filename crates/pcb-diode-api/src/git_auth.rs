@@ -2,7 +2,7 @@ use anyhow::{Context, Result, bail};
 use clap::Args;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use url::Url;
 
@@ -74,7 +74,6 @@ struct MintedGitCredential {
 
 pub fn execute(args: GitAuthArgs, ctx: &WorkspaceContext) -> Result<()> {
     let stdin = io::stdin();
-    let mut stdout = io::stdout().lock();
 
     match args.operation.as_str() {
         "configure" => {
@@ -85,17 +84,20 @@ pub fn execute(args: GitAuthArgs, ctx: &WorkspaceContext) -> Result<()> {
         }
         "unconfigure" => pcb_zen::git::unconfigure_diodehub_credentials_globally()?,
         "capability" => {
-            writeln!(stdout, "version 0")?;
-            writeln!(stdout, "capability {AUTHTYPE_CAPABILITY}")?;
+            pcb_ui::write_stdout(|stdout| {
+                writeln!(stdout, "version 0")?;
+                writeln!(stdout, "capability {AUTHTYPE_CAPABILITY}")
+            })?;
         }
         "get" => {
             let host = args.host.as_deref().unwrap_or(DEFAULT_DIODEHUB_HOST);
             let result = read_credential_request(stdin.lock())
-                .and_then(|request| provide_credential(ctx, host, request, &mut stdout));
+                .and_then(|request| provide_credential(ctx, host, request));
             if let Err(error) = result {
-                writeln!(stdout, "quit=true")?;
-                writeln!(stdout)?;
-                stdout.flush()?;
+                pcb_ui::write_stdout(|stdout| {
+                    writeln!(stdout, "quit=true")?;
+                    writeln!(stdout)
+                })?;
                 eprintln!("pcb auth git: {error:#}");
             }
         }
@@ -112,7 +114,6 @@ fn provide_credential(
     ctx: &WorkspaceContext,
     configured_host: &str,
     request: CredentialRequest,
-    output: &mut impl Write,
 ) -> Result<()> {
     if request.protocol.as_deref() != Some(b"https") {
         return Ok(());
@@ -139,12 +140,13 @@ fn provide_credential(
     let path = std::str::from_utf8(path).context("Git credential path is not UTF-8")?;
     let credential = exchange_credential(ctx, configured_host, path)?;
 
-    writeln!(output, "capability[]={AUTHTYPE_CAPABILITY}")?;
-    writeln!(output, "authtype=Bearer")?;
-    writeln!(output, "credential={}", credential.token)?;
-    writeln!(output, "password_expiry_utc={}", credential.expires_at)?;
-    writeln!(output)?;
-    output.flush()?;
+    pcb_ui::write_stdout(|output| {
+        writeln!(output, "capability[]={AUTHTYPE_CAPABILITY}")?;
+        writeln!(output, "authtype=Bearer")?;
+        writeln!(output, "credential={}", credential.token)?;
+        writeln!(output, "password_expiry_utc={}", credential.expires_at)?;
+        writeln!(output)
+    })?;
 
     Ok(())
 }
