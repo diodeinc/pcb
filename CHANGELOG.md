@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.41] - 2026-08-31
+
 ### Added
 
 - Add self-contained DFM JSON reports with native geometry and PDK source.
@@ -1726,7 +1728,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.40...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.41...HEAD
+[0.4.41]: https://github.com/diodeinc/pcb/compare/v0.4.40...v0.4.41
 [0.4.40]: https://github.com/diodeinc/pcb/compare/v0.4.39...v0.4.40
 [0.4.39]: https://github.com/diodeinc/pcb/compare/v0.4.38...v0.4.39
 [0.4.38]: https://github.com/diodeinc/pcb/compare/v0.4.37...v0.4.38
