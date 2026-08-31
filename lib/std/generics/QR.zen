@@ -1,9 +1,25 @@
+Size = enum("5mm", "8mm", "10mm")
+
+size = config(
+    Size, default=Size("5mm"), optional=True, help="JLCPCB 2D barcode size (solid silkscreen square edge length)"
+)
+properties = {
+    "value": "QR_" + size.value,
+    "size": size,
+}
+
+
+def _footprint(size: Size) -> str:
+    return "./footprints/QR_" + size.value + ".kicad_mod"
+
+
 Component(
     name="QR",
     prefix="QR",
     symbol=Symbol("./symbols/QR.kicad_sym"),
-    footprint=File("./footprints/QR.kicad_mod"),
+    footprint=File(_footprint(size)),
     pins={},
+    properties=properties,
     skip_bom=True,
     skip_pos=True,
 )

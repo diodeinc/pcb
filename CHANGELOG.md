@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- The stdlib `QR` generic now places a solid silkscreen square per JLCPCB's 2D barcode placeholder spec, with a `size` config (`5mm`, `8mm`, `10mm`; default `5mm`) replacing the previous fixed corner-bracket outline.
+
 ## [0.4.40] - 2026-08-28
 
 ### Fixed

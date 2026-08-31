@@ -23,33 +23,6 @@
 				)
 			)
 		)
-		(property "Footprint" ""
-			(at 0 0 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Datasheet" ""
-			(at 0 0 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Description" ""
-			(at 0 0 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
 		(symbol "QR_0_1"
 			(rectangle (start -10.500 10.500) (end 10.500 -10.500) (stroke (width 0) (type default)) (fill (type none)))
 			(rectangle (start -10.500 10.500) (end -9.500 9.500) (stroke (width 0) (type default)) (fill (type outline)))
