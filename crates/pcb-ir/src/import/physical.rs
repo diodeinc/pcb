@@ -4,10 +4,12 @@
 //! geometry remains owned once by the canonical IPC document and final images
 //! are composed on demand for the requested layout scope.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use anyhow::{Context, Result};
-use ipc2581::types::LayerFunction;
+use ipc2581::types::{
+    LayerFunction, PackagePinElectricalType, PackagePinMountType, PackagePinType,
+};
 use ipc2581::{Symbol, types::Side as IpcSide};
 
 use crate::dialects::Side;
@@ -45,6 +47,9 @@ impl<T> Association<T> {
 pub struct LandId(pub FeatureOccurrenceId);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct PhysicalTerminationId(pub u32);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct PasteIslandId {
     pub source: FeatureOccurrenceId,
     pub island: u32,
@@ -75,16 +80,39 @@ pub struct PhysicalLand {
     pub net: Option<Symbol>,
 }
 
+/// One explicitly identified electrical package contact on the board.
+///
+/// Copper-layer replicas share a termination only when their IPC component,
+/// pin, padstack, and location identities are exactly equal.
+#[derive(Debug, Clone)]
+pub struct PhysicalTermination {
+    pub id: PhysicalTerminationId,
+    pub component: ComponentOccurrenceId,
+    pub pin: Symbol,
+    pub pin_type: PackagePinType,
+    pub mount_type: Option<PackagePinMountType>,
+    pub padstack: Symbol,
+    pub at: Point,
+    pub side: Side,
+    pub population: PopulationState,
+    pub lands: Vec<LandId>,
+}
+
 #[derive(Debug, Clone)]
 pub struct PasteIsland {
     pub id: PasteIslandId,
     pub layer: LayerId,
     pub side: Side,
+    pub at: Point,
     pub image: ContourSet,
     pub board: Option<LayoutOccurrenceId>,
     pub component: Association<ComponentOccurrenceId>,
+    pub pin: Option<Symbol>,
+    pub padstack: Option<Symbol>,
     pub population: PopulationState,
-    pub land: Association<LandId>,
+    /// Present only when IPC gives the same component, pin, padstack, and
+    /// location identity as an electrical termination.
+    pub termination: Option<PhysicalTerminationId>,
 }
 
 #[derive(Debug, Clone)]
@@ -121,6 +149,7 @@ pub struct LayerLandAssociation {
 #[derive(Debug, Clone, Default)]
 pub struct PhysicalView {
     pub lands: Vec<PhysicalLand>,
+    pub terminations: Vec<PhysicalTermination>,
     pub paste_islands: Vec<PasteIsland>,
     pub mask_openings: Vec<MaskOpening>,
     pub holes: Vec<PhysicalHole>,
@@ -133,12 +162,43 @@ struct FeatureEvidence {
     geometry_ref: Option<Symbol>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct PhysicalTerminationKey {
+    component: ComponentOccurrenceId,
+    pin: Symbol,
+    padstack: Symbol,
+    x: u64,
+    y: u64,
+}
+
+impl PhysicalTerminationKey {
+    fn new(component: ComponentOccurrenceId, pin: Symbol, padstack: Symbol, at: Point) -> Self {
+        Self {
+            component,
+            pin,
+            padstack,
+            x: exact_coordinate(at.x),
+            y: exact_coordinate(at.y),
+        }
+    }
+}
+
+fn exact_coordinate(value: f64) -> u64 {
+    if value == 0.0 { 0 } else { value.to_bits() }
+}
+
 impl ImportedDesign {
     /// Derive physical copper lands without materializing unrelated physical
     /// layers.
     pub fn physical_lands(&self, scope: ArtworkScope) -> Result<Vec<PhysicalLand>> {
         let components = self.component_occurrences(scope)?;
         self.derive_physical_lands(scope, &components)
+    }
+
+    /// Derive electrical package contacts using only exact IPC identities.
+    pub fn physical_terminations(&self, scope: ArtworkScope) -> Result<Vec<PhysicalTermination>> {
+        let lands = self.physical_lands(scope)?;
+        Ok(self.derive_physical_terminations(&lands))
     }
 
     /// Derive drilled openings and their copper-land relationships without
@@ -148,16 +208,19 @@ impl ImportedDesign {
         self.derive_physical_holes(scope, &lands)
     }
 
-    /// Derive physical lands, final paste islands, mask openings, and drilled
-    /// openings without reinterpreting source XML or duplicating geometry.
+    /// Derive physical lands, exact electrical terminations, independent paste
+    /// islands, mask openings, and drilled openings without reinterpreting
+    /// source XML or duplicating geometry.
     pub fn physical_view(&self, scope: ArtworkScope) -> Result<PhysicalView> {
         let components = self.component_occurrences(scope)?;
         let lands = self.derive_physical_lands(scope, &components)?;
-        let paste_islands = self.paste_islands(scope, &components, &lands)?;
+        let terminations = self.derive_physical_terminations(&lands);
+        let paste_islands = self.paste_islands(scope, &components, &terminations)?;
         let mask_openings = self.mask_openings(scope, &lands)?;
         let holes = self.derive_physical_holes(scope, &lands)?;
         Ok(PhysicalView {
             lands,
+            terminations,
             paste_islands,
             mask_openings,
             holes,
@@ -209,11 +272,102 @@ impl ImportedDesign {
         Ok(lands)
     }
 
+    fn derive_physical_terminations(&self, lands: &[PhysicalLand]) -> Vec<PhysicalTermination> {
+        let mut terminations = Vec::<PhysicalTermination>::new();
+        let mut by_identity = HashMap::<PhysicalTerminationKey, usize>::new();
+        for land in lands {
+            let Some(component) = land.component.resolved().copied() else {
+                continue;
+            };
+            let (Some(pin), Some(padstack)) = (land.pin, land.padstack) else {
+                continue;
+            };
+            let Some(package_pin) = self.package_pin(component, pin) else {
+                continue;
+            };
+            if package_pin.electrical_type != Some(PackagePinElectricalType::Electrical) {
+                continue;
+            }
+
+            let key = PhysicalTerminationKey::new(component, pin, padstack, land.at);
+            if let Some(index) = by_identity.get(&key).copied() {
+                terminations[index].lands.push(land.id);
+                continue;
+            }
+
+            let index = terminations.len();
+            by_identity.insert(key, index);
+            let definition = self
+                .component_definition(component.component)
+                .expect("physical land component references its imported definition");
+            let side = self
+                .layer_definitions
+                .iter()
+                .find(|layer| layer.name == definition.source.layer_ref)
+                .and_then(|layer| layer.side)
+                .map(|side| physical_side(Some(side)))
+                .unwrap_or(Side::None);
+            terminations.push(PhysicalTermination {
+                id: PhysicalTerminationId(0),
+                component,
+                pin,
+                pin_type: package_pin.pin_type,
+                mount_type: package_pin.mount_type,
+                padstack,
+                at: land.at,
+                side,
+                population: definition.population,
+                lands: vec![land.id],
+            });
+        }
+
+        terminations.sort_by(|left, right| {
+            left.component
+                .cmp(&right.component)
+                .then_with(|| self.resolve(left.pin).cmp(self.resolve(right.pin)))
+                .then_with(|| {
+                    self.resolve(left.padstack)
+                        .cmp(self.resolve(right.padstack))
+                })
+                .then_with(|| left.at.x.total_cmp(&right.at.x))
+                .then_with(|| left.at.y.total_cmp(&right.at.y))
+        });
+        for (index, termination) in terminations.iter_mut().enumerate() {
+            termination.id = PhysicalTerminationId(index as u32);
+        }
+        terminations
+    }
+
+    fn package_pin(
+        &self,
+        component: ComponentOccurrenceId,
+        pin: Symbol,
+    ) -> Option<&ipc2581::types::PackagePin> {
+        let package = self
+            .component_definition(component.component)?
+            .package
+            .and_then(|package| self.package_definition(package))?;
+        package
+            .source
+            .pins
+            .iter()
+            .find(|candidate| candidate.number == pin)
+            .or_else(|| {
+                package
+                    .source
+                    .topside
+                    .as_ref()?
+                    .pins
+                    .iter()
+                    .find(|candidate| candidate.number == pin)
+            })
+    }
+
     fn paste_islands(
         &self,
         scope: ArtworkScope,
         components: &[ComponentOccurrence],
-        lands: &[PhysicalLand],
+        terminations: &[PhysicalTermination],
     ) -> Result<Vec<PasteIsland>> {
         let mut islands = Vec::new();
         for (layer_index, layer) in self.layer_definitions.iter().enumerate() {
@@ -227,16 +381,27 @@ impl ImportedDesign {
             let side = physical_side(layer.side);
             for (occurrence, image) in self.attributed_feature_images(layer_id, scope)? {
                 let source = occurrence.id;
+                let feature = self
+                    .feature_definition(source.feature)
+                    .context("paste island references a missing feature definition")?;
                 let evidence = self.feature_evidence(source);
                 let board = occurrence.board;
+                let at = occurrence.root_from_local.transform_point(feature.center);
                 let component = self.component_association(source, &evidence, components);
                 let population = component
                     .resolved()
                     .and_then(|component| self.component_definition(component.component))
                     .map(|component| component.population)
                     .unwrap_or_default();
+                let termination = exact_termination(
+                    at,
+                    side,
+                    evidence.pin,
+                    feature.padstack_ref,
+                    &component,
+                    terminations,
+                );
                 for (island, image) in image.connected_components().into_iter().enumerate() {
-                    let land = associate_land(&image, board, side, &evidence, &component, lands);
                     islands.push(PasteIsland {
                         id: PasteIslandId {
                             source,
@@ -244,11 +409,14 @@ impl ImportedDesign {
                         },
                         layer: layer_id,
                         side,
+                        at,
                         image,
                         board,
                         component: component.clone(),
+                        pin: evidence.pin,
+                        padstack: feature.padstack_ref,
                         population,
-                        land,
+                        termination,
                     });
                 }
             }
@@ -488,6 +656,28 @@ impl ArtworkLowering<Symbol, Option<FeatureOccurrenceId>> for OccurrenceAttribut
     }
 }
 
+fn exact_termination(
+    at: Point,
+    side: Side,
+    pin: Option<Symbol>,
+    padstack: Option<Symbol>,
+    component: &Association<ComponentOccurrenceId>,
+    terminations: &[PhysicalTermination],
+) -> Option<PhysicalTerminationId> {
+    let component = component.resolved()?;
+    let (pin, padstack) = (pin?, padstack?);
+    terminations
+        .iter()
+        .find(|termination| {
+            termination.component == *component
+                && termination.pin == pin
+                && termination.padstack == padstack
+                && termination.at == at
+                && termination.side == side
+        })
+        .map(|termination| termination.id)
+}
+
 fn associate_land(
     image: &ContourSet,
     board: Option<LayoutOccurrenceId>,
@@ -613,7 +803,7 @@ mod tests {
 
         assert_eq!(
             imported.physical_lands(ArtworkScope::Board).unwrap().len(),
-            4
+            7
         );
         assert_eq!(
             imported.physical_holes(ArtworkScope::Board).unwrap().len(),
@@ -629,12 +819,13 @@ mod tests {
     }
 
     #[test]
-    fn derives_component_owned_paste_and_explicit_land_relationships() {
+    fn derives_exact_physical_terminations_separately_from_paste() {
+        Ipc2581::validate(physical_fixture()).expect("fixture conforms to IPC-2581C");
         let ipc = Ipc2581::parse(physical_fixture()).unwrap();
         let imported = import_design(&ipc).unwrap();
         let physical = imported.physical_view(ArtworkScope::Board).unwrap();
 
-        assert_eq!(physical.lands.len(), 4);
+        assert_eq!(physical.lands.len(), 7);
         let u1_pin = imported
             .components
             .iter()
@@ -665,30 +856,74 @@ mod tests {
             "physical lands remain distinct even when they share one logical pin"
         );
 
-        assert_eq!(physical.paste_islands.len(), 5);
-        let resolved = physical
+        assert_eq!(physical.terminations.len(), 5);
+        assert_eq!(
+            physical
+                .terminations
+                .iter()
+                .filter(|termination| {
+                    imported
+                        .component_definition(termination.component.component)
+                        .is_some_and(|component| component.source.ref_des == Some(u1))
+                })
+                .count(),
+            3,
+            "separate lands with one logical pin remain separate terminations"
+        );
+        assert!(
+            physical
+                .terminations
+                .iter()
+                .all(|termination| imported.resolve(termination.pin) != "PAD0")
+        );
+        assert_eq!(
+            physical
+                .terminations
+                .iter()
+                .filter(|termination| termination.pin_type == PackagePinType::Surface)
+                .count(),
+            4
+        );
+        let through = physical
+            .terminations
+            .iter()
+            .find(|termination| termination.pin_type == PackagePinType::Through)
+            .unwrap();
+        assert_eq!(through.lands.len(), 2);
+        assert_eq!(
+            through.mount_type,
+            Some(PackagePinMountType::ThroughHolePin)
+        );
+
+        assert_eq!(physical.paste_islands.len(), 8);
+        let linked = physical
             .paste_islands
             .iter()
-            .filter(|island| matches!(island.land, Association::Resolved(_)))
+            .filter(|island| island.termination.is_some())
             .collect::<Vec<_>>();
-        assert_eq!(resolved.len(), 2);
-        assert_eq!(resolved[0].land, resolved[1].land);
-        assert!(
-            resolved
-                .iter()
-                .all(|island| island.population == PopulationState::DoNotPopulate)
-        );
-        assert!(physical.paste_islands.iter().any(
-            |island| matches!(island.land, Association::Ambiguous(ref lands) if lands.len() == 2)
-        ));
-        assert!(physical.paste_islands.iter().any(
-            |island| matches!(island.land, Association::Conflicting(ref lands) if lands.len() == 3)
-        ));
-        assert!(
+        assert_eq!(linked.len(), 1);
+        assert_eq!(linked[0].population, PopulationState::DoNotPopulate);
+        let termination = &physical.terminations[linked[0].termination.unwrap().0 as usize];
+        assert_eq!(termination.at, Point::new(5.0, 5.0));
+        assert_eq!(imported.resolve(termination.pin), "1");
+        assert!(physical.paste_islands.iter().any(|island| {
+            island
+                .pin
+                .is_some_and(|pin| imported.resolve(pin) == "PAD0")
+                && island.termination.is_none()
+        }));
+        assert!(physical.paste_islands.iter().any(|island| {
+            island.at == Point::new(5.1, 5.0)
+                && island.pin.is_some_and(|pin| imported.resolve(pin) == "1")
+                && island.termination.is_none()
+        }));
+        assert_eq!(
             physical
                 .paste_islands
                 .iter()
-                .any(|island| island.land == Association::Unresolved)
+                .filter(|island| island.termination.is_none())
+                .count(),
+            7
         );
 
         assert_eq!(physical.mask_openings.len(), 1);
@@ -697,11 +932,13 @@ mod tests {
             Association::Resolved(_)
         ));
         assert_eq!(physical.holes.len(), 1);
-        assert_eq!(physical.holes[0].lands.len(), 1);
-        assert!(matches!(
-            physical.holes[0].lands[0].land,
-            Association::Resolved(_)
-        ));
+        assert_eq!(physical.holes[0].lands.len(), 2);
+        assert!(
+            physical.holes[0]
+                .lands
+                .iter()
+                .any(|association| matches!(association.land, Association::Resolved(_)))
+        );
     }
 
     fn make_paste_artwork_invalid(imported: &mut ImportedDesign) {
@@ -741,56 +978,102 @@ mod tests {
   <Content roleRef="owner">
     <FunctionMode mode="ASSEMBLY"/>
     <StepRef name="board"/>
+    <BomRef name="bom"/>
+    <DictionaryLineDesc units="MILLIMETER">
+      <EntryLineDesc id="line"><LineDesc lineWidth="0" lineEnd="ROUND"/></EntryLineDesc>
+    </DictionaryLineDesc>
     <DictionaryStandard units="MILLIMETER">
       <EntryStandard id="land"><Circle diameter="1"/></EntryStandard>
       <EntryStandard id="paste"><Circle diameter="0.4"/></EntryStandard>
       <EntryStandard id="wide-paste"><Circle diameter="3"/></EntryStandard>
     </DictionaryStandard>
   </Content>
+  <LogisticHeader>
+    <Role id="owner" roleFunction="OWNER"/>
+    <Enterprise id="owner-enterprise" code="owner" name="Owner"/>
+    <Person name="Owner" enterpriseRef="owner-enterprise" roleRef="owner"/>
+  </LogisticHeader>
+  <HistoryRecord number="1" origination="2026-01-01T00:00:00Z" software="test" lastChange="2026-01-01T00:00:00Z">
+    <FileRevision fileRevisionId="1" comment="test">
+      <SoftwarePackage name="test" vendor="test" revision="1"><Certification certificationStatus="SELFTEST"/></SoftwarePackage>
+    </FileRevision>
+  </HistoryRecord>
   <Bom name="bom">
     <BomHeader assembly="board" revision="1"/>
     <BomItem OEMDesignNumberRef="part-u1" quantity="1" pinCount="1" category="ELECTRICAL">
       <RefDes name="U1" packageRef="pkg" populate="false" layerRef="TOP"/>
+      <Characteristics category="ELECTRICAL"/>
     </BomItem>
     <BomItem OEMDesignNumberRef="part-u2" quantity="1" pinCount="1" category="ELECTRICAL">
       <RefDes name="U2" packageRef="pkg" populate="true" layerRef="TOP"/>
+      <Characteristics category="ELECTRICAL"/>
+    </BomItem>
+    <BomItem OEMDesignNumberRef="part-j1" quantity="1" pinCount="1" category="ELECTRICAL">
+      <RefDes name="J1" packageRef="pkg-tht" populate="true" layerRef="TOP"/>
+      <Characteristics category="ELECTRICAL"/>
     </BomItem>
   </Bom>
-  <Ecad>
+  <Ecad name="design">
     <CadHeader units="MILLIMETER"/>
     <CadData>
       <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Layer name="BOTTOM" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>
       <Layer name="PASTE" layerFunction="SOLDERPASTE" side="TOP" polarity="POSITIVE"/>
       <Layer name="MASK" layerFunction="SOLDERMASK" side="TOP" polarity="POSITIVE"/>
       <Layer name="DRILL" layerFunction="DRILL" side="ALL" polarity="POSITIVE"/>
       <Step name="board" type="BOARD">
+        <PadStackDef name="padstack">
+          <PadstackPadDef layerRef="TOP" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="land"/></PadstackPadDef>
+          <PadstackPadDef layerRef="PASTE" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="paste"/></PadstackPadDef>
+          <PadstackPadDef layerRef="MASK" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="land"/></PadstackPadDef>
+        </PadStackDef>
+        <PadStackDef name="tht-padstack">
+          <PadstackHoleDef name="J1-H1" diameter="0.3" platingStatus="PLATED" plusTol="0" minusTol="0" x="0" y="0"/>
+          <PadstackPadDef layerRef="TOP" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="land"/></PadstackPadDef>
+          <PadstackPadDef layerRef="BOTTOM" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="land"/></PadstackPadDef>
+        </PadStackDef>
+        <Datum x="0" y="0"/>
+        <Package name="pkg" type="OTHER" pinOne="1" pinOneOrientation="OTHER">
+          <Outline><Polygon><PolyBegin x="0" y="0"/><PolyStepSegment x="0" y="0"/></Polygon><LineDescRef id="line"/></Outline>
+          <Pin number="1" type="SURFACE" electricalType="ELECTRICAL" mountType="SURFACE_MOUNT_PAD"><Location x="0" y="0"/><StandardPrimitiveRef id="land"/></Pin>
+          <Pin number="PAD0" type="SURFACE" electricalType="UNDEFINED" mountType="UNDEFINED"><Location x="3" y="0"/><StandardPrimitiveRef id="land"/></Pin>
+        </Package>
+        <Package name="pkg-tht" type="OTHER" pinOne="1" pinOneOrientation="OTHER">
+          <Outline><Polygon><PolyBegin x="0" y="0"/><PolyStepSegment x="0" y="0"/></Polygon><LineDescRef id="line"/></Outline>
+          <Pin number="1" type="THRU" electricalType="ELECTRICAL" mountType="THROUGH_HOLE_PIN"><Location x="0" y="0"/><StandardPrimitiveRef id="land"/></Pin>
+        </Package>
         <Component refDes="U1" packageRef="pkg" part="part-u1" layerRef="TOP" mountType="SMT">
           <Location x="5" y="5"/>
         </Component>
         <Component refDes="U2" packageRef="pkg" part="part-u2" layerRef="TOP" mountType="SMT">
           <Location x="25" y="5"/>
         </Component>
-        <PadStackDef name="padstack">
-          <PadstackPadDef layerRef="TOP" padUse="REGULAR"><StandardPrimitiveRef id="land"/></PadstackPadDef>
-          <PadstackPadDef layerRef="MASK" padUse="REGULAR"><StandardPrimitiveRef id="land"/></PadstackPadDef>
-        </PadStackDef>
+        <Component refDes="J1" packageRef="pkg-tht" part="part-j1" layerRef="TOP" mountType="THMT">
+          <Location x="40" y="5"/>
+        </Component>
         <LayerFeature layerRef="TOP">
-          <Set net="N1"><Pad padstackDefRef="padstack"><Location x="5" y="5"/><PinRef componentRef="U1" pin="1"/></Pad></Set>
-          <Set net="N1"><Pad padstackDefRef="padstack"><Location x="14" y="5"/><PinRef componentRef="U1" pin="1"/></Pad></Set>
-          <Set net="N1"><Pad padstackDefRef="padstack"><Location x="16" y="5"/><PinRef componentRef="U1" pin="1"/></Pad></Set>
-          <Set net="N2"><Pad padstackDefRef="padstack"><Location x="25" y="5"/><PinRef componentRef="U2" pin="1"/></Pad></Set>
+          <Set net="N1"><Pad padstackDefRef="padstack"><Location x="5" y="5"/><StandardPrimitiveRef id="land"/><PinRef componentRef="U1" pin="1"/></Pad></Set>
+          <Set net="N1"><Pad padstackDefRef="padstack"><Location x="14" y="5"/><StandardPrimitiveRef id="land"/><PinRef componentRef="U1" pin="1"/></Pad></Set>
+          <Set net="N1"><Pad padstackDefRef="padstack"><Location x="16" y="5"/><StandardPrimitiveRef id="land"/><PinRef componentRef="U1" pin="1"/></Pad></Set>
+          <Set><Pad padstackDefRef="padstack"><Location x="8" y="5"/><StandardPrimitiveRef id="land"/><PinRef componentRef="U1" pin="PAD0"/></Pad></Set>
+          <Set net="N2"><Pad padstackDefRef="padstack"><Location x="25" y="5"/><StandardPrimitiveRef id="land"/><PinRef componentRef="U2" pin="1"/></Pad></Set>
+          <Set net="N3"><Pad padstackDefRef="tht-padstack"><Location x="40" y="5"/><StandardPrimitiveRef id="land"/><PinRef componentRef="J1" pin="1"/></Pad></Set>
         </LayerFeature>
+        <LayerFeature layerRef="BOTTOM"><Set net="N3"><Pad padstackDefRef="tht-padstack"><Location x="40" y="5"/><StandardPrimitiveRef id="land"/><PinRef componentRef="J1" pin="1"/></Pad></Set></LayerFeature>
         <LayerFeature layerRef="PASTE">
+          <Set><Pad padstackDefRef="padstack"><Location x="5" y="5"/><StandardPrimitiveRef id="paste"/><PinRef componentRef="U1" pin="1"/></Pad></Set>
+          <Set><Pad padstackDefRef="padstack"><Location x="5.1" y="5"/><StandardPrimitiveRef id="paste"/><PinRef componentRef="U1" pin="1"/></Pad></Set>
+          <Set><Pad padstackDefRef="padstack"><Location x="8" y="5"/><StandardPrimitiveRef id="paste"/><PinRef componentRef="U1" pin="PAD0"/></Pad></Set>
           <Set componentRef="U1" geometryUsage="GRAPHIC"><Features><Location x="4.7" y="5"/><Location x="5.3" y="5"/><StandardPrimitiveRef id="paste"/></Features></Set>
           <Set componentRef="U1" geometryUsage="GRAPHIC"><Features><Location x="15" y="5"/><StandardPrimitiveRef id="wide-paste"/></Features></Set>
           <Set componentRef="U1" geometryUsage="GRAPHIC"><Features><Location x="25" y="5"/><StandardPrimitiveRef id="paste"/></Features></Set>
           <Set geometryUsage="GRAPHIC"><Features><Location x="35" y="5"/><StandardPrimitiveRef id="paste"/></Features></Set>
         </LayerFeature>
         <LayerFeature layerRef="MASK">
-          <Set><Pad padstackDefRef="padstack"><Location x="5" y="5"/><PinRef componentRef="U1" pin="1"/></Pad></Set>
+          <Set><Pad padstackDefRef="padstack"><Location x="5" y="5"/><StandardPrimitiveRef id="land"/><PinRef componentRef="U1" pin="1"/></Pad></Set>
         </LayerFeature>
         <LayerFeature layerRef="DRILL">
-          <Set geometry="padstack"><Hole name="H1" diameter="0.3" platingStatus="PLATED" x="5" y="5"/></Set>
+          <Set geometry="padstack"><Hole name="H1" diameter="0.3" platingStatus="PLATED" plusTol="0" minusTol="0" x="5" y="5"/></Set>
         </LayerFeature>
       </Step>
     </CadData>
