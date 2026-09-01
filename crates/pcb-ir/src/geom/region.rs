@@ -1276,6 +1276,10 @@ struct OrientedBoundarySegment {
     topology: BoundarySegment,
     start: Point,
     end: Point,
+    /// Source-ring direction averaged across one flattening-tolerance on
+    /// either side. Sub-resolution backtracking must not turn one wall into
+    /// two opposing walls.
+    tangent: Point,
     bbox: BBox,
 }
 
@@ -1291,6 +1295,10 @@ fn source_boundary_segments(source: &ContourSet) -> Vec<OrientedBoundarySegment>
         .iter()
         .enumerate()
         .flat_map(|(ring_id, ring)| {
+            let metric = RingArcLength::new(ring);
+            // Keep the two-sided chord local even when the whole ring is
+            // smaller than the ordinary geometry resolution.
+            let tangent_radius = tol::FLATTEN_MM.min(metric.perimeter() / 8.0);
             ring_edges(ring)
                 .enumerate()
                 .filter(|(_, (start, end))| start.distance_to(*end) > source.tolerance)
@@ -1302,10 +1310,57 @@ fn source_boundary_segments(source: &ContourSet) -> Vec<OrientedBoundarySegment>
                     },
                     start,
                     end,
+                    tangent: metric.edge_tangent(index, tangent_radius),
                     bbox: segment_bbox(start, end),
                 })
         })
         .collect()
+}
+
+/// Canonical arc-length parameterization of a closed polygonal ring.
+/// Consecutive entries are the stations at the ends of each source edge.
+struct RingArcLength<'a> {
+    ring: &'a Ring,
+    stations: Vec<f64>,
+}
+
+impl<'a> RingArcLength<'a> {
+    fn new(ring: &'a Ring) -> Self {
+        let stations = std::iter::once(0.0)
+            .chain(ring_edges(ring).scan(0.0, |station, (start, end)| {
+                *station += start.distance_to(end);
+                Some(*station)
+            }))
+            .collect();
+        Self { ring, stations }
+    }
+
+    fn perimeter(&self) -> f64 {
+        self.stations[self.ring.len()]
+    }
+
+    /// Point at a periodic arc-length station. Selecting by edge-end station
+    /// skips zero-length edges as a consequence of the parameterization.
+    fn point_at(&self, station: f64) -> Point {
+        let station = station.rem_euclid(self.perimeter());
+        let index = self.stations[1..].partition_point(|&end| end <= station);
+        let start_station = self.stations[index];
+        let end_station = self.stations[index + 1];
+        let [start_x, start_y] = self.ring[index];
+        let [end_x, end_y] = self.ring[(index + 1) % self.ring.len()];
+        let start = Point::new(start_x, start_y);
+        let end = Point::new(end_x, end_y);
+        start + (end - start) * ((station - start_station) / (end_station - start_station))
+    }
+
+    /// Direction at one edge, measured as the chord between equal arc-length
+    /// offsets around its midpoint. Tiny reversals therefore retain the
+    /// direction of their resolution-scale wall instead of becoming an
+    /// opposing wall.
+    fn edge_tangent(&self, index: usize, radius: f64) -> Point {
+        let midpoint = (self.stations[index] + self.stations[index + 1]) / 2.0;
+        self.point_at(midpoint + radius) - self.point_at(midpoint - radius)
+    }
 }
 
 /// Each connected component of `residual` that two distinct source-boundary
@@ -1392,7 +1447,7 @@ impl SegmentGrid {
 }
 
 /// A boundary segment snapped to the tolerance grid, with its topology.
-type GridSite = (VoronoiLine<i32>, BoundarySegment);
+type GridSite = (VoronoiLine<i32>, OrientedBoundarySegment);
 
 /// The sites snap-rounded to a planar set on the tolerance grid. The
 /// Voronoi builder accepts segments that meet only at endpoints, while
@@ -1438,7 +1493,7 @@ fn planar_grid_sites(
         .map(|site| {
             (
                 VoronoiLine::new(quantize(site.start), quantize(site.end)),
-                site.topology,
+                *site,
             )
         })
         .filter(|(line, _)| line.start != line.end)
@@ -1450,7 +1505,7 @@ fn planar_grid_sites(
     let mut seen = std::collections::HashSet::new();
     let split = snapped
         .iter()
-        .flat_map(|&(line, topology)| {
+        .flat_map(|&(line, source)| {
             let mut stations = endpoints
                 .iter()
                 .copied()
@@ -1469,7 +1524,7 @@ fn planar_grid_sites(
                 .chain(std::iter::once(line.end))
                 .collect::<Vec<_>>()
                 .windows(2)
-                .map(|pair| (VoronoiLine::new(pair[0], pair[1]), topology))
+                .map(|pair| (VoronoiLine::new(pair[0], pair[1]), source))
                 .collect::<Vec<_>>()
         })
         .filter(|(line, _)| seen.insert(key(line)))
@@ -1547,9 +1602,10 @@ impl InscribedDisk {
     }
 }
 
-/// One piece of the boundary medial axis, with the two walls defining it.
-/// Curved edges are polylines within the shared flattening tolerance. These
-/// are candidates until clipped to the residue and the requested width.
+/// One cell of the boundary medial axis, with the two walls defining it.
+/// A vertex has equal start/end points; curved edges are polylines within the
+/// shared flattening tolerance. These are candidates until clipped to the
+/// residue and the requested width.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct WidthAxisSegment {
     pub start: Point,
@@ -1598,13 +1654,14 @@ fn component_width(
     let lines = grid.iter().map(|(line, _)| *line).collect::<Vec<_>>();
     let sites = grid
         .iter()
-        .map(|(line, topology)| {
+        .map(|(line, source)| {
             let start = unquantize([f64::from(line.start.x), f64::from(line.start.y)]);
             let end = unquantize([f64::from(line.end.x), f64::from(line.end.y)]);
             OrientedBoundarySegment {
-                topology: *topology,
+                topology: source.topology,
                 start,
                 end,
+                tangent: source.tangent,
                 bbox: segment_bbox(start, end),
             }
         })
@@ -1615,16 +1672,15 @@ fn component_width(
     // Which sites are one wall. A ring's two sides of a channel are
     // traversed in opposite directions, so two segments of one ring face
     // each other only when their directions oppose; ring-adjacent segments
-    // and segments running within a quarter turn of each other — chords of
-    // one curve, however a sub-tolerance stub between them snapped — are
-    // the same wall. Segments of different rings are one wall only where
-    // they touch.
+    // and segments whose resolution-scale tangents are within a quarter turn
+    // are the same wall. The averaged tangent prevents a microscopic reversal
+    // from manufacturing an opposing branch. Segments of different rings are
+    // one wall only where they touch.
     let incident = |i: usize, j: usize| {
         let (a, b) = (&sites[i], &sites[j]);
         if a.topology.ring == b.topology.ring {
-            let (da, db) = (a.end - a.start, b.end - b.start);
             boundary_segments_are_incident(a.topology, b.topology)
-                || da.x * db.x + da.y * db.y > 0.0
+                || a.tangent.x * b.tangent.x + a.tangent.y * b.tangent.y > 0.0
         } else {
             [lines[i].start, lines[i].end]
                 .iter()
@@ -1666,23 +1722,39 @@ fn component_width(
 
     // Vertices: tangent to every site around them; a width needs two that
     // are not incident.
-    let at_vertices = diagram.vertices().iter().filter_map(|vertex| {
-        let around = diagram
-            .edge_rot_next_iterator(vertex.get_incident_edge().ok()?)
-            .filter_map(|edge| diagram.edge(edge).ok()?.cell().ok())
-            .map(|cell| site_of(cell).0)
-            .collect::<Vec<_>>();
-        around
-            .iter()
-            .enumerate()
-            .flat_map(|(position, &first)| {
-                around[position + 1..]
-                    .iter()
-                    .map(move |&second| (first, second))
-            })
-            .find(|&(first, second)| !incident(first, second))
-            .map(|(first, second)| disk(unquantize([vertex.x(), vertex.y()]), first, second))
-    });
+    let at_vertices = diagram
+        .vertices()
+        .iter()
+        .filter_map(|vertex| {
+            let around = diagram
+                .edge_rot_next_iterator(vertex.get_incident_edge().ok()?)
+                .filter_map(|edge| diagram.edge(edge).ok()?.cell().ok())
+                .map(|cell| site_of(cell).0)
+                .collect::<Vec<_>>();
+            around
+                .iter()
+                .enumerate()
+                .flat_map(|(position, &first)| {
+                    around[position + 1..]
+                        .iter()
+                        .map(move |&second| (first, second))
+                })
+                .find(|&(first, second)| !incident(first, second))
+                .map(|(first, second)| {
+                    let center = unquantize([vertex.x(), vertex.y()]);
+                    (
+                        disk(center, first, second),
+                        WidthAxisSegment {
+                            start: center,
+                            end: center,
+                            first_wall: (sites[first].start, sites[first].end),
+                            second_wall: (sites[second].start, sites[second].end),
+                            uncertainty_mm: 0.0,
+                        },
+                    )
+                })
+        })
+        .collect::<Vec<_>>();
 
     // Edges between non-incident sites, sampled along their length and at
     // the apex of a parabola (reflex vertex against a segment) or of a
@@ -1740,7 +1812,7 @@ fn component_width(
                 .map(|center| disk(center, first, second)),
         );
     }
-    on_axis.extend(at_vertices);
+    on_axis.extend(at_vertices.iter().map(|(disk, _)| *disk));
 
     // A disk is maximal only if its radius is its clearance to every site;
     // the builder's degenerate edges can put a center next to a wall it
@@ -1781,68 +1853,78 @@ fn component_width(
     // same maximal-disk pruning. Both containment inequalities are convex
     // along a straight axis piece, so their endpoints can be located without
     // turning the candidate's bounding box into a claimed violation region.
-    let axis = axis
-        .into_iter()
-        .flat_map(|segment| {
-            let delta = segment.end - segment.start;
-            let at = |t| segment.start + delta * t;
-            let radius = |t| {
-                let point = at(t);
-                (dist::point_segment(point, segment.first_wall.0, segment.first_wall.1).0
-                    + dist::point_segment(point, segment.second_wall.0, segment.second_wall.1).0)
-                    / 2.0
-            };
-            let mut retained = segment_inside_intervals(component, segment.start, segment.end);
-            for other in &present {
-                if retained.is_empty() {
-                    break;
-                }
-                if dist::point_segment(other.center, segment.start, segment.end).0
-                    > other.radius + tol::FLATTEN_MM
-                {
-                    continue;
-                }
-                let Some(larger) = convex_sublevel_interval(radius, other.radius - tol::EPSILON_MM)
-                else {
-                    continue;
-                };
-                let Some(contained) = convex_sublevel_interval(
-                    |t| at(t).distance_to(other.center) + radius(t),
-                    other.radius + tol::FLATTEN_MM,
-                ) else {
-                    continue;
-                };
-                let removed = (larger.0.max(contained.0), larger.1.min(contained.1));
-                if removed.0 >= removed.1 {
-                    continue;
-                }
-                retained = retained
-                    .into_iter()
-                    .flat_map(|(start, end)| {
-                        let mut pieces = Vec::with_capacity(2);
-                        if start < removed.0 {
-                            pieces.push((start, end.min(removed.0)));
-                        }
-                        if end > removed.1 {
-                            pieces.push((start.max(removed.1), end));
-                        }
-                        pieces
-                    })
-                    .collect();
+    let span_axis = axis.into_iter().flat_map(|segment| {
+        let delta = segment.end - segment.start;
+        let at = |t| segment.start + delta * t;
+        let radius = |t| {
+            let point = at(t);
+            (dist::point_segment(point, segment.first_wall.0, segment.first_wall.1).0
+                + dist::point_segment(point, segment.second_wall.0, segment.second_wall.1).0)
+                / 2.0
+        };
+        let mut retained = segment_inside_intervals(component, segment.start, segment.end);
+        for other in &present {
+            if retained.is_empty() {
+                break;
             }
-            retained
+            if dist::point_segment(other.center, segment.start, segment.end).0
+                > other.radius + tol::FLATTEN_MM
+            {
+                continue;
+            }
+            let Some(larger) = convex_sublevel_interval(radius, other.radius - tol::EPSILON_MM)
+            else {
+                continue;
+            };
+            let Some(contained) = convex_sublevel_interval(
+                |t| at(t).distance_to(other.center) + radius(t),
+                other.radius + tol::FLATTEN_MM,
+            ) else {
+                continue;
+            };
+            let removed = (larger.0.max(contained.0), larger.1.min(contained.1));
+            if removed.0 >= removed.1 {
+                continue;
+            }
+            retained = retained
                 .into_iter()
-                .filter_map(move |(start, end)| {
-                    let (start, end) = (at(start), at(end));
-                    (start.distance_to(end) > contact_tolerance).then_some(WidthAxisSegment {
-                        start,
-                        end,
-                        ..segment
-                    })
+                .flat_map(|(start, end)| {
+                    let mut pieces = Vec::with_capacity(2);
+                    if start < removed.0 {
+                        pieces.push((start, end.min(removed.0)));
+                    }
+                    if end > removed.1 {
+                        pieces.push((start.max(removed.1), end));
+                    }
+                    pieces
                 })
-                .collect::<Vec<_>>()
+                .collect();
+        }
+        retained
+            .into_iter()
+            .filter_map(move |(start, end)| {
+                let (start, end) = (at(start), at(end));
+                (start.distance_to(end) > contact_tolerance).then_some(WidthAxisSegment {
+                    start,
+                    end,
+                    ..segment
+                })
+            })
+            .collect::<Vec<_>>()
+    });
+    // Voronoi vertices are the zero-dimensional cells of the same medial-axis
+    // complex. Preserve the maximal ones as zero-length axis segments so
+    // islands and symmetric tips use the exact same construction as spans.
+    let vertex_axis = at_vertices
+        .into_iter()
+        .filter(|(disk, _)| {
+            component.contains_point(disk.center)
+                && disk.radius <= clearance(disk.center) + contact_tolerance
+                && disk.width().mm > 2.0 * contact_tolerance
+                && !pruned(disk)
         })
-        .collect();
+        .map(|(_, segment)| segment);
+    let axis = span_axis.chain(vertex_axis).collect();
     Some(ComponentWidth {
         disk: minimum,
         axis,
@@ -1855,29 +1937,7 @@ fn component_width(
 /// void, whatever their relative angle; same-ring contacts must oppose, so
 /// the rounded bite of one smooth concavity is not mistaken for a gap.
 fn two_sided_gap_residual(source: &ContourSet, residual: &ContourSet) -> ContourSet {
-    let source_segments = source
-        .rings
-        .iter()
-        .enumerate()
-        .flat_map(|(ring_id, ring)| {
-            (0..ring.len()).filter_map(move |index| {
-                let [start_x, start_y] = ring[index];
-                let [end_x, end_y] = ring[(index + 1) % ring.len()];
-                let start = Point::new(start_x, start_y);
-                let end = Point::new(end_x, end_y);
-                (start.distance_to(end) > source.tolerance).then_some(OrientedBoundarySegment {
-                    topology: BoundarySegment {
-                        ring: ring_id,
-                        index,
-                        ring_len: ring.len(),
-                    },
-                    start,
-                    end,
-                    bbox: segment_bbox(start, end),
-                })
-            })
-        })
-        .collect::<Vec<_>>();
+    let source_segments = source_boundary_segments(source);
     let contact_tolerance = source.tolerance.max(residual.tolerance);
 
     let rings = residual
@@ -1943,9 +2003,7 @@ fn boundary_tangents_oppose(
     left: &OrientedBoundarySegment,
     right: &OrientedBoundarySegment,
 ) -> bool {
-    let left_tangent = left.end - left.start;
-    let right_tangent = right.end - right.start;
-    left_tangent.x * right_tangent.x + left_tangent.y * right_tangent.y < 0.0
+    left.tangent.x * right.tangent.x + left.tangent.y * right.tangent.y < 0.0
 }
 
 /// Keep-out whose removal widens every narrow void: a radius-`radius` tube
@@ -2364,6 +2422,7 @@ mod tests {
             },
             start: Point::new(start.0, start.1),
             end: Point::new(end.0, end.1),
+            tangent: Point::new(end.0 - start.0, end.1 - start.1),
             bbox: segment_bbox(Point::new(start.0, start.1), Point::new(end.0, end.1)),
         };
         // A right-to-left host touched at two interior points by other rings.
@@ -2378,7 +2437,7 @@ mod tests {
 
         let host = grid
             .iter()
-            .filter(|(_, topology)| topology.index == 0)
+            .filter(|(_, site)| site.topology.index == 0)
             .map(|(line, _)| line)
             .collect::<Vec<_>>();
         assert_eq!(host.len(), 3);
