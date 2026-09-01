@@ -860,13 +860,15 @@ fn drill_span(
         None => copper_span(span, layers),
     };
     let (first_copper_index, last_copper_index) = resolved.unwrap_or(whole_stack);
+    let declared_through = matches!(span, FeatureSpan::ThroughBoard)
+        || resolved.is_some_and(|resolved| resolved == whole_stack);
     DrillSpan {
         first_copper_index,
         last_copper_index,
-        interpretation: match span {
-            FeatureSpan::ThroughBoard => "declared_through_board",
-            _ if resolved.is_some() => "declared_layer_span",
-            _ => "assumed_whole_stack",
+        interpretation: match (declared_through, resolved) {
+            (true, _) => "declared_through_board",
+            (false, Some(_)) => "declared_layer_span",
+            (false, None) => "assumed_whole_stack",
         },
     }
 }

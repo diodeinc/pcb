@@ -135,7 +135,7 @@ mod tests {
     <Layer name="INNER2" layerFunction="SIGNAL" side="INTERNAL" polarity="POSITIVE"/>
     <Layer name="INNER1" layerFunction="SIGNAL" side="INTERNAL" polarity="POSITIVE"/>
     <Layer name="BOTTOM" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>
-    <Layer name="DRILL" layerFunction="DRILL" side="ALL" polarity="POSITIVE"/>
+    <Layer name="DRILL" layerFunction="DRILL" side="ALL" polarity="POSITIVE"><Span fromLayer="TOP" toLayer="BOTTOM"/></Layer>
     <Layer name="BLIND" layerFunction="DRILL" side="ALL" polarity="POSITIVE"><Span fromLayer="TOP" toLayer="INNER1"/></Layer>
     <Layer name="BURIED" layerFunction="DRILL" side="ALL" polarity="POSITIVE"><Span fromLayer="INNER1" toLayer="INNER2"/></Layer>
     <Stackup name="Primary" overallThickness="1.6" whereMeasured="METAL">
