@@ -33,30 +33,16 @@ struct Selection {
 }
 
 impl Selection {
-    fn metadata_fields(
-        &self,
-    ) -> (
-        &Uuid,
-        &str,
-        &str,
-        Option<&str>,
-        Option<&str>,
-        Option<&str>,
-        Option<&str>,
-        Option<&str>,
-        &[String],
-    ) {
-        (
-            &self.manufacturer_id,
-            &self.manufacturer,
-            &self.mpn,
-            self.distributor.as_deref(),
-            self.distributor_part_id.as_deref(),
-            self.external_part_library.as_deref(),
-            self.external_part_library_mpn.as_deref(),
-            self.external_part_identifier.as_deref(),
-            &self.mpn_aliases,
-        )
+    fn has_same_metadata(&self, other: &Self) -> bool {
+        self.manufacturer_id == other.manufacturer_id
+            && self.manufacturer == other.manufacturer
+            && self.mpn == other.mpn
+            && self.distributor == other.distributor
+            && self.distributor_part_id == other.distributor_part_id
+            && self.external_part_library == other.external_part_library
+            && self.external_part_library_mpn == other.external_part_library_mpn
+            && self.external_part_identifier == other.external_part_identifier
+            && self.mpn_aliases == other.mpn_aliases
     }
 }
 
@@ -327,7 +313,7 @@ fn resolve_selections<'a>(
         let selection = resolved_selection.selection;
         if let Some(&index) = index_by_oem.get(&resolved_selection.oem_design_number) {
             let previous = deduplicated[index].selection;
-            if previous.metadata_fields() != selection.metadata_fields() {
+            if !previous.has_same_metadata(selection) {
                 anyhow::bail!(
                     "Selections for paths {} and {} resolve to OEM {} but have differing metadata",
                     previous.path,
