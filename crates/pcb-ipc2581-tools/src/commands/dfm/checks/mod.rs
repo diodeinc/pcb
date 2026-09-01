@@ -11,6 +11,7 @@
 mod annular_ring;
 mod board_array_spacing;
 mod copper_clearance;
+mod hole_aspect_ratio;
 mod hole_diameter;
 mod hole_pair_clearance;
 mod layer_count;
@@ -105,9 +106,30 @@ struct CountEvaluation {
     subjects: Vec<Subject>,
 }
 
+struct RatioMeasured {
+    actual_ratio: f64,
+    drilled_span_thickness_mm: f64,
+    finished_hole_diameter_mm: f64,
+    thickness_source: &'static str,
+    center: Point,
+    bbox: BBox,
+    layers: Vec<LayerRef>,
+    subjects: Vec<Subject>,
+    evidence: Vec<Evidence>,
+    note: String,
+}
+
+struct RatioEvaluation {
+    checked: usize,
+    measured: Vec<RatioMeasured>,
+    incomplete_reason: Option<String>,
+    assumptions: Vec<String>,
+}
+
 enum RuleEvaluation {
     Distance(Evaluation),
     Count(CountEvaluation),
+    Ratio(RatioEvaluation),
 }
 
 impl From<Evaluation> for RuleEvaluation {
@@ -162,6 +184,28 @@ pub(super) fn run(
                                 .push(count_finding(rule, evaluation, limit));
                         }
                     }
+                    RuleEvaluation::Ratio(evaluation) => {
+                        debug_assert_eq!(rule.comparison, Comparison::Maximum);
+                        result.assumptions = evaluation.assumptions;
+                        if let Some(reason) = evaluation.incomplete_reason {
+                            result.skip(reason);
+                        } else if evaluation.checked == 0 {
+                            result.skip(format!(
+                                "no measurable {} subjects in the selected layout target",
+                                rule.kind.semantics().subject
+                            ));
+                        } else {
+                            result.checked = evaluation.checked;
+                            let maximum = rule.limit.ratio();
+                            results.findings.extend(
+                                evaluation
+                                    .measured
+                                    .into_iter()
+                                    .filter(|measured| measured.actual_ratio > maximum)
+                                    .map(|measured| ratio_finding(rule, measured, maximum)),
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -173,7 +217,10 @@ pub(super) fn run(
     for finding in &results.findings {
         assert_eq!(
             !finding.sites.is_empty(),
-            matches!(finding.measurement, Measurement::Distance { .. }),
+            matches!(
+                finding.measurement,
+                Measurement::Distance { .. } | Measurement::Ratio { .. }
+            ),
             "finding {} violates the spatial-site contract",
             finding.rule_id,
         );
@@ -241,7 +288,9 @@ fn skip_reason(rule: &Rule, design: &Design) -> Option<String> {
         }
         RuleKind::BoardArrayPairClearance => (design.board_arrays.len() < 2)
             .then(|| "two or more direct board-array instances".to_owned()),
-        RuleKind::HoleDiameter(class) | RuleKind::AnnularRing(class) => design
+        RuleKind::HoleDiameter(class)
+        | RuleKind::HoleAspectRatio(class)
+        | RuleKind::AnnularRing(class) => design
             .holes
             .iter()
             .all(|hole| hole.class != class)
@@ -290,6 +339,9 @@ fn evaluate(rule: &Rule, design: &Design) -> RuleEvaluation {
     match rule.kind {
         RuleKind::CopperLayerCount => RuleEvaluation::Count(layer_count::evaluate(design)),
         RuleKind::HoleDiameter(class) => hole_diameter::evaluate(limit(), class, design).into(),
+        RuleKind::HoleAspectRatio(class) => {
+            RuleEvaluation::Ratio(hole_aspect_ratio::evaluate(class, &rule.conditions, design))
+        }
         RuleKind::SlotWidth(plating) => slot_width::evaluate(limit(), plating, design).into(),
         RuleKind::HolePairClearance(first, second) => {
             hole_pair_clearance::evaluate(limit(), first, second, design).into()
@@ -449,6 +501,56 @@ fn count_finding(rule: &Rule, measured: CountEvaluation, limit: u32) -> Finding 
         subjects: measured.subjects,
         evidence: Vec::new(),
         sites: Vec::new(),
+        group_key: None,
+    }
+}
+
+fn ratio_finding(rule: &Rule, measured: RatioMeasured, maximum: f64) -> Finding {
+    let semantics = rule.kind.semantics();
+    let measurement = Measurement::maximum_ratio(
+        measured.actual_ratio,
+        maximum,
+        measured.drilled_span_thickness_mm,
+        measured.finished_hole_diameter_mm,
+        measured.thickness_source,
+    );
+    let site = Site {
+        id: String::new(),
+        measurement: measurement.clone(),
+        measurement_kind: MeasurementKind::AspectRatio,
+        uncertainty_mm: 0.0,
+        witnesses: Vec::new(),
+        bounding_box: measured.bbox.into(),
+        layers: measured.layers.clone(),
+        subjects: measured.subjects.clone(),
+        evidence: measured.evidence.clone(),
+        note: Some(measured.note),
+    };
+    Finding {
+        id: String::new(),
+        rule_id: rule.id.clone(),
+        severity: rule.severity,
+        waived: false,
+        waiver_reason: None,
+        title: semantics.finding_title,
+        message: format!(
+            "{} is {:.6} ({:.6} mm drilled span / {:.6} mm finished diameter); the PDK permits at most {maximum:.6}; thickness source is {}",
+            semantics.quantity_label,
+            measured.actual_ratio,
+            measured.drilled_span_thickness_mm,
+            measured.finished_hole_diameter_mm,
+            measured.thickness_source,
+        ),
+        measurement,
+        location: Location {
+            point: Some(measured.center.into()),
+            bounding_box: Some(measured.bbox.into()),
+            witnesses: Vec::new(),
+        },
+        layers: measured.layers,
+        subjects: measured.subjects,
+        evidence: measured.evidence,
+        sites: vec![site],
         group_key: None,
     }
 }
@@ -697,6 +799,7 @@ fn repeat_group_key(finding: &Finding, inverse: Affine2) -> Option<String> {
         let measurement = match site.measurement {
             Measurement::Distance { actual_mm, required_mm, .. } => [quantize(actual_mm), quantize(required_mm)],
             Measurement::Count { actual_count, required_count, .. } => [f64::from(actual_count), f64::from(required_count)],
+            Measurement::Ratio { actual_ratio, maximum_ratio, .. } => [quantize(actual_ratio), quantize(maximum_ratio)],
         };
         let evidence = site.evidence.iter().map(|evidence| serde_json::json!({
             "role": evidence.role, "kind": evidence.kind,

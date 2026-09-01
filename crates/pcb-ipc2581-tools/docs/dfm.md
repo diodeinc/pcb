@@ -47,6 +47,12 @@ select = { hole = "via" }
 limit = { minimum = "0.2 mm", preferred = "0.25 mm" }
 source = "capabilities"
 
+[[rules.drilling.hole_aspect_ratio]]
+id = "drilling.via_aspect_ratio"
+select = { hole = "via" }
+limit = { maximum = 8.0 }
+source = "capabilities"
+
 [[rules.drilling.slot_width]]
 id = "drilling.plated_slot"
 select = { plating = "plated" }
@@ -87,8 +93,10 @@ The schema gives each kind of constraint one place:
   PDK authors do not write layer-count DFM rules.
 - `select` identifies the physical subjects a rule measures. Hole rules select
   `via`, `pth`, or `npth`; slots select `plated` or `nonplated`; hole-pair rules
-  state both classes.
-- `limit` defines one unconditional minimum and an optional preferred value.
+  state both classes. Hole-aspect-ratio rules accept only plated `via` or `pth`
+  holes; selecting `npth` is a schema error.
+- `limit` defines one unconditional dimensional minimum and optional preferred
+  value, or one required aspect-ratio maximum.
 - `cases` defines named conditional limits when one value is not enough. A
   rule uses either `limit` or `cases`, never both.
 - `profile.defaults` records missing-data assumptions. Copper weight defaults
@@ -107,7 +115,9 @@ technology reliably enough for qualification.
 
 Layer counts are positive integers. Every dimensional minimum is a positive
 string containing a number and `mm`, `mil`, `mils`, or `um`; copper weight is a
-positive `oz` string. Units can be mixed. Checks normalize lengths to
+positive `oz` string. A hole-aspect-ratio `limit.maximum` is a positive finite
+unitless number; zero, nonfinite, string-valued, and otherwise malformed ratios
+are rejected. Units can be mixed. Checks normalize lengths to
 millimeters and retain both source spelling and normalized value. Profile
 defaults document an order's assumptions in the report; an outer/inner copper
 weight default is also the fallback for a weight-conditioned rule when the
@@ -124,6 +134,10 @@ tier:
   and counted but do not fail the verdict. The preferred value must exceed the
   minimum.
 
+Each direct or named-case hole-aspect-ratio limit instead has one required
+**error**-severity `maximum`; values above it fail the rule. It has no preferred
+tier.
+
 Rule ids, profile metadata, source citations, and the exact PDK TOML are
 retained in the report for auditability.
 
@@ -138,6 +152,7 @@ high-level pass is never allowed to suppress a later authoritative failure.
 | --- | --- | --- |
 | Profile copper-layer support | Conductive layers in the one physical IPC stackup | None |
 | Hole diameter | Materialized IPC drill primitive and plating class | None |
+| Plated-hole aspect ratio | Physical IPC stackup thickness over the resolved circular drill span, divided by finished hole diameter | None |
 | Nominal slot width | IPC slot primitive width | None |
 | Outline slot width | Materialized filled route outline, then its narrowest maximal inscribed disk | None |
 | Hole-to-hole clearance | Materialized drill circles and overlapping drill spans | Sorted bounds prune pairs already proven clear |
@@ -158,6 +173,11 @@ minimum only when the measured value falls short beyond its own uncertainty,
 so curve tessellation by itself cannot manufacture a violation. Profile
 copper-layer qualification instead compares one exact integer with the
 configured support bounds.
+
+Aspect ratio is a scalar rather than a geometric distance. Its spatial site and
+circle evidence identify the hole, while its measurement records the actual
+unitless ratio, maximum, drilled-span thickness, finished diameter, and
+thickness source. Witness separation does not encode the ratio.
 
 Morphological opening and closing are deliberately candidate stages for width
 and soldermask-web checks. Each candidate residue is measured on the medial
@@ -199,6 +219,16 @@ when fewer than two exist.
   narrowest local width. Drill extraction fails rather than silently
   discarding a hole whose plating class or diameter is missing, or a slot
   whose stated width its outline contradicts.
+- Hole aspect ratio is physical drilled-span thickness divided by finished
+  circular hole diameter. A through hole uses IPC-2581 `overallThickness` when
+  it is positive and finite, otherwise a complete sum of physical stackup
+  layer thicknesses. A resolved blind or buried hole sums only layers from its
+  first copper endpoint through its last endpoint, inclusive. Routed slots and
+  NPTH holes are never subjects. If IPC thickness is incomplete, a selected
+  profile's `defaults.board_thickness` may be assumed only for a declared
+  through hole; the rule reports that assumption. An incomplete resolved span,
+  or an incomplete through span without that default, skips the rule with the
+  precise missing-data reason rather than claiming a pass.
 - Hole-to-hole clearance measures edge-to-edge distance between hole pairs
   whose drill spans overlap; stacked blind and buried vias on disjoint spans
   do not interact.
@@ -276,11 +306,14 @@ which depends on the chosen routing, mouse-bite, or V-cut process. The
 standard-color profile uses the published 0.10 mm mask web; the black/white
 profile uses 0.13 mm.
 
-The nine IPC built-ins model performance Classes 1-3 crossed with
-Producibility Levels A-C and identify IPC's public 0.125-6 oz coverage. They
-are `metadata_only`: IPC publishes the taxonomy, but the numeric Advanced DFM
-profile matrices are licensed data and are not redistributed here. Selecting
-one returns an incomplete-check error instead of claiming IPC compliance.
+The nine `ipc-1a` through `ipc-3c` built-ins preserve performance Classes 1-3
+crossed with Producibility Levels A-C, but they are executable **partial Diode
+baselines**, not IPC profile matrices. They currently check only maximum via
+and PTH aspect ratio: Level A uses 6.0, Level B 8.0, and Level C 10.0, across
+all three performance classes. Each profile assumes 1.6 mm board thickness for
+the through-hole fallback described above. Diode chose these opinionated values
+using IPC design topics as context; they are not licensed IPC numeric matrices,
+do not prove full IPC compliance, and do not imply IPC certification.
 
 Output is UTF-8 JSON on stdout unless `-o` / `--output` is supplied. The
 recommended suffix is `.dfm.json`. Every complete report includes the native
@@ -333,6 +366,8 @@ A complete report has these fields:
   `maximum`), and `checked`, the number of measurements evaluated. `view`
   specifies the diagnostic family, whether it is spatial, and its semantic
   rendering features; `tier` distinguishes required and preferred limits.
+  `assumptions` lists profile defaults actually used while evaluating that
+  rule, and is empty when no assumption was needed.
 - `findings`: violations in deterministic rule/location order.
 - `scene`: required native artwork for the complete checked layout; see
   [native scene](#native-scene).
@@ -377,7 +412,10 @@ consumer's machine to render or validate the report.
   violation; `waived` and `waiver_reason` record acceptance.
 - `measurement` carries `actual_mm`, `required_mm`, and signed `margin_mm` for
   geometry, or the corresponding `actual_count`, `required_count`, and
-  `margin_count` for discrete counts. A nonnegative margin satisfies the limit.
+  `margin_count` for discrete counts. Aspect-ratio measurements instead carry
+  `actual_ratio`, `maximum_ratio`, signed `margin_ratio`,
+  `drilled_span_thickness_mm`, `finished_hole_diameter_mm`, and
+  `thickness_source`. A nonnegative margin satisfies the limit.
   Signed annular enclosure can be negative. Do not clamp measurements or
   recompute the verdict from rounded display values.
 - `location` carries a representative point, bounding box, and role-labelled
@@ -399,7 +437,8 @@ consumer's machine to render or validate the report.
   `measurement_kind`, `witnesses`, uncertainty, bounds, layers, subjects, and
   evidence. Nonspatial findings use `sites: []`. Site bounds describe the
   finding; viewers add their own camera padding. Witness-point separation is
-  not necessarily the measured width or diameter.
+  not necessarily the measured width or diameter. Scalar aspect-ratio sites
+  have no measurement witnesses; their circle evidence locates the hole.
 - `group_key`, when available, groups proven equivalent causes for display.
   It does not replace the finding id or change the waiver unit. Every finding
   and physical occurrence remains accessible.

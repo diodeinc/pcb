@@ -13,6 +13,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Add canonical assembly IR and derive component placement data from it.
 - Derive physical electrical terminations from exact IPC-2581 pin and padstack identities.
 - Add strict profile-based DFM PDK schema v2, executable JLCPCB 1 oz profiles, and metadata-only IPC 1A-3C profiles.
+- Add maximum plated-hole aspect-ratio DFM checks and make IPC 1A-3C profiles executable with opinionated partial IPC-informed baselines.
 - Add a deterministic, versioned PCBA assembly report contract over canonical assembly and physical IR.
 - Expose PCBA assembly reports as JSON through `pcb ipc assembly`.
 
