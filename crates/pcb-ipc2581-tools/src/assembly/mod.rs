@@ -5,7 +5,11 @@ use std::collections::{BTreeSet, HashMap};
 use anyhow::{Result, bail};
 use pcb_ir::dialects::assembly as ir;
 use pcb_ir::dialects::ipc::LayoutStepKind;
-use pcb_ir::geom::{Affine2, Point as IrPoint};
+use pcb_ir::geom::path::{ContourBuf, PathCmd, PathOp};
+use pcb_ir::geom::{
+    Affine2, BBox, FillRule as IrFillRule, LineCap as IrLineCap, LineJoin as IrLineJoin,
+    LinePattern as IrLinePattern, Paint, Point as IrPoint, Polarity as IrPolarity,
+};
 use pcb_ir::import::ipc2581::{ImportedDesign, LayoutOccurrenceId};
 use pcb_ir::import::physical::LandId;
 use serde::Serialize;
@@ -30,6 +34,11 @@ pub fn build_report(imported: &ImportedDesign, target: LayoutTarget) -> Result<A
     let assembly = imported.assembly_document(scope)?;
     let physical = imported.physical_view(target.artwork_scope())?;
     let mut ids = IdAllocator::default();
+    let (profiles, profile_ids) = physical_profiles(&assembly, &mut ids);
+    let (scope_bounds, scope_area) = assembly
+        .root_step
+        .map(|step| step_envelope(&assembly.steps[step as usize]))
+        .unwrap_or((None, None));
 
     let scoped_packages = assembly
         .occurrences
@@ -50,14 +59,21 @@ pub fn build_report(imported: &ImportedDesign, target: LayoutTarget) -> Result<A
                 source_step,
                 name: package.name.clone(),
                 package_type: package.package_type.clone(),
+                pin_one: package.pin_one.clone(),
+                pin_one_orientation: package.pin_one_orientation.clone(),
                 height_mm: package.height.map(canonical_number),
+                negative_body_extension_mm: package.negative_body_extension.map(canonical_number),
+                comment: package.comment.clone(),
+                pickup_point_mm: package.pickup_point.map(point),
+                views: package.views.iter().map(package_view).collect(),
                 pins: package.pins.iter().map(package_pin).collect(),
             }
         })
         .collect::<Vec<_>>();
     packages.sort_by(|left, right| left.id.cmp(&right.id));
 
-    let (mut boards, board_ids) = board_occurrences(imported, &assembly, target, &mut ids);
+    let (mut boards, board_ids) =
+        board_occurrences(imported, &assembly, target, &profile_ids, &mut ids);
     boards.sort_by(|left, right| left.id.cmp(&right.id));
 
     let mut component_ids = HashMap::new();
@@ -266,9 +282,16 @@ pub fn build_report(imported: &ImportedDesign, target: LayoutTarget) -> Result<A
                 .root_step
                 .map(|step| assembly.steps[step as usize].name.clone()),
             coordinate_frame: "ipc_2581_design_x_right_y_up",
+            profile_ids: assembly
+                .root_step
+                .and_then(|step| profile_ids.get(&step).cloned())
+                .unwrap_or_default(),
+            bounds_mm: scope_bounds,
+            area_mm2: scope_area,
         },
         readiness,
         summary,
+        profiles,
         boards,
         packages,
         components,
@@ -322,10 +345,75 @@ fn source(imported: &ImportedDesign) -> report::Source {
     }
 }
 
+fn physical_profiles(
+    assembly: &ir::Document,
+    ids: &mut IdAllocator,
+) -> (Vec<report::PhysicalProfile>, HashMap<u32, Vec<String>>) {
+    let mut profiles = Vec::new();
+    let mut profile_ids = HashMap::new();
+    for (step_index, step) in assembly.steps.iter().enumerate() {
+        for (profile_index, profile) in step.profiles.iter().enumerate() {
+            let id = ids.allocate("profile", &(&step.name, profile_index));
+            let (profile_bounds, profile_area) = profile_envelope(profile);
+            profile_ids
+                .entry(step_index as u32)
+                .or_insert_with(Vec::new)
+                .push(id.clone());
+            profiles.push(report::PhysicalProfile {
+                id,
+                source_step: step.name.clone(),
+                bounds_mm: bounds(profile_bounds),
+                area_mm2: canonical_number(profile_area),
+                outer: contour(&profile.outer),
+                cutouts: profile.cutouts.iter().map(contour).collect(),
+            });
+        }
+    }
+    (profiles, profile_ids)
+}
+
+fn step_envelope(step: &ir::Step) -> (Option<report::Bounds>, Option<f64>) {
+    if step.profiles.is_empty() {
+        return (None, None);
+    }
+    let (profile_bounds, area) = step.profiles.iter().map(profile_envelope).fold(
+        (BBox::empty(), 0.0),
+        |(combined_bounds, combined_area), (profile_bounds, profile_area)| {
+            (
+                combined_bounds.union(profile_bounds),
+                combined_area + profile_area,
+            )
+        },
+    );
+    (Some(bounds(profile_bounds)), Some(canonical_number(area)))
+}
+
+fn profile_envelope(profile: &ir::Profile) -> (BBox, f64) {
+    let cutout_area = profile
+        .cutouts
+        .iter()
+        .map(|cutout| cutout.signed_area().abs())
+        .sum::<f64>();
+    (
+        profile.outer.bbox,
+        profile.outer.signed_area().abs() - cutout_area,
+    )
+}
+
+fn bounds(value: BBox) -> report::Bounds {
+    report::Bounds {
+        min: point(value.min),
+        max: point(value.max),
+        width: canonical_number(value.width()),
+        height: canonical_number(value.height()),
+    }
+}
+
 fn board_occurrences(
     imported: &ImportedDesign,
     assembly: &ir::Document,
     target: LayoutTarget,
+    profile_ids: &HashMap<u32, Vec<String>>,
     ids: &mut IdAllocator,
 ) -> (
     Vec<report::BoardOccurrence>,
@@ -338,12 +426,16 @@ fn board_occurrences(
             if let Some(step) = assembly.root_step {
                 let path = root_path(imported, step);
                 let transform = affine(Affine2::IDENTITY);
+                let (bounds_mm, area_mm2) = step_envelope(&assembly.steps[step as usize]);
                 let id = ids.allocate("board", &(&path, transform));
                 board_ids.insert(LayoutOccurrenceId::Root, id.clone());
                 boards.push(report::BoardOccurrence {
                     id,
                     step: assembly.steps[step as usize].name.clone(),
                     path,
+                    profile_ids: profile_ids.get(&step).cloned().unwrap_or_default(),
+                    bounds_mm,
+                    area_mm2,
                     transform,
                 });
             }
@@ -356,6 +448,7 @@ fn board_occurrences(
             {
                 let path = root_path(imported, root);
                 let transform = affine(Affine2::IDENTITY);
+                let (bounds_mm, area_mm2) = step_envelope(&assembly.steps[root as usize]);
                 let id = ids.allocate("board", &(&path, transform));
                 board_ids.insert(LayoutOccurrenceId::Root, id.clone());
                 boards.push(report::BoardOccurrence {
@@ -364,6 +457,9 @@ fn board_occurrences(
                         .resolve(layout.steps[root as usize].source_step_ref)
                         .to_owned(),
                     path,
+                    profile_ids: profile_ids.get(&root).cloned().unwrap_or_default(),
+                    bounds_mm,
+                    area_mm2,
                     transform,
                 });
             }
@@ -373,12 +469,20 @@ fn board_occurrences(
                 let occurrence = LayoutOccurrenceId::Instance(index as u32);
                 let path = layout_path(imported, target, occurrence, instance.child_step);
                 let transform = affine(instance.transform);
+                let (bounds_mm, area_mm2) =
+                    step_envelope(&assembly.steps[instance.child_step as usize]);
                 let id = ids.allocate("board", &(&path, transform));
                 board_ids.insert(occurrence, id.clone());
                 boards.push(report::BoardOccurrence {
                     id,
                     step: imported.resolve(instance.source_step_ref).to_owned(),
                     path,
+                    profile_ids: profile_ids
+                        .get(&instance.child_step)
+                        .cloned()
+                        .unwrap_or_default(),
+                    bounds_mm,
+                    area_mm2,
                     transform,
                 });
             }
@@ -656,6 +760,170 @@ fn summarize(
     }
 }
 
+fn package_view(view: &ir::PackageView) -> report::PackageView {
+    report::PackageView {
+        kind: match view.kind {
+            ir::PackageViewKind::Primary => report::PackageViewKind::Primary,
+            ir::PackageViewKind::Topside => report::PackageViewKind::Topside,
+            ir::PackageViewKind::OtherSide => report::PackageViewKind::OtherSide,
+        },
+        outline: view.outline.as_ref().map(package_outline),
+        land_pattern: view
+            .land_pattern
+            .as_ref()
+            .map(|land_pattern| report::PackageLandPattern {
+                pads: land_pattern
+                    .pads
+                    .iter()
+                    .map(|pad| report::PackagePad {
+                        padstack_ref: pad.padstack_ref.clone(),
+                        x_mm: pad.x.map(canonical_number),
+                        y_mm: pad.y.map(canonical_number),
+                        transform: pad.transform.map(source_transform),
+                        graphic: pad.graphic.as_ref().map(package_graphic),
+                        pin_ref: pad.pin_ref.as_ref().map(|pin| report::PackagePinReference {
+                            component_ref: pin.component_ref.clone(),
+                            pin: pin.pin.clone(),
+                            title: pin.title.clone(),
+                        }),
+                    })
+                    .collect(),
+                targets: land_pattern
+                    .targets
+                    .iter()
+                    .map(|target| report::PackageTarget {
+                        location_mm: point(target.location),
+                        transform: target.transform.map(source_transform),
+                        shape: package_shape(&target.shape),
+                    })
+                    .collect(),
+            }),
+        silkscreen: view
+            .silkscreen
+            .as_ref()
+            .map(|silkscreen| report::PackageSilkscreen {
+                outlines: silkscreen.outlines.iter().map(package_outline).collect(),
+                markings: silkscreen.markings.iter().map(package_marking).collect(),
+            }),
+        assembly_drawing: view.assembly_drawing.as_ref().map(|drawing| {
+            report::PackageAssemblyDrawing {
+                outline: drawing.outline.as_ref().map(package_outline),
+                markings: drawing.markings.iter().map(package_marking).collect(),
+            }
+        }),
+    }
+}
+
+fn package_marking(marking: &ir::PackageMarking) -> report::PackageMarking {
+    report::PackageMarking {
+        usage: marking.usage.clone(),
+        location_mm: marking.location.map(point),
+        transform: marking.transform.map(source_transform),
+        graphic: package_graphic(&marking.graphic),
+    }
+}
+
+fn package_outline(outline: &ir::PackageOutline) -> report::PackageOutline {
+    report::PackageOutline {
+        transform: outline.transform.map(source_transform),
+        shape: package_shape(&outline.shape),
+    }
+}
+
+fn package_graphic(graphic: &ir::PackageGraphic) -> report::PackageGraphic {
+    match graphic {
+        ir::PackageGraphic::Shape(shape) => report::PackageGraphic::Shape(package_shape(shape)),
+        ir::PackageGraphic::Text(text) => report::PackageGraphic::Text(report::PackageText {
+            text: text.text.clone(),
+            font_size: text.font_size,
+            font_size_source: text.font_size_raw.clone(),
+            transform: text.transform.map(source_transform),
+            bounds_mm: bounds(BBox::new(text.lower_left, text.upper_right)),
+            font_ref: text.font_ref.clone(),
+        }),
+        ir::PackageGraphic::Outline(outline) => {
+            report::PackageGraphic::Outline(package_outline(outline))
+        }
+    }
+}
+
+fn package_shape(shape: &ir::PackageShape) -> report::PackageShape {
+    report::PackageShape {
+        status: match shape.status {
+            ir::PackageGeometryStatus::Complete => report::PackageGeometryStatus::Complete,
+            ir::PackageGeometryStatus::Partial => report::PackageGeometryStatus::Partial,
+            ir::PackageGeometryStatus::Unresolved => report::PackageGeometryStatus::Unresolved,
+            ir::PackageGeometryStatus::Unsupported => report::PackageGeometryStatus::Unsupported,
+        },
+        references: shape
+            .references
+            .iter()
+            .map(|reference| report::PackageGeometryReference {
+                kind: match reference.kind {
+                    ir::PackageGeometryReferenceKind::StandardPrimitive => {
+                        report::PackageGeometryReferenceKind::StandardPrimitive
+                    }
+                    ir::PackageGeometryReferenceKind::UserPrimitive => {
+                        report::PackageGeometryReferenceKind::UserPrimitive
+                    }
+                    ir::PackageGeometryReferenceKind::LineDescription => {
+                        report::PackageGeometryReferenceKind::LineDescription
+                    }
+                    ir::PackageGeometryReferenceKind::FillDescription => {
+                        report::PackageGeometryReferenceKind::FillDescription
+                    }
+                },
+                id: reference.id.clone(),
+            })
+            .collect(),
+        polarity: match shape.polarity {
+            IrPolarity::Dark => report::GeometryPolarity::Dark,
+            IrPolarity::Clear => report::GeometryPolarity::Clear,
+        },
+        paths: shape
+            .paths
+            .iter()
+            .map(|path| report::GeometryPath {
+                paint: path_paint(path.paint),
+                contours: path.contours.iter().map(contour).collect(),
+            })
+            .collect(),
+    }
+}
+
+fn path_paint(paint: Paint) -> report::PathPaint {
+    match paint {
+        Paint::None => report::PathPaint::None,
+        Paint::Fill { rule } => report::PathPaint::Fill {
+            rule: match rule {
+                IrFillRule::NonZero => report::FillRule::NonZero,
+                IrFillRule::EvenOdd => report::FillRule::EvenOdd,
+            },
+        },
+        Paint::Stroke(stroke) => report::PathPaint::Stroke {
+            width_mm: canonical_number(stroke.width),
+            cap: match stroke.cap {
+                IrLineCap::Round => report::LineCap::Round,
+                IrLineCap::Square => report::LineCap::Square,
+                IrLineCap::Butt => report::LineCap::Butt,
+            },
+            join: match stroke.join {
+                IrLineJoin::Round => report::LineJoin::Round,
+                IrLineJoin::Miter => report::LineJoin::Miter,
+                IrLineJoin::Bevel => report::LineJoin::Bevel,
+            },
+            pattern: match stroke.pattern {
+                IrLinePattern::Solid => report::LinePattern::Solid,
+                IrLinePattern::Dotted => report::LinePattern::Dotted,
+                IrLinePattern::Dashed => report::LinePattern::Dashed,
+                IrLinePattern::Center => report::LinePattern::Center,
+                IrLinePattern::Phantom => report::LinePattern::Phantom,
+                IrLinePattern::Erase => report::LinePattern::Erase,
+            },
+        },
+    }
+}
+
 fn package_pin(pin: &ir::PackagePin) -> report::PackagePin {
     report::PackagePin {
         view: match pin.view {
@@ -692,14 +960,8 @@ fn package_pin(pin: &ir::PackagePin) -> report::PackagePin {
             ir::PackagePinPolarity::Cathode => report::PinPolarity::Cathode,
         }),
         location_mm: pin.location.map(point),
-        transform: pin.transform.map(|transform| report::SourceTransform {
-            x_offset_mm: canonical_number(transform.x_offset),
-            y_offset_mm: canonical_number(transform.y_offset),
-            rotation_degrees: canonical_number(transform.rotation_degrees),
-            mirror: transform.mirror,
-            face_up: transform.face_up,
-            scale: canonical_number(transform.scale),
-        }),
+        transform: pin.transform.map(source_transform),
+        shape: package_shape(&pin.shape),
     }
 }
 
@@ -801,6 +1063,52 @@ fn point(value: IrPoint) -> report::Point {
     report::Point {
         x: canonical_number(value.x),
         y: canonical_number(value.y),
+    }
+}
+
+fn contour(value: &ContourBuf) -> report::Contour {
+    report::Contour {
+        commands: value.cmds.iter().copied().map(path_command).collect(),
+    }
+}
+
+fn path_command(value: PathCmd) -> report::PathCommand {
+    match value.op {
+        PathOp::MoveTo => report::PathCommand::MoveTo {
+            x: canonical_number(value.p0.x),
+            y: canonical_number(value.p0.y),
+        },
+        PathOp::LineTo => report::PathCommand::LineTo {
+            x: canonical_number(value.p0.x),
+            y: canonical_number(value.p0.y),
+        },
+        PathOp::ArcTo => report::PathCommand::ArcTo {
+            x: canonical_number(value.p0.x),
+            y: canonical_number(value.p0.y),
+            center_x: canonical_number(value.p1.x),
+            center_y: canonical_number(value.p1.y),
+            clockwise: value.clockwise,
+        },
+        PathOp::CubicTo => report::PathCommand::CubicTo {
+            control_1_x: canonical_number(value.p0.x),
+            control_1_y: canonical_number(value.p0.y),
+            control_2_x: canonical_number(value.p1.x),
+            control_2_y: canonical_number(value.p1.y),
+            x: canonical_number(value.p2.x),
+            y: canonical_number(value.p2.y),
+        },
+        PathOp::Close => report::PathCommand::Close,
+    }
+}
+
+fn source_transform(value: ir::Transform) -> report::SourceTransform {
+    report::SourceTransform {
+        x_offset_mm: canonical_number(value.x_offset),
+        y_offset_mm: canonical_number(value.y_offset),
+        rotation_degrees: canonical_number(value.rotation_degrees),
+        mirror: value.mirror,
+        face_up: value.face_up,
+        scale: canonical_number(value.scale),
     }
 }
 

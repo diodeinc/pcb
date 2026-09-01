@@ -235,9 +235,10 @@ struct LayoutInstanceSpec {
 }
 
 struct ExtractContext<'a> {
-    ipc: &'a Ipc2581,
+    strings: &'a Interner,
     padstacks: HashMap<Symbol, &'a ipc2581::types::PadStackDef>,
     line_descs: HashMap<Symbol, ipc2581::types::LineDesc>,
+    fill_descs: HashMap<Symbol, ipc2581::types::FillDesc>,
     standard_primitives: HashMap<Symbol, &'a StandardPrimitive>,
     user_primitives: HashMap<Symbol, &'a UserPrimitive>,
 }
@@ -1490,7 +1491,7 @@ pub fn extract_step_layer_local(
 ) -> Result<GeometryDocument> {
     let content = ipc.content();
     let context = ExtractContext {
-        ipc,
+        strings: ipc.interner(),
         padstacks: step
             .padstack_defs
             .iter()
@@ -1501,6 +1502,12 @@ pub fn extract_step_layer_local(
             .entries
             .iter()
             .map(|entry| (entry.id, entry.line_desc))
+            .collect(),
+        fill_descs: content
+            .dictionary_fill_desc
+            .entries
+            .iter()
+            .map(|entry| (entry.id, entry.fill_desc))
             .collect(),
         standard_primitives: content
             .dictionary_standard
@@ -2350,8 +2357,8 @@ fn extract_pad(
     let Some(primitive_ref) = pad_primitive_ref(pad, padstack, layer_ref) else {
         doc.warn(format!(
             "Skipping padstack '{}' because it has no regular primitive for layer '{}'",
-            context.ipc.resolve(padstack_ref),
-            context.ipc.resolve(layer_ref)
+            context.strings.resolve(padstack_ref),
+            context.strings.resolve(layer_ref)
         ));
         return Ok(None);
     };
@@ -2363,8 +2370,8 @@ fn extract_pad(
             let Some(primitive) = context.standard_primitives.get(&primitive_ref).copied() else {
                 doc.warn(format!(
                     "Skipping padstack '{}' because primitive '{}' is missing",
-                    context.ipc.resolve(padstack_ref),
-                    context.ipc.resolve(primitive_ref)
+                    context.strings.resolve(padstack_ref),
+                    context.strings.resolve(primitive_ref)
                 ));
                 return Ok(None);
             };
@@ -2374,8 +2381,8 @@ fn extract_pad(
             let Some(primitive) = context.user_primitives.get(&primitive_ref).copied() else {
                 doc.warn(format!(
                     "Skipping padstack '{}' because user primitive '{}' is missing",
-                    context.ipc.resolve(padstack_ref),
-                    context.ipc.resolve(primitive_ref)
+                    context.strings.resolve(padstack_ref),
+                    context.strings.resolve(primitive_ref)
                 ));
                 return Ok(None);
             };
@@ -2479,7 +2486,7 @@ fn extract_feature_primitive(
             else {
                 doc.warn(format!(
                     "Skipping feature because standard primitive '{}' is missing",
-                    context.ipc.resolve(primitive_ref.id)
+                    context.strings.resolve(primitive_ref.id)
                 ));
                 return Ok(Vec::new());
             };
@@ -2492,7 +2499,7 @@ fn extract_feature_primitive(
             let Some(primitive) = context.user_primitives.get(&primitive_ref.id).copied() else {
                 doc.warn(format!(
                     "Skipping feature because user primitive '{}' is missing",
-                    context.ipc.resolve(primitive_ref.id)
+                    context.strings.resolve(primitive_ref.id)
                 ));
                 return Ok(Vec::new());
             };
@@ -2598,7 +2605,7 @@ fn extract_fiducial(
             let Some(primitive) = context.standard_primitives.get(primitive_ref).copied() else {
                 doc.warn(format!(
                     "Skipping fiducial because standard primitive '{}' is missing",
-                    context.ipc.resolve(*primitive_ref)
+                    context.strings.resolve(*primitive_ref)
                 ));
                 return Ok(None);
             };
@@ -2683,7 +2690,7 @@ fn extract_trace(
     let Some(line_desc) = context.line_descs.get(&line_desc_ref).copied() else {
         doc.warn(format!(
             "Skipping trace referencing missing LineDesc '{}'",
-            context.ipc.resolve(line_desc_ref)
+            context.strings.resolve(line_desc_ref)
         ));
         return None;
     };
@@ -3090,7 +3097,7 @@ fn lower_standard_primitive(
     primitive: &StandardPrimitive,
     transform: Affine2,
 ) -> Result<PrimitivePaint> {
-    let paint = primitive_paint(primitive);
+    let paint = primitive_paint(context, primitive);
     if standard_primitive_has_no_area(primitive) {
         return Ok(paint);
     }
@@ -3575,56 +3582,79 @@ fn push_polygon_path(
     doc.push_path(Paint::Fill { rule: fill_rule }, [contour]);
 }
 
-fn primitive_paint(primitive: &StandardPrimitive) -> PrimitivePaint {
-    match primitive_fill_property(primitive) {
+fn primitive_paint(context: &ExtractContext<'_>, primitive: &StandardPrimitive) -> PrimitivePaint {
+    match primitive_fill_property(context, primitive) {
         Some(FillProperty::Hollow) => PrimitivePaint::Hollow,
         Some(FillProperty::Void) => PrimitivePaint::Void,
         _ => PrimitivePaint::Fill,
     }
 }
 
-fn primitive_fill_property(primitive: &StandardPrimitive) -> Option<FillProperty> {
-    match primitive {
-        StandardPrimitive::Circle(styled) => styled.fill_property,
-        StandardPrimitive::RectCenter(styled) => styled.fill_property,
-        StandardPrimitive::RectRound(styled) => styled.fill_property,
-        StandardPrimitive::RectCham(styled) => styled.fill_property,
-        StandardPrimitive::RectCorner(styled) => styled.fill_property,
-        StandardPrimitive::Oval(styled) => styled.fill_property,
-        StandardPrimitive::Butterfly(styled) => styled.fill_property,
-        StandardPrimitive::Diamond(styled) => styled.fill_property,
-        StandardPrimitive::Donut(styled) => styled.fill_property,
-        StandardPrimitive::Ellipse(styled) => styled.fill_property,
-        StandardPrimitive::Hexagon(styled) => styled.fill_property,
-        StandardPrimitive::Octagon(styled) => styled.fill_property,
-        StandardPrimitive::Thermal(styled) => styled.fill_property,
-        StandardPrimitive::Triangle(styled) => styled.fill_property,
-        StandardPrimitive::Moire(_) | StandardPrimitive::Contour(_) => None,
-    }
+fn primitive_fill_property(
+    context: &ExtractContext<'_>,
+    primitive: &StandardPrimitive,
+) -> Option<FillProperty> {
+    let style = primitive_style(primitive);
+    style.fill_property.or_else(|| {
+        style
+            .fill_desc_ref
+            .and_then(|reference| context.fill_descs.get(&reference))
+            .map(|description| description.fill_property)
+    })
 }
 
 fn primitive_line_desc(
     context: &ExtractContext<'_>,
     primitive: &StandardPrimitive,
 ) -> Option<ipc2581::types::LineDesc> {
-    let line_desc_ref = match primitive {
-        StandardPrimitive::Circle(styled) => styled.line_desc_ref,
-        StandardPrimitive::RectCenter(styled) => styled.line_desc_ref,
-        StandardPrimitive::RectRound(styled) => styled.line_desc_ref,
-        StandardPrimitive::RectCham(styled) => styled.line_desc_ref,
-        StandardPrimitive::RectCorner(styled) => styled.line_desc_ref,
-        StandardPrimitive::Oval(styled) => styled.line_desc_ref,
-        StandardPrimitive::Butterfly(styled) => styled.line_desc_ref,
-        StandardPrimitive::Diamond(styled) => styled.line_desc_ref,
-        StandardPrimitive::Donut(styled) => styled.line_desc_ref,
-        StandardPrimitive::Ellipse(styled) => styled.line_desc_ref,
-        StandardPrimitive::Hexagon(styled) => styled.line_desc_ref,
-        StandardPrimitive::Octagon(styled) => styled.line_desc_ref,
-        StandardPrimitive::Thermal(styled) => styled.line_desc_ref,
-        StandardPrimitive::Triangle(styled) => styled.line_desc_ref,
-        StandardPrimitive::Moire(_) | StandardPrimitive::Contour(_) => None,
-    }?;
-    context.line_descs.get(&line_desc_ref).copied()
+    let style = primitive_style(primitive);
+    style.line_desc.or_else(|| {
+        style
+            .line_desc_ref
+            .and_then(|reference| context.line_descs.get(&reference).copied())
+    })
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct StandardPrimitiveStyle {
+    fill_property: Option<FillProperty>,
+    line_desc: Option<ipc2581::types::LineDesc>,
+    line_desc_ref: Option<Symbol>,
+    fill_desc_ref: Option<Symbol>,
+}
+
+fn primitive_style(primitive: &StandardPrimitive) -> StandardPrimitiveStyle {
+    fn styled<T>(styled: &ipc2581::types::Styled<T>) -> StandardPrimitiveStyle {
+        StandardPrimitiveStyle {
+            fill_property: styled
+                .fill_desc
+                .map(|description| description.fill_property)
+                .or(styled.fill_property),
+            line_desc: styled.line_desc,
+            line_desc_ref: styled.line_desc_ref,
+            fill_desc_ref: styled.fill_desc_ref,
+        }
+    }
+
+    match primitive {
+        StandardPrimitive::Circle(value) => styled(value),
+        StandardPrimitive::RectCenter(value) => styled(value),
+        StandardPrimitive::RectRound(value) => styled(value),
+        StandardPrimitive::RectCham(value) => styled(value),
+        StandardPrimitive::RectCorner(value) => styled(value),
+        StandardPrimitive::Oval(value) => styled(value),
+        StandardPrimitive::Butterfly(value) => styled(value),
+        StandardPrimitive::Diamond(value) => styled(value),
+        StandardPrimitive::Donut(value) => styled(value),
+        StandardPrimitive::Ellipse(value) => styled(value),
+        StandardPrimitive::Hexagon(value) => styled(value),
+        StandardPrimitive::Octagon(value) => styled(value),
+        StandardPrimitive::Thermal(value) => styled(value),
+        StandardPrimitive::Triangle(value) => styled(value),
+        StandardPrimitive::Moire(_) | StandardPrimitive::Contour(_) => {
+            StandardPrimitiveStyle::default()
+        }
+    }
 }
 
 fn make_paths_stroked(
@@ -4466,6 +4496,18 @@ mod tests {
 
     #[test]
     fn reads_standard_primitive_fill_properties() {
+        let ipc = Ipc2581::parse(
+            r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581"><Content roleRef="Owner"><FunctionMode mode="FABRICATION"/></Content></IPC-2581>"#,
+        )
+        .unwrap();
+        let context = ExtractContext {
+            strings: ipc.interner(),
+            padstacks: HashMap::new(),
+            line_descs: HashMap::new(),
+            fill_descs: HashMap::new(),
+            standard_primitives: HashMap::new(),
+            user_primitives: HashMap::new(),
+        };
         let circle = ipc2581::types::StandardPrimitive::Circle(ipc2581::types::Styled {
             shape: ipc2581::types::Circle { diameter: 1.0 },
             fill_property: Some(FillProperty::Hollow),
@@ -4488,8 +4530,8 @@ mod tests {
             fill_desc_ref: None,
         });
 
-        assert_eq!(primitive_paint(&circle), PrimitivePaint::Hollow);
-        assert_eq!(primitive_paint(&rect), PrimitivePaint::Void);
+        assert_eq!(primitive_paint(&context, &circle), PrimitivePaint::Hollow);
+        assert_eq!(primitive_paint(&context, &rect), PrimitivePaint::Void);
     }
 
     #[test]
@@ -4499,9 +4541,10 @@ mod tests {
         )
         .unwrap();
         let context = ExtractContext {
-            ipc: &ipc,
+            strings: ipc.interner(),
             padstacks: HashMap::new(),
             line_descs: HashMap::new(),
+            fill_descs: HashMap::new(),
             standard_primitives: HashMap::new(),
             user_primitives: HashMap::new(),
         };
@@ -4580,14 +4623,16 @@ mod tests {
             line_property: None,
         };
 
+        let ipc = Ipc2581::parse(
+            r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581"><Content roleRef="Owner"><FunctionMode mode="FABRICATION"/></Content></IPC-2581>"#,
+        )
+        .unwrap();
         let feature = extract_feature_polyline(
             &ExtractContext {
-                ipc: &Ipc2581::parse(
-                    r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581"><Content roleRef="Owner"><FunctionMode mode="FABRICATION"/></Content></IPC-2581>"#,
-                )
-                .unwrap(),
+                strings: ipc.interner(),
                 padstacks: HashMap::new(),
                 line_descs: HashMap::new(),
+                fill_descs: HashMap::new(),
                 standard_primitives: HashMap::new(),
                 user_primitives: HashMap::new(),
             },
@@ -4634,9 +4679,10 @@ mod tests {
         )
         .unwrap();
         let context = ExtractContext {
-            ipc: &ipc,
+            strings: ipc.interner(),
             padstacks: HashMap::new(),
             line_descs: HashMap::new(),
+            fill_descs: HashMap::new(),
             standard_primitives: HashMap::new(),
             user_primitives: HashMap::new(),
         };
@@ -4670,9 +4716,10 @@ mod tests {
         .unwrap();
         let entry = ipc.content().dictionary_line_desc.entries[0].clone();
         let context = ExtractContext {
-            ipc: &ipc,
+            strings: ipc.interner(),
             padstacks: HashMap::new(),
             line_descs: HashMap::from([(entry.id, entry.line_desc)]),
+            fill_descs: HashMap::new(),
             standard_primitives: HashMap::new(),
             user_primitives: HashMap::new(),
         };
@@ -4727,9 +4774,10 @@ mod tests {
         )
         .unwrap();
         let context = ExtractContext {
-            ipc: &ipc,
+            strings: ipc.interner(),
             padstacks: HashMap::new(),
             line_descs: HashMap::new(),
+            fill_descs: HashMap::new(),
             standard_primitives: HashMap::new(),
             user_primitives: HashMap::new(),
         };
@@ -4779,9 +4827,10 @@ mod tests {
         )
         .unwrap();
         let context = ExtractContext {
-            ipc: &ipc,
+            strings: ipc.interner(),
             padstacks: HashMap::new(),
             line_descs: HashMap::new(),
+            fill_descs: HashMap::new(),
             standard_primitives: HashMap::new(),
             user_primitives: HashMap::new(),
         };
@@ -4841,9 +4890,10 @@ mod tests {
         )
         .unwrap();
         let context = ExtractContext {
-            ipc: &ipc,
+            strings: ipc.interner(),
             padstacks: HashMap::new(),
             line_descs: HashMap::new(),
+            fill_descs: HashMap::new(),
             standard_primitives: HashMap::new(),
             user_primitives: HashMap::new(),
         };

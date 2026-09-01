@@ -19,6 +19,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Add a deterministic, versioned PCBA assembly report contract over canonical assembly and physical IR.
 - Expose PCBA assembly reports as JSON through `pcb ipc assembly`.
 - Preserve external part-library provenance and same-part MPN aliases in IPC-2581 BOM selections.
+- Preserve IPC-2581 package geometry and exact board and panel profiles in assembly IR and reports.
 
 ### Changed
 

@@ -7,11 +7,25 @@
     <AvlRef name="avl"/>
     <DictionaryLineDesc units="MILLIMETER">
       <EntryLineDesc id="line"><LineDesc lineWidth="0" lineEnd="ROUND"/></EntryLineDesc>
+      <EntryLineDesc id="fine"><LineDesc lineWidth="0.05" lineEnd="ROUND"/></EntryLineDesc>
     </DictionaryLineDesc>
+    <DictionaryFillDesc units="MILLIMETER">
+      <EntryFillDesc id="void"><FillDesc fillProperty="VOID"/></EntryFillDesc>
+      <EntryFillDesc id="hatch"><FillDesc fillProperty="HATCH" lineWidth="0.05" pitch1="0.2" angle1="45"/></EntryFillDesc>
+      <EntryFillDesc id="mesh"><FillDesc fillProperty="MESH" lineWidth="0.05" pitch1="0.2" pitch2="0.2" angle1="45" angle2="135"/></EntryFillDesc>
+    </DictionaryFillDesc>
     <DictionaryStandard units="MILLIMETER">
       <EntryStandard id="land"><Circle diameter="1"/></EntryStandard>
       <EntryStandard id="paste"><Circle diameter="0.6"/></EntryStandard>
+      <EntryStandard id="hollow-inline"><Circle diameter="0.4"><LineDesc lineWidth="0.05" lineEnd="ROUND"/><FillDesc fillProperty="HOLLOW"/></Circle></EntryStandard>
+      <EntryStandard id="hollow-ref"><Circle diameter="0.35"><LineDescRef id="fine"/><FillDesc fillProperty="HOLLOW"/></Circle></EntryStandard>
+      <EntryStandard id="void-ref"><Circle diameter="0.3"><FillDescRef id="void"/></Circle></EntryStandard>
+      <EntryStandard id="hatch-ref"><Circle diameter="0.2"><FillDescRef id="hatch"/></Circle></EntryStandard>
+      <EntryStandard id="mesh-ref"><Circle diameter="0.15"><FillDescRef id="mesh"/></Circle></EntryStandard>
     </DictionaryStandard>
+    <DictionaryUser units="MILLIMETER">
+      <EntryUser id="custom"><UserSpecial><Circle diameter="0.1"/></UserSpecial></EntryUser>
+    </DictionaryUser>
   </Content>
   <LogisticHeader>
     <Role id="owner" roleFunction="OWNER"/>
@@ -59,9 +73,61 @@
           <PadstackPadDef layerRef="BOTTOM" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="land"/></PadstackPadDef>
         </PadStackDef>
         <Datum x="0" y="0"/>
-        <Package name="pkg-smt" type="CHIP" pinOne="1" pinOneOrientation="OTHER" height="0.8">
-          <Outline><Polygon><PolyBegin x="0" y="0"/><PolyStepSegment x="0" y="0"/></Polygon><LineDescRef id="line"/></Outline>
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="10" y="0"/>
+            <PolyStepSegment x="10" y="8"/>
+            <PolyStepSegment x="0" y="8"/>
+            <PolyStepSegment x="0" y="0"/>
+          </Polygon>
+          <Cutout>
+            <PolyBegin x="9" y="6.5"/>
+            <PolyStepCurve x="8" y="6.5" centerX="8.5" centerY="6.5" clockwise="false"/>
+            <PolyStepCurve x="9" y="6.5" centerX="8.5" centerY="6.5" clockwise="false"/>
+          </Cutout>
+        </Profile>
+        <Package name="pkg-smt" type="CHIP" pinOne="1" pinOneOrientation="OTHER" height="0.8" negativeBodyExtension="0.1" comment="SMT body">
+          <Outline>
+            <Polygon>
+              <PolyBegin x="-1" y="-0.5"/>
+              <PolyStepSegment x="1" y="-0.5"/>
+              <PolyStepSegment x="1" y="0.5"/>
+              <PolyStepSegment x="-1" y="0.5"/>
+              <PolyStepSegment x="-1" y="-0.5"/>
+              <Xform xOffset="0.1" yOffset="0.2" rotation="5"/>
+            </Polygon>
+            <LineDesc lineWidth="0.1" lineEnd="ROUND"/>
+          </Outline>
+          <PickupPoint x="0.1" y="0.2"/>
+          <LandPattern>
+            <Pad padstackDefRef="smt-padstack"><Location x="-0.5" y="0"/><Circle diameter="0.8"/></Pad>
+            <Pad><Location x="-0.25" y="0"/><StandardPrimitiveRef id="hollow-inline"/></Pad>
+            <Pad><Location x="-0.125" y="0"/><StandardPrimitiveRef id="hollow-ref"/></Pad>
+            <Pad><Location x="0" y="0"/><StandardPrimitiveRef id="void-ref"/></Pad>
+            <Pad><Location x="0.25" y="0"/><StandardPrimitiveRef id="hatch-ref"/></Pad>
+            <Pad><Location x="0.375" y="0"/><StandardPrimitiveRef id="mesh-ref"/></Pad>
+            <Pad><Location x="0.5" y="0"/><UserPrimitiveRef id="custom"/></Pad>
+            <Target><Location x="0" y="0"/><StandardPrimitiveRef id="land"/></Target>
+          </LandPattern>
+          <SilkScreen>
+            <Outline><Polygon><PolyBegin x="-1.1" y="-0.6"/><PolyStepSegment x="1.1" y="-0.6"/><PolyStepSegment x="1.1" y="0.6"/><PolyStepSegment x="-1.1" y="0.6"/><PolyStepSegment x="-1.1" y="-0.6"/></Polygon><LineDescRef id="line"/></Outline>
+            <Marking markingUsage="REFDES"><Location x="0" y="0"/><Circle diameter="0.2"/></Marking>
+          </SilkScreen>
+          <AssemblyDrawing>
+            <Outline><Polygon><PolyBegin x="-1" y="-0.5"/><PolyStepSegment x="1" y="-0.5"/><PolyStepSegment x="1" y="0.5"/><PolyStepSegment x="-1" y="0.5"/><PolyStepSegment x="-1" y="-0.5"/></Polygon><LineDescRef id="line"/></Outline>
+            <Marking markingUsage="PARTNAME">
+              <Location x="0" y="0"/>
+              <Text textString="pkg-smt" fontSize="10"><BoundingBox lowerLeftX="-0.8" lowerLeftY="-0.2" upperRightX="0.8" upperRightY="0.2"/></Text>
+            </Marking>
+          </AssemblyDrawing>
           <Pin number="1" name="signal" type="SURFACE" electricalType="ELECTRICAL" mountType="SURFACE_MOUNT_PAD"><Location x="0" y="0"/><StandardPrimitiveRef id="land"/></Pin>
+          <Topside>
+            <Outline><Polygon><PolyBegin x="-1" y="-0.5"/><PolyStepSegment x="1" y="-0.5"/><PolyStepSegment x="1" y="0.5"/><PolyStepSegment x="-1" y="0.5"/><PolyStepSegment x="-1" y="-0.5"/></Polygon><LineDescRef id="line"/></Outline>
+          </Topside>
+          <OtherSideView>
+            <Outline><Polygon><PolyBegin x="-0.9" y="-0.4"/><PolyStepSegment x="0.9" y="-0.4"/><PolyStepSegment x="0.9" y="0.4"/><PolyStepSegment x="-0.9" y="0.4"/><PolyStepSegment x="-0.9" y="-0.4"/></Polygon><LineDescRef id="line"/></Outline>
+          </OtherSideView>
         </Package>
         <Package name="pkg-tht" type="CONNECTOR_TH" pinOne="1" pinOneOrientation="OTHER" height="5">
           <Outline><Polygon><PolyBegin x="0" y="0"/><PolyStepSegment x="0" y="0"/></Polygon><LineDescRef id="line"/></Outline>
@@ -88,6 +154,15 @@
       </Step>
       <Step name="panel" type="PALLET">
         <Datum x="0" y="0"/>
+        <Profile>
+          <Polygon>
+            <PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="40" y="0"/>
+            <PolyStepSegment x="40" y="35"/>
+            <PolyStepSegment x="0" y="35"/>
+            <PolyStepSegment x="0" y="0"/>
+          </Polygon>
+        </Profile>
         <StepRepeat stepRef="board" x="10" y="20" nx="2" ny="1" dx="15" dy="0" angle="13" mirror="false"/>
       </Step>
     </CadData>
