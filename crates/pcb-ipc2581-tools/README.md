@@ -6,6 +6,7 @@ alias provides the same commands.
 | Command | Purpose |
 |---|---|
 | `info` | Report board, layer, drill, and stackup metadata. |
+| `assembly` | Emit the versioned PCBA assembly report as JSON. |
 | `bom` | Export the bill of materials. |
 | `cpl` | Export component placement data. |
 | `html` | Export an HTML board summary. |
@@ -19,6 +20,13 @@ alias provides the same commands.
 | `edit bom` | Add approved alternatives to BOM entries. |
 
 Run `pcb ipc2581 <command> --help` for arguments and output options.
+
+Use `assembly` to emit the complete board-array report, or select one canonical
+board with `--scope board`:
+
+```bash
+pcb ipc assembly design.xml --scope board-array > assembly-report.json
+```
 
 Board-array creation balances copper by default; pass `--no-copper-balance`
 to disable it. Fabrication-panel creation leaves copper unchanged by default;

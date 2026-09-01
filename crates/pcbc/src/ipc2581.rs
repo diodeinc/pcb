@@ -23,6 +23,15 @@ enum Commands {
         #[arg(short, long, default_value = "mm")]
         units: UnitFormat,
     },
+    /// Emit the deterministic PCBA assembly report as JSON
+    Assembly {
+        /// IPC-2581 XML file to inspect
+        #[arg(value_hint = clap::ValueHint::FilePath)]
+        file: PathBuf,
+        /// Counting scope: one canonical board or the complete board array
+        #[arg(long, default_value = "board-array")]
+        scope: LayoutTarget,
+    },
     /// Generate Bill of Materials (BOM)
     Bom {
         /// IPC-2581 XML file to inspect
@@ -338,6 +347,17 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
             format,
             units,
         } => commands::info::execute(&file, format, units),
+        Commands::Assembly { file, scope } => {
+            let ipc = pcb_ipc2581_tools::ipc2581::Ipc2581::parse_file(&file)?;
+            let imported = pcb_ir::import::ipc2581::import_design(&ipc)?;
+            let report = pcb_ipc2581_tools::assembly::build_report(&imported, scope)?;
+            let output = serde_json::to_vec_pretty(&report)?;
+            pcb_ui::write_stdout(|stdout| {
+                stdout.write_all(&output)?;
+                stdout.write_all(b"\n")
+            })?;
+            Ok(())
+        }
         Commands::Bom {
             file,
             format,

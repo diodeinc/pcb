@@ -8,6 +8,7 @@ mod doc;
 mod electrical_checks;
 mod import;
 mod info;
+mod ipc2581;
 mod layout;
 mod migrate;
 mod moved;

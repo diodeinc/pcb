@@ -1,3 +1,5 @@
+use std::io::Cursor;
+
 use ipc2581::Ipc2581;
 use pcb_ir::import::ipc2581::import_design;
 
@@ -137,5 +139,27 @@ fn rejects_non_finite_report_numbers() {
     assert_eq!(
         error.to_string(),
         "assembly report contains a non-finite number"
+    );
+}
+
+#[test]
+fn dm0002_excludes_document_objects_from_assembly_work() {
+    let compressed = include_bytes!("../../../ipc2581/tests/data/DM0002-IPC-2518.xml.zst");
+    let xml = zstd::decode_all(Cursor::new(compressed)).unwrap();
+    let ipc = Ipc2581::parse(std::str::from_utf8(&xml).unwrap()).unwrap();
+    let imported = import_design(&ipc).unwrap();
+
+    let report = build_report(&imported, LayoutTarget::BoardArray).unwrap();
+
+    assert_eq!(report.summary.components.total, 59);
+    assert_eq!(report.summary.components.included, 53);
+    assert_eq!(report.summary.components.excluded, 6);
+    assert_eq!(report.summary.components.included_populated, 53);
+    assert!(
+        report
+            .components
+            .iter()
+            .filter(|component| component.assembly_status == report::AssemblyStatus::Included)
+            .all(|component| component.side == report::Side::Top)
     );
 }
