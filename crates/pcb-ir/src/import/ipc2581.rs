@@ -13,6 +13,13 @@ use crate::geom::Polarity as GeometryPolarity;
 use crate::geom::path::transform_cmds;
 use crate::geom::*;
 
+mod assembly;
+
+pub use crate::dialects::assembly::{
+    BomReferenceId, ComponentDefinitionId, ComponentOccurrenceId, LayoutOccurrenceId,
+    PackageDefinitionId, Population as PopulationState,
+};
+
 pub type GeometryDocument = crate::dialects::ipc::Document<Symbol, LayerFunction>;
 type GeometryLayer = crate::dialects::ipc::Layer<Symbol, LayerFunction>;
 type GeometryFeature = crate::dialects::ipc::Feature<Symbol>;
@@ -51,21 +58,6 @@ pub struct StepLayer {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum LayoutOccurrenceId {
-    Root,
-    Instance(u32),
-}
-
-impl LayoutOccurrenceId {
-    fn source_instance(self) -> Option<u32> {
-        match self {
-            Self::Root => None,
-            Self::Instance(instance) => Some(instance),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct FeatureDefinitionId(pub u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -95,25 +87,6 @@ pub fn feature_occurrence_id(feature: &GeometryFeature) -> Option<FeatureOccurre
     })
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ComponentDefinitionId(pub u32);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct PackageDefinitionId(pub u32);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct BomReferenceId {
-    pub bom: u32,
-    pub item: u32,
-    pub designator: u32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ComponentOccurrenceId {
-    pub component: ComponentDefinitionId,
-    pub layout: LayoutOccurrenceId,
-}
-
 #[derive(Debug, Clone)]
 pub struct ComponentDefinition {
     pub step: u32,
@@ -140,15 +113,6 @@ pub struct ComponentOccurrence {
     pub root_from_board: Affine2,
     pub board_from_component: Option<Affine2>,
     pub population: PopulationState,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum PopulationState {
-    #[default]
-    Unspecified,
-    Populate,
-    DoNotPopulate,
-    Conflicting,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -5181,6 +5145,33 @@ mod tests {
         assert!(imported.avl.is_some());
         assert_eq!(imported.packages.len(), 3);
         assert_eq!(imported.components.len(), 5);
+
+        let assembly = imported
+            .assembly_document(crate::dialects::assembly::Scope::BoardArray)
+            .unwrap();
+        assert_eq!(assembly.primary_bom, Some(0));
+        assert_eq!(assembly.boms.len(), 3);
+        assert_eq!(assembly.packages.len(), 3);
+        assert_eq!(assembly.components.len(), 5);
+        assert_eq!(assembly.occurrences.len(), 2);
+        assert_eq!(assembly.avl.as_ref().unwrap().items.len(), 1);
+        let assembly_a = assembly
+            .components
+            .iter()
+            .find(|component| component.part == "part-a")
+            .unwrap();
+        assert_eq!(assembly_a.side, crate::dialects::assembly::Side::Top);
+        assert_eq!(assembly_a.mount, crate::dialects::assembly::Mount::Smt);
+        assert_eq!(
+            assembly_a.population,
+            crate::dialects::assembly::Population::DoNotPopulate
+        );
+        let reference = assembly.preferred_bom_reference(assembly_a).unwrap();
+        assert_eq!(assembly.bom_designator(reference).name, "U1");
+        assert_eq!(
+            assembly.bom_item(reference).category,
+            Some(crate::dialects::assembly::BomCategory::Electrical)
+        );
 
         let a = imported
             .components

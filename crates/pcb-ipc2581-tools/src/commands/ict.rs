@@ -193,7 +193,7 @@ pub fn extract_contacts_from_design(
         info.at = Some((land.at.x, land.at.y));
     }
 
-    let placements = extract_single_board_placements_from_design(&accessor, imported)?;
+    let placements = extract_single_board_placements_from_design(imported)?;
     let mut contacts = Vec::new();
     for component in &placements.components {
         let Some((ict, path)) = roles.get(&component.designator) else {
@@ -257,7 +257,10 @@ fn side_sort_key(side: PlacementSide) -> u8 {
         PlacementSide::Top => 0,
         PlacementSide::Bottom => 1,
         PlacementSide::Internal => 2,
-        PlacementSide::Unknown => 3,
+        PlacementSide::Both
+        | PlacementSide::All
+        | PlacementSide::None
+        | PlacementSide::Unspecified => 3,
     }
 }
 
@@ -294,7 +297,10 @@ fn side_name(side: PlacementSide) -> &'static str {
         PlacementSide::Top => "top",
         PlacementSide::Bottom => "bottom",
         PlacementSide::Internal => "internal",
-        PlacementSide::Unknown => "unknown",
+        PlacementSide::Both
+        | PlacementSide::All
+        | PlacementSide::None
+        | PlacementSide::Unspecified => "unknown",
     }
 }
 
