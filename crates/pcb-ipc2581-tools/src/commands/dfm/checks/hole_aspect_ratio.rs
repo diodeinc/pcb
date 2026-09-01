@@ -339,6 +339,7 @@ cases = [
     fn blind_and_buried_holes_use_only_their_physical_spans() {
         let report = run(BOARD, VIA_PDK_WITH_DEFAULT);
         let rule = only_rule(&report);
+        assert_eq!(rule.id, "via-aspect-ratio.4-layer");
         assert_eq!(rule.checked, 2);
         assert_eq!(report.findings.len(), 2);
         let measurements = report
