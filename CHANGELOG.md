@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.42] - 2026-09-01
+
 ### Added
 
 - Preserve IPC-2581 assembly BOM, package, pin, population, and supporting dictionary source facts in `pcb-ir` imports.
@@ -1736,7 +1738,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.41...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.42...HEAD
+[0.4.42]: https://github.com/diodeinc/pcb/compare/v0.4.41...v0.4.42
 [0.4.41]: https://github.com/diodeinc/pcb/compare/v0.4.40...v0.4.41
 [0.4.40]: https://github.com/diodeinc/pcb/compare/v0.4.39...v0.4.40
 [0.4.39]: https://github.com/diodeinc/pcb/compare/v0.4.38...v0.4.39
