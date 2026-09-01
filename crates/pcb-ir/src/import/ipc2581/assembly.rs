@@ -36,6 +36,7 @@ impl ImportedDesign {
                 population: occurrence.population,
             })
             .collect();
+        let package_context = package_shape_context(self);
 
         Ok(ir::Document {
             scope,
@@ -85,7 +86,7 @@ impl ImportedDesign {
                 .packages
                 .iter()
                 .enumerate()
-                .map(|(index, package)| map_package(self, index as u32, package))
+                .map(|(index, package)| map_package(self, &package_context, index as u32, package))
                 .collect::<Result<Vec<_>>>()?,
             components: self
                 .components
@@ -148,52 +149,54 @@ fn map_component(
 
 fn map_package(
     design: &ImportedDesign,
+    context: &super::ExtractContext<'_>,
     index: u32,
     package: &super::PackageDefinition,
 ) -> Result<ir::PackageDefinition> {
     let source = &package.source;
-    let mut pins = source
+    let pins = source
         .pins
         .iter()
-        .map(|pin| map_package_pin(design, ir::PackagePinView::Primary, pin))
-        .collect::<Result<Vec<_>>>()?;
-    if let Some(topside) = &source.topside {
-        pins.extend(
+        .map(|pin| map_package_pin(design, context, ir::PackagePinView::Primary, pin))
+        .chain(source.topside.iter().flat_map(|topside| {
             topside
                 .pins
                 .iter()
-                .map(|pin| map_package_pin(design, ir::PackagePinView::Topside, pin))
-                .collect::<Result<Vec<_>>>()?,
-        );
-    }
-    let mut views = vec![map_package_view(
+                .map(|pin| map_package_pin(design, context, ir::PackagePinView::Topside, pin))
+        }))
+        .collect::<Result<Vec<_>>>()?;
+    let views = std::iter::once(map_package_view(
         design,
+        context,
         ir::PackageViewKind::Primary,
         source.outline.as_ref(),
         source.land_pattern.as_ref(),
         source.silkscreen.as_ref(),
         source.assembly_drawing.as_ref(),
-    )?];
-    if let Some(topside) = &source.topside {
-        views.push(map_package_view(
+    ))
+    .chain(source.topside.iter().map(|topside| {
+        map_package_view(
             design,
+            context,
             ir::PackageViewKind::Topside,
             topside.outline.as_ref(),
             topside.land_pattern.as_ref(),
             topside.silkscreen.as_ref(),
             topside.assembly_drawing.as_ref(),
-        )?);
-    }
-    if let Some(other) = &source.other_side_view {
-        views.push(map_package_view(
+        )
+    }))
+    .chain(source.other_side_view.iter().map(|other| {
+        map_package_view(
             design,
+            context,
             ir::PackageViewKind::OtherSide,
             other.outline.as_ref(),
             None,
             other.silkscreen.as_ref(),
             other.assembly_drawing.as_ref(),
-        )?);
-    }
+        )
+    }))
+    .collect::<Result<Vec<_>>>()?;
     Ok(ir::PackageDefinition {
         id: ir::PackageDefinitionId(index),
         step: package.step,
@@ -215,6 +218,7 @@ fn map_package(
 
 fn map_package_pin(
     design: &ImportedDesign,
+    context: &super::ExtractContext<'_>,
     view: ir::PackagePinView,
     pin: &types::PackagePin,
 ) -> Result<ir::PackagePin> {
@@ -261,12 +265,13 @@ fn map_package_pin(
             .location
             .map(|location| Point::new(location.x, location.y)),
         transform: pin.xform.map(map_transform),
-        shape: map_standard_shape(design, &pin.shape)?,
+        shape: map_standard_shape(design, context, &pin.shape)?,
     })
 }
 
 fn map_package_view(
     design: &ImportedDesign,
+    context: &super::ExtractContext<'_>,
     kind: ir::PackageViewKind,
     outline: Option<&types::PackageOutline>,
     land_pattern: Option<&types::PackageLandPattern>,
@@ -275,82 +280,74 @@ fn map_package_view(
 ) -> Result<ir::PackageView> {
     Ok(ir::PackageView {
         kind,
-        outline: outline.map(|outline| map_package_outline(design, outline)),
+        outline: outline.map(|outline| map_package_outline(design, context, outline)),
         land_pattern: land_pattern
-            .map(|land_pattern| map_land_pattern(design, land_pattern))
+            .map(|land_pattern| map_land_pattern(design, context, land_pattern))
             .transpose()?,
         silkscreen: silkscreen
-            .map(|silkscreen| map_silkscreen(design, silkscreen))
+            .map(|silkscreen| map_silkscreen(design, context, silkscreen))
             .transpose()?,
         assembly_drawing: assembly_drawing
-            .map(|drawing| map_assembly_drawing(design, drawing))
+            .map(|drawing| map_assembly_drawing(design, context, drawing))
             .transpose()?,
     })
 }
 
 fn map_package_outline(
     design: &ImportedDesign,
+    context: &super::ExtractContext<'_>,
     outline: &types::PackageOutline,
 ) -> ir::PackageOutline {
-    let context = package_shape_context(design);
-    let mut references = Vec::new();
-    let mut unresolved_style = false;
-    let line_desc = match outline.line_desc {
-        types::LineDescGroup::Inline(line_desc) => Some(line_desc),
+    let (line_desc, line_desc_ref) = match outline.line_desc {
+        types::LineDescGroup::Inline(line_desc) => (Some(line_desc), None),
         types::LineDescGroup::Ref(reference) => {
-            references.push(geometry_reference(
-                design,
-                ir::PackageGeometryReferenceKind::LineDescription,
-                reference,
-            ));
-            let line_desc = context.line_descs.get(&reference).copied();
-            unresolved_style |= line_desc.is_none();
-            line_desc
+            (context.line_descs.get(&reference).copied(), Some(reference))
         }
     };
-    if let Some(reference) = outline.polygon_line_desc_ref {
-        references.push(geometry_reference(
-            design,
+    let references = [
+        (
             ir::PackageGeometryReferenceKind::LineDescription,
-            reference,
-        ));
-        unresolved_style |= !context.line_descs.contains_key(&reference);
-    }
-    if let Some(reference) = outline.polygon_fill_desc_ref {
-        references.push(geometry_reference(
-            design,
+            line_desc_ref,
+        ),
+        (
+            ir::PackageGeometryReferenceKind::LineDescription,
+            outline.polygon_line_desc_ref,
+        ),
+        (
             ir::PackageGeometryReferenceKind::FillDescription,
-            reference,
-        ));
-        unresolved_style |= !context.fill_descs.contains_key(&reference);
-    }
-    let status = if unresolved_style {
-        ir::PackageGeometryStatus::Unresolved
-    } else if outline.polygon_line_desc.is_some()
+            outline.polygon_fill_desc_ref,
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(kind, reference)| {
+        reference.map(|reference| geometry_reference(design, kind, reference))
+    })
+    .collect();
+    let unresolved_style = line_desc_ref.is_some() && line_desc.is_none()
+        || outline
+            .polygon_line_desc_ref
+            .is_some_and(|reference| !context.line_descs.contains_key(&reference))
+        || outline
+            .polygon_fill_desc_ref
+            .is_some_and(|reference| !context.fill_descs.contains_key(&reference));
+    let partial_style = outline.polygon_line_desc.is_some()
         || outline.polygon_line_desc_ref.is_some()
         || outline.polygon_fill_desc.is_some()
-        || outline.polygon_fill_desc_ref.is_some()
-    {
-        ir::PackageGeometryStatus::Partial
-    } else {
-        ir::PackageGeometryStatus::Complete
-    };
-    let paint = if unresolved_style {
-        Paint::None
-    } else {
-        line_desc.map_or(Paint::None, |line_desc| {
+        || outline.polygon_fill_desc_ref.is_some();
+    let paint = line_desc
+        .filter(|_| !unresolved_style)
+        .map_or(Paint::None, |line_desc| {
             let mut stroke = StrokeStyle::new(
                 line_desc.line_width,
                 super::map_line_cap(line_desc.line_end),
             );
             stroke.pattern = super::map_line_pattern(line_desc.line_property);
             Paint::Stroke(stroke)
-        })
-    };
+        });
     ir::PackageOutline {
         transform: outline.polygon_xform.map(map_transform),
         shape: ir::PackageShape {
-            status,
+            status: geometry_status(unresolved_style, partial_style),
             references,
             polarity: Polarity::Dark,
             paths: vec![ir::PackagePath {
@@ -363,6 +360,7 @@ fn map_package_outline(
 
 fn map_land_pattern(
     design: &ImportedDesign,
+    context: &super::ExtractContext<'_>,
     land_pattern: &types::PackageLandPattern,
 ) -> Result<ir::PackageLandPattern> {
     Ok(ir::PackageLandPattern {
@@ -370,21 +368,19 @@ fn map_land_pattern(
             .pads
             .iter()
             .map(|pad| {
-                let graphic = pad
-                    .feature
-                    .as_ref()
-                    .map(|feature| map_feature_shape(design, feature))
-                    .transpose()?;
-                let graphic = if let Some(graphic) = graphic {
-                    Some(graphic)
-                } else if let Some(reference) = pad.standard_primitive_ref {
-                    Some(ir::PackageGraphic::Shape(map_standard_reference(
-                        design, reference,
-                    )?))
-                } else {
-                    pad.user_primitive_ref.map(|reference| {
-                        ir::PackageGraphic::Shape(map_user_reference(design, reference))
-                    })
+                let graphic = match (
+                    pad.feature.as_ref(),
+                    pad.standard_primitive_ref,
+                    pad.user_primitive_ref,
+                ) {
+                    (Some(feature), _, _) => Some(map_feature_shape(design, context, feature)?),
+                    (None, Some(reference), _) => Some(ir::PackageGraphic::Shape(
+                        map_standard_reference(design, context, reference)?,
+                    )),
+                    (None, None, Some(reference)) => Some(ir::PackageGraphic::Shape(
+                        map_user_reference(design, context, reference),
+                    )),
+                    (None, None, None) => None,
                 };
                 Ok(ir::PackagePad {
                     padstack_ref: resolve_optional(design, pad.padstack_def_ref),
@@ -407,7 +403,7 @@ fn map_land_pattern(
                 Ok(ir::PackageTarget {
                     location: Point::new(target.location.x, target.location.y),
                     transform: target.xform.map(map_transform),
-                    shape: map_standard_shape(design, &target.shape)?,
+                    shape: map_standard_shape(design, context, &target.shape)?,
                 })
             })
             .collect::<Result<Vec<_>>>()?,
@@ -416,41 +412,44 @@ fn map_land_pattern(
 
 fn map_assembly_drawing(
     design: &ImportedDesign,
+    context: &super::ExtractContext<'_>,
     drawing: &types::PackageAssemblyDrawing,
 ) -> Result<ir::PackageAssemblyDrawing> {
     Ok(ir::PackageAssemblyDrawing {
         outline: drawing
             .outline
             .as_ref()
-            .map(|outline| map_package_outline(design, outline)),
+            .map(|outline| map_package_outline(design, context, outline)),
         markings: drawing
             .markings
             .iter()
-            .map(|marking| map_package_marking(design, marking))
+            .map(|marking| map_package_marking(design, context, marking))
             .collect::<Result<Vec<_>>>()?,
     })
 }
 
 fn map_silkscreen(
     design: &ImportedDesign,
+    context: &super::ExtractContext<'_>,
     silkscreen: &types::PackageSilkscreen,
 ) -> Result<ir::PackageSilkscreen> {
     Ok(ir::PackageSilkscreen {
         outlines: silkscreen
             .outlines
             .iter()
-            .map(|outline| map_package_outline(design, outline))
+            .map(|outline| map_package_outline(design, context, outline))
             .collect(),
         markings: silkscreen
             .markings
             .iter()
-            .map(|marking| map_package_marking(design, marking))
+            .map(|marking| map_package_marking(design, context, marking))
             .collect::<Result<Vec<_>>>()?,
     })
 }
 
 fn map_package_marking(
     design: &ImportedDesign,
+    context: &super::ExtractContext<'_>,
     marking: &types::PackageMarking,
 ) -> Result<ir::PackageMarking> {
     Ok(ir::PackageMarking {
@@ -459,26 +458,27 @@ fn map_package_marking(
             .location
             .map(|location| Point::new(location.x, location.y)),
         transform: marking.xform.map(map_transform),
-        graphic: map_feature_shape(design, &marking.feature)?,
+        graphic: map_feature_shape(design, context, &marking.feature)?,
     })
 }
 
 fn map_feature_shape(
     design: &ImportedDesign,
+    context: &super::ExtractContext<'_>,
     shape: &types::FeatureShape,
 ) -> Result<ir::PackageGraphic> {
     Ok(match shape {
-        types::FeatureShape::StandardPrimitive(primitive) => {
-            ir::PackageGraphic::Shape(lower_standard_primitive(design, primitive, Vec::new())?)
-        }
+        types::FeatureShape::StandardPrimitive(primitive) => ir::PackageGraphic::Shape(
+            lower_standard_primitive(design, context, primitive, Vec::new())?,
+        ),
         types::FeatureShape::StandardPrimitiveRef(reference) => {
-            ir::PackageGraphic::Shape(map_standard_reference(design, *reference)?)
+            ir::PackageGraphic::Shape(map_standard_reference(design, context, *reference)?)
         }
         types::FeatureShape::UserPrimitive(_) | types::FeatureShape::UserShape(_) => {
             ir::PackageGraphic::Shape(unsupported_user_shape(Vec::new()))
         }
         types::FeatureShape::UserPrimitiveRef(reference) => {
-            ir::PackageGraphic::Shape(map_user_reference(design, *reference))
+            ir::PackageGraphic::Shape(map_user_reference(design, context, *reference))
         }
         types::FeatureShape::Text(text) => ir::PackageGraphic::Text(ir::PackageText {
             text: design.resolve(text.text_string).to_owned(),
@@ -496,82 +496,85 @@ fn map_feature_shape(
             font_ref: resolve_optional(design, text.font_ref),
         }),
         types::FeatureShape::Outline(outline) => {
-            ir::PackageGraphic::Outline(map_package_outline(design, outline))
+            ir::PackageGraphic::Outline(map_package_outline(design, context, outline))
         }
     })
 }
 
 fn map_standard_shape(
     design: &ImportedDesign,
+    context: &super::ExtractContext<'_>,
     shape: &types::StandardShape,
 ) -> Result<ir::PackageShape> {
     match shape {
         types::StandardShape::Primitive(primitive) => {
-            lower_standard_primitive(design, primitive, Vec::new())
+            lower_standard_primitive(design, context, primitive, Vec::new())
         }
-        types::StandardShape::PrimitiveRef(reference) => map_standard_reference(design, *reference),
+        types::StandardShape::PrimitiveRef(reference) => {
+            map_standard_reference(design, context, *reference)
+        }
     }
 }
 
-fn map_standard_reference(design: &ImportedDesign, reference: Symbol) -> Result<ir::PackageShape> {
+fn map_standard_reference(
+    design: &ImportedDesign,
+    context: &super::ExtractContext<'_>,
+    reference: Symbol,
+) -> Result<ir::PackageShape> {
     let references = vec![geometry_reference(
         design,
         ir::PackageGeometryReferenceKind::StandardPrimitive,
         reference,
     )];
-    let primitive = design
-        .content
-        .dictionary_standard
-        .entries
-        .iter()
-        .find(|entry| entry.id == reference)
-        .map(|entry| &entry.primitive);
-    match primitive {
-        Some(primitive) => lower_standard_primitive(design, primitive, references),
-        None => Ok(unresolved_shape(references)),
+    match context.standard_primitives.get(&reference) {
+        Some(primitive) => lower_standard_primitive(design, context, primitive, references),
+        None => Ok(empty_shape(
+            ir::PackageGeometryStatus::Unresolved,
+            references,
+        )),
     }
 }
 
-fn map_user_reference(design: &ImportedDesign, reference: Symbol) -> ir::PackageShape {
+fn map_user_reference(
+    design: &ImportedDesign,
+    context: &super::ExtractContext<'_>,
+    reference: Symbol,
+) -> ir::PackageShape {
     let references = vec![geometry_reference(
         design,
         ir::PackageGeometryReferenceKind::UserPrimitive,
         reference,
     )];
-    if design
-        .content
-        .dictionary_user
-        .entries
-        .iter()
-        .any(|entry| entry.id == reference)
-    {
-        unsupported_user_shape(references)
+    if context.user_primitives.contains_key(&reference) {
+        empty_shape(ir::PackageGeometryStatus::Unsupported, references)
     } else {
-        unresolved_shape(references)
+        empty_shape(ir::PackageGeometryStatus::Unresolved, references)
     }
 }
 
 fn lower_standard_primitive(
     design: &ImportedDesign,
+    context: &super::ExtractContext<'_>,
     primitive: &types::StandardPrimitive,
     mut references: Vec<ir::PackageGeometryReference>,
 ) -> Result<ir::PackageShape> {
-    let context = package_shape_context(design);
     let style = super::primitive_style(primitive);
-    for (kind, reference) in [
-        (
-            ir::PackageGeometryReferenceKind::LineDescription,
-            style.line_desc_ref,
-        ),
-        (
-            ir::PackageGeometryReferenceKind::FillDescription,
-            style.fill_desc_ref,
-        ),
-    ] {
-        if let Some(reference) = reference {
-            references.push(geometry_reference(design, kind, reference));
-        }
-    }
+    references.extend(
+        [
+            (
+                ir::PackageGeometryReferenceKind::LineDescription,
+                style.line_desc_ref,
+            ),
+            (
+                ir::PackageGeometryReferenceKind::FillDescription,
+                style.fill_desc_ref,
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(kind, reference)| {
+            reference.map(|reference| geometry_reference(design, kind, reference))
+        }),
+    );
     let unresolved_style = style
         .line_desc_ref
         .is_some_and(|reference| !context.line_descs.contains_key(&reference))
@@ -579,20 +582,24 @@ fn lower_standard_primitive(
             .fill_desc_ref
             .is_some_and(|reference| !context.fill_descs.contains_key(&reference));
     let unsupported_fill = matches!(
-        super::primitive_fill_property(&context, primitive),
+        super::primitive_fill_property(context, primitive),
         Some(types::FillProperty::Hatch | types::FillProperty::Mesh)
     );
     let mut geometry = super::GeometryDocument::new();
     let primitive_paint =
-        super::lower_standard_primitive(&context, &mut geometry, primitive, Affine2::IDENTITY)?;
-    let status = if unresolved_style {
-        ir::PackageGeometryStatus::Unresolved
-    } else if unsupported_fill || !geometry.diagnostics.is_empty() {
-        ir::PackageGeometryStatus::Partial
-    } else {
-        ir::PackageGeometryStatus::Complete
-    };
+        super::lower_standard_primitive(context, &mut geometry, primitive, Affine2::IDENTITY)?;
+    let status = geometry_status(
+        unresolved_style,
+        unsupported_fill || !geometry.diagnostics.is_empty(),
+    );
     let omit_unrepresented_paint = unresolved_style || unsupported_fill;
+    if omit_unrepresented_paint {
+        geometry
+            .arena
+            .paths
+            .iter_mut()
+            .for_each(|path| path.paint = Paint::None);
+    }
     Ok(ir::PackageShape {
         status,
         references,
@@ -606,11 +613,7 @@ fn lower_standard_primitive(
             .paths
             .iter()
             .map(|path| ir::PackagePath {
-                paint: if omit_unrepresented_paint {
-                    Paint::None
-                } else {
-                    path.paint
-                },
+                paint: path.paint,
                 contours: geometry.arena.path_contours(path),
             })
             .collect(),
@@ -618,20 +621,26 @@ fn lower_standard_primitive(
 }
 
 fn unsupported_user_shape(references: Vec<ir::PackageGeometryReference>) -> ir::PackageShape {
+    empty_shape(ir::PackageGeometryStatus::Unsupported, references)
+}
+
+fn empty_shape(
+    status: ir::PackageGeometryStatus,
+    references: Vec<ir::PackageGeometryReference>,
+) -> ir::PackageShape {
     ir::PackageShape {
-        status: ir::PackageGeometryStatus::Unsupported,
+        status,
         references,
         polarity: Polarity::Dark,
         paths: Vec::new(),
     }
 }
 
-fn unresolved_shape(references: Vec<ir::PackageGeometryReference>) -> ir::PackageShape {
-    ir::PackageShape {
-        status: ir::PackageGeometryStatus::Unresolved,
-        references,
-        polarity: Polarity::Dark,
-        paths: Vec::new(),
+fn geometry_status(unresolved: bool, partial: bool) -> ir::PackageGeometryStatus {
+    match (unresolved, partial) {
+        (true, _) => ir::PackageGeometryStatus::Unresolved,
+        (false, true) => ir::PackageGeometryStatus::Partial,
+        (false, false) => ir::PackageGeometryStatus::Complete,
     }
 }
 

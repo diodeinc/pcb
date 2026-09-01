@@ -37,8 +37,8 @@ pub fn build_report(imported: &ImportedDesign, target: LayoutTarget) -> Result<A
     let (profiles, profile_ids) = physical_profiles(&assembly, &mut ids);
     let (scope_bounds, scope_area) = assembly
         .root_step
-        .map(|step| step_envelope(&assembly.steps[step as usize]))
-        .unwrap_or((None, None));
+        .and_then(|step| step_envelope(&assembly.steps[step as usize]))
+        .unzip();
 
     let scoped_packages = assembly
         .occurrences
@@ -372,20 +372,19 @@ fn physical_profiles(
     (profiles, profile_ids)
 }
 
-fn step_envelope(step: &ir::Step) -> (Option<report::Bounds>, Option<f64>) {
-    if step.profiles.is_empty() {
-        return (None, None);
-    }
-    let (profile_bounds, area) = step.profiles.iter().map(profile_envelope).fold(
-        (BBox::empty(), 0.0),
-        |(combined_bounds, combined_area), (profile_bounds, profile_area)| {
-            (
-                combined_bounds.union(profile_bounds),
-                combined_area + profile_area,
-            )
-        },
-    );
-    (Some(bounds(profile_bounds)), Some(canonical_number(area)))
+fn step_envelope(step: &ir::Step) -> Option<(report::Bounds, f64)> {
+    step.profiles
+        .iter()
+        .map(profile_envelope)
+        .reduce(
+            |(combined_bounds, combined_area), (profile_bounds, profile_area)| {
+                (
+                    combined_bounds.union(profile_bounds),
+                    combined_area + profile_area,
+                )
+            },
+        )
+        .map(|(profile_bounds, area)| (bounds(profile_bounds), canonical_number(area)))
 }
 
 fn profile_envelope(profile: &ir::Profile) -> (BBox, f64) {
@@ -426,7 +425,7 @@ fn board_occurrences(
             if let Some(step) = assembly.root_step {
                 let path = root_path(imported, step);
                 let transform = affine(Affine2::IDENTITY);
-                let (bounds_mm, area_mm2) = step_envelope(&assembly.steps[step as usize]);
+                let (bounds_mm, area_mm2) = step_envelope(&assembly.steps[step as usize]).unzip();
                 let id = ids.allocate("board", &(&path, transform));
                 board_ids.insert(LayoutOccurrenceId::Root, id.clone());
                 boards.push(report::BoardOccurrence {
@@ -448,7 +447,7 @@ fn board_occurrences(
             {
                 let path = root_path(imported, root);
                 let transform = affine(Affine2::IDENTITY);
-                let (bounds_mm, area_mm2) = step_envelope(&assembly.steps[root as usize]);
+                let (bounds_mm, area_mm2) = step_envelope(&assembly.steps[root as usize]).unzip();
                 let id = ids.allocate("board", &(&path, transform));
                 board_ids.insert(LayoutOccurrenceId::Root, id.clone());
                 boards.push(report::BoardOccurrence {
@@ -470,7 +469,7 @@ fn board_occurrences(
                 let path = layout_path(imported, target, occurrence, instance.child_step);
                 let transform = affine(instance.transform);
                 let (bounds_mm, area_mm2) =
-                    step_envelope(&assembly.steps[instance.child_step as usize]);
+                    step_envelope(&assembly.steps[instance.child_step as usize]).unzip();
                 let id = ids.allocate("board", &(&path, transform));
                 board_ids.insert(occurrence, id.clone());
                 boards.push(report::BoardOccurrence {
