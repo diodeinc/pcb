@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - Add canonical assembly IR and derive component placement data from it.
+- Derive physical electrical terminations from exact IPC-2581 pin and padstack identities.
 
 ### Fixed
 
