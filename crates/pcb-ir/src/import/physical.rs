@@ -395,7 +395,6 @@ impl ImportedDesign {
                     .unwrap_or_default();
                 let termination = exact_termination(
                     at,
-                    side,
                     evidence.pin,
                     feature.padstack_ref,
                     &component,
@@ -658,7 +657,6 @@ impl ArtworkLowering<Symbol, Option<FeatureOccurrenceId>> for OccurrenceAttribut
 
 fn exact_termination(
     at: Point,
-    side: Side,
     pin: Option<Symbol>,
     padstack: Option<Symbol>,
     component: &Association<ComponentOccurrenceId>,
@@ -673,7 +671,6 @@ fn exact_termination(
                 && termination.pin == pin
                 && termination.padstack == padstack
                 && termination.at == at
-                && termination.side == side
         })
         .map(|termination| termination.id)
 }
@@ -895,17 +892,26 @@ mod tests {
             Some(PackagePinMountType::ThroughHolePin)
         );
 
-        assert_eq!(physical.paste_islands.len(), 8);
+        assert_eq!(physical.paste_islands.len(), 9);
         let linked = physical
             .paste_islands
             .iter()
             .filter(|island| island.termination.is_some())
             .collect::<Vec<_>>();
-        assert_eq!(linked.len(), 1);
-        assert_eq!(linked[0].population, PopulationState::DoNotPopulate);
-        let termination = &physical.terminations[linked[0].termination.unwrap().0 as usize];
+        assert_eq!(linked.len(), 2);
+        let linked_surface = linked
+            .iter()
+            .find(|island| island.at == Point::new(5.0, 5.0))
+            .unwrap();
+        assert_eq!(linked_surface.population, PopulationState::DoNotPopulate);
+        let termination = &physical.terminations[linked_surface.termination.unwrap().0 as usize];
         assert_eq!(termination.at, Point::new(5.0, 5.0));
         assert_eq!(imported.resolve(termination.pin), "1");
+        let linked_bottom = linked
+            .iter()
+            .find(|island| island.side == Side::Bottom)
+            .unwrap();
+        assert_eq!(linked_bottom.termination, Some(through.id));
         assert!(physical.paste_islands.iter().any(|island| {
             island
                 .pin
@@ -1019,6 +1025,7 @@ mod tests {
       <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
       <Layer name="BOTTOM" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>
       <Layer name="PASTE" layerFunction="SOLDERPASTE" side="TOP" polarity="POSITIVE"/>
+      <Layer name="BOTTOM_PASTE" layerFunction="SOLDERPASTE" side="BOTTOM" polarity="POSITIVE"/>
       <Layer name="MASK" layerFunction="SOLDERMASK" side="TOP" polarity="POSITIVE"/>
       <Layer name="DRILL" layerFunction="DRILL" side="ALL" polarity="POSITIVE"/>
       <Step name="board" type="BOARD">
@@ -1031,6 +1038,7 @@ mod tests {
           <PadstackHoleDef name="J1-H1" diameter="0.3" platingStatus="PLATED" plusTol="0" minusTol="0" x="0" y="0"/>
           <PadstackPadDef layerRef="TOP" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="land"/></PadstackPadDef>
           <PadstackPadDef layerRef="BOTTOM" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="land"/></PadstackPadDef>
+          <PadstackPadDef layerRef="BOTTOM_PASTE" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="paste"/></PadstackPadDef>
         </PadStackDef>
         <Datum x="0" y="0"/>
         <Package name="pkg" type="OTHER" pinOne="1" pinOneOrientation="OTHER">
@@ -1069,6 +1077,7 @@ mod tests {
           <Set componentRef="U1" geometryUsage="GRAPHIC"><Features><Location x="25" y="5"/><StandardPrimitiveRef id="paste"/></Features></Set>
           <Set geometryUsage="GRAPHIC"><Features><Location x="35" y="5"/><StandardPrimitiveRef id="paste"/></Features></Set>
         </LayerFeature>
+        <LayerFeature layerRef="BOTTOM_PASTE"><Set><Pad padstackDefRef="tht-padstack"><Location x="40" y="5"/><StandardPrimitiveRef id="paste"/><PinRef componentRef="J1" pin="1"/></Pad></Set></LayerFeature>
         <LayerFeature layerRef="MASK">
           <Set><Pad padstackDefRef="padstack"><Location x="5" y="5"/><StandardPrimitiveRef id="land"/><PinRef componentRef="U1" pin="1"/></Pad></Set>
         </LayerFeature>
