@@ -218,50 +218,6 @@ pub fn plan_repairs_on_page(
     )
 }
 
-/// Build a plan that places missing labels and net symbols for the selected
-/// disconnected-net issues using only components already present in
-/// `document`.
-///
-/// Unlike [`plan_repairs`], this operation does not promise to resolve a whole
-/// connectivity issue: a net can remain disconnected because another
-/// component is still unplaced. It does guarantee that no unrelated issue is
-/// introduced, and it never projects a missing component.
-/// `inspection` must be the snapshot from which the selected keys were read.
-pub fn plan_issue_net_drivers(
-    document: &SchDocument,
-    netlist: &Schematic,
-    inspection: &ConnectivityInspection,
-    selected_issue_keys: &BTreeSet<SchematicIssueKey>,
-) -> Result<ReconciliationPlan> {
-    component_slots::validate_symbol_library_versions(netlist)?;
-    let target_nets = selected_issue_keys
-        .iter()
-        .map(|key| {
-            let context = inspection
-                .issues
-                .iter()
-                .find(|issue| &issue.key == key)
-                .with_context(|| format!("schematic issue {key:?} is not present"))?;
-            match &context.issue {
-                SchematicIssue::DisconnectedNet { net_name, .. } => Ok(net_name.clone()),
-                issue => bail!(
-                    "net-driver placement does not apply to '{}' issues",
-                    issue.kind()
-                ),
-            }
-        })
-        .collect::<Result<BTreeSet<_>>>()?;
-    let desired = compose::place_net_drivers(document, netlist, &target_nets)?;
-    let inspection_after = inspect_schematic(&desired, netlist)?;
-    ensure_no_new_issues(inspection, &inspection_after, "placing net drivers")?;
-    verified_plan(
-        Some(document),
-        desired,
-        InitialInspection::Available(inspection.clone()),
-        inspection_after,
-    )
-}
-
 fn plan_repairs_impl(
     document: &SchDocument,
     netlist: &Schematic,

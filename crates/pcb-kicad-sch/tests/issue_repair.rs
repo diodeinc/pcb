@@ -6,10 +6,7 @@ use pcb_kicad_sch::{
     LabelShape, Point, Rotation, SchDocument, SchItem, SchPage, Sheet, SheetPin, Symbol,
     SymbolField, Wire,
     analysis::{SchematicIssue, SchematicIssueKey, inspect_schematic},
-    reconcile::{
-        InitialInspection, plan_issue_net_drivers, plan_reconciliation, plan_repairs,
-        plan_repairs_on_page,
-    },
+    reconcile::{InitialInspection, plan_reconciliation, plan_repairs, plan_repairs_on_page},
 };
 
 const CONNECTION_GRID_MM: f64 = 1.27;
@@ -49,7 +46,14 @@ fn singleton_primary_issue_and_complete_issue_set_produce_the_same_repair() {
             BTreeSet::from([key.clone()]),
         )
         .unwrap_or_else(|error| panic!("failed to plan selected {name}: {error:#}"));
+        let original = document.clone();
         let selected = plan.apply(Some(&document)).unwrap();
+        assert_eq!(document, original, "{name} planning mutated its input");
+        assert_eq!(
+            plan.revert(&selected).unwrap(),
+            original,
+            "{name} plan was not reversible"
+        );
         let complete = plan_reconciliation(Some(&document), &netlist, "simple.kicad_sch")
             .unwrap_or_else(|error| panic!("failed to plan complete {name}: {error:#}"))
             .apply(Some(&document))
@@ -127,69 +131,6 @@ fn selected_issue_repair_preserves_an_unrelated_existing_issue() {
         .apply(Some(&document))
         .unwrap();
     assert_eq!(selected_all, complete);
-}
-
-#[test]
-fn selected_net_drivers_do_not_realize_an_unplaced_component() {
-    let netlist = common::compile_fixture("analysis", "simple.zen");
-    let mut document = plan_reconciliation(None, &netlist, "simple.kicad_sch")
-        .unwrap()
-        .apply(None)
-        .unwrap();
-    let removed_path = document.pages[0]
-        .items
-        .iter()
-        .find_map(|item| match item {
-            SchItem::Symbol(symbol) => symbol.field_value("Path").map(str::to_string),
-            _ => None,
-        })
-        .unwrap();
-    document.pages[0].items.retain(|item| match item {
-        SchItem::Symbol(symbol) => symbol.field_value("Path") != Some(removed_path.as_str()),
-        SchItem::Label(_) | SchItem::Wire(_) | SchItem::Junction(_) => false,
-        _ => true,
-    });
-    let inspection = inspect_schematic(&document, &netlist).unwrap();
-    let disconnected = inspection
-        .issues
-        .iter()
-        .find(|issue| {
-            matches!(
-                &issue.issue,
-                SchematicIssue::DisconnectedNet {
-                    islands,
-                    missing_terminals,
-                    ..
-                } if !islands.is_empty() && !missing_terminals.is_empty()
-            )
-        })
-        .expect("removing a connected component should leave a partially placed net");
-
-    let plan = plan_issue_net_drivers(
-        &document,
-        &netlist,
-        &inspection,
-        &BTreeSet::from([disconnected.key.clone()]),
-    )
-    .unwrap();
-    let repaired = plan.apply(Some(&document)).unwrap();
-
-    assert_ne!(repaired, document);
-    assert_eq!(plan.revert(&repaired).unwrap(), document);
-    assert!(repaired.pages[0].items.iter().any(|item| {
-        matches!(item, SchItem::Label(_))
-            || matches!(item, SchItem::Symbol(symbol) if symbol.field_value("Path").is_none())
-    }));
-    assert!(!repaired.pages[0].items.iter().any(|item| {
-        matches!(item, SchItem::Symbol(symbol) if symbol.field_value("Path") == Some(removed_path.as_str()))
-    }));
-    let after = inspect_schematic(&repaired, &netlist).unwrap();
-    assert!(after.issues.iter().any(|issue| {
-        matches!(
-            &issue.issue,
-            SchematicIssue::MissingSymbol { slot } if slot.component_path() == removed_path
-        )
-    }));
 }
 
 #[test]
