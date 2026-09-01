@@ -707,54 +707,34 @@ mod tests {
     }
 
     #[test]
-    fn quarter_turn_symbol_fields_keep_their_outward_justification() {
+    fn rotated_symbol_fields_keep_their_outward_justification() {
         let definition = SymbolDefinition::from_kicad_symbol_sexpr(
             r#"(symbol "Test:IC"
               (symbol "IC_1_1"
                 (rectangle (start -5 -2) (end 5 2))))"#,
         )
         .unwrap();
-        let mut symbol = test_symbol(Point::new(10.0, 20.0), Rotation::Deg90, None);
+        for rotation in [Rotation::Deg90, Rotation::Deg180] {
+            let mut symbol = test_symbol(Point::new(10.0, 20.0), rotation, None);
 
-        assert!(autoplace_symbol_fields(&mut symbol, &definition).unwrap());
+            assert!(autoplace_symbol_fields(&mut symbol, &definition).unwrap());
 
-        for field in symbol.fields.values() {
-            assert_eq!(
-                field.justify,
-                Some(FieldJustify::new(
-                    Some(FieldHorizontalJustify::Right),
-                    Some(FieldVerticalJustify::Center),
-                ))
-            );
-            let bounds = field_text_bounds(&symbol, field, 2.0, 1.0);
-            assert!((bounds.min_x - field.at.x).abs() < GEOMETRY_EPS_MM);
-            assert!(bounds.max_x > field.at.x);
-        }
-    }
-
-    #[test]
-    fn upside_down_symbol_fields_keep_their_outward_justification() {
-        let definition = SymbolDefinition::from_kicad_symbol_sexpr(
-            r#"(symbol "Test:IC"
-              (symbol "IC_1_1"
-                (rectangle (start -5 -2) (end 5 2))))"#,
-        )
-        .unwrap();
-        let mut symbol = test_symbol(Point::new(10.0, 20.0), Rotation::Deg180, None);
-
-        assert!(autoplace_symbol_fields(&mut symbol, &definition).unwrap());
-
-        for field in symbol.fields.values() {
-            assert_eq!(
-                field.justify,
-                Some(FieldJustify::new(
-                    Some(FieldHorizontalJustify::Right),
-                    Some(FieldVerticalJustify::Center),
-                ))
-            );
-            let bounds = field_text_bounds(&symbol, field, 2.0, 1.0);
-            assert!((bounds.min_x - field.at.x).abs() < GEOMETRY_EPS_MM);
-            assert!(bounds.max_x > field.at.x);
+            for field in symbol.fields.values() {
+                assert_eq!(
+                    field.justify,
+                    Some(FieldJustify::new(
+                        Some(FieldHorizontalJustify::Right),
+                        Some(FieldVerticalJustify::Center),
+                    )),
+                    "rotation={rotation:?}"
+                );
+                let bounds = field_text_bounds(&symbol, field, 2.0, 1.0);
+                assert!(
+                    (bounds.min_x - field.at.x).abs() < GEOMETRY_EPS_MM,
+                    "rotation={rotation:?}"
+                );
+                assert!(bounds.max_x > field.at.x, "rotation={rotation:?}");
+            }
         }
     }
 

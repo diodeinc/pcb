@@ -427,8 +427,7 @@ mod tests {
     }
 
     #[test]
-    fn new_blocks_align_with_existing_symbol_anchors() {
-        let mut packer = GridPacker::for_page(&Paper::default()).unwrap();
+    fn only_anchored_blocks_align_with_existing_symbol_anchors() {
         let existing_anchor = GridPoint { x: 100, y: 80 };
         let existing = GridRect {
             min_x: 96,
@@ -436,41 +435,24 @@ mod tests {
             max_x: 104,
             max_y: 84,
         };
-        packer.occupy_anchored(existing, existing_anchor.to_point());
-
-        let placed = packer.place_anchored(GridRect {
+        let new_block = GridRect {
             min_x: -2,
             min_y: -2,
             max_x: 2,
             max_y: 2,
-        });
+        };
+        let packer_with_existing = || {
+            let mut packer = GridPacker::for_page(&Paper::default()).unwrap();
+            packer.occupy_anchored(existing, existing_anchor.to_point());
+            packer
+        };
 
-        assert!(placed.x == existing_anchor.x || placed.y == existing_anchor.y);
-        assert!(placed.x < 130 && placed.y < 110);
-    }
+        let anchored = packer_with_existing().place_anchored(new_block);
+        assert!(anchored.x == existing_anchor.x || anchored.y == existing_anchor.y);
+        assert!(anchored.x < 130 && anchored.y < 110);
 
-    #[test]
-    fn non_component_blocks_ignore_symbol_anchor_lines() {
-        let mut packer = GridPacker::for_page(&Paper::default()).unwrap();
-        let existing_anchor = GridPoint { x: 20, y: 20 };
-        packer.occupy_anchored(
-            GridRect {
-                min_x: 16,
-                min_y: 16,
-                max_x: 24,
-                max_y: 24,
-            },
-            existing_anchor.to_point(),
-        );
-
-        let placed = packer.place(GridRect {
-            min_x: -2,
-            min_y: -2,
-            max_x: 2,
-            max_y: 2,
-        });
-
-        assert_ne!(placed.x, existing_anchor.x);
-        assert_ne!(placed.y, existing_anchor.y);
+        let unanchored = packer_with_existing().place(new_block);
+        assert_ne!(unanchored.x, existing_anchor.x);
+        assert_ne!(unanchored.y, existing_anchor.y);
     }
 }

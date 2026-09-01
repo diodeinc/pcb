@@ -3279,69 +3279,57 @@ mod tests {
     }
 
     #[test]
-    fn new_page_grows_to_fit_its_placement_grid() {
-        let blocks = [
-            test_placement_block(
-                "a",
+    fn new_page_grows_to_fit_grid_without_covering_title_block() {
+        let default_usable = GridPacker::for_page(&Paper::default())
+            .unwrap()
+            .usable_bounds();
+        let cases = [
+            vec![
+                test_placement_block(
+                    "a",
+                    GridRect {
+                        min_x: 0,
+                        min_y: 0,
+                        max_x: 180,
+                        max_y: 100,
+                    },
+                ),
+                test_placement_block(
+                    "b",
+                    GridRect {
+                        min_x: 0,
+                        min_y: 0,
+                        max_x: 180,
+                        max_y: 100,
+                    },
+                ),
+            ],
+            vec![test_placement_block(
+                "full-page",
                 GridRect {
                     min_x: 0,
                     min_y: 0,
-                    max_x: 180,
-                    max_y: 100,
+                    max_x: default_usable.width(),
+                    max_y: default_usable.height(),
                 },
-            ),
-            test_placement_block(
-                "b",
-                GridRect {
-                    min_x: 0,
-                    min_y: 0,
-                    max_x: 180,
-                    max_y: 100,
-                },
-            ),
+            )],
         ];
-        let blocks = blocks.iter().collect::<Vec<_>>();
-        let mut page = SchPage::new("large");
 
-        let (bounds, _) = arrange_new_page_blocks(&mut page, &blocks).unwrap();
+        for blocks in cases {
+            let blocks = blocks.iter().collect::<Vec<_>>();
+            let mut page = SchPage::new("large");
+            let (bounds, _) = arrange_new_page_blocks(&mut page, &blocks).unwrap();
 
-        assert_eq!(
-            page.paper,
-            Paper::Named {
-                name: "A3".to_string(),
-                portrait: false,
-            }
-        );
-        let packer = GridPacker::for_page(&page.paper).unwrap();
-        assert!(packer.can_place_without_overlap(bounds));
-    }
-
-    #[test]
-    fn new_page_grows_when_grid_would_cover_title_block() {
-        let mut page = SchPage::new("title-block");
-        let usable = GridPacker::for_page(&page.paper).unwrap().usable_bounds();
-        let blocks = [test_placement_block(
-            "full-page",
-            GridRect {
-                min_x: 0,
-                min_y: 0,
-                max_x: usable.width(),
-                max_y: usable.height(),
-            },
-        )];
-        let blocks = blocks.iter().collect::<Vec<_>>();
-
-        let (bounds, _) = arrange_new_page_blocks(&mut page, &blocks).unwrap();
-
-        assert_eq!(
-            page.paper,
-            Paper::Named {
-                name: "A3".to_string(),
-                portrait: false,
-            }
-        );
-        let packer = GridPacker::for_page(&page.paper).unwrap();
-        assert!(packer.can_place_without_overlap(bounds));
+            assert_eq!(
+                page.paper,
+                Paper::Named {
+                    name: "A3".to_string(),
+                    portrait: false,
+                }
+            );
+            let packer = GridPacker::for_page(&page.paper).unwrap();
+            assert!(packer.can_place_without_overlap(bounds));
+        }
     }
 
     fn multi_pad_symbol() -> BTreeMap<SymbolSlotKey, PlacedSymbol> {
