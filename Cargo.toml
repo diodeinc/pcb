@@ -69,6 +69,7 @@ itertools = "0.15"
 heck = "0.5.0"
 hex = "0.4"
 httpmock = "0.8"
+libm = { version = "0.2.16", default-features = false }
 log = "0.4.34"
 minijinja = "2.24"
 notify = "8.2"

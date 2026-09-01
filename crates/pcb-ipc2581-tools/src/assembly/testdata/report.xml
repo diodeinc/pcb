@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="ASSEMBLY"/>
+    <StepRef name="panel"/>
+    <BomRef name="bom"/>
+    <AvlRef name="avl"/>
+    <DictionaryLineDesc units="MILLIMETER">
+      <EntryLineDesc id="line"><LineDesc lineWidth="0" lineEnd="ROUND"/></EntryLineDesc>
+    </DictionaryLineDesc>
+    <DictionaryStandard units="MILLIMETER">
+      <EntryStandard id="land"><Circle diameter="1"/></EntryStandard>
+      <EntryStandard id="paste"><Circle diameter="0.6"/></EntryStandard>
+    </DictionaryStandard>
+  </Content>
+  <LogisticHeader>
+    <Role id="owner" roleFunction="OWNER"/>
+    <Enterprise id="maker" code="maker" name="Maker"/>
+    <Person name="Engineer" enterpriseRef="maker" roleRef="owner"/>
+  </LogisticHeader>
+  <HistoryRecord number="1" origination="2026-01-01T00:00:00Z" software="KiCad" lastChange="2026-01-01T00:00:00Z">
+    <FileRevision fileRevisionId="1" comment="assembly report fixture">
+      <SoftwarePackage name="KiCad" vendor="KiCad" revision="10.0"><Certification certificationStatus="SELFTEST"/></SoftwarePackage>
+    </FileRevision>
+  </HistoryRecord>
+  <Bom name="bom">
+    <BomHeader assembly="board" revision="1"><StepRef name="board"/></BomHeader>
+    <BomItem OEMDesignNumberRef="part-u1" quantity="1" pinCount="1" category="ELECTRICAL">
+      <RefDes name="U1" packageRef="pkg-smt" populate="true" layerRef="TOP"/>
+      <Characteristics category="ELECTRICAL"/>
+    </BomItem>
+    <BomItem OEMDesignNumberRef="part-u2" quantity="1" pinCount="1" category="ELECTRICAL">
+      <RefDes name="U2" packageRef="pkg-smt" layerRef="TOP"/>
+      <Characteristics category="ELECTRICAL"/>
+    </BomItem>
+    <BomItem OEMDesignNumberRef="part-j1" quantity="1" pinCount="1" category="ELECTRICAL">
+      <RefDes name="J1" packageRef="pkg-tht" populate="true" layerRef="TOP"/>
+      <Characteristics category="ELECTRICAL"/>
+    </BomItem>
+    <BomItem OEMDesignNumberRef="artwork" quantity="1" category="DOCUMENT">
+      <RefDes name="LOGO" packageRef="pkg-artwork" populate="false" layerRef="BOTTOM"/>
+      <Characteristics category="DOCUMENT"/>
+    </BomItem>
+  </Bom>
+  <Ecad name="design">
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+      <Layer name="BOTTOM" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>
+      <Layer name="PASTE" layerFunction="SOLDERPASTE" side="TOP" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <PadStackDef name="smt-padstack">
+          <PadstackPadDef layerRef="TOP" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="land"/></PadstackPadDef>
+          <PadstackPadDef layerRef="PASTE" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="paste"/></PadstackPadDef>
+        </PadStackDef>
+        <PadStackDef name="tht-padstack">
+          <PadstackHoleDef name="J1-H1" diameter="0.4" platingStatus="PLATED" plusTol="0" minusTol="0" x="0" y="0"/>
+          <PadstackPadDef layerRef="TOP" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="land"/></PadstackPadDef>
+          <PadstackPadDef layerRef="BOTTOM" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="land"/></PadstackPadDef>
+        </PadStackDef>
+        <Datum x="0" y="0"/>
+        <Package name="pkg-smt" type="CHIP" pinOne="1" pinOneOrientation="OTHER" height="0.8">
+          <Outline><Polygon><PolyBegin x="0" y="0"/><PolyStepSegment x="0" y="0"/></Polygon><LineDescRef id="line"/></Outline>
+          <Pin number="1" name="signal" type="SURFACE" electricalType="ELECTRICAL" mountType="SURFACE_MOUNT_PAD"><Location x="0" y="0"/><StandardPrimitiveRef id="land"/></Pin>
+        </Package>
+        <Package name="pkg-tht" type="CONNECTOR_TH" pinOne="1" pinOneOrientation="OTHER" height="5">
+          <Outline><Polygon><PolyBegin x="0" y="0"/><PolyStepSegment x="0" y="0"/></Polygon><LineDescRef id="line"/></Outline>
+          <Pin number="1" type="THRU" electricalType="ELECTRICAL" mountType="THROUGH_HOLE_PIN"><Location x="0" y="0"/><StandardPrimitiveRef id="land"/></Pin>
+        </Package>
+        <Package name="pkg-artwork" type="OTHER" pinOneOrientation="OTHER">
+          <Outline><Polygon><PolyBegin x="0" y="0"/><PolyStepSegment x="0" y="0"/></Polygon><LineDescRef id="line"/></Outline>
+        </Package>
+        <Component refDes="U1" packageRef="pkg-smt" part="part-u1" layerRef="TOP" mountType="SMT"><Xform rotation="17"/><Location x="2" y="2"/></Component>
+        <Component refDes="U2" packageRef="pkg-smt" part="part-u2" layerRef="TOP" mountType="SMT"><Location x="4" y="2"/></Component>
+        <Component refDes="J1" packageRef="pkg-tht" part="part-j1" layerRef="TOP" mountType="THMT"><Location x="6" y="2"/></Component>
+        <Component refDes="LOGO" packageRef="pkg-artwork" part="artwork" layerRef="BOTTOM" mountType="OTHER"><Location x="8" y="2"/></Component>
+        <LayerFeature layerRef="TOP">
+          <Set><Pad padstackDefRef="smt-padstack"><Location x="2" y="2"/><StandardPrimitiveRef id="land"/><PinRef componentRef="U1" pin="1"/></Pad></Set>
+          <Set><Pad padstackDefRef="smt-padstack"><Location x="4" y="2"/><StandardPrimitiveRef id="land"/><PinRef componentRef="U2" pin="1"/></Pad></Set>
+          <Set><Pad padstackDefRef="tht-padstack"><Location x="6" y="2"/><StandardPrimitiveRef id="land"/><PinRef componentRef="J1" pin="1"/></Pad></Set>
+        </LayerFeature>
+        <LayerFeature layerRef="BOTTOM">
+          <Set><Pad padstackDefRef="tht-padstack"><Location x="6" y="2"/><StandardPrimitiveRef id="land"/><PinRef componentRef="J1" pin="1"/></Pad></Set>
+        </LayerFeature>
+        <LayerFeature layerRef="PASTE">
+          <Set><Pad padstackDefRef="smt-padstack"><Location x="2" y="2"/><StandardPrimitiveRef id="paste"/><PinRef componentRef="U1" pin="1"/></Pad></Set>
+        </LayerFeature>
+      </Step>
+      <Step name="panel" type="PALLET">
+        <Datum x="0" y="0"/>
+        <StepRepeat stepRef="board" x="10" y="20" nx="2" ny="1" dx="15" dy="0" angle="13" mirror="false"/>
+      </Step>
+    </CadData>
+  </Ecad>
+  <Avl name="avl">
+    <AvlHeader title="parts" source="fixture" author="fixture" datetime="2026-01-01T00:00:00Z" version="1"/>
+    <AvlItem OEMDesignNumber="part-u1">
+      <AvlVmpn qualified="true" chosen="true"><AvlMpn name="U1-MPN" rank="1"/><AvlVendor enterpriseRef="maker"/></AvlVmpn>
+    </AvlItem>
+  </Avl>
+</IPC-2581>

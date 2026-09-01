@@ -45,9 +45,8 @@ impl Affine2 {
     pub fn placement(center: Point, rotation_degrees: f64, mirror: Mirror, scale: f64) -> Self {
         let sx = if mirror.x { -scale } else { scale };
         let sy = if mirror.y { -scale } else { scale };
-        let radians = rotation_degrees.to_radians();
-        let cos = radians.cos();
-        let sin = radians.sin();
+        let radians = rotation_degrees * (core::f64::consts::PI / 180.0);
+        let (sin, cos) = libm::sincos(radians);
 
         Self {
             m00: cos * sx,
@@ -120,5 +119,22 @@ impl Affine2 {
         let col1 = self.m01 * self.m01 + self.m11 * self.m11;
         let dot = self.m00 * self.m01 + self.m10 * self.m11;
         (col0 - col1).abs() <= epsilon && dot.abs() <= epsilon
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn non_axis_placement_has_stable_coefficients() {
+        let transform = Affine2::placement(Point::new(2.0, 3.0), 17.0, Mirror::NONE, 1.0);
+
+        assert_eq!(transform.m00.to_bits(), 0x3fee_9a0c_6e7b_db1f);
+        assert_eq!(transform.m01.to_bits(), 0xbfd2_b637_cf83_d5c8);
+        assert_eq!(transform.m10.to_bits(), 0x3fd2_b637_cf83_d5c8);
+        assert_eq!(transform.m11.to_bits(), 0x3fee_9a0c_6e7b_db1f);
+        assert_eq!(transform.m02, 2.0);
+        assert_eq!(transform.m12, 3.0);
     }
 }
