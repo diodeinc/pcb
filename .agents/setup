@@ -37,6 +37,14 @@ if ! command -v uv >/dev/null 2>&1; then
   curl -LsSf https://astral.sh/uv/install.sh | sh
   log 'Installed uv'
 fi
+export PATH="$HOME/.local/bin:$PATH"
+
+# --- prek (pre-commit runner) ------------------------------------------------
+if ! command -v prek >/dev/null 2>&1; then
+  log 'Installing prek'
+  uv tool install prek
+  log 'Installed prek'
+fi
 
 # --- Diode KiCad 10 (signed APT repository) ---------------------------------
 KICAD_APT_URL=https://kicad-mirror.api.diode.computer/apt
