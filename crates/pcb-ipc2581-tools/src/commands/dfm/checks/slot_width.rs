@@ -12,7 +12,7 @@ use crate::commands::dfm::report::{Evidence, EvidenceDisplay, MeasurementKind};
 use pcb_ir::geom::BBox;
 use pcb_ir::geom::dfm::thin_features;
 
-use super::{Evaluation, Measured, MeasuredSite, drilled_subject, thin_regions, violates};
+use super::{Evaluation, Measured, MeasuredSite, slot_subject, thin_regions, violates};
 
 pub(super) fn evaluate(limit_mm: f64, plating: SlotPlating, design: &Design) -> Evaluation {
     let slots = design
@@ -23,11 +23,7 @@ pub(super) fn evaluate(limit_mm: f64, plating: SlotPlating, design: &Design) -> 
     let measured = slots
         .iter()
         .map(|&slot: &&Slot| {
-            let mut subject = drilled_subject(
-                design, "offender", "routed_slot", slot.net, slot.padstack, slot.step,
-                &slot.layer, slot.source_set_index, slot.source_feature_index,
-            );
-            subject.provenance = Some(slot.provenance.clone());
+            let subject = slot_subject(design, slot, "offender");
             let sites = if !violates(&slot.width, limit_mm) {
                 Vec::new()
             } else if let Some(nominal) = slot.nominal_width_mm {

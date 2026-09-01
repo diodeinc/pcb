@@ -143,6 +143,10 @@ pub(super) enum RuleKind {
     SlotWidth(SlotPlating),
     /// Clearance: holes with overlapping spans keep edge-to-edge distance.
     HolePairClearance(HoleClass, HoleClass),
+    /// Clearance: each circular hole stays inside and clear of its board profile.
+    HoleToBoardEdgeClearance(HoleClass),
+    /// Clearance: each routed slot stays inside and clear of its board profile.
+    SlotToBoardEdgeClearance(SlotPlating),
     /// Enclosure: radial copper around each hole on the layers it lands on.
     AnnularRing(HoleClass),
     /// Clearance: a circular drill stays clear of unrelated final copper.
@@ -279,6 +283,18 @@ impl RuleKind {
                 true,
                 &["drills", "board_outlines"],
             ),
+            Self::HoleToBoardEdgeClearance(_) => (
+                "hole_to_board_edge_clearance",
+                "Hole-to-board-edge clearance",
+                true,
+                &["drills", "board_outlines"],
+            ),
+            Self::SlotToBoardEdgeClearance(_) => (
+                "slot_to_board_edge_clearance",
+                "Slot-to-board-edge clearance",
+                true,
+                &["drills", "board_outlines"],
+            ),
             Self::AnnularRing(_) => (
                 "annular_ring",
                 "Annular ring",
@@ -393,6 +409,36 @@ impl RuleKind {
                 ),
                 witness_roles: Some(["first_hole_boundary", "second_hole_boundary"]),
                 pools: DRILLED,
+            },
+            Self::HoleToBoardEdgeClearance(class) => Semantics {
+                subject: "hole",
+                quantity: "hole_edge_to_board_edge_clearance",
+                method: "circle_to_enclosing_physical_profile_boundary",
+                finding_title: format!("{} hole is too close to the board edge", class.label()),
+                quantity_label: format!("{} hole-to-board-edge clearance", class.label()),
+                witness_roles: Some(["hole_boundary", "board_outline"]),
+                pools: Pools {
+                    board_outlines: true,
+                    ..DRILLED
+                },
+            },
+            Self::SlotToBoardEdgeClearance(plating) => Semantics {
+                subject: "slot",
+                quantity: "slot_edge_to_board_edge_clearance",
+                method: "materialized_slot_to_enclosing_physical_profile_boundary",
+                finding_title: format!(
+                    "{} slot is too close to the board edge",
+                    slot_label(plating)
+                ),
+                quantity_label: format!(
+                    "{} routed-slot-to-board-edge clearance",
+                    slot_label(plating)
+                ),
+                witness_roles: Some(["slot_boundary", "board_outline"]),
+                pools: Pools {
+                    board_outlines: true,
+                    ..DRILLED
+                },
             },
             Self::AnnularRing(class) => Semantics {
                 subject: "hole_layer_pair",
@@ -524,7 +570,7 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
     let (profile_name, profile) = pdk.selected_profile(selected_profile)?;
     if profile.status == ProfileStatus::MetadataOnly {
         anyhow::bail!(
-            "PDK profile '{profile_name}' is metadata-only; licensed numeric IPC profile rules are required before it can run DFM checks"
+            "PDK profile '{profile_name}' is metadata-only; executable numeric rules are required before it can run DFM checks"
         );
     }
 
@@ -609,6 +655,32 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
                 second.label()
             ),
             RuleKind::HolePairClearance(first, second),
+        ));
+    }
+    for rule in &pdk.rules.drilling.hole_to_board_edge_clearance {
+        let class = hole_class(rule.select.hole);
+        rules.extend(lower_length_rule(
+            &rule.metadata,
+            rule.limit.as_ref(),
+            &rule.cases,
+            profile_name,
+            profile,
+            format!("Minimum {} hole-to-board-edge clearance", class.label()),
+            RuleKind::HoleToBoardEdgeClearance(class),
+        ));
+    }
+    for rule in &pdk.rules.drilling.slot_to_board_edge_clearance {
+        rules.extend(lower_length_rule(
+            &rule.metadata,
+            rule.limit.as_ref(),
+            &rule.cases,
+            profile_name,
+            profile,
+            format!(
+                "Minimum {} routed-slot-to-board-edge clearance",
+                slot_label(rule.select.plating)
+            ),
+            RuleKind::SlotToBoardEdgeClearance(rule.select.plating),
         ));
     }
     for rule in &pdk.rules.copper.annular_ring {
@@ -908,5 +980,73 @@ limit = { minimum = "0.30 mm" }
             RuleKind::HoleToCopperClearance(HoleClass::Via)
         ));
         assert_eq!(lowered[1].limit.length().millimeters(), 0.25);
+    }
+
+    const EDGE_CLEARANCE_PDK: &str = r#"
+schema_version = 2
+default_profile = "primary"
+
+[pdk]
+id = "edge-clearance"
+name = "Edge clearance"
+revision = "1"
+
+[profiles.primary]
+name = "Primary"
+technologies = ["rigid"]
+
+[profiles.secondary]
+name = "Secondary"
+technologies = ["rigid"]
+
+[[rules.drilling.hole_to_board_edge_clearance]]
+id = "via-edge"
+profiles = ["primary"]
+select = { hole = "via" }
+cases = [
+  { id = "4-to-12-layer", when = { copper_layers = { minimum = 4, maximum = 12 } }, limit = { minimum = "0.3 mm", preferred = "0.4 mm" } },
+]
+
+[[rules.drilling.slot_to_board_edge_clearance]]
+id = "plated-slot-edge"
+profiles = ["primary"]
+select = { plating = "plated" }
+limit = { minimum = "0.5 mm" }
+"#;
+
+    #[test]
+    fn lowers_typed_board_edge_clearance_rules_and_tiers() {
+        let pdk = Pdk::parse(EDGE_CLEARANCE_PDK).unwrap();
+        let rules = lower(&pdk, Some("primary")).unwrap();
+        assert_eq!(rules.len(), 3);
+
+        let required = &rules[0];
+        assert_eq!(required.id, "via-edge.4-to-12-layer");
+        assert!(matches!(
+            required.kind,
+            RuleKind::HoleToBoardEdgeClearance(HoleClass::Via)
+        ));
+        assert_eq!(required.severity, Severity::Error);
+        assert_eq!(required.limit.length().millimeters(), 0.3);
+        assert_eq!(required.conditions.minimum_copper_layers, Some(4));
+        assert_eq!(required.conditions.maximum_copper_layers, Some(12));
+
+        let preferred = &rules[1];
+        assert_eq!(preferred.id, "via-edge.4-to-12-layer.preferred");
+        assert!(matches!(
+            preferred.kind,
+            RuleKind::HoleToBoardEdgeClearance(HoleClass::Via)
+        ));
+        assert_eq!(preferred.severity, Severity::Warning);
+        assert_eq!(preferred.limit.length().millimeters(), 0.4);
+
+        assert_eq!(rules[2].id, "plated-slot-edge");
+        assert!(matches!(
+            rules[2].kind,
+            RuleKind::SlotToBoardEdgeClearance(SlotPlating::Plated)
+        ));
+        assert_eq!(rules[2].limit.length().millimeters(), 0.5);
+
+        assert!(lower(&pdk, Some("secondary")).unwrap().is_empty());
     }
 }

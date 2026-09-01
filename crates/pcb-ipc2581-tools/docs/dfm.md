@@ -66,6 +66,16 @@ id = "drilling.via_to_pth"
 select = { first_hole = "via", second_hole = "pth" }
 limit = { minimum = "10 mil" }
 
+[[rules.drilling.hole_to_board_edge_clearance]]
+id = "drilling.npth_to_board_edge"
+select = { hole = "npth" }
+limit = { minimum = "0.30 mm", preferred = "0.40 mm" }
+
+[[rules.drilling.slot_to_board_edge_clearance]]
+id = "drilling.nonplated_slot_to_board_edge"
+select = { plating = "nonplated" }
+limit = { minimum = "0.30 mm" }
+
 [[rules.copper.annular_ring]]
 id = "copper.via_annular_ring"
 select = { hole = "via" }
@@ -163,6 +173,8 @@ high-level pass is never allowed to suppress a later authoritative failure.
 | Nominal slot width | IPC slot primitive width | None |
 | Outline slot width | Materialized filled route outline, then its narrowest maximal inscribed disk | None |
 | Hole-to-hole clearance | Materialized drill circles and overlapping drill spans | Sorted bounds prune pairs already proven clear |
+| Hole-to-board-edge clearance | Analytic drill circle against its enclosing physical board profile, including cutouts | Indexed profile boundaries |
+| Slot-to-board-edge clearance | Materialized filled route outline against its enclosing physical board profile, including cutouts | Indexed profile boundaries |
 | Annular ring | Drill circle and final composed copper image on each applicable layer | Batched containment and an indexed copper boundary |
 | Hole-to-copper clearance | Analytic drill circle and attributed final composed copper on each layer in its drill span | Indexed attributed-copper boundaries |
 | Copper width | Final composed copper image, medial-axis width of each residue | Guarded opening localizes candidates |
@@ -248,6 +260,12 @@ when fewer than two exist.
 - Hole-to-hole clearance measures edge-to-edge distance between hole pairs
   whose drill spans overlap; stacked blind and buried vias on disjoint spans
   do not interact.
+- Hole- and slot-to-board-edge clearance measure true edge-to-edge distance
+  from each circular hole or materialized routed-slot outline to the boundary
+  of its enclosing physical board profile. Profile cutouts are board edges.
+  The profile must have the feature's exact physical occurrence, so a repeated
+  board never measures against another board or its panel outline. A feature
+  crossing or outside its board material has zero clearance.
 - Annular ring measures the radial copper enclosure of each via or PTH hole
   on every applicable layer. A genuine intermediate plane anti-pad with no
   matching source land has no ring to measure. Both terminal layers, and any
@@ -332,13 +350,15 @@ crossed with Producibility Levels A-C, but they are executable **partial Diode
 baselines**, not IPC profile matrices. They check maximum via and PTH aspect
 ratio at 6.0 for Level A, 8.0 for Level B, and 10.0 for Level C. They also
 check via, PTH, and NPTH hole-to-copper clearance at 0.25 mm for Level A,
-0.20 mm for Level B, and 0.15 mm for Level C. These values apply across all
-three performance classes. Each profile assumes 1.6 mm board thickness for the
-through-hole aspect-ratio fallback described above. Diode chose these
-opinionated values using IPC design topics as context; they are not licensed
-IPC numeric matrices, do not prove full IPC compliance, and do not imply IPC
-certification. A pass covers only the checks listed in the selected profile's
-`coverage` metadata.
+0.20 mm for Level B, and 0.15 mm for Level C. They check via, PTH, NPTH,
+plated-slot, and nonplated-slot clearance to the board edge at 0.50 mm for
+Level A, 0.40 mm for Level B, and 0.30 mm for Level C. These values apply
+across all three performance classes. Each profile assumes 1.6 mm board
+thickness for the through-hole aspect-ratio fallback described above. Diode
+chose these opinionated values using IPC design topics as context; they are not
+licensed IPC numeric matrices, do not prove full IPC compliance, and do not
+imply IPC certification. A pass covers only the checks listed in the selected
+profile's `coverage` metadata.
 
 Output is UTF-8 JSON on stdout unless `-o` / `--output` is supplied. The
 recommended suffix is `.dfm.json`. Every complete report includes the native
@@ -461,9 +481,11 @@ consumer's machine to render or validate the report.
 - `sites` retain individual failing regions or layers with their measurement,
   `measurement_kind`, `witnesses`, uncertainty, bounds, layers, subjects, and
   evidence. Nonspatial findings use `sites: []`. Site bounds describe the
-  finding; viewers add their own camera padding. Witness-point separation is
-  not necessarily the measured width or diameter. Scalar aspect-ratio sites
-  have no measurement witnesses; their circle evidence locates the hole.
+  finding; viewers add their own camera padding. `outside_board` identifies a
+  drilled feature that crosses or lies outside its physical board material and
+  therefore has zero clearance. Witness-point separation is not necessarily
+  the measured width or diameter. Scalar aspect-ratio sites have no measurement
+  witnesses; their circle evidence locates the hole.
 - `group_key`, when available, groups proven equivalent causes for display.
   It does not replace the finding id or change the waiver unit. Every finding
   and physical occurrence remains accessible.

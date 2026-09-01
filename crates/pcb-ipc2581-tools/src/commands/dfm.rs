@@ -561,24 +561,29 @@ limit = { minimum = "300 mil" }
 
         for builtin in builtin_pdks() {
             let parsed = pdk::Pdk::parse(builtin.source).unwrap();
-            let lowered = rules::lower(&parsed, Some(builtin.profile));
-            let (_, profile) = parsed.selected_profile(Some(builtin.profile)).unwrap();
-            if profile.status == pdk::ProfileStatus::MetadataOnly {
-                assert!(lowered.unwrap_err().to_string().contains("metadata-only"));
-            } else {
-                assert!(!lowered.unwrap().is_empty());
-            }
+            assert!(
+                !rules::lower(&parsed, Some(builtin.profile))
+                    .unwrap()
+                    .is_empty()
+            );
         }
 
         let ipc = builtin_pdks().iter().find(|pdk| pdk.name == "ipc").unwrap();
         let parsed = pdk::Pdk::parse(ipc.source).unwrap();
+        assert_eq!(parsed.rules.drilling.hole_to_board_edge_clearance.len(), 9);
+        assert_eq!(parsed.rules.drilling.slot_to_board_edge_clearance.len(), 6);
+        assert_eq!(parsed.rules.drilling.hole_aspect_ratio.len(), 6);
+        assert_eq!(parsed.rules.copper.hole_clearance.len(), 9);
         assert_eq!(parsed.pdk.manufacturer.as_deref(), Some("Diode"));
         for class in 1..=3 {
-            for (level, maximum, clearance) in
-                [('a', 6.0, 0.25), ('b', 8.0, 0.20), ('c', 10.0, 0.15)]
-            {
+            for (level, maximum, copper_clearance, edge_clearance) in [
+                ('a', 6.0, 0.25, 0.50),
+                ('b', 8.0, 0.20, 0.40),
+                ('c', 10.0, 0.15, 0.30),
+            ] {
                 let profile = format!("{class}{level}");
                 let definition = &parsed.profiles[&profile];
+                assert_eq!(definition.status, pdk::ProfileStatus::Executable);
                 assert_eq!(definition.performance_class, Some(class));
                 assert_eq!(
                     definition.producibility_level.unwrap().label(),
@@ -594,7 +599,7 @@ limit = { minimum = "300 mil" }
                     1.6
                 );
                 let rules = rules::lower(&parsed, Some(&profile)).unwrap();
-                assert_eq!(rules.len(), 5);
+                assert_eq!(rules.len(), 10);
                 let aspect_ratio = rules
                     .iter()
                     .filter(|rule| matches!(rule.kind, rules::RuleKind::HoleAspectRatio(_)))
@@ -616,7 +621,32 @@ limit = { minimum = "300 mil" }
                 assert!(
                     hole_clearance
                         .iter()
-                        .all(|rule| rule.limit.length().millimeters() == clearance)
+                        .all(|rule| rule.limit.length().millimeters() == copper_clearance)
+                );
+
+                let hole_to_edge = rules
+                    .iter()
+                    .filter(|rule| {
+                        matches!(rule.kind, rules::RuleKind::HoleToBoardEdgeClearance(_))
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(hole_to_edge.len(), 3);
+                assert!(
+                    hole_to_edge
+                        .iter()
+                        .all(|rule| rule.limit.length().millimeters() == edge_clearance)
+                );
+                let slot_to_edge = rules
+                    .iter()
+                    .filter(|rule| {
+                        matches!(rule.kind, rules::RuleKind::SlotToBoardEdgeClearance(_))
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(slot_to_edge.len(), 2);
+                assert!(
+                    slot_to_edge
+                        .iter()
+                        .all(|rule| rule.limit.length().millimeters() == edge_clearance)
                 );
             }
         }
