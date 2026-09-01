@@ -13,7 +13,6 @@ use crate::{
     GEOMETRY_EPS_MM, LabelSpin, MirrorAxis, Point, Rotation, Symbol, SymbolDefinition, symbol,
 };
 
-const FIELD_ROW_SPACING_MM: f64 = 2.54;
 const HPADDING_MM: f64 = 0.635;
 const VPADDING_MM: f64 = 0.381;
 const ESTIMATED_TEXT_WIDTH_EM: f64 = 1.0;
@@ -38,7 +37,7 @@ pub(crate) fn autoplace_symbol_fields(
         return Ok(false);
     }
 
-    let occupancy = visible_pin_side_occupancy(&pins);
+    let occupancy = pin_side_occupancy(&pins, parsed.power_scope().is_some());
     let selection = choose_side(
         symbol,
         parsed.power_scope().is_some(),
@@ -320,7 +319,7 @@ fn field_box_size(layouts: &[FieldLayout]) -> Point {
 }
 
 fn field_slot_height(layout: &FieldLayout) -> f64 {
-    snap_up(layout.height.max(FIELD_ROW_SPACING_MM), CONNECTION_GRID_MM)
+    snap_up(layout.height, CONNECTION_GRID_MM)
 }
 
 fn snap_up(value: f64, grid: f64) -> f64 {
@@ -435,9 +434,9 @@ fn visible_pin_bounds(pins: &[symbol::PlacedPin]) -> Option<Bounds> {
     )
 }
 
-fn visible_pin_side_occupancy(pins: &[symbol::PlacedPin]) -> [SideOccupancy; 4] {
+fn pin_side_occupancy(pins: &[symbol::PlacedPin], include_hidden: bool) -> [SideOccupancy; 4] {
     let mut occupancy = [SideOccupancy::default(); 4];
-    for pin in pins.iter().filter(|pin| !pin.hidden) {
+    for pin in pins.iter().filter(|pin| include_hidden || !pin.hidden) {
         let side = side_from_spin(pin.outward_spin);
         let bounds = Bounds::from_points([pin.point, pin.body_point]).expect("two pin points");
         let slot = &mut occupancy[side_index(side)];
@@ -532,7 +531,7 @@ fn place_field_box(
     if let Some(pin_bounds) = occupancy[side_index(side)].bounds {
         match side {
             Side::Top | Side::Bottom => min_x = pin_bounds.max_x + HPADDING_MM * 2.0,
-            Side::Left | Side::Right => min_y = pin_bounds.max_y + VPADDING_MM * 2.0,
+            Side::Left | Side::Right => min_y = pin_bounds.min_y - size.y - VPADDING_MM * 2.0,
         }
     }
     Bounds {
@@ -639,8 +638,35 @@ mod tests {
         assert!(reference.at.x > 5.0);
         assert!(value.at.x > 5.0);
         assert!(reference.at.y < value.at.y);
-        assert!((value.at.y - reference.at.y - FIELD_ROW_SPACING_MM).abs() < 1.0e-9);
+        assert!((value.at.y - reference.at.y - CONNECTION_GRID_MM).abs() < 1.0e-9);
         assert_eq!(reference.effects.font_size.x, 1.016);
+    }
+
+    #[test]
+    fn places_fields_above_pins_when_every_symbol_side_is_occupied() {
+        let definition = SymbolDefinition::from_kicad_symbol_sexpr(
+            r#"(symbol "Test:IC"
+              (symbol "IC_1_1"
+                (rectangle (start -5 -5) (end 5 5))
+                (pin input line (at -7.54 0 0) (length 2.54)
+                  (name "LEFT") (number "1"))
+                (pin input line (at 7.54 0 180) (length 2.54)
+                  (name "RIGHT") (number "2"))
+                (pin input line (at 0 -7.54 90) (length 2.54)
+                  (name "TOP") (number "3"))
+                (pin input line (at 0 7.54 270) (length 2.54)
+                  (name "BOTTOM") (number "4"))))"#,
+        )
+        .unwrap();
+        let mut symbol = test_symbol(Point::default(), Rotation::Deg0, None);
+
+        assert!(autoplace_symbol_fields(&mut symbol, &definition).unwrap());
+
+        assert!(
+            symbol.fields.values().all(|field| field.at.y < 0.0),
+            "KiCad places the right-side field box above that side's pins: {:#?}",
+            symbol.fields
+        );
     }
 
     #[test]
@@ -707,33 +733,42 @@ mod tests {
     }
 
     #[test]
-    fn rotated_symbol_fields_keep_their_outward_justification() {
+    fn rotated_symbol_fields_stay_horizontal_and_outside_the_body() {
         let definition = SymbolDefinition::from_kicad_symbol_sexpr(
             r#"(symbol "Test:IC"
               (symbol "IC_1_1"
                 (rectangle (start -5 -2) (end 5 2))))"#,
         )
         .unwrap();
-        for rotation in [Rotation::Deg90, Rotation::Deg180] {
+        for (rotation, expected_justify) in [
+            (Rotation::Deg0, FieldHorizontalJustify::Left),
+            (Rotation::Deg90, FieldHorizontalJustify::Right),
+            (Rotation::Deg180, FieldHorizontalJustify::Right),
+            (Rotation::Deg270, FieldHorizontalJustify::Left),
+        ] {
             let mut symbol = test_symbol(Point::new(10.0, 20.0), rotation, None);
 
             assert!(autoplace_symbol_fields(&mut symbol, &definition).unwrap());
 
+            let body = symbol_body_bounds(&definition, &symbol).unwrap();
             for field in symbol.fields.values() {
                 assert_eq!(
                     field.justify,
                     Some(FieldJustify::new(
-                        Some(FieldHorizontalJustify::Right),
+                        Some(expected_justify),
                         Some(FieldVerticalJustify::Center),
                     )),
                     "rotation={rotation:?}"
                 );
                 let bounds = field_text_bounds(&symbol, field, 2.0, 1.0);
                 assert!(
-                    (bounds.min_x - field.at.x).abs() < GEOMETRY_EPS_MM,
-                    "rotation={rotation:?}"
+                    bounds.min_x >= body.max_x - GEOMETRY_EPS_MM,
+                    "rotation={rotation:?}, body={body:?}, field={bounds:?}"
                 );
-                assert!(bounds.max_x > field.at.x, "rotation={rotation:?}");
+                assert!(
+                    bounds.width() > bounds.height(),
+                    "rotation={rotation:?}, field={bounds:?}"
+                );
             }
         }
     }
