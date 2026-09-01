@@ -2374,7 +2374,7 @@ fn arrange_net_symbol_runs<'a>(
     net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
     placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
 ) -> Result<Vec<NetSymbolRun>> {
-    type Slot = (usize, SymbolSlotKey, LabelSpin, LabelSpin);
+    type Slot = (usize, SymbolSlotKey, LabelSpin);
     type GroupKey = (String, usize, SymbolSlotKey, LabelSpin, LabelSpin);
 
     let mut groups = BTreeMap::<GroupKey, Vec<&PinTarget>>::new();
@@ -2394,7 +2394,7 @@ fn arrange_net_symbol_runs<'a>(
 
     let mut runs = Vec::<NetSymbolRun>::new();
     let mut slots = BTreeMap::<Slot, Vec<usize>>::new();
-    for ((net_name, page_index, slot, target_side, symbol_side), members) in groups {
+    for ((net_name, page_index, slot, target_side, _symbol_side), members) in groups {
         for members in adjacent_target_runs(&placed[&slot], members, |target| *target)? {
             let run_index = runs.len();
             runs.push(NetSymbolRun {
@@ -2405,13 +2405,13 @@ fn arrange_net_symbol_runs<'a>(
                 stair_index: 0,
             });
             slots
-                .entry((page_index, slot.clone(), target_side, symbol_side))
+                .entry((page_index, slot.clone(), target_side))
                 .or_default()
                 .push(run_index);
         }
     }
 
-    for ((_, slot, _, _), run_indices) in &slots {
+    for ((_, slot, _), run_indices) in &slots {
         let banks = {
             let indexed_targets = run_indices
                 .iter()
@@ -3611,6 +3611,44 @@ mod tests {
 
         assert_eq!(runs.len(), 2);
         assert!(runs.iter().all(|run| run.stair_index == 0));
+    }
+
+    #[test]
+    fn opposite_net_symbols_share_stair_indices_on_one_pin_bank() {
+        let placed = multi_pad_symbol();
+        let slot = placed.keys().next().unwrap().clone();
+        let target = |name: &str, number: &str| {
+            resolve_pin_targets(
+                &placed,
+                "MQ-7.MQ-7",
+                name,
+                &BTreeSet::from([number.to_string()]),
+            )
+            .unwrap()
+            .remove(0)
+        };
+        let upper = target("B", "4");
+        let lower = target("X", "6");
+        let ground = ground_net_symbol_spec();
+        let mut power = ground.clone();
+        power.pin_outward_spin = LabelSpin::Bottom;
+        let targets = BTreeMap::from([
+            ("GROUND".to_string(), vec![lower]),
+            ("POWER".to_string(), vec![upper]),
+        ]);
+        let specs = BTreeMap::from([("GROUND".to_string(), ground), ("POWER".to_string(), power)]);
+
+        let runs =
+            plan_projected_net_symbol_runs(&targets, &BTreeSet::from([slot]), &specs, &placed)
+                .unwrap();
+
+        assert_eq!(runs.len(), 2);
+        assert_eq!(
+            runs.iter()
+                .map(|run| run.stair_index)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([0, 1])
+        );
     }
 
     #[test]
