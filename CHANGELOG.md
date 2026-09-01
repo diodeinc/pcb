@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.43] - 2026-09-01
+
 ### Added
 
 - Add canonical assembly IR and derive component placement data from it.
@@ -1761,7 +1763,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.42...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.43...HEAD
+[0.4.43]: https://github.com/diodeinc/pcb/compare/v0.4.42...v0.4.43
 [0.4.42]: https://github.com/diodeinc/pcb/compare/v0.4.41...v0.4.42
 [0.4.41]: https://github.com/diodeinc/pcb/compare/v0.4.40...v0.4.41
 [0.4.40]: https://github.com/diodeinc/pcb/compare/v0.4.39...v0.4.40
