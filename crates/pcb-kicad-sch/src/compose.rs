@@ -1067,7 +1067,6 @@ struct PlacementMember {
 
 #[derive(Debug)]
 struct CapacitorBank {
-    key: String,
     nets: [String; 2],
 }
 
@@ -1223,7 +1222,7 @@ fn placement_blocks(
         slots.sort();
         claimed.extend(slots.iter().cloned());
         let key = format!("capacitor-bank:{page_index}:{first}:{second}");
-        let mut block = row_placement_block(key.clone(), page_index, slots, bounds_by_slot);
+        let mut block = placement_block(key, page_index, slots, bounds_by_slot, usize::MAX);
         // Shared rail buses sit just outside the component pins. The projected
         // net-symbol envelopes generally reserve more room, but keep the block
         // contract explicit for nets without symbols as well.
@@ -1231,7 +1230,6 @@ fn placement_blocks(
             .bounds
             .expanded(CAPACITOR_BANK_BUS_OFFSET_CELLS as i32);
         block.capacitor_bank = Some(CapacitorBank {
-            key,
             nets: [first, second],
         });
         blocks.push(block);
@@ -1246,11 +1244,15 @@ fn placement_blocks(
         }
         slots.sort();
         let page_index = placed[&slots[0]].page_index;
-        blocks.push(grid_placement_block(
+        let columns = (1..)
+            .find(|columns| columns * columns >= slots.len())
+            .expect("a finite component has a square grid");
+        blocks.push(placement_block(
             format!("component:{component_path}"),
             page_index,
             slots,
             bounds_by_slot,
+            columns,
         ));
     }
 
@@ -1262,27 +1264,6 @@ fn placement_blocks(
             .then_with(|| left.key.cmp(&right.key))
     });
     Ok(blocks)
-}
-
-fn row_placement_block(
-    key: String,
-    page_index: usize,
-    slots: Vec<SymbolSlotKey>,
-    bounds_by_slot: &BTreeMap<SymbolSlotKey, GridRect>,
-) -> PlacementBlock {
-    placement_block(key, page_index, slots, bounds_by_slot, usize::MAX)
-}
-
-fn grid_placement_block(
-    key: String,
-    page_index: usize,
-    slots: Vec<SymbolSlotKey>,
-    bounds_by_slot: &BTreeMap<SymbolSlotKey, GridRect>,
-) -> PlacementBlock {
-    let columns = (1..)
-        .find(|columns| columns * columns >= slots.len())
-        .expect("a finite component has a square grid");
-    placement_block(key, page_index, slots, bounds_by_slot, columns)
 }
 
 fn placement_block(
@@ -1411,7 +1392,7 @@ fn add_capacitor_bank_wires(
                 }
                 let id = available_deterministic_id(
                     document,
-                    &format!("zener:{}:{net_name}:wire:{index}", bank.key),
+                    &format!("zener:{}:{net_name}:wire:{index}", block.key),
                 );
                 document.pages[block.page_index]
                     .items

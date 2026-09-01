@@ -413,17 +413,12 @@ fn include_primitive(bounds: &mut Option<Bounds>, items: &[Sexpr], placed: &Symb
 
 fn transform_bounds(bounds: Bounds, placed: &Symbol) -> Bounds {
     Bounds::from_points([
-        transform_local(Point::new(bounds.min_x, bounds.min_y), placed),
-        transform_local(Point::new(bounds.min_x, bounds.max_y), placed),
-        transform_local(Point::new(bounds.max_x, bounds.min_y), placed),
-        transform_local(Point::new(bounds.max_x, bounds.max_y), placed),
+        symbol::transform_point(Point::new(bounds.min_x, -bounds.min_y), placed),
+        symbol::transform_point(Point::new(bounds.min_x, -bounds.max_y), placed),
+        symbol::transform_point(Point::new(bounds.max_x, -bounds.min_y), placed),
+        symbol::transform_point(Point::new(bounds.max_x, -bounds.max_y), placed),
     ])
     .expect("four symbol body corners")
-}
-
-fn transform_local(mut point: Point, placed: &Symbol) -> Point {
-    point.y = -point.y;
-    symbol::transform_point(point, placed)
 }
 
 fn visible_pin_bounds(pins: &[symbol::PlacedPin]) -> Option<Bounds> {
