@@ -380,19 +380,23 @@ mod tests {
       </CadData></Ecad>
     </IPC-2581>"#;
 
-    const MASK_PDK: &str = r#"schema_version = 1
+    const MASK_PDK: &str = r#"schema_version = 2
+      default_profile = "test"
       [pdk]
       id = "mask-scene"
       name = "Mask scene"
       revision = "1"
-      [capabilities.soldermask]
-      minimum_web = "0.1 mm"
+      [profiles.test]
+      name = "Test"
+      [[rules.soldermask.web]]
+      id = "mask-web"
+      minimum = "0.1 mm"
     "#;
 
     #[test]
     fn native_mask_scene_preserves_openings_voids_and_world_coordinates() {
         let ipc = Ipc2581::parse(MASK_BOARD).unwrap();
-        let rules = rules::lower(&pdk::Pdk::parse(MASK_PDK).unwrap()).unwrap();
+        let rules = rules::lower(&pdk::Pdk::parse(MASK_PDK).unwrap(), None).unwrap();
         let imported = pcb_ir::import::ipc2581::import_design(&ipc).unwrap();
         let design = Design::extract(&imported, ArtworkScope::Board, &rules).unwrap();
         let artwork = native_artwork(&design, "F.Mask").unwrap();
@@ -431,7 +435,7 @@ mod tests {
     #[test]
     fn outlines_and_drills_remain_full_native_paths_outside_any_site() {
         let ipc = Ipc2581::parse(MASK_BOARD).unwrap();
-        let rules = rules::lower(&pdk::Pdk::parse(MASK_PDK).unwrap()).unwrap();
+        let rules = rules::lower(&pdk::Pdk::parse(MASK_PDK).unwrap(), None).unwrap();
         let imported = pcb_ir::import::ipc2581::import_design(&ipc).unwrap();
         let design = Design::extract(&imported, ArtworkScope::Board, &rules).unwrap();
         let outline = ContourSet::rectangle(

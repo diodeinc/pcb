@@ -52,6 +52,9 @@ export async function checkUsage(
     expectType<"pass" | "fail">(report.verdict);
     expectType<string>(report.input.sha256);
     expectType<string>(report.pdk.source);
+    expectType<string>(report.pdk.profile);
+    expectType<"executable" | "metadata_only">(report.pdk.profile_status);
+    expectType<string | null>(report.pdk.defaults.outer_copper_weight);
     expectType<string>(report.layout.kind);
     expectType<string>(report.scene.passes[0].svg);
     expectType<number>(report.scene.bounds.min.x);

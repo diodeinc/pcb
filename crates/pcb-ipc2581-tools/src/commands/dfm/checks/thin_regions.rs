@@ -39,8 +39,13 @@ use rayon::prelude::*;
 use super::{Evaluation, Measured, MeasuredSite};
 use crate::commands::dfm::design::{CopperConductor, CopperLayer, Design, MaskLayer, MaskOwner};
 use crate::commands::dfm::report::{Evidence, LayerRef, MeasurementKind, SourceLocator, Subject};
+use crate::commands::dfm::rules::Conditions;
 
-pub(super) fn copper_feature_width(limit_mm: f64, design: &Design) -> Evaluation {
+pub(super) fn copper_feature_width(
+    limit_mm: f64,
+    conditions: &Conditions,
+    design: &Design,
+) -> Evaluation {
     let measure = |layer: &CopperLayer| {
         thin_features(&layer.image, limit_mm)
             .into_iter()
@@ -86,12 +91,22 @@ pub(super) fn copper_feature_width(limit_mm: f64, design: &Design) -> Evaluation
     let measured = design
         .copper_layers
         .par_iter()
+        .filter(|layer| conditions.applies_to_layer(layer))
         .flat_map_iter(measure)
         .collect();
     #[cfg(target_family = "wasm")]
-    let measured = design.copper_layers.iter().flat_map(measure).collect();
+    let measured = design
+        .copper_layers
+        .iter()
+        .filter(|layer| conditions.applies_to_layer(layer))
+        .flat_map(measure)
+        .collect();
     Evaluation {
-        checked: design.copper_layers.len(),
+        checked: design
+            .copper_layers
+            .iter()
+            .filter(|layer| conditions.applies_to_layer(layer))
+            .count(),
         measured,
     }
 }

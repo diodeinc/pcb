@@ -1,22 +1,46 @@
-schema_version = 1
+schema_version = 2
+default_profile = "test"
 
 [pdk]
 id = "wasm-test"
 name = "WASM integration process"
-revision = "1"
+revision = "2"
 
-[capabilities.stackup]
-minimum_copper_layer_count = 2
-maximum_copper_layer_count = 4
+[profiles.test]
+name = "Test"
 
-[capabilities.drilling]
-minimum_pth_hole_diameter = "1.2 mm"
-minimum_hole_to_hole_clearance = "0.2 mm"
+[[rules.stackup.copper_layer_count]]
+id = "stackup.minimum_copper_layer_count"
+minimum = 2
 
-[capabilities.copper]
-minimum_feature_width = "0.2 mm"
-minimum_pth_annular_ring = "0.2 mm"
-minimum_board_edge_clearance = "0.25 mm"
+[[rules.stackup.copper_layer_count]]
+id = "stackup.maximum_copper_layer_count"
+maximum = 4
 
-[capabilities.soldermask]
-minimum_web = "0.2 mm"
+[[rules.drilling.hole_diameter]]
+id = "drilling.minimum_pth_hole_diameter"
+hole = "pth"
+minimum = "1.2 mm"
+
+[[rules.drilling.hole_to_hole_clearance]]
+id = "drilling.minimum_hole_to_hole_clearance"
+first_hole = "pth"
+second_hole = "pth"
+minimum = "0.2 mm"
+
+[[rules.copper.feature_width]]
+id = "copper.minimum_feature_width"
+minimum = "0.2 mm"
+
+[[rules.copper.annular_ring]]
+id = "copper.minimum_pth_annular_ring"
+hole = "pth"
+minimum = "0.2 mm"
+
+[[rules.copper.board_edge_clearance]]
+id = "copper.minimum_board_edge_clearance"
+minimum = "0.25 mm"
+
+[[rules.soldermask.web]]
+id = "soldermask.minimum_web"
+minimum = "0.2 mm"

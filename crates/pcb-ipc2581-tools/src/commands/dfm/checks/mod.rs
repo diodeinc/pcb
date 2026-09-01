@@ -29,6 +29,7 @@ use pcb_ir::geom::{Affine2, BBox, Point};
 use sha2::{Digest, Sha256};
 
 use super::design::{Design, Hole, HoleClass};
+use super::pdk::SlotPlating;
 use super::report::{
     Evidence, Finding, LayerRef, Location, Measurement, MeasurementKind, ReportBBox, ReportPoint,
     RuleResult, RuleStatus, Site, SourceLocator, Subject, Witness,
@@ -230,6 +231,9 @@ fn violates_count(actual: u32, comparison: Comparison, limit: u32) -> bool {
 /// The one skip policy: a rule is skipped when its subject pool or a
 /// required layer pool is empty for the selected layout target.
 fn skip_reason(rule: &Rule, design: &Design) -> Option<String> {
+    if !rule.conditions.applies_to_design(design) {
+        return Some("rule conditions do not apply to this stackup".to_owned());
+    }
     let subjects = match rule.kind {
         RuleKind::CopperLayerCount => None,
         RuleKind::BoardArrayPairClearance if design.scope != ArtworkScope::ArrayFlattened => {
@@ -242,10 +246,20 @@ fn skip_reason(rule: &Rule, design: &Design) -> Option<String> {
             .iter()
             .all(|hole| hole.class != class)
             .then(|| format!("{} holes", class.label())),
-        RuleKind::HolePairClearance => {
-            (design.holes.len() < 2).then(|| "two or more holes".to_owned())
+        RuleKind::HolePairClearance(first, second) => {
+            (!has_hole_pair(design, first, second)).then(|| {
+                format!(
+                    "an eligible {}-to-{} hole pair",
+                    first.label(),
+                    second.label()
+                )
+            })
         }
-        RuleKind::SlotWidth => design.slots.is_empty().then(|| "routed slots".to_owned()),
+        RuleKind::SlotWidth(plating) => design
+            .slots
+            .iter()
+            .all(|slot| !slot_matches(slot.plating, plating))
+            .then(|| format!("{} routed slots", slot_plating_label(plating))),
         RuleKind::LineworkToCopperClearance(Linework::VScore) => design
             .scores
             .is_empty()
@@ -257,11 +271,15 @@ fn skip_reason(rule: &Rule, design: &Design) -> Option<String> {
         RuleKind::CopperFeatureWidth | RuleKind::CopperClearance | RuleKind::SoldermaskWeb => None,
     };
     let pools = rule.kind.semantics().pools;
-    let layers = (pools.copper && design.copper_layers.is_empty())
-        .then(|| "copper layers".to_owned())
-        .or_else(|| {
-            (pools.masks && design.mask_layers.is_empty()).then(|| "soldermask layers".to_owned())
-        });
+    let layers = (pools.copper
+        && design
+            .copper_layers
+            .iter()
+            .all(|layer| !rule.conditions.applies_to_layer(layer)))
+    .then(|| "applicable copper layers".to_owned())
+    .or_else(|| {
+        (pools.masks && design.mask_layers.is_empty()).then(|| "soldermask layers".to_owned())
+    });
     subjects
         .or(layers)
         .map(|what| format!("no {what} in the selected layout target"))
@@ -272,16 +290,59 @@ fn evaluate(rule: &Rule, design: &Design) -> RuleEvaluation {
     match rule.kind {
         RuleKind::CopperLayerCount => RuleEvaluation::Count(layer_count::evaluate(design)),
         RuleKind::HoleDiameter(class) => hole_diameter::evaluate(limit(), class, design).into(),
-        RuleKind::SlotWidth => slot_width::evaluate(limit(), design).into(),
-        RuleKind::HolePairClearance => hole_pair_clearance::evaluate(limit(), design).into(),
-        RuleKind::AnnularRing(class) => annular_ring::evaluate(limit(), class, design).into(),
+        RuleKind::SlotWidth(plating) => slot_width::evaluate(limit(), plating, design).into(),
+        RuleKind::HolePairClearance(first, second) => {
+            hole_pair_clearance::evaluate(limit(), first, second, design).into()
+        }
+        RuleKind::AnnularRing(class) => {
+            annular_ring::evaluate(limit(), class, &rule.conditions, design).into()
+        }
         RuleKind::LineworkToCopperClearance(linework) => {
-            linework_clearance::evaluate(limit(), linework, design).into()
+            linework_clearance::evaluate(limit(), linework, &rule.conditions, design).into()
         }
         RuleKind::BoardArrayPairClearance => board_array_spacing::evaluate(limit(), design).into(),
-        RuleKind::CopperFeatureWidth => thin_regions::copper_feature_width(limit(), design).into(),
-        RuleKind::CopperClearance => copper_clearance::evaluate(limit(), design).into(),
+        RuleKind::CopperFeatureWidth => {
+            thin_regions::copper_feature_width(limit(), &rule.conditions, design).into()
+        }
+        RuleKind::CopperClearance => {
+            copper_clearance::evaluate(limit(), &rule.conditions, design).into()
+        }
         RuleKind::SoldermaskWeb => thin_regions::soldermask_web(limit(), design).into(),
+    }
+}
+
+fn slot_matches(actual: pcb_ir::dialects::ipc::PlatingKind, expected: SlotPlating) -> bool {
+    matches!(
+        (actual, expected),
+        (
+            pcb_ir::dialects::ipc::PlatingKind::Plated,
+            SlotPlating::Plated
+        ) | (
+            pcb_ir::dialects::ipc::PlatingKind::NonPlated,
+            SlotPlating::Nonplated
+        )
+    )
+}
+
+fn slot_plating_label(plating: SlotPlating) -> &'static str {
+    match plating {
+        SlotPlating::Plated => "plated",
+        SlotPlating::Nonplated => "non-plated",
+    }
+}
+
+fn has_hole_pair(design: &Design, first: HoleClass, second: HoleClass) -> bool {
+    if first == second {
+        design
+            .holes
+            .iter()
+            .filter(|hole| hole.class == first)
+            .take(2)
+            .count()
+            == 2
+    } else {
+        design.holes.iter().any(|hole| hole.class == first)
+            && design.holes.iter().any(|hole| hole.class == second)
     }
 }
 

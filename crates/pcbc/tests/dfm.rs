@@ -156,19 +156,28 @@ const IPC_BOARD: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
   </Ecad>
 </IPC-2581>"#;
 
-const REPORT_PDK: &str = r#"schema_version = 1
+const REPORT_PDK: &str = r#"schema_version = 2
+default_profile = "test"
 
 [pdk]
 id = "report-fixture"
 name = "Report fixture"
 revision = "1"
 
-[capabilities.stackup]
-minimum_copper_layer_count = 3
-maximum_copper_layer_count = 4
+[profiles.test]
+name = "Test"
 
-[capabilities.copper]
-minimum_board_edge_clearance = "1 mm"
+[[rules.stackup.copper_layer_count]]
+id = "stackup.minimum_copper_layer_count"
+minimum = 3
+
+[[rules.stackup.copper_layer_count]]
+id = "stackup.maximum_copper_layer_count"
+maximum = 4
+
+[[rules.copper.board_edge_clearance]]
+id = "copper.minimum_board_edge_clearance"
+minimum = "1 mm"
 "#;
 
 fn read_report(sandbox: &Sandbox, path: &str) -> Value {
@@ -303,14 +312,8 @@ fn ipc_dfm_json_matches_stdout_and_preserves_full_scene_with_waivers() {
 #[test]
 fn ipc_dfm_passing_json_still_includes_native_scene_and_pdk() {
     let pdk = REPORT_PDK
-        .replace(
-            "minimum_copper_layer_count = 3",
-            "minimum_copper_layer_count = 2",
-        )
-        .replace(
-            "minimum_board_edge_clearance = \"1 mm\"",
-            "minimum_board_edge_clearance = \"0.5 mm\"",
-        );
+        .replace("minimum = 3", "minimum = 2")
+        .replace("minimum = \"1 mm\"", "minimum = \"0.5 mm\"");
     let mut sandbox = Sandbox::new();
     sandbox
         .write("board.xml", IPC_BOARD)
@@ -456,8 +459,8 @@ fn ipc_dfm_json_replaces_stale_report_and_reports_all_incomplete_runs() {
         .write(
             "bad-pdk.toml",
             REPORT_PDK.replace(
-                "minimum_board_edge_clearance",
-                "minimum_bord_edge_clearance",
+                "[[rules.copper.board_edge_clearance]]",
+                "[[rules.copper.board_edge_clearence]]",
             ),
         )
         .write("bad-waivers.toml", "[[waiver]]\nfinding = ");
@@ -602,7 +605,7 @@ fn ipc_dfm_geometry_distinguishes_canonical_board_arrays_and_mixed_fab_scope() {
         .write(
             "pdk.toml",
             format!(
-                "{REPORT_PDK}\n[capabilities.panelization]\nminimum_board_array_spacing = \"7.62 mm\"\n"
+                "{REPORT_PDK}\n[[rules.panelization.board_spacing]]\nid = \"panelization.minimum_board_array_spacing\"\nminimum = \"7.62 mm\"\n"
             ),
         );
     let mut spec = FabPanelSpec::INCHES_12_X_18;

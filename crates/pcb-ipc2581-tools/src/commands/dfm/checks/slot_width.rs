@@ -7,17 +7,22 @@
 //! pointwise predicate `wₛ ≥ W_min` for every slot `s`.
 
 use crate::commands::dfm::design::{Design, Slot};
+use crate::commands::dfm::pdk::SlotPlating;
 use crate::commands::dfm::report::{Evidence, EvidenceDisplay, MeasurementKind};
 use pcb_ir::geom::BBox;
 use pcb_ir::geom::dfm::thin_features;
 
 use super::{Evaluation, Measured, MeasuredSite, drilled_subject, thin_regions, violates};
 
-pub(super) fn evaluate(limit_mm: f64, design: &Design) -> Evaluation {
-    let slots = &design.slots;
+pub(super) fn evaluate(limit_mm: f64, plating: SlotPlating, design: &Design) -> Evaluation {
+    let slots = design
+        .slots
+        .iter()
+        .filter(|slot| super::slot_matches(slot.plating, plating))
+        .collect::<Vec<_>>();
     let measured = slots
         .iter()
-        .map(|slot: &Slot| {
+        .map(|&slot: &&Slot| {
             let mut subject = drilled_subject(
                 design, "offender", "routed_slot", slot.net, slot.padstack, slot.step,
                 &slot.layer, slot.source_set_index, slot.source_feature_index,
@@ -93,21 +98,31 @@ mod tests {
           </CadData></Ecad>
         </IPC-2581>"#).unwrap();
         let pdk = Pdk::parse(
-            r#"schema_version = 1
+            r#"schema_version = 2
+          default_profile = "test"
           [pdk]
           id = "test"
           name = "Test"
           revision = "1"
-          [capabilities.drilling]
-          minimum_slot_width = "0.8 mm"
+          [profiles.test]
+          name = "Test"
+          [[rules.drilling.slot_width]]
+          id = "slot-width"
+          plating = "plated"
+          minimum = "0.8 mm"
         "#,
         )
         .unwrap();
-        let rules = rules::lower(&pdk).unwrap();
+        let rules = rules::lower(&pdk, None).unwrap();
         let imported = pcb_ir::import::ipc2581::import_design(&ipc).unwrap();
         let design = Design::extract(&imported, ArtworkScope::Board, &rules).unwrap();
-        let evaluation = evaluate(0.8, &design);
+        let evaluation = evaluate(0.8, SlotPlating::Plated, &design);
         assert_eq!(evaluation.measured.len(), 1);
+        assert_eq!(
+            evaluate(0.8, SlotPlating::Nonplated, &design).checked,
+            0,
+            "slot plating is part of rule selection"
+        );
         let site = &evaluation.measured[0].sites[0];
         assert!(matches!(
             site.measurement_kind,

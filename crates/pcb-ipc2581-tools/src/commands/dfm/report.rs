@@ -97,20 +97,100 @@ pub struct PdkIdentity {
     pub revision: String,
     pub manufacturer: Option<String>,
     pub process: Option<String>,
+    pub profile: String,
+    pub profile_name: String,
+    pub profile_description: Option<String>,
+    pub profile_status: &'static str,
+    pub performance_class: Option<u8>,
+    pub producibility_level: Option<&'static str>,
+    pub technologies: Vec<&'static str>,
+    pub coverage: Vec<String>,
+    pub defaults: PdkProfileDefaults,
+    pub profile_source: Option<PdkSourceReference>,
     pub path: String,
     pub sha256: String,
     /// Exact resolved UTF-8 PDK TOML used by this check, without reserialization.
     pub source: String,
 }
 
+#[derive(Debug, Serialize)]
+pub struct PdkProfileDefaults {
+    pub material: Option<String>,
+    pub board_thickness: Option<String>,
+    pub outer_copper_weight: Option<String>,
+    pub inner_copper_weight: Option<String>,
+    pub soldermask_color: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PdkSourceReference {
+    pub id: String,
+    pub title: String,
+    pub url: String,
+    pub revision: Option<String>,
+    pub accessed: Option<String>,
+    pub note: Option<String>,
+}
+
 impl PdkIdentity {
-    pub(super) fn from_pdk(pdk: &Pdk, path: String, sha256: String, source: String) -> Self {
+    pub(super) fn from_pdk(
+        pdk: &Pdk,
+        selected_profile: Option<&str>,
+        path: String,
+        sha256: String,
+        source: String,
+    ) -> Self {
+        let (profile, definition) = pdk
+            .selected_profile(selected_profile)
+            .expect("selected profile was validated while lowering rules");
+        let profile_source = definition.source.as_ref().and_then(|id| {
+            pdk.sources.get(id).map(|source| PdkSourceReference {
+                id: id.clone(),
+                title: source.title.clone(),
+                url: source.url.clone(),
+                revision: source.revision.clone(),
+                accessed: source.accessed.clone(),
+                note: source.note.clone(),
+            })
+        });
         Self {
             id: pdk.pdk.id.clone(),
             name: pdk.pdk.name.clone(),
             revision: pdk.pdk.revision.clone(),
             manufacturer: pdk.pdk.manufacturer.clone(),
             process: pdk.pdk.process.clone(),
+            profile: profile.to_owned(),
+            profile_name: definition.name.clone(),
+            profile_description: definition.description.clone(),
+            profile_status: definition.status.label(),
+            performance_class: definition.performance_class,
+            producibility_level: definition.producibility_level.map(|level| level.label()),
+            technologies: definition
+                .technologies
+                .iter()
+                .map(|technology| technology.label())
+                .collect(),
+            coverage: definition.coverage.clone(),
+            defaults: PdkProfileDefaults {
+                material: definition.defaults.material.clone(),
+                board_thickness: definition
+                    .defaults
+                    .board_thickness
+                    .as_ref()
+                    .map(|value| value.original().to_owned()),
+                outer_copper_weight: definition
+                    .defaults
+                    .outer_copper_weight
+                    .as_ref()
+                    .map(|value| value.original().to_owned()),
+                inner_copper_weight: definition
+                    .defaults
+                    .inner_copper_weight
+                    .as_ref()
+                    .map(|value| value.original().to_owned()),
+                soldermask_color: definition.defaults.soldermask_color.clone(),
+            },
+            profile_source,
             path,
             sha256,
             source,

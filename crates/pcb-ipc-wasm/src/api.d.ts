@@ -32,7 +32,7 @@ export interface ExportFile { name: string; mediaType: string; data: Uint8Array<
 /** Names are report labels only. No method reads paths or fetches URLs. */
 export interface TextInput { source: string; name?: string; }
 export type PdkInput = string | TextInput;
-export interface BuiltinPdk { name: string; source: string; }
+export interface BuiltinPdk { name: string; profile: string; source: string; }
 export interface DfmOptions {
   /** A built-in name (default: standard) or custom TOML. */
   pdk?: PdkInput;
@@ -42,9 +42,28 @@ export interface DfmOptions {
   generatedAt?: string;
 }
 export interface FileIdentity { path: string; sha256: string; size_bytes: number; }
+export interface PdkProfileDefaults {
+  material: string | null;
+  board_thickness: string | null;
+  outer_copper_weight: string | null;
+  inner_copper_weight: string | null;
+  soldermask_color: string | null;
+}
+export interface PdkSourceReference {
+  id: string; title: string; url: string;
+  revision: string | null; accessed: string | null; note: string | null;
+}
 export interface PdkIdentity {
   id: string; name: string; revision: string;
   manufacturer: string | null; process: string | null;
+  profile: string; profile_name: string; profile_description: string | null;
+  profile_status: "executable" | "metadata_only";
+  performance_class: 1 | 2 | 3 | null;
+  producibility_level: "A" | "B" | "C" | null;
+  technologies: Array<"rigid" | "flex" | "rigid_flex" | "hdi">;
+  coverage: string[];
+  defaults: PdkProfileDefaults;
+  profile_source: PdkSourceReference | null;
   path: string; sha256: string; source: string;
 }
 export interface DfmSummary {

@@ -369,6 +369,7 @@ pub(super) struct HoleLand {
 /// local width.
 #[derive(Debug, Clone)]
 pub(super) struct Slot {
+    pub plating: PlatingKind,
     pub width: Distance,
     pub width_disk: WidthDisk,
     pub nominal_width_mm: Option<f64>,
@@ -404,6 +405,8 @@ pub(super) struct Land {
 #[derive(Debug)]
 pub(super) struct CopperLayer {
     pub layer: LayerRef,
+    pub position: super::pdk::LayerPosition,
+    pub copper_weight_oz: Option<f64>,
     pub image: ContourSet,
     pub conductors: Vec<CopperConductor>,
     pub lands: Vec<Land>,
@@ -582,12 +585,19 @@ fn collect_drilled(
                         feature.bbox.center().x,
                         feature.bbox.center().y
                     );
+                    if !matches!(
+                        feature.intent.plating,
+                        PlatingKind::Plated | PlatingKind::NonPlated
+                    ) {
+                        bail!("{at} has unknown plating; DFM rules cannot certify it");
+                    }
                     let contours = document.placed_feature_contours(feature);
                     let outline = ContourSet::from_filled_contours(&contours, tol::REGION_MM);
                     let Some(width_disk) = min_width_disk(&outline) else {
                         bail!("{at} has no measurable outline");
                     };
                     slots.push(Slot {
+                        plating: feature.intent.plating,
                         width: slot_width(feature.outer_diameter, width_disk.width)
                             .with_context(|| at)?,
                         width_disk,
@@ -945,12 +955,35 @@ fn collect_copper_layers(
                 side_label(layers::ir_side(layer.side)).unwrap_or(stack_side(ordinal, total));
             Ok(CopperLayer {
                 layer: layer_ref(name, layer.layer_function, Some(side)),
+                position: if side == "inner" {
+                    super::pdk::LayerPosition::Inner
+                } else {
+                    super::pdk::LayerPosition::Outer
+                },
+                copper_weight_oz: copper_weight_oz(imported, layer.name),
                 image,
                 conductors,
                 lands,
             })
         })
         .collect()
+}
+
+fn copper_weight_oz(imported: &ImportedDesign, layer: Symbol) -> Option<f64> {
+    let stackup_layer = imported
+        .stackups
+        .iter()
+        .flat_map(|stackup| &stackup.layers)
+        .find(|candidate| candidate.layer_ref == layer)?;
+    stackup_layer
+        .spec_ref
+        .and_then(|spec| imported.specs.get(&spec))
+        .and_then(|spec| spec.copper_weight_oz)
+        .or_else(|| {
+            stackup_layer
+                .thickness
+                .map(|millimeters| millimeters / 0.0348)
+        })
 }
 
 fn side_label(side: Side) -> Option<&'static str> {

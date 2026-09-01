@@ -41,7 +41,8 @@ by the retained geometry.
 ## DFM process design kits
 
 `dfm check` accepts a built-in process design kit name or a strict, versioned
-TOML file. The built-in `standard` PDK is bundled with `pcb`:
+TOML file. Built-ins include `standard`, executable JLCPCB 1 oz profiles, and
+the nine IPC Class/Producibility profile identities:
 
 ```bash
 pcb ipc dfm check fabrication-panel.xml \
@@ -50,6 +51,12 @@ pcb ipc dfm check fabrication-panel.xml \
 ```
 
 `standard` currently supports 2 through 10 copper layers.
+`jlcpcb` selects the standard-color 1 oz rigid FR-4 profile;
+`jlcpcb-1oz-black-white` selects its larger mask-web requirement. The
+`ipc` alias selects the opinionated Class 2 / Producibility Level B default.
+It and the explicit `ipc-1a` through `ipc-3c` profiles are metadata-only because
+IPC does not publish redistributable numeric matrices; they fail closed rather
+than claim IPC compliance.
 
 Pass a path such as `--pdk ./fab-process.toml` to use a custom PDK. Exact
 built-in names take precedence, so prefix a same-named file with `./`.

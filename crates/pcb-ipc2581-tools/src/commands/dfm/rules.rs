@@ -6,10 +6,13 @@
 //! verbatim; a capability's preferred tier lowers to a second, warning-level
 //! rule under `<capability>.preferred`.
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 
 use super::design::HoleClass;
-use super::pdk::{Length, Limit as LengthLimit, Pdk};
+use super::pdk::{
+    CopperWeight, HoleKind, LayerPosition, Length, Pdk, PlatedHoleKind, Profile, ProfileStatus,
+    RuleConditions, RuleMetadata, SlotPlating,
+};
 use super::report::{Severity, ViewRecipe};
 
 #[derive(Debug, Clone)]
@@ -20,6 +23,57 @@ pub(super) struct Rule {
     pub comparison: Comparison,
     pub limit: LimitValue,
     pub kind: RuleKind,
+    pub conditions: Conditions,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(super) struct Conditions {
+    pub minimum_copper_layers: Option<u32>,
+    pub maximum_copper_layers: Option<u32>,
+    pub layer: Option<LayerPosition>,
+    pub copper_weight_oz: Option<f64>,
+    pub assumed_outer_copper_weight_oz: Option<f64>,
+    pub assumed_inner_copper_weight_oz: Option<f64>,
+}
+
+impl Conditions {
+    pub fn requires_stackup(&self) -> bool {
+        self.minimum_copper_layers.is_some()
+            || self.maximum_copper_layers.is_some()
+            || self.copper_weight_oz.is_some()
+    }
+
+    pub fn applies_to_design(&self, design: &super::design::Design) -> bool {
+        if self.minimum_copper_layers.is_none() && self.maximum_copper_layers.is_none() {
+            return true;
+        }
+        let Some(stackup) = design.stackup.as_ref() else {
+            return false;
+        };
+        let count = stackup.copper_layers.len() as u32;
+        self.minimum_copper_layers
+            .is_none_or(|minimum| count >= minimum)
+            && self
+                .maximum_copper_layers
+                .is_none_or(|maximum| count <= maximum)
+    }
+
+    pub fn applies_to_layer(&self, layer: &super::design::CopperLayer) -> bool {
+        if self
+            .layer
+            .is_some_and(|position| position != layer.position)
+        {
+            return false;
+        }
+        let Some(required_oz) = self.copper_weight_oz else {
+            return true;
+        };
+        let actual_oz = layer.copper_weight_oz.or(match layer.position {
+            LayerPosition::Outer => self.assumed_outer_copper_weight_oz,
+            LayerPosition::Inner => self.assumed_inner_copper_weight_oz,
+        });
+        actual_oz.is_some_and(|actual| (actual - required_oz).abs() <= 0.01)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,9 +122,9 @@ pub(super) enum RuleKind {
     /// Size: each hole's drilled diameter meets the limit.
     HoleDiameter(HoleClass),
     /// Size: each routed slot's width meets the limit.
-    SlotWidth,
+    SlotWidth(SlotPlating),
     /// Clearance: holes with overlapping spans keep edge-to-edge distance.
-    HolePairClearance,
+    HolePairClearance(HoleClass, HoleClass),
     /// Enclosure: radial copper around each hole on the layers it lands on.
     AnnularRing(HoleClass),
     /// Clearance: reference linework stays clear of each copper image.
@@ -181,13 +235,13 @@ impl RuleKind {
                 true,
                 &["drills", "board_outlines"],
             ),
-            Self::SlotWidth => (
+            Self::SlotWidth(_) => (
                 "slot_width",
                 "Slot width",
                 true,
                 &["drills", "board_outlines"],
             ),
-            Self::HolePairClearance => (
+            Self::HolePairClearance(_, _) => (
                 "hole_clearance",
                 "Hole-to-hole clearance",
                 true,
@@ -264,21 +318,29 @@ impl RuleKind {
                 witness_roles: Some(["hole_boundary", "hole_boundary"]),
                 pools: DRILLED,
             },
-            Self::SlotWidth => Semantics {
+            Self::SlotWidth(plating) => Semantics {
                 subject: "slot",
                 quantity: "slot_width",
                 method: "ipc_slot_width_or_outline_medial_axis_width",
-                finding_title: "Slot is below minimum width".to_owned(),
-                quantity_label: "routed slot width".to_owned(),
+                finding_title: format!("{} slot is below minimum width", slot_label(plating)),
+                quantity_label: format!("{} routed slot width", slot_label(plating)),
                 witness_roles: Some(["first_slot_boundary", "second_slot_boundary"]),
                 pools: DRILLED,
             },
-            Self::HolePairClearance => Semantics {
+            Self::HolePairClearance(first, second) => Semantics {
                 subject: "hole",
                 quantity: "hole_edge_to_hole_edge_clearance",
                 method: "circle_edge_distance",
-                finding_title: "Hole-to-hole clearance is below minimum".to_owned(),
-                quantity_label: "hole edge-to-edge clearance".to_owned(),
+                finding_title: format!(
+                    "{}-to-{} hole clearance is below minimum",
+                    first.label(),
+                    second.label()
+                ),
+                quantity_label: format!(
+                    "{}-to-{} hole edge-to-edge clearance",
+                    first.label(),
+                    second.label()
+                ),
                 witness_roles: Some(["first_hole_boundary", "second_hole_boundary"]),
                 pools: DRILLED,
             },
@@ -376,157 +438,240 @@ impl RuleKind {
 pub(super) fn pools(rules: &[Rule]) -> Pools {
     rules
         .iter()
-        .map(|rule| rule.kind.semantics().pools)
+        .map(|rule| {
+            let mut pools = rule.kind.semantics().pools;
+            pools.stackup |= rule.conditions.requires_stackup();
+            pools
+        })
         .fold(Pools::default(), |union, pools| union | pools)
 }
 
-/// Lower every configured capability to its rules. Absent capabilities lower
-/// to nothing; new capabilities are new rows here. The minimum tier is an
-/// error-severity rule under the capability path; a preferred tier adds a
-/// warning-severity rule under `<path>.preferred` and must exceed the
-/// minimum.
-pub(super) fn lower(pdk: &Pdk) -> Result<Vec<Rule>> {
-    let stackup = &pdk.capabilities.stackup;
-    let drilling = &pdk.capabilities.drilling;
-    let copper = &pdk.capabilities.copper;
-    let soldermask = &pdk.capabilities.soldermask;
-    let panelization = &pdk.capabilities.panelization;
-    let table: [(&Option<LengthLimit>, &str, &str, RuleKind); 13] = [
+/// Lower the selected profile's typed rules. Rules with no `profiles` selector
+/// apply to every executable profile in the kit. Required limits are errors;
+/// optional preferred limits become warning rules under `<id>.preferred`.
+pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rule>> {
+    pdk.validate_rule_references()?;
+    let (profile_name, profile) = pdk.selected_profile(selected_profile)?;
+    if profile.status == ProfileStatus::MetadataOnly {
+        anyhow::bail!(
+            "PDK profile '{profile_name}' is metadata-only; licensed numeric IPC profile rules are required before it can run DFM checks"
+        );
+    }
+
+    let mut rules = Vec::new();
+    for rule in &pdk.rules.stackup.copper_layer_count {
+        if !rule.metadata.applies_to(profile_name) {
+            continue;
+        }
+        let conditions = conditions(&rule.metadata.when, profile);
+        if let Some(limit) = rule.minimum {
+            rules.push(Rule {
+                id: if rule.maximum.is_some() {
+                    format!("{}.minimum", rule.metadata.id)
+                } else {
+                    rule.metadata.id.clone()
+                },
+                title: "Minimum copper layer count".to_owned(),
+                severity: Severity::Error,
+                comparison: Comparison::Minimum,
+                limit: LimitValue::Count(limit),
+                kind: RuleKind::CopperLayerCount,
+                conditions: conditions.clone(),
+            });
+        }
+        if let Some(limit) = rule.maximum {
+            rules.push(Rule {
+                id: if rule.minimum.is_some() {
+                    format!("{}.maximum", rule.metadata.id)
+                } else {
+                    rule.metadata.id.clone()
+                },
+                title: "Maximum copper layer count".to_owned(),
+                severity: Severity::Error,
+                comparison: Comparison::Maximum,
+                limit: LimitValue::Count(limit),
+                kind: RuleKind::CopperLayerCount,
+                conditions,
+            });
+        }
+    }
+
+    for rule in &pdk.rules.drilling.hole_diameter {
+        lower_length_rule(
+            &mut rules,
+            &rule.metadata,
+            &rule.minimum,
+            rule.preferred.as_ref(),
+            profile_name,
+            profile,
+            format!("Minimum {} hole diameter", hole_class(rule.hole).label()),
+            RuleKind::HoleDiameter(hole_class(rule.hole)),
+        );
+    }
+    for rule in &pdk.rules.drilling.slot_width {
+        lower_length_rule(
+            &mut rules,
+            &rule.metadata,
+            &rule.minimum,
+            rule.preferred.as_ref(),
+            profile_name,
+            profile,
+            format!("Minimum {} routed slot width", slot_label(rule.plating)),
+            RuleKind::SlotWidth(rule.plating),
+        );
+    }
+    for rule in &pdk.rules.drilling.hole_to_hole_clearance {
+        let first = hole_class(rule.first_hole);
+        let second = hole_class(rule.second_hole);
+        lower_length_rule(
+            &mut rules,
+            &rule.metadata,
+            &rule.minimum,
+            rule.preferred.as_ref(),
+            profile_name,
+            profile,
+            format!(
+                "Minimum {}-to-{} hole clearance",
+                first.label(),
+                second.label()
+            ),
+            RuleKind::HolePairClearance(first, second),
+        );
+    }
+    for rule in &pdk.rules.copper.annular_ring {
+        let class = plated_hole_class(rule.hole);
+        lower_length_rule(
+            &mut rules,
+            &rule.metadata,
+            &rule.minimum,
+            rule.preferred.as_ref(),
+            profile_name,
+            profile,
+            format!("Minimum {} annular ring", class.label()),
+            RuleKind::AnnularRing(class),
+        );
+    }
+    for (ruleset, title, kind) in [
         (
-            &drilling.minimum_via_hole_diameter,
-            "drilling.minimum_via_hole_diameter",
-            "Minimum via hole diameter",
-            RuleKind::HoleDiameter(HoleClass::Via),
-        ),
-        (
-            &drilling.minimum_pth_hole_diameter,
-            "drilling.minimum_pth_hole_diameter",
-            "Minimum plated through-hole diameter",
-            RuleKind::HoleDiameter(HoleClass::Pth),
-        ),
-        (
-            &drilling.minimum_npth_hole_diameter,
-            "drilling.minimum_npth_hole_diameter",
-            "Minimum non-plated hole diameter",
-            RuleKind::HoleDiameter(HoleClass::Npth),
-        ),
-        (
-            &drilling.minimum_slot_width,
-            "drilling.minimum_slot_width",
-            "Minimum routed slot width",
-            RuleKind::SlotWidth,
-        ),
-        (
-            &drilling.minimum_hole_to_hole_clearance,
-            "drilling.minimum_hole_to_hole_clearance",
-            "Minimum hole edge-to-edge clearance",
-            RuleKind::HolePairClearance,
-        ),
-        (
-            &copper.minimum_via_annular_ring,
-            "copper.minimum_via_annular_ring",
-            "Minimum via annular ring",
-            RuleKind::AnnularRing(HoleClass::Via),
-        ),
-        (
-            &copper.minimum_pth_annular_ring,
-            "copper.minimum_pth_annular_ring",
-            "Minimum plated through-hole annular ring",
-            RuleKind::AnnularRing(HoleClass::Pth),
-        ),
-        (
-            &copper.minimum_feature_width,
-            "copper.minimum_feature_width",
+            &pdk.rules.copper.feature_width,
             "Minimum copper feature width",
             RuleKind::CopperFeatureWidth,
         ),
         (
-            &copper.minimum_copper_clearance,
-            "copper.minimum_copper_clearance",
+            &pdk.rules.copper.clearance,
             "Minimum copper-to-copper clearance",
             RuleKind::CopperClearance,
         ),
         (
-            &copper.minimum_vscore_to_copper_clearance,
-            "copper.minimum_vscore_to_copper_clearance",
-            "Minimum V-score centerline-to-copper clearance",
-            RuleKind::LineworkToCopperClearance(Linework::VScore),
-        ),
-        (
-            &copper.minimum_board_edge_clearance,
-            "copper.minimum_board_edge_clearance",
+            &pdk.rules.copper.board_edge_clearance,
             "Minimum board-edge-to-copper clearance",
             RuleKind::LineworkToCopperClearance(Linework::BoardEdge),
         ),
         (
-            &soldermask.minimum_web,
-            "soldermask.minimum_web",
+            &pdk.rules.copper.vscore_clearance,
+            "Minimum V-score centerline-to-copper clearance",
+            RuleKind::LineworkToCopperClearance(Linework::VScore),
+        ),
+        (
+            &pdk.rules.soldermask.web,
             "Minimum soldermask web",
             RuleKind::SoldermaskWeb,
         ),
         (
-            &panelization.minimum_board_array_spacing,
-            "panelization.minimum_board_array_spacing",
+            &pdk.rules.panelization.board_spacing,
             "Minimum spacing between board-array outlines",
             RuleKind::BoardArrayPairClearance,
         ),
-    ];
-
-    let mut rules = Vec::new();
-    for (limit, id, title, kind) in table {
-        let Some(limit) = limit else {
-            continue;
-        };
-        rules.push(Rule {
-            id: id.to_owned(),
-            title: title.to_owned(),
-            severity: Severity::Error,
-            comparison: Comparison::Minimum,
-            limit: LimitValue::Length(limit.minimum().clone()),
-            kind,
-        });
-        if let Some(preferred) = limit.preferred() {
-            if preferred.millimeters() <= limit.minimum().millimeters() {
-                bail!(
-                    "{id}: preferred limit {} must exceed the minimum {}",
-                    preferred.original(),
-                    limit.minimum().original()
-                );
-            }
-            rules.push(Rule {
-                id: format!("{id}.preferred"),
-                title: format!("{title} (preferred)"),
-                severity: Severity::Warning,
-                comparison: Comparison::Minimum,
-                limit: LimitValue::Length(preferred.clone()),
-                kind,
-            });
-        }
-    }
-    for (limit, id, title, comparison) in [
-        (
-            stackup.minimum_copper_layer_count,
-            "stackup.minimum_copper_layer_count",
-            "Minimum copper layer count",
-            Comparison::Minimum,
-        ),
-        (
-            stackup.maximum_copper_layer_count,
-            "stackup.maximum_copper_layer_count",
-            "Maximum copper layer count",
-            Comparison::Maximum,
-        ),
     ] {
-        if let Some(limit) = limit {
-            rules.push(Rule {
-                id: id.to_owned(),
-                title: title.to_owned(),
-                severity: Severity::Error,
-                comparison,
-                limit: LimitValue::Count(limit),
-                kind: RuleKind::CopperLayerCount,
-            });
+        for rule in ruleset {
+            lower_length_rule(
+                &mut rules,
+                &rule.metadata,
+                &rule.minimum,
+                rule.preferred.as_ref(),
+                profile_name,
+                profile,
+                title.to_owned(),
+                kind,
+            );
         }
     }
     Ok(rules)
+}
+
+fn lower_length_rule(
+    rules: &mut Vec<Rule>,
+    metadata: &RuleMetadata,
+    minimum: &Length,
+    preferred: Option<&Length>,
+    profile_name: &str,
+    profile: &Profile,
+    title: String,
+    kind: RuleKind,
+) {
+    if !metadata.applies_to(profile_name) {
+        return;
+    }
+    let conditions = conditions(&metadata.when, profile);
+    rules.push(Rule {
+        id: metadata.id.clone(),
+        title: title.clone(),
+        severity: Severity::Error,
+        comparison: Comparison::Minimum,
+        limit: LimitValue::Length(minimum.clone()),
+        kind,
+        conditions: conditions.clone(),
+    });
+    if let Some(preferred) = preferred {
+        rules.push(Rule {
+            id: format!("{}.preferred", metadata.id),
+            title: format!("{title} (preferred)"),
+            severity: Severity::Warning,
+            comparison: Comparison::Minimum,
+            limit: LimitValue::Length(preferred.clone()),
+            kind,
+            conditions,
+        });
+    }
+}
+
+fn conditions(rule: &RuleConditions, profile: &Profile) -> Conditions {
+    Conditions {
+        minimum_copper_layers: rule.minimum_copper_layers,
+        maximum_copper_layers: rule.maximum_copper_layers,
+        layer: rule.layer,
+        copper_weight_oz: rule.copper_weight.as_ref().map(CopperWeight::ounces),
+        assumed_outer_copper_weight_oz: profile
+            .defaults
+            .outer_copper_weight
+            .as_ref()
+            .map(CopperWeight::ounces),
+        assumed_inner_copper_weight_oz: profile
+            .defaults
+            .inner_copper_weight
+            .as_ref()
+            .map(CopperWeight::ounces),
+    }
+}
+
+fn hole_class(kind: HoleKind) -> HoleClass {
+    match kind {
+        HoleKind::Via => HoleClass::Via,
+        HoleKind::Pth => HoleClass::Pth,
+        HoleKind::Npth => HoleClass::Npth,
+    }
+}
+
+fn plated_hole_class(kind: PlatedHoleKind) -> HoleClass {
+    match kind {
+        PlatedHoleKind::Via => HoleClass::Via,
+        PlatedHoleKind::Pth => HoleClass::Pth,
+    }
+}
+
+fn slot_label(plating: SlotPlating) -> &'static str {
+    match plating {
+        SlotPlating::Plated => "plated",
+        SlotPlating::Nonplated => "non-plated",
+    }
 }

@@ -204,7 +204,7 @@ enum DfmCommands {
         /// IPC-2581 XML file to check
         #[arg(value_hint = clap::ValueHint::FilePath)]
         file: PathBuf,
-        /// Built-in PDK name or fabrication PDK TOML path (built-ins: standard)
+        /// Built-in PDK name or fabrication PDK TOML path (standard, JLCPCB, or IPC profile)
         #[arg(long)]
         pdk: PathBuf,
         /// Waiver file of accepted finding ids (TOML)

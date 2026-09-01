@@ -12,6 +12,7 @@ use pcb_ir::geom::dfm::{region_clearance, region_clearance_sites};
 
 use crate::commands::dfm::design::{ConductorId, Design};
 use crate::commands::dfm::report::{Evidence, SourceLocator, Subject};
+use crate::commands::dfm::rules::Conditions;
 
 use super::{Evaluation, Measured, linework_clearance, violates};
 
@@ -20,11 +21,14 @@ struct Piece {
     region: pcb_ir::geom::ContourSet,
 }
 
-pub(super) fn evaluate(limit_mm: f64, design: &Design) -> Evaluation {
+pub(super) fn evaluate(limit_mm: f64, conditions: &Conditions, design: &Design) -> Evaluation {
     let mut checked = 0;
     let mut measured = Vec::new();
 
     for layer in &design.copper_layers {
+        if !conditions.applies_to_layer(layer) {
+            continue;
+        }
         let components = layer
             .conductors
             .iter()
@@ -155,15 +159,20 @@ mod tests {
     use crate::commands::dfm::{checks, design::Design, pdk::Pdk, rules};
     use crate::ipc2581::Ipc2581;
 
-    const PDK: &str = r#"schema_version = 1
+    const PDK: &str = r#"schema_version = 2
+default_profile = "test"
 
 [pdk]
 id = "clearance-test"
 name = "Clearance test"
 revision = "1"
 
-[capabilities.copper]
-minimum_copper_clearance = "0.15 mm"
+[profiles.test]
+name = "Test"
+
+[[rules.copper.clearance]]
+id = "copper-clearance"
+minimum = "0.15 mm"
 "#;
 
     const BOARD: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -219,7 +228,7 @@ minimum_copper_clearance = "0.15 mm"
     fn run(xml: &str) -> checks::Results {
         let ipc = Ipc2581::parse(xml).unwrap();
         let pdk = Pdk::parse(PDK).unwrap();
-        let rules = rules::lower(&pdk).unwrap();
+        let rules = rules::lower(&pdk, None).unwrap();
         let imported = pcb_ir::import::ipc2581::import_design(&ipc).unwrap();
         let design = Design::extract(&imported, ArtworkScope::Board, &rules).unwrap();
         checks::run(
@@ -275,7 +284,7 @@ minimum_copper_clearance = "0.15 mm"
         let xml = BOARD.replace("<Set net=\"N2\">", "<Set>");
         let ipc = Ipc2581::parse(&xml).unwrap();
         let pdk = Pdk::parse(PDK).unwrap();
-        let rules = rules::lower(&pdk).unwrap();
+        let rules = rules::lower(&pdk, None).unwrap();
         let imported = pcb_ir::import::ipc2581::import_design(&ipc).unwrap();
 
         let error = Design::extract(&imported, ArtworkScope::Board, &rules)

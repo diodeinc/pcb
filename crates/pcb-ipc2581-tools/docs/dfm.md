@@ -7,66 +7,114 @@ native vector geometry, and the exact PDK source for external viewers.
 ## PDK
 
 The PDK is strict and versioned. Unknown fields, bare numeric lengths, and
-unsupported schema versions are errors — refusing an unknown capability key
-is deliberate, because silently ignoring a capability the fab requires would
+unsupported schema versions are errors — refusing an unknown rule key
+is deliberate, because silently ignoring a rule the fab requires would
 green-light unchecked boards. A PDK that configures no rules is an error
 rather than a passing report.
 
 ```toml
-schema_version = 1
+schema_version = 2
+default_profile = "standard"
 
 [pdk]
-id = "example-fab-standard"
-name = "Example fabrication standard"
-revision = "1"
-# manufacturer = "Example Fabricator"
-# process = "standard"
+id = "example-fab"
+name = "Example fabrication kit"
+revision = "2"
 
-[capabilities.stackup]
-minimum_copper_layer_count = 2
-maximum_copper_layer_count = 10
+[sources.capabilities]
+title = "Example Fab PCB capabilities"
+url = "https://fab.example/capabilities"
+accessed = "2026-09-01"
 
-[capabilities.drilling]
-minimum_via_hole_diameter = "0.2 mm"
-minimum_pth_hole_diameter = "0.2 mm"
-minimum_npth_hole_diameter = "0.2 mm"
-minimum_slot_width = "0.8 mm"
-minimum_hole_to_hole_clearance = "10 mil"
+[profiles.standard]
+name = "1 oz rigid standard"
+technologies = ["rigid"]
+source = "capabilities"
 
-[capabilities.copper]
-minimum_via_annular_ring = { minimum = "100 um", preferred = "0.125 mm" }
-minimum_pth_annular_ring = "0.125 mm"
-minimum_feature_width = "0.09 mm"
-minimum_copper_clearance = "0.09 mm"
-minimum_board_edge_clearance = "0.25 mm"
-minimum_vscore_to_copper_clearance = "15 mil"
+[profiles.standard.defaults]
+material = "FR-4"
+board_thickness = "1.6 mm"
+outer_copper_weight = "1 oz"
+inner_copper_weight = "0.5 oz"
+soldermask_color = "green"
 
-[capabilities.soldermask]
-minimum_web = "3 mil"
+[[rules.stackup.copper_layer_count]]
+id = "stackup.layers"
+minimum = 2
+maximum = 10
 
-[capabilities.panelization]
-minimum_board_array_spacing = "300 mil"
+[[rules.drilling.hole_diameter]]
+id = "drilling.via_hole"
+hole = "via"
+minimum = "0.2 mm"
+preferred = "0.25 mm"
+source = "capabilities"
+
+[[rules.drilling.slot_width]]
+id = "drilling.plated_slot.2_layer"
+plating = "plated"
+minimum = "0.50 mm"
+when = { minimum_copper_layers = 2, maximum_copper_layers = 2 }
+
+[[rules.drilling.slot_width]]
+id = "drilling.plated_slot.multilayer"
+plating = "plated"
+minimum = "0.35 mm"
+when = { minimum_copper_layers = 3, maximum_copper_layers = 10 }
+
+[[rules.drilling.hole_to_hole_clearance]]
+id = "drilling.via_to_pth"
+first_hole = "via"
+second_hole = "pth"
+minimum = "10 mil"
+
+[[rules.copper.annular_ring]]
+id = "copper.via_annular_ring"
+hole = "via"
+minimum = "100 um"
+preferred = "0.125 mm"
+
+[[rules.copper.feature_width]]
+id = "copper.outer_feature_width"
+minimum = "0.10 mm"
+when = { layer = "outer", copper_weight = "1 oz" }
 ```
 
-Layer counts are positive integers and refer specifically to conductive layers
-in the physical stackup. When both bounds are configured, the minimum must not
-exceed the maximum. Every dimensional limit is a positive string containing a
-number and `mm`, `mil`, `mils`, or `um`. Units can be mixed in one PDK. Checks
-normalize lengths to millimeters and the report retains both the source
-spelling and normalized value.
+One PDK file is a kit with named profiles. A built-in name selects both a kit
+and one profile; a custom file runs its `default_profile`. An executable
+profile lowers only rules whose `profiles` list contains it; an omitted list
+means every profile. A `metadata_only` profile fails closed before checking,
+which lets a kit publish a standard taxonomy without pretending that missing
+numeric rules establish compliance.
 
-Every dimensional capability takes either a bare length — the binding minimum
-— or a table with a `preferred` tier the fab would rather see met:
+Every rule has a stable authored `id` and a typed subject selector. Hole rules
+select `via`, `pth`, or `npth`; slots select `plated` or `nonplated`; hole-pair
+rules state both classes. `when` can condition any rule on a copper-layer-count
+range; copper rules can also select `outer`/`inner` layer position and finished
+copper weight. Unsupported condition/rule combinations are errors rather than
+silently ignored selectors. Every overlapping applicable rule is enforced, so
+the strictest requirement is binding without an expression language. A
+condition requiring stackup context fails extraction if the IPC-2581 file has
+no unambiguous physical stackup.
+
+Layer counts are positive integers. Every dimensional minimum is a positive
+string containing a number and `mm`, `mil`, `mils`, or `um`; copper weight is a
+positive `oz` string. Units can be mixed. Checks normalize lengths to
+millimeters and retain both source spelling and normalized value. Profile
+defaults document an order's assumptions in the report; an outer/inner copper
+weight default is also the fallback for a weight-conditioned rule when the
+source stackup does not state that weight.
+
+Every dimensional rule has a binding `minimum` and may add a `preferred` tier:
 
 - The minimum lowers to an **error**-severity rule whose id is the
-  capability path, e.g. `copper.minimum_via_annular_ring`. Error findings
-  fail the verdict.
+  authored rule id. Error findings fail the verdict.
 - A preferred tier lowers to a second, **warning**-severity rule under
-  `<capability>.preferred`. Warning findings are reported and counted but do
+  `<id>.preferred`. Warning findings are reported and counted but do
   not fail the verdict. The preferred value must exceed the minimum.
 
-Rule ids are the PDK capability paths, so every reported limit can be traced
-to its PDK line verbatim.
+Rule ids, profile metadata, source citations, and the exact PDK TOML are
+retained in the report for auditability.
 
 ## Evaluation model
 
@@ -132,8 +180,8 @@ when fewer than two exist.
 - Copper layer count requires exactly one physical stackup. Every declared
   copper layer must occur exactly once in it; missing or ambiguous stackup data
   fails extraction rather than guessing from artwork layer names.
-- Hole diameter rules measure every drilled hole of the rule's class;
-  `minimum_slot_width` measures every routed slot. A slot's width is settled
+- Hole diameter rules measure every drilled hole of the rule's class. Slot
+  width rules measure routed slots of the selected plating class. A slot's width is settled
   at extraction: the stated primitive width when present — exact, and
   verified against the materialized outline — and otherwise the outline's
   narrowest local width. Drill extraction fails rather than silently
@@ -148,15 +196,15 @@ when fewer than two exist.
   layer with a matching source land, must retain copper at the hole center;
   missing copper there is a zero-enclosure failure. One finding per hole
   reports the worst layer.
-- `minimum_feature_width` reports narrow copper piece by piece after final
-  polarity composition. `minimum_copper_clearance` measures the shortest
+- Copper feature-width rules report narrow copper piece by piece after final
+  polarity composition. Copper-clearance rules measure the shortest
   boundary distance between distinct final conductor images. Same-net
   notches and same-net islands are not clearance subjects; touching or
   overlapping distinct conductors have zero clearance. Functional copper
   without a net fails extraction when this rule is configured instead of
   being guessed into an electrical domain. Fiducials and copper-balance
   support remain explicit auxiliary conductors.
-- `soldermask.minimum_web` reports mask webs — gaps between mask openings —
+- Soldermask-web rules report mask webs — gaps between mask openings —
   narrower than the limit. Morphology finds candidates; the medial-axis
   width decides each finding.
 - V-score and board-edge clearance measure the shortest distance from the
@@ -200,11 +248,27 @@ pcb dfm board.zen --pdk standard -o board.dfm.json
 temporary IPC-2581 and checking the canonical board. Use `pcb ipc dfm check`
 to inspect existing manufacturing files without changing their source layout.
 
-`--pdk` accepts an exact built-in name or a TOML path. `standard` is bundled
-with `pcb` and reported as `builtin:standard`; use `./standard` to select a
-same-named file. Both use the same parser and checks. `--layout-target` accepts
+`--pdk` accepts an exact built-in name or a TOML path. `standard`, `jlcpcb`,
+`jlcpcb-1oz-standard-color`, `jlcpcb-1oz-black-white`, and `ipc-1a` through
+`ipc-3c` are bundled. `jlcpcb` selects the standard-color profile; `ipc`
+selects the opinionated Class 2 / Producibility Level B default. Use
+`./standard` to select a same-named file. Both sources use the same parser and
+checks. `--layout-target` accepts
 `board` or `board-array` and defaults to `board-array`. Add
 `--waivers waivers.toml` to apply a [waiver file](#waivers).
+
+The JLCPCB profiles execute the public rigid FR-4 capability table for 2-32
+copper layers and 1 oz outer copper. They deliberately omit the one-layer
+NPTH-only service, 2 oz rules, local 3 mil BGA exceptions, and panel spacing,
+which depends on the chosen routing, mouse-bite, or V-cut process. The
+standard-color profile uses the published 0.10 mm mask web; the black/white
+profile uses 0.13 mm.
+
+The nine IPC built-ins model performance Classes 1-3 crossed with
+Producibility Levels A-C and identify IPC's public 0.125-6 oz coverage. They
+are `metadata_only`: IPC publishes the taxonomy, but the numeric Advanced DFM
+profile matrices are licensed data and are not redistributed here. Selecting
+one returns an incomplete-check error instead of claiming IPC compliance.
 
 Output is UTF-8 JSON on stdout unless `-o` / `--output` is supplied. The
 recommended suffix is `.dfm.json`. Every complete report includes the native
@@ -234,7 +298,8 @@ A complete report has these fields:
 - `verdict`: `pass` or `fail`.
 - `tool`: producer name and version.
 - `input`: original IPC input path, SHA-256, and byte size.
-- `pdk`: resolved kit metadata, path, exact TOML `source`, and SHA-256.
+- `pdk`: resolved kit and profile metadata, assumptions, source citation, path,
+  exact TOML `source`, and SHA-256.
 - `waivers`: file path and SHA-256 plus applied, expired, and unmatched entries;
   `null` when no waiver file was given. See [source identity](#source-identity).
 - `layout_target`: `board` or `board_array`.
@@ -246,7 +311,7 @@ A complete report has these fields:
   geometry: `mm`, `x_right_y_up`, and `ipc_2581_design` in version 1.
 - `summary`: rule counts by status and finding counts by severity and
   waiver state.
-- `rules`: one result per lowered rule: its id (the capability path, plus
+- `rules`: one result per lowered rule: its authored id (plus
   `.preferred` for warning tiers), severity, source and normalized limit,
   status (`pass`, `warning`, `fail`, or `skipped`), skip reason, and the
   measurement contract shared by all of its findings — `subject` (what one

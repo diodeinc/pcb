@@ -75,13 +75,17 @@ pub fn builtin_pdks() -> &'static [BuiltinPdk] {
 /// Manufacturing violations are successful results with a `fail` verdict;
 /// only invalid inputs or geometry that cannot be checked return an error.
 pub fn check(imported: &ImportedDesign, request: CheckRequest<'_>) -> Result<DfmReport> {
-    let (pdk_path, pdk_source) = match request.pdk {
+    let (pdk_path, pdk_source, selected_profile) = match request.pdk {
         PdkSource::Builtin(name) => {
             let pdk = builtin_pdks::find(name)
                 .with_context(|| format!("unknown built-in PDK '{name}'"))?;
-            (format!("builtin:{}", pdk.name), pdk.source)
+            (
+                format!("builtin:{}", pdk.name),
+                pdk.source,
+                Some(pdk.profile),
+            )
         }
-        PdkSource::Toml(source) => (source.path.to_owned(), source.source),
+        PdkSource::Toml(source) => (source.path.to_owned(), source.source, None),
     };
     ensure!(
         pdk_source.len() <= MAX_PDK_BYTES,
@@ -89,7 +93,8 @@ pub fn check(imported: &ImportedDesign, request: CheckRequest<'_>) -> Result<Dfm
     );
     let pdk =
         pdk::Pdk::parse(pdk_source).with_context(|| format!("failed to parse PDK {pdk_path}"))?;
-    let rules = rules::lower(&pdk).with_context(|| format!("failed to lower PDK {pdk_path}"))?;
+    let rules = rules::lower(&pdk, selected_profile)
+        .with_context(|| format!("failed to lower PDK {pdk_path}"))?;
     if rules.is_empty() {
         bail!("PDK {pdk_path} configures no DFM rules; add at least one capability");
     }
@@ -126,6 +131,7 @@ pub fn check(imported: &ImportedDesign, request: CheckRequest<'_>) -> Result<Dfm
         input: request.input,
         pdk: report::PdkIdentity::from_pdk(
             &pdk,
+            selected_profile,
             pdk_path,
             sha256(pdk_source.as_bytes()),
             pdk_source.to_owned(),
@@ -478,23 +484,36 @@ mod tests {
   </Ecad>
 </IPC-2581>"#;
 
-    const PDK: &str = r#"schema_version = 1
+    const PDK: &str = r#"schema_version = 2
+default_profile = "test"
 
 [pdk]
 id = "scope-test"
 name = "Scope test"
 revision = "1"
 
-[capabilities.stackup]
-minimum_copper_layer_count = 2
-maximum_copper_layer_count = 4
+[profiles.test]
+name = "Test"
 
-[capabilities.copper]
-minimum_vscore_to_copper_clearance = "0.5 mm"
-minimum_board_edge_clearance = "0.5 mm"
+[[rules.stackup.copper_layer_count]]
+id = "stackup.minimum_copper_layer_count"
+minimum = 2
 
-[capabilities.panelization]
-minimum_board_array_spacing = "300 mil"
+[[rules.stackup.copper_layer_count]]
+id = "stackup.maximum_copper_layer_count"
+maximum = 4
+
+[[rules.copper.vscore_clearance]]
+id = "copper.minimum_vscore_to_copper_clearance"
+minimum = "0.5 mm"
+
+[[rules.copper.board_edge_clearance]]
+id = "copper.minimum_board_edge_clearance"
+minimum = "0.5 mm"
+
+[[rules.panelization.board_spacing]]
+id = "panelization.minimum_board_array_spacing"
+minimum = "300 mil"
 "#;
 
     fn check(xml: &str, target: LayoutTarget) -> DfmReport {
@@ -525,7 +544,7 @@ minimum_board_array_spacing = "300 mil"
     }
 
     #[test]
-    fn loads_the_embedded_standard_pdk() {
+    fn loads_the_embedded_pdks_and_keeps_ipc_profiles_non_executable() {
         let builtin = builtin_pdks()
             .iter()
             .find(|pdk| pdk.name == "standard")
@@ -535,24 +554,58 @@ minimum_board_array_spacing = "300 mil"
         assert_eq!(parsed.pdk.name, "Standard");
         assert_eq!(parsed.pdk.manufacturer.as_deref(), Some("Diode"));
         assert_eq!(parsed.pdk.process.as_deref(), Some("Standard"));
-        assert_eq!(
-            parsed.capabilities.stackup.minimum_copper_layer_count,
-            Some(2)
+        assert_eq!(parsed.default_profile, "standard");
+        assert_eq!(parsed.rules.stackup.copper_layer_count[0].minimum, Some(2));
+        assert_eq!(parsed.rules.stackup.copper_layer_count[1].maximum, Some(10));
+        assert!(!rules::lower(&parsed, None).unwrap().is_empty());
+
+        for builtin in builtin_pdks() {
+            let parsed = pdk::Pdk::parse(builtin.source).unwrap();
+            let lowered = rules::lower(&parsed, Some(builtin.profile));
+            let (_, profile) = parsed.selected_profile(Some(builtin.profile)).unwrap();
+            if profile.status == pdk::ProfileStatus::MetadataOnly {
+                assert!(lowered.unwrap_err().to_string().contains("metadata-only"));
+            } else {
+                assert!(!lowered.unwrap().is_empty());
+            }
+        }
+
+        let jlc = builtin_pdks()
+            .iter()
+            .find(|pdk| pdk.name == "jlcpcb-1oz-black-white")
+            .unwrap();
+        let parsed = pdk::Pdk::parse(jlc.source).unwrap();
+        let rules = rules::lower(&parsed, Some(jlc.profile)).unwrap();
+        let mask = rules
+            .iter()
+            .find(|rule| rule.id == "jlc.soldermask.minimum_web.black_white")
+            .unwrap();
+        assert_eq!(mask.limit.length().millimeters(), 0.13);
+        assert!(
+            rules
+                .iter()
+                .all(|rule| rule.id != "jlc.soldermask.minimum_web.standard_color")
         );
-        assert_eq!(
-            parsed.capabilities.stackup.maximum_copper_layer_count,
-            Some(10)
-        );
-        assert!(!rules::lower(&parsed).unwrap().is_empty());
+        let two_layer = rules
+            .iter()
+            .find(|rule| rule.id == "jlc.copper.minimum_feature_width.2_layer")
+            .unwrap();
+        assert_eq!(two_layer.limit.length().millimeters(), 0.10);
+        assert_eq!(two_layer.conditions.minimum_copper_layers, Some(2));
+        assert_eq!(two_layer.conditions.maximum_copper_layers, Some(2));
+        let multilayer = rules
+            .iter()
+            .find(|rule| rule.id == "jlc.copper.minimum_feature_width.multilayer")
+            .unwrap();
+        assert_eq!(multilayer.limit.length().millimeters(), 0.09);
+        assert_eq!(multilayer.conditions.minimum_copper_layers, Some(3));
+        assert_eq!(multilayer.conditions.maximum_copper_layers, Some(32));
     }
 
     #[test]
     fn in_memory_report_keeps_source_identity_and_waiver_dates() {
         let imported = import_design(&Ipc2581::parse(BOARD).unwrap()).unwrap();
-        let pdk_source = PDK.replace(
-            "minimum_copper_layer_count = 2",
-            "minimum_copper_layer_count = 3",
-        );
+        let pdk_source = PDK.replace("minimum = 2", "minimum = 3");
         let run = |waivers, day| {
             super::check(
                 &imported,
@@ -628,10 +681,7 @@ reason = "old finding"
         let input = directory.path().join("board.xml.zst");
         let pdk = directory.path().join("custom.toml");
         let output = directory.path().join("report.json");
-        let pdk_source = PDK.replace(
-            "minimum_copper_layer_count = 2",
-            "minimum_copper_layer_count = 3",
-        );
+        let pdk_source = PDK.replace("minimum = 2", "minimum = 3");
         let bytes = zstd::encode_all(BOARD.as_bytes(), 0).unwrap();
         std::fs::write(&input, &bytes).unwrap();
         std::fs::write(&pdk, &pdk_source).unwrap();
@@ -741,10 +791,7 @@ reason = "old finding"
         let below_minimum = check_with_pdk(
             BOARD,
             LayoutTarget::Board,
-            &PDK.replace(
-                "minimum_copper_layer_count = 2",
-                "minimum_copper_layer_count = 3",
-            ),
+            &PDK.replace("minimum = 2", "minimum = 3"),
         );
         let minimum_rule = rule(&below_minimum, "stackup.minimum_copper_layer_count");
         assert_eq!(minimum_rule.checked, 1);
@@ -777,10 +824,7 @@ reason = "old finding"
         let above_maximum = check_with_pdk(
             BOARD,
             LayoutTarget::Board,
-            &PDK.replace(
-                "minimum_copper_layer_count = 2\nmaximum_copper_layer_count = 4",
-                "minimum_copper_layer_count = 1\nmaximum_copper_layer_count = 1",
-            ),
+            &PDK.replace("maximum = 4", "maximum = 1"),
         );
         let maximum_rule = rule(&above_maximum, "stackup.maximum_copper_layer_count");
         assert_eq!(maximum_rule.checked, 1);
@@ -804,7 +848,7 @@ reason = "old finding"
         ))
         .unwrap();
         let pdk = pdk::Pdk::parse(PDK).unwrap();
-        let rules = rules::lower(&pdk).unwrap();
+        let rules = rules::lower(&pdk, None).unwrap();
         let imported = import_design(&ipc).unwrap();
 
         let error = design::Design::extract(&imported, ArtworkScope::Board, &rules)

@@ -42,6 +42,7 @@ use crate::commands::dfm::design::{CopperLayer, Design, Hole, HoleClass, HoleLan
 use crate::commands::dfm::report::{
     Evidence, EvidenceDisplay, MeasurementKind, SourceLocator, Subject,
 };
+use crate::commands::dfm::rules::Conditions;
 
 use super::{Evaluation, Measured, MeasuredSite, hole_subject, holes_of_class, layers, violates};
 
@@ -53,7 +54,12 @@ struct RingSubject<'a> {
     in_copper: bool,
 }
 
-pub(super) fn evaluate(limit_mm: f64, class: HoleClass, design: &Design) -> Evaluation {
+pub(super) fn evaluate(
+    limit_mm: f64,
+    class: HoleClass,
+    conditions: &Conditions,
+    design: &Design,
+) -> Evaluation {
     let holes = holes_of_class(design, class);
     let copper_layers = &design.copper_layers;
     let hole_lands = &design.hole_lands;
@@ -100,6 +106,7 @@ pub(super) fn evaluate(limit_mm: f64, class: HoleClass, design: &Design) -> Eval
                 .iter()
                 .enumerate()
                 .filter(|(copper_index, _)| hole.spans_copper(*copper_index))
+                .filter(|(_, copper)| conditions.applies_to_layer(copper))
                 .filter_map(|(copper_index, copper)| {
                     let land = hole_lands[hole_index]
                         .iter()
@@ -260,19 +267,25 @@ mod tests {
 
     fn rule() -> Rule {
         let pdk = Pdk::parse(
-            r#"schema_version = 1
+            r#"schema_version = 2
+default_profile = "test"
 
 [pdk]
 id = "test"
 name = "Test"
 revision = "1"
 
-[capabilities.copper]
-minimum_pth_annular_ring = "0.2 mm"
+[profiles.test]
+name = "Test"
+
+[[rules.copper.annular_ring]]
+id = "pth-ring"
+hole = "pth"
+minimum = "0.2 mm"
 "#,
         )
         .unwrap();
-        rules::lower(&pdk).unwrap().remove(0)
+        rules::lower(&pdk, None).unwrap().remove(0)
     }
 
     /// A 1 mm plated hole at the origin through copper layers `L0..Ln`,
@@ -341,7 +354,12 @@ minimum_pth_annular_ring = "0.2 mm"
         let imported = pcb_ir::import::ipc2581::import_design(ipc).unwrap();
         let design =
             Design::extract(&imported, ArtworkScope::Board, std::slice::from_ref(&rule)).unwrap();
-        evaluate(rule.limit.length().millimeters(), HoleClass::Pth, &design)
+        evaluate(
+            rule.limit.length().millimeters(),
+            HoleClass::Pth,
+            &rule.conditions,
+            &design,
+        )
     }
 
     #[test]

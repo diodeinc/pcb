@@ -22,13 +22,22 @@
 
 use pcb_ir::geom::dfm::{circular_region, disk_clearance};
 
-use crate::commands::dfm::design::Design;
+use crate::commands::dfm::design::{Design, HoleClass};
 use crate::commands::dfm::report::{DisplayCircle, Evidence, EvidenceDisplay, MeasurementKind};
 
 use super::{COMPARISON_EPSILON_MM, Evaluation, Measured, MeasuredSite, hole_subject, layers};
 
-pub(super) fn evaluate(limit_mm: f64, design: &Design) -> Evaluation {
-    let holes = &design.holes;
+pub(super) fn evaluate(
+    limit_mm: f64,
+    first_class: HoleClass,
+    second_class: HoleClass,
+    design: &Design,
+) -> Evaluation {
+    let holes = design
+        .holes
+        .iter()
+        .filter(|hole| hole.class == first_class || hole.class == second_class)
+        .collect::<Vec<_>>();
     let reach = limit_mm - COMPARISON_EPSILON_MM;
     let measured = holes
         .iter()
@@ -38,10 +47,13 @@ pub(super) fn evaluate(limit_mm: f64, design: &Design) -> Evaluation {
                 .iter()
                 .take_while(move |second| second.bbox.min.x - first.bbox.max.x < reach)
                 .filter(move |second| {
+                    let classes_match = (first.class == first_class
+                        && second.class == second_class)
+                        || (first.class == second_class && second.class == first_class);
                     let y_gap = (second.bbox.min.y - first.bbox.max.y)
                         .max(first.bbox.min.y - second.bbox.max.y)
                         .max(0.0);
-                    y_gap < reach && first.span_overlaps(second)
+                    classes_match && y_gap < reach && first.span_overlaps(second)
                 })
                 .map(move |second| {
                     let distance = disk_clearance(
@@ -139,20 +151,26 @@ mod tests {
           </CadData></Ecad>
         </IPC-2581>"#).unwrap();
         let pdk = Pdk::parse(
-            r#"schema_version = 1
+            r#"schema_version = 2
+          default_profile = "test"
           [pdk]
           id = "test"
           name = "Test"
           revision = "1"
-          [capabilities.drilling]
-          minimum_hole_to_hole_clearance = "0.2 mm"
+          [profiles.test]
+          name = "Test"
+          [[rules.drilling.hole_to_hole_clearance]]
+          id = "hole-clearance"
+          first_hole = "pth"
+          second_hole = "pth"
+          minimum = "0.2 mm"
         "#,
         )
         .unwrap();
-        let rules = rules::lower(&pdk).unwrap();
+        let rules = rules::lower(&pdk, None).unwrap();
         let imported = pcb_ir::import::ipc2581::import_design(&ipc).unwrap();
         let design = Design::extract(&imported, ArtworkScope::Board, &rules).unwrap();
-        let evaluation = evaluate(0.2, &design);
+        let evaluation = evaluate(0.2, HoleClass::Pth, HoleClass::Pth, &design);
         assert_eq!(evaluation.measured.len(), 1);
         let site = &evaluation.measured[0].sites[0];
         let overlap = site

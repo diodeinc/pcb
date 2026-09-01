@@ -32,7 +32,7 @@ use crate::commands::dfm::design::{BoardOutline, CopperLayer, Design};
 use crate::commands::dfm::report::{
     Evidence, EvidenceDisplay, LayerRef, MeasurementKind, ReportPoint, SourceLocator, Subject,
 };
-use crate::commands::dfm::rules::Linework;
+use crate::commands::dfm::rules::{Conditions, Linework};
 
 use super::{Evaluation, Measured, MeasuredSite, layers, violates};
 
@@ -93,7 +93,12 @@ fn linework_items(linework: Linework, design: &Design) -> LineworkPool {
     LineworkPool { items, segments }
 }
 
-pub(super) fn evaluate(limit_mm: f64, linework: Linework, design: &Design) -> Evaluation {
+pub(super) fn evaluate(
+    limit_mm: f64,
+    linework: Linework,
+    conditions: &Conditions,
+    design: &Design,
+) -> Evaluation {
     let copper_layers = &design.copper_layers;
     let boundaries = &design.copper_boundaries;
     let pool = linework_items(linework, design);
@@ -106,6 +111,7 @@ pub(super) fn evaluate(limit_mm: f64, linework: Linework, design: &Design) -> Ev
     let measured = copper_layers
         .iter()
         .enumerate()
+        .filter(|(_, copper)| conditions.applies_to_layer(copper))
         .flat_map(|(copper_index, copper)| {
             let inside = copper.image.contains_points_batch(&endpoints);
             items.iter().filter_map(move |item| {
@@ -155,7 +161,11 @@ pub(super) fn evaluate(limit_mm: f64, linework: Linework, design: &Design) -> Ev
         })
         .collect();
     Evaluation {
-        checked: copper_layers.len() * items.len(),
+        checked: copper_layers
+            .iter()
+            .filter(|layer| conditions.applies_to_layer(layer))
+            .count()
+            * items.len(),
         measured,
     }
 }

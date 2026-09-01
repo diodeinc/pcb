@@ -1,31 +1,59 @@
-schema_version = 1
+schema_version = 2
+default_profile = "standard"
 
 [pdk]
-id = "example-fab-standard"
-name = "Example fabrication standard"
-revision = "1"
+id = "example-fab"
+name = "Example fabrication kit"
+revision = "2"
 
-[capabilities.stackup]
-minimum_copper_layer_count = 2
-maximum_copper_layer_count = 10
+[profiles.standard]
+name = "1 oz rigid standard"
+technologies = ["rigid"]
 
-[capabilities.drilling]
-minimum_via_hole_diameter = "0.2 mm"
-minimum_pth_hole_diameter = "0.2 mm"
-minimum_npth_hole_diameter = "0.2 mm"
-minimum_slot_width = "0.8 mm"
-minimum_hole_to_hole_clearance = "10 mil"
+[profiles.standard.defaults]
+material = "FR-4"
+board_thickness = "1.6 mm"
+outer_copper_weight = "1 oz"
+inner_copper_weight = "0.5 oz"
+soldermask_color = "green"
 
-[capabilities.copper]
-minimum_via_annular_ring = { minimum = "100 um", preferred = "0.125 mm" }
-minimum_pth_annular_ring = "0.125 mm"
-minimum_feature_width = "0.09 mm"
-minimum_copper_clearance = "0.09 mm"
-minimum_board_edge_clearance = "0.25 mm"
-minimum_vscore_to_copper_clearance = "15 mil"
+[[rules.stackup.copper_layer_count]]
+id = "stackup.layers"
+minimum = 2
+maximum = 10
 
-[capabilities.soldermask]
-minimum_web = "3 mil"
+[[rules.drilling.hole_diameter]]
+id = "drilling.via_hole"
+hole = "via"
+minimum = "0.2 mm"
 
-[capabilities.panelization]
-minimum_board_array_spacing = "300 mil"
+[[rules.drilling.slot_width]]
+id = "drilling.plated_slot.2_layer"
+plating = "plated"
+minimum = "0.5 mm"
+when = { minimum_copper_layers = 2, maximum_copper_layers = 2 }
+
+[[rules.drilling.slot_width]]
+id = "drilling.plated_slot.multilayer"
+plating = "plated"
+minimum = "0.35 mm"
+when = { minimum_copper_layers = 3, maximum_copper_layers = 10 }
+
+[[rules.copper.annular_ring]]
+id = "copper.via_annular_ring"
+hole = "via"
+minimum = "100 um"
+preferred = "0.125 mm"
+
+[[rules.copper.feature_width]]
+id = "copper.outer_feature_width"
+minimum = "0.10 mm"
+when = { layer = "outer", copper_weight = "1 oz" }
+
+[[rules.copper.clearance]]
+id = "copper.clearance"
+minimum = "0.10 mm"
+
+[[rules.soldermask.web]]
+id = "soldermask.web"
+minimum = "0.10 mm"
