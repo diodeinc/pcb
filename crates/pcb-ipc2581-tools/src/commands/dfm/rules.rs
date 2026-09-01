@@ -599,6 +599,7 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
     Ok(rules)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn lower_length_rule(
     rules: &mut Vec<Rule>,
     metadata: &RuleMetadata,
