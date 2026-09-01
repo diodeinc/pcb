@@ -1,0 +1,802 @@
+{
+  "schema_version": 1,
+  "units": {
+    "length": "mm",
+    "angle": "degree"
+  },
+  "source": {
+    "format": "ipc_2581",
+    "revision": "C",
+    "creation_software": "KiCad",
+    "software_package": {
+      "name": "KiCad",
+      "revision": "10.0",
+      "vendor": "KiCad"
+    }
+  },
+  "scope": {
+    "kind": "board_array",
+    "root_step": "panel",
+    "coordinate_frame": "ipc_2581_design_x_right_y_up"
+  },
+  "readiness": "incomplete",
+  "summary": {
+    "board_occurrences": 2,
+    "packages": 3,
+    "components": {
+      "total": 8,
+      "included": 6,
+      "excluded": 2,
+      "included_populated": 4,
+      "included_do_not_populate": 0,
+      "included_population_unresolved": 2
+    },
+    "terminations": {
+      "total": 6,
+      "on_included_populated_components": 4,
+      "surface_on_included_populated_components": 2,
+      "through_on_included_populated_components": 2,
+      "blind_on_included_populated_components": 0
+    },
+    "paste": {
+      "islands": 2,
+      "exactly_linked_to_termination": 2,
+      "on_included_populated_components": 2,
+      "exactly_linked_on_included_populated_components": 2
+    }
+  },
+  "boards": [
+    {
+      "id": "board-15ffd245c3d0",
+      "step": "board",
+      "path": [
+        {
+          "step": "panel",
+          "repeat": null
+        },
+        {
+          "step": "board",
+          "repeat": {
+            "index_x": 1,
+            "index_y": 0,
+            "first_x_mm": 10.0,
+            "first_y_mm": 20.0,
+            "pitch_x_mm": 15.0,
+            "pitch_y_mm": 0.0,
+            "rotation_degrees": 13.0,
+            "mirror": false
+          }
+        }
+      ],
+      "transform": [
+        0.9743700647852352,
+        -0.224951054343865,
+        0.224951054343865,
+        0.9743700647852352,
+        25.0,
+        20.0
+      ]
+    },
+    {
+      "id": "board-47fd2771cbd2",
+      "step": "board",
+      "path": [
+        {
+          "step": "panel",
+          "repeat": null
+        },
+        {
+          "step": "board",
+          "repeat": {
+            "index_x": 0,
+            "index_y": 0,
+            "first_x_mm": 10.0,
+            "first_y_mm": 20.0,
+            "pitch_x_mm": 15.0,
+            "pitch_y_mm": 0.0,
+            "rotation_degrees": 13.0,
+            "mirror": false
+          }
+        }
+      ],
+      "transform": [
+        0.9743700647852352,
+        -0.224951054343865,
+        0.224951054343865,
+        0.9743700647852352,
+        10.0,
+        20.0
+      ]
+    }
+  ],
+  "packages": [
+    {
+      "id": "package-5a10ae1cfb32",
+      "source_step": "board",
+      "name": "pkg-artwork",
+      "package_type": "OTHER",
+      "height_mm": null,
+      "pins": []
+    },
+    {
+      "id": "package-e5bda79c0951",
+      "source_step": "board",
+      "name": "pkg-tht",
+      "package_type": "CONNECTOR_TH",
+      "height_mm": 5.0,
+      "pins": [
+        {
+          "view": "primary",
+          "number": "1",
+          "name": null,
+          "pin_type": "through",
+          "electrical_type": "electrical",
+          "mount_type": "through_hole_pin",
+          "polarity": null,
+          "location_mm": {
+            "x": 0.0,
+            "y": 0.0
+          },
+          "transform": null
+        }
+      ]
+    },
+    {
+      "id": "package-f5f0b8324145",
+      "source_step": "board",
+      "name": "pkg-smt",
+      "package_type": "CHIP",
+      "height_mm": 0.8,
+      "pins": [
+        {
+          "view": "primary",
+          "number": "1",
+          "name": "signal",
+          "pin_type": "surface",
+          "electrical_type": "electrical",
+          "mount_type": "surface_mount_pad",
+          "polarity": null,
+          "location_mm": {
+            "x": 0.0,
+            "y": 0.0
+          },
+          "transform": null
+        }
+      ]
+    }
+  ],
+  "components": [
+    {
+      "id": "component-12ce7dea81e7",
+      "board_id": "board-47fd2771cbd2",
+      "source_step": "board",
+      "layout_path": [
+        {
+          "step": "panel",
+          "repeat": null
+        },
+        {
+          "step": "board",
+          "repeat": {
+            "index_x": 0,
+            "index_y": 0,
+            "first_x_mm": 10.0,
+            "first_y_mm": 20.0,
+            "pitch_x_mm": 15.0,
+            "pitch_y_mm": 0.0,
+            "rotation_degrees": 13.0,
+            "mirror": false
+          }
+        }
+      ],
+      "reference_designator": "LOGO",
+      "part": "artwork",
+      "package_id": "package-5a10ae1cfb32",
+      "package_ref": "pkg-artwork",
+      "bom": {
+        "bom": "bom",
+        "oem_design_number": "artwork",
+        "category": "document",
+        "quantity": 1,
+        "quantity_source": "1",
+        "pin_count": null,
+        "pin_count_source": null,
+        "internal_part_number": null,
+        "approved_parts": []
+      },
+      "population": "do_not_populate",
+      "side": "bottom",
+      "mount": "other",
+      "assembly_status": "excluded",
+      "exclusion_reason": "document_bom_category",
+      "transform": [
+        0.9743700647852352,
+        -0.224951054343865,
+        0.224951054343865,
+        0.9743700647852352,
+        17.345058409594152,
+        23.74834856432139
+      ],
+      "termination_ids": []
+    },
+    {
+      "id": "component-2b989b62a17f",
+      "board_id": "board-15ffd245c3d0",
+      "source_step": "board",
+      "layout_path": [
+        {
+          "step": "panel",
+          "repeat": null
+        },
+        {
+          "step": "board",
+          "repeat": {
+            "index_x": 1,
+            "index_y": 0,
+            "first_x_mm": 10.0,
+            "first_y_mm": 20.0,
+            "pitch_x_mm": 15.0,
+            "pitch_y_mm": 0.0,
+            "rotation_degrees": 13.0,
+            "mirror": false
+          }
+        }
+      ],
+      "reference_designator": "J1",
+      "part": "part-j1",
+      "package_id": "package-e5bda79c0951",
+      "package_ref": "pkg-tht",
+      "bom": {
+        "bom": "bom",
+        "oem_design_number": "part-j1",
+        "category": "electrical",
+        "quantity": 1,
+        "quantity_source": "1",
+        "pin_count": 1,
+        "pin_count_source": "1",
+        "internal_part_number": null,
+        "approved_parts": []
+      },
+      "population": "populate",
+      "side": "top",
+      "mount": "through_hole",
+      "assembly_status": "included",
+      "exclusion_reason": null,
+      "transform": [
+        0.9743700647852352,
+        -0.224951054343865,
+        0.224951054343865,
+        0.9743700647852352,
+        30.39631828002368,
+        23.29844645563366
+      ],
+      "termination_ids": [
+        "termination-256a5926443b"
+      ]
+    },
+    {
+      "id": "component-59cf6e1cb8ac",
+      "board_id": "board-47fd2771cbd2",
+      "source_step": "board",
+      "layout_path": [
+        {
+          "step": "panel",
+          "repeat": null
+        },
+        {
+          "step": "board",
+          "repeat": {
+            "index_x": 0,
+            "index_y": 0,
+            "first_x_mm": 10.0,
+            "first_y_mm": 20.0,
+            "pitch_x_mm": 15.0,
+            "pitch_y_mm": 0.0,
+            "rotation_degrees": 13.0,
+            "mirror": false
+          }
+        }
+      ],
+      "reference_designator": "U2",
+      "part": "part-u2",
+      "package_id": "package-f5f0b8324145",
+      "package_ref": "pkg-smt",
+      "bom": {
+        "bom": "bom",
+        "oem_design_number": "part-u2",
+        "category": "electrical",
+        "quantity": 1,
+        "quantity_source": "1",
+        "pin_count": 1,
+        "pin_count_source": "1",
+        "internal_part_number": null,
+        "approved_parts": []
+      },
+      "population": "unspecified",
+      "side": "top",
+      "mount": "smt",
+      "assembly_status": "included",
+      "exclusion_reason": null,
+      "transform": [
+        0.9743700647852352,
+        -0.224951054343865,
+        0.224951054343865,
+        0.9743700647852352,
+        13.44757815045321,
+        22.848544346945932
+      ],
+      "termination_ids": [
+        "termination-26152faa05f9"
+      ]
+    },
+    {
+      "id": "component-6d5f30fc29ca",
+      "board_id": "board-15ffd245c3d0",
+      "source_step": "board",
+      "layout_path": [
+        {
+          "step": "panel",
+          "repeat": null
+        },
+        {
+          "step": "board",
+          "repeat": {
+            "index_x": 1,
+            "index_y": 0,
+            "first_x_mm": 10.0,
+            "first_y_mm": 20.0,
+            "pitch_x_mm": 15.0,
+            "pitch_y_mm": 0.0,
+            "rotation_degrees": 13.0,
+            "mirror": false
+          }
+        }
+      ],
+      "reference_designator": "U1",
+      "part": "part-u1",
+      "package_id": "package-f5f0b8324145",
+      "package_ref": "pkg-smt",
+      "bom": {
+        "bom": "bom",
+        "oem_design_number": "part-u1",
+        "category": "electrical",
+        "quantity": 1,
+        "quantity_source": "1",
+        "pin_count": 1,
+        "pin_count_source": "1",
+        "internal_part_number": null,
+        "approved_parts": [
+          {
+            "external_vendor": null,
+            "external_mpn": null,
+            "qualified": true,
+            "chosen": true,
+            "manufacturer_part_numbers": [
+              "U1-MPN"
+            ],
+            "vendor_refs": [
+              "maker"
+            ]
+          }
+        ]
+      },
+      "population": "populate",
+      "side": "top",
+      "mount": "smt",
+      "assembly_status": "included",
+      "exclusion_reason": null,
+      "transform": [
+        0.8660254037844386,
+        -0.5,
+        0.5,
+        0.8660254037844386,
+        26.49883802088274,
+        22.3986422382582
+      ],
+      "termination_ids": [
+        "termination-fb975f7fd2c4"
+      ]
+    },
+    {
+      "id": "component-9554a70f1bea",
+      "board_id": "board-15ffd245c3d0",
+      "source_step": "board",
+      "layout_path": [
+        {
+          "step": "panel",
+          "repeat": null
+        },
+        {
+          "step": "board",
+          "repeat": {
+            "index_x": 1,
+            "index_y": 0,
+            "first_x_mm": 10.0,
+            "first_y_mm": 20.0,
+            "pitch_x_mm": 15.0,
+            "pitch_y_mm": 0.0,
+            "rotation_degrees": 13.0,
+            "mirror": false
+          }
+        }
+      ],
+      "reference_designator": "U2",
+      "part": "part-u2",
+      "package_id": "package-f5f0b8324145",
+      "package_ref": "pkg-smt",
+      "bom": {
+        "bom": "bom",
+        "oem_design_number": "part-u2",
+        "category": "electrical",
+        "quantity": 1,
+        "quantity_source": "1",
+        "pin_count": 1,
+        "pin_count_source": "1",
+        "internal_part_number": null,
+        "approved_parts": []
+      },
+      "population": "unspecified",
+      "side": "top",
+      "mount": "smt",
+      "assembly_status": "included",
+      "exclusion_reason": null,
+      "transform": [
+        0.9743700647852352,
+        -0.224951054343865,
+        0.224951054343865,
+        0.9743700647852352,
+        28.44757815045321,
+        22.848544346945932
+      ],
+      "termination_ids": [
+        "termination-d1402ac24609"
+      ]
+    },
+    {
+      "id": "component-cd9b711d3e24",
+      "board_id": "board-47fd2771cbd2",
+      "source_step": "board",
+      "layout_path": [
+        {
+          "step": "panel",
+          "repeat": null
+        },
+        {
+          "step": "board",
+          "repeat": {
+            "index_x": 0,
+            "index_y": 0,
+            "first_x_mm": 10.0,
+            "first_y_mm": 20.0,
+            "pitch_x_mm": 15.0,
+            "pitch_y_mm": 0.0,
+            "rotation_degrees": 13.0,
+            "mirror": false
+          }
+        }
+      ],
+      "reference_designator": "U1",
+      "part": "part-u1",
+      "package_id": "package-f5f0b8324145",
+      "package_ref": "pkg-smt",
+      "bom": {
+        "bom": "bom",
+        "oem_design_number": "part-u1",
+        "category": "electrical",
+        "quantity": 1,
+        "quantity_source": "1",
+        "pin_count": 1,
+        "pin_count_source": "1",
+        "internal_part_number": null,
+        "approved_parts": [
+          {
+            "external_vendor": null,
+            "external_mpn": null,
+            "qualified": true,
+            "chosen": true,
+            "manufacturer_part_numbers": [
+              "U1-MPN"
+            ],
+            "vendor_refs": [
+              "maker"
+            ]
+          }
+        ]
+      },
+      "population": "populate",
+      "side": "top",
+      "mount": "smt",
+      "assembly_status": "included",
+      "exclusion_reason": null,
+      "transform": [
+        0.8660254037844386,
+        -0.5,
+        0.5,
+        0.8660254037844386,
+        11.49883802088274,
+        22.3986422382582
+      ],
+      "termination_ids": [
+        "termination-37c6932bc5e2"
+      ]
+    },
+    {
+      "id": "component-de7a5f38f6f7",
+      "board_id": "board-15ffd245c3d0",
+      "source_step": "board",
+      "layout_path": [
+        {
+          "step": "panel",
+          "repeat": null
+        },
+        {
+          "step": "board",
+          "repeat": {
+            "index_x": 1,
+            "index_y": 0,
+            "first_x_mm": 10.0,
+            "first_y_mm": 20.0,
+            "pitch_x_mm": 15.0,
+            "pitch_y_mm": 0.0,
+            "rotation_degrees": 13.0,
+            "mirror": false
+          }
+        }
+      ],
+      "reference_designator": "LOGO",
+      "part": "artwork",
+      "package_id": "package-5a10ae1cfb32",
+      "package_ref": "pkg-artwork",
+      "bom": {
+        "bom": "bom",
+        "oem_design_number": "artwork",
+        "category": "document",
+        "quantity": 1,
+        "quantity_source": "1",
+        "pin_count": null,
+        "pin_count_source": null,
+        "internal_part_number": null,
+        "approved_parts": []
+      },
+      "population": "do_not_populate",
+      "side": "bottom",
+      "mount": "other",
+      "assembly_status": "excluded",
+      "exclusion_reason": "document_bom_category",
+      "transform": [
+        0.9743700647852352,
+        -0.224951054343865,
+        0.224951054343865,
+        0.9743700647852352,
+        32.34505840959415,
+        23.74834856432139
+      ],
+      "termination_ids": []
+    },
+    {
+      "id": "component-fe72c60e4916",
+      "board_id": "board-47fd2771cbd2",
+      "source_step": "board",
+      "layout_path": [
+        {
+          "step": "panel",
+          "repeat": null
+        },
+        {
+          "step": "board",
+          "repeat": {
+            "index_x": 0,
+            "index_y": 0,
+            "first_x_mm": 10.0,
+            "first_y_mm": 20.0,
+            "pitch_x_mm": 15.0,
+            "pitch_y_mm": 0.0,
+            "rotation_degrees": 13.0,
+            "mirror": false
+          }
+        }
+      ],
+      "reference_designator": "J1",
+      "part": "part-j1",
+      "package_id": "package-e5bda79c0951",
+      "package_ref": "pkg-tht",
+      "bom": {
+        "bom": "bom",
+        "oem_design_number": "part-j1",
+        "category": "electrical",
+        "quantity": 1,
+        "quantity_source": "1",
+        "pin_count": 1,
+        "pin_count_source": "1",
+        "internal_part_number": null,
+        "approved_parts": []
+      },
+      "population": "populate",
+      "side": "top",
+      "mount": "through_hole",
+      "assembly_status": "included",
+      "exclusion_reason": null,
+      "transform": [
+        0.9743700647852352,
+        -0.224951054343865,
+        0.224951054343865,
+        0.9743700647852352,
+        15.396318280023682,
+        23.29844645563366
+      ],
+      "termination_ids": [
+        "termination-f516a352c7fa"
+      ]
+    }
+  ],
+  "terminations": [
+    {
+      "id": "termination-256a5926443b",
+      "component_id": "component-2b989b62a17f",
+      "pin": "1",
+      "pin_type": "through",
+      "mount_type": "through_hole_pin",
+      "padstack": "tht-padstack",
+      "location_mm": {
+        "x": 30.39631828002368,
+        "y": 23.29844645563366
+      },
+      "side": "top",
+      "population": "populate",
+      "lands": [
+        {
+          "layer": "BOTTOM"
+        },
+        {
+          "layer": "TOP"
+        }
+      ],
+      "paste_islands": []
+    },
+    {
+      "id": "termination-26152faa05f9",
+      "component_id": "component-59cf6e1cb8ac",
+      "pin": "1",
+      "pin_type": "surface",
+      "mount_type": "surface_mount_pad",
+      "padstack": "smt-padstack",
+      "location_mm": {
+        "x": 13.44757815045321,
+        "y": 22.848544346945932
+      },
+      "side": "top",
+      "population": "unspecified",
+      "lands": [
+        {
+          "layer": "TOP"
+        }
+      ],
+      "paste_islands": []
+    },
+    {
+      "id": "termination-37c6932bc5e2",
+      "component_id": "component-cd9b711d3e24",
+      "pin": "1",
+      "pin_type": "surface",
+      "mount_type": "surface_mount_pad",
+      "padstack": "smt-padstack",
+      "location_mm": {
+        "x": 11.49883802088274,
+        "y": 22.3986422382582
+      },
+      "side": "top",
+      "population": "populate",
+      "lands": [
+        {
+          "layer": "TOP"
+        }
+      ],
+      "paste_islands": [
+        {
+          "layer": "PASTE",
+          "side": "top",
+          "location_mm": {
+            "x": 11.49883802088274,
+            "y": 22.3986422382582
+          }
+        }
+      ]
+    },
+    {
+      "id": "termination-d1402ac24609",
+      "component_id": "component-9554a70f1bea",
+      "pin": "1",
+      "pin_type": "surface",
+      "mount_type": "surface_mount_pad",
+      "padstack": "smt-padstack",
+      "location_mm": {
+        "x": 28.44757815045321,
+        "y": 22.848544346945932
+      },
+      "side": "top",
+      "population": "unspecified",
+      "lands": [
+        {
+          "layer": "TOP"
+        }
+      ],
+      "paste_islands": []
+    },
+    {
+      "id": "termination-f516a352c7fa",
+      "component_id": "component-fe72c60e4916",
+      "pin": "1",
+      "pin_type": "through",
+      "mount_type": "through_hole_pin",
+      "padstack": "tht-padstack",
+      "location_mm": {
+        "x": 15.396318280023682,
+        "y": 23.29844645563366
+      },
+      "side": "top",
+      "population": "populate",
+      "lands": [
+        {
+          "layer": "BOTTOM"
+        },
+        {
+          "layer": "TOP"
+        }
+      ],
+      "paste_islands": []
+    },
+    {
+      "id": "termination-fb975f7fd2c4",
+      "component_id": "component-6d5f30fc29ca",
+      "pin": "1",
+      "pin_type": "surface",
+      "mount_type": "surface_mount_pad",
+      "padstack": "smt-padstack",
+      "location_mm": {
+        "x": 26.49883802088274,
+        "y": 22.3986422382582
+      },
+      "side": "top",
+      "population": "populate",
+      "lands": [
+        {
+          "layer": "TOP"
+        }
+      ],
+      "paste_islands": [
+        {
+          "layer": "PASTE",
+          "side": "top",
+          "location_mm": {
+            "x": 26.49883802088274,
+            "y": 22.3986422382582
+          }
+        }
+      ]
+    }
+  ],
+  "diagnostics": [
+    {
+      "id": "assembly-diagnostic-f74d6df05a2b",
+      "severity": "error",
+      "code": "missing_population",
+      "subject": {
+        "kind": "component",
+        "id": "component-59cf6e1cb8ac",
+        "reference_designator": "U2"
+      },
+      "message": "component 'U2' has no explicit population state"
+    },
+    {
+      "id": "assembly-diagnostic-751c34e86de7",
+      "severity": "error",
+      "code": "missing_population",
+      "subject": {
+        "kind": "component",
+        "id": "component-9554a70f1bea",
+        "reference_designator": "U2"
+      },
+      "message": "component 'U2' has no explicit population state"
+    }
+  ]
+}

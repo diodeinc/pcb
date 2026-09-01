@@ -6,6 +6,7 @@ extern crate anstream;
 use ipc2581::Mode;
 
 pub mod accessors;
+pub mod assembly;
 pub mod board_array;
 pub mod commands;
 pub mod copper_balance;

@@ -19,6 +19,7 @@ boostvoronoi = { workspace = true }
 i_overlay = { workspace = true }
 ipc2581 = { workspace = true }
 kurbo = { workspace = true }
+libm = { workspace = true }
 resvg = { workspace = true }
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
