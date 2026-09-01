@@ -172,7 +172,7 @@ name = "Test"
 
 [[rules.copper.clearance]]
 id = "copper-clearance"
-minimum = "0.15 mm"
+limit = { minimum = "0.15 mm" }
 "#;
 
     const BOARD: &str = r#"<?xml version="1.0" encoding="UTF-8"?>

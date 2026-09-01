@@ -28,6 +28,9 @@ outer_copper_weight = "1 oz"
 inner_copper_weight = "0.5 oz"
 soldermask_color = "green"
 
+[profiles.one-ounce-standard-color.support]
+copper_layers = { minimum = 2, maximum = 32 }
+
 [profiles.one-ounce-black-white]
 name = "1 oz, black/white soldermask"
 description = "Standard rigid FR-4 service with the larger published mask-web requirement for black or white mask. Black is assumed when color is absent."
@@ -42,163 +45,127 @@ outer_copper_weight = "1 oz"
 inner_copper_weight = "0.5 oz"
 soldermask_color = "black"
 
-[[rules.stackup.copper_layer_count]]
-id = "jlc.stackup.minimum_copper_layer_count"
-minimum = 2
-source = "jlc-capabilities"
-
-[[rules.stackup.copper_layer_count]]
-id = "jlc.stackup.maximum_copper_layer_count"
-maximum = 32
-source = "jlc-capabilities"
+[profiles.one-ounce-black-white.support]
+copper_layers = { minimum = 2, maximum = 32 }
 
 [[rules.drilling.hole_diameter]]
 id = "jlc.drilling.minimum_via_hole_diameter"
-hole = "via"
-minimum = "0.15 mm"
-preferred = "0.20 mm"
+select = { hole = "via" }
+limit = { minimum = "0.15 mm", preferred = "0.20 mm" }
 source = "jlc-capabilities"
 
 [[rules.drilling.hole_diameter]]
 id = "jlc.drilling.minimum_pth_hole_diameter"
-hole = "pth"
-minimum = "0.15 mm"
-preferred = "0.50 mm"
+select = { hole = "pth" }
+limit = { minimum = "0.15 mm", preferred = "0.50 mm" }
 source = "jlc-capabilities"
 
 [[rules.drilling.hole_diameter]]
 id = "jlc.drilling.minimum_npth_hole_diameter"
-hole = "npth"
-minimum = "0.50 mm"
+select = { hole = "npth" }
+limit = { minimum = "0.50 mm" }
 source = "jlc-capabilities"
 
 [[rules.drilling.slot_width]]
-id = "jlc.drilling.minimum_plated_slot_width.2_layer"
-plating = "plated"
-minimum = "0.50 mm"
-when = { minimum_copper_layers = 2, maximum_copper_layers = 2 }
-source = "jlc-capabilities"
-
-[[rules.drilling.slot_width]]
-id = "jlc.drilling.minimum_plated_slot_width.multilayer"
-plating = "plated"
-minimum = "0.35 mm"
-when = { minimum_copper_layers = 3, maximum_copper_layers = 32 }
+id = "jlc.drilling.minimum_plated_slot_width"
+select = { plating = "plated" }
+cases = [
+  { id = "2-layer", when = { copper_layers = { exact = 2 } }, limit = { minimum = "0.50 mm" } },
+  { id = "multilayer", when = { copper_layers = { minimum = 3, maximum = 32 } }, limit = { minimum = "0.35 mm" } },
+]
 source = "jlc-capabilities"
 
 [[rules.drilling.slot_width]]
 id = "jlc.drilling.minimum_nonplated_slot_width"
-plating = "nonplated"
-minimum = "1.0 mm"
+select = { plating = "nonplated" }
+limit = { minimum = "1.0 mm" }
 source = "jlc-capabilities"
 
 [[rules.drilling.hole_to_hole_clearance]]
 id = "jlc.drilling.minimum_hole_clearance.via_via"
-first_hole = "via"
-second_hole = "via"
-minimum = "0.20 mm"
+select = { first_hole = "via", second_hole = "via" }
+limit = { minimum = "0.20 mm" }
 source = "jlc-capabilities"
 
 [[rules.drilling.hole_to_hole_clearance]]
 id = "jlc.drilling.minimum_hole_clearance.via_pth"
-first_hole = "via"
-second_hole = "pth"
-minimum = "0.45 mm"
+select = { first_hole = "via", second_hole = "pth" }
+limit = { minimum = "0.45 mm" }
 source = "jlc-capabilities"
 
 [[rules.drilling.hole_to_hole_clearance]]
 id = "jlc.drilling.minimum_hole_clearance.via_npth"
-first_hole = "via"
-second_hole = "npth"
-minimum = "0.45 mm"
+select = { first_hole = "via", second_hole = "npth" }
+limit = { minimum = "0.45 mm" }
 source = "jlc-capabilities"
 
 [[rules.drilling.hole_to_hole_clearance]]
 id = "jlc.drilling.minimum_hole_clearance.pth_pth"
-first_hole = "pth"
-second_hole = "pth"
-minimum = "0.45 mm"
+select = { first_hole = "pth", second_hole = "pth" }
+limit = { minimum = "0.45 mm" }
 source = "jlc-capabilities"
 
 [[rules.drilling.hole_to_hole_clearance]]
 id = "jlc.drilling.minimum_hole_clearance.pth_npth"
-first_hole = "pth"
-second_hole = "npth"
-minimum = "0.45 mm"
+select = { first_hole = "pth", second_hole = "npth" }
+limit = { minimum = "0.45 mm" }
 source = "jlc-capabilities"
 
 [[rules.drilling.hole_to_hole_clearance]]
 id = "jlc.drilling.minimum_hole_clearance.npth_npth"
-first_hole = "npth"
-second_hole = "npth"
-minimum = "0.45 mm"
+select = { first_hole = "npth", second_hole = "npth" }
+limit = { minimum = "0.45 mm" }
 source = "jlc-capabilities"
 
 [[rules.copper.annular_ring]]
 id = "jlc.copper.minimum_via_annular_ring"
-hole = "via"
-minimum = "0.05 mm"
-preferred = "0.075 mm"
+select = { hole = "via" }
+limit = { minimum = "0.05 mm", preferred = "0.075 mm" }
 source = "jlc-capabilities"
 
 [[rules.copper.annular_ring]]
-id = "jlc.copper.minimum_pth_annular_ring.2_layer"
-hole = "pth"
-minimum = "0.18 mm"
-preferred = "0.25 mm"
-when = { minimum_copper_layers = 2, maximum_copper_layers = 2 }
-source = "jlc-capabilities"
-
-[[rules.copper.annular_ring]]
-id = "jlc.copper.minimum_pth_annular_ring.multilayer"
-hole = "pth"
-minimum = "0.15 mm"
-preferred = "0.20 mm"
-when = { minimum_copper_layers = 3, maximum_copper_layers = 32 }
+id = "jlc.copper.minimum_pth_annular_ring"
+select = { hole = "pth" }
+cases = [
+  { id = "2-layer", when = { copper_layers = { exact = 2 } }, limit = { minimum = "0.18 mm", preferred = "0.25 mm" } },
+  { id = "multilayer", when = { copper_layers = { minimum = 3, maximum = 32 } }, limit = { minimum = "0.15 mm", preferred = "0.20 mm" } },
+]
 source = "jlc-capabilities"
 
 [[rules.copper.feature_width]]
-id = "jlc.copper.minimum_feature_width.2_layer"
-minimum = "0.10 mm"
-when = { minimum_copper_layers = 2, maximum_copper_layers = 2 }
-source = "jlc-capabilities"
-
-[[rules.copper.feature_width]]
-id = "jlc.copper.minimum_feature_width.multilayer"
-minimum = "0.09 mm"
-when = { minimum_copper_layers = 3, maximum_copper_layers = 32 }
+id = "jlc.copper.minimum_feature_width"
+cases = [
+  { id = "2-layer", when = { copper_layers = { exact = 2 } }, limit = { minimum = "0.10 mm" } },
+  { id = "multilayer", when = { copper_layers = { minimum = 3, maximum = 32 } }, limit = { minimum = "0.09 mm" } },
+]
 source = "jlc-capabilities"
 
 [[rules.copper.clearance]]
-id = "jlc.copper.minimum_clearance.2_layer"
-minimum = "0.10 mm"
-when = { minimum_copper_layers = 2, maximum_copper_layers = 2 }
-source = "jlc-capabilities"
-
-[[rules.copper.clearance]]
-id = "jlc.copper.minimum_clearance.multilayer"
-minimum = "0.09 mm"
-when = { minimum_copper_layers = 3, maximum_copper_layers = 32 }
+id = "jlc.copper.minimum_clearance"
+cases = [
+  { id = "2-layer", when = { copper_layers = { exact = 2 } }, limit = { minimum = "0.10 mm" } },
+  { id = "multilayer", when = { copper_layers = { minimum = 3, maximum = 32 } }, limit = { minimum = "0.09 mm" } },
+]
 source = "jlc-capabilities"
 
 [[rules.copper.board_edge_clearance]]
 id = "jlc.copper.minimum_board_edge_clearance"
-minimum = "0.20 mm"
+limit = { minimum = "0.20 mm" }
 source = "jlc-capabilities"
 
 [[rules.copper.vscore_clearance]]
 id = "jlc.copper.minimum_vscore_clearance"
-minimum = "0.40 mm"
+limit = { minimum = "0.40 mm" }
 source = "jlc-capabilities"
 
 [[rules.soldermask.web]]
 id = "jlc.soldermask.minimum_web.standard_color"
 profiles = ["one-ounce-standard-color"]
-minimum = "0.10 mm"
+limit = { minimum = "0.10 mm" }
 source = "jlc-capabilities"
 
 [[rules.soldermask.web]]
 id = "jlc.soldermask.minimum_web.black_white"
 profiles = ["one-ounce-black-white"]
-minimum = "0.13 mm"
+limit = { minimum = "0.13 mm" }
 source = "jlc-capabilities"

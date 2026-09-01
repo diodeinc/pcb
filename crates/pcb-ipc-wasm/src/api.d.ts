@@ -49,6 +49,9 @@ export interface PdkProfileDefaults {
   inner_copper_weight: string | null;
   soldermask_color: string | null;
 }
+export interface PdkProfileSupport {
+  copper_layers: null | { exact: number | null; minimum: number | null; maximum: number | null };
+}
 export interface PdkSourceReference {
   id: string; title: string; url: string;
   revision: string | null; accessed: string | null; note: string | null;
@@ -62,6 +65,7 @@ export interface PdkIdentity {
   producibility_level: "A" | "B" | "C" | null;
   technologies: Array<"rigid" | "flex" | "rigid_flex" | "hdi">;
   coverage: string[];
+  support: PdkProfileSupport;
   defaults: PdkProfileDefaults;
   profile_source: PdkSourceReference | null;
   path: string; sha256: string; source: string;

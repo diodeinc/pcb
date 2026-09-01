@@ -108,8 +108,8 @@ mod tests {
           name = "Test"
           [[rules.drilling.slot_width]]
           id = "slot-width"
-          plating = "plated"
-          minimum = "0.8 mm"
+          select = { plating = "plated" }
+          limit = { minimum = "0.8 mm" }
         "#,
         )
         .unwrap();

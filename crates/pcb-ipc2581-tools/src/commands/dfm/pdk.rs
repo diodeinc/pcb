@@ -45,6 +45,7 @@ impl Pdk {
             {
                 bail!("profile '{name}' cites unknown source '{source}'");
             }
+            profile.support.validate(name)?;
         }
         for (id, source) in &pdk.sources {
             if source.title.trim().is_empty() || source.url.trim().is_empty() {
@@ -64,13 +65,17 @@ impl Pdk {
     }
 
     pub fn validate_rule_references(&self) -> Result<()> {
-        let mut ids = HashSet::new();
+        let mut authored_ids = HashSet::new();
+        let mut configured_ids = HashSet::from([
+            "profile.support.copper_layers.minimum".to_owned(),
+            "profile.support.copper_layers.maximum".to_owned(),
+        ]);
         for rule in self.rules.all() {
             let metadata = rule.metadata();
             if metadata.id.trim().is_empty() {
                 bail!("PDK rule ids must not be empty");
             }
-            if !ids.insert(metadata.id.clone()) {
+            if !authored_ids.insert(metadata.id.clone()) {
                 bail!("duplicate PDK rule id '{}'", metadata.id);
             }
             for profile in &metadata.profiles {
@@ -84,6 +89,11 @@ impl Pdk {
                 bail!("rule '{}' cites unknown source '{source}'", metadata.id);
             }
             rule.validate()?;
+            for id in rule.configured_ids() {
+                if !configured_ids.insert(id.clone()) {
+                    bail!("duplicate lowered PDK rule id '{id}'");
+                }
+            }
         }
         Ok(())
     }
@@ -118,9 +128,79 @@ pub struct Profile {
     #[serde(default)]
     pub coverage: Vec<String>,
     #[serde(default)]
+    pub support: ProfileSupport,
+    #[serde(default)]
     pub defaults: ProfileDefaults,
     #[serde(default)]
     pub source: Option<String>,
+}
+
+/// Hard, measurable bounds a design must satisfy to use a profile.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProfileSupport {
+    #[serde(default)]
+    pub copper_layers: Option<CountRange>,
+}
+
+impl ProfileSupport {
+    fn validate(&self, profile: &str) -> Result<()> {
+        if let Some(range) = &self.copper_layers {
+            range.validate(&format!("profile '{profile}' support.copper_layers"))?;
+        }
+        Ok(())
+    }
+}
+
+/// An inclusive positive-integer range. `exact` is shorthand for equal bounds.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CountRange {
+    #[serde(default)]
+    pub exact: Option<u32>,
+    #[serde(default)]
+    pub minimum: Option<u32>,
+    #[serde(default)]
+    pub maximum: Option<u32>,
+}
+
+impl CountRange {
+    fn validate(&self, context: &str) -> Result<()> {
+        if self.exact.is_none() && self.minimum.is_none() && self.maximum.is_none() {
+            bail!("{context} requires exact, minimum, or maximum");
+        }
+        if self.exact.is_some() && (self.minimum.is_some() || self.maximum.is_some()) {
+            bail!("{context} exact cannot be combined with minimum or maximum");
+        }
+        for (name, count) in [
+            ("exact", self.exact),
+            ("minimum", self.minimum),
+            ("maximum", self.maximum),
+        ] {
+            if count == Some(0) {
+                bail!("{context} {name} must be a positive integer");
+            }
+        }
+        if let (Some(minimum), Some(maximum)) = (self.minimum, self.maximum)
+            && minimum > maximum
+        {
+            bail!("{context} minimum ({minimum}) must not exceed maximum ({maximum})");
+        }
+        Ok(())
+    }
+
+    pub fn minimum(&self) -> Option<u32> {
+        self.exact.or(self.minimum)
+    }
+
+    pub fn maximum(&self) -> Option<u32> {
+        self.exact.or(self.maximum)
+    }
+
+    fn overlaps(&self, other: &Self) -> bool {
+        self.minimum().unwrap_or(1) <= other.maximum().unwrap_or(u32::MAX)
+            && other.minimum().unwrap_or(1) <= self.maximum().unwrap_or(u32::MAX)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
@@ -209,8 +289,6 @@ pub struct SourceReference {
 #[serde(deny_unknown_fields)]
 pub struct Rules {
     #[serde(default)]
-    pub stackup: StackupRules,
-    #[serde(default)]
     pub drilling: DrillingRules,
     #[serde(default)]
     pub copper: CopperRules,
@@ -222,16 +300,10 @@ pub struct Rules {
 
 impl Rules {
     fn all(&self) -> impl Iterator<Item = RuleDefinition<'_>> {
-        self.stackup
-            .copper_layer_count
+        self.drilling
+            .hole_diameter
             .iter()
-            .map(RuleDefinition::Count)
-            .chain(
-                self.drilling
-                    .hole_diameter
-                    .iter()
-                    .map(RuleDefinition::HoleDiameter),
-            )
+            .map(RuleDefinition::HoleDiameter)
             .chain(
                 self.drilling
                     .slot_width
@@ -285,7 +357,6 @@ impl Rules {
 }
 
 enum RuleDefinition<'a> {
-    Count(&'a CountRule),
     HoleDiameter(&'a HoleDiameterRule),
     SlotWidth(&'a SlotWidthRule),
     HolePair(&'a HolePairRule),
@@ -297,7 +368,6 @@ enum RuleDefinition<'a> {
 impl RuleDefinition<'_> {
     fn metadata(&self) -> &RuleMetadata {
         match self {
-            Self::Count(rule) => &rule.metadata,
             Self::HoleDiameter(rule) => &rule.metadata,
             Self::SlotWidth(rule) => &rule.metadata,
             Self::HolePair(rule) => &rule.metadata,
@@ -306,41 +376,40 @@ impl RuleDefinition<'_> {
         }
     }
 
-    fn validate(&self) -> Result<()> {
-        let metadata = self.metadata();
-        metadata.when.validate(&metadata.id)?;
-        if metadata.when.layer.is_some()
-            && !matches!(self, Self::AnnularRing(_) | Self::CopperLength(_))
-        {
-            bail!(
-                "rule '{}': layer and copper_weight conditions are supported only for copper rules",
-                metadata.id
-            );
-        }
+    fn limits(&self) -> (Option<&LengthLimit>, &[LengthCase]) {
         match self {
-            Self::Count(rule) => rule.validate(),
-            Self::HoleDiameter(rule) => {
-                validate_length(&rule.metadata, &rule.minimum, rule.preferred.as_ref())
+            Self::HoleDiameter(rule) => (rule.limit.as_ref(), &rule.cases),
+            Self::SlotWidth(rule) => (rule.limit.as_ref(), &rule.cases),
+            Self::HolePair(rule) => (rule.limit.as_ref(), &rule.cases),
+            Self::AnnularRing(rule) => (rule.limit.as_ref(), &rule.cases),
+            Self::CopperLength(rule) | Self::OtherLength(rule) => {
+                (rule.limit.as_ref(), &rule.cases)
             }
-            Self::SlotWidth(rule) => {
-                validate_length(&rule.metadata, &rule.minimum, rule.preferred.as_ref())
-            }
-            Self::HolePair(rule) => {
-                validate_length(&rule.metadata, &rule.minimum, rule.preferred.as_ref())
-            }
-            Self::AnnularRing(rule) => {
-                validate_length(&rule.metadata, &rule.minimum, rule.preferred.as_ref())
-            }
-            Self::CopperLength(rule) | Self::OtherLength(rule) => rule.validate(),
         }
     }
-}
 
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct StackupRules {
-    #[serde(default)]
-    pub copper_layer_count: Vec<CountRule>,
+    fn validate(&self) -> Result<()> {
+        let metadata = self.metadata();
+        let (limit, cases) = self.limits();
+        validate_limits(
+            metadata,
+            limit,
+            cases,
+            matches!(self, Self::AnnularRing(_) | Self::CopperLength(_)),
+        )
+    }
+
+    fn configured_ids(&self) -> Vec<String> {
+        let metadata = self.metadata();
+        let (limit, cases) = self.limits();
+        match limit {
+            Some(limit) => limit.ids(&metadata.id),
+            None => cases
+                .iter()
+                .flat_map(|case| case.limit.ids(&format!("{}.{}", metadata.id, case.id)))
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -390,8 +459,6 @@ pub struct RuleMetadata {
     #[serde(default)]
     pub profiles: Vec<String>,
     #[serde(default)]
-    pub when: RuleConditions,
-    #[serde(default)]
     pub source: Option<String>,
 }
 
@@ -405,37 +472,47 @@ impl RuleMetadata {
 #[serde(deny_unknown_fields)]
 pub struct RuleConditions {
     #[serde(default)]
-    pub minimum_copper_layers: Option<u32>,
+    pub copper_layers: Option<CountRange>,
     #[serde(default)]
-    pub maximum_copper_layers: Option<u32>,
-    #[serde(default)]
-    pub layer: Option<LayerPosition>,
-    #[serde(default)]
-    pub copper_weight: Option<CopperWeight>,
+    pub copper: Option<CopperCondition>,
 }
 
 impl RuleConditions {
     fn validate(&self, id: &str) -> Result<()> {
-        for (name, count) in [
-            ("minimum_copper_layers", self.minimum_copper_layers),
-            ("maximum_copper_layers", self.maximum_copper_layers),
-        ] {
-            if count == Some(0) {
-                bail!("rule '{id}' {name} must be a positive integer");
-            }
-        }
-        if let (Some(minimum), Some(maximum)) =
-            (self.minimum_copper_layers, self.maximum_copper_layers)
-            && minimum > maximum
-        {
-            bail!(
-                "rule '{id}' minimum_copper_layers ({minimum}) must not exceed maximum_copper_layers ({maximum})"
-            );
-        }
-        if self.copper_weight.is_some() && self.layer.is_none() {
-            bail!("rule '{id}' copper_weight requires a layer condition");
+        if let Some(range) = &self.copper_layers {
+            range.validate(&format!("rule '{id}' when.copper_layers"))?;
         }
         Ok(())
+    }
+
+    fn overlaps(&self, other: &Self) -> bool {
+        let layers_overlap = match (&self.copper_layers, &other.copper_layers) {
+            (Some(left), Some(right)) => left.overlaps(right),
+            _ => true,
+        };
+        let copper_overlap = match (&self.copper, &other.copper) {
+            (Some(left), Some(right)) => left.overlaps(right),
+            _ => true,
+        };
+        layers_overlap && copper_overlap
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CopperCondition {
+    pub position: LayerPosition,
+    #[serde(default)]
+    pub weight: Option<CopperWeight>,
+}
+
+impl CopperCondition {
+    fn overlaps(&self, other: &Self) -> bool {
+        self.position == other.position
+            && match (&self.weight, &other.weight) {
+                (Some(left), Some(right)) => (left.ounces() - right.ounces()).abs() <= 0.02,
+                _ => true,
+            }
     }
 }
 
@@ -448,73 +525,91 @@ pub enum LayerPosition {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct CountRule {
-    #[serde(flatten)]
-    pub metadata: RuleMetadata,
-    #[serde(default)]
-    pub minimum: Option<u32>,
-    #[serde(default)]
-    pub maximum: Option<u32>,
-}
-
-impl CountRule {
-    fn validate(&self) -> Result<()> {
-        if self.minimum.is_none() && self.maximum.is_none() {
-            bail!(
-                "rule '{}' requires minimum, maximum, or both",
-                self.metadata.id
-            );
-        }
-        for (name, count) in [("minimum", self.minimum), ("maximum", self.maximum)] {
-            if count == Some(0) {
-                bail!(
-                    "rule '{}' {name} must be a positive integer",
-                    self.metadata.id
-                );
-            }
-        }
-        if let (Some(minimum), Some(maximum)) = (self.minimum, self.maximum)
-            && minimum > maximum
-        {
-            bail!(
-                "rule '{}' minimum ({minimum}) must not exceed maximum ({maximum})",
-                self.metadata.id
-            );
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LengthRule {
-    #[serde(flatten)]
-    pub metadata: RuleMetadata,
+pub struct LengthLimit {
     pub minimum: Length,
     #[serde(default)]
     pub preferred: Option<Length>,
 }
 
-impl LengthRule {
-    fn validate(&self) -> Result<()> {
-        validate_length(&self.metadata, &self.minimum, self.preferred.as_ref())
+impl LengthLimit {
+    fn validate(&self, id: &str) -> Result<()> {
+        if let Some(preferred) = &self.preferred
+            && preferred.millimeters() <= self.minimum.millimeters()
+        {
+            bail!(
+                "rule '{id}': preferred limit {} must exceed the minimum {}",
+                preferred.original(),
+                self.minimum.original()
+            );
+        }
+        Ok(())
+    }
+
+    fn ids(&self, id: &str) -> Vec<String> {
+        std::iter::once(id.to_owned())
+            .chain(self.preferred.as_ref().map(|_| format!("{id}.preferred")))
+            .collect()
     }
 }
 
-fn validate_length(
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LengthCase {
+    pub id: String,
+    #[serde(default)]
+    pub when: RuleConditions,
+    pub limit: LengthLimit,
+}
+
+fn validate_limits(
     metadata: &RuleMetadata,
-    minimum: &Length,
-    preferred: Option<&Length>,
+    limit: Option<&LengthLimit>,
+    cases: &[LengthCase],
+    allow_copper_conditions: bool,
 ) -> Result<()> {
-    if let Some(preferred) = preferred
-        && preferred.millimeters() <= minimum.millimeters()
-    {
-        bail!(
-            "rule '{}': preferred limit {} must exceed the minimum {}",
-            metadata.id,
-            preferred.original(),
-            minimum.original()
-        );
+    match (limit, cases.is_empty()) {
+        (Some(limit), true) => return limit.validate(&metadata.id),
+        (None, false) => {}
+        (Some(_), false) => {
+            bail!(
+                "rule '{}': limit and cases are mutually exclusive",
+                metadata.id
+            )
+        }
+        (None, true) => bail!("rule '{}': requires limit or cases", metadata.id),
+    }
+
+    let mut ids = HashSet::new();
+    for case in cases {
+        if case.id.trim().is_empty() {
+            bail!("rule '{}': case ids must not be empty", metadata.id);
+        }
+        if !ids.insert(&case.id) {
+            bail!("rule '{}': duplicate case id '{}'", metadata.id, case.id);
+        }
+        case.when
+            .validate(&format!("{}.{}", metadata.id, case.id))?;
+        if case.when.copper.is_some() && !allow_copper_conditions {
+            bail!(
+                "rule '{}.{}': when.copper is supported only for copper rules",
+                metadata.id,
+                case.id
+            );
+        }
+        case.limit
+            .validate(&format!("{}.{}", metadata.id, case.id))?;
+    }
+    for (index, left) in cases.iter().enumerate() {
+        for right in &cases[index + 1..] {
+            if left.when.overlaps(&right.when) {
+                bail!(
+                    "rule '{}': cases '{}' and '{}' overlap",
+                    metadata.id,
+                    left.id,
+                    right.id
+                );
+            }
+        }
     }
     Ok(())
 }
@@ -524,10 +619,11 @@ fn validate_length(
 pub struct HoleDiameterRule {
     #[serde(flatten)]
     pub metadata: RuleMetadata,
-    pub hole: HoleKind,
-    pub minimum: Length,
+    pub select: HoleSelector,
     #[serde(default)]
-    pub preferred: Option<Length>,
+    pub limit: Option<LengthLimit>,
+    #[serde(default)]
+    pub cases: Vec<LengthCase>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -535,10 +631,11 @@ pub struct HoleDiameterRule {
 pub struct SlotWidthRule {
     #[serde(flatten)]
     pub metadata: RuleMetadata,
-    pub plating: SlotPlating,
-    pub minimum: Length,
+    pub select: SlotSelector,
     #[serde(default)]
-    pub preferred: Option<Length>,
+    pub limit: Option<LengthLimit>,
+    #[serde(default)]
+    pub cases: Vec<LengthCase>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -546,11 +643,11 @@ pub struct SlotWidthRule {
 pub struct HolePairRule {
     #[serde(flatten)]
     pub metadata: RuleMetadata,
-    pub first_hole: HoleKind,
-    pub second_hole: HoleKind,
-    pub minimum: Length,
+    pub select: HolePairSelector,
     #[serde(default)]
-    pub preferred: Option<Length>,
+    pub limit: Option<LengthLimit>,
+    #[serde(default)]
+    pub cases: Vec<LengthCase>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -558,10 +655,47 @@ pub struct HolePairRule {
 pub struct AnnularRingRule {
     #[serde(flatten)]
     pub metadata: RuleMetadata,
-    pub hole: PlatedHoleKind,
-    pub minimum: Length,
+    pub select: PlatedHoleSelector,
     #[serde(default)]
-    pub preferred: Option<Length>,
+    pub limit: Option<LengthLimit>,
+    #[serde(default)]
+    pub cases: Vec<LengthCase>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LengthRule {
+    #[serde(flatten)]
+    pub metadata: RuleMetadata,
+    #[serde(default)]
+    pub limit: Option<LengthLimit>,
+    #[serde(default)]
+    pub cases: Vec<LengthCase>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HoleSelector {
+    pub hole: HoleKind,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SlotSelector {
+    pub plating: SlotPlating,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HolePairSelector {
+    pub first_hole: HoleKind,
+    pub second_hole: HoleKind,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PlatedHoleSelector {
+    pub hole: PlatedHoleKind,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -707,53 +841,82 @@ revision = "1"
 name = "Standard"
 technologies = ["rigid"]
 
+[profiles.standard.support]
+copper_layers = { minimum = 2, maximum = 10 }
+
 [profiles.standard.defaults]
 outer_copper_weight = "1 oz"
 
-[[rules.stackup.copper_layer_count]]
-id = "layers"
-minimum = 2
-maximum = 10
-
 [[rules.drilling.hole_diameter]]
 id = "via-hole"
-hole = "via"
-minimum = "0.2 mm"
+select = { hole = "via" }
+limit = { minimum = "0.2 mm" }
 
 [[rules.drilling.hole_to_hole_clearance]]
 id = "via-spacing"
-first_hole = "via"
-second_hole = "via"
-minimum = "10 mil"
+select = { first_hole = "via", second_hole = "via" }
+limit = { minimum = "10 mil" }
 
 [[rules.copper.annular_ring]]
 id = "via-ring"
-hole = "via"
-minimum = "100 um"
-preferred = "0.125 mm"
+select = { hole = "via" }
+limit = { minimum = "100 um", preferred = "0.125 mm" }
+
+[[rules.copper.feature_width]]
+id = "copper-width"
+cases = [
+  { id = "2-layer-outer", when = { copper_layers = { exact = 2 }, copper = { position = "outer", weight = "1 oz" } }, limit = { minimum = "0.1 mm" } },
+  { id = "multilayer", when = { copper_layers = { minimum = 3, maximum = 10 } }, limit = { minimum = "0.09 mm" } },
+]
 
 [[rules.panelization.board_spacing]]
 id = "array-spacing"
-minimum = "300 mil"
+limit = { minimum = "300 mil" }
 "#;
 
     #[test]
     fn parses_profiles_typed_rules_units_and_tiers() {
         let pdk = Pdk::parse(MIXED_UNIT_PDK).unwrap();
         pdk.validate_rule_references().unwrap();
-        assert_eq!(pdk.rules.stackup.copper_layer_count[0].minimum, Some(2));
-        assert_eq!(pdk.rules.stackup.copper_layer_count[0].maximum, Some(10));
+        let support = pdk.profiles["standard"]
+            .support
+            .copper_layers
+            .as_ref()
+            .unwrap();
+        assert_eq!(support.minimum(), Some(2));
+        assert_eq!(support.maximum(), Some(10));
         assert_eq!(
-            pdk.rules.drilling.hole_diameter[0].minimum.millimeters(),
+            pdk.rules.drilling.hole_diameter[0].select.hole,
+            HoleKind::Via
+        );
+        assert_eq!(
+            pdk.rules.drilling.hole_diameter[0]
+                .limit
+                .as_ref()
+                .unwrap()
+                .minimum
+                .millimeters(),
             0.2
         );
         assert!(
             (pdk.rules.drilling.hole_to_hole_clearance[0]
+                .limit
+                .as_ref()
+                .unwrap()
                 .minimum
                 .millimeters()
                 - 0.254)
                 .abs()
                 < 1e-12
+        );
+        assert_eq!(
+            pdk.rules.copper.feature_width[0].cases[0]
+                .when
+                .copper_layers
+                .as_ref()
+                .unwrap()
+                .exact,
+            Some(2)
         );
         assert_eq!(
             pdk.profiles["standard"]
@@ -792,18 +955,30 @@ minimum = "300 mil"
                 .validate_rule_references()
                 .is_err()
         );
+        let reserved = MIXED_UNIT_PDK.replace(
+            "id = \"via-hole\"",
+            "id = \"profile.support.copper_layers.minimum\"",
+        );
+        assert!(
+            Pdk::parse(&reserved)
+                .unwrap()
+                .validate_rule_references()
+                .unwrap_err()
+                .to_string()
+                .contains("duplicate lowered PDK rule id")
+        );
     }
 
     #[test]
-    fn rejects_schema_v1_bare_lengths_and_invalid_conditions() {
+    fn rejects_old_shapes_bad_ranges_and_overlapping_cases() {
         assert!(
             Pdk::parse(&MIXED_UNIT_PDK.replace("schema_version = 2", "schema_version = 1"))
                 .is_err()
         );
         assert!(Pdk::parse(&MIXED_UNIT_PDK.replace("\"0.2 mm\"", "0.2")).is_err());
         let invalid = MIXED_UNIT_PDK.replace(
-            "id = \"via-hole\"",
-            "id = \"via-hole\"\nwhen = { minimum_copper_layers = 4, maximum_copper_layers = 2 }",
+            "limit = { minimum = \"0.2 mm\" }",
+            "cases = [{ id = \"bad\", when = { copper_layers = { minimum = 4, maximum = 2 } }, limit = { minimum = \"0.2 mm\" } }]",
         );
         assert!(
             Pdk::parse(&invalid)
@@ -812,8 +987,8 @@ minimum = "300 mil"
                 .is_err()
         );
         let unsupported = MIXED_UNIT_PDK.replace(
-            "id = \"via-hole\"",
-            "id = \"via-hole\"\nwhen = { layer = \"outer\" }",
+            "limit = { minimum = \"0.2 mm\" }",
+            "cases = [{ id = \"bad\", when = { copper = { position = \"outer\" } }, limit = { minimum = \"0.2 mm\" } }]",
         );
         assert!(
             Pdk::parse(&unsupported)
@@ -822,6 +997,18 @@ minimum = "300 mil"
                 .unwrap_err()
                 .to_string()
                 .contains("supported only for copper rules")
+        );
+        let overlapping = MIXED_UNIT_PDK.replace(
+            "{ id = \"multilayer\", when = { copper_layers = { minimum = 3, maximum = 10 } }, limit = { minimum = \"0.09 mm\" } }",
+            "{ id = \"overlap\", when = { copper_layers = { minimum = 2, maximum = 10 } }, limit = { minimum = \"0.09 mm\" } }",
+        );
+        assert!(
+            Pdk::parse(&overlapping)
+                .unwrap()
+                .validate_rule_references()
+                .unwrap_err()
+                .to_string()
+                .contains("overlap")
         );
     }
 }

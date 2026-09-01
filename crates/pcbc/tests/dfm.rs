@@ -167,17 +167,12 @@ revision = "1"
 [profiles.test]
 name = "Test"
 
-[[rules.stackup.copper_layer_count]]
-id = "stackup.minimum_copper_layer_count"
-minimum = 3
-
-[[rules.stackup.copper_layer_count]]
-id = "stackup.maximum_copper_layer_count"
-maximum = 4
+[profiles.test.support]
+copper_layers = { minimum = 3, maximum = 4 }
 
 [[rules.copper.board_edge_clearance]]
 id = "copper.minimum_board_edge_clearance"
-minimum = "1 mm"
+limit = { minimum = "1 mm" }
 "#;
 
 fn read_report(sandbox: &Sandbox, path: &str) -> Value {
@@ -328,6 +323,10 @@ fn ipc_dfm_passing_json_still_includes_native_scene_and_pdk() {
     assert_eq!(report["summary"]["findings"], 0);
     assert!(report["findings"].as_array().unwrap().is_empty());
     assert_eq!(report["pdk"]["source"], pdk);
+    assert_eq!(
+        report["pdk"]["support"]["copper_layers"],
+        serde_json::json!({ "exact": null, "minimum": 2, "maximum": 4 })
+    );
     assert_eq!(report["scene"]["schema_version"], 1);
     let top = report["scene"]["passes"]
         .as_array()
@@ -605,7 +604,7 @@ fn ipc_dfm_geometry_distinguishes_canonical_board_arrays_and_mixed_fab_scope() {
         .write(
             "pdk.toml",
             format!(
-                "{REPORT_PDK}\n[[rules.panelization.board_spacing]]\nid = \"panelization.minimum_board_array_spacing\"\nminimum = \"7.62 mm\"\n"
+                "{REPORT_PDK}\n[[rules.panelization.board_spacing]]\nid = \"panelization.minimum_board_array_spacing\"\nlimit = {{ minimum = \"7.62 mm\" }}\n"
             ),
         );
     let mut spec = FabPanelSpec::INCHES_12_X_18;

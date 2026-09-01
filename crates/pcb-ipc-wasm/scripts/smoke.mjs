@@ -83,6 +83,7 @@ if (!isMainThread) {
     assert.equal(report.pdk.source, pdk.source);
     assert.equal(report.pdk.profile, 'test');
     assert.equal(report.pdk.profile_status, 'executable');
+    assert.deepEqual(report.pdk.support.copper_layers, { exact: null, minimum: 2, maximum: 4 });
     assert.equal(report.layout.kind, 'board');
     assert.equal(report.scene.schema_version, 1);
     assert.ok(report.scene.bounds.min.x <= 0 && report.scene.bounds.max.x >= 30);

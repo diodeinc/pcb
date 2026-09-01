@@ -390,7 +390,7 @@ mod tests {
       name = "Test"
       [[rules.soldermask.web]]
       id = "mask-web"
-      minimum = "0.1 mm"
+      limit = { minimum = "0.1 mm" }
     "#;
 
     #[test]
