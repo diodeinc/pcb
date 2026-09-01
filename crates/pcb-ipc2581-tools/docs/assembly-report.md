@@ -6,6 +6,13 @@ report carries design and manufacturing facts only. It does not select a part
 offer, infer commercial process policy, multiply by order quantity, or contain
 prices.
 
+The CLI writes this contract as JSON. It reports the complete board array by
+default; pass `--scope board` to select one canonical board instead.
+
+```bash
+pcb ipc assembly design.xml --scope board-array > assembly-report.json
+```
+
 The report has no generated timestamp or host file path. Repeating a build
 with the same IPC input and scope produces identical JSON. Board, package,
 component, and termination arrays are ordered by stable identifiers;
