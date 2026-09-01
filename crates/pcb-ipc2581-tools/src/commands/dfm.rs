@@ -631,7 +631,7 @@ limit = { minimum = "300 mil" }
                 .description
                 .as_deref()
                 .unwrap()
-                .contains("does not prove IPC compliance")
+                .contains("proof of full IPC compliance")
         );
 
         let jlc = builtin_pdks()
