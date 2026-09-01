@@ -22,7 +22,8 @@ This is the final proposed model.
 
 - $w,h$ are finished-board bounding-box dimensions in millimeters.
 - $q$ is integer quantity.
-- $S_{L,v}$ is the fixed setup charge selected by layer count and via-in-pad.
+- $S_{L,v}$ is the fixed supplier-cost allocation selected by layer count and
+  via-in-pad.
 - $r_b$ is that bucket's base price per square millimeter.
 
 In implementation form:
@@ -45,13 +46,15 @@ It separates the three things that actually need pricing:
 
 | Term | Purpose |
 | --- | --- |
-| $S_{L,v}$ | Per-order CAM, handling, setup, and test setup |
+| $S_{L,v}$ | Fixed part of the fitted supplier cost, spread across quantity |
 | $\max(wh,625)$ | Board area with a 25 mm × 25 mm minimum |
 | $M_{\mathrm{shape}}$ | Small penalty for shapes that pool less flexibly |
 
 Process options such as layer count, laminate, thickness, copper, finish, test, and
 lead time select $b$ and therefore $r_b$. Layer count and via-in-pad select the
-fixed-order table $S_{L,v}$. None creates a new geometry formula.
+fixed-order table $S_{L,v}$. The fixed and variable coefficients are two allocations
+of the same supplier cost; neither is an added Diode cost. None creates a new
+geometry formula.
 
 Published pricing practice supports this structure: AISLER describes a job fee plus
 area usage times quantity, OSH Park publishes area-based services with minimums and
@@ -131,8 +134,9 @@ $$
 $$
 
 so a positive fixed setup charge produces a smooth quantity discount through
-$S_{L,v}/q$. The variable supplier cost remains proportional to the fab-panel area
-consumed; no second quantity curve is required.
+$S_{L,v}/q$. When a fab charges the same amount for every panel, however, the exact
+fit has $S_{L,v}=0$ and cost-only unit price is constant in quantity. A quantity
+discount must not be invented when the source price book does not contain one.
 
 ## Worked quote
 
@@ -273,12 +277,13 @@ Shipping, tax, assembly, components, and NRE are outside this bare-board functio
 ## Calibration and validation
 
 1. Define one $S_{L,v}$ entry per layer/via bucket and one $r_b$ per process bucket.
-2. Fit $S_{L,v}$ to internal operating cost and $r_b$ to supplier fab-panel cost.
+2. Fit both coefficients to the selected fab's panel price book under one explicit
+   normalization rule.
 3. Shadow-quote representative historical jobs and compare against realized COGS.
 4. Validate error by dimension, quantity, process bucket, and achieved panel utilization.
 5. Round only the final currency result.
 
-For a reference quote $(w_0,h_0,q_0,P_0)$ and chosen setup fee:
+For a reference quote $(w_0,h_0,q_0,P_0)$ and fitted setup allocation:
 
 $$
 r_b=
@@ -477,26 +482,43 @@ $$
 
 so $C_{\mathrm{supplier},i}=r^{\mathrm{pool}}qA_{\mathrm{bill}}
 M_{\mathrm{shape}}$. APCB has no per-customer setup term in this fit:
-$S_{\mathrm{APCB}}=0$. Its fab-panel cost is entirely in the area rate. A separate
-$S_{L,v}$ may recover Diode's fixed CAM, QA, and order-handling cost. Layer count
-and via-in-pad select that setup schedule; turn time does not.
+$S_{\mathrm{APCB}}=0$. This is a solved result, not a missing cost estimate.
+
+For a fixed $(L,T,v)$ bucket, let $K=320u_T R$ be the variable charge for one
+expected-fill panel equivalent. Exact recovery for one and two panel equivalents
+requires
+
+$$
+S+K=B_{L,T}+500v,
+\qquad
+S+2K=2(B_{L,T}+500v).
+$$
+
+Subtracting the equations gives $K=B_{L,T}+500v$ and therefore
+
+$$
+\boxed{S_{\mathrm{APCB}}=0}.
+$$
+
+Any positive setup paired with a lower area rate can match one panel, but it then
+underprices every multi-panel order. Keeping the original area rate and adding setup
+would instead be an unlisted markup. Neither is an APCB cost fit.
 
 The final calibrated cost function is:
 
 $$
 \boxed{
 P_{\mathrm{cost},i}
-=S_{L,v}+
-\frac{qA_{\mathrm{bill}}M_{\mathrm{shape}}(w,h)}{A_u u_T(\alpha)}
+=\frac{qA_{\mathrm{bill}}M_{\mathrm{shape}}(w,h)}{A_u u_T(\alpha)}
 \left(B_{L,T}+500v\right)
 }
 $$
 
 The customer supplies dimensions, quantity, layer-stack service, turn-time service,
-and whether via-in-pad is present. The price book supplies $S_{L,v}$,
-the exact matrix coefficients, the expected-utilization table, and $\alpha$. No
-margin is included. Turn time selects the supplier coefficient and utilization,
-while one internal knob retires the pooling reserve as volume matures.
+and whether via-in-pad is present. The price book supplies the exact matrix
+coefficients, the expected-utilization table, and $\alpha$. No margin or separate
+quantity-discount policy is included. Turn time selects the supplier coefficient and
+utilization, while one internal knob retires the pooling reserve as volume matures.
 
 ## Source status and scope
 
@@ -564,8 +586,8 @@ R^{\mathrm{cost}}_{L,T,v}(\alpha)A_{\mathrm{eff,in^2}}.
 $$
 
 The following matrix is fully solved at $\alpha=1$ without via-in-pad. It includes
-the pooling-utilization reserve, but not the separate per-order setup fee, shipping,
-tax, or unsupported process add-ons. No margin is included. Values are
+the pooling-utilization reserve, but not shipping, tax, or unsupported process
+add-ons. No margin is included. Values are
 rounded to the nearest \$0.001/in² for display; implementation should retain the
 integer source charges and compute the coefficient rather than storing rounded cells.
 
@@ -581,6 +603,19 @@ per effective square inch.
 | 5 day | \$2.208 | \$3.567 | \$5.944 | \$7.982 | \$10.870 |
 | 7 day | \$1.862 | \$2.926 | \$4.854 | \$6.184 | \$9.574 |
 | 10 day | \$1.513 | \$2.500 | \$3.783 | \$4.803 | \$6.513 |
+
+### Solved APCB setup table
+
+The exact multi-panel fit produces the following fixed-order coefficients:
+
+| Layer | No via-in-pad | Via-in-pad |
+| --- | ---: | ---: |
+| 4 layers | \$0.00 | \$0.00 |
+| 6 layers | \$0.00 | \$0.00 |
+| 8 layers | \$0.00 | \$0.00 |
+
+Via-in-pad does not change setup because the quoted \$500 process charge is allocated
+over effective fab-panel area.
 
 ![The solved APCB rate surface rises sharply with both urgency and layer count.](images/bare-board-pricing/apcb-solved-area-rates.png)
 
@@ -609,9 +644,9 @@ same coefficient with $u_T(\alpha)$. For example, the 4-layer rates at 2 days an
 not a Diode pooling reserve.
 
 The APCB fit has $S_{\mathrm{APCB}}=0$: every APCB dollar is represented by the
-fab-panel area rate. $S_{L,v}$ is a separate Diode cost table and is not identifiable
-from a supplier matrix containing only fab-panel prices. It should be calibrated
-from measured DFM, CAM, QA, and order-handling work.
+fab-panel area rate. Because the same coefficient applies to fractional and multiple
+panel equivalents, this is the only affine board-level law that remains exact at
+every order size.
 
 ## Bucket lookup versus continuous variables
 
@@ -722,8 +757,8 @@ $$
 The via-in-pad premium attributable to this order is therefore \$256.07, not the
 entire \$500 pooled-lot charge.
 
-These are fitted supplier costs before the separate order setup, shipping, tax, or
-other unlisted process add-ons. No margin is included.
+These are fitted supplier costs before shipping, tax, or other unlisted process
+add-ons. No margin is included.
 
 ## Actual-price acceptance criteria
 
@@ -747,5 +782,5 @@ other unlisted process add-ons. No margin is included.
 - Realized effective utilization is measured by turn bucket and used to lower
   $\alpha$ for future price-book revisions; mature volume sets $\alpha=0$.
 - Quantity enters once through effective area; no second quantity multiplier is used.
-- The supplier fit uses $S_{\mathrm{APCB}}=0$; the $S_{L,v}$ setup table remains separate.
+- The solved APCB setup table is zero for 4L, 6L, and 8L, with or without via-in-pad.
 - The supplier matrix is refreshed before these expired rates are enabled.
