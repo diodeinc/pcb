@@ -261,7 +261,7 @@ fn copper_subject(copper: &CopperLayer) -> Subject {
     }
 }
 
-fn outline_subject(outline: &BoardOutline, role: &'static str) -> Subject {
+pub(super) fn outline_subject(outline: &BoardOutline, role: &'static str) -> Subject {
     Subject {
         role,
         kind: "board_outline",

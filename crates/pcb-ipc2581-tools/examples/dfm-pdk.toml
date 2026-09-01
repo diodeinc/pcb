@@ -38,6 +38,16 @@ cases = [
   { id = "multilayer", when = { copper_layers = { minimum = 3, maximum = 10 } }, limit = { minimum = "0.35 mm" } },
 ]
 
+[[rules.drilling.hole_to_board_edge_clearance]]
+id = "drilling.npth_to_board_edge"
+select = { hole = "npth" }
+limit = { minimum = "0.30 mm", preferred = "0.40 mm" }
+
+[[rules.drilling.slot_to_board_edge_clearance]]
+id = "drilling.nonplated_slot_to_board_edge"
+select = { plating = "nonplated" }
+limit = { minimum = "0.30 mm" }
+
 [[rules.copper.annular_ring]]
 id = "copper.via_annular_ring"
 select = { hole = "via" }

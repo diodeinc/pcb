@@ -323,6 +323,18 @@ impl Rules {
                     .map(RuleDefinition::HolePair),
             )
             .chain(
+                self.drilling
+                    .hole_to_board_edge_clearance
+                    .iter()
+                    .map(RuleDefinition::HoleToBoardEdge),
+            )
+            .chain(
+                self.drilling
+                    .slot_to_board_edge_clearance
+                    .iter()
+                    .map(RuleDefinition::SlotToBoardEdge),
+            )
+            .chain(
                 self.copper
                     .annular_ring
                     .iter()
@@ -373,6 +385,8 @@ enum RuleDefinition<'a> {
     HoleAspectRatio(&'a HoleAspectRatioRule),
     SlotWidth(&'a SlotWidthRule),
     HolePair(&'a HolePairRule),
+    HoleToBoardEdge(&'a HoleToBoardEdgeClearanceRule),
+    SlotToBoardEdge(&'a SlotToBoardEdgeClearanceRule),
     AnnularRing(&'a AnnularRingRule),
     HoleClearance(&'a HoleClearanceRule),
     CopperLength(&'a LengthRule),
@@ -386,6 +400,8 @@ impl RuleDefinition<'_> {
             Self::HoleAspectRatio(rule) => &rule.metadata,
             Self::SlotWidth(rule) => &rule.metadata,
             Self::HolePair(rule) => &rule.metadata,
+            Self::HoleToBoardEdge(rule) => &rule.metadata,
+            Self::SlotToBoardEdge(rule) => &rule.metadata,
             Self::AnnularRing(rule) => &rule.metadata,
             Self::HoleClearance(rule) => &rule.metadata,
             Self::CopperLength(rule) | Self::OtherLength(rule) => &rule.metadata,
@@ -400,6 +416,8 @@ impl RuleDefinition<'_> {
             }
             Self::SlotWidth(rule) => (rule.limit.as_ref(), &rule.cases),
             Self::HolePair(rule) => (rule.limit.as_ref(), &rule.cases),
+            Self::HoleToBoardEdge(rule) => (rule.limit.as_ref(), &rule.cases),
+            Self::SlotToBoardEdge(rule) => (rule.limit.as_ref(), &rule.cases),
             Self::AnnularRing(rule) => (rule.limit.as_ref(), &rule.cases),
             Self::HoleClearance(rule) => (rule.limit.as_ref(), &rule.cases),
             Self::CopperLength(rule) | Self::OtherLength(rule) => {
@@ -459,6 +477,10 @@ pub struct DrillingRules {
     pub slot_width: Vec<SlotWidthRule>,
     #[serde(default)]
     pub hole_to_hole_clearance: Vec<HolePairRule>,
+    #[serde(default)]
+    pub hole_to_board_edge_clearance: Vec<HoleToBoardEdgeClearanceRule>,
+    #[serde(default)]
+    pub slot_to_board_edge_clearance: Vec<SlotToBoardEdgeClearanceRule>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -756,6 +778,30 @@ pub struct HolePairRule {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct HoleToBoardEdgeClearanceRule {
+    #[serde(flatten)]
+    pub metadata: RuleMetadata,
+    pub select: HoleSelector,
+    #[serde(default)]
+    pub limit: Option<LengthLimit>,
+    #[serde(default)]
+    pub cases: Vec<LengthCase>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SlotToBoardEdgeClearanceRule {
+    #[serde(flatten)]
+    pub metadata: RuleMetadata,
+    pub select: SlotSelector,
+    #[serde(default)]
+    pub limit: Option<LengthLimit>,
+    #[serde(default)]
+    pub cases: Vec<LengthCase>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AnnularRingRule {
     #[serde(flatten)]
     pub metadata: RuleMetadata,
@@ -986,6 +1032,10 @@ copper_layers = { minimum = 2, maximum = 10 }
 [profiles.standard.defaults]
 outer_copper_weight = "1 oz"
 
+[sources.example]
+title = "Example source"
+url = "https://example.com/pdk"
+
 [[rules.drilling.hole_diameter]]
 id = "via-hole"
 select = { hole = "via" }
@@ -1000,6 +1050,22 @@ limit = { maximum = 8.0 }
 id = "via-spacing"
 select = { first_hole = "via", second_hole = "via" }
 limit = { minimum = "10 mil" }
+
+[[rules.drilling.hole_to_board_edge_clearance]]
+id = "npth-edge"
+profiles = ["standard"]
+source = "example"
+select = { hole = "npth" }
+cases = [
+  { id = "2-to-8-layer", when = { copper_layers = { minimum = 2, maximum = 8 } }, limit = { minimum = "0.3 mm", preferred = "0.4 mm" } },
+]
+
+[[rules.drilling.slot_to_board_edge_clearance]]
+id = "nonplated-slot-edge"
+profiles = ["standard"]
+source = "example"
+select = { plating = "nonplated" }
+limit = { minimum = "15 mil" }
 
 [[rules.copper.annular_ring]]
 id = "via-ring"
@@ -1067,6 +1133,28 @@ limit = { minimum = "300 mil" }
                 .abs()
                 < 1e-12
         );
+        let hole_edge = &pdk.rules.drilling.hole_to_board_edge_clearance[0];
+        assert_eq!(hole_edge.select.hole, HoleKind::Npth);
+        assert_eq!(hole_edge.metadata.profiles, ["standard"]);
+        assert_eq!(hole_edge.metadata.source.as_deref(), Some("example"));
+        let hole_case = &hole_edge.cases[0];
+        assert_eq!(hole_case.id, "2-to-8-layer");
+        assert_eq!(
+            hole_case.when.copper_layers.as_ref().unwrap().minimum(),
+            Some(2)
+        );
+        assert_eq!(
+            hole_case.when.copper_layers.as_ref().unwrap().maximum(),
+            Some(8)
+        );
+        assert_eq!(hole_case.limit.minimum.millimeters(), 0.3);
+        assert_eq!(
+            hole_case.limit.preferred.as_ref().unwrap().millimeters(),
+            0.4
+        );
+        let slot_edge = &pdk.rules.drilling.slot_to_board_edge_clearance[0];
+        assert_eq!(slot_edge.select.plating, SlotPlating::Nonplated);
+        assert!((slot_edge.limit.as_ref().unwrap().minimum.millimeters() - 0.381).abs() < 1e-12);
         assert_eq!(
             pdk.rules.copper.feature_width[0].cases[0]
                 .when
@@ -1245,5 +1333,67 @@ limit = { minimum = "300 mil" }
             .unwrap()
             .validate_rule_references()
             .unwrap();
+    }
+
+    #[test]
+    fn rejects_malformed_board_edge_clearance_rules() {
+        assert!(
+            Pdk::parse(&MIXED_UNIT_PDK.replace(
+                "select = { hole = \"npth\" }",
+                "select = { hole = \"pad\" }"
+            ))
+            .is_err()
+        );
+        assert!(
+            Pdk::parse(&MIXED_UNIT_PDK.replace(
+                "select = { plating = \"nonplated\" }",
+                "select = { plating = \"unplated\" }"
+            ))
+            .is_err()
+        );
+        assert!(
+            Pdk::parse(&MIXED_UNIT_PDK.replace(
+                "select = { hole = \"npth\" }",
+                "select = { plating = \"nonplated\" }"
+            ))
+            .is_err()
+        );
+
+        let invalid_tier = MIXED_UNIT_PDK.replace(
+            "minimum = \"0.3 mm\", preferred = \"0.4 mm\"",
+            "minimum = \"0.3 mm\", preferred = \"0.2 mm\"",
+        );
+        assert!(
+            Pdk::parse(&invalid_tier)
+                .unwrap()
+                .validate_rule_references()
+                .unwrap_err()
+                .to_string()
+                .contains("preferred limit")
+        );
+        let unsupported_condition = MIXED_UNIT_PDK.replace(
+            "when = { copper_layers = { minimum = 2, maximum = 8 } }",
+            "when = { copper = { position = \"outer\" } }",
+        );
+        assert!(
+            Pdk::parse(&unsupported_condition)
+                .unwrap()
+                .validate_rule_references()
+                .unwrap_err()
+                .to_string()
+                .contains("supported only for copper rules")
+        );
+        let limit_and_cases = MIXED_UNIT_PDK.replace(
+            "cases = [\n  { id = \"2-to-8-layer\"",
+            "limit = { minimum = \"0.3 mm\" }\ncases = [\n  { id = \"2-to-8-layer\"",
+        );
+        assert!(
+            Pdk::parse(&limit_and_cases)
+                .unwrap()
+                .validate_rule_references()
+                .unwrap_err()
+                .to_string()
+                .contains("mutually exclusive")
+        );
     }
 }

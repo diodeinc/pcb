@@ -15,6 +15,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Add strict profile-based DFM PDK schema v2, executable JLCPCB 1 oz profiles, and metadata-only IPC 1A-3C profiles.
 - Add maximum plated-hole aspect-ratio DFM checks and make IPC 1A-3C profiles executable with opinionated partial IPC-informed baselines.
 - Add circular drilled-hole-to-unrelated-copper DFM checks and extend the executable IPC 1A-3C partial baselines with opinionated IPC-informed values.
+- Add drilled-feature board-edge DFM checks and extend the executable IPC 1A-3C partial baselines with opinionated IPC-informed values.
 - Add a deterministic, versioned PCBA assembly report contract over canonical assembly and physical IR.
 - Expose PCBA assembly reports as JSON through `pcb ipc assembly`.
 - Preserve external part-library provenance and same-part MPN aliases in IPC-2581 BOM selections.

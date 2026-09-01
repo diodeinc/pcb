@@ -708,6 +708,11 @@ pub(super) struct BoardOutline {
     pub instance_index: Option<u32>,
     /// Outer profile plus cutout rings.
     pub contours: Vec<Ring>,
+    /// Finished board material: the filled outer profile minus every cutout.
+    pub region: ContourSet,
+    pub boundary: RegionBoundaryIndex,
+    /// Native outer and cutout contours in the checked frame.
+    pub native_outline: Vec<ContourBuf>,
     pub bbox: BBox,
 }
 
@@ -1431,26 +1436,35 @@ fn collect_board_outlines(
             )
         })
         .filter_map(|occurrence| {
-            let mut contours = layout
+            let mut native_outline = layout
                 .transformed_path_contours(occurrence.profile.outer_path, occurrence.transform);
+            let outer_count = native_outline.len();
             for cutout in occurrence.profile.cutouts.slice(&layout.profile_cutouts) {
-                contours
+                native_outline
                     .extend(layout.transformed_path_contours(cutout.path, occurrence.transform));
             }
-            let rings = pcb_ir::geom::region::rings_from_contours(&contours);
-            if rings.is_empty() {
+            let outer =
+                ContourSet::from_filled_contours(&native_outline[..outer_count], tol::REGION_MM);
+            let cutouts =
+                ContourSet::from_filled_contours(&native_outline[outer_count..], tol::REGION_MM);
+            let region = outer.difference(&cutouts);
+            if region.is_empty() {
                 return None;
             }
-            let bbox = pcb_ir::geom::region::rings_bbox(&rings);
+            let bbox = region.bbox;
             let name = occurrence
                 .step
                 .and_then(|step| layout.layout.steps.get(step as usize))
                 .map(|step| imported.resolve(step.source_step_ref).to_owned())
                 .unwrap_or_else(|| "board".to_owned());
+            let boundary = RegionBoundaryIndex::new(&region, 1.0);
             Some(BoardOutline {
                 name,
                 instance_index: occurrence.instance,
-                contours: rings,
+                contours: region.rings.clone(),
+                region,
+                boundary,
+                native_outline,
                 bbox,
             })
         })

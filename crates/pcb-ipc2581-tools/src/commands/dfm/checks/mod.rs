@@ -11,6 +11,7 @@
 mod annular_ring;
 mod board_array_spacing;
 mod copper_clearance;
+mod drilled_board_edge_clearance;
 mod hole_aspect_ratio;
 mod hole_clearance;
 mod hole_diameter;
@@ -30,7 +31,7 @@ use pcb_ir::geom::dfm::Distance;
 use pcb_ir::geom::{Affine2, BBox, Point};
 use sha2::{Digest, Sha256};
 
-use super::design::{Design, Hole, HoleClass};
+use super::design::{Design, Hole, HoleClass, Slot};
 use super::pdk::SlotPlating;
 use super::report::{
     Evidence, Finding, LayerRef, Location, Measurement, MeasurementKind, ReportBBox, ReportPoint,
@@ -306,7 +307,17 @@ fn skip_reason(rule: &Rule, design: &Design) -> Option<String> {
                 )
             })
         }
+        RuleKind::HoleToBoardEdgeClearance(class) => design
+            .holes
+            .iter()
+            .all(|hole| hole.class != class)
+            .then(|| format!("{} holes", class.label())),
         RuleKind::SlotWidth(plating) => design
+            .slots
+            .iter()
+            .all(|slot| !slot_matches(slot.plating, plating))
+            .then(|| format!("{} routed slots", slot_plating_label(plating))),
+        RuleKind::SlotToBoardEdgeClearance(plating) => design
             .slots
             .iter()
             .all(|slot| !slot_matches(slot.plating, plating))
@@ -347,6 +358,12 @@ fn evaluate(rule: &Rule, design: &Design) -> RuleEvaluation {
         RuleKind::SlotWidth(plating) => slot_width::evaluate(limit(), plating, design).into(),
         RuleKind::HolePairClearance(first, second) => {
             hole_pair_clearance::evaluate(limit(), first, second, design).into()
+        }
+        RuleKind::HoleToBoardEdgeClearance(class) => {
+            drilled_board_edge_clearance::evaluate_holes(limit(), class, design).into()
+        }
+        RuleKind::SlotToBoardEdgeClearance(plating) => {
+            drilled_board_edge_clearance::evaluate_slots(limit(), plating, design).into()
         }
         RuleKind::AnnularRing(class) => {
             annular_ring::evaluate(limit(), class, &rule.conditions, design).into()
@@ -613,6 +630,22 @@ fn hole_subject(design: &Design, hole: &Hole, role: &'static str) -> Subject {
     );
     subject.provenance = Some(hole.provenance.clone());
     subject.drill_span = Some(hole.drill_span.clone());
+    subject
+}
+
+fn slot_subject(design: &Design, slot: &Slot, role: &'static str) -> Subject {
+    let mut subject = drilled_subject(
+        design,
+        role,
+        "routed_slot",
+        slot.net,
+        slot.padstack,
+        slot.step,
+        &slot.layer,
+        slot.source_set_index,
+        slot.source_feature_index,
+    );
+    subject.provenance = Some(slot.provenance.clone());
     subject
 }
 
