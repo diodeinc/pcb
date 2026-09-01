@@ -1,5 +1,5 @@
 load("units.zen", "Impedance")
-load("properties.zen", "Layout")
+load("properties.zen", "Project")
 
 # Enum Types
 CopperWeight = enum("0.5oz", "1oz", "2oz")
@@ -391,6 +391,7 @@ def Board(
     via_dimensions: list | None = None,
     default: bool = False,
     modifiers: list | None = None,
+    schematic: bool = False,
 ):
     """Define a PCB board with an optional board configuration.
 
@@ -406,8 +407,8 @@ def Board(
                      Values are deduplicated and sorted automatically.
         via_dimensions: Additional via dimensions to append to the base configuration.
                        Values are deduplicated and sorted automatically.
-        layout_hints: Optional list of layout hints for the board
         default: Whether this is the default board configuration
+        schematic: Whether to enable the KiCad schematic for this board
 
     Raises:
         error: If layers is provided but no default board configuration exists for
@@ -457,11 +458,12 @@ def Board(
             config=config,
         )
 
-    # Add layout to the module
-    Layout(
+    # Add the KiCad project to the module
+    Project(
         name=name,
         path=layout_path,
         modifiers=modifiers,
+        schematic=schematic,
     )
 
 
