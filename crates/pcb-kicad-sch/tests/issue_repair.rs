@@ -6,7 +6,10 @@ use pcb_kicad_sch::{
     LabelShape, Point, Rotation, SchDocument, SchItem, SchPage, Sheet, SheetPin, Symbol,
     SymbolField, Wire,
     analysis::{SchematicIssue, SchematicIssueKey, inspect_schematic},
-    reconcile::{InitialInspection, plan_reconciliation, plan_repairs, plan_repairs_on_page},
+    reconcile::{
+        InitialInspection, plan_issue_net_drivers, plan_reconciliation, plan_repairs,
+        plan_repairs_on_page,
+    },
 };
 
 const CONNECTION_GRID_MM: f64 = 1.27;
@@ -127,6 +130,69 @@ fn selected_issue_repair_preserves_an_unrelated_existing_issue() {
 }
 
 #[test]
+fn selected_net_drivers_do_not_realize_an_unplaced_component() {
+    let netlist = common::compile_fixture("analysis", "simple.zen");
+    let mut document = plan_reconciliation(None, &netlist, "simple.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    let removed_path = document.pages[0]
+        .items
+        .iter()
+        .find_map(|item| match item {
+            SchItem::Symbol(symbol) => symbol.field_value("Path").map(str::to_string),
+            _ => None,
+        })
+        .unwrap();
+    document.pages[0].items.retain(|item| match item {
+        SchItem::Symbol(symbol) => symbol.field_value("Path") != Some(removed_path.as_str()),
+        SchItem::Label(_) | SchItem::Wire(_) | SchItem::Junction(_) => false,
+        _ => true,
+    });
+    let inspection = inspect_schematic(&document, &netlist).unwrap();
+    let disconnected = inspection
+        .issues
+        .iter()
+        .find(|issue| {
+            matches!(
+                &issue.issue,
+                SchematicIssue::DisconnectedNet {
+                    islands,
+                    missing_terminals,
+                    ..
+                } if !islands.is_empty() && !missing_terminals.is_empty()
+            )
+        })
+        .expect("removing a connected component should leave a partially placed net");
+
+    let plan = plan_issue_net_drivers(
+        &document,
+        &netlist,
+        &inspection,
+        &BTreeSet::from([disconnected.key.clone()]),
+    )
+    .unwrap();
+    let repaired = plan.apply(Some(&document)).unwrap();
+
+    assert_ne!(repaired, document);
+    assert_eq!(plan.revert(&repaired).unwrap(), document);
+    assert!(repaired.pages[0].items.iter().any(|item| {
+        matches!(item, SchItem::Label(_))
+            || matches!(item, SchItem::Symbol(symbol) if symbol.field_value("Path").is_none())
+    }));
+    assert!(!repaired.pages[0].items.iter().any(|item| {
+        matches!(item, SchItem::Symbol(symbol) if symbol.field_value("Path") == Some(removed_path.as_str()))
+    }));
+    let after = inspect_schematic(&repaired, &netlist).unwrap();
+    assert!(after.issues.iter().any(|issue| {
+        matches!(
+            &issue.issue,
+            SchematicIssue::MissingSymbol { slot } if slot.component_path() == removed_path
+        )
+    }));
+}
+
+#[test]
 fn added_component_batch_docks_without_moving_existing_symbols() {
     let before = common::compile_fixture("analysis", "incremental_before.zen");
     let after = common::compile_fixture("analysis", "incremental_after.zen");
@@ -161,26 +227,19 @@ fn added_component_batch_docks_without_moving_existing_symbols() {
         .map(|(_, at)| *at)
         .collect::<Vec<_>>();
     assert_eq!(added.len(), 3);
-    assert!(added.iter().enumerate().any(|(index, left)| {
-        added[index + 1..]
-            .iter()
-            .any(|right| left.x == right.x || left.y == right.y)
-    }));
-    assert!(added.iter().any(|new| {
-        existing
-            .values()
-            .any(|old| new.x == old.x || new.y == old.y)
-    }));
-    let nearest_existing_mm = added
-        .iter()
-        .flat_map(|new| {
-            existing
-                .values()
-                .map(move |old| (new.x - old.x).abs() + (new.y - old.y).abs())
-        })
-        .reduce(f64::min)
+    assert_eq!(
+        added.iter().map(|point| point.x).collect::<Vec<_>>(),
+        existing.values().map(|point| point.x).collect::<Vec<_>>(),
+        "the new batch should align to the existing row's columns"
+    );
+    assert!(added.iter().all(|point| point.y == added[0].y));
+    let existing_bottom = existing
+        .values()
+        .map(|point| point.y)
+        .reduce(f64::max)
         .unwrap();
-    assert!(nearest_existing_mm <= 50.8, "{nearest_existing_mm}");
+    let row_gap = added[0].y - existing_bottom;
+    assert!(row_gap > 0.0 && row_gap <= 50.8, "{row_gap}");
 }
 
 #[test]

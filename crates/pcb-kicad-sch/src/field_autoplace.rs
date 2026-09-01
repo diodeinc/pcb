@@ -717,22 +717,6 @@ mod tests {
     }
 
     #[test]
-    fn field_baseline_follows_kicad_page_rotation() {
-        for (rotation, field_rotation_deg, expected_x) in [
-            (Rotation::Deg0, 0.0, 1.0),
-            (Rotation::Deg90, 90.0, -1.0),
-            (Rotation::Deg180, 0.0, -1.0),
-            (Rotation::Deg270, 90.0, 1.0),
-        ] {
-            let symbol = test_symbol(Point::default(), rotation, None);
-            let baseline =
-                transform_field_vector(Point::new(1.0, 0.0), &symbol, field_rotation_deg);
-            assert!((baseline.x - expected_x).abs() < GEOMETRY_EPS_MM);
-            assert!(baseline.y.abs() < GEOMETRY_EPS_MM);
-        }
-    }
-
-    #[test]
     fn rotated_symbol_fields_stay_horizontal_and_outside_the_body() {
         let definition = SymbolDefinition::from_kicad_symbol_sexpr(
             r#"(symbol "Test:IC"

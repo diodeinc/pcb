@@ -218,6 +218,50 @@ pub fn plan_repairs_on_page(
     )
 }
 
+/// Build a plan that places missing labels and net symbols for the selected
+/// disconnected-net issues using only components already present in
+/// `document`.
+///
+/// Unlike [`plan_repairs`], this operation does not promise to resolve a whole
+/// connectivity issue: a net can remain disconnected because another
+/// component is still unplaced. It does guarantee that no unrelated issue is
+/// introduced, and it never projects a missing component.
+/// `inspection` must be the snapshot from which the selected keys were read.
+pub fn plan_issue_net_drivers(
+    document: &SchDocument,
+    netlist: &Schematic,
+    inspection: &ConnectivityInspection,
+    selected_issue_keys: &BTreeSet<SchematicIssueKey>,
+) -> Result<ReconciliationPlan> {
+    component_slots::validate_symbol_library_versions(netlist)?;
+    let target_nets = selected_issue_keys
+        .iter()
+        .map(|key| {
+            let context = inspection
+                .issues
+                .iter()
+                .find(|issue| &issue.key == key)
+                .with_context(|| format!("schematic issue {key:?} is not present"))?;
+            match &context.issue {
+                SchematicIssue::DisconnectedNet { net_name, .. } => Ok(net_name.clone()),
+                issue => bail!(
+                    "net-driver placement does not apply to '{}' issues",
+                    issue.kind()
+                ),
+            }
+        })
+        .collect::<Result<BTreeSet<_>>>()?;
+    let desired = compose::place_net_drivers(document, netlist, &target_nets)?;
+    let inspection_after = inspect_schematic(&desired, netlist)?;
+    ensure_no_new_issues(inspection, &inspection_after, "placing net drivers")?;
+    verified_plan(
+        Some(document),
+        desired,
+        InitialInspection::Available(inspection.clone()),
+        inspection_after,
+    )
+}
+
 fn plan_repairs_impl(
     document: &SchDocument,
     netlist: &Schematic,
@@ -260,6 +304,33 @@ fn issue_summaries<'a>(issues: impl Iterator<Item = &'a SchematicIssue>) -> Stri
         .map(|issue| issue.summary())
         .collect::<Vec<_>>()
         .join("; ")
+}
+
+fn ensure_no_new_issues(
+    before: &ConnectivityInspection,
+    after: &ConnectivityInspection,
+    action: &str,
+) -> Result<()> {
+    // Compare without item fingerprints: a pre-existing issue whose affected
+    // islands shifted is still the same issue, not a new one this action
+    // introduced.
+    let before_keys = before
+        .issues
+        .iter()
+        .map(|issue| coarse_key(&issue.key))
+        .collect::<BTreeSet<_>>();
+    let new_issues = after
+        .issues
+        .iter()
+        .filter(|issue| !before_keys.contains(&coarse_key(&issue.key)))
+        .collect::<Vec<_>>();
+    if !new_issues.is_empty() {
+        bail!(
+            "{action} would introduce unrelated issues: {}",
+            issue_summaries(new_issues.iter().map(|context| &context.issue))
+        );
+    }
+    Ok(())
 }
 
 fn build_plan(
@@ -307,27 +378,18 @@ fn build_plan(
                     bail!("planned repair did not resolve schematic issue {key:?}");
                 }
             }
-            // Compare without item fingerprints: a pre-existing issue whose
-            // affected islands shifted is still the same issue, not a new one
-            // this repair introduced.
-            let before_keys = before
-                .issues
-                .iter()
-                .map(|issue| coarse_key(&issue.key))
-                .collect::<std::collections::BTreeSet<_>>();
-            let new_issues = inspection_after
-                .issues
-                .iter()
-                .filter(|issue| !before_keys.contains(&coarse_key(&issue.key)))
-                .collect::<Vec<_>>();
-            if !new_issues.is_empty() {
-                bail!(
-                    "planned repair would introduce unrelated issues: {}",
-                    issue_summaries(new_issues.iter().map(|context| &context.issue))
-                );
-            }
+            ensure_no_new_issues(before, &inspection_after, "planned repair")?;
         }
     }
+    verified_plan(document, desired, initial_inspection, inspection_after)
+}
+
+fn verified_plan(
+    document: Option<&SchDocument>,
+    desired: SchDocument,
+    initial_inspection: InitialInspection,
+    inspection_after: ConnectivityInspection,
+) -> Result<ReconciliationPlan> {
     let edits = document_edits(document.unwrap_or(&SchDocument::default()), &desired)?;
     let plan = ReconciliationPlan {
         edits,

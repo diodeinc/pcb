@@ -280,6 +280,40 @@ pub(crate) fn reconcile_document(
     Ok(document)
 }
 
+/// Add missing labels and net symbols for `target_nets` using only component
+/// symbols that are already present in `document`.
+///
+/// Interactive clients use this when the user asks to annotate a placed
+/// component while other netlist components remain unplaced. Missing symbols
+/// deliberately contribute no pin targets, so this operation cannot realize
+/// them as a side effect.
+pub(crate) fn place_net_drivers(
+    document: &SchDocument,
+    netlist: &Schematic,
+    target_nets: &BTreeSet<String>,
+) -> Result<SchDocument> {
+    let mut desired = document.clone();
+    let root_page = desired
+        .root_page_ids
+        .iter()
+        .find_map(|id| desired.pages.iter().position(|page| &page.id == id))
+        .context("KiCad schematic project has no loaded root page")?;
+    let expected_slots = component_slots::component_symbol_slots(netlist)?
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let placed = placed_symbols_from_document(&desired, &expected_slots)?;
+    let net_symbol_specs = net_symbols::specs(netlist)?;
+    add_connectivity_drivers(
+        &mut desired,
+        netlist,
+        &placed,
+        &net_symbol_specs,
+        root_page,
+        target_nets,
+    )?;
+    Ok(desired)
+}
+
 fn is_connectivity_issue(issue: &SchematicIssue) -> bool {
     matches!(
         issue,

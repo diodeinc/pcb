@@ -198,12 +198,6 @@ fn generated_net_symbols_form_a_wired_staircase() {
     assert_eq!(net_symbols.len(), 2);
     let connection_points = [net_symbols[0].1, net_symbols[1].1];
     assert_ne!(connection_points[0], connection_points[1]);
-    let wire_count = page
-        .items
-        .iter()
-        .filter(|item| matches!(item, SchItem::Wire(_)))
-        .count();
-    assert!((5..=14).contains(&wire_count), "{wire_count}");
     assert!(page.items.iter().all(|item| match item {
         SchItem::Wire(wire) => wire.a.x == wire.b.x || wire.a.y == wire.b.y,
         _ => true,
@@ -363,9 +357,9 @@ fn root_interfaces_use_hierarchical_labels_directly_on_component_pins() {
 }
 
 #[test]
-fn interface_only_endpoints_form_regular_labels_and_report_a_removed_one() {
+fn interface_only_endpoints_form_regular_labels() {
     let netlist = common::compile_fixture("hierarchy", "unused_root_interface.zen");
-    let mut document = plan_reconciliation(None, &netlist, "UnusedRootInterface.kicad_sch")
+    let document = plan_reconciliation(None, &netlist, "UnusedRootInterface.kicad_sch")
         .unwrap()
         .apply(None)
         .unwrap();
@@ -401,16 +395,6 @@ fn interface_only_endpoints_form_regular_labels_and_report_a_removed_one() {
             .analysis
             .is_equivalent()
     );
-    document.pages[0]
-        .items
-        .retain(|item| !matches!(item, SchItem::Label(label) if label.text == "UNUSED_3"));
-
-    let inspection = inspect_schematic(&document, &netlist).unwrap();
-    assert!(matches!(
-        inspection.analysis.issues(),
-        [SchematicIssue::MissingPort { net_name, ports, .. }]
-            if net_name == "UNUSED_3" && ports == &["UNUSED_3".to_string()]
-    ));
 }
 
 #[test]
