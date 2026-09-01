@@ -539,7 +539,7 @@ limit = { minimum = "300 mil" }
     }
 
     #[test]
-    fn loads_the_embedded_pdks_and_keeps_ipc_profiles_non_executable() {
+    fn loads_embedded_pdks_and_lowers_partial_ipc_baselines() {
         let builtin = builtin_pdks()
             .iter()
             .find(|pdk| pdk.name == "standard")
@@ -567,6 +567,35 @@ limit = { minimum = "300 mil" }
                 assert!(lowered.unwrap_err().to_string().contains("metadata-only"));
             } else {
                 assert!(!lowered.unwrap().is_empty());
+            }
+        }
+
+        let ipc = builtin_pdks().iter().find(|pdk| pdk.name == "ipc").unwrap();
+        let parsed = pdk::Pdk::parse(ipc.source).unwrap();
+        assert_eq!(parsed.pdk.manufacturer.as_deref(), Some("Diode"));
+        for class in 1..=3 {
+            for (level, maximum) in [('a', 6.0), ('b', 8.0), ('c', 10.0)] {
+                let profile = format!("{class}{level}");
+                let definition = &parsed.profiles[&profile];
+                assert_eq!(definition.performance_class, Some(class));
+                assert_eq!(
+                    definition.producibility_level.unwrap().label(),
+                    level.to_ascii_uppercase().to_string()
+                );
+                assert_eq!(
+                    definition
+                        .defaults
+                        .board_thickness
+                        .as_ref()
+                        .unwrap()
+                        .millimeters(),
+                    1.6
+                );
+                let rules = rules::lower(&parsed, Some(&profile)).unwrap();
+                assert_eq!(rules.len(), 2);
+                assert!(rules.iter().all(|rule| rule.limit.ratio() == maximum));
+                assert!(rules.iter().any(|rule| rule.id.contains("via")));
+                assert!(rules.iter().any(|rule| rule.id.contains("pth")));
             }
         }
 

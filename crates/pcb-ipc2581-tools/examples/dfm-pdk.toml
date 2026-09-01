@@ -25,6 +25,11 @@ id = "drilling.via_hole"
 select = { hole = "via" }
 limit = { minimum = "0.2 mm" }
 
+[[rules.drilling.hole_aspect_ratio]]
+id = "drilling.via_aspect_ratio"
+select = { hole = "via" }
+limit = { maximum = 8.0 }
+
 [[rules.drilling.slot_width]]
 id = "drilling.plated_slot"
 select = { plating = "plated" }

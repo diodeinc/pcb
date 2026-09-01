@@ -295,6 +295,8 @@ pub struct RuleResult {
     pub finding_count: usize,
     pub waived_count: usize,
     pub skip_reason: Option<String>,
+    /// Input assumptions actually used while evaluating this rule.
+    pub assumptions: Vec<String>,
     pub view: ViewRecipe,
     pub tier: &'static str,
 }
@@ -316,6 +318,7 @@ impl RuleResult {
             finding_count: 0,
             waived_count: 0,
             skip_reason: None,
+            assumptions: Vec::new(),
             view: rule.kind.view_recipe(),
             tier: if rule.severity == Severity::Warning {
                 "preferred"
@@ -374,6 +377,11 @@ impl RuleLimit {
                 normalized_value: f64::from(*count),
                 normalized_unit: "layers",
             },
+            LimitValue::Ratio(ratio) => Self {
+                pdk_value: ratio.value().to_string(),
+                normalized_value: ratio.value(),
+                normalized_unit: "ratio",
+            },
         }
     }
 }
@@ -402,6 +410,7 @@ pub struct Finding {
 #[serde(rename_all = "snake_case")]
 pub enum MeasurementKind {
     Diameter,
+    AspectRatio,
     NominalWidth,
     InscribedWidth,
     Clearance,
@@ -449,6 +458,14 @@ pub enum Measurement {
         required_count: u32,
         margin_count: i64,
     },
+    Ratio {
+        actual_ratio: f64,
+        maximum_ratio: f64,
+        margin_ratio: f64,
+        drilled_span_thickness_mm: f64,
+        finished_hole_diameter_mm: f64,
+        thickness_source: &'static str,
+    },
 }
 
 impl Measurement {
@@ -476,11 +493,28 @@ impl Measurement {
         }
     }
 
+    pub fn maximum_ratio(
+        actual_ratio: f64,
+        maximum_ratio: f64,
+        drilled_span_thickness_mm: f64,
+        finished_hole_diameter_mm: f64,
+        thickness_source: &'static str,
+    ) -> Self {
+        Self::Ratio {
+            actual_ratio,
+            maximum_ratio,
+            margin_ratio: maximum_ratio - actual_ratio,
+            drilled_span_thickness_mm,
+            finished_hole_diameter_mm,
+            thickness_source,
+        }
+    }
+
     #[cfg(test)]
     pub fn actual_mm(&self) -> Option<f64> {
         match self {
             Self::Distance { actual_mm, .. } => Some(*actual_mm),
-            Self::Count { .. } => None,
+            Self::Count { .. } | Self::Ratio { .. } => None,
         }
     }
 }

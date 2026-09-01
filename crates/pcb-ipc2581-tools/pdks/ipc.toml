@@ -2,96 +2,164 @@ schema_version = 2
 default_profile = "2b"
 
 [pdk]
-id = "ipc-advanced-dfm-profiles"
-name = "IPC Advanced DFM Profiles"
-revision = "public-metadata-2026-09-01"
-manufacturer = "IPC"
-process = "Advanced DFM Profiles"
+id = "diode-ipc-informed-baselines"
+name = "Diode opinionated IPC-informed DFM baselines"
+revision = "2026-09-01"
+manufacturer = "Diode"
+process = "Partial IPC-informed baseline"
 
-[sources.ipc-profiles]
-title = "Design & Manufacturing Confirmed to IPC Standards"
+[sources.ipc-design-topics]
+title = "IPC design and manufacturing profile topics"
 url = "https://www.electronics.org/design-manufacturing-confirmed-ipc-standards"
 accessed = "2026-09-01"
-note = "IPC states that the profiles draw on IPC-2221, IPC-2222, IPC-2226, IPC-2152, IPC-6012, IPC-7351, and IPC-J-STD-001. Public material defines the taxonomy and copper-weight coverage but does not publish the licensed numeric rule matrices."
+note = "IPC public material identifies the class/producibility taxonomy and relevant design topics. Diode chose the numeric baseline values in this PDK; they are not licensed IPC numeric matrices, do not establish full IPC compliance, and do not imply IPC certification."
 
 [profiles.1a]
-name = "IPC Class 1 / Producibility Level A"
-status = "metadata_only"
+name = "IPC Class 1 / Producibility Level A — Diode partial baseline"
+description = "Diode's opinionated partial baseline informed by IPC design topics; not an IPC numeric matrix, certification, or proof of full IPC compliance."
 performance_class = 1
 producibility_level = "A"
 technologies = ["rigid", "flex", "rigid_flex", "hdi"]
-coverage = ["outer copper: 0.125-6 oz", "inner copper: 0.125-6 oz"]
-source = "ipc-profiles"
+coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio"]
+source = "ipc-design-topics"
+
+[profiles.1a.defaults]
+board_thickness = "1.6 mm"
 
 [profiles.1b]
-name = "IPC Class 1 / Producibility Level B"
-status = "metadata_only"
+name = "IPC Class 1 / Producibility Level B — Diode partial baseline"
+description = "Diode's opinionated partial baseline informed by IPC design topics; not an IPC numeric matrix, certification, or proof of full IPC compliance."
 performance_class = 1
 producibility_level = "B"
 technologies = ["rigid", "flex", "rigid_flex", "hdi"]
-coverage = ["outer copper: 0.125-6 oz", "inner copper: 0.125-6 oz"]
-source = "ipc-profiles"
+coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio"]
+source = "ipc-design-topics"
+
+[profiles.1b.defaults]
+board_thickness = "1.6 mm"
 
 [profiles.1c]
-name = "IPC Class 1 / Producibility Level C"
-status = "metadata_only"
+name = "IPC Class 1 / Producibility Level C — Diode partial baseline"
+description = "Diode's opinionated partial baseline informed by IPC design topics; not an IPC numeric matrix, certification, or proof of full IPC compliance."
 performance_class = 1
 producibility_level = "C"
 technologies = ["rigid", "flex", "rigid_flex", "hdi"]
-coverage = ["outer copper: 0.125-6 oz", "inner copper: 0.125-6 oz"]
-source = "ipc-profiles"
+coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio"]
+source = "ipc-design-topics"
+
+[profiles.1c.defaults]
+board_thickness = "1.6 mm"
 
 [profiles.2a]
-name = "IPC Class 2 / Producibility Level A"
-status = "metadata_only"
+name = "IPC Class 2 / Producibility Level A — Diode partial baseline"
+description = "Diode's opinionated partial baseline informed by IPC design topics; not an IPC numeric matrix, certification, or proof of full IPC compliance."
 performance_class = 2
 producibility_level = "A"
 technologies = ["rigid", "flex", "rigid_flex", "hdi"]
-coverage = ["outer copper: 0.125-6 oz", "inner copper: 0.125-6 oz"]
-source = "ipc-profiles"
+coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio"]
+source = "ipc-design-topics"
+
+[profiles.2a.defaults]
+board_thickness = "1.6 mm"
 
 [profiles.2b]
-name = "IPC Class 2 / Producibility Level B"
-description = "Opinionated default IPC taxonomy profile; numeric rules require licensed IPC profile data."
-status = "metadata_only"
+name = "IPC Class 2 / Producibility Level B — Diode partial baseline"
+description = "Diode's opinionated partial baseline informed by IPC design topics; not an IPC numeric matrix, certification, or proof of full IPC compliance."
 performance_class = 2
 producibility_level = "B"
 technologies = ["rigid", "flex", "rigid_flex", "hdi"]
-coverage = ["outer copper: 0.125-6 oz", "inner copper: 0.125-6 oz"]
-source = "ipc-profiles"
+coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio"]
+source = "ipc-design-topics"
+
+[profiles.2b.defaults]
+board_thickness = "1.6 mm"
 
 [profiles.2c]
-name = "IPC Class 2 / Producibility Level C"
-status = "metadata_only"
+name = "IPC Class 2 / Producibility Level C — Diode partial baseline"
+description = "Diode's opinionated partial baseline informed by IPC design topics; not an IPC numeric matrix, certification, or proof of full IPC compliance."
 performance_class = 2
 producibility_level = "C"
 technologies = ["rigid", "flex", "rigid_flex", "hdi"]
-coverage = ["outer copper: 0.125-6 oz", "inner copper: 0.125-6 oz"]
-source = "ipc-profiles"
+coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio"]
+source = "ipc-design-topics"
+
+[profiles.2c.defaults]
+board_thickness = "1.6 mm"
 
 [profiles.3a]
-name = "IPC Class 3 / Producibility Level A"
-status = "metadata_only"
+name = "IPC Class 3 / Producibility Level A — Diode partial baseline"
+description = "Diode's opinionated partial baseline informed by IPC design topics; not an IPC numeric matrix, certification, or proof of full IPC compliance."
 performance_class = 3
 producibility_level = "A"
 technologies = ["rigid", "flex", "rigid_flex", "hdi"]
-coverage = ["outer copper: 0.125-6 oz", "inner copper: 0.125-6 oz"]
-source = "ipc-profiles"
+coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio"]
+source = "ipc-design-topics"
+
+[profiles.3a.defaults]
+board_thickness = "1.6 mm"
 
 [profiles.3b]
-name = "IPC Class 3 / Producibility Level B"
-status = "metadata_only"
+name = "IPC Class 3 / Producibility Level B — Diode partial baseline"
+description = "Diode's opinionated partial baseline informed by IPC design topics; not an IPC numeric matrix, certification, or proof of full IPC compliance."
 performance_class = 3
 producibility_level = "B"
 technologies = ["rigid", "flex", "rigid_flex", "hdi"]
-coverage = ["outer copper: 0.125-6 oz", "inner copper: 0.125-6 oz"]
-source = "ipc-profiles"
+coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio"]
+source = "ipc-design-topics"
+
+[profiles.3b.defaults]
+board_thickness = "1.6 mm"
 
 [profiles.3c]
-name = "IPC Class 3 / Producibility Level C"
-status = "metadata_only"
+name = "IPC Class 3 / Producibility Level C — Diode partial baseline"
+description = "Diode's opinionated partial baseline informed by IPC design topics; not an IPC numeric matrix, certification, or proof of full IPC compliance."
 performance_class = 3
 producibility_level = "C"
 technologies = ["rigid", "flex", "rigid_flex", "hdi"]
-coverage = ["outer copper: 0.125-6 oz", "inner copper: 0.125-6 oz"]
-source = "ipc-profiles"
+coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio"]
+source = "ipc-design-topics"
+
+[profiles.3c.defaults]
+board_thickness = "1.6 mm"
+
+[[rules.drilling.hole_aspect_ratio]]
+id = "diode.ipc.maximum_via_aspect_ratio.level_a"
+profiles = ["1a", "2a", "3a"]
+select = { hole = "via" }
+limit = { maximum = 6.0 }
+source = "ipc-design-topics"
+
+[[rules.drilling.hole_aspect_ratio]]
+id = "diode.ipc.maximum_pth_aspect_ratio.level_a"
+profiles = ["1a", "2a", "3a"]
+select = { hole = "pth" }
+limit = { maximum = 6.0 }
+source = "ipc-design-topics"
+
+[[rules.drilling.hole_aspect_ratio]]
+id = "diode.ipc.maximum_via_aspect_ratio.level_b"
+profiles = ["1b", "2b", "3b"]
+select = { hole = "via" }
+limit = { maximum = 8.0 }
+source = "ipc-design-topics"
+
+[[rules.drilling.hole_aspect_ratio]]
+id = "diode.ipc.maximum_pth_aspect_ratio.level_b"
+profiles = ["1b", "2b", "3b"]
+select = { hole = "pth" }
+limit = { maximum = 8.0 }
+source = "ipc-design-topics"
+
+[[rules.drilling.hole_aspect_ratio]]
+id = "diode.ipc.maximum_via_aspect_ratio.level_c"
+profiles = ["1c", "2c", "3c"]
+select = { hole = "via" }
+limit = { maximum = 10.0 }
+source = "ipc-design-topics"
+
+[[rules.drilling.hole_aspect_ratio]]
+id = "diode.ipc.maximum_pth_aspect_ratio.level_c"
+profiles = ["1c", "2c", "3c"]
+select = { hole = "pth" }
+limit = { maximum = 10.0 }
+source = "ipc-design-topics"

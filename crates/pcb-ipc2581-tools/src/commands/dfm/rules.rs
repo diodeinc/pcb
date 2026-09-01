@@ -11,7 +11,8 @@ use anyhow::Result;
 use super::design::HoleClass;
 use super::pdk::{
     CopperWeight, HoleKind, LayerPosition, Length, LengthCase, LengthLimit, Pdk, PlatedHoleKind,
-    Profile, ProfileStatus, RuleConditions, RuleMetadata, SlotPlating,
+    Profile, ProfileStatus, Ratio, RatioCase, RatioLimit, RuleConditions, RuleMetadata,
+    SlotPlating,
 };
 use super::report::{Severity, ViewRecipe};
 
@@ -32,6 +33,7 @@ pub(super) struct Conditions {
     pub maximum_copper_layers: Option<u32>,
     pub layer: Option<LayerPosition>,
     pub copper_weight_oz: Option<f64>,
+    pub assumed_board_thickness: Option<Length>,
     pub assumed_outer_copper_weight_oz: Option<f64>,
     pub assumed_inner_copper_weight_oz: Option<f64>,
 }
@@ -95,20 +97,34 @@ impl Comparison {
 pub(super) enum LimitValue {
     Length(Length),
     Count(u32),
+    Ratio(Ratio),
 }
 
 impl LimitValue {
     pub fn length(&self) -> &Length {
         match self {
             Self::Length(length) => length,
-            Self::Count(_) => unreachable!("a count-valued rule has no length limit"),
+            Self::Count(_) | Self::Ratio(_) => {
+                unreachable!("a non-length-valued rule has no length limit")
+            }
         }
     }
 
     pub fn count(&self) -> u32 {
         match self {
             Self::Count(count) => *count,
-            Self::Length(_) => unreachable!("a length-valued rule has no count limit"),
+            Self::Length(_) | Self::Ratio(_) => {
+                unreachable!("a non-count-valued rule has no count limit")
+            }
+        }
+    }
+
+    pub fn ratio(&self) -> f64 {
+        match self {
+            Self::Ratio(ratio) => ratio.value(),
+            Self::Length(_) | Self::Count(_) => {
+                unreachable!("a non-ratio-valued rule has no ratio limit")
+            }
         }
     }
 }
@@ -121,6 +137,8 @@ pub(super) enum RuleKind {
     CopperLayerCount,
     /// Size: each hole's drilled diameter meets the limit.
     HoleDiameter(HoleClass),
+    /// Ratio: drilled physical span thickness divided by finished hole diameter.
+    HoleAspectRatio(HoleClass),
     /// Size: each routed slot's width meets the limit.
     SlotWidth(SlotPlating),
     /// Clearance: holes with overlapping spans keep edge-to-edge distance.
@@ -235,6 +253,12 @@ impl RuleKind {
                 true,
                 &["drills", "board_outlines"],
             ),
+            Self::HoleAspectRatio(_) => (
+                "hole_aspect_ratio",
+                "Plated-hole aspect ratio",
+                true,
+                &["drills", "board_outlines"],
+            ),
             Self::SlotWidth(_) => (
                 "slot_width",
                 "Slot width",
@@ -317,6 +341,18 @@ impl RuleKind {
                 quantity_label: format!("{} hole diameter", class.label()),
                 witness_roles: Some(["hole_boundary", "hole_boundary"]),
                 pools: DRILLED,
+            },
+            Self::HoleAspectRatio(class) => Semantics {
+                subject: "hole",
+                quantity: "plated_hole_aspect_ratio",
+                method: "physical_drilled_span_thickness_over_finished_hole_diameter",
+                finding_title: format!("{} hole exceeds maximum aspect ratio", class.label()),
+                quantity_label: format!("{} hole aspect ratio", class.label()),
+                witness_roles: None,
+                pools: Pools {
+                    stackup: true,
+                    ..DRILLED
+                },
             },
             Self::SlotWidth(plating) => Semantics {
                 subject: "slot",
@@ -498,6 +534,18 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
             RuleKind::HoleDiameter(hole_class(rule.select.hole)),
         ));
     }
+    for rule in &pdk.rules.drilling.hole_aspect_ratio {
+        let class = plated_hole_class(rule.select.hole);
+        rules.extend(lower_ratio_rule(
+            &rule.metadata,
+            rule.limit.as_ref(),
+            &rule.cases,
+            profile_name,
+            profile,
+            format!("Maximum {} hole aspect ratio", class.label()),
+            RuleKind::HoleAspectRatio(class),
+        ));
+    }
     for rule in &pdk.rules.drilling.slot_width {
         rules.extend(lower_length_rule(
             &rule.metadata,
@@ -657,6 +705,63 @@ fn lower_limit(
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
+fn lower_ratio_rule(
+    metadata: &RuleMetadata,
+    limit: Option<&RatioLimit>,
+    cases: &[RatioCase],
+    profile_name: &str,
+    profile: &Profile,
+    title: String,
+    kind: RuleKind,
+) -> Vec<Rule> {
+    if !metadata.applies_to(profile_name) {
+        return Vec::new();
+    }
+    match limit {
+        Some(limit) => vec![lower_ratio_limit(
+            &metadata.id,
+            limit,
+            &RuleConditions::default(),
+            profile,
+            title,
+            kind,
+        )],
+        None => cases
+            .iter()
+            .map(|case| {
+                lower_ratio_limit(
+                    &format!("{}.{}", metadata.id, case.id),
+                    &case.limit,
+                    &case.when,
+                    profile,
+                    title.clone(),
+                    kind,
+                )
+            })
+            .collect(),
+    }
+}
+
+fn lower_ratio_limit(
+    id: &str,
+    limit: &RatioLimit,
+    when: &RuleConditions,
+    profile: &Profile,
+    title: String,
+    kind: RuleKind,
+) -> Rule {
+    Rule {
+        id: id.to_owned(),
+        title,
+        severity: Severity::Error,
+        comparison: Comparison::Maximum,
+        limit: LimitValue::Ratio(limit.maximum.clone()),
+        kind,
+        conditions: conditions(when, profile),
+    }
+}
+
 fn conditions(rule: &RuleConditions, profile: &Profile) -> Conditions {
     let copper_layers = rule.copper_layers.as_ref();
     let copper = rule.copper.as_ref();
@@ -667,6 +772,7 @@ fn conditions(rule: &RuleConditions, profile: &Profile) -> Conditions {
         copper_weight_oz: copper
             .and_then(|condition| condition.weight.as_ref())
             .map(CopperWeight::ounces),
+        assumed_board_thickness: profile.defaults.board_thickness.clone(),
         assumed_outer_copper_weight_oz: profile
             .defaults
             .outer_copper_weight

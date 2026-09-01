@@ -306,6 +306,12 @@ impl Rules {
             .map(RuleDefinition::HoleDiameter)
             .chain(
                 self.drilling
+                    .hole_aspect_ratio
+                    .iter()
+                    .map(RuleDefinition::HoleAspectRatio),
+            )
+            .chain(
+                self.drilling
                     .slot_width
                     .iter()
                     .map(RuleDefinition::SlotWidth),
@@ -358,6 +364,7 @@ impl Rules {
 
 enum RuleDefinition<'a> {
     HoleDiameter(&'a HoleDiameterRule),
+    HoleAspectRatio(&'a HoleAspectRatioRule),
     SlotWidth(&'a SlotWidthRule),
     HolePair(&'a HolePairRule),
     AnnularRing(&'a AnnularRingRule),
@@ -369,6 +376,7 @@ impl RuleDefinition<'_> {
     fn metadata(&self) -> &RuleMetadata {
         match self {
             Self::HoleDiameter(rule) => &rule.metadata,
+            Self::HoleAspectRatio(rule) => &rule.metadata,
             Self::SlotWidth(rule) => &rule.metadata,
             Self::HolePair(rule) => &rule.metadata,
             Self::AnnularRing(rule) => &rule.metadata,
@@ -379,6 +387,9 @@ impl RuleDefinition<'_> {
     fn limits(&self) -> (Option<&LengthLimit>, &[LengthCase]) {
         match self {
             Self::HoleDiameter(rule) => (rule.limit.as_ref(), &rule.cases),
+            Self::HoleAspectRatio(_) => {
+                unreachable!("an aspect-ratio rule has no length limits")
+            }
             Self::SlotWidth(rule) => (rule.limit.as_ref(), &rule.cases),
             Self::HolePair(rule) => (rule.limit.as_ref(), &rule.cases),
             Self::AnnularRing(rule) => (rule.limit.as_ref(), &rule.cases),
@@ -390,6 +401,9 @@ impl RuleDefinition<'_> {
 
     fn validate(&self) -> Result<()> {
         let metadata = self.metadata();
+        if let Self::HoleAspectRatio(rule) = self {
+            return validate_ratio_limits(metadata, rule.limit.as_ref(), &rule.cases);
+        }
         let (limit, cases) = self.limits();
         validate_limits(
             metadata,
@@ -401,6 +415,16 @@ impl RuleDefinition<'_> {
 
     fn configured_ids(&self) -> Vec<String> {
         let metadata = self.metadata();
+        if let Self::HoleAspectRatio(rule) = self {
+            return if rule.limit.is_some() {
+                vec![metadata.id.clone()]
+            } else {
+                rule.cases
+                    .iter()
+                    .map(|case| format!("{}.{}", metadata.id, case.id))
+                    .collect()
+            };
+        }
         let (limit, cases) = self.limits();
         match limit {
             Some(limit) => limit.ids(&metadata.id),
@@ -417,6 +441,8 @@ impl RuleDefinition<'_> {
 pub struct DrillingRules {
     #[serde(default)]
     pub hole_diameter: Vec<HoleDiameterRule>,
+    #[serde(default)]
+    pub hole_aspect_ratio: Vec<HoleAspectRatioRule>,
     #[serde(default)]
     pub slot_width: Vec<SlotWidthRule>,
     #[serde(default)]
@@ -561,6 +587,21 @@ pub struct LengthCase {
     pub limit: LengthLimit,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RatioLimit {
+    pub maximum: Ratio,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RatioCase {
+    pub id: String,
+    #[serde(default)]
+    pub when: RuleConditions,
+    pub limit: RatioLimit,
+}
+
 fn validate_limits(
     metadata: &RuleMetadata,
     limit: Option<&LengthLimit>,
@@ -579,34 +620,71 @@ fn validate_limits(
         (None, true) => bail!("rule '{}': requires limit or cases", metadata.id),
     }
 
-    let mut ids = HashSet::new();
     for case in cases {
-        if case.id.trim().is_empty() {
-            bail!("rule '{}': case ids must not be empty", metadata.id);
-        }
-        if !ids.insert(&case.id) {
-            bail!("rule '{}': duplicate case id '{}'", metadata.id, case.id);
-        }
-        case.when
-            .validate(&format!("{}.{}", metadata.id, case.id))?;
-        if case.when.copper.is_some() && !allow_copper_conditions {
-            bail!(
-                "rule '{}.{}': when.copper is supported only for copper rules",
-                metadata.id,
-                case.id
-            );
-        }
         case.limit
             .validate(&format!("{}.{}", metadata.id, case.id))?;
     }
+    validate_cases(
+        metadata,
+        cases.iter().map(|case| (case.id.as_str(), &case.when)),
+        allow_copper_conditions,
+    )
+}
+
+fn validate_ratio_limits(
+    metadata: &RuleMetadata,
+    limit: Option<&RatioLimit>,
+    cases: &[RatioCase],
+) -> Result<()> {
+    match (limit, cases.is_empty()) {
+        (Some(_), true) => return Ok(()),
+        (None, false) => {}
+        (Some(_), false) => {
+            bail!(
+                "rule '{}': limit and cases are mutually exclusive",
+                metadata.id
+            )
+        }
+        (None, true) => bail!("rule '{}': requires limit or cases", metadata.id),
+    }
+    validate_cases(
+        metadata,
+        cases.iter().map(|case| (case.id.as_str(), &case.when)),
+        false,
+    )
+}
+
+fn validate_cases<'a>(
+    metadata: &RuleMetadata,
+    cases: impl Iterator<Item = (&'a str, &'a RuleConditions)>,
+    allow_copper_conditions: bool,
+) -> Result<()> {
+    let cases = cases.collect::<Vec<_>>();
+    let mut ids = HashSet::new();
+    for (id, when) in &cases {
+        if id.trim().is_empty() {
+            bail!("rule '{}': case ids must not be empty", metadata.id);
+        }
+        if !ids.insert(*id) {
+            bail!("rule '{}': duplicate case id '{}'", metadata.id, id);
+        }
+        when.validate(&format!("{}.{}", metadata.id, id))?;
+        if when.copper.is_some() && !allow_copper_conditions {
+            bail!(
+                "rule '{}.{}': when.copper is supported only for copper rules",
+                metadata.id,
+                id
+            );
+        }
+    }
     for (index, left) in cases.iter().enumerate() {
         for right in &cases[index + 1..] {
-            if left.when.overlaps(&right.when) {
+            if left.1.overlaps(right.1) {
                 bail!(
                     "rule '{}': cases '{}' and '{}' overlap",
                     metadata.id,
-                    left.id,
-                    right.id
+                    left.0,
+                    right.0
                 );
             }
         }
@@ -624,6 +702,18 @@ pub struct HoleDiameterRule {
     pub limit: Option<LengthLimit>,
     #[serde(default)]
     pub cases: Vec<LengthCase>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HoleAspectRatioRule {
+    #[serde(flatten)]
+    pub metadata: RuleMetadata,
+    pub select: PlatedHoleSelector,
+    #[serde(default)]
+    pub limit: Option<RatioLimit>,
+    #[serde(default)]
+    pub cases: Vec<RatioCase>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -718,6 +808,29 @@ pub enum PlatedHoleKind {
 pub enum SlotPlating {
     Plated,
     Nonplated,
+}
+
+/// A positive finite unitless PDK ratio.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(try_from = "f64")]
+pub struct Ratio(f64);
+
+impl Ratio {
+    pub fn value(&self) -> f64 {
+        self.0
+    }
+}
+
+impl TryFrom<f64> for Ratio {
+    type Error = String;
+
+    fn try_from(value: f64) -> std::result::Result<Self, Self::Error> {
+        if value.is_finite() && value > 0.0 {
+            Ok(Self(value))
+        } else {
+            Err("ratio must be a positive finite unitless number".to_owned())
+        }
+    }
 }
 
 /// A dimensional PDK value with its source spelling retained for auditability.
@@ -852,6 +965,11 @@ id = "via-hole"
 select = { hole = "via" }
 limit = { minimum = "0.2 mm" }
 
+[[rules.drilling.hole_aspect_ratio]]
+id = "via-aspect-ratio"
+select = { hole = "via" }
+limit = { maximum = 8.0 }
+
 [[rules.drilling.hole_to_hole_clearance]]
 id = "via-spacing"
 select = { first_hole = "via", second_hole = "via" }
@@ -897,6 +1015,15 @@ limit = { minimum = "300 mil" }
                 .minimum
                 .millimeters(),
             0.2
+        );
+        assert_eq!(
+            pdk.rules.drilling.hole_aspect_ratio[0]
+                .limit
+                .as_ref()
+                .unwrap()
+                .maximum
+                .value(),
+            8.0
         );
         assert!(
             (pdk.rules.drilling.hole_to_hole_clearance[0]
@@ -1010,5 +1137,44 @@ limit = { minimum = "300 mil" }
                 .to_string()
                 .contains("overlap")
         );
+    }
+
+    #[test]
+    fn rejects_npth_and_invalid_hole_aspect_ratios() {
+        assert!(
+            Pdk::parse(&MIXED_UNIT_PDK.replace(
+                "select = { hole = \"via\" }\nlimit = { maximum = 8.0 }",
+                "select = { hole = \"npth\" }\nlimit = { maximum = 8.0 }"
+            ))
+            .is_err()
+        );
+        for invalid in ["0.0", "-1.0", "inf", "nan", "\"8.0\""] {
+            assert!(
+                Pdk::parse(
+                    &MIXED_UNIT_PDK.replace("maximum = 8.0", &format!("maximum = {invalid}"))
+                )
+                .is_err(),
+                "accepted invalid ratio {invalid}"
+            );
+        }
+        assert!(
+            Pdk::parse(&MIXED_UNIT_PDK.replace(
+                "select = { hole = \"via\" }\nlimit = { maximum = 8.0 }",
+                "hole = \"via\"\nmaximum = 8.0"
+            ))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn validates_named_hole_aspect_ratio_cases() {
+        let pdk = MIXED_UNIT_PDK.replace(
+            "limit = { maximum = 8.0 }",
+            "cases = [\n  { id = \"2-layer\", when = { copper_layers = { exact = 2 } }, limit = { maximum = 8.0 } },\n  { id = \"multilayer\", when = { copper_layers = { minimum = 3 } }, limit = { maximum = 10.0 } },\n]",
+        );
+        Pdk::parse(&pdk)
+            .unwrap()
+            .validate_rule_references()
+            .unwrap();
     }
 }
