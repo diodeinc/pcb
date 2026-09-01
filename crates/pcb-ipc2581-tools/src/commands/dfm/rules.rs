@@ -497,8 +497,7 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
     }
 
     for rule in &pdk.rules.drilling.hole_diameter {
-        lower_length_rule(
-            &mut rules,
+        rules.extend(lower_length_rule(
             &rule.metadata,
             &rule.minimum,
             rule.preferred.as_ref(),
@@ -506,11 +505,10 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
             profile,
             format!("Minimum {} hole diameter", hole_class(rule.hole).label()),
             RuleKind::HoleDiameter(hole_class(rule.hole)),
-        );
+        ));
     }
     for rule in &pdk.rules.drilling.slot_width {
-        lower_length_rule(
-            &mut rules,
+        rules.extend(lower_length_rule(
             &rule.metadata,
             &rule.minimum,
             rule.preferred.as_ref(),
@@ -518,13 +516,12 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
             profile,
             format!("Minimum {} routed slot width", slot_label(rule.plating)),
             RuleKind::SlotWidth(rule.plating),
-        );
+        ));
     }
     for rule in &pdk.rules.drilling.hole_to_hole_clearance {
         let first = hole_class(rule.first_hole);
         let second = hole_class(rule.second_hole);
-        lower_length_rule(
-            &mut rules,
+        rules.extend(lower_length_rule(
             &rule.metadata,
             &rule.minimum,
             rule.preferred.as_ref(),
@@ -536,12 +533,11 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
                 second.label()
             ),
             RuleKind::HolePairClearance(first, second),
-        );
+        ));
     }
     for rule in &pdk.rules.copper.annular_ring {
         let class = plated_hole_class(rule.hole);
-        lower_length_rule(
-            &mut rules,
+        rules.extend(lower_length_rule(
             &rule.metadata,
             &rule.minimum,
             rule.preferred.as_ref(),
@@ -549,7 +545,7 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
             profile,
             format!("Minimum {} annular ring", class.label()),
             RuleKind::AnnularRing(class),
-        );
+        ));
     }
     for (ruleset, title, kind) in [
         (
@@ -584,8 +580,7 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
         ),
     ] {
         for rule in ruleset {
-            lower_length_rule(
-                &mut rules,
+            rules.extend(lower_length_rule(
                 &rule.metadata,
                 &rule.minimum,
                 rule.preferred.as_ref(),
@@ -593,14 +588,13 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
                 profile,
                 title.to_owned(),
                 kind,
-            );
+            ));
         }
     }
     Ok(rules)
 }
 
 fn lower_length_rule(
-    rules: &mut Vec<Rule>,
     metadata: &RuleMetadata,
     minimum: &Length,
     preferred: Option<&Length>,
@@ -608,12 +602,12 @@ fn lower_length_rule(
     profile: &Profile,
     title: String,
     kind: RuleKind,
-) {
+) -> Vec<Rule> {
     if !metadata.applies_to(profile_name) {
-        return;
+        return Vec::new();
     }
     let conditions = conditions(&metadata.when, profile);
-    rules.push(Rule {
+    let required = Rule {
         id: metadata.id.clone(),
         title: title.clone(),
         severity: Severity::Error,
@@ -621,9 +615,9 @@ fn lower_length_rule(
         limit: LimitValue::Length(minimum.clone()),
         kind,
         conditions: conditions.clone(),
-    });
-    if let Some(preferred) = preferred {
-        rules.push(Rule {
+    };
+    std::iter::once(required)
+        .chain(preferred.map(|preferred| Rule {
             id: format!("{}.preferred", metadata.id),
             title: format!("{title} (preferred)"),
             severity: Severity::Warning,
@@ -631,8 +625,8 @@ fn lower_length_rule(
             limit: LimitValue::Length(preferred.clone()),
             kind,
             conditions,
-        });
-    }
+        }))
+        .collect()
 }
 
 fn conditions(rule: &RuleConditions, profile: &Profile) -> Conditions {
