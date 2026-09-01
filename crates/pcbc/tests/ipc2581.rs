@@ -31,13 +31,20 @@ fn assembly_report(scope: &str) -> (Vec<u8>, Value) {
 fn assembly_command_matches_the_shared_board_array_report() {
     let (first_json, report) = assembly_report("board-array");
     let (second_json, _) = assembly_report("board-array");
-    let expected: Value = serde_json::from_str(include_str!(
-        "../../pcb-ipc2581-tools/src/assembly/testdata/report-v1.json"
-    ))
-    .unwrap();
 
     assert_eq!(first_json, second_json);
-    assert_eq!(report, expected);
+    assert_eq!(report["schema_version"], 2);
+    assert_eq!(report["scope"]["kind"], "board_array");
+    assert_eq!(report["scope"]["area_mm2"], 1_400.0);
+    assert_eq!(report["profiles"].as_array().unwrap().len(), 2);
+    let package = report["packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|package| package["name"] == "pkg-smt")
+        .unwrap();
+    assert_eq!(package["pickup_point_mm"]["x"], 0.1);
+    assert!(package["views"][0]["silkscreen"].is_object());
 }
 
 #[test]

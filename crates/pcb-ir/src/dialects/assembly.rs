@@ -5,7 +5,7 @@
 //! canonically in millimeters.
 
 use crate::dialects::ipc::LayoutStepKind;
-use crate::geom::{Affine2, Point};
+use crate::geom::{Affine2, ContourBuf, Paint, Point, Polarity};
 
 #[derive(Debug, Clone, Default)]
 pub struct Document {
@@ -59,6 +59,15 @@ pub enum Scope {
 pub struct Step {
     pub name: String,
     pub kind: LayoutStepKind,
+    pub profiles: Vec<Profile>,
+}
+
+/// One exact step-local physical profile. Cutouts are explicit rather than
+/// inferred from contour winding.
+#[derive(Debug, Clone)]
+pub struct Profile {
+    pub outer: ContourBuf,
+    pub cutouts: Vec<ContourBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -196,7 +205,136 @@ pub struct PackageDefinition {
     pub negative_body_extension: Option<f64>,
     pub comment: Option<String>,
     pub pickup_point: Option<Point>,
+    pub views: Vec<PackageView>,
     pub pins: Vec<PackagePin>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PackageView {
+    pub kind: PackageViewKind,
+    pub outline: Option<PackageOutline>,
+    pub land_pattern: Option<PackageLandPattern>,
+    pub silkscreen: Option<PackageSilkscreen>,
+    pub assembly_drawing: Option<PackageAssemblyDrawing>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackageViewKind {
+    Primary,
+    Topside,
+    OtherSide,
+}
+
+#[derive(Debug, Clone)]
+pub struct PackageOutline {
+    pub transform: Option<Transform>,
+    pub shape: PackageShape,
+}
+
+#[derive(Debug, Clone)]
+pub struct PackageLandPattern {
+    pub pads: Vec<PackagePad>,
+    pub targets: Vec<PackageTarget>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PackagePad {
+    pub padstack_ref: Option<String>,
+    pub x: Option<f64>,
+    pub y: Option<f64>,
+    pub transform: Option<Transform>,
+    pub graphic: Option<PackageGraphic>,
+    pub pin_ref: Option<PackagePinReference>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PackagePinReference {
+    pub component_ref: Option<String>,
+    pub pin: String,
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PackageTarget {
+    pub location: Point,
+    pub transform: Option<Transform>,
+    pub shape: PackageShape,
+}
+
+#[derive(Debug, Clone)]
+pub struct PackageSilkscreen {
+    pub outlines: Vec<PackageOutline>,
+    pub markings: Vec<PackageMarking>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PackageAssemblyDrawing {
+    pub outline: Option<PackageOutline>,
+    pub markings: Vec<PackageMarking>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PackageMarking {
+    pub usage: Option<String>,
+    pub location: Option<Point>,
+    pub transform: Option<Transform>,
+    pub graphic: PackageGraphic,
+}
+
+#[derive(Debug, Clone)]
+pub enum PackageGraphic {
+    Shape(PackageShape),
+    Text(PackageText),
+    Outline(PackageOutline),
+}
+
+/// Canonical package-local geometry plus the source references needed to
+/// distinguish complete geometry from an unresolved or unsupported source.
+#[derive(Debug, Clone)]
+pub struct PackageShape {
+    pub status: PackageGeometryStatus,
+    pub references: Vec<PackageGeometryReference>,
+    pub polarity: Polarity,
+    pub paths: Vec<PackagePath>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackageGeometryStatus {
+    Complete,
+    Partial,
+    Unresolved,
+    Unsupported,
+}
+
+#[derive(Debug, Clone)]
+pub struct PackageGeometryReference {
+    pub kind: PackageGeometryReferenceKind,
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackageGeometryReferenceKind {
+    StandardPrimitive,
+    UserPrimitive,
+    LineDescription,
+    FillDescription,
+}
+
+#[derive(Debug, Clone)]
+pub struct PackagePath {
+    pub paint: Paint,
+    pub contours: Vec<ContourBuf>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PackageText {
+    pub text: String,
+    pub font_size: u32,
+    pub font_size_raw: String,
+    pub transform: Option<Transform>,
+    pub lower_left: Point,
+    pub upper_right: Point,
+    pub font_ref: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -210,6 +348,7 @@ pub struct PackagePin {
     pub polarity: Option<PackagePinPolarity>,
     pub location: Option<Point>,
     pub transform: Option<Transform>,
+    pub shape: PackageShape,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
