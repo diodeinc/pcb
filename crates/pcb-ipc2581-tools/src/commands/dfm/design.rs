@@ -77,9 +77,6 @@ impl<'a> Design<'a> {
         let (holes, slots) = when(pools.drilled, || {
             collect_drilled(imported, scope, stackup.as_ref())
         })?;
-        if pools.resolved_drill_spans {
-            validate_hole_clearance_spans(&holes, rules)?;
-        }
         let copper_layers = when(pools.copper, || {
             collect_copper_layers(imported, scope, pools.conductor_ownership)
         })?;
@@ -97,7 +94,7 @@ impl<'a> Design<'a> {
             })
             .map(|rule| rule.limit.length().millimeters())
             .fold(1.0, f64::max);
-        Ok(Self {
+        let design = Self {
             imported,
             scope,
             stackup,
@@ -146,7 +143,11 @@ impl<'a> Design<'a> {
             holes,
             slots,
             copper_layers,
-        })
+        };
+        if pools.resolved_drill_spans {
+            validate_hole_clearance_spans(&design, rules)?;
+        }
+        Ok(design)
     }
 
     pub fn resolve(&self, symbol: Option<Symbol>) -> Option<String> {
@@ -224,13 +225,20 @@ impl<'a> Design<'a> {
     }
 }
 
-fn validate_hole_clearance_spans(holes: &[Hole], rules: &[Rule]) -> Result<()> {
-    for hole in holes {
+fn validate_hole_clearance_spans(design: &Design, rules: &[Rule]) -> Result<()> {
+    for hole in &design.holes {
         let selected = rules.iter().any(|rule| {
             matches!(
                 rule.kind,
                 rules::RuleKind::HoleToCopperClearance(class) if class == hole.class
-            )
+            ) && rule.conditions.applies_to_design(design)
+                && design
+                    .copper_layers
+                    .iter()
+                    .enumerate()
+                    .any(|(index, layer)| {
+                        hole.spans_copper(index) && rule.conditions.applies_to_layer(layer)
+                    })
         });
         if selected
             && (!hole.span_declared || hole.drill_span.interpretation == "assumed_whole_stack")

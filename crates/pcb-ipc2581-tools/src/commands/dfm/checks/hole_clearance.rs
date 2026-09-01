@@ -293,6 +293,13 @@ limit = {{ minimum = "0.20 mm" }}
     <Layer name="L1" layerFunction="CONDUCTOR" side="INTERNAL" polarity="POSITIVE"/>
     <Layer name="L2" layerFunction="CONDUCTOR" side="BOTTOM" polarity="POSITIVE"/>
     <Layer name="DRILL" layerFunction="DRILL" side="ALL" polarity="POSITIVE">{span}</Layer>
+    <Stackup name="Primary" overallThickness="0.105" tolPlus="0" tolMinus="0" whereMeasured="METAL" stackupStatus="PROPOSED">
+      <StackupGroup name="Primary_Group" thickness="0.105" tolPlus="0" tolMinus="0">
+        <StackupLayer layerOrGroupRef="L0" thickness="0.035" tolPlus="0" tolMinus="0" sequence="0"/>
+        <StackupLayer layerOrGroupRef="L1" thickness="0.035" tolPlus="0" tolMinus="0" sequence="1"/>
+        <StackupLayer layerOrGroupRef="L2" thickness="0.035" tolPlus="0" tolMinus="0" sequence="2"/>
+      </StackupGroup>
+    </Stackup>
     <Step name="board" type="BOARD"><Datum x="0" y="0"/>
       {}
       <LayerFeature layerRef="DRILL"><Set net="N1" polarity="POSITIVE">
@@ -516,5 +523,34 @@ limit = {{ minimum = "0.20 mm" }}
             .err()
             .expect("an unknown span must fail closed");
         assert!(error.to_string().contains("no resolvable drill span"));
+    }
+
+    #[test]
+    fn does_not_require_a_span_for_a_nonapplicable_named_case() {
+        let xml = board("VIA", None, &[copper(0, Some("N2"), 0.55)]);
+        let source = pdk("via").replace(
+            "limit = { minimum = \"0.20 mm\" }",
+            "cases = [{ id = \"two-layer\", when = { copper_layers = { exact = 2 } }, limit = { minimum = \"0.20 mm\" } }]",
+        );
+        let ipc = Ipc2581::parse(&xml).unwrap();
+        let pdk = Pdk::parse(&source).unwrap();
+        let rules = rules::lower(&pdk, None).unwrap();
+        let imported = pcb_ir::import::ipc2581::import_design(&ipc).unwrap();
+        let design = Design::extract(&imported, ArtworkScope::Board, &rules).unwrap();
+        let results = checks::run(
+            &rules,
+            &design,
+            None,
+            NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
+        );
+
+        assert!(matches!(
+            results.rules[0].status,
+            crate::commands::dfm::report::RuleStatus::Skipped
+        ));
+        assert_eq!(
+            results.rules[0].skip_reason.as_deref(),
+            Some("rule conditions do not apply to this stackup")
+        );
     }
 }
