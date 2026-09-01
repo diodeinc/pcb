@@ -11,6 +11,9 @@ const MANUFACTURER_ENTERPRISE_PREFIX: &str = "diode-mfr-";
 const OFFER_DEFINITION_SOURCE: &str = "urn:diode:ipc2581:offer:v1";
 const SUPPLIER_ENTERPRISE_REF: &str = "SelectedSupplierEnterpriseRef";
 const SUPPLIER_PART_NUMBER: &str = "SelectedSupplierPartNumber";
+const PART_IDENTITY_DEFINITION_SOURCE: &str = "urn:diode:ipc2581:part-identity:v1";
+const EXTERNAL_PART_IDENTIFIER: &str = "ExternalPartIdentifier";
+const MANUFACTURER_PART_NUMBER_ALIAS: &str = "ManufacturerPartNumberAlias";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -22,17 +25,24 @@ struct Selection {
     mpn: String,
     distributor: Option<String>,
     distributor_part_id: Option<String>,
+    external_part_library: Option<String>,
+    external_part_library_mpn: Option<String>,
+    external_part_identifier: Option<String>,
+    #[serde(default)]
+    mpn_aliases: Vec<String>,
 }
 
 impl Selection {
-    fn offer_fields(&self) -> (&Uuid, &str, &str, Option<&str>, Option<&str>) {
-        (
-            &self.manufacturer_id,
-            &self.manufacturer,
-            &self.mpn,
-            self.distributor.as_deref(),
-            self.distributor_part_id.as_deref(),
-        )
+    fn has_same_metadata(&self, other: &Self) -> bool {
+        self.manufacturer_id == other.manufacturer_id
+            && self.manufacturer == other.manufacturer
+            && self.mpn == other.mpn
+            && self.distributor == other.distributor
+            && self.distributor_part_id == other.distributor_part_id
+            && self.external_part_library == other.external_part_library
+            && self.external_part_library_mpn == other.external_part_library_mpn
+            && self.external_part_identifier == other.external_part_identifier
+            && self.mpn_aliases == other.mpn_aliases
     }
 }
 
@@ -47,6 +57,8 @@ struct ResolvedSelection<'a> {
 struct BomHydration {
     oem_design_number: String,
     supplier: Option<(String, String)>,
+    external_part_identifier: Option<String>,
+    mpn_aliases: Vec<String>,
 }
 
 #[derive(Debug, Default)]
@@ -162,6 +174,17 @@ fn parse_selections(content: &str) -> Result<Vec<Selection>> {
         if selection.distributor.is_some() != selection.distributor_part_id.is_some() {
             anyhow::bail!("Selection distributor and distributorPartId must be supplied together");
         }
+        if selection.external_part_library.is_some()
+            != selection.external_part_library_mpn.is_some()
+        {
+            anyhow::bail!(
+                "Selection externalPartLibrary and externalPartLibraryMpn must be supplied together"
+            );
+        }
+        if selection.external_part_identifier.is_some() && selection.external_part_library.is_none()
+        {
+            anyhow::bail!("Selection externalPartIdentifier requires externalPartLibrary");
+        }
         for (name, value) in [
             ("path", Some(selection.path.as_str())),
             ("refdes", selection.refdes.as_deref()),
@@ -172,6 +195,18 @@ fn parse_selections(content: &str) -> Result<Vec<Selection>> {
                 "distributorPartId",
                 selection.distributor_part_id.as_deref(),
             ),
+            (
+                "externalPartLibrary",
+                selection.external_part_library.as_deref(),
+            ),
+            (
+                "externalPartLibraryMpn",
+                selection.external_part_library_mpn.as_deref(),
+            ),
+            (
+                "externalPartIdentifier",
+                selection.external_part_identifier.as_deref(),
+            ),
         ] {
             let Some(value) = value else { continue };
             if value.is_empty() {
@@ -179,6 +214,24 @@ fn parse_selections(content: &str) -> Result<Vec<Selection>> {
             }
             if value.trim() != value {
                 anyhow::bail!("Selection {name} must not have leading or trailing whitespace");
+            }
+        }
+
+        let mut aliases = HashSet::new();
+        for (index, alias) in selection.mpn_aliases.iter().enumerate() {
+            if alias.is_empty() {
+                anyhow::bail!("Selection mpnAliases[{index}] must not be empty");
+            }
+            if alias.trim() != alias {
+                anyhow::bail!(
+                    "Selection mpnAliases[{index}] must not have leading or trailing whitespace"
+                );
+            }
+            if alias.eq_ignore_ascii_case(&selection.mpn) {
+                anyhow::bail!("Selection mpnAliases[{index}] must not duplicate the canonical mpn");
+            }
+            if !aliases.insert(alias.to_ascii_lowercase()) {
+                anyhow::bail!("Selection mpnAliases must be unique case-insensitively");
             }
         }
 
@@ -260,9 +313,9 @@ fn resolve_selections<'a>(
         let selection = resolved_selection.selection;
         if let Some(&index) = index_by_oem.get(&resolved_selection.oem_design_number) {
             let previous = deduplicated[index].selection;
-            if previous.offer_fields() != selection.offer_fields() {
+            if !previous.has_same_metadata(selection) {
                 anyhow::bail!(
-                    "Selections for paths {} and {} resolve to OEM {} but have differing offer fields",
+                    "Selections for paths {} and {} resolve to OEM {} but have differing metadata",
                     previous.path,
                     selection.path,
                     resolved_selection.oem_design_number
@@ -447,7 +500,7 @@ fn apply_selection(
         vmpn.chosen = None;
     }
 
-    let existing = item.vmpn_list.iter_mut().find(|vmpn| {
+    let existing = item.vmpn_list.iter().position(|vmpn| {
         let has_mpn = vmpn
             .mpns
             .iter()
@@ -459,9 +512,8 @@ fn apply_selection(
         has_mpn && has_manufacturer
     });
 
-    if let Some(vmpn) = existing {
-        vmpn.qualified = Some(true);
-        vmpn.chosen = Some(true);
+    let selected_index = if let Some(index) = existing {
+        index
     } else {
         item.vmpn_list.push(create_vmpn(
             interner,
@@ -471,11 +523,25 @@ fn apply_selection(
             Some(true),
             Some(true),
         ));
-    }
+        item.vmpn_list.len() - 1
+    };
+    let selected_vmpn = &mut item.vmpn_list[selected_index];
+    selected_vmpn.qualified = Some(true);
+    selected_vmpn.chosen = Some(true);
+    selected_vmpn.evpl_vendor = selection
+        .external_part_library
+        .as_deref()
+        .map(|value| interner.intern(value));
+    selected_vmpn.evpl_mpn = selection
+        .external_part_library_mpn
+        .as_deref()
+        .map(|value| interner.intern(value));
 
     Ok(BomHydration {
         oem_design_number: resolved.oem_design_number.clone(),
         supplier,
+        external_part_identifier: selection.external_part_identifier.clone(),
+        mpn_aliases: selection.mpn_aliases.clone(),
     })
 }
 
@@ -654,7 +720,13 @@ fn bom_hydration_edits(
                     doc.attr(textual, "textualCharacteristicName"),
                     Some(SUPPLIER_ENTERPRISE_REF | SUPPLIER_PART_NUMBER)
                 );
-            if is_diode_offer {
+            let is_diode_part_identity = doc.attr(textual, "definitionSource")
+                == Some(PART_IDENTITY_DEFINITION_SOURCE)
+                && matches!(
+                    doc.attr(textual, "textualCharacteristicName"),
+                    Some(EXTERNAL_PART_IDENTIFIER | MANUFACTURER_PART_NUMBER_ALIAS)
+                );
+            if is_diode_offer || is_diode_part_identity {
                 edits.push(doc.delete(textual));
             }
         }
@@ -677,6 +749,31 @@ fn bom_hydration_edits(
                     ("textualCharacteristicValue", part_number.as_str()),
                 ],
             );
+            edits.push(doc.append_inside(characteristics, writer.into_string()));
+        }
+
+        if hydration.external_part_identifier.is_some() || !hydration.mpn_aliases.is_empty() {
+            let mut writer = ipc2581::XmlWriter::new();
+            if let Some(identifier) = &hydration.external_part_identifier {
+                writer.empty_element(
+                    "Textual",
+                    &[
+                        ("definitionSource", PART_IDENTITY_DEFINITION_SOURCE),
+                        ("textualCharacteristicName", EXTERNAL_PART_IDENTIFIER),
+                        ("textualCharacteristicValue", identifier.as_str()),
+                    ],
+                );
+            }
+            for alias in &hydration.mpn_aliases {
+                writer.empty_element(
+                    "Textual",
+                    &[
+                        ("definitionSource", PART_IDENTITY_DEFINITION_SOURCE),
+                        ("textualCharacteristicName", MANUFACTURER_PART_NUMBER_ALIAS),
+                        ("textualCharacteristicValue", alias.as_str()),
+                    ],
+                );
+            }
             edits.push(doc.append_inside(characteristics, writer.into_string()));
         }
     }
@@ -733,6 +830,10 @@ mod tests {
             mpn: "EXAMPLE-MPN".to_string(),
             distributor: Some("Example Distributor".to_string()),
             distributor_part_id: Some("EXAMPLE-SKU".to_string()),
+            external_part_library: None,
+            external_part_library_mpn: None,
+            external_part_identifier: None,
+            mpn_aliases: Vec::new(),
         }
     }
 
@@ -775,6 +876,10 @@ mod tests {
         <Textual definitionSource="urn:diode:ipc2581:offer:v1" textualCharacteristicName="SelectedSupplierEnterpriseRef" textualCharacteristicValue="DUPLICATE_VENDOR"/>
         <Textual definitionSource="urn:diode:ipc2581:offer:v1" textualCharacteristicName="SelectedSupplierPartNumber" textualCharacteristicValue="OLD-SKU"/>
         <Textual definitionSource="urn:diode:ipc2581:offer:v1" textualCharacteristicName="SelectedSupplierPartNumber" textualCharacteristicValue="DUPLICATE-SKU"/>
+        <Textual definitionSource="urn:diode:ipc2581:part-identity:v1" textualCharacteristicName="ExternalPartIdentifier" textualCharacteristicValue="old:identifier"/>
+        <Textual definitionSource="urn:diode:ipc2581:part-identity:v1" textualCharacteristicName="ExternalPartIdentifier" textualCharacteristicValue="duplicate:identifier"/>
+        <Textual definitionSource="urn:diode:ipc2581:part-identity:v1" textualCharacteristicName="ManufacturerPartNumberAlias" textualCharacteristicValue="OLD-ALIAS"/>
+        <Textual definitionSource="urn:diode:ipc2581:part-identity:v1" textualCharacteristicName="FutureIdentityField" textualCharacteristicValue="preserve-identity-extension"/>
       </Characteristics>
     </BomItem>
     <BomItem OEMDesignNumberRef="NEW_PART" quantity="1" category="ELECTRICAL">
@@ -795,9 +900,13 @@ mod tests {
   <Avl name="avl">
     <AvlHeader title="Test" source="test" author="test" datetime="2026-08-25T00:00:00Z" version="1"/>
     <AvlItem OEMDesignNumber="EXISTING_PART">
-      <AvlVmpn qualified="true" chosen="true">
+      <AvlVmpn evplVendor="Legacy Library" evplMpn="LEGACY-EXTERNAL-MPN" qualified="true" chosen="true">
         <AvlMpn name="LEGACY-MPN" rank="7" other="preserve-me"/>
         <AvlVendor enterpriseRef="LEGACY_MFR"/>
+      </AvlVmpn>
+      <AvlVmpn evplVendor="Old Library" evplMpn="OLD-EXTERNAL-MPN" qualified="true">
+        <AvlMpn name="MPN&lt;&amp;&quot;"/>
+        <AvlVendor enterpriseRef="diode-mfr-550e8400-e29b-41d4-a716-446655440000"/>
       </AvlVmpn>
     </AvlItem>
   </Avl>
@@ -857,7 +966,64 @@ mod tests {
         assert!(xml.contains("LEGACY-MPN"));
         assert!(xml.contains("rank=\"7\""));
         assert!(xml.contains("other=\"preserve-me\""));
+        assert!(xml.contains("evplVendor=\"Legacy Library\""));
+        assert!(xml.contains("evplMpn=\"LEGACY-EXTERNAL-MPN\""));
         assert!(xml.contains("enterpriseRef=\"diode-mfr-550e8400-e29b-41d4-a716-446655440000\""));
+
+        let selected_vmpn = doc
+            .find_all("AvlVmpn")
+            .into_iter()
+            .find(|&vmpn| {
+                doc.child(vmpn, "AvlMpn")
+                    .is_some_and(|mpn| doc.attr(mpn, "name") == Some("MPN<&\""))
+            })
+            .unwrap();
+        assert_eq!(doc.attr(selected_vmpn, "evplVendor"), Some("Cofactr & Co"));
+        assert_eq!(doc.attr(selected_vmpn, "evplMpn"), Some("COFACTR-MPN<&\""));
+        assert_eq!(doc.attr(selected_vmpn, "chosen"), Some("true"));
+        let existing_avl_item =
+            unique_node_by_attr(&doc, "AvlItem", "OEMDesignNumber", "EXISTING_PART").unwrap();
+        assert_eq!(
+            doc.children(existing_avl_item)
+                .into_iter()
+                .filter(|&node| {
+                    doc.name(node) == "AvlVmpn" && doc.attr(node, "chosen") == Some("true")
+                })
+                .count(),
+            1
+        );
+        assert!(doc.find_all("AvlMpn").into_iter().all(|node| {
+            !matches!(
+                doc.attr(node, "name"),
+                Some("MPN-ALIAS<&\"" | "Second-Alias")
+            )
+        }));
+
+        let identity_textuals = doc
+            .find_all("Textual")
+            .into_iter()
+            .filter(|&node| {
+                doc.attr(node, "definitionSource") == Some(PART_IDENTITY_DEFINITION_SOURCE)
+            })
+            .collect::<Vec<_>>();
+        for (name, value) in [
+            (EXTERNAL_PART_IDENTIFIER, "cofactr:CPID<&\""),
+            (MANUFACTURER_PART_NUMBER_ALIAS, "MPN-ALIAS<&\""),
+            (MANUFACTURER_PART_NUMBER_ALIAS, "Second-Alias"),
+            ("FutureIdentityField", "preserve-identity-extension"),
+        ] {
+            assert_eq!(
+                identity_textuals
+                    .iter()
+                    .filter(|&&node| {
+                        doc.attr(node, "textualCharacteristicName") == Some(name)
+                            && doc.attr(node, "textualCharacteristicValue") == Some(value)
+                    })
+                    .count(),
+                1
+            );
+        }
+        assert_eq!(identity_textuals.len(), 4);
     }
 
     #[test]
@@ -938,9 +1104,9 @@ mod tests {
     }
 
     #[test]
-    fn selection_schema_canonicalizes_uuid_and_validates_supplier_pair() {
+    fn selection_schema_validates_identity_metadata() {
         let selections = parse_selections(
-            r#"[{"path":"Power.R1","manufacturerId":"550E8400E29B41D4A716446655440000","manufacturer":"Example","mpn":"MPN"}]"#,
+            r#"[{"path":"Power.R1","manufacturerId":"550E8400E29B41D4A716446655440000","manufacturer":"Example","mpn":"MPN","externalPartLibrary":"Cofactr","externalPartLibraryMpn":"LIBRARY-MPN","externalPartIdentifier":"cofactr:123","mpnAliases":["MPN-ALIAS","Second-Alias"]}]"#,
         )
         .unwrap();
 
@@ -948,14 +1114,24 @@ mod tests {
             selections[0].manufacturer_id.to_string(),
             "550e8400-e29b-41d4-a716-446655440000"
         );
-        assert!(parse_selections(
+        assert_eq!(selections[0].mpn_aliases, ["MPN-ALIAS", "Second-Alias"]);
+
+        for invalid in [
             r#"[{"path":"Power.R1","manufacturerId":"not-a-uuid","manufacturer":"Example","mpn":"MPN"}]"#,
-        )
-        .is_err());
-        assert!(parse_selections(
             r#"[{"path":"Power.R1","manufacturerId":"550e8400-e29b-41d4-a716-446655440000","manufacturer":"Example","mpn":"MPN","distributor":"Digi-Key"}]"#,
-        )
-        .is_err());
+            r#"[{"path":"Power.R1","manufacturerId":"550e8400-e29b-41d4-a716-446655440000","manufacturer":"Example","mpn":"MPN","externalPartLibrary":"Cofactr"}]"#,
+            r#"[{"path":"Power.R1","manufacturerId":"550e8400-e29b-41d4-a716-446655440000","manufacturer":"Example","mpn":"MPN","externalPartLibraryMpn":"LIBRARY-MPN"}]"#,
+            r#"[{"path":"Power.R1","manufacturerId":"550e8400-e29b-41d4-a716-446655440000","manufacturer":"Example","mpn":"MPN","externalPartIdentifier":"cofactr:123"}]"#,
+            r#"[{"path":"Power.R1","manufacturerId":"550e8400-e29b-41d4-a716-446655440000","manufacturer":"Example","mpn":"MPN","externalPartLibrary":"","externalPartLibraryMpn":"LIBRARY-MPN"}]"#,
+            r#"[{"path":"Power.R1","manufacturerId":"550e8400-e29b-41d4-a716-446655440000","manufacturer":"Example","mpn":"MPN","externalPartLibrary":" Cofactr","externalPartLibraryMpn":"LIBRARY-MPN"}]"#,
+            r#"[{"path":"Power.R1","manufacturerId":"550e8400-e29b-41d4-a716-446655440000","manufacturer":"Example","mpn":"MPN","mpnAliases":[""]}]"#,
+            r#"[{"path":"Power.R1","manufacturerId":"550e8400-e29b-41d4-a716-446655440000","manufacturer":"Example","mpn":"MPN","mpnAliases":[" ALIAS"]}]"#,
+            r#"[{"path":"Power.R1","manufacturerId":"550e8400-e29b-41d4-a716-446655440000","manufacturer":"Example","mpn":"MPN","mpnAliases":["ALIAS","alias"]}]"#,
+            r#"[{"path":"Power.R1","manufacturerId":"550e8400-e29b-41d4-a716-446655440000","manufacturer":"Example","mpn":"MPN","mpnAliases":["mpn"]}]"#,
+            r#"[{"path":"Power.R1","manufacturerId":"550e8400-e29b-41d4-a716-446655440000","manufacturer":"Example","mpn":"MPN","unknownIdentity":"value"}]"#,
+        ] {
+            assert!(parse_selections(invalid).is_err(), "accepted {invalid}");
+        }
     }
 
     #[test]
@@ -972,6 +1148,9 @@ mod tests {
 
         selections[1].mpn = "DIFFERENT-MPN".to_string();
         assert!(resolve_selections(&ipc, &selections).is_err());
+        selections[1].mpn = selections[0].mpn.clone();
+        selections[1].external_part_identifier = Some("different:identity".to_string());
+        assert!(resolve_selections(&ipc, &selections).is_err());
     }
 
     #[test]
@@ -981,6 +1160,7 @@ mod tests {
         let selections = temp.path().join("selections.json");
         let first_output = temp.path().join("first.xml");
         let second_output = temp.path().join("second.xml");
+        let cleared_output = temp.path().join("cleared.xml");
 
         let input_xml = schema_valid_hydration_ipc();
         ipc2581::Ipc2581::validate(input_xml).unwrap();
@@ -988,7 +1168,7 @@ mod tests {
         std::fs::write(
             &selections,
             r#"[
-  {"path":"Power.R1","manufacturerId":"550E8400E29B41D4A716446655440000","manufacturer":"New & <Manufacturer>","mpn":"MPN<&\"","distributor":"Digi-Key & Partners","distributorPartId":"SKU<&\""},
+  {"path":"Power.R1","manufacturerId":"550E8400E29B41D4A716446655440000","manufacturer":"New & <Manufacturer>","mpn":"MPN<&\"","distributor":"Digi-Key & Partners","distributorPartId":"SKU<&\"","externalPartLibrary":"Cofactr & Co","externalPartLibraryMpn":"COFACTR-MPN<&\"","externalPartIdentifier":"cofactr:CPID<&\"","mpnAliases":["MPN-ALIAS<&\"","Second-Alias"]},
   {"path":"Power.C1","manufacturerId":"AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE","manufacturer":"New Manufacturer","mpn":"NEW-MPN","distributor":"New Distributor","distributorPartId":"NEW-SKU"}
 ]"#,
         )
@@ -1004,5 +1184,38 @@ mod tests {
         execute_selections(&first_output, &selections, &second_output).unwrap();
         let second_xml = std::fs::read_to_string(&second_output).unwrap();
         assert_hydrated_output(&second_xml);
+
+        std::fs::write(
+            &selections,
+            r#"[{"path":"Power.R1","manufacturerId":"550E8400E29B41D4A716446655440000","manufacturer":"New & <Manufacturer>","mpn":"MPN<&\"","distributor":"Digi-Key & Partners","distributorPartId":"SKU<&\""}]"#,
+        )
+        .unwrap();
+        execute_selections(&second_output, &selections, &cleared_output).unwrap();
+        let cleared_xml = std::fs::read_to_string(&cleared_output).unwrap();
+        ipc2581::Ipc2581::validate(&cleared_xml).unwrap();
+        let cleared_doc = ipc2581::edit::Doc::parse(&cleared_xml).unwrap();
+        let selected_vmpn = cleared_doc
+            .find_all("AvlVmpn")
+            .into_iter()
+            .find(|&vmpn| {
+                cleared_doc
+                    .child(vmpn, "AvlMpn")
+                    .is_some_and(|mpn| cleared_doc.attr(mpn, "name") == Some("MPN<&\""))
+            })
+            .unwrap();
+        assert_eq!(cleared_doc.attr(selected_vmpn, "evplVendor"), None);
+        assert_eq!(cleared_doc.attr(selected_vmpn, "evplMpn"), None);
+        let identity_textuals = cleared_doc
+            .find_all("Textual")
+            .into_iter()
+            .filter(|&node| {
+                cleared_doc.attr(node, "definitionSource") == Some(PART_IDENTITY_DEFINITION_SOURCE)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(identity_textuals.len(), 1);
+        assert_eq!(
+            cleared_doc.attr(identity_textuals[0], "textualCharacteristicName"),
+            Some("FutureIdentityField")
+        );
     }
 }
