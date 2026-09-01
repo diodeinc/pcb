@@ -12,6 +12,7 @@ mod annular_ring;
 mod board_array_spacing;
 mod copper_clearance;
 mod hole_aspect_ratio;
+mod hole_clearance;
 mod hole_diameter;
 mod hole_pair_clearance;
 mod layer_count;
@@ -290,7 +291,8 @@ fn skip_reason(rule: &Rule, design: &Design) -> Option<String> {
             .then(|| "two or more direct board-array instances".to_owned()),
         RuleKind::HoleDiameter(class)
         | RuleKind::HoleAspectRatio(class)
-        | RuleKind::AnnularRing(class) => design
+        | RuleKind::AnnularRing(class)
+        | RuleKind::HoleToCopperClearance(class) => design
             .holes
             .iter()
             .all(|hole| hole.class != class)
@@ -348,6 +350,9 @@ fn evaluate(rule: &Rule, design: &Design) -> RuleEvaluation {
         }
         RuleKind::AnnularRing(class) => {
             annular_ring::evaluate(limit(), class, &rule.conditions, design).into()
+        }
+        RuleKind::HoleToCopperClearance(class) => {
+            hole_clearance::evaluate(limit(), class, &rule.conditions, design).into()
         }
         RuleKind::LineworkToCopperClearance(linework) => {
             linework_clearance::evaluate(limit(), linework, &rule.conditions, design).into()

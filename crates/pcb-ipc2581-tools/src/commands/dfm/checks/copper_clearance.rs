@@ -112,7 +112,12 @@ pub(super) fn evaluate(limit_mm: f64, conditions: &Conditions, design: &Design) 
     Evaluation { checked, measured }
 }
 
-fn conductor_subject(design: &Design, id: ConductorId, role: &'static str, layer: &str) -> Subject {
+pub(super) fn conductor_subject(
+    design: &Design,
+    id: ConductorId,
+    role: &'static str,
+    layer: &str,
+) -> Subject {
     let (kind, name, set_index) = match id {
         ConductorId::Net { .. } => ("electrical_net", None, None),
         ConductorId::Auxiliary {
@@ -122,9 +127,20 @@ fn conductor_subject(design: &Design, id: ConductorId, role: &'static str, layer
             Some("auxiliary copper".to_owned()),
             Some(source_set_index),
         ),
-        ConductorId::Unattributed { .. } => {
-            unreachable!("unattributed copper is rejected during DFM extraction")
-        }
+        ConductorId::Unattributed {
+            source_set_index, ..
+        } => (
+            "unattributed_copper",
+            Some("functional copper without net attribution".to_owned()),
+            Some(source_set_index),
+        ),
+    };
+    let feature_index = match id {
+        ConductorId::Unattributed {
+            source_feature_index,
+            ..
+        } => Some(source_feature_index),
+        ConductorId::Net { .. } | ConductorId::Auxiliary { .. } => None,
     };
     Subject {
         role,
@@ -135,7 +151,7 @@ fn conductor_subject(design: &Design, id: ConductorId, role: &'static str, layer
             step: design.resolve(id.step()),
             layer: Some(layer.to_owned()),
             set_index,
-            feature_index: None,
+            feature_index,
             instance_index: id.instance(),
         }),
         provenance: matches!(id, ConductorId::Net { .. }).then(|| SourceLocator {

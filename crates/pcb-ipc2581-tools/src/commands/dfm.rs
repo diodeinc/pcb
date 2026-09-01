@@ -574,7 +574,9 @@ limit = { minimum = "300 mil" }
         let parsed = pdk::Pdk::parse(ipc.source).unwrap();
         assert_eq!(parsed.pdk.manufacturer.as_deref(), Some("Diode"));
         for class in 1..=3 {
-            for (level, maximum) in [('a', 6.0), ('b', 8.0), ('c', 10.0)] {
+            for (level, maximum, clearance) in
+                [('a', 6.0, 0.25), ('b', 8.0, 0.20), ('c', 10.0, 0.15)]
+            {
                 let profile = format!("{class}{level}");
                 let definition = &parsed.profiles[&profile];
                 assert_eq!(definition.performance_class, Some(class));
@@ -592,12 +594,45 @@ limit = { minimum = "300 mil" }
                     1.6
                 );
                 let rules = rules::lower(&parsed, Some(&profile)).unwrap();
-                assert_eq!(rules.len(), 2);
-                assert!(rules.iter().all(|rule| rule.limit.ratio() == maximum));
-                assert!(rules.iter().any(|rule| rule.id.contains("via")));
-                assert!(rules.iter().any(|rule| rule.id.contains("pth")));
+                assert_eq!(rules.len(), 5);
+                let aspect_ratio = rules
+                    .iter()
+                    .filter(|rule| matches!(rule.kind, rules::RuleKind::HoleAspectRatio(_)))
+                    .collect::<Vec<_>>();
+                assert_eq!(aspect_ratio.len(), 2);
+                assert!(
+                    aspect_ratio
+                        .iter()
+                        .all(|rule| rule.limit.ratio() == maximum)
+                );
+                assert!(aspect_ratio.iter().any(|rule| rule.id.contains("via")));
+                assert!(aspect_ratio.iter().any(|rule| rule.id.contains("pth")));
+
+                let hole_clearance = rules
+                    .iter()
+                    .filter(|rule| matches!(rule.kind, rules::RuleKind::HoleToCopperClearance(_)))
+                    .collect::<Vec<_>>();
+                assert_eq!(hole_clearance.len(), 3);
+                assert!(
+                    hole_clearance
+                        .iter()
+                        .all(|rule| rule.limit.length().millimeters() == clearance)
+                );
             }
         }
+        let (_, default_ipc) = parsed.selected_profile(Some("2b")).unwrap();
+        assert_eq!(default_ipc.performance_class, Some(2));
+        assert_eq!(
+            default_ipc.producibility_level,
+            Some(pdk::ProducibilityLevel::B)
+        );
+        assert!(
+            default_ipc
+                .description
+                .as_deref()
+                .unwrap()
+                .contains("does not prove IPC compliance")
+        );
 
         let jlc = builtin_pdks()
             .iter()

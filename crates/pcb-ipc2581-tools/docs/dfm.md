@@ -71,6 +71,11 @@ id = "copper.via_annular_ring"
 select = { hole = "via" }
 limit = { minimum = "100 um", preferred = "0.125 mm" }
 
+[[rules.copper.hole_clearance]]
+id = "copper.via_hole_clearance"
+select = { hole = "via" }
+limit = { minimum = "0.20 mm", preferred = "0.25 mm" }
+
 [[rules.copper.feature_width]]
 id = "copper.feature_width"
 cases = [
@@ -94,7 +99,9 @@ The schema gives each kind of constraint one place:
 - `select` identifies the physical subjects a rule measures. Hole rules select
   `via`, `pth`, or `npth`; slots select `plated` or `nonplated`; hole-pair rules
   state both classes. Hole-aspect-ratio rules accept only plated `via` or `pth`
-  holes; selecting `npth` is a schema error.
+  holes; selecting `npth` is a schema error. A
+  `rules.copper.hole_clearance` selector chooses the drill class measured to
+  unrelated final copper.
 - `limit` defines one unconditional dimensional minimum and optional preferred
   value, or one required aspect-ratio maximum.
 - `cases` defines named conditional limits when one value is not enough. A
@@ -157,6 +164,7 @@ high-level pass is never allowed to suppress a later authoritative failure.
 | Outline slot width | Materialized filled route outline, then its narrowest maximal inscribed disk | None |
 | Hole-to-hole clearance | Materialized drill circles and overlapping drill spans | Sorted bounds prune pairs already proven clear |
 | Annular ring | Drill circle and final composed copper image on each applicable layer | Batched containment and an indexed copper boundary |
+| Hole-to-copper clearance | Analytic drill circle and attributed final composed copper on each layer in its drill span | Indexed attributed-copper boundaries |
 | Copper width | Final composed copper image, medial-axis width of each residue | Guarded opening localizes candidates |
 | Copper clearance | Final composed copper attributed to occurrence-scoped electrical conductors | Sorted bounds prune conductor components already proven clear |
 | Soldermask web | Final composed mask-opening image, medial-axis width of each residue | Guarded closing localizes candidates |
@@ -198,6 +206,14 @@ then measures only pairs of distinct owners. A net is scoped by its
 materialized Step occurrence, so repeated boards do not become electrically
 connected merely because they reuse the same net names.
 
+Hole-to-copper clearance uses the same attributed composition. For a via or
+PTH, copper proven to belong to the hole's occurrence-scoped net or a resolved
+physical land is excluded; other-net, auxiliary, and unattributed functional
+copper remains an offender. For an NPTH, every final copper owner is an
+offender, including a same-named net. The rule requires a declared through or
+resolvable layer span and fails extraction when the span is unavailable rather
+than guessing which copper layers the drill intersects.
+
 `--layout-target board` extracts the canonical board step. `board-array`
 materializes the root layout and every nested repeat, so the same evaluators
 operate on a board array or on a fabrication panel without a second DFM code
@@ -238,6 +254,11 @@ when fewer than two exist.
   layer with a matching source land, must retain copper at the hole center;
   missing copper there is a zero-enclosure failure. One finding per hole
   reports the worst layer.
+- Hole-to-copper clearance measures the edge-to-edge distance from each
+  circular drill to the nearest unrelated final copper owner on every copper
+  layer in its declared span. Via and PTH copper is exempt only when net or
+  physical-land identity proves that it belongs to the hole. NPTH copper is
+  never exempt. Missing drill-span identity makes the check incomplete.
 - Copper feature-width rules report narrow copper piece by piece after final
   polarity composition. Copper-clearance rules measure the shortest
   boundary distance between distinct final conductor images. Same-net
@@ -308,12 +329,16 @@ profile uses 0.13 mm.
 
 The nine `ipc-1a` through `ipc-3c` built-ins preserve performance Classes 1-3
 crossed with Producibility Levels A-C, but they are executable **partial Diode
-baselines**, not IPC profile matrices. They currently check only maximum via
-and PTH aspect ratio: Level A uses 6.0, Level B 8.0, and Level C 10.0, across
-all three performance classes. Each profile assumes 1.6 mm board thickness for
-the through-hole fallback described above. Diode chose these opinionated values
-using IPC design topics as context; they are not licensed IPC numeric matrices,
-do not prove full IPC compliance, and do not imply IPC certification.
+baselines**, not IPC profile matrices. They check maximum via and PTH aspect
+ratio at 6.0 for Level A, 8.0 for Level B, and 10.0 for Level C. They also
+check via, PTH, and NPTH hole-to-copper clearance at 0.25 mm for Level A,
+0.20 mm for Level B, and 0.15 mm for Level C. These values apply across all
+three performance classes. Each profile assumes 1.6 mm board thickness for the
+through-hole aspect-ratio fallback described above. Diode chose these
+opinionated values using IPC design topics as context; they are not licensed
+IPC numeric matrices, do not prove full IPC compliance, and do not imply IPC
+certification. A pass covers only the checks listed in the selected profile's
+`coverage` metadata.
 
 Output is UTF-8 JSON on stdout unless `-o` / `--output` is supplied. The
 recommended suffix is `.dfm.json`. Every complete report includes the native

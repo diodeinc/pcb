@@ -43,6 +43,11 @@ id = "copper.via_annular_ring"
 select = { hole = "via" }
 limit = { minimum = "100 um", preferred = "0.125 mm" }
 
+[[rules.copper.hole_clearance]]
+id = "copper.via_hole_clearance"
+select = { hole = "via" }
+limit = { minimum = "0.20 mm", preferred = "0.25 mm" }
+
 [[rules.copper.feature_width]]
 id = "copper.outer_feature_width"
 cases = [
