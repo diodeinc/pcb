@@ -8,6 +8,14 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Add canonical assembly IR and derive component placement data from it.
+
+### Fixed
+
+- Keep IPC-2581 `DOCUMENT` BOM entries out of CPL exports.
+
 ## [0.4.42] - 2026-09-01
 
 ### Added

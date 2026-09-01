@@ -10,8 +10,9 @@
 //!   [`dialects::ipc`] (source-faithful IPC-2581 geometry) lowers to
 //!   [`dialects::artwork`] (ordered fabrication object streams), which
 //!   composes to [`dialects::mask`] (final positive layer images).
-//!   [`dialects::nc`] and [`dialects::placement`] carry drill/rout and
-//!   component placement data.
+//!   [`dialects::assembly`] joins source-independent component, BOM, package,
+//!   AVL, and layout facts and lowers to [`dialects::placement`].
+//!   [`dialects::nc`] carries drill and rout data.
 //! - [`render`] turns mask documents into SVG, PNG, or terminal output.
 //!
 //! All geometry is canonically in millimeters.

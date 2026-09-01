@@ -1,251 +1,30 @@
-use std::collections::{BTreeMap, BTreeSet};
+use anyhow::Result;
+use pcb_ir::dialects::assembly::Scope;
+use pcb_ir::dialects::placement::{Document as PlacementDocument, lower_single_board};
+use pcb_ir::import::ipc2581::{ImportedDesign, import_design};
 
-use anyhow::{Context, Result, bail};
-use ipc2581::types::{MountType, Side};
-use pcb_ir::dialects::ipc::ArtworkScope;
-use pcb_ir::dialects::placement::{
-    Document as PlacementDocument, Placement, PlacementMount, PlacementSide,
-};
-use pcb_ir::geom::{Affine2, Point};
-use pcb_ir::import::ipc2581::{ImportedDesign, PopulationState, import_design};
-
-use crate::accessors::{CharacteristicsData, IpcAccessor};
+use crate::accessors::IpcAccessor;
 
 pub fn extract_single_board_placements(accessor: &IpcAccessor<'_>) -> Result<PlacementDocument> {
     let ipc = accessor.ipc();
     let imported = import_design(ipc)?;
-    extract_single_board_placements_from_design(accessor, &imported)
+    extract_single_board_placements_from_design(&imported)
 }
 
 pub fn extract_single_board_placements_from_design(
-    accessor: &IpcAccessor<'_>,
     imported: &ImportedDesign,
 ) -> Result<PlacementDocument> {
-    let layer_sides = imported
-        .layer_definitions
-        .iter()
-        .map(|layer| (imported.resolve(layer.name).to_string(), layer.side))
-        .collect::<BTreeMap<_, _>>();
-    let bom_lookup = build_bom_lookup(accessor);
-    let occurrences = imported.component_occurrences(ArtworkScope::ArrayFlattened)?;
-    let root_step = imported.geometry.layout.root_step;
-    let root_has_components = root_step.is_some_and(|root| {
-        occurrences.iter().any(|occurrence| {
-            imported
-                .component_definition(occurrence.id.component)
-                .is_some_and(|component| component.step == root)
-        })
-    });
-    let component_steps = occurrences
-        .iter()
-        .filter_map(|occurrence| {
-            imported
-                .component_definition(occurrence.id.component)
-                .map(|component| component.step)
-        })
-        .collect::<BTreeSet<_>>();
-    let selected_step = if root_has_components {
-        root_step
-    } else {
-        match component_steps
-            .iter()
-            .copied()
-            .collect::<Vec<_>>()
-            .as_slice()
-        {
-            [] => None,
-            [step] => Some(*step),
-            steps => {
-                let names = steps
-                    .iter()
-                    .map(|step| {
-                        imported
-                            .resolve(imported.geometry.layout.steps[*step as usize].source_step_ref)
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                bail!(
-                    "CPL export found multiple component-bearing repeated Steps ({names}); single-board CPL is ambiguous"
-                );
-            }
-        }
-    };
-    let Some(selected_step) = selected_step else {
-        return Ok(PlacementDocument::default());
-    };
-
-    let mut components = Vec::new();
-    let mut emitted = BTreeSet::new();
-    for occurrence in occurrences {
-        let component = imported
-            .component_definition(occurrence.id.component)
-            .context("component occurrence references a missing definition")?;
-        if component.step != selected_step || !emitted.insert(occurrence.id.component) {
-            continue;
-        }
-        let component = &component.source;
-        let Some(ref_des) = component.ref_des else {
-            continue;
-        };
-        let designator = imported.resolve(ref_des).to_string();
-        if designator.is_empty() {
-            continue;
-        }
-
-        let bom = bom_lookup.get(&designator);
-        let component_package = component
-            .package_ref
-            .map(|package_ref| imported.resolve(package_ref).to_string())
-            .filter(|package| !package.is_empty());
-        let package = bom
-            .and_then(|data| data.package.clone())
-            .or(component_package);
-        let value = bom.and_then(|data| data.value.clone());
-        let populate = match occurrence.population {
-            PopulationState::Unspecified => bom.and_then(|data| data.populate),
-            PopulationState::Populate => Some(true),
-            PopulationState::DoNotPopulate => Some(false),
-            PopulationState::Conflicting => {
-                bail!("component '{designator}' has conflicting population state")
-            }
-        };
-        let source_xform = component.xform.unwrap_or_default();
-        let layer_ref = imported.resolve(component.layer_ref).to_string();
-        let side = layer_sides
-            .get(&layer_ref)
-            .copied()
-            .flatten()
-            .map(map_side)
-            .unwrap_or(PlacementSide::Unknown);
-        let transform = occurrence
-            .board_from_component
-            .unwrap_or(occurrence.root_from_component);
-        let placement = decompose_placement(transform)?;
-
-        components.push(Placement {
-            designator,
-            value,
-            package,
-            part: imported.resolve(component.part).to_string(),
-            layer_ref,
-            side,
-            mount: map_mount(component.mount_type),
-            at: placement.at,
-            rotation_degrees: placement.rotation_degrees,
-            x_offset: 0.0,
-            y_offset: 0.0,
-            mirror: placement.mirror,
-            face_up: source_xform.face_up,
-            scale: placement.scale,
-            populate,
-        });
-    }
-
-    Ok(PlacementDocument { components })
-}
-
-struct DecomposedPlacement {
-    at: Point,
-    rotation_degrees: f64,
-    mirror: bool,
-    scale: f64,
-}
-
-fn decompose_placement(transform: Affine2) -> Result<DecomposedPlacement> {
-    let scale = transform.m00.hypot(transform.m10);
-    let other_scale = transform.m01.hypot(transform.m11);
-    let dot = transform.m00 * transform.m01 + transform.m10 * transform.m11;
-    let epsilon = 1e-9 * scale.max(other_scale).max(1.0);
-    if scale <= 0.0 || (scale - other_scale).abs() > epsilon || dot.abs() > epsilon {
-        bail!("component occurrence transform is not a rigid uniform placement");
-    }
-    let mirror = transform.determinant() < 0.0;
-    let signed_scale = if mirror { -scale } else { scale };
-    Ok(DecomposedPlacement {
-        at: Point::new(transform.m02, transform.m12),
-        rotation_degrees: (transform.m10 / signed_scale)
-            .atan2(transform.m00 / signed_scale)
-            .to_degrees(),
-        mirror,
-        scale,
-    })
-}
-
-#[derive(Debug, Clone)]
-struct BomPlacementData {
-    value: Option<String>,
-    package: Option<String>,
-    populate: Option<bool>,
-}
-
-fn build_bom_lookup(accessor: &IpcAccessor<'_>) -> BTreeMap<String, BomPlacementData> {
-    let ipc = accessor.ipc();
-    let mut lookup = BTreeMap::new();
-
-    let Some(bom) = ipc.bom() else {
-        return lookup;
-    };
-
-    for item in &bom.items {
-        let characteristics = item
-            .characteristics
-            .as_ref()
-            .map(|chars| accessor.extract_characteristics(chars))
-            .unwrap_or_else(CharacteristicsData::default);
-
-        for ref_des in item.reference_designators() {
-            let designator = ipc.resolve(ref_des.name).to_string();
-            if designator.is_empty() {
-                continue;
-            }
-
-            let package = ref_des
-                .package_ref
-                .map(|package| ipc.resolve(package).to_string())
-                .filter(|package| !package.is_empty())
-                .or_else(|| characteristics.package.clone());
-
-            lookup.insert(
-                designator,
-                BomPlacementData {
-                    value: characteristics.value.clone(),
-                    package,
-                    populate: ref_des.populate,
-                },
-            );
-        }
-    }
-
-    lookup
-}
-
-fn map_side(side: Side) -> PlacementSide {
-    match side {
-        Side::Top => PlacementSide::Top,
-        Side::Bottom => PlacementSide::Bottom,
-        Side::Internal => PlacementSide::Internal,
-        Side::Both | Side::All | Side::None => PlacementSide::Unknown,
-    }
-}
-
-fn map_mount(mount: MountType) -> PlacementMount {
-    match mount {
-        MountType::Smt => PlacementMount::Smt,
-        MountType::Thmt => PlacementMount::ThroughHole,
-        MountType::Embedded => PlacementMount::Embedded,
-        MountType::PressFit => PlacementMount::PressFit,
-        MountType::WireBonded => PlacementMount::WireBonded,
-        MountType::Glued => PlacementMount::Glued,
-        MountType::Clamped => PlacementMount::Clamped,
-        MountType::Socketed => PlacementMount::Socketed,
-        MountType::Formed => PlacementMount::Formed,
-        MountType::Other => PlacementMount::Other,
-    }
+    lower_single_board(&imported.assembly_document(Scope::BoardArray)?)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::io::Cursor;
+
     use ipc2581::Ipc2581;
+    use pcb_ir::dialects::assembly::BomCategory;
+    use pcb_ir::dialects::placement::PlacementSide;
+    use pcb_ir::geom::Point;
 
     use super::*;
 
@@ -284,6 +63,32 @@ mod tests {
         assert_eq!(component.side, PlacementSide::Top);
         assert_eq!(component.at, Point::new(1.25, 2.5));
         assert_eq!(component.rotation_degrees, 90.0);
+    }
+
+    #[test]
+    fn dm0002_preserves_bom_categories_in_placement() {
+        let compressed = include_bytes!("../../ipc2581/tests/data/DM0002-IPC-2518.xml.zst");
+        let xml = zstd::decode_all(Cursor::new(compressed)).unwrap();
+        let xml = std::str::from_utf8(&xml).unwrap();
+        let imported = import_design(&Ipc2581::parse(xml).unwrap()).unwrap();
+
+        let placements = extract_single_board_placements_from_design(&imported).unwrap();
+        assert_eq!(placements.components.len(), 59);
+        assert_eq!(
+            placements
+                .components
+                .iter()
+                .filter(|component| component.bom_category == Some(BomCategory::Document))
+                .count(),
+            6
+        );
+        assert!(
+            placements
+                .components
+                .iter()
+                .filter(|component| component.bom_category != Some(BomCategory::Document))
+                .all(|component| component.side == PlacementSide::Top)
+        );
     }
 
     #[test]
