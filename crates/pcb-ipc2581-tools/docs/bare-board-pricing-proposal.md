@@ -657,6 +657,12 @@ per effective square inch.
 | 7 day | \$1.862 | \$2.926 | \$4.854 | \$6.184 | \$9.574 |
 | 10 day | \$1.513 | \$2.500 | \$3.783 | \$4.803 | \$6.513 |
 
+![The solved launch-stage APCB rate surface rises sharply with both urgency and layer count.](images/bare-board-pricing/apcb-solved-area-rates.png)
+
+The most expensive cell, 1-day 10-layer, is 18.7 times the 10-day 2-layer rate.
+This spread comes primarily from the exact APCB matrix rather than the deliberately
+small pooling-utilization adjustment.
+
 ### Initial-plus-extra-panel pool: $n=2$, $v=0$
 
 Enable this matrix only if the two-panel service described above is intentionally
@@ -671,6 +677,12 @@ the initial panel and its one quoted extra panel.
 | 5 day | \$1.231 | \$2.013 | \$3.261 | \$4.637 | \$6.420 |
 | 7 day | \$1.056 | \$1.687 | \$2.709 | \$3.723 | \$5.751 |
 | 10 day | \$0.880 | \$1.472 | \$2.171 | \$3.026 | \$4.211 |
+
+![Across every quoted layer and turn bucket, the two-panel plan materially reduces average supplier area cost.](images/bare-board-pricing/apcb-two-panel-savings.png)
+
+Across all 30 quoted cells, the two-panel plan reduces average supplier cost per
+effective square inch by 35.4%-45.9%. This is why $n=2$ should be an explicit pool
+plan backed by reliable demand, not a second smooth quantity-discount curve.
 
 ### Via-in-pad area-rate increment
 
