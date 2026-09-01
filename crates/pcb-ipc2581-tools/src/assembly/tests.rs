@@ -307,10 +307,10 @@ fn reports_missing_style_references_without_guessing() {
 fn panel_without_root_profile_does_not_invent_an_envelope() {
     let mut xml = FIXTURE.to_owned();
     let panel = xml.find("      <Step name=\"panel\"").unwrap();
-    let profile_start = panel + xml[panel..].find("        <Profile>\n").unwrap();
+    let profile_start = panel + xml[panel..].find("        <Profile>").unwrap();
     let profile_end = profile_start
-        + xml[profile_start..].find("        </Profile>\n").unwrap()
-        + "        </Profile>\n".len();
+        + xml[profile_start..].find("        </Profile>").unwrap()
+        + "        </Profile>".len();
     xml.replace_range(profile_start..profile_end, "");
     ipc2581::validate(&xml).expect("panel without a Profile conforms to IPC-2581C");
     let ipc = Ipc2581::parse(&xml).unwrap();
