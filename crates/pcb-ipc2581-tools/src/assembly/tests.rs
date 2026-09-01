@@ -114,11 +114,14 @@ fn board_scope_is_one_canonical_board() {
 fn serialization_is_deterministic() {
     let first = serde_json::to_string_pretty(&report(LayoutTarget::BoardArray)).unwrap();
     let second = serde_json::to_string_pretty(&report(LayoutTarget::BoardArray)).unwrap();
+    let expected = include_str!("testdata/report-v1.json")
+        .lines()
+        .collect::<Vec<_>>()
+        .join("\n");
 
     assert_eq!(first, second);
     assert_eq!(
-        first,
-        include_str!("testdata/report-v1.json").trim_end(),
+        first, expected,
         "schema v1 changed without an explicit version change"
     );
 }
