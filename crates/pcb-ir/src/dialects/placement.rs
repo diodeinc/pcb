@@ -34,6 +34,7 @@ pub struct Placement {
     pub designator: String,
     pub value: Option<String>,
     pub package: Option<String>,
+    pub bom_category: Option<assembly::BomCategory>,
     pub part: String,
     pub layer_ref: String,
     pub side: PlacementSide,
@@ -104,11 +105,6 @@ pub fn lower_single_board(source: &assembly::Document) -> Result<Document> {
             continue;
         };
         let bom_reference = source.preferred_bom_reference(component);
-        if bom_reference.is_some_and(|reference| {
-            source.bom_item(reference).category == Some(assembly::BomCategory::Document)
-        }) {
-            continue;
-        }
         if occurrence.population == Population::Conflicting {
             bail!("component '{designator}' has conflicting population state");
         }
@@ -141,6 +137,7 @@ pub fn lower_single_board(source: &assembly::Document) -> Result<Document> {
             designator: designator.to_owned(),
             value,
             package,
+            bom_category: bom_item.and_then(|item| item.category),
             part: component.part.clone(),
             layer_ref: component.layer_ref.clone(),
             side: component.side,

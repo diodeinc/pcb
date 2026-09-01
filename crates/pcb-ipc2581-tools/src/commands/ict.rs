@@ -354,7 +354,7 @@ mod tests {
     <BomHeader assembly="board" revision="1.0">
       <StepRef name="board"/>
     </BomHeader>
-    <BomItem OEMDesignNumberRef="TP_GND" quantity="1" pinCount="1" category="ELECTRICAL">
+    <BomItem OEMDesignNumberRef="TP_GND" quantity="1" pinCount="1" category="DOCUMENT">
       <RefDes name="TP1" packageRef="TestPoint_ICT" populate="true" layerRef="BOTTOM"/>
       <Characteristics category="ELECTRICAL">
         <Textual textualCharacteristicName="Ict" textualCharacteristicValue="gnd"/>

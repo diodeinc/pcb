@@ -66,33 +66,27 @@ mod tests {
     }
 
     #[test]
-    fn dm0002_keeps_document_components_out_of_placement() {
+    fn dm0002_preserves_bom_categories_in_placement() {
         let compressed = include_bytes!("../../ipc2581/tests/data/DM0002-IPC-2518.xml.zst");
         let xml = zstd::decode_all(Cursor::new(compressed)).unwrap();
         let xml = std::str::from_utf8(&xml).unwrap();
         let imported = import_design(&Ipc2581::parse(xml).unwrap()).unwrap();
-        let assembly = imported.assembly_document(Scope::Board).unwrap();
-
-        let documents = assembly
-            .components
-            .iter()
-            .filter(|component| {
-                assembly
-                    .preferred_bom_reference(component)
-                    .is_some_and(|reference| {
-                        assembly.bom_item(reference).category == Some(BomCategory::Document)
-                    })
-            })
-            .count();
-        assert_eq!(assembly.components.len(), 59);
-        assert_eq!(documents, 6);
 
         let placements = extract_single_board_placements_from_design(&imported).unwrap();
-        assert_eq!(placements.components.len(), 53);
+        assert_eq!(placements.components.len(), 59);
+        assert_eq!(
+            placements
+                .components
+                .iter()
+                .filter(|component| component.bom_category == Some(BomCategory::Document))
+                .count(),
+            6
+        );
         assert!(
             placements
                 .components
                 .iter()
+                .filter(|component| component.bom_category != Some(BomCategory::Document))
                 .all(|component| component.side == PlacementSide::Top)
         );
     }
