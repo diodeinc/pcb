@@ -15,6 +15,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Add strict profile-based DFM PDK schema v2, executable JLCPCB 1 oz profiles, and metadata-only IPC 1A-3C profiles.
 - Add a deterministic, versioned PCBA assembly report contract over canonical assembly and physical IR.
 
+### Changed
+
+- Speed up DFM width and gap checks.
+
 ### Fixed
 
 - Keep IPC-2581 `DOCUMENT` BOM entries out of CPL exports.

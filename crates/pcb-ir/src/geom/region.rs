@@ -1687,6 +1687,26 @@ fn component_width(
                 .any(|point| [lines[j].start, lines[j].end].contains(point))
         }
     };
+    // Any disk within the morphology reach that touches two eligible walls
+    // proves those walls are no farther apart than its diameter. Allow one
+    // contact tolerance at each wall for the snap-rounded residual, then
+    // leave every surviving measurement to the Voronoi construction below.
+    let candidate_diameter = 2.0 * (reach + contact_tolerance);
+    let has_reachable_wall_pair = (0..sites.len())
+        .flat_map(|first| (first + 1..sites.len()).map(move |second| (first, second)))
+        .any(|(first, second)| {
+            !incident(first, second)
+                && dist::segments(
+                    sites[first].start,
+                    sites[first].end,
+                    sites[second].start,
+                    sites[second].end,
+                )
+                .0 <= candidate_diameter
+        });
+    if !has_reachable_wall_pair {
+        return None;
+    }
     let diagram = VoronoiBuilder::<i32>::default()
         .with_segments(lines.iter())
         .and_then(VoronoiBuilder::build)
@@ -2411,6 +2431,24 @@ fn segment_bbox(start: Point, end: Point) -> BBox {
 mod tests {
     use super::*;
     use crate::geom::shapes;
+
+    #[test]
+    fn component_width_prunes_only_beyond_grid_uncertainty() {
+        let measure = |height| {
+            let component = ContourSet::rectangle(rect(0.0, 0.0, 1.0, height), tol::REGION_MM);
+            component_width(
+                &source_boundary_segments(&component),
+                &component,
+                0.05,
+                tol::REGION_MM,
+            )
+        };
+
+        let width = measure(0.101).expect("grid uncertainty keeps the reachable opposing walls");
+        assert!((width.disk.width().mm - 0.101).abs() < 1e-9);
+
+        assert!(measure(0.103).is_none());
+    }
 
     #[test]
     fn planar_sites_split_along_the_segment_whichever_way_it_runs() {
