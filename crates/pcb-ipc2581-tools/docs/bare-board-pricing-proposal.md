@@ -13,9 +13,8 @@ Use this one pricing function:
 
 $$
 \boxed{
-P_b(w,h,q)=S_b+r_bq\,\max(wh,625)
+P_b(w,h,q)=S_{L,v}+r_bq\,\max(wh,625)
 \left[1+0.04\left(\frac{w-h}{w+h}\right)^2\right]
-\left[0.60+\frac{10.4}{q+25}\right]
 }
 $$
 
@@ -23,7 +22,7 @@ This is the final proposed model.
 
 - $w,h$ are finished-board bounding-box dimensions in millimeters.
 - $q$ is integer quantity.
-- $S_b$ is the fixed setup charge for process bucket $b$.
+- $S_{L,v}$ is the fixed setup charge selected by layer count and via-in-pad.
 - $r_b$ is that bucket's base price per square millimeter.
 
 In implementation form:
@@ -32,9 +31,8 @@ In implementation form:
 area = width_mm * height_mm
 billable_area = max(area, 625.0)
 shape = 1.0 + 0.04 * ((width_mm - height_mm) / (width_mm + height_mm))^2
-volume = 0.60 + 10.4 / (quantity + 25.0)
 
-price = setup_fee + area_rate * quantity * billable_area * shape * volume
+price = setup_fee[layer, via_in_pad] + area_rate * quantity * billable_area * shape
 ```
 
 Only the final currency amount is rounded. There is no runtime panel search, board-
@@ -43,25 +41,24 @@ domain return `manual_quote_required`.
 
 ## Why this model
 
-It separates the four things that actually need pricing:
+It separates the three things that actually need pricing:
 
 | Term | Purpose |
 | --- | --- |
-| $S_b$ | Per-order CAM, handling, setup, and test setup |
+| $S_{L,v}$ | Per-order CAM, handling, setup, and test setup |
 | $\max(wh,625)$ | Board area with a 25 mm × 25 mm minimum |
 | $M_{\mathrm{shape}}$ | Small penalty for shapes that pool less flexibly |
-| $M_q$ | Smooth volume discount |
 
 Process options such as layer count, laminate, thickness, copper, finish, test, and
-lead time select $b$. They change $S_b$ and $r_b$; they do not create new geometry
-formulas.
+lead time select $b$ and therefore $r_b$. Layer count and via-in-pad select the
+fixed-order table $S_{L,v}$. None creates a new geometry formula.
 
 Published pricing practice supports this structure: AISLER describes a job fee plus
 area usage times quantity, OSH Park publishes area-based services with minimums and
 volume rates, and Eurocircuits connects dimensions and order pooling to manufacturing
 efficiency.[^aisler][^oshpark][^eurocircuits]
 
-## The three variable terms
+## The variable terms
 
 ### 1. Billable area
 
@@ -86,7 +83,7 @@ The function has one harmless slope change at 625 mm², but no price jump. Keepi
 this explicit is preferable to hiding the same minimum inside a high-order smooth-
 maximum expression.
 
-The setup fee and area floor are not duplicates: $S_b$ is paid once per order;
+The setup fee and area floor are not duplicates: $S_{L,v}$ is paid once per order;
 $A_{\mathrm{bill}}$ is applied once per board.
 
 ### 2. Shape multiplier
@@ -125,48 +122,17 @@ extreme shapes are less flexible to pool with unrelated work.
 
 ![The maximum supported shape premium is 2.68 percent at 10 to 1.](images/bare-board-pricing/same-area-shape-bias.png)
 
-### 3. Quantity multiplier
+### 3. Quantity and unit price
 
-Use
-
-$$
-M_q(q)=0.60+\frac{10.4}{q+25}.
-$$
-
-| Quantity | $M_q$ |
-| ---: | ---: |
-| 1 | 1.000 |
-| 5 | 0.947 |
-| 10 | 0.897 |
-| 20 | 0.831 |
-| 50 | 0.739 |
-| 100 | 0.683 |
-| 250 | 0.638 |
-| 1,000 | 0.610 |
-| 5,000 | 0.602 |
-
-Variable unit price always falls:
+Quantity multiplies effective board area exactly once. Including setup, unit price is
 
 $$
-M_q'(q)=-\frac{10.4}{(q+25)^2}<0.
+\frac{P_b}{q}=\frac{S_{L,v}}{q}+r_bA_{\mathrm{bill}}M_{\mathrm{shape}},
 $$
 
-Total variable price always rises:
-
-$$
-\frac{d}{dq}\left(qM_q(q)\right)
-=0.60+\frac{260}{(q+25)^2}>0.
-$$
-
-Including setup, complete unit price is
-
-$$
-\frac{P_b}{q}=\frac{S_b}{q}+r_bA_{\mathrm{bill}}M_{\mathrm{shape}}M_q(q),
-$$
-
-so setup makes the low-quantity unit-price decline stronger without another rule.
-
-![The quantity multiplier declines smoothly from 1.0 toward 0.60.](images/bare-board-pricing/quantity-multiplier.png)
+so a positive fixed setup charge produces a smooth quantity discount through
+$S_{L,v}/q$. The variable supplier cost remains proportional to the fab-panel area
+consumed; no second quantity curve is required.
 
 ## Worked quote
 
@@ -176,17 +142,15 @@ $$
 A_{\mathrm{bill}}=5{,}000,
 \qquad
 M_{\mathrm{shape}}=1.00444,
-\qquad
-M_q=0.6832.
 $$
 
 Therefore
 
 $$
-P_b=S_b+r_b(343{,}118.22).
+P_b=S_{L,v}+r_b(502{,}222.22).
 $$
 
-Once a process bucket supplies its currency-valued $S_b$ and $r_b$, no other quote
+Once the price book supplies its currency-valued $S_{L,v}$ and $r_b$, no other quote
 logic is required.
 
 ## Panelizer evidence
@@ -306,21 +270,20 @@ pricing fallback.
 
 Shipping, tax, assembly, components, and NRE are outside this bare-board function.
 
-## Calibration and launch
+## Calibration and validation
 
-1. Define one $S_b$ and $r_b$ pair per supported process bucket.
-2. Fit those two currency parameters to actual supplier cost and target margin.
+1. Define one $S_{L,v}$ entry per layer/via bucket and one $r_b$ per process bucket.
+2. Fit $S_{L,v}$ to internal operating cost and $r_b$ to supplier fab-panel cost.
 3. Shadow-quote representative historical jobs and compare against realized COGS.
-4. Validate gross margin by dimension, quantity, process bucket, and achieved panel
-   utilization.
+4. Validate error by dimension, quantity, process bucket, and achieved panel utilization.
 5. Round only the final currency result.
 
 For a reference quote $(w_0,h_0,q_0,P_0)$ and chosen setup fee:
 
 $$
 r_b=
-\frac{P_0-S_b}
-{q_0A_{\mathrm{bill}}(w_0,h_0)M_{\mathrm{shape}}(w_0,h_0)M_q(q_0)}.
+\frac{P_0-S_{L,v}}
+{q_0A_{\mathrm{bill}}(w_0,h_0)M_{\mathrm{shape}}(w_0,h_0)}.
 $$
 
 Use several reference jobs in production calibration. The equation itself should not
@@ -330,12 +293,12 @@ change unless realized cost data show a systematic error.
 
 - Exactly one customer pricing equation exists.
 - Quoting never calls the board-array or fab-panel packer.
-- Unit price strictly decreases with quantity.
+- Unit price strictly decreases with quantity when $S_{L,v}>0$.
 - Total price strictly increases with quantity.
 - Swapping width and height produces the same price.
 - Shape premium remains between 0% and 2.68% in the automatic domain.
-- Every process bucket has explicit $S_b$ and $r_b$ values.
-- A holdout set of realized jobs meets agreed margin and error limits.
+- Every layer/via bucket has an explicit $S_{L,v}$ and every process bucket has $r_b$.
+- A holdout set of realized jobs meets agreed cost-error limits.
 
 ## Research basis
 
@@ -378,21 +341,20 @@ The continuity boundary is intentional:
 
 There is no requirement to smooth across those manufacturing choices.
 
-For supported layer-stack bucket $L$ and turn-time bucket $T$, look up:
-
-- $B_{L,T}$: quoted first-panel-lot price; and
-- $E_{L,T}$: quoted extra-panel price.
+For supported layer-stack bucket $L$ and turn-time bucket $T$, look up
+$B_{L,T}$, the quoted cost of one fab panel. The same coefficient is used for any
+number of fab panels.
 
 Let $v\in\{0,1\}$ be the via-in-pad flag. Set $v=1$ whenever the design contains
-one or more via-in-pad structures. The source prices the required non-conductive
-via-fill process as one flat charge to the pooled fabrication lot, not to every
-customer order and not to every via.
+one or more via-in-pad structures. The source calls the required non-conductive
+via-fill process "NC Via-Fill." We allocate its quoted $500 charge over the usable
+area of each via-fill fab panel, not once to every customer order.
 
-Let $n\in\{1,2\}$ be the priced pool plan: one initial panel, or the initial panel
-plus the one quoted extra panel. Its supplier cost is
+If a compatible production pool runs $m\ge1$ fab panels, its fitted supplier
+cost is
 
 $$
-K_{L,T,v}(n)=B_{L,T}+(n-1)E_{L,T}+500v.
+K_{L,T,v}(m)=m\left(B_{L,T}+500v\right).
 $$
 
 Define the supplied usable panel area:
@@ -412,13 +374,12 @@ $$
 ### Turn-time pooling utilization
 
 Pool only orders with the same discrete $(L,T,v)$ key. A longer turn gives the
-scheduler more opportunities to find compatible work before that pool must launch.
-Represent the launch-stage disadvantage with an expected effective-fill schedule
-$u_T^{\mathrm{launch}}$ in the same discrete turn-time lookup:
+scheduler more opportunities to find compatible work before that pool must close.
+Represent that effect with an expected effective-fill schedule
+$u_T^{\mathrm{expected}}$ in the same discrete turn-time lookup:
 
-| Turn | Launch fill $u_T^{\mathrm{launch}}$ | Launch recovery factor | Added pooling reserve vs. 10 day |
+| Turn | Expected fill $u_T^{\mathrm{expected}}$ | Recovery factor | Added pooling reserve vs. 10 day |
 | --- | ---: | ---: | ---: |
-| 1 day | 83% | 1.205× | 14.5% |
 | 2 day | 86% | 1.163× | 10.5% |
 | 3 day | 90% | 1.111× | 5.6% |
 | 5 day | 92% | 1.087× | 3.3% |
@@ -426,129 +387,116 @@ $u_T^{\mathrm{launch}}$ in the same discrete turn-time lookup:
 | 10 day | 95% | 1.053× | baseline |
 
 The last column is
-$u_{10}^{\mathrm{launch}}/u_T^{\mathrm{launch}}-1$, so it isolates the additional
-pooling effect from the much larger expedite premium already present in $B_{L,T}$
-and $E_{L,T}$.
-Even the 1-day product assumes 83% effective fill: the model does not pretend that
-urgent work runs alone. The 10-day product stops at 95%, rather than assuming
+$u_{10}^{\mathrm{expected}}/u_T^{\mathrm{expected}}-1$, so it isolates the
+additional pooling effect from the much larger expedite premium already present in
+$B_{L,T}$. Even the 2-day product assumes 86% effective fill: the model does not
+pretend that urgent work runs alone. The 10-day product stops at 95%, rather than assuming
 perfect nesting despite rails, spacing, incompatible arrivals, and residual gaps.
 
-These percentages are deliberately modest launch assumptions, not values stated in
-the supplier matrix. They must not become permanent margin once order volume is high
-enough to fill pools reliably.
+These percentages are deliberately modest initial assumptions, not values stated in
+the supplier matrix. Reduce the reserve as order volume becomes sufficient to fill
+pools reliably.
 
 Make the reserve adjustable with one price-book parameter
 $\alpha\in[0,1]$, named `pooling_reserve_strength`:
 
 $$
 \boxed{
-u_T(\alpha)=1-\alpha\left(1-u_T^{\mathrm{launch}}\right)
+u_T(\alpha)=1-\alpha\left(1-u_T^{\mathrm{expected}}\right)
 }
 $$
 
 In implementation form:
 
 ```text
-alpha = price_book.pooling_reserve_strength  # 1.0 at launch, 0.0 at maturity
-launch_fill = price_book.launch_fill_by_turn[turn]
-utilization = 1.0 - alpha * (1.0 - launch_fill)
+alpha = price_book.pooling_reserve_strength  # 1.0 initially, 0.0 at maturity
+expected_fill = price_book.expected_fill_by_turn[turn]
+utilization = 1.0 - alpha * (1.0 - expected_fill)
 ```
 
-- $\alpha=1$ uses the launch schedule above.
+- $\alpha=1$ uses the expected-fill schedule above.
 - $\alpha=0.5$ removes roughly half of the assumed unfilled capacity.
 - $\alpha=0$ represents mature volume: every turn bucket uses $u_T(0)=1$, so the
   pooling-utilization factor disappears completely.
 
-| `pooling_reserve_strength` | Operating state | 1-day fill | 2-day fill | 10-day fill |
-| ---: | --- | ---: | ---: | ---: |
-| 1.0 | Launch | 83.0% | 86.0% | 95.0% |
-| 0.5 | Growing volume | 91.5% | 93.0% | 97.5% |
-| 0.0 | Mature volume | 100.0% | 100.0% | 100.0% |
+| `pooling_reserve_strength` | Operating state | 2-day fill | 10-day fill |
+| ---: | --- | ---: | ---: |
+| 1.0 | Initial volume | 86.0% | 95.0% |
+| 0.5 | Growing volume | 93.0% | 97.5% |
+| 0.0 | Mature volume | 100.0% | 100.0% |
 
 This is a configuration value, not a customer input and not an automatic calendar
 decay. Reduce it for future quotes as completed-pool data demonstrates higher fill.
 Do not derive it from the live contents of one pool or reprice an issued quote. If
 volume becomes sufficient to fill even short-turn pools consistently, set it to
-zero. The supplier's genuine expedite pricing in $B_{L,T}$ and $E_{L,T}$ remains;
-only Diode's temporary pooling-scarcity reserve goes away.
+zero. The supplier's genuine expedite pricing in $B_{L,T}$ remains; only Diode's
+temporary pooling-scarcity reserve goes away.
 
 ![A single configurable parameter fades the pooling reserve to zero as order volume matures.](images/bare-board-pricing/turn-time-pooling-utilization.png)
 
-At the launch setting $\alpha=1$, an order occupying 10% of one panel is allocated
-12.05% of the lot cost at 1 day, 11.63% at 2 days, and 10.53% at 10 days. At mature
-volume $\alpha=0$, each becomes exactly 10%. It is never charged for an entire
-otherwise-empty panel.
+At $\alpha=1$, an order occupying 10% of one panel is allocated 11.63% of one
+fab-panel cost at 2 days and 10.53% at 10 days. At mature volume $\alpha=0$, each
+becomes exactly 10%. It is never charged for an entire otherwise-empty panel.
 
-The expected launch target is therefore $\sum_i x_i\approx n u_T(\alpha)$. Allocate
-the supplier cost by effective area share against that target:
+For a pool of $m$ fab panels, the expected target is
+$\sum_i x_i\approx m u_T(\alpha)$. Allocate supplier cost by effective area share:
 
 $$
 \boxed{
 C_{\mathrm{supplier},i}
-=\frac{x_i}{n u_T(\alpha)}\left[B_{L,T}+(n-1)E_{L,T}+500v\right]
+=\frac{x_i}{u_T(\alpha)}\left(B_{L,T}+500v\right)
 }
 $$
 
-The allocation recovers the supplied lot cost at the expected launch utilization:
+The allocation recovers the supplied fab-panel cost at the expected utilization:
 
 $$
 \sum_i C_{\mathrm{supplier},i}
-=K_{L,T,v}(n)
+=K_{L,T,v}(m)
 \quad\text{when}\quad
-\sum_i x_i=n u_T(\alpha).
+\sum_i x_i=m u_T(\alpha).
 $$
 
-An individual customer therefore does not pay the whole first-panel price or the
-whole via-fill fee. Those are shared by every compatible order occupying the pooled
-panel. The production panelizer remains the internal utilization and COGS check; it
-does not select a different customer formula.
+An individual customer therefore does not pay the whole fab-panel price or the
+whole via-fill charge unless its order consumes that full effective area. Those
+costs are shared by every compatible order occupying a pooled panel. The production
+panelizer remains the internal utilization and COGS check; it does not select a
+different customer formula.
 
-The matrix directly supports only the two discrete pool plans
+The same allocation works whether an order consumes a fraction of one fab panel or
+several fab panels. Actual production uses an integer $m$; the quote uses the
+continuous expected fab-panel equivalent $x_i/u_T$ so prices have no panel-boundary
+jumps. The panelizer measures realized $m$ and utilization for COGS validation.
 
-$$
-n\in\{1,2\}.
-$$
-
-Do not silently extrapolate beyond the one quoted extra panel. Larger pool plans are
-outside this matrix and require a separately approved volume price book.
-
-Use $n=1$ for the initial pooled-panel product. Enable $n=2$ only as an explicit
-price-book service after operations can reliably fill and run two-panel pools. Do
-not change $n$ opportunistically from live pool occupancy after a customer is quoted.
-
-For a chosen pool plan, the pooled supplier area rate is
+The pooled supplier area rate is
 
 $$
-r^{\mathrm{pool}}_{L,T,v,n}
-=\frac{B_{L,T}+(n-1)E_{L,T}+500v}{nA_u u_T(\alpha)},
+r^{\mathrm{pool}}_{L,T,v}
+=\frac{B_{L,T}+500v}{A_u u_T(\alpha)},
 $$
 
 so $C_{\mathrm{supplier},i}=r^{\mathrm{pool}}qA_{\mathrm{bill}}
-M_{\mathrm{shape}}$. Order-level CAM, support, payment, and margin remain in the
-generic order setup term; supplier panel setup is not charged once per customer.
+M_{\mathrm{shape}}$. APCB has no per-customer setup term in this fit:
+$S_{\mathrm{APCB}}=0$. Its fab-panel cost is entirely in the area rate. A separate
+$S_{L,v}$ may recover Diode's fixed CAM, QA, and order-handling cost. Layer count
+and via-in-pad select that setup schedule; turn time does not.
 
-The source matrix already provides the volume economics through a high first-panel
-price and a much lower extra-panel price. Therefore the supplier-fit equation does
-**not** also apply the generic $M_q(q)$ curve. Doing both would double-discount volume
-and would eventually price incremental panels below the supplied extra-panel rate.
-
-If this cost basis is converted to a customer selling price at gross-margin target
-$g$, the final calibrated pricing function is:
+The final calibrated cost function is:
 
 $$
 \boxed{
-P_{\mathrm{customer},i}
-=S_{\mathrm{order}}+
-\frac{qA_{\mathrm{bill}}M_{\mathrm{shape}}(w,h)}{nA_u u_T(\alpha)}
-\frac{B_{L,T}+(n-1)E_{L,T}+500v}{1-g}
+P_{\mathrm{cost},i}
+=S_{L,v}+
+\frac{qA_{\mathrm{bill}}M_{\mathrm{shape}}(w,h)}{A_u u_T(\alpha)}
+\left(B_{L,T}+500v\right)
 }
 $$
 
 The customer supplies dimensions, quantity, layer-stack service, turn-time service,
-and whether via-in-pad is present. The price book supplies $S_{\mathrm{order}}$,
-$g$, $n$, the exact matrix coefficients, the launch utilization table, and $\alpha$.
-This is one equation; turn time selects the supplier coefficient and launch
-utilization, while one internal knob retires the reserve as volume matures.
+and whether via-in-pad is present. The price book supplies $S_{L,v}$,
+the exact matrix coefficients, the expected-utilization table, and $\alpha$. No
+margin is included. Turn time selects the supplier coefficient and utilization,
+while one internal knob retires the pooling reserve as volume matures.
 
 ## Source status and scope
 
@@ -559,12 +507,12 @@ matrix is valid for 90 days from May 2026. It is therefore outside its stated
 validity window as of this report's 2026-09-01 date.
 
 The numbers below are a faithful fit to the supplied negotiated matrix, but they
-must be refreshed with the supplier before production launch.
+must be refreshed with the supplier before production use.
 
 The quoted envelope is:
 
 - 2, 4, 6, 8, or 10 layers;
-- 1-, 2-, 3-, 5-, 7-, or 10-day turn;
+- 2-, 3-, 5-, 7-, or 10-day turn (the source's 1-day row is outside this model);
 - one 18 in × 24 in panel lot with 16 in × 20 in usable area;
 - IPC-A-600, FR-4, 0.062 in thickness, 0.5-1.0 oz copper;
 - no mixed copper weights on one core;
@@ -573,53 +521,31 @@ The quoted envelope is:
 - impedance not included in the base matrix.
 
 The source describes shipment timing as contingent on purchase order and data being
-received by 10 AM Pacific. The extra-panel quantity is build yield, not a guaranteed
-copy count. Consequently, this is a panel-equivalent expected-cost fit; the supplied
+received by 10 AM Pacific. This is a panel-equivalent expected-cost fit; the supplied
 document alone is not enough to promise an exact shipped-piece quantity after yield
 loss.
 
-## Exact first-panel coefficients
+## Exact fab-panel coefficients
 
 | Turn | 2 layers | 4 layers | 6 layers | 8 layers | 10 layers |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| 1 day | \$925 | \$1,700 | \$2,425 | \$4,500 | \$7,500 |
 | 2 day | \$800 | \$1,450 | \$2,100 | \$3,652 | \$5,560 |
 | 3 day | \$725 | \$1,250 | \$2,075 | \$2,805 | \$3,620 |
 | 5 day | \$650 | \$1,050 | \$1,750 | \$2,350 | \$3,200 |
 | 7 day | \$560 | \$880 | \$1,460 | \$1,860 | \$2,880 |
 | 10 day | \$460 | \$760 | \$1,150 | \$1,460 | \$1,980 |
 
-![The supplied first-panel price is strongly nonlinear across turn time and layer count.](images/bare-board-pricing/prototype-price-matrix.png)
+![The supplied fab-panel price is strongly nonlinear across turn time and layer count.](images/bare-board-pricing/prototype-price-matrix.png)
 
-## Exact extra-panel coefficients
-
-| Turn bucket | 2 layers | 4 layers | 6 layers | 8 layers | 10 layers |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| 1 or 2 day | \$100 | \$175 | \$210 | \$500 | \$700 |
-| 3, 5, 7, or 10 day | \$75 | \$135 | \$170 | \$380 | \$580 |
-
-Because $A_u=320\ \mathrm{in}^2$, the corresponding incremental rates are:
-
-| Turn bucket | 2 layers | 4 layers | 6 layers | 8 layers | 10 layers |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| 1 or 2 day | \$0.313/in² | \$0.547/in² | \$0.656/in² | \$1.563/in² | \$2.188/in² |
-| 3+ day | \$0.234/in² | \$0.422/in² | \$0.531/in² | \$1.188/in² | \$1.813/in² |
-
-The implied pool-level setup component $B_{L,T}-E_{L,T}$ ranges from \$385
-for a 10-day 2-layer build to \$6,800 for a 1-day 10-layer build. The incremental
-panel charge is only 8.2%-29.3% of the first-panel price, which explains most of the
-observed quantity discount without another quantity curve.
-
-## Solved APCB area-rate matrices
+## Solved APCB area-rate matrix
 
 The exact APCB matrix can be reduced to the coefficient used directly by the quote
 equation. In dollars per effective square inch:
 
 $$
 \boxed{
-R^{\mathrm{cost}}_{L,T,v,n}(\alpha)=
-\frac{B_{L,T}+(n-1)E_{L,T}+500v}
-{320n\,u_T(\alpha)}
+R^{\mathrm{cost}}_{L,T,v}(\alpha)=
+\frac{B_{L,T}+500v}{320\,u_T(\alpha)}
 }
 $$
 
@@ -634,112 +560,85 @@ Then the APCB supplier cost is simply
 
 $$
 C_{\mathrm{supplier}}=
-R^{\mathrm{cost}}_{L,T,v,n}(\alpha)A_{\mathrm{eff,in^2}}.
+R^{\mathrm{cost}}_{L,T,v}(\alpha)A_{\mathrm{eff,in^2}}.
 $$
 
-The following matrices are fully solved at the launch setting $\alpha=1$ without
-via-in-pad. They include the pooling-utilization reserve, but not Diode gross margin,
-the per-order setup fee, shipping, tax, or unsupported process add-ons. Values are
+The following matrix is fully solved at $\alpha=1$ without via-in-pad. It includes
+the pooling-utilization reserve, but not the separate per-order setup fee, shipping,
+tax, or unsupported process add-ons. No margin is included. Values are
 rounded to the nearest \$0.001/in² for display; implementation should retain the
 integer source charges and compute the coefficient rather than storing rounded cells.
 
-### Initial one-panel pool: $n=1$, $v=0$
+### Fab-panel cost card: $v=0$
 
 This is the recommended initial price-book matrix. Each cell is APCB supplier cost
 per effective square inch.
 
 | Turn | 2 layers | 4 layers | 6 layers | 8 layers | 10 layers |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| 1 day | \$3.483 | \$6.401 | \$9.130 | \$16.943 | \$28.238 |
 | 2 day | \$2.907 | \$5.269 | \$7.631 | \$13.270 | \$20.203 |
 | 3 day | \$2.517 | \$4.340 | \$7.205 | \$9.740 | \$12.569 |
 | 5 day | \$2.208 | \$3.567 | \$5.944 | \$7.982 | \$10.870 |
 | 7 day | \$1.862 | \$2.926 | \$4.854 | \$6.184 | \$9.574 |
 | 10 day | \$1.513 | \$2.500 | \$3.783 | \$4.803 | \$6.513 |
 
-![The solved launch-stage APCB rate surface rises sharply with both urgency and layer count.](images/bare-board-pricing/apcb-solved-area-rates.png)
+![The solved APCB rate surface rises sharply with both urgency and layer count.](images/bare-board-pricing/apcb-solved-area-rates.png)
 
-The most expensive cell, 1-day 10-layer, is 18.7 times the 10-day 2-layer rate.
+The most expensive supported cell, 2-day 10-layer, is 13.4 times the 10-day 2-layer rate.
 This spread comes primarily from the exact APCB matrix rather than the deliberately
 small pooling-utilization adjustment.
-
-### Initial-plus-extra-panel pool: $n=2$, $v=0$
-
-Enable this matrix only if the two-panel service described above is intentionally
-offered. Each cell is the average APCB supplier cost per effective square inch across
-the initial panel and its one quoted extra panel.
-
-| Turn | 2 layers | 4 layers | 6 layers | 8 layers | 10 layers |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| 1 day | \$1.930 | \$3.530 | \$4.960 | \$9.413 | \$15.437 |
-| 2 day | \$1.635 | \$2.952 | \$4.197 | \$7.544 | \$11.374 |
-| 3 day | \$1.389 | \$2.405 | \$3.898 | \$5.530 | \$7.292 |
-| 5 day | \$1.231 | \$2.013 | \$3.261 | \$4.637 | \$6.420 |
-| 7 day | \$1.056 | \$1.687 | \$2.709 | \$3.723 | \$5.751 |
-| 10 day | \$0.880 | \$1.472 | \$2.171 | \$3.026 | \$4.211 |
-
-![Across every quoted layer and turn bucket, the two-panel plan materially reduces average supplier area cost.](images/bare-board-pricing/apcb-two-panel-savings.png)
-
-Across all 30 quoted cells, the two-panel plan reduces average supplier cost per
-effective square inch by 35.4%-45.9%. This is why $n=2$ should be an explicit pool
-plan backed by reliable demand, not a second smooth quantity-discount curve.
 
 ### Via-in-pad area-rate increment
 
 For supported via-in-pad turns, add the following amount to the matching base cell.
-This is the solved allocation of one \$500 via-fill lot fee, not another per-order
-charge.
+This is the solved allocation of the \$500 via-fill charge over each effective fab
+panel, not another per-customer-order charge.
 
-| Turn | Add for $n=1$ | Add for $n=2$ |
-| --- | ---: | ---: |
-| 3 day | \$1.736/in² | \$0.868/in² |
-| 5 day | \$1.698/in² | \$0.849/in² |
-| 7 day | \$1.662/in² | \$0.831/in² |
-| 10 day | \$1.645/in² | \$0.822/in² |
+| Turn | Via-in-pad increment |
+| --- | ---: |
+| 3 day | \$1.736/in² |
+| 5 day | \$1.698/in² |
+| 7 day | \$1.662/in² |
+| 10 day | \$1.645/in² |
 
 The configurable volume adjustment does not require another matrix. Recompute the
-same coefficient with $u_T(\alpha)$. For example, the one-panel 4-layer rates at
-1 day and 10 days are respectively \$6.401/in² and \$2.500/in² at launch
-($\alpha=1$), \$5.806/in² and \$2.436/in² at growing volume ($\alpha=0.5$), and
-\$5.312/in² and \$2.375/in² at mature volume ($\alpha=0$). The remaining mature
-spread is APCB's actual expedite pricing, not a Diode pooling reserve.
+same coefficient with $u_T(\alpha)$. For example, the 4-layer rates at 2 days and
+10 days are respectively \$5.269/in² and \$2.500/in² at $\alpha=1$,
+\$4.872/in² and \$2.436/in² at $\alpha=0.5$, and \$4.531/in² and
+\$2.375/in² at $\alpha=0$. The remaining spread is APCB's actual expedite pricing,
+not a Diode pooling reserve.
 
-To obtain the customer area-rate coefficient at gross-margin target $g$, use
-
-$$
-R^{\mathrm{sell}}_{L,T,v,n}(\alpha)
-=\frac{R^{\mathrm{cost}}_{L,T,v,n}(\alpha)}{1-g},
-$$
-
-then add $S_{\mathrm{order}}$ once per order. A numeric customer selling-price matrix
-cannot be fixed from the APCB document alone because neither $g$ nor
-$S_{\mathrm{order}}$ is supplied.
+The APCB fit has $S_{\mathrm{APCB}}=0$: every APCB dollar is represented by the
+fab-panel area rate. $S_{L,v}$ is a separate Diode cost table and is not identifiable
+from a supplier matrix containing only fab-panel prices. It should be calibrated
+from measured DFM, CAM, QA, and order-handling work.
 
 ## Bucket lookup versus continuous variables
 
-The source has 30 exact first-panel prices. Several candidate fits were evaluated:
+The source has an exact layer-by-turn fab-panel matrix. Several candidate fits were evaluated:
 
 | Candidate | Parameters | Mean absolute error | RMSE | Worst cell |
 | --- | ---: | ---: | ---: | ---: |
-| Power law $cL^aT^b$ | 3 | 11.1% | \$497 | 32.7% |
-| Quadratic log surface | 6 | 5.1% | \$249 | 18.3% |
-| Independent layer and turn multipliers | 10 | 7.4% | \$360 | 21.1% |
-| Exact $(L,T)$ coefficient lookup | 30 | 0% | \$0 | 0% |
+| Power law $cL^aT^b$ | 3 | 9.0% | \$312 | 23.2% |
+| Quadratic log surface | 6 | 4.4% | \$194 | 14.7% |
+| Independent layer and turn multipliers | 9 | 5.4% | \$219 | 16.1% |
+| Exact $(L,T)$ coefficient lookup | 25 | 0% | \$0 | 0% |
 
 The simple power-law fit was
 
 $$
-\widehat B=489.46L^{1.051}T^{-0.398},
+\widehat B=565.57L^{1.012}T^{-0.443},
 $$
 
-but it overpredicted the 1-day 6-layer quote by 32.7%. Adding a smooth six-parameter
-surface still missed one quoted cell by 18.3%. That complexity buys less accuracy
-than the source table itself.
+but it underpredicted the 2-day 10-layer quote by 23.2%. Adding a smooth
+six-parameter surface still missed one quoted cell by 14.7%. That complexity buys
+less accuracy than the source table itself.
 
 ![Even materially more complicated continuous surfaces retain large errors against the supplied cells.](images/bare-board-pricing/pricing-fit-errors.png)
 
 Turn and layer effects are also not separable. Relative to the 10-day price, the
-1-day premium ranges from 2.01× for 2 layers to 3.79× for 10 layers. A single
+2-day premium ranges from 1.74× for 2 layers to 2.81× for 10 layers. Among the
+published 4L, 6L, and 8L buckets it is 1.91×, 1.83×, and 2.50×. A single
 `turn_multiplier(T) * layer_multiplier(L)` therefore loses the urgent high-layer
 premium.
 
@@ -759,7 +658,6 @@ material, thickness, copper, finish, hole, and spacing constraints match the sou
 envelope. Likewise, represent turn time as an enum with exactly these service codes:
 
 ```text
-TURN_1_DAY
 TURN_2_DAY
 TURN_3_DAY
 TURN_5_DAY
@@ -776,18 +674,16 @@ turn times, or technology requirements return `manual_quote_required`.
 - The pooled lot cost includes one \$500 NC via-fill charge. Order $i$ pays only
 
   $$
-  \Delta C_{\mathrm{VIP},i}=500\frac{x_i}{n u_T(\alpha)}.
+  \Delta C_{\mathrm{VIP},i}=500\frac{x_i}{u_T(\alpha)}.
   $$
 
-  Across a pool launched at the expected $n u_T(\alpha)$ fill, these shares sum to \$500.
-  The via-fill fee therefore uses the same turn-time pooling reserve as the base lot
-  instead of becoming a flat \$500 charge on every order.
-- The \$500 value is listed for 3-, 5-, 7-, and 10-day turns. The 1- and 2-day
-  cells are blank, so via-in-pad at those turns is unsupported by this matrix and
+  Across $m$ fab panels filled to the expected $m u_T(\alpha)$ load, these shares
+  sum to $500m$. The via-fill process therefore uses the same area allocation and
+  turn-time pooling reserve as the base panel instead of becoming a flat \$500
+  charge on every customer order.
+- The \$500 value is listed for 3-, 5-, 7-, and 10-day turns. The 2-day cell is
+  blank, so via-in-pad at that turn is unsupported by this matrix and
   returns `manual_quote_required`; the blank must not be interpreted as free.
-- The source does not list a separate via-fill charge for the extra panel. The
-  pooled-lot formula therefore includes \$500 once for either supported $n$, subject
-  to confirmation when the expired matrix is refreshed.
 - Controlled-impedance testing is an additional \$50.
 - The source says impedance itself is not included in the base technology offering.
 
@@ -806,9 +702,8 @@ x_i=
 =0.48653.
 $$
 
-For the initial $n=1$ pooled product at the launch setting $\alpha=1$, in the
-standard 4-layer, 10-day bucket, $B=760$ and $u_{10}(1)=0.95$. Without
-via-in-pad, $v=0$:
+At $\alpha=1$, in the standard 4-layer, 10-day bucket, $B=760$ and
+$u_{10}(1)=0.95$. Without via-in-pad, $v=0$:
 
 $$
 C_{\mathrm{supplier},i}
@@ -827,29 +722,30 @@ $$
 The via-in-pad premium attributable to this order is therefore \$256.07, not the
 entire \$500 pooled-lot charge.
 
-These are fitted supplier costs before gross-margin markup, shipping, tax, or other
-unlisted process add-ons.
+These are fitted supplier costs before the separate order setup, shipping, tax, or
+other unlisted process add-ons. No margin is included.
 
 ## Actual-price acceptance criteria
 
 - Every automatic quote uses an explicitly approved `layer_stack_id`.
-- Every automatic quote uses one of the six quoted turn-time service codes.
-- The exact $B_{L,T}$ and $E_{L,T}$ source cells are preserved as data.
+- Every automatic quote uses one of the five supported turn-time service codes.
+- The exact $B_{L,T}$ source cells are preserved as data.
 - Every solved area-rate cell reproduces its source lot cost when multiplied by
-  $320n u_T(\alpha)$, before display rounding.
-- Each turn bucket selects the explicit launch utilization above, with utilization
+  $320u_T(\alpha)$, before display rounding.
+- Each turn bucket selects the explicit expected utilization above, with utilization
   nondecreasing as lead time increases.
 - `pooling_reserve_strength` is a price-book configuration in $[0,1]$, never a
   customer or live-pool input.
 - Every pool contains only one exact $(L,T,v)$ compatibility key.
-- At expected $n u_T(\alpha)$ effective fill, customer allocations sum to
-  $B+(n-1)E+500v$ exactly.
-- No customer order is charged the full first-panel or via-fill lot fee by default.
+- At expected $m u_T(\alpha)$ effective fill across $m$ fab panels, customer
+  allocations sum to $m(B+500v)$ exactly.
+- No customer order is charged a full fab-panel or via-fill cost unless it consumes
+  the corresponding effective area.
 - Any detected via-in-pad sets $v=1$ and selects the via-fill pool.
 - Via-in-pad is automatically quoted only for 3-, 5-, 7-, or 10-day turns.
-- The priced pool plan is explicitly $n=1$ or $n=2$ and never exceeds the source.
 - Live pool occupancy never changes an already-issued customer quote.
 - Realized effective utilization is measured by turn bucket and used to lower
   $\alpha$ for future price-book revisions; mature volume sets $\alpha=0$.
-- The generic $M_q$ multiplier is not applied again to supplier cost.
+- Quantity enters once through effective area; no second quantity multiplier is used.
+- The supplier fit uses $S_{\mathrm{APCB}}=0$; the $S_{L,v}$ setup table remains separate.
 - The supplier matrix is refreshed before these expired rates are enabled.
