@@ -16,6 +16,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Add maximum plated-hole aspect-ratio DFM checks and make IPC 1A-3C profiles executable with opinionated partial IPC-informed baselines.
 - Add a deterministic, versioned PCBA assembly report contract over canonical assembly and physical IR.
 - Expose PCBA assembly reports as JSON through `pcb ipc assembly`.
+- Preserve external part-library provenance and same-part MPN aliases in IPC-2581 BOM selections.
 
 ### Changed
 
