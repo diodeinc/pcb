@@ -105,12 +105,25 @@ pub struct PdkIdentity {
     pub producibility_level: Option<&'static str>,
     pub technologies: Vec<&'static str>,
     pub coverage: Vec<String>,
+    pub support: PdkProfileSupport,
     pub defaults: PdkProfileDefaults,
     pub profile_source: Option<PdkSourceReference>,
     pub path: String,
     pub sha256: String,
     /// Exact resolved UTF-8 PDK TOML used by this check, without reserialization.
     pub source: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PdkProfileSupport {
+    pub copper_layers: Option<PdkCountRange>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PdkCountRange {
+    pub exact: Option<u32>,
+    pub minimum: Option<u32>,
+    pub maximum: Option<u32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -171,6 +184,15 @@ impl PdkIdentity {
                 .map(|technology| technology.label())
                 .collect(),
             coverage: definition.coverage.clone(),
+            support: PdkProfileSupport {
+                copper_layers: definition.support.copper_layers.as_ref().map(|range| {
+                    PdkCountRange {
+                        exact: range.exact,
+                        minimum: range.minimum,
+                        maximum: range.maximum,
+                    }
+                }),
+            },
             defaults: PdkProfileDefaults {
                 material: definition.defaults.material.clone(),
                 board_thickness: definition
@@ -295,7 +317,7 @@ impl RuleResult {
             waived_count: 0,
             skip_reason: None,
             view: rule.kind.view_recipe(),
-            tier: if rule.id.ends_with(".preferred") {
+            tier: if rule.severity == Severity::Warning {
                 "preferred"
             } else {
                 "required"

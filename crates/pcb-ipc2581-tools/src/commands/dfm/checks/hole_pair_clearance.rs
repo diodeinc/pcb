@@ -161,9 +161,8 @@ mod tests {
           name = "Test"
           [[rules.drilling.hole_to_hole_clearance]]
           id = "hole-clearance"
-          first_hole = "pth"
-          second_hole = "pth"
-          minimum = "0.2 mm"
+          select = { first_hole = "pth", second_hole = "pth" }
+          limit = { minimum = "0.2 mm" }
         "#,
         )
         .unwrap();

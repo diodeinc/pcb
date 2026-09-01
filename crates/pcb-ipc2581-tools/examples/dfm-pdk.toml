@@ -10,6 +10,9 @@ revision = "2"
 name = "1 oz rigid standard"
 technologies = ["rigid"]
 
+[profiles.standard.support]
+copper_layers = { minimum = 2, maximum = 10 }
+
 [profiles.standard.defaults]
 material = "FR-4"
 board_thickness = "1.6 mm"
@@ -17,43 +20,34 @@ outer_copper_weight = "1 oz"
 inner_copper_weight = "0.5 oz"
 soldermask_color = "green"
 
-[[rules.stackup.copper_layer_count]]
-id = "stackup.layers"
-minimum = 2
-maximum = 10
-
 [[rules.drilling.hole_diameter]]
 id = "drilling.via_hole"
-hole = "via"
-minimum = "0.2 mm"
+select = { hole = "via" }
+limit = { minimum = "0.2 mm" }
 
 [[rules.drilling.slot_width]]
-id = "drilling.plated_slot.2_layer"
-plating = "plated"
-minimum = "0.5 mm"
-when = { minimum_copper_layers = 2, maximum_copper_layers = 2 }
-
-[[rules.drilling.slot_width]]
-id = "drilling.plated_slot.multilayer"
-plating = "plated"
-minimum = "0.35 mm"
-when = { minimum_copper_layers = 3, maximum_copper_layers = 10 }
+id = "drilling.plated_slot"
+select = { plating = "plated" }
+cases = [
+  { id = "2-layer", when = { copper_layers = { exact = 2 } }, limit = { minimum = "0.5 mm" } },
+  { id = "multilayer", when = { copper_layers = { minimum = 3, maximum = 10 } }, limit = { minimum = "0.35 mm" } },
+]
 
 [[rules.copper.annular_ring]]
 id = "copper.via_annular_ring"
-hole = "via"
-minimum = "100 um"
-preferred = "0.125 mm"
+select = { hole = "via" }
+limit = { minimum = "100 um", preferred = "0.125 mm" }
 
 [[rules.copper.feature_width]]
 id = "copper.outer_feature_width"
-minimum = "0.10 mm"
-when = { layer = "outer", copper_weight = "1 oz" }
+cases = [
+  { id = "outer-1oz", when = { copper = { position = "outer", weight = "1 oz" } }, limit = { minimum = "0.10 mm" } },
+]
 
 [[rules.copper.clearance]]
 id = "copper.clearance"
-minimum = "0.10 mm"
+limit = { minimum = "0.10 mm" }
 
 [[rules.soldermask.web]]
 id = "soldermask.web"
-minimum = "0.10 mm"
+limit = { minimum = "0.10 mm" }

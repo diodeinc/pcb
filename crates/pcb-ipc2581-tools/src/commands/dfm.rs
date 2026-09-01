@@ -495,25 +495,20 @@ revision = "1"
 [profiles.test]
 name = "Test"
 
-[[rules.stackup.copper_layer_count]]
-id = "stackup.minimum_copper_layer_count"
-minimum = 2
-
-[[rules.stackup.copper_layer_count]]
-id = "stackup.maximum_copper_layer_count"
-maximum = 4
+[profiles.test.support]
+copper_layers = { minimum = 2, maximum = 4 }
 
 [[rules.copper.vscore_clearance]]
 id = "copper.minimum_vscore_to_copper_clearance"
-minimum = "0.5 mm"
+limit = { minimum = "0.5 mm" }
 
 [[rules.copper.board_edge_clearance]]
 id = "copper.minimum_board_edge_clearance"
-minimum = "0.5 mm"
+limit = { minimum = "0.5 mm" }
 
 [[rules.panelization.board_spacing]]
 id = "panelization.minimum_board_array_spacing"
-minimum = "300 mil"
+limit = { minimum = "300 mil" }
 "#;
 
     fn check(xml: &str, target: LayoutTarget) -> DfmReport {
@@ -555,8 +550,13 @@ minimum = "300 mil"
         assert_eq!(parsed.pdk.manufacturer.as_deref(), Some("Diode"));
         assert_eq!(parsed.pdk.process.as_deref(), Some("Standard"));
         assert_eq!(parsed.default_profile, "standard");
-        assert_eq!(parsed.rules.stackup.copper_layer_count[0].minimum, Some(2));
-        assert_eq!(parsed.rules.stackup.copper_layer_count[1].maximum, Some(10));
+        let support = parsed.profiles["standard"]
+            .support
+            .copper_layers
+            .as_ref()
+            .unwrap();
+        assert_eq!(support.minimum(), Some(2));
+        assert_eq!(support.maximum(), Some(10));
         assert!(!rules::lower(&parsed, None).unwrap().is_empty());
 
         for builtin in builtin_pdks() {
@@ -588,7 +588,7 @@ minimum = "300 mil"
         );
         let two_layer = rules
             .iter()
-            .find(|rule| rule.id == "jlc.copper.minimum_feature_width.2_layer")
+            .find(|rule| rule.id == "jlc.copper.minimum_feature_width.2-layer")
             .unwrap();
         assert_eq!(two_layer.limit.length().millimeters(), 0.10);
         assert_eq!(two_layer.conditions.minimum_copper_layers, Some(2));
@@ -600,6 +600,20 @@ minimum = "300 mil"
         assert_eq!(multilayer.limit.length().millimeters(), 0.09);
         assert_eq!(multilayer.conditions.minimum_copper_layers, Some(3));
         assert_eq!(multilayer.conditions.maximum_copper_layers, Some(32));
+    }
+
+    #[test]
+    fn case_named_preferred_remains_a_required_tier() {
+        let pdk = PDK.replace(
+            "[[rules.copper.board_edge_clearance]]\nid = \"copper.minimum_board_edge_clearance\"\nlimit = { minimum = \"0.5 mm\" }",
+            "[[rules.copper.board_edge_clearance]]\nid = \"copper.minimum_board_edge_clearance\"\ncases = [\n  { id = \"preferred\", when = { copper_layers = { exact = 2 } }, limit = { minimum = \"0.5 mm\" } },\n]",
+        );
+
+        let results = check_with_pdk(BOARD, LayoutTarget::Board, &pdk);
+        let required = rule(&results, "copper.minimum_board_edge_clearance.preferred");
+
+        assert_eq!(required.severity, report::Severity::Error);
+        assert_eq!(required.tier, "required");
     }
 
     #[test]
@@ -787,13 +801,13 @@ reason = "old finding"
     }
 
     #[test]
-    fn copper_layer_count_checks_both_bounds_from_the_physical_stackup() {
+    fn profile_support_checks_both_layer_bounds_from_the_physical_stackup() {
         let below_minimum = check_with_pdk(
             BOARD,
             LayoutTarget::Board,
             &PDK.replace("minimum = 2", "minimum = 3"),
         );
-        let minimum_rule = rule(&below_minimum, "stackup.minimum_copper_layer_count");
+        let minimum_rule = rule(&below_minimum, "profile.support.copper_layers.minimum");
         assert_eq!(minimum_rule.checked, 1);
         assert_eq!(minimum_rule.comparison, "minimum");
         assert_eq!(minimum_rule.limit.normalized_unit, "layers");
@@ -824,9 +838,12 @@ reason = "old finding"
         let above_maximum = check_with_pdk(
             BOARD,
             LayoutTarget::Board,
-            &PDK.replace("maximum = 4", "maximum = 1"),
+            &PDK.replace(
+                "copper_layers = { minimum = 2, maximum = 4 }",
+                "copper_layers = { maximum = 1 }",
+            ),
         );
-        let maximum_rule = rule(&above_maximum, "stackup.maximum_copper_layer_count");
+        let maximum_rule = rule(&above_maximum, "profile.support.copper_layers.maximum");
         assert_eq!(maximum_rule.checked, 1);
         assert_eq!(maximum_rule.comparison, "maximum");
         assert!(matches!(maximum_rule.status, report::RuleStatus::Fail));
@@ -841,7 +858,7 @@ reason = "old finding"
     }
 
     #[test]
-    fn copper_layer_count_rejects_an_incomplete_physical_stackup() {
+    fn profile_support_rejects_an_incomplete_physical_stackup() {
         let ipc = Ipc2581::parse(&BOARD.replace(
             "layerOrGroupRef=\"BOTTOM\"",
             "layerOrGroupRef=\"DIELECTRIC\"",

@@ -19,6 +19,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - Speed up DFM width and gap checks.
+- Separate DFM profile support, subject selectors, limits, and named conditional cases in PDK schema v2.
 
 ### Fixed
 

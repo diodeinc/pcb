@@ -54,6 +54,7 @@ export async function checkUsage(
     expectType<string>(report.pdk.source);
     expectType<string>(report.pdk.profile);
     expectType<"executable" | "metadata_only">(report.pdk.profile_status);
+    expectType<number | null>(report.pdk.support.copper_layers?.minimum ?? null);
     expectType<string | null>(report.pdk.defaults.outer_copper_weight);
     expectType<string>(report.layout.kind);
     expectType<string>(report.scene.passes[0].svg);

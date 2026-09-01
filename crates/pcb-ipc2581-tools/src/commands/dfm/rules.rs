@@ -10,8 +10,8 @@ use anyhow::Result;
 
 use super::design::HoleClass;
 use super::pdk::{
-    CopperWeight, HoleKind, LayerPosition, Length, Pdk, PlatedHoleKind, Profile, ProfileStatus,
-    RuleConditions, RuleMetadata, SlotPlating,
+    CopperWeight, HoleKind, LayerPosition, Length, LengthCase, LengthLimit, Pdk, PlatedHoleKind,
+    Profile, ProfileStatus, RuleConditions, RuleMetadata, SlotPlating,
 };
 use super::report::{Severity, ViewRecipe};
 
@@ -446,9 +446,9 @@ pub(super) fn pools(rules: &[Rule]) -> Pools {
         .fold(Pools::default(), |union, pools| union | pools)
 }
 
-/// Lower the selected profile's typed rules. Rules with no `profiles` selector
-/// apply to every executable profile in the kit. Required limits are errors;
-/// optional preferred limits become warning rules under `<id>.preferred`.
+/// Lower the selected profile's support envelope and typed rules. Rules with
+/// no `profiles` selector apply to every executable profile in the kit.
+/// Required limits are errors; optional preferred limits become warning rules.
 pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rule>> {
     pdk.validate_rule_references()?;
     let (profile_name, profile) = pdk.selected_profile(selected_profile)?;
@@ -459,39 +459,27 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
     }
 
     let mut rules = Vec::new();
-    for rule in &pdk.rules.stackup.copper_layer_count {
-        if !rule.metadata.applies_to(profile_name) {
-            continue;
-        }
-        let conditions = conditions(&rule.metadata.when, profile);
-        if let Some(limit) = rule.minimum {
+    if let Some(range) = &profile.support.copper_layers {
+        if let Some(limit) = range.minimum() {
             rules.push(Rule {
-                id: if rule.maximum.is_some() {
-                    format!("{}.minimum", rule.metadata.id)
-                } else {
-                    rule.metadata.id.clone()
-                },
-                title: "Minimum copper layer count".to_owned(),
+                id: "profile.support.copper_layers.minimum".to_owned(),
+                title: "Profile minimum copper layer count".to_owned(),
                 severity: Severity::Error,
                 comparison: Comparison::Minimum,
                 limit: LimitValue::Count(limit),
                 kind: RuleKind::CopperLayerCount,
-                conditions: conditions.clone(),
+                conditions: Conditions::default(),
             });
         }
-        if let Some(limit) = rule.maximum {
+        if let Some(limit) = range.maximum() {
             rules.push(Rule {
-                id: if rule.minimum.is_some() {
-                    format!("{}.maximum", rule.metadata.id)
-                } else {
-                    rule.metadata.id.clone()
-                },
-                title: "Maximum copper layer count".to_owned(),
+                id: "profile.support.copper_layers.maximum".to_owned(),
+                title: "Profile maximum copper layer count".to_owned(),
                 severity: Severity::Error,
                 comparison: Comparison::Maximum,
                 limit: LimitValue::Count(limit),
                 kind: RuleKind::CopperLayerCount,
-                conditions,
+                conditions: Conditions::default(),
             });
         }
     }
@@ -499,32 +487,38 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
     for rule in &pdk.rules.drilling.hole_diameter {
         rules.extend(lower_length_rule(
             &rule.metadata,
-            &rule.minimum,
-            rule.preferred.as_ref(),
+            rule.limit.as_ref(),
+            &rule.cases,
             profile_name,
             profile,
-            format!("Minimum {} hole diameter", hole_class(rule.hole).label()),
-            RuleKind::HoleDiameter(hole_class(rule.hole)),
+            format!(
+                "Minimum {} hole diameter",
+                hole_class(rule.select.hole).label()
+            ),
+            RuleKind::HoleDiameter(hole_class(rule.select.hole)),
         ));
     }
     for rule in &pdk.rules.drilling.slot_width {
         rules.extend(lower_length_rule(
             &rule.metadata,
-            &rule.minimum,
-            rule.preferred.as_ref(),
+            rule.limit.as_ref(),
+            &rule.cases,
             profile_name,
             profile,
-            format!("Minimum {} routed slot width", slot_label(rule.plating)),
-            RuleKind::SlotWidth(rule.plating),
+            format!(
+                "Minimum {} routed slot width",
+                slot_label(rule.select.plating)
+            ),
+            RuleKind::SlotWidth(rule.select.plating),
         ));
     }
     for rule in &pdk.rules.drilling.hole_to_hole_clearance {
-        let first = hole_class(rule.first_hole);
-        let second = hole_class(rule.second_hole);
+        let first = hole_class(rule.select.first_hole);
+        let second = hole_class(rule.select.second_hole);
         rules.extend(lower_length_rule(
             &rule.metadata,
-            &rule.minimum,
-            rule.preferred.as_ref(),
+            rule.limit.as_ref(),
+            &rule.cases,
             profile_name,
             profile,
             format!(
@@ -536,11 +530,11 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
         ));
     }
     for rule in &pdk.rules.copper.annular_ring {
-        let class = plated_hole_class(rule.hole);
+        let class = plated_hole_class(rule.select.hole);
         rules.extend(lower_length_rule(
             &rule.metadata,
-            &rule.minimum,
-            rule.preferred.as_ref(),
+            rule.limit.as_ref(),
+            &rule.cases,
             profile_name,
             profile,
             format!("Minimum {} annular ring", class.label()),
@@ -582,8 +576,8 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
         for rule in ruleset {
             rules.extend(lower_length_rule(
                 &rule.metadata,
-                &rule.minimum,
-                rule.preferred.as_ref(),
+                rule.limit.as_ref(),
+                &rule.cases,
                 profile_name,
                 profile,
                 title.to_owned(),
@@ -597,8 +591,8 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
 #[allow(clippy::too_many_arguments)]
 fn lower_length_rule(
     metadata: &RuleMetadata,
-    minimum: &Length,
-    preferred: Option<&Length>,
+    limit: Option<&LengthLimit>,
+    cases: &[LengthCase],
     profile_name: &str,
     profile: &Profile,
     title: String,
@@ -607,19 +601,52 @@ fn lower_length_rule(
     if !metadata.applies_to(profile_name) {
         return Vec::new();
     }
-    let conditions = conditions(&metadata.when, profile);
+    match limit {
+        Some(limit) => lower_limit(
+            &metadata.id,
+            limit,
+            &RuleConditions::default(),
+            profile,
+            title,
+            kind,
+        ),
+        None => cases
+            .iter()
+            .flat_map(|case| {
+                lower_limit(
+                    &format!("{}.{}", metadata.id, case.id),
+                    &case.limit,
+                    &case.when,
+                    profile,
+                    title.clone(),
+                    kind,
+                )
+            })
+            .collect(),
+    }
+}
+
+fn lower_limit(
+    id: &str,
+    limit: &LengthLimit,
+    when: &RuleConditions,
+    profile: &Profile,
+    title: String,
+    kind: RuleKind,
+) -> Vec<Rule> {
+    let conditions = conditions(when, profile);
     let required = Rule {
-        id: metadata.id.clone(),
+        id: id.to_owned(),
         title: title.clone(),
         severity: Severity::Error,
         comparison: Comparison::Minimum,
-        limit: LimitValue::Length(minimum.clone()),
+        limit: LimitValue::Length(limit.minimum.clone()),
         kind,
         conditions: conditions.clone(),
     };
     std::iter::once(required)
-        .chain(preferred.map(|preferred| Rule {
-            id: format!("{}.preferred", metadata.id),
+        .chain(limit.preferred.as_ref().map(|preferred| Rule {
+            id: format!("{id}.preferred"),
             title: format!("{title} (preferred)"),
             severity: Severity::Warning,
             comparison: Comparison::Minimum,
@@ -631,11 +658,15 @@ fn lower_length_rule(
 }
 
 fn conditions(rule: &RuleConditions, profile: &Profile) -> Conditions {
+    let copper_layers = rule.copper_layers.as_ref();
+    let copper = rule.copper.as_ref();
     Conditions {
-        minimum_copper_layers: rule.minimum_copper_layers,
-        maximum_copper_layers: rule.maximum_copper_layers,
-        layer: rule.layer,
-        copper_weight_oz: rule.copper_weight.as_ref().map(CopperWeight::ounces),
+        minimum_copper_layers: copper_layers.and_then(|range| range.minimum()),
+        maximum_copper_layers: copper_layers.and_then(|range| range.maximum()),
+        layer: copper.map(|condition| condition.position),
+        copper_weight_oz: copper
+            .and_then(|condition| condition.weight.as_ref())
+            .map(CopperWeight::ounces),
         assumed_outer_copper_weight_oz: profile
             .defaults
             .outer_copper_weight

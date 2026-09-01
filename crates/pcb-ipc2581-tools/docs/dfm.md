@@ -9,8 +9,8 @@ native vector geometry, and the exact PDK source for external viewers.
 The PDK is strict and versioned. Unknown fields, bare numeric lengths, and
 unsupported schema versions are errors — refusing an unknown rule key
 is deliberate, because silently ignoring a rule the fab requires would
-green-light unchecked boards. A PDK that configures no rules is an error
-rather than a passing report.
+green-light unchecked boards. A profile with neither measurable support bounds
+nor DFM rules is an error rather than a passing report.
 
 ```toml
 schema_version = 2
@@ -31,6 +31,9 @@ name = "1 oz rigid standard"
 technologies = ["rigid"]
 source = "capabilities"
 
+[profiles.standard.support]
+copper_layers = { minimum = 2, maximum = 10 }
+
 [profiles.standard.defaults]
 material = "FR-4"
 board_thickness = "1.6 mm"
@@ -38,64 +41,69 @@ outer_copper_weight = "1 oz"
 inner_copper_weight = "0.5 oz"
 soldermask_color = "green"
 
-[[rules.stackup.copper_layer_count]]
-id = "stackup.layers"
-minimum = 2
-maximum = 10
-
 [[rules.drilling.hole_diameter]]
 id = "drilling.via_hole"
-hole = "via"
-minimum = "0.2 mm"
-preferred = "0.25 mm"
+select = { hole = "via" }
+limit = { minimum = "0.2 mm", preferred = "0.25 mm" }
 source = "capabilities"
 
 [[rules.drilling.slot_width]]
-id = "drilling.plated_slot.2_layer"
-plating = "plated"
-minimum = "0.50 mm"
-when = { minimum_copper_layers = 2, maximum_copper_layers = 2 }
-
-[[rules.drilling.slot_width]]
-id = "drilling.plated_slot.multilayer"
-plating = "plated"
-minimum = "0.35 mm"
-when = { minimum_copper_layers = 3, maximum_copper_layers = 10 }
+id = "drilling.plated_slot"
+select = { plating = "plated" }
+cases = [
+  { id = "2-layer", when = { copper_layers = { exact = 2 } }, limit = { minimum = "0.50 mm" } },
+  { id = "multilayer", when = { copper_layers = { minimum = 3, maximum = 10 } }, limit = { minimum = "0.35 mm" } },
+]
 
 [[rules.drilling.hole_to_hole_clearance]]
 id = "drilling.via_to_pth"
-first_hole = "via"
-second_hole = "pth"
-minimum = "10 mil"
+select = { first_hole = "via", second_hole = "pth" }
+limit = { minimum = "10 mil" }
 
 [[rules.copper.annular_ring]]
 id = "copper.via_annular_ring"
-hole = "via"
-minimum = "100 um"
-preferred = "0.125 mm"
+select = { hole = "via" }
+limit = { minimum = "100 um", preferred = "0.125 mm" }
 
 [[rules.copper.feature_width]]
-id = "copper.outer_feature_width"
-minimum = "0.10 mm"
-when = { layer = "outer", copper_weight = "1 oz" }
+id = "copper.feature_width"
+cases = [
+  { id = "outer-1oz", when = { copper = { position = "outer", weight = "1 oz" } }, limit = { minimum = "0.10 mm" } },
+]
 ```
 
 One PDK file is a kit with named profiles. A built-in name selects both a kit
 and one profile; a custom file runs its `default_profile`. An executable
 profile lowers only rules whose `profiles` list contains it; an omitted list
-means every profile. A `metadata_only` profile fails closed before checking,
-which lets a kit publish a standard taxonomy without pretending that missing
+means every profile. A `metadata_only` profile fails closed before checking.
+This lets a kit publish a standard taxonomy without claiming that missing
 numeric rules establish compliance.
 
-Every rule has a stable authored `id` and a typed subject selector. Hole rules
-select `via`, `pth`, or `npth`; slots select `plated` or `nonplated`; hole-pair
-rules state both classes. `when` can condition any rule on a copper-layer-count
-range; copper rules can also select `outer`/`inner` layer position and finished
-copper weight. Unsupported condition/rule combinations are errors rather than
-silently ignored selectors. Every overlapping applicable rule is enforced, so
-the strictest requirement is binding without an expression language. A
-condition requiring stackup context fails extraction if the IPC-2581 file has
-no unambiguous physical stackup.
+The schema gives each kind of constraint one place:
+
+- `profile.support` is the hard eligibility envelope for the whole profile.
+  A design outside its copper-layer range fails profile qualification. The
+  engine emits these checks as reserved `profile.support.*` report rules;
+  PDK authors do not write layer-count DFM rules.
+- `select` identifies the physical subjects a rule measures. Hole rules select
+  `via`, `pth`, or `npth`; slots select `plated` or `nonplated`; hole-pair rules
+  state both classes.
+- `limit` defines one unconditional minimum and an optional preferred value.
+- `cases` defines named conditional limits when one value is not enough. A
+  rule uses either `limit` or `cases`, never both.
+- `profile.defaults` records missing-data assumptions. Copper weight defaults
+  are used when a weight-conditioned case has no stated stackup weight.
+
+Case conditions use structured ranges such as
+`copper_layers = { exact = 2 }` or `{ minimum = 3, maximum = 10 }`. Copper
+rules may also condition on `copper = { position = "outer", weight = "1 oz" }`.
+The parser rejects unsupported conditions and any pair of cases whose domains
+overlap. Therefore, at most one case from a rule applies to a design or copper
+layer; non-applicable case rules are reported as skipped. A condition that
+needs stackup context fails extraction when the IPC-2581 file has no
+unambiguous physical stackup. The `technologies` list remains descriptive
+metadata because imported designs do not yet state rigid, flex, and HDI
+technology reliably enough for qualification.
 
 Layer counts are positive integers. Every dimensional minimum is a positive
 string containing a number and `mm`, `mil`, `mils`, or `um`; copper weight is a
@@ -105,13 +113,16 @@ defaults document an order's assumptions in the report; an outer/inner copper
 weight default is also the fallback for a weight-conditioned rule when the
 source stackup does not state that weight.
 
-Every dimensional rule has a binding `minimum` and may add a `preferred` tier:
+Every direct limit or case has a binding `minimum` and may add a `preferred`
+tier:
 
 - The minimum lowers to an **error**-severity rule whose id is the
-  authored rule id. Error findings fail the verdict.
+  authored rule id, or `<id>.<case>` for a named case. Error findings fail the
+  verdict.
 - A preferred tier lowers to a second, **warning**-severity rule under
-  `<id>.preferred`. Warning findings are reported and counted but do
-  not fail the verdict. The preferred value must exceed the minimum.
+  `<id>.preferred` or `<id>.<case>.preferred`. Warning findings are reported
+  and counted but do not fail the verdict. The preferred value must exceed the
+  minimum.
 
 Rule ids, profile metadata, source citations, and the exact PDK TOML are
 retained in the report for auditability.
@@ -123,9 +134,9 @@ highest-level representation that still states the measured quantity exactly,
 and lowers only when fabrication composition can change that quantity. A
 high-level pass is never allowed to suppress a later authoritative failure.
 
-| Rules | Authoritative representation | Acceleration only |
+| Check | Authoritative representation | Acceleration only |
 | --- | --- | --- |
-| Copper layer count | Conductive layers in the one physical IPC stackup | None |
+| Profile copper-layer support | Conductive layers in the one physical IPC stackup | None |
 | Hole diameter | Materialized IPC drill primitive and plating class | None |
 | Nominal slot width | IPC slot primitive width | None |
 | Outline slot width | Materialized filled route outline, then its narrowest maximal inscribed disk | None |
@@ -144,9 +155,9 @@ curve; zero for stated primitives and analytic shapes). A pair of witness
 points does not always encode a length: widths, diameters, and annular
 enclosures retain their own measurement constructions. The engine fails a
 minimum only when the measured value falls short beyond its own uncertainty,
-so curve tessellation by itself cannot manufacture a violation. Layer-count
-checks instead compare one exact integer with the configured minimum or
-maximum.
+so curve tessellation by itself cannot manufacture a violation. Profile
+copper-layer qualification instead compares one exact integer with the
+configured support bounds.
 
 Morphological opening and closing are deliberately candidate stages for width
 and soldermask-web checks. Each candidate residue is measured on the medial
@@ -177,9 +188,10 @@ when fewer than two exist.
 
 ## Rule semantics
 
-- Copper layer count requires exactly one physical stackup. Every declared
-  copper layer must occur exactly once in it; missing or ambiguous stackup data
-  fails extraction rather than guessing from artwork layer names.
+- Profile copper-layer qualification requires exactly one physical stackup.
+  Every declared copper layer must occur exactly once in it; missing or
+  ambiguous stackup data fails extraction rather than guessing from artwork
+  layer names.
 - Hole diameter rules measure every drilled hole of the rule's class. Slot
   width rules measure routed slots of the selected plating class. A slot's width is settled
   at extraction: the stated primitive width when present — exact, and
@@ -299,7 +311,8 @@ A complete report has these fields:
 - `tool`: producer name and version.
 - `input`: original IPC input path, SHA-256, and byte size.
 - `pdk`: resolved kit and profile metadata, assumptions, source citation, path,
-  exact TOML `source`, and SHA-256.
+  exact TOML `source`, SHA-256, and the selected profile's
+  `support.copper_layers` range (`exact`, `minimum`, and `maximum`).
 - `waivers`: file path and SHA-256 plus applied, expired, and unmatched entries;
   `null` when no waiver file was given. See [source identity](#source-identity).
 - `layout_target`: `board` or `board_array`.
@@ -311,8 +324,9 @@ A complete report has these fields:
   geometry: `mm`, `x_right_y_up`, and `ipc_2581_design` in version 1.
 - `summary`: rule counts by status and finding counts by severity and
   waiver state.
-- `rules`: one result per lowered rule: its authored id (plus
-  `.preferred` for warning tiers), severity, source and normalized limit,
+- `rules`: one result per lowered rule. A direct limit uses its authored id; a
+  named case uses `<id>.<case>`; a preferred tier appends `.preferred` to
+  either form. Each result includes severity, source and normalized limit,
   status (`pass`, `warning`, `fail`, or `skipped`), skip reason, and the
   measurement contract shared by all of its findings — `subject` (what one
   checked unit is), `quantity`, `method`, `comparison` (`minimum` or

@@ -12,56 +12,59 @@ process = "Aurora 2-10 layer prototype"
 name = "Aurora 2-10 layer prototype"
 technologies = ["rigid"]
 
+[profiles.aurora-prototype.support]
+copper_layers = { minimum = 2, maximum = 10 }
+
 [[rules.drilling.hole_diameter]]
 id = "drilling.minimum_via_hole_diameter"
-hole = "via"
-minimum = "0.2 mm"
+select = { hole = "via" }
+limit = { minimum = "0.2 mm" }
 
 [[rules.drilling.hole_diameter]]
 id = "drilling.minimum_pth_hole_diameter"
-hole = "pth"
-minimum = "15 mil"
+select = { hole = "pth" }
+limit = { minimum = "15 mil" }
 
 [[rules.drilling.hole_diameter]]
 id = "drilling.minimum_npth_hole_diameter"
-hole = "npth"
-minimum = "0.2 mm"
+select = { hole = "npth" }
+limit = { minimum = "0.2 mm" }
 
 [[rules.drilling.slot_width]]
 id = "drilling.minimum_plated_slot_width"
-plating = "plated"
-minimum = "31 mil"
+select = { plating = "plated" }
+limit = { minimum = "31 mil" }
 
 [[rules.copper.annular_ring]]
 id = "copper.minimum_via_annular_ring"
-hole = "via"
-minimum = "0.125 mm"
+select = { hole = "via" }
+limit = { minimum = "0.125 mm" }
 
 [[rules.copper.annular_ring]]
 id = "copper.minimum_pth_annular_ring"
-hole = "pth"
-minimum = "7 mil"
+select = { hole = "pth" }
+limit = { minimum = "7 mil" }
 
 [[rules.copper.feature_width]]
 id = "copper.minimum_feature_width"
-minimum = "5 mil"
+limit = { minimum = "5 mil" }
 
 [[rules.copper.clearance]]
 id = "copper.minimum_clearance"
-minimum = "5 mil"
+limit = { minimum = "5 mil" }
 
 [[rules.copper.board_edge_clearance]]
 id = "copper.minimum_board_edge_clearance"
-minimum = "15 mil"
+limit = { minimum = "15 mil" }
 
 [[rules.copper.vscore_clearance]]
 id = "copper.minimum_vscore_clearance"
-minimum = "15 mil"
+limit = { minimum = "15 mil" }
 
 [[rules.soldermask.web]]
 id = "soldermask.minimum_web"
-minimum = "4 mil"
+limit = { minimum = "4 mil" }
 
 [[rules.panelization.board_spacing]]
 id = "panelization.minimum_board_array_spacing"
-minimum = "300 mil"
+limit = { minimum = "300 mil" }

@@ -280,8 +280,8 @@ name = "Test"
 
 [[rules.copper.annular_ring]]
 id = "pth-ring"
-hole = "pth"
-minimum = "0.2 mm"
+select = { hole = "pth" }
+limit = { minimum = "0.2 mm" }
 "#,
         )
         .unwrap();
