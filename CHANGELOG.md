@@ -17,6 +17,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Keep IPC-2581 `DOCUMENT` BOM entries out of CPL exports.
+- Prevent sub-resolution boundary backtracking from producing false DFM width findings.
 
 ## [0.4.42] - 2026-09-01
 
