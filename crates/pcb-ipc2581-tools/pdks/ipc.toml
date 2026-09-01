@@ -20,7 +20,7 @@ description = "Diode's opinionated partial baseline informed by IPC design topic
 performance_class = 1
 producibility_level = "A"
 technologies = ["rigid", "flex", "rigid_flex", "hdi"]
-coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio"]
+coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio", "Diode baseline: via, PTH, and NPTH hole-to-copper clearance at 0.25 mm"]
 source = "ipc-design-topics"
 
 [profiles.1a.defaults]
@@ -32,7 +32,7 @@ description = "Diode's opinionated partial baseline informed by IPC design topic
 performance_class = 1
 producibility_level = "B"
 technologies = ["rigid", "flex", "rigid_flex", "hdi"]
-coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio"]
+coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio", "Diode baseline: via, PTH, and NPTH hole-to-copper clearance at 0.20 mm"]
 source = "ipc-design-topics"
 
 [profiles.1b.defaults]
@@ -44,7 +44,7 @@ description = "Diode's opinionated partial baseline informed by IPC design topic
 performance_class = 1
 producibility_level = "C"
 technologies = ["rigid", "flex", "rigid_flex", "hdi"]
-coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio"]
+coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio", "Diode baseline: via, PTH, and NPTH hole-to-copper clearance at 0.15 mm"]
 source = "ipc-design-topics"
 
 [profiles.1c.defaults]
@@ -56,7 +56,7 @@ description = "Diode's opinionated partial baseline informed by IPC design topic
 performance_class = 2
 producibility_level = "A"
 technologies = ["rigid", "flex", "rigid_flex", "hdi"]
-coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio"]
+coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio", "Diode baseline: via, PTH, and NPTH hole-to-copper clearance at 0.25 mm"]
 source = "ipc-design-topics"
 
 [profiles.2a.defaults]
@@ -68,7 +68,7 @@ description = "Diode's opinionated partial baseline informed by IPC design topic
 performance_class = 2
 producibility_level = "B"
 technologies = ["rigid", "flex", "rigid_flex", "hdi"]
-coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio"]
+coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio", "Diode baseline: via, PTH, and NPTH hole-to-copper clearance at 0.20 mm"]
 source = "ipc-design-topics"
 
 [profiles.2b.defaults]
@@ -80,7 +80,7 @@ description = "Diode's opinionated partial baseline informed by IPC design topic
 performance_class = 2
 producibility_level = "C"
 technologies = ["rigid", "flex", "rigid_flex", "hdi"]
-coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio"]
+coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio", "Diode baseline: via, PTH, and NPTH hole-to-copper clearance at 0.15 mm"]
 source = "ipc-design-topics"
 
 [profiles.2c.defaults]
@@ -92,7 +92,7 @@ description = "Diode's opinionated partial baseline informed by IPC design topic
 performance_class = 3
 producibility_level = "A"
 technologies = ["rigid", "flex", "rigid_flex", "hdi"]
-coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio"]
+coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio", "Diode baseline: via, PTH, and NPTH hole-to-copper clearance at 0.25 mm"]
 source = "ipc-design-topics"
 
 [profiles.3a.defaults]
@@ -104,7 +104,7 @@ description = "Diode's opinionated partial baseline informed by IPC design topic
 performance_class = 3
 producibility_level = "B"
 technologies = ["rigid", "flex", "rigid_flex", "hdi"]
-coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio"]
+coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio", "Diode baseline: via, PTH, and NPTH hole-to-copper clearance at 0.20 mm"]
 source = "ipc-design-topics"
 
 [profiles.3b.defaults]
@@ -116,7 +116,7 @@ description = "Diode's opinionated partial baseline informed by IPC design topic
 performance_class = 3
 producibility_level = "C"
 technologies = ["rigid", "flex", "rigid_flex", "hdi"]
-coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio"]
+coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio", "Diode baseline: via, PTH, and NPTH hole-to-copper clearance at 0.15 mm"]
 source = "ipc-design-topics"
 
 [profiles.3c.defaults]
@@ -162,4 +162,67 @@ id = "diode.ipc.maximum_pth_aspect_ratio.level_c"
 profiles = ["1c", "2c", "3c"]
 select = { hole = "pth" }
 limit = { maximum = 10.0 }
+source = "ipc-design-topics"
+
+[[rules.copper.hole_clearance]]
+id = "diode.ipc_baseline.copper.via_hole_clearance.level_a"
+profiles = ["1a", "2a", "3a"]
+select = { hole = "via" }
+limit = { minimum = "0.25 mm" }
+source = "ipc-design-topics"
+
+[[rules.copper.hole_clearance]]
+id = "diode.ipc_baseline.copper.pth_hole_clearance.level_a"
+profiles = ["1a", "2a", "3a"]
+select = { hole = "pth" }
+limit = { minimum = "0.25 mm" }
+source = "ipc-design-topics"
+
+[[rules.copper.hole_clearance]]
+id = "diode.ipc_baseline.copper.npth_hole_clearance.level_a"
+profiles = ["1a", "2a", "3a"]
+select = { hole = "npth" }
+limit = { minimum = "0.25 mm" }
+source = "ipc-design-topics"
+
+[[rules.copper.hole_clearance]]
+id = "diode.ipc_baseline.copper.via_hole_clearance.level_b"
+profiles = ["1b", "2b", "3b"]
+select = { hole = "via" }
+limit = { minimum = "0.20 mm" }
+source = "ipc-design-topics"
+
+[[rules.copper.hole_clearance]]
+id = "diode.ipc_baseline.copper.pth_hole_clearance.level_b"
+profiles = ["1b", "2b", "3b"]
+select = { hole = "pth" }
+limit = { minimum = "0.20 mm" }
+source = "ipc-design-topics"
+
+[[rules.copper.hole_clearance]]
+id = "diode.ipc_baseline.copper.npth_hole_clearance.level_b"
+profiles = ["1b", "2b", "3b"]
+select = { hole = "npth" }
+limit = { minimum = "0.20 mm" }
+source = "ipc-design-topics"
+
+[[rules.copper.hole_clearance]]
+id = "diode.ipc_baseline.copper.via_hole_clearance.level_c"
+profiles = ["1c", "2c", "3c"]
+select = { hole = "via" }
+limit = { minimum = "0.15 mm" }
+source = "ipc-design-topics"
+
+[[rules.copper.hole_clearance]]
+id = "diode.ipc_baseline.copper.pth_hole_clearance.level_c"
+profiles = ["1c", "2c", "3c"]
+select = { hole = "pth" }
+limit = { minimum = "0.15 mm" }
+source = "ipc-design-topics"
+
+[[rules.copper.hole_clearance]]
+id = "diode.ipc_baseline.copper.npth_hole_clearance.level_c"
+profiles = ["1c", "2c", "3c"]
+select = { hole = "npth" }
+limit = { minimum = "0.15 mm" }
 source = "ipc-design-topics"

@@ -48,6 +48,8 @@ pub(super) struct Design<'a> {
     /// One boundary index per copper layer, for clearance and enclosure
     /// queries against the composed copper.
     pub copper_boundaries: Vec<RegionBoundaryIndex>,
+    /// One boundary index per attributed conductor on each copper layer.
+    pub conductor_boundaries: Vec<Vec<RegionBoundaryIndex>>,
     /// Each hole's lands, one per copper layer it owns a land on, indexed
     /// like `holes`.
     pub hole_lands: Vec<Vec<HoleLand>>,
@@ -86,10 +88,13 @@ impl<'a> Design<'a> {
         // would let one large hole coarsen every fine-clearance query.
         let boundary_search_mm = rules
             .iter()
-            .filter(|rule| rule.kind.semantics().pools.copper_boundaries)
+            .filter(|rule| {
+                let pools = rule.kind.semantics().pools;
+                pools.copper_boundaries || pools.conductor_boundaries
+            })
             .map(|rule| rule.limit.length().millimeters())
             .fold(1.0, f64::max);
-        Ok(Self {
+        let design = Self {
             imported,
             scope,
             stackup,
@@ -100,6 +105,23 @@ impl<'a> Design<'a> {
                 let layers = copper_layers.iter();
                 Ok(layers
                     .map(|layer| RegionBoundaryIndex::new(&layer.image, boundary_search_mm))
+                    .collect())
+            })?,
+            conductor_boundaries: when(pools.conductor_boundaries, || {
+                #[cfg(not(target_family = "wasm"))]
+                let layers = copper_layers.par_iter();
+                #[cfg(target_family = "wasm")]
+                let layers = copper_layers.iter();
+                Ok(layers
+                    .map(|layer| {
+                        layer
+                            .conductors
+                            .iter()
+                            .map(|conductor| {
+                                RegionBoundaryIndex::new(&conductor.image, boundary_search_mm)
+                            })
+                            .collect()
+                    })
                     .collect())
             })?,
             hole_lands: when(pools.hole_lands, || {
@@ -121,7 +143,11 @@ impl<'a> Design<'a> {
             holes,
             slots,
             copper_layers,
-        })
+        };
+        if pools.resolved_drill_spans {
+            validate_hole_clearance_spans(&design, rules)?;
+        }
+        Ok(design)
     }
 
     pub fn resolve(&self, symbol: Option<Symbol>) -> Option<String> {
@@ -197,6 +223,36 @@ impl<'a> Design<'a> {
             },
         }
     }
+}
+
+fn validate_hole_clearance_spans(design: &Design, rules: &[Rule]) -> Result<()> {
+    for hole in &design.holes {
+        let selected = rules.iter().any(|rule| {
+            matches!(
+                rule.kind,
+                rules::RuleKind::HoleToCopperClearance(class) if class == hole.class
+            ) && rule.conditions.applies_to_design(design)
+                && design
+                    .copper_layers
+                    .iter()
+                    .enumerate()
+                    .any(|(index, layer)| {
+                        hole.spans_copper(index) && rule.conditions.applies_to_layer(layer)
+                    })
+        });
+        if selected
+            && (!hole.span_declared || hole.drill_span.interpretation == "assumed_whole_stack")
+        {
+            bail!(
+                "{} hole on layer '{}' at ({:.6}, {:.6}) has no resolvable drill span; hole-to-copper clearance cannot be certified",
+                hole.class.label(),
+                hole.layer.name,
+                hole.center.x,
+                hole.center.y
+            );
+        }
+    }
+    Ok(())
 }
 
 fn step_kind(kind: LayoutStepKind) -> &'static str {
@@ -476,6 +532,7 @@ pub(super) struct Hole {
     /// Inclusive ordinal range over the copper stackup the drill spans. A
     /// through-board or unstated span covers every copper layer.
     pub copper_span: (u16, u16),
+    pub span_declared: bool,
     pub drill_span: DrillSpan,
     pub provenance: SourceLocator,
     pub step: Option<Symbol>,
@@ -581,6 +638,7 @@ pub(super) enum ConductorId {
         step: Option<Symbol>,
         instance: Option<u32>,
         source_set_index: u32,
+        source_feature_index: u32,
     },
 }
 
@@ -717,6 +775,7 @@ fn collect_drilled(
                         layer: layer_ref(layer_name, source_layer.layer_function, None),
                         copper_span: copper_span(feature.intent.span, &imported.layer_definitions)
                             .unwrap_or(whole_stack),
+                        span_declared: source_layer.span.is_some(),
                         drill_span: drill_span(
                             feature.intent.span,
                             &imported.layer_definitions,
@@ -726,7 +785,7 @@ fn collect_drilled(
                         provenance: feature_provenance(imported, layer_name, feature),
                         step: feature.source_step_ref,
                         padstack: feature.padstack_ref,
-                        net: feature.net,
+                        net: source_net(&document, feature),
                         source_set_index: feature.source.set_index,
                         source_feature_index: feature.source.feature_index,
                     });
@@ -898,6 +957,15 @@ fn physical_copper_span(
     }
 }
 
+fn source_net(document: &GeometryDocument, feature: &Feature<Symbol>) -> Option<Symbol> {
+    feature.net.or_else(|| {
+        feature
+            .set
+            .and_then(|set| document.feature_sets.get(set as usize))
+            .and_then(|set| set.net)
+    })
+}
+
 fn feature_provenance(
     imported: &ImportedDesign,
     layer: &str,
@@ -955,6 +1023,7 @@ impl ArtworkLowering<Symbol, Option<ConductorId>> for CopperAttributionLowering 
             step: feature.source_step_ref,
             instance: feature.source_instance,
             source_set_index: feature.source.set_index,
+            source_feature_index: feature.source.feature_index,
         })
     }
 }
@@ -1025,7 +1094,7 @@ fn compose_attributed_image<Owner: Clone + Eq + std::hash::Hash>(
 fn conductor_order(
     imported: &ImportedDesign,
     id: ConductorId,
-) -> (u8, &str, Option<u32>, &str, u32) {
+) -> (u8, &str, Option<u32>, &str, u32, u32) {
     match id {
         ConductorId::Net {
             step,
@@ -1036,6 +1105,7 @@ fn conductor_order(
             step.map(|step| imported.resolve(step)).unwrap_or(""),
             instance,
             imported.resolve(net),
+            0,
             0,
         ),
         ConductorId::Auxiliary {
@@ -1048,17 +1118,20 @@ fn conductor_order(
             instance,
             "",
             source_set_index,
+            0,
         ),
         ConductorId::Unattributed {
             step,
             instance,
             source_set_index,
+            source_feature_index,
         } => (
             2,
             step.map(|step| imported.resolve(step)).unwrap_or(""),
             instance,
             "",
             source_set_index,
+            source_feature_index,
         ),
     }
 }

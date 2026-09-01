@@ -63,9 +63,10 @@ pcb ipc dfm check fabrication-panel.xml \
 `jlcpcb-1oz-black-white` selects its larger mask-web requirement. The
 `ipc` alias selects the opinionated Class 2 / Producibility Level B default.
 It and the explicit `ipc-1a` through `ipc-3c` profiles run Diode's opinionated
-partial baseline for plated-hole aspect ratio. These values are informed by IPC
-design topics, but they are not licensed IPC numeric matrices, do not prove full
-IPC compliance, and do not imply IPC certification.
+partial baseline for plated-hole aspect ratio and via, PTH, and NPTH
+hole-to-copper clearance. Diode selected these values with IPC design topics as
+context; they are not licensed IPC numeric matrices, do not prove full IPC
+compliance, and do not imply IPC certification.
 
 Pass a path such as `--pdk ./fab-process.toml` to use a custom PDK. Exact
 built-in names take precedence, so prefix a same-named file with `./`.

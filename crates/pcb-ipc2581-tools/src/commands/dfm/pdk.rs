@@ -330,6 +330,12 @@ impl Rules {
             )
             .chain(
                 self.copper
+                    .hole_clearance
+                    .iter()
+                    .map(RuleDefinition::HoleClearance),
+            )
+            .chain(
+                self.copper
                     .feature_width
                     .iter()
                     .map(RuleDefinition::CopperLength),
@@ -368,6 +374,7 @@ enum RuleDefinition<'a> {
     SlotWidth(&'a SlotWidthRule),
     HolePair(&'a HolePairRule),
     AnnularRing(&'a AnnularRingRule),
+    HoleClearance(&'a HoleClearanceRule),
     CopperLength(&'a LengthRule),
     OtherLength(&'a LengthRule),
 }
@@ -380,6 +387,7 @@ impl RuleDefinition<'_> {
             Self::SlotWidth(rule) => &rule.metadata,
             Self::HolePair(rule) => &rule.metadata,
             Self::AnnularRing(rule) => &rule.metadata,
+            Self::HoleClearance(rule) => &rule.metadata,
             Self::CopperLength(rule) | Self::OtherLength(rule) => &rule.metadata,
         }
     }
@@ -393,6 +401,7 @@ impl RuleDefinition<'_> {
             Self::SlotWidth(rule) => (rule.limit.as_ref(), &rule.cases),
             Self::HolePair(rule) => (rule.limit.as_ref(), &rule.cases),
             Self::AnnularRing(rule) => (rule.limit.as_ref(), &rule.cases),
+            Self::HoleClearance(rule) => (rule.limit.as_ref(), &rule.cases),
             Self::CopperLength(rule) | Self::OtherLength(rule) => {
                 (rule.limit.as_ref(), &rule.cases)
             }
@@ -409,7 +418,10 @@ impl RuleDefinition<'_> {
             metadata,
             limit,
             cases,
-            matches!(self, Self::AnnularRing(_) | Self::CopperLength(_)),
+            matches!(
+                self,
+                Self::AnnularRing(_) | Self::HoleClearance(_) | Self::CopperLength(_)
+            ),
         )
     }
 
@@ -454,6 +466,8 @@ pub struct DrillingRules {
 pub struct CopperRules {
     #[serde(default)]
     pub annular_ring: Vec<AnnularRingRule>,
+    #[serde(default)]
+    pub hole_clearance: Vec<HoleClearanceRule>,
     #[serde(default)]
     pub feature_width: Vec<LengthRule>,
     #[serde(default)]
@@ -754,6 +768,18 @@ pub struct AnnularRingRule {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct HoleClearanceRule {
+    #[serde(flatten)]
+    pub metadata: RuleMetadata,
+    pub select: HoleSelector,
+    #[serde(default)]
+    pub limit: Option<LengthLimit>,
+    #[serde(default)]
+    pub cases: Vec<LengthCase>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LengthRule {
     #[serde(flatten)]
     pub metadata: RuleMetadata,
@@ -987,6 +1013,11 @@ cases = [
   { id = "multilayer", when = { copper_layers = { minimum = 3, maximum = 10 } }, limit = { minimum = "0.09 mm" } },
 ]
 
+[[rules.copper.hole_clearance]]
+id = "via-copper-clearance"
+select = { hole = "via" }
+limit = { minimum = "0.2 mm", preferred = "0.25 mm" }
+
 [[rules.panelization.board_spacing]]
 id = "array-spacing"
 limit = { minimum = "300 mil" }
@@ -1053,6 +1084,21 @@ limit = { minimum = "300 mil" }
                 .unwrap()
                 .ounces(),
             1.0
+        );
+        assert_eq!(
+            pdk.rules.copper.hole_clearance[0].select.hole,
+            HoleKind::Via
+        );
+        assert_eq!(
+            pdk.rules.copper.hole_clearance[0]
+                .limit
+                .as_ref()
+                .unwrap()
+                .preferred
+                .as_ref()
+                .unwrap()
+                .millimeters(),
+            0.25
         );
     }
 
@@ -1137,6 +1183,29 @@ limit = { minimum = "300 mil" }
                 .to_string()
                 .contains("overlap")
         );
+
+        let malformed = MIXED_UNIT_PDK.replace(
+            "select = { hole = \"via\" }\nlimit = { minimum = \"0.2 mm\", preferred = \"0.25 mm\" }",
+            "select = { hole = \"slot\" }\nlimit = { minimum = \"0.2 mm\", preferred = \"0.25 mm\" }",
+        );
+        assert!(Pdk::parse(&malformed).is_err());
+
+        let invalid_tier = MIXED_UNIT_PDK.replace(
+            "limit = { minimum = \"0.2 mm\", preferred = \"0.25 mm\" }",
+            "limit = { minimum = \"0.2 mm\", preferred = \"0.15 mm\" }",
+        );
+        assert!(
+            Pdk::parse(&invalid_tier)
+                .unwrap()
+                .validate_rule_references()
+                .is_err()
+        );
+
+        let old_hole_shape = MIXED_UNIT_PDK.replace(
+            "select = { hole = \"via\" }\nlimit = { minimum = \"0.2 mm\", preferred = \"0.25 mm\" }",
+            "hole = \"via\"\nminimum = \"0.2 mm\"\npreferred = \"0.25 mm\"",
+        );
+        assert!(Pdk::parse(&old_hole_shape).is_err());
     }
 
     #[test]
