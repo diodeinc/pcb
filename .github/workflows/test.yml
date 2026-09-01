@@ -43,7 +43,7 @@ jobs:
         run: cargo run -p pcb -- fmt --check lib/std
 
       - name: Run Clippy
-        run: cargo clippy --workspace -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   test:
     name: Test (${{ matrix.config.name }})
