@@ -466,9 +466,9 @@ fn missing_symbols_use_attached_net_symbol_orientation() {
     assert_eq!(rotation("R_SINGLE.R"), pcb_kicad_sch::Rotation::Deg90);
     // Default GND and VCC symbols on opposite ends agree on this rotation.
     assert_eq!(rotation("R_BOTH.R"), pcb_kicad_sch::Rotation::Deg180);
-    // Two equal GND constraints conflict, while ordinary nets do not constrain
-    // orientation; both cases retain the deterministic default.
-    assert_eq!(rotation("R_TIED.R"), pcb_kicad_sch::Rotation::Deg0);
+    // Two equal GND constraints conflict, so the resistor uses a horizontal
+    // terminal axis. Ordinary nets do not constrain orientation.
+    assert_eq!(rotation("R_TIED.R"), pcb_kicad_sch::Rotation::Deg90);
     assert_eq!(rotation("R_NONE.R"), pcb_kicad_sch::Rotation::Deg0);
     // Larger symbols retain the orientation authored by their library even
     // when every attached net symbol would favor the same rotation.

@@ -497,12 +497,31 @@ fn initial_component_rotation(
         }
     }
 
+    Ok(preferred_two_pin_rotation(&constraints))
+}
+
+fn preferred_two_pin_rotation(constraints: &[(LabelSpin, LabelSpin)]) -> Rotation {
     let rotations = [
         Rotation::Deg0,
         Rotation::Deg90,
         Rotation::Deg180,
         Rotation::Deg270,
     ];
+
+    // Two same-facing net symbols cannot both sit directly beyond opposite
+    // component pins. Keep the component's terminal axis horizontal so the
+    // two drivers can use parallel, easy-to-scan escape routes.
+    if constraints.len() == 2
+        && constraints[0].1 == constraints[1].1
+        && let Some(rotation) = rotations.into_iter().find(|rotation| {
+            constraints
+                .iter()
+                .all(|(pin_spin, _)| !rotate_spin(*pin_spin, *rotation).is_vertical())
+        })
+    {
+        return rotation;
+    }
+
     // Opposite outward directions put the component and net-symbol bodies on
     // opposite sides of their shared connection point.
     let scores = rotations.map(|rotation| {
@@ -526,11 +545,11 @@ fn initial_component_rotation(
         .map(|(rotation, _)| rotation);
     let rotation = best.next().expect("at least one best rotation");
     // A non-unique optimum is less informative than the stable default.
-    Ok(if best.next().is_none() {
+    if best.next().is_none() {
         rotation
     } else {
         Rotation::default()
-    })
+    }
 }
 
 fn rotate_spin(mut spin: LabelSpin, rotation: Rotation) -> LabelSpin {
@@ -3099,6 +3118,24 @@ fn resolve_pin_targets(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn same_facing_net_symbols_make_two_pin_terminal_axis_horizontal() {
+        assert_eq!(
+            preferred_two_pin_rotation(&[
+                (LabelSpin::Up, LabelSpin::Up),
+                (LabelSpin::Bottom, LabelSpin::Up),
+            ]),
+            Rotation::Deg90
+        );
+        assert_eq!(
+            preferred_two_pin_rotation(&[
+                (LabelSpin::Left, LabelSpin::Bottom),
+                (LabelSpin::Right, LabelSpin::Bottom),
+            ]),
+            Rotation::Deg0
+        );
+    }
 
     fn test_placement_block(key: &str, bounds: GridRect) -> PlacementBlock {
         PlacementBlock {

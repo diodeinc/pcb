@@ -1137,9 +1137,40 @@ fn normalize_internal_metadata_properties(sexpr: &mut Sexpr) {
         ensure_property_hidden(items);
     }
 
-    for item in items {
+    for item in items.iter_mut() {
         normalize_internal_metadata_properties(item);
     }
+
+    if list_tag(items) == Some("symbol") {
+        sort_symbol_properties(items);
+    }
+}
+
+fn sort_symbol_properties(items: &mut [Sexpr]) {
+    let property_indices = items
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| {
+            item.as_list()
+                .filter(|items| list_tag(items) == Some("property"))
+                .map(|_| index)
+        })
+        .collect::<Vec<_>>();
+    let mut properties = property_indices
+        .iter()
+        .map(|index| items[*index].clone())
+        .collect::<Vec<_>>();
+    properties.sort_by(|a, b| symbol_property_name(a).cmp(symbol_property_name(b)));
+    for (index, property) in property_indices.into_iter().zip(properties) {
+        items[index] = property;
+    }
+}
+
+fn symbol_property_name(property: &Sexpr) -> &str {
+    property
+        .as_list()
+        .and_then(property_name)
+        .expect("property child has a name")
 }
 
 fn validate_symbol_graphics_for_kicad_10(sexpr: &Sexpr) -> Result<()> {
@@ -1925,6 +1956,26 @@ mod tests {
         .expect("parse wrapped symbol definition");
 
         assert_eq!(definition.lib_id, "Device:R");
+    }
+
+    #[test]
+    fn symbol_definition_properties_have_canonical_order() {
+        let first = SymbolDefinition::from_kicad_symbol_sexpr(
+            r#"(symbol "Device:R"
+              (property "Reference" "R")
+              (property "Value" "1k")
+              (property "Manufacturer" "Example"))"#,
+        )
+        .unwrap();
+        let reordered = SymbolDefinition::from_kicad_symbol_sexpr(
+            r#"(symbol "Device:R"
+              (property "Manufacturer" "Example")
+              (property "Reference" "R")
+              (property "Value" "1k"))"#,
+        )
+        .unwrap();
+
+        assert_eq!(first, reordered);
     }
 
     #[test]
