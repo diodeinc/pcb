@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.45] - 2026-09-02
+
 ### Changed
 
 - Improve generated schematic placement and repair connectivity issues with minimal verified edits instead of regenerating the affected nets.
@@ -1785,7 +1787,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.44...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.45...HEAD
+[0.4.45]: https://github.com/diodeinc/pcb/compare/v0.4.44...v0.4.45
 [0.4.44]: https://github.com/diodeinc/pcb/compare/v0.4.43...v0.4.44
 [0.4.43]: https://github.com/diodeinc/pcb/compare/v0.4.42...v0.4.43
 [0.4.42]: https://github.com/diodeinc/pcb/compare/v0.4.41...v0.4.42
