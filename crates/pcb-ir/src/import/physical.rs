@@ -542,7 +542,7 @@ impl ImportedDesign {
                         Side::None,
                         &evidence,
                         &Association::Unresolved,
-                        &candidates,
+                        candidates,
                     );
                     layer_lands.push(LayerLandAssociation {
                         layer: copper_layer,
