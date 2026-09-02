@@ -68,6 +68,14 @@ pub fn builtin_globals(builder: &mut GlobalsBuilder) {
 
 #[starlark_module]
 fn builtin_methods(methods: &mut MethodsBuilder) {
+    /// Pin-capability builtins; see `@stdlib/pinmux.zen`.
+    #[starlark(attribute)]
+    fn pinmux(
+        #[allow(unused_variables)] this: &Builtin,
+    ) -> starlark::Result<crate::lang::pinmux::Pinmux> {
+        Ok(crate::lang::pinmux::Pinmux)
+    }
+
     #[allow(non_snake_case)]
     #[starlark(attribute)]
     fn Mass(#[allow(unused_variables)] this: &Builtin) -> starlark::Result<PhysicalValueType> {
@@ -278,6 +286,12 @@ fn builtin_methods(methods: &mut MethodsBuilder) {
         #[starlark(require = pos)] value: Value<'v>,
         eval: &mut Evaluator<'v, '_, '_>,
     ) -> starlark::Result<NoneType> {
+        if crate::lang::pinmux::RESULT_PROPERTIES.contains(&name.as_str()) {
+            return Err(starlark::Error::new_other(anyhow::anyhow!(
+                "module property `{name}` is written by pin_solve; record your own data under \
+                 another name"
+            )));
+        }
         crate::lang::module::warn_legacy_module_dnp_add_property(eval, &name);
         eval.add_property(&name, value);
         Ok(NoneType)

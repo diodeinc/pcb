@@ -244,7 +244,7 @@ bus = MyBus("BUS1", enable=False)
 debug_bus = MyBus()
 ```
 
-Interface fields can be net instances, interface instances (for hierarchical composition), or `field()` specs. When instantiated, the first positional argument is an optional name; named arguments override defaults.
+Interface fields can be net instances, interface instances (for hierarchical composition), or `field()` specs. The names `implies`, `attrs`, and `__post_init__` are reserved for interface metadata and cannot be fields. When instantiated, the first positional argument is an optional name; named arguments override defaults.
 
 If an interface instance omits its explicit name, the assigned variable name becomes the root used for generated child nets:
 
@@ -267,6 +267,176 @@ power = PowerIf(vcc = ext)
 ```
 
 The standard library provides common interfaces (`Spi`, `I2c`, `Uart`, `Usb2`, `DiffPair`, `Pcie`, `Jtag`, `Swd`, etc.) in `@stdlib/interfaces.zen`. Helper functions `UartPair(a, b)` and `UsartPair(a, b)` create cross-connected pairs for point-to-point links.
+
+### Interface implication (`implies=`)
+
+An interface type may declare that it implies other interface types. This is a
+capability statement consumed by the pin-capability model (below): a resource
+providing the richer interface automatically satisfies requests for any implied
+one — never the reverse.
+
+```python
+Uart  = interface(TX = Net, RX = Net)
+Usart = interface(TX = Net, RX = Net, CK = Net, implies = [Uart])
+# same signals, distinct capability — a "marker" interface:
+LpUart = interface(TX = Net, RX = Net, implies = [Uart])
+```
+
+An interface may imply several others; matching is nominal — two structurally
+identical interfaces remain distinct capabilities.
+
+An interface may also declare the **attribute vocabulary** its capability
+providers use, as attribute name → physical value type:
+
+```python
+Uart = interface(TX = Net, RX = Net, attrs = {"baud_max": Frequency})
+```
+
+## Pin capabilities and assignment
+
+Multi-function components (MCUs, multi-unit analog/logic parts) can declare
+what each pin *can do* and let elaboration solve the assignment. This covers
+GPIO matrices and classic gate/pin swap.
+
+Matching is nominal: a capability is the `interface()` **declaration**, not its
+shape. Two files declaring identical fields are two capabilities, and an
+interface built by a factory function is a fresh one per binding. Declare a
+capability interface once, at a file's top level, and `load()` it wherever it
+is provided or requested.
+
+These builtins are not in the prelude — load the ones you use:
+
+```python
+load("@stdlib/pinmux.zen", "peripheral", "pool", "pin", "pin_request", "pin_solve", "pin_map", "at")
+
+UartFlow = interface(TX = Net, RX = Net, RTS = Net, CTS = Net, implies = [Uart])
+
+USART1 = peripheral(
+    "USART1",
+    provides = [Usart, UartFlow],       # interface types, closed over implies=
+    rebind   = "firmware",              # "none" | "firmware" | "fixed"
+    signals  = {
+        "TX": [pin("PA9", data = {"af": 1}), pin("PB6", data = {"af": 0})],
+        "RX": [pin("PA10", data = {"af": 1}), pin("PB7", data = {"af": 0})],
+        "CK": [pin("PA8", data = {"af": 1})],
+        "RTS": [pin("PA12", data = {"af": 1})],
+        "CTS": [pin("PA11", data = {"af": 1})],
+    },
+    attrs = {"baud_max": "8MHz"},       # unit strings parse to physical values
+)
+GPIOS = pool("GPIO", provides = [GpioPin], pins = ["PB4", "PB5", "PD6"])
+
+result = pin_solve(
+    [USART1, GPIOS],
+    [
+        pin_request("DEBUG", Uart),                       # any provider of Uart
+        pin_request("LED", GpioPin, prefer = ["PB4"]),
+        pin_request("SC", Usart),                         # needs CK: USART-class only
+    ],
+)
+```
+
+**`pin(name, data={}, cost=0, input_only=False, strap=False)`** — one
+candidate physical pin for a signal.
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `name` | yes | Physical pin name (`"PA9"`) |
+| `data` | no | Realization info (an STM32 AF index, an ESP32 IOMUX FUNC number), passed through unchanged into the solved assignment |
+| `cost` | no | The solver prefers lower-cost candidates |
+| `input_only` | no | Pin has no output driver: excluded from `direction = "output"` requests |
+| `strap` | no | Boot-strapping pin: penalized against any alternative, warns when chosen |
+
+**`peripheral(name, provides, signals, rebind, attrs={}, unless=None)`** — a
+resource cluster (an MCU USART, one comparator of a dual package).
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `name` | yes | Instance name (`"USART1"`) |
+| `provides` | yes | Interface types this cluster can serve, including implied ones |
+| `signals` | yes | Signal name → list of `pin()` candidates (bare strings allowed); every signal of every provided interface needs at least one candidate |
+| `rebind` | yes | What a later swap costs: `"none"` (gate swap), `"firmware"` (a constant to regenerate), `"fixed"` (never movable) |
+| `attrs` | no | Capability attributes, validated against the interfaces' vocabulary |
+| `unless` | no | The peripheral is unavailable when this key is truthy in `pin_solve(config=...)`; its exclusive pads are then left out of the tie-off `pin_map` produces. A part is configured once: an axis that flips between two solves of the same part is an error |
+| `part` | no | Component these pads belong to; peripherals sharing a `part` share a pin namespace |
+
+**`pool(name, provides, pins, rebind="firmware")`** — sugar for N
+interchangeable single-signal units (GPIO pools): one unit per pin, all
+providing the same single-signal interface.
+
+**`pin_request(name, Iface, uses=None, instance=None, prefer=[], lock=False, where=None, direction=None, if_connected=False, bind=None)`** — a capability
+demand: the interface type *is* the request.
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `name` | yes | Request name; keys the result and pairs with the `io()` input of the same name (`if_connected`, caller `at()`) |
+| `Iface` | yes | Requested interface type; any provider, direct or through `implies`, can serve it |
+| `uses` | no | Signals that consume pins (default: all of the interface's signals) |
+| `where` | no | Predicate over the provider's attrs: `lambda a: a["baud_max"] >= "1MHz"`. The solver may weigh a candidate more than once, so keep it pure |
+| `instance` | no | Restrict to a named peripheral or pool |
+| `prefer` | no | Pins the solver favors: a name/list of names, or a `{signal: name-or-list}` dict |
+| `lock` | no | Make `prefer` mandatory instead of preferred |
+| `direction` | no | `"input"` or `"output"`; `"output"` excludes `input_only` pins |
+| `if_connected` | no | Serve the request only when the caller connected the module input of the same name; pair with `io(Iface, optional = True)`. A `config()` of that name does not count as a connection; declare it above the `pin_solve` or the build reports the collision |
+| `bind` | no | The connected value, carried on the request itself (dict-of-roles pattern) |
+
+**`pin_solve(peripherals, requests, config={}, previous=None)`** — solve the
+joint instance × pin assignment across every peripheral given. Pin names are a
+part's pads: peripherals declaring the same `part=` share a pin namespace,
+those declaring none form one anonymous part, and a module holding two
+components solves both in one call. A pin carries at most one function and an
+instance serves at most one request (even on disjoint pin sets); when no
+assignment satisfies every request, the build fails with per-candidate
+rejection reasons. The result is deterministic and globally optimized: the
+solver prefers the least-capable sufficient instance, avoids strapping pins,
+honors per-pin `cost` and `prefer=`, and biases toward `previous=` (a prior
+assignment passed as a stability seed) so adding a request tends to keep a
+routed design in place.
+
+**`at(value, pins, soft=False)`** — constrain the physical pin(s) on the
+connection itself: `Mcu(IO0 = at(led_net, "PA8"))`. The wrapper is
+transparent: the inner value flows as if passed directly and the constraint
+reaches the `pin_request` of the same name as the `io()` input it annotates.
+Hard by default (unsatisfiable → build error); `soft = True` is a preference
+the solver may fall back from — it falls back to what the `pin_request` itself
+asked for, so a wish never voids a `lock = True` the module set, it only
+chooses among the pins that lock allows. A pin name answers for one component,
+so a constrained net that reaches two solves is an error rather than a race:
+give each side its own `at()`.
+
+A name or list of names must be claimed *in full* — every pin listed ends up
+on some signal of the request, whatever the signal count, so
+`at(uart, "PA2")` pins one signal of a multi-signal role and leaves the rest
+free. To bound a single signal instead, pass a dict:
+`at(uart, {"TX": ["PA9", "PB6"]})` means "TX takes one of these, RX is
+free".
+
+**`pin_map(assignment, ifaces, part=None)`** — the whole pin table of one
+component: every solved request's pads mapped to the net of the matching
+interface field (a bare `Net` works for single-signal requests), plus every
+candidate pad no request claimed, tied to `NotConnected()`. Override any of
+them afterwards. Requests absent from the assignment (e.g. dropped by
+`if_connected`) are skipped. `part=` selects the component when the assignment
+spans several; it is required then.
+
+`pin_solve` returns a dict:
+
+| Key | Content |
+|-----|---------|
+| `assignment` | Per request: the chosen instance, its `part`, and the pin per signal (with each pin's realization `data`), plus free alternates |
+| `swap_classes` | Residual swap freedom of *this* solve: pool classes with spare pins, gate-swap clusters. Each class names its `part` and never spans two of them. The module property of the same name merges every solve, so the two differ once a module solves more than once |
+
+Several `pin_solve` calls may share a module: every result stays live, so a
+later call never re-uses a pin or an instance an earlier one took. A request
+name identifies its claim on the parts of the table that solves it, so solving
+the same name again over the same component replaces its earlier claim — which
+is how `previous=` widens a solve — while a like-named request on another
+component keeps its own. Requests a call does not mention keep theirs.
+
+`assignment` and `swap_classes` are also stored as module properties (JSON) —
+several solves in one module merge, keyed by request name — and flow through
+the netlist into schematic fields, so the assignment and the
+remaining swap freedom reach layout tools with no side files.
 
 ## Components and symbols
 

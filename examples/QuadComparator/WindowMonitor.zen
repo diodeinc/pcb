@@ -1,0 +1,56 @@
+"""
+Type: Board (pin-capability model demo)
+Description: Battery window monitor around the LM339 example module. The
+board names three comparator roles (undervoltage, overvoltage,
+overtemperature) and never picks a gate: the solver assigns three of the
+four units, the fourth gets its inputs tied to VCC/GND by the module (no
+floating comparator) and appears as a `spare_units` entry of a
+`rebind = "none"` swap class — a pure copper swap, no firmware involved.
+"""
+
+load("./LM339.zen", "Comparator")
+
+Cmp = Module("./LM339.zen")
+Resistor = Module("@stdlib/generics/Resistor.zen")
+Capacitor = Module("@stdlib/generics/Capacitor.zen")
+
+VCC = Power("VCC_5V", voltage = "5V")
+GND = Ground("GND")
+
+VBAT = Net("VBAT")
+VBAT_SENSE = Net("VBAT_SENSE")
+NTC_SENSE = Net("NTC_SENSE")
+VREF_HI = Net("VREF_HI")
+VREF_LO = Net("VREF_LO")
+UV_ALERT = Net("UV_ALERT")
+OV_ALERT = Net("OV_ALERT")
+OT_ALERT = Net("OT_ALERT")
+
+Cmp(
+    name = "CMP1",
+    VCC = VCC,
+    GND = GND,
+    comp = {
+        "UV": Comparator("UV", INP = VBAT_SENSE, INN = VREF_LO, OUT = UV_ALERT),
+        "OV": Comparator("OV", INP = VREF_HI, INN = VBAT_SENSE, OUT = OV_ALERT),
+        "OT": Comparator("OT", INP = NTC_SENSE, INN = VREF_LO, OUT = OT_ALERT),
+    },
+)
+
+# Threshold ladder and battery divider.
+Resistor(name = "R1", value = "10kohm", package = "0402", P1 = VCC, P2 = VREF_HI)
+Resistor(name = "R2", value = "10kohm", package = "0402", P1 = VREF_HI, P2 = VREF_LO)
+Resistor(name = "R3", value = "10kohm", package = "0402", P1 = VREF_LO, P2 = GND)
+Resistor(name = "R4", value = "100kohm", package = "0402", P1 = VBAT, P2 = VBAT_SENSE)
+Resistor(name = "R5", value = "33kohm", package = "0402", P1 = VBAT_SENSE, P2 = GND)
+
+# NTC leg and open-collector pull-ups.
+Resistor(name = "R6", value = "10kohm", package = "0402", P1 = VCC, P2 = NTC_SENSE)
+Resistor(name = "RT1", value = "10kohm", package = "0603", P1 = NTC_SENSE, P2 = GND)
+Resistor(name = "R7", value = "100kohm", package = "0402", P1 = VCC, P2 = UV_ALERT)
+Resistor(name = "R8", value = "100kohm", package = "0402", P1 = VCC, P2 = OV_ALERT)
+Resistor(name = "R9", value = "100kohm", package = "0402", P1 = VCC, P2 = OT_ALERT)
+
+Capacitor(name = "C1", value = "100nF", package = "0402", P1 = VCC, P2 = GND)
+
+Board(name = "QuadComparator", layers = 2, layout_path = "layout/QuadComparator")

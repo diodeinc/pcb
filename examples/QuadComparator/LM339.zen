@@ -1,0 +1,71 @@
+"""
+Type: Quad comparator (pin-capability model demo)
+Description: LM339-style quad comparator showing pure gate swap: four
+identical units declared as `peripheral(rebind = "none")`, demanded through a
+dict of design roles. The solver assigns units, publishes the residual
+freedom as a cluster-granularity swap class (`spare_units` included), and
+unused units are tied off per the datasheet (INP to VCC, INN to GND, output
+transistor off) unless the caller opts out with `tie_unused = False`.
+
+Pinout per TI SLCS006 (D/N/PW 14-pin packages): OUT1=1, OUT2=2, VCC=3,
+IN2N=4, IN2P=5, IN1N=6, IN1P=7, IN3N=8, IN3P=9, IN4N=10, IN4P=11, GND=12,
+OUT4=13, OUT3=14. Channels 1 and 2 cross on the die: unit 1 is IN1+/- (7/6)
+to OUT1 (1), unit 2 is IN2+/- (5/4) to OUT2 (2).
+"""
+
+load("@stdlib/pinmux.zen", "peripheral", "pin", "pin_map", "pin_request", "pin_solve")
+
+Comparator = interface(INP = Net(), INN = Net(), OUT = Net())
+
+def _unit(name, inp, inn, out):
+    return peripheral(
+        name,
+        provides = [Comparator],
+        rebind = "none",
+        signals = {"INP": [pin(inp)], "INN": [pin(inn)], "OUT": [pin(out)]},
+    )
+
+UNITS = [
+    _unit("A", "IN1P", "IN1N", "OUT1"),
+    _unit("B", "IN2P", "IN2N", "OUT2"),
+    _unit("C", "IN3P", "IN3N", "OUT3"),
+    _unit("D", "IN4P", "IN4N", "OUT4"),
+]
+
+VCC = io(Power)
+GND = io(Ground)
+comp = config(dict, default = {})  # role name -> Comparator
+tie_unused = config(bool, default = True)
+
+res = pin_solve(UNITS, [pin_request(n, Comparator, bind = comp[n]) for n in comp])
+
+m = pin_map(res["assignment"], comp)
+
+pins = m
+pins.update({"VCC": VCC, "GND": GND})
+
+# A floating comparator input oscillates: strap unused units to a defined
+# state (INP > INN keeps the open-collector output off, OUT stays NC).
+def _tie_unused_units():
+    if not tie_unused:
+        return
+    used = [res["assignment"][r]["instance"] for r in res["assignment"]]
+    for u in UNITS:
+        if not (u["name"] in used):
+            pins[u["signals"]["INP"][0]["name"]] = VCC
+            pins[u["signals"]["INN"][0]["name"]] = GND
+
+_tie_unused_units()
+
+Component(
+    name = "CMP",
+    symbol = Symbol(library = "./LM339.kicad_sym"),
+    footprint = "Package_SO:SOIC-14_3.9x8.7mm_P1.27mm",
+    prefix = "U",
+    part = Part(
+        mpn = "LM339DR",
+        manufacturer = "Texas Instruments",
+        datasheet = "https://www.ti.com/lit/ds/symlink/lm339.pdf",
+    ),
+    pins = pins,
+)

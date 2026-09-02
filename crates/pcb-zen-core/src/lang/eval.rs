@@ -4,7 +4,7 @@ use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap, HashSet},
     path::{Path, PathBuf},
-    sync::{Arc, RwLock},
+    sync::{Arc, Mutex, RwLock},
 };
 
 use anyhow::anyhow;
@@ -477,6 +477,15 @@ pub struct EvalContextConfig {
     /// in the current load chain (ancestors). Thread-local to each evaluation path.
     pub(crate) load_chain: HashSet<PathBuf>,
 
+    /// `at()` pin constraints of the design being elaborated, shared with every
+    /// descendant so a constraint reaches a nested `pin_solve`, and distinct per
+    /// root so concurrent designs never see each other's.
+    pub(crate) pin_constraints: Arc<Mutex<crate::lang::pinmux::PinConstraints>>,
+
+    /// Nominal interface identities for this design: one declaration keeps one
+    /// identity however many times its file is evaluated.
+    pub(crate) interface_ids: Arc<crate::lang::pinmux::InterfaceIds>,
+
     /// The absolute path to the module we are evaluating.
     pub(crate) source_path: Option<PathBuf>,
 
@@ -527,6 +536,8 @@ impl EvalContextConfig {
             builtin_docs,
             file_provider,
             resolution,
+            pin_constraints: Arc::default(),
+            interface_ids: Arc::default(),
             module_path: ModulePath::root(),
             load_chain: HashSet::new(),
             source_path: None,
@@ -599,6 +610,8 @@ impl EvalContextConfig {
             builtin_docs: self.builtin_docs.clone(),
             file_provider: self.file_provider.clone(),
             resolution: self.resolution.clone(),
+            pin_constraints: self.pin_constraints.clone(),
+            interface_ids: self.interface_ids.clone(),
             module_path: child_module_path,
             load_chain: child_load_chain,
             source_path: None,
@@ -627,6 +640,8 @@ impl EvalContextConfig {
             builtin_docs: self.builtin_docs.clone(),
             file_provider: self.file_provider.clone(),
             resolution: self.resolution.clone(),
+            pin_constraints: self.pin_constraints.clone(),
+            interface_ids: self.interface_ids.clone(),
             module_path: child_module_path,
             load_chain: HashSet::new(),
             source_path: None,
@@ -1205,6 +1220,8 @@ impl EvalContext {
             builtin_docs: self.config.builtin_docs.clone(),
             file_provider: self.config.file_provider.clone(),
             resolution: self.config.resolution.clone(),
+            pin_constraints: self.config.pin_constraints.clone(),
+            interface_ids: self.config.interface_ids.clone(),
             module_path,
             load_chain: self.config.load_chain.clone(),
             source_path: None,
@@ -1264,6 +1281,14 @@ impl EvalContext {
     /// Record that `from` references `to` via a `Module()` call.
     pub(crate) fn record_module_dependency(&self, from: &Path, to: &Path) {
         self.session.record_module_dependency(from, to);
+    }
+
+    pub(crate) fn pin_constraints(&self) -> Arc<Mutex<crate::lang::pinmux::PinConstraints>> {
+        self.config.pin_constraints.clone()
+    }
+
+    pub(crate) fn interface_ids(&self) -> Arc<crate::lang::pinmux::InterfaceIds> {
+        self.config.interface_ids.clone()
     }
 
     fn load_cache_scope(&self, path: &Path) -> Option<PackageScopeKey> {
@@ -1479,6 +1504,13 @@ impl EvalContext {
         if self.config.source_path.is_none() {
             return anyhow::anyhow!("source_path not set on Context before eval()").into();
         }
+        // Elaboration state starts empty at a design boundary, whatever config
+        // the caller reused, so one design's `at()` constraints never surface
+        // as another's errors. Loads and children keep theirs.
+        if self.config.module_path.is_root() {
+            self.config.pin_constraints = Arc::default();
+            self.config.interface_ids = Arc::default();
+        }
 
         let ParsedSource { contents, ast } = match self.parsed_source() {
             Ok(source) => source,
@@ -1532,6 +1564,39 @@ impl EvalContext {
 
             match eval_result {
                 Ok(_) => {
+                    // `if_connected` reads the caller's inputs, which include
+                    // config values; one declared after the solve was not yet
+                    // known to be a config. The signature is complete now.
+                    if let Some(ctx) = module
+                        .extra_value()
+                        .and_then(|e| e.downcast_ref::<ContextValue>())
+                    {
+                        let path = self
+                            .config
+                            .source_path
+                            .clone()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .into_owned();
+                        for name in ctx.if_connected_served() {
+                            if ctx
+                                .module()
+                                .signature()
+                                .iter()
+                                .any(|p| p.is_config && p.name == name)
+                            {
+                                diagnostics.push(Diagnostic::categorized(
+                                    &path,
+                                    &format!(
+                                        "pin_request `{name}` was served because the caller passed `{name}`, but that input is a config(), not a connection — declare the config() above the pin_solve, or rename one of them"
+                                    ),
+                                    "pinmux.if_connected_config",
+                                    EvalSeverity::Error,
+                                ));
+                            }
+                        }
+                    }
+
                     let frozen_module = {
                         let _span = info_span!("freeze_module").entered();
                         module
@@ -1610,7 +1675,7 @@ impl EvalContext {
 
                     // Process pending children after parent is frozen
                     let module_path = extra.module.path().clone();
-                    let is_root = module_path.segments.is_empty();
+                    let is_root = module_path.is_root();
 
                     if self.config.build_circuit || is_root {
                         self.session
@@ -1656,6 +1721,48 @@ impl EvalContext {
 
                     // Module's own diagnostics (from ContextValue)
                     diagnostics.extend(extra.diagnostics().iter().cloned());
+
+                    // Every solve in the tree has run by now, so a hard
+                    // constraint still unclaimed is one nothing ever wanted,
+                    // and one several solves wanted is reported once, here,
+                    // rather than by whichever of them lost the race.
+                    if is_root {
+                        for (module, input, span, who) in
+                            self.config.pin_constraints.lock().unwrap().contended()
+                        {
+                            diagnostics.push(
+                                Diagnostic::categorized(
+                                    &module,
+                                    &format!(
+                                        "at() pin constraint on input `{input}` is wanted by the solves of `{}`: a pin name answers for one component, so give each its own at()",
+                                        who.join("`, `")
+                                    ),
+                                    "pinmux.contended_at",
+                                    EvalSeverity::Error,
+                                )
+                                .with_span(span),
+                            );
+                        }
+                        for (module, input, span) in self
+                            .config
+                            .pin_constraints
+                            .lock()
+                            .unwrap()
+                            .unconsumed_hard()
+                        {
+                            diagnostics.push(
+                                Diagnostic::categorized(
+                                    &module,
+                                    &format!(
+                                        "at() pin constraint on input `{input}` was never consumed: no pin_request named `{input}` reached a pin_solve"
+                                    ),
+                                    "pinmux.unconsumed_at",
+                                    EvalSeverity::Error,
+                                )
+                                .with_span(span),
+                            );
+                        }
+                    }
 
                     if !diagnostics.iter().any(Diagnostic::is_error) {
                         diagnostics.extend(ast_style_lints(&ast));

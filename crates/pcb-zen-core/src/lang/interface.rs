@@ -506,11 +506,15 @@ impl InterfaceCell for FrozenValue {
 #[derive(Clone, Debug, Trace, ProvidesStaticType, NoSerialize, Allocative)]
 pub struct InterfaceFactoryGen<V: InterfaceCell> {
     id: TypeInstanceId,
+    /// Declaring file, paired with the exported name to key nominal identity.
+    declaration_path: String,
     #[allocative(skip)]
     #[trace(unsafe_ignore)]
     interface_type_data: V::InterfaceTypeDataOpt,
     fields: SmallMap<String, V>,
     post_init_fn: Option<V>,
+    implies: Vec<V>,
+    attr_spec: SmallMap<String, V>,
     param_spec: ParametersSpec<FrozenValue>,
 }
 
@@ -526,9 +530,12 @@ impl Freeze for InterfaceFactory<'_> {
     ) -> starlark::values::FreezeResult<Self::Frozen> {
         Ok(FrozenInterfaceFactory {
             id: self.id,
+            declaration_path: self.declaration_path,
             interface_type_data: self.interface_type_data.into_inner(),
             fields: self.fields.freeze(freezer)?,
             post_init_fn: self.post_init_fn.freeze(freezer)?,
+            implies: self.implies.freeze(freezer)?,
+            attr_spec: self.attr_spec.freeze(freezer)?,
             param_spec: self.param_spec,
         })
     }
@@ -767,12 +774,58 @@ pub(crate) fn interface_globals(builder: &mut GlobalsBuilder) {
         let heap = eval.heap();
         let mut fields = SmallMap::new();
         let mut post_init_fn = None;
+        let mut implies: Vec<Value<'v>> = Vec::new();
+        let mut attr_spec: SmallMap<String, Value<'v>> = SmallMap::new();
 
         // Process field specifications and validate reserved names
         for (name, v) in &kwargs {
             if name == "__post_init__" {
                 // Handle __post_init__ as direct function assignment
                 post_init_fn = Some(v.to_value());
+            } else if name == "attrs" {
+                let d =
+                    starlark::values::dict::DictRef::from_value(v.to_value()).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "interface(attrs=...) must be a dict of attribute name -> physical type; \
+                             `attrs` is reserved for capability metadata — rename the field if you \
+                             meant a connection field"
+                        )
+                    })?;
+                for (k, ty) in d.iter() {
+                    let key = k.unpack_str().ok_or_else(|| {
+                        anyhow::anyhow!("interface(attrs=...) keys must be strings")
+                    })?;
+                    if ty
+                        .downcast_ref::<pcb_sch::physical::PhysicalValueType>()
+                        .is_none()
+                    {
+                        return Err(anyhow::anyhow!(
+                            "interface(attrs=...): `{key}` must map to a physical value type (Voltage, Frequency, ...), got `{}`",
+                            ty.get_type()
+                        ));
+                    }
+                    attr_spec.insert(key.to_owned(), ty);
+                }
+            } else if name == "implies" {
+                let list =
+                    starlark::values::list::ListRef::from_value(v.to_value()).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "interface(implies=...) must be a list of interface types; `implies` \
+                             is reserved for capability metadata — rename the field if you meant \
+                             a connection field"
+                        )
+                    })?;
+                for item in list.iter() {
+                    if item.downcast_ref::<InterfaceFactory<'v>>().is_none()
+                        && item.downcast_ref::<FrozenInterfaceFactory>().is_none()
+                    {
+                        return Err(anyhow::anyhow!(
+                            "interface(implies=...) entries must be interface types, got `{}`",
+                            item.get_type()
+                        ));
+                    }
+                    implies.push(item);
+                }
             } else if name == "name" {
                 // Reject "name" as field name to avoid conflict with implicit parameter
                 return Err(anyhow::anyhow!(
@@ -817,9 +870,12 @@ pub(crate) fn interface_globals(builder: &mut GlobalsBuilder) {
 
         let factory = heap.alloc(InterfaceFactory {
             id: TypeInstanceId::r#gen(),
+            declaration_path: eval.source_path().unwrap_or_default(),
             interface_type_data: OnceCell::new(),
             fields,
             post_init_fn,
+            implies,
+            attr_spec,
             param_spec,
         });
 
@@ -873,6 +929,46 @@ pub(crate) fn instantiate_interface<'v>(
         "internal error: unexpected value type in instantiate_interface: {} (expected InterfaceFactory or InterfaceValue)",
         spec.get_type()
     ).into())
+}
+
+impl<'v, V: ValueLike<'v> + InterfaceCell> InterfaceFactoryGen<V> {
+    /// Return the map of field specifications (field name -> type value) that
+    /// define this interface. This is primarily used by the input
+    /// deserialization logic to determine the expected type for nested
+    /// interface fields when reconstructing an instance from a serialised
+    /// `InputValue`.
+    #[inline]
+    pub fn fields(&self) -> &SmallMap<String, V> {
+        &self.fields
+    }
+
+    /// Interface types this one implies (see `interface(implies=...)`).
+    #[inline]
+    pub fn implies(&self) -> &[V] {
+        &self.implies
+    }
+
+    /// Declared capability-attribute vocabulary (see `interface(attrs=...)`).
+    #[inline]
+    pub fn attr_spec(&self) -> &SmallMap<String, V> {
+        &self.attr_spec
+    }
+
+    /// Identity of this very `interface()` evaluation. Capability matching
+    /// keys on the declaration instead — see `nominal_id` in `pinmux.rs`.
+    pub fn evaluation_id(&self) -> TypeInstanceId {
+        self.id
+    }
+
+    /// File that declared this interface.
+    pub fn declaration_path(&self) -> &str {
+        &self.declaration_path
+    }
+
+    /// Best-effort display name: the exported variable name when known.
+    pub fn type_name(&self) -> Option<String> {
+        V::get_ty(&self.interface_type_data).map(|d| d.name.clone())
+    }
 }
 
 #[cfg(test)]

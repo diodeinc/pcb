@@ -2032,6 +2032,9 @@ impl PhysicalValueType {
             exported_name: Default::default(),
         }
     }
+    pub fn dims(&self) -> PhysicalUnitDims {
+        self.unit
+    }
 
     fn type_instance_id(&self) -> TypeInstanceId {
         static CACHE: OnceLock<Mutex<HashMap<PhysicalUnitDims, TypeInstanceId>>> = OnceLock::new();
