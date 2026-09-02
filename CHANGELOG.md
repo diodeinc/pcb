@@ -10,9 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
-- Generate compact rectangular symbol-anchor grids that account for rendered fields, compose new component batches alongside existing schematic content, grow fresh pages to fit their generated content, group parallel capacitors into shared wired banks and unused interface labels into regular blocks, and limit net-aware rotation to two-terminal symbols.
-- Prefer hierarchical labels during full schematic reconciliation, while retaining global labels as the fallback for unresolved cross-page connections and scoped repairs.
-- Place hierarchy-related net symbols through the regular component-driver path, offset hierarchy bridge labels with orthogonal routes, and generate more compact sheet boxes with KiCad-style name and file fields.
+- Improve schematic generation and reconciliation with compact grid placement, grouped patterns, page fitting, KiCad-style hierarchy and fields, and shared orthogonal routing.
 
 ### Fixed
 
