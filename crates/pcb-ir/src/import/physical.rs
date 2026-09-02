@@ -463,6 +463,19 @@ impl ImportedDesign {
         scope: ArtworkScope,
         lands: &[PhysicalLand],
     ) -> Result<Vec<MaskOpening>> {
+        let mut lands_by_context = HashMap::<_, Vec<_>>::new();
+        for land in lands {
+            lands_by_context
+                .entry((land.board, land.side))
+                .or_default()
+                .push(land);
+            if land.side != Side::None {
+                lands_by_context
+                    .entry((land.board, Side::None))
+                    .or_default()
+                    .push(land);
+            }
+        }
         let mut openings = Vec::new();
         for (layer_index, layer) in self.layer_definitions.iter().enumerate() {
             if layer.layer_function != LayerFunction::Soldermask {
@@ -474,6 +487,9 @@ impl ImportedDesign {
                 let source = occurrence.id;
                 let evidence = self.feature_evidence(source);
                 let board = occurrence.board;
+                let candidates = lands_by_context
+                    .get(&(board, side))
+                    .map_or(&[][..], Vec::as_slice);
                 for (island, image) in image.connected_components().into_iter().enumerate() {
                     openings.push(MaskOpening {
                         id: MaskOpeningId {
@@ -484,13 +500,13 @@ impl ImportedDesign {
                         side,
                         image: image.clone(),
                         board,
-                        lands: associate_land(
+                        lands: associate_land_candidates(
                             &image,
                             board,
                             side,
                             &evidence,
                             &Association::Unresolved,
-                            lands,
+                            candidates,
                         ),
                     });
                 }
@@ -965,18 +981,6 @@ fn exact_termination(
                 && termination.at == at
         })
         .map(|termination| termination.id)
-}
-
-fn associate_land(
-    image: &ContourSet,
-    board: Option<LayoutOccurrenceId>,
-    side: Side,
-    evidence: &FeatureEvidence,
-    component: &Association<ComponentOccurrenceId>,
-    lands: &[PhysicalLand],
-) -> Association<LandId> {
-    let candidates = lands.iter().collect::<Vec<_>>();
-    associate_land_candidates(image, board, side, evidence, component, &candidates)
 }
 
 fn associate_land_candidates(
