@@ -2,11 +2,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use pcb_sch::Schematic;
 
 use crate::{
-    GEOMETRY_EPS_MM, Point, SchDocument, SchItem, SchPage,
+    GEOMETRY_EPS_MM, Point, SchDocument, SchItem, SchPage, Symbol,
     analysis::{
         ConnectivityInspection, SchematicIssue, SchematicIssueKey, analyze_connectivity,
         ensure_issues_resolved, ensure_no_new_issues, inspect_schematic, issue_context,
@@ -348,12 +348,16 @@ fn ensure_items_preserved(
     if before.root_page_ids != after.root_page_ids {
         bail!("repair changed the schematic root pages");
     }
-    for page in &before.pages {
-        let after_page = after
-            .pages
-            .iter()
-            .find(|candidate| candidate.id == page.id)
-            .with_context(|| format!("repair removed schematic page '{}'", page.id))?;
+    ensure_pages_preserved(before, after)?;
+    for (page, after_page) in before.pages.iter().zip(&after.pages) {
+        if page.file_name != after_page.file_name || page.paper != after_page.paper {
+            bail!(
+                "repair changed the file name or paper of schematic page '{}'",
+                page.id
+            );
+        }
+        ensure_library_preserved(page, after_page)?;
+        ensure_opaque_items_preserved(page, after_page)?;
         for item in &page.items {
             let Some(id) = item.id() else {
                 continue;
@@ -383,12 +387,20 @@ fn ensure_items_preserved(
                 );
             };
             let expected = match item {
-                SchItem::Symbol(_)
+                SchItem::Symbol(symbol)
                     if intent.relocated_symbols.contains(&SymbolLocation {
                         page_id: page.id.clone(),
                         symbol_id: id.to_string(),
                     }) =>
                 {
+                    let relocated = matches!(after_item, SchItem::Symbol(after_symbol)
+                        if symbol_differs_only_by_relocation(symbol, after_symbol));
+                    if !relocated {
+                        bail!(
+                            "repair changed relocated symbol '{id}' on page '{}' beyond its position",
+                            page.id
+                        );
+                    }
                     continue;
                 }
                 SchItem::Sheet(sheet) => {
@@ -415,10 +427,108 @@ fn ensure_items_preserved(
     Ok(())
 }
 
+/// The repaired document carries the same pages in the same order.
+fn ensure_pages_preserved(before: &SchDocument, after: &SchDocument) -> Result<()> {
+    for page in &after.pages {
+        if !before.pages.iter().any(|candidate| candidate.id == page.id) {
+            bail!("repair added schematic page '{}'", page.id);
+        }
+    }
+    for page in &before.pages {
+        if !after.pages.iter().any(|candidate| candidate.id == page.id) {
+            bail!("repair removed schematic page '{}'", page.id);
+        }
+    }
+    if before
+        .pages
+        .iter()
+        .map(|page| &page.id)
+        .ne(after.pages.iter().map(|page| &page.id))
+    {
+        bail!("repair reordered the schematic pages");
+    }
+    Ok(())
+}
+
+/// Existing symbol definitions stay as they were; a realizer may add the
+/// definitions of the net symbols it places.
+fn ensure_library_preserved(page: &SchPage, after_page: &SchPage) -> Result<()> {
+    for (lib_id, definition) in &page.library.definitions {
+        match after_page.library.definitions.get(lib_id) {
+            Some(after_definition) if after_definition == definition => {}
+            Some(_) => bail!(
+                "repair modified symbol definition '{lib_id}' on page '{}'",
+                page.id
+            ),
+            None => bail!(
+                "repair removed symbol definition '{lib_id}' on page '{}'",
+                page.id
+            ),
+        }
+    }
+    if page.library.unsupported != after_page.library.unsupported {
+        bail!(
+            "repair changed uninterpreted symbol library content on page '{}'",
+            page.id
+        );
+    }
+    Ok(())
+}
+
+/// Items without a typed identity can only be matched by content, so the
+/// repaired page must carry exactly the same multiset of them.
+fn ensure_opaque_items_preserved(page: &SchPage, after_page: &SchPage) -> Result<()> {
+    let mut remaining = after_page
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            SchItem::Unsupported(sexpr) => Some(sexpr),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    for item in &page.items {
+        let SchItem::Unsupported(sexpr) = item else {
+            continue;
+        };
+        let Some(position) = remaining.iter().position(|candidate| *candidate == sexpr) else {
+            bail!(
+                "repair removed or modified an uninterpreted item on page '{}'",
+                page.id
+            );
+        };
+        remaining.swap_remove(position);
+    }
+    if !remaining.is_empty() {
+        bail!("repair added an uninterpreted item on page '{}'", page.id);
+    }
+    Ok(())
+}
+
+/// A relocated symbol may sit elsewhere, with its fields carried along by the
+/// same offset; everything else about it must be exactly as it was.
+fn symbol_differs_only_by_relocation(before: &Symbol, after: &Symbol) -> bool {
+    let delta = Point::new(after.at.x - before.at.x, after.at.y - before.at.y);
+    let mut normalized = after.clone();
+    normalized.at = before.at;
+    for (name, field) in &mut normalized.fields {
+        let Some(original) = before.fields.get(name) else {
+            return false;
+        };
+        let carried = Point::new(field.at.x - delta.x, field.at.y - delta.y);
+        if (carried.x - original.at.x).abs() > GEOMETRY_EPS_MM
+            || (carried.y - original.at.y).abs() > GEOMETRY_EPS_MM
+        {
+            return false;
+        }
+        field.at = original.at;
+    }
+    normalized == *before
+}
+
 /// Junctions left with fewer than two contacts once the removals are applied,
 /// restricted to junctions that sat on a removed wire so unrelated litter
-/// stays exactly as it was. Wires, labels, no-connects, and symbol pins at the
-/// junction point all count as contacts.
+/// stays exactly as it was. Wires, labels, no-connects, sheet pins, and symbol
+/// pins at the junction point all count as contacts.
 fn orphaned_junctions(
     original: &SchDocument,
     remaining: &SchDocument,
@@ -465,7 +575,10 @@ fn orphaned_junctions(
                         remaining_points.extend(pins.into_iter().map(|pin| pin.point));
                     }
                 }
-                SchItem::Junction(_) | SchItem::Sheet(_) | SchItem::Unsupported(_) => {}
+                SchItem::Sheet(sheet) => {
+                    remaining_points.extend(sheet.pins.iter().map(|pin| pin.at));
+                }
+                SchItem::Junction(_) | SchItem::Unsupported(_) => {}
             }
         }
         for junction in page.items.iter().filter_map(|item| match item {
@@ -1047,8 +1160,239 @@ impl ConnectivityItemRef {
 mod tests {
     use std::collections::BTreeMap;
 
+    use pcb_sexpr::Sexpr;
+
     use super::*;
-    use crate::connectivity::{ConnectionGroup, ConnectionOrigin, IslandRef};
+    use crate::{
+        connectivity::{ConnectionGroup, ConnectionOrigin, IslandRef},
+        model::{
+            Junction, LabelShape, Paper, Rotation, Sheet, SheetPin, SymbolDefinition, SymbolField,
+            Wire,
+        },
+    };
+
+    fn page_with(id: &str, items: Vec<SchItem>) -> SchPage {
+        let mut page = SchPage::new(id);
+        page.items = items;
+        page
+    }
+
+    fn document(pages: Vec<SchPage>) -> SchDocument {
+        SchDocument {
+            root_page_ids: vec![pages[0].id.clone()],
+            pages,
+        }
+    }
+
+    fn note() -> SchItem {
+        SchItem::Unsupported(Sexpr::list(vec![
+            Sexpr::symbol("text"),
+            Sexpr::string("keep me"),
+        ]))
+    }
+
+    fn part(at: Point, field_at: Point) -> Symbol {
+        Symbol {
+            id: "part".to_string(),
+            lib_id: "Test:Part".to_string(),
+            unit: 1,
+            body_style: 1,
+            at,
+            rotation: Rotation::default(),
+            mirror: None,
+            fields_autoplaced: false,
+            fields: BTreeMap::from([(
+                "Reference".to_string(),
+                SymbolField::new("Reference", "R1", field_at),
+            )]),
+            pins: Vec::new(),
+            unsupported: Vec::new(),
+        }
+    }
+
+    fn preservation_error(before: &SchDocument, after: &SchDocument) -> String {
+        ensure_items_preserved(before, after, &ConnectivityRepairIntent::additions_only())
+            .expect_err("the change lies outside the intent")
+            .to_string()
+    }
+
+    #[test]
+    fn verification_rejects_document_changes_outside_the_intent() {
+        let definition = SymbolDefinition::from_kicad_symbol_sexpr(
+            r#"(symbol "Test:Part" (symbol "Part_1_1"
+              (pin passive line (at 0 0 0) (length 2.54) (name "1") (number "1"))))"#,
+        )
+        .unwrap();
+        let mut before = document(vec![page_with("page", vec![note()])]);
+        before.pages[0]
+            .library
+            .definitions
+            .insert(definition.lib_id.clone(), definition.clone());
+        assert!(
+            ensure_items_preserved(
+                &before,
+                &before,
+                &ConnectivityRepairIntent::additions_only()
+            )
+            .is_ok()
+        );
+
+        let mut added_page = before.clone();
+        added_page.pages.push(SchPage::new("extra"));
+        assert!(preservation_error(&before, &added_page).contains("added schematic page"));
+
+        let mut resized = before.clone();
+        resized.pages[0].paper = Paper::Named {
+            name: "A3".to_string(),
+            portrait: false,
+        };
+        assert!(preservation_error(&before, &resized).contains("paper"));
+
+        let mut renamed = before.clone();
+        renamed.pages[0].file_name = Some("moved.kicad_sch".to_string());
+        assert!(preservation_error(&before, &renamed).contains("file name"));
+
+        let mut dropped_note = before.clone();
+        dropped_note.pages[0].items.clear();
+        assert!(preservation_error(&before, &dropped_note).contains("uninterpreted item"));
+
+        let mut dropped_definition = before.clone();
+        dropped_definition.pages[0].library.definitions.clear();
+        assert!(
+            preservation_error(&before, &dropped_definition).contains("removed symbol definition")
+        );
+
+        // Realizers add the definitions of the net symbols they place.
+        let mut extended_library = before.clone();
+        let mut power = definition.clone();
+        power.lib_id = "power:GND".to_string();
+        extended_library.pages[0]
+            .library
+            .definitions
+            .insert(power.lib_id.clone(), power);
+        assert!(
+            ensure_items_preserved(
+                &before,
+                &extended_library,
+                &ConnectivityRepairIntent::additions_only()
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn relocated_symbols_may_only_move_with_their_fields() {
+        let before = document(vec![page_with(
+            "page",
+            vec![SchItem::Symbol(part(
+                Point::new(0.0, 0.0),
+                Point::new(1.0, 1.0),
+            ))],
+        )]);
+        let mut intent = ConnectivityRepairIntent::additions_only();
+        intent.relocated_symbols.insert(SymbolLocation {
+            page_id: "page".to_string(),
+            symbol_id: "part".to_string(),
+        });
+
+        let moved = document(vec![page_with(
+            "page",
+            vec![SchItem::Symbol(part(
+                Point::new(10.0, 20.0),
+                Point::new(11.0, 21.0),
+            ))],
+        )]);
+        assert!(ensure_items_preserved(&before, &moved, &intent).is_ok());
+
+        let mut rotated = moved.clone();
+        let SchItem::Symbol(symbol) = &mut rotated.pages[0].items[0] else {
+            unreachable!();
+        };
+        symbol.rotation = Rotation::Deg90;
+        assert!(
+            ensure_items_preserved(&before, &rotated, &intent)
+                .unwrap_err()
+                .to_string()
+                .contains("beyond its position")
+        );
+
+        let field_left_behind = document(vec![page_with(
+            "page",
+            vec![SchItem::Symbol(part(
+                Point::new(10.0, 20.0),
+                Point::new(1.0, 1.0),
+            ))],
+        )]);
+        assert!(
+            ensure_items_preserved(&before, &field_left_behind, &intent)
+                .unwrap_err()
+                .to_string()
+                .contains("beyond its position")
+        );
+    }
+
+    #[test]
+    fn junction_joining_a_sheet_pin_to_a_through_wire_is_not_orphaned() {
+        let removed = SchItem::Wire(Wire {
+            id: "removed".to_string(),
+            a: Point::new(0.0, 0.0),
+            b: Point::new(10.0, 0.0),
+            unsupported: Vec::new(),
+        });
+        let through = SchItem::Wire(Wire {
+            id: "through".to_string(),
+            a: Point::new(10.0, -10.0),
+            b: Point::new(10.0, 10.0),
+            unsupported: Vec::new(),
+        });
+        let junction = SchItem::Junction(Junction {
+            id: "junction".to_string(),
+            at: Point::new(10.0, 0.0),
+            unsupported: Vec::new(),
+        });
+        let sheet = SchItem::Sheet(Box::new(Sheet {
+            id: "sheet".to_string(),
+            at: Some(Point::new(10.0, 0.0)),
+            size: Some(Point::new(20.0, 20.0)),
+            name: None,
+            file: SymbolField::new("Sheetfile", "child.kicad_sch", Point::default()),
+            pins: vec![SheetPin {
+                id: "pin".to_string(),
+                name: "NET".to_string(),
+                at: Point::new(10.0, 0.0),
+                rotation: Rotation::default(),
+                shape: LabelShape::Bidirectional,
+                unsupported: Vec::new(),
+            }],
+            unsupported: Vec::new(),
+        }));
+        let removals = BTreeSet::from([ConnectivityItemRef::Wire {
+            page_id: "page".to_string(),
+            id: "removed".to_string(),
+        }]);
+        let without = |original: &SchDocument| {
+            let mut remaining = original.clone();
+            remaining.pages[0]
+                .items
+                .retain(|item| item.id() != Some("removed"));
+            remaining
+        };
+
+        let with_sheet = document(vec![page_with(
+            "page",
+            vec![removed.clone(), through.clone(), junction.clone(), sheet],
+        )]);
+        assert!(orphaned_junctions(&with_sheet, &without(&with_sheet), &removals).is_empty());
+
+        let without_sheet = document(vec![page_with("page", vec![removed, through, junction])]);
+        assert_eq!(
+            orphaned_junctions(&without_sheet, &without(&without_sheet), &removals),
+            BTreeSet::from([ConnectivityItemRef::Junction {
+                page_id: "page".to_string(),
+                id: "junction".to_string(),
+            }])
+        );
+    }
 
     #[test]
     fn short_candidates_exclude_uninvolved_globally_merged_islands() {

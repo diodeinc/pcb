@@ -1,0 +1,7 @@
+"""Root schematic exposing one net under two interface names and no component terminals."""
+
+Project(name="SharedRootInterface", path="kicad", layout=False)
+
+SHARED = Net("SHARED")
+ALIAS_A = io("ALIAS_A", Net, default=SHARED)
+ALIAS_B = io("ALIAS_B", Net, default=SHARED)

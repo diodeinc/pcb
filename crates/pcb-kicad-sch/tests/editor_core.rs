@@ -398,6 +398,52 @@ fn interface_only_endpoints_form_regular_labels() {
 }
 
 #[test]
+fn interface_only_endpoints_of_one_net_share_an_island() {
+    let netlist = common::compile_fixture("hierarchy", "shared_root_interface.zen");
+    let document = plan_reconciliation(None, &netlist, "SharedRootInterface.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    let page = &document.pages[0];
+    let labels = page
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            SchItem::Label(label) => Some(label),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        labels
+            .iter()
+            .map(|label| label.text.as_str())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["ALIAS_A", "ALIAS_B"])
+    );
+    // Hierarchical labels do not merge by text: one wire joins the two.
+    let wires = page
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            SchItem::Wire(wire) => Some(wire),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(wires.len(), 1);
+    assert!(
+        labels
+            .iter()
+            .all(|label| [wires[0].a, wires[0].b].contains(&label.at))
+    );
+    let inspection = inspect_schematic(&document, &netlist).unwrap();
+    assert!(
+        inspection.analysis.is_equivalent(),
+        "{:#?}",
+        inspection.analysis
+    );
+}
+
+#[test]
 fn generated_hierarchy_connects_sheet_ports_without_label_bridges() {
     let netlist = common::compile_fixture("hierarchy", "root.zen");
     let document = plan_reconciliation(None, &netlist, "Hierarchy.kicad_sch")
