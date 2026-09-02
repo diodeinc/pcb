@@ -342,8 +342,10 @@ fn merge_symbol_sexprs(parent_sexp: &Sexpr, child_sexp: &Sexpr) -> Sexpr {
             .unwrap_or_else(|| Sexpr::symbol("Unknown")),
     ];
 
-    // Create a map of child properties for easy lookup
-    let mut child_props: HashMap<String, Sexpr> = HashMap::new();
+    // Child items keyed for override lookup but kept in source order: a hash
+    // map here reorders the flattened symbol on every run, which downstream
+    // writers see as a real change to the schematic.
+    let mut child_props: Vec<(String, Sexpr)> = Vec::new();
     let mut child_symbols: Vec<Sexpr> = Vec::new();
     let mut has_child_in_bom = false;
 
@@ -358,12 +360,12 @@ fn merge_symbol_sexprs(parent_sexp: &Sexpr, child_sexp: &Sexpr) -> Sexpr {
                     if let Some(second) = prop_items.get(1)
                         && let SexprKind::Symbol(key) | SexprKind::String(key) = &second.kind
                     {
-                        child_props.insert(key.clone(), item.clone());
+                        push_child_item(&mut child_props, key.clone(), item.clone());
                     }
                 }
                 "in_bom" => {
                     has_child_in_bom = true;
-                    child_props.insert("in_bom".to_string(), item.clone());
+                    push_child_item(&mut child_props, "in_bom".to_string(), item.clone());
                 }
                 s if s.starts_with("symbol") => {
                     // This is a symbol section (like "symbol_0_1")
@@ -371,7 +373,7 @@ fn merge_symbol_sexprs(parent_sexp: &Sexpr, child_sexp: &Sexpr) -> Sexpr {
                 }
                 _ => {
                     // Other properties
-                    child_props.insert(prop_type.clone(), item.clone());
+                    push_child_item(&mut child_props, prop_type.clone(), item.clone());
                 }
             }
         }
@@ -387,7 +389,7 @@ fn merge_symbol_sexprs(parent_sexp: &Sexpr, child_sexp: &Sexpr) -> Sexpr {
                 "property" => {
                     if let Some(second) = prop_items.get(1)
                         && let SexprKind::Symbol(key) | SexprKind::String(key) = &second.kind
-                        && !child_props.contains_key(key)
+                        && !child_props.iter().any(|(existing, _)| existing == key)
                     {
                         merged_items.push(item.clone());
                     }
@@ -431,7 +433,10 @@ fn merge_symbol_sexprs(parent_sexp: &Sexpr, child_sexp: &Sexpr) -> Sexpr {
                     }
                 }
                 _ => {
-                    if !child_props.contains_key(prop_type) {
+                    if !child_props
+                        .iter()
+                        .any(|(existing, _)| existing == prop_type)
+                    {
                         merged_items.push(item.clone());
                     }
                 }
@@ -439,7 +444,7 @@ fn merge_symbol_sexprs(parent_sexp: &Sexpr, child_sexp: &Sexpr) -> Sexpr {
         }
     }
 
-    // Add all child properties
+    // Add all child properties, in the child's own order
     for (_, prop) in child_props {
         merged_items.push(prop);
     }
@@ -450,6 +455,15 @@ fn merge_symbol_sexprs(parent_sexp: &Sexpr, child_sexp: &Sexpr) -> Sexpr {
     }
 
     Sexpr::list(merged_items)
+}
+
+/// Record a child item under its key, replacing an earlier item with the same
+/// key in place so the child's first mention decides the position.
+fn push_child_item(items: &mut Vec<(String, Sexpr)>, key: String, item: Sexpr) {
+    match items.iter_mut().find(|(existing, _)| *existing == key) {
+        Some(entry) => entry.1 = item,
+        None => items.push((key, item)),
+    }
 }
 
 /// Parse a KiCad symbol library from a string, keeping raw S-expressions
@@ -1033,6 +1047,73 @@ mod tests {
             child.properties.get("NewProperty"),
             Some(&"NewValue".to_string())
         );
+    }
+
+    #[test]
+    fn test_extends_merge_keeps_child_items_in_source_order() {
+        let content = r#"(kicad_symbol_lib
+            (symbol "Base"
+                (pin_numbers (hide yes))
+                (in_bom yes)
+                (property "Reference" "L" (at 0 0 0))
+                (property "Value" "Base" (at 0 0 0))
+                (symbol "Base_1_1" (pin passive line (at 0 0 0) (length 2.54) (name "1") (number "1")))
+                (embedded_fonts no)
+            )
+            (symbol "Child"
+                (extends "Base")
+                (property "Value" "Child" (at 0 0 0))
+                (property "Description" "child" (at 0 0 0))
+                (property "Manufacturer_Part_Number" "C-1" (at 0 0 0))
+                (property "ki_keywords" "child" (at 0 0 0))
+                (embedded_fonts no)
+            )
+        )"#;
+        let expected = vec![
+            "pin_numbers",
+            "in_bom",
+            "property:Reference",
+            "symbol",
+            "property:Value",
+            "property:Description",
+            "property:Manufacturer_Part_Number",
+            "property:ki_keywords",
+            "embedded_fonts",
+        ];
+
+        // The child's items follow the child's own order, run after run.
+        for _ in 0..16 {
+            let lib = KicadSymbolLibrary::from_string(content).unwrap();
+            let child = lib.get_symbol_lazy("Child").unwrap().unwrap();
+            assert_eq!(merged_item_tags(child.raw_sexp.as_ref().unwrap()), expected);
+        }
+    }
+
+    fn merged_item_tags(sexpr: &Sexpr) -> Vec<String> {
+        let SexprKind::List(items) = &sexpr.kind else {
+            panic!("symbol is a list");
+        };
+        items
+            .iter()
+            .skip(2)
+            .filter_map(|item| {
+                let SexprKind::List(parts) = &item.kind else {
+                    return None;
+                };
+                let SexprKind::Symbol(tag) = &parts.first()?.kind else {
+                    return None;
+                };
+                if tag != "property" {
+                    return Some(tag.clone());
+                }
+                match &parts.get(1)?.kind {
+                    SexprKind::Symbol(name) | SexprKind::String(name) => {
+                        Some(format!("property:{name}"))
+                    }
+                    _ => None,
+                }
+            })
+            .collect()
     }
 
     #[test]
