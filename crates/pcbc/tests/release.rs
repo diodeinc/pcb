@@ -258,6 +258,9 @@ fn test_publish_board_with_version_preserves_local_only_tags() {
         .run()
         .expect("build failed");
     sb.commit("Hydrate manifests").tag("boards/v1.2.3");
+    sb.cmd("git", ["switch", "--detach"])
+        .run()
+        .expect("detach HEAD");
 
     let mut args = source_only_args("boards/TB0001.zen");
     args.push("--bump=patch");

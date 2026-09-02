@@ -530,7 +530,11 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
         return Ok(());
     }
 
-    let remote = resolve_remote(&workspace.root, args.force)?;
+    let remote = if args.no_push {
+        resolve_fetch_remote(&workspace.root)?
+    } else {
+        resolve_remote(&workspace.root, args.force)?
+    };
     eprintln!("Syncing with {}...", remote.cyan());
     if args.no_push {
         git::fetch_tags_without_pruning(&workspace.root, &remote)?;
@@ -1055,6 +1059,27 @@ fn resolve_remote(repo_root: &Path, force: bool) -> Result<String> {
     })
 }
 
+fn resolve_fetch_remote(repo_root: &Path) -> Result<String> {
+    if let Some(remote) = git::symbolic_ref_short_head(repo_root)
+        .and_then(|branch| git::get_branch_remote(repo_root, &branch))
+    {
+        return Ok(remote);
+    }
+
+    let remotes = git::run_output(repo_root, &["remote"])?;
+    let remotes: Vec<_> = remotes.lines().collect();
+    if remotes.contains(&"origin") {
+        return Ok("origin".to_string());
+    }
+    match remotes.as_slice() {
+        [remote] => Ok((*remote).to_string()),
+        [] => bail!("No Git remote is configured. Add a remote before publishing."),
+        _ => bail!(
+            "Unable to select a Git remote for publishing. Configure an 'origin' remote or set the current branch's upstream."
+        ),
+    }
+}
+
 /// Preflight checks run after fetching remote state.
 fn preflight_checks(repo_root: &Path, remote: &str) -> Result<()> {
     if git::has_uncommitted_changes(repo_root)? {
@@ -1509,6 +1534,21 @@ P1 = io(Net)
             packages: BTreeMap::new(),
             errors: Vec::new(),
         }
+    }
+
+    #[test]
+    fn fetch_remote_uses_origin_for_untracked_branch() {
+        let mut sb = Sandbox::new();
+        setup_publish_workspace(&mut sb, &[]);
+        sb.cwd("src")
+            .cmd("git", ["switch", "-c", "feature"])
+            .run()
+            .expect("create untracked branch");
+
+        assert_eq!(
+            resolve_fetch_remote(&sb.root_path().join("src")).unwrap(),
+            "origin"
+        );
     }
 
     #[test]
