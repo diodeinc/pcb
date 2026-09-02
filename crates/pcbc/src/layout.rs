@@ -28,7 +28,7 @@ pub struct LayoutArgs {
     #[arg(long = "offline")]
     pub offline: bool,
 
-    /// Run KiCad DRC checks after layout generation
+    /// Validate the existing layout without modifying it, then run KiCad DRC
     #[arg(long = "check")]
     pub check: bool,
 
