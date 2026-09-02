@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.44] - 2026-09-02
+
 ### Added
 
 - Expose drilled holes, termination associations, and explicit via-protection intent in PCBA assembly reports.
@@ -1779,7 +1781,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.43...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.44...HEAD
+[0.4.44]: https://github.com/diodeinc/pcb/compare/v0.4.43...v0.4.44
 [0.4.43]: https://github.com/diodeinc/pcb/compare/v0.4.42...v0.4.43
 [0.4.42]: https://github.com/diodeinc/pcb/compare/v0.4.41...v0.4.42
 [0.4.41]: https://github.com/diodeinc/pcb/compare/v0.4.40...v0.4.41
