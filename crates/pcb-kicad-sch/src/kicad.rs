@@ -1137,9 +1137,45 @@ fn normalize_internal_metadata_properties(sexpr: &mut Sexpr) {
         ensure_property_hidden(items);
     }
 
-    for item in items {
+    for item in items.iter_mut() {
         normalize_internal_metadata_properties(item);
     }
+
+    if list_tag(items) == Some("symbol") {
+        canonicalize_symbol_children(items);
+    }
+}
+
+/// KiCad writes a library symbol as its header attributes, then properties,
+/// then unit sub-symbols, then `embedded_fonts`. Impose that order, with the
+/// properties sorted by name, so a definition compares and serializes the
+/// same however its source ordered the children: a flattened derived symbol
+/// must not read as a changed schematic on every apply.
+fn canonicalize_symbol_children(items: &mut Vec<Sexpr>) {
+    if items.len() <= 2 {
+        return;
+    }
+    let mut leading = Vec::new();
+    let mut properties = Vec::new();
+    let mut units = Vec::new();
+    let mut embedded_fonts = Vec::new();
+    for child in items.split_off(2) {
+        match child.as_list().and_then(|list| list_tag(list)) {
+            Some("property") => properties.push(child),
+            Some("symbol") => units.push(child),
+            Some("embedded_fonts") => embedded_fonts.push(child),
+            _ => leading.push(child),
+        }
+    }
+    properties.sort_by(|a, b| symbol_property_name(a).cmp(symbol_property_name(b)));
+    items.extend(leading);
+    items.extend(properties);
+    items.extend(units);
+    items.extend(embedded_fonts);
+}
+
+fn symbol_property_name(property: &Sexpr) -> &str {
+    property.as_list().and_then(property_name).unwrap_or("")
 }
 
 fn validate_symbol_graphics_for_kicad_10(sexpr: &Sexpr) -> Result<()> {
@@ -1925,6 +1961,73 @@ mod tests {
         .expect("parse wrapped symbol definition");
 
         assert_eq!(definition.lib_id, "Device:R");
+    }
+
+    #[test]
+    fn symbol_definition_properties_have_canonical_order() {
+        let first = SymbolDefinition::from_kicad_symbol_sexpr(
+            r#"(symbol "Device:R"
+              (property "Reference" "R")
+              (property "Value" "1k")
+              (property "Manufacturer" "Example"))"#,
+        )
+        .unwrap();
+        let reordered = SymbolDefinition::from_kicad_symbol_sexpr(
+            r#"(symbol "Device:R"
+              (property "Manufacturer" "Example")
+              (property "Reference" "R")
+              (property "Value" "1k"))"#,
+        )
+        .unwrap();
+
+        assert_eq!(first, reordered);
+    }
+
+    #[test]
+    fn symbol_definition_children_have_canonical_order() {
+        let kicad_order = SymbolDefinition::from_kicad_symbol_sexpr(
+            r#"(symbol "Device:L"
+              (pin_numbers (hide yes))
+              (in_bom yes)
+              (property "Reference" "L")
+              (property "Value" "10u")
+              (symbol "L_1_1" (pin passive line (at 0 0 0) (length 2.54) (name "1") (number "1")))
+              (embedded_fonts no))"#,
+        )
+        .unwrap();
+        // A flattened derived symbol trails its properties after the units
+        // and drops embedded_fonts wherever the merge happened to put it.
+        let flattened_order = SymbolDefinition::from_kicad_symbol_sexpr(
+            r#"(symbol "Device:L"
+              (pin_numbers (hide yes))
+              (in_bom yes)
+              (symbol "L_1_1" (pin passive line (at 0 0 0) (length 2.54) (name "1") (number "1")))
+              (property "Value" "10u")
+              (embedded_fonts no)
+              (property "Reference" "L"))"#,
+        )
+        .unwrap();
+
+        assert_eq!(kicad_order, flattened_order);
+        let tags = kicad_order
+            .sexpr
+            .as_list()
+            .unwrap()
+            .iter()
+            .skip(2)
+            .map(|child| child.as_list().and_then(|list| list_tag(list)).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            tags,
+            [
+                "pin_numbers",
+                "in_bom",
+                "property",
+                "property",
+                "symbol",
+                "embedded_fonts"
+            ]
+        );
     }
 
     #[test]

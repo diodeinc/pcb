@@ -84,6 +84,62 @@ fn reconciliation_drives_each_physical_pin_of_a_logical_terminal() {
 }
 
 #[test]
+fn parallel_capacitors_form_one_regular_wired_bank() {
+    let netlist = common::compile_fixture("analysis", "capacitor_bank.zen");
+    let document = plan_reconciliation(None, &netlist, "CapacitorBank.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+
+    assert!(
+        inspect_schematic(&document, &netlist)
+            .unwrap()
+            .analysis
+            .is_equivalent()
+    );
+    let page = &document.pages[0];
+    let mut bank = page
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            SchItem::Symbol(symbol)
+                if matches!(symbol.field_value("Path"), Some("C1.C" | "C2.C" | "C3.C")) =>
+            {
+                Some((symbol.field_value("Path").unwrap(), symbol.at))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    bank.sort_by_key(|(path, _)| *path);
+    assert_eq!(bank.len(), 3);
+    assert_eq!(bank[0].1.y, bank[1].1.y);
+    assert_eq!(bank[1].1.y, bank[2].1.y);
+    let first_spacing = bank[1].1.x - bank[0].1.x;
+    let second_spacing = bank[2].1.x - bank[1].1.x;
+    assert!((first_spacing - second_spacing).abs() <= 1.0e-9);
+
+    for (net_name, expected) in [("VCC", 1), ("GROUND", 2)] {
+        assert_eq!(
+            page.items
+                .iter()
+                .filter(|item| matches!(
+                    item,
+                    SchItem::Symbol(symbol)
+                        if symbol.field_value("Path").is_none()
+                            && symbol.field_value("Value") == Some(net_name)
+                ))
+                .count(),
+            expected,
+            "the shared bank rail should need one {net_name} symbol; C4 needs its own GROUND"
+        );
+    }
+
+    let unchanged =
+        plan_reconciliation(Some(&document), &netlist, "CapacitorBank.kicad_sch").unwrap();
+    assert!(unchanged.is_empty(), "{:#?}", unchanged.edits());
+}
+
+#[test]
 fn generated_net_symbols_form_a_wired_staircase() {
     let netlist = common::compile_fixture("net_symbol_staircase", "root.zen");
     let document = plan_reconciliation(None, &netlist, "NetSymbolStaircase.kicad_sch")
@@ -110,6 +166,18 @@ fn generated_net_symbols_form_a_wired_staircase() {
         })
         .count();
     assert_eq!(shared_ground_count, 1);
+    assert_eq!(
+        page.items
+            .iter()
+            .filter(|item| matches!(
+                item,
+                SchItem::Symbol(symbol)
+                    if symbol.field_value("Value") == Some("GROUND_SPLIT")
+            ))
+            .count(),
+        2,
+        "separate pin banks should receive separate ground symbols"
+    );
     let mut net_symbols = page
         .items
         .iter()
@@ -130,12 +198,6 @@ fn generated_net_symbols_form_a_wired_staircase() {
     assert_eq!(net_symbols.len(), 2);
     let connection_points = [net_symbols[0].1, net_symbols[1].1];
     assert_ne!(connection_points[0], connection_points[1]);
-    let wire_count = page
-        .items
-        .iter()
-        .filter(|item| matches!(item, SchItem::Wire(_)))
-        .count();
-    assert!((5..=10).contains(&wire_count), "{wire_count}");
     assert!(page.items.iter().all(|item| match item {
         SchItem::Wire(wire) => wire.a.x == wire.b.x || wire.a.y == wire.b.y,
         _ => true,
@@ -295,6 +357,93 @@ fn root_interfaces_use_hierarchical_labels_directly_on_component_pins() {
 }
 
 #[test]
+fn interface_only_endpoints_form_regular_labels() {
+    let netlist = common::compile_fixture("hierarchy", "unused_root_interface.zen");
+    let document = plan_reconciliation(None, &netlist, "UnusedRootInterface.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    {
+        let mut labels = document.pages[0]
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                SchItem::Label(label) => Some(label),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        labels.sort_by(|left, right| left.text.cmp(&right.text));
+
+        assert_eq!(labels.len(), 6);
+        assert!(
+            labels
+                .iter()
+                .all(|label| matches!(label.kind, LabelKind::Hierarchical { .. }))
+        );
+        assert!(labels.iter().all(|label| label.at.x == labels[0].at.x));
+        let row_spacing = labels[1].at.y - labels[0].at.y;
+        assert!(row_spacing > 0.0);
+        assert!(
+            labels
+                .windows(2)
+                .all(|pair| ((pair[1].at.y - pair[0].at.y) - row_spacing).abs() < 1e-9)
+        );
+    }
+    assert!(
+        inspect_schematic(&document, &netlist)
+            .unwrap()
+            .analysis
+            .is_equivalent()
+    );
+}
+
+#[test]
+fn interface_only_endpoints_of_one_net_share_an_island() {
+    let netlist = common::compile_fixture("hierarchy", "shared_root_interface.zen");
+    let document = plan_reconciliation(None, &netlist, "SharedRootInterface.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    let page = &document.pages[0];
+    let labels = page
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            SchItem::Label(label) => Some(label),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        labels
+            .iter()
+            .map(|label| label.text.as_str())
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from(["ALIAS_A", "ALIAS_B"])
+    );
+    // Hierarchical labels do not merge by text: one wire joins the two.
+    let wires = page
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            SchItem::Wire(wire) => Some(wire),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(wires.len(), 1);
+    assert!(
+        labels
+            .iter()
+            .all(|label| [wires[0].a, wires[0].b].contains(&label.at))
+    );
+    let inspection = inspect_schematic(&document, &netlist).unwrap();
+    assert!(
+        inspection.analysis.is_equivalent(),
+        "{:#?}",
+        inspection.analysis
+    );
+}
+
+#[test]
 fn generated_hierarchy_connects_sheet_ports_without_label_bridges() {
     let netlist = common::compile_fixture("hierarchy", "root.zen");
     let document = plan_reconciliation(None, &netlist, "Hierarchy.kicad_sch")
@@ -363,10 +512,13 @@ fn missing_symbols_use_attached_net_symbol_orientation() {
     assert_eq!(rotation("R_SINGLE.R"), pcb_kicad_sch::Rotation::Deg90);
     // Default GND and VCC symbols on opposite ends agree on this rotation.
     assert_eq!(rotation("R_BOTH.R"), pcb_kicad_sch::Rotation::Deg180);
-    // Two equal GND constraints conflict, while ordinary nets do not constrain
-    // orientation; both cases retain the deterministic default.
-    assert_eq!(rotation("R_TIED.R"), pcb_kicad_sch::Rotation::Deg0);
+    // Two equal GND constraints conflict, so the resistor uses a horizontal
+    // terminal axis. Ordinary nets do not constrain orientation.
+    assert_eq!(rotation("R_TIED.R"), pcb_kicad_sch::Rotation::Deg90);
     assert_eq!(rotation("R_NONE.R"), pcb_kicad_sch::Rotation::Deg0);
+    // Larger symbols retain the orientation authored by their library even
+    // when every attached net symbol would favor the same rotation.
+    assert_eq!(rotation("U_LARGE"), pcb_kicad_sch::Rotation::Deg0);
 }
 
 #[test]

@@ -1,0 +1,12 @@
+"""First revision of the incremental default-placement regression design."""
+
+Project(name="Incremental", path="kicad", layout=False)
+
+Resistor = Module("@stdlib/generics/Resistor.zen")
+
+VCC = Power("VCC")
+GROUND = Ground("GROUND")
+
+Resistor(name="R1", value="1kohms", package="0402", P1=VCC, P2=GROUND)
+Resistor(name="R2", value="2kohms", package="0402", P1=VCC, P2=GROUND)
+Resistor(name="R3", value="3kohms", package="0402", P1=VCC, P2=GROUND)

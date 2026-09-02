@@ -7,7 +7,10 @@ use pcb_sch::Schematic;
 
 use crate::{
     SchDocument, SchPage,
-    analysis::{ConnectivityInspection, SchematicIssue, SchematicIssueKey, inspect_schematic},
+    analysis::{
+        ConnectivityInspection, SchematicIssueKey, ensure_issues_resolved, ensure_no_new_issues,
+        inspect_schematic, issue_summaries,
+    },
     component_slots, compose,
 };
 
@@ -236,32 +239,6 @@ fn plan_repairs_impl(
     )
 }
 
-/// The key with volatile item fingerprints stripped, for before/after
-/// identity comparisons.
-fn coarse_key(key: &SchematicIssueKey) -> SchematicIssueKey {
-    let mut key = key.clone();
-    match &mut key {
-        SchematicIssueKey::UnexpectedNet { items, .. }
-        | SchematicIssueKey::UnexpectedConnection { items, .. }
-        | SchematicIssueKey::Shorted { items, .. } => items.clear(),
-        SchematicIssueKey::MissingSymbol(_)
-        | SchematicIssueKey::DuplicateSymbol(_)
-        | SchematicIssueKey::MismatchedSymbolId { .. }
-        | SchematicIssueKey::UnexpectedSymbol(_)
-        | SchematicIssueKey::UnboundSymbol(_)
-        | SchematicIssueKey::DisconnectedNet(_)
-        | SchematicIssueKey::MissingPort(_) => {}
-    }
-    key
-}
-
-fn issue_summaries<'a>(issues: impl Iterator<Item = &'a SchematicIssue>) -> String {
-    issues
-        .map(|issue| issue.summary())
-        .collect::<Vec<_>>()
-        .join("; ")
-}
-
 fn build_plan(
     document: Option<&SchDocument>,
     netlist: &Schematic,
@@ -299,35 +276,20 @@ fn build_plan(
                 if !before.issues.iter().any(|issue| &issue.key == key) {
                     bail!("schematic issue {key:?} is not present");
                 }
-                if inspection_after
-                    .issues
-                    .iter()
-                    .any(|issue| coarse_key(&issue.key) == coarse_key(key))
-                {
-                    bail!("planned repair did not resolve schematic issue {key:?}");
-                }
             }
-            // Compare without item fingerprints: a pre-existing issue whose
-            // affected islands shifted is still the same issue, not a new one
-            // this repair introduced.
-            let before_keys = before
-                .issues
-                .iter()
-                .map(|issue| coarse_key(&issue.key))
-                .collect::<std::collections::BTreeSet<_>>();
-            let new_issues = inspection_after
-                .issues
-                .iter()
-                .filter(|issue| !before_keys.contains(&coarse_key(&issue.key)))
-                .collect::<Vec<_>>();
-            if !new_issues.is_empty() {
-                bail!(
-                    "planned repair would introduce unrelated issues: {}",
-                    issue_summaries(new_issues.iter().map(|context| &context.issue))
-                );
-            }
+            ensure_issues_resolved(&inspection_after, selected_keys, "planned repair")?;
+            ensure_no_new_issues(before, &inspection_after, "planned repair")?;
         }
     }
+    verified_plan(document, desired, initial_inspection, inspection_after)
+}
+
+fn verified_plan(
+    document: Option<&SchDocument>,
+    desired: SchDocument,
+    initial_inspection: InitialInspection,
+    inspection_after: ConnectivityInspection,
+) -> Result<ReconciliationPlan> {
     let edits = document_edits(document.unwrap_or(&SchDocument::default()), &desired)?;
     let plan = ReconciliationPlan {
         edits,

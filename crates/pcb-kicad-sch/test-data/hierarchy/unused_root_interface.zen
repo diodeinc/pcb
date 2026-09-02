@@ -1,0 +1,10 @@
+"""Root schematic with interface ports that have no component terminals."""
+
+Project(name="UnusedRootInterface", path="kicad", layout=False)
+
+UNUSED_1 = io("UNUSED_1", Net)
+UNUSED_2 = io("UNUSED_2", Net)
+UNUSED_3 = io("UNUSED_3", Net)
+UNUSED_4 = io("UNUSED_4", Net)
+UNUSED_5 = io("UNUSED_5", Net)
+UNUSED_6 = io("UNUSED_6", Net)

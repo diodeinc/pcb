@@ -11,11 +11,13 @@ use crate::{
     symbol,
 };
 
-/// A Zener net symbol is a creation preference, not reconciliation identity.
-#[derive(Clone)]
-pub(crate) struct NetSymbolSpec {
+/// The netlist-specified power symbol for a net, ready to instantiate. A
+/// Zener net symbol is a creation preference, not reconciliation identity.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NetSymbolSpec {
     pub definition: SymbolDefinition,
     pub unit: u32,
+    /// The visible power-input pin, relative to the symbol origin.
     pub pin_offset: Point,
     pub pin_outward_spin: LabelSpin,
 }

@@ -16,21 +16,25 @@ use crate::{
         reduce_with_provenance,
     },
     deterministic_uuid, field_autoplace, hierarchy, net_symbols,
-    repair::{ConnectivityRepairPlan, plan_connectivity_repair, remove_items},
+    placement::{GridPacker, GridPoint, GridRect, point_rect},
+    repair::{
+        ConnectivityRepairIntent, NetDriverKind, item_matches, plan_connectivity_repair_core,
+        point_on_segment, remove_items,
+    },
     root_interface, root_page_id, symbol,
 };
 
-const DEFAULT_TITLE_BLOCK_WIDTH_MM: f64 = 110.0;
-const DEFAULT_TITLE_BLOCK_HEIGHT_MM: f64 = 34.0;
-const PACKING_MARGIN_CELLS: i32 = 5;
-const PACKING_CLEARANCE_CELLS: i32 = 2;
 const LABEL_SHAPE_LENGTH_MM: f64 = 2.54;
 const NET_SYMBOL_OFFSET_CELLS: f64 = 4.0;
-const NET_SYMBOL_STAIR_CELLS: f64 = 2.0;
+const NET_SYMBOL_STAIR_CELLS: f64 = 4.0;
+const NET_SYMBOL_STAIR_RETRIES: usize = 8;
 const ESTIMATED_LABEL_WIDTH_EM: f64 = 0.8;
 const SHEET_PIN_SPACING_MM: f64 = 5.08;
 const SHEET_MIN_WIDTH_MM: f64 = 50.8;
 const SHEET_MIN_HEIGHT_MM: f64 = 20.32;
+const PLACEMENT_BLOCK_GAP_CELLS: i32 = 4;
+const CONTEXT_LABEL_GAP_CELLS: i32 = 1;
+const CAPACITOR_BANK_BUS_OFFSET_CELLS: f64 = 2.0;
 
 pub(crate) fn reconcile_document(
     existing: Option<&SchDocument>,
@@ -68,6 +72,7 @@ pub(crate) fn reconcile_document(
     if document.pages.is_empty() {
         bail!("KiCad schematic project has no pages");
     }
+    let preserved_page_count = if creating { 0 } else { document.pages.len() };
     let default_page = document
         .root_page_ids
         .iter()
@@ -188,6 +193,7 @@ pub(crate) fn reconcile_document(
         &mut placed,
         &relocatable_slots,
         &net_symbol_specs,
+        preserved_page_count,
     )?;
 
     add_hierarchy_connectivity(
@@ -255,10 +261,16 @@ pub(crate) fn reconcile_document(
             .collect::<BTreeSet<_>>()
     };
     if creating || !repair_keys.is_empty() {
-        let mut plan = plan_connectivity_repair(&document, netlist, &current, &repair_keys)?;
+        let intent = plan_connectivity_repair_core(
+            &document,
+            netlist,
+            &current,
+            &repair_keys,
+            &BTreeSet::new(),
+        )?;
+        let mut reconnect_nets = intent.reconnect_nets.clone();
         if creating {
-            plan.reconnect_nets
-                .extend(named_connected_nets(netlist).map(|net| net.name.clone()));
+            reconnect_nets.extend(named_connected_nets(netlist).map(|net| net.name.clone()));
         }
         apply_connectivity_repair(
             &mut document,
@@ -266,7 +278,8 @@ pub(crate) fn reconcile_document(
             &mut placed,
             &net_symbol_specs,
             default_page,
-            plan,
+            &intent,
+            &reconnect_nets,
         )?;
     }
 
@@ -460,6 +473,12 @@ fn initial_component_rotation(
         unsupported: Vec::new(),
     };
     let pins = symbol::ParsedSymbolDefinition::parse(definition)?.placed_pins(&unplaced)?;
+    // Orientation inference is useful for simple passives, but rotating a
+    // larger authored symbol to favor its generated net symbols makes the
+    // whole schematic harder to scan.
+    if pins.len() != 2 {
+        return Ok(Rotation::default());
+    }
     let mut constraints = Vec::new();
     for net in named_connected_nets(netlist) {
         let Some(spec) = net_symbol_specs.get(&net.name) else {
@@ -489,12 +508,31 @@ fn initial_component_rotation(
         }
     }
 
+    Ok(preferred_two_pin_rotation(&constraints))
+}
+
+fn preferred_two_pin_rotation(constraints: &[(LabelSpin, LabelSpin)]) -> Rotation {
     let rotations = [
         Rotation::Deg0,
         Rotation::Deg90,
         Rotation::Deg180,
         Rotation::Deg270,
     ];
+
+    // Two same-facing net symbols cannot both sit directly beyond opposite
+    // component pins. Keep the component's terminal axis horizontal so the
+    // two drivers can use parallel, easy-to-scan escape routes.
+    if constraints.len() == 2
+        && constraints[0].1 == constraints[1].1
+        && let Some(rotation) = rotations.into_iter().find(|rotation| {
+            constraints
+                .iter()
+                .all(|(pin_spin, _)| !rotate_spin(*pin_spin, *rotation).is_vertical())
+        })
+    {
+        return rotation;
+    }
+
     // Opposite outward directions put the component and net-symbol bodies on
     // opposite sides of their shared connection point.
     let scores = rotations.map(|rotation| {
@@ -518,11 +556,11 @@ fn initial_component_rotation(
         .map(|(rotation, _)| rotation);
     let rotation = best.next().expect("at least one best rotation");
     // A non-unique optimum is less informative than the stable default.
-    Ok(if best.next().is_none() {
+    if best.next().is_none() {
         rotation
     } else {
         Rotation::default()
-    })
+    }
 }
 
 fn rotate_spin(mut spin: LabelSpin, rotation: Rotation) -> LabelSpin {
@@ -763,7 +801,7 @@ fn materialize_hierarchy(
             bail!("hierarchy planner produced a non-contiguous child page index");
         }
         let ports = module_ports(netlist, &sheet_plan.instance_ref)?;
-        let height = SHEET_MIN_HEIGHT_MM.max((ports.len() as f64 + 1.0) * SHEET_PIN_SPACING_MM);
+        let height = SHEET_MIN_HEIGHT_MM.max((ports.len() as f64 + 2.0) * SHEET_PIN_SPACING_MM);
         let size = Point::new(SHEET_MIN_WIDTH_MM, height);
         let at = place_sheet(document, sheet_plan.parent_page, size)?;
         let name = sheet_plan
@@ -780,7 +818,7 @@ fn materialize_hierarchy(
                     sheet_plan.module_path
                 )),
                 name: port_name.clone(),
-                at: Point::new(at.x, at.y + (index as f64 + 1.0) * SHEET_PIN_SPACING_MM),
+                at: Point::new(at.x, at.y + (index as f64 + 2.0) * SHEET_PIN_SPACING_MM),
                 rotation: Rotation::Deg180,
                 shape: LabelShape::Bidirectional,
                 unsupported: Vec::new(),
@@ -885,6 +923,7 @@ fn pack_generated_symbols(
     placed: &mut BTreeMap<SymbolSlotKey, PlacedSymbol>,
     relocatable_slots: &BTreeSet<SymbolSlotKey>,
     net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
+    preserved_page_count: usize,
 ) -> Result<()> {
     if relocatable_slots.is_empty() {
         return Ok(());
@@ -895,6 +934,28 @@ fn pack_generated_symbols(
     let targets = connectivity_targets(netlist, placed, &all_nets)?;
     let net_symbol_runs =
         plan_projected_net_symbol_runs(&targets, relocatable_slots, net_symbol_specs, placed)?;
+
+    let bounds_by_slot = relocatable_slots
+        .iter()
+        .map(|slot| {
+            Ok((
+                slot.clone(),
+                GridRect::from_bounds(component_envelope(
+                    &placed[slot],
+                    &targets,
+                    net_symbol_specs,
+                    &net_symbol_runs,
+                )?),
+            ))
+        })
+        .collect::<Result<BTreeMap<_, _>>>()?;
+    let blocks = placement_blocks(
+        netlist,
+        placed,
+        relocatable_slots,
+        &targets,
+        &bounds_by_slot,
+    )?;
 
     for page_index in 0..document.pages.len() {
         let relocatable = relocatable_slots
@@ -909,37 +970,489 @@ fn pack_generated_symbols(
         if relocatable.is_empty() {
             continue;
         }
-        let mut packer = GridPacker::for_page(&document.pages[page_index].paper)?;
+        let page_blocks = blocks
+            .iter()
+            .filter(|block| block.page_index == page_index)
+            .collect::<Vec<_>>();
+        // Fit and placement share one occupancy: the title block, hierarchy
+        // sheets, and every preserved item. A batch that fits therefore has
+        // a collision-free spot, and place_anchored takes that spot rather
+        // than its least-overlap fallback over preserved work.
         let relocatable_ids = relocatable
             .iter()
             .map(|slot| slot.symbol_id())
             .collect::<BTreeSet<_>>();
-        occupy_page_items_except(&mut packer, &document.pages[page_index], &relocatable_ids)?;
+        let (mut packer, grid_bounds, block_offsets) = if page_index >= preserved_page_count {
+            arrange_new_page_blocks(
+                &mut document.pages[page_index],
+                &page_blocks,
+                &relocatable_ids,
+            )?
+        } else {
+            arrange_existing_page_blocks(
+                &document.pages[page_index],
+                &page_blocks,
+                &relocatable_ids,
+            )?
+        };
+        let grid_origin = packer.place_anchored(grid_bounds);
+        for (block, block_offset) in page_blocks.into_iter().zip(block_offsets) {
+            let block_origin = grid_origin.translated(block_offset);
+            for member in &block.members {
+                let anchor = block_origin.translated(member.offset);
+                move_placed_symbol(document, placed, &member.slot, anchor.to_point())?;
+            }
+        }
+    }
 
-        let mut items = relocatable
-            .into_iter()
-            .map(|slot| {
-                let bounds = GridRect::from_bounds(component_envelope(
-                    &placed[&slot],
-                    &targets,
-                    net_symbol_specs,
-                    &net_symbol_runs,
-                )?);
-                Ok((slot, bounds))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        items.sort_by(|(left_slot, left), (right_slot, right)| {
-            right
-                .area()
-                .cmp(&left.area())
-                .then_with(|| left_slot.cmp(right_slot))
+    add_capacitor_bank_wires(document, netlist, placed, &blocks)?;
+    Ok(())
+}
+
+fn arrange_new_page_blocks(
+    page: &mut SchPage,
+    blocks: &[&PlacementBlock],
+    excluded_symbol_ids: &BTreeSet<String>,
+) -> Result<(GridPacker, GridRect, Vec<GridPoint>)> {
+    for paper in placement_paper_candidates(&page.paper) {
+        let packer = occupied_page_packer(page, &paper, excluded_symbol_ids)?;
+        if let Some((bounds, offsets)) = arrange_placement_blocks(blocks, &packer) {
+            page.paper = paper;
+            return Ok((packer, bounds, offsets));
+        }
+    }
+    bail!(
+        "generated component batch is too large for automatic schematic placement on {}",
+        page.file_name.as_deref().unwrap_or(&page.id)
+    )
+}
+
+fn arrange_existing_page_blocks(
+    page: &SchPage,
+    blocks: &[&PlacementBlock],
+    excluded_symbol_ids: &BTreeSet<String>,
+) -> Result<(GridPacker, GridRect, Vec<GridPoint>)> {
+    let packer = occupied_page_packer(page, &page.paper, excluded_symbol_ids)?;
+    let Some((bounds, offsets)) = arrange_placement_blocks(blocks, &packer) else {
+        bail!(
+            "generated component batch does not fit existing schematic page {}",
+            page.file_name.as_deref().unwrap_or(&page.id)
+        );
+    };
+    Ok((packer, bounds, offsets))
+}
+
+/// A packer for `paper` with the page's title block and every item other than
+/// the excluded symbols occupied: the one occupancy fit checks and final
+/// placement must agree on.
+fn occupied_page_packer(
+    page: &SchPage,
+    paper: &Paper,
+    excluded_symbol_ids: &BTreeSet<String>,
+) -> Result<GridPacker> {
+    let mut packer = GridPacker::for_page(paper)?;
+    occupy_page_items_except(&mut packer, page, excluded_symbol_ids)?;
+    Ok(packer)
+}
+
+fn placement_paper_candidates(current: &Paper) -> Vec<Paper> {
+    let mut candidates = vec![current.clone()];
+    let Paper::Named { name, portrait } = current else {
+        return candidates;
+    };
+    let larger: &[&str] = match name.as_str() {
+        "A5" => &["A4", "A3", "A2", "A1", "A0"],
+        "A4" => &["A3", "A2", "A1", "A0"],
+        "A3" => &["A2", "A1", "A0"],
+        "A2" => &["A1", "A0"],
+        "A1" => &["A0"],
+        "A" | "USLetter" => &["B", "C", "D", "E"],
+        "B" | "USLedger" => &["C", "D", "E"],
+        "C" => &["D", "E"],
+        "D" => &["E"],
+        _ => return candidates,
+    };
+    candidates.extend(larger.iter().map(|name| Paper::Named {
+        name: (*name).to_string(),
+        portrait: *portrait,
+    }));
+    candidates
+}
+
+#[derive(Debug)]
+struct PlacementMember {
+    slot: SymbolSlotKey,
+    offset: GridPoint,
+}
+
+#[derive(Debug)]
+struct CapacitorBank {
+    nets: [String; 2],
+}
+
+#[derive(Debug)]
+struct PlacementBlock {
+    key: String,
+    page_index: usize,
+    members: Vec<PlacementMember>,
+    bounds: GridRect,
+    capacitor_bank: Option<CapacitorBank>,
+}
+
+fn arrange_placement_blocks(
+    blocks: &[&PlacementBlock],
+    packer: &GridPacker,
+) -> Option<(GridRect, Vec<GridPoint>)> {
+    // Pick one page-shaped shelf grid for the whole generated cohort, among
+    // the column counts the page still has room for. Placing the grid as a
+    // unit avoids the radial pattern produced by repeatedly extending a
+    // centered cluster one block at a time.
+    let usable = packer.usable_bounds();
+    (1..=blocks.len())
+        .map(|columns| {
+            let (bounds, offsets) = placement_grid_with_columns(blocks, columns);
+            (columns, bounds, offsets)
+        })
+        .filter(|(_, bounds, _)| packer.can_place_without_overlap(*bounds))
+        .min_by_key(|(columns, bounds, _)| {
+            let aspect_error = (i64::from(bounds.width()) * i64::from(usable.height())
+                - i64::from(bounds.height()) * i64::from(usable.width()))
+            .abs();
+            (aspect_error, bounds.area(), *columns)
+        })
+        .map(|(_, bounds, offsets)| (bounds, offsets))
+}
+
+fn placement_grid_with_columns(
+    blocks: &[&PlacementBlock],
+    columns: usize,
+) -> (GridRect, Vec<GridPoint>) {
+    debug_assert!(!blocks.is_empty());
+    debug_assert!((1..=blocks.len()).contains(&columns));
+    let rows = blocks.len().div_ceil(columns);
+    let mut row_min = vec![i32::MAX; rows];
+    let mut row_max = vec![i32::MIN; rows];
+    for (index, block) in blocks.iter().enumerate() {
+        let row = index / columns;
+        row_min[row] = row_min[row].min(block.bounds.min_y);
+        row_max[row] = row_max[row].max(block.bounds.max_y);
+    }
+
+    let mut row_origins = vec![0; rows];
+    for row in 1..rows {
+        row_origins[row] =
+            row_origins[row - 1] + row_max[row - 1] - row_min[row] + PLACEMENT_BLOCK_GAP_CELLS;
+    }
+
+    let mut offsets: Vec<GridPoint> = Vec::with_capacity(blocks.len());
+    for (index, block) in blocks.iter().enumerate() {
+        let row = index / columns;
+        let x = if index % columns == 0 {
+            0
+        } else {
+            let previous = blocks[index - 1];
+            offsets[index - 1].x + previous.bounds.max_x - block.bounds.min_x
+                + PLACEMENT_BLOCK_GAP_CELLS
+        };
+        offsets.push(GridPoint {
+            x,
+            y: row_origins[row],
         });
-        for (slot, relative_bounds) in items {
-            let anchor = packer.place(relative_bounds);
-            move_placed_symbol(document, placed, &slot, anchor.to_point())?;
+    }
+    let bounds = blocks
+        .iter()
+        .zip(&offsets)
+        .map(|(block, offset)| block.bounds.translated(*offset))
+        .reduce(GridRect::union)
+        .expect("a placement grid has blocks");
+    (bounds, offsets)
+}
+
+fn placement_blocks(
+    netlist: &Schematic,
+    placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
+    relocatable_slots: &BTreeSet<SymbolSlotKey>,
+    targets: &BTreeMap<String, Vec<PinTarget>>,
+    bounds_by_slot: &BTreeMap<SymbolSlotKey, GridRect>,
+) -> Result<Vec<PlacementBlock>> {
+    let instances = component_instances(netlist)?;
+    let slots_by_component = relocatable_slots.iter().cloned().fold(
+        BTreeMap::<String, Vec<SymbolSlotKey>>::new(),
+        |mut components, slot| {
+            components
+                .entry(slot.component_path().to_string())
+                .or_default()
+                .push(slot);
+            components
+        },
+    );
+
+    // Recognize topology, not names: two or more simple capacitors spanning
+    // the same pair of nets form one visual bank. Requiring every symbol slot
+    // of a component to be new prevents a repair from reorganizing user work.
+    let mut bank_candidates = BTreeMap::<(usize, String, String), Vec<SymbolSlotKey>>::new();
+    for (component_path, slots) in &slots_by_component {
+        let Some(instance) = instances.get(component_path) else {
+            continue;
+        };
+        if instance.component_type().as_deref() != Some("capacitor") || slots.len() != 1 {
+            continue;
+        }
+        let all_slots_are_relocatable = placed
+            .keys()
+            .filter(|slot| slot.component_path() == component_path)
+            .all(|slot| relocatable_slots.contains(slot));
+        if !all_slots_are_relocatable {
+            continue;
+        }
+        let connected_nets = targets
+            .iter()
+            .filter(|(_, net_targets)| {
+                net_targets
+                    .iter()
+                    .any(|target| !target.hidden && target.slot.component_path() == component_path)
+            })
+            .map(|(net_name, _)| net_name.clone())
+            .collect::<BTreeSet<_>>();
+        let mut connected_nets = connected_nets.into_iter();
+        let (Some(first), Some(second), None) = (
+            connected_nets.next(),
+            connected_nets.next(),
+            connected_nets.next(),
+        ) else {
+            continue;
+        };
+        let page_index = placed[&slots[0]].page_index;
+        bank_candidates
+            .entry((page_index, first, second))
+            .or_default()
+            .push(slots[0].clone());
+    }
+
+    let mut claimed = BTreeSet::new();
+    let mut blocks = Vec::new();
+    for ((page_index, first, second), mut slots) in bank_candidates {
+        if slots.len() < 2 {
+            continue;
+        }
+        slots.sort();
+        claimed.extend(slots.iter().cloned());
+        let key = format!("capacitor-bank:{page_index}:{first}:{second}");
+        let mut block = placement_block(key, page_index, slots, bounds_by_slot, usize::MAX);
+        // Shared rail buses sit just outside the component pins. The projected
+        // net-symbol envelopes generally reserve more room, but keep the block
+        // contract explicit for nets without symbols as well.
+        block.bounds = block
+            .bounds
+            .expanded(CAPACITOR_BANK_BUS_OFFSET_CELLS as i32);
+        block.capacitor_bank = Some(CapacitorBank {
+            nets: [first, second],
+        });
+        blocks.push(block);
+    }
+
+    // The fallback groups all units of one component into a small regular
+    // block. Most components have one unit, so these become singleton blocks.
+    for (component_path, mut slots) in slots_by_component {
+        slots.retain(|slot| !claimed.contains(slot));
+        if slots.is_empty() {
+            continue;
+        }
+        slots.sort();
+        let page_index = placed[&slots[0]].page_index;
+        let columns = (1..)
+            .find(|columns| columns * columns >= slots.len())
+            .expect("a finite component has a square grid");
+        blocks.push(placement_block(
+            format!("component:{component_path}"),
+            page_index,
+            slots,
+            bounds_by_slot,
+            columns,
+        ));
+    }
+
+    blocks.sort_by(|left, right| {
+        right
+            .bounds
+            .area()
+            .cmp(&left.bounds.area())
+            .then_with(|| left.key.cmp(&right.key))
+    });
+    Ok(blocks)
+}
+
+fn placement_block(
+    key: String,
+    page_index: usize,
+    slots: Vec<SymbolSlotKey>,
+    bounds_by_slot: &BTreeMap<SymbolSlotKey, GridRect>,
+    max_columns: usize,
+) -> PlacementBlock {
+    let columns = max_columns.min(slots.len());
+    let rows = slots.len().div_ceil(columns);
+    let mut row_min = vec![i32::MAX; rows];
+    let mut row_max = vec![i32::MIN; rows];
+    for (index, slot) in slots.iter().enumerate() {
+        let row = index / columns;
+        row_min[row] = row_min[row].min(bounds_by_slot[slot].min_y);
+        row_max[row] = row_max[row].max(bounds_by_slot[slot].max_y);
+    }
+    let mut row_origins = vec![0; rows];
+    for row in 1..rows {
+        row_origins[row] =
+            row_origins[row - 1] + row_max[row - 1] - row_min[row] + PLACEMENT_BLOCK_GAP_CELLS;
+    }
+
+    let mut block_bounds = None;
+    let mut members: Vec<PlacementMember> = Vec::with_capacity(slots.len());
+    for (index, slot) in slots.into_iter().enumerate() {
+        let bounds = bounds_by_slot[&slot];
+        let row = index / columns;
+        let x = if index % columns == 0 {
+            0
+        } else {
+            let previous = &members[index - 1];
+            previous.offset.x + bounds_by_slot[&previous.slot].max_x - bounds.min_x
+                + PLACEMENT_BLOCK_GAP_CELLS
+        };
+        let offset = GridPoint {
+            x,
+            y: row_origins[row],
+        };
+        let member_bounds = bounds.translated(offset);
+        block_bounds =
+            Some(block_bounds.map_or(member_bounds, |block: GridRect| block.union(member_bounds)));
+        members.push(PlacementMember { slot, offset });
+    }
+    PlacementBlock {
+        key,
+        page_index,
+        members,
+        bounds: block_bounds.expect("placement block has bounds"),
+        capacitor_bank: None,
+    }
+}
+
+fn add_capacitor_bank_wires(
+    document: &mut SchDocument,
+    netlist: &Schematic,
+    placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
+    blocks: &[PlacementBlock],
+) -> Result<()> {
+    let bank_nets = blocks
+        .iter()
+        .filter_map(|block| block.capacitor_bank.as_ref())
+        .flat_map(|bank| bank.nets.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    if bank_nets.is_empty() {
+        return Ok(());
+    }
+    let targets = connectivity_targets(netlist, placed, &bank_nets)?;
+    for block in blocks {
+        let Some(bank) = &block.capacitor_bank else {
+            continue;
+        };
+        let member_slots = block
+            .members
+            .iter()
+            .map(|member| member.slot.clone())
+            .collect::<BTreeSet<_>>();
+        let rail_targets = bank
+            .nets
+            .iter()
+            .map(|net_name| {
+                let selected = targets[net_name]
+                    .iter()
+                    .filter(|target| !target.hidden && member_slots.contains(&target.slot))
+                    .collect::<Vec<_>>();
+                let one_per_member = selected.len() == member_slots.len()
+                    && member_slots.iter().all(|slot| {
+                        selected
+                            .iter()
+                            .filter(|target| &target.slot == slot)
+                            .count()
+                            == 1
+                    });
+                one_per_member.then_some(selected)
+            })
+            .collect::<Option<Vec<_>>>();
+        let Some(rail_targets) = rail_targets else {
+            continue;
+        };
+        let sides = rail_targets
+            .iter()
+            .map(|targets| {
+                let side = targets[0].spin;
+                targets
+                    .iter()
+                    .all(|target| target.spin == side)
+                    .then_some(side)
+            })
+            .collect::<Option<Vec<_>>>();
+        let Some(sides) = sides else {
+            continue;
+        };
+        // A horizontal capacitor row has safe, conventional shared buses only
+        // when the two terminals point vertically in opposite directions.
+        if !sides[0].is_vertical() || sides[1] != opposite_spin(sides[0]) {
+            continue;
+        }
+        for ((net_name, targets), side) in bank.nets.iter().zip(rail_targets).zip(sides) {
+            for (index, (a, b)) in capacitor_bank_wire_segments(&targets, side)
+                .into_iter()
+                .enumerate()
+            {
+                if points_coincide(a, b) {
+                    continue;
+                }
+                let id = available_deterministic_id(
+                    document,
+                    &format!("zener:{}:{net_name}:wire:{index}", block.key),
+                );
+                document.pages[block.page_index]
+                    .items
+                    .push(SchItem::Wire(Wire {
+                        id,
+                        a,
+                        b,
+                        unsupported: Vec::new(),
+                    }));
+            }
         }
     }
     Ok(())
+}
+
+fn capacitor_bank_wire_segments(targets: &[&PinTarget], side: LabelSpin) -> Vec<(Point, Point)> {
+    debug_assert!(side.is_vertical());
+    let bus_y = if side == LabelSpin::Up {
+        targets
+            .iter()
+            .map(|target| target.point.y)
+            .min_by(f64::total_cmp)
+            .expect("capacitor bank rail has targets")
+            - CAPACITOR_BANK_BUS_OFFSET_CELLS * CONNECTION_GRID_MM
+    } else {
+        targets
+            .iter()
+            .map(|target| target.point.y)
+            .max_by(f64::total_cmp)
+            .expect("capacitor bank rail has targets")
+            + CAPACITOR_BANK_BUS_OFFSET_CELLS * CONNECTION_GRID_MM
+    };
+    let mut bus_points = targets
+        .iter()
+        .map(|target| Point::new(target.point.x, bus_y))
+        .collect::<Vec<_>>();
+    bus_points.sort_by(|left, right| left.x.total_cmp(&right.x));
+    targets
+        .iter()
+        .map(|target| (target.point, Point::new(target.point.x, bus_y)))
+        // Split the bus at every branch. KiCad connectivity treats endpoints
+        // as joins without needing generated junction markers.
+        .chain(bus_points.windows(2).map(|points| (points[0], points[1])))
+        .collect()
 }
 
 fn occupy_page_items(packer: &mut GridPacker, page: &SchPage) -> Result<()> {
@@ -958,7 +1471,12 @@ fn occupy_page_items_except(
                     continue;
                 };
                 if let Some(bounds) = field_autoplace::symbol_visual_bounds(symbol, definition)? {
-                    packer.occupy(GridRect::from_bounds(bounds));
+                    let bounds = GridRect::from_bounds(bounds);
+                    if symbol.field_value("Path").is_some() {
+                        packer.occupy_anchored(bounds, symbol.at);
+                    } else {
+                        packer.occupy(bounds);
+                    }
                 }
             }
             SchItem::Sheet(sheet) => {
@@ -968,7 +1486,9 @@ fn occupy_page_items_except(
                     packer.occupy(GridRect::from_bounds(bounds));
                 }
             }
-            SchItem::Label(label) => packer.occupy(point_rect(label.at)),
+            SchItem::Label(label) => {
+                packer.occupy(GridRect::from_bounds(label_visual_bounds(label)))
+            }
             SchItem::Wire(wire) => {
                 let bounds = field_autoplace::Bounds::from_points([wire.a, wire.b])
                     .expect("wire has two endpoints");
@@ -980,214 +1500,6 @@ fn occupy_page_items_except(
         }
     }
     Ok(())
-}
-
-fn point_rect(point: Point) -> GridRect {
-    GridRect {
-        min_x: grid_floor(point.x),
-        min_y: grid_floor(point.y),
-        max_x: grid_ceil(point.x).max(grid_floor(point.x) + 1),
-        max_y: grid_ceil(point.y).max(grid_floor(point.y) + 1),
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct GridPoint {
-    x: i32,
-    y: i32,
-}
-
-impl GridPoint {
-    fn to_point(self) -> Point {
-        Point::new(
-            self.x as f64 * CONNECTION_GRID_MM,
-            self.y as f64 * CONNECTION_GRID_MM,
-        )
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct GridRect {
-    min_x: i32,
-    min_y: i32,
-    max_x: i32,
-    max_y: i32,
-}
-
-impl GridRect {
-    fn from_bounds(bounds: field_autoplace::Bounds) -> Self {
-        let min_x = grid_floor(bounds.min_x);
-        let min_y = grid_floor(bounds.min_y);
-        Self {
-            min_x,
-            min_y,
-            max_x: grid_ceil(bounds.max_x).max(min_x + 1),
-            max_y: grid_ceil(bounds.max_y).max(min_y + 1),
-        }
-    }
-
-    fn translated(self, point: GridPoint) -> Self {
-        Self {
-            min_x: self.min_x + point.x,
-            min_y: self.min_y + point.y,
-            max_x: self.max_x + point.x,
-            max_y: self.max_y + point.y,
-        }
-    }
-
-    fn expanded(self, amount: i32) -> Self {
-        Self {
-            min_x: self.min_x - amount,
-            min_y: self.min_y - amount,
-            max_x: self.max_x + amount,
-            max_y: self.max_y + amount,
-        }
-    }
-
-    fn area(self) -> i64 {
-        i64::from(self.max_x - self.min_x) * i64::from(self.max_y - self.min_y)
-    }
-}
-
-struct GridPacker {
-    usable: GridRect,
-    width: usize,
-    occupied: Vec<bool>,
-}
-
-impl GridPacker {
-    fn for_page(paper: &Paper) -> Result<Self> {
-        let (width_mm, height_mm) = paper_dimensions(paper)?;
-        let usable = GridRect {
-            min_x: PACKING_MARGIN_CELLS,
-            min_y: PACKING_MARGIN_CELLS,
-            max_x: grid_floor(width_mm) - PACKING_MARGIN_CELLS,
-            max_y: grid_floor(height_mm) - PACKING_MARGIN_CELLS,
-        };
-        if usable.max_x <= usable.min_x || usable.max_y <= usable.min_y {
-            bail!("schematic page is too small for automatic placement");
-        }
-        let width = (usable.max_x - usable.min_x) as usize;
-        let height = (usable.max_y - usable.min_y) as usize;
-        let mut packer = Self {
-            usable,
-            width,
-            occupied: vec![false; width * height],
-        };
-        packer.occupy(GridRect::from_bounds(
-            field_autoplace::Bounds::from_points([
-                Point::new(
-                    width_mm - DEFAULT_TITLE_BLOCK_WIDTH_MM,
-                    height_mm - DEFAULT_TITLE_BLOCK_HEIGHT_MM,
-                ),
-                Point::new(width_mm, height_mm),
-            ])
-            .expect("title block has two corners"),
-        ));
-        Ok(packer)
-    }
-
-    fn occupy(&mut self, rect: GridRect) {
-        let rect = rect.expanded(PACKING_CLEARANCE_CELLS);
-        let min_x = rect.min_x.max(self.usable.min_x);
-        let min_y = rect.min_y.max(self.usable.min_y);
-        let max_x = rect.max_x.min(self.usable.max_x);
-        let max_y = rect.max_y.min(self.usable.max_y);
-        for y in min_y..max_y {
-            for x in min_x..max_x {
-                let index = self.index(x, y);
-                self.occupied[index] = true;
-            }
-        }
-    }
-
-    fn place(&mut self, relative: GridRect) -> GridPoint {
-        let min_anchor_x = self.usable.min_x - relative.min_x;
-        let min_anchor_y = self.usable.min_y - relative.min_y;
-        let max_anchor_x = self.usable.max_x - relative.max_x;
-        let max_anchor_y = self.usable.max_y - relative.max_y;
-        if max_anchor_x < min_anchor_x || max_anchor_y < min_anchor_y {
-            let anchor = self.centered_anchor(relative);
-            self.occupy(relative.translated(anchor));
-            return anchor;
-        }
-        let occupied = self.occupancy_prefix();
-        let mut best = None;
-        for y in min_anchor_y..=max_anchor_y {
-            for x in min_anchor_x..=max_anchor_x {
-                let anchor = GridPoint { x, y };
-                let candidate = relative.translated(anchor);
-                let overlap = self.occupied_cells(candidate, &occupied);
-                let rank = (overlap, self.distance_from_center_squared(candidate), y, x);
-                if best.is_none_or(|(best_rank, _)| rank < best_rank) {
-                    best = Some((rank, anchor));
-                }
-            }
-        }
-        let anchor = best.expect("a non-empty anchor range has a candidate").1;
-        self.occupy(relative.translated(anchor));
-        anchor
-    }
-
-    fn centered_anchor(&self, relative: GridRect) -> GridPoint {
-        let x2 = i64::from(self.usable.min_x) + i64::from(self.usable.max_x)
-            - i64::from(relative.min_x)
-            - i64::from(relative.max_x);
-        let y2 = i64::from(self.usable.min_y) + i64::from(self.usable.max_y)
-            - i64::from(relative.min_y)
-            - i64::from(relative.max_y);
-        GridPoint {
-            x: x2.div_euclid(2) as i32,
-            y: y2.div_euclid(2) as i32,
-        }
-    }
-
-    fn distance_from_center_squared(&self, rect: GridRect) -> i64 {
-        let dx = i64::from(rect.min_x) + i64::from(rect.max_x)
-            - i64::from(self.usable.min_x)
-            - i64::from(self.usable.max_x);
-        let dy = i64::from(rect.min_y) + i64::from(rect.max_y)
-            - i64::from(self.usable.min_y)
-            - i64::from(self.usable.max_y);
-        dx * dx + dy * dy
-    }
-
-    fn occupancy_prefix(&self) -> Vec<u32> {
-        let height = self.occupied.len() / self.width;
-        let stride = self.width + 1;
-        let mut prefix = vec![0; stride * (height + 1)];
-        for y in 0..height {
-            let mut row = 0;
-            for x in 0..self.width {
-                row += u32::from(self.occupied[y * self.width + x]);
-                prefix[(y + 1) * stride + x + 1] = prefix[y * stride + x + 1] + row;
-            }
-        }
-        prefix
-    }
-
-    fn occupied_cells(&self, rect: GridRect, prefix: &[u32]) -> u32 {
-        let x0 = (rect.min_x - self.usable.min_x) as usize;
-        let y0 = (rect.min_y - self.usable.min_y) as usize;
-        let x1 = (rect.max_x - self.usable.min_x) as usize;
-        let y1 = (rect.max_y - self.usable.min_y) as usize;
-        let stride = self.width + 1;
-        prefix[y1 * stride + x1] + prefix[y0 * stride + x0]
-            - prefix[y0 * stride + x1]
-            - prefix[y1 * stride + x0]
-    }
-
-    fn index(&self, x: i32, y: i32) -> usize {
-        (y - self.usable.min_y) as usize * self.width + (x - self.usable.min_x) as usize
-    }
-}
-
-fn grid_floor(value: f64) -> i32 {
-    ((value + GEOMETRY_EPS_MM) / CONNECTION_GRID_MM).floor() as i32
-}
-
-fn grid_ceil(value: f64) -> i32 {
-    ((value - GEOMETRY_EPS_MM) / CONNECTION_GRID_MM).ceil() as i32
 }
 
 fn component_envelope(
@@ -1230,7 +1542,7 @@ fn component_envelope(
                 bounds.union(symbol_bounds);
             }
             for target in &run.targets {
-                let bend = net_symbol_wire_bend(target.point, connection, spec.pin_outward_spin);
+                let bend = net_symbol_wire_bend(target.point, connection, target.spin);
                 bounds.union(
                     field_autoplace::Bounds::from_points([target.point, bend, connection])
                         .expect("net-symbol route has at least two points"),
@@ -1242,12 +1554,25 @@ fn component_envelope(
 }
 
 fn net_label_bounds(net_name: &str, target: &PinTarget) -> field_autoplace::Bounds {
+    estimated_label_bounds(target.point, target.spin, estimated_label_width(net_name))
+}
+
+fn label_visual_bounds(label: &Label) -> field_autoplace::Bounds {
+    let length = match label.kind {
+        LabelKind::Local => estimated_label_width(&label.text),
+        LabelKind::Global { .. } | LabelKind::Hierarchical { .. } | LabelKind::Directive { .. } => {
+            estimated_shaped_label_width(&label.text)
+        }
+    };
+    estimated_label_bounds(label.at, label.spin, length)
+}
+
+fn estimated_label_bounds(at: Point, spin: LabelSpin, length: f64) -> field_autoplace::Bounds {
     let text_height = crate::TextEffects::default().font_size.y.abs();
-    let length = estimated_label_width(net_name);
     let half_height = text_height * 0.5;
     // Extend `length` along the spin direction, +/- half a text height on the
     // perpendicular axis.
-    let (dx, dy): (f64, f64) = match target.spin {
+    let (dx, dy): (f64, f64) = match spin {
         LabelSpin::Left => (-1.0, 0.0),
         LabelSpin::Right => (1.0, 0.0),
         LabelSpin::Up => (0.0, -1.0),
@@ -1255,11 +1580,8 @@ fn net_label_bounds(net_name: &str, target: &PinTarget) -> field_autoplace::Boun
     };
     let (px, py) = (dy.abs() * half_height, dx.abs() * half_height);
     field_autoplace::Bounds::from_points([
-        Point::new(target.point.x - px, target.point.y - py),
-        Point::new(
-            target.point.x + dx * length + px,
-            target.point.y + dy * length + py,
-        ),
+        Point::new(at.x - px, at.y - py),
+        Point::new(at.x + dx * length + px, at.y + dy * length + py),
     ])
     .expect("two points define label bounds")
 }
@@ -1604,10 +1926,11 @@ fn apply_connectivity_repair(
     placed: &mut BTreeMap<SymbolSlotKey, PlacedSymbol>,
     net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
     root_page: usize,
-    plan: ConnectivityRepairPlan,
+    intent: &ConnectivityRepairIntent,
+    reconnect_nets: &BTreeSet<String>,
 ) -> Result<()> {
-    remove_items(document, &plan.removals)?;
-    for location in &plan.relocate_symbols {
+    remove_items(document, &intent.removals)?;
+    for location in &intent.relocated_symbols {
         relocate_symbol(document, placed, location)?;
     }
     add_connectivity_drivers(
@@ -1616,8 +1939,117 @@ fn apply_connectivity_repair(
         placed,
         net_symbol_specs,
         root_page,
-        &plan.reconnect_nets,
+        reconnect_nets,
     )?;
+    Ok(())
+}
+
+/// The name driver a realizer must use for each reconnected net on each page
+/// where the net has visible pins or an interface port. Power-symbol nets use
+/// their netlist symbol; an island cut off from the same net on another page
+/// needs a global label; a page whose module interface exposes the net uses a
+/// hierarchical label; a net whose pins span pages without such an interface
+/// needs a global label; everything else is a local label.
+pub(crate) fn plan_net_driver_kinds(
+    document: &SchDocument,
+    netlist: &Schematic,
+    nets: &BTreeSet<String>,
+) -> Result<BTreeMap<String, BTreeMap<String, NetDriverKind>>> {
+    if nets.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let root_page = document
+        .root_page_ids
+        .iter()
+        .find_map(|id| document.pages.iter().position(|page| &page.id == id))
+        .context("KiCad schematic project has no loaded root page")?;
+    let expected_slots = component_slots::component_symbol_slots(netlist)?
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let placed = placed_symbols_from_document(document, &expected_slots)?;
+    let targets = connectivity_targets(netlist, &placed, nets)?;
+    let contexts = page_driver_contexts(document, netlist, root_page)?;
+    let specs = net_symbols::specs(netlist)?;
+    let root_ports = netlist
+        .root_ref
+        .as_ref()
+        .map(|root| root_interface::ports_by_net(netlist, root))
+        .transpose()?
+        .unwrap_or_default();
+
+    let observed = reduce_with_provenance(document, PinVisibility::VisibleOnly)?;
+
+    let mut kinds = BTreeMap::new();
+    for net_name in nets {
+        let net_targets = targets.get(net_name).map(Vec::as_slice).unwrap_or(&[]);
+        let mut pages = net_targets
+            .iter()
+            .filter(|target| !target.hidden)
+            .map(|target| target.page_index)
+            .collect::<BTreeSet<_>>();
+        // An island cut off from the same net on another page needs a global
+        // driver whatever the page's interface says. This is the realizer's
+        // own rule, so a consumer following the intent lands on the same
+        // label kind and the pages actually join.
+        let global_pages = if specs.contains_key(net_name) {
+            BTreeSet::new()
+        } else {
+            net_driver_islands(document, net_targets, &observed)?
+                .into_iter()
+                .filter(|island| island.needs_global)
+                .map(|island| net_targets[island.canonical_target].page_index)
+                .collect::<BTreeSet<_>>()
+        };
+        if root_ports.contains_key(net_name) {
+            pages.insert(root_page);
+        }
+        // A page whose module interface exposes the net owes it a
+        // hierarchical endpoint even when none of the net's pins sit there.
+        if !specs.contains_key(net_name) {
+            pages.extend(
+                contexts
+                    .iter()
+                    .filter(|(_, context)| context.contains_key(net_name))
+                    .map(|(page_index, _)| *page_index),
+            );
+        }
+        let spans_pages = pages.len() > 1;
+        let per_page = pages
+            .into_iter()
+            .map(|page_index| {
+                let kind = if let Some(spec) = specs.get(net_name) {
+                    NetDriverKind::NetSymbol(spec.clone())
+                } else if global_pages.contains(&page_index) {
+                    NetDriverKind::Global
+                } else if let Some(names) = contexts
+                    .get(&page_index)
+                    .and_then(|context| context.get(net_name))
+                {
+                    NetDriverKind::Hierarchical {
+                        names: names.clone(),
+                    }
+                } else if spans_pages {
+                    NetDriverKind::Global
+                } else {
+                    NetDriverKind::Local
+                };
+                (document.pages[page_index].id.clone(), kind)
+            })
+            .collect();
+        kinds.insert(net_name.clone(), per_page);
+    }
+    Ok(kinds)
+}
+
+/// Move each symbol off its invalid overlap, changing nothing else.
+pub(crate) fn relocate_symbols(
+    document: &mut SchDocument,
+    locations: &BTreeSet<SymbolLocation>,
+) -> Result<()> {
+    let mut placed = BTreeMap::new();
+    for location in locations {
+        relocate_symbol(document, &mut placed, location)?;
+    }
     Ok(())
 }
 
@@ -1662,7 +2094,7 @@ fn relocate_symbol(
             })
             .translated(-symbol.at.x, -symbol.at.y),
     );
-    let new_at = packer.place(relative).to_point();
+    let new_at = packer.place_anchored(relative).to_point();
     let delta = Point::new(new_at.x - symbol.at.x, new_at.y - symbol.at.y);
     symbol.at = new_at;
     for field in symbol.fields.values_mut() {
@@ -1846,29 +2278,111 @@ fn sync_net_drivers(
     // that order without treating a deterministic UUID as ownership.
     let net_symbol_runs = plan_net_symbol_runs(document, targets_by_net, net_symbol_specs, placed)?;
     let observed = reduce_with_provenance(document, PinVisibility::VisibleOnly)?;
+    // Drivers this pass adds, by net: the snapshot above predates them, and
+    // meeting a net's own new symbol or stub is not a collision.
+    let mut added_by_net = BTreeMap::<String, BTreeSet<ConnectivityItemRef>>::new();
 
     for run in net_symbol_runs {
         let spec = &net_symbol_specs[&run.net_name];
         let target = &run.targets[0];
-        let connection_point = net_symbol_connection_point(
-            &placed[&run.slot],
-            &run.placement_target(),
-            spec.pin_outward_spin,
-            run.stair_index,
-        )?;
+        // Geometry the new driver may touch: every island that already
+        // belongs to this net, whether named or reached through one of the
+        // net's pins. Meeting it never shorts and may well reconnect it.
+        let net_targets = targets_by_net
+            .get(&run.net_name)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let net_pins = net_targets
+            .iter()
+            .map(|member| member.physical_pin(&document.pages[member.page_index].id))
+            .collect::<BTreeSet<_>>();
+        let mut own_items = observed
+            .islands
+            .values()
+            .filter(|island| {
+                island.names.contains(&run.net_name) || !island.pins.is_disjoint(&net_pins)
+            })
+            .flat_map(|island| island.items.iter().cloned())
+            .collect::<BTreeSet<_>>();
+        if let Some(added) = added_by_net.get(&run.net_name) {
+            own_items.extend(added.iter().cloned());
+        }
+        let page_id = document.pages[run.page_index].id.clone();
+        // Only this page's pins are safe to meet: a coordinate that merely
+        // matches a pin on another page is foreign geometry here.
+        let own_points = net_targets
+            .iter()
+            .filter(|member| member.page_index == run.page_index)
+            .map(|member| member.point)
+            .collect::<Vec<_>>();
+        let placement_target = run.placement_target();
+        let mut connection_point = None;
+        for extra in 0..NET_SYMBOL_STAIR_RETRIES {
+            let candidate = net_symbol_connection_point(
+                &placed[&run.slot],
+                &placement_target,
+                spec.pin_outward_spin,
+                run.stair_index + extra,
+            )?;
+            if !net_symbol_stub_collides(
+                &document.pages[run.page_index],
+                &run.targets,
+                &own_points,
+                &own_items,
+                candidate,
+            )? {
+                connection_point = Some(candidate);
+                break;
+            }
+        }
+        let Some(connection_point) = connection_point else {
+            // Dense wiring leaves the symbol no clear spot. A label at the
+            // pin names the island with no new geometry, in the scope the
+            // power symbol itself has: global, so the island joins the net's
+            // symbols on every page, or local for a local power symbol.
+            let spans_pages = matches!(
+                symbol::ParsedSymbolDefinition::parse(&spec.definition)?.power_scope(),
+                Some(symbol::PowerScope::Global)
+            );
+            for member in &run.targets {
+                let id = available_deterministic_id(document, &member.label_key(&run.net_name));
+                let mut label = driver_label(&run.net_name, None, spans_pages, id, member.point);
+                label.spin = member.spin;
+                added_by_net
+                    .entry(run.net_name.clone())
+                    .or_default()
+                    .insert(ConnectivityItemRef::Label {
+                        page_id: page_id.clone(),
+                        id: label.id.clone(),
+                    });
+                document.pages[member.page_index]
+                    .items
+                    .push(SchItem::Label(label));
+            }
+            continue;
+        };
         let id = available_deterministic_id(document, &target.net_symbol_key(&run.net_name));
         let symbol = build_net_symbol(spec, &run.net_name, id, connection_point)?;
         let symbol_id = symbol.id.clone();
         insert_net_symbol(document, run.page_index, symbol, &spec.definition)?;
+        let added = added_by_net.entry(run.net_name.clone()).or_default();
+        added.insert(ConnectivityItemRef::Symbol {
+            page_id: page_id.clone(),
+            id: symbol_id.clone(),
+        });
         for member in run.targets {
-            insert_connection_wires(
+            let wire_ids = insert_connection_wires(
                 document,
                 member.page_index,
                 &symbol_id,
                 member.point,
                 connection_point,
-                spec.pin_outward_spin,
+                member.spin,
             );
+            added.extend(wire_ids.into_iter().map(|id| ConnectivityItemRef::Wire {
+                page_id: page_id.clone(),
+                id,
+            }));
         }
     }
 
@@ -1919,14 +2433,15 @@ fn sync_net_drivers(
     Ok(())
 }
 
-fn adjacent_target_runs<'a>(
+fn adjacent_target_runs<'a, T>(
     placed: &PlacedSymbol,
-    mut targets: Vec<&'a PinTarget>,
-) -> Result<Vec<Vec<&'a PinTarget>>> {
-    let Some(side) = targets.first().map(|target| target.spin) else {
+    mut targets: Vec<T>,
+    pin_target: impl Fn(&T) -> &'a PinTarget,
+) -> Result<Vec<Vec<T>>> {
+    let Some(side) = targets.first().map(|target| pin_target(target).spin) else {
         return Ok(Vec::new());
     };
-    debug_assert!(targets.iter().all(|target| target.spin == side));
+    debug_assert!(targets.iter().all(|target| pin_target(target).spin == side));
     let compare_points = |left: Point, right: Point| {
         let primary = if matches!(side, LabelSpin::Left | LabelSpin::Right) {
             left.y.total_cmp(&right.y)
@@ -1938,6 +2453,8 @@ fn adjacent_target_runs<'a>(
             .then_with(|| left.y.total_cmp(&right.y))
     };
     targets.sort_by(|left, right| {
+        let left = pin_target(left);
+        let right = pin_target(right);
         compare_points(left.point, right.point).then_with(|| left.number.cmp(&right.number))
     });
 
@@ -1953,7 +2470,8 @@ fn adjacent_target_runs<'a>(
 
     let ranked = targets
         .into_iter()
-        .map(|target| {
+        .map(|item| {
+            let target = pin_target(&item);
             let matches = visible_pins
                 .iter()
                 .enumerate()
@@ -1972,11 +2490,11 @@ fn adjacent_target_runs<'a>(
                 .filter(|pin| pin.point == target.point)
                 .count()
                 > 1;
-            Ok((target, *rank, stacked))
+            Ok((item, *rank, stacked))
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let mut runs = Vec::<Vec<&PinTarget>>::new();
+    let mut runs = Vec::<Vec<T>>::new();
     let mut previous: Option<(usize, bool)> = None;
     for (target, rank, stacked) in ranked {
         let joins_previous = previous.is_some_and(|(previous_rank, previous_stacked)| {
@@ -2019,7 +2537,7 @@ fn plan_net_symbol_runs(
             missing.push((net_name, target));
         }
     }
-    arrange_net_symbol_runs(missing, net_symbol_specs, placed)
+    arrange_net_symbol_runs(missing, placed, net_symbol_specs)
 }
 
 fn plan_projected_net_symbol_runs(
@@ -2037,27 +2555,25 @@ fn plan_projected_net_symbol_runs(
                 .filter(|target| !target.hidden && projected_slots.contains(&target.slot))
                 .map(move |target| (net_name, target))
         });
-    arrange_net_symbol_runs(missing, net_symbol_specs, placed)
+    arrange_net_symbol_runs(missing, placed, net_symbol_specs)
 }
 
 fn arrange_net_symbol_runs<'a>(
     missing: impl IntoIterator<Item = (&'a String, &'a PinTarget)>,
-    net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
     placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
+    net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
 ) -> Result<Vec<NetSymbolRun>> {
-    type Slot = (usize, SymbolSlotKey, LabelSpin, LabelSpin);
-    type GroupKey = (String, usize, SymbolSlotKey, LabelSpin, LabelSpin);
+    type Slot = (usize, SymbolSlotKey, LabelSpin);
+    type GroupKey = (String, usize, SymbolSlotKey, LabelSpin);
 
     let mut groups = BTreeMap::<GroupKey, Vec<&PinTarget>>::new();
     for (net_name, target) in missing {
-        let spec = &net_symbol_specs[net_name];
         groups
             .entry((
                 net_name.clone(),
                 target.page_index,
                 target.slot.clone(),
                 target.spin,
-                spec.pin_outward_spin,
             ))
             .or_default()
             .push(target);
@@ -2065,8 +2581,8 @@ fn arrange_net_symbol_runs<'a>(
 
     let mut runs = Vec::<NetSymbolRun>::new();
     let mut slots = BTreeMap::<Slot, Vec<usize>>::new();
-    for ((net_name, page_index, slot, target_side, symbol_side), members) in groups {
-        for members in adjacent_target_runs(&placed[&slot], members)? {
+    for ((net_name, page_index, slot, target_side), members) in groups {
+        for members in adjacent_target_runs(&placed[&slot], members, |target| *target)? {
             let run_index = runs.len();
             runs.push(NetSymbolRun {
                 net_name: net_name.clone(),
@@ -2076,28 +2592,58 @@ fn arrange_net_symbol_runs<'a>(
                 stair_index: 0,
             });
             slots
-                .entry((page_index, slot.clone(), target_side, symbol_side))
+                .entry((page_index, slot.clone(), target_side))
                 .or_default()
                 .push(run_index);
         }
     }
 
-    for ((_, _, target_side, _), run_indices) in &mut slots {
-        run_indices.sort_by(|left, right| {
-            let left_point = runs[*left].placement_target().point;
-            let right_point = runs[*right].placement_target().point;
-            let primary = if matches!(*target_side, LabelSpin::Left | LabelSpin::Right) {
-                left_point.y.total_cmp(&right_point.y)
-            } else {
-                left_point.x.total_cmp(&right_point.x)
-            };
-            primary
-                .then_with(|| left_point.x.total_cmp(&right_point.x))
-                .then_with(|| left_point.y.total_cmp(&right_point.y))
-                .then_with(|| runs[*left].net_name.cmp(&runs[*right].net_name))
-        });
-        for (stair_index, run_index) in run_indices.iter().enumerate() {
-            runs[*run_index].stair_index = stair_index;
+    for ((_, slot, target_side), run_indices) in &slots {
+        let banks = {
+            let indexed_targets = run_indices
+                .iter()
+                .flat_map(|run_index| {
+                    runs[*run_index]
+                        .targets
+                        .iter()
+                        .map(move |target| (*run_index, target))
+                })
+                .collect::<Vec<_>>();
+            adjacent_target_runs(&placed[slot], indexed_targets, |(_, target)| *target)?
+                .into_iter()
+                .map(|bank| {
+                    let mut bank_runs = Vec::new();
+                    for (run_index, _) in bank {
+                        if !bank_runs.contains(&run_index) {
+                            bank_runs.push(run_index);
+                        }
+                    }
+                    bank_runs
+                })
+                .collect::<Vec<_>>()
+        };
+        // A stair that follows its pin (top or bottom pins, or side pins
+        // with a sideways symbol) restarts per bank: distinct pins already
+        // give distinct points. A side pin with an upright symbol lands at
+        // the body corner whatever the pin, so those stairs number the whole
+        // side, or two banks' symbols would stack and short their nets.
+        let mut corner_stair = 0;
+        for bank_runs in banks {
+            let mut bank_stair = 0;
+            for run_index in bank_runs {
+                let run = &mut runs[run_index];
+                let follows_pin = target_side.is_vertical()
+                    || net_symbol_specs
+                        .get(&run.net_name)
+                        .is_some_and(|spec| !spec.pin_outward_spin.is_vertical());
+                if follows_pin {
+                    run.stair_index = bank_stair;
+                    bank_stair += 1;
+                } else {
+                    run.stair_index = corner_stair;
+                    corner_stair += 1;
+                }
+            }
         }
     }
     Ok(runs)
@@ -2130,8 +2676,8 @@ fn net_symbol_connection_point(
             };
             Point::new(x, y)
         }
-        LabelSpin::Up => Point::new(target.point.x + stair, bounds.min_y - offset),
-        LabelSpin::Bottom => Point::new(target.point.x + stair, bounds.max_y + offset),
+        LabelSpin::Up => Point::new(target.point.x + stair, bounds.min_y - offset - stair),
+        LabelSpin::Bottom => Point::new(target.point.x + stair, bounds.max_y + offset + stair),
     };
     Ok(Point::new(
         snap_connection_grid(point.x),
@@ -2149,9 +2695,10 @@ fn insert_connection_wires(
     symbol_id: &str,
     target: Point,
     connection: Point,
-    symbol_pin_spin: LabelSpin,
-) {
-    let bend = net_symbol_wire_bend(target, connection, symbol_pin_spin);
+    target_spin: LabelSpin,
+) -> Vec<String> {
+    let bend = net_symbol_wire_bend(target, connection, target_spin);
+    let mut ids = Vec::new();
     for (index, (a, b)) in [(target, bend), (bend, connection)].into_iter().enumerate() {
         if points_coincide(a, b) {
             continue;
@@ -2160,6 +2707,7 @@ fn insert_connection_wires(
             document,
             &format!("zener:net-symbol-wire:{symbol_id}:{index}"),
         );
+        ids.push(id.clone());
         document.pages[page_index].items.push(SchItem::Wire(Wire {
             id,
             a,
@@ -2167,13 +2715,89 @@ fn insert_connection_wires(
             unsupported: Vec::new(),
         }));
     }
+    ids
 }
 
-fn net_symbol_wire_bend(target: Point, connection: Point, symbol_pin_spin: LabelSpin) -> Point {
-    if symbol_pin_spin.is_vertical() {
-        Point::new(connection.x, target.y)
-    } else {
+/// Whether a net symbol at `connection`, with stubs from each target pin,
+/// would touch geometry that is not already part of the targets' islands.
+/// Meeting a wire end, junction, label, or pin would connect the new driver to
+/// whatever sits there; landing on a wire's interior is at best ambiguous.
+fn net_symbol_stub_collides(
+    page: &SchPage,
+    targets: &[PinTarget],
+    own_points: &[Point],
+    own_items: &BTreeSet<ConnectivityItemRef>,
+    connection: Point,
+) -> Result<bool> {
+    let is_own_point = |point: Point| own_points.iter().any(|own| points_coincide(*own, point));
+    let mut new_segments = Vec::new();
+    for target in targets {
+        let bend = net_symbol_wire_bend(target.point, connection, target.spin);
+        for (a, b) in [(target.point, bend), (bend, connection)] {
+            if !points_coincide(a, b) {
+                new_segments.push((a, b));
+            }
+        }
+    }
+    let mut new_points = vec![connection];
+    for (a, b) in &new_segments {
+        new_points.push(*a);
+        new_points.push(*b);
+    }
+    new_points.retain(|point| !is_own_point(*point));
+
+    let mut existing_points = Vec::new();
+    let mut existing_segments = Vec::new();
+    for item in &page.items {
+        if own_items
+            .iter()
+            .any(|item_ref| item_matches(&page.id, item, item_ref))
+        {
+            continue;
+        }
+        match item {
+            SchItem::Wire(wire) => {
+                existing_points.extend([wire.a, wire.b]);
+                existing_segments.push((wire.a, wire.b));
+            }
+            SchItem::Junction(junction) => existing_points.push(junction.at),
+            SchItem::Label(label) => existing_points.push(label.at),
+            SchItem::NoConnect(no_connect) => existing_points.push(no_connect.at),
+            SchItem::Sheet(sheet) => existing_points.extend(sheet.pins.iter().map(|pin| pin.at)),
+            SchItem::Symbol(symbol) => {
+                if let Some(definition) = page.library.definitions.get(&symbol.lib_id) {
+                    existing_points.extend(
+                        definition
+                            .placed_pins(symbol)?
+                            .into_iter()
+                            .map(|pin| pin.point),
+                    );
+                }
+            }
+            SchItem::Unsupported(_) => {}
+        }
+    }
+    existing_points.retain(|point| !is_own_point(*point));
+
+    Ok(new_points.iter().any(|point| {
+        existing_points
+            .iter()
+            .any(|existing| points_coincide(*existing, *point))
+            || existing_segments
+                .iter()
+                .any(|(a, b)| point_on_segment(*point, *a, *b))
+    }) || existing_points.iter().any(|point| {
+        new_segments
+            .iter()
+            .any(|(a, b)| point_on_segment(*point, *a, *b))
+    }))
+}
+
+fn net_symbol_wire_bend(target: Point, connection: Point, target_spin: LabelSpin) -> Point {
+    if target_spin.is_vertical() {
         Point::new(target.x, connection.y)
+    } else {
+        Point::new(connection.x, target.y)
     }
 }
 
@@ -2277,31 +2901,25 @@ fn ensure_context_endpoints(
 ) -> Result<()> {
     for (&page_index, context) in page_contexts {
         let page_id = document.pages[page_index].id.clone();
+        let mut free_labels = Vec::new();
         for (net_name, interface_names) in context {
             if !target_nets.contains(net_name) || net_symbol_specs.contains_key(net_name) {
                 continue;
             }
             // Anchor at a pin, else at a sheet pin carrying the interface
-            // (the net reaches this page only through a subsheet), else at a
-            // free spot.
-            let (anchor, spin) = match canonical_target(targets_by_net, net_name, page_index)
+            // (the net reaches this page only through a subsheet). Collect
+            // interface-only endpoints and place them as one regular block.
+            let attached = canonical_target(targets_by_net, net_name, page_index)
                 .map(|target| (target.point, target.spin))
-                .or_else(|| sheet_pin_anchor(document, page_index, interface_names))
-            {
-                Some(anchor) => anchor,
-                None => (
-                    place_context_label(
-                        document,
-                        page_index,
-                        interface_names.first().map_or(net_name, String::as_str),
-                    )?,
-                    LabelSpin::Right,
-                ),
-            };
+                .or_else(|| sheet_pin_anchor(document, page_index, interface_names));
             for interface_name in interface_names {
                 if page_has_hierarchical_label(document, page_index, interface_name) {
                     continue;
                 }
+                let Some((anchor, spin)) = attached else {
+                    free_labels.push((net_name, interface_name));
+                    continue;
+                };
                 let mut label = Label::new(
                     deterministic_uuid(format!(
                         "zener:context-endpoint:{page_id}:{net_name}:{interface_name}"
@@ -2315,6 +2933,49 @@ fn ensure_context_endpoints(
                 label.spin = spin;
                 upsert_label(document, page_index, label)?;
             }
+        }
+
+        let texts = free_labels
+            .iter()
+            .map(|(_, interface_name)| interface_name.as_str())
+            .collect::<Vec<_>>();
+        let anchors = place_context_label_group(document, page_index, &texts)?;
+        let placed = free_labels.into_iter().zip(anchors).collect::<Vec<_>>();
+        for ((net_name, interface_name), anchor) in &placed {
+            let mut label = Label::new(
+                deterministic_uuid(format!(
+                    "zener:context-endpoint:{page_id}:{net_name}:{interface_name}"
+                )),
+                *interface_name,
+                *anchor,
+            );
+            label.kind = LabelKind::Hierarchical {
+                shape: LabelShape::Bidirectional,
+            };
+            label.spin = LabelSpin::Right;
+            upsert_label(document, page_index, label)?;
+        }
+        // Hierarchical labels merge by text, so a net exposed under several
+        // interface names would otherwise split into one island per label.
+        // A wire through the group's consecutive rows makes them one.
+        for pair in placed.windows(2) {
+            let ((net_name, interface_name), anchor) = &pair[0];
+            let ((next_net_name, next_interface_name), next_anchor) = &pair[1];
+            if net_name != next_net_name {
+                continue;
+            }
+            upsert_wire(
+                document,
+                page_index,
+                Wire {
+                    id: deterministic_uuid(format!(
+                        "zener:context-endpoint-wire:{page_id}:{net_name}:{interface_name}:{next_interface_name}"
+                    )),
+                    a: *anchor,
+                    b: *next_anchor,
+                    unsupported: Vec::new(),
+                },
+            );
         }
     }
     Ok(())
@@ -2574,6 +3235,51 @@ fn place_context_label(document: &SchDocument, page_index: usize, text: &str) ->
     Ok(packer.place(relative).to_point())
 }
 
+fn place_context_label_group(
+    document: &SchDocument,
+    page_index: usize,
+    texts: &[&str],
+) -> Result<Vec<Point>> {
+    if texts.is_empty() {
+        return Ok(Vec::new());
+    }
+    let bounds = texts
+        .iter()
+        .map(|text| {
+            GridRect::from_bounds(estimated_label_bounds(
+                Point::default(),
+                LabelSpin::Right,
+                estimated_shaped_label_width(text),
+            ))
+        })
+        .collect::<Vec<_>>();
+    let row_height = bounds
+        .iter()
+        .map(|bounds| bounds.height())
+        .max()
+        .expect("label group is non-empty")
+        + CONTEXT_LABEL_GAP_CELLS;
+    let offsets = (0..texts.len())
+        .map(|index| GridPoint {
+            x: 0,
+            y: index as i32 * row_height,
+        })
+        .collect::<Vec<_>>();
+    let group_bounds = bounds
+        .iter()
+        .zip(&offsets)
+        .map(|(bounds, offset)| bounds.translated(*offset))
+        .reduce(GridRect::union)
+        .expect("label group is non-empty");
+    let mut packer = GridPacker::for_page(&document.pages[page_index].paper)?;
+    occupy_page_items(&mut packer, &document.pages[page_index])?;
+    let group_anchor = packer.place(group_bounds);
+    Ok(offsets
+        .into_iter()
+        .map(|offset| offset.translated(group_anchor).to_point())
+        .collect())
+}
+
 fn estimated_label_width(text: &str) -> f64 {
     let font_height = crate::TextEffects::default().font_size.y.abs();
     text.chars().count().max(1) as f64 * font_height * ESTIMATED_LABEL_WIDTH_EM
@@ -2581,35 +3287,6 @@ fn estimated_label_width(text: &str) -> f64 {
 
 fn estimated_shaped_label_width(text: &str) -> f64 {
     estimated_label_width(text) + LABEL_SHAPE_LENGTH_MM
-}
-
-fn paper_dimensions(paper: &Paper) -> Result<(f64, f64)> {
-    let (mut width, mut height) = match paper {
-        Paper::Custom {
-            width_mm,
-            height_mm,
-        } => (*width_mm, *height_mm),
-        Paper::Named { name, .. } => match name.as_str() {
-            "A0" => (1189.0, 841.0),
-            "A1" => (841.0, 594.0),
-            "A2" => (594.0, 420.0),
-            "A3" => (420.0, 297.0),
-            "A4" => (297.0, 210.0),
-            "A5" => (210.0, 148.0),
-            "A" | "USLetter" => (279.4, 215.9),
-            "B" | "USLedger" => (431.8, 279.4),
-            "C" => (558.8, 431.8),
-            "D" => (863.6, 558.8),
-            "E" => (1117.6, 863.6),
-            "USLegal" => (355.6, 215.9),
-            "GERBER" => (812.8, 812.8),
-            _ => bail!("unsupported KiCad paper size '{name}' for interface placement"),
-        },
-    };
-    if matches!(paper, Paper::Named { portrait: true, .. }) {
-        std::mem::swap(&mut width, &mut height);
-    }
-    Ok((width, height))
 }
 
 fn contains_id(document: &SchDocument, id: &str) -> bool {
@@ -2656,6 +3333,25 @@ fn upsert_label(document: &mut SchDocument, page_index: usize, mut label: Label)
     }
     document.pages[page_index].items.push(SchItem::Label(label));
     Ok(())
+}
+
+fn upsert_wire(document: &mut SchDocument, page_index: usize, mut wire: Wire) {
+    let existing = document.pages[page_index]
+        .items
+        .iter_mut()
+        .find_map(|item| match item {
+            SchItem::Wire(existing) if existing.id == wire.id => Some(existing),
+            _ => None,
+        });
+    if let Some(existing) = existing {
+        existing.a = wire.a;
+        existing.b = wire.b;
+        return;
+    }
+    if contains_id(document, &wire.id) {
+        wire.id = available_deterministic_id(document, &wire.id);
+    }
+    document.pages[page_index].items.push(SchItem::Wire(wire));
 }
 
 fn insert_net_symbol(
@@ -2782,6 +3478,348 @@ fn resolve_pin_targets(
 mod tests {
     use super::*;
 
+    #[test]
+    fn same_facing_net_symbols_make_two_pin_terminal_axis_horizontal() {
+        assert_eq!(
+            preferred_two_pin_rotation(&[
+                (LabelSpin::Up, LabelSpin::Up),
+                (LabelSpin::Bottom, LabelSpin::Up),
+            ]),
+            Rotation::Deg90
+        );
+        assert_eq!(
+            preferred_two_pin_rotation(&[
+                (LabelSpin::Left, LabelSpin::Bottom),
+                (LabelSpin::Right, LabelSpin::Bottom),
+            ]),
+            Rotation::Deg0
+        );
+    }
+
+    fn test_placement_block(key: &str, bounds: GridRect) -> PlacementBlock {
+        PlacementBlock {
+            key: key.to_string(),
+            page_index: 0,
+            members: Vec::new(),
+            bounds,
+            capacitor_bank: None,
+        }
+    }
+
+    #[test]
+    fn placement_block_separates_opposing_asymmetric_envelopes() {
+        let slots = (0..4)
+            .map(|index| SymbolSlotKey::new(format!("U{index}"), 1).unwrap())
+            .collect::<Vec<_>>();
+        let bounds_by_slot = [
+            GridRect {
+                min_x: -1,
+                min_y: -1,
+                max_x: 8,
+                max_y: 8,
+            },
+            GridRect {
+                min_x: -8,
+                min_y: -1,
+                max_x: 1,
+                max_y: 8,
+            },
+            GridRect {
+                min_x: -1,
+                min_y: -8,
+                max_x: 8,
+                max_y: 1,
+            },
+            GridRect {
+                min_x: -8,
+                min_y: -8,
+                max_x: 1,
+                max_y: 1,
+            },
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, bounds)| (slots[index].clone(), bounds))
+        .collect::<BTreeMap<_, _>>();
+
+        let block = placement_block("component".to_string(), 0, slots, &bounds_by_slot, 2);
+        let member_bounds = block
+            .members
+            .iter()
+            .map(|member| bounds_by_slot[&member.slot].translated(member.offset))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            member_bounds[1].min_x - member_bounds[0].max_x,
+            PLACEMENT_BLOCK_GAP_CELLS
+        );
+        assert_eq!(
+            member_bounds[2].min_y - member_bounds[0].max_y,
+            PLACEMENT_BLOCK_GAP_CELLS
+        );
+    }
+
+    #[test]
+    fn placement_grid_aligns_block_origins_in_rows() {
+        let blocks = [
+            test_placement_block(
+                "a",
+                GridRect {
+                    min_x: -2,
+                    min_y: -8,
+                    max_x: 3,
+                    max_y: 2,
+                },
+            ),
+            test_placement_block(
+                "b",
+                GridRect {
+                    min_x: -4,
+                    min_y: -2,
+                    max_x: 6,
+                    max_y: 7,
+                },
+            ),
+            test_placement_block(
+                "c",
+                GridRect {
+                    min_x: -1,
+                    min_y: -3,
+                    max_x: 2,
+                    max_y: 4,
+                },
+            ),
+            test_placement_block(
+                "d",
+                GridRect {
+                    min_x: -3,
+                    min_y: -1,
+                    max_x: 5,
+                    max_y: 3,
+                },
+            ),
+        ];
+        let blocks = blocks.iter().collect::<Vec<_>>();
+
+        let (_, offsets) = placement_grid_with_columns(&blocks, 2);
+
+        assert_eq!(offsets[0].y, offsets[1].y);
+        assert_eq!(offsets[2].y, offsets[3].y);
+        assert_eq!(offsets[0].x, offsets[2].x);
+        assert_ne!(
+            offsets[1].x, offsets[3].x,
+            "each row should use its members' actual widths"
+        );
+    }
+
+    #[test]
+    fn placement_grid_chooses_a_page_shaped_matrix() {
+        let blocks = (0..6)
+            .map(|index| {
+                test_placement_block(
+                    &index.to_string(),
+                    GridRect {
+                        min_x: -2,
+                        min_y: -2,
+                        max_x: 2,
+                        max_y: 2,
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        let blocks = blocks.iter().collect::<Vec<_>>();
+        // A page whose usable area is 200 x 140 cells.
+        let packer = GridPacker::for_page(&Paper::Custom {
+            width_mm: 267.0,
+            height_mm: 191.0,
+        })
+        .unwrap();
+        assert_eq!(packer.usable_bounds().width(), 200);
+        assert_eq!(packer.usable_bounds().height(), 140);
+
+        let (_, offsets) = arrange_placement_blocks(&blocks, &packer).unwrap();
+
+        assert_eq!(
+            offsets
+                .iter()
+                .map(|offset| offset.x)
+                .collect::<BTreeSet<_>>()
+                .len(),
+            3
+        );
+        assert_eq!(
+            offsets
+                .iter()
+                .map(|offset| offset.y)
+                .collect::<BTreeSet<_>>()
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn new_page_grows_to_fit_grid_without_covering_title_block() {
+        let default_usable = GridPacker::for_page(&Paper::default())
+            .unwrap()
+            .usable_bounds();
+        let cases = [
+            vec![
+                test_placement_block(
+                    "a",
+                    GridRect {
+                        min_x: 0,
+                        min_y: 0,
+                        max_x: 180,
+                        max_y: 100,
+                    },
+                ),
+                test_placement_block(
+                    "b",
+                    GridRect {
+                        min_x: 0,
+                        min_y: 0,
+                        max_x: 180,
+                        max_y: 100,
+                    },
+                ),
+            ],
+            vec![test_placement_block(
+                "full-page",
+                GridRect {
+                    min_x: 0,
+                    min_y: 0,
+                    max_x: default_usable.width(),
+                    max_y: default_usable.height(),
+                },
+            )],
+        ];
+
+        for blocks in cases {
+            let blocks = blocks.iter().collect::<Vec<_>>();
+            let mut page = SchPage::new("large");
+            let (_, bounds, _) =
+                arrange_new_page_blocks(&mut page, &blocks, &BTreeSet::new()).unwrap();
+
+            assert_eq!(
+                page.paper,
+                Paper::Named {
+                    name: "A3".to_string(),
+                    portrait: false,
+                }
+            );
+            let packer = GridPacker::for_page(&page.paper).unwrap();
+            assert!(packer.can_place_without_overlap(bounds));
+        }
+    }
+
+    /// A hierarchy sheet covering most of an A4 page, as a page keeps
+    /// between incremental applies.
+    fn test_page_with_sheet(id: &str) -> SchPage {
+        let mut page = SchPage::new(id);
+        page.items.push(SchItem::Sheet(Box::new(Sheet {
+            id: format!("{id}-sheet"),
+            at: Some(Point::new(10.0, 10.0)),
+            size: Some(Point::new(200.0, 180.0)),
+            name: None,
+            file: SymbolField::new("Sheetfile", "child.kicad_sch", Point::default()),
+            pins: Vec::new(),
+            unsupported: Vec::new(),
+        })));
+        page
+    }
+
+    #[test]
+    fn new_page_fit_counts_preserved_items() {
+        let block = test_placement_block(
+            "a",
+            GridRect {
+                min_x: 0,
+                min_y: 0,
+                max_x: 100,
+                max_y: 60,
+            },
+        );
+        let blocks = vec![&block];
+
+        let mut empty = SchPage::new("empty");
+        arrange_new_page_blocks(&mut empty, &blocks, &BTreeSet::new()).unwrap();
+        assert_eq!(empty.paper, Paper::default());
+
+        let mut occupied = test_page_with_sheet("occupied");
+        let (packer, bounds, _) =
+            arrange_new_page_blocks(&mut occupied, &blocks, &BTreeSet::new()).unwrap();
+        assert_eq!(
+            occupied.paper,
+            Paper::Named {
+                name: "A3".to_string(),
+                portrait: false,
+            }
+        );
+        assert!(packer.can_place_without_overlap(bounds));
+    }
+
+    #[test]
+    fn fit_tries_every_grid_shape_around_preserved_items() {
+        // Two 50-cell blocks: side by side they are 104 cells wide and cannot
+        // pass the sheet on an A4 page, stacked they fit the strip beside it.
+        let blocks = ["a", "b"].map(|key| {
+            test_placement_block(
+                key,
+                GridRect {
+                    min_x: 0,
+                    min_y: 0,
+                    max_x: 50,
+                    max_y: 50,
+                },
+            )
+        });
+        let blocks = blocks.iter().collect::<Vec<_>>();
+
+        let (packer, bounds, offsets) = arrange_existing_page_blocks(
+            &test_page_with_sheet("occupied"),
+            &blocks,
+            &BTreeSet::new(),
+        )
+        .unwrap();
+        assert!(packer.can_place_without_overlap(bounds));
+        assert_eq!(offsets[0].x, offsets[1].x);
+        assert_ne!(offsets[0].y, offsets[1].y);
+
+        let mut page = test_page_with_sheet("new");
+        arrange_new_page_blocks(&mut page, &blocks, &BTreeSet::new()).unwrap();
+        assert_eq!(page.paper, Paper::default());
+    }
+
+    #[test]
+    fn existing_page_fit_counts_preserved_items() {
+        let block = test_placement_block(
+            "a",
+            GridRect {
+                min_x: 0,
+                min_y: 0,
+                max_x: 100,
+                max_y: 60,
+            },
+        );
+        let blocks = vec![&block];
+
+        assert!(
+            arrange_existing_page_blocks(&SchPage::new("empty"), &blocks, &BTreeSet::new()).is_ok()
+        );
+        let error = arrange_existing_page_blocks(
+            &test_page_with_sheet("occupied"),
+            &blocks,
+            &BTreeSet::new(),
+        )
+        .err()
+        .expect("a covered page rejects the batch");
+        assert!(
+            error
+                .to_string()
+                .contains("does not fit existing schematic page")
+        );
+    }
+
     fn multi_pad_symbol() -> BTreeMap<SymbolSlotKey, PlacedSymbol> {
         let definition = SymbolDefinition::from_kicad_symbol_sexpr(
             r#"(symbol "Test:MultiPad"
@@ -2890,8 +3928,14 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        assert!((second.x - first.x - 2.0 * CONNECTION_GRID_MM).abs() < GEOMETRY_EPS_MM);
-        assert!((second.y - first.y - 2.0 * CONNECTION_GRID_MM).abs() < GEOMETRY_EPS_MM);
+        assert!(
+            (second.x - first.x - NET_SYMBOL_STAIR_CELLS * CONNECTION_GRID_MM).abs()
+                < GEOMETRY_EPS_MM
+        );
+        assert!(
+            (second.y - first.y - NET_SYMBOL_STAIR_CELLS * CONNECTION_GRID_MM).abs()
+                < GEOMETRY_EPS_MM
+        );
         assert!((first.x - bounds.max_x - 4.0 * CONNECTION_GRID_MM).abs() < GEOMETRY_EPS_MM);
         assert!(first.x > target.point.x);
         assert!(first.y > target.point.y);
@@ -2945,7 +3989,7 @@ mod tests {
 
         let envelope = component_envelope(item, &targets, &specs, &runs).unwrap();
         let connection = net_symbol_connection_point(item, &second, LabelSpin::Up, 1).unwrap();
-        let bend = net_symbol_wire_bend(second.point, connection, LabelSpin::Up);
+        let bend = net_symbol_wire_bend(second.point, connection, second.spin);
         let symbol = build_net_symbol(&spec, "SECOND", String::new(), connection).unwrap();
         let symbol_bounds = field_autoplace::symbol_visual_bounds(&symbol, &spec.definition)
             .unwrap()
@@ -2979,12 +4023,332 @@ mod tests {
         let intervening = target("X", "6");
         let last = target("C", "5");
 
-        let split = adjacent_target_runs(item, vec![&first, &last]).unwrap();
+        let split = adjacent_target_runs(item, vec![&first, &last], |target| *target).unwrap();
         assert_eq!(split.len(), 2);
 
-        let shared = adjacent_target_runs(item, vec![&first, &intervening, &last]).unwrap();
+        let shared =
+            adjacent_target_runs(item, vec![&first, &intervening, &last], |target| *target)
+                .unwrap();
         assert_eq!(shared.len(), 1);
         assert_eq!(shared[0].len(), 3);
+    }
+
+    #[test]
+    fn upright_side_net_symbols_stair_uniquely_across_pin_banks() {
+        // B/4 and C/5 are separate right-side banks (X/6 sits between them).
+        // An upright symbol lands at the body corner whatever the pin, so
+        // both banks at stair 0 would stack two power nets on one point.
+        let placed = multi_pad_symbol();
+        let slot = placed.keys().next().unwrap().clone();
+        let item = placed.values().next().unwrap();
+        let target = |name: &str, number: &str| {
+            resolve_pin_targets(
+                &placed,
+                "MQ-7.MQ-7",
+                name,
+                &BTreeSet::from([number.to_string()]),
+            )
+            .unwrap()
+            .remove(0)
+        };
+        let spec = ground_net_symbol_spec();
+        let targets = BTreeMap::from([
+            ("FIRST".to_string(), vec![target("B", "4")]),
+            ("LAST".to_string(), vec![target("C", "5")]),
+        ]);
+        let specs = BTreeMap::from([
+            ("FIRST".to_string(), spec.clone()),
+            ("LAST".to_string(), spec.clone()),
+        ]);
+
+        let runs =
+            plan_projected_net_symbol_runs(&targets, &BTreeSet::from([slot]), &specs, &placed)
+                .unwrap();
+
+        assert_eq!(runs.len(), 2);
+        assert_eq!(
+            runs.iter()
+                .map(|run| run.stair_index)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([0, 1])
+        );
+        let points = runs
+            .iter()
+            .map(|run| {
+                net_symbol_connection_point(
+                    item,
+                    &run.placement_target(),
+                    spec.pin_outward_spin,
+                    run.stair_index,
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert!(!points_coincide(points[0], points[1]));
+    }
+
+    #[test]
+    fn sideways_side_net_symbols_restart_stairs_per_pin_bank() {
+        // A sideways symbol follows its pin row, so separate banks start at
+        // stair 0 each and still land apart.
+        let placed = multi_pad_symbol();
+        let slot = placed.keys().next().unwrap().clone();
+        let item = placed.values().next().unwrap();
+        let target = |name: &str, number: &str| {
+            resolve_pin_targets(
+                &placed,
+                "MQ-7.MQ-7",
+                name,
+                &BTreeSet::from([number.to_string()]),
+            )
+            .unwrap()
+            .remove(0)
+        };
+        let mut spec = ground_net_symbol_spec();
+        spec.pin_outward_spin = LabelSpin::Right;
+        let targets = BTreeMap::from([
+            ("FIRST".to_string(), vec![target("B", "4")]),
+            ("LAST".to_string(), vec![target("C", "5")]),
+        ]);
+        let specs = BTreeMap::from([
+            ("FIRST".to_string(), spec.clone()),
+            ("LAST".to_string(), spec.clone()),
+        ]);
+
+        let runs =
+            plan_projected_net_symbol_runs(&targets, &BTreeSet::from([slot]), &specs, &placed)
+                .unwrap();
+
+        assert_eq!(runs.len(), 2);
+        assert!(runs.iter().all(|run| run.stair_index == 0));
+        let points = runs
+            .iter()
+            .map(|run| {
+                net_symbol_connection_point(
+                    item,
+                    &run.placement_target(),
+                    spec.pin_outward_spin,
+                    run.stair_index,
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        assert!(!points_coincide(points[0], points[1]));
+    }
+
+    #[test]
+    fn stub_collisions_ignore_same_net_pins_on_other_pages() {
+        let mut placed = multi_pad_symbol();
+        let first_slot = placed.keys().next().unwrap().clone();
+        let first_symbol = placed[&first_slot].symbol.clone();
+        let definition = placed[&first_slot].definition.clone();
+        let target = resolve_pin_targets(
+            &placed,
+            "MQ-7.MQ-7",
+            "B",
+            &BTreeSet::from(["4".to_string()]),
+        )
+        .unwrap()
+        .remove(0);
+        let spec = ground_net_symbol_spec();
+        let crowded =
+            net_symbol_connection_point(&placed[&first_slot], &target, spec.pin_outward_spin, 0)
+                .unwrap();
+
+        // A same-net symbol on another page whose pin B/4 happens to sit at
+        // the first symbol's stair-0 point.
+        let second_slot = SymbolSlotKey::new("MQ-8.MQ-8", 1).unwrap();
+        let mut second_symbol = first_symbol.clone();
+        second_symbol.id = second_slot.symbol_id();
+        second_symbol.at = Point::new(crowded.x - target.point.x, crowded.y - target.point.y);
+        placed.insert(
+            second_slot,
+            PlacedSymbol {
+                page_index: 1,
+                symbol: second_symbol.clone(),
+                definition: definition.clone(),
+            },
+        );
+        let other = resolve_pin_targets(
+            &placed,
+            "MQ-8.MQ-8",
+            "B",
+            &BTreeSet::from(["4".to_string()]),
+        )
+        .unwrap()
+        .remove(0);
+        assert!(points_coincide(other.point, crowded));
+
+        let mut page = SchPage::new("page");
+        page.library
+            .definitions
+            .insert(definition.lib_id.clone(), definition.clone());
+        page.items.push(SchItem::Symbol(first_symbol));
+        // Foreign wire ending exactly on this page's stair-0 point.
+        page.items.push(SchItem::Wire(Wire {
+            id: "foreign".to_string(),
+            a: crowded,
+            b: Point::new(crowded.x, crowded.y + 2.54),
+            unsupported: Vec::new(),
+        }));
+        let mut other_page = SchPage::new("other");
+        other_page
+            .library
+            .definitions
+            .insert(definition.lib_id.clone(), definition);
+        other_page.items.push(SchItem::Symbol(second_symbol));
+        let mut document = SchDocument {
+            pages: vec![page, other_page],
+            root_page_ids: vec!["page".to_string(), "other".to_string()],
+        };
+        let targets_by_net = BTreeMap::from([("GND".to_string(), vec![target, other])]);
+        let specs = BTreeMap::from([("GND".to_string(), spec)]);
+
+        sync_net_drivers(
+            &mut document,
+            &targets_by_net,
+            &placed,
+            &specs,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+
+        // This page's net symbol stepped past the foreign wire endpoint, and
+        // none of its stubs end on it.
+        let symbols = document.pages[0]
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                SchItem::Symbol(symbol) if symbol.lib_id == "power:GND" => Some(symbol.at),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(symbols.len(), 1);
+        assert!(!points_coincide(symbols[0], crowded), "{:?}", symbols[0]);
+        assert!(document.pages[0].items.iter().all(|item| !matches!(
+            item,
+            SchItem::Wire(wire)
+                if wire.id != "foreign"
+                    && (points_coincide(wire.a, crowded) || points_coincide(wire.b, crowded))
+        )));
+    }
+
+    #[test]
+    fn crowded_net_symbol_falls_back_to_a_label_in_the_symbol_scope() {
+        let placed = multi_pad_symbol();
+        let item = placed.values().next().unwrap();
+        let target = resolve_pin_targets(
+            &placed,
+            "MQ-7.MQ-7",
+            "B",
+            &BTreeSet::from(["4".to_string()]),
+        )
+        .unwrap()
+        .remove(0);
+        let spec = ground_net_symbol_spec();
+        let mut page = SchPage::new("page");
+        page.library
+            .definitions
+            .insert(item.definition.lib_id.clone(), item.definition.clone());
+        page.items.push(SchItem::Symbol(item.symbol.clone()));
+        // Foreign wires end on every stair candidate the symbol could take.
+        for extra in 0..NET_SYMBOL_STAIR_RETRIES {
+            let candidate =
+                net_symbol_connection_point(item, &target, spec.pin_outward_spin, extra).unwrap();
+            page.items.push(SchItem::Wire(Wire {
+                id: format!("blocker-{extra}"),
+                a: candidate,
+                b: Point::new(candidate.x, candidate.y + 2.54),
+                unsupported: Vec::new(),
+            }));
+        }
+        let mut document = SchDocument {
+            pages: vec![page],
+            root_page_ids: vec!["page".to_string()],
+        };
+        let targets_by_net = BTreeMap::from([("GND".to_string(), vec![target.clone()])]);
+        let specs = BTreeMap::from([("GND".to_string(), spec)]);
+
+        sync_net_drivers(
+            &mut document,
+            &targets_by_net,
+            &placed,
+            &specs,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+
+        let labels = document.pages[0]
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                SchItem::Label(label) => Some(label),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(labels.len(), 1);
+        assert_eq!(labels[0].text, "GND");
+        assert!(points_coincide(labels[0].at, target.point));
+        // Power symbols merge globally, so the stand-in label must too.
+        assert!(
+            matches!(labels[0].kind, LabelKind::Global { .. }),
+            "{:?}",
+            labels[0].kind
+        );
+        assert!(
+            document.pages[0].items.iter().all(
+                |item| !matches!(item, SchItem::Symbol(symbol) if symbol.lib_id == "power:GND")
+            )
+        );
+    }
+
+    #[test]
+    fn opposite_net_symbols_share_stair_indices_on_one_pin_bank() {
+        let placed = multi_pad_symbol();
+        let slot = placed.keys().next().unwrap().clone();
+        let target = |name: &str, number: &str| {
+            resolve_pin_targets(
+                &placed,
+                "MQ-7.MQ-7",
+                name,
+                &BTreeSet::from([number.to_string()]),
+            )
+            .unwrap()
+            .remove(0)
+        };
+        let upper = target("B", "4");
+        let lower = target("X", "6");
+        let ground = ground_net_symbol_spec();
+        let mut power = ground.clone();
+        power.pin_outward_spin = LabelSpin::Bottom;
+        let targets = BTreeMap::from([
+            ("GROUND".to_string(), vec![lower]),
+            ("POWER".to_string(), vec![upper]),
+        ]);
+        let specs = BTreeMap::from([("GROUND".to_string(), ground), ("POWER".to_string(), power)]);
+
+        let runs =
+            plan_projected_net_symbol_runs(&targets, &BTreeSet::from([slot]), &specs, &placed)
+                .unwrap();
+
+        assert_eq!(runs.len(), 2);
+        assert_eq!(
+            runs.iter()
+                .map(|run| run.stair_index)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([0, 1])
+        );
+    }
+
+    #[test]
+    fn vertical_pin_routes_escape_before_stairing_sideways() {
+        let target = Point::new(10.0, 10.0);
+        let connection = Point::new(15.0, 0.0);
+
+        assert_eq!(
+            net_symbol_wire_bend(target, connection, LabelSpin::Up),
+            Point::new(10.0, 0.0)
+        );
     }
 
     #[test]
@@ -3030,23 +4394,5 @@ mod tests {
             resolve_pin_targets(&placed, "R_EN.R", "2", &BTreeSet::from(["2".to_string()]))
                 .expect("unplaced component contributes no anchors");
         assert!(targets.is_empty());
-    }
-
-    #[test]
-    fn grid_packer_prefers_the_page_center() {
-        let mut packer = GridPacker::for_page(&Paper::default()).unwrap();
-        let relative = GridRect {
-            min_x: -2,
-            min_y: -2,
-            max_x: 2,
-            max_y: 2,
-        };
-
-        let placed = relative.translated(packer.place(relative));
-
-        let center_dx = placed.min_x + placed.max_x - packer.usable.min_x - packer.usable.max_x;
-        let center_dy = placed.min_y + placed.max_y - packer.usable.min_y - packer.usable.max_y;
-        assert!(center_dx.abs() <= 1);
-        assert!(center_dy.abs() <= 1);
     }
 }

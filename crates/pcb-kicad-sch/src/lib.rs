@@ -11,12 +11,14 @@ pub(crate) const GEOMETRY_EPS_MM: f64 = 1.0e-9;
 
 mod component_slots;
 pub mod connectivity;
+mod cut;
 mod field_autoplace;
 mod hierarchy;
 pub mod identity;
 pub mod kicad;
 pub mod model;
 mod net_symbols;
+mod placement;
 pub mod reconcile;
 mod repair;
 mod root_interface;
@@ -37,6 +39,10 @@ pub use model::{
     LabelShape, LabelSpin, MirrorAxis, NoConnect, Paper, PinInstance, Point, Rotation, SchDocument,
     SchItem, SchPage, Sheet, SheetPin, Symbol, SymbolDefinition, SymbolField, SymbolLibrary,
     TextEffects, TextSize, Wire,
+};
+pub use net_symbols::NetSymbolSpec;
+pub use repair::{
+    ConnectivityRepairIntent, NetDriverKind, plan_connectivity_repair, verify_connectivity_repair,
 };
 pub use source::patch_page_source;
 pub use symbol::PlacedPin;

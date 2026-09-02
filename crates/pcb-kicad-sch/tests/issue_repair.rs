@@ -1,11 +1,12 @@
 mod common;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use pcb_kicad_sch::{
     LabelShape, Point, Rotation, SchDocument, SchItem, SchPage, Sheet, SheetPin, Symbol,
     SymbolField, Wire,
     analysis::{SchematicIssue, SchematicIssueKey, inspect_schematic},
+    plan_connectivity_repair,
     reconcile::{InitialInspection, plan_reconciliation, plan_repairs, plan_repairs_on_page},
 };
 
@@ -46,7 +47,14 @@ fn singleton_primary_issue_and_complete_issue_set_produce_the_same_repair() {
             BTreeSet::from([key.clone()]),
         )
         .unwrap_or_else(|error| panic!("failed to plan selected {name}: {error:#}"));
+        let original = document.clone();
         let selected = plan.apply(Some(&document)).unwrap();
+        assert_eq!(document, original, "{name} planning mutated its input");
+        assert_eq!(
+            plan.revert(&selected).unwrap(),
+            original,
+            "{name} plan was not reversible"
+        );
         let complete = plan_reconciliation(Some(&document), &netlist, "simple.kicad_sch")
             .unwrap_or_else(|error| panic!("failed to plan complete {name}: {error:#}"))
             .apply(Some(&document))
@@ -127,6 +135,56 @@ fn selected_issue_repair_preserves_an_unrelated_existing_issue() {
 }
 
 #[test]
+fn added_component_batch_docks_without_moving_existing_symbols() {
+    let before = common::compile_fixture("analysis", "incremental_before.zen");
+    let after = common::compile_fixture("analysis", "incremental_after.zen");
+    let document = plan_reconciliation(None, &before, "Incremental.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    let existing = managed_symbol_positions(&document);
+    let inspection = inspect_schematic(&document, &after).unwrap();
+    let missing = inspection
+        .issues
+        .iter()
+        .filter(|issue| matches!(issue.issue, SchematicIssue::MissingSymbol { .. }))
+        .map(|issue| issue.key.clone())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(missing.len(), 3);
+
+    let repaired = plan_repairs(&document, &after, &inspection, missing)
+        .unwrap()
+        .apply(Some(&document))
+        .unwrap();
+    let all = managed_symbol_positions(&repaired);
+
+    assert_eq!(all.len(), 6);
+    assert_eq!(repaired.pages[0].paper, document.pages[0].paper);
+    for (path, at) in &existing {
+        assert_eq!(all[path], *at, "existing symbol {path} moved");
+    }
+    let added = all
+        .iter()
+        .filter(|(path, _)| !existing.contains_key(*path))
+        .map(|(_, at)| *at)
+        .collect::<Vec<_>>();
+    assert_eq!(added.len(), 3);
+    assert_eq!(
+        added.iter().map(|point| point.x).collect::<Vec<_>>(),
+        existing.values().map(|point| point.x).collect::<Vec<_>>(),
+        "the new batch should align to the existing row's columns"
+    );
+    assert!(added.iter().all(|point| point.y == added[0].y));
+    let existing_bottom = existing
+        .values()
+        .map(|point| point.y)
+        .reduce(f64::max)
+        .unwrap();
+    let row_gap = added[0].y - existing_bottom;
+    assert!(row_gap > 0.0 && row_gap <= 50.8, "{row_gap}");
+}
+
+#[test]
 fn complete_reconciliation_recovers_from_invalid_initial_analysis() {
     let netlist = common::compile_fixture("analysis", "simple.zen");
     let mut document = plan_reconciliation(None, &netlist, "simple.kicad_sch")
@@ -149,8 +207,8 @@ fn directly_overlapping_component_pins_relocate_the_affected_symbols() {
         .unwrap()
         .apply(None)
         .unwrap();
-    let target = pin_point(&document, "R1.R", "1");
-    let source = pin_point(&document, "R2.R", "1");
+    let target = common::pin_point(&document, "R1.R", "1");
+    let source = common::pin_point(&document, "R2.R", "1");
     let symbol = managed_symbol_mut(&mut document, "R2.R");
     let new_at = Point::new(
         symbol.at.x + target.x - source.x,
@@ -277,6 +335,12 @@ fn managed_symbols(document: &SchDocument) -> impl Iterator<Item = &Symbol> {
         })
 }
 
+fn managed_symbol_positions(document: &SchDocument) -> BTreeMap<String, Point> {
+    managed_symbols(document)
+        .map(|symbol| (symbol.field_value("Path").unwrap().to_string(), symbol.at))
+        .collect()
+}
+
 fn first_managed_mut(document: &mut SchDocument) -> &mut Symbol {
     document
         .pages
@@ -299,25 +363,6 @@ fn managed_symbol_mut<'a>(document: &'a mut SchDocument, path: &str) -> &'a mut 
             _ => None,
         })
         .unwrap_or_else(|| panic!("missing managed symbol {path}"))
-}
-
-fn pin_point(document: &SchDocument, path: &str, number: &str) -> Point {
-    for page in &document.pages {
-        let Some(symbol) = page.items.iter().find_map(|item| match item {
-            SchItem::Symbol(symbol) if symbol.field_value("Path") == Some(path) => Some(symbol),
-            _ => None,
-        }) else {
-            continue;
-        };
-        return page.library.definitions[&symbol.lib_id]
-            .placed_pins(symbol)
-            .unwrap()
-            .into_iter()
-            .find(|pin| pin.number == number)
-            .unwrap_or_else(|| panic!("missing {path} pin {number}"))
-            .point;
-    }
-    panic!("missing managed symbol {path}")
 }
 
 fn remove_first_managed(document: &mut SchDocument) {
@@ -474,10 +519,11 @@ fn unbound_symbol_on_a_child_sheet_repairs_by_selection() {
 }
 
 /// A KiCad wire joining two pins the netlist marks NotConnected is a real
-/// electrical divergence and must be reported, while unwired NotConnected
-/// pins stay silent.
+/// electrical divergence: it is reported, unwired NotConnected pins stay
+/// silent, and the repair cuts one segment per path next to the pin instead
+/// of tearing down the branches between them.
 #[test]
-fn wired_not_connected_pins_report_an_unexpected_connection() {
+fn wired_not_connected_pins_are_cut_free_locally() {
     let netlist = common::compile_fixture("analysis", "not_connected.zen");
     let baseline = plan_reconciliation(None, &netlist, "not_connected.kicad_sch")
         .unwrap()
@@ -491,14 +537,31 @@ fn wired_not_connected_pins_report_an_unexpected_connection() {
     );
 
     let mut document = baseline.clone();
-    let a = pin_point(&document, "R1.R", "2");
-    let b = pin_point(&document, "R2.R", "2");
-    document.pages[0].items.push(SchItem::Wire(Wire {
-        id: "nc-short".to_string(),
-        a,
-        b,
-        unsupported: Vec::new(),
-    }));
+    let a = common::pin_point(&document, "R1.R", "2");
+    let b = common::pin_point(&document, "R2.R", "2");
+    for (path_index, offset) in [2.54, -2.54].into_iter().enumerate() {
+        let mut points = vec![a];
+        points.extend((1..10).map(|index| {
+            let t = f64::from(index) / 10.0;
+            Point::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t + offset)
+        }));
+        points.push(b);
+        document.pages[0]
+            .items
+            .extend(
+                points
+                    .windows(2)
+                    .enumerate()
+                    .map(|(segment_index, points)| {
+                        SchItem::Wire(Wire {
+                            id: format!("nc-short-{path_index}-{segment_index}"),
+                            a: points[0],
+                            b: points[1],
+                            unsupported: Vec::new(),
+                        })
+                    }),
+            );
+    }
     let inspection = inspect_schematic(&document, &netlist).unwrap();
     assert!(
         inspection
@@ -507,6 +570,24 @@ fn wired_not_connected_pins_report_an_unexpected_connection() {
             .any(|issue| matches!(issue.issue, SchematicIssue::UnexpectedConnection { .. })),
         "a wire between NotConnected pins must be reported: {:#?}",
         inspection.issues
+    );
+    let issue = inspection
+        .issues
+        .iter()
+        .find(|issue| matches!(issue.issue, SchematicIssue::UnexpectedConnection { .. }))
+        .unwrap();
+    let intent = plan_connectivity_repair(
+        &document,
+        &netlist,
+        &inspection,
+        &BTreeSet::from([issue.key.clone()]),
+        &BTreeSet::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        intent.removals().len(),
+        2,
+        "the local two-wire cut must preserve the other 18 branch segments"
     );
 }
 
@@ -693,7 +774,7 @@ fn emptied_module_page_is_repopulated_not_duplicated() {
 /// The LTC regression: a hierarchical port label dragged onto another net's
 /// pin shorts the two ports. No single island looks inconsistent on its own
 /// and the offending label is a hierarchy alias (not a named driver), so the
-/// gated searches see nothing — the teardown fallback must still repair it.
+/// physical graph has no finite cut — the teardown fallback must still repair it.
 #[test]
 fn short_from_a_mislabeled_hierarchical_label_is_repairable() {
     let netlist = common::compile_fixture("hierarchy", "root_interface.zen");

@@ -284,6 +284,26 @@ fn reduce_page(
     symbol_definitions: &mut BTreeMap<String, symbol::ParsedSymbolDefinition>,
     pin_visibility: PinVisibility,
 ) -> Result<ReducedPage> {
+    let (components, mut connectables) =
+        collect_page_connectables(instance, repeated_page, symbol_definitions, pin_visibility)?;
+    let mut union_find = UnionFind::new(connectables.len());
+    union_internal_connections(&connectables, &mut union_find);
+    union_touching(&connectables, &mut union_find);
+    resolve_legacy_power_drivers(&mut connectables, &mut union_find);
+    union_same_page_drivers(&connectables, &mut union_find);
+    Ok(ReducedPage {
+        components,
+        groups: connection_groups(&instance.id, connectables, union_find),
+    })
+}
+
+/// Every connectable item of one page instance, before any union step.
+fn collect_page_connectables(
+    instance: &PageInstance<'_>,
+    repeated_page: bool,
+    symbol_definitions: &mut BTreeMap<String, symbol::ParsedSymbolDefinition>,
+    pin_visibility: PinVisibility,
+) -> Result<(Vec<ComponentNode>, Vec<Connectable>)> {
     let page = instance.page;
     let mut components = Vec::new();
     let mut connectables = Vec::new();
@@ -407,16 +427,149 @@ fn reduce_page(
             }
         }
     }
+    Ok((components, connectables))
+}
 
-    let mut union_find = UnionFind::new(connectables.len());
-    union_internal_connections(&connectables, &mut union_find);
-    union_touching(&connectables, &mut union_find);
-    resolve_legacy_power_drivers(&mut connectables, &mut union_find);
-    union_same_page_drivers(&connectables, &mut union_find);
-    Ok(ReducedPage {
-        components,
-        groups: connection_groups(&instance.id, connectables, union_find),
-    })
+/// Physical adjacency for cut planning.
+///
+/// Every connectable item and every connection point is a node, and every
+/// connection the reducer would union is an undirected edge. Removing an item
+/// removes its node, so a node cut over wires and junctions is exactly a set of
+/// items whose deletion separates two groups of terminals. Name and hierarchy
+/// merges are edges too; they are never cut here, so a cut that relies on them
+/// simply does not exist in this graph and the caller falls back.
+pub(crate) struct CutGraph {
+    pub(crate) nodes: Vec<CutNode>,
+    pub(crate) edges: Vec<(usize, usize)>,
+}
+
+#[derive(Default)]
+pub(crate) struct CutNode {
+    pub(crate) item: Option<ConnectivityItemRef>,
+    pub(crate) terminals: Vec<Terminal>,
+    /// Net names this node drives by name (labels and power symbols).
+    pub(crate) driver_names: Vec<String>,
+}
+
+pub(crate) fn cut_graph(document: &SchDocument, pin_visibility: PinVisibility) -> Result<CutGraph> {
+    let instances = page_instances(document)?;
+    let instance_counts = instances
+        .iter()
+        .fold(BTreeMap::new(), |mut counts, instance| {
+            *counts.entry(instance.page.id.as_str()).or_insert(0usize) += 1;
+            counts
+        });
+    let mut parsed_definitions =
+        BTreeMap::<String, BTreeMap<String, symbol::ParsedSymbolDefinition>>::new();
+    let mut graph = CutGraph {
+        nodes: Vec::new(),
+        edges: Vec::new(),
+    };
+    let mut shared_nodes = BTreeMap::<String, usize>::new();
+    for instance in &instances {
+        let definitions = parsed_definitions
+            .entry(instance.page.id.clone())
+            .or_default();
+        let (_, connectables) = collect_page_connectables(
+            instance,
+            instance_counts[instance.page.id.as_str()] > 1,
+            definitions,
+            pin_visibility,
+        )?;
+        let base = graph.nodes.len();
+        for item in &connectables {
+            graph.nodes.push(CutNode {
+                item: item.source.clone(),
+                terminals: item.terminal.iter().cloned().collect(),
+                driver_names: item
+                    .driver
+                    .iter()
+                    .filter(|driver| driver.role == DriverNameRole::NetName)
+                    .map(|driver| driver.name.clone())
+                    .collect(),
+            });
+        }
+
+        let mut point_nodes = BTreeMap::<GridPoint, usize>::new();
+        let mut point_node = |graph: &mut CutGraph, at: GridPoint| {
+            *point_nodes.entry(at).or_insert_with(|| {
+                graph.nodes.push(CutNode::default());
+                graph.nodes.len() - 1
+            })
+        };
+        let mut segments = Vec::new();
+        for (index, item) in connectables.iter().enumerate() {
+            match item.geometry {
+                Geometry::Point { at, .. } => {
+                    let point = point_node(&mut graph, at);
+                    graph.edges.push((base + index, point));
+                }
+                Geometry::Segment(segment) => {
+                    let a = point_node(&mut graph, segment.a);
+                    let b = point_node(&mut graph, segment.b);
+                    graph.edges.push((base + index, a));
+                    graph.edges.push((base + index, b));
+                    segments.push((index, segment));
+                }
+            }
+        }
+        for (index, item) in connectables.iter().enumerate() {
+            let Geometry::Point {
+                at,
+                segment_interior_tolerance: Some(tolerance),
+            } = item.geometry
+            else {
+                continue;
+            };
+            for (segment_index, segment) in &segments {
+                if points_equal(at, segment.a) || points_equal(at, segment.b) {
+                    continue;
+                }
+                if point_near_segment(at, *segment, tolerance) {
+                    graph.edges.push((base + index, base + segment_index));
+                }
+            }
+        }
+
+        let mut shared_node = |graph: &mut CutGraph, key: String| {
+            *shared_nodes.entry(key).or_insert_with(|| {
+                graph.nodes.push(CutNode::default());
+                graph.nodes.len() - 1
+            })
+        };
+        for (index, item) in connectables.iter().enumerate() {
+            for link in &item.internal_links {
+                let shared = shared_node(&mut graph, format!("link:{}:{link}", instance.id));
+                graph.edges.push((base + index, shared));
+            }
+            if let Some(driver) = &item.driver {
+                if driver.merge_by_name {
+                    let shared =
+                        shared_node(&mut graph, format!("name:{}:{}", instance.id, driver.name));
+                    graph.edges.push((base + index, shared));
+                }
+                // Legacy hidden power pins resolve to global drivers only when
+                // isolated; the reducer's verification of any cut planned on
+                // this graph covers the approximation.
+                if matches!(driver.kind, DriverKind::Global | DriverKind::LegacyGlobal) {
+                    let shared = shared_node(&mut graph, format!("global:{}", driver.name));
+                    graph.edges.push((base + index, shared));
+                }
+            }
+            match &item.hierarchy {
+                Some(HierarchyEndpoint::Parent { name }) => {
+                    let shared = shared_node(&mut graph, format!("hier:{}:{name}", instance.id));
+                    graph.edges.push((base + index, shared));
+                }
+                Some(HierarchyEndpoint::Child { instance_id, name }) => {
+                    let shared = shared_node(&mut graph, format!("hier:{instance_id}:{name}"));
+                    graph.edges.push((base + index, shared));
+                }
+                None => {}
+            }
+        }
+    }
+    Ok(graph)
 }
 
 fn cached_symbol_definition<'a>(
