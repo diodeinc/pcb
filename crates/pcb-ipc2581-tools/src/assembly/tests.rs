@@ -333,10 +333,15 @@ fn reports_scoped_components_and_exact_physical_evidence() {
 
 #[test]
 fn reports_ambiguous_overlap_without_selecting_a_termination() {
-    let xml = FIXTURE.replace(
-        "name=\"standalone-via\" diameter=\"0.2\" platingStatus=\"VIA\" plusTol=\"0\" minusTol=\"0\" x=\"8\" y=\"5\"",
-        "name=\"standalone-via\" diameter=\"2.2\" platingStatus=\"VIA\" plusTol=\"0\" minusTol=\"0\" x=\"3\" y=\"2\"",
-    );
+    let xml = FIXTURE
+        .replace(
+            "name=\"standalone-via\" diameter=\"0.2\" platingStatus=\"VIA\" plusTol=\"0\" minusTol=\"0\" x=\"8\" y=\"5\"",
+            "name=\"standalone-via\" diameter=\"2.2\" platingStatus=\"VIA\" plusTol=\"0\" minusTol=\"0\" x=\"3\" y=\"2\"",
+        )
+        .replace(
+            "<Layer name=\"NC-FILL\" layerFunction=\"HOLEFILL\" side=\"ALL\" polarity=\"POSITIVE\">",
+            "<Layer name=\"NC-FILL\" layerFunction=\"HOLEFILL\" side=\"TOP\" polarity=\"POSITIVE\">",
+        );
 
     let report = report_xml(&xml, LayoutTarget::Board);
     let hole = report
@@ -354,6 +359,7 @@ fn reports_ambiguous_overlap_without_selecting_a_termination() {
         Some(report::AssociationBasis::ExactGeometry)
     );
     assert_eq!(hole.termination.termination_ids.len(), 2);
+    assert_eq!(hole.protection.status, report::ProtectionStatus::Explicit);
     assert!(report.diagnostics.iter().any(|diagnostic| {
         diagnostic.code == report::DiagnosticCode::AmbiguousHoleTermination
             && diagnostic.subject.id == hole.id
@@ -397,6 +403,43 @@ fn geometric_association_requires_one_known_reachable_land() {
 }
 
 #[test]
+fn strict_span_reachability_uses_physical_stackup_order() {
+    let xml = FIXTURE
+        .replace(
+            "      <Layer name=\"TOP\" layerFunction=\"SIGNAL\" side=\"TOP\" polarity=\"POSITIVE\"/>",
+            "      <Layer name=\"INNER\" layerFunction=\"SIGNAL\" side=\"INTERNAL\" polarity=\"POSITIVE\"/>\n      <Layer name=\"TOP\" layerFunction=\"SIGNAL\" side=\"TOP\" polarity=\"POSITIVE\"/>",
+        )
+        .replacen(
+            "<Span fromLayer=\"TOP\" toLayer=\"BOTTOM\"/>",
+            "<Span fromLayer=\"INNER\" toLayer=\"BOTTOM\"/>",
+            1,
+        )
+        .replacen(
+            "<Span fromLayer=\"TOP\" toLayer=\"BOTTOM\"/>",
+            "<Span fromLayer=\"TOP\" toLayer=\"TOP\"/>",
+            1,
+        )
+        .replace(
+            "      <Step name=\"board\" type=\"BOARD\">",
+            "      <Stackup name=\"Primary\" overallThickness=\"0.105\" tolPlus=\"0\" tolMinus=\"0\" whereMeasured=\"METAL\" stackupStatus=\"PROPOSED\">\n        <StackupGroup name=\"Primary_Group\" thickness=\"0.105\" tolPlus=\"0\" tolMinus=\"0\">\n          <StackupLayer layerOrGroupRef=\"TOP\" thickness=\"0.035\" tolPlus=\"0\" tolMinus=\"0\" sequence=\"0\"/>\n          <StackupLayer layerOrGroupRef=\"INNER\" thickness=\"0.035\" tolPlus=\"0\" tolMinus=\"0\" sequence=\"1\"/>\n          <StackupLayer layerOrGroupRef=\"BOTTOM\" thickness=\"0.035\" tolPlus=\"0\" tolMinus=\"0\" sequence=\"2\"/>\n        </StackupGroup>\n      </Stackup>\n      <Step name=\"board\" type=\"BOARD\">",
+        );
+
+    let report = report_xml(&xml, LayoutTarget::Board);
+    let via = report
+        .holes
+        .iter()
+        .find(|hole| hole.source_name.as_deref() == Some("U1-via"))
+        .unwrap();
+
+    assert_eq!(
+        via.termination.status,
+        report::AssociationStatus::Unresolved
+    );
+    assert_eq!(via.protection.status, report::ProtectionStatus::Unknown);
+    assert!(via.protection.evidence.is_empty());
+}
+
+#[test]
 fn semantic_hole_ids_survive_source_reordering() {
     let capped = "          <Set geometry=\"via-padstack\" componentRef=\"U1\"><Hole name=\"U1-via-capped\" diameter=\"0.2\" platingStatus=\"VIA_CAPPED\" plusTol=\"0\" minusTol=\"0\" x=\"1.8\" y=\"2\"/></Set>";
     let filled = "          <Set geometry=\"via-padstack\"><Hole name=\"U1-via\" diameter=\"0.2\" platingStatus=\"VIA\" plusTol=\"0\" minusTol=\"0\" x=\"2.2\" y=\"2\"/></Set>";
@@ -410,6 +453,60 @@ fn semantic_hole_ids_survive_source_reordering() {
         report(LayoutTarget::Board),
         report_xml(&reordered, LayoutTarget::Board)
     );
+}
+
+#[test]
+fn repeated_layer_sections_preserve_hole_names() {
+    let capped = "<Set geometry=\"via-padstack\" componentRef=\"U1\"><Hole name=\"U1-via-capped\" diameter=\"0.2\" platingStatus=\"VIA_CAPPED\" plusTol=\"0\" minusTol=\"0\" x=\"1.8\" y=\"2\"/></Set>";
+    let split = format!("{capped}</LayerFeature><LayerFeature layerRef=\"DRILL\">");
+    let xml = FIXTURE.replace(capped, &split);
+
+    let report = report_xml(&xml, LayoutTarget::Board);
+
+    assert_eq!(
+        report
+            .holes
+            .iter()
+            .find(|hole| hole.location_mm == report::Point { x: 1.8, y: 2.0 })
+            .and_then(|hole| hole.source_name.as_deref()),
+        Some("U1-via-capped")
+    );
+    assert_eq!(
+        report
+            .holes
+            .iter()
+            .find(|hole| hole.location_mm == report::Point { x: 2.2, y: 2.0 })
+            .and_then(|hole| hole.source_name.as_deref()),
+        Some("U1-via")
+    );
+}
+
+#[test]
+fn protection_requires_compatible_span_and_assembly_side() {
+    let span = "<Span fromLayer=\"TOP\" toLayer=\"BOTTOM\"/>";
+    let disjoint_span = FIXTURE
+        .replacen(span, "<Span fromLayer=\"TOP\" toLayer=\"TOP\"/>", 1)
+        .replacen(span, "<Span fromLayer=\"BOTTOM\" toLayer=\"BOTTOM\"/>", 1);
+    let opposite_side = FIXTURE.replace(
+        "<Layer name=\"NC-FILL\" layerFunction=\"HOLEFILL\" side=\"ALL\" polarity=\"POSITIVE\">",
+        "<Layer name=\"NC-FILL\" layerFunction=\"HOLEFILL\" side=\"BOTTOM\" polarity=\"POSITIVE\">",
+    );
+
+    for xml in [disjoint_span, opposite_side] {
+        let report = report_xml(&xml, LayoutTarget::Board);
+        let via = report
+            .holes
+            .iter()
+            .find(|hole| hole.source_name.as_deref() == Some("U1-via"))
+            .unwrap();
+
+        assert_eq!(
+            via.termination.status,
+            report::AssociationStatus::ExactGeometric
+        );
+        assert_eq!(via.protection.status, report::ProtectionStatus::Unknown);
+        assert!(via.protection.evidence.is_empty());
+    }
 }
 
 #[test]

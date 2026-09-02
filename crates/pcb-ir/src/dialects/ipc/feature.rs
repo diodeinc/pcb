@@ -24,6 +24,8 @@ pub struct Feature<Symbol> {
     pub net: Option<Symbol>,
     pub source_layer_ref: Option<Symbol>,
     pub source_step_ref: Option<Symbol>,
+    /// Source name for named physical features such as holes and slots.
+    pub source_name: Option<Symbol>,
     /// Materialized occurrence of `source_step_ref` in the layout graph.
     /// `None` identifies geometry owned directly by the root step.
     pub source_instance: Option<u32>,
@@ -89,6 +91,7 @@ impl<Symbol> Feature<Symbol> {
             net: None,
             source_layer_ref: None,
             source_step_ref: None,
+            source_name: None,
             source_instance: None,
             source_placement: None,
             source_step_kind: LayoutStepKind::Unknown,

@@ -3041,6 +3041,7 @@ fn extract_hole(
 
     let mut feature = GeometryFeature::new(FeatureKind::Hole, GeometryPolarity::Dark);
     feature.source = source;
+    feature.source_name = hole.name;
     feature.bbox = doc.arena.paths_bbox(paths);
     feature.paths = paths;
     feature.center = center;
@@ -3077,6 +3078,7 @@ fn extract_slot(
     let paths = Span::new(path_start, doc.arena.paths.len() as u32 - path_start);
     let mut feature = GeometryFeature::new(FeatureKind::Slot, GeometryPolarity::Dark);
     feature.source = source;
+    feature.source_name = slot.name;
     feature.bbox = doc.arena.paths_bbox(paths);
     feature.paths = paths;
     apply_ipc_placement(&mut feature, placement);
