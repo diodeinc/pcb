@@ -6,7 +6,7 @@ use anyhow::{Result, bail};
 use pcb_sch::Schematic;
 
 use crate::{
-    SchDocument, SchItem, SchPage,
+    Point, SchDocument, SchItem, SchPage,
     analysis::{
         ConnectivityInspection, SchematicIssue, SchematicIssueKey, analyze_connectivity,
         issue_context, logical_name, observed_reconcilable_connectivity,
@@ -181,6 +181,8 @@ pub fn plan_connectivity_repair(
         }
 
         let candidates = repair_candidates(issue, expected, &current_observed.islands);
+        let candidates = local_unexpected_connection_candidates(document, issue, &candidates)?
+            .unwrap_or(candidates);
         if let Some(cut) = minimum_verified_cut(
             &simulated,
             netlist,
@@ -509,6 +511,121 @@ fn repair_candidates(
         }
     }
     candidates
+}
+
+/// Restrict an unexpected-terminal cut to connectors that physically touch
+/// the unexpected terminal. Searching an entire named island is both
+/// needlessly expensive and unsafe: the bounded exact search can otherwise
+/// fall through to tearing down healthy branches far away from the terminal.
+fn local_unexpected_connection_candidates(
+    document: &SchDocument,
+    issue: &SchematicIssue,
+    candidates: &BTreeSet<ConnectivityItemRef>,
+) -> Result<Option<BTreeSet<ConnectivityItemRef>>> {
+    let SchematicIssue::UnexpectedConnection { terminals, .. } = issue else {
+        return Ok(None);
+    };
+    let points = terminals
+        .iter()
+        .map(|terminal| terminal_connection_points(document, terminal))
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    if points.is_empty() {
+        return Ok(None);
+    }
+
+    let local = candidates
+        .iter()
+        .filter(|candidate| connector_touches_points(document, candidate, &points))
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    Ok((!local.is_empty()).then_some(local))
+}
+
+fn terminal_connection_points(
+    document: &SchDocument,
+    terminal: &Terminal,
+) -> Result<Vec<(String, Point)>> {
+    let Terminal::ComponentPin {
+        component,
+        pin_name,
+        pin_numbers,
+    } = terminal
+    else {
+        return Ok(Vec::new());
+    };
+    let mut points = Vec::new();
+    for page in &document.pages {
+        for symbol in page.items.iter().filter_map(|item| match item {
+            SchItem::Symbol(symbol) => Some(symbol),
+            _ => None,
+        }) {
+            let matches_component = match component {
+                ComponentIdentity::ManagedPath(path) => {
+                    symbol.field_value("Path") == Some(path.as_str())
+                }
+                ComponentIdentity::KiCadSymbol(location) => {
+                    page.id == location.page_id && symbol.id == location.symbol_id
+                }
+            };
+            if !matches_component {
+                continue;
+            }
+            let Some(definition) = page.library.definitions.get(&symbol.lib_id) else {
+                continue;
+            };
+            for pin in definition.placed_pins(symbol)? {
+                if (!pin_name.is_empty() && pin.name == *pin_name)
+                    || !pin.numbers.is_disjoint(pin_numbers)
+                {
+                    points.push((page.id.clone(), pin.point));
+                }
+            }
+        }
+    }
+    Ok(points)
+}
+
+fn connector_touches_points(
+    document: &SchDocument,
+    candidate: &ConnectivityItemRef,
+    points: &[(String, Point)],
+) -> bool {
+    match candidate {
+        ConnectivityItemRef::Wire { page_id, id } => document
+            .pages
+            .iter()
+            .find(|page| &page.id == page_id)
+            .into_iter()
+            .flat_map(|page| &page.items)
+            .any(|item| {
+                matches!(item, SchItem::Wire(wire) if &wire.id == id && points.iter().any(|(point_page, point)| point_page == page_id && point_on_segment(*point, wire.a, wire.b)))
+            }),
+        ConnectivityItemRef::Junction { page_id, id } => document
+            .pages
+            .iter()
+            .find(|page| &page.id == page_id)
+            .into_iter()
+            .flat_map(|page| &page.items)
+            .any(|item| {
+                matches!(item, SchItem::Junction(junction) if &junction.id == id && points.iter().any(|(point_page, point)| point_page == page_id && *point == junction.at))
+            }),
+        ConnectivityItemRef::Symbol { .. }
+        | ConnectivityItemRef::NoConnect { .. }
+        | ConnectivityItemRef::Label { .. }
+        | ConnectivityItemRef::SheetPin { .. } => false,
+    }
+}
+
+fn point_on_segment(point: Point, a: Point, b: Point) -> bool {
+    let cross = (point.x - a.x) * (b.y - a.y) - (point.y - a.y) * (b.x - a.x);
+    cross.abs() <= 1e-9
+        && point.x >= a.x.min(b.x) - 1e-9
+        && point.x <= a.x.max(b.x) + 1e-9
+        && point.y >= a.y.min(b.y) - 1e-9
+        && point.y <= a.y.max(b.y) + 1e-9
 }
 
 fn repair_island(

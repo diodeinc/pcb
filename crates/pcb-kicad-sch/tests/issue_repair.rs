@@ -6,6 +6,7 @@ use pcb_kicad_sch::{
     LabelShape, Point, Rotation, SchDocument, SchItem, SchPage, Sheet, SheetPin, Symbol,
     SymbolField, Wire,
     analysis::{SchematicIssue, SchematicIssueKey, inspect_schematic},
+    plan_connectivity_repair,
     reconcile::{InitialInspection, plan_reconciliation, plan_repairs, plan_repairs_on_page},
 };
 
@@ -556,12 +557,29 @@ fn wired_not_connected_pins_report_an_unexpected_connection() {
     let mut document = baseline.clone();
     let a = pin_point(&document, "R1.R", "2");
     let b = pin_point(&document, "R2.R", "2");
-    document.pages[0].items.push(SchItem::Wire(Wire {
-        id: "nc-short".to_string(),
-        a,
-        b,
-        unsupported: Vec::new(),
-    }));
+    for (path_index, offset) in [2.54, -2.54].into_iter().enumerate() {
+        let mut points = vec![a];
+        points.extend((1..10).map(|index| {
+            let t = f64::from(index) / 10.0;
+            Point::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t + offset)
+        }));
+        points.push(b);
+        document.pages[0]
+            .items
+            .extend(
+                points
+                    .windows(2)
+                    .enumerate()
+                    .map(|(segment_index, points)| {
+                        SchItem::Wire(Wire {
+                            id: format!("nc-short-{path_index}-{segment_index}"),
+                            a: points[0],
+                            b: points[1],
+                            unsupported: Vec::new(),
+                        })
+                    }),
+            );
+    }
     let inspection = inspect_schematic(&document, &netlist).unwrap();
     assert!(
         inspection
@@ -570,6 +588,23 @@ fn wired_not_connected_pins_report_an_unexpected_connection() {
             .any(|issue| matches!(issue.issue, SchematicIssue::UnexpectedConnection { .. })),
         "a wire between NotConnected pins must be reported: {:#?}",
         inspection.issues
+    );
+    let issue = inspection
+        .issues
+        .iter()
+        .find(|issue| matches!(issue.issue, SchematicIssue::UnexpectedConnection { .. }))
+        .unwrap();
+    let intent = plan_connectivity_repair(
+        &document,
+        &netlist,
+        &inspection,
+        &BTreeSet::from([issue.key.clone()]),
+    )
+    .unwrap();
+    assert_eq!(
+        intent.removals().len(),
+        2,
+        "the local two-wire cut must preserve the other 18 branch segments"
     );
 }
 
