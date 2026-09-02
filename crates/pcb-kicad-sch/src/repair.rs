@@ -43,6 +43,17 @@ impl ConnectivityRepairIntent {
     pub fn reconnect_nets(&self) -> &BTreeSet<String> {
         &self.reconnect_nets
     }
+
+    /// Apply only the destructive conflict-removal portion of this intent.
+    ///
+    /// This is the handoff boundary for consumers with their own routing
+    /// policy: remove PCB's verified conflict cut, then rebuild the affected
+    /// nets with the consumer's router.
+    pub fn apply_removals(&self, document: &SchDocument) -> Result<SchDocument> {
+        let mut repaired = document.clone();
+        remove_items(&mut repaired, &self.removals)?;
+        Ok(repaired)
+    }
 }
 
 /// Plans the pure connectivity-recovery intent for a set of inspected issues.
@@ -72,6 +83,10 @@ pub fn plan_connectivity_repair(
     let selected_items = selected
         .iter()
         .flat_map(|issue| issue.items.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    let selected_problems = selected
+        .iter()
+        .flat_map(|context| repair_problems(&context.issue))
         .collect::<BTreeSet<_>>();
     let mut reconnect_nets = BTreeSet::new();
 
@@ -145,6 +160,7 @@ pub fn plan_connectivity_repair(
             let context = issue_context((*issue).clone(), &current_observed.islands);
             selected.iter().any(|selected| &selected.issue == *issue)
                 || !context.items.is_disjoint(&selected_items)
+                || !repair_problems(issue).is_disjoint(&selected_problems)
         }) else {
             break;
         };
@@ -293,39 +309,41 @@ enum RepairProblem {
 fn repair_problem_counts(issues: &[SchematicIssue]) -> BTreeMap<RepairProblem, usize> {
     let mut result = BTreeMap::new();
     for issue in issues {
-        match issue {
-            SchematicIssue::UnexpectedNet { net_name, .. } => {
-                *result
-                    .entry(RepairProblem::UnexpectedNet(net_name.clone()))
-                    .or_default() += 1;
-            }
-            SchematicIssue::Shorted { net_names, .. } => {
-                let names = net_names.iter().collect::<Vec<_>>();
-                for (index, left) in names.iter().enumerate() {
-                    for right in &names[index + 1..] {
-                        *result
-                            .entry(RepairProblem::Shorted((*left).clone(), (*right).clone()))
-                            .or_default() += 1;
-                    }
-                }
-            }
-            SchematicIssue::UnexpectedConnection { terminals, .. } => {
-                for terminal in terminals {
-                    *result
-                        .entry(RepairProblem::UnexpectedConnection(terminal.clone()))
-                        .or_default() += 1;
-                }
-            }
-            SchematicIssue::DisconnectedNet { .. }
-            | SchematicIssue::MissingPort { .. }
-            | SchematicIssue::UnboundSymbol { .. }
-            | SchematicIssue::MissingSymbol { .. }
-            | SchematicIssue::DuplicateSymbol { .. }
-            | SchematicIssue::MismatchedSymbolId { .. }
-            | SchematicIssue::UnexpectedSymbol { .. } => {}
+        for problem in repair_problems(issue) {
+            *result.entry(problem).or_default() += 1;
         }
     }
     result
+}
+
+fn repair_problems(issue: &SchematicIssue) -> BTreeSet<RepairProblem> {
+    match issue {
+        SchematicIssue::UnexpectedNet { net_name, .. } => {
+            BTreeSet::from([RepairProblem::UnexpectedNet(net_name.clone())])
+        }
+        SchematicIssue::Shorted { net_names, .. } => {
+            let names = net_names.iter().collect::<Vec<_>>();
+            let mut result = BTreeSet::new();
+            for (index, left) in names.iter().enumerate() {
+                for right in &names[index + 1..] {
+                    result.insert(RepairProblem::Shorted((*left).clone(), (*right).clone()));
+                }
+            }
+            result
+        }
+        SchematicIssue::UnexpectedConnection { terminals, .. } => terminals
+            .iter()
+            .cloned()
+            .map(RepairProblem::UnexpectedConnection)
+            .collect(),
+        SchematicIssue::DisconnectedNet { .. }
+        | SchematicIssue::MissingPort { .. }
+        | SchematicIssue::UnboundSymbol { .. }
+        | SchematicIssue::MissingSymbol { .. }
+        | SchematicIssue::DuplicateSymbol { .. }
+        | SchematicIssue::MismatchedSymbolId { .. }
+        | SchematicIssue::UnexpectedSymbol { .. } => BTreeSet::new(),
+    }
 }
 
 fn strictly_reduces_problems(
@@ -710,6 +728,20 @@ mod tests {
 
     use super::*;
     use crate::connectivity::{ConnectionGroup, ConnectionOrigin, IslandRef};
+
+    #[test]
+    fn residual_pair_is_part_of_the_selected_multi_net_short() {
+        let selected = SchematicIssue::Shorted {
+            islands: vec![island(0)],
+            net_names: BTreeSet::from(["A".to_string(), "B".to_string(), "C".to_string()]),
+        };
+        let residual = SchematicIssue::Shorted {
+            islands: vec![island(1)],
+            net_names: BTreeSet::from(["A".to_string(), "B".to_string()]),
+        };
+
+        assert!(!repair_problems(&selected).is_disjoint(&repair_problems(&residual)));
+    }
 
     #[test]
     fn short_candidates_exclude_uninvolved_globally_merged_islands() {

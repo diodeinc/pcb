@@ -137,6 +137,38 @@ fn removes_a_two_wire_cut_when_no_single_wire_resolves_the_short() {
     assert!(contains_wire_id(intent.removals(), "parallel-b"));
 }
 
+#[test]
+fn fully_repairs_a_three_net_short_across_two_bridges() {
+    let netlist = common::compile_fixture("analysis", "simple.zen");
+    let mut document = plan_reconciliation(None, &netlist, "simple.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    let left = label_point(&document, "LEFT");
+    let mid = label_point(&document, "MID");
+    let right = label_point(&document, "RIGHT");
+    add_wire(&mut document, "left-mid-short", left, mid);
+    add_wire(&mut document, "mid-right-short", mid, right);
+    let inspection = inspect_schematic(&document, &netlist).unwrap();
+    let short = inspection
+        .issues
+        .iter()
+        .find(|issue| matches!(issue.issue, SchematicIssue::Shorted { .. }))
+        .expect("three nets should be shorted");
+
+    let plan = plan_repairs(
+        &document,
+        &netlist,
+        &inspection,
+        BTreeSet::from([short.key.clone()]),
+    )
+    .expect("one selected multi-net short should be repaired completely");
+    let repaired = plan.apply(Some(&document)).unwrap();
+    let after = inspect_schematic(&repaired, &netlist).unwrap();
+
+    assert!(after.analysis.is_equivalent(), "{:#?}", after.issues);
+}
+
 fn label_point(document: &SchDocument, name: &str) -> Point {
     document
         .pages
