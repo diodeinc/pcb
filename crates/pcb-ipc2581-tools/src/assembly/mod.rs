@@ -196,12 +196,10 @@ pub fn build_report(imported: &ImportedDesign, target: LayoutTarget) -> Result<A
                 .mask_openings
                 .iter()
                 .filter(|opening| {
-                    (termination.side == pcb_ir::dialects::Side::None
-                        || opening.side == termination.side)
-                        && opening
-                            .lands
-                            .resolved()
-                            .is_some_and(|land| termination.lands.contains(land))
+                    opening
+                        .lands
+                        .resolved()
+                        .is_some_and(|land| termination.lands.contains(land))
                 })
                 .map(|opening| report::MaskEvidence {
                     layer: imported
@@ -663,6 +661,7 @@ fn physical_hole_reports(
             let finished_diameter_mm = hole.finished_diameter.map(canonical_number);
             let kind = match hole.kind {
                 PhysicalHoleKind::Round => report::HoleKind::Round,
+                PhysicalHoleKind::Square => report::HoleKind::Square,
                 PhysicalHoleKind::Slot => report::HoleKind::Slot,
             };
             let plating = hole_plating(hole.plating);

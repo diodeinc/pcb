@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve IPC-2581 hole shapes, transforms, local specifications, and both-side solder-mask evidence in PCBA assembly reports.
+
 ## [0.4.45] - 2026-09-02
 
 ### Changed

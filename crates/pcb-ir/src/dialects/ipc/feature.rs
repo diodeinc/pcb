@@ -26,6 +26,8 @@ pub struct Feature<Symbol> {
     pub source_step_ref: Option<Symbol>,
     /// Source name for named physical features such as holes and slots.
     pub source_name: Option<Symbol>,
+    /// Source-local references declared directly on this feature.
+    pub spec_refs: Span,
     /// Materialized occurrence of `source_step_ref` in the layout graph.
     /// `None` identifies geometry owned directly by the root step.
     pub source_instance: Option<u32>,
@@ -57,6 +59,7 @@ pub struct Feature<Symbol> {
 
     pub line_cap: LineCap,
     pub fill_rule: FillRule,
+    pub hole_shape: HoleShape,
     pub padstack_ref: Option<Symbol>,
     pub primitive_ref: Option<PrimitiveRef<Symbol>>,
     /// Spans `doc.pin_refs`.
@@ -92,6 +95,7 @@ impl<Symbol> Feature<Symbol> {
             source_layer_ref: None,
             source_step_ref: None,
             source_name: None,
+            spec_refs: Span::EMPTY,
             source_instance: None,
             source_placement: None,
             source_step_kind: LayoutStepKind::Unknown,
@@ -114,6 +118,7 @@ impl<Symbol> Feature<Symbol> {
             scale: 1.0,
             line_cap: LineCap::Round,
             fill_rule: FillRule::NonZero,
+            hole_shape: HoleShape::Round,
             padstack_ref: None,
             primitive_ref: None,
             pin_refs: Span::EMPTY,
@@ -190,6 +195,12 @@ pub enum FeatureKind {
     Slot,
     Trace,
     FlattenedBucket,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HoleShape {
+    Round,
+    Square,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

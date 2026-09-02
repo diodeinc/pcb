@@ -666,10 +666,19 @@ pub struct FeaturePrimitiveRef {
 #[derive(Debug, Clone)]
 pub struct Hole {
     pub name: Option<Symbol>,
+    pub shape: HoleShape,
     pub diameter: f64,
     pub plating_status: PlatingStatus,
+    pub xform: Option<super::Xform>,
+    pub spec_refs: Vec<Symbol>,
     pub x: f64,
     pub y: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HoleShape {
+    Circle,
+    Square,
 }
 
 /// Shape definition for a SlotCavity

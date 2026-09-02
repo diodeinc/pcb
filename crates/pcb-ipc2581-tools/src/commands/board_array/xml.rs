@@ -353,8 +353,11 @@ pub(super) fn round_fiducial_features(
 pub(super) fn round_nonplated_hole(x_mm: f64, y_mm: f64, diameter_mm: f64) -> Hole {
     Hole {
         name: None,
+        shape: ipc2581::types::HoleShape::Circle,
         diameter: diameter_mm,
         plating_status: PlatingStatus::NonPlated,
+        xform: None,
+        spec_refs: Vec::new(),
         x: x_mm,
         y: y_mm,
     }

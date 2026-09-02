@@ -2,8 +2,9 @@ use std::collections::{BTreeSet, HashMap};
 
 use anyhow::{Context, Result, bail};
 use ipc2581::types::{
-    FillDesc, FillProperty, LayerFunction, LineEnd, LineProperty, PadUse, PlatingStatus, Polarity,
-    PolyStep, SlotShape, StandardPrimitive, UserPrimitive, UserShapeType, Xform,
+    FillDesc, FillProperty, HoleShape as IpcHoleShape, LayerFunction, LineEnd, LineProperty,
+    PadUse, PlatingStatus, Polarity, PolyStep, SlotShape, StandardPrimitive, UserPrimitive,
+    UserShapeType, Xform,
     ecad::{Layer, SetFeature, Step, StepRepeat, StepType},
 };
 use ipc2581::{Interner, Ipc2581, Symbol};
@@ -1883,6 +1884,12 @@ fn source_layer_set_span(source: &GeometryDocument, layer_index: usize) -> Resul
     Ok(span)
 }
 
+fn append_span<T: Clone>(target: &mut Vec<T>, source: &[T], span: Span) -> Span {
+    let start = target.len() as u32;
+    target.extend(span.slice(source).iter().cloned());
+    Span::new(start, span.count)
+}
+
 fn append_transformed_layer(
     target: &mut GeometryDocument,
     source: &GeometryDocument,
@@ -1898,13 +1905,10 @@ fn append_transformed_layer(
 
     for source_set_index in layer.sets.indices() {
         let source_set = &source.feature_sets[source_set_index as usize];
-        let spec_ref_start = target.spec_refs.len() as u32;
-        target.spec_refs.extend(
-            source_set
-                .spec_refs
-                .slice(&source.spec_refs)
-                .iter()
-                .cloned(),
+        let spec_refs = append_span(
+            &mut target.spec_refs,
+            &source.spec_refs,
+            source_set.spec_refs,
         );
         let target_set = target.feature_sets.len() as u32;
         target.feature_sets.push(FeatureSet {
@@ -1918,15 +1922,14 @@ fn append_transformed_layer(
             geometry_usage: source_set.geometry_usage,
             net: source_set.net,
             polarity: source_set.polarity,
-            spec_refs: Span::new(
-                spec_ref_start,
-                target.spec_refs.len() as u32 - spec_ref_start,
-            ),
+            spec_refs,
             features: Span::new(target.features.len() as u32, 0),
             bbox: BBox::empty(),
         });
 
         for feature in source_set.features.slice(&source.features) {
+            let spec_refs =
+                append_span(&mut target.spec_refs, &source.spec_refs, feature.spec_refs);
             let target_placement_group = if let Some(source_group_id) = feature.placement_group {
                 if let Some(&target_group_id) = placement_groups.get(&source_group_id) {
                     Some(target_group_id)
@@ -1978,6 +1981,7 @@ fn append_transformed_layer(
             };
 
             let mut feature = feature.clone();
+            feature.spec_refs = spec_refs;
             if target_placement_group.is_none() {
                 feature.transform = transform.concat(feature.transform);
                 feature.center = transform.transform_point(feature.center);
@@ -1992,13 +1996,8 @@ fn append_transformed_layer(
                 .set_index
                 .checked_add(source_set_offset)
                 .context("Panel source feature set index overflow")?;
-            if !feature.pin_refs.is_empty() {
-                let pin_ref_start = target.pin_refs.len() as u32;
-                target
-                    .pin_refs
-                    .extend(feature.pin_refs.slice(&source.pin_refs).iter().cloned());
-                feature.pin_refs = Span::new(pin_ref_start, feature.pin_refs.count);
-            }
+            feature.pin_refs =
+                append_span(&mut target.pin_refs, &source.pin_refs, feature.pin_refs);
             target.features.push(feature);
             let target_set_record = &mut target.feature_sets[target_set as usize];
             target_set_record.features.count += 1;
@@ -3029,23 +3028,30 @@ fn extract_hole(
     hole: &ipc2581::types::Hole,
     doc: &mut GeometryDocument,
 ) -> GeometryFeature {
+    let placement = ipc_placement(Point::new(hole.x, hole.y), hole.xform);
     let path_start = doc.arena.paths.len() as u32;
-    let center = Point::new(hole.x, hole.y);
-    push_ellipse_path(
-        doc,
-        Affine2::placement(center, 0.0, Mirror::NONE, 1.0),
-        hole.diameter,
-        hole.diameter,
-    );
+    match hole.shape {
+        IpcHoleShape::Circle => {
+            push_ellipse_path(doc, placement.transform, hole.diameter, hole.diameter)
+        }
+        IpcHoleShape::Square => {
+            push_rect_path(doc, placement.transform, hole.diameter, hole.diameter)
+        }
+    }
     let paths = Span::new(path_start, doc.arena.paths.len() as u32 - path_start);
 
     let mut feature = GeometryFeature::new(FeatureKind::Hole, GeometryPolarity::Dark);
     feature.source = source;
     feature.source_name = hole.name;
+    feature.spec_refs = push_spec_refs(doc, &hole.spec_refs);
     feature.bbox = doc.arena.paths_bbox(paths);
     feature.paths = paths;
-    feature.center = center;
-    feature.outer_diameter = hole.diameter;
+    apply_ipc_placement(&mut feature, placement);
+    feature.hole_shape = match hole.shape {
+        IpcHoleShape::Circle => HoleShape::Round,
+        IpcHoleShape::Square => HoleShape::Square,
+    };
+    feature.outer_diameter = hole.diameter * feature.scale;
     feature.padstack_ref = padstack_ref;
     feature.intent.plating = plating_kind(hole.plating_status);
     feature.flags.lowered_to_paths = true;
