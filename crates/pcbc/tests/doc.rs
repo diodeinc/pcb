@@ -30,8 +30,8 @@ const REMOTE_PACKAGE_TOML: &str = r#"[workspace]
 pcb-version = "0.4"
 "#;
 
-fn seed_remote_package(sb: &mut Sandbox) {
-    let mut fixture = sb.git_fixture("https://github.com/mycompany/components.git");
+fn seed_remote_package(sb: &mut Sandbox, repository: &str) {
+    let mut fixture = sb.git_fixture(repository);
     fixture
         .write("SimpleResistor/pcb.toml", REMOTE_PACKAGE_TOML)
         .write("SimpleResistor/SimpleResistor.zen", SIMPLE_RESISTOR_V1)
@@ -55,7 +55,11 @@ fn run_doc(sb: &mut Sandbox, package: &str) -> Output {
 #[test]
 fn test_pcb_doc_remote_package_defaults_to_latest() {
     let mut sb = Sandbox::new();
-    seed_remote_package(&mut sb);
+    seed_remote_package(&mut sb, "https://github.com/mycompany/components.git");
+    seed_remote_package(
+        &mut sb,
+        "https://code.diode.computer/mycompany/components.git",
+    );
 
     let default_output = run_doc(&mut sb, "github.com/mycompany/components/SimpleResistor");
     let latest_output = run_doc(
@@ -66,11 +70,16 @@ fn test_pcb_doc_remote_package_defaults_to_latest() {
         &mut sb,
         "github.com/mycompany/components/SimpleResistor@1.0.0",
     );
+    let diodehub_output = run_doc(
+        &mut sb,
+        "code.diode.computer/mycompany/components/SimpleResistor@1.0.0",
+    );
 
     for (label, output) in [
         ("default", &default_output),
         ("latest", &latest_output),
         ("pinned", &pinned_output),
+        ("diodehub", &diodehub_output),
     ] {
         assert!(
             output.status.success(),
@@ -88,6 +97,7 @@ fn test_pcb_doc_remote_package_defaults_to_latest() {
     let default_stdout = String::from_utf8_lossy(&default_output.stdout);
     let latest_stdout = String::from_utf8_lossy(&latest_output.stdout);
     let pinned_stdout = String::from_utf8_lossy(&pinned_output.stdout);
+    let diodehub_stdout = String::from_utf8_lossy(&diodehub_output.stdout);
 
     assert_eq!(
         default_stdout, latest_stdout,
@@ -120,6 +130,10 @@ fn test_pcb_doc_remote_package_defaults_to_latest() {
     assert!(
         !pinned_stdout.contains("| value | str | \"4.7kOhm\" |"),
         "explicit version should not resolve the newer tag:\n{pinned_stdout}"
+    );
+    assert!(
+        diodehub_stdout.contains("| value | str | \"1kOhm\" |"),
+        "DiodeHub output should document the pinned package:\n{diodehub_stdout}"
     );
 }
 
