@@ -185,6 +185,38 @@ fn test_publish_board_source_only() {
 }
 
 #[test]
+fn test_publish_board_hides_advice_but_reports_warnings() {
+    let mut sb = Sandbox::new();
+    let board = format!(
+        "{SIMPLE_BOARD_ZEN}\nwarn(\"publish warning\", kind=\"publish.warning\")\n\ndef publish_advice(module):\n    error(\"publish advice\")\n\nbuiltin.add_electrical_check(name=\"publish_advice\", check_fn=publish_advice, severity=\"advice\")\n"
+    );
+    sb.cwd("src")
+        .write("pcb.toml", PCB_TOML)
+        .write("boards/pcb.toml", BOARD_PCB_TOML)
+        .write("boards/modules/component.zen", SIMPLE_COMPONENT)
+        .write("boards/modules/test.kicad_mod", TEST_KICAD_MOD)
+        .write("boards/modules/datasheet.txt", "test")
+        .write("boards/TestBoard.zen", board)
+        .init_git()
+        .commit("Initial commit")
+        .sync();
+
+    let output = sb
+        .run("pcbc", source_only_args("boards/TestBoard.zen"))
+        .stderr_capture()
+        .stdout_capture()
+        .run()
+        .expect("Failed to run pcb publish command");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(stderr.contains("publish warning"), "{stderr}");
+    assert!(!stdout.contains("publish advice"), "{stdout}");
+    assert!(!stderr.contains("publish advice"), "{stderr}");
+    assert!(!stderr.contains("Advice"), "{stderr}");
+}
+
+#[test]
 fn test_publish_board_with_version() {
     let mut sb = Sandbox::new();
     sb.cwd("src")

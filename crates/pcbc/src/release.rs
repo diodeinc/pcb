@@ -690,7 +690,7 @@ fn review_release_preflight(
     spinner: &Spinner,
     diagnostics: &mut Diagnostics,
 ) -> Result<()> {
-    spinner.suspend(|| crate::drc::render_diagnostics(diagnostics, &info.suppress));
+    spinner.suspend(|| crate::drc::render_warnings_and_errors(diagnostics, &info.suppress));
     let warning_count = diagnostics.warning_count();
     if !confirm_continue_on_warnings(
         spinner,

@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Fetch remote tags before `pcb publish` determines a board version bump.
+- Hide Advice-level diagnostics from `pcb publish` output while preserving warnings and errors.
 - Clarified that `pcb layout --check` validates an existing layout without modifying it; the command now fails when that layout is missing.
 - Reject stackups with an odd number of copper layers before generating an invalid KiCad board.
 - Resolve domain-based package references with `pcb doc --package`.

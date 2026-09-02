@@ -11,6 +11,22 @@ type ColorFn = fn(String) -> colored::ColoredString;
 
 /// Render diagnostics (filter, print, show summary table)
 pub fn render_diagnostics(diagnostics: &mut pcb_zen_core::Diagnostics, suppress_kinds: &[String]) {
+    render_diagnostics_inner(diagnostics, suppress_kinds, true);
+}
+
+/// Render only warning and error diagnostics.
+pub fn render_warnings_and_errors(
+    diagnostics: &mut pcb_zen_core::Diagnostics,
+    suppress_kinds: &[String],
+) {
+    render_diagnostics_inner(diagnostics, suppress_kinds, false);
+}
+
+fn render_diagnostics_inner(
+    diagnostics: &mut pcb_zen_core::Diagnostics,
+    suppress_kinds: &[String],
+    include_advice: bool,
+) {
     // Apply filter passes
     for pass in [
         &FilterHiddenPass as &dyn DiagnosticsPass,
@@ -30,7 +46,8 @@ pub fn render_diagnostics(diagnostics: &mut pcb_zen_core::Diagnostics, suppress_
     });
 
     for diagnostic in ordered {
-        if !diagnostic.suppressed
+        if (include_advice || !matches!(diagnostic.severity, EvalSeverity::Advice))
+            && !diagnostic.suppressed
             && let Some((severity_str, severity_color)) = match diagnostic.severity {
                 EvalSeverity::Error => Some(("Error", Style::Red)),
                 EvalSeverity::Warning => Some(("Warning", Style::Yellow)),
@@ -56,9 +73,13 @@ pub fn render_diagnostics(diagnostics: &mut pcb_zen_core::Diagnostics, suppress_
     }
 
     // Print summary table
-    if !diagnostics.diagnostics.is_empty() {
+    let mut counts = diagnostics.counts();
+    if !include_advice {
+        counts
+            .retain(|(_, severity, _), _| matches!(severity, Severity::Error | Severity::Warning));
+    }
+    if !counts.is_empty() {
         eprintln!();
-        let counts = diagnostics.counts();
 
         // Show DRC and parity in separate tables, since they represent very different
         // concepts during import. Keep any remaining kinds in an "Other" table.
