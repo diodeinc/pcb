@@ -1,21 +1,25 @@
-Size = enum("5mm", "8mm", "10mm")
+load("../units.zen", "Length")
 
-size = config(Size, default=Size("5mm"), optional=True, help="2D barcode size")
+size = config(Length, default=Length("5mm"), optional=True, help="2D barcode size")
+
+
+def _size_mm(size: Length) -> int:
+    for mm in [5, 8, 10]:
+        if size == Length(str(mm) + "mm"):
+            return mm
+    error("QR size must be 5mm, 8mm or 10mm, got " + str(size))
+
+
 properties = {
-    "value": "QR_" + size.value,
+    "value": "QR_" + str(_size_mm(size)) + "mm",
     "size": size,
 }
-
-
-def _footprint(size: Size) -> str:
-    return "./footprints/QR_" + size.value + ".kicad_mod"
-
 
 Component(
     name="QR",
     prefix="QR",
     symbol=Symbol("./symbols/QR.kicad_sym"),
-    footprint=File(_footprint(size)),
+    footprint=File("./footprints/QR_" + str(_size_mm(size)) + "mm.kicad_mod"),
     pins={},
     properties=properties,
     skip_bom=True,
