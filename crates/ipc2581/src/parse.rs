@@ -3194,17 +3194,42 @@ impl<'a> Parser<'a> {
         let units = self.ecad_units.unwrap_or(Units::Millimeter);
 
         let name = self.attr(node, "name").map(|s| self.interner.intern(s));
+        let shape = match self.attr(node, "type").unwrap_or("CIRCLE") {
+            "CIRCLE" => ecad::HoleShape::Circle,
+            "SQUARE" => ecad::HoleShape::Square,
+            value => {
+                return Err(Ipc2581Error::InvalidAttribute(format!(
+                    "Invalid Hole type: {value}"
+                )));
+            }
+        };
         let diameter = self.parse_f64_attr_with_units(node, "diameter", "Hole", units)?;
         let plating_status_str = self.required_attr(node, "platingStatus", "Hole")?;
         let plating_status =
             self.parse_plating_status(self.interner.resolve(plating_status_str))?;
         let x = self.parse_f64_attr_with_units(node, "x", "Hole", units)?;
         let y = self.parse_f64_attr_with_units(node, "y", "Hole", units)?;
+        let mut xform = None;
+        let mut spec_refs = Vec::new();
+        for child in self.element_children(node) {
+            match self.name(&child) {
+                "SpecRef" => {
+                    if let Some(id) = self.attr(&child, "id") {
+                        spec_refs.push(self.interner.intern(id));
+                    }
+                }
+                "Xform" => xform = Some(self.parse_xform(&child, units)?),
+                _ => {}
+            }
+        }
 
         Ok(Hole {
             name,
+            shape,
             diameter,
             plating_status,
+            xform,
+            spec_refs,
             x,
             y,
         })

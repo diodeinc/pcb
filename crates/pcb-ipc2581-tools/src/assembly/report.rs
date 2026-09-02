@@ -2,7 +2,7 @@
 
 use serde::Serialize;
 
-pub const REPORT_SCHEMA_VERSION: u32 = 3;
+pub const REPORT_SCHEMA_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AssemblyReport {
@@ -571,6 +571,7 @@ pub struct Hole {
 #[serde(rename_all = "snake_case")]
 pub enum HoleKind {
     Round,
+    Square,
     Slot,
 }
 

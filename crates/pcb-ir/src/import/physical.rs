@@ -16,7 +16,7 @@ use crate::dialects::Side;
 use crate::dialects::artwork;
 use crate::dialects::ipc::{
     ArtworkLowering, ArtworkObjectKind, ArtworkScope, Feature, FeatureDomain, FeatureKind,
-    FeatureSpan, PlatingKind, lower_layer_to_artwork_with,
+    FeatureSpan, HoleShape, PlatingKind, lower_layer_to_artwork_with,
 };
 use crate::geom::{ContourSet, FillRule, Point, Polarity, Span, tol};
 use crate::import::ipc2581::{
@@ -73,6 +73,7 @@ pub enum AssociationBasis {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PhysicalHoleKind {
     Round,
+    Square,
     Slot,
 }
 
@@ -553,7 +554,10 @@ impl ImportedDesign {
                     layer: layer_id,
                     source_name: feature.source_name,
                     kind: match feature.kind {
-                        FeatureKind::Hole => PhysicalHoleKind::Round,
+                        FeatureKind::Hole => match feature.hole_shape {
+                            HoleShape::Round => PhysicalHoleKind::Round,
+                            HoleShape::Square => PhysicalHoleKind::Square,
+                        },
                         FeatureKind::Slot => PhysicalHoleKind::Slot,
                         _ => unreachable!("physical opening is a hole or slot"),
                     },
@@ -734,6 +738,13 @@ impl ImportedDesign {
         feature: &Feature<Symbol>,
     ) -> Vec<Symbol> {
         let mut spec_refs = layer.spec_refs.clone();
+        spec_refs.extend(
+            feature
+                .spec_refs
+                .slice(&self.geometry.spec_refs)
+                .iter()
+                .map(|reference| reference.spec),
+        );
         if let Some(set) = feature
             .set
             .and_then(|set| self.geometry.feature_sets.get(set as usize))

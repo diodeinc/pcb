@@ -24,7 +24,7 @@ fn report_xml(xml: &str, target: LayoutTarget) -> report::AssemblyReport {
 fn reports_scoped_components_and_exact_physical_evidence() {
     let report = report(LayoutTarget::BoardArray);
 
-    assert_eq!(report.schema_version, 3);
+    assert_eq!(report.schema_version, 4);
     assert_eq!(report.scope.kind, report::ScopeKind::BoardArray);
     assert_eq!(report.scope.root_step.as_deref(), Some("panel"));
     assert_eq!(report.scope.profile_ids.len(), 1);
@@ -482,6 +482,80 @@ fn repeated_layer_sections_preserve_hole_names() {
 }
 
 #[test]
+fn reports_square_hole_shape_and_xform() {
+    let xml = FIXTURE.replace(
+        "<Hole name=\"U1-via\" diameter=\"0.2\" platingStatus=\"VIA\" plusTol=\"0\" minusTol=\"0\" x=\"2.2\" y=\"2\"/>",
+        "<Hole name=\"U1-via\" type=\"SQUARE\" diameter=\"0.2\" platingStatus=\"VIA\" plusTol=\"0\" minusTol=\"0\" x=\"2\" y=\"2\"><Xform xOffset=\"0.2\"/></Hole>",
+    );
+
+    let report = report_xml(&xml, LayoutTarget::Board);
+    let hole = report
+        .holes
+        .iter()
+        .find(|hole| hole.source_name.as_deref() == Some("U1-via"))
+        .unwrap();
+
+    assert_eq!(hole.kind, report::HoleKind::Square);
+    assert_eq!(hole.location_mm, report::Point { x: 2.2, y: 2.0 });
+    assert_eq!(
+        hole.termination.status,
+        report::AssociationStatus::ExactGeometric
+    );
+    assert_eq!(hole.protection.status, report::ProtectionStatus::Explicit);
+}
+
+#[test]
+fn reports_hole_local_protection_intent() {
+    let xml = FIXTURE
+        .replace(
+            "    </CadHeader>",
+            "      <Spec name=\"open-via\"><General type=\"MATERIAL\"><Property text=\"OPEN\"/></General></Spec>\n    </CadHeader>",
+        )
+        .replace(
+            "<Hole name=\"standalone-via\" diameter=\"0.2\" platingStatus=\"VIA\" plusTol=\"0\" minusTol=\"0\" x=\"8\" y=\"5\"/>",
+            "<Hole name=\"standalone-via\" diameter=\"0.2\" platingStatus=\"VIA\" plusTol=\"0\" minusTol=\"0\" x=\"8\" y=\"5\"><SpecRef id=\"open-via\"/></Hole>",
+        );
+
+    let report = report_xml(&xml, LayoutTarget::Board);
+    let hole = report
+        .holes
+        .iter()
+        .find(|hole| hole.source_name.as_deref() == Some("standalone-via"))
+        .unwrap();
+
+    assert_eq!(hole.protection.status, report::ProtectionStatus::Explicit);
+    assert_eq!(hole.protection.methods, [report::ProtectionMethod::Open]);
+    assert_eq!(hole.protection.evidence[0].specs, ["open-via"]);
+}
+
+#[test]
+fn reports_both_and_all_mask_openings() {
+    for side in ["BOTH", "ALL"] {
+        let xml = FIXTURE.replace(
+            "<Layer name=\"MASK\" layerFunction=\"SOLDERMASK\" side=\"TOP\" polarity=\"POSITIVE\"/>",
+            &format!(
+                "<Layer name=\"MASK\" layerFunction=\"SOLDERMASK\" side=\"{side}\" polarity=\"POSITIVE\"/>"
+            ),
+        );
+
+        let report = report_xml(&xml, LayoutTarget::Board);
+        let openings = report
+            .terminations
+            .iter()
+            .flat_map(|termination| &termination.mask_openings)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            openings,
+            [&report::MaskEvidence {
+                layer: "MASK".to_owned(),
+                side: report::Side::None,
+            }]
+        );
+    }
+}
+
+#[test]
 fn protection_requires_compatible_span_and_assembly_side() {
     let span = "<Span fromLayer=\"TOP\" toLayer=\"BOTTOM\"/>";
     let disjoint_span = FIXTURE
@@ -776,8 +850,8 @@ fn serialization_is_deterministic() {
     assert_eq!(first, second);
     assert_eq!(
         hex::encode(Sha256::digest(first.as_bytes())),
-        "047ec7cb0494a77bb7a1261584eb0cd97ab15743fb1c9d7bd4c1d6491d46739c",
-        "schema v3 changed without an explicit version change"
+        "603792a48cab06f08eb5c1bb7258767c59a225705d3635d1db85c7b33018f3ff",
+        "schema v4 changed without an explicit version change"
     );
 }
 

@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- Fix IPC-2581 hole geometry and manufacturing evidence in PCBA assembly reports.
+
 ## [0.4.45] - 2026-09-02
 
 ### Changed

@@ -260,8 +260,11 @@ mod tests {
 
         let hole_mm = Hole {
             name: None,
+            shape: crate::types::HoleShape::Circle,
             diameter: 2.0,
             plating_status: PlatingStatus::NonPlated,
+            xform: None,
+            spec_refs: Vec::new(),
             x: 1.5,
             y: -0.25,
         };
