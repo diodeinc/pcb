@@ -690,7 +690,7 @@ fn review_release_preflight(
     spinner: &Spinner,
     diagnostics: &mut Diagnostics,
 ) -> Result<()> {
-    spinner.suspend(|| crate::drc::render_diagnostics(diagnostics, &info.suppress));
+    spinner.suspend(|| crate::drc::render_diagnostics(diagnostics, &info.suppress, false));
     let warning_count = diagnostics.warning_count();
     if !confirm_continue_on_warnings(
         spinner,
@@ -1502,7 +1502,9 @@ fn run_kicad_drc(info: &ReleaseInfo, spinner: &Spinner) -> Result<Diagnostics> {
 
     pcb_zen_core::SuppressPass::new(info.suppress.clone()).apply(&mut diagnostics);
     if diagnostics.error_count() > 0 {
-        spinner.suspend(|| crate::drc::render_diagnostics(&mut active_errors(&diagnostics), &[]));
+        spinner.suspend(|| {
+            crate::drc::render_diagnostics(&mut active_errors(&diagnostics), &[], false)
+        });
         std::process::exit(1);
     }
 
