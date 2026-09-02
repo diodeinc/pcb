@@ -52,3 +52,32 @@ in-memory plan application, and pure source patching. Project discovery, file
 loading, atomic writes, and rollback belong to the calling application. The
 normal crate build is therefore usable in WASM without a separate feature
 mode.
+
+## Repair model
+
+Every repair, whether `pcb apply` or an interactive editor action, is one
+pipeline with different inputs: PCB inspects, PCB decides, a realizer draws,
+PCB verifies.
+
+- **Inspect** (`analysis::inspect_schematic`) reduces the document and the
+  netlist to one connectivity graph and reports issues with the exact items
+  that formed them. It is the only connectivity model; consumers never
+  recompute which net a wire belongs to.
+- **Decide** (`plan_connectivity_repair`) turns selected issues, plus any
+  items the consumer has chosen to remove, into a `ConnectivityRepairIntent`:
+  items to remove, symbols that must leave an invalid overlap, nets to
+  reconnect, and the driver kind each of those nets needs on each page. Label
+  scope changes what KiCad's netlister computes, so PCB chooses it. A short or
+  unexpected connection is cut by a minimum node cut over the physical
+  adjacency graph, verified through the reducer; whole-island teardown is the
+  last resort when no finite cut exists.
+- **Realize** applies the intent's removals and relocations, then only adds
+  geometry. PCB's realizer places one driver per island with a one-bend stub;
+  an editor may use its own router instead.
+- **Verify** (`verify_repair`) accepts a realization only if every selected
+  issue is gone, no issue appeared, and nothing outside the intent changed.
+
+Two invariants follow. A schematic equivalent to its netlist is never touched.
+Otherwise the repair is the least change that restores equivalence: PCB's
+removals are minimal, realizers add the least they can, and everything else is
+preserved exactly.

@@ -11,6 +11,7 @@ pub(crate) const GEOMETRY_EPS_MM: f64 = 1.0e-9;
 
 mod component_slots;
 pub mod connectivity;
+mod cut;
 mod field_autoplace;
 mod hierarchy;
 pub mod identity;
@@ -39,6 +40,9 @@ pub use model::{
     SchItem, SchPage, Sheet, SheetPin, Symbol, SymbolDefinition, SymbolField, SymbolLibrary,
     TextEffects, TextSize, Wire,
 };
-pub use repair::{ConnectivityRepairIntent, plan_connectivity_repair};
+pub use repair::{
+    ConnectivityRepairIntent, NetDriverKind, NetSymbolDriver, plan_connectivity_repair,
+    verify_repair,
+};
 pub use source::patch_page_source;
 pub use symbol::PlacedPin;

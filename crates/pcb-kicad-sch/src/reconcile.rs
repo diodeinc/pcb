@@ -7,7 +7,10 @@ use pcb_sch::Schematic;
 
 use crate::{
     SchDocument, SchPage,
-    analysis::{ConnectivityInspection, SchematicIssue, SchematicIssueKey, inspect_schematic},
+    analysis::{
+        ConnectivityInspection, SchematicIssueKey, coarse_key, ensure_no_new_issues,
+        inspect_schematic, issue_summaries,
+    },
     component_slots, compose,
 };
 
@@ -234,59 +237,6 @@ fn plan_repairs_impl(
         placement_page_id,
         InitialInspection::Available(inspection.clone()),
     )
-}
-
-/// The key with volatile item fingerprints stripped, for before/after
-/// identity comparisons.
-fn coarse_key(key: &SchematicIssueKey) -> SchematicIssueKey {
-    let mut key = key.clone();
-    match &mut key {
-        SchematicIssueKey::UnexpectedNet { items, .. }
-        | SchematicIssueKey::UnexpectedConnection { items, .. }
-        | SchematicIssueKey::Shorted { items, .. } => items.clear(),
-        SchematicIssueKey::MissingSymbol(_)
-        | SchematicIssueKey::DuplicateSymbol(_)
-        | SchematicIssueKey::MismatchedSymbolId { .. }
-        | SchematicIssueKey::UnexpectedSymbol(_)
-        | SchematicIssueKey::UnboundSymbol(_)
-        | SchematicIssueKey::DisconnectedNet(_)
-        | SchematicIssueKey::MissingPort(_) => {}
-    }
-    key
-}
-
-fn issue_summaries<'a>(issues: impl Iterator<Item = &'a SchematicIssue>) -> String {
-    issues
-        .map(|issue| issue.summary())
-        .collect::<Vec<_>>()
-        .join("; ")
-}
-
-fn ensure_no_new_issues(
-    before: &ConnectivityInspection,
-    after: &ConnectivityInspection,
-    action: &str,
-) -> Result<()> {
-    // Compare without item fingerprints: a pre-existing issue whose affected
-    // islands shifted is still the same issue, not a new one this action
-    // introduced.
-    let before_keys = before
-        .issues
-        .iter()
-        .map(|issue| coarse_key(&issue.key))
-        .collect::<BTreeSet<_>>();
-    let new_issues = after
-        .issues
-        .iter()
-        .filter(|issue| !before_keys.contains(&coarse_key(&issue.key)))
-        .collect::<Vec<_>>();
-    if !new_issues.is_empty() {
-        bail!(
-            "{action} would introduce unrelated issues: {}",
-            issue_summaries(new_issues.iter().map(|context| &context.issue))
-        );
-    }
-    Ok(())
 }
 
 fn build_plan(

@@ -17,13 +17,17 @@ use crate::{
     },
     deterministic_uuid, field_autoplace, hierarchy, net_symbols,
     placement::{GridPacker, GridPoint, GridRect, point_rect},
-    repair::{ConnectivityRepairIntent, plan_connectivity_repair, remove_items},
+    repair::{
+        ConnectivityRepairIntent, NetDriverKind, NetSymbolDriver, plan_connectivity_repair,
+        remove_items,
+    },
     root_interface, root_page_id, symbol,
 };
 
 const LABEL_SHAPE_LENGTH_MM: f64 = 2.54;
 const NET_SYMBOL_OFFSET_CELLS: f64 = 4.0;
 const NET_SYMBOL_STAIR_CELLS: f64 = 4.0;
+const NET_SYMBOL_STAIR_RETRIES: usize = 8;
 const ESTIMATED_LABEL_WIDTH_EM: f64 = 0.8;
 const SHEET_PIN_SPACING_MM: f64 = 5.08;
 const SHEET_MIN_WIDTH_MM: f64 = 50.8;
@@ -257,7 +261,8 @@ pub(crate) fn reconcile_document(
             .collect::<BTreeSet<_>>()
     };
     if creating || !repair_keys.is_empty() {
-        let mut plan = plan_connectivity_repair(&document, netlist, &current, &repair_keys)?;
+        let mut plan =
+            plan_connectivity_repair(&document, netlist, &current, &repair_keys, &BTreeSet::new())?;
         if creating {
             plan.reconnect_nets
                 .extend(named_connected_nets(netlist).map(|net| net.name.clone()));
@@ -1912,6 +1917,93 @@ fn apply_connectivity_repair(
     Ok(())
 }
 
+/// The name driver a realizer must use for each reconnected net on each page
+/// where the net has visible pins or an interface port. Power-symbol nets use
+/// their netlist symbol; a page whose module interface exposes the net uses a
+/// hierarchical label; a net whose pins span pages without such an interface
+/// needs a global label; everything else is a local label.
+pub(crate) fn plan_net_driver_kinds(
+    document: &SchDocument,
+    netlist: &Schematic,
+    nets: &BTreeSet<String>,
+) -> Result<BTreeMap<String, BTreeMap<String, NetDriverKind>>> {
+    if nets.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let root_page = document
+        .root_page_ids
+        .iter()
+        .find_map(|id| document.pages.iter().position(|page| &page.id == id))
+        .context("KiCad schematic project has no loaded root page")?;
+    let expected_slots = component_slots::component_symbol_slots(netlist)?
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let placed = placed_symbols_from_document(document, &expected_slots)?;
+    let targets = connectivity_targets(netlist, &placed, nets)?;
+    let contexts = page_driver_contexts(document, netlist, root_page)?;
+    let specs = net_symbols::specs(netlist)?;
+    let root_ports = netlist
+        .root_ref
+        .as_ref()
+        .map(|root| root_interface::ports_by_net(netlist, root))
+        .transpose()?
+        .unwrap_or_default();
+
+    let mut kinds = BTreeMap::new();
+    for net_name in nets {
+        let mut pages = targets
+            .get(net_name)
+            .into_iter()
+            .flatten()
+            .filter(|target| !target.hidden)
+            .map(|target| target.page_index)
+            .collect::<BTreeSet<_>>();
+        if root_ports.contains_key(net_name) {
+            pages.insert(root_page);
+        }
+        let spans_pages = pages.len() > 1;
+        let per_page = pages
+            .into_iter()
+            .map(|page_index| {
+                let kind = if let Some(spec) = specs.get(net_name) {
+                    NetDriverKind::NetSymbol(NetSymbolDriver {
+                        definition: spec.definition.clone(),
+                        unit: spec.unit,
+                        pin_offset: spec.pin_offset,
+                        pin_outward_spin: spec.pin_outward_spin,
+                    })
+                } else if let Some(names) = contexts
+                    .get(&page_index)
+                    .and_then(|context| context.get(net_name))
+                {
+                    NetDriverKind::Hierarchical {
+                        names: names.clone(),
+                    }
+                } else if spans_pages {
+                    NetDriverKind::Global
+                } else {
+                    NetDriverKind::Local
+                };
+                (document.pages[page_index].id.clone(), kind)
+            })
+            .collect();
+        kinds.insert(net_name.clone(), per_page);
+    }
+    Ok(kinds)
+}
+
+/// Move each symbol off its invalid overlap, changing nothing else.
+pub(crate) fn relocate_symbols(
+    document: &mut SchDocument,
+    locations: &BTreeSet<SymbolLocation>,
+) -> Result<()> {
+    let mut placed = BTreeMap::new();
+    for location in locations {
+        relocate_symbol(document, &mut placed, location)?;
+    }
+    Ok(())
+}
+
 fn relocate_symbol(
     document: &mut SchDocument,
     placed: &mut BTreeMap<SymbolSlotKey, PlacedSymbol>,
@@ -2141,12 +2233,63 @@ fn sync_net_drivers(
     for run in net_symbol_runs {
         let spec = &net_symbol_specs[&run.net_name];
         let target = &run.targets[0];
-        let connection_point = net_symbol_connection_point(
-            &placed[&run.slot],
-            &run.placement_target(),
-            spec.pin_outward_spin,
-            run.stair_index,
-        )?;
+        // Geometry the new driver may touch: every island that already
+        // belongs to this net, whether named or reached through one of the
+        // net's pins. Meeting it never shorts and may well reconnect it.
+        let net_targets = targets_by_net
+            .get(&run.net_name)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let net_pins = net_targets
+            .iter()
+            .map(|member| member.physical_pin(&document.pages[member.page_index].id))
+            .collect::<BTreeSet<_>>();
+        let own_items = observed
+            .islands
+            .values()
+            .filter(|island| {
+                island.names.contains(&run.net_name) || !island.pins.is_disjoint(&net_pins)
+            })
+            .flat_map(|island| island.items.iter().cloned())
+            .collect::<BTreeSet<_>>();
+        let own_points = net_targets
+            .iter()
+            .map(|member| member.point)
+            .collect::<Vec<_>>();
+        let placement_target = run.placement_target();
+        let mut connection_point = None;
+        for extra in 0..NET_SYMBOL_STAIR_RETRIES {
+            let candidate = net_symbol_connection_point(
+                &placed[&run.slot],
+                &placement_target,
+                spec.pin_outward_spin,
+                run.stair_index + extra,
+            )?;
+            if !net_symbol_stub_collides(
+                &document.pages[run.page_index],
+                &run.targets,
+                &own_points,
+                &own_items,
+                candidate,
+            )? {
+                connection_point = Some(candidate);
+                break;
+            }
+        }
+        let Some(connection_point) = connection_point else {
+            // Dense wiring leaves the symbol no clear spot. A local label at
+            // the pin names the island with no new geometry, and same-page
+            // name merging joins it to the net's power symbols.
+            for member in &run.targets {
+                let id = available_deterministic_id(document, &member.label_key(&run.net_name));
+                let mut label = driver_label(&run.net_name, None, false, id, member.point);
+                label.spin = member.spin;
+                document.pages[member.page_index]
+                    .items
+                    .push(SchItem::Label(label));
+            }
+            continue;
+        };
         let id = available_deterministic_id(document, &target.net_symbol_key(&run.net_name));
         let symbol = build_net_symbol(spec, &run.net_name, id, connection_point)?;
         let symbol_id = symbol.id.clone();
@@ -2474,6 +2617,107 @@ fn insert_connection_wires(
             unsupported: Vec::new(),
         }));
     }
+}
+
+/// Whether a net symbol at `connection`, with stubs from each target pin,
+/// would touch geometry that is not already part of the targets' islands.
+/// Meeting a wire end, junction, label, or pin would connect the new driver to
+/// whatever sits there; landing on a wire's interior is at best ambiguous.
+fn net_symbol_stub_collides(
+    page: &SchPage,
+    targets: &[PinTarget],
+    own_points: &[Point],
+    own_items: &BTreeSet<ConnectivityItemRef>,
+    connection: Point,
+) -> Result<bool> {
+    let is_own_point = |point: Point| own_points.iter().any(|own| points_coincide(*own, point));
+    let mut new_segments = Vec::new();
+    for target in targets {
+        let bend = net_symbol_wire_bend(target.point, connection, target.spin);
+        for (a, b) in [(target.point, bend), (bend, connection)] {
+            if !points_coincide(a, b) {
+                new_segments.push((a, b));
+            }
+        }
+    }
+    let mut new_points = vec![connection];
+    for (a, b) in &new_segments {
+        new_points.push(*a);
+        new_points.push(*b);
+    }
+    new_points.retain(|point| !is_own_point(*point));
+
+    let mut existing_points = Vec::new();
+    let mut existing_segments = Vec::new();
+    for item in &page.items {
+        let owned = |id: &str, make: fn(String, String) -> ConnectivityItemRef| {
+            own_items.contains(&make(page.id.clone(), id.to_string()))
+        };
+        match item {
+            SchItem::Wire(wire) => {
+                if owned(&wire.id, |page_id, id| ConnectivityItemRef::Wire {
+                    page_id,
+                    id,
+                }) {
+                    continue;
+                }
+                existing_points.extend([wire.a, wire.b]);
+                existing_segments.push((wire.a, wire.b));
+            }
+            SchItem::Junction(junction) => {
+                if !owned(&junction.id, |page_id, id| ConnectivityItemRef::Junction {
+                    page_id,
+                    id,
+                }) {
+                    existing_points.push(junction.at);
+                }
+            }
+            SchItem::Label(label) => {
+                if !owned(&label.id, |page_id, id| ConnectivityItemRef::Label {
+                    page_id,
+                    id,
+                }) {
+                    existing_points.push(label.at);
+                }
+            }
+            SchItem::NoConnect(no_connect) => existing_points.push(no_connect.at),
+            SchItem::Sheet(sheet) => existing_points.extend(sheet.pins.iter().map(|pin| pin.at)),
+            SchItem::Symbol(symbol) => {
+                if let Some(definition) = page.library.definitions.get(&symbol.lib_id) {
+                    existing_points.extend(
+                        definition
+                            .placed_pins(symbol)?
+                            .into_iter()
+                            .map(|pin| pin.point),
+                    );
+                }
+            }
+            SchItem::Unsupported(_) => {}
+        }
+    }
+    existing_points.retain(|point| !is_own_point(*point));
+
+    Ok(new_points.iter().any(|point| {
+        existing_points
+            .iter()
+            .any(|existing| points_coincide(*existing, *point))
+            || existing_segments
+                .iter()
+                .any(|(a, b)| point_touches_segment(*point, *a, *b))
+    }) || existing_points.iter().any(|point| {
+        new_segments
+            .iter()
+            .any(|(a, b)| point_touches_segment(*point, *a, *b))
+    }))
+}
+
+fn point_touches_segment(point: Point, a: Point, b: Point) -> bool {
+    let cross = (point.x - a.x) * (b.y - a.y) - (point.y - a.y) * (b.x - a.x);
+    cross.abs() <= GEOMETRY_EPS_MM
+        && point.x >= a.x.min(b.x) - GEOMETRY_EPS_MM
+        && point.x <= a.x.max(b.x) + GEOMETRY_EPS_MM
+        && point.y >= a.y.min(b.y) - GEOMETRY_EPS_MM
+        && point.y <= a.y.max(b.y) + GEOMETRY_EPS_MM
 }
 
 fn net_symbol_wire_bend(target: Point, connection: Point, target_spin: LabelSpin) -> Point {

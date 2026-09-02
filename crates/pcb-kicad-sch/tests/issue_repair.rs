@@ -599,6 +599,7 @@ fn wired_not_connected_pins_report_an_unexpected_connection() {
         &netlist,
         &inspection,
         &BTreeSet::from([issue.key.clone()]),
+        &BTreeSet::new(),
     )
     .unwrap();
     assert_eq!(

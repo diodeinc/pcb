@@ -412,6 +412,60 @@ pub(crate) fn issue_context(
     SchematicIssueContext { key, issue, items }
 }
 
+/// The key with volatile item fingerprints stripped, for before/after
+/// identity comparisons.
+pub(crate) fn coarse_key(key: &SchematicIssueKey) -> SchematicIssueKey {
+    let mut key = key.clone();
+    match &mut key {
+        SchematicIssueKey::UnexpectedNet { items, .. }
+        | SchematicIssueKey::UnexpectedConnection { items, .. }
+        | SchematicIssueKey::Shorted { items, .. } => items.clear(),
+        SchematicIssueKey::MissingSymbol(_)
+        | SchematicIssueKey::DuplicateSymbol(_)
+        | SchematicIssueKey::MismatchedSymbolId { .. }
+        | SchematicIssueKey::UnexpectedSymbol(_)
+        | SchematicIssueKey::UnboundSymbol(_)
+        | SchematicIssueKey::DisconnectedNet(_)
+        | SchematicIssueKey::MissingPort(_) => {}
+    }
+    key
+}
+
+pub(crate) fn issue_summaries<'a>(issues: impl Iterator<Item = &'a SchematicIssue>) -> String {
+    issues
+        .map(|issue| issue.summary())
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// Reject a document change that introduced an issue absent before it.
+pub(crate) fn ensure_no_new_issues(
+    before: &ConnectivityInspection,
+    after: &ConnectivityInspection,
+    action: &str,
+) -> anyhow::Result<()> {
+    // Compare without item fingerprints: a pre-existing issue whose affected
+    // islands shifted is still the same issue, not a new one this action
+    // introduced.
+    let before_keys = before
+        .issues
+        .iter()
+        .map(|issue| coarse_key(&issue.key))
+        .collect::<BTreeSet<_>>();
+    let new_issues = after
+        .issues
+        .iter()
+        .filter(|issue| !before_keys.contains(&coarse_key(&issue.key)))
+        .collect::<Vec<_>>();
+    if !new_issues.is_empty() {
+        anyhow::bail!(
+            "{action} would introduce unrelated issues: {}",
+            issue_summaries(new_issues.iter().map(|context| &context.issue))
+        );
+    }
+    Ok(())
+}
+
 fn symbol_item(location: &SymbolLocation) -> ConnectivityItemRef {
     ConnectivityItemRef::Symbol {
         page_id: location.page_id.clone(),
