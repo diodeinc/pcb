@@ -3946,7 +3946,7 @@ dependencies = [
 
 [[package]]
 name = "ortho-router"
-version = "0.4.40"
+version = "0.4.43"
 dependencies = [
  "env_logger",
  "insta",
