@@ -732,6 +732,7 @@ fn plating_kind(status: PlatingStatus) -> PlatingKind {
         PlatingStatus::Plated => PlatingKind::Plated,
         PlatingStatus::NonPlated => PlatingKind::NonPlated,
         PlatingStatus::Via => PlatingKind::Via,
+        PlatingStatus::ViaCapped => PlatingKind::ViaCapped,
     }
 }
 
@@ -2350,7 +2351,7 @@ fn extract_pad(
         .and_then(|padstack| padstack.hole_def.as_ref())
         .map(|hole| hole.plating_status)
     {
-        Some(PlatingStatus::Via) => FeatureRole::Via,
+        Some(PlatingStatus::Via | PlatingStatus::ViaCapped) => FeatureRole::Via,
         _ => FeatureRole::Pad,
     };
 

@@ -198,6 +198,7 @@ pub enum PlatingStatus {
     Plated,
     NonPlated,
     Via,
+    ViaCapped,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

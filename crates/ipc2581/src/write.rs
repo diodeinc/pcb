@@ -77,6 +77,7 @@ pub fn plating_status_attr(plating_status: PlatingStatus) -> &'static str {
         PlatingStatus::Plated => "PLATED",
         PlatingStatus::NonPlated => "NONPLATED",
         PlatingStatus::Via => "VIA",
+        PlatingStatus::ViaCapped => "VIA_CAPPED",
     }
 }
 
@@ -255,6 +256,8 @@ mod tests {
 
     #[test]
     fn hole_renders_units_and_plating() {
+        assert_eq!(plating_status_attr(PlatingStatus::ViaCapped), "VIA_CAPPED");
+
         let hole_mm = Hole {
             name: None,
             diameter: 2.0,

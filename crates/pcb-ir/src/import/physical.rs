@@ -8,7 +8,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use anyhow::{Context, Result};
 use ipc2581::types::{
-    LayerFunction, PackagePinElectricalType, PackagePinMountType, PackagePinType,
+    LayerFunction, PackagePinElectricalType, PackagePinMountType, PackagePinType, SetFeature,
 };
 use ipc2581::{Symbol, types::Side as IpcSide};
 
@@ -16,12 +16,13 @@ use crate::dialects::Side;
 use crate::dialects::artwork;
 use crate::dialects::ipc::{
     ArtworkLowering, ArtworkObjectKind, ArtworkScope, Feature, FeatureDomain, FeatureKind,
-    PlatingKind, lower_layer_to_artwork_with,
+    FeatureSpan, PlatingKind, lower_layer_to_artwork_with,
 };
 use crate::geom::{ContourSet, FillRule, Point, Polarity, Span, tol};
 use crate::import::ipc2581::{
-    ComponentOccurrence, ComponentOccurrenceId, FeatureOccurrenceId, ImportedDesign, LayerId,
-    LayoutOccurrenceId, PopulationState, feature_occurrence_id, is_copper, layer_role,
+    ComponentOccurrence, ComponentOccurrenceId, FeatureOccurrence, FeatureOccurrenceId,
+    ImportedDesign, LayerId, LayoutOccurrenceId, PopulationState, feature_occurrence_id, is_copper,
+    layer_role,
 };
 
 /// A relationship whose uncertainty is part of the result rather than hidden
@@ -63,6 +64,28 @@ pub struct MaskOpeningId {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct HoleId(pub FeatureOccurrenceId);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssociationBasis {
+    SourceIdentity,
+    ExactGeometry,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PhysicalHoleKind {
+    Round,
+    Slot,
+}
+
+#[derive(Debug, Clone)]
+pub struct HoleProtectionEvidence {
+    pub source: FeatureOccurrenceId,
+    pub layer: LayerId,
+    pub function: LayerFunction,
+    pub side: Side,
+    pub span: FeatureSpan<Symbol>,
+    pub spec_refs: Vec<Symbol>,
+}
 
 #[derive(Debug, Clone)]
 pub struct PhysicalLand {
@@ -129,11 +152,20 @@ pub struct MaskOpening {
 pub struct PhysicalHole {
     pub id: HoleId,
     pub layer: LayerId,
+    pub source_name: Option<Symbol>,
+    pub kind: PhysicalHoleKind,
+    pub at: Point,
+    pub finished_diameter: Option<f64>,
     pub image: ContourSet,
     pub board: Option<LayoutOccurrenceId>,
     pub plating: PlatingKind,
     pub padstack: Option<Symbol>,
     pub net: Option<Symbol>,
+    pub span: FeatureSpan<Symbol>,
+    pub spec_refs: Vec<Symbol>,
+    pub termination: Association<PhysicalTerminationId>,
+    pub termination_basis: Option<AssociationBasis>,
+    pub protection: Vec<HoleProtectionEvidence>,
     /// One explicit result per copper layer the opening geometrically reaches.
     pub lands: Vec<LayerLandAssociation>,
 }
@@ -205,7 +237,8 @@ impl ImportedDesign {
     /// materializing paste or mask layers.
     pub fn physical_holes(&self, scope: ArtworkScope) -> Result<Vec<PhysicalHole>> {
         let lands = self.physical_lands(scope)?;
-        self.derive_physical_holes(scope, &lands)
+        let terminations = self.derive_physical_terminations(&lands);
+        self.derive_physical_holes(scope, &lands, &terminations)
     }
 
     /// Derive physical lands, exact electrical terminations, independent paste
@@ -217,7 +250,7 @@ impl ImportedDesign {
         let terminations = self.derive_physical_terminations(&lands);
         let paste_islands = self.paste_islands(scope, &components, &terminations)?;
         let mask_openings = self.mask_openings(scope, &lands)?;
-        let holes = self.derive_physical_holes(scope, &lands)?;
+        let holes = self.derive_physical_holes(scope, &lands, &terminations)?;
         Ok(PhysicalView {
             lands,
             terminations,
@@ -470,7 +503,12 @@ impl ImportedDesign {
         &self,
         scope: ArtworkScope,
         lands: &[PhysicalLand],
+        terminations: &[PhysicalTermination],
     ) -> Result<Vec<PhysicalHole>> {
+        let land_by_id = lands
+            .iter()
+            .map(|land| (land.id, land))
+            .collect::<HashMap<_, _>>();
         let mut holes = Vec::new();
         for (layer_index, layer) in self.layer_definitions.iter().enumerate() {
             if !matches!(
@@ -489,6 +527,14 @@ impl ImportedDesign {
                 }
                 let image = self.feature_region(occurrence);
                 let evidence = self.feature_evidence(occurrence.id);
+                let (termination, termination_basis) = self.hole_termination_association(
+                    &occurrence,
+                    &image,
+                    &evidence,
+                    feature.intent.span,
+                    terminations,
+                    &land_by_id,
+                );
                 let mut layer_lands = Vec::new();
                 for copper_layer in lands.iter().map(|land| land.layer).collect::<BTreeSet<_>>() {
                     if !feature_spans_layer(
@@ -518,17 +564,187 @@ impl ImportedDesign {
                 holes.push(PhysicalHole {
                     id: HoleId(occurrence.id),
                     layer: layer_id,
+                    source_name: self.feature_source_name(feature),
+                    kind: match feature.kind {
+                        FeatureKind::Hole => PhysicalHoleKind::Round,
+                        FeatureKind::Slot => PhysicalHoleKind::Slot,
+                        _ => unreachable!("physical opening is a hole or slot"),
+                    },
+                    at: occurrence.root_from_local.transform_point(feature.center),
+                    finished_diameter: (feature.kind == FeatureKind::Hole)
+                        .then_some(feature.outer_diameter),
                     image,
                     board: occurrence.board,
                     plating: feature.intent.plating,
                     padstack: feature.padstack_ref,
                     net: feature.net,
+                    span: feature.intent.span,
+                    spec_refs: self.feature_spec_refs(layer, feature),
+                    termination,
+                    termination_basis,
+                    protection: Vec::new(),
                     lands: layer_lands,
                 });
             }
         }
+        self.attach_hole_protection(scope, &mut holes)?;
         holes.sort_by_key(|hole| (hole.layer, hole.id));
         Ok(holes)
+    }
+
+    fn hole_termination_association(
+        &self,
+        occurrence: &FeatureOccurrence,
+        image: &ContourSet,
+        evidence: &FeatureEvidence,
+        span: FeatureSpan<Symbol>,
+        terminations: &[PhysicalTermination],
+        land_by_id: &HashMap<LandId, &PhysicalLand>,
+    ) -> (Association<PhysicalTerminationId>, Option<AssociationBasis>) {
+        if !evidence.component_refs.is_empty() || evidence.pin.is_some() {
+            let candidates = terminations
+                .iter()
+                .filter(|termination| termination.component.layout == occurrence.id.layout)
+                .filter(|termination| {
+                    evidence.pin.is_none() || evidence.pin == Some(termination.pin)
+                })
+                .filter(|termination| {
+                    evidence.component_refs.is_empty()
+                        || self
+                            .component_definition(termination.component.component)
+                            .and_then(|component| component.source.ref_des)
+                            .is_some_and(|reference| evidence.component_refs.contains(&reference))
+                })
+                .map(|termination| termination.id)
+                .collect::<BTreeSet<_>>();
+            return (
+                association_from_candidates(candidates, true),
+                Some(AssociationBasis::SourceIdentity),
+            );
+        }
+
+        let candidate_lands = terminations
+            .iter()
+            .flat_map(|termination| {
+                termination.lands.iter().filter_map(|land| {
+                    let land = land_by_id[land];
+                    (termination.side != Side::None
+                        && land.board == occurrence.board
+                        && land.side == termination.side
+                        && feature_spans_layer(span, land.layer, &self.layer_definitions)
+                        && land.image.bbox().intersects(image.bbox())
+                        && land.image.intersection(image).area() > tol::REGION_MM.powi(2))
+                    .then_some((land.id, termination.id))
+                })
+            })
+            .collect::<Vec<_>>();
+        match candidate_lands.as_slice() {
+            [] => (Association::Unresolved, None),
+            [(_, termination)] => (
+                Association::Resolved(*termination),
+                Some(AssociationBasis::ExactGeometry),
+            ),
+            _ => (
+                Association::Ambiguous(
+                    candidate_lands
+                        .into_iter()
+                        .map(|(_, termination)| termination)
+                        .collect::<BTreeSet<_>>()
+                        .into_iter()
+                        .collect(),
+                ),
+                Some(AssociationBasis::ExactGeometry),
+            ),
+        }
+    }
+
+    fn attach_hole_protection(
+        &self,
+        scope: ArtworkScope,
+        holes: &mut [PhysicalHole],
+    ) -> Result<()> {
+        for (layer_index, layer) in self.layer_definitions.iter().enumerate() {
+            if !matches!(
+                layer.layer_function,
+                LayerFunction::HoleFill
+                    | LayerFunction::CoatingCond
+                    | LayerFunction::CoatingNonCond
+            ) {
+                continue;
+            }
+            let layer_id = LayerId(layer_index as u32);
+            for (occurrence, image) in self.attributed_feature_images(layer_id, scope)? {
+                let feature = self
+                    .feature_definition(occurrence.id.feature)
+                    .context("hole protection references a missing feature definition")?;
+                let evidence = HoleProtectionEvidence {
+                    source: occurrence.id,
+                    layer: layer_id,
+                    function: layer.layer_function,
+                    side: feature.intent.side,
+                    span: feature.intent.span,
+                    spec_refs: self.feature_spec_refs(layer, feature),
+                };
+                for hole in holes
+                    .iter_mut()
+                    .filter(|hole| hole.board == occurrence.board)
+                {
+                    if hole.image.bbox().intersects(image.bbox())
+                        && hole.image.intersection(&image).area() > tol::REGION_MM.powi(2)
+                    {
+                        hole.protection.push(evidence.clone());
+                    }
+                }
+            }
+        }
+        for hole in holes {
+            hole.protection
+                .sort_by_key(|evidence| (evidence.layer, evidence.source));
+        }
+        Ok(())
+    }
+
+    fn feature_spec_refs(
+        &self,
+        layer: &ipc2581::types::Layer,
+        feature: &Feature<Symbol>,
+    ) -> Vec<Symbol> {
+        let mut spec_refs = layer.spec_refs.clone();
+        if let Some(set) = feature
+            .set
+            .and_then(|set| self.geometry.feature_sets.get(set as usize))
+        {
+            spec_refs.extend(
+                set.spec_refs
+                    .slice(&self.geometry.spec_refs)
+                    .iter()
+                    .map(|reference| reference.spec),
+            );
+        }
+        spec_refs.sort_by_key(|spec| self.resolve(*spec));
+        spec_refs.dedup();
+        spec_refs
+    }
+
+    fn feature_source_name(&self, feature: &Feature<Symbol>) -> Option<Symbol> {
+        let step = self
+            .steps
+            .iter()
+            .find(|step| Some(step.name) == feature.source_step_ref)?;
+        let layer = step
+            .layer_features
+            .iter()
+            .find(|layer| Some(layer.layer_ref) == feature.source_layer_ref)?;
+        match layer
+            .sets
+            .get(feature.source.set_index as usize)?
+            .features
+            .get(feature.source.feature_index as usize)?
+        {
+            SetFeature::Hole(hole) => hole.name,
+            SetFeature::Slot(slot) => slot.name,
+            _ => None,
+        }
     }
 
     fn attributed_feature_images(
@@ -655,6 +871,19 @@ impl ArtworkLowering<Symbol, Option<FeatureOccurrenceId>> for OccurrenceAttribut
     }
 }
 
+fn association_from_candidates<T: Copy + Ord>(
+    candidates: BTreeSet<T>,
+    source_claimed: bool,
+) -> Association<T> {
+    let candidates = candidates.into_iter().collect::<Vec<_>>();
+    match candidates.as_slice() {
+        [candidate] => Association::Resolved(*candidate),
+        [_, _, ..] => Association::Ambiguous(candidates),
+        [] if source_claimed => Association::Conflicting(Vec::new()),
+        [] => Association::Unresolved,
+    }
+}
+
 fn exact_termination(
     at: Point,
     pin: Option<Symbol>,
@@ -762,8 +991,8 @@ fn feature_spans_layer(
 ) -> bool {
     let target_index = target.0 as usize;
     match span {
-        crate::dialects::ipc::FeatureSpan::Unknown
-        | crate::dialects::ipc::FeatureSpan::ThroughBoard => true,
+        crate::dialects::ipc::FeatureSpan::Unknown => false,
+        crate::dialects::ipc::FeatureSpan::ThroughBoard => true,
         crate::dialects::ipc::FeatureSpan::Layer(layer) => layers
             .get(target_index)
             .is_some_and(|target| target.name == layer),
@@ -772,14 +1001,14 @@ fn feature_spans_layer(
             to: Some(to),
         } => {
             let Some(from) = layers.iter().position(|layer| layer.name == from) else {
-                return true;
+                return false;
             };
             let Some(to) = layers.iter().position(|layer| layer.name == to) else {
-                return true;
+                return false;
             };
             (from.min(to)..=from.max(to)).contains(&target_index)
         }
-        crate::dialects::ipc::FeatureSpan::FromTo { .. } => true,
+        crate::dialects::ipc::FeatureSpan::FromTo { .. } => false,
     }
 }
 

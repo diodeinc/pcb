@@ -2,7 +2,7 @@
 
 use serde::Serialize;
 
-pub const REPORT_SCHEMA_VERSION: u32 = 2;
+pub const REPORT_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct AssemblyReport {
@@ -17,6 +17,7 @@ pub struct AssemblyReport {
     pub packages: Vec<Package>,
     pub components: Vec<Component>,
     pub terminations: Vec<Termination>,
+    pub holes: Vec<Hole>,
     pub diagnostics: Vec<Diagnostic>,
 }
 
@@ -527,6 +528,8 @@ pub struct Termination {
     pub population: Population,
     pub lands: Vec<LandEvidence>,
     pub paste_islands: Vec<PasteEvidence>,
+    pub mask_openings: Vec<MaskEvidence>,
+    pub hole_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -539,6 +542,142 @@ pub struct PasteEvidence {
     pub layer: String,
     pub side: Side,
     pub location_mm: Point,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MaskEvidence {
+    pub layer: String,
+    pub side: Side,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Hole {
+    pub id: String,
+    pub board_id: Option<String>,
+    pub source_layer: String,
+    pub source_name: Option<String>,
+    pub kind: HoleKind,
+    pub location_mm: Point,
+    pub finished_diameter_mm: Option<f64>,
+    pub plating: HolePlating,
+    pub padstack: Option<String>,
+    pub net: Option<String>,
+    pub span: HoleSpan,
+    pub termination: TerminationAssociation,
+    pub protection: ProtectionIntent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HoleKind {
+    Round,
+    Slot,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HolePlating {
+    Unknown,
+    None,
+    Plated,
+    NonPlated,
+    Via,
+    ViaCapped,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HoleSpan {
+    pub kind: HoleSpanKind,
+    pub from_layer: Option<String>,
+    pub to_layer: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HoleSpanKind {
+    Unknown,
+    Layer,
+    ThroughBoard,
+    FromTo,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TerminationAssociation {
+    pub status: AssociationStatus,
+    pub basis: Option<AssociationBasis>,
+    pub termination_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssociationBasis {
+    SourceIdentity,
+    ExactGeometry,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssociationStatus {
+    Explicit,
+    ExactGeometric,
+    Ambiguous,
+    Conflicting,
+    Unresolved,
+    Unsupported,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProtectionIntent {
+    pub status: ProtectionStatus,
+    pub methods: Vec<ProtectionMethod>,
+    pub fill_material: Option<FillMaterial>,
+    pub evidence: Vec<ProtectionEvidence>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProtectionStatus {
+    Explicit,
+    Conflicting,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProtectionMethod {
+    Open,
+    Tented,
+    Plugged,
+    Filled,
+    Capped,
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FillMaterial {
+    NonConductive,
+    Conductive,
+    Copper,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProtectionEvidence {
+    pub id: String,
+    pub kind: ProtectionEvidenceKind,
+    pub layer: String,
+    pub side: Side,
+    pub span: HoleSpan,
+    pub specs: Vec<String>,
+    pub terms: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProtectionEvidenceKind {
+    SourceTerms,
+    ViaCappedPlatingStatus,
+    HoleFillLayer,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -615,6 +754,10 @@ pub enum DiagnosticCode {
     MissingReferenceDesignator,
     MissingPackage,
     MissingPhysicalTerminations,
+    AmbiguousHoleTermination,
+    ConflictingHoleTermination,
+    ConflictingViaProtection,
+    UnknownViaProtection,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -628,4 +771,5 @@ pub struct DiagnosticSubject {
 #[serde(rename_all = "snake_case")]
 pub enum DiagnosticSubjectKind {
     Component,
+    Hole,
 }

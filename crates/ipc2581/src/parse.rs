@@ -3636,6 +3636,7 @@ impl<'a> Parser<'a> {
             "PLATED" => Ok(PlatingStatus::Plated),
             "NONPLATED" => Ok(PlatingStatus::NonPlated),
             "VIA" => Ok(PlatingStatus::Via),
+            "VIA_CAPPED" => Ok(PlatingStatus::ViaCapped),
             _ => Err(Ipc2581Error::InvalidAttribute(format!(
                 "Invalid plating status: {}",
                 s
