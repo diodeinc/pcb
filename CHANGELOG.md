@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- `QR` generic is now a solid silkscreen square with a 5mm, 8mm or 10mm side length
+
 ### Fixed
 
 - Fetch remote tags before `pcb publish` determines a board version bump.

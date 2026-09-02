@@ -1,9 +1,18 @@
+load("../units.zen", "Length")
+
+size = config(Length, default=Length("5mm"), optional=True, allowed=["5mm", "8mm", "10mm"], help="QR code side length")
+properties = {
+    "value": "QR_" + str(size),
+    "size": size,
+}
+
 Component(
     name="QR",
     prefix="QR",
     symbol=Symbol("./symbols/QR.kicad_sym"),
-    footprint=File("./footprints/QR.kicad_mod"),
+    footprint=File("./footprints/QR_" + str(size) + ".kicad_mod"),
     pins={},
+    properties=properties,
     skip_bom=True,
     skip_pos=True,
 )
