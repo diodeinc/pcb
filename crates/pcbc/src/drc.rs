@@ -9,20 +9,8 @@ use std::collections::{BTreeSet, HashMap};
 
 type ColorFn = fn(String) -> colored::ColoredString;
 
-/// Render diagnostics (filter, print, show summary table)
-pub fn render_diagnostics(diagnostics: &mut pcb_zen_core::Diagnostics, suppress_kinds: &[String]) {
-    render_diagnostics_inner(diagnostics, suppress_kinds, true);
-}
-
-/// Render only warning and error diagnostics.
-pub fn render_warnings_and_errors(
-    diagnostics: &mut pcb_zen_core::Diagnostics,
-    suppress_kinds: &[String],
-) {
-    render_diagnostics_inner(diagnostics, suppress_kinds, false);
-}
-
-fn render_diagnostics_inner(
+/// Render diagnostics (filter, print, show summary table).
+pub fn render_diagnostics(
     diagnostics: &mut pcb_zen_core::Diagnostics,
     suppress_kinds: &[String],
     include_advice: bool,

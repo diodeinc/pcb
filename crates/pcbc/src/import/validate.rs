@@ -90,7 +90,7 @@ pub(super) fn validate(
     };
     // Render diagnostics for the user (this is intentionally noisy and useful).
     let mut diagnostics_for_render = diagnostics;
-    crate::drc::render_diagnostics(&mut diagnostics_for_render, &[]);
+    crate::drc::render_diagnostics(&mut diagnostics_for_render, &[], true);
 
     if !summary.schematic_parity_ok {
         print_parity_blocking_recap(&diagnostics_for_render, 50);

@@ -141,7 +141,7 @@ pub(crate) fn render_or_bail(
     suppress: &[String],
     message: &str,
 ) -> Result<()> {
-    drc::render_diagnostics(diagnostics, suppress);
+    drc::render_diagnostics(diagnostics, suppress, true);
     if diagnostics.error_count() > 0 {
         anyhow::bail!("{message}");
     }
