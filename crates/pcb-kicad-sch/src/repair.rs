@@ -361,11 +361,15 @@ fn ensure_items_preserved(
                 .items
                 .iter()
                 .find(|candidate| candidate.id() == Some(id));
+            // An item the intent removes may be gone, or kept exactly as it
+            // was: a realizer that re-establishes a tee where PCB dropped an
+            // orphaned junction has changed nothing the issue checks do not
+            // already judge.
             if let Some(item_ref) = item_ref(&page.id, item)
                 && intent.removals.contains(&item_ref)
             {
-                if after_item.is_some() {
-                    bail!("repair kept {item_ref:?}, which the intent removes");
+                if after_item.is_some_and(|after_item| after_item != item) {
+                    bail!("repair modified {item_ref:?}, which the intent removes");
                 }
                 continue;
             }
