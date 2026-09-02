@@ -530,18 +530,13 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
         return Ok(());
     }
 
-    let remote = if !args.no_push {
-        let r = resolve_remote(&workspace.root, args.force)?;
-        eprintln!("Syncing with {}...", r.cyan());
-        git::fetch_tags(&workspace.root, &r)?;
-        if !args.force {
-            git::fetch_branch(&workspace.root, &r, "main")?;
-            preflight_checks(&workspace.root, &r)?;
-        }
-        Some(r)
-    } else {
-        None
-    };
+    let remote = resolve_remote(&workspace.root, args.force)?;
+    eprintln!("Syncing with {}...", remote.cyan());
+    git::fetch_tags(&workspace.root, &remote)?;
+    if !args.no_push && !args.force {
+        git::fetch_branch(&workspace.root, &remote, "main")?;
+        preflight_checks(&workspace.root, &remote)?;
+    }
 
     // Compute current version from tags (after fetch)
     let tag_prefix = tags::compute_tag_prefix(Some(&package_relative_path), workspace.path());
@@ -573,7 +568,7 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
     )?;
 
     // Upload to API (must succeed before creating tag)
-    if remote.is_some() {
+    if !args.no_push {
         let ws_name = release_workspace_name(&workspace)?;
         let ctx = pcb_diode_api::WorkspaceContext::from_workspace_root(&workspace.root);
         eprintln!("Uploading release to Diode...");
@@ -606,9 +601,9 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
     eprintln!("{} Created tag {}", "✓".green(), tag_name.bold());
 
     // Push tag to remote
-    if let Some(ref r) = remote {
-        eprintln!("Pushing tag to {}...", r.cyan());
-        git::push_tag(&workspace.root, &tag_name, r).context("Failed to push tag")?;
+    if !args.no_push {
+        eprintln!("Pushing tag to {}...", remote.cyan());
+        git::push_tag(&workspace.root, &tag_name, &remote).context("Failed to push tag")?;
         eprintln!("{} Pushed {}", "✓".green(), tag_name.bold());
     }
 

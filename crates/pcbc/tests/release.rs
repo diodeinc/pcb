@@ -204,10 +204,17 @@ fn test_publish_board_with_version() {
         .run()
         .expect("build failed");
 
-    // Commit the hydrated manifests and tag an existing version
+    // Put the existing version only on the remote, as in a clone whose tags
+    // have not been fetched yet.
     sb.commit("Hydrate manifests").tag("boards/v1.2.3");
+    sb.cmd("git", ["push", "origin", "main", "boards/v1.2.3"])
+        .run()
+        .expect("push existing release");
+    sb.cmd("git", ["tag", "--delete", "boards/v1.2.3"])
+        .run()
+        .expect("delete local release tag");
 
-    // Run source-only publish with bump (creates v1.3.0)
+    // Publish fetches the remote tag before computing the bump (creates v1.3.0).
     let mut args = source_only_args("boards/TB0001.zen");
     args.push("--bump=minor");
     sb.run("pcbc", &args)
