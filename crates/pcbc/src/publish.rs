@@ -530,18 +530,21 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
         return Ok(());
     }
 
-    let remote = if !args.no_push {
-        let r = resolve_remote(&workspace.root, args.force)?;
-        eprintln!("Syncing with {}...", r.cyan());
-        git::fetch_tags(&workspace.root, &r)?;
-        if !args.force {
-            git::fetch_branch(&workspace.root, &r, "main")?;
-            preflight_checks(&workspace.root, &r)?;
-        }
-        Some(r)
+    let remote = if args.no_push {
+        resolve_fetch_remote(&workspace.root)?
     } else {
-        None
+        resolve_remote(&workspace.root, args.force)?
     };
+    eprintln!("Syncing with {}...", remote.cyan());
+    if args.no_push {
+        git::fetch_tags_without_pruning(&workspace.root, &remote)?;
+    } else {
+        git::fetch_tags(&workspace.root, &remote)?;
+        if !args.force {
+            git::fetch_branch(&workspace.root, &remote, "main")?;
+            preflight_checks(&workspace.root, &remote)?;
+        }
+    }
 
     // Compute current version from tags (after fetch)
     let tag_prefix = tags::compute_tag_prefix(Some(&package_relative_path), workspace.path());
@@ -573,7 +576,7 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
     )?;
 
     // Upload to API (must succeed before creating tag)
-    if remote.is_some() {
+    if !args.no_push {
         let ws_name = release_workspace_name(&workspace)?;
         let ctx = pcb_diode_api::WorkspaceContext::from_workspace_root(&workspace.root);
         eprintln!("Uploading release to Diode...");
@@ -606,9 +609,9 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
     eprintln!("{} Created tag {}", "✓".green(), tag_name.bold());
 
     // Push tag to remote
-    if let Some(ref r) = remote {
-        eprintln!("Pushing tag to {}...", r.cyan());
-        git::push_tag(&workspace.root, &tag_name, r).context("Failed to push tag")?;
+    if !args.no_push {
+        eprintln!("Pushing tag to {}...", remote.cyan());
+        git::push_tag(&workspace.root, &tag_name, &remote).context("Failed to push tag")?;
         eprintln!("{} Pushed {}", "✓".green(), tag_name.bold());
     }
 
@@ -1054,6 +1057,27 @@ fn resolve_remote(repo_root: &Path, force: bool) -> Result<String> {
             branch, branch
         )
     })
+}
+
+fn resolve_fetch_remote(repo_root: &Path) -> Result<String> {
+    if let Some(remote) = git::symbolic_ref_short_head(repo_root)
+        .and_then(|branch| git::get_branch_remote(repo_root, &branch))
+    {
+        return Ok(remote);
+    }
+
+    let remotes = git::run_output(repo_root, &["remote"])?;
+    let remotes: Vec<_> = remotes.lines().collect();
+    if remotes.contains(&"origin") {
+        return Ok("origin".to_string());
+    }
+    match remotes.as_slice() {
+        [remote] => Ok((*remote).to_string()),
+        [] => bail!("No Git remote is configured. Add a remote before publishing."),
+        _ => bail!(
+            "Unable to select a Git remote for publishing. Configure an 'origin' remote or set the current branch's upstream."
+        ),
+    }
 }
 
 /// Preflight checks run after fetching remote state.
@@ -1510,6 +1534,21 @@ P1 = io(Net)
             packages: BTreeMap::new(),
             errors: Vec::new(),
         }
+    }
+
+    #[test]
+    fn fetch_remote_uses_origin_for_untracked_branch() {
+        let mut sb = Sandbox::new();
+        setup_publish_workspace(&mut sb, &[]);
+        sb.cwd("src")
+            .cmd("git", ["switch", "-c", "feature"])
+            .run()
+            .expect("create untracked branch");
+
+        assert_eq!(
+            resolve_fetch_remote(&sb.root_path().join("src")).unwrap(),
+            "origin"
+        );
     }
 
     #[test]

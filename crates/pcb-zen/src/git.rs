@@ -719,6 +719,14 @@ pub fn fetch_tags(repo_root: &Path, remote: &str) -> anyhow::Result<()> {
     )
 }
 
+/// Fetch tags from remote without deleting local-only tags.
+pub fn fetch_tags_without_pruning(repo_root: &Path, remote: &str) -> anyhow::Result<()> {
+    run_network_in(
+        repo_root,
+        &["fetch", remote, "--tags", "--force", "--quiet"],
+    )
+}
+
 pub fn push_tag(repo_root: &Path, tag_name: &str, remote: &str) -> anyhow::Result<()> {
     run_network_in(repo_root, &["push", remote, tag_name])
 }
