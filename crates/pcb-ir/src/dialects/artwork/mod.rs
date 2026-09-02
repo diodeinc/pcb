@@ -556,6 +556,22 @@ pub fn compose_attributed<LayerMeta: Clone, ObjectMeta: Clone, Owner: Clone + Eq
     doc: &Document<LayerMeta, ObjectMeta>,
     owner: impl Fn(&ObjectMeta) -> Owner,
 ) -> (Vec<AttributedImage<Owner>>, Vec<Diagnostic>) {
+    compose_selected_attributed(doc, |meta| Some(owner(meta)))
+}
+
+/// Ordered artwork composition for only the owners selected by the caller.
+///
+/// Unselected dark objects cannot change a selected owner's image and are
+/// skipped. Clear objects and final cutouts still subtract from selected
+/// owners in source paint order.
+pub(crate) fn compose_selected_attributed<
+    LayerMeta: Clone,
+    ObjectMeta: Clone,
+    Owner: Clone + Eq + Hash,
+>(
+    doc: &Document<LayerMeta, ObjectMeta>,
+    owner: impl Fn(&ObjectMeta) -> Option<Owner>,
+) -> (Vec<AttributedImage<Owner>>, Vec<Diagnostic>) {
     let doc = expand_native_geometry_to_regions(doc.clone());
     struct OwnerState {
         composer: region::PaintComposer,
@@ -573,18 +589,27 @@ pub fn compose_attributed<LayerMeta: Clone, ObjectMeta: Clone, Owner: Clone + Eq
         let mut owner_indices: HashMap<Owner, usize> = HashMap::new();
         let mut states: Vec<(Owner, OwnerState)> = Vec::new();
         for object in objects {
-            let image = object_image_rings(&doc, object);
-            if image.is_empty() {
-                continue;
-            }
             let polarity = if object.order.stage == PaintStage::FinalCutout && has_material {
                 Polarity::Clear
             } else {
                 object.polarity
             };
+            let selected_owner = match polarity {
+                Polarity::Dark => {
+                    let Some(owner) = owner(&object.meta) else {
+                        continue;
+                    };
+                    Some(owner)
+                }
+                Polarity::Clear => None,
+            };
+            let image = object_image_rings(&doc, object);
+            if image.is_empty() {
+                continue;
+            }
             match polarity {
                 Polarity::Dark => {
-                    let owner = owner(&object.meta);
+                    let owner = selected_owner.expect("dark object has a selected owner");
                     let index = match owner_indices.get(&owner) {
                         Some(&index) => index,
                         None => {
@@ -1399,6 +1424,31 @@ mod tests {
         assert!(owners["C"].contains_point(Point::new(8.5, 8.5)));
         assert!(physical.contains_point(Point::new(5.0, 5.0)));
         assert!(physical.contains_point(Point::new(8.5, 8.5)));
+
+        let (mut selected, diagnostics) =
+            compose_selected_attributed(&doc, |meta| (*meta != "C").then_some(*meta));
+        assert!(diagnostics.is_empty());
+        let selected = selected.remove(0);
+        assert_eq!(
+            selected
+                .owners
+                .iter()
+                .map(|(owner, _)| *owner)
+                .collect::<Vec<_>>(),
+            ["A", "B"]
+        );
+        let selected = selected
+            .owners
+            .into_iter()
+            .map(|(owner, rings)| {
+                (
+                    owner,
+                    region::ContourSet::new(rings, FillRule::NonZero, crate::geom::tol::REGION_MM),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        assert!(!selected["A"].contains_point(Point::new(5.0, 5.0)));
+        assert!(selected["B"].contains_point(Point::new(5.0, 5.0)));
     }
 
     #[test]

@@ -4,7 +4,7 @@
 //! geometry remains owned once by the canonical IPC document and final images
 //! are composed on demand for the requested layout scope.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use anyhow::{Context, Result};
 use ipc2581::types::{
@@ -273,7 +273,7 @@ impl ImportedDesign {
             }
             let layer_id = LayerId(layer_index as u32);
             let side = physical_side(layer.side);
-            for (occurrence, image) in self.attributed_feature_images(layer_id, scope)? {
+            for (occurrence, image) in self.attributed_land_images(layer_id, scope)? {
                 let source = occurrence.id;
                 let feature = self
                     .feature_definition(source.feature)
@@ -463,6 +463,19 @@ impl ImportedDesign {
         scope: ArtworkScope,
         lands: &[PhysicalLand],
     ) -> Result<Vec<MaskOpening>> {
+        let mut lands_by_context = HashMap::<_, Vec<_>>::new();
+        for land in lands {
+            lands_by_context
+                .entry((land.board, land.side))
+                .or_default()
+                .push(land);
+            if land.side != Side::None {
+                lands_by_context
+                    .entry((land.board, Side::None))
+                    .or_default()
+                    .push(land);
+            }
+        }
         let mut openings = Vec::new();
         for (layer_index, layer) in self.layer_definitions.iter().enumerate() {
             if layer.layer_function != LayerFunction::Soldermask {
@@ -474,6 +487,9 @@ impl ImportedDesign {
                 let source = occurrence.id;
                 let evidence = self.feature_evidence(source);
                 let board = occurrence.board;
+                let candidates = lands_by_context
+                    .get(&(board, side))
+                    .map_or(&[][..], Vec::as_slice);
                 for (island, image) in image.connected_components().into_iter().enumerate() {
                     openings.push(MaskOpening {
                         id: MaskOpeningId {
@@ -484,13 +500,13 @@ impl ImportedDesign {
                         side,
                         image: image.clone(),
                         board,
-                        lands: associate_land(
+                        lands: associate_land_candidates(
                             &image,
                             board,
                             side,
                             &evidence,
                             &Association::Unresolved,
-                            lands,
+                            candidates,
                         ),
                     });
                 }
@@ -505,6 +521,10 @@ impl ImportedDesign {
         scope: ArtworkScope,
         lands: &[PhysicalLand],
     ) -> Result<Vec<PhysicalHole>> {
+        let mut lands_by_layer = BTreeMap::<_, Vec<_>>::new();
+        for land in lands {
+            lands_by_layer.entry(land.layer).or_default().push(land);
+        }
         let mut holes = Vec::new();
         for (layer_index, layer) in self.layer_definitions.iter().enumerate() {
             if !matches!(
@@ -524,7 +544,7 @@ impl ImportedDesign {
                 let image = self.feature_region(occurrence);
                 let evidence = self.feature_evidence(occurrence.id);
                 let mut layer_lands = Vec::new();
-                for copper_layer in lands.iter().map(|land| land.layer).collect::<BTreeSet<_>>() {
+                for (&copper_layer, candidates) in &lands_by_layer {
                     if !feature_spans_layer(
                         feature.intent.span,
                         copper_layer,
@@ -532,17 +552,13 @@ impl ImportedDesign {
                     ) {
                         continue;
                     }
-                    let candidates = lands
-                        .iter()
-                        .filter(|land| land.layer == copper_layer)
-                        .collect::<Vec<_>>();
                     let land = associate_land_candidates(
                         &image,
                         occurrence.board,
                         Side::None,
                         &evidence,
                         &Association::Unresolved,
-                        &candidates,
+                        candidates,
                     );
                     layer_lands.push(LayerLandAssociation {
                         layer: copper_layer,
@@ -766,6 +782,27 @@ impl ImportedDesign {
         layer: LayerId,
         scope: ArtworkScope,
     ) -> Result<Vec<(crate::import::ipc2581::FeatureOccurrence, ContourSet)>> {
+        self.attributed_feature_images_where(layer, scope, |_| true)
+    }
+
+    fn attributed_land_images(
+        &self,
+        layer: LayerId,
+        scope: ArtworkScope,
+    ) -> Result<Vec<(crate::import::ipc2581::FeatureOccurrence, ContourSet)>> {
+        self.attributed_feature_images_where(layer, scope, |feature| {
+            feature.kind == FeatureKind::Padstack
+                && feature.polarity == Polarity::Dark
+                && feature.intent.domain == FeatureDomain::Copper
+        })
+    }
+
+    fn attributed_feature_images_where(
+        &self,
+        layer: LayerId,
+        scope: ArtworkScope,
+        include: impl Fn(&Feature<Symbol>) -> bool,
+    ) -> Result<Vec<(crate::import::ipc2581::FeatureOccurrence, ContourSet)>> {
         let definition = self
             .layer_definition(layer)
             .context("layer id is outside the imported design")?;
@@ -787,14 +824,18 @@ impl ImportedDesign {
             meta: definition.layer_function,
         };
         let artwork = lower_layer_to_artwork_with(&document, 0, header, &mut OccurrenceAttribution);
-        let (mut images, _) = artwork::compose_attributed(&artwork, |owner| *owner);
+        let (mut images, _) = artwork::compose_selected_attributed(&artwork, |owner| {
+            let owner = (*owner)?;
+            self.feature_definition(owner.feature)
+                .filter(|feature| include(feature))
+                .map(|_| owner)
+        });
         let image = images
             .pop()
             .context("attributed physical composition produced no layer")?;
         image
             .owners
             .into_iter()
-            .filter_map(|(owner, rings)| owner.map(|owner| (owner, rings)))
             .map(|(owner, rings)| {
                 Ok((
                     *occurrences
@@ -940,18 +981,6 @@ fn exact_termination(
                 && termination.at == at
         })
         .map(|termination| termination.id)
-}
-
-fn associate_land(
-    image: &ContourSet,
-    board: Option<LayoutOccurrenceId>,
-    side: Side,
-    evidence: &FeatureEvidence,
-    component: &Association<ComponentOccurrenceId>,
-    lands: &[PhysicalLand],
-) -> Association<LandId> {
-    let candidates = lands.iter().collect::<Vec<_>>();
-    associate_land_candidates(image, board, side, evidence, component, &candidates)
 }
 
 fn associate_land_candidates(

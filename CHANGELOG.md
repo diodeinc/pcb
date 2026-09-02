@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- Speed up IPC-2581 assembly analysis by avoiding unrelated copper composition and repeated land scans.
+
 ### Fixed
 
 - Fix IPC-2581 hole geometry and manufacturing evidence in PCBA assembly reports.
