@@ -98,7 +98,7 @@ pub struct Ipc2581 {
     logistic_header: Option<LogisticHeader>,
     history_record: Option<HistoryRecord>,
     ecad: Option<Ecad>,
-    bom: Option<Bom>,
+    boms: Vec<Bom>,
     avl: Option<Avl>,
 }
 
@@ -145,7 +145,7 @@ impl Ipc2581 {
             logistic_header: parsed.logistic_header,
             history_record: parsed.history_record,
             ecad: parsed.ecad,
-            bom: parsed.bom,
+            boms: parsed.boms,
             avl: parsed.avl,
         })
     }
@@ -182,9 +182,18 @@ impl Ipc2581 {
         self.ecad.as_ref()
     }
 
-    /// Get the BOM section if present
+    /// Get the Content-referenced BOM, or the first BOM if no reference matches.
     pub fn bom(&self) -> Option<&Bom> {
-        self.bom.as_ref()
+        self.content
+            .bom_refs
+            .iter()
+            .find_map(|reference| self.boms.iter().find(|bom| bom.name == *reference))
+            .or_else(|| self.boms.first())
+    }
+
+    /// Get every BOM section in source document order.
+    pub fn boms(&self) -> &[Bom] {
+        &self.boms
     }
 
     /// Get the AVL section if present
@@ -863,8 +872,278 @@ mod tests {
         // Verify other attributes
         assert_eq!(item.quantity, Some(1));
         assert_eq!(item.pin_count, Some(4));
-        assert_eq!(item.ref_des_list.len(), 1);
-        assert_eq!(doc.resolve(item.ref_des_list[0].name), "U4");
+        let references = item.reference_designators().collect::<Vec<_>>();
+        assert_eq!(references.len(), 1);
+        assert_eq!(doc.resolve(references[0].name), "U4");
+    }
+
+    #[test]
+    fn preserves_assembly_bom_and_package_source_facts() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="Owner">
+    <FunctionMode mode="ASSEMBLY"/>
+    <BomRef name="assembly-bom"/>
+    <DictionaryLineDesc units="INCH">
+      <EntryLineDesc id="line"><LineDesc lineWidth="0.005" lineEnd="NONE"/></EntryLineDesc>
+    </DictionaryLineDesc>
+    <DictionaryFont units="INCH">
+      <EntryFont id="font">
+        <FontDefEmbedded name="assembly-font">
+          <LineDescRef id="line"/>
+          <Glyph charCode="41" lowerLeftX="0" lowerLeftY="0" upperRightX="0.05" upperRightY="0.1">
+            <Line startX="0" startY="0" endX="0.05" endY="0.1"><LineDescRef id="line"/></Line>
+          </Glyph>
+        </FontDefEmbedded>
+      </EntryFont>
+      <EntryFont id="external-font"><FontDefExternal name="Helvetica" urn="urn:font:helvetica"/></EntryFont>
+    </DictionaryFont>
+    <DictionaryStandard units="INCH">
+      <EntryStandard id="land"><Circle diameter="0.02"/></EntryStandard>
+    </DictionaryStandard>
+    <DictionaryFirmware>
+      <EntryFirmware id="firmware"><CachedFirmware hexEncodedBinary="00"/></EntryFirmware>
+    </DictionaryFirmware>
+  </Content>
+  <LogisticHeader>
+    <Role id="Owner" roleFunction="SENDER"/>
+    <Enterprise id="enterprise" code="TEST"/>
+    <Person name="Engineer" enterpriseRef="enterprise" roleRef="Owner"/>
+  </LogisticHeader>
+  <HistoryRecord number="1" origination="2026-01-01T00:00:00Z" software="test" lastChange="2026-01-01T00:00:00Z">
+    <FileRevision fileRevisionId="1" comment="test">
+      <SoftwarePackage name="test" vendor="test" revision="1">
+        <Certification certificationStatus="SELFTEST"/>
+      </SoftwarePackage>
+    </FileRevision>
+  </HistoryRecord>
+  <Bom name="unreferenced-bom">
+    <BomHeader assembly="old" revision="0"/>
+    <BomItem OEMDesignNumberRef="old-part" quantity="1" category="ELECTRICAL">
+      <Characteristics category="ELECTRICAL"/>
+    </BomItem>
+  </Bom>
+  <Bom name="assembly-bom">
+    <BomHeader assembly="main" revision="7" affecting=" 1 ">
+      <StepRef name="board"/>
+    </BomHeader>
+    <BomItem OEMDesignNumberRef="part" quantity="1.5" pinCount="3" category="PROGRAMMABLE" internalPartNumber="internal" description="controller">
+      <RefDes name="U1" packageRef="pkg" populate=" true " layerRef="TOP" modelRef="model">
+        <Tuning value="calibrated" comments="at test"/>
+        <Firmware progName="main" progVersion="2">
+          <File name="main.hex" crc="1234"/>
+          <FirmwareRef id="firmware"/>
+        </Firmware>
+      </RefDes>
+      <MatDes name="adhesive" layerRef="TOP"/>
+      <DocDes name="drawing"/>
+      <ToolDes name="fixture"/>
+      <FindDes number="4" layerRef="TOP" modelRef="model"/>
+      <Characteristics category="PROGRAMMABLE">
+        <Measured definitionSource="vendor" measuredCharacteristicName="Height" measuredCharacteristicValue="1.2" engineeringUnitOfMeasure="mm" engineeringNegativeTolerance="0.1" engineeringPositiveTolerance="0.2"/>
+        <Ranged rangedCharacteristicName="Temperature" rangedCharacteristicLowerValue="-40" rangedCharacteristicUpperValue="85" engineeringUnitOfMeasure="C"/>
+        <Enumerated enumeratedCharacteristicName="Finish" enumeratedCharacteristicValue="matte"/>
+        <Textual textualCharacteristicName="Process" textualCharacteristicValue="reflow"/>
+      </Characteristics>
+      <SpecRef id="assembly-spec"/>
+    </BomItem>
+    <BomItem OEMDesignNumberRef="mechanical" quantity="1" category="MECHANICAL"><Characteristics category="MECHANICAL"/></BomItem>
+    <BomItem OEMDesignNumberRef="material" quantity="1" category="MATERIAL"><Characteristics category="MATERIAL"/></BomItem>
+    <BomItem OEMDesignNumberRef="document" quantity="1" category="DOCUMENT"><Characteristics category="DOCUMENT"/></BomItem>
+    <BomItem OEMDesignNumberRef="electrical" quantity="1" category="ELECTRICAL"><Characteristics category="ELECTRICAL"/></BomItem>
+  </Bom>
+  <Ecad name="design">
+    <CadHeader units="INCH"><Spec name="assembly-spec"/></CadHeader>
+    <CadData>
+      <Layer name="TOP" layerFunction="CONDUCTOR" side="TOP" polarity="POSITIVE"/>
+      <Step name="board" type="BOARD">
+        <Datum x="0" y="0"/>
+        <Package name="pkg" type="OTHER" pinOne="1" pinOneOrientation="CENTER" height="0.1" negativeBodyExtension="0.01" comment="body">
+          <Outline>
+            <Polygon>
+              <PolyBegin x="-0.1" y="-0.05"/>
+              <PolyStepSegment x="0.1" y="-0.05"/>
+              <PolyStepSegment x="0.1" y="0.05"/>
+              <PolyStepSegment x="-0.1" y="0.05"/>
+              <PolyStepSegment x="-0.1" y="-0.05"/>
+              <Xform xOffset="0.01" yOffset="0.02" rotation="90" mirror="1"/>
+              <LineDesc lineWidth="0.003" lineEnd="ROUND"/>
+              <FillDesc fillProperty="HOLLOW"/>
+            </Polygon>
+            <LineDesc lineWidth="0.005" lineEnd="ROUND"/>
+          </Outline>
+          <PickupPoint x="0.01" y="0.02"/>
+          <LandPattern>
+            <Pad><Location x="-0.05" y="0"/><Circle diameter="0.02"/></Pad>
+            <Target><Location x="0" y="0"/><Circle diameter="0.01"/></Target>
+          </LandPattern>
+          <SilkScreen>
+            <Marking markingUsage="PIN_ONE">
+              <Location x="-0.1" y="0.05"/>
+              <Polyline><PolyBegin x="0" y="0"/><PolyStepSegment x="0.01" y="0"/><LineDesc lineWidth="0.002" lineEnd="ROUND"/></Polyline>
+            </Marking>
+          </SilkScreen>
+          <AssemblyDrawing>
+            <Outline><Polygon><PolyBegin x="0" y="0"/><PolyStepSegment x="0" y="0"/></Polygon><LineDescRef id="line"/></Outline>
+            <Marking markingUsage="PARTNAME">
+              <Location x="0" y="0"/>
+              <Text textString="controller" fontSize="12">
+                <BoundingBox lowerLeftX="-0.05" lowerLeftY="-0.01" upperRightX="0.05" upperRightY="0.01"/>
+                <FontRef id="font"/>
+                <Color r="10" g="20" b="30"/>
+              </Text>
+            </Marking>
+          </AssemblyDrawing>
+          <Pin number="1" name="A" type="SURFACE" electricalType="ELECTRICAL" mountType="SURFACE_MOUNT_PAD" pinPolarity="PLUS">
+            <Location x="-0.05" y="0"/><StandardPrimitiveRef id="land"/>
+          </Pin>
+          <Topside>
+            <Pin number="2" type="THRU"><Circle diameter="0.02"/></Pin>
+          </Topside>
+          <OtherSideView>
+            <Outline><Polygon><PolyBegin x="0" y="0"/><PolyStepSegment x="0" y="0"/></Polygon><LineDescRef id="line"/></Outline>
+          </OtherSideView>
+        </Package>
+        <Component refDes="U1" packageRef="pkg" part="part" layerRef="TOP" mountType="SMT" height="0.08" standoff="0.005">
+          <Location x="1" y="2"/>
+        </Component>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#;
+
+        validate(xml).expect("assembly source facts conform to IPC-2581C");
+        let doc = Ipc2581::parse(xml).expect("parse assembly source facts");
+        assert_eq!(doc.boms().len(), 2);
+        let bom = doc.bom().expect("Content-referenced BOM");
+        assert_eq!(doc.resolve(bom.name), "assembly-bom");
+        let header = bom.header.as_ref().unwrap();
+        assert_eq!(doc.resolve(header.assembly), "main");
+        assert_eq!(header.affecting, Some(true));
+        assert_eq!(doc.resolve(header.step_refs[0]), "board");
+        assert_eq!(
+            bom.items
+                .iter()
+                .map(|item| item.category)
+                .collect::<Vec<_>>(),
+            vec![
+                Some(BomCategory::Programmable),
+                Some(BomCategory::Mechanical),
+                Some(BomCategory::Material),
+                Some(BomCategory::Document),
+                Some(BomCategory::Electrical),
+            ]
+        );
+        let item = &bom.items[0];
+        assert_eq!(item.quantity, None);
+        assert_eq!(doc.resolve(item.quantity_raw), "1.5");
+        assert_eq!(doc.resolve(item.internal_part_number.unwrap()), "internal");
+        assert!(matches!(&item.designators[1], BomDesignator::Material(_)));
+        assert!(matches!(&item.designators[2], BomDesignator::Document(_)));
+        assert!(matches!(&item.designators[3], BomDesignator::Tool(_)));
+        assert!(matches!(
+            &item.designators[4],
+            BomDesignator::Find(BomFindDesignator { number: 4, .. })
+        ));
+        assert_eq!(doc.resolve(item.spec_refs[0]), "assembly-spec");
+        let reference = item.reference_designators().next().unwrap();
+        assert_eq!(reference.populate, Some(true));
+        assert_eq!(doc.resolve(reference.package_ref.unwrap()), "pkg");
+        assert_eq!(reference.tunings.len(), 1);
+        assert!(matches!(
+            reference.firmwares[0].payload,
+            BomFirmwarePayload::Reference(_)
+        ));
+        assert_eq!(doc.content().dictionary_firmware.entries.len(), 1);
+        assert_eq!(
+            doc.resolve(doc.content().dictionary_firmware.entries[0].hex_encoded_binary),
+            "00"
+        );
+        assert_eq!(
+            doc.content().dictionary_line_desc.entries[0]
+                .line_desc
+                .line_end,
+            LineEnd::None
+        );
+        let fonts = &doc.content().dictionary_font;
+        assert_eq!(fonts.entries.len(), 2);
+        let FontDefinition::Embedded(font) = &fonts.entries[0].definition else {
+            panic!("embedded font");
+        };
+        assert_eq!(doc.resolve(font.name), "assembly-font");
+        assert_eq!(font.glyphs[0].bounding_box.upper_right.y, 2.54);
+        assert!(matches!(font.glyphs[0].shapes[0], FontShape::Shape(_)));
+        assert!(matches!(
+            fonts.entries[1].definition,
+            FontDefinition::External(_)
+        ));
+        let characteristics = item.characteristics.as_ref().unwrap();
+        assert_eq!(characteristics.measured[0].value, Some(1.2));
+        assert_eq!(characteristics.ranged[0].lower_value, Some(-40.0));
+        assert_eq!(characteristics.enumerated.len(), 1);
+        assert_eq!(characteristics.textuals.len(), 1);
+
+        let step = &doc.ecad().unwrap().cad_data.steps[0];
+        let package = &step.packages[0];
+        assert_eq!(package.height, Some(2.54));
+        assert_eq!(package.negative_body_extension, Some(0.254));
+        let outline = package.outline.as_ref().unwrap();
+        assert_eq!(outline.polygon.begin.x, -2.54);
+        assert_eq!(outline.polygon_xform.unwrap().x_offset, 0.254);
+        assert!(outline.polygon_xform.unwrap().mirror);
+        assert_eq!(outline.polygon_line_desc.unwrap().line_width, 0.0762);
+        let LineDescGroup::Inline(outline_line) = &outline.line_desc else {
+            panic!("inline package outline line description");
+        };
+        assert_eq!(outline_line.line_width, 0.127);
+        assert!(outline.polygon_fill_desc.is_some());
+        assert_eq!(package.pickup_point.unwrap().x, 0.254);
+        let land_pattern = package.land_pattern.as_ref().unwrap();
+        assert_eq!(land_pattern.pads.len(), 1);
+        assert!(matches!(
+            &land_pattern.targets[0].shape,
+            StandardShape::Primitive(StandardPrimitive::Circle(_))
+        ));
+        assert_eq!(package.silkscreen.as_ref().unwrap().markings.len(), 1);
+        let assembly_drawing = package.assembly_drawing.as_ref().unwrap();
+        assert!(assembly_drawing.outline.is_some());
+        let FeatureShape::Text(text) = &assembly_drawing.markings[0].feature else {
+            panic!("assembly marking text");
+        };
+        assert_eq!(doc.resolve(text.text_string), "controller");
+        assert_eq!(text.font_size, 12);
+        assert_eq!(doc.resolve(text.font_ref.unwrap()), "font");
+        assert_eq!(text.bounding_box.upper_right.x, 1.27);
+        assert!(matches!(text.color, Some(ColorGroup::Color(_))));
+        assert_eq!(package.pins[0].pin_type, PackagePinType::Surface);
+        assert_eq!(
+            package.pins[0].mount_type,
+            Some(PackagePinMountType::SurfaceMountPad)
+        );
+        assert!(matches!(
+            &package.pins[0].shape,
+            StandardShape::PrimitiveRef(_)
+        ));
+        assert_eq!(package.pins[0].location.unwrap().x, -1.27);
+        assert_eq!(package.topside.as_ref().unwrap().pins.len(), 1);
+        assert!(package.other_side_view.is_some());
+        assert_eq!(step.components[0].height, Some(2.032));
+        assert_eq!(step.components[0].standoff, Some(0.127));
+
+        for invalid in [
+            xml.replace("category=\"PROGRAMMABLE\"", "category=\"UNKNOWN\""),
+            xml.replace("pinCount=\"3\"", "pinCount=\"-1\""),
+            xml.replace("number=\"4\"", "number=\"0\""),
+            xml.replace("fontSize=\"12\"", "fontSize=\"0\""),
+            xml.replace("height=\"0.1\"", "height=\"-0.1\""),
+            xml.replace("populate=\" true \"", "populate=\"yes\""),
+            xml.replace("lineEnd=\"NONE\"", "lineEnd=\"FLAT\""),
+        ] {
+            assert!(
+                Ipc2581::parse(&invalid).is_err(),
+                "schema-invalid assembly values must not be reclassified"
+            );
+        }
     }
 
     #[test]
@@ -923,7 +1202,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_component_accepts_tht_mount_type_alias() {
+    fn parse_component_accepts_only_ipc2581c_mount_types() {
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
   <Content roleRef="Owner">
@@ -933,7 +1212,7 @@ mod tests {
     <CadHeader units="MILLIMETER"/>
     <CadData>
       <Step name="board" type="BOARD">
-        <Component refDes="J1" part="CONN" layerRef="F.Cu" mountType="THT">
+        <Component refDes="J1" part="CONN" layerRef="F.Cu" mountType="THMT">
           <Location x="0" y="0"/>
         </Component>
       </Step>
@@ -945,5 +1224,6 @@ mod tests {
         let component = &doc.ecad().unwrap().cad_data.steps[0].components[0];
 
         assert_eq!(component.mount_type, MountType::Thmt);
+        assert!(Ipc2581::parse(&xml.replace("THMT", "THT")).is_err());
     }
 }

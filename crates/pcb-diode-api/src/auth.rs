@@ -1,14 +1,17 @@
 use anyhow::{Context, Result};
 use atomicwrites::{AtomicFile, OverwriteBehavior};
+use base64::Engine;
 use clap::{Args, Subcommand};
 use fslock::LockFile;
 use rand::distr::{Alphanumeric, SampleString};
+use reqwest::StatusCode;
 use reqwest::blocking::{Client, RequestBuilder};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
-use std::net::TcpListener;
+use std::io::Write;
 use std::path::PathBuf;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::WorkspaceContext;
 
@@ -21,6 +24,10 @@ pub struct AuthTokens {
     pub refresh_token: String,
     pub expires_at: i64,
     pub email: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_endpoint: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
 }
 
 impl AuthTokens {
@@ -104,12 +111,16 @@ fn save_tokens(
     refresh_token: &str,
     expires_at: i64,
     email: Option<&str>,
+    token_endpoint: Option<&str>,
+    client_id: Option<&str>,
 ) -> Result<()> {
     let tokens = AuthTokens {
         access_token: access_token.to_string(),
         refresh_token: refresh_token.to_string(),
         expires_at,
         email: email.map(|s| s.to_string()),
+        token_endpoint: token_endpoint.map(str::to_string),
+        client_id: client_id.map(str::to_string),
     };
     let contents = toml::to_string(&tokens)?;
 
@@ -144,6 +155,20 @@ struct RefreshResponse {
     expires_at: i64,
 }
 
+#[derive(Deserialize)]
+struct OAuthRefreshResponse {
+    access_token: String,
+    refresh_token: Option<String>,
+    expires_in: i64,
+}
+
+fn oauth_client() -> Result<Client> {
+    Ok(Client::builder()
+        .timeout(Duration::from_secs(30))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()?)
+}
+
 fn refresh_tokens_with_context(ctx: &WorkspaceContext) -> Result<AuthTokens> {
     let lock_path = get_auth_file_path(ctx)?.with_extension("toml.lock");
     let mut lock = LockFile::open(&lock_path)?;
@@ -154,34 +179,76 @@ fn refresh_tokens_with_context(ctx: &WorkspaceContext) -> Result<AuthTokens> {
         return Ok(tokens);
     }
 
-    let url = format!("{}/api/auth/refresh", ctx.api_base_url());
-    let response = Client::new()
-        .post(&url)
-        .json(&RefreshRequest {
-            refresh_token: tokens.refresh_token.clone(),
-        })
-        .send()?;
-
-    if !response.status().is_success() {
-        anyhow::bail!("Token refresh failed: {}", response.status());
-    }
-
-    let refresh_response: RefreshResponse = response.json()?;
+    let refreshed = match (&tokens.token_endpoint, &tokens.client_id) {
+        (Some(token_endpoint), Some(client_id)) => {
+            let body = url::form_urlencoded::Serializer::new(String::new())
+                .append_pair("grant_type", "refresh_token")
+                .append_pair("refresh_token", &tokens.refresh_token)
+                .append_pair("client_id", client_id)
+                .finish();
+            let response = oauth_client()?
+                .post(token_endpoint)
+                .header(
+                    reqwest::header::CONTENT_TYPE,
+                    "application/x-www-form-urlencoded",
+                )
+                .body(body)
+                .send()?;
+            if !response.status().is_success() {
+                anyhow::bail!("Token refresh failed: {}", response.status());
+            }
+            let response: OAuthRefreshResponse = response.json()?;
+            if response.expires_in <= 0 {
+                anyhow::bail!("Invalid token expiry");
+            }
+            AuthTokens {
+                access_token: response.access_token,
+                refresh_token: response
+                    .refresh_token
+                    .unwrap_or(tokens.refresh_token.clone()),
+                expires_at: unix_now()?
+                    .checked_add(response.expires_in)
+                    .context("Token expiry is too large")?,
+                email: tokens.email.clone(),
+                token_endpoint: tokens.token_endpoint.clone(),
+                client_id: tokens.client_id.clone(),
+            }
+        }
+        (None, None) => {
+            let url = format!("{}/api/auth/refresh", ctx.api_base_url());
+            let response = Client::new()
+                .post(&url)
+                .json(&RefreshRequest {
+                    refresh_token: tokens.refresh_token.clone(),
+                })
+                .send()?;
+            if !response.status().is_success() {
+                anyhow::bail!("Token refresh failed: {}", response.status());
+            }
+            let response: RefreshResponse = response.json()?;
+            AuthTokens {
+                access_token: response.access_token,
+                refresh_token: response.refresh_token,
+                expires_at: response.expires_at,
+                email: tokens.email.clone(),
+                token_endpoint: None,
+                client_id: None,
+            }
+        }
+        _ => anyhow::bail!("Incomplete OAuth refresh configuration"),
+    };
 
     save_tokens(
         ctx,
-        &refresh_response.access_token,
-        &refresh_response.refresh_token,
-        refresh_response.expires_at,
-        tokens.email.as_deref(),
+        &refreshed.access_token,
+        &refreshed.refresh_token,
+        refreshed.expires_at,
+        refreshed.email.as_deref(),
+        refreshed.token_endpoint.as_deref(),
+        refreshed.client_id.as_deref(),
     )?;
 
-    Ok(AuthTokens {
-        access_token: refresh_response.access_token,
-        refresh_token: refresh_response.refresh_token,
-        expires_at: refresh_response.expires_at,
-        email: tokens.email,
-    })
+    Ok(refreshed)
 }
 
 pub fn refresh_tokens() -> Result<AuthTokens> {
@@ -256,60 +323,236 @@ pub(crate) fn apply_api_auth_with_context(
     ))
 }
 
+struct Pkce {
+    verifier: String,
+    challenge: String,
+}
+
+impl Pkce {
+    fn generate() -> Self {
+        let verifier = Alphanumeric.sample_string(&mut rand::rng(), 64);
+        let challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(Sha256::digest(verifier.as_bytes()));
+        Self {
+            verifier,
+            challenge,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct DeviceStartRequest<'a> {
+    code_challenge: &'a str,
+    code_challenge_method: &'static str,
+}
+
+#[derive(Deserialize)]
+struct DeviceStartResponse {
+    device_code: String,
+    user_code: String,
+    verification_uri_complete: String,
+    expires_in: u64,
+    interval: u64,
+}
+
+#[derive(Serialize)]
+struct DevicePollRequest<'a> {
+    device_code: &'a str,
+}
+
+#[derive(Deserialize)]
+struct DeviceAuthorization {
+    authorization_code: String,
+    token_endpoint: String,
+    client_id: String,
+    redirect_uri: String,
+}
+
+#[derive(Deserialize)]
+struct OAuthErrorResponse {
+    error: String,
+}
+
+enum DevicePollResult {
+    AuthorizationPending,
+    SlowDown,
+    AccessDenied,
+    ExpiredToken,
+    Authorized(DeviceAuthorization),
+}
+
+#[derive(Deserialize)]
+struct TokenExchangeResponse {
+    access_token: String,
+    refresh_token: String,
+    expires_in: i64,
+}
+
 pub fn login_with_context(ctx: &WorkspaceContext) -> Result<()> {
-    let code = Alphanumeric
-        .sample_string(&mut rand::rng(), 6)
-        .to_uppercase();
+    let client = oauth_client()?;
+    let pkce = Pkce::generate();
+    let api_base_url = ctx.api_base_url().trim_end_matches('/');
+    let start_url = format!("{api_base_url}/api/auth/device/start");
+    let started_at = Instant::now();
+    let response = client
+        .post(&start_url)
+        .json(&DeviceStartRequest {
+            code_challenge: &pkce.challenge,
+            code_challenge_method: "S256",
+        })
+        .send()
+        .context("Failed to start device authorization")?;
+    if !response.status().is_success() {
+        anyhow::bail!(
+            "Failed to start device authorization: {}",
+            response.status()
+        );
+    }
+    let start: DeviceStartResponse = response
+        .json()
+        .context("Invalid device authorization response")?;
+    if start.expires_in == 0 || start.interval == 0 {
+        anyhow::bail!("Invalid device authorization polling configuration");
+    }
+    let deadline = started_at
+        .checked_add(Duration::from_secs(start.expires_in))
+        .context("Device authorization expiry is too large")?;
 
-    let listener = TcpListener::bind("127.0.0.1:0")?;
-    let port = listener.local_addr()?.port();
-    let redirect_uri = format!("http://localhost:{}/callback", port);
-
-    let auth_url = format!(
-        "{}/cli-auth?code={}&redirect_uri={}",
-        ctx.web_base_url(),
-        code,
-        urlencoding::encode(&redirect_uri)
-    );
-
-    println!("Code: {}", code);
+    println!("Code: {}", start.user_code);
+    println!("Verify at: {}", start.verification_uri_complete);
     println!("Opening browser...");
-
-    if let Err(e) = open::that(&auth_url) {
-        eprintln!("Failed to open browser: {}", e);
-        eprintln!("Please manually open: {}", auth_url);
+    if let Err(error) = open::that(&start.verification_uri_complete) {
+        eprintln!("Failed to open browser: {error}");
+        eprintln!("Continue at: {}", start.verification_uri_complete);
     }
 
-    let (mut stream, _) = listener.accept()?;
+    let poll_url = format!("{api_base_url}/api/auth/device/poll");
+    let authorization = wait_for_device_authorization(
+        &client,
+        &poll_url,
+        &start.device_code,
+        deadline,
+        start.interval,
+    )?;
 
-    let mut reader = BufReader::new(&stream);
-    let mut request_line = String::new();
-    reader.read_line(&mut request_line)?;
-
-    let tokens = parse_tokens_from_request(&request_line)?;
-
-    let response = format!(
-        "HTTP/1.1 302 Found\r\nLocation: {}\r\nContent-Length: 0\r\n\r\n",
-        ctx.web_base_url()
-    );
-    stream.write_all(response.as_bytes())?;
-    stream.flush()?;
+    let token_exchange_body = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("grant_type", "authorization_code")
+        .append_pair("code", &authorization.authorization_code)
+        .append_pair("client_id", &authorization.client_id)
+        .append_pair("redirect_uri", &authorization.redirect_uri)
+        .append_pair("code_verifier", &pkce.verifier)
+        .finish();
+    let response = client
+        .post(&authorization.token_endpoint)
+        .header(
+            reqwest::header::CONTENT_TYPE,
+            "application/x-www-form-urlencoded",
+        )
+        .body(token_exchange_body)
+        .send()
+        .context("Failed to exchange authorization code")?;
+    if !response.status().is_success() {
+        anyhow::bail!("Authorization code exchange failed: {}", response.status());
+    }
+    let tokens: TokenExchangeResponse = response.json().context("Invalid token response")?;
+    if tokens.expires_in <= 0 {
+        anyhow::bail!("Invalid token expiry");
+    }
+    let expires_at = unix_now()?
+        .checked_add(tokens.expires_in)
+        .context("Token expiry is too large")?;
 
     save_tokens(
         ctx,
         &tokens.access_token,
         &tokens.refresh_token,
-        tokens.expires_at,
-        tokens.email.as_deref(),
+        expires_at,
+        None,
+        Some(&authorization.token_endpoint),
+        Some(&authorization.client_id),
     )?;
     pcb_zen::git::clear_diodehub_credential_cache();
 
     println!("✓ Authentication successful!");
-    if let Some(email) = &tokens.email {
-        println!("  Logged in as: {}", email);
-    }
 
     Ok(())
+}
+
+fn wait_for_device_authorization(
+    client: &Client,
+    poll_url: &str,
+    device_code: &str,
+    deadline: Instant,
+    mut interval: u64,
+) -> Result<DeviceAuthorization> {
+    sleep_before_poll(deadline, interval)?;
+    loop {
+        let result = poll_device_authorization(client, poll_url, device_code)?;
+        match result {
+            DevicePollResult::AuthorizationPending => {}
+            DevicePollResult::SlowDown => interval = interval.saturating_add(5),
+            DevicePollResult::AccessDenied => anyhow::bail!("Authorization was denied"),
+            DevicePollResult::ExpiredToken => anyhow::bail!("Authorization expired"),
+            DevicePollResult::Authorized(authorization) => return Ok(authorization),
+        }
+        sleep_before_poll(deadline, interval)?;
+    }
+}
+
+fn poll_device_authorization(
+    client: &Client,
+    poll_url: &str,
+    device_code: &str,
+) -> Result<DevicePollResult> {
+    let response = client
+        .post(poll_url)
+        .json(&DevicePollRequest { device_code })
+        .send()
+        .context("Failed to poll device authorization")?;
+    let status = response.status();
+    if status.is_success() {
+        return response
+            .json()
+            .map(DevicePollResult::Authorized)
+            .context("Invalid device authorization response");
+    }
+    if status != StatusCode::BAD_REQUEST {
+        anyhow::bail!("Device authorization polling failed: {status}");
+    }
+
+    let error: OAuthErrorResponse = response
+        .json()
+        .context("Invalid device authorization error response")?;
+    match error.error.as_str() {
+        "authorization_pending" => Ok(DevicePollResult::AuthorizationPending),
+        "slow_down" => Ok(DevicePollResult::SlowDown),
+        "access_denied" => Ok(DevicePollResult::AccessDenied),
+        "expired_token" => Ok(DevicePollResult::ExpiredToken),
+        error => anyhow::bail!("Device authorization failed: {error}"),
+    }
+}
+
+fn sleep_before_poll(deadline: Instant, interval: u64) -> Result<()> {
+    let delay = Duration::from_secs(interval);
+    if Instant::now()
+        .checked_add(delay)
+        .is_none_or(|next_poll| next_poll >= deadline)
+    {
+        anyhow::bail!("Authorization expired");
+    }
+    std::thread::sleep(delay);
+    if Instant::now() >= deadline {
+        anyhow::bail!("Authorization expired");
+    }
+    Ok(())
+}
+
+fn unix_now() -> Result<i64> {
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("System clock is before the Unix epoch")?
+        .as_secs();
+    i64::try_from(seconds).context("System time is too large")
 }
 
 pub fn login() -> Result<()> {
@@ -378,47 +621,6 @@ pub fn refresh_with_context(ctx: &WorkspaceContext) -> Result<()> {
 pub fn refresh() -> Result<()> {
     let ctx = WorkspaceContext::from_cwd().unwrap_or_default();
     refresh_with_context(&ctx)
-}
-
-struct CallbackTokens {
-    access_token: String,
-    refresh_token: String,
-    expires_at: i64,
-    email: Option<String>,
-}
-
-fn parse_tokens_from_request(request_line: &str) -> Result<CallbackTokens> {
-    let parts: Vec<&str> = request_line.split_whitespace().collect();
-    if parts.len() < 2 {
-        anyhow::bail!("Invalid HTTP request format");
-    }
-
-    let query_string = parts[1].split('?').nth(1).context("No query string")?;
-
-    let mut access_token = None;
-    let mut refresh_token = None;
-    let mut expires_at = None;
-
-    for param in query_string.split('&') {
-        let mut kv = param.split('=');
-        let key = kv.next().context("Invalid query parameter")?;
-        let value = kv.next().context("Invalid query parameter")?;
-        let decoded_value = urlencoding::decode(value)?.into_owned();
-
-        match key {
-            "access_token" => access_token = Some(decoded_value),
-            "refresh_token" => refresh_token = Some(decoded_value),
-            "expires_at" => expires_at = Some(decoded_value),
-            _ => {}
-        }
-    }
-
-    Ok(CallbackTokens {
-        access_token: access_token.context("Missing access_token")?,
-        refresh_token: refresh_token.context("Missing refresh_token")?,
-        expires_at: expires_at.context("Missing expires_at")?.parse()?,
-        email: None,
-    })
 }
 
 #[derive(Args, Debug)]
@@ -565,6 +767,8 @@ mod tests {
             "refresh-token",
             unix_now() - 3600,
             Some("user@example.com"),
+            None,
+            None,
         )
         .unwrap();
         let refresh_calls = Cell::new(0);
@@ -589,6 +793,8 @@ mod tests {
             "refresh-token",
             unix_now() - 3600,
             Some("user@example.com"),
+            None,
+            None,
         )
         .unwrap();
         let refresh_calls = Cell::new(0);
@@ -600,6 +806,8 @@ mod tests {
                 refresh_token: "refresh-token".to_string(),
                 expires_at: unix_now() + 3600,
                 email: Some("user@example.com".to_string()),
+                token_endpoint: None,
+                client_id: None,
             })
         })
         .unwrap();
@@ -618,6 +826,8 @@ mod tests {
             "refresh-token",
             unix_now() + 3600,
             Some("user@example.com"),
+            None,
+            None,
         )
         .unwrap();
         let refresh_calls = Cell::new(0);

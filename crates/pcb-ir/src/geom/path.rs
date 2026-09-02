@@ -116,6 +116,13 @@ impl ContourBuf {
     pub fn segments(&self) -> Segments<'_> {
         segments(&self.cmds)
     }
+
+    /// Signed area enclosed by this contour, preserving line, circular-arc,
+    /// and cubic Bézier segments without flattening. Counter-clockwise
+    /// contours are positive and clockwise contours are negative.
+    pub fn signed_area(&self) -> f64 {
+        self.segments().map(segment_signed_double_area).sum::<f64>() / 2.0
+    }
 }
 
 /// A resolved geometric segment of a contour, with explicit start points.
@@ -203,6 +210,33 @@ impl Segment {
             }
         }
     }
+}
+
+fn segment_signed_double_area(segment: Segment) -> f64 {
+    match segment {
+        Segment::Line { start, end } => cross(start, end),
+        Segment::Arc(arc) => {
+            let sweep = if arc.clockwise {
+                -arc.sweep_radians()
+            } else {
+                arc.sweep_radians()
+            };
+            cross(arc.center, arc.end - arc.start) + arc.radius().powi(2) * sweep
+        }
+        Segment::Cubic { start, c1, c2, end } => {
+            // Integrate x·dy - y·dx over the cubic in power-basis form.
+            let d = start;
+            let c = (c1 - start) * 3.0;
+            let b = (c2 - c1 * 2.0 + start) * 3.0;
+            let a = end - c2 * 3.0 + c1 * 3.0 - start;
+            cross(d, c) + cross(d, b) + (cross(d, a) * 3.0 + cross(c, b)) / 3.0 + cross(c, a) / 2.0
+                - cross(a, b) / 5.0
+        }
+    }
+}
+
+fn cross(left: Point, right: Point) -> f64 {
+    left.x * right.y - left.y * right.x
 }
 
 /// Iterate the geometric segments of a command stream, resolving the current
@@ -647,6 +681,27 @@ pub(crate) fn ir_point(point: kurbo::Point) -> Point {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn signed_area_preserves_arcs_and_cubics() {
+        let circle = ContourBuf::new(vec![
+            PathCmd::move_to(Point::new(1.0, 0.0)),
+            PathCmd::arc_to(Point::new(1.0, 0.0), Point::ZERO, false),
+            PathCmd::close(),
+        ]);
+        assert!((circle.signed_area() - std::f64::consts::PI).abs() <= 1e-12);
+
+        let curved = ContourBuf::new(vec![
+            PathCmd::move_to(Point::ZERO),
+            PathCmd::cubic_to(
+                Point::new(0.0, 1.0),
+                Point::new(1.0, 1.0),
+                Point::new(1.0, 0.0),
+            ),
+            PathCmd::close(),
+        ]);
+        assert!((curved.signed_area() + 0.6).abs() <= 1e-12);
+    }
 
     #[test]
     fn stroke_to_fill_rejects_non_positive_width() {

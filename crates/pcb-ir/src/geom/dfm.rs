@@ -775,6 +775,8 @@ pub struct WidthDisk {
 pub struct ThinSite {
     pub bbox: BBox,
     pub disk: WidthDisk,
+    /// Cells of the verified medial axis. A zero-dimensional cell repeats
+    /// its point so vertices and spans share one representation.
     pub axis: Vec<Vec<Point>>,
     /// Actual source-boundary contacts along the verified axis. A vertex
     /// contact is a zero-length segment; these also retain isolated disk
@@ -836,7 +838,7 @@ fn pieces(components: Vec<TwoSidedResidualComponent>, minimum_mm: f64) -> Vec<Th
     let mut pieces = components
         .into_iter()
         .filter(|component| component.width.certainly_below(minimum_mm))
-        .map(|component| {
+        .filter_map(|component| {
             let narrow_axis = component
                 .axis
                 .iter()
@@ -931,7 +933,7 @@ fn pieces(components: Vec<TwoSidedResidualComponent>, minimum_mm: f64) -> Vec<Th
                 .iter()
                 .map(|(line, _, _)| *line)
                 .collect::<Vec<_>>();
-            let mut sites = connected_line_groups(&lines)
+            let sites = connected_line_groups(&lines)
                 .into_iter()
                 .map(|group| {
                     let disk = group
@@ -974,22 +976,7 @@ fn pieces(components: Vec<TwoSidedResidualComponent>, minimum_mm: f64) -> Vec<Th
                 radius_mm: component.disk.radius,
                 width: component.width,
             };
-            // A width can live at an isolated Voronoi vertex (for example a
-            // small island). Keep its real construction even without an axis.
-            if !lines.iter().any(|&(start, end)| {
-                dist::point_segment(disk.center, start, end).0 <= tol::FLATTEN_MM
-            }) {
-                sites.push(ThinSite {
-                    bbox: BBox::from_point(disk.center).expand(disk.radius_mm),
-                    disk,
-                    axis: Vec::new(),
-                    walls: vec![
-                        (disk.width.first, disk.width.first),
-                        (disk.width.second, disk.width.second),
-                    ],
-                });
-            }
-            ThinPiece {
+            (!sites.is_empty()).then_some(ThinPiece {
                 bbox: component.region.bbox,
                 area_mm2: component.region.area(),
                 width: component.width,
@@ -997,7 +984,7 @@ fn pieces(components: Vec<TwoSidedResidualComponent>, minimum_mm: f64) -> Vec<Th
                 disk,
                 sites,
                 candidate: component.region,
-            }
+            })
         })
         .collect::<Vec<_>>();
     pieces.sort_by(|a, b| b.area_mm2.total_cmp(&a.area_mm2));
@@ -1290,6 +1277,65 @@ mod tests {
     }
 
     #[test]
+    fn sub_resolution_backtracking_does_not_create_opposing_walls() {
+        // A real zone boundary can contain a tiny reversal inside an otherwise
+        // smooth clearance wall. The opening sheds the resulting nib, but its
+        // two locally reversed edges are still one wall, not a copper width.
+        let hole_points = [
+            (139.5, -98.5),
+            (140.5, -98.5),
+            (140.5, -99.6),
+            (140.384861, -99.716885),
+            (140.382971, -99.718775),
+            (140.364306, -99.742690),
+            (140.363799, -99.743537),
+            (140.363792, -99.743546),
+            (140.363644, -99.743794),
+            (140.346960, -99.796665),
+            (140.346570, -99.796621),
+            (140.346451, -99.797673),
+            (140.346439, -99.797780),
+            (140.346499, -99.798125),
+            (140.346314, -99.798714),
+            (140.346099, -99.801724),
+            (140.347144, -99.801798),
+            (140.357813, -99.862557),
+            (140.356851, -99.862986),
+            (140.357874, -99.865284),
+            (140.5, -100.0),
+            (140.5, -100.5),
+            (139.5, -100.5),
+        ];
+        let hole = ContourBuf::new(
+            std::iter::once(PathCmd::move_to(Point::new(
+                hole_points[0].0,
+                hole_points[0].1,
+            )))
+            .chain(
+                hole_points[1..]
+                    .iter()
+                    .map(|&(x, y)| PathCmd::line_to(Point::new(x, y))),
+            )
+            .chain(std::iter::once(PathCmd::close()))
+            .collect(),
+        );
+        let region = ContourSet::from_contours(
+            &[rect_at(139.0, -101.0, 141.0, -98.0), hole],
+            FillRule::NonZero,
+            tol::REGION_MM,
+        );
+        let candidate_radius = (0.127 + MORPHOLOGY_CANDIDATE_GUARD_MM) / 2.0;
+
+        assert!(
+            !region
+                .difference(&region.disk_open(candidate_radius))
+                .is_empty(),
+            "the opening must still localize the one-sided nib"
+        );
+        assert!(thin_features(&region, 0.127).is_empty());
+    }
+
+    #[test]
     fn thin_spur_is_reported_with_its_size() {
         // A healthy plate with a 0.05 x 2.0 mm spur sticking out.
         let region = ContourSet::from_filled_contours(
@@ -1377,6 +1423,8 @@ mod tests {
         let findings = thin_features(&island, 0.1);
 
         assert_eq!(findings.len(), 1);
+        assert!(!findings[0].sites.is_empty());
+        assert!(findings[0].sites.iter().all(|site| !site.axis.is_empty()));
         assert!((findings[0].width.mm - 0.05).abs() < 1e-9);
         assert!(
             (findings[0]
@@ -1462,6 +1510,8 @@ mod tests {
             "witnesses at the tip"
         );
         let piece = &findings[0];
+        assert!(!piece.sites.is_empty());
+        assert!(piece.sites.iter().all(|site| !site.axis.is_empty()));
         assert!((piece.disk.radius_mm * 2.0 - width.mm).abs() < 1e-12);
         assert!(
             piece

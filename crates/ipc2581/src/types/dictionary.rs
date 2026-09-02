@@ -1,4 +1,10 @@
-use super::primitives::{Color, FillDesc, LineDesc, StandardPrimitive, UserPrimitive};
+use super::{
+    ecad::PackageOutline,
+    primitives::{
+        BoundingBox, Color, FillDesc, LineDesc, LineDescGroup, StandardPrimitive, UserPrimitive,
+        UserShape,
+    },
+};
 use crate::Symbol;
 
 /// Dictionary of colors
@@ -37,6 +43,65 @@ pub struct DictionaryFillDesc {
 pub struct EntryFillDesc {
     pub id: Symbol,
     pub fill_desc: FillDesc,
+}
+
+/// Dictionary of cached firmware payloads.
+#[derive(Debug, Clone, Default)]
+pub struct DictionaryFirmware {
+    pub entries: Vec<EntryFirmware>,
+}
+
+#[derive(Debug, Clone)]
+pub struct EntryFirmware {
+    pub id: Symbol,
+    pub hex_encoded_binary: Symbol,
+}
+
+/// Dictionary of embedded or externally referenced fonts.
+#[derive(Debug, Clone, Default)]
+pub struct DictionaryFont {
+    pub units: Option<Units>,
+    pub entries: Vec<EntryFont>,
+}
+
+#[derive(Debug, Clone)]
+pub struct EntryFont {
+    pub id: Symbol,
+    pub definition: FontDefinition,
+}
+
+#[derive(Debug, Clone)]
+pub enum FontDefinition {
+    Embedded(EmbeddedFont),
+    External(ExternalFont),
+}
+
+#[derive(Debug, Clone)]
+pub struct EmbeddedFont {
+    pub name: Symbol,
+    pub line_desc: LineDescGroup,
+    pub glyphs: Vec<FontGlyph>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExternalFont {
+    pub name: Symbol,
+    pub urn: Symbol,
+}
+
+#[derive(Debug, Clone)]
+pub struct FontGlyph {
+    /// Required IPC-2581C `hexBinary` source text.
+    pub char_code: Symbol,
+    pub bounding_box: BoundingBox,
+    pub shapes: Vec<FontShape>,
+}
+
+/// Content allowed by the IPC-2581C `Simple` substitution group in a glyph.
+#[derive(Debug, Clone)]
+pub enum FontShape {
+    Shape(UserShape),
+    Outline(PackageOutline),
 }
 
 /// Dictionary of standard primitives

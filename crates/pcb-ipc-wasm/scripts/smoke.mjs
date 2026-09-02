@@ -35,8 +35,11 @@ if (!isMainThread) {
     assert.equal(document.info().board_dimensions.width_mm, 30);
     assert.equal(document.info().layers.copper, 2);
     assert.ok(document.layers().includes('TOP'));
-    assert.equal(builtinPdks()[0].name, 'standard');
-    assert.ok(builtinPdks()[0].source.includes('[pdk]'));
+    const builtins = builtinPdks();
+    assert.equal(builtins[0].name, 'standard');
+    assert.ok(builtins[0].source.includes('[pdk]'));
+    assert.equal(builtins.find(pdk => pdk.name === 'jlcpcb').profile, 'one-ounce-standard-color');
+    assert.equal(builtins.find(pdk => pdk.name === 'ipc').profile, '2b');
     const bom = JSON.parse(text(document.export({ format: 'bom' })[0]));
     assert.equal(bom[0].designator, 'J1');
     assert.equal(bom[0].characteristics.value, 'Connector');
@@ -78,6 +81,9 @@ if (!isMainThread) {
     assert.equal(report.input.size_bytes, Buffer.byteLength(xml));
     assert.equal(report.pdk.sha256, hash(pdk.source));
     assert.equal(report.pdk.source, pdk.source);
+    assert.equal(report.pdk.profile, 'test');
+    assert.equal(report.pdk.profile_status, 'executable');
+    assert.deepEqual(report.pdk.support.copper_layers, { exact: null, minimum: 2, maximum: 4 });
     assert.equal(report.layout.kind, 'board');
     assert.equal(report.scene.schema_version, 1);
     assert.ok(report.scene.bounds.min.x <= 0 && report.scene.bounds.max.x >= 30);

@@ -603,12 +603,10 @@ pub fn check_layout_sync(
     let Some(layout_dir) = utils::resolve_layout_dir(schematic)? else {
         return Ok(None);
     };
-    let Some(kicad_files) = utils::discover_kicad_files(&layout_dir)? else {
-        return Ok(None);
-    };
+    let kicad_files = utils::require_kicad_files(&layout_dir)?;
     let pcb_file = kicad_files.kicad_pcb();
     if !pcb_file.exists() {
-        return Ok(None);
+        return Err(anyhow::anyhow!("Layout file not found: {}", pcb_file.display()).into());
     }
 
     let source_path = schematic

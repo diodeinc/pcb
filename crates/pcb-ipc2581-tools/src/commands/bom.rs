@@ -123,7 +123,7 @@ pub fn extract_bom_lines(accessor: &IpcAccessor) -> Vec<BomLine> {
                 .description
                 .map(|symbol| ipc.resolve(symbol).to_string())
                 .or_else(|| characteristics.value.clone());
-            for ref_des in &item.ref_des_list {
+            for ref_des in item.reference_designators() {
                 let designator = ipc.resolve(ref_des.name);
                 if designator.is_empty() {
                     continue;
@@ -137,7 +137,7 @@ pub fn extract_bom_lines(accessor: &IpcAccessor) -> Vec<BomLine> {
                     mpn: avl.primary_mpn.clone(),
                     manufacturer: avl.primary_manufacturer.clone(),
                     description: description.clone(),
-                    dnp: !ref_des.populate,
+                    dnp: ref_des.populate == Some(false),
                     characteristics: characteristics.clone(),
                 });
             }

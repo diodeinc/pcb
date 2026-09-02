@@ -7,66 +7,156 @@ native vector geometry, and the exact PDK source for external viewers.
 ## PDK
 
 The PDK is strict and versioned. Unknown fields, bare numeric lengths, and
-unsupported schema versions are errors — refusing an unknown capability key
-is deliberate, because silently ignoring a capability the fab requires would
-green-light unchecked boards. A PDK that configures no rules is an error
-rather than a passing report.
+unsupported schema versions are errors — refusing an unknown rule key
+is deliberate, because silently ignoring a rule the fab requires would
+green-light unchecked boards. A profile with neither measurable support bounds
+nor DFM rules is an error rather than a passing report.
 
 ```toml
-schema_version = 1
+schema_version = 2
+default_profile = "standard"
 
 [pdk]
-id = "example-fab-standard"
-name = "Example fabrication standard"
-revision = "1"
-# manufacturer = "Example Fabricator"
-# process = "standard"
+id = "example-fab"
+name = "Example fabrication kit"
+revision = "2"
 
-[capabilities.stackup]
-minimum_copper_layer_count = 2
-maximum_copper_layer_count = 10
+[sources.capabilities]
+title = "Example Fab PCB capabilities"
+url = "https://fab.example/capabilities"
+accessed = "2026-09-01"
 
-[capabilities.drilling]
-minimum_via_hole_diameter = "0.2 mm"
-minimum_pth_hole_diameter = "0.2 mm"
-minimum_npth_hole_diameter = "0.2 mm"
-minimum_slot_width = "0.8 mm"
-minimum_hole_to_hole_clearance = "10 mil"
+[profiles.standard]
+name = "1 oz rigid standard"
+technologies = ["rigid"]
+source = "capabilities"
 
-[capabilities.copper]
-minimum_via_annular_ring = { minimum = "100 um", preferred = "0.125 mm" }
-minimum_pth_annular_ring = "0.125 mm"
-minimum_feature_width = "0.09 mm"
-minimum_copper_clearance = "0.09 mm"
-minimum_board_edge_clearance = "0.25 mm"
-minimum_vscore_to_copper_clearance = "15 mil"
+[profiles.standard.support]
+copper_layers = { minimum = 2, maximum = 10 }
 
-[capabilities.soldermask]
-minimum_web = "3 mil"
+[profiles.standard.defaults]
+material = "FR-4"
+board_thickness = "1.6 mm"
+outer_copper_weight = "1 oz"
+inner_copper_weight = "0.5 oz"
+soldermask_color = "green"
 
-[capabilities.panelization]
-minimum_board_array_spacing = "300 mil"
+[[rules.drilling.hole_diameter]]
+id = "drilling.via_hole"
+select = { hole = "via" }
+limit = { minimum = "0.2 mm", preferred = "0.25 mm" }
+source = "capabilities"
+
+[[rules.drilling.hole_aspect_ratio]]
+id = "drilling.via_aspect_ratio"
+select = { hole = "via" }
+limit = { maximum = 8.0 }
+source = "capabilities"
+
+[[rules.drilling.slot_width]]
+id = "drilling.plated_slot"
+select = { plating = "plated" }
+cases = [
+  { id = "2-layer", when = { copper_layers = { exact = 2 } }, limit = { minimum = "0.50 mm" } },
+  { id = "multilayer", when = { copper_layers = { minimum = 3, maximum = 10 } }, limit = { minimum = "0.35 mm" } },
+]
+
+[[rules.drilling.hole_to_hole_clearance]]
+id = "drilling.via_to_pth"
+select = { first_hole = "via", second_hole = "pth" }
+limit = { minimum = "10 mil" }
+
+[[rules.drilling.hole_to_board_edge_clearance]]
+id = "drilling.npth_to_board_edge"
+select = { hole = "npth" }
+limit = { minimum = "0.30 mm", preferred = "0.40 mm" }
+
+[[rules.drilling.slot_to_board_edge_clearance]]
+id = "drilling.nonplated_slot_to_board_edge"
+select = { plating = "nonplated" }
+limit = { minimum = "0.30 mm" }
+
+[[rules.copper.annular_ring]]
+id = "copper.via_annular_ring"
+select = { hole = "via" }
+limit = { minimum = "100 um", preferred = "0.125 mm" }
+
+[[rules.copper.hole_clearance]]
+id = "copper.via_hole_clearance"
+select = { hole = "via" }
+limit = { minimum = "0.20 mm", preferred = "0.25 mm" }
+
+[[rules.copper.feature_width]]
+id = "copper.feature_width"
+cases = [
+  { id = "outer-1oz", when = { copper = { position = "outer", weight = "1 oz" } }, limit = { minimum = "0.10 mm" } },
+]
 ```
 
-Layer counts are positive integers and refer specifically to conductive layers
-in the physical stackup. When both bounds are configured, the minimum must not
-exceed the maximum. Every dimensional limit is a positive string containing a
-number and `mm`, `mil`, `mils`, or `um`. Units can be mixed in one PDK. Checks
-normalize lengths to millimeters and the report retains both the source
-spelling and normalized value.
+One PDK file is a kit with named profiles. A built-in name selects both a kit
+and one profile; a custom file runs its `default_profile`. An executable
+profile lowers only rules whose `profiles` list contains it; an omitted list
+means every profile. A `metadata_only` profile fails closed before checking.
+This lets a kit publish a standard taxonomy without claiming that missing
+numeric rules establish compliance.
 
-Every dimensional capability takes either a bare length — the binding minimum
-— or a table with a `preferred` tier the fab would rather see met:
+The schema gives each kind of constraint one place:
+
+- `profile.support` is the hard eligibility envelope for the whole profile.
+  A design outside its copper-layer range fails profile qualification. The
+  engine emits these checks as reserved `profile.support.*` report rules;
+  PDK authors do not write layer-count DFM rules.
+- `select` identifies the physical subjects a rule measures. Hole rules select
+  `via`, `pth`, or `npth`; slots select `plated` or `nonplated`; hole-pair rules
+  state both classes. Hole-aspect-ratio rules accept only plated `via` or `pth`
+  holes; selecting `npth` is a schema error. A
+  `rules.copper.hole_clearance` selector chooses the drill class measured to
+  unrelated final copper.
+- `limit` defines one unconditional dimensional minimum and optional preferred
+  value, or one required aspect-ratio maximum.
+- `cases` defines named conditional limits when one value is not enough. A
+  rule uses either `limit` or `cases`, never both.
+- `profile.defaults` records missing-data assumptions. Copper weight defaults
+  are used when a weight-conditioned case has no stated stackup weight.
+
+Case conditions use structured ranges such as
+`copper_layers = { exact = 2 }` or `{ minimum = 3, maximum = 10 }`. Copper
+rules may also condition on `copper = { position = "outer", weight = "1 oz" }`.
+The parser rejects unsupported conditions and any pair of cases whose domains
+overlap. Therefore, at most one case from a rule applies to a design or copper
+layer; non-applicable case rules are reported as skipped. A condition that
+needs stackup context fails extraction when the IPC-2581 file has no
+unambiguous physical stackup. The `technologies` list remains descriptive
+metadata because imported designs do not yet state rigid, flex, and HDI
+technology reliably enough for qualification.
+
+Layer counts are positive integers. Every dimensional minimum is a positive
+string containing a number and `mm`, `mil`, `mils`, or `um`; copper weight is a
+positive `oz` string. A hole-aspect-ratio `limit.maximum` is a positive finite
+unitless number; zero, nonfinite, string-valued, and otherwise malformed ratios
+are rejected. Units can be mixed. Checks normalize lengths to
+millimeters and retain both source spelling and normalized value. Profile
+defaults document an order's assumptions in the report; an outer/inner copper
+weight default is also the fallback for a weight-conditioned rule when the
+source stackup does not state that weight.
+
+Every direct limit or case has a binding `minimum` and may add a `preferred`
+tier:
 
 - The minimum lowers to an **error**-severity rule whose id is the
-  capability path, e.g. `copper.minimum_via_annular_ring`. Error findings
-  fail the verdict.
+  authored rule id, or `<id>.<case>` for a named case. Error findings fail the
+  verdict.
 - A preferred tier lowers to a second, **warning**-severity rule under
-  `<capability>.preferred`. Warning findings are reported and counted but do
-  not fail the verdict. The preferred value must exceed the minimum.
+  `<id>.preferred` or `<id>.<case>.preferred`. Warning findings are reported
+  and counted but do not fail the verdict. The preferred value must exceed the
+  minimum.
 
-Rule ids are the PDK capability paths, so every reported limit can be traced
-to its PDK line verbatim.
+Each direct or named-case hole-aspect-ratio limit instead has one required
+**error**-severity `maximum`; values above it fail the rule. It has no preferred
+tier.
+
+Rule ids, profile metadata, source citations, and the exact PDK TOML are
+retained in the report for auditability.
 
 ## Evaluation model
 
@@ -75,14 +165,18 @@ highest-level representation that still states the measured quantity exactly,
 and lowers only when fabrication composition can change that quantity. A
 high-level pass is never allowed to suppress a later authoritative failure.
 
-| Rules | Authoritative representation | Acceleration only |
+| Check | Authoritative representation | Acceleration only |
 | --- | --- | --- |
-| Copper layer count | Conductive layers in the one physical IPC stackup | None |
+| Profile copper-layer support | Conductive layers in the one physical IPC stackup | None |
 | Hole diameter | Materialized IPC drill primitive and plating class | None |
+| Plated-hole aspect ratio | Physical IPC stackup thickness over the resolved circular drill span, divided by finished hole diameter | None |
 | Nominal slot width | IPC slot primitive width | None |
 | Outline slot width | Materialized filled route outline, then its narrowest maximal inscribed disk | None |
 | Hole-to-hole clearance | Materialized drill circles and overlapping drill spans | Sorted bounds prune pairs already proven clear |
+| Hole-to-board-edge clearance | Analytic drill circle against its enclosing physical board profile, including cutouts | Indexed profile boundaries |
+| Slot-to-board-edge clearance | Materialized filled route outline against its enclosing physical board profile, including cutouts | Indexed profile boundaries |
 | Annular ring | Drill circle and final composed copper image on each applicable layer | Batched containment and an indexed copper boundary |
+| Hole-to-copper clearance | Analytic drill circle and attributed final composed copper on each layer in its drill span | Indexed attributed-copper boundaries |
 | Copper width | Final composed copper image, medial-axis width of each residue | Guarded opening localizes candidates |
 | Copper clearance | Final composed copper attributed to occurrence-scoped electrical conductors | Sorted bounds prune conductor components already proven clear |
 | Soldermask web | Final composed mask-opening image, medial-axis width of each residue | Guarded closing localizes candidates |
@@ -96,9 +190,14 @@ curve; zero for stated primitives and analytic shapes). A pair of witness
 points does not always encode a length: widths, diameters, and annular
 enclosures retain their own measurement constructions. The engine fails a
 minimum only when the measured value falls short beyond its own uncertainty,
-so curve tessellation by itself cannot manufacture a violation. Layer-count
-checks instead compare one exact integer with the configured minimum or
-maximum.
+so curve tessellation by itself cannot manufacture a violation. Profile
+copper-layer qualification instead compares one exact integer with the
+configured support bounds.
+
+Aspect ratio is a scalar rather than a geometric distance. Its spatial site and
+circle evidence identify the hole, while its measurement records the actual
+unitless ratio, maximum, drilled-span thickness, finished diameter, and
+thickness source. Witness separation does not encode the ratio.
 
 Morphological opening and closing are deliberately candidate stages for width
 and soldermask-web checks. Each candidate residue is measured on the medial
@@ -119,6 +218,14 @@ then measures only pairs of distinct owners. A net is scoped by its
 materialized Step occurrence, so repeated boards do not become electrically
 connected merely because they reuse the same net names.
 
+Hole-to-copper clearance uses the same attributed composition. For a via or
+PTH, copper proven to belong to the hole's occurrence-scoped net or a resolved
+physical land is excluded; other-net, auxiliary, and unattributed functional
+copper remains an offender. For an NPTH, every final copper owner is an
+offender, including a same-named net. The rule requires a declared through or
+resolvable layer span and fails extraction when the span is unavailable rather
+than guessing which copper layers the drill intersects.
+
 `--layout-target board` extracts the canonical board step. `board-array`
 materializes the root layout and every nested repeat, so the same evaluators
 operate on a board array or on a fabrication panel without a second DFM code
@@ -129,34 +236,56 @@ when fewer than two exist.
 
 ## Rule semantics
 
-- Copper layer count requires exactly one physical stackup. Every declared
-  copper layer must occur exactly once in it; missing or ambiguous stackup data
-  fails extraction rather than guessing from artwork layer names.
-- Hole diameter rules measure every drilled hole of the rule's class;
-  `minimum_slot_width` measures every routed slot. A slot's width is settled
+- Profile copper-layer qualification requires exactly one physical stackup.
+  Every declared copper layer must occur exactly once in it; missing or
+  ambiguous stackup data fails extraction rather than guessing from artwork
+  layer names.
+- Hole diameter rules measure every drilled hole of the rule's class. Slot
+  width rules measure routed slots of the selected plating class. A slot's width is settled
   at extraction: the stated primitive width when present — exact, and
   verified against the materialized outline — and otherwise the outline's
   narrowest local width. Drill extraction fails rather than silently
   discarding a hole whose plating class or diameter is missing, or a slot
   whose stated width its outline contradicts.
+- Hole aspect ratio is physical drilled-span thickness divided by finished
+  circular hole diameter. A through hole uses IPC-2581 `overallThickness` when
+  it is positive and finite, otherwise a complete sum of physical stackup
+  layer thicknesses. A resolved blind or buried hole sums only layers from its
+  first copper endpoint through its last endpoint, inclusive. Routed slots and
+  NPTH holes are never subjects. If IPC thickness is incomplete, a selected
+  profile's `defaults.board_thickness` may be assumed only for a declared
+  through hole; the rule reports that assumption. An incomplete resolved span,
+  or an incomplete through span without that default, skips the rule with the
+  precise missing-data reason rather than claiming a pass.
 - Hole-to-hole clearance measures edge-to-edge distance between hole pairs
   whose drill spans overlap; stacked blind and buried vias on disjoint spans
   do not interact.
+- Hole- and slot-to-board-edge clearance measure true edge-to-edge distance
+  from each circular hole or materialized routed-slot outline to the boundary
+  of its enclosing physical board profile. Profile cutouts are board edges.
+  The profile must have the feature's exact physical occurrence, so a repeated
+  board never measures against another board or its panel outline. A feature
+  crossing or outside its board material has zero clearance.
 - Annular ring measures the radial copper enclosure of each via or PTH hole
   on every applicable layer. A genuine intermediate plane anti-pad with no
   matching source land has no ring to measure. Both terminal layers, and any
   layer with a matching source land, must retain copper at the hole center;
   missing copper there is a zero-enclosure failure. One finding per hole
   reports the worst layer.
-- `minimum_feature_width` reports narrow copper piece by piece after final
-  polarity composition. `minimum_copper_clearance` measures the shortest
+- Hole-to-copper clearance measures the edge-to-edge distance from each
+  circular drill to the nearest unrelated final copper owner on every copper
+  layer in its declared span. Via and PTH copper is exempt only when net or
+  physical-land identity proves that it belongs to the hole. NPTH copper is
+  never exempt. Missing drill-span identity makes the check incomplete.
+- Copper feature-width rules report narrow copper piece by piece after final
+  polarity composition. Copper-clearance rules measure the shortest
   boundary distance between distinct final conductor images. Same-net
   notches and same-net islands are not clearance subjects; touching or
   overlapping distinct conductors have zero clearance. Functional copper
   without a net fails extraction when this rule is configured instead of
   being guessed into an electrical domain. Fiducials and copper-balance
   support remain explicit auxiliary conductors.
-- `soldermask.minimum_web` reports mask webs — gaps between mask openings —
+- Soldermask-web rules report mask webs — gaps between mask openings —
   narrower than the limit. Morphology finds candidates; the medial-axis
   width decides each finding.
 - V-score and board-edge clearance measure the shortest distance from the
@@ -200,11 +329,36 @@ pcb dfm board.zen --pdk standard -o board.dfm.json
 temporary IPC-2581 and checking the canonical board. Use `pcb ipc dfm check`
 to inspect existing manufacturing files without changing their source layout.
 
-`--pdk` accepts an exact built-in name or a TOML path. `standard` is bundled
-with `pcb` and reported as `builtin:standard`; use `./standard` to select a
-same-named file. Both use the same parser and checks. `--layout-target` accepts
+`--pdk` accepts an exact built-in name or a TOML path. `standard`, `jlcpcb`,
+`jlcpcb-1oz-standard-color`, `jlcpcb-1oz-black-white`, and `ipc-1a` through
+`ipc-3c` are bundled. `jlcpcb` selects the standard-color profile; `ipc`
+selects the opinionated Class 2 / Producibility Level B default. Use
+`./standard` to select a same-named file. Both sources use the same parser and
+checks. `--layout-target` accepts
 `board` or `board-array` and defaults to `board-array`. Add
 `--waivers waivers.toml` to apply a [waiver file](#waivers).
+
+The JLCPCB profiles execute the public rigid FR-4 capability table for 2-32
+copper layers and 1 oz outer copper. They deliberately omit the one-layer
+NPTH-only service, 2 oz rules, local 3 mil BGA exceptions, and panel spacing,
+which depends on the chosen routing, mouse-bite, or V-cut process. The
+standard-color profile uses the published 0.10 mm mask web; the black/white
+profile uses 0.13 mm.
+
+The nine `ipc-1a` through `ipc-3c` built-ins preserve performance Classes 1-3
+crossed with Producibility Levels A-C, but they are executable **partial Diode
+baselines**, not IPC profile matrices. They check maximum via and PTH aspect
+ratio at 6.0 for Level A, 8.0 for Level B, and 10.0 for Level C. They also
+check via, PTH, and NPTH hole-to-copper clearance at 0.25 mm for Level A,
+0.20 mm for Level B, and 0.15 mm for Level C. They check via, PTH, NPTH,
+plated-slot, and nonplated-slot clearance to the board edge at 0.50 mm for
+Level A, 0.40 mm for Level B, and 0.30 mm for Level C. These values apply
+across all three performance classes. Each profile assumes 1.6 mm board
+thickness for the through-hole aspect-ratio fallback described above. Diode
+chose these opinionated values using IPC design topics as context; they are not
+licensed IPC numeric matrices, do not prove full IPC compliance, and do not
+imply IPC certification. A pass covers only the checks listed in the selected
+profile's `coverage` metadata.
 
 Output is UTF-8 JSON on stdout unless `-o` / `--output` is supplied. The
 recommended suffix is `.dfm.json`. Every complete report includes the native
@@ -234,7 +388,9 @@ A complete report has these fields:
 - `verdict`: `pass` or `fail`.
 - `tool`: producer name and version.
 - `input`: original IPC input path, SHA-256, and byte size.
-- `pdk`: resolved kit metadata, path, exact TOML `source`, and SHA-256.
+- `pdk`: resolved kit and profile metadata, assumptions, source citation, path,
+  exact TOML `source`, SHA-256, and the selected profile's
+  `support.copper_layers` range (`exact`, `minimum`, and `maximum`).
 - `waivers`: file path and SHA-256 plus applied, expired, and unmatched entries;
   `null` when no waiver file was given. See [source identity](#source-identity).
 - `layout_target`: `board` or `board_array`.
@@ -246,14 +402,17 @@ A complete report has these fields:
   geometry: `mm`, `x_right_y_up`, and `ipc_2581_design` in version 1.
 - `summary`: rule counts by status and finding counts by severity and
   waiver state.
-- `rules`: one result per lowered rule: its id (the capability path, plus
-  `.preferred` for warning tiers), severity, source and normalized limit,
+- `rules`: one result per lowered rule. A direct limit uses its authored id; a
+  named case uses `<id>.<case>`; a preferred tier appends `.preferred` to
+  either form. Each result includes severity, source and normalized limit,
   status (`pass`, `warning`, `fail`, or `skipped`), skip reason, and the
   measurement contract shared by all of its findings — `subject` (what one
   checked unit is), `quantity`, `method`, `comparison` (`minimum` or
   `maximum`), and `checked`, the number of measurements evaluated. `view`
   specifies the diagnostic family, whether it is spatial, and its semantic
   rendering features; `tier` distinguishes required and preferred limits.
+  `assumptions` lists profile defaults actually used while evaluating that
+  rule, and is empty when no assumption was needed.
 - `findings`: violations in deterministic rule/location order.
 - `scene`: required native artwork for the complete checked layout; see
   [native scene](#native-scene).
@@ -298,7 +457,10 @@ consumer's machine to render or validate the report.
   violation; `waived` and `waiver_reason` record acceptance.
 - `measurement` carries `actual_mm`, `required_mm`, and signed `margin_mm` for
   geometry, or the corresponding `actual_count`, `required_count`, and
-  `margin_count` for discrete counts. A nonnegative margin satisfies the limit.
+  `margin_count` for discrete counts. Aspect-ratio measurements instead carry
+  `actual_ratio`, `maximum_ratio`, signed `margin_ratio`,
+  `drilled_span_thickness_mm`, `finished_hole_diameter_mm`, and
+  `thickness_source`. A nonnegative margin satisfies the limit.
   Signed annular enclosure can be negative. Do not clamp measurements or
   recompute the verdict from rounded display values.
 - `location` carries a representative point, bounding box, and role-labelled
@@ -319,8 +481,11 @@ consumer's machine to render or validate the report.
 - `sites` retain individual failing regions or layers with their measurement,
   `measurement_kind`, `witnesses`, uncertainty, bounds, layers, subjects, and
   evidence. Nonspatial findings use `sites: []`. Site bounds describe the
-  finding; viewers add their own camera padding. Witness-point separation is
-  not necessarily the measured width or diameter.
+  finding; viewers add their own camera padding. `outside_board` identifies a
+  drilled feature that crosses or lies outside its physical board material and
+  therefore has zero clearance. Witness-point separation is not necessarily
+  the measured width or diameter. Scalar aspect-ratio sites have no measurement
+  witnesses; their circle evidence locates the hole.
 - `group_key`, when available, groups proven equivalent causes for display.
   It does not replace the finding id or change the waiver unit. Every finding
   and physical occurrence remains accessible.

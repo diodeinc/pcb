@@ -1,0 +1,333 @@
+schema_version = 2
+default_profile = "2b"
+
+[pdk]
+id = "diode-ipc-informed-baselines"
+name = "Diode opinionated IPC-informed DFM baselines"
+revision = "2026-09-01"
+manufacturer = "Diode"
+process = "Partial IPC-informed baseline"
+
+[sources.ipc-design-topics]
+title = "IPC design and manufacturing profile topics"
+url = "https://www.electronics.org/design-manufacturing-confirmed-ipc-standards"
+accessed = "2026-09-01"
+note = "IPC public material identifies the class/producibility taxonomy and relevant design topics. Diode chose the numeric baseline values in this PDK; they are not licensed IPC numeric matrices, do not establish full IPC compliance, and do not imply IPC certification."
+
+[profiles.1a]
+name = "IPC Class 1 / Producibility Level A — Diode partial baseline"
+description = "Diode's opinionated partial baseline informed by IPC design topics; not an IPC numeric matrix, certification, or proof of full IPC compliance."
+performance_class = 1
+producibility_level = "A"
+technologies = ["rigid", "flex", "rigid_flex", "hdi"]
+coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio", "Diode baseline: via, PTH, and NPTH hole-to-copper clearance at 0.25 mm", "Diode baseline: via, PTH, NPTH, plated-slot, and nonplated-slot board-edge clearance at 0.50 mm"]
+source = "ipc-design-topics"
+
+[profiles.1a.defaults]
+board_thickness = "1.6 mm"
+
+[profiles.1b]
+name = "IPC Class 1 / Producibility Level B — Diode partial baseline"
+description = "Diode's opinionated partial baseline informed by IPC design topics; not an IPC numeric matrix, certification, or proof of full IPC compliance."
+performance_class = 1
+producibility_level = "B"
+technologies = ["rigid", "flex", "rigid_flex", "hdi"]
+coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio", "Diode baseline: via, PTH, and NPTH hole-to-copper clearance at 0.20 mm", "Diode baseline: via, PTH, NPTH, plated-slot, and nonplated-slot board-edge clearance at 0.40 mm"]
+source = "ipc-design-topics"
+
+[profiles.1b.defaults]
+board_thickness = "1.6 mm"
+
+[profiles.1c]
+name = "IPC Class 1 / Producibility Level C — Diode partial baseline"
+description = "Diode's opinionated partial baseline informed by IPC design topics; not an IPC numeric matrix, certification, or proof of full IPC compliance."
+performance_class = 1
+producibility_level = "C"
+technologies = ["rigid", "flex", "rigid_flex", "hdi"]
+coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio", "Diode baseline: via, PTH, and NPTH hole-to-copper clearance at 0.15 mm", "Diode baseline: via, PTH, NPTH, plated-slot, and nonplated-slot board-edge clearance at 0.30 mm"]
+source = "ipc-design-topics"
+
+[profiles.1c.defaults]
+board_thickness = "1.6 mm"
+
+[profiles.2a]
+name = "IPC Class 2 / Producibility Level A — Diode partial baseline"
+description = "Diode's opinionated partial baseline informed by IPC design topics; not an IPC numeric matrix, certification, or proof of full IPC compliance."
+performance_class = 2
+producibility_level = "A"
+technologies = ["rigid", "flex", "rigid_flex", "hdi"]
+coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio", "Diode baseline: via, PTH, and NPTH hole-to-copper clearance at 0.25 mm", "Diode baseline: via, PTH, NPTH, plated-slot, and nonplated-slot board-edge clearance at 0.50 mm"]
+source = "ipc-design-topics"
+
+[profiles.2a.defaults]
+board_thickness = "1.6 mm"
+
+[profiles.2b]
+name = "IPC Class 2 / Producibility Level B — Diode partial baseline"
+description = "Diode's opinionated partial baseline informed by IPC design topics; not an IPC numeric matrix, certification, or proof of full IPC compliance."
+performance_class = 2
+producibility_level = "B"
+technologies = ["rigid", "flex", "rigid_flex", "hdi"]
+coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio", "Diode baseline: via, PTH, and NPTH hole-to-copper clearance at 0.20 mm", "Diode baseline: via, PTH, NPTH, plated-slot, and nonplated-slot board-edge clearance at 0.40 mm"]
+source = "ipc-design-topics"
+
+[profiles.2b.defaults]
+board_thickness = "1.6 mm"
+
+[profiles.2c]
+name = "IPC Class 2 / Producibility Level C — Diode partial baseline"
+description = "Diode's opinionated partial baseline informed by IPC design topics; not an IPC numeric matrix, certification, or proof of full IPC compliance."
+performance_class = 2
+producibility_level = "C"
+technologies = ["rigid", "flex", "rigid_flex", "hdi"]
+coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio", "Diode baseline: via, PTH, and NPTH hole-to-copper clearance at 0.15 mm", "Diode baseline: via, PTH, NPTH, plated-slot, and nonplated-slot board-edge clearance at 0.30 mm"]
+source = "ipc-design-topics"
+
+[profiles.2c.defaults]
+board_thickness = "1.6 mm"
+
+[profiles.3a]
+name = "IPC Class 3 / Producibility Level A — Diode partial baseline"
+description = "Diode's opinionated partial baseline informed by IPC design topics; not an IPC numeric matrix, certification, or proof of full IPC compliance."
+performance_class = 3
+producibility_level = "A"
+technologies = ["rigid", "flex", "rigid_flex", "hdi"]
+coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio", "Diode baseline: via, PTH, and NPTH hole-to-copper clearance at 0.25 mm", "Diode baseline: via, PTH, NPTH, plated-slot, and nonplated-slot board-edge clearance at 0.50 mm"]
+source = "ipc-design-topics"
+
+[profiles.3a.defaults]
+board_thickness = "1.6 mm"
+
+[profiles.3b]
+name = "IPC Class 3 / Producibility Level B — Diode partial baseline"
+description = "Diode's opinionated partial baseline informed by IPC design topics; not an IPC numeric matrix, certification, or proof of full IPC compliance."
+performance_class = 3
+producibility_level = "B"
+technologies = ["rigid", "flex", "rigid_flex", "hdi"]
+coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio", "Diode baseline: via, PTH, and NPTH hole-to-copper clearance at 0.20 mm", "Diode baseline: via, PTH, NPTH, plated-slot, and nonplated-slot board-edge clearance at 0.40 mm"]
+source = "ipc-design-topics"
+
+[profiles.3b.defaults]
+board_thickness = "1.6 mm"
+
+[profiles.3c]
+name = "IPC Class 3 / Producibility Level C — Diode partial baseline"
+description = "Diode's opinionated partial baseline informed by IPC design topics; not an IPC numeric matrix, certification, or proof of full IPC compliance."
+performance_class = 3
+producibility_level = "C"
+technologies = ["rigid", "flex", "rigid_flex", "hdi"]
+coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio", "Diode baseline: via, PTH, and NPTH hole-to-copper clearance at 0.15 mm", "Diode baseline: via, PTH, NPTH, plated-slot, and nonplated-slot board-edge clearance at 0.30 mm"]
+source = "ipc-design-topics"
+
+[profiles.3c.defaults]
+board_thickness = "1.6 mm"
+
+[[rules.drilling.hole_aspect_ratio]]
+id = "diode.ipc.maximum_via_aspect_ratio.level_a"
+profiles = ["1a", "2a", "3a"]
+select = { hole = "via" }
+limit = { maximum = 6.0 }
+source = "ipc-design-topics"
+
+[[rules.drilling.hole_aspect_ratio]]
+id = "diode.ipc.maximum_pth_aspect_ratio.level_a"
+profiles = ["1a", "2a", "3a"]
+select = { hole = "pth" }
+limit = { maximum = 6.0 }
+source = "ipc-design-topics"
+
+[[rules.drilling.hole_aspect_ratio]]
+id = "diode.ipc.maximum_via_aspect_ratio.level_b"
+profiles = ["1b", "2b", "3b"]
+select = { hole = "via" }
+limit = { maximum = 8.0 }
+source = "ipc-design-topics"
+
+[[rules.drilling.hole_aspect_ratio]]
+id = "diode.ipc.maximum_pth_aspect_ratio.level_b"
+profiles = ["1b", "2b", "3b"]
+select = { hole = "pth" }
+limit = { maximum = 8.0 }
+source = "ipc-design-topics"
+
+[[rules.drilling.hole_aspect_ratio]]
+id = "diode.ipc.maximum_via_aspect_ratio.level_c"
+profiles = ["1c", "2c", "3c"]
+select = { hole = "via" }
+limit = { maximum = 10.0 }
+source = "ipc-design-topics"
+
+[[rules.drilling.hole_aspect_ratio]]
+id = "diode.ipc.maximum_pth_aspect_ratio.level_c"
+profiles = ["1c", "2c", "3c"]
+select = { hole = "pth" }
+limit = { maximum = 10.0 }
+source = "ipc-design-topics"
+
+[[rules.copper.hole_clearance]]
+id = "diode.ipc_baseline.copper.via_hole_clearance.level_a"
+profiles = ["1a", "2a", "3a"]
+select = { hole = "via" }
+limit = { minimum = "0.25 mm" }
+source = "ipc-design-topics"
+
+[[rules.copper.hole_clearance]]
+id = "diode.ipc_baseline.copper.pth_hole_clearance.level_a"
+profiles = ["1a", "2a", "3a"]
+select = { hole = "pth" }
+limit = { minimum = "0.25 mm" }
+source = "ipc-design-topics"
+
+[[rules.copper.hole_clearance]]
+id = "diode.ipc_baseline.copper.npth_hole_clearance.level_a"
+profiles = ["1a", "2a", "3a"]
+select = { hole = "npth" }
+limit = { minimum = "0.25 mm" }
+source = "ipc-design-topics"
+
+[[rules.copper.hole_clearance]]
+id = "diode.ipc_baseline.copper.via_hole_clearance.level_b"
+profiles = ["1b", "2b", "3b"]
+select = { hole = "via" }
+limit = { minimum = "0.20 mm" }
+source = "ipc-design-topics"
+
+[[rules.copper.hole_clearance]]
+id = "diode.ipc_baseline.copper.pth_hole_clearance.level_b"
+profiles = ["1b", "2b", "3b"]
+select = { hole = "pth" }
+limit = { minimum = "0.20 mm" }
+source = "ipc-design-topics"
+
+[[rules.copper.hole_clearance]]
+id = "diode.ipc_baseline.copper.npth_hole_clearance.level_b"
+profiles = ["1b", "2b", "3b"]
+select = { hole = "npth" }
+limit = { minimum = "0.20 mm" }
+source = "ipc-design-topics"
+
+[[rules.copper.hole_clearance]]
+id = "diode.ipc_baseline.copper.via_hole_clearance.level_c"
+profiles = ["1c", "2c", "3c"]
+select = { hole = "via" }
+limit = { minimum = "0.15 mm" }
+source = "ipc-design-topics"
+
+[[rules.copper.hole_clearance]]
+id = "diode.ipc_baseline.copper.pth_hole_clearance.level_c"
+profiles = ["1c", "2c", "3c"]
+select = { hole = "pth" }
+limit = { minimum = "0.15 mm" }
+source = "ipc-design-topics"
+
+[[rules.copper.hole_clearance]]
+id = "diode.ipc_baseline.copper.npth_hole_clearance.level_c"
+profiles = ["1c", "2c", "3c"]
+select = { hole = "npth" }
+limit = { minimum = "0.15 mm" }
+source = "ipc-design-topics"
+
+[[rules.drilling.hole_to_board_edge_clearance]]
+id = "diode.ipc_baseline.drilling.minimum_via_hole_to_board_edge_clearance.level_a"
+profiles = ["1a", "2a", "3a"]
+select = { hole = "via" }
+limit = { minimum = "0.50 mm" }
+source = "ipc-design-topics"
+
+[[rules.drilling.hole_to_board_edge_clearance]]
+id = "diode.ipc_baseline.drilling.minimum_pth_hole_to_board_edge_clearance.level_a"
+profiles = ["1a", "2a", "3a"]
+select = { hole = "pth" }
+limit = { minimum = "0.50 mm" }
+source = "ipc-design-topics"
+
+[[rules.drilling.hole_to_board_edge_clearance]]
+id = "diode.ipc_baseline.drilling.minimum_npth_hole_to_board_edge_clearance.level_a"
+profiles = ["1a", "2a", "3a"]
+select = { hole = "npth" }
+limit = { minimum = "0.50 mm" }
+source = "ipc-design-topics"
+
+[[rules.drilling.slot_to_board_edge_clearance]]
+id = "diode.ipc_baseline.drilling.minimum_plated_slot_to_board_edge_clearance.level_a"
+profiles = ["1a", "2a", "3a"]
+select = { plating = "plated" }
+limit = { minimum = "0.50 mm" }
+source = "ipc-design-topics"
+
+[[rules.drilling.slot_to_board_edge_clearance]]
+id = "diode.ipc_baseline.drilling.minimum_nonplated_slot_to_board_edge_clearance.level_a"
+profiles = ["1a", "2a", "3a"]
+select = { plating = "nonplated" }
+limit = { minimum = "0.50 mm" }
+source = "ipc-design-topics"
+
+[[rules.drilling.hole_to_board_edge_clearance]]
+id = "diode.ipc_baseline.drilling.minimum_via_hole_to_board_edge_clearance.level_b"
+profiles = ["1b", "2b", "3b"]
+select = { hole = "via" }
+limit = { minimum = "0.40 mm" }
+source = "ipc-design-topics"
+
+[[rules.drilling.hole_to_board_edge_clearance]]
+id = "diode.ipc_baseline.drilling.minimum_pth_hole_to_board_edge_clearance.level_b"
+profiles = ["1b", "2b", "3b"]
+select = { hole = "pth" }
+limit = { minimum = "0.40 mm" }
+source = "ipc-design-topics"
+
+[[rules.drilling.hole_to_board_edge_clearance]]
+id = "diode.ipc_baseline.drilling.minimum_npth_hole_to_board_edge_clearance.level_b"
+profiles = ["1b", "2b", "3b"]
+select = { hole = "npth" }
+limit = { minimum = "0.40 mm" }
+source = "ipc-design-topics"
+
+[[rules.drilling.slot_to_board_edge_clearance]]
+id = "diode.ipc_baseline.drilling.minimum_plated_slot_to_board_edge_clearance.level_b"
+profiles = ["1b", "2b", "3b"]
+select = { plating = "plated" }
+limit = { minimum = "0.40 mm" }
+source = "ipc-design-topics"
+
+[[rules.drilling.slot_to_board_edge_clearance]]
+id = "diode.ipc_baseline.drilling.minimum_nonplated_slot_to_board_edge_clearance.level_b"
+profiles = ["1b", "2b", "3b"]
+select = { plating = "nonplated" }
+limit = { minimum = "0.40 mm" }
+source = "ipc-design-topics"
+
+[[rules.drilling.hole_to_board_edge_clearance]]
+id = "diode.ipc_baseline.drilling.minimum_via_hole_to_board_edge_clearance.level_c"
+profiles = ["1c", "2c", "3c"]
+select = { hole = "via" }
+limit = { minimum = "0.30 mm" }
+source = "ipc-design-topics"
+
+[[rules.drilling.hole_to_board_edge_clearance]]
+id = "diode.ipc_baseline.drilling.minimum_pth_hole_to_board_edge_clearance.level_c"
+profiles = ["1c", "2c", "3c"]
+select = { hole = "pth" }
+limit = { minimum = "0.30 mm" }
+source = "ipc-design-topics"
+
+[[rules.drilling.hole_to_board_edge_clearance]]
+id = "diode.ipc_baseline.drilling.minimum_npth_hole_to_board_edge_clearance.level_c"
+profiles = ["1c", "2c", "3c"]
+select = { hole = "npth" }
+limit = { minimum = "0.30 mm" }
+source = "ipc-design-topics"
+
+[[rules.drilling.slot_to_board_edge_clearance]]
+id = "diode.ipc_baseline.drilling.minimum_plated_slot_to_board_edge_clearance.level_c"
+profiles = ["1c", "2c", "3c"]
+select = { plating = "plated" }
+limit = { minimum = "0.30 mm" }
+source = "ipc-design-topics"
+
+[[rules.drilling.slot_to_board_edge_clearance]]
+id = "diode.ipc_baseline.drilling.minimum_nonplated_slot_to_board_edge_clearance.level_c"
+profiles = ["1c", "2c", "3c"]
+select = { plating = "nonplated" }
+limit = { minimum = "0.30 mm" }
+source = "ipc-design-topics"

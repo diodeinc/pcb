@@ -28,7 +28,7 @@ pub struct LayoutArgs {
     #[arg(long = "offline")]
     pub offline: bool,
 
-    /// Run KiCad DRC checks after layout generation
+    /// Validate the existing layout without modifying it, then run KiCad DRC
     #[arg(long = "check")]
     pub check: bool,
 
@@ -141,7 +141,7 @@ pub(crate) fn render_or_bail(
     suppress: &[String],
     message: &str,
 ) -> Result<()> {
-    drc::render_diagnostics(diagnostics, suppress);
+    drc::render_diagnostics(diagnostics, suppress, true);
     if diagnostics.error_count() > 0 {
         anyhow::bail!("{message}");
     }

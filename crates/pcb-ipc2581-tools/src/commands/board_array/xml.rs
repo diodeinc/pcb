@@ -330,7 +330,10 @@ pub(super) fn round_fiducial(
                 diameter: diameter_mm,
             },
             fill_property: None,
+            line_desc: None,
             line_desc_ref: None,
+            fill_desc: None,
+            fill_desc_ref: None,
         })),
         pin_ref: None,
     }

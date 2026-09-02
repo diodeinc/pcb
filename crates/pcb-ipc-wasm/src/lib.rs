@@ -226,10 +226,8 @@ impl IpcDocument {
                 serde_json::to_vec_pretty(&commands::bom::extract_bom_lines(&self.accessor()))?,
             ),
             ExportOptions::Cpl { side, exclude_dnp } => {
-                let placements = placement::extract_single_board_placements_from_design(
-                    &self.accessor(),
-                    self.design()?,
-                )?;
+                let placements =
+                    placement::extract_single_board_placements_from_design(self.design()?)?;
                 ExportFile::new(
                     "placements.csv",
                     "text/csv",

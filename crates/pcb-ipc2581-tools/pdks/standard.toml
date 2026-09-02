@@ -1,33 +1,106 @@
-schema_version = 1
+schema_version = 2
+default_profile = "standard"
 
 [pdk]
 id = "standard"
 name = "Standard"
-revision = "draft-2026-08-21"
+revision = "draft-2026-09-01"
 manufacturer = "Diode"
 process = "Standard"
 
-[capabilities.stackup]
-minimum_copper_layer_count = 2
-maximum_copper_layer_count = 10
+[profiles.standard]
+name = "Diode standard"
+description = "General-purpose defaults retained from the original Diode DFM PDK."
+technologies = ["rigid"]
 
-[capabilities.drilling]
-minimum_via_hole_diameter = "0.2 mm"
-minimum_pth_hole_diameter = "15 mil"
-minimum_npth_hole_diameter = "0.2 mm"
-minimum_slot_width = "31 mil"
-minimum_hole_to_hole_clearance = "10 mil"
+[profiles.standard.support]
+copper_layers = { minimum = 2, maximum = 10 }
 
-[capabilities.copper]
-minimum_via_annular_ring = "0.125 mm"
-minimum_pth_annular_ring = "7 mil"
-minimum_feature_width = "5 mil"
-minimum_copper_clearance = "5 mil"
-minimum_board_edge_clearance = "15 mil"
-minimum_vscore_to_copper_clearance = "15 mil"
+[[rules.drilling.hole_diameter]]
+id = "drilling.minimum_via_hole_diameter"
+select = { hole = "via" }
+limit = { minimum = "0.2 mm" }
 
-[capabilities.soldermask]
-minimum_web = "4 mil"
+[[rules.drilling.hole_diameter]]
+id = "drilling.minimum_pth_hole_diameter"
+select = { hole = "pth" }
+limit = { minimum = "15 mil" }
 
-[capabilities.panelization]
-minimum_board_array_spacing = "300 mil"
+[[rules.drilling.hole_diameter]]
+id = "drilling.minimum_npth_hole_diameter"
+select = { hole = "npth" }
+limit = { minimum = "0.2 mm" }
+
+[[rules.drilling.slot_width]]
+id = "drilling.minimum_slot_width"
+select = { plating = "plated" }
+limit = { minimum = "31 mil" }
+
+[[rules.drilling.slot_width]]
+id = "drilling.minimum_slot_width.nonplated"
+select = { plating = "nonplated" }
+limit = { minimum = "31 mil" }
+
+[[rules.drilling.hole_to_hole_clearance]]
+id = "drilling.minimum_hole_to_hole_clearance.via_via"
+select = { first_hole = "via", second_hole = "via" }
+limit = { minimum = "10 mil" }
+
+[[rules.drilling.hole_to_hole_clearance]]
+id = "drilling.minimum_hole_to_hole_clearance.via_pth"
+select = { first_hole = "via", second_hole = "pth" }
+limit = { minimum = "10 mil" }
+
+[[rules.drilling.hole_to_hole_clearance]]
+id = "drilling.minimum_hole_to_hole_clearance.via_npth"
+select = { first_hole = "via", second_hole = "npth" }
+limit = { minimum = "10 mil" }
+
+[[rules.drilling.hole_to_hole_clearance]]
+id = "drilling.minimum_hole_to_hole_clearance.pth_pth"
+select = { first_hole = "pth", second_hole = "pth" }
+limit = { minimum = "10 mil" }
+
+[[rules.drilling.hole_to_hole_clearance]]
+id = "drilling.minimum_hole_to_hole_clearance.pth_npth"
+select = { first_hole = "pth", second_hole = "npth" }
+limit = { minimum = "10 mil" }
+
+[[rules.drilling.hole_to_hole_clearance]]
+id = "drilling.minimum_hole_to_hole_clearance.npth_npth"
+select = { first_hole = "npth", second_hole = "npth" }
+limit = { minimum = "10 mil" }
+
+[[rules.copper.annular_ring]]
+id = "copper.minimum_via_annular_ring"
+select = { hole = "via" }
+limit = { minimum = "0.125 mm" }
+
+[[rules.copper.annular_ring]]
+id = "copper.minimum_pth_annular_ring"
+select = { hole = "pth" }
+limit = { minimum = "7 mil" }
+
+[[rules.copper.feature_width]]
+id = "copper.minimum_feature_width"
+limit = { minimum = "5 mil" }
+
+[[rules.copper.clearance]]
+id = "copper.minimum_copper_clearance"
+limit = { minimum = "5 mil" }
+
+[[rules.copper.board_edge_clearance]]
+id = "copper.minimum_board_edge_clearance"
+limit = { minimum = "15 mil" }
+
+[[rules.copper.vscore_clearance]]
+id = "copper.minimum_vscore_to_copper_clearance"
+limit = { minimum = "15 mil" }
+
+[[rules.soldermask.web]]
+id = "soldermask.minimum_web"
+limit = { minimum = "4 mil" }
+
+[[rules.panelization.board_spacing]]
+id = "panelization.minimum_board_array_spacing"
+limit = { minimum = "300 mil" }

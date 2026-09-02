@@ -55,6 +55,16 @@ fn layout_json_output_is_parseable() {
         .write("modules/test.kicad_mod", TEST_KICAD_MOD)
         .write("no-layout.zen", NO_LAYOUT_ZEN);
 
+    let check_output = sandbox
+        .run("pcbc", ["layout", "--check", "board.zen"])
+        .stderr_capture()
+        .stdout_capture()
+        .unchecked()
+        .run()
+        .expect("layout --check command should execute");
+    assert!(!check_output.status.success());
+    assert!(String::from_utf8_lossy(&check_output.stderr).contains("No .kicad_pro file found"));
+
     let output = sandbox
         .run("pcbc", ["layout", "--no-open", "-f", "json", "board.zen"])
         .stderr_capture()

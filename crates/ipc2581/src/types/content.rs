@@ -13,6 +13,8 @@ pub struct Content {
     pub dictionary_color: DictionaryColor,
     pub dictionary_line_desc: DictionaryLineDesc,
     pub dictionary_fill_desc: DictionaryFillDesc,
+    pub dictionary_font: DictionaryFont,
+    pub dictionary_firmware: DictionaryFirmware,
     pub dictionary_standard: DictionaryStandard,
     pub dictionary_user: DictionaryUser,
 }

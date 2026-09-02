@@ -12,6 +12,49 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - `QR` generic is now a solid silkscreen square with a 5mm, 8mm or 10mm side length
 
+### Fixed
+
+- Fetch remote tags before `pcb publish` determines a board version bump.
+- Hide Advice-level diagnostics from `pcb publish` output while preserving warnings and errors.
+- Clarified that `pcb layout --check` validates an existing layout without modifying it; the command now fails when that layout is missing.
+- Reject stackups with an odd number of copper layers before generating an invalid KiCad board.
+- Resolve domain-based package references with `pcb doc --package`.
+
+## [0.4.43] - 2026-09-01
+
+### Added
+
+- Add canonical assembly IR and derive component placement data from it.
+- Derive physical electrical terminations from exact IPC-2581 pin and padstack identities.
+- Add strict profile-based DFM PDK schema v2, executable JLCPCB 1 oz profiles, and metadata-only IPC 1A-3C profiles.
+- Add maximum plated-hole aspect-ratio DFM checks and make IPC 1A-3C profiles executable with opinionated partial IPC-informed baselines.
+- Add circular drilled-hole-to-unrelated-copper DFM checks and extend the executable IPC 1A-3C partial baselines with opinionated IPC-informed values.
+- Add drilled-feature board-edge DFM checks and extend the executable IPC 1A-3C partial baselines with opinionated IPC-informed values.
+- Add a deterministic, versioned PCBA assembly report contract over canonical assembly and physical IR.
+- Expose PCBA assembly reports as JSON through `pcb ipc assembly`.
+- Preserve external part-library provenance and same-part MPN aliases in IPC-2581 BOM selections.
+- Preserve IPC-2581 package geometry and exact board and panel profiles in assembly IR and reports.
+
+### Changed
+
+- Speed up DFM width and gap checks.
+- Separate DFM profile support, subject selectors, limits, and named conditional cases in PDK schema v2.
+
+### Fixed
+
+- Keep IPC-2581 `DOCUMENT` BOM entries out of CPL exports.
+- Prevent sub-resolution boundary backtracking from producing false DFM width findings.
+
+## [0.4.42] - 2026-09-01
+
+### Added
+
+- Preserve IPC-2581 assembly BOM, package, pin, population, and supporting dictionary source facts in `pcb-ir` imports.
+
+### Changed
+
+- Use a device-style PKCE flow for `pcb auth login` so headless machines can authenticate securely.
+
 ## [0.4.41] - 2026-08-31
 
 ### Added
@@ -1732,7 +1775,9 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.41...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.43...HEAD
+[0.4.43]: https://github.com/diodeinc/pcb/compare/v0.4.42...v0.4.43
+[0.4.42]: https://github.com/diodeinc/pcb/compare/v0.4.41...v0.4.42
 [0.4.41]: https://github.com/diodeinc/pcb/compare/v0.4.40...v0.4.41
 [0.4.40]: https://github.com/diodeinc/pcb/compare/v0.4.39...v0.4.40
 [0.4.39]: https://github.com/diodeinc/pcb/compare/v0.4.38...v0.4.39

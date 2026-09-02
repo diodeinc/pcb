@@ -213,7 +213,147 @@ pub struct Package {
     pub name: Symbol,
     pub package_type: Symbol,
     pub pin_one: Option<Symbol>,
+    pub pin_one_orientation: Option<Symbol>,
     pub height: Option<f64>,
+    pub negative_body_extension: Option<f64>,
+    pub comment: Option<Symbol>,
+    pub outline: Option<PackageOutline>,
+    pub pickup_point: Option<super::Location>,
+    pub land_pattern: Option<PackageLandPattern>,
+    pub silkscreen: Option<PackageSilkscreen>,
+    pub assembly_drawing: Option<PackageAssemblyDrawing>,
+    pub pins: Vec<PackagePin>,
+    pub topside: Option<PackageSideView>,
+    pub other_side_view: Option<PackageOtherSideView>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PackageOutline {
+    pub polygon: super::Polygon,
+    pub polygon_xform: Option<super::Xform>,
+    pub polygon_line_desc: Option<super::LineDesc>,
+    pub polygon_line_desc_ref: Option<Symbol>,
+    pub polygon_fill_desc: Option<super::FillDesc>,
+    pub polygon_fill_desc_ref: Option<Symbol>,
+    pub line_desc: super::LineDescGroup,
+}
+
+#[derive(Debug, Clone)]
+pub struct PackageLandPattern {
+    pub pads: Vec<Pad>,
+    pub targets: Vec<PackageTarget>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PackageTarget {
+    pub xform: Option<super::Xform>,
+    pub location: super::Location,
+    pub shape: StandardShape,
+}
+
+#[derive(Debug, Clone)]
+pub struct PackageSilkscreen {
+    pub outlines: Vec<PackageOutline>,
+    pub markings: Vec<PackageMarking>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PackageAssemblyDrawing {
+    /// The descriptive IPC-2581C document permits this to be absent, while
+    /// the revision C XML Schema requires it. Preserve the source distinction.
+    pub outline: Option<PackageOutline>,
+    pub markings: Vec<PackageMarking>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PackageMarking {
+    pub usage: Option<Symbol>,
+    pub xform: Option<super::Xform>,
+    pub location: Option<super::Location>,
+    pub feature: FeatureShape,
+}
+
+#[derive(Debug, Clone)]
+pub struct PackageSideView {
+    pub outline: Option<PackageOutline>,
+    pub land_pattern: Option<PackageLandPattern>,
+    pub silkscreen: Option<PackageSilkscreen>,
+    pub assembly_drawing: Option<PackageAssemblyDrawing>,
+    pub pins: Vec<PackagePin>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PackageOtherSideView {
+    pub outline: Option<PackageOutline>,
+    pub silkscreen: Option<PackageSilkscreen>,
+    pub assembly_drawing: Option<PackageAssemblyDrawing>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PackagePin {
+    pub number: Symbol,
+    pub name: Option<Symbol>,
+    pub pin_type: PackagePinType,
+    pub electrical_type: Option<PackagePinElectricalType>,
+    pub mount_type: Option<PackagePinMountType>,
+    pub polarity: Option<PackagePinPolarity>,
+    pub xform: Option<super::Xform>,
+    pub location: Option<super::Location>,
+    pub shape: StandardShape,
+}
+
+/// Shape content allowed by the IPC-2581C `StandardShape` substitution group.
+#[derive(Debug, Clone)]
+pub enum StandardShape {
+    Primitive(super::StandardPrimitive),
+    PrimitiveRef(Symbol),
+}
+
+/// Shape content allowed by the broader IPC-2581C `Feature` substitution group.
+#[derive(Debug, Clone)]
+pub enum FeatureShape {
+    StandardPrimitive(super::StandardPrimitive),
+    StandardPrimitiveRef(Symbol),
+    UserPrimitive(super::UserPrimitive),
+    UserPrimitiveRef(Symbol),
+    UserShape(super::UserShape),
+    Text(super::Text),
+    Outline(PackageOutline),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackagePinType {
+    Through,
+    Blind,
+    Surface,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackagePinElectricalType {
+    Electrical,
+    Mechanical,
+    Undefined,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackagePinMountType {
+    SurfaceMountPin,
+    SurfaceMountPad,
+    ThroughHolePin,
+    ThroughHoleHole,
+    PressFit,
+    NonBoard,
+    Hole,
+    WireBond,
+    Undefined,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackagePinPolarity {
+    Plus,
+    Minus,
+    Anode,
+    Cathode,
 }
 
 /// Component instance on the board
@@ -563,6 +703,9 @@ pub struct Pad {
     pub x: Option<f64>,
     pub y: Option<f64>,
     pub xform: Option<super::Xform>,
+    /// Source feature shape, including inline definitions that cannot be
+    /// represented by the reference-only convenience fields below.
+    pub feature: Option<FeatureShape>,
     /// Inline primitive override (takes precedence over padstack definition)
     pub standard_primitive_ref: Option<Symbol>,
     /// Inline user primitive override (takes precedence over padstack definition)

@@ -48,6 +48,8 @@ pub(super) struct Design<'a> {
     /// One boundary index per copper layer, for clearance and enclosure
     /// queries against the composed copper.
     pub copper_boundaries: Vec<RegionBoundaryIndex>,
+    /// One boundary index per attributed conductor on each copper layer.
+    pub conductor_boundaries: Vec<Vec<RegionBoundaryIndex>>,
     /// Each hole's lands, one per copper layer it owns a land on, indexed
     /// like `holes`.
     pub hole_lands: Vec<Vec<HoleLand>>,
@@ -69,7 +71,12 @@ impl<'a> Design<'a> {
         rules: &[Rule],
     ) -> Result<Self> {
         let pools = rules::pools(rules);
-        let (holes, slots) = when(pools.drilled, || collect_drilled(imported, scope))?;
+        let stackup = when(pools.stackup, || {
+            collect_physical_stackup(imported).map(Some)
+        })?;
+        let (holes, slots) = when(pools.drilled, || {
+            collect_drilled(imported, scope, stackup.as_ref())
+        })?;
         let copper_layers = when(pools.copper, || {
             collect_copper_layers(imported, scope, pools.conductor_ownership)
         })?;
@@ -81,15 +88,16 @@ impl<'a> Design<'a> {
         // would let one large hole coarsen every fine-clearance query.
         let boundary_search_mm = rules
             .iter()
-            .filter(|rule| rule.kind.semantics().pools.copper_boundaries)
+            .filter(|rule| {
+                let pools = rule.kind.semantics().pools;
+                pools.copper_boundaries || pools.conductor_boundaries
+            })
             .map(|rule| rule.limit.length().millimeters())
             .fold(1.0, f64::max);
-        Ok(Self {
+        let design = Self {
             imported,
             scope,
-            stackup: when(pools.stackup, || {
-                collect_physical_stackup(imported).map(Some)
-            })?,
+            stackup,
             copper_boundaries: when(pools.copper_boundaries, || {
                 #[cfg(not(target_family = "wasm"))]
                 let layers = copper_layers.par_iter();
@@ -97,6 +105,23 @@ impl<'a> Design<'a> {
                 let layers = copper_layers.iter();
                 Ok(layers
                     .map(|layer| RegionBoundaryIndex::new(&layer.image, boundary_search_mm))
+                    .collect())
+            })?,
+            conductor_boundaries: when(pools.conductor_boundaries, || {
+                #[cfg(not(target_family = "wasm"))]
+                let layers = copper_layers.par_iter();
+                #[cfg(target_family = "wasm")]
+                let layers = copper_layers.iter();
+                Ok(layers
+                    .map(|layer| {
+                        layer
+                            .conductors
+                            .iter()
+                            .map(|conductor| {
+                                RegionBoundaryIndex::new(&conductor.image, boundary_search_mm)
+                            })
+                            .collect()
+                    })
                     .collect())
             })?,
             hole_lands: when(pools.hole_lands, || {
@@ -118,7 +143,11 @@ impl<'a> Design<'a> {
             holes,
             slots,
             copper_layers,
-        })
+        };
+        if pools.resolved_drill_spans {
+            validate_hole_clearance_spans(&design, rules)?;
+        }
+        Ok(design)
     }
 
     pub fn resolve(&self, symbol: Option<Symbol>) -> Option<String> {
@@ -196,6 +225,36 @@ impl<'a> Design<'a> {
     }
 }
 
+fn validate_hole_clearance_spans(design: &Design, rules: &[Rule]) -> Result<()> {
+    for hole in &design.holes {
+        let selected = rules.iter().any(|rule| {
+            matches!(
+                rule.kind,
+                rules::RuleKind::HoleToCopperClearance(class) if class == hole.class
+            ) && rule.conditions.applies_to_design(design)
+                && design
+                    .copper_layers
+                    .iter()
+                    .enumerate()
+                    .any(|(index, layer)| {
+                        hole.spans_copper(index) && rule.conditions.applies_to_layer(layer)
+                    })
+        });
+        if selected
+            && (!hole.span_declared || hole.drill_span.interpretation == "assumed_whole_stack")
+        {
+            bail!(
+                "{} hole on layer '{}' at ({:.6}, {:.6}) has no resolvable drill span; hole-to-copper clearance cannot be certified",
+                hole.class.label(),
+                hole.layer.name,
+                hole.center.x,
+                hole.center.y
+            );
+        }
+    }
+    Ok(())
+}
+
 fn step_kind(kind: LayoutStepKind) -> &'static str {
     match kind {
         LayoutStepKind::Board => "board",
@@ -211,6 +270,114 @@ fn step_kind(kind: LayoutStepKind) -> &'static str {
 pub(super) struct PhysicalStackup {
     pub name: String,
     pub copper_layers: Vec<LayerRef>,
+    overall_thickness_mm: Option<f64>,
+    layers: Vec<PhysicalStackupLayer>,
+}
+
+#[derive(Debug)]
+struct PhysicalStackupLayer {
+    layer_ref: Symbol,
+    name: String,
+    thickness_mm: Option<f64>,
+    copper_index: Option<u16>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ThicknessSource {
+    IpcOverallThickness,
+    IpcStackupLayerThicknesses,
+    ProfileDefaultBoardThickness,
+}
+
+impl ThicknessSource {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::IpcOverallThickness => "ipc_2581_overall_thickness",
+            Self::IpcStackupLayerThicknesses => "ipc_2581_stackup_layer_thicknesses",
+            Self::ProfileDefaultBoardThickness => "profile_default_board_thickness",
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct SpanThickness {
+    pub millimeters: f64,
+    pub source: ThicknessSource,
+}
+
+impl PhysicalStackup {
+    pub fn span_thickness(&self, span: &DrillSpan) -> std::result::Result<SpanThickness, String> {
+        match span.interpretation {
+            "declared_through_board" => self.total_thickness(),
+            "declared_layer_span" => {
+                let first = self
+                    .layers
+                    .iter()
+                    .position(|layer| layer.copper_index == Some(span.first_copper_index))
+                    .ok_or_else(|| {
+                        format!(
+                            "physical stackup has no copper layer at drill-span index {}",
+                            span.first_copper_index
+                        )
+                    })?;
+                let last = self
+                    .layers
+                    .iter()
+                    .position(|layer| layer.copper_index == Some(span.last_copper_index))
+                    .ok_or_else(|| {
+                        format!(
+                            "physical stackup has no copper layer at drill-span index {}",
+                            span.last_copper_index
+                        )
+                    })?;
+                self.layer_thicknesses(first.min(last), first.max(last))
+            }
+            _ => Err(
+                "drill span is not resolved in the physical stackup; board-thickness fallback is permitted only for a through hole"
+                    .to_owned(),
+            ),
+        }
+    }
+
+    fn total_thickness(&self) -> std::result::Result<SpanThickness, String> {
+        if let Some(thickness) = self.overall_thickness_mm
+            && thickness.is_finite()
+            && thickness > 0.0
+        {
+            return Ok(SpanThickness {
+                millimeters: thickness,
+                source: ThicknessSource::IpcOverallThickness,
+            });
+        }
+        self.layer_thicknesses(0, self.layers.len().saturating_sub(1))
+    }
+
+    fn layer_thicknesses(
+        &self,
+        first: usize,
+        last: usize,
+    ) -> std::result::Result<SpanThickness, String> {
+        let mut total = 0.0;
+        for layer in &self.layers[first..=last] {
+            let thickness = layer.thickness_mm.ok_or_else(|| {
+                format!("physical stackup layer '{}' has no thickness", layer.name)
+            })?;
+            if !thickness.is_finite() || thickness < 0.0 {
+                return Err(format!(
+                    "physical stackup layer '{}' has a negative or non-finite thickness",
+                    layer.name
+                ));
+            }
+            total += thickness;
+        }
+        if !(total.is_finite() && total > 0.0) {
+            return Err("physical drilled span has no positive finite thickness".to_owned());
+        }
+        Ok(SpanThickness {
+            millimeters: total,
+            source: ThicknessSource::IpcStackupLayerThicknesses,
+        })
+    }
 }
 
 fn collect_physical_stackup(imported: &ImportedDesign) -> Result<PhysicalStackup> {
@@ -218,7 +385,7 @@ fn collect_physical_stackup(imported: &ImportedDesign) -> Result<PhysicalStackup
         [stackup] => stackup,
         [] => bail!("IPC-2581 file carries no physical stackup"),
         stackups => bail!(
-            "IPC-2581 file carries {} physical stackups; layer-count DFM requires exactly one",
+            "IPC-2581 file carries {} physical stackups; physical-stackup DFM requires exactly one",
             stackups.len()
         ),
     };
@@ -242,18 +409,55 @@ fn collect_physical_stackup(imported: &ImportedDesign) -> Result<PhysicalStackup
 
     let mut seen = HashSet::new();
     let mut ordered = Vec::new();
-    for stackup_layer in &stackup.layers {
-        let Some(layer) = copper_by_name.get(&stackup_layer.layer_ref).copied() else {
-            continue;
-        };
-        if !seen.insert(layer.name) {
+    let mut physical_layers = Vec::new();
+    let mut copper_ordinal = 0u16;
+    let mut stackup_layers = stackup.layers.iter().collect::<Vec<_>>();
+    if stackup_layers
+        .iter()
+        .all(|layer| layer.layer_number.is_some())
+    {
+        stackup_layers.sort_by_key(|layer| layer.layer_number);
+        if stackup_layers
+            .windows(2)
+            .any(|pair| pair[0].layer_number == pair[1].layer_number)
+        {
             bail!(
-                "physical stackup '{}' contains copper layer '{}' more than once",
-                imported.resolve(stackup.name),
-                imported.resolve(layer.name)
+                "physical stackup '{}' has duplicate layer sequence numbers",
+                imported.resolve(stackup.name)
             );
         }
-        ordered.push(layer);
+    }
+    for stackup_layer in stackup_layers {
+        let copper_index =
+            if let Some(layer) = copper_by_name.get(&stackup_layer.layer_ref).copied() {
+                if !seen.insert(layer.name) {
+                    bail!(
+                        "physical stackup '{}' contains copper layer '{}' more than once",
+                        imported.resolve(stackup.name),
+                        imported.resolve(layer.name)
+                    );
+                }
+                ordered.push(layer);
+                let index = copper_ordinal;
+                copper_ordinal = copper_ordinal
+                    .checked_add(1)
+                    .context("physical stackup has too many copper layers")?;
+                Some(index)
+            } else {
+                None
+            };
+        physical_layers.push(PhysicalStackupLayer {
+            layer_ref: stackup_layer.layer_ref,
+            name: imported.resolve(stackup_layer.layer_ref).to_owned(),
+            thickness_mm: stackup_layer.thickness,
+            copper_index,
+        });
+    }
+    if physical_layers.is_empty() {
+        bail!(
+            "physical stackup '{}' contains no layers",
+            imported.resolve(stackup.name)
+        );
     }
 
     let mut missing = copper_by_name
@@ -287,6 +491,8 @@ fn collect_physical_stackup(imported: &ImportedDesign) -> Result<PhysicalStackup
     Ok(PhysicalStackup {
         name: imported.resolve(stackup.name).to_owned(),
         copper_layers,
+        overall_thickness_mm: stackup.overall_thickness,
+        layers: physical_layers,
     })
 }
 
@@ -326,6 +532,7 @@ pub(super) struct Hole {
     /// Inclusive ordinal range over the copper stackup the drill spans. A
     /// through-board or unstated span covers every copper layer.
     pub copper_span: (u16, u16),
+    pub span_declared: bool,
     pub drill_span: DrillSpan,
     pub provenance: SourceLocator,
     pub step: Option<Symbol>,
@@ -369,6 +576,7 @@ pub(super) struct HoleLand {
 /// local width.
 #[derive(Debug, Clone)]
 pub(super) struct Slot {
+    pub plating: PlatingKind,
     pub width: Distance,
     pub width_disk: WidthDisk,
     pub nominal_width_mm: Option<f64>,
@@ -404,6 +612,8 @@ pub(super) struct Land {
 #[derive(Debug)]
 pub(super) struct CopperLayer {
     pub layer: LayerRef,
+    pub position: super::pdk::LayerPosition,
+    pub copper_weight_oz: Option<f64>,
     pub image: ContourSet,
     pub conductors: Vec<CopperConductor>,
     pub lands: Vec<Land>,
@@ -428,6 +638,7 @@ pub(super) enum ConductorId {
         step: Option<Symbol>,
         instance: Option<u32>,
         source_set_index: u32,
+        source_feature_index: u32,
     },
 }
 
@@ -497,6 +708,11 @@ pub(super) struct BoardOutline {
     pub instance_index: Option<u32>,
     /// Outer profile plus cutout rings.
     pub contours: Vec<Ring>,
+    /// Finished board material: the filled outer profile minus every cutout.
+    pub region: ContourSet,
+    pub boundary: RegionBoundaryIndex,
+    /// Native outer and cutout contours in the checked frame.
+    pub native_outline: Vec<ContourBuf>,
     pub bbox: BBox,
 }
 
@@ -510,6 +726,7 @@ pub(super) struct BoardArray {
 fn collect_drilled(
     imported: &ImportedDesign,
     scope: ArtworkScope,
+    stackup: Option<&PhysicalStackup>,
 ) -> Result<(Vec<Hole>, Vec<Slot>)> {
     let copper_count = imported
         .layer_definitions
@@ -563,15 +780,17 @@ fn collect_drilled(
                         layer: layer_ref(layer_name, source_layer.layer_function, None),
                         copper_span: copper_span(feature.intent.span, &imported.layer_definitions)
                             .unwrap_or(whole_stack),
+                        span_declared: source_layer.span.is_some(),
                         drill_span: drill_span(
                             feature.intent.span,
                             &imported.layer_definitions,
                             whole_stack,
+                            stackup,
                         ),
                         provenance: feature_provenance(imported, layer_name, feature),
                         step: feature.source_step_ref,
                         padstack: feature.padstack_ref,
-                        net: feature.net,
+                        net: source_net(&document, feature),
                         source_set_index: feature.source.set_index,
                         source_feature_index: feature.source.feature_index,
                     });
@@ -582,12 +801,19 @@ fn collect_drilled(
                         feature.bbox.center().x,
                         feature.bbox.center().y
                     );
+                    if !matches!(
+                        feature.intent.plating,
+                        PlatingKind::Plated | PlatingKind::NonPlated
+                    ) {
+                        bail!("{at} has unknown plating; DFM rules cannot certify it");
+                    }
                     let contours = document.placed_feature_contours(feature);
                     let outline = ContourSet::from_filled_contours(&contours, tol::REGION_MM);
                     let Some(width_disk) = min_width_disk(&outline) else {
                         bail!("{at} has no measurable outline");
                     };
                     slots.push(Slot {
+                        plating: feature.intent.plating,
                         width: slot_width(feature.outer_diameter, width_disk.width)
                             .with_context(|| at)?,
                         width_disk,
@@ -691,18 +917,58 @@ fn drill_span(
     span: FeatureSpan<Symbol>,
     layers: &[ipc2581::types::Layer],
     whole_stack: (u16, u16),
+    stackup: Option<&PhysicalStackup>,
 ) -> DrillSpan {
-    let resolved = copper_span(span, layers);
+    let resolved = match stackup {
+        Some(stackup) => physical_copper_span(span, stackup),
+        None => copper_span(span, layers),
+    };
     let (first_copper_index, last_copper_index) = resolved.unwrap_or(whole_stack);
+    let declared_through = matches!(span, FeatureSpan::ThroughBoard)
+        || resolved.is_some_and(|resolved| resolved == whole_stack);
     DrillSpan {
         first_copper_index,
         last_copper_index,
-        interpretation: match span {
-            FeatureSpan::ThroughBoard => "declared_through_board",
-            _ if resolved.is_some() => "declared_layer_span",
-            _ => "assumed_whole_stack",
+        interpretation: match (declared_through, resolved) {
+            (true, _) => "declared_through_board",
+            (false, Some(_)) => "declared_layer_span",
+            (false, None) => "assumed_whole_stack",
         },
     }
+}
+
+fn physical_copper_span(
+    span: FeatureSpan<Symbol>,
+    stackup: &PhysicalStackup,
+) -> Option<(u16, u16)> {
+    let copper_index = |name: Symbol| {
+        stackup
+            .layers
+            .iter()
+            .find(|layer| layer.layer_ref == name)
+            .and_then(|layer| layer.copper_index)
+    };
+    match span {
+        FeatureSpan::Layer(layer) => copper_index(layer).map(|index| (index, index)),
+        FeatureSpan::FromTo {
+            from: Some(from),
+            to: Some(to),
+        } => {
+            let from = copper_index(from)?;
+            let to = copper_index(to)?;
+            Some((from.min(to), from.max(to)))
+        }
+        FeatureSpan::Unknown | FeatureSpan::ThroughBoard | FeatureSpan::FromTo { .. } => None,
+    }
+}
+
+fn source_net(document: &GeometryDocument, feature: &Feature<Symbol>) -> Option<Symbol> {
+    feature.net.or_else(|| {
+        feature
+            .set
+            .and_then(|set| document.feature_sets.get(set as usize))
+            .and_then(|set| set.net)
+    })
 }
 
 fn feature_provenance(
@@ -762,6 +1028,7 @@ impl ArtworkLowering<Symbol, Option<ConductorId>> for CopperAttributionLowering 
             step: feature.source_step_ref,
             instance: feature.source_instance,
             source_set_index: feature.source.set_index,
+            source_feature_index: feature.source.feature_index,
         })
     }
 }
@@ -832,7 +1099,7 @@ fn compose_attributed_image<Owner: Clone + Eq + std::hash::Hash>(
 fn conductor_order(
     imported: &ImportedDesign,
     id: ConductorId,
-) -> (u8, &str, Option<u32>, &str, u32) {
+) -> (u8, &str, Option<u32>, &str, u32, u32) {
     match id {
         ConductorId::Net {
             step,
@@ -843,6 +1110,7 @@ fn conductor_order(
             step.map(|step| imported.resolve(step)).unwrap_or(""),
             instance,
             imported.resolve(net),
+            0,
             0,
         ),
         ConductorId::Auxiliary {
@@ -855,17 +1123,20 @@ fn conductor_order(
             instance,
             "",
             source_set_index,
+            0,
         ),
         ConductorId::Unattributed {
             step,
             instance,
             source_set_index,
+            source_feature_index,
         } => (
             2,
             step.map(|step| imported.resolve(step)).unwrap_or(""),
             instance,
             "",
             source_set_index,
+            source_feature_index,
         ),
     }
 }
@@ -945,12 +1216,35 @@ fn collect_copper_layers(
                 side_label(layers::ir_side(layer.side)).unwrap_or(stack_side(ordinal, total));
             Ok(CopperLayer {
                 layer: layer_ref(name, layer.layer_function, Some(side)),
+                position: if side == "inner" {
+                    super::pdk::LayerPosition::Inner
+                } else {
+                    super::pdk::LayerPosition::Outer
+                },
+                copper_weight_oz: copper_weight_oz(imported, layer.name),
                 image,
                 conductors,
                 lands,
             })
         })
         .collect()
+}
+
+fn copper_weight_oz(imported: &ImportedDesign, layer: Symbol) -> Option<f64> {
+    let stackup_layer = imported
+        .stackups
+        .iter()
+        .flat_map(|stackup| &stackup.layers)
+        .find(|candidate| candidate.layer_ref == layer)?;
+    stackup_layer
+        .spec_ref
+        .and_then(|spec| imported.specs.get(&spec))
+        .and_then(|spec| spec.copper_weight_oz)
+        .or_else(|| {
+            stackup_layer
+                .thickness
+                .map(|millimeters| millimeters / 0.0348)
+        })
 }
 
 fn side_label(side: Side) -> Option<&'static str> {
@@ -1142,26 +1436,35 @@ fn collect_board_outlines(
             )
         })
         .filter_map(|occurrence| {
-            let mut contours = layout
+            let mut native_outline = layout
                 .transformed_path_contours(occurrence.profile.outer_path, occurrence.transform);
+            let outer_count = native_outline.len();
             for cutout in occurrence.profile.cutouts.slice(&layout.profile_cutouts) {
-                contours
+                native_outline
                     .extend(layout.transformed_path_contours(cutout.path, occurrence.transform));
             }
-            let rings = pcb_ir::geom::region::rings_from_contours(&contours);
-            if rings.is_empty() {
+            let outer =
+                ContourSet::from_filled_contours(&native_outline[..outer_count], tol::REGION_MM);
+            let cutouts =
+                ContourSet::from_filled_contours(&native_outline[outer_count..], tol::REGION_MM);
+            let region = outer.difference(&cutouts);
+            if region.is_empty() {
                 return None;
             }
-            let bbox = pcb_ir::geom::region::rings_bbox(&rings);
+            let bbox = region.bbox;
             let name = occurrence
                 .step
                 .and_then(|step| layout.layout.steps.get(step as usize))
                 .map(|step| imported.resolve(step.source_step_ref).to_owned())
                 .unwrap_or_else(|| "board".to_owned());
+            let boundary = RegionBoundaryIndex::new(&region, 1.0);
             Some(BoardOutline {
                 name,
                 instance_index: occurrence.instance,
-                contours: rings,
+                contours: region.rings.clone(),
+                region,
+                boundary,
+                native_outline,
                 bbox,
             })
         })
@@ -1338,7 +1641,7 @@ mod tests {
               <Oval width="1.8" height="0.6"/>"#,
         );
         let oval = import_design(&oval).unwrap();
-        let (_, slots) = collect_drilled(&oval, ArtworkScope::Board).unwrap();
+        let (_, slots) = collect_drilled(&oval, ArtworkScope::Board, None).unwrap();
         assert_eq!(slots.len(), 1);
         assert!((slots[0].width.mm - 0.6).abs() < 1e-9);
         assert_eq!(
@@ -1382,7 +1685,7 @@ mod tests {
               </Outline>"#,
         );
         let outline = import_design(&outline).unwrap();
-        let (_, slots) = collect_drilled(&outline, ArtworkScope::Board).unwrap();
+        let (_, slots) = collect_drilled(&outline, ArtworkScope::Board, None).unwrap();
         assert_eq!(slots.len(), 1);
         let width = slots[0].width;
         assert!(
@@ -1416,7 +1719,7 @@ mod tests {
               <Oval width="1.8" height="0.6"/>"#,
         );
         let imported = import_design(&ipc).unwrap();
-        let oval = collect_drilled(&imported, ArtworkScope::Board)
+        let oval = collect_drilled(&imported, ArtworkScope::Board, None)
             .unwrap()
             .1
             .remove(0);

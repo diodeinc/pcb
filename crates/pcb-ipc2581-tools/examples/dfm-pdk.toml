@@ -1,31 +1,73 @@
-schema_version = 1
+schema_version = 2
+default_profile = "standard"
 
 [pdk]
-id = "example-fab-standard"
-name = "Example fabrication standard"
-revision = "1"
+id = "example-fab"
+name = "Example fabrication kit"
+revision = "2"
 
-[capabilities.stackup]
-minimum_copper_layer_count = 2
-maximum_copper_layer_count = 10
+[profiles.standard]
+name = "1 oz rigid standard"
+technologies = ["rigid"]
 
-[capabilities.drilling]
-minimum_via_hole_diameter = "0.2 mm"
-minimum_pth_hole_diameter = "0.2 mm"
-minimum_npth_hole_diameter = "0.2 mm"
-minimum_slot_width = "0.8 mm"
-minimum_hole_to_hole_clearance = "10 mil"
+[profiles.standard.support]
+copper_layers = { minimum = 2, maximum = 10 }
 
-[capabilities.copper]
-minimum_via_annular_ring = { minimum = "100 um", preferred = "0.125 mm" }
-minimum_pth_annular_ring = "0.125 mm"
-minimum_feature_width = "0.09 mm"
-minimum_copper_clearance = "0.09 mm"
-minimum_board_edge_clearance = "0.25 mm"
-minimum_vscore_to_copper_clearance = "15 mil"
+[profiles.standard.defaults]
+material = "FR-4"
+board_thickness = "1.6 mm"
+outer_copper_weight = "1 oz"
+inner_copper_weight = "0.5 oz"
+soldermask_color = "green"
 
-[capabilities.soldermask]
-minimum_web = "3 mil"
+[[rules.drilling.hole_diameter]]
+id = "drilling.via_hole"
+select = { hole = "via" }
+limit = { minimum = "0.2 mm" }
 
-[capabilities.panelization]
-minimum_board_array_spacing = "300 mil"
+[[rules.drilling.hole_aspect_ratio]]
+id = "drilling.via_aspect_ratio"
+select = { hole = "via" }
+limit = { maximum = 8.0 }
+
+[[rules.drilling.slot_width]]
+id = "drilling.plated_slot"
+select = { plating = "plated" }
+cases = [
+  { id = "2-layer", when = { copper_layers = { exact = 2 } }, limit = { minimum = "0.5 mm" } },
+  { id = "multilayer", when = { copper_layers = { minimum = 3, maximum = 10 } }, limit = { minimum = "0.35 mm" } },
+]
+
+[[rules.drilling.hole_to_board_edge_clearance]]
+id = "drilling.npth_to_board_edge"
+select = { hole = "npth" }
+limit = { minimum = "0.30 mm", preferred = "0.40 mm" }
+
+[[rules.drilling.slot_to_board_edge_clearance]]
+id = "drilling.nonplated_slot_to_board_edge"
+select = { plating = "nonplated" }
+limit = { minimum = "0.30 mm" }
+
+[[rules.copper.annular_ring]]
+id = "copper.via_annular_ring"
+select = { hole = "via" }
+limit = { minimum = "100 um", preferred = "0.125 mm" }
+
+[[rules.copper.hole_clearance]]
+id = "copper.via_hole_clearance"
+select = { hole = "via" }
+limit = { minimum = "0.20 mm", preferred = "0.25 mm" }
+
+[[rules.copper.feature_width]]
+id = "copper.outer_feature_width"
+cases = [
+  { id = "outer-1oz", when = { copper = { position = "outer", weight = "1 oz" } }, limit = { minimum = "0.10 mm" } },
+]
+
+[[rules.copper.clearance]]
+id = "copper.clearance"
+limit = { minimum = "0.10 mm" }
+
+[[rules.soldermask.web]]
+id = "soldermask.web"
+limit = { minimum = "0.10 mm" }

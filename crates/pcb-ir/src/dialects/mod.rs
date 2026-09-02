@@ -1,4 +1,5 @@
 pub mod artwork;
+pub mod assembly;
 pub mod ipc;
 pub mod kicad;
 pub mod mask;

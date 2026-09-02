@@ -12,6 +12,7 @@ use pcb_ir::geom::dfm::{region_clearance, region_clearance_sites};
 
 use crate::commands::dfm::design::{ConductorId, Design};
 use crate::commands::dfm::report::{Evidence, SourceLocator, Subject};
+use crate::commands::dfm::rules::Conditions;
 
 use super::{Evaluation, Measured, linework_clearance, violates};
 
@@ -20,11 +21,14 @@ struct Piece {
     region: pcb_ir::geom::ContourSet,
 }
 
-pub(super) fn evaluate(limit_mm: f64, design: &Design) -> Evaluation {
+pub(super) fn evaluate(limit_mm: f64, conditions: &Conditions, design: &Design) -> Evaluation {
     let mut checked = 0;
     let mut measured = Vec::new();
 
     for layer in &design.copper_layers {
+        if !conditions.applies_to_layer(layer) {
+            continue;
+        }
         let components = layer
             .conductors
             .iter()
@@ -108,7 +112,12 @@ pub(super) fn evaluate(limit_mm: f64, design: &Design) -> Evaluation {
     Evaluation { checked, measured }
 }
 
-fn conductor_subject(design: &Design, id: ConductorId, role: &'static str, layer: &str) -> Subject {
+pub(super) fn conductor_subject(
+    design: &Design,
+    id: ConductorId,
+    role: &'static str,
+    layer: &str,
+) -> Subject {
     let (kind, name, set_index) = match id {
         ConductorId::Net { .. } => ("electrical_net", None, None),
         ConductorId::Auxiliary {
@@ -118,9 +127,20 @@ fn conductor_subject(design: &Design, id: ConductorId, role: &'static str, layer
             Some("auxiliary copper".to_owned()),
             Some(source_set_index),
         ),
-        ConductorId::Unattributed { .. } => {
-            unreachable!("unattributed copper is rejected during DFM extraction")
-        }
+        ConductorId::Unattributed {
+            source_set_index, ..
+        } => (
+            "unattributed_copper",
+            Some("functional copper without net attribution".to_owned()),
+            Some(source_set_index),
+        ),
+    };
+    let feature_index = match id {
+        ConductorId::Unattributed {
+            source_feature_index,
+            ..
+        } => Some(source_feature_index),
+        ConductorId::Net { .. } | ConductorId::Auxiliary { .. } => None,
     };
     Subject {
         role,
@@ -131,7 +151,7 @@ fn conductor_subject(design: &Design, id: ConductorId, role: &'static str, layer
             step: design.resolve(id.step()),
             layer: Some(layer.to_owned()),
             set_index,
-            feature_index: None,
+            feature_index,
             instance_index: id.instance(),
         }),
         provenance: matches!(id, ConductorId::Net { .. }).then(|| SourceLocator {
@@ -155,15 +175,20 @@ mod tests {
     use crate::commands::dfm::{checks, design::Design, pdk::Pdk, rules};
     use crate::ipc2581::Ipc2581;
 
-    const PDK: &str = r#"schema_version = 1
+    const PDK: &str = r#"schema_version = 2
+default_profile = "test"
 
 [pdk]
 id = "clearance-test"
 name = "Clearance test"
 revision = "1"
 
-[capabilities.copper]
-minimum_copper_clearance = "0.15 mm"
+[profiles.test]
+name = "Test"
+
+[[rules.copper.clearance]]
+id = "copper-clearance"
+limit = { minimum = "0.15 mm" }
 "#;
 
     const BOARD: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -219,7 +244,7 @@ minimum_copper_clearance = "0.15 mm"
     fn run(xml: &str) -> checks::Results {
         let ipc = Ipc2581::parse(xml).unwrap();
         let pdk = Pdk::parse(PDK).unwrap();
-        let rules = rules::lower(&pdk).unwrap();
+        let rules = rules::lower(&pdk, None).unwrap();
         let imported = pcb_ir::import::ipc2581::import_design(&ipc).unwrap();
         let design = Design::extract(&imported, ArtworkScope::Board, &rules).unwrap();
         checks::run(
@@ -275,7 +300,7 @@ minimum_copper_clearance = "0.15 mm"
         let xml = BOARD.replace("<Set net=\"N2\">", "<Set>");
         let ipc = Ipc2581::parse(&xml).unwrap();
         let pdk = Pdk::parse(PDK).unwrap();
-        let rules = rules::lower(&pdk).unwrap();
+        let rules = rules::lower(&pdk, None).unwrap();
         let imported = pcb_ir::import::ipc2581::import_design(&ipc).unwrap();
 
         let error = Design::extract(&imported, ArtworkScope::Board, &rules)

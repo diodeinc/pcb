@@ -13,7 +13,7 @@ pub struct DfmArgs {
     #[arg(value_name = "FILE", value_hint = clap::ValueHint::FilePath)]
     pub file: PathBuf,
 
-    /// Built-in PDK name or fabrication PDK TOML path (built-ins: standard)
+    /// Built-in PDK name or fabrication PDK TOML path (standard, JLCPCB, or IPC profile)
     #[arg(long)]
     pub pdk: PathBuf,
 

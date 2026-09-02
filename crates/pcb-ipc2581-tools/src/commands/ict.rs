@@ -88,8 +88,11 @@ pub fn extract_contacts_from_design(
             else {
                 continue;
             };
-            for ref_des in &item.ref_des_list {
-                if !is_ict_package(ipc.resolve(ref_des.package_ref)) {
+            for ref_des in item.reference_designators() {
+                if !ref_des
+                    .package_ref
+                    .is_some_and(|package| is_ict_package(ipc.resolve(package)))
+                {
                     continue;
                 }
                 let designator = ipc.resolve(ref_des.name).to_string();
@@ -190,7 +193,7 @@ pub fn extract_contacts_from_design(
         info.at = Some((land.at.x, land.at.y));
     }
 
-    let placements = extract_single_board_placements_from_design(&accessor, imported)?;
+    let placements = extract_single_board_placements_from_design(imported)?;
     let mut contacts = Vec::new();
     for component in &placements.components {
         let Some((ict, path)) = roles.get(&component.designator) else {
@@ -254,7 +257,10 @@ fn side_sort_key(side: PlacementSide) -> u8 {
         PlacementSide::Top => 0,
         PlacementSide::Bottom => 1,
         PlacementSide::Internal => 2,
-        PlacementSide::Unknown => 3,
+        PlacementSide::Both
+        | PlacementSide::All
+        | PlacementSide::None
+        | PlacementSide::Unspecified => 3,
     }
 }
 
@@ -291,7 +297,10 @@ fn side_name(side: PlacementSide) -> &'static str {
         PlacementSide::Top => "top",
         PlacementSide::Bottom => "bottom",
         PlacementSide::Internal => "internal",
-        PlacementSide::Unknown => "unknown",
+        PlacementSide::Both
+        | PlacementSide::All
+        | PlacementSide::None
+        | PlacementSide::Unspecified => "unknown",
     }
 }
 
@@ -345,7 +354,7 @@ mod tests {
     <BomHeader assembly="board" revision="1.0">
       <StepRef name="board"/>
     </BomHeader>
-    <BomItem OEMDesignNumberRef="TP_GND" quantity="1" pinCount="1" category="ELECTRICAL">
+    <BomItem OEMDesignNumberRef="TP_GND" quantity="1" pinCount="1" category="DOCUMENT">
       <RefDes name="TP1" packageRef="TestPoint_ICT" populate="true" layerRef="BOTTOM"/>
       <Characteristics category="ELECTRICAL">
         <Textual textualCharacteristicName="Ict" textualCharacteristicValue="gnd"/>

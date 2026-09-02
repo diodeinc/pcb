@@ -6,6 +6,7 @@ alias provides the same commands.
 | Command | Purpose |
 |---|---|
 | `info` | Report board, layer, drill, and stackup metadata. |
+| `assembly` | Emit the versioned PCBA assembly report as JSON. |
 | `bom` | Export the bill of materials. |
 | `cpl` | Export component placement data. |
 | `html` | Export an HTML board summary. |
@@ -19,6 +20,13 @@ alias provides the same commands.
 | `edit bom` | Add approved alternatives to BOM entries. |
 
 Run `pcb ipc2581 <command> --help` for arguments and output options.
+
+Use `assembly` to emit the complete board-array report, or select one canonical
+board with `--scope board`:
+
+```bash
+pcb ipc assembly design.xml --scope board-array > assembly-report.json
+```
 
 Board-array creation balances copper by default; pass `--no-copper-balance`
 to disable it. Fabrication-panel creation leaves copper unchanged by default;
@@ -41,7 +49,8 @@ by the retained geometry.
 ## DFM process design kits
 
 `dfm check` accepts a built-in process design kit name or a strict, versioned
-TOML file. The built-in `standard` PDK is bundled with `pcb`:
+TOML file. Built-ins include `standard`, executable JLCPCB 1 oz profiles, and
+the nine IPC Class/Producibility profile identities:
 
 ```bash
 pcb ipc dfm check fabrication-panel.xml \
@@ -50,6 +59,14 @@ pcb ipc dfm check fabrication-panel.xml \
 ```
 
 `standard` currently supports 2 through 10 copper layers.
+`jlcpcb` selects the standard-color 1 oz rigid FR-4 profile;
+`jlcpcb-1oz-black-white` selects its larger mask-web requirement. The
+`ipc` alias selects the opinionated Class 2 / Producibility Level B default.
+It and the explicit `ipc-1a` through `ipc-3c` profiles run Diode's opinionated
+partial baseline for plated-hole aspect ratio and via, PTH, and NPTH
+hole-to-copper clearance. Diode selected these values with IPC design topics as
+context; they are not licensed IPC numeric matrices, do not prove full IPC
+compliance, and do not imply IPC certification.
 
 Pass a path such as `--pdk ./fab-process.toml` to use a custom PDK. Exact
 built-in names take precedence, so prefix a same-named file with `./`.
@@ -144,6 +161,11 @@ Import/export and DFM use the same implementations in both environments.
 design; the resulting package exposes individual files and `to_zip()` for an
 in-memory archive. `geometry::render::prepare_layer` prepares a layer for the
 shared SVG/PNG renderers.
+
+`assembly::build_report` builds the deterministic, schema-versioned PCBA
+assembly contract from that same imported design. See the
+[assembly report v1 contract](docs/assembly-report.md) for scope, units,
+identities, physical evidence, and readiness semantics.
 
 For browser and Node.js bindings, see [`pcb-ipc-wasm`](../pcb-ipc-wasm/README.md).
 

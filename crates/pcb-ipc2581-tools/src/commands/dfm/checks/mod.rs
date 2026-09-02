@@ -11,6 +11,9 @@
 mod annular_ring;
 mod board_array_spacing;
 mod copper_clearance;
+mod drilled_board_edge_clearance;
+mod hole_aspect_ratio;
+mod hole_clearance;
 mod hole_diameter;
 mod hole_pair_clearance;
 mod layer_count;
@@ -28,7 +31,8 @@ use pcb_ir::geom::dfm::Distance;
 use pcb_ir::geom::{Affine2, BBox, Point};
 use sha2::{Digest, Sha256};
 
-use super::design::{Design, Hole, HoleClass};
+use super::design::{Design, Hole, HoleClass, Slot};
+use super::pdk::SlotPlating;
 use super::report::{
     Evidence, Finding, LayerRef, Location, Measurement, MeasurementKind, ReportBBox, ReportPoint,
     RuleResult, RuleStatus, Site, SourceLocator, Subject, Witness,
@@ -104,9 +108,30 @@ struct CountEvaluation {
     subjects: Vec<Subject>,
 }
 
+struct RatioMeasured {
+    actual_ratio: f64,
+    drilled_span_thickness_mm: f64,
+    finished_hole_diameter_mm: f64,
+    thickness_source: &'static str,
+    center: Point,
+    bbox: BBox,
+    layers: Vec<LayerRef>,
+    subjects: Vec<Subject>,
+    evidence: Vec<Evidence>,
+    note: String,
+}
+
+struct RatioEvaluation {
+    checked: usize,
+    measured: Vec<RatioMeasured>,
+    incomplete_reason: Option<String>,
+    assumptions: Vec<String>,
+}
+
 enum RuleEvaluation {
     Distance(Evaluation),
     Count(CountEvaluation),
+    Ratio(RatioEvaluation),
 }
 
 impl From<Evaluation> for RuleEvaluation {
@@ -161,6 +186,28 @@ pub(super) fn run(
                                 .push(count_finding(rule, evaluation, limit));
                         }
                     }
+                    RuleEvaluation::Ratio(evaluation) => {
+                        debug_assert_eq!(rule.comparison, Comparison::Maximum);
+                        result.assumptions = evaluation.assumptions;
+                        if let Some(reason) = evaluation.incomplete_reason {
+                            result.skip(reason);
+                        } else if evaluation.checked == 0 {
+                            result.skip(format!(
+                                "no measurable {} subjects in the selected layout target",
+                                rule.kind.semantics().subject
+                            ));
+                        } else {
+                            result.checked = evaluation.checked;
+                            let maximum = rule.limit.ratio();
+                            results.findings.extend(
+                                evaluation
+                                    .measured
+                                    .into_iter()
+                                    .filter(|measured| measured.actual_ratio > maximum)
+                                    .map(|measured| ratio_finding(rule, measured, maximum)),
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -172,7 +219,10 @@ pub(super) fn run(
     for finding in &results.findings {
         assert_eq!(
             !finding.sites.is_empty(),
-            matches!(finding.measurement, Measurement::Distance { .. }),
+            matches!(
+                finding.measurement,
+                Measurement::Distance { .. } | Measurement::Ratio { .. }
+            ),
             "finding {} violates the spatial-site contract",
             finding.rule_id,
         );
@@ -230,6 +280,9 @@ fn violates_count(actual: u32, comparison: Comparison, limit: u32) -> bool {
 /// The one skip policy: a rule is skipped when its subject pool or a
 /// required layer pool is empty for the selected layout target.
 fn skip_reason(rule: &Rule, design: &Design) -> Option<String> {
+    if !rule.conditions.applies_to_design(design) {
+        return Some("rule conditions do not apply to this stackup".to_owned());
+    }
     let subjects = match rule.kind {
         RuleKind::CopperLayerCount => None,
         RuleKind::BoardArrayPairClearance if design.scope != ArtworkScope::ArrayFlattened => {
@@ -237,15 +290,38 @@ fn skip_reason(rule: &Rule, design: &Design) -> Option<String> {
         }
         RuleKind::BoardArrayPairClearance => (design.board_arrays.len() < 2)
             .then(|| "two or more direct board-array instances".to_owned()),
-        RuleKind::HoleDiameter(class) | RuleKind::AnnularRing(class) => design
+        RuleKind::HoleDiameter(class)
+        | RuleKind::HoleAspectRatio(class)
+        | RuleKind::AnnularRing(class)
+        | RuleKind::HoleToCopperClearance(class) => design
             .holes
             .iter()
             .all(|hole| hole.class != class)
             .then(|| format!("{} holes", class.label())),
-        RuleKind::HolePairClearance => {
-            (design.holes.len() < 2).then(|| "two or more holes".to_owned())
+        RuleKind::HolePairClearance(first, second) => {
+            (!has_hole_pair(design, first, second)).then(|| {
+                format!(
+                    "an eligible {}-to-{} hole pair",
+                    first.label(),
+                    second.label()
+                )
+            })
         }
-        RuleKind::SlotWidth => design.slots.is_empty().then(|| "routed slots".to_owned()),
+        RuleKind::HoleToBoardEdgeClearance(class) => design
+            .holes
+            .iter()
+            .all(|hole| hole.class != class)
+            .then(|| format!("{} holes", class.label())),
+        RuleKind::SlotWidth(plating) => design
+            .slots
+            .iter()
+            .all(|slot| !slot_matches(slot.plating, plating))
+            .then(|| format!("{} routed slots", slot_plating_label(plating))),
+        RuleKind::SlotToBoardEdgeClearance(plating) => design
+            .slots
+            .iter()
+            .all(|slot| !slot_matches(slot.plating, plating))
+            .then(|| format!("{} routed slots", slot_plating_label(plating))),
         RuleKind::LineworkToCopperClearance(Linework::VScore) => design
             .scores
             .is_empty()
@@ -257,11 +333,15 @@ fn skip_reason(rule: &Rule, design: &Design) -> Option<String> {
         RuleKind::CopperFeatureWidth | RuleKind::CopperClearance | RuleKind::SoldermaskWeb => None,
     };
     let pools = rule.kind.semantics().pools;
-    let layers = (pools.copper && design.copper_layers.is_empty())
-        .then(|| "copper layers".to_owned())
-        .or_else(|| {
-            (pools.masks && design.mask_layers.is_empty()).then(|| "soldermask layers".to_owned())
-        });
+    let layers = (pools.copper
+        && design
+            .copper_layers
+            .iter()
+            .all(|layer| !rule.conditions.applies_to_layer(layer)))
+    .then(|| "applicable copper layers".to_owned())
+    .or_else(|| {
+        (pools.masks && design.mask_layers.is_empty()).then(|| "soldermask layers".to_owned())
+    });
     subjects
         .or(layers)
         .map(|what| format!("no {what} in the selected layout target"))
@@ -272,16 +352,71 @@ fn evaluate(rule: &Rule, design: &Design) -> RuleEvaluation {
     match rule.kind {
         RuleKind::CopperLayerCount => RuleEvaluation::Count(layer_count::evaluate(design)),
         RuleKind::HoleDiameter(class) => hole_diameter::evaluate(limit(), class, design).into(),
-        RuleKind::SlotWidth => slot_width::evaluate(limit(), design).into(),
-        RuleKind::HolePairClearance => hole_pair_clearance::evaluate(limit(), design).into(),
-        RuleKind::AnnularRing(class) => annular_ring::evaluate(limit(), class, design).into(),
+        RuleKind::HoleAspectRatio(class) => {
+            RuleEvaluation::Ratio(hole_aspect_ratio::evaluate(class, &rule.conditions, design))
+        }
+        RuleKind::SlotWidth(plating) => slot_width::evaluate(limit(), plating, design).into(),
+        RuleKind::HolePairClearance(first, second) => {
+            hole_pair_clearance::evaluate(limit(), first, second, design).into()
+        }
+        RuleKind::HoleToBoardEdgeClearance(class) => {
+            drilled_board_edge_clearance::evaluate_holes(limit(), class, design).into()
+        }
+        RuleKind::SlotToBoardEdgeClearance(plating) => {
+            drilled_board_edge_clearance::evaluate_slots(limit(), plating, design).into()
+        }
+        RuleKind::AnnularRing(class) => {
+            annular_ring::evaluate(limit(), class, &rule.conditions, design).into()
+        }
+        RuleKind::HoleToCopperClearance(class) => {
+            hole_clearance::evaluate(limit(), class, &rule.conditions, design).into()
+        }
         RuleKind::LineworkToCopperClearance(linework) => {
-            linework_clearance::evaluate(limit(), linework, design).into()
+            linework_clearance::evaluate(limit(), linework, &rule.conditions, design).into()
         }
         RuleKind::BoardArrayPairClearance => board_array_spacing::evaluate(limit(), design).into(),
-        RuleKind::CopperFeatureWidth => thin_regions::copper_feature_width(limit(), design).into(),
-        RuleKind::CopperClearance => copper_clearance::evaluate(limit(), design).into(),
+        RuleKind::CopperFeatureWidth => {
+            thin_regions::copper_feature_width(limit(), &rule.conditions, design).into()
+        }
+        RuleKind::CopperClearance => {
+            copper_clearance::evaluate(limit(), &rule.conditions, design).into()
+        }
         RuleKind::SoldermaskWeb => thin_regions::soldermask_web(limit(), design).into(),
+    }
+}
+
+fn slot_matches(actual: pcb_ir::dialects::ipc::PlatingKind, expected: SlotPlating) -> bool {
+    matches!(
+        (actual, expected),
+        (
+            pcb_ir::dialects::ipc::PlatingKind::Plated,
+            SlotPlating::Plated
+        ) | (
+            pcb_ir::dialects::ipc::PlatingKind::NonPlated,
+            SlotPlating::Nonplated
+        )
+    )
+}
+
+fn slot_plating_label(plating: SlotPlating) -> &'static str {
+    match plating {
+        SlotPlating::Plated => "plated",
+        SlotPlating::Nonplated => "non-plated",
+    }
+}
+
+fn has_hole_pair(design: &Design, first: HoleClass, second: HoleClass) -> bool {
+    if first == second {
+        design
+            .holes
+            .iter()
+            .filter(|hole| hole.class == first)
+            .take(2)
+            .count()
+            == 2
+    } else {
+        design.holes.iter().any(|hole| hole.class == first)
+            && design.holes.iter().any(|hole| hole.class == second)
     }
 }
 
@@ -392,6 +527,56 @@ fn count_finding(rule: &Rule, measured: CountEvaluation, limit: u32) -> Finding 
     }
 }
 
+fn ratio_finding(rule: &Rule, measured: RatioMeasured, maximum: f64) -> Finding {
+    let semantics = rule.kind.semantics();
+    let measurement = Measurement::maximum_ratio(
+        measured.actual_ratio,
+        maximum,
+        measured.drilled_span_thickness_mm,
+        measured.finished_hole_diameter_mm,
+        measured.thickness_source,
+    );
+    let site = Site {
+        id: String::new(),
+        measurement: measurement.clone(),
+        measurement_kind: MeasurementKind::AspectRatio,
+        uncertainty_mm: 0.0,
+        witnesses: Vec::new(),
+        bounding_box: measured.bbox.into(),
+        layers: measured.layers.clone(),
+        subjects: measured.subjects.clone(),
+        evidence: measured.evidence.clone(),
+        note: Some(measured.note),
+    };
+    Finding {
+        id: String::new(),
+        rule_id: rule.id.clone(),
+        severity: rule.severity,
+        waived: false,
+        waiver_reason: None,
+        title: semantics.finding_title,
+        message: format!(
+            "{} is {:.6} ({:.6} mm drilled span / {:.6} mm finished diameter); the PDK permits at most {maximum:.6}; thickness source is {}",
+            semantics.quantity_label,
+            measured.actual_ratio,
+            measured.drilled_span_thickness_mm,
+            measured.finished_hole_diameter_mm,
+            measured.thickness_source,
+        ),
+        measurement,
+        location: Location {
+            point: Some(measured.center.into()),
+            bounding_box: Some(measured.bbox.into()),
+            witnesses: Vec::new(),
+        },
+        layers: measured.layers,
+        subjects: measured.subjects,
+        evidence: measured.evidence,
+        sites: vec![site],
+        group_key: None,
+    }
+}
+
 /// Holes of one plating class, with their indices into the hole pool.
 fn holes_of_class<'a>(design: &'a Design<'a>, class: HoleClass) -> Vec<(usize, &'a Hole)> {
     design
@@ -445,6 +630,22 @@ fn hole_subject(design: &Design, hole: &Hole, role: &'static str) -> Subject {
     );
     subject.provenance = Some(hole.provenance.clone());
     subject.drill_span = Some(hole.drill_span.clone());
+    subject
+}
+
+fn slot_subject(design: &Design, slot: &Slot, role: &'static str) -> Subject {
+    let mut subject = drilled_subject(
+        design,
+        role,
+        "routed_slot",
+        slot.net,
+        slot.padstack,
+        slot.step,
+        &slot.layer,
+        slot.source_set_index,
+        slot.source_feature_index,
+    );
+    subject.provenance = Some(slot.provenance.clone());
     subject
 }
 
@@ -636,6 +837,7 @@ fn repeat_group_key(finding: &Finding, inverse: Affine2) -> Option<String> {
         let measurement = match site.measurement {
             Measurement::Distance { actual_mm, required_mm, .. } => [quantize(actual_mm), quantize(required_mm)],
             Measurement::Count { actual_count, required_count, .. } => [f64::from(actual_count), f64::from(required_count)],
+            Measurement::Ratio { actual_ratio, maximum_ratio, .. } => [quantize(actual_ratio), quantize(maximum_ratio)],
         };
         let evidence = site.evidence.iter().map(|evidence| serde_json::json!({
             "role": evidence.role, "kind": evidence.kind,

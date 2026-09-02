@@ -446,7 +446,7 @@ fn validate_testcase1_cross_file_consistency(
     let placed_quantity: u32 = bom
         .items
         .iter()
-        .filter(|item| !item.ref_des_list.is_empty())
+        .filter(|item| item.reference_designators().next().is_some())
         .map(|item| item.quantity.unwrap_or(0))
         .sum();
     assert!(
