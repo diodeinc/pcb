@@ -400,10 +400,10 @@ fn geometric_association_requires_one_known_reachable_land() {
 fn semantic_hole_ids_survive_source_reordering() {
     let capped = "          <Set geometry=\"via-padstack\" componentRef=\"U1\"><Hole name=\"U1-via-capped\" diameter=\"0.2\" platingStatus=\"VIA_CAPPED\" plusTol=\"0\" minusTol=\"0\" x=\"1.8\" y=\"2\"/></Set>";
     let filled = "          <Set geometry=\"via-padstack\"><Hole name=\"U1-via\" diameter=\"0.2\" platingStatus=\"VIA\" plusTol=\"0\" minusTol=\"0\" x=\"2.2\" y=\"2\"/></Set>";
-    let reordered = FIXTURE.replace(
-        &format!("{capped}\n{filled}"),
-        &format!("{filled}\n{capped}"),
-    );
+    let reordered = FIXTURE
+        .replace(capped, "__CAPPED_VIA__")
+        .replace(filled, capped)
+        .replace("__CAPPED_VIA__", filled);
 
     assert_ne!(reordered, FIXTURE);
     assert_eq!(
