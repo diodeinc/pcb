@@ -11,8 +11,8 @@ const PACKING_CLEARANCE_CELLS: i32 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct GridPoint {
-    pub x: i32,
-    pub y: i32,
+    pub(crate) x: i32,
+    pub(crate) y: i32,
 }
 
 impl GridPoint {
@@ -33,10 +33,10 @@ impl GridPoint {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct GridRect {
-    pub min_x: i32,
-    pub min_y: i32,
-    pub max_x: i32,
-    pub max_y: i32,
+    pub(crate) min_x: i32,
+    pub(crate) min_y: i32,
+    pub(crate) max_x: i32,
+    pub(crate) max_y: i32,
 }
 
 impl GridRect {
@@ -90,10 +90,9 @@ impl GridRect {
         i64::from(self.width()) * i64::from(self.height())
     }
 
+    /// Twice the longer side: a square beats a strip of equal area.
     fn compactness(self) -> i64 {
-        let width = i64::from(self.width());
-        let height = i64::from(self.height());
-        width + height + (width - height).abs()
+        2 * i64::from(self.width().max(self.height()))
     }
 }
 
@@ -154,15 +153,13 @@ impl GridPacker {
     }
 
     pub(crate) fn occupy_anchored(&mut self, rect: GridRect, anchor: Point) {
-        self.occupy(rect);
-        self.placed_cluster = Some(
-            self.placed_cluster
-                .map_or(rect, |cluster| cluster.union(rect)),
+        self.record_placement(
+            rect,
+            Some(GridPoint {
+                x: (anchor.x / CONNECTION_GRID_MM).round() as i32,
+                y: (anchor.y / CONNECTION_GRID_MM).round() as i32,
+            }),
         );
-        self.placement_anchors.push(GridPoint {
-            x: (anchor.x / CONNECTION_GRID_MM).round() as i32,
-            y: (anchor.y / CONNECTION_GRID_MM).round() as i32,
-        });
     }
 
     pub(crate) fn usable_bounds(&self) -> GridRect {

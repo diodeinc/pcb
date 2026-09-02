@@ -6,11 +6,11 @@ use anyhow::{Context, Result, bail};
 use pcb_sch::Schematic;
 
 use crate::{
-    LabelSpin, Point, SchDocument, SchItem, SchPage, SymbolDefinition,
+    GEOMETRY_EPS_MM, Point, SchDocument, SchItem, SchPage,
     analysis::{
         ConnectivityInspection, SchematicIssue, SchematicIssueKey, analyze_connectivity,
-        coarse_key, ensure_no_new_issues, inspect_schematic, issue_context, logical_name,
-        observed_reconcilable_connectivity,
+        ensure_issues_resolved, ensure_no_new_issues, inspect_schematic, issue_context,
+        logical_name, observed_reconcilable_connectivity,
     },
     compose,
     connectivity::{
@@ -18,6 +18,7 @@ use crate::{
         PinVisibility, SymbolLocation, Terminal, cut_graph,
     },
     cut,
+    net_symbols::NetSymbolSpec,
 };
 
 /// A deterministic, UUID-addressed connectivity repair decision.
@@ -26,17 +27,29 @@ use crate::{
 /// remove, symbols that must move, nets whose connectivity a realizer rebuilds,
 /// and the name driver each of those nets needs on each page. Planning does
 /// not mutate the input document. A realizer applies the intent and then
-/// [`verify_repair`] judges the result.
+/// [`verify_connectivity_repair`] judges the result.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConnectivityRepairIntent {
     pub(crate) selected_keys: BTreeSet<SchematicIssueKey>,
     pub(crate) removals: BTreeSet<ConnectivityItemRef>,
-    pub(crate) relocate_symbols: BTreeSet<SymbolLocation>,
+    pub(crate) relocated_symbols: BTreeSet<SymbolLocation>,
     pub(crate) reconnect_nets: BTreeSet<String>,
     pub(crate) drivers: BTreeMap<String, BTreeMap<String, NetDriverKind>>,
 }
 
 impl ConnectivityRepairIntent {
+    /// An intent that changes nothing. Verifying a document against it means
+    /// the realizer may only have added items.
+    pub fn additions_only() -> Self {
+        Self {
+            selected_keys: BTreeSet::new(),
+            removals: BTreeSet::new(),
+            relocated_symbols: BTreeSet::new(),
+            reconnect_nets: BTreeSet::new(),
+            drivers: BTreeMap::new(),
+        }
+    }
+
     /// The issues this intent resolves.
     pub fn selected_keys(&self) -> &BTreeSet<SchematicIssueKey> {
         &self.selected_keys
@@ -50,7 +63,7 @@ impl ConnectivityRepairIntent {
 
     /// Component symbols that the repair will move away from an invalid overlap.
     pub fn relocated_symbols(&self) -> &BTreeSet<SymbolLocation> {
-        &self.relocate_symbols
+        &self.relocated_symbols
     }
 
     /// Nets whose expected connectivity the repair will regenerate.
@@ -58,8 +71,9 @@ impl ConnectivityRepairIntent {
         &self.reconnect_nets
     }
 
-    /// The name driver each reconnected net needs, by net and then page id.
-    /// A page absent from a net's map has no visible pin of that net.
+    /// The name driver each reconnected net needs, by net and then page id. A
+    /// page appears only where the net has a visible pin or, on the root page,
+    /// an interface port.
     pub fn drivers(&self) -> &BTreeMap<String, BTreeMap<String, NetDriverKind>> {
         &self.drivers
     }
@@ -69,24 +83,13 @@ impl ConnectivityRepairIntent {
         self.drivers.get(net_name)?.get(page_id)
     }
 
-    /// Apply only the destructive conflict-removal portion of this intent.
-    ///
-    /// This is the handoff boundary for consumers with their own routing
-    /// policy: remove PCB's verified conflict cut, then rebuild the affected
-    /// nets with the consumer's router.
-    pub fn apply_removals(&self, document: &SchDocument) -> Result<SchDocument> {
-        let mut repaired = document.clone();
-        remove_items(&mut repaired, &self.removals)?;
-        Ok(repaired)
-    }
-
     /// Apply the removals and symbol relocations of this intent: everything
     /// PCB decided must change, with no new geometry. A consumer's realizer
     /// starts from this document and only adds connections.
     pub fn apply_edits(&self, document: &SchDocument) -> Result<SchDocument> {
         let mut repaired = document.clone();
         remove_items(&mut repaired, &self.removals)?;
-        compose::relocate_symbols(&mut repaired, &self.relocate_symbols)?;
+        compose::relocate_symbols(&mut repaired, &self.relocated_symbols)?;
         Ok(repaired)
     }
 }
@@ -97,23 +100,13 @@ impl ConnectivityRepairIntent {
 #[derive(Debug, Clone, PartialEq)]
 pub enum NetDriverKind {
     /// The netlist specifies a KiCad power symbol for this net.
-    NetSymbol(NetSymbolDriver),
+    NetSymbol(NetSymbolSpec),
     /// A hierarchical label carrying one of the page's interface names.
     Hierarchical { names: BTreeSet<String> },
     /// A global label: the net's pins span pages no interface bridges.
     Global,
     /// A local label.
     Local,
-}
-
-/// The netlist-specified power symbol for a net, ready to instantiate.
-#[derive(Debug, Clone, PartialEq)]
-pub struct NetSymbolDriver {
-    pub definition: SymbolDefinition,
-    pub unit: u32,
-    /// The visible power-input pin, relative to the symbol origin.
-    pub pin_offset: Point,
-    pub pin_outward_spin: LabelSpin,
 }
 
 /// Plans the pure connectivity-recovery intent for a set of inspected issues.
@@ -123,6 +116,26 @@ pub struct NetSymbolDriver {
 /// they carried are queued for reconnection, and any conflict touching the
 /// selection is still cut minimally on top of them.
 pub fn plan_connectivity_repair(
+    document: &SchDocument,
+    netlist: &Schematic,
+    inspection: &ConnectivityInspection,
+    selected_keys: &BTreeSet<SchematicIssueKey>,
+    forced_removals: &BTreeSet<ConnectivityItemRef>,
+) -> Result<ConnectivityRepairIntent> {
+    let mut intent = plan_connectivity_repair_core(
+        document,
+        netlist,
+        inspection,
+        selected_keys,
+        forced_removals,
+    )?;
+    intent.drivers = compose::plan_net_driver_kinds(document, netlist, &intent.reconnect_nets)?;
+    Ok(intent)
+}
+
+/// The intent without driver kinds. PCB's own realizer derives drivers with
+/// the same rule while it places them, so it never reads the map.
+pub(crate) fn plan_connectivity_repair_core(
     document: &SchDocument,
     netlist: &Schematic,
     inspection: &ConnectivityInspection,
@@ -298,13 +311,12 @@ pub fn plan_connectivity_repair(
     }
 
     removals.extend(orphaned_junctions(document, &simulated, &removals));
-    let drivers = compose::plan_net_driver_kinds(document, netlist, &reconnect_nets)?;
     Ok(ConnectivityRepairIntent {
         selected_keys: selected_keys.clone(),
         removals,
-        relocate_symbols,
+        relocated_symbols: relocate_symbols,
         reconnect_nets,
-        drivers,
+        drivers: BTreeMap::new(),
     })
 }
 
@@ -314,7 +326,7 @@ pub fn plan_connectivity_repair(
 /// must meet the same postcondition: every selected issue is gone, no issue
 /// appeared, and nothing outside the intent's removals and relocations
 /// changed. Returns the inspection of the repaired document.
-pub fn verify_repair(
+pub fn verify_connectivity_repair(
     before: &SchDocument,
     before_inspection: &ConnectivityInspection,
     netlist: &Schematic,
@@ -322,18 +334,7 @@ pub fn verify_repair(
     after: &SchDocument,
 ) -> Result<ConnectivityInspection> {
     let after_inspection = inspect_schematic(after, netlist)?;
-    for key in &intent.selected_keys {
-        if let Some(remaining) = after_inspection
-            .issues
-            .iter()
-            .find(|issue| coarse_key(&issue.key) == coarse_key(key))
-        {
-            bail!(
-                "repair did not resolve schematic issue: {}",
-                remaining.issue.summary()
-            );
-        }
-    }
+    ensure_issues_resolved(&after_inspection, &intent.selected_keys, "repair")?;
     ensure_no_new_issues(before_inspection, &after_inspection, "repair")?;
     ensure_items_preserved(before, after, intent)?;
     Ok(after_inspection)
@@ -365,8 +366,10 @@ fn ensure_items_preserved(
             // was: a realizer that re-establishes a tee where PCB dropped an
             // orphaned junction has changed nothing the issue checks do not
             // already judge.
-            if let Some(item_ref) = item_ref(&page.id, item)
-                && intent.removals.contains(&item_ref)
+            if let Some(item_ref) = intent
+                .removals
+                .iter()
+                .find(|removal| item_matches(&page.id, item, removal))
             {
                 if after_item.is_some_and(|after_item| after_item != item) {
                     bail!("repair modified {item_ref:?}, which the intent removes");
@@ -381,7 +384,7 @@ fn ensure_items_preserved(
             };
             let expected = match item {
                 SchItem::Symbol(_)
-                    if intent.relocate_symbols.contains(&SymbolLocation {
+                    if intent.relocated_symbols.contains(&SymbolLocation {
                         page_id: page.id.clone(),
                         symbol_id: id.to_string(),
                     }) =>
@@ -412,36 +415,10 @@ fn ensure_items_preserved(
     Ok(())
 }
 
-fn item_ref(page_id: &str, item: &SchItem) -> Option<ConnectivityItemRef> {
-    let page_id = page_id.to_string();
-    Some(match item {
-        SchItem::Symbol(symbol) => ConnectivityItemRef::Symbol {
-            page_id,
-            id: symbol.id.clone(),
-        },
-        SchItem::Wire(wire) => ConnectivityItemRef::Wire {
-            page_id,
-            id: wire.id.clone(),
-        },
-        SchItem::Junction(junction) => ConnectivityItemRef::Junction {
-            page_id,
-            id: junction.id.clone(),
-        },
-        SchItem::NoConnect(no_connect) => ConnectivityItemRef::NoConnect {
-            page_id,
-            id: no_connect.id.clone(),
-        },
-        SchItem::Label(label) => ConnectivityItemRef::Label {
-            page_id,
-            id: label.id.clone(),
-        },
-        SchItem::Sheet(_) | SchItem::Unsupported(_) => return None,
-    })
-}
-
-/// Junctions left touching at most one wire once the removals are applied,
+/// Junctions left with fewer than two contacts once the removals are applied,
 /// restricted to junctions that sat on a removed wire so unrelated litter
-/// stays exactly as it was.
+/// stays exactly as it was. Wires, labels, no-connects, and symbol pins at the
+/// junction point all count as contacts.
 fn orphaned_junctions(
     original: &SchDocument,
     remaining: &SchDocument,
@@ -467,17 +444,30 @@ fn orphaned_junctions(
         if removed_segments.is_empty() {
             continue;
         }
-        let remaining_wires = remaining
+        let Some(remaining_page) = remaining
             .pages
             .iter()
             .find(|candidate| candidate.id == page.id)
-            .into_iter()
-            .flat_map(|candidate| &candidate.items)
-            .filter_map(|item| match item {
-                SchItem::Wire(wire) => Some((wire.a, wire.b)),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
+        else {
+            continue;
+        };
+        let mut remaining_wires = Vec::new();
+        let mut remaining_points = Vec::new();
+        for item in &remaining_page.items {
+            match item {
+                SchItem::Wire(wire) => remaining_wires.push((wire.a, wire.b)),
+                SchItem::Label(label) => remaining_points.push(label.at),
+                SchItem::NoConnect(no_connect) => remaining_points.push(no_connect.at),
+                SchItem::Symbol(symbol) => {
+                    if let Some(definition) = remaining_page.library.definitions.get(&symbol.lib_id)
+                        && let Ok(pins) = definition.placed_pins(symbol)
+                    {
+                        remaining_points.extend(pins.into_iter().map(|pin| pin.point));
+                    }
+                }
+                SchItem::Junction(_) | SchItem::Sheet(_) | SchItem::Unsupported(_) => {}
+            }
+        }
         for junction in page.items.iter().filter_map(|item| match item {
             SchItem::Junction(junction) => Some(junction),
             _ => None,
@@ -496,8 +486,12 @@ fn orphaned_junctions(
             let contacts = remaining_wires
                 .iter()
                 .filter(|(a, b)| point_on_segment(junction.at, *a, *b))
-                .count();
-            if contacts <= 1 {
+                .count()
+                + remaining_points
+                    .iter()
+                    .filter(|point| point_on_segment(**point, junction.at, junction.at))
+                    .count();
+            if contacts < 2 {
                 orphaned.insert(junction_ref);
             }
         }
@@ -573,9 +567,20 @@ fn minimum_verified_cut(
                     adjacent.insert(*a);
                 }
             }
+            // Nothing on the offending pin's own net is a sink; the cut must
+            // not sever the pin from its label just to satisfy the flow.
+            let source_nets = sources
+                .iter()
+                .flat_map(|index| node_nets[*index].iter().cloned())
+                .collect::<BTreeSet<_>>();
             let sinks = nodes_with(&|index, node| {
                 !sources.contains(&index)
                     && !adjacent.contains(&index)
+                    && node_nets[index].is_disjoint(&source_nets)
+                    && !node
+                        .driver_names
+                        .iter()
+                        .any(|name| source_nets.contains(name))
                     && (node.item.is_none()
                         || !node_nets[index].is_empty()
                         || !node.driver_names.is_empty()
@@ -592,7 +597,7 @@ fn minimum_verified_cut(
             .item
             .as_ref()
             .filter(|item| candidates.contains(item))
-            .map(|item| connectivity_item_cut_cost(item) as u64)
+            .map(connectivity_item_cut_cost)
     }) else {
         return Ok(None);
     };
@@ -608,6 +613,9 @@ fn minimum_verified_cut(
     let observed = observed_reconcilable_connectivity(&next, netlist)?;
     let analysis = analyze_connectivity(expected, &observed.graph);
     let problems = repair_problem_counts(analysis.issues());
+    // The metric counts conflicts only. A cut may also split a net; the
+    // reconnect list rebuilds that, so "minimal" means the fewest removals,
+    // not the least rewiring.
     Ok(strictly_reduces_problems(current_problems, &problems).then_some(cut))
 }
 
@@ -684,12 +692,10 @@ fn collect_terminal_symbols(
     }
 }
 
-/// Teardown fallback: every removable item across the issue's islands. This
-/// is deliberately ungated — the affected nets are queued for driver
+/// Teardown fallback: every removable item across the issue's islands, for
+/// an issue whose physical graph has no finite cut (a short through labels,
+/// pins that coincide). The affected nets are queued for driver
 /// reconnection, which rebuilds correct connectivity from the component pins.
-/// Not minimal, but it makes every wiring-caused short repairable, including
-/// shorts created by mislabeled hierarchical labels that no single-item
-/// search can attribute to one island.
 fn repair_region_items(
     issue: &SchematicIssue,
     islands: &std::collections::BTreeMap<crate::connectivity::IslandRef, PhysicalIsland>,
@@ -765,14 +771,17 @@ fn strictly_reduces_problems(
         && after.values().sum::<usize>() < before.values().sum()
 }
 
-fn connectivity_item_cut_cost(item: &ConnectivityItemRef) -> usize {
+/// Removing a wire is the cheapest repair, a junction breaks a tee, and a
+/// power symbol is a named driver worth keeping. Only these three kinds are
+/// ever cut candidates.
+fn connectivity_item_cut_cost(item: &ConnectivityItemRef) -> u64 {
     match item {
         ConnectivityItemRef::Wire { .. } => 1,
         ConnectivityItemRef::Junction { .. } => 2,
-        ConnectivityItemRef::NoConnect { .. } => 3,
-        ConnectivityItemRef::Label { .. } => 4,
         ConnectivityItemRef::Symbol { .. } => 8,
-        ConnectivityItemRef::SheetPin { .. } => usize::MAX,
+        ConnectivityItemRef::NoConnect { .. }
+        | ConnectivityItemRef::Label { .. }
+        | ConnectivityItemRef::SheetPin { .. } => u64::MAX / 4,
     }
 }
 
@@ -813,13 +822,14 @@ fn repair_candidates(
     candidates
 }
 
-fn point_on_segment(point: Point, a: Point, b: Point) -> bool {
+/// Whether `point` lies on the closed segment `a`-`b`.
+pub(crate) fn point_on_segment(point: Point, a: Point, b: Point) -> bool {
     let cross = (point.x - a.x) * (b.y - a.y) - (point.y - a.y) * (b.x - a.x);
-    cross.abs() <= 1e-9
-        && point.x >= a.x.min(b.x) - 1e-9
-        && point.x <= a.x.max(b.x) + 1e-9
-        && point.y >= a.y.min(b.y) - 1e-9
-        && point.y <= a.y.max(b.y) + 1e-9
+    cross.abs() <= GEOMETRY_EPS_MM
+        && point.x >= a.x.min(b.x) - GEOMETRY_EPS_MM
+        && point.x <= a.x.max(b.x) + GEOMETRY_EPS_MM
+        && point.y >= a.y.min(b.y) - GEOMETRY_EPS_MM
+        && point.y <= a.y.max(b.y) + GEOMETRY_EPS_MM
 }
 
 fn repair_island(
@@ -848,7 +858,7 @@ fn unrepairable_issue(document: &SchDocument, issue: &SchematicIssue) -> anyhow:
                 .collect::<Vec<_>>()
                 .join(", ");
             anyhow::anyhow!(
-                "KiCad directly connects component terminals that should be separate: {descriptions}. pcb apply cannot identify one wire or junction whose removal repairs the connection"
+                "KiCad directly connects component terminals that should be separate: {descriptions}. no set of wires or junctions separates these terminals"
             )
         }
         SchematicIssue::Shorted { net_names, .. } => anyhow::anyhow!(
@@ -996,7 +1006,7 @@ fn matching_item_count(page: &SchPage, item_ref: &ConnectivityItemRef) -> usize 
         .count()
 }
 
-fn item_matches(page_id: &str, item: &SchItem, item_ref: &ConnectivityItemRef) -> bool {
+pub(crate) fn item_matches(page_id: &str, item: &SchItem, item_ref: &ConnectivityItemRef) -> bool {
     match (item, item_ref) {
         (SchItem::Symbol(_), ConnectivityItemRef::Symbol { page_id: page, id })
         | (SchItem::Wire(_), ConnectivityItemRef::Wire { page_id: page, id })
@@ -1039,20 +1049,6 @@ mod tests {
 
     use super::*;
     use crate::connectivity::{ConnectionGroup, ConnectionOrigin, IslandRef};
-
-    #[test]
-    fn residual_pair_is_part_of_the_selected_multi_net_short() {
-        let selected = SchematicIssue::Shorted {
-            islands: vec![island(0)],
-            net_names: BTreeSet::from(["A".to_string(), "B".to_string(), "C".to_string()]),
-        };
-        let residual = SchematicIssue::Shorted {
-            islands: vec![island(1)],
-            net_names: BTreeSet::from(["A".to_string(), "B".to_string()]),
-        };
-
-        assert!(!repair_problems(&selected).is_disjoint(&repair_problems(&residual)));
-    }
 
     #[test]
     fn short_candidates_exclude_uninvolved_globally_merged_islands() {

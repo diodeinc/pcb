@@ -1167,10 +1167,7 @@ fn sort_symbol_properties(items: &mut [Sexpr]) {
 }
 
 fn symbol_property_name(property: &Sexpr) -> &str {
-    property
-        .as_list()
-        .and_then(property_name)
-        .expect("property child has a name")
+    property.as_list().and_then(property_name).unwrap_or("")
 }
 
 fn validate_symbol_graphics_for_kicad_10(sexpr: &Sexpr) -> Result<()> {

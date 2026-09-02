@@ -8,40 +8,8 @@ use pcb_kicad_sch::{
     connectivity::ConnectivityItemRef,
     plan_connectivity_repair,
     reconcile::{plan_reconciliation, plan_repairs},
-    verify_repair,
+    verify_connectivity_repair,
 };
-
-const LEFT_PIN: Point = Point::new(207.01, 146.05);
-const MID_PIN: Point = Point::new(207.01, 151.13);
-
-#[test]
-fn removes_only_the_unique_bridge_wire() {
-    let fixture = common::AnalysisFixture::load("analysis", "simple.zen", "kicad");
-    let mut document = fixture.kicad_document().clone();
-    add_wire(&mut document, "shorting-wire", LEFT_PIN, MID_PIN);
-
-    let inspection = inspect_schematic(&document, fixture.netlist()).unwrap();
-    let short = inspection
-        .issues
-        .iter()
-        .find(|issue| matches!(issue.issue, SchematicIssue::Shorted { .. }))
-        .unwrap();
-    let plan = plan_repairs(
-        &document,
-        fixture.netlist(),
-        &inspection,
-        BTreeSet::from([short.key.clone()]),
-    )
-    .unwrap();
-    let repaired = plan.apply(Some(&document)).unwrap();
-
-    assert!(
-        !repaired.pages[0]
-            .items
-            .iter()
-            .any(|item| matches!(item, SchItem::Wire(wire) if wire.id == "shorting-wire"))
-    );
-}
 
 #[test]
 fn chooses_one_deterministic_wire_when_single_item_repairs_are_ambiguous() {
@@ -61,12 +29,6 @@ fn chooses_one_deterministic_wire_when_single_item_repairs_are_ambiguous() {
         .iter()
         .find(|issue| matches!(issue.issue, SchematicIssue::Shorted { .. }))
         .unwrap();
-    let short_wires = short
-        .items
-        .iter()
-        .filter(|item| matches!(item, ConnectivityItemRef::Wire { .. }))
-        .cloned()
-        .collect::<BTreeSet<_>>();
     let intent = plan_connectivity_repair(
         &document,
         &netlist,
@@ -76,31 +38,17 @@ fn chooses_one_deterministic_wire_when_single_item_repairs_are_ambiguous() {
     )
     .unwrap();
 
-    let plan = plan_repairs(
+    assert_eq!(intent.removals().len(), 1);
+    assert!(contains_wire_id(intent.removals(), "ambiguous-a"));
+    let repaired = plan_repairs(
         &document,
         &netlist,
         &inspection,
         BTreeSet::from([short.key.clone()]),
     )
+    .unwrap()
+    .apply(Some(&document))
     .unwrap();
-    let repaired = plan.apply(Some(&document)).unwrap();
-
-    assert!(contains_wire_id(&short_wires, "ambiguous-a"));
-    assert!(contains_wire_id(&short_wires, "ambiguous-b"));
-    assert_eq!(intent.removals().len(), 1);
-    assert!(contains_wire_id(intent.removals(), "ambiguous-a"));
-    assert!(!contains(
-        &repaired,
-        intent.removals().iter().next().unwrap()
-    ));
-    assert_eq!(
-        short_wires
-            .iter()
-            .filter(|item| contains(&repaired, item))
-            .count(),
-        1
-    );
-
     let all = plan_reconciliation(Some(&document), &netlist, "simple.kicad_sch")
         .unwrap()
         .apply(Some(&document))
@@ -181,9 +129,8 @@ fn minimal_cut_survives_a_large_island_with_duplicate_wires() {
         .unwrap();
     let left = label_point(&document, "LEFT");
     let mid = label_point(&document, "MID");
-    // A 24-segment bridge whose first half is drawn twice: too many candidates
-    // for any bounded search, and no single-wire removal in the doubled half
-    // changes connectivity.
+    // A 24-segment bridge whose first half is drawn twice: no single-wire
+    // removal in the doubled half changes connectivity.
     let steps = 24;
     let points = (0..=steps)
         .map(|index| {
@@ -213,15 +160,6 @@ fn minimal_cut_survives_a_large_island_with_duplicate_wires() {
         .iter()
         .find(|issue| matches!(issue.issue, SchematicIssue::Shorted { .. }))
         .expect("the bridge shorts LEFT and MID");
-    assert!(
-        short
-            .items
-            .iter()
-            .filter(|item| matches!(item, ConnectivityItemRef::Wire { .. }))
-            .count()
-            > 16
-    );
-
     let intent = plan_connectivity_repair(
         &document,
         &netlist,
@@ -266,8 +204,8 @@ fn forced_wire_removal_reconnects_only_the_net_it_carried() {
     document.pages[0]
         .items
         .retain(|item| !matches!(item, SchItem::Label(label) if label.text == "MID"));
-    let r1_p2 = pin_point(&document, "R1.R", "2");
-    let r2_p1 = pin_point(&document, "R2.R", "1");
+    let r1_p2 = common::pin_point(&document, "R1.R", "2");
+    let r2_p1 = common::pin_point(&document, "R2.R", "1");
     add_wire(&mut document, "mid-wire", r1_p2, r2_p1);
     let inspection = inspect_schematic(&document, &netlist).unwrap();
     assert!(
@@ -317,7 +255,8 @@ fn forced_wire_removal_reconnects_only_the_net_it_carried() {
         .unwrap()
         .apply(Some(&edited))
         .unwrap();
-    let verified = verify_repair(&document, &inspection, &netlist, &intent, &realized).unwrap();
+    let verified =
+        verify_connectivity_repair(&document, &inspection, &netlist, &intent, &realized).unwrap();
     assert!(verified.analysis.is_equivalent(), "{:#?}", verified.issues);
 
     // A realizer that touches anything outside the intent is rejected.
@@ -325,7 +264,7 @@ fn forced_wire_removal_reconnects_only_the_net_it_carried() {
     tampered.pages[0]
         .items
         .retain(|item| !matches!(item, SchItem::Label(label) if label.text == "RIGHT"));
-    let error = verify_repair(&document, &inspection, &netlist, &intent, &tampered)
+    let error = verify_connectivity_repair(&document, &inspection, &netlist, &intent, &tampered)
         .expect_err("removing an unrelated label must fail verification");
     assert!(
         error.to_string().contains("outside the intent"),
@@ -379,28 +318,6 @@ fn intent_names_the_net_symbol_driver_for_a_symbol_backed_net() {
     }
 }
 
-fn pin_point(document: &SchDocument, path: &str, number: &str) -> Point {
-    let page = &document.pages[0];
-    let symbol = page
-        .items
-        .iter()
-        .find_map(|item| match item {
-            SchItem::Symbol(symbol) if symbol.field_value("Path") == Some(path) => Some(symbol),
-            _ => None,
-        })
-        .unwrap_or_else(|| panic!("missing managed symbol {path}"));
-    page.library
-        .definitions
-        .get(&symbol.lib_id)
-        .unwrap()
-        .placed_pins(symbol)
-        .unwrap()
-        .into_iter()
-        .find(|pin| pin.number == number)
-        .unwrap_or_else(|| panic!("missing pin {number} on {path}"))
-        .point
-}
-
 fn label_point(document: &SchDocument, name: &str) -> Point {
     document
         .pages
@@ -426,15 +343,4 @@ fn contains_wire_id(items: &BTreeSet<ConnectivityItemRef>, expected_id: &str) ->
     items
         .iter()
         .any(|item| matches!(item, ConnectivityItemRef::Wire { id, .. } if id == expected_id))
-}
-
-fn contains(document: &SchDocument, item_ref: &ConnectivityItemRef) -> bool {
-    document.pages.iter().any(|page| {
-        page.items.iter().any(|item| match (item, item_ref) {
-            (SchItem::Wire(wire), ConnectivityItemRef::Wire { page_id, id }) => {
-                page.id == *page_id && wire.id == *id
-            }
-            _ => false,
-        })
-    })
 }

@@ -207,8 +207,8 @@ fn directly_overlapping_component_pins_relocate_the_affected_symbols() {
         .unwrap()
         .apply(None)
         .unwrap();
-    let target = pin_point(&document, "R1.R", "1");
-    let source = pin_point(&document, "R2.R", "1");
+    let target = common::pin_point(&document, "R1.R", "1");
+    let source = common::pin_point(&document, "R2.R", "1");
     let symbol = managed_symbol_mut(&mut document, "R2.R");
     let new_at = Point::new(
         symbol.at.x + target.x - source.x,
@@ -365,25 +365,6 @@ fn managed_symbol_mut<'a>(document: &'a mut SchDocument, path: &str) -> &'a mut 
         .unwrap_or_else(|| panic!("missing managed symbol {path}"))
 }
 
-fn pin_point(document: &SchDocument, path: &str, number: &str) -> Point {
-    for page in &document.pages {
-        let Some(symbol) = page.items.iter().find_map(|item| match item {
-            SchItem::Symbol(symbol) if symbol.field_value("Path") == Some(path) => Some(symbol),
-            _ => None,
-        }) else {
-            continue;
-        };
-        return page.library.definitions[&symbol.lib_id]
-            .placed_pins(symbol)
-            .unwrap()
-            .into_iter()
-            .find(|pin| pin.number == number)
-            .unwrap_or_else(|| panic!("missing {path} pin {number}"))
-            .point;
-    }
-    panic!("missing managed symbol {path}")
-}
-
 fn remove_first_managed(document: &mut SchDocument) {
     let id = managed_symbols(document).next().unwrap().id.clone();
     document.pages[0]
@@ -538,10 +519,11 @@ fn unbound_symbol_on_a_child_sheet_repairs_by_selection() {
 }
 
 /// A KiCad wire joining two pins the netlist marks NotConnected is a real
-/// electrical divergence and must be reported, while unwired NotConnected
-/// pins stay silent.
+/// electrical divergence: it is reported, unwired NotConnected pins stay
+/// silent, and the repair cuts one segment per path next to the pin instead
+/// of tearing down the branches between them.
 #[test]
-fn wired_not_connected_pins_report_an_unexpected_connection() {
+fn wired_not_connected_pins_are_cut_free_locally() {
     let netlist = common::compile_fixture("analysis", "not_connected.zen");
     let baseline = plan_reconciliation(None, &netlist, "not_connected.kicad_sch")
         .unwrap()
@@ -555,8 +537,8 @@ fn wired_not_connected_pins_report_an_unexpected_connection() {
     );
 
     let mut document = baseline.clone();
-    let a = pin_point(&document, "R1.R", "2");
-    let b = pin_point(&document, "R2.R", "2");
+    let a = common::pin_point(&document, "R1.R", "2");
+    let b = common::pin_point(&document, "R2.R", "2");
     for (path_index, offset) in [2.54, -2.54].into_iter().enumerate() {
         let mut points = vec![a];
         points.extend((1..10).map(|index| {
@@ -792,7 +774,7 @@ fn emptied_module_page_is_repopulated_not_duplicated() {
 /// The LTC regression: a hierarchical port label dragged onto another net's
 /// pin shorts the two ports. No single island looks inconsistent on its own
 /// and the offending label is a hierarchy alias (not a named driver), so the
-/// gated searches see nothing — the teardown fallback must still repair it.
+/// physical graph has no finite cut — the teardown fallback must still repair it.
 #[test]
 fn short_from_a_mislabeled_hierarchical_label_is_repairable() {
     let netlist = common::compile_fixture("hierarchy", "root_interface.zen");

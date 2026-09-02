@@ -40,9 +40,9 @@ pub use model::{
     SchItem, SchPage, Sheet, SheetPin, Symbol, SymbolDefinition, SymbolField, SymbolLibrary,
     TextEffects, TextSize, Wire,
 };
+pub use net_symbols::NetSymbolSpec;
 pub use repair::{
-    ConnectivityRepairIntent, NetDriverKind, NetSymbolDriver, plan_connectivity_repair,
-    verify_repair,
+    ConnectivityRepairIntent, NetDriverKind, plan_connectivity_repair, verify_connectivity_repair,
 };
 pub use source::patch_page_source;
 pub use symbol::PlacedPin;

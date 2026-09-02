@@ -180,6 +180,26 @@ impl TestProject {
     }
 }
 
+/// World position of one pin of a managed symbol, found by its Zener path.
+pub fn pin_point(document: &SchDocument, path: &str, number: &str) -> pcb_kicad_sch::Point {
+    for page in &document.pages {
+        let Some(symbol) = page.items.iter().find_map(|item| match item {
+            SchItem::Symbol(symbol) if symbol.field_value("Path") == Some(path) => Some(symbol),
+            _ => None,
+        }) else {
+            continue;
+        };
+        return page.library.definitions[&symbol.lib_id]
+            .placed_pins(symbol)
+            .unwrap()
+            .into_iter()
+            .find(|pin| pin.number == number)
+            .unwrap_or_else(|| panic!("missing {path} pin {number}"))
+            .point;
+    }
+    panic!("missing managed symbol {path}")
+}
+
 pub fn compile_fixture(project: &str, entrypoint: &str) -> pcb_sch::Schematic {
     let test_data = test_data_dir();
     compile_zener_project(&test_data.join(project), entrypoint)

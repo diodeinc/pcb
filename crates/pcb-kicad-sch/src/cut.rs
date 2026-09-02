@@ -1,8 +1,8 @@
 //! Minimum node cut over the physical adjacency graph.
 //!
-//! Wires and junctions are cuttable nodes with a cost; connection points,
-//! labels, pins, and name merges are uncuttable. The cut separates two groups
-//! of terminals with the least total cost, which is the smallest set of items
+//! Nodes the caller prices are cuttable; everything else, connection points
+//! and name merges included, is infinite. The cut separates two groups of
+//! terminals with the least total cost, which is the smallest set of items
 //! whose removal splits them in the geometric model. The planner verifies the
 //! result through the real reducer before trusting it.
 
@@ -174,13 +174,21 @@ mod tests {
     }
 
     #[test]
-    fn prefers_one_expensive_node_over_two_cheap_parallel_paths() {
-        // 0 - {1, 2} - 3 - 4 - 5: nodes 1 and 2 cost 1 each, node 4 costs 1.
+    fn prefers_two_cheap_nodes_over_one_expensive_node() {
+        // 0 - {1, 2} - 3 - 4 - 5: nodes 1 and 2 cost 1 each, node 4 costs 3.
         let graph = graph(6, &[(0, 1), (0, 2), (1, 3), (2, 3), (3, 4), (4, 5)]);
-        let cut = minimum_node_cut(&graph, &BTreeSet::from([0]), &BTreeSet::from([5]), |node| {
-            matches!(node, 1 | 2 | 4).then_some(1)
-        });
-        assert_eq!(cut, Some(vec![4]));
+        let cut =
+            minimum_node_cut(
+                &graph,
+                &BTreeSet::from([0]),
+                &BTreeSet::from([5]),
+                |node| match node {
+                    1 | 2 => Some(1),
+                    4 => Some(3),
+                    _ => None,
+                },
+            );
+        assert_eq!(cut, Some(vec![1, 2]));
     }
 
     #[test]

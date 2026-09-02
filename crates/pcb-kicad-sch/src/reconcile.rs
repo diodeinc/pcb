@@ -8,7 +8,7 @@ use pcb_sch::Schematic;
 use crate::{
     SchDocument, SchPage,
     analysis::{
-        ConnectivityInspection, SchematicIssueKey, coarse_key, ensure_no_new_issues,
+        ConnectivityInspection, SchematicIssueKey, ensure_issues_resolved, ensure_no_new_issues,
         inspect_schematic, issue_summaries,
     },
     component_slots, compose,
@@ -276,14 +276,8 @@ fn build_plan(
                 if !before.issues.iter().any(|issue| &issue.key == key) {
                     bail!("schematic issue {key:?} is not present");
                 }
-                if inspection_after
-                    .issues
-                    .iter()
-                    .any(|issue| coarse_key(&issue.key) == coarse_key(key))
-                {
-                    bail!("planned repair did not resolve schematic issue {key:?}");
-                }
             }
+            ensure_issues_resolved(&inspection_after, selected_keys, "planned repair")?;
             ensure_no_new_issues(before, &inspection_after, "planned repair")?;
         }
     }

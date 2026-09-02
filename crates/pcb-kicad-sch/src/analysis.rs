@@ -438,6 +438,27 @@ pub(crate) fn issue_summaries<'a>(issues: impl Iterator<Item = &'a SchematicIssu
         .join("; ")
 }
 
+/// Reject a repair that left one of the issues it set out to resolve.
+pub(crate) fn ensure_issues_resolved(
+    after: &ConnectivityInspection,
+    keys: &BTreeSet<SchematicIssueKey>,
+    action: &str,
+) -> anyhow::Result<()> {
+    for key in keys {
+        if let Some(remaining) = after
+            .issues
+            .iter()
+            .find(|issue| coarse_key(&issue.key) == coarse_key(key))
+        {
+            anyhow::bail!(
+                "{action} did not resolve schematic issue: {}",
+                remaining.issue.summary()
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Reject a document change that introduced an issue absent before it.
 pub(crate) fn ensure_no_new_issues(
     before: &ConnectivityInspection,

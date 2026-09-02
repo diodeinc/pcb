@@ -72,10 +72,14 @@ PCB verifies.
   adjacency graph, verified through the reducer; whole-island teardown is the
   last resort when no finite cut exists.
 - **Realize** applies the intent's removals and relocations, then only adds
-  geometry. PCB's realizer places one driver per island with a one-bend stub;
-  an editor may use its own router instead.
-- **Verify** (`verify_repair`) accepts a realization only if every selected
-  issue is gone, no issue appeared, and nothing outside the intent changed.
+  geometry. PCB's realizer places one driver per island with a one-bend stub,
+  deriving each driver's kind with the same rule the intent reports; an
+  editor may use its own router instead.
+- **Verify** accepts a realization only if every selected issue is gone, no
+  issue appeared, and the result is netlist-equivalent. `pcb apply` verifies
+  through reconciliation, which also proves its edits reversible. An external
+  realizer calls `verify_connectivity_repair`, which additionally requires
+  that nothing outside the intent changed.
 
 Two invariants follow. A schematic equivalent to its netlist is never touched.
 Otherwise the repair is the least change that restores equivalence: PCB's

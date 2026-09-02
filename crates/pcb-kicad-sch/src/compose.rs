@@ -18,8 +18,8 @@ use crate::{
     deterministic_uuid, field_autoplace, hierarchy, net_symbols,
     placement::{GridPacker, GridPoint, GridRect, point_rect},
     repair::{
-        ConnectivityRepairIntent, NetDriverKind, NetSymbolDriver, plan_connectivity_repair,
-        remove_items,
+        ConnectivityRepairIntent, NetDriverKind, item_matches, plan_connectivity_repair_core,
+        point_on_segment, remove_items,
     },
     root_interface, root_page_id, symbol,
 };
@@ -261,11 +261,16 @@ pub(crate) fn reconcile_document(
             .collect::<BTreeSet<_>>()
     };
     if creating || !repair_keys.is_empty() {
-        let mut plan =
-            plan_connectivity_repair(&document, netlist, &current, &repair_keys, &BTreeSet::new())?;
+        let intent = plan_connectivity_repair_core(
+            &document,
+            netlist,
+            &current,
+            &repair_keys,
+            &BTreeSet::new(),
+        )?;
+        let mut reconnect_nets = intent.reconnect_nets.clone();
         if creating {
-            plan.reconnect_nets
-                .extend(named_connected_nets(netlist).map(|net| net.name.clone()));
+            reconnect_nets.extend(named_connected_nets(netlist).map(|net| net.name.clone()));
         }
         apply_connectivity_repair(
             &mut document,
@@ -273,7 +278,8 @@ pub(crate) fn reconcile_document(
             &mut placed,
             &net_symbol_specs,
             default_page,
-            plan,
+            &intent,
+            &reconnect_nets,
         )?;
     }
 
@@ -1900,10 +1906,11 @@ fn apply_connectivity_repair(
     placed: &mut BTreeMap<SymbolSlotKey, PlacedSymbol>,
     net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
     root_page: usize,
-    plan: ConnectivityRepairIntent,
+    intent: &ConnectivityRepairIntent,
+    reconnect_nets: &BTreeSet<String>,
 ) -> Result<()> {
-    remove_items(document, &plan.removals)?;
-    for location in &plan.relocate_symbols {
+    remove_items(document, &intent.removals)?;
+    for location in &intent.relocated_symbols {
         relocate_symbol(document, placed, location)?;
     }
     add_connectivity_drivers(
@@ -1912,7 +1919,7 @@ fn apply_connectivity_repair(
         placed,
         net_symbol_specs,
         root_page,
-        &plan.reconnect_nets,
+        reconnect_nets,
     )?;
     Ok(())
 }
@@ -1966,12 +1973,7 @@ pub(crate) fn plan_net_driver_kinds(
             .into_iter()
             .map(|page_index| {
                 let kind = if let Some(spec) = specs.get(net_name) {
-                    NetDriverKind::NetSymbol(NetSymbolDriver {
-                        definition: spec.definition.clone(),
-                        unit: spec.unit,
-                        pin_offset: spec.pin_offset,
-                        pin_outward_spin: spec.pin_outward_spin,
-                    })
+                    NetDriverKind::NetSymbol(spec.clone())
                 } else if let Some(names) = contexts
                     .get(&page_index)
                     .and_then(|context| context.get(net_name))
@@ -2457,7 +2459,7 @@ fn plan_net_symbol_runs(
             missing.push((net_name, target));
         }
     }
-    arrange_net_symbol_runs(missing, net_symbol_specs, placed)
+    arrange_net_symbol_runs(missing, placed)
 }
 
 fn plan_projected_net_symbol_runs(
@@ -2475,27 +2477,24 @@ fn plan_projected_net_symbol_runs(
                 .filter(|target| !target.hidden && projected_slots.contains(&target.slot))
                 .map(move |target| (net_name, target))
         });
-    arrange_net_symbol_runs(missing, net_symbol_specs, placed)
+    arrange_net_symbol_runs(missing, placed)
 }
 
 fn arrange_net_symbol_runs<'a>(
     missing: impl IntoIterator<Item = (&'a String, &'a PinTarget)>,
-    net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
     placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
 ) -> Result<Vec<NetSymbolRun>> {
     type Slot = (usize, SymbolSlotKey, LabelSpin);
-    type GroupKey = (String, usize, SymbolSlotKey, LabelSpin, LabelSpin);
+    type GroupKey = (String, usize, SymbolSlotKey, LabelSpin);
 
     let mut groups = BTreeMap::<GroupKey, Vec<&PinTarget>>::new();
     for (net_name, target) in missing {
-        let spec = &net_symbol_specs[net_name];
         groups
             .entry((
                 net_name.clone(),
                 target.page_index,
                 target.slot.clone(),
                 target.spin,
-                spec.pin_outward_spin,
             ))
             .or_default()
             .push(target);
@@ -2503,7 +2502,7 @@ fn arrange_net_symbol_runs<'a>(
 
     let mut runs = Vec::<NetSymbolRun>::new();
     let mut slots = BTreeMap::<Slot, Vec<usize>>::new();
-    for ((net_name, page_index, slot, target_side, _symbol_side), members) in groups {
+    for ((net_name, page_index, slot, target_side), members) in groups {
         for members in adjacent_target_runs(&placed[&slot], members, |target| *target)? {
             let run_index = runs.len();
             runs.push(NetSymbolRun {
@@ -2650,36 +2649,19 @@ fn net_symbol_stub_collides(
     let mut existing_points = Vec::new();
     let mut existing_segments = Vec::new();
     for item in &page.items {
-        let owned = |id: &str, make: fn(String, String) -> ConnectivityItemRef| {
-            own_items.contains(&make(page.id.clone(), id.to_string()))
-        };
+        if own_items
+            .iter()
+            .any(|item_ref| item_matches(&page.id, item, item_ref))
+        {
+            continue;
+        }
         match item {
             SchItem::Wire(wire) => {
-                if owned(&wire.id, |page_id, id| ConnectivityItemRef::Wire {
-                    page_id,
-                    id,
-                }) {
-                    continue;
-                }
                 existing_points.extend([wire.a, wire.b]);
                 existing_segments.push((wire.a, wire.b));
             }
-            SchItem::Junction(junction) => {
-                if !owned(&junction.id, |page_id, id| ConnectivityItemRef::Junction {
-                    page_id,
-                    id,
-                }) {
-                    existing_points.push(junction.at);
-                }
-            }
-            SchItem::Label(label) => {
-                if !owned(&label.id, |page_id, id| ConnectivityItemRef::Label {
-                    page_id,
-                    id,
-                }) {
-                    existing_points.push(label.at);
-                }
-            }
+            SchItem::Junction(junction) => existing_points.push(junction.at),
+            SchItem::Label(label) => existing_points.push(label.at),
             SchItem::NoConnect(no_connect) => existing_points.push(no_connect.at),
             SchItem::Sheet(sheet) => existing_points.extend(sheet.pins.iter().map(|pin| pin.at)),
             SchItem::Symbol(symbol) => {
@@ -2703,21 +2685,12 @@ fn net_symbol_stub_collides(
             .any(|existing| points_coincide(*existing, *point))
             || existing_segments
                 .iter()
-                .any(|(a, b)| point_touches_segment(*point, *a, *b))
+                .any(|(a, b)| point_on_segment(*point, *a, *b))
     }) || existing_points.iter().any(|point| {
         new_segments
             .iter()
-            .any(|(a, b)| point_touches_segment(*point, *a, *b))
+            .any(|(a, b)| point_on_segment(*point, *a, *b))
     }))
-}
-
-fn point_touches_segment(point: Point, a: Point, b: Point) -> bool {
-    let cross = (point.x - a.x) * (b.y - a.y) - (point.y - a.y) * (b.x - a.x);
-    cross.abs() <= GEOMETRY_EPS_MM
-        && point.x >= a.x.min(b.x) - GEOMETRY_EPS_MM
-        && point.x <= a.x.max(b.x) + GEOMETRY_EPS_MM
-        && point.y >= a.y.min(b.y) - GEOMETRY_EPS_MM
-        && point.y <= a.y.max(b.y) + GEOMETRY_EPS_MM
 }
 
 fn net_symbol_wire_bend(target: Point, connection: Point, target_spin: LabelSpin) -> Point {
