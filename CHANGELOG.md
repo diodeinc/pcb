@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Expose drilled holes, termination associations, and explicit via-protection intent in PCBA assembly reports.
+
 ### Changed
 
 - `QR` generic is now a solid silkscreen square with a 5mm, 8mm or 10mm side length

@@ -33,7 +33,7 @@ fn assembly_command_matches_the_shared_board_array_report() {
     let (second_json, _) = assembly_report("board-array");
 
     assert_eq!(first_json, second_json);
-    assert_eq!(report["schema_version"], 2);
+    assert_eq!(report["schema_version"], 3);
     assert_eq!(report["scope"]["kind"], "board_array");
     assert_eq!(report["scope"]["area_mm2"], 1_400.0);
     assert_eq!(report["profiles"].as_array().unwrap().len(), 2);

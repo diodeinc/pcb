@@ -17,6 +17,7 @@
     <DictionaryStandard units="MILLIMETER">
       <EntryStandard id="land"><Circle diameter="1"/></EntryStandard>
       <EntryStandard id="paste"><Circle diameter="0.6"/></EntryStandard>
+      <EntryStandard id="via-land"><Circle diameter="0.4"/></EntryStandard>
       <EntryStandard id="hollow-inline"><Circle diameter="0.4"><LineDesc lineWidth="0.05" lineEnd="ROUND"/><FillDesc fillProperty="HOLLOW"/></Circle></EntryStandard>
       <EntryStandard id="hollow-ref"><Circle diameter="0.35"><LineDescRef id="fine"/><FillDesc fillProperty="HOLLOW"/></Circle></EntryStandard>
       <EntryStandard id="void-ref"><Circle diameter="0.3"><FillDescRef id="void"/></Circle></EntryStandard>
@@ -57,11 +58,23 @@
     </BomItem>
   </Bom>
   <Ecad name="design">
-    <CadHeader units="MILLIMETER"/>
+    <CadHeader units="MILLIMETER">
+      <Spec name="nc-fill">
+        <General type="MATERIAL"><Property text="NON-CONDUCTIVE EPOXY"/></General>
+      </Spec>
+    </CadHeader>
     <CadData>
       <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
       <Layer name="BOTTOM" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/>
       <Layer name="PASTE" layerFunction="SOLDERPASTE" side="TOP" polarity="POSITIVE"/>
+      <Layer name="MASK" layerFunction="SOLDERMASK" side="TOP" polarity="POSITIVE"/>
+      <Layer name="DRILL" layerFunction="DRILL" side="ALL" polarity="POSITIVE">
+        <Span fromLayer="TOP" toLayer="BOTTOM"/>
+      </Layer>
+      <Layer name="NC-FILL" layerFunction="HOLEFILL" side="ALL" polarity="POSITIVE">
+        <SpecRef id="nc-fill"/>
+        <Span fromLayer="TOP" toLayer="BOTTOM"/>
+      </Layer>
       <Step name="board" type="BOARD">
         <PadStackDef name="smt-padstack">
           <PadstackPadDef layerRef="TOP" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="land"/></PadstackPadDef>
@@ -71,6 +84,11 @@
           <PadstackHoleDef name="J1-H1" diameter="0.4" platingStatus="PLATED" plusTol="0" minusTol="0" x="0" y="0"/>
           <PadstackPadDef layerRef="TOP" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="land"/></PadstackPadDef>
           <PadstackPadDef layerRef="BOTTOM" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="land"/></PadstackPadDef>
+        </PadStackDef>
+        <PadStackDef name="via-padstack">
+          <PadstackHoleDef name="via" diameter="0.2" platingStatus="VIA" plusTol="0" minusTol="0" x="0" y="0"/>
+          <PadstackPadDef layerRef="TOP" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="via-land"/></PadstackPadDef>
+          <PadstackPadDef layerRef="BOTTOM" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="via-land"/></PadstackPadDef>
         </PadStackDef>
         <Datum x="0" y="0"/>
         <Profile>
@@ -144,12 +162,30 @@
           <Set><Pad padstackDefRef="smt-padstack"><Location x="2" y="2"/><StandardPrimitiveRef id="land"/><PinRef componentRef="U1" pin="1"/></Pad></Set>
           <Set><Pad padstackDefRef="smt-padstack"><Location x="4" y="2"/><StandardPrimitiveRef id="land"/><PinRef componentRef="U2" pin="1"/></Pad></Set>
           <Set><Pad padstackDefRef="tht-padstack"><Location x="6" y="2"/><StandardPrimitiveRef id="land"/><PinRef componentRef="J1" pin="1"/></Pad></Set>
+          <Set><Pad padstackDefRef="via-padstack"><Location x="1.8" y="2"/><StandardPrimitiveRef id="via-land"/></Pad></Set>
+          <Set><Pad padstackDefRef="via-padstack"><Location x="2.2" y="2"/><StandardPrimitiveRef id="via-land"/></Pad></Set>
+          <Set><Pad padstackDefRef="via-padstack"><Location x="8" y="5"/><StandardPrimitiveRef id="via-land"/></Pad></Set>
         </LayerFeature>
         <LayerFeature layerRef="BOTTOM">
           <Set><Pad padstackDefRef="tht-padstack"><Location x="6" y="2"/><StandardPrimitiveRef id="land"/><PinRef componentRef="J1" pin="1"/></Pad></Set>
+          <Set><Pad padstackDefRef="via-padstack"><Location x="1.8" y="2"/><StandardPrimitiveRef id="via-land"/></Pad></Set>
+          <Set><Pad padstackDefRef="via-padstack"><Location x="2.2" y="2"/><StandardPrimitiveRef id="via-land"/></Pad></Set>
+          <Set><Pad padstackDefRef="via-padstack"><Location x="8" y="5"/><StandardPrimitiveRef id="via-land"/></Pad></Set>
         </LayerFeature>
         <LayerFeature layerRef="PASTE">
           <Set><Pad padstackDefRef="smt-padstack"><Location x="2" y="2"/><StandardPrimitiveRef id="paste"/><PinRef componentRef="U1" pin="1"/></Pad></Set>
+        </LayerFeature>
+        <LayerFeature layerRef="MASK">
+          <Set><Pad padstackDefRef="smt-padstack"><Location x="2" y="2"/><StandardPrimitiveRef id="land"/><PinRef componentRef="U1" pin="1"/></Pad></Set>
+        </LayerFeature>
+        <LayerFeature layerRef="DRILL">
+          <Set geometry="via-padstack" componentRef="U1"><Hole name="U1-via-capped" diameter="0.2" platingStatus="VIA_CAPPED" plusTol="0" minusTol="0" x="1.8" y="2"/></Set>
+          <Set geometry="via-padstack"><Hole name="U1-via" diameter="0.2" platingStatus="VIA" plusTol="0" minusTol="0" x="2.2" y="2"/></Set>
+          <Set geometry="via-padstack"><Hole name="standalone-via" diameter="0.2" platingStatus="VIA" plusTol="0" minusTol="0" x="8" y="5"/></Set>
+        </LayerFeature>
+        <LayerFeature layerRef="NC-FILL">
+          <Set geometry="via-padstack"><SpecRef id="nc-fill"/><Pad padstackDefRef="via-padstack"><Location x="1.8" y="2"/><StandardPrimitiveRef id="via-land"/></Pad></Set>
+          <Set geometry="via-padstack"><SpecRef id="nc-fill"/><Pad padstackDefRef="via-padstack"><Location x="2.2" y="2"/><StandardPrimitiveRef id="via-land"/></Pad></Set>
         </LayerFeature>
       </Step>
       <Step name="panel" type="PALLET">
@@ -163,7 +199,7 @@
             <PolyStepSegment x="0" y="0"/>
           </Polygon>
         </Profile>
-        <StepRepeat stepRef="board" x="10" y="20" nx="2" ny="1" dx="15" dy="0" angle="13" mirror="false"/>
+        <StepRepeat stepRef="board" x="10" y="20" nx="2" ny="1" dx="15" dy="0" angle="13" mirror="true"/>
       </Step>
     </CadData>
   </Ecad>

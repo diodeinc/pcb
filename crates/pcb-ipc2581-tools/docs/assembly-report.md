@@ -1,4 +1,4 @@
-# PCBA assembly report v2
+# PCBA assembly report v3
 
 `assembly::build_report` lowers one cached `pcb-ir` imported design into the
 deterministic contract used by the CLI and native library. The report carries
@@ -101,8 +101,26 @@ Packages contain only definitions referenced by components in the selected
 scope. Physical terminations include only pins explicitly marked
 `electricalType="ELECTRICAL"`. Copper replicas collapse only when component,
 pin, padstack, and location identities match exactly. Paste islands link only
-through that same exact identity. No nearest-object or overlap heuristic is
-used.
+through that same exact identity.
+
+`holes` contains stable source-backed drilled-hole facts, including location,
+source name, finished diameter, plating, padstack, net, and layer span. Each
+termination lists its associated `hole_ids`, paste islands, and source-backed
+assembly-side soldermask openings. Source component/pin evidence takes
+precedence when present. Otherwise, a hole associates with a termination only
+when its declared span reaches exactly one land on a known assembly side.
+Multiple exact overlaps are `ambiguous`, and no exact overlap is `unresolved`;
+nearest-object matching is never used. `basis` preserves whether source
+identity or exact geometry produced the candidates.
+
+Via protection is an independent intent assembled from explicit source
+evidence. `VIA_CAPPED` contributes `capped`; `HOLEFILL` contributes `filled` or
+`plugged`. Coating layers contribute no method unless their specification
+values name a protection action. Explicit specification values can identify
+`open`, `tented`, `plugged`, `filled`, and `capped`. Fill material is normalized
+only from specification material and property values, never layer or
+specification names. Missing protection evidence remains `unknown`: geometry
+does not imply fill, protection, factory capability, or quote readiness.
 
 Components remain present when excluded. A preferred BOM item with
 `category="DOCUMENT"` sets `assembly_status` to `excluded` and
@@ -124,6 +142,11 @@ population, a missing reference designator, a populated component without a
 resolved package, or a populated SMT or through-hole component without an
 exact physical termination.
 
+It emits warnings when a hole has ambiguous or conflicting termination
+evidence, or when an associated via has unknown or conflicting protection
+intent.
+
 The complete report contract is declared in `src/assembly/report.rs`. The
 IPC-2581C-valid fixture in `src/assembly/testdata/report.xml` exercises package
-geometry, structural text, board cutouts, and a panel profile.
+geometry, structural text, board cutouts, via protection, and mirrored panel
+repeats.

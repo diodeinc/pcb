@@ -10,8 +10,12 @@ use crate::LayoutTarget;
 const FIXTURE: &str = include_str!("testdata/report.xml");
 
 fn report(target: LayoutTarget) -> report::AssemblyReport {
-    ipc2581::validate(FIXTURE).expect("assembly report fixture conforms to IPC-2581C");
-    let ipc = Ipc2581::parse(FIXTURE).unwrap();
+    report_xml(FIXTURE, target)
+}
+
+fn report_xml(xml: &str, target: LayoutTarget) -> report::AssemblyReport {
+    ipc2581::validate(xml).expect("assembly report fixture conforms to IPC-2581C");
+    let ipc = Ipc2581::parse(xml).unwrap();
     let imported = import_design(&ipc).unwrap();
     build_report(&imported, target).unwrap()
 }
@@ -20,7 +24,7 @@ fn report(target: LayoutTarget) -> report::AssemblyReport {
 fn reports_scoped_components_and_exact_physical_evidence() {
     let report = report(LayoutTarget::BoardArray);
 
-    assert_eq!(report.schema_version, 2);
+    assert_eq!(report.schema_version, 3);
     assert_eq!(report.scope.kind, report::ScopeKind::BoardArray);
     assert_eq!(report.scope.root_step.as_deref(), Some("panel"));
     assert_eq!(report.scope.profile_ids.len(), 1);
@@ -90,6 +94,14 @@ fn reports_scoped_components_and_exact_physical_evidence() {
             && board.area_mm2 == Some(board_profile.area_mm2)
             && board.bounds_mm == Some(board_profile.bounds_mm)
     }));
+    assert!(
+        report
+            .boards
+            .iter()
+            .all(|board| board.transform[0] * board.transform[3]
+                - board.transform[1] * board.transform[2]
+                < 0.0)
+    );
 
     let package = report
         .packages
@@ -248,6 +260,327 @@ fn reports_scoped_components_and_exact_physical_evidence() {
         .unwrap();
     assert_eq!(through.lands.len(), 2);
     assert!(through.paste_islands.is_empty());
+
+    assert_eq!(report.holes.len(), 6);
+    assert_eq!(
+        report
+            .holes
+            .iter()
+            .filter(|hole| {
+                hole.termination.status == report::AssociationStatus::ExactGeometric
+                    && hole.termination.basis == Some(report::AssociationBasis::ExactGeometry)
+            })
+            .count(),
+        2
+    );
+    assert_eq!(
+        report
+            .holes
+            .iter()
+            .filter(|hole| {
+                hole.termination.status == report::AssociationStatus::Explicit
+                    && hole.termination.basis == Some(report::AssociationBasis::SourceIdentity)
+            })
+            .count(),
+        2
+    );
+    assert!(report.holes.iter().all(|hole| hole.source_name.is_some()));
+    assert!(
+        report
+            .holes
+            .iter()
+            .filter(|hole| { hole.termination.status == report::AssociationStatus::ExactGeometric })
+            .all(|hole| {
+                hole.protection.status == report::ProtectionStatus::Explicit
+                    && hole.protection.fill_material == Some(report::FillMaterial::NonConductive)
+                    && hole
+                        .protection
+                        .methods
+                        .contains(&report::ProtectionMethod::Filled)
+            })
+    );
+    assert!(
+        report
+            .holes
+            .iter()
+            .filter(|hole| { hole.plating == report::HolePlating::ViaCapped })
+            .all(|hole| hole
+                .protection
+                .methods
+                .contains(&report::ProtectionMethod::Capped))
+    );
+    assert!(
+        report
+            .holes
+            .iter()
+            .filter(|hole| { hole.termination.status == report::AssociationStatus::Unresolved })
+            .all(|hole| hole.protection.status == report::ProtectionStatus::Unknown)
+    );
+    let u1_termination = report
+        .terminations
+        .iter()
+        .find(|termination| termination.component_id == u1.id)
+        .unwrap();
+    assert_eq!(u1_termination.hole_ids.len(), 2);
+    assert_eq!(
+        u1_termination.mask_openings,
+        [report::MaskEvidence {
+            layer: "MASK".to_owned(),
+            side: report::Side::Top,
+        }]
+    );
+}
+
+#[test]
+fn reports_ambiguous_overlap_without_selecting_a_termination() {
+    let xml = FIXTURE.replace(
+        "name=\"standalone-via\" diameter=\"0.2\" platingStatus=\"VIA\" plusTol=\"0\" minusTol=\"0\" x=\"8\" y=\"5\"",
+        "name=\"standalone-via\" diameter=\"2.2\" platingStatus=\"VIA\" plusTol=\"0\" minusTol=\"0\" x=\"3\" y=\"2\"",
+    );
+
+    let report = report_xml(&xml, LayoutTarget::Board);
+    let hole = report
+        .holes
+        .iter()
+        .find(|hole| hole.finished_diameter_mm == Some(2.2))
+        .unwrap();
+
+    assert_eq!(
+        hole.termination.status,
+        report::AssociationStatus::Ambiguous
+    );
+    assert_eq!(
+        hole.termination.basis,
+        Some(report::AssociationBasis::ExactGeometry)
+    );
+    assert_eq!(hole.termination.termination_ids.len(), 2);
+    assert!(report.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == report::DiagnosticCode::AmbiguousHoleTermination
+            && diagnostic.subject.id == hole.id
+    }));
+}
+
+#[test]
+fn geometric_association_requires_one_known_reachable_land() {
+    for replacement in [
+        "<Span fromLayer=\"TOP\"/>",
+        "<Span fromLayer=\"BOTTOM\" toLayer=\"BOTTOM\"/>",
+    ] {
+        let xml = FIXTURE.replacen(
+            "<Span fromLayer=\"TOP\" toLayer=\"BOTTOM\"/>",
+            replacement,
+            1,
+        );
+        let report = report_xml(&xml, LayoutTarget::Board);
+        let via = report
+            .holes
+            .iter()
+            .find(|hole| hole.source_name.as_deref() == Some("U1-via"))
+            .unwrap();
+        assert_eq!(
+            via.termination.status,
+            report::AssociationStatus::Unresolved
+        );
+        assert_eq!(via.termination.basis, None);
+    }
+
+    let u1_land = "<Set><Pad padstackDefRef=\"smt-padstack\"><Location x=\"2\" y=\"2\"/><StandardPrimitiveRef id=\"land\"/><PinRef componentRef=\"U1\" pin=\"1\"/></Pad></Set>";
+    let xml = FIXTURE.replacen(u1_land, &format!("{u1_land}\n          {u1_land}"), 1);
+    let report = report_xml(&xml, LayoutTarget::Board);
+    let via = report
+        .holes
+        .iter()
+        .find(|hole| hole.source_name.as_deref() == Some("U1-via"))
+        .unwrap();
+    assert_eq!(via.termination.status, report::AssociationStatus::Ambiguous);
+    assert_eq!(via.termination.termination_ids.len(), 1);
+}
+
+#[test]
+fn semantic_hole_ids_survive_source_reordering() {
+    let capped = "          <Set geometry=\"via-padstack\" componentRef=\"U1\"><Hole name=\"U1-via-capped\" diameter=\"0.2\" platingStatus=\"VIA_CAPPED\" plusTol=\"0\" minusTol=\"0\" x=\"1.8\" y=\"2\"/></Set>";
+    let filled = "          <Set geometry=\"via-padstack\"><Hole name=\"U1-via\" diameter=\"0.2\" platingStatus=\"VIA\" plusTol=\"0\" minusTol=\"0\" x=\"2.2\" y=\"2\"/></Set>";
+    let reordered = FIXTURE.replace(
+        &format!("{capped}\n{filled}"),
+        &format!("{filled}\n{capped}"),
+    );
+
+    assert_ne!(reordered, FIXTURE);
+    assert_eq!(
+        report(LayoutTarget::Board),
+        report_xml(&reordered, LayoutTarget::Board)
+    );
+}
+
+#[test]
+fn reports_unknown_and_conflicting_component_land_via_protection() {
+    let unknown_xml = FIXTURE.replace(
+        "name=\"standalone-via\" diameter=\"0.2\" platingStatus=\"VIA\" plusTol=\"0\" minusTol=\"0\" x=\"8\" y=\"5\"",
+        "name=\"standalone-via\" diameter=\"0.2\" platingStatus=\"VIA\" plusTol=\"0\" minusTol=\"0\" x=\"2\" y=\"2.3\"",
+    );
+    let unknown = report_xml(&unknown_xml, LayoutTarget::Board);
+    assert!(
+        unknown
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.code == report::DiagnosticCode::UnknownViaProtection })
+    );
+
+    let plated_xml = unknown_xml.replace(
+        "name=\"standalone-via\" diameter=\"0.2\" platingStatus=\"VIA\"",
+        "name=\"standalone-via\" diameter=\"0.2\" platingStatus=\"PLATED\"",
+    );
+    let plated = report_xml(&plated_xml, LayoutTarget::Board);
+    let plated_hole = plated
+        .holes
+        .iter()
+        .find(|hole| hole.location_mm == report::Point { x: 2.0, y: 2.3 })
+        .unwrap();
+    assert_eq!(
+        plated_hole.termination.status,
+        report::AssociationStatus::ExactGeometric
+    );
+    assert!(!plated.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == report::DiagnosticCode::UnknownViaProtection
+            && diagnostic.subject.id == plated_hole.id
+    }));
+
+    let conflicting_xml = FIXTURE.replace("NON-CONDUCTIVE EPOXY", "OPEN NON-CONDUCTIVE EPOXY");
+    let conflicting = report_xml(&conflicting_xml, LayoutTarget::Board);
+    assert!(conflicting.holes.iter().any(|hole| {
+        hole.termination.status == report::AssociationStatus::ExactGeometric
+            && hole.protection.status == report::ProtectionStatus::Conflicting
+    }));
+    assert!(
+        conflicting.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == report::DiagnosticCode::ConflictingViaProtection
+        })
+    );
+}
+
+#[test]
+fn preserves_distinct_explicit_protection_methods_and_fill_materials() {
+    for (term, method, material) in [
+        (
+            "NON-CONDUCTIVE EPOXY",
+            report::ProtectionMethod::Filled,
+            Some(report::FillMaterial::NonConductive),
+        ),
+        (
+            "CONDUCTIVE EPOXY",
+            report::ProtectionMethod::Filled,
+            Some(report::FillMaterial::Conductive),
+        ),
+        (
+            "COPPER FILL",
+            report::ProtectionMethod::Filled,
+            Some(report::FillMaterial::Copper),
+        ),
+        (
+            "NON-CONDUCTIVE PLUGGED EPOXY",
+            report::ProtectionMethod::Plugged,
+            Some(report::FillMaterial::NonConductive),
+        ),
+    ] {
+        let xml = FIXTURE.replace("NON-CONDUCTIVE EPOXY", term);
+        let report = report_xml(&xml, LayoutTarget::Board);
+        assert!(
+            report
+                .holes
+                .iter()
+                .filter(|hole| {
+                    hole.termination.status == report::AssociationStatus::ExactGeometric
+                })
+                .all(|hole| {
+                    hole.protection.methods.contains(&method)
+                        && hole.protection.fill_material == material
+                })
+        );
+    }
+
+    for (function, term, method) in [
+        (
+            "COATINGNONCOND",
+            "TENTED COATING",
+            report::ProtectionMethod::Tented,
+        ),
+        (
+            "COATINGCOND",
+            "CAPPED COATING",
+            report::ProtectionMethod::Capped,
+        ),
+    ] {
+        let xml = FIXTURE
+            .replace(
+                "layerFunction=\"HOLEFILL\"",
+                &format!("layerFunction=\"{function}\""),
+            )
+            .replace("NON-CONDUCTIVE EPOXY", term);
+        let report = report_xml(&xml, LayoutTarget::Board);
+        assert!(
+            report
+                .holes
+                .iter()
+                .filter(|hole| {
+                    hole.termination.status == report::AssociationStatus::ExactGeometric
+                })
+                .all(|hole| {
+                    hole.protection.methods.contains(&method)
+                        && hole.protection.fill_material.is_none()
+                })
+        );
+    }
+
+    let ordinary_coating = FIXTURE
+        .replace(
+            "layerFunction=\"HOLEFILL\"",
+            "layerFunction=\"COATINGCOND\"",
+        )
+        .replace("NON-CONDUCTIVE EPOXY", "ENIG");
+    let report = report_xml(&ordinary_coating, LayoutTarget::Board);
+    let capped = report
+        .holes
+        .iter()
+        .find(|hole| hole.plating == report::HolePlating::ViaCapped)
+        .unwrap();
+    assert_eq!(
+        capped.protection.methods,
+        [report::ProtectionMethod::Capped]
+    );
+    assert_eq!(capped.protection.fill_material, None);
+    let uncapped = report
+        .holes
+        .iter()
+        .find(|hole| hole.source_name.as_deref() == Some("U1-via"))
+        .unwrap();
+    assert_eq!(
+        uncapped.protection.status,
+        report::ProtectionStatus::Unknown
+    );
+}
+
+#[test]
+fn reports_explicit_open_source_terms_without_inferring_fill() {
+    let xml = FIXTURE
+        .replace(
+            "    </CadHeader>",
+            "      <Spec name=\"open-via\"><General type=\"MATERIAL\"><Property text=\"OPEN\"/></General></Spec>\n    </CadHeader>",
+        )
+        .replace(
+            "<Set geometry=\"via-padstack\"><Hole name=\"standalone-via\" diameter=\"0.2\" platingStatus=\"VIA\" plusTol=\"0\" minusTol=\"0\" x=\"8\" y=\"5\"/></Set>",
+            "<Set geometry=\"via-padstack\"><SpecRef id=\"open-via\"/><Hole name=\"standalone-via\" diameter=\"0.2\" platingStatus=\"VIA\" plusTol=\"0\" minusTol=\"0\" x=\"8\" y=\"5\"/></Set>",
+        );
+
+    let report = report_xml(&xml, LayoutTarget::Board);
+    let hole = report
+        .holes
+        .iter()
+        .find(|hole| hole.location_mm == report::Point { x: 8.0, y: 5.0 })
+        .unwrap();
+
+    assert_eq!(hole.protection.status, report::ProtectionStatus::Explicit);
+    assert_eq!(hole.protection.methods, [report::ProtectionMethod::Open]);
+    assert_eq!(hole.protection.fill_material, None);
 }
 
 #[test]
@@ -264,6 +597,7 @@ fn board_scope_is_one_canonical_board() {
     assert_eq!(report.boards.len(), 1);
     assert_eq!(report.components.len(), 4);
     assert_eq!(report.terminations.len(), 3);
+    assert_eq!(report.holes.len(), 3);
     assert_eq!(report.summary.paste.islands, 1);
     assert_eq!(report.diagnostics.len(), 1);
 }
@@ -345,8 +679,8 @@ fn serialization_is_deterministic() {
     assert_eq!(first, second);
     assert_eq!(
         hex::encode(Sha256::digest(first.as_bytes())),
-        "b93670440008eee052acf83e6895ad1d1dda4c467132cfcff9ccd9ff30f787d9",
-        "schema v2 changed without an explicit version change"
+        "047ec7cb0494a77bb7a1261584eb0cd97ab15743fb1c9d7bd4c1d6491d46739c",
+        "schema v3 changed without an explicit version change"
     );
 }
 

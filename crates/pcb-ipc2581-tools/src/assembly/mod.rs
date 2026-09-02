@@ -3,15 +3,19 @@
 use std::collections::{BTreeSet, HashMap};
 
 use anyhow::{Result, bail};
+use ipc2581::types::LayerFunction;
 use pcb_ir::dialects::assembly as ir;
-use pcb_ir::dialects::ipc::LayoutStepKind;
+use pcb_ir::dialects::ipc::{FeatureSpan, LayoutStepKind, PlatingKind};
 use pcb_ir::geom::path::{ContourBuf, PathCmd, PathOp};
 use pcb_ir::geom::{
     Affine2, BBox, FillRule as IrFillRule, LineCap as IrLineCap, LineJoin as IrLineJoin,
     LinePattern as IrLinePattern, Paint, Point as IrPoint, Polarity as IrPolarity,
 };
 use pcb_ir::import::ipc2581::{ImportedDesign, LayoutOccurrenceId};
-use pcb_ir::import::physical::LandId;
+use pcb_ir::import::physical::{
+    Association, AssociationBasis as PhysicalAssociationBasis, LandId, PhysicalHoleKind,
+    PhysicalTerminationId, PhysicalView,
+};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -23,9 +27,9 @@ pub use report::AssemblyReport;
 
 /// Build the stable report consumed by native, CLI, and WebAssembly surfaces.
 ///
-/// The report uses only source-backed assembly IR and exact physical
-/// relationships. It performs no geometric matching and applies no quote or
-/// shop policy.
+/// The report uses source-backed assembly IR and conservative physical
+/// relationships. Geometry can establish only a unique exact overlap; the
+/// report applies no quote or shop policy.
 pub fn build_report(imported: &ImportedDesign, target: LayoutTarget) -> Result<AssemblyReport> {
     let scope = match target {
         LayoutTarget::Board => ir::Scope::Board,
@@ -134,6 +138,7 @@ pub fn build_report(imported: &ImportedDesign, target: LayoutTarget) -> Result<A
         .map(|land| (land.id, land))
         .collect::<HashMap<LandId, _>>();
     let mut component_terminations = HashMap::<String, Vec<String>>::new();
+    let mut termination_ids = HashMap::<PhysicalTerminationId, String>::new();
     let mut terminations = physical
         .terminations
         .iter()
@@ -149,6 +154,7 @@ pub fn build_report(imported: &ImportedDesign, target: LayoutTarget) -> Result<A
                 "termination",
                 &(&component_id, &pin, &padstack, location_mm),
             );
+            termination_ids.insert(termination.id, id.clone());
             component_terminations
                 .entry(component_id.clone())
                 .or_default()
@@ -186,6 +192,25 @@ pub fn build_report(imported: &ImportedDesign, target: LayoutTarget) -> Result<A
                     .then_with(|| left.location_mm.x.total_cmp(&right.location_mm.x))
                     .then_with(|| left.location_mm.y.total_cmp(&right.location_mm.y))
             });
+            let mut mask_openings = physical
+                .mask_openings
+                .iter()
+                .filter(|opening| {
+                    (termination.side == pcb_ir::dialects::Side::None
+                        || opening.side == termination.side)
+                        && opening
+                            .lands
+                            .resolved()
+                            .is_some_and(|land| termination.lands.contains(land))
+                })
+                .map(|opening| report::MaskEvidence {
+                    layer: imported
+                        .resolve(imported.layer_definitions[opening.layer.0 as usize].name)
+                        .to_owned(),
+                    side: physical_side(opening.side),
+                })
+                .collect::<Vec<_>>();
+            mask_openings.sort_by(|left, right| left.layer.cmp(&right.layer));
             report::Termination {
                 id,
                 component_id,
@@ -198,10 +223,22 @@ pub fn build_report(imported: &ImportedDesign, target: LayoutTarget) -> Result<A
                 population: population(termination.population),
                 lands: layers,
                 paste_islands,
+                mask_openings,
+                hole_ids: Vec::new(),
             }
         })
         .collect::<Vec<_>>();
     terminations.sort_by(|left, right| left.id.cmp(&right.id));
+
+    let (mut holes, mut termination_holes) =
+        physical_hole_reports(imported, &physical, &board_ids, &termination_ids, &mut ids);
+    holes.sort_by(|left, right| left.id.cmp(&right.id));
+    for termination in &mut terminations {
+        termination.hole_ids = termination_holes
+            .remove(&termination.id)
+            .unwrap_or_default();
+        termination.hole_ids.sort();
+    }
 
     for component in &mut components {
         component.termination_ids = component_terminations
@@ -212,6 +249,7 @@ pub fn build_report(imported: &ImportedDesign, target: LayoutTarget) -> Result<A
     components.sort_by(|left, right| left.id.cmp(&right.id));
 
     let mut diagnostics = component_diagnostics(&components, &mut ids);
+    diagnostics.extend(hole_diagnostics(&holes, &mut ids));
     diagnostics.sort_by(|left, right| {
         left.code
             .cmp(&right.code)
@@ -296,6 +334,7 @@ pub fn build_report(imported: &ImportedDesign, target: LayoutTarget) -> Result<A
         packages,
         components,
         terminations,
+        holes,
         diagnostics,
     };
     validate_finite_numbers(&serde_value::to_value(&report)?)?;
@@ -601,6 +640,360 @@ fn bom_evidence(
     })
 }
 
+fn physical_hole_reports(
+    imported: &ImportedDesign,
+    physical: &PhysicalView,
+    board_ids: &HashMap<LayoutOccurrenceId, String>,
+    termination_ids: &HashMap<PhysicalTerminationId, String>,
+    ids: &mut IdAllocator,
+) -> (Vec<report::Hole>, HashMap<String, Vec<String>>) {
+    let mut termination_holes = HashMap::<String, Vec<String>>::new();
+    let holes = physical
+        .holes
+        .iter()
+        .map(|hole| {
+            let source_layer = imported
+                .resolve(imported.layer_definitions[hole.layer.0 as usize].name)
+                .to_owned();
+            let source_name = hole
+                .source_name
+                .map(|name| imported.resolve(name).to_owned());
+            let board_id = hole.board.and_then(|board| board_ids.get(&board).cloned());
+            let location_mm = point(hole.at);
+            let finished_diameter_mm = hole.finished_diameter.map(canonical_number);
+            let kind = match hole.kind {
+                PhysicalHoleKind::Round => report::HoleKind::Round,
+                PhysicalHoleKind::Slot => report::HoleKind::Slot,
+            };
+            let plating = hole_plating(hole.plating);
+            let padstack = hole
+                .padstack
+                .map(|padstack| imported.resolve(padstack).to_owned());
+            let net = hole.net.map(|net| imported.resolve(net).to_owned());
+            let span = hole_span(imported, hole.span);
+            let source_specs = hole
+                .spec_refs
+                .iter()
+                .map(|spec| imported.resolve(*spec).to_owned())
+                .collect::<Vec<_>>();
+            let termination =
+                termination_association(&hole.termination, hole.termination_basis, termination_ids);
+            let id = ids.allocate(
+                "hole",
+                &(
+                    &board_id,
+                    &source_layer,
+                    &source_name,
+                    kind,
+                    location_mm,
+                    finished_diameter_mm,
+                    plating,
+                    &padstack,
+                    &net,
+                    &span,
+                    &source_specs,
+                    &termination,
+                ),
+            );
+            if let Association::Resolved(termination) = hole.termination
+                && let Some(termination_id) = termination_ids.get(&termination)
+            {
+                termination_holes
+                    .entry(termination_id.clone())
+                    .or_default()
+                    .push(id.clone());
+            }
+            report::Hole {
+                id: id.clone(),
+                board_id,
+                source_layer,
+                source_name,
+                kind,
+                location_mm,
+                finished_diameter_mm,
+                plating,
+                padstack,
+                net,
+                span,
+                termination,
+                protection: protection_intent(imported, hole, &id, ids),
+            }
+        })
+        .collect();
+    (holes, termination_holes)
+}
+
+fn termination_association(
+    association: &Association<PhysicalTerminationId>,
+    basis: Option<PhysicalAssociationBasis>,
+    termination_ids: &HashMap<PhysicalTerminationId, String>,
+) -> report::TerminationAssociation {
+    let (status, physical_ids) = match association {
+        Association::Resolved(termination) => (
+            match basis {
+                Some(PhysicalAssociationBasis::SourceIdentity) => {
+                    report::AssociationStatus::Explicit
+                }
+                Some(PhysicalAssociationBasis::ExactGeometry) => {
+                    report::AssociationStatus::ExactGeometric
+                }
+                None => report::AssociationStatus::Unsupported,
+            },
+            vec![*termination],
+        ),
+        Association::Ambiguous(terminations) => {
+            (report::AssociationStatus::Ambiguous, terminations.clone())
+        }
+        Association::Conflicting(terminations) => {
+            (report::AssociationStatus::Conflicting, terminations.clone())
+        }
+        Association::Unresolved => (report::AssociationStatus::Unresolved, Vec::new()),
+    };
+    let mut termination_ids = physical_ids
+        .into_iter()
+        .filter_map(|termination| termination_ids.get(&termination).cloned())
+        .collect::<Vec<_>>();
+    termination_ids.sort();
+    report::TerminationAssociation {
+        status,
+        basis: basis.map(|basis| match basis {
+            PhysicalAssociationBasis::SourceIdentity => report::AssociationBasis::SourceIdentity,
+            PhysicalAssociationBasis::ExactGeometry => report::AssociationBasis::ExactGeometry,
+        }),
+        termination_ids,
+    }
+}
+
+fn protection_intent(
+    imported: &ImportedDesign,
+    hole: &pcb_ir::import::physical::PhysicalHole,
+    hole_id: &str,
+    ids: &mut IdAllocator,
+) -> report::ProtectionIntent {
+    let source_layer = imported
+        .resolve(imported.layer_definitions[hole.layer.0 as usize].name)
+        .to_owned();
+    let mut evidence = Vec::new();
+    let source_terms = spec_terms(imported, &hole.spec_refs);
+    if has_protection_action(&source_terms) {
+        evidence.push(report::ProtectionEvidence {
+            id: ids.allocate(
+                "protection-evidence",
+                &(hole_id, "SOURCE_TERMS", &source_layer, &source_terms),
+            ),
+            kind: report::ProtectionEvidenceKind::SourceTerms,
+            layer: source_layer.clone(),
+            side: report::Side::None,
+            span: hole_span(imported, hole.span),
+            specs: hole
+                .spec_refs
+                .iter()
+                .map(|spec| imported.resolve(*spec).to_owned())
+                .collect(),
+            terms: source_terms,
+        });
+    }
+    if hole.plating == PlatingKind::ViaCapped {
+        evidence.push(report::ProtectionEvidence {
+            id: ids.allocate(
+                "protection-evidence",
+                &(hole_id, "VIA_CAPPED", &source_layer),
+            ),
+            kind: report::ProtectionEvidenceKind::ViaCappedPlatingStatus,
+            layer: source_layer,
+            side: report::Side::None,
+            span: hole_span(imported, hole.span),
+            specs: Vec::new(),
+            terms: vec!["VIA_CAPPED".to_owned()],
+        });
+    }
+    evidence.extend(hole.protection.iter().filter_map(|source| {
+        let layer = imported
+            .resolve(imported.layer_definitions[source.layer.0 as usize].name)
+            .to_owned();
+        let specs = source
+            .spec_refs
+            .iter()
+            .map(|spec| imported.resolve(*spec).to_owned())
+            .collect::<Vec<_>>();
+        let terms = spec_terms(imported, &source.spec_refs);
+        let kind = match source.function {
+            LayerFunction::HoleFill => report::ProtectionEvidenceKind::HoleFillLayer,
+            LayerFunction::CoatingCond | LayerFunction::CoatingNonCond
+                if has_protection_action(&terms) =>
+            {
+                report::ProtectionEvidenceKind::SourceTerms
+            }
+            LayerFunction::CoatingCond | LayerFunction::CoatingNonCond => return None,
+            _ => unreachable!("physical protection uses a protection layer"),
+        };
+        Some(report::ProtectionEvidence {
+            id: ids.allocate(
+                "protection-evidence",
+                &(hole_id, source.function.as_str(), &layer, &specs, &terms),
+            ),
+            kind,
+            layer,
+            side: physical_side(source.side),
+            span: hole_span(imported, source.span),
+            specs,
+            terms,
+        })
+    }));
+
+    let mut methods = BTreeSet::new();
+    let mut fill_materials = BTreeSet::new();
+    for source in &evidence {
+        let text = normalized_terms(&source.terms);
+        if contains_term(&text, OPEN_TERMS) {
+            methods.insert(report::ProtectionMethod::Open);
+        }
+        if contains_term(&text, TENT_TERMS) {
+            methods.insert(report::ProtectionMethod::Tented);
+        }
+        if contains_term(&text, PLUG_TERMS) {
+            methods.insert(report::ProtectionMethod::Plugged);
+        }
+        if contains_term(&text, FILL_TERMS) {
+            methods.insert(report::ProtectionMethod::Filled);
+        }
+        if contains_term(&text, CAP_TERMS) {
+            methods.insert(report::ProtectionMethod::Capped);
+        }
+        match source.kind {
+            report::ProtectionEvidenceKind::SourceTerms => {}
+            report::ProtectionEvidenceKind::ViaCappedPlatingStatus => {
+                methods.insert(report::ProtectionMethod::Capped);
+            }
+            report::ProtectionEvidenceKind::HoleFillLayer => {
+                methods.insert(if contains_term(&text, PLUG_TERMS) {
+                    report::ProtectionMethod::Plugged
+                } else {
+                    report::ProtectionMethod::Filled
+                });
+            }
+        }
+        let has_fill = source.kind == report::ProtectionEvidenceKind::HoleFillLayer
+            || contains_term(&text, FILL_TERMS)
+            || contains_term(&text, PLUG_TERMS);
+        if has_fill {
+            if text.contains(" NON CONDUCTIVE ") || text.contains(" NONCONDUCTIVE ") {
+                fill_materials.insert(report::FillMaterial::NonConductive);
+            } else if text.contains(" COPPER ") {
+                fill_materials.insert(report::FillMaterial::Copper);
+            } else if text.contains(" CONDUCTIVE ") {
+                fill_materials.insert(report::FillMaterial::Conductive);
+            }
+        }
+    }
+    let conflicting = fill_materials.len() > 1
+        || (methods.contains(&report::ProtectionMethod::Open) && methods.len() > 1);
+    report::ProtectionIntent {
+        status: if evidence.is_empty() {
+            report::ProtectionStatus::Unknown
+        } else if conflicting {
+            report::ProtectionStatus::Conflicting
+        } else {
+            report::ProtectionStatus::Explicit
+        },
+        methods: methods.into_iter().collect(),
+        fill_material: (fill_materials.len() == 1)
+            .then(|| *fill_materials.first().expect("one fill material")),
+        evidence,
+    }
+}
+
+fn spec_terms(imported: &ImportedDesign, spec_refs: &[ipc2581::Symbol]) -> Vec<String> {
+    let mut terms = BTreeSet::new();
+    for spec_ref in spec_refs {
+        let Some(spec) = imported.specs.get(spec_ref) else {
+            continue;
+        };
+        terms.extend(
+            spec.material
+                .into_iter()
+                .chain(spec.properties.iter().copied())
+                .map(|term| imported.resolve(term).to_owned()),
+        );
+        for item in &spec.items {
+            terms.extend(
+                item.properties
+                    .iter()
+                    .filter_map(|property| property.text)
+                    .map(|term| imported.resolve(term).to_owned()),
+            );
+        }
+    }
+    terms.into_iter().collect()
+}
+
+fn normalized_terms(terms: &[String]) -> String {
+    format!(
+        " {} ",
+        terms
+            .join(" ")
+            .to_ascii_uppercase()
+            .replace(['-', '_'], " ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    )
+}
+
+fn has_protection_action(terms: &[String]) -> bool {
+    let text = normalized_terms(terms);
+    [OPEN_TERMS, TENT_TERMS, PLUG_TERMS, FILL_TERMS, CAP_TERMS]
+        .into_iter()
+        .any(|terms| contains_term(&text, terms))
+}
+
+const OPEN_TERMS: &[&str] = &["OPEN", "OPENED"];
+const TENT_TERMS: &[&str] = &["TENT", "TENTED", "TENTING"];
+const PLUG_TERMS: &[&str] = &["PLUG", "PLUGGED", "PLUGGING"];
+const FILL_TERMS: &[&str] = &["FILL", "FILLED", "FILLING"];
+const CAP_TERMS: &[&str] = &["CAP", "CAPPED", "CAPPING"];
+
+fn contains_term(text: &str, terms: &[&str]) -> bool {
+    text.split_ascii_whitespace()
+        .any(|word| terms.contains(&word))
+}
+
+fn hole_plating(value: PlatingKind) -> report::HolePlating {
+    match value {
+        PlatingKind::Unknown => report::HolePlating::Unknown,
+        PlatingKind::None => report::HolePlating::None,
+        PlatingKind::Plated => report::HolePlating::Plated,
+        PlatingKind::NonPlated => report::HolePlating::NonPlated,
+        PlatingKind::Via => report::HolePlating::Via,
+        PlatingKind::ViaCapped => report::HolePlating::ViaCapped,
+    }
+}
+
+fn hole_span(imported: &ImportedDesign, value: FeatureSpan<ipc2581::Symbol>) -> report::HoleSpan {
+    match value {
+        FeatureSpan::Unknown => report::HoleSpan {
+            kind: report::HoleSpanKind::Unknown,
+            from_layer: None,
+            to_layer: None,
+        },
+        FeatureSpan::Layer(layer) => report::HoleSpan {
+            kind: report::HoleSpanKind::Layer,
+            from_layer: Some(imported.resolve(layer).to_owned()),
+            to_layer: None,
+        },
+        FeatureSpan::ThroughBoard => report::HoleSpan {
+            kind: report::HoleSpanKind::ThroughBoard,
+            from_layer: None,
+            to_layer: None,
+        },
+        FeatureSpan::FromTo { from, to } => report::HoleSpan {
+            kind: report::HoleSpanKind::FromTo,
+            from_layer: from.map(|layer| imported.resolve(layer).to_owned()),
+            to_layer: to.map(|layer| imported.resolve(layer).to_owned()),
+        },
+    }
+}
+
 fn component_diagnostics(
     components: &[report::Component],
     ids: &mut IdAllocator,
@@ -663,6 +1056,72 @@ fn component_diagnostics(
         }
     }
     diagnostics
+}
+
+fn hole_diagnostics(holes: &[report::Hole], ids: &mut IdAllocator) -> Vec<report::Diagnostic> {
+    let mut diagnostics = Vec::new();
+    for hole in holes {
+        let association_code = match hole.termination.status {
+            report::AssociationStatus::Ambiguous => {
+                Some(report::DiagnosticCode::AmbiguousHoleTermination)
+            }
+            report::AssociationStatus::Conflicting => {
+                Some(report::DiagnosticCode::ConflictingHoleTermination)
+            }
+            _ => None,
+        };
+        if let Some(code) = association_code {
+            diagnostics.push(hole_diagnostic(
+                ids,
+                hole,
+                code,
+                "hole cannot be associated with one physical component termination".to_owned(),
+            ));
+        }
+        let component_land_via = matches!(
+            hole.termination.status,
+            report::AssociationStatus::Explicit | report::AssociationStatus::ExactGeometric
+        ) && matches!(
+            hole.plating,
+            report::HolePlating::Via | report::HolePlating::ViaCapped
+        );
+        if component_land_via {
+            let protection = match hole.protection.status {
+                report::ProtectionStatus::Unknown => Some((
+                    report::DiagnosticCode::UnknownViaProtection,
+                    "component-land via has no explicit protection intent",
+                )),
+                report::ProtectionStatus::Conflicting => Some((
+                    report::DiagnosticCode::ConflictingViaProtection,
+                    "component-land via has conflicting protection intent",
+                )),
+                report::ProtectionStatus::Explicit => None,
+            };
+            if let Some((code, message)) = protection {
+                diagnostics.push(hole_diagnostic(ids, hole, code, message.to_owned()));
+            }
+        }
+    }
+    diagnostics
+}
+
+fn hole_diagnostic(
+    ids: &mut IdAllocator,
+    hole: &report::Hole,
+    code: report::DiagnosticCode,
+    message: String,
+) -> report::Diagnostic {
+    report::Diagnostic {
+        id: ids.allocate("assembly-diagnostic", &(code, &hole.id)),
+        severity: report::DiagnosticSeverity::Warning,
+        code,
+        subject: report::DiagnosticSubject {
+            kind: report::DiagnosticSubjectKind::Hole,
+            id: hole.id.clone(),
+            reference_designator: None,
+        },
+        message,
+    }
 }
 
 fn diagnostic(

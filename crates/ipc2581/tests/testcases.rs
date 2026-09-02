@@ -297,7 +297,7 @@ fn validate_testcase1_metadata(doc: &Ipc2581) {
                     for hole in set.holes() {
                         total_drills += 1;
                         match hole.plating_status {
-                            PlatingStatus::Via => via_drills += 1,
+                            PlatingStatus::Via | PlatingStatus::ViaCapped => via_drills += 1,
                             PlatingStatus::Plated => plated_drills += 1,
                             PlatingStatus::NonPlated => nonplated_drills += 1,
                         }
