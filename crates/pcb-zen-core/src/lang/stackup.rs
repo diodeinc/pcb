@@ -357,6 +357,9 @@ pub enum StackupError {
     #[error("Stackup must have an odd number of layers, got {0}")]
     EvenLayerCount(usize),
 
+    #[error("Stackup must have an even number of copper layers, got {0}")]
+    OddCopperLayerCount(usize),
+
     #[error("Stackup must start and end with copper layers")]
     MustStartEndWithCopper,
 
@@ -450,6 +453,10 @@ impl Stackup {
         }
         if layers.len().is_multiple_of(2) {
             return Err(StackupError::EvenLayerCount(layers.len()));
+        }
+        let copper_layers = self.copper_layer_count();
+        if !copper_layers.is_multiple_of(2) {
+            return Err(StackupError::OddCopperLayerCount(copper_layers));
         }
         Ok(())
     }
@@ -556,17 +563,9 @@ impl Stackup {
 
     /// Calculate the number of copper layers
     pub fn copper_layer_count(&self) -> usize {
-        if let Some(layers) = &self.layers {
-            let n = layers.len();
-            if n % 2 == 1 {
-                // For odd number of layers: n - (n/2)
-                n - (n / 2)
-            } else {
-                0 // Should not happen if validation passes
-            }
-        } else {
-            0
-        }
+        self.layers.as_deref().map_or(0, |layers| {
+            layers.iter().filter(|layer| layer.is_copper()).count()
+        })
     }
 
     /// Generate KiCad layers S-expression
@@ -1109,6 +1108,45 @@ mod tests {
         assert!(matches!(
             stackup.validate(),
             Err(StackupError::EvenLayerCount(4))
+        ));
+    }
+
+    #[test]
+    fn test_invalid_odd_copper_layers() {
+        let stackup = Stackup {
+            materials: None,
+            layers: Some(vec![
+                Layer::Copper {
+                    thickness: 0.035,
+                    role: CopperRole::Signal,
+                },
+                Layer::Dielectric {
+                    thickness: 0.7,
+                    material: "FR4".to_string(),
+                    form: DielectricForm::Core,
+                },
+                Layer::Copper {
+                    thickness: 0.035,
+                    role: CopperRole::Power,
+                },
+                Layer::Dielectric {
+                    thickness: 0.7,
+                    material: "FR4".to_string(),
+                    form: DielectricForm::Core,
+                },
+                Layer::Copper {
+                    thickness: 0.035,
+                    role: CopperRole::Signal,
+                },
+            ]),
+            silk_screen_color: None,
+            solder_mask_color: None,
+            copper_finish: None,
+        };
+
+        assert!(matches!(
+            stackup.validate(),
+            Err(StackupError::OddCopperLayerCount(3))
         ));
     }
 
