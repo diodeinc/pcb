@@ -579,7 +579,7 @@ Board(name="MainBoard", layers=4, layout_path="layout/MainBoard")
 Board(name="my_board", layers=4, layout_path="layout/my_board")
 ```
 
-Key parameters: `name`, `layout_path`, `layers` (2/4/6/8/10), `config` (explicit `BoardConfig`), `outer_copper_weight` (`"1oz"` or `"2oz"`), `copper_finish` (default `"ENIG"`).
+Key parameters: `name`, `layout_path`, `layers` (2/4/6/8/10), `config` (explicit `BoardConfig`), `outer_copper_weight` (`"1oz"` or `"2oz"`), `copper_finish` (default `"ENIG"`). An explicit stackup must contain an even number of copper layers.
 
 When `layers` is provided, `Board()` selects an appropriate default stackup, netclasses, and design rules. An explicit `config` is merged on top. See `@stdlib/board_config.zen` for `BoardConfig`, `Stackup`, `DesignRules`, `NetClass`, and preset stackups.
 
