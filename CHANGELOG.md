@@ -16,6 +16,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- Improve generated schematic placement and repair connectivity issues with minimal verified edits instead of regenerating the affected nets.
 - `QR` generic is now a solid silkscreen square with a 5mm, 8mm or 10mm side length
 
 ### Fixed
@@ -67,10 +68,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Add self-contained DFM JSON reports with native geometry and PDK source.
 - Add WASM APIs for IPC-2581 import, export, and DFM.
-
-### Changed
-
-- Improve generated schematic placement, field orientation, and net-symbol routing.
 
 ### Fixed
 
