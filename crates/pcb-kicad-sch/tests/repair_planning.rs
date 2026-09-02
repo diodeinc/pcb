@@ -6,6 +6,7 @@ use pcb_kicad_sch::{
     Point, SchDocument, SchItem, Wire,
     analysis::{SchematicIssue, inspect_schematic},
     connectivity::ConnectivityItemRef,
+    plan_connectivity_repair,
     reconcile::{plan_reconciliation, plan_repairs},
 };
 
@@ -42,7 +43,7 @@ fn removes_only_the_unique_bridge_wire() {
 }
 
 #[test]
-fn replaces_the_affected_region_when_single_item_repairs_are_ambiguous() {
+fn chooses_one_deterministic_wire_when_single_item_repairs_are_ambiguous() {
     let netlist = common::compile_fixture("analysis", "simple.zen");
     let mut document = plan_reconciliation(None, &netlist, "simple.kicad_sch")
         .unwrap()
@@ -65,6 +66,13 @@ fn replaces_the_affected_region_when_single_item_repairs_are_ambiguous() {
         .filter(|item| matches!(item, ConnectivityItemRef::Wire { .. }))
         .cloned()
         .collect::<BTreeSet<_>>();
+    let intent = plan_connectivity_repair(
+        &document,
+        &netlist,
+        &inspection,
+        &BTreeSet::from([short.key.clone()]),
+    )
+    .unwrap();
 
     let plan = plan_repairs(
         &document,
@@ -77,14 +85,56 @@ fn replaces_the_affected_region_when_single_item_repairs_are_ambiguous() {
 
     assert!(contains_wire_id(&short_wires, "ambiguous-a"));
     assert!(contains_wire_id(&short_wires, "ambiguous-b"));
-    assert!(short_wires.iter().all(|item| !contains(&repaired, item)));
+    assert_eq!(intent.removals().len(), 1);
+    assert!(contains_wire_id(intent.removals(), "ambiguous-a"));
+    assert!(!contains(
+        &repaired,
+        intent.removals().iter().next().unwrap()
+    ));
+    assert_eq!(
+        short_wires
+            .iter()
+            .filter(|item| contains(&repaired, item))
+            .count(),
+        1
+    );
 
     let all = plan_reconciliation(Some(&document), &netlist, "simple.kicad_sch")
         .unwrap()
         .apply(Some(&document))
         .unwrap();
-    assert!(short_wires.iter().all(|item| !contains(&all, item)));
     assert_eq!(repaired, all);
+}
+
+#[test]
+fn removes_a_two_wire_cut_when_no_single_wire_resolves_the_short() {
+    let netlist = common::compile_fixture("analysis", "simple.zen");
+    let mut document = plan_reconciliation(None, &netlist, "simple.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    let left = label_point(&document, "LEFT");
+    let mid = label_point(&document, "MID");
+    add_wire(&mut document, "parallel-a", left, mid);
+    add_wire(&mut document, "parallel-b", left, mid);
+    let inspection = inspect_schematic(&document, &netlist).unwrap();
+    let short = inspection
+        .issues
+        .iter()
+        .find(|issue| matches!(issue.issue, SchematicIssue::Shorted { .. }))
+        .unwrap();
+
+    let intent = plan_connectivity_repair(
+        &document,
+        &netlist,
+        &inspection,
+        &BTreeSet::from([short.key.clone()]),
+    )
+    .unwrap();
+
+    assert_eq!(intent.removals().len(), 2);
+    assert!(contains_wire_id(intent.removals(), "parallel-a"));
+    assert!(contains_wire_id(intent.removals(), "parallel-b"));
 }
 
 fn label_point(document: &SchDocument, name: &str) -> Point {

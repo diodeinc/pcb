@@ -17,7 +17,7 @@ use crate::{
     },
     deterministic_uuid, field_autoplace, hierarchy, net_symbols,
     placement::{GridPacker, GridPoint, GridRect, point_rect},
-    repair::{ConnectivityRepairPlan, plan_connectivity_repair, remove_items},
+    repair::{ConnectivityRepairIntent, plan_connectivity_repair, remove_items},
     root_interface, root_page_id, symbol,
 };
 
@@ -1895,7 +1895,7 @@ fn apply_connectivity_repair(
     placed: &mut BTreeMap<SymbolSlotKey, PlacedSymbol>,
     net_symbol_specs: &BTreeMap<String, net_symbols::NetSymbolSpec>,
     root_page: usize,
-    plan: ConnectivityRepairPlan,
+    plan: ConnectivityRepairIntent,
 ) -> Result<()> {
     remove_items(document, &plan.removals)?;
     for location in &plan.relocate_symbols {

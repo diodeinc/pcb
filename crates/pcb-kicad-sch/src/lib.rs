@@ -39,5 +39,6 @@ pub use model::{
     SchItem, SchPage, Sheet, SheetPin, Symbol, SymbolDefinition, SymbolField, SymbolLibrary,
     TextEffects, TextSize, Wire,
 };
+pub use repair::{ConnectivityRepairIntent, plan_connectivity_repair};
 pub use source::patch_page_source;
 pub use symbol::PlacedPin;

@@ -22,18 +22,36 @@ use crate::{
 /// Planning does not mutate the input document. Callers can inspect the plan,
 /// apply it to a clone, and verify the result before persisting any changes.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ConnectivityRepairPlan {
+pub struct ConnectivityRepairIntent {
     pub(crate) removals: BTreeSet<ConnectivityItemRef>,
     pub(crate) relocate_symbols: BTreeSet<SymbolLocation>,
     pub(crate) reconnect_nets: BTreeSet<String>,
 }
 
-pub(crate) fn plan_connectivity_repair(
+impl ConnectivityRepairIntent {
+    /// Existing connectivity items that the repair will remove.
+    pub fn removals(&self) -> &BTreeSet<ConnectivityItemRef> {
+        &self.removals
+    }
+
+    /// Component symbols that the repair will move away from an invalid overlap.
+    pub fn relocated_symbols(&self) -> &BTreeSet<SymbolLocation> {
+        &self.relocate_symbols
+    }
+
+    /// Nets whose expected connectivity the repair will regenerate.
+    pub fn reconnect_nets(&self) -> &BTreeSet<String> {
+        &self.reconnect_nets
+    }
+}
+
+/// Plans the pure connectivity-recovery intent for a set of inspected issues.
+pub fn plan_connectivity_repair(
     document: &SchDocument,
     netlist: &Schematic,
     inspection: &ConnectivityInspection,
     selected_keys: &BTreeSet<SchematicIssueKey>,
-) -> Result<ConnectivityRepairPlan> {
+) -> Result<ConnectivityRepairIntent> {
     let expected = &inspection.expected;
     let observed = &inspection.physical;
     let mut removals = BTreeSet::new();
@@ -147,21 +165,15 @@ pub(crate) fn plan_connectivity_repair(
         }
 
         let candidates = repair_candidates(issue, expected, &current_observed.islands);
-        let mut valid = Vec::new();
-        for candidate in candidates {
-            let mut next = simulated.clone();
-            remove_items(&mut next, &BTreeSet::from([candidate.clone()]))?;
-            let next_observed = observed_reconcilable_connectivity(&next, netlist)?;
-            let next_analysis = analyze_connectivity(expected, &next_observed.graph);
-            let next_problems = repair_problem_counts(next_analysis.issues());
-            if strictly_reduces_problems(&current_problems, &next_problems) {
-                valid.push(candidate);
-            }
-        }
-
-        if let [candidate] = valid.as_slice() {
-            remove_items(&mut simulated, &BTreeSet::from([candidate.clone()]))?;
-            removals.insert(candidate.clone());
+        if let Some(cut) = minimum_verified_cut(
+            &simulated,
+            netlist,
+            expected,
+            &current_problems,
+            &candidates,
+        )? {
+            remove_items(&mut simulated, &cut)?;
+            removals.extend(cut);
             continue;
         }
 
@@ -188,7 +200,7 @@ pub(crate) fn plan_connectivity_repair(
         removals.extend(fallback);
     }
 
-    Ok(ConnectivityRepairPlan {
+    Ok(ConnectivityRepairIntent {
         removals,
         relocate_symbols,
         reconnect_nets,
@@ -324,6 +336,124 @@ fn strictly_reduces_problems(
         .iter()
         .all(|(problem, count)| count <= before.get(problem).unwrap_or(&0))
         && after.values().sum::<usize>() < before.values().sum()
+}
+
+const MAX_EXACT_CUT_CANDIDATES: usize = 16;
+const MAX_EXACT_CUT_ITEMS: usize = 4;
+
+/// Finds the minimum-cost removable-item cut and verifies it through the same
+/// semantic reducer used by inspection. This is a bounded exact multiway cut:
+/// schematic labels and hierarchical drivers make a geometric two-terminal
+/// max-flow graph insufficient on its own.
+fn minimum_verified_cut(
+    document: &SchDocument,
+    netlist: &Schematic,
+    expected: &ConnectivityGraph,
+    current_problems: &BTreeMap<RepairProblem, usize>,
+    candidates: &BTreeSet<ConnectivityItemRef>,
+) -> Result<Option<BTreeSet<ConnectivityItemRef>>> {
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+
+    let candidates = candidates.iter().cloned().collect::<Vec<_>>();
+    let mut best = None;
+    let max_items = if candidates.len() > MAX_EXACT_CUT_CANDIDATES {
+        1
+    } else {
+        MAX_EXACT_CUT_ITEMS.min(candidates.len())
+    };
+    for size in 1..=max_items {
+        visit_cut_combinations(
+            document,
+            netlist,
+            expected,
+            current_problems,
+            &candidates,
+            size,
+            0,
+            &mut BTreeSet::new(),
+            &mut best,
+        )?;
+        if best
+            .as_ref()
+            .is_some_and(|best| cut_cost(best) <= size.saturating_add(1))
+        {
+            break;
+        }
+    }
+    Ok(best)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn visit_cut_combinations(
+    document: &SchDocument,
+    netlist: &Schematic,
+    expected: &ConnectivityGraph,
+    current_problems: &BTreeMap<RepairProblem, usize>,
+    candidates: &[ConnectivityItemRef],
+    remaining: usize,
+    start: usize,
+    current: &mut BTreeSet<ConnectivityItemRef>,
+    best: &mut Option<BTreeSet<ConnectivityItemRef>>,
+) -> Result<()> {
+    if remaining == 0 {
+        if best
+            .as_ref()
+            .is_some_and(|best| cut_sort_key(current) >= cut_sort_key(best))
+        {
+            return Ok(());
+        }
+        let mut next = document.clone();
+        remove_items(&mut next, current)?;
+        let observed = observed_reconcilable_connectivity(&next, netlist)?;
+        let analysis = analyze_connectivity(expected, &observed.graph);
+        let problems = repair_problem_counts(analysis.issues());
+        if strictly_reduces_problems(current_problems, &problems) {
+            *best = Some(current.clone());
+        }
+        return Ok(());
+    }
+
+    let last_start = candidates.len() - remaining;
+    for index in start..=last_start {
+        let candidate = candidates[index].clone();
+        current.insert(candidate.clone());
+        visit_cut_combinations(
+            document,
+            netlist,
+            expected,
+            current_problems,
+            candidates,
+            remaining - 1,
+            index + 1,
+            current,
+            best,
+        )?;
+        current.remove(&candidate);
+    }
+    Ok(())
+}
+
+fn cut_sort_key(
+    items: &BTreeSet<ConnectivityItemRef>,
+) -> (usize, usize, &BTreeSet<ConnectivityItemRef>) {
+    (cut_cost(items), items.len(), items)
+}
+
+fn cut_cost(items: &BTreeSet<ConnectivityItemRef>) -> usize {
+    items.iter().map(connectivity_item_cut_cost).sum()
+}
+
+fn connectivity_item_cut_cost(item: &ConnectivityItemRef) -> usize {
+    match item {
+        ConnectivityItemRef::Wire { .. } => 1,
+        ConnectivityItemRef::Junction { .. } => 2,
+        ConnectivityItemRef::NoConnect { .. } => 3,
+        ConnectivityItemRef::Label { .. } => 4,
+        ConnectivityItemRef::Symbol { .. } => 8,
+        ConnectivityItemRef::SheetPin { .. } => usize::MAX,
+    }
 }
 
 fn repair_candidates(
