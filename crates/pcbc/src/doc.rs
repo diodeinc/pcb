@@ -19,7 +19,7 @@ pub struct DocArgs {
     #[arg(default_value = "")]
     pub path: String,
 
-    /// Generate docs from a package (local path, @stdlib, or github.com/user/repo[@version])
+    /// Generate docs from a package (local path, @stdlib, or host/user/repo[@version])
     #[arg(long, value_name = "PACKAGE")]
     pub package: Option<String>,
 }
@@ -39,15 +39,7 @@ pub fn execute(args: DocArgs) -> Result<()> {
         );
     }
 
-    if looks_like_package_path(&args.path) {
-        return run_docgen_for_package(&args.path);
-    }
-
-    anyhow::bail!(
-        "Unknown documentation path '{}'.\n\n\
-         Use `pcb doc --package <PACKAGE>` for package documentation.",
-        args.path
-    )
+    run_docgen_for_package(&args.path)
 }
 
 pub(crate) fn print_markdown(content: &str) {
@@ -56,16 +48,6 @@ pub(crate) fn print_markdown(content: &str) {
     } else {
         println!("{}", content);
     }
-}
-
-/// Check if input looks like a filesystem path or package URL
-fn looks_like_package_path(s: &str) -> bool {
-    s.starts_with('.')
-        || s.starts_with('/')
-        || s.starts_with('@')
-        || s.starts_with("github.com/")
-        || s.starts_with("gitlab.com/")
-        || s.contains('\\')
 }
 
 /// Generate docs for a package specified as local path, @stdlib, or remote URL
@@ -96,8 +78,11 @@ fn run_docgen_for_package(pkg: &str) -> Result<()> {
         return run_docgen(&package_dir, Some(&package_url), filter.as_deref());
     }
 
-    // Handle remote package URLs (github.com/user/repo@version)
-    if pkg.starts_with("github.com/") || pkg.starts_with("gitlab.com/") {
+    // Handle remote package URLs (host/user/repo@version)
+    if matches!(
+        pcb_zen_core::LoadSpec::parse(pkg),
+        Some(pcb_zen_core::LoadSpec::Url { .. })
+    ) {
         let (display_name, requested_version) = parse_remote_package_spec(pkg)?;
         let (module_path, version, filter) =
             resolve_remote_package(display_name, requested_version.as_ref())?;
