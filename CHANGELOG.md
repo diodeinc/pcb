@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- Clarified that `pcb layout --check` validates an existing layout without modifying it; the command now fails when that layout is missing.
+
 ## [0.4.43] - 2026-09-01
 
 ### Added
