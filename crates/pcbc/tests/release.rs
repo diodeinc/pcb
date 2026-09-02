@@ -240,6 +240,40 @@ fn test_publish_board_with_version() {
 }
 
 #[test]
+fn test_publish_board_with_version_preserves_local_only_tags() {
+    let mut sb = Sandbox::new();
+    sb.cwd("src")
+        .ignore_globs(["layout/*", "**/vendor/**", "**/build/**"])
+        .hash_globs(["*.kicad_mod", "**/diodeinc/stdlib/*.zen", "**/netlist.json"])
+        .write(".gitignore", ".pcb")
+        .write("pcb.toml", PCB_TOML)
+        .write("boards/pcb.toml", TB0001_BOARD_PCB_TOML)
+        .write("boards/modules/LedModule.zen", LED_MODULE_ZEN)
+        .write("boards/TB0001.zen", TEST_BOARD_ZEN)
+        .init_git()
+        .commit("Initial commit")
+        .sync();
+
+    sb.run("pcbc", ["build", "boards/TB0001.zen"])
+        .run()
+        .expect("build failed");
+    sb.commit("Hydrate manifests").tag("boards/v1.2.3");
+
+    let mut args = source_only_args("boards/TB0001.zen");
+    args.push("--bump=patch");
+    sb.run("pcbc", &args)
+        .run()
+        .expect("Failed to run pcb publish command");
+
+    let tags = sb
+        .cmd("git", ["tag", "--list", "boards/v*"])
+        .read()
+        .expect("list release tags");
+    assert!(tags.lines().any(|tag| tag == "boards/v1.2.3"));
+    assert!(tags.lines().any(|tag| tag == "boards/v1.2.4"));
+}
+
+#[test]
 fn test_publish_board_full() {
     let server = MockServer::start();
     let matched_paths = ["C1.C", "C2.C", "LED1.D1.LED", "LED1.R1.R", "R1.R"];

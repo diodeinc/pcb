@@ -532,10 +532,14 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
 
     let remote = resolve_remote(&workspace.root, args.force)?;
     eprintln!("Syncing with {}...", remote.cyan());
-    git::fetch_tags(&workspace.root, &remote)?;
-    if !args.no_push && !args.force {
-        git::fetch_branch(&workspace.root, &remote, "main")?;
-        preflight_checks(&workspace.root, &remote)?;
+    if args.no_push {
+        git::fetch_tags_without_pruning(&workspace.root, &remote)?;
+    } else {
+        git::fetch_tags(&workspace.root, &remote)?;
+        if !args.force {
+            git::fetch_branch(&workspace.root, &remote, "main")?;
+            preflight_checks(&workspace.root, &remote)?;
+        }
     }
 
     // Compute current version from tags (after fetch)
