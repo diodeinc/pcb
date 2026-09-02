@@ -318,6 +318,103 @@ fn intent_names_the_net_symbol_driver_for_a_symbol_backed_net() {
     }
 }
 
+#[test]
+fn forced_removal_rejects_component_symbols() {
+    let netlist = common::compile_fixture("analysis", "simple.zen");
+    let document = plan_reconciliation(None, &netlist, "simple.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    let inspection = inspect_schematic(&document, &netlist).unwrap();
+    let root_page = document.pages[0].id.clone();
+    let component = document.pages[0]
+        .items
+        .iter()
+        .find_map(|item| match item {
+            SchItem::Symbol(symbol) if symbol.fields.contains_key("Path") => {
+                Some(ConnectivityItemRef::Symbol {
+                    page_id: root_page.clone(),
+                    id: symbol.id.clone(),
+                })
+            }
+            _ => None,
+        })
+        .expect("the fixture places component symbols");
+
+    let error = plan_connectivity_repair(
+        &document,
+        &netlist,
+        &inspection,
+        &BTreeSet::new(),
+        &BTreeSet::from([component]),
+    )
+    .expect_err("a component symbol is not a removable driver");
+    assert!(
+        error.to_string().contains("not a removable driver symbol"),
+        "{error:#}"
+    );
+}
+
+#[test]
+fn intent_uses_a_global_driver_for_islands_cut_off_across_pages() {
+    let netlist = common::compile_fixture("hierarchy", "root.zen");
+    let mut document = plan_reconciliation(None, &netlist, "Hierarchy.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    let root_page = document.root_page_ids[0].clone();
+    let root_index = document
+        .pages
+        .iter()
+        .position(|page| page.id == root_page)
+        .unwrap();
+    // Without the root labels, each child's MID island is cut off from the
+    // net on the other child page; only a global driver can rejoin them.
+    document.pages[root_index]
+        .items
+        .retain(|item| !matches!(item, SchItem::Label(label) if label.text == "MID"));
+    let inspection = inspect_schematic(&document, &netlist).unwrap();
+    let key = SchematicIssueKey::DisconnectedNet("MID".to_string());
+    assert!(
+        inspection.issues.iter().any(|issue| issue.key == key),
+        "{:#?}",
+        inspection.issues
+    );
+
+    let intent = plan_connectivity_repair(
+        &document,
+        &netlist,
+        &inspection,
+        &BTreeSet::from([key.clone()]),
+        &BTreeSet::new(),
+    )
+    .unwrap();
+    let child_pages = document
+        .pages
+        .iter()
+        .filter(|page| page.id != root_page)
+        .map(|page| page.id.clone())
+        .collect::<Vec<_>>();
+    assert!(!child_pages.is_empty());
+    for page_id in &child_pages {
+        assert_eq!(
+            intent.driver_kind("MID", page_id),
+            Some(&NetDriverKind::Global),
+            "{page_id}: {:#?}",
+            intent.drivers()
+        );
+    }
+
+    // PCB's realizer places the same global drivers the intent names.
+    let realized = plan_repairs(&document, &netlist, &inspection, BTreeSet::from([key]))
+        .unwrap()
+        .apply(Some(&document))
+        .unwrap();
+    let verified =
+        verify_connectivity_repair(&document, &inspection, &netlist, &intent, &realized).unwrap();
+    assert!(verified.analysis.is_equivalent(), "{:#?}", verified.issues);
+}
+
 fn label_point(document: &SchDocument, name: &str) -> Point {
     document
         .pages

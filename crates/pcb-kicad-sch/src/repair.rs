@@ -224,6 +224,19 @@ pub(crate) fn plan_connectivity_repair_core(
         if !item.is_removable() {
             bail!("connectivity item {item:?} cannot be removed by a repair");
         }
+        // A symbol is removable only as a name driver (a power symbol). A
+        // component symbol is design content: deleting it leaves a missing
+        // symbol that no verification can accept.
+        if item.is_symbol()
+            && !observed.islands.values().any(|island| {
+                island
+                    .named_drivers
+                    .values()
+                    .any(|drivers| drivers.contains(item))
+            })
+        {
+            bail!("connectivity item {item:?} is not a removable driver symbol");
+        }
         removals.insert(item.clone());
         for provenance in observed
             .islands

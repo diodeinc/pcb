@@ -1016,10 +1016,9 @@ fn arrange_new_page_blocks(
 ) -> Result<(GridPacker, GridRect, Vec<GridPoint>)> {
     for paper in placement_paper_candidates(&page.paper) {
         let packer = occupied_page_packer(page, &paper, excluded_symbol_ids)?;
-        let arrangement = arrange_placement_blocks(blocks, packer.usable_bounds());
-        if packer.can_place_without_overlap(arrangement.0) {
+        if let Some((bounds, offsets)) = arrange_placement_blocks(blocks, &packer) {
             page.paper = paper;
-            return Ok((packer, arrangement.0, arrangement.1));
+            return Ok((packer, bounds, offsets));
         }
     }
     bail!(
@@ -1034,14 +1033,13 @@ fn arrange_existing_page_blocks(
     excluded_symbol_ids: &BTreeSet<String>,
 ) -> Result<(GridPacker, GridRect, Vec<GridPoint>)> {
     let packer = occupied_page_packer(page, &page.paper, excluded_symbol_ids)?;
-    let arrangement = arrange_placement_blocks(blocks, packer.usable_bounds());
-    if !packer.can_place_without_overlap(arrangement.0) {
+    let Some((bounds, offsets)) = arrange_placement_blocks(blocks, &packer) else {
         bail!(
             "generated component batch does not fit existing schematic page {}",
             page.file_name.as_deref().unwrap_or(&page.id)
         );
-    }
-    Ok((packer, arrangement.0, arrangement.1))
+    };
+    Ok((packer, bounds, offsets))
 }
 
 /// A packer for `paper` with the page's title block and every item other than
@@ -1103,30 +1101,26 @@ struct PlacementBlock {
 
 fn arrange_placement_blocks(
     blocks: &[&PlacementBlock],
-    usable: GridRect,
-) -> (GridRect, Vec<GridPoint>) {
-    // Pick one page-shaped shelf grid for the whole generated cohort. Placing
-    // the grid as a unit avoids the radial pattern produced by repeatedly
-    // extending a centered cluster one block at a time.
+    packer: &GridPacker,
+) -> Option<(GridRect, Vec<GridPoint>)> {
+    // Pick one page-shaped shelf grid for the whole generated cohort, among
+    // the column counts the page still has room for. Placing the grid as a
+    // unit avoids the radial pattern produced by repeatedly extending a
+    // centered cluster one block at a time.
+    let usable = packer.usable_bounds();
     (1..=blocks.len())
         .map(|columns| {
             let (bounds, offsets) = placement_grid_with_columns(blocks, columns);
-            let overflow_x = (bounds.width() - usable.width()).max(0);
-            let overflow_y = (bounds.height() - usable.height()).max(0);
+            (columns, bounds, offsets)
+        })
+        .filter(|(_, bounds, _)| packer.can_place_without_overlap(*bounds))
+        .min_by_key(|(columns, bounds, _)| {
             let aspect_error = (i64::from(bounds.width()) * i64::from(usable.height())
                 - i64::from(bounds.height()) * i64::from(usable.width()))
             .abs();
-            let rank = (
-                i64::from(overflow_x) + i64::from(overflow_y),
-                aspect_error,
-                bounds.area(),
-                columns,
-            );
-            (rank, bounds, offsets)
+            (aspect_error, bounds.area(), *columns)
         })
-        .min_by_key(|(rank, _, _)| *rank)
         .map(|(_, bounds, offsets)| (bounds, offsets))
-        .expect("a placement page has at least one block")
 }
 
 fn placement_grid_with_columns(
@@ -1952,7 +1946,8 @@ fn apply_connectivity_repair(
 
 /// The name driver a realizer must use for each reconnected net on each page
 /// where the net has visible pins or an interface port. Power-symbol nets use
-/// their netlist symbol; a page whose module interface exposes the net uses a
+/// their netlist symbol; an island cut off from the same net on another page
+/// needs a global label; a page whose module interface exposes the net uses a
 /// hierarchical label; a net whose pins span pages without such an interface
 /// needs a global label; everything else is a local label.
 pub(crate) fn plan_net_driver_kinds(
@@ -1982,15 +1977,29 @@ pub(crate) fn plan_net_driver_kinds(
         .transpose()?
         .unwrap_or_default();
 
+    let observed = reduce_with_provenance(document, PinVisibility::VisibleOnly)?;
+
     let mut kinds = BTreeMap::new();
     for net_name in nets {
-        let mut pages = targets
-            .get(net_name)
-            .into_iter()
-            .flatten()
+        let net_targets = targets.get(net_name).map(Vec::as_slice).unwrap_or(&[]);
+        let mut pages = net_targets
+            .iter()
             .filter(|target| !target.hidden)
             .map(|target| target.page_index)
             .collect::<BTreeSet<_>>();
+        // An island cut off from the same net on another page needs a global
+        // driver whatever the page's interface says. This is the realizer's
+        // own rule, so a consumer following the intent lands on the same
+        // label kind and the pages actually join.
+        let global_pages = if specs.contains_key(net_name) {
+            BTreeSet::new()
+        } else {
+            net_driver_islands(document, net_targets, &observed)?
+                .into_iter()
+                .filter(|island| island.needs_global)
+                .map(|island| net_targets[island.canonical_target].page_index)
+                .collect::<BTreeSet<_>>()
+        };
         if root_ports.contains_key(net_name) {
             pages.insert(root_page);
         }
@@ -2010,6 +2019,8 @@ pub(crate) fn plan_net_driver_kinds(
             .map(|page_index| {
                 let kind = if let Some(spec) = specs.get(net_name) {
                     NetDriverKind::NetSymbol(spec.clone())
+                } else if global_pages.contains(&page_index) {
+                    NetDriverKind::Global
                 } else if let Some(names) = contexts
                     .get(&page_index)
                     .and_then(|context| context.get(net_name))
@@ -2297,8 +2308,11 @@ fn sync_net_drivers(
             own_items.extend(added.iter().cloned());
         }
         let page_id = document.pages[run.page_index].id.clone();
+        // Only this page's pins are safe to meet: a coordinate that merely
+        // matches a pin on another page is foreign geometry here.
         let own_points = net_targets
             .iter()
+            .filter(|member| member.page_index == run.page_index)
             .map(|member| member.point)
             .collect::<Vec<_>>();
         let placement_target = run.placement_target();
@@ -3614,14 +3628,16 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let blocks = blocks.iter().collect::<Vec<_>>();
-        let usable = GridRect {
-            min_x: 0,
-            min_y: 0,
-            max_x: 200,
-            max_y: 140,
-        };
+        // A page whose usable area is 200 x 140 cells.
+        let packer = GridPacker::for_page(&Paper::Custom {
+            width_mm: 267.0,
+            height_mm: 191.0,
+        })
+        .unwrap();
+        assert_eq!(packer.usable_bounds().width(), 200);
+        assert_eq!(packer.usable_bounds().height(), 140);
 
-        let (_, offsets) = arrange_placement_blocks(&blocks, usable);
+        let (_, offsets) = arrange_placement_blocks(&blocks, &packer).unwrap();
 
         assert_eq!(
             offsets
@@ -3740,6 +3756,38 @@ mod tests {
             }
         );
         assert!(packer.can_place_without_overlap(bounds));
+    }
+
+    #[test]
+    fn fit_tries_every_grid_shape_around_preserved_items() {
+        // Two 50-cell blocks: side by side they are 104 cells wide and cannot
+        // pass the sheet on an A4 page, stacked they fit the strip beside it.
+        let blocks = ["a", "b"].map(|key| {
+            test_placement_block(
+                key,
+                GridRect {
+                    min_x: 0,
+                    min_y: 0,
+                    max_x: 50,
+                    max_y: 50,
+                },
+            )
+        });
+        let blocks = blocks.iter().collect::<Vec<_>>();
+
+        let (packer, bounds, offsets) = arrange_existing_page_blocks(
+            &test_page_with_sheet("occupied"),
+            &blocks,
+            &BTreeSet::new(),
+        )
+        .unwrap();
+        assert!(packer.can_place_without_overlap(bounds));
+        assert_eq!(offsets[0].x, offsets[1].x);
+        assert_ne!(offsets[0].y, offsets[1].y);
+
+        let mut page = test_page_with_sheet("new");
+        arrange_new_page_blocks(&mut page, &blocks, &BTreeSet::new()).unwrap();
+        assert_eq!(page.paper, Paper::default());
     }
 
     #[test]
@@ -4086,6 +4134,103 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert!(!points_coincide(points[0], points[1]));
+    }
+
+    #[test]
+    fn stub_collisions_ignore_same_net_pins_on_other_pages() {
+        let mut placed = multi_pad_symbol();
+        let first_slot = placed.keys().next().unwrap().clone();
+        let first_symbol = placed[&first_slot].symbol.clone();
+        let definition = placed[&first_slot].definition.clone();
+        let target = resolve_pin_targets(
+            &placed,
+            "MQ-7.MQ-7",
+            "B",
+            &BTreeSet::from(["4".to_string()]),
+        )
+        .unwrap()
+        .remove(0);
+        let spec = ground_net_symbol_spec();
+        let crowded =
+            net_symbol_connection_point(&placed[&first_slot], &target, spec.pin_outward_spin, 0)
+                .unwrap();
+
+        // A same-net symbol on another page whose pin B/4 happens to sit at
+        // the first symbol's stair-0 point.
+        let second_slot = SymbolSlotKey::new("MQ-8.MQ-8", 1).unwrap();
+        let mut second_symbol = first_symbol.clone();
+        second_symbol.id = second_slot.symbol_id();
+        second_symbol.at = Point::new(crowded.x - target.point.x, crowded.y - target.point.y);
+        placed.insert(
+            second_slot,
+            PlacedSymbol {
+                page_index: 1,
+                symbol: second_symbol.clone(),
+                definition: definition.clone(),
+            },
+        );
+        let other = resolve_pin_targets(
+            &placed,
+            "MQ-8.MQ-8",
+            "B",
+            &BTreeSet::from(["4".to_string()]),
+        )
+        .unwrap()
+        .remove(0);
+        assert!(points_coincide(other.point, crowded));
+
+        let mut page = SchPage::new("page");
+        page.library
+            .definitions
+            .insert(definition.lib_id.clone(), definition.clone());
+        page.items.push(SchItem::Symbol(first_symbol));
+        // Foreign wire ending exactly on this page's stair-0 point.
+        page.items.push(SchItem::Wire(Wire {
+            id: "foreign".to_string(),
+            a: crowded,
+            b: Point::new(crowded.x, crowded.y + 2.54),
+            unsupported: Vec::new(),
+        }));
+        let mut other_page = SchPage::new("other");
+        other_page
+            .library
+            .definitions
+            .insert(definition.lib_id.clone(), definition);
+        other_page.items.push(SchItem::Symbol(second_symbol));
+        let mut document = SchDocument {
+            pages: vec![page, other_page],
+            root_page_ids: vec!["page".to_string(), "other".to_string()],
+        };
+        let targets_by_net = BTreeMap::from([("GND".to_string(), vec![target, other])]);
+        let specs = BTreeMap::from([("GND".to_string(), spec)]);
+
+        sync_net_drivers(
+            &mut document,
+            &targets_by_net,
+            &placed,
+            &specs,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+
+        // This page's net symbol stepped past the foreign wire endpoint, and
+        // none of its stubs end on it.
+        let symbols = document.pages[0]
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                SchItem::Symbol(symbol) if symbol.lib_id == "power:GND" => Some(symbol.at),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(symbols.len(), 1);
+        assert!(!points_coincide(symbols[0], crowded), "{:?}", symbols[0]);
+        assert!(document.pages[0].items.iter().all(|item| !matches!(
+            item,
+            SchItem::Wire(wire)
+                if wire.id != "foreign"
+                    && (points_coincide(wire.a, crowded) || points_coincide(wire.b, crowded))
+        )));
     }
 
     #[test]
