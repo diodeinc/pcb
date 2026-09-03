@@ -48,6 +48,24 @@ LedModule(name = "LED1", led_color = "green", VCC = vcc_3v3, GND = gnd, CTRL = l
 Resistor(name = "R1", value = "10kOhm", package = "0603", P1 = vcc_3v3, P2 = led_ctrl)
 "#;
 
+const BOM_INTENT_BOARD_ZEN: &str = r#"
+Resistor = Module("@stdlib/generics/Resistor.zen")
+
+vcc = Net("VCC")
+gnd = Net("GND")
+
+Resistor(name = "GENERIC", value = "1kOhm", package = "0603", P1 = vcc, P2 = gnd)
+Resistor(
+    name = "AUTHORED",
+    value = "10kOhm",
+    package = "0603",
+    mpn = "AUTHORED-MPN",
+    manufacturer = "Authored Manufacturer",
+    P1 = vcc,
+    P2 = gnd,
+)
+"#;
+
 const PCB_TOML: &str = r#"
 [workspace]
 pcb-version = "0.4"
@@ -274,6 +292,111 @@ fn test_publish_board_with_version_preserves_local_only_tags() {
         .expect("list release tags");
     assert!(tags.lines().any(|tag| tag == "boards/v1.2.3"));
     assert!(tags.lines().any(|tag| tag == "boards/v1.2.4"));
+}
+
+#[test]
+fn test_publish_preserves_authored_bom_intent() {
+    let server = MockServer::start();
+    let _bom_match = server.mock(|when, then| {
+        when.method(POST)
+            .path("/api/boms/match")
+            .query_param("strict", "true");
+        then.status(200).json_body(serde_json::json!({
+            "results": [
+                {
+                    "designEntry": { "path": "GENERIC.R" },
+                    "offerIds": ["selection"],
+                    "offerStockClasses": { "selection": "PLENTY" },
+                    "match": "MATCH_COMPATIBLE",
+                    "selectedOfferId": "selection"
+                },
+                {
+                    "designEntry": { "path": "AUTHORED.R" },
+                    "offerIds": ["selection"],
+                    "offerStockClasses": { "selection": "PLENTY" },
+                    "match": "MATCH_COMPATIBLE",
+                    "selectedOfferId": "selection"
+                }
+            ],
+            "offers": {
+                "selection": {
+                    "id": "selection",
+                    "geography": "US",
+                    "mpn": "SELECTED-MPN",
+                    "manufacturer": "Selected Manufacturer",
+                    "stockAvailable": 100
+                }
+            }
+        }));
+    });
+
+    let mut sb = Sandbox::new();
+    sb.cwd("src")
+        .env("DIODE_API_URL", server.base_url())
+        .env("NO_PROXY", "127.0.0.1,localhost")
+        .env("no_proxy", "127.0.0.1,localhost")
+        .write("pcb.toml", PCB_TOML)
+        .write("boards/pcb.toml", BOARD_PCB_TOML)
+        .write("boards/TestBoard.zen", BOM_INTENT_BOARD_ZEN)
+        .init_git()
+        .commit("Initial commit")
+        .sync();
+
+    sb.run("pcbc", ["publish", "boards/TestBoard.zen", "--no-push"])
+        .run()
+        .expect("Failed to run pcb publish command");
+
+    let release_dir = sb
+        .root_path()
+        .join("src")
+        .join(find_staging_dir(&sb, "TestBoard"));
+    let design_bom: Vec<Value> =
+        serde_json::from_reader(File::open(release_dir.join("bom/design_bom.json")).unwrap())
+            .unwrap();
+    let bom_entry = |path| {
+        design_bom
+            .iter()
+            .find(|entry| entry["path"] == path)
+            .unwrap()
+    };
+    let generic_bom = bom_entry("GENERIC.R");
+    assert_eq!(
+        (generic_bom.get("mpn"), generic_bom.get("manufacturer")),
+        (None, None)
+    );
+    assert_eq!(
+        (
+            bom_entry("AUTHORED.R")["mpn"].as_str(),
+            bom_entry("AUTHORED.R")["manufacturer"].as_str()
+        ),
+        (Some("AUTHORED-MPN"), Some("Authored Manufacturer"))
+    );
+
+    let netlist: pcb_sch::Schematic =
+        serde_json::from_reader(File::open(release_dir.join("netlist.json")).unwrap()).unwrap();
+    let component = |path| {
+        netlist
+            .instances
+            .iter()
+            .find_map(|(instance_ref, instance)| {
+                (instance_ref.instance_path.join(".") == path).then_some(instance)
+            })
+            .unwrap()
+    };
+    assert_eq!(
+        (
+            component("GENERIC.R").mpn().as_deref(),
+            component("GENERIC.R").manufacturer().as_deref()
+        ),
+        (Some("SELECTED-MPN"), Some("Selected Manufacturer"))
+    );
+    assert_eq!(
+        (
+            component("AUTHORED.R").mpn().as_deref(),
+            component("AUTHORED.R").manufacturer().as_deref()
+        ),
+        (Some("AUTHORED-MPN"), Some("Authored Manufacturer"))
+    );
 }
 
 #[test]
