@@ -118,29 +118,39 @@ pub(super) fn conductor_subject(
     role: &'static str,
     layer: &str,
 ) -> Subject {
-    let (kind, name, set_index) = match id {
-        ConductorId::Net { .. } => ("electrical_net", None, None),
+    let (kind, name, set_index, feature_index) = match id {
+        ConductorId::Net { .. } => ("electrical_net", None, None, None),
+        ConductorId::Isolated { occurrence, .. } => {
+            let source = design
+                .imported
+                .feature_definition(occurrence.feature)
+                .expect("isolated pad must reference its imported definition")
+                .source;
+            (
+                "auxiliary_copper",
+                Some("isolated pad".to_owned()),
+                Some(source.set_index),
+                Some(source.feature_index),
+            )
+        }
         ConductorId::Auxiliary {
             source_set_index, ..
         } => (
             "auxiliary_copper",
             Some("auxiliary copper".to_owned()),
             Some(source_set_index),
+            None,
         ),
         ConductorId::Unattributed {
-            source_set_index, ..
+            source_set_index,
+            source_feature_index,
+            ..
         } => (
             "unattributed_copper",
             Some("functional copper without net attribution".to_owned()),
             Some(source_set_index),
+            Some(source_feature_index),
         ),
-    };
-    let feature_index = match id {
-        ConductorId::Unattributed {
-            source_feature_index,
-            ..
-        } => Some(source_feature_index),
-        ConductorId::Net { .. } | ConductorId::Auxiliary { .. } => None,
     };
     Subject {
         role,
@@ -197,12 +207,18 @@ limit = { minimum = "0.15 mm" }
     <FunctionMode mode="FABRICATION"/>
     <StepRef name="board"/>
     <LayerRef name="TOP"/>
+    <DictionaryStandard units="MILLIMETER">
+      <EntryStandard id="pad"><Circle diameter="0.1"/></EntryStandard>
+    </DictionaryStandard>
   </Content>
   <Ecad>
     <CadHeader units="MILLIMETER"/>
     <CadData>
       <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
       <Step name="board" type="BOARD">
+        <PadStackDef name="padstack">
+          <PadstackPadDef layerRef="TOP" padUse="REGULAR"><Location x="0" y="0"/><StandardPrimitiveRef id="pad"/></PadstackPadDef>
+        </PadStackDef>
         <LayerFeature layerRef="TOP">
           <Set net="N1"><Features><UserSpecial><Contour><Polygon>
             <PolyBegin x="0" y="0"/>
@@ -311,6 +327,37 @@ limit = { minimum = "0.15 mm" }
                 .to_string()
                 .contains("final functional copper without net attribution"),
             "{error:#}"
+        );
+    }
+
+    #[test]
+    fn checks_netless_pads_as_isolated_copper() {
+        let xml = BOARD.replace(
+            "</Step>",
+            r#"<LayerFeature layerRef="TOP"><Set>
+          <Pad padstackDefRef="padstack"><Location x="3.85" y="0.5"/><PinRef componentRef="FID1" pin="PAD0"/></Pad>
+        </Set></LayerFeature>
+        <LayerFeature layerRef="TOP"><Set>
+          <Pad padstackDefRef="padstack"><Location x="3.65" y="0.5"/><PinRef componentRef="FID2" pin="PAD0"/></Pad>
+        </Set></LayerFeature>
+      </Step>"#,
+        );
+
+        let results = run(&xml);
+
+        assert_eq!(results.findings.len(), 4);
+        assert_eq!(
+            results
+                .findings
+                .iter()
+                .filter(|finding| {
+                    finding
+                        .subjects
+                        .iter()
+                        .any(|subject| subject.name.as_deref() == Some("isolated pad"))
+                })
+                .count(),
+            2
         );
     }
 }

@@ -629,6 +629,11 @@ pub(super) enum ConductorId {
         instance: Option<u32>,
         net: Symbol,
     },
+    Isolated {
+        step: Option<Symbol>,
+        instance: Option<u32>,
+        occurrence: FeatureOccurrenceId,
+    },
     Auxiliary {
         step: Option<Symbol>,
         instance: Option<u32>,
@@ -646,6 +651,7 @@ impl ConductorId {
     pub fn step(self) -> Option<Symbol> {
         match self {
             Self::Net { step, .. }
+            | Self::Isolated { step, .. }
             | Self::Auxiliary { step, .. }
             | Self::Unattributed { step, .. } => step,
         }
@@ -654,6 +660,7 @@ impl ConductorId {
     pub fn instance(self) -> Option<u32> {
         match self {
             Self::Net { instance, .. }
+            | Self::Isolated { instance, .. }
             | Self::Auxiliary { instance, .. }
             | Self::Unattributed { instance, .. } => instance,
         }
@@ -662,7 +669,7 @@ impl ConductorId {
     pub fn net(self) -> Option<Symbol> {
         match self {
             Self::Net { net, .. } => Some(net),
-            Self::Auxiliary { .. } | Self::Unattributed { .. } => None,
+            Self::Isolated { .. } | Self::Auxiliary { .. } | Self::Unattributed { .. } => None,
         }
     }
 
@@ -1017,6 +1024,14 @@ impl ArtworkLowering<Symbol, Option<ConductorId>> for CopperAttributionLowering 
                 net,
             });
         }
+        if feature.kind == FeatureKind::Padstack {
+            return Some(ConductorId::Isolated {
+                step: feature.source_step_ref,
+                instance: feature.source_instance,
+                occurrence: feature_occurrence_id(feature)
+                    .expect("materialized copper pad must retain its occurrence identity"),
+            });
+        }
         if feature.is_fiducial() || feature.flags.copper_balance.is_some() {
             return Some(ConductorId::Auxiliary {
                 step: feature.source_step_ref,
@@ -1099,7 +1114,15 @@ fn compose_attributed_image<Owner: Clone + Eq + std::hash::Hash>(
 fn conductor_order(
     imported: &ImportedDesign,
     id: ConductorId,
-) -> (u8, &str, Option<u32>, &str, u32, u32) {
+) -> (
+    u8,
+    &str,
+    Option<u32>,
+    &str,
+    u32,
+    u32,
+    Option<FeatureOccurrenceId>,
+) {
     match id {
         ConductorId::Net {
             step,
@@ -1112,18 +1135,39 @@ fn conductor_order(
             imported.resolve(net),
             0,
             0,
+            None,
         ),
+        ConductorId::Isolated {
+            step,
+            instance,
+            occurrence,
+        } => {
+            let source = imported
+                .feature_definition(occurrence.feature)
+                .expect("isolated pad must reference its imported definition")
+                .source;
+            (
+                1,
+                step.map(|step| imported.resolve(step)).unwrap_or(""),
+                instance,
+                "",
+                source.set_index,
+                source.feature_index,
+                Some(occurrence),
+            )
+        }
         ConductorId::Auxiliary {
             step,
             instance,
             source_set_index,
         } => (
-            1,
+            2,
             step.map(|step| imported.resolve(step)).unwrap_or(""),
             instance,
             "",
             source_set_index,
             0,
+            None,
         ),
         ConductorId::Unattributed {
             step,
@@ -1131,12 +1175,13 @@ fn conductor_order(
             source_set_index,
             source_feature_index,
         } => (
-            2,
+            3,
             step.map(|step| imported.resolve(step)).unwrap_or(""),
             instance,
             "",
             source_set_index,
             source_feature_index,
+            None,
         ),
     }
 }
