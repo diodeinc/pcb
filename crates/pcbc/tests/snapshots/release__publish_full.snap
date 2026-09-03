@@ -123,7 +123,7 @@ Designator,Val,Package,Mid X,Mid Y,Rotation,Layer
     "user": "<USER>"
   }
 }
-=== netlist.json <76006 bytes, sha256: 5e388e7>
+=== netlist.json <76356 bytes, sha256: be3143c>
 === src/boards/TestBoard.zen
 
 load("@stdlib/interfaces.zen", "Gpio")
