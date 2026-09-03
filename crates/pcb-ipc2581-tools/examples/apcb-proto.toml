@@ -4,7 +4,7 @@ default_profile = "aurora-prototype"
 [pdk]
 id = "apcb-proto"
 name = "AdvancedPCB Aurora prototype"
-revision = "draft-2026-09-01"
+revision = "draft-2026-09-02"
 manufacturer = "AdvancedPCB"
 process = "Aurora 2-10 layer prototype"
 
@@ -33,7 +33,7 @@ limit = { minimum = "0.2 mm" }
 [[rules.drilling.slot_width]]
 id = "drilling.minimum_plated_slot_width"
 select = { plating = "plated" }
-limit = { minimum = "31 mil" }
+limit = { minimum = "0.5 mm", preferred = "0.6 mm" }
 
 [[rules.copper.annular_ring]]
 id = "copper.minimum_via_annular_ring"
