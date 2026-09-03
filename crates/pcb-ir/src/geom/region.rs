@@ -1452,7 +1452,7 @@ impl SegmentGrid {
             .iter()
             .map(|segment| segment.bbox)
             .fold(BBox::empty(), BBox::union);
-        let pitch = CellGrid::pitch(cell_mm.max(MIN_SEGMENT_GRID_CELL_MM), bounds);
+        let pitch = cell_mm.max(MIN_SEGMENT_GRID_CELL_MM);
         let grid = CellGrid::new(
             pitch,
             bounds,

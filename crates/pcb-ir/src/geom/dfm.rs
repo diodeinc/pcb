@@ -120,10 +120,7 @@ impl RegionBoundaryIndex {
     ///
     /// The radius is a pitch hint, not a limit: queries may pass any distance.
     pub fn new(region: &ContourSet, search_radius_mm: f64) -> Self {
-        let pitch = CellGrid::pitch(
-            search_radius_mm.clamp(MIN_CELL_MM, MAX_CELL_MM),
-            region.bbox,
-        );
+        let pitch = search_radius_mm.clamp(MIN_CELL_MM, MAX_CELL_MM);
         let segments = region.rings.iter().flat_map(ring_edges).collect::<Vec<_>>();
         let bounds = segments
             .iter()
