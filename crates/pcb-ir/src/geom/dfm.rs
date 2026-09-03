@@ -630,8 +630,8 @@ pub fn region_clearance_sites_with_index(
 
 /// A local required-clearance band around the supplied reference paths.
 pub fn linework_envelope(paths: &[Vec<Point>], radius_mm: f64) -> ContourSet {
-    use crate::geom::path::{ContourBuf, PathCmd};
-    use crate::geom::{Paint, PathArena, StrokeStyle};
+    use crate::geom::path::{ContourBuf, PathCmd, stroke_to_fill};
+    use crate::geom::{FillRule, StrokeStyle};
     let contours = paths
         .iter()
         .filter(|path| path.len() >= 2)
@@ -643,13 +643,9 @@ pub fn linework_envelope(paths: &[Vec<Point>], radius_mm: f64) -> ContourSet {
             )
         })
         .collect::<Vec<_>>();
-    let mut arena = PathArena::default();
-    let path = arena.push_path(Paint::Stroke(StrokeStyle::round(2.0 * radius_mm)), contours);
-    ContourSet::from_painted_paths(
-        &arena,
-        std::iter::once(&arena.paths[path as usize]),
-        tol::REGION_MM,
-    )
+    let band =
+        stroke_to_fill(&contours, StrokeStyle::round(2.0 * radius_mm).into()).unwrap_or_default();
+    ContourSet::from_contours(&band, FillRule::NonZero, tol::REGION_MM)
 }
 
 /// Circular material in the same flattened representation as check images.

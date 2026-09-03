@@ -29,7 +29,7 @@ pub(crate) struct CellGrid {
 impl CellGrid {
     /// Bucket every `(id, cell)` registration over `bounds`. Registrations
     /// outside the bounds' columns are dropped; a cell lists its ids in
-    /// registration order.
+    /// ascending order.
     pub fn new(
         pitch: f64,
         bounds: BBox,
@@ -47,8 +47,7 @@ impl CellGrid {
                 (first_column..first_column + column_count as i64).contains(&column)
             })
             .collect::<Vec<_>>();
-        // A stable sort keeps each cell's ids in registration order.
-        pairs.sort_by_key(|&(_, cell)| cell);
+        pairs.sort_unstable_by_key(|&(id, cell)| (cell, id));
 
         let mut columns = vec![0u32; column_count + 1];
         let mut rows = Vec::new();
@@ -133,7 +132,7 @@ mod tests {
     }
 
     #[test]
-    fn cells_keep_registration_order_and_ignore_outsiders() {
+    fn cells_list_ids_ascending_and_ignore_outsiders() {
         let grid = CellGrid::new(
             1.0,
             bounds(0.0, 0.0, 2.5, 1.5),
@@ -149,9 +148,9 @@ mod tests {
             .into_iter(),
         );
 
-        assert_eq!(grid.column(0, 0, 0), &[7, 3]);
-        assert_eq!(grid.column(0, 0, 1), &[7, 3, 1]);
-        assert_eq!(grid.column(0, -5, 5), &[2, 7, 3, 1]);
+        assert_eq!(grid.column(0, 0, 0), &[3, 7]);
+        assert_eq!(grid.column(0, 0, 1), &[3, 7, 1]);
+        assert_eq!(grid.column(0, -5, 5), &[2, 3, 7, 1]);
         assert_eq!(grid.column(0, 2, 5), &[]);
         assert_eq!(grid.column(1, -5, 5), &[]);
         assert_eq!(grid.column(2, 1, 1), &[5]);
@@ -161,7 +160,7 @@ mod tests {
         assert_eq!(
             grid.rectangle(bounds(-1.0, -1.0, 9.0, 9.0))
                 .collect::<Vec<_>>(),
-            vec![2, 7, 3, 1, 5, 4]
+            vec![2, 3, 7, 1, 5, 4]
         );
     }
 
