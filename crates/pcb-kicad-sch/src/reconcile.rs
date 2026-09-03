@@ -187,6 +187,43 @@ pub fn plan_reconciliation(
     )
 }
 
+/// Refresh assembly properties owned by the Zener netlist without changing
+/// schematic topology, placement, fields, or unmanaged symbols.
+///
+/// Returns whether any placed managed symbol changed. Interactive editors use
+/// this narrow synchronization when accepting a new analysis context; full
+/// topology repair remains an explicit action.
+pub fn sync_netlist_derived_symbol_properties(
+    document: &mut SchDocument,
+    netlist: &Schematic,
+) -> Result<bool> {
+    let instances = component_slots::component_instances(netlist)?;
+    let mut changed = false;
+    for page in &mut document.pages {
+        for item in &mut page.items {
+            let crate::SchItem::Symbol(symbol) = item else {
+                continue;
+            };
+            let Some(path) = symbol.field_value("Path") else {
+                continue;
+            };
+            let Some(instance) = instances.get(path) else {
+                continue;
+            };
+            changed |= sync_symbol_netlist_derived_properties(symbol, instance);
+        }
+    }
+    Ok(changed)
+}
+
+/// Refresh one placed symbol's assembly properties from its netlist component.
+pub fn sync_symbol_netlist_derived_properties(
+    symbol: &mut crate::Symbol,
+    instance: &pcb_sch::Instance,
+) -> bool {
+    component_slots::sync_netlist_derived_symbol_properties(symbol, instance)
+}
+
 /// Build and verify one exact repair plan for a set of current issues.
 ///
 /// A per-issue repair passes a singleton set. Multiple selected issues use the

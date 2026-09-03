@@ -6,6 +6,10 @@ use serde::{Deserialize, Serialize};
 pub type Id = String;
 pub type LibId = String;
 
+const fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct SchDocument {
     pub pages: Vec<SchPage>,
@@ -137,6 +141,14 @@ pub struct Symbol {
     pub at: Point,
     pub rotation: Rotation,
     pub mirror: Option<MirrorAxis>,
+    #[serde(default)]
+    pub dnp: bool,
+    #[serde(default = "default_true")]
+    pub in_bom: bool,
+    #[serde(default = "default_true")]
+    pub on_board: bool,
+    #[serde(default = "default_true")]
+    pub in_pos_files: bool,
     pub fields_autoplaced: bool,
     pub fields: BTreeMap<String, SymbolField>,
     pub pins: Vec<PinInstance>,
