@@ -65,6 +65,71 @@ fn editor_core_plans_applies_analyzes_and_reopens_in_memory() {
 }
 
 #[test]
+fn reconciliation_refreshes_netlist_derived_symbol_properties() {
+    let mut netlist = common::compile_fixture("analysis", "simple.zen");
+    let mut stale = plan_reconciliation(None, &netlist, "Editor.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    let symbol = stale.pages[0]
+        .items
+        .iter_mut()
+        .find_map(|item| match item {
+            SchItem::Symbol(symbol) if symbol.field_value("Path") == Some("R1.R") => Some(symbol),
+            _ => None,
+        })
+        .expect("R1 symbol");
+    symbol.dnp = false;
+    symbol.in_bom = true;
+    symbol.on_board = false;
+    symbol.in_pos_files = true;
+    symbol.unsupported.push(
+        pcb_sexpr::parse("(exclude_from_sim yes)").expect("parse unsupported symbol property"),
+    );
+    let stale = SchDocument::from_kicad_sch(&stale.to_kicad_sch().unwrap()).unwrap();
+
+    let instance = netlist
+        .instances
+        .values_mut()
+        .find(|instance| instance.reference_designator.as_deref() == Some("R1"))
+        .expect("R1 instance");
+    instance
+        .attributes
+        .insert("dnp".to_string(), AttributeValue::Boolean(true));
+    instance
+        .attributes
+        .insert("skip_bom".to_string(), AttributeValue::Boolean(true));
+    instance
+        .attributes
+        .insert("skip_pos".to_string(), AttributeValue::Boolean(true));
+
+    let plan = plan_reconciliation(Some(&stale), &netlist, "Editor.kicad_sch").unwrap();
+    assert!(!plan.is_empty());
+    let repaired = plan.apply(Some(&stale)).unwrap();
+    let source = repaired.to_kicad_sch().unwrap();
+    assert!(source.contains("(exclude_from_sim yes)"));
+    let reopened = SchDocument::from_kicad_sch(&source).unwrap();
+    let symbol = reopened.pages[0]
+        .items
+        .iter()
+        .find_map(|item| match item {
+            SchItem::Symbol(symbol) if symbol.field_value("Path") == Some("R1.R") => Some(symbol),
+            _ => None,
+        })
+        .expect("R1 symbol");
+    assert!(symbol.dnp);
+    assert!(!symbol.in_bom);
+    assert!(
+        symbol.on_board,
+        "skip_pos excludes placement output, not the component from the board"
+    );
+    assert!(!symbol.in_pos_files);
+
+    let unchanged = plan_reconciliation(Some(&reopened), &netlist, "Editor.kicad_sch").unwrap();
+    assert!(unchanged.is_empty(), "{:#?}", unchanged.edits());
+}
+
+#[test]
 fn reconciliation_drives_each_physical_pin_of_a_logical_terminal() {
     let netlist = common::compile_fixture("multi_pad", "root.zen");
     let document = plan_reconciliation(None, &netlist, "MultiPad.kicad_sch")

@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- Refresh netlist-derived symbol assembly properties during schematic reconciliation.
+
 ## [0.4.47] - 2026-09-03
 
 ### Changed

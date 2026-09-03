@@ -295,6 +295,10 @@ fn parse_symbol(items: SexprList<'_>) -> Result<Symbol> {
     let mut body_style = 1;
     let mut at = None;
     let mut mirror = None;
+    let mut dnp = false;
+    let mut in_bom = true;
+    let mut on_board = true;
+    let mut in_pos_files = true;
     let mut fields_autoplaced = false;
     let mut fields = BTreeMap::new();
     let mut pins = Vec::new();
@@ -332,6 +336,18 @@ fn parse_symbol(items: SexprList<'_>) -> Result<Symbol> {
                         .context("symbol mirror must be x or y")?,
                 );
             }
+            Some("dnp") => {
+                dnp = list.bool_or(1, true, "symbol dnp")?;
+            }
+            Some("in_bom") => {
+                in_bom = list.bool_or(1, true, "symbol in_bom")?;
+            }
+            Some("on_board") => {
+                on_board = list.bool_or(1, true, "symbol on_board")?;
+            }
+            Some("in_pos_files") => {
+                in_pos_files = list.bool_or(1, true, "symbol in_pos_files")?;
+            }
             Some("fields_autoplaced") => {
                 fields_autoplaced = list.bool_or(1, true, "fields_autoplaced")?;
             }
@@ -361,6 +377,10 @@ fn parse_symbol(items: SexprList<'_>) -> Result<Symbol> {
         at,
         rotation,
         mirror,
+        dnp,
+        in_bom,
+        on_board,
+        in_pos_files,
         fields_autoplaced,
         fields,
         pins,
@@ -967,6 +987,13 @@ fn symbol_to_sexpr(symbol: &Symbol) -> Sexpr {
         ]));
     }
 
+    items.extend([
+        bool_property_to_sexpr("in_bom", symbol.in_bom),
+        bool_property_to_sexpr("on_board", symbol.on_board),
+        bool_property_to_sexpr("in_pos_files", symbol.in_pos_files),
+        bool_property_to_sexpr("dnp", symbol.dnp),
+    ]);
+
     if symbol.fields_autoplaced {
         items.push(Sexpr::list(vec![
             Sexpr::symbol("fields_autoplaced"),
@@ -984,6 +1011,13 @@ fn symbol_to_sexpr(symbol: &Symbol) -> Sexpr {
     items.extend(symbol.unsupported.iter().cloned());
 
     Sexpr::list(items)
+}
+
+fn bool_property_to_sexpr(name: &str, value: bool) -> Sexpr {
+    Sexpr::list(vec![
+        Sexpr::symbol(name),
+        Sexpr::symbol(if value { "yes" } else { "no" }),
+    ])
 }
 
 fn wire_to_sexpr(wire: &Wire) -> Sexpr {
@@ -2094,8 +2128,10 @@ mod tests {
             })
             .expect("placed symbol");
 
-        assert!(has_tag(&symbol.unsupported, "in_pos_files"));
-        assert!(has_tag(&symbol.unsupported, "dnp"));
+        assert!(symbol.in_bom);
+        assert!(symbol.on_board);
+        assert!(symbol.in_pos_files);
+        assert!(!symbol.dnp);
         assert!(has_tag(&symbol.unsupported, "instances"));
         assert!(has_tag(
             &symbol.field("Reference").unwrap().unsupported,

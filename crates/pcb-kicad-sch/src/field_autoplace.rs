@@ -761,6 +761,10 @@ mod tests {
             at,
             rotation,
             mirror,
+            dnp: false,
+            in_bom: true,
+            on_board: true,
+            in_pos_files: true,
             fields_autoplaced: true,
             fields: BTreeMap::from([
                 (

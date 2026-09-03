@@ -1213,6 +1213,10 @@ mod tests {
             at,
             rotation: Rotation::default(),
             mirror: None,
+            dnp: false,
+            in_bom: true,
+            on_board: true,
+            in_pos_files: true,
             fields_autoplaced: false,
             fields: BTreeMap::from([(
                 "Reference".to_string(),
