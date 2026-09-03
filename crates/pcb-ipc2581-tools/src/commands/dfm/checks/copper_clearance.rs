@@ -61,8 +61,11 @@ pub(super) fn evaluate(limit_mm: f64, conditions: &Conditions, design: &Design) 
                 .then_with(|| left.region.bbox.min.y.total_cmp(&right.region.bbox.min.y))
         });
 
-        // The pairs the bounds cannot separate, in sweep order along x. Only
-        // the pieces in those pairs need a boundary index.
+        let boundaries = pieces
+            .iter()
+            .map(|piece| RegionBoundaryIndex::new(&piece.region, limit_mm))
+            .collect::<Vec<_>>();
+        // The pairs the bounds cannot separate, in sweep order along x.
         let pairs = pieces
             .iter()
             .enumerate()
@@ -80,30 +83,13 @@ pub(super) fn evaluate(limit_mm: f64, conditions: &Conditions, design: &Design) 
                     .map(move |(offset, _)| (left_index, left_index + 1 + offset))
             })
             .collect::<Vec<_>>();
-        let mut queried = vec![false; pieces.len()];
-        for &(left_index, right_index) in &pairs {
-            queried[left_index] = true;
-            queried[right_index] = true;
-        }
-        let boundaries = pieces
-            .iter()
-            .zip(queried)
-            .map(|(piece, queried)| {
-                queried.then(|| RegionBoundaryIndex::new(&piece.region, limit_mm))
-            })
-            .collect::<Vec<_>>();
 
         for (left_index, right_index) in pairs {
             let (left, right) = (&pieces[left_index], &pieces[right_index]);
-            let boundary = |index: usize| {
-                boundaries[index]
-                    .as_ref()
-                    .expect("every paired piece is indexed")
-            };
-            let (left_boundary, right_boundary) = (boundary(left_index), boundary(right_index));
+            let right_boundary = &boundaries[right_index];
             let Some(distance) = region_clearance_within(
                 &left.region,
-                left_boundary,
+                &boundaries[left_index],
                 &right.region,
                 right_boundary,
                 limit_mm,

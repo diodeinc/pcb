@@ -21,7 +21,7 @@ use pcb_ir::dialects::ipc::{
 use pcb_ir::dialects::{LayerRole, Side, artwork};
 use pcb_ir::geom::dfm::{Distance, RegionBoundaryIndex, WidthDisk, min_width_disk};
 use pcb_ir::geom::path::ContourBuf;
-use pcb_ir::geom::region::Ring;
+use pcb_ir::geom::region::{Ring, union_rings};
 use pcb_ir::geom::{BBox, ContourSet, FillRule, Point, Polarity, Span, tol};
 #[cfg(not(target_family = "wasm"))]
 use rayon::prelude::*;
@@ -1054,7 +1054,7 @@ fn compose_attributed_copper(
     let owners =
         compose_attributed_owners(document, LayerRole::Copper, &mut CopperAttributionLowering)?;
     let image = ContourSet::from_regularized(
-        pcb_ir::geom::region::union_rings(
+        union_rings(
             owners
                 .iter()
                 .flat_map(|(_, rings)| rings.iter().cloned())

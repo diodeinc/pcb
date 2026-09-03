@@ -15,6 +15,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- Report a sharp copper tip narrower than the minimum width when it stands alone.
 - Check netless pads as isolated copper in DFM reports.
 - Ignore nested `NotConnected()` interface members when creating schematic sheet ports.
 

@@ -406,17 +406,7 @@ impl std::error::Error for GapRegularizationError {}
 
 impl ContourSet {
     pub fn new(rings: Vec<Ring>, fill_rule: FillRule, tolerance: f64) -> Self {
-        let rings = filter_significant_rings(simplify_rings(rings, fill_rule), tolerance);
-        let ring_bounds = rings
-            .iter()
-            .map(|ring| rings_bbox(std::slice::from_ref(ring)))
-            .collect::<Vec<_>>();
-        Self {
-            bbox: ring_bounds.iter().copied().fold(BBox::empty(), BBox::union),
-            rings,
-            ring_bounds,
-            tolerance,
-        }
+        Self::from_regularized(simplify_rings(rings, fill_rule), tolerance)
     }
 
     /// A region from rings a regularized boolean operation produced, kept
@@ -633,26 +623,28 @@ impl ContourSet {
     }
 
     /// The material within `reach_mm` of walls that face each other across
-    /// material within `material_mm` or across void within `void_mm`:
-    /// every ring within reach of such a wall, with the outer ring of each
-    /// component so reached, clipped to the reach around the facing walls.
-    /// A hole farther away is filled and material farther away is cut,
-    /// since neither reaches the facing walls; the cut's own edges disturb
-    /// the morphology only within a disk diameter of themselves, so a reach
-    /// of three radii keeps the residue at the facing walls exact. Walls
-    /// face when they are not
-    /// incident: on one ring, neither adjacent nor turned the same way,
-    /// exactly as the width construction judges a wall pair. Material lies
-    /// to the left of travel, so two walls of one component face across
-    /// material when each has the other's nearest point on its left and
-    /// across void when each has it on its right; a nearest point along a
-    /// wall's own line, as at the corners of a notch or of aligned holes,
-    /// leaves the side open and both reaches apply. Distinct components
-    /// always face across void.
+    /// material within `material_mm` or across void within `void_mm`.
+    ///
+    /// Every ring within reach of such a wall comes along with the outer
+    /// ring of its component, and the material is clipped to the reach
+    /// around the facing walls. A hole farther away is filled and material
+    /// farther away is cut, since neither reaches the facing walls; the
+    /// cut's own edges disturb the morphology only within a disk diameter
+    /// of themselves, so a reach of three radii keeps the residue at the
+    /// facing walls exact.
+    ///
+    /// Walls face when they are not incident: on one ring, neither adjacent
+    /// nor turned the same way, exactly as the width construction judges a
+    /// wall pair. Material lies to the left of travel, so two walls of one
+    /// component face across material when each has the other's nearest
+    /// point on its left and across void when each has it on its right; a
+    /// nearest point along a wall's own line, as at the corners of a notch
+    /// or of aligned holes, leaves the side open and both reaches apply.
+    /// Distinct components always face across void.
     fn facing_components(&self, material_mm: f64, void_mm: f64, reach_mm: f64) -> Self {
         let (components, outers) = self.ring_components();
-        let reach = material_mm.max(void_mm).max(reach_mm);
-        let grid = SegmentGrid::new(source_boundary_segments(self), reach);
+        let pitch = material_mm.max(void_mm).max(reach_mm);
+        let grid = SegmentGrid::new(source_boundary_segments(self), pitch);
         let segments = &grid.segments;
         let sees_left = |wall: &OrientedBoundarySegment, across: Point| {
             let along = wall.end - wall.start;
@@ -772,13 +764,6 @@ impl ContourSet {
                 })
                 .filter_map(move |edge| horizontal_crossing(edge, y))
         };
-        if let [point] = points {
-            let winding = crossings_at(point.y, point.x, point.x)
-                .filter_map(|(x, direction)| (x <= point.x).then_some(direction))
-                .sum::<i32>();
-            result[0] = f64::from(winding != 0);
-            return result;
-        }
         let mut by_height = (0..points.len()).collect::<Vec<_>>();
         by_height.sort_by(|left, right| {
             points[*left]
@@ -1240,18 +1225,16 @@ impl ContourSet {
         radius: f64,
         width_mm: f64,
     ) -> Vec<TwoSidedResidualComponent> {
-        // Opening is the union of the disks inside a region, and a disk is
-        // connected, so every component opens on its own, and the disks
-        // through a residue point reach a diameter from it. A width is a
-        // disk touching two facing walls, so it is at least their
-        // separation: material whose walls never face each other that
-        // closely has no width to find, and only the material within a
-        // diameter of facing walls decides the residue within a radius of
-        // them, where any width lies. Separate components share a width
-        // only where they touch within tolerance.
-        // The snap-rounded width construction moves walls by a tolerance,
-        // and `M \ (X ∩ M)` is `M \ X`, so the opening's clip to the
-        // source is not needed to find what the opening removed.
+        // A width is a disk touching two facing walls, so it is at least
+        // their separation: material whose walls never face each other that
+        // closely has no width to find. Any width lies within a radius of
+        // its walls, and the disks through a residue point reach a diameter
+        // from it, so only the material within a few radii of facing walls
+        // decides the residue there. Separate components share a width only
+        // where they touch within tolerance. The snap-rounded width
+        // construction moves walls by a tolerance, and `M \ (X ∩ M)` is
+        // `M \ X`, so the opening's clip to the source is not needed to
+        // find what the opening removed.
         self.two_sided_residual(radius, |region, radius| {
             let facing = width_mm + 4.0 * region.tolerance;
             let touching = 3.0 * region.tolerance + tol::FLATTEN_MM;
@@ -1268,13 +1251,11 @@ impl ContourSet {
         radius: f64,
         width_mm: f64,
     ) -> Vec<TwoSidedResidualComponent> {
-        // Closing fills only void narrower than the disk diameter, between
-        // walls facing across it, and a width is at least the separation of
-        // the walls it touches. A residue point lies within a radius of its
-        // walls, and the disks that decide it reach a diameter further, so
-        // everything within two diameters comes along as context and the
-        // closing of that neighbourhood is the closing of the whole region
-        // there.
+        // A gap is a disk touching two walls facing across void, so it is
+        // at least their separation. A residue point lies within a radius
+        // of its walls and the disks that decide it reach a diameter
+        // further, so the closing of the material within two diameters of
+        // facing walls is the closing of the whole region there.
         self.two_sided_residual(radius, |region, radius| {
             let facing = width_mm + 4.0 * region.tolerance;
             let reach = 4.0 * (radius + 2.0 * region.tolerance);
