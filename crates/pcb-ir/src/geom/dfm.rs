@@ -5,94 +5,49 @@
 //! it was measured against. Deciding whether a distance violates a limit is
 //! the caller's policy, via [`Distance::certainly_below`].
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use crate::geom::bbox::BBox;
 use crate::geom::dist;
+use crate::geom::grid::CellGrid;
 use crate::geom::point::Point;
-use crate::geom::region::{ContourSet, Ring, TwoSidedResidualComponent, ring_edges};
+use crate::geom::region::{ContourSet, TwoSidedResidualComponent, ring_edges};
 use crate::geom::tol;
 
 pub use crate::geom::dist::Distance;
 
-/// Exact candidate index over ring or shape bounds. Large enclosing rings
-/// remain queryable even when none of their boundary segments cross a small
-/// region of interest. The returned IDs retain the source ordering.
+/// Candidate index over ring or shape bounds, on a grid of about sixty-four
+/// cells across. Every bounds is registered in each cell it covers, so a
+/// large enclosing ring stays queryable in a small region of interest.
 #[derive(Debug)]
 pub struct BBoxIndex {
     bounds: Vec<BBox>,
-    cells: HashMap<(i64, i64), Vec<usize>>,
-    enclosing: Vec<usize>,
-    pitch: f64,
+    grid: CellGrid,
 }
 
 impl BBoxIndex {
     pub fn new(bounds: Vec<BBox>) -> Self {
         let total = bounds.iter().copied().fold(BBox::empty(), BBox::union);
-        let pitch = if total.is_empty() {
-            2.0
-        } else {
-            (total.width().max(total.height()) / 64.0).max(2.0)
-        };
-        let mut index = Self {
-            bounds,
-            cells: HashMap::new(),
-            enclosing: Vec::new(),
+        let pitch = (total.width().max(total.height()) / 64.0).max(2.0);
+        let grid = CellGrid::new(
             pitch,
-        };
-        for (id, bbox) in index.bounds.iter().enumerate() {
-            if bbox.is_empty() {
-                continue;
-            }
-            let (x0, y0, x1, y1) = index.cells_for(*bbox);
-            if (x1 - x0 + 1).saturating_mul(y1 - y0 + 1) > 256 {
-                index.enclosing.push(id);
-                continue;
-            }
-            for x in x0..=x1 {
-                for y in y0..=y1 {
-                    index.cells.entry((x, y)).or_default().push(id);
-                }
-            }
-        }
-        index
+            total,
+            bounds.iter().enumerate().flat_map(|(id, &bounds)| {
+                CellGrid::cells_of(bounds, pitch).map(move |cell| (id as u32, cell))
+            }),
+        );
+        Self { bounds, grid }
     }
 
-    fn cells_for(&self, bbox: BBox) -> (i64, i64, i64, i64) {
-        let cell = |value: f64| (value / self.pitch).floor() as i64;
-        (
-            cell(bbox.min.x),
-            cell(bbox.min.y),
-            cell(bbox.max.x),
-            cell(bbox.max.y),
-        )
-    }
-
+    /// The ids of the bounds meeting `bbox`, ascending.
     pub fn query(&self, bbox: BBox) -> Vec<usize> {
-        if bbox.is_empty() {
-            return Vec::new();
-        }
-        let (x0, y0, x1, y1) = self.cells_for(bbox);
-        if (x1 - x0 + 1).saturating_mul(y1 - y0 + 1) > 4096 {
-            return self
-                .bounds
-                .iter()
-                .enumerate()
-                .filter_map(|(id, bounds)| bounds.intersects(bbox).then_some(id))
-                .collect();
-        }
-        let mut candidates = self.enclosing.clone();
-        for x in x0..=x1 {
-            for y in y0..=y1 {
-                if let Some(ids) = self.cells.get(&(x, y)) {
-                    candidates.extend(ids);
-                }
-            }
-        }
-        candidates.sort_unstable();
-        candidates.dedup();
-        candidates.retain(|&id| self.bounds[id].intersects(bbox));
-        candidates
+        let mut ids = self.grid.rectangle(bbox).collect::<Vec<_>>();
+        ids.sort_unstable();
+        ids.dedup();
+        ids.into_iter()
+            .map(|id| id as usize)
+            .filter(|&id| self.bounds[id].intersects(bbox))
+            .collect()
     }
 }
 
@@ -104,9 +59,9 @@ impl BBoxIndex {
 /// answer counts the region boundary as one flattened input.
 #[derive(Debug, Clone)]
 pub struct RegionBoundaryIndex {
-    cell_size_mm: f64,
     segments: Vec<(Point, Point)>,
-    cells: HashMap<(i64, i64), Vec<u32>>,
+    bounds: Vec<BBox>,
+    grid: CellGrid,
 }
 
 /// Grid pitch bounds. Queries stay correct for any pitch; these only keep the
@@ -119,26 +74,31 @@ impl RegionBoundaryIndex {
     ///
     /// The radius is a pitch hint, not a limit: queries may pass any distance.
     pub fn new(region: &ContourSet, search_radius_mm: f64) -> Self {
-        let cell_size_mm = search_radius_mm.clamp(MIN_CELL_MM, MAX_CELL_MM);
+        let pitch = search_radius_mm.clamp(MIN_CELL_MM, MAX_CELL_MM);
         let segments = region.rings.iter().flat_map(ring_edges).collect::<Vec<_>>();
-        let mut cells: HashMap<(i64, i64), Vec<u32>> = HashMap::new();
-        for (index, &(start, end)) in segments.iter().enumerate() {
-            for cell in corridor_cells(start, end, 0.0, cell_size_mm) {
-                cells.entry(cell).or_default().push(index as u32);
-            }
-        }
+        let bounds = segments
+            .iter()
+            .map(|&(start, end)| BBox::spanning(start, end))
+            .collect();
+        let grid = CellGrid::new(
+            pitch,
+            region.bbox,
+            segments.iter().enumerate().flat_map(|(id, &(start, end))| {
+                corridor_cells(start, end, 0.0, pitch).map(move |cell| (id as u32, cell))
+            }),
+        );
         Self {
-            cell_size_mm,
             segments,
-            cells,
+            bounds,
+            grid,
         }
     }
 
     /// Nearest boundary point no farther than `max_distance_mm` from `point`.
     pub fn nearest_within(&self, point: Point, max_distance_mm: f64) -> Option<Distance> {
-        let cells = corridor_cells(point, point, max_distance_mm, self.cell_size_mm);
-        self.segments_in(cells)
-            .map(|&(start, end)| {
+        self.near(point, point, max_distance_mm)
+            .map(|index| {
+                let (start, end) = self.segments[index as usize];
                 let (mm, boundary) = dist::point_segment(point, start, end);
                 Distance::flattened(mm, point, boundary, 1)
             })
@@ -154,14 +114,39 @@ impl RegionBoundaryIndex {
         end: Point,
         max_distance_mm: f64,
     ) -> Option<Distance> {
-        let cells = corridor_cells(start, end, max_distance_mm, self.cell_size_mm);
-        self.segments_in(cells)
-            .map(|&(edge_start, edge_end)| {
+        self.near(start, end, max_distance_mm)
+            .map(|index| {
+                let (edge_start, edge_end) = self.segments[index as usize];
                 let (mm, on_query, on_boundary) = dist::segments(start, end, edge_start, edge_end);
                 Distance::flattened(mm, on_query, on_boundary, 1)
             })
             .filter(|distance| distance.mm <= max_distance_mm + tol::EPSILON_MM)
             .min_by(|left, right| left.mm.total_cmp(&right.mm))
+    }
+
+    /// The indexed segments whose bounds meet `bounds`, in boundary order,
+    /// each once.
+    pub fn segments_meeting(&self, bounds: BBox) -> impl Iterator<Item = (Point, Point)> + '_ {
+        let mut ids = self.grid.rectangle(bounds).collect::<Vec<_>>();
+        ids.sort_unstable();
+        ids.dedup();
+        ids.into_iter()
+            .filter(move |&id| self.bounds[id as usize].intersects(bounds))
+            .map(|id| self.segments[id as usize])
+    }
+
+    /// Ids of the indexed segments whose bounds come within `reach` of the
+    /// query segment, in grid order: column by column, row by row, then by
+    /// id. A segment spanning several cells is yielded once per cell. The
+    /// minimum a consumer takes is unchanged by the repeats, and of equal
+    /// minima it keeps the first, which is always the first cell's copy.
+    fn near(&self, start: Point, end: Point, reach: f64) -> impl Iterator<Item = u32> + '_ {
+        let query = BBox::spanning(start, end).expand(reach + tol::EPSILON_MM);
+        corridor_columns(start, end, reach, self.grid.pitch_mm())
+            .flat_map(move |(column, min_row, max_row)| {
+                self.grid.column(column, min_row, max_row).iter().copied()
+            })
+            .filter(move |&id| self.bounds[id as usize].intersects(query))
     }
 
     /// Parameter intervals along a segment within `distance_mm` of the
@@ -211,38 +196,22 @@ impl RegionBoundaryIndex {
             1,
         ))
     }
-
-    /// Every indexed segment registered in any of `cells`. A segment spanning
-    /// several cells is yielded once per cell; every consumer takes a
-    /// minimum, for which repeats are harmless.
-    fn segments_in(
-        &self,
-        cells: impl Iterator<Item = (i64, i64)>,
-    ) -> impl Iterator<Item = &(Point, Point)> {
-        cells
-            .filter_map(|cell| self.cells.get(&cell))
-            .flatten()
-            .map(|&index| &self.segments[index as usize])
-    }
 }
 
-fn grid_cell(value: f64, cell_size_mm: f64) -> i64 {
-    (value / cell_size_mm).floor() as i64
-}
-
-/// Every grid cell within `radius_mm` of the segment, column by column, so
-/// long diagonal segments touch a linear number of cells instead of their
-/// whole bounding box. A zero-length segment yields the cells around a point.
-fn corridor_cells(
+/// Every grid column within `radius_mm` of the segment with the rows it
+/// covers there, so long diagonal segments touch a linear number of cells
+/// instead of their whole bounding box. A zero-length segment yields the
+/// cells around a point.
+fn corridor_columns(
     start: Point,
     end: Point,
     radius_mm: f64,
     cell_size_mm: f64,
-) -> impl Iterator<Item = (i64, i64)> {
-    let min_column = grid_cell(start.x.min(end.x) - radius_mm, cell_size_mm);
-    let max_column = grid_cell(start.x.max(end.x) + radius_mm, cell_size_mm);
+) -> impl Iterator<Item = (i64, i64, i64)> {
+    let min_column = CellGrid::cell(start.x.min(end.x) - radius_mm, cell_size_mm);
+    let max_column = CellGrid::cell(start.x.max(end.x) + radius_mm, cell_size_mm);
     let delta = end - start;
-    (min_column..=max_column).flat_map(move |column| {
+    (min_column..=max_column).map(move |column| {
         let column_min = column as f64 * cell_size_mm - radius_mm;
         let column_max = (column + 1) as f64 * cell_size_mm + radius_mm;
         let (t_min, t_max) = if delta.x.abs() <= f64::EPSILON {
@@ -257,10 +226,21 @@ fn corridor_cells(
         };
         let y_at_min = start.y + delta.y * t_min;
         let y_at_max = start.y + delta.y * t_max;
-        let min_row = grid_cell(y_at_min.min(y_at_max) - radius_mm, cell_size_mm);
-        let max_row = grid_cell(y_at_min.max(y_at_max) + radius_mm, cell_size_mm);
-        (min_row..=max_row).map(move |row| (column, row))
+        let min_row = CellGrid::cell(y_at_min.min(y_at_max) - radius_mm, cell_size_mm);
+        let max_row = CellGrid::cell(y_at_min.max(y_at_max) + radius_mm, cell_size_mm);
+        (column, min_row, max_row)
     })
+}
+
+/// Every grid cell of the corridor, column by column and row by row.
+fn corridor_cells(
+    start: Point,
+    end: Point,
+    radius_mm: f64,
+    cell_size_mm: f64,
+) -> impl Iterator<Item = (i64, i64)> {
+    corridor_columns(start, end, radius_mm, cell_size_mm)
+        .flat_map(|(column, min_row, max_row)| (min_row..=max_row).map(move |row| (column, row)))
 }
 
 /// Set distance between two closed disks: `max(0, ‖c₁ − c₂‖ − r₁ − r₂)`,
@@ -293,44 +273,79 @@ pub fn region_clearance(first: &ContourSet, second: &ContourSet) -> Option<Dista
     if first.is_empty() || second.is_empty() {
         return None;
     }
+    // Nothing lies farther apart than the span of both bounds.
+    let span = first.bbox.union(second.bbox);
+    let reach = span.width().hypot(span.height());
+    region_clearance_within(
+        first,
+        &RegionBoundaryIndex::new(first, reach),
+        second,
+        &RegionBoundaryIndex::new(second, reach),
+        reach,
+    )
+}
 
-    if let Some(point) = contained_vertex(first, second).or_else(|| contained_vertex(second, first))
+/// Shortest clearance between two filled regions when it is no greater than
+/// `maximum_mm`.
+///
+/// Each boundary index must index its region. Overlapping, contained, or
+/// touching regions have zero clearance. `None` means at least one input is
+/// empty or the clearance is greater than `maximum_mm`.
+pub fn region_clearance_within(
+    first: &ContourSet,
+    first_boundary: &RegionBoundaryIndex,
+    second: &ContourSet,
+    second_boundary: &RegionBoundaryIndex,
+    maximum_mm: f64,
+) -> Option<Distance> {
+    if first.is_empty() || second.is_empty() {
+        return None;
+    }
+
+    // Every vertex starts one boundary edge, so a region's vertices inside
+    // the other's bounds are among the starts of its edges meeting them.
+    let starts = |segments: Vec<(Point, Point)>| segments.into_iter().map(|(start, _)| start);
+    if first.bbox.intersects(second.bbox)
+        && let Some(point) = contained_vertex(
+            starts(first_boundary.segments_meeting(second.bbox).collect()),
+            second,
+        )
+        .or_else(|| {
+            contained_vertex(
+                starts(second_boundary.segments_meeting(first.bbox).collect()),
+                first,
+            )
+        })
     {
         return Some(Distance::flattened(0.0, point, point, 2));
     }
 
-    closest_ring_edges(&first.rings, &second.rings)
+    // Only the first boundary's edges within reach of the second region's
+    // bounds can come within reach of its boundary.
+    first_boundary
+        .segments_meeting(second.bbox.expand(maximum_mm + tol::EPSILON_MM))
+        .filter_map(|(first_start, first_end)| {
+            second_boundary
+                .segment_nearest_within(first_start, first_end, maximum_mm)
+                .map(|distance| distance.also_flattened(1))
+        })
+        .min_by(|left, right| left.mm.total_cmp(&right.mm))
 }
 
-/// A vertex of `subject` inside `container`, batched in one winding sweep.
-fn contained_vertex(subject: &ContourSet, container: &ContourSet) -> Option<Point> {
-    let vertices = subject
-        .rings
-        .iter()
-        .flat_map(|ring| ring.iter())
-        .map(|&[x, y]| Point::new(x, y))
+/// The first of a subject's `vertices` inside `container`, batched in one
+/// winding sweep.
+fn contained_vertex(
+    vertices: impl Iterator<Item = Point>,
+    container: &ContourSet,
+) -> Option<Point> {
+    let vertices = vertices
+        .filter(|&point| container.bbox.contains_point(point))
         .collect::<Vec<_>>();
     container
         .contains_points_batch(&vertices)
         .into_iter()
         .zip(vertices)
         .find_map(|(inside, vertex)| inside.then_some(vertex))
-}
-
-fn closest_ring_edges(first: &[Ring], second: &[Ring]) -> Option<Distance> {
-    first
-        .iter()
-        .flat_map(ring_edges)
-        .flat_map(|(first_start, first_end)| {
-            second.iter().flat_map(move |ring| {
-                ring_edges(ring).map(move |(second_start, second_end)| {
-                    let (mm, on_first, on_second) =
-                        dist::segments(first_start, first_end, second_start, second_end);
-                    Distance::flattened(mm, on_first, on_second, 2)
-                })
-            })
-        })
-        .min_by(|left, right| left.mm.total_cmp(&right.mm))
 }
 
 /// A connected local clearance failure. The paths are the participating
@@ -474,9 +489,19 @@ pub fn region_clearance_sites(
     second: &ContourSet,
     minimum_mm: f64,
 ) -> Vec<ClearanceSite> {
-    let lines = first.rings.iter().flat_map(ring_edges).collect::<Vec<_>>();
     let index = RegionBoundaryIndex::new(second, minimum_mm);
-    let mut sites = linework_clearance_sites(&lines, second, &index, minimum_mm, 1);
+    region_clearance_sites_with_index(first, second, &index, minimum_mm)
+}
+
+/// Local sites between two filled regions, reusing an index of `second`.
+pub fn region_clearance_sites_with_index(
+    first: &ContourSet,
+    second: &ContourSet,
+    second_boundary: &RegionBoundaryIndex,
+    minimum_mm: f64,
+) -> Vec<ClearanceSite> {
+    let lines = first.rings.iter().flat_map(ring_edges).collect::<Vec<_>>();
+    let mut sites = linework_clearance_sites(&lines, second, second_boundary, minimum_mm, 1);
     for overlap in first.intersection(second).connected_components() {
         let Some(point) = overlap
             .rings
@@ -528,8 +553,8 @@ pub fn region_clearance_sites(
 
 /// A local required-clearance band around the supplied reference paths.
 pub fn linework_envelope(paths: &[Vec<Point>], radius_mm: f64) -> ContourSet {
-    use crate::geom::path::{ContourBuf, PathCmd};
-    use crate::geom::{Paint, PathArena, StrokeStyle};
+    use crate::geom::path::{ContourBuf, PathCmd, stroke_to_fill};
+    use crate::geom::{FillRule, StrokeStyle};
     let contours = paths
         .iter()
         .filter(|path| path.len() >= 2)
@@ -541,13 +566,9 @@ pub fn linework_envelope(paths: &[Vec<Point>], radius_mm: f64) -> ContourSet {
             )
         })
         .collect::<Vec<_>>();
-    let mut arena = PathArena::default();
-    let path = arena.push_path(Paint::Stroke(StrokeStyle::round(2.0 * radius_mm)), contours);
-    ContourSet::from_painted_paths(
-        &arena,
-        std::iter::once(&arena.paths[path as usize]),
-        tol::REGION_MM,
-    )
+    let band =
+        stroke_to_fill(&contours, StrokeStyle::round(2.0 * radius_mm).into()).unwrap_or_default();
+    ContourSet::from_contours(&band, FillRule::NonZero, tol::REGION_MM)
 }
 
 /// Circular material in the same flattened representation as check images.
@@ -574,17 +595,14 @@ fn indexed_edges_near(
         .collect()
 }
 
+/// The distinct indexed segments near the query, by id.
 fn indexed_edge_ids_near(
     index: &RegionBoundaryIndex,
     start: Point,
     end: Point,
     reach: f64,
 ) -> Vec<u32> {
-    let mut ids = corridor_cells(start, end, reach, index.cell_size_mm)
-        .filter_map(|cell| index.cells.get(&cell))
-        .flatten()
-        .copied()
-        .collect::<Vec<_>>();
+    let mut ids = index.near(start, end, reach).collect::<Vec<_>>();
     ids.sort_unstable();
     ids.dedup();
     ids
@@ -696,9 +714,21 @@ fn interval_complement(intervals: &[(f64, f64)]) -> Vec<(f64, f64)> {
     result
 }
 
+/// Lines grouped by shared endpoints, within the region tolerance, in the
+/// order of each group's first line.
 fn connected_line_groups(lines: &[(Point, Point)]) -> Vec<Vec<usize>> {
+    let endpoints = lines.iter().flat_map(|&(a, b)| [a, b]).collect::<Vec<_>>();
+    let bounds = endpoints.iter().fold(BBox::empty(), |bounds, &point| {
+        bounds.union(BBox::from_point(point))
+    });
+    let grid = CellGrid::new(
+        1.0,
+        bounds,
+        endpoints.iter().enumerate().flat_map(|(id, &point)| {
+            CellGrid::cells_of(BBox::from_point(point), 1.0).map(move |cell| (id as u32, cell))
+        }),
+    );
     let mut parents = (0..lines.len()).collect::<Vec<_>>();
-    let mut endpoints: HashMap<(i64, i64), Vec<(Point, usize)>> = HashMap::new();
     fn root(parents: &mut [usize], mut id: usize) -> usize {
         while parents[id] != id {
             parents[id] = parents[parents[id]];
@@ -706,30 +736,22 @@ fn connected_line_groups(lines: &[(Point, Point)]) -> Vec<Vec<usize>> {
         }
         id
     }
-    for (id, &(first, second)) in lines.iter().enumerate() {
-        for point in [first, second] {
-            let key = (
-                (point.x / tol::REGION_MM).round() as i64,
-                (point.y / tol::REGION_MM).round() as i64,
-            );
-            for x in key.0 - 1..=key.0 + 1 {
-                for y in key.1 - 1..=key.1 + 1 {
-                    for &(other_point, other) in endpoints.get(&(x, y)).into_iter().flatten() {
-                        if point.distance_to(other_point) <= tol::REGION_MM {
-                            let (a, b) = (root(&mut parents, id), root(&mut parents, other));
-                            parents[a] = b;
-                        }
-                    }
-                }
+    for (id, &point) in endpoints.iter().enumerate() {
+        for other in grid.rectangle(BBox::from_point(point).expand(tol::REGION_MM)) {
+            if point.distance_to(endpoints[other as usize]) <= tol::REGION_MM {
+                let (a, b) = (
+                    root(&mut parents, id / 2),
+                    root(&mut parents, other as usize / 2),
+                );
+                parents[a] = b;
             }
-            endpoints.entry(key).or_default().push((point, id));
         }
     }
-    let mut positions = HashMap::new();
+    let mut positions = vec![None; lines.len()];
     let mut groups: Vec<Vec<usize>> = Vec::new();
     for id in 0..lines.len() {
         let owner = root(&mut parents, id);
-        let position = *positions.entry(owner).or_insert_with(|| {
+        let position = *positions[owner].get_or_insert_with(|| {
             groups.push(Vec::new());
             groups.len() - 1
         });
@@ -797,9 +819,16 @@ pub fn thin_features(region: &ContourSet, min_width_mm: f64) -> Vec<ThinPiece> {
     pieces(
         region.disk_feature_violation_components(
             (min_width_mm + MORPHOLOGY_CANDIDATE_GUARD_MM) / 2.0,
+            reportable_width(min_width_mm),
         ),
         min_width_mm,
     )
+}
+
+/// The widest measurement certainly below `min_mm` once both flattened
+/// walls' uncertainty is counted, as [`pieces`] requires.
+fn reportable_width(min_mm: f64) -> f64 {
+    min_mm - 2.0 * tol::FLATTEN_MM
 }
 
 /// Gaps in the material certainly narrower than `min_gap_mm`, including
@@ -808,7 +837,10 @@ pub fn thin_features(region: &ContourSet, min_width_mm: f64) -> Vec<ThinPiece> {
 /// Largest piece first.
 pub fn thin_gaps(region: &ContourSet, min_gap_mm: f64) -> Vec<ThinPiece> {
     pieces(
-        region.disk_gap_violation_components((min_gap_mm + MORPHOLOGY_CANDIDATE_GUARD_MM) / 2.0),
+        region.disk_gap_violation_components(
+            (min_gap_mm + MORPHOLOGY_CANDIDATE_GUARD_MM) / 2.0,
+            reportable_width(min_gap_mm),
+        ),
         min_gap_mm,
     )
 }
@@ -1194,6 +1226,39 @@ mod tests {
         let container = rect_region(-2.0, -2.0, 2.0, 2.0);
         let contained = rect_region(-0.5, -0.5, 0.5, 0.5);
         assert_eq!(region_clearance(&container, &contained).unwrap().mm, 0.0);
+    }
+
+    #[test]
+    fn thresholded_region_clearance_matches_authoritative_measurement() {
+        let left = rect_region(0.0, 0.0, 2.0, 2.0);
+        let right = rect_region(3.5, 0.5, 5.0, 1.5);
+        let clearance_within = |first: &ContourSet, second: &ContourSet, maximum_mm: f64| {
+            region_clearance_within(
+                first,
+                &RegionBoundaryIndex::new(first, maximum_mm),
+                second,
+                &RegionBoundaryIndex::new(second, maximum_mm),
+                maximum_mm,
+            )
+        };
+
+        assert_eq!(
+            clearance_within(&left, &right, 2.0),
+            region_clearance(&left, &right)
+        );
+        assert_eq!(clearance_within(&left, &right, 1.0), None);
+
+        let crossing = rect_region(1.0, -1.0, 1.5, 3.0);
+        assert_eq!(
+            clearance_within(&left, &crossing, 0.1),
+            region_clearance(&left, &crossing)
+        );
+
+        let contained = rect_region(0.5, 0.5, 1.5, 1.5);
+        assert_eq!(
+            clearance_within(&left, &contained, 0.1),
+            region_clearance(&left, &contained)
+        );
     }
 
     #[test]

@@ -11,9 +11,11 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - Allow 0.5 mm plated slots (0.6 mm preferred).
+- Speed up IPC-2581 DFM geometry checks.
 
 ### Fixed
 
+- Report a sharp copper tip narrower than the minimum width when it stands alone.
 - Check netless pads as isolated copper in DFM reports.
 - Ignore nested `NotConnected()` interface members when creating schematic sheet ports.
 

@@ -559,7 +559,8 @@ pub fn compose_attributed<LayerMeta: Clone, ObjectMeta: Clone, Owner: Clone + Eq
     compose_selected_attributed(doc, |meta| Some(owner(meta)))
 }
 
-/// Ordered artwork composition for only the owners selected by the caller.
+/// Ordered artwork composition for only the owners selected by the caller,
+/// with each layer's image as the union of its owners.
 ///
 /// Unselected dark objects cannot change a selected owner's image and are
 /// skipped. Clear objects and final cutouts still subtract from selected
@@ -572,6 +573,33 @@ pub(crate) fn compose_selected_attributed<
     doc: &Document<LayerMeta, ObjectMeta>,
     owner: impl Fn(&ObjectMeta) -> Option<Owner>,
 ) -> (Vec<AttributedImage<Owner>>, Vec<Diagnostic>) {
+    let (layers, diagnostics) = compose_selected_owners(doc, owner);
+    let layers = layers
+        .into_iter()
+        .map(|owners| AttributedImage {
+            image: region::union_rings(
+                owners
+                    .iter()
+                    .flat_map(|(_, image)| image.iter().cloned())
+                    .collect(),
+                FillRule::NonZero,
+            ),
+            owners,
+        })
+        .collect();
+    (layers, diagnostics)
+}
+
+/// One layer's owner images in first-paint order; every image is a
+/// regularized ring set.
+pub type OwnerImages<Owner> = Vec<(Owner, Vec<Ring>)>;
+
+/// Each layer's owner images from the ordered paint fold, for only the
+/// owners selected by the caller.
+pub fn compose_selected_owners<LayerMeta: Clone, ObjectMeta: Clone, Owner: Clone + Eq + Hash>(
+    doc: &Document<LayerMeta, ObjectMeta>,
+    owner: impl Fn(&ObjectMeta) -> Option<Owner>,
+) -> (Vec<OwnerImages<Owner>>, Vec<Diagnostic>) {
     let doc = expand_native_geometry_to_regions(doc.clone());
     struct OwnerState {
         composer: region::PaintComposer,
@@ -641,21 +669,15 @@ pub(crate) fn compose_selected_attributed<
             }
         }
 
-        let owners = states
-            .into_iter()
-            .filter_map(|(owner, state)| {
-                let image = state.composer.finish();
-                (!image.is_empty()).then_some((owner, image))
-            })
-            .collect::<Vec<_>>();
-        let image = region::union_rings(
-            owners
-                .iter()
-                .flat_map(|(_, image)| image.iter().cloned())
-                .collect(),
-            FillRule::NonZero,
+        layers.push(
+            states
+                .into_iter()
+                .filter_map(|(owner, state)| {
+                    let image = state.composer.finish();
+                    (!image.is_empty()).then_some((owner, image))
+                })
+                .collect::<Vec<_>>(),
         );
-        layers.push(AttributedImage { image, owners });
     }
     (layers, doc.diagnostics)
 }

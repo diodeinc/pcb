@@ -8,7 +8,9 @@
 //! or contained distinct-owner regions measure zero.
 
 use pcb_ir::geom::BBox;
-use pcb_ir::geom::dfm::{region_clearance, region_clearance_sites};
+use pcb_ir::geom::dfm::{
+    RegionBoundaryIndex, region_clearance_sites_with_index, region_clearance_within,
+};
 
 use crate::commands::dfm::design::{ConductorId, Design};
 use crate::commands::dfm::report::{Evidence, SourceLocator, Subject};
@@ -34,11 +36,10 @@ pub(super) fn evaluate(limit_mm: f64, conditions: &Conditions, design: &Design) 
             .iter()
             .map(|conductor| conductor.image.connected_components())
             .collect::<Vec<_>>();
-        for (index, left) in components.iter().enumerate() {
-            checked += components[index + 1..]
-                .iter()
-                .map(|right| left.len() * right.len())
-                .sum::<usize>();
+        let mut earlier_components = 0;
+        for conductor_components in &components {
+            checked += earlier_components * conductor_components.len();
+            earlier_components += conductor_components.len();
         }
 
         let mut pieces = components
@@ -60,52 +61,74 @@ pub(super) fn evaluate(limit_mm: f64, conditions: &Conditions, design: &Design) 
                 .then_with(|| left.region.bbox.min.y.total_cmp(&right.region.bbox.min.y))
         });
 
-        for (left_index, left) in pieces.iter().enumerate() {
-            for right in &pieces[left_index + 1..] {
-                if right.region.bbox.min.x - left.region.bbox.max.x >= limit_mm {
-                    break;
-                }
-                if left.conductor_index == right.conductor_index
-                    || left.region.bbox.distance_to(right.region.bbox) >= limit_mm
-                {
-                    continue;
-                }
-                let Some(distance) = region_clearance(&left.region, &right.region) else {
-                    continue;
-                };
+        let boundaries = pieces
+            .iter()
+            .map(|piece| RegionBoundaryIndex::new(&piece.region, limit_mm))
+            .collect::<Vec<_>>();
+        // The pairs the bounds cannot separate, in sweep order along x.
+        let pairs = pieces
+            .iter()
+            .enumerate()
+            .flat_map(|(left_index, left)| {
+                pieces[left_index + 1..]
+                    .iter()
+                    .enumerate()
+                    .take_while(move |(_, right)| {
+                        right.region.bbox.min.x - left.region.bbox.max.x < limit_mm
+                    })
+                    .filter(move |(_, right)| {
+                        left.conductor_index != right.conductor_index
+                            && left.region.bbox.distance_to(right.region.bbox) < limit_mm
+                    })
+                    .map(move |(offset, _)| (left_index, left_index + 1 + offset))
+            })
+            .collect::<Vec<_>>();
 
-                let left_id = layer.conductors[left.conductor_index].id;
-                let right_id = layer.conductors[right.conductor_index].id;
-                let mut bbox = BBox::from_point(distance.first);
-                bbox.include_point(distance.second);
-                measured.push(Measured {
-                    distance,
-                    bbox,
-                    layers: vec![layer.layer.clone()],
-                    subjects: vec![
-                        conductor_subject(design, left_id, "first_conductor", &layer.layer.name),
-                        conductor_subject(design, right_id, "second_conductor", &layer.layer.name),
-                    ],
-                    evidence: vec![
-                        Evidence::bounds("first_conductor_component", left.region.bbox),
-                        Evidence::bounds("second_conductor_component", right.region.bbox),
-                    ],
-                    sites: if violates(&distance, limit_mm) {
-                        region_clearance_sites(&left.region, &right.region, limit_mm)
-                            .into_iter()
-                            .map(|site| {
-                                linework_clearance::report_site(
-                                    site,
-                                    vec![layer.layer.clone()],
-                                    limit_mm,
-                                )
-                            })
-                            .collect()
-                    } else {
-                        Vec::new()
-                    },
-                });
-            }
+        for (left_index, right_index) in pairs {
+            let (left, right) = (&pieces[left_index], &pieces[right_index]);
+            let right_boundary = &boundaries[right_index];
+            let Some(distance) = region_clearance_within(
+                &left.region,
+                &boundaries[left_index],
+                &right.region,
+                right_boundary,
+                limit_mm,
+            ) else {
+                continue;
+            };
+
+            let left_id = layer.conductors[left.conductor_index].id;
+            let right_id = layer.conductors[right.conductor_index].id;
+            let mut bbox = BBox::from_point(distance.first);
+            bbox.include_point(distance.second);
+            measured.push(Measured {
+                distance,
+                bbox,
+                layers: vec![layer.layer.clone()],
+                subjects: vec![
+                    conductor_subject(design, left_id, "first_conductor", &layer.layer.name),
+                    conductor_subject(design, right_id, "second_conductor", &layer.layer.name),
+                ],
+                evidence: vec![
+                    Evidence::bounds("first_conductor_component", left.region.bbox),
+                    Evidence::bounds("second_conductor_component", right.region.bbox),
+                ],
+                sites: if violates(&distance, limit_mm) {
+                    region_clearance_sites_with_index(
+                        &left.region,
+                        &right.region,
+                        right_boundary,
+                        limit_mm,
+                    )
+                    .into_iter()
+                    .map(|site| {
+                        linework_clearance::report_site(site, vec![layer.layer.clone()], limit_mm)
+                    })
+                    .collect()
+                } else {
+                    Vec::new()
+                },
+            });
         }
     }
 

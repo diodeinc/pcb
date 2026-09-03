@@ -23,6 +23,14 @@ impl BBox {
         Self { min: p, max: p }
     }
 
+    /// The bounds of the segment between two points.
+    pub fn spanning(a: Point, b: Point) -> Self {
+        Self {
+            min: Point::new(a.x.min(b.x), a.y.min(b.y)),
+            max: Point::new(a.x.max(b.x), a.y.max(b.y)),
+        }
+    }
+
     pub fn include_point(&mut self, p: Point) {
         self.min.x = self.min.x.min(p.x);
         self.min.y = self.min.y.min(p.y);
@@ -60,6 +68,14 @@ impl BBox {
             .max(self.min.y - other.max.y)
             .max(0.0);
         x.hypot(y)
+    }
+
+    /// Whether the closed bounds contain the point.
+    pub fn contains_point(&self, point: Point) -> bool {
+        self.min.x <= point.x
+            && point.x <= self.max.x
+            && self.min.y <= point.y
+            && point.y <= self.max.y
     }
 
     pub fn expand(self, amount: f64) -> Self {

@@ -18,7 +18,7 @@ use crate::dialects::ipc::{
     ArtworkLowering, ArtworkObjectKind, ArtworkScope, Feature, FeatureDomain, FeatureKind,
     FeatureSpan, HoleShape, PlatingKind, lower_layer_to_artwork_with,
 };
-use crate::geom::{ContourSet, FillRule, Point, Polarity, Span, tol};
+use crate::geom::{ContourSet, Point, Polarity, Span, tol};
 use crate::import::ipc2581::{
     ComponentOccurrence, ComponentOccurrenceId, FeatureOccurrenceId, ImportedDesign, LayerId,
     LayoutOccurrenceId, PopulationState, feature_occurrence_id, is_copper, layer_role,
@@ -824,24 +824,23 @@ impl ImportedDesign {
             meta: definition.layer_function,
         };
         let artwork = lower_layer_to_artwork_with(&document, 0, header, &mut OccurrenceAttribution);
-        let (mut images, _) = artwork::compose_selected_attributed(&artwork, |owner| {
+        let (mut layers, _) = artwork::compose_selected_owners(&artwork, |owner| {
             let owner = (*owner)?;
             self.feature_definition(owner.feature)
                 .filter(|feature| include(feature))
                 .map(|_| owner)
         });
-        let image = images
+        let owners = layers
             .pop()
             .context("attributed physical composition produced no layer")?;
-        image
-            .owners
+        owners
             .into_iter()
             .map(|(owner, rings)| {
                 Ok((
                     *occurrences
                         .get(&owner)
                         .context("composed feature has no canonical occurrence")?,
-                    ContourSet::new(rings, FillRule::NonZero, tol::REGION_MM),
+                    ContourSet::from_regularized(rings, tol::REGION_MM),
                 ))
             })
             .collect()
@@ -1414,7 +1413,7 @@ mod tests {
         let start = imported.geometry.arena.paths.len() as u32;
         imported.geometry.push_path(
             Paint::Fill {
-                rule: FillRule::NonZero,
+                rule: crate::geom::FillRule::NonZero,
             },
             [ContourBuf::new(vec![
                 PathCmd::move_to(Point::new(0.0, 0.0)),
