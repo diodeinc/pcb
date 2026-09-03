@@ -659,17 +659,18 @@ impl ContourSet {
             {
                 return false;
             }
-            if !left
-                .bbox
-                .expand(material_mm.max(void_mm))
-                .intersects(right.bbox)
-            {
+            let same_component = components[left.topology.ring] == components[right.topology.ring];
+            let farthest = if same_component {
+                material_mm.max(void_mm)
+            } else {
+                void_mm
+            };
+            if !left.bbox.expand(farthest).intersects(right.bbox) {
                 return false;
             }
             let (separation, nearest_left, nearest_right) =
                 dist::segments(left.start, left.end, right.start, right.end);
             let across = nearest_right - nearest_left;
-            let same_component = components[left.topology.ring] == components[right.topology.ring];
             let reach = match (
                 same_component,
                 sees_left(left, across),
@@ -1213,43 +1214,48 @@ impl ContourSet {
         two_sided_gap_residual(self, &closing_residual(self, radius))
     }
 
-    /// Connected sub-diameter material residues (opening residue) with the
-    /// local width of each.
+    /// Connected material residues of the opening by `radius` whose local
+    /// width can be under `width_mm`, with the local width of each.
     pub(crate) fn disk_feature_violation_components(
         &self,
         radius: f64,
+        width_mm: f64,
     ) -> Vec<TwoSidedResidualComponent> {
         // Opening is the union of the disks inside a region, and a disk is
-        // connected, so every component opens on its own: one whose walls
-        // never face each other across its material within the disk
-        // diameter opens to itself and has no residue. Separate components
-        // can share a width only where they touch within tolerance. The
-        // snap-rounded width construction moves walls by a tolerance, and
-        // `M \ (X ∩ M)` is `M \ X`, so the opening's clip to the source
-        // is not needed to find what the opening removed.
+        // connected, so every component opens on its own. A width is a disk
+        // touching two facing walls, so it is at least their separation: a
+        // component whose walls never face each other across its material
+        // that closely has no width to find. Separate components share a
+        // width only where they touch within tolerance. The snap-rounded
+        // width construction moves walls by a tolerance, and `M \ (X ∩ M)`
+        // is `M \ X`, so the opening's clip to the source is not needed to
+        // find what the opening removed.
         self.two_sided_residual(radius, |region, radius| {
-            let diameter = 2.0 * (radius + 2.0 * region.tolerance);
+            let facing = width_mm + 4.0 * region.tolerance;
             let touching = 3.0 * region.tolerance + tol::FLATTEN_MM;
-            let candidates = region.facing_components(diameter, touching, 0.0);
+            let candidates = region.facing_components(facing, touching, 0.0);
             candidates.difference(&candidates.disk_erode(radius).disk_dilate(radius))
         })
     }
 
-    /// Connected sub-diameter void residues (closing residue) with the local
-    /// width of each.
+    /// Connected void residues of the closing by `radius` whose local width
+    /// can be under `width_mm`, with the local width of each.
     pub(crate) fn disk_gap_violation_components(
         &self,
         radius: f64,
+        width_mm: f64,
     ) -> Vec<TwoSidedResidualComponent> {
         // Closing fills only void narrower than the disk diameter, between
-        // walls facing across it. A residue point there lies within a radius
-        // of those walls, and the disks that decide it reach a diameter
-        // further, so everything within two diameters comes along as
-        // context and the closing of that neighbourhood is the closing of
-        // the whole region there.
+        // walls facing across it, and a width is at least the separation of
+        // the walls it touches. A residue point lies within a radius of its
+        // walls, and the disks that decide it reach a diameter further, so
+        // everything within two diameters comes along as context and the
+        // closing of that neighbourhood is the closing of the whole region
+        // there.
         self.two_sided_residual(radius, |region, radius| {
-            let diameter = 2.0 * (radius + 2.0 * region.tolerance);
-            let candidates = region.facing_components(0.0, diameter, 2.0 * diameter);
+            let facing = width_mm + 4.0 * region.tolerance;
+            let context = 4.0 * (radius + 2.0 * region.tolerance);
+            let candidates = region.facing_components(0.0, facing, context);
             closing_residual(&candidates, radius)
         })
     }
