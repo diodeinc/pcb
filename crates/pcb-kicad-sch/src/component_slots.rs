@@ -1,11 +1,11 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use anyhow::{Context, Result, bail};
 use pcb_sch::{
     ATTR_SYMBOL_FORMAT_VERSION, AttributeValue, Instance, InstanceKind, InstanceRef, Schematic,
 };
 
-use crate::{SymbolDefinition, SymbolSlotKey, canonical_component_path, symbol};
+use crate::{Symbol, SymbolDefinition, SymbolSlotKey, canonical_component_path, symbol};
 
 pub(crate) const SYMBOL_VALUE_ATTR: &str = "__symbol_value";
 pub(crate) const SYMBOL_PATH_ATTR: &str = "symbol_path";
@@ -75,6 +75,63 @@ pub(crate) fn component_symbol_slots(netlist: &Schematic) -> Result<Vec<SymbolSl
     }
     slots.sort();
     Ok(slots)
+}
+
+pub(crate) fn component_instances(netlist: &Schematic) -> Result<BTreeMap<String, &Instance>> {
+    let mut result = BTreeMap::new();
+    for (instance_ref, instance) in &netlist.instances {
+        if instance.kind != InstanceKind::Component {
+            continue;
+        }
+        let path = canonical_component_path(&instance_ref.instance_path)
+            .context("component instance has no canonical path")?;
+        if result.insert(path.clone(), instance).is_some() {
+            bail!("netlist contains duplicate component path '{path}'");
+        }
+    }
+    Ok(result)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct NetlistDerivedSymbolProperties {
+    dnp: bool,
+    in_bom: bool,
+    on_board: bool,
+    in_pos_files: bool,
+}
+
+impl NetlistDerivedSymbolProperties {
+    fn from_instance(instance: &Instance) -> Self {
+        Self {
+            dnp: instance.dnp(),
+            in_bom: !instance.skip_bom(),
+            // Excluding placement output does not remove the component from the board.
+            on_board: true,
+            in_pos_files: !instance.skip_pos(),
+        }
+    }
+
+    fn from_symbol(symbol: &Symbol) -> Self {
+        Self {
+            dnp: symbol.dnp,
+            in_bom: symbol.in_bom,
+            on_board: symbol.on_board,
+            in_pos_files: symbol.in_pos_files,
+        }
+    }
+}
+
+pub(crate) fn sync_netlist_derived_symbol_properties(
+    symbol: &mut Symbol,
+    instance: &Instance,
+) -> bool {
+    let properties = NetlistDerivedSymbolProperties::from_instance(instance);
+    let changed = NetlistDerivedSymbolProperties::from_symbol(symbol) != properties;
+    symbol.dnp = properties.dnp;
+    symbol.in_bom = properties.in_bom;
+    symbol.on_board = properties.on_board;
+    symbol.in_pos_files = properties.in_pos_files;
+    changed
 }
 
 pub(crate) fn port_pad_numbers(netlist: &Schematic, port: &InstanceRef) -> BTreeSet<String> {

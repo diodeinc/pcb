@@ -89,7 +89,7 @@ pub(crate) fn reconcile_document(
         remove_locations,
         connectivity: selected_connectivity,
     } = repair_targets(issue_selection, inspection_before, &expected_slots)?;
-    let instances = component_instances(netlist)?;
+    let instances = component_slots::component_instances(netlist)?;
     let mut selected_existing = BTreeMap::new();
     for slot in &project_slots {
         if let Some(symbol) = select_existing_symbol(slot, existing_slots.get(slot)) {
@@ -744,21 +744,6 @@ fn select_existing_symbol(
         .cloned()
 }
 
-fn component_instances(netlist: &Schematic) -> Result<BTreeMap<String, &Instance>> {
-    let mut result = BTreeMap::new();
-    for (instance_ref, instance) in &netlist.instances {
-        if instance.kind != InstanceKind::Component {
-            continue;
-        }
-        let path = crate::canonical_component_path(&instance_ref.instance_path)
-            .context("component instance has no canonical path")?;
-        if result.insert(path.clone(), instance).is_some() {
-            bail!("netlist contains duplicate component path '{path}'");
-        }
-    }
-    Ok(result)
-}
-
 fn linked_modules(netlist: &Schematic) -> Result<Vec<hierarchy::LinkedModule>> {
     let component_paths = netlist
         .instances
@@ -1179,7 +1164,7 @@ fn placement_blocks(
     targets: &BTreeMap<String, Vec<PinTarget>>,
     bounds_by_slot: &BTreeMap<SymbolSlotKey, GridRect>,
 ) -> Result<Vec<PlacementBlock>> {
-    let instances = component_instances(netlist)?;
+    let instances = component_slots::component_instances(netlist)?;
     let slots_by_component = relocatable_slots.iter().cloned().fold(
         BTreeMap::<String, Vec<SymbolSlotKey>>::new(),
         |mut components, slot| {
@@ -1664,11 +1649,10 @@ fn build_component_symbol(
         at,
         rotation,
         mirror,
-        dnp: instance.dnp(),
-        in_bom: !instance.skip_bom(),
-        // `skip_pos` excludes placement output; it does not remove the component from the board.
+        dnp: false,
+        in_bom: true,
         on_board: true,
-        in_pos_files: !instance.skip_pos(),
+        in_pos_files: true,
         fields_autoplaced: previous
             .map(|symbol| symbol.fields_autoplaced)
             .unwrap_or(true),
@@ -1679,6 +1663,7 @@ fn build_component_symbol(
             .map(|symbol| symbol.unsupported.clone())
             .unwrap_or_default(),
     };
+    component_slots::sync_netlist_derived_symbol_properties(&mut symbol, instance);
     reconcile_pin_instances(&mut symbol, definition, previous_pins)?;
     if previous.is_none() {
         field_autoplace::apply_definition_field_styles(&mut symbol, definition)?;

@@ -7,7 +7,7 @@ use pcb_kicad_sch::{
     analysis::{SchematicIssue, SchematicIssueKey, inspect_schematic},
     connectivity::{PhysicalConnectivity, PinVisibility},
     deterministic_uuid,
-    reconcile::{plan_reconciliation, plan_repairs},
+    reconcile::{plan_reconciliation, plan_repairs, sync_netlist_derived_symbol_properties},
 };
 use pcb_sch::{AttributeValue, Schematic};
 
@@ -127,6 +127,63 @@ fn reconciliation_refreshes_netlist_derived_symbol_properties() {
 
     let unchanged = plan_reconciliation(Some(&reopened), &netlist, "Editor.kicad_sch").unwrap();
     assert!(unchanged.is_empty(), "{:#?}", unchanged.edits());
+}
+
+#[test]
+fn netlist_derived_symbol_properties_sync_without_repairing_topology() {
+    let mut netlist = common::compile_fixture("analysis", "simple.zen");
+    let mut document = plan_reconciliation(None, &netlist, "Editor.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    let instance = netlist
+        .instances
+        .values_mut()
+        .find(|instance| instance.reference_designator.as_deref() == Some("R1"))
+        .expect("R1 instance");
+    instance
+        .attributes
+        .insert("dnp".to_string(), AttributeValue::Boolean(true));
+    instance
+        .attributes
+        .insert("skip_bom".to_string(), AttributeValue::Boolean(true));
+    instance
+        .attributes
+        .insert("skip_pos".to_string(), AttributeValue::Boolean(true));
+
+    let item_count = document.pages[0].items.len();
+    document.pages[0].items.retain(
+        |item| !matches!(item, SchItem::Symbol(symbol) if symbol.field_value("Path") == Some("R2.R")),
+    );
+    assert!(
+        !inspect_schematic(&document, &netlist)
+            .unwrap()
+            .analysis
+            .is_equivalent()
+    );
+
+    assert!(sync_netlist_derived_symbol_properties(&mut document, &netlist).unwrap());
+    let symbol = document.pages[0]
+        .items
+        .iter()
+        .find_map(|item| match item {
+            SchItem::Symbol(symbol) if symbol.field_value("Path") == Some("R1.R") => Some(symbol),
+            _ => None,
+        })
+        .expect("R1 symbol");
+    assert!(symbol.dnp);
+    assert!(!symbol.in_bom);
+    assert!(symbol.on_board);
+    assert!(!symbol.in_pos_files);
+    assert_eq!(document.pages[0].items.len(), item_count - 1);
+    assert!(
+        !inspect_schematic(&document, &netlist)
+            .unwrap()
+            .analysis
+            .is_equivalent(),
+        "property synchronization must not repair the missing R2 symbol"
+    );
+    assert!(!sync_netlist_derived_symbol_properties(&mut document, &netlist).unwrap());
 }
 
 #[test]
