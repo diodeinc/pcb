@@ -334,7 +334,16 @@ pub fn region_clearance(first: &ContourSet, second: &ContourSet) -> Option<Dista
         return None;
     }
 
-    if let Some(point) = contained_vertex(first, second).or_else(|| contained_vertex(second, first))
+    let vertices = |region: &ContourSet| {
+        region
+            .rings
+            .iter()
+            .flat_map(|ring| ring.iter())
+            .map(|&[x, y]| Point::new(x, y))
+            .collect::<Vec<_>>()
+    };
+    if let Some(point) = contained_vertex(vertices(first), second)
+        .or_else(|| contained_vertex(vertices(second), first))
     {
         return Some(Distance::flattened(0.0, point, point, 2));
     }
@@ -359,9 +368,17 @@ pub fn region_clearance_within(
         return None;
     }
 
+    // Every vertex starts one boundary edge, so a region's vertices inside
+    // the other's bounds are among the starts of its edges meeting them.
+    let vertices_within = |boundary: &RegionBoundaryIndex, bounds: BBox| {
+        boundary
+            .segments_meeting(bounds)
+            .map(|(start, _)| start)
+            .collect::<Vec<_>>()
+    };
     if first.bbox.intersects(second.bbox)
-        && let Some(point) =
-            contained_vertex(first, second).or_else(|| contained_vertex(second, first))
+        && let Some(point) = contained_vertex(vertices_within(first_boundary, second.bbox), second)
+            .or_else(|| contained_vertex(vertices_within(second_boundary, first.bbox), first))
     {
         return Some(Distance::flattened(0.0, point, point, 2));
     }
@@ -378,19 +395,12 @@ pub fn region_clearance_within(
         .min_by(|left, right| left.mm.total_cmp(&right.mm))
 }
 
-/// A vertex of `subject` inside `container`, batched in one winding sweep.
-fn contained_vertex(subject: &ContourSet, container: &ContourSet) -> Option<Point> {
-    let vertices = subject
-        .rings
-        .iter()
-        .flat_map(|ring| ring.iter())
-        .map(|&[x, y]| Point::new(x, y))
-        .filter(|point| {
-            point.x >= container.bbox.min.x
-                && point.x <= container.bbox.max.x
-                && point.y >= container.bbox.min.y
-                && point.y <= container.bbox.max.y
-        })
+/// The first of a subject's `vertices` inside `container`, batched in one
+/// winding sweep.
+fn contained_vertex(vertices: Vec<Point>, container: &ContourSet) -> Option<Point> {
+    let vertices = vertices
+        .into_iter()
+        .filter(|&point| container.bbox.contains_point(point))
         .collect::<Vec<_>>();
     if vertices.is_empty() {
         return None;
