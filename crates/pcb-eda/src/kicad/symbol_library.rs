@@ -732,42 +732,6 @@ fn merge_symbols(parent: &KicadSymbol, child: &KicadSymbol) -> KicadSymbol {
     merged
 }
 
-/// Resolve extends references by cloning parent symbols and applying child overrides
-#[allow(dead_code)]
-fn resolve_extends(symbols: &mut [KicadSymbol]) -> Result<()> {
-    // Create a map for quick lookup
-    let mut symbol_map: HashMap<String, usize> = HashMap::new();
-    for (idx, symbol) in symbols.iter().enumerate() {
-        symbol_map.insert(symbol.name().to_string(), idx);
-    }
-
-    // Collect symbols that need to be resolved (to avoid borrowing issues)
-    let mut to_resolve: Vec<(usize, String)> = Vec::new();
-    for (idx, symbol) in symbols.iter().enumerate() {
-        if let Some(parent_name) = symbol.extends() {
-            to_resolve.push((idx, parent_name.to_string()));
-        }
-    }
-
-    // Apply inheritance by cloning parent and using the shared merge routine.
-    for (child_idx, parent_name) in to_resolve {
-        if let Some(&parent_idx) = symbol_map.get(&parent_name) {
-            let parent = symbols[parent_idx].clone();
-            let child = symbols[child_idx].clone();
-            let merged = merge_symbols(&parent, &child);
-            symbols[child_idx] = merged;
-        } else {
-            eprintln!(
-                "Warning: Symbol '{}' extends '{}' but parent not found",
-                symbols[child_idx].name(),
-                parent_name
-            );
-        }
-    }
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
