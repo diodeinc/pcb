@@ -363,10 +363,12 @@ pub fn rings_area(rings: &[Ring]) -> f64 {
 /// operation is a regularized set operation.
 #[derive(Debug, Clone)]
 pub struct ContourSet {
+    /// Bounds of `rings`, fixed at construction like the rings themselves:
+    /// a region is built through its constructors, never edited in place.
     pub bbox: BBox,
     pub rings: Vec<Ring>,
-    /// Bounds of each ring, indexed like `rings`.
-    pub ring_bounds: Vec<BBox>,
+    /// Bounds of each ring, indexed like `rings` and fixed with them.
+    pub(crate) ring_bounds: Vec<BBox>,
     pub tolerance: f64,
 }
 
