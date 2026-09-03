@@ -15,6 +15,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Check netless pads as isolated copper in DFM reports.
+- Ignore nested `NotConnected()` interface members when creating schematic sheet ports.
 
 ## [0.4.46] - 2026-09-02
 
