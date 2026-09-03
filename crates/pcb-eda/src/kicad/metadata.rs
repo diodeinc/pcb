@@ -178,19 +178,6 @@ pub fn is_primary_property(name: &str) -> bool {
     PRIMARY_PROPERTY_NAMES.contains(&name)
 }
 
-pub fn primary_field_name(property_key: &str) -> Option<&'static str> {
-    match property_key {
-        "Reference" => Some("reference"),
-        "Value" => Some("value"),
-        "Footprint" => Some("footprint"),
-        "Datasheet" => Some("datasheet"),
-        "Description" => Some("description"),
-        "ki_keywords" => Some("keywords"),
-        "ki_fp_filters" => Some("footprint_filters"),
-        _ => None,
-    }
-}
-
 fn property_value(properties: &BTreeMap<String, String>, name: &str) -> Option<String> {
     properties.get(name).cloned()
 }
