@@ -1406,9 +1406,13 @@ struct SegmentGrid {
     cells: HashMap<(i64, i64), Vec<u32>>,
 }
 
+/// Grid pitch changes candidate lookup cost only. A fixed floor prevents a
+/// small DFM limit from dividing a board-length edge into thousands of cells.
+const MIN_SEGMENT_GRID_CELL_MM: f64 = 1.0;
+
 impl SegmentGrid {
     fn new(segments: Vec<OrientedBoundarySegment>, cell_mm: f64) -> Self {
-        let cell_mm = cell_mm.max(tol::REGION_MM);
+        let cell_mm = cell_mm.max(MIN_SEGMENT_GRID_CELL_MM);
         let mut cells: HashMap<(i64, i64), Vec<u32>> = HashMap::new();
         for (index, segment) in segments.iter().enumerate() {
             for cell in Self::cells_of(segment.bbox, cell_mm) {
@@ -2448,6 +2452,18 @@ mod tests {
         assert!((width.disk.width().mm - 0.101).abs() < 1e-9);
 
         assert!(measure(0.103).is_none());
+    }
+
+    #[test]
+    fn segment_grid_uses_coarse_cells_without_losing_local_edges() {
+        let region = ContourSet::rectangle(rect(0.0, 0.0, 400.0, 10.0), tol::REGION_MM);
+        let grid = SegmentGrid::new(source_boundary_segments(&region), 0.05);
+
+        assert_eq!(grid.cell_mm, MIN_SEGMENT_GRID_CELL_MM);
+        let near = grid.near(rect(199.9, -0.1, 200.1, 0.1));
+        assert_eq!(near.len(), 1);
+        assert_eq!(near[0].start.y, 0.0);
+        assert_eq!(near[0].end.y, 0.0);
     }
 
     #[test]

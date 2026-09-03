@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - Allow 0.5 mm plated slots (0.6 mm preferred).
+- Speed up IPC-2581 DFM geometry checks.
 
 ### Fixed
 

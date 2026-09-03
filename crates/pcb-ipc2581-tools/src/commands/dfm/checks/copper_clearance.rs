@@ -7,8 +7,10 @@
 //! one owner are deliberately outside this quantity. Touching, overlapping,
 //! or contained distinct-owner regions measure zero.
 
+use std::sync::OnceLock;
+
 use pcb_ir::geom::BBox;
-use pcb_ir::geom::dfm::{region_clearance, region_clearance_sites};
+use pcb_ir::geom::dfm::{RegionBoundaryIndex, region_clearance_sites, region_clearance_within};
 
 use crate::commands::dfm::design::{ConductorId, Design};
 use crate::commands::dfm::report::{Evidence, SourceLocator, Subject};
@@ -19,6 +21,7 @@ use super::{Evaluation, Measured, linework_clearance, violates};
 struct Piece {
     conductor_index: usize,
     region: pcb_ir::geom::ContourSet,
+    boundary: OnceLock<RegionBoundaryIndex>,
 }
 
 pub(super) fn evaluate(limit_mm: f64, conditions: &Conditions, design: &Design) -> Evaluation {
@@ -48,6 +51,7 @@ pub(super) fn evaluate(limit_mm: f64, conditions: &Conditions, design: &Design) 
                 components.into_iter().map(move |region| Piece {
                     conductor_index,
                     region,
+                    boundary: OnceLock::new(),
                 })
             })
             .collect::<Vec<_>>();
@@ -70,7 +74,12 @@ pub(super) fn evaluate(limit_mm: f64, conditions: &Conditions, design: &Design) 
                 {
                     continue;
                 }
-                let Some(distance) = region_clearance(&left.region, &right.region) else {
+                let right_boundary = right
+                    .boundary
+                    .get_or_init(|| RegionBoundaryIndex::new(&right.region, limit_mm));
+                let Some(distance) =
+                    region_clearance_within(&left.region, &right.region, right_boundary, limit_mm)
+                else {
                     continue;
                 };
 

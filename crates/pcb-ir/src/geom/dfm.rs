@@ -302,6 +302,41 @@ pub fn region_clearance(first: &ContourSet, second: &ContourSet) -> Option<Dista
     closest_ring_edges(&first.rings, &second.rings)
 }
 
+/// Shortest clearance between two filled regions when it is no greater than
+/// `maximum_mm`.
+///
+/// `second_boundary` must index `second`. Overlapping, contained, or touching
+/// regions have zero clearance. `None` means at least one input is empty or
+/// the clearance is greater than `maximum_mm`.
+pub fn region_clearance_within(
+    first: &ContourSet,
+    second: &ContourSet,
+    second_boundary: &RegionBoundaryIndex,
+    maximum_mm: f64,
+) -> Option<Distance> {
+    if first.is_empty() || second.is_empty() {
+        return None;
+    }
+
+    if first.bbox.intersects(second.bbox)
+        && let Some(point) =
+            contained_vertex(first, second).or_else(|| contained_vertex(second, first))
+    {
+        return Some(Distance::flattened(0.0, point, point, 2));
+    }
+
+    first
+        .rings
+        .iter()
+        .flat_map(ring_edges)
+        .filter_map(|(first_start, first_end)| {
+            second_boundary
+                .segment_nearest_within(first_start, first_end, maximum_mm)
+                .map(|distance| distance.also_flattened(1))
+        })
+        .min_by(|left, right| left.mm.total_cmp(&right.mm))
+}
+
 /// A vertex of `subject` inside `container`, batched in one winding sweep.
 fn contained_vertex(subject: &ContourSet, container: &ContourSet) -> Option<Point> {
     let vertices = subject
@@ -1194,6 +1229,33 @@ mod tests {
         let container = rect_region(-2.0, -2.0, 2.0, 2.0);
         let contained = rect_region(-0.5, -0.5, 0.5, 0.5);
         assert_eq!(region_clearance(&container, &contained).unwrap().mm, 0.0);
+    }
+
+    #[test]
+    fn thresholded_region_clearance_matches_authoritative_measurement() {
+        let left = rect_region(0.0, 0.0, 2.0, 2.0);
+        let right = rect_region(3.5, 0.5, 5.0, 1.5);
+        let index = RegionBoundaryIndex::new(&right, 2.0);
+
+        assert_eq!(
+            region_clearance_within(&left, &right, &index, 2.0),
+            region_clearance(&left, &right)
+        );
+        assert_eq!(region_clearance_within(&left, &right, &index, 1.0), None);
+
+        let crossing = rect_region(1.0, -1.0, 1.5, 3.0);
+        let crossing_index = RegionBoundaryIndex::new(&crossing, 0.1);
+        assert_eq!(
+            region_clearance_within(&left, &crossing, &crossing_index, 0.1),
+            region_clearance(&left, &crossing)
+        );
+
+        let contained = rect_region(0.5, 0.5, 1.5, 1.5);
+        let contained_index = RegionBoundaryIndex::new(&contained, 0.1);
+        assert_eq!(
+            region_clearance_within(&left, &contained, &contained_index, 0.1),
+            region_clearance(&left, &contained)
+        );
     }
 
     #[test]
