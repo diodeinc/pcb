@@ -4,7 +4,7 @@ default_profile = "standard"
 [pdk]
 id = "standard"
 name = "Standard"
-revision = "draft-2026-09-02"
+revision = "draft-2026-09-03"
 manufacturer = "Diode"
 process = "Standard"
 
@@ -99,7 +99,7 @@ limit = { minimum = "15 mil" }
 
 [[rules.soldermask.web]]
 id = "soldermask.minimum_web"
-limit = { minimum = "4 mil" }
+limit = { preferred = "4 mil" }
 
 [[rules.panelization.board_spacing]]
 id = "panelization.minimum_board_array_spacing"

@@ -557,7 +557,14 @@ limit = { minimum = "300 mil" }
             .unwrap();
         assert_eq!(support.minimum(), Some(2));
         assert_eq!(support.maximum(), Some(10));
-        assert!(!rules::lower(&parsed, None).unwrap().is_empty());
+        let standard_rules = rules::lower(&parsed, None).unwrap();
+        assert!(!standard_rules.is_empty());
+        let mask_web = standard_rules
+            .iter()
+            .find(|rule| rule.id == "soldermask.minimum_web.preferred")
+            .unwrap();
+        assert_eq!(mask_web.severity, report::Severity::Warning);
+        assert_eq!(mask_web.limit.length().millimeters(), 0.1016);
 
         for builtin in builtin_pdks() {
             let parsed = pdk::Pdk::parse(builtin.source).unwrap();
@@ -694,6 +701,47 @@ limit = { minimum = "300 mil" }
         assert_eq!(multilayer.limit.length().millimeters(), 0.09);
         assert_eq!(multilayer.conditions.minimum_copper_layers, Some(3));
         assert_eq!(multilayer.conditions.maximum_copper_layers, Some(32));
+    }
+
+    #[test]
+    fn standard_soldermask_web_warns_without_failing_verdict() {
+        let mask_web = r#"
+        <LayerFeature layerRef="F.Mask">
+          <Set polarity="POSITIVE"><Features>
+            <Contour><Polygon>
+              <PolyBegin x="2" y="2"/><PolyStepSegment x="5" y="2"/>
+              <PolyStepSegment x="5" y="8"/><PolyStepSegment x="2" y="8"/>
+            </Polygon></Contour>
+            <Contour><Polygon>
+              <PolyBegin x="5.05" y="2"/><PolyStepSegment x="8" y="2"/>
+              <PolyStepSegment x="8" y="8"/><PolyStepSegment x="5.05" y="8"/>
+            </Polygon></Contour>
+          </Features></Set>
+        </LayerFeature>"#;
+        let copper = r#"        <LayerFeature layerRef="TOP">
+          <Set polarity="POSITIVE">
+            <Features>
+              <Line startX="1" startY="1" endX="29" endY="1">
+                <LineDesc lineWidth="0.2" lineEnd="ROUND"/>
+              </Line>
+            </Features>
+          </Set>
+        </LayerFeature>"#;
+        let board = BOARD.replace(copper, mask_web);
+        let standard = builtin_pdks()
+            .iter()
+            .find(|pdk| pdk.name == "standard")
+            .unwrap();
+
+        let results = check_with_pdk(&board, LayoutTarget::Board, standard.source);
+        let mask_rule = rule(&results, "soldermask.minimum_web.preferred");
+
+        assert!(matches!(results.verdict, report::Verdict::Pass));
+        assert_eq!(results.summary.errors, 0);
+        assert_eq!(results.summary.warnings, 1);
+        assert_eq!(mask_rule.severity, report::Severity::Warning);
+        assert!(matches!(mask_rule.status, report::RuleStatus::Warning));
+        assert_eq!(mask_rule.finding_count, 1);
     }
 
     #[test]

@@ -588,27 +588,33 @@ pub enum LayerPosition {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LengthLimit {
-    pub minimum: Length,
+    #[serde(default)]
+    pub minimum: Option<Length>,
     #[serde(default)]
     pub preferred: Option<Length>,
 }
 
 impl LengthLimit {
     fn validate(&self, id: &str) -> Result<()> {
-        if let Some(preferred) = &self.preferred
-            && preferred.millimeters() <= self.minimum.millimeters()
+        if self.minimum.is_none() && self.preferred.is_none() {
+            bail!("rule '{id}': limit requires a minimum, preferred, or both");
+        }
+        if let (Some(minimum), Some(preferred)) = (&self.minimum, &self.preferred)
+            && preferred.millimeters() <= minimum.millimeters()
         {
             bail!(
                 "rule '{id}': preferred limit {} must exceed the minimum {}",
                 preferred.original(),
-                self.minimum.original()
+                minimum.original()
             );
         }
         Ok(())
     }
 
     fn ids(&self, id: &str) -> Vec<String> {
-        std::iter::once(id.to_owned())
+        self.minimum
+            .iter()
+            .map(|_| id.to_owned())
             .chain(self.preferred.as_ref().map(|_| format!("{id}.preferred")))
             .collect()
     }
@@ -1110,6 +1116,8 @@ limit = { minimum = "300 mil" }
                 .as_ref()
                 .unwrap()
                 .minimum
+                .as_ref()
+                .unwrap()
                 .millimeters(),
             0.2
         );
@@ -1128,6 +1136,8 @@ limit = { minimum = "300 mil" }
                 .as_ref()
                 .unwrap()
                 .minimum
+                .as_ref()
+                .unwrap()
                 .millimeters()
                 - 0.254)
                 .abs()
@@ -1147,14 +1157,26 @@ limit = { minimum = "300 mil" }
             hole_case.when.copper_layers.as_ref().unwrap().maximum(),
             Some(8)
         );
-        assert_eq!(hole_case.limit.minimum.millimeters(), 0.3);
+        assert_eq!(hole_case.limit.minimum.as_ref().unwrap().millimeters(), 0.3);
         assert_eq!(
             hole_case.limit.preferred.as_ref().unwrap().millimeters(),
             0.4
         );
         let slot_edge = &pdk.rules.drilling.slot_to_board_edge_clearance[0];
         assert_eq!(slot_edge.select.plating, SlotPlating::Nonplated);
-        assert!((slot_edge.limit.as_ref().unwrap().minimum.millimeters() - 0.381).abs() < 1e-12);
+        assert!(
+            (slot_edge
+                .limit
+                .as_ref()
+                .unwrap()
+                .minimum
+                .as_ref()
+                .unwrap()
+                .millimeters()
+                - 0.381)
+                .abs()
+                < 1e-12
+        );
         assert_eq!(
             pdk.rules.copper.feature_width[0].cases[0]
                 .when
@@ -1287,6 +1309,16 @@ limit = { minimum = "300 mil" }
                 .unwrap()
                 .validate_rule_references()
                 .is_err()
+        );
+
+        let empty_limit = MIXED_UNIT_PDK.replace("limit = { minimum = \"0.2 mm\" }", "limit = {}");
+        assert!(
+            Pdk::parse(&empty_limit)
+                .unwrap()
+                .validate_rule_references()
+                .unwrap_err()
+                .to_string()
+                .contains("requires a minimum, preferred, or both")
         );
 
         let old_hole_shape = MIXED_UNIT_PDK.replace(

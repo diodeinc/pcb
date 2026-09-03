@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- Report the standard PDK's 4 mil soldermask-web threshold as a warning.
+
 ### Fixed
 
 - Refresh netlist-derived symbol assembly properties during schematic reconciliation.

@@ -112,8 +112,8 @@ The schema gives each kind of constraint one place:
   holes; selecting `npth` is a schema error. A
   `rules.copper.hole_clearance` selector chooses the drill class measured to
   unrelated final copper.
-- `limit` defines one unconditional dimensional minimum and optional preferred
-  value, or one required aspect-ratio maximum.
+- `limit` defines an unconditional dimensional minimum, preferred value, or
+  both, or one required aspect-ratio maximum.
 - `cases` defines named conditional limits when one value is not enough. A
   rule uses either `limit` or `cases`, never both.
 - `profile.defaults` records missing-data assumptions. Copper weight defaults
@@ -140,16 +140,17 @@ defaults document an order's assumptions in the report; an outer/inner copper
 weight default is also the fallback for a weight-conditioned rule when the
 source stackup does not state that weight.
 
-Every direct limit or case has a binding `minimum` and may add a `preferred`
-tier:
+Every direct dimensional limit or case has a `minimum`, a `preferred` tier, or
+both:
 
 - The minimum lowers to an **error**-severity rule whose id is the
   authored rule id, or `<id>.<case>` for a named case. Error findings fail the
   verdict.
 - A preferred tier lowers to a second, **warning**-severity rule under
   `<id>.preferred` or `<id>.<case>.preferred`. Warning findings are reported
-  and counted but do not fail the verdict. The preferred value must exceed the
-  minimum.
+  and counted but do not fail the verdict. It may stand alone when the PDK has
+  no binding minimum. When both tiers are present, the preferred value must
+  exceed the minimum.
 
 Each direct or named-case hole-aspect-ratio limit instead has one required
 **error**-severity `maximum`; values above it fail the rule. It has no preferred
