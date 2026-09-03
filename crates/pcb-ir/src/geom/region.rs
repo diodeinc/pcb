@@ -419,6 +419,21 @@ impl ContourSet {
         }
     }
 
+    /// A region from rings that are already regularized, kept as they are.
+    fn from_regularized(rings: Vec<Ring>, tolerance: f64) -> Self {
+        let rings = filter_significant_rings(rings, tolerance);
+        let ring_bounds = rings
+            .iter()
+            .map(|ring| rings_bbox(std::slice::from_ref(ring)))
+            .collect::<Vec<_>>();
+        Self {
+            bbox: ring_bounds.iter().copied().fold(BBox::empty(), BBox::union),
+            rings,
+            ring_bounds,
+            tolerance,
+        }
+    }
+
     pub fn empty(tolerance: f64) -> Self {
         Self {
             bbox: BBox::empty(),
@@ -582,6 +597,126 @@ impl ContourSet {
             .into_iter()
             .map(|shape| Self::new(shape, FillRule::NonZero, self.tolerance))
             .collect()
+    }
+
+    /// The component of each ring, by ring index. Regularized rings nest
+    /// without crossing and holes are wound opposite their outer ring, so
+    /// a hole belongs to the smallest outer ring around it.
+    fn ring_components(&self) -> Vec<usize> {
+        let areas = self.rings.iter().map(ring_signed_area).collect::<Vec<_>>();
+        let mut outers = (0..self.rings.len())
+            .filter(|&ring| areas[ring] > 0.0)
+            .collect::<Vec<_>>();
+        outers.sort_by(|&left, &right| areas[left].total_cmp(&areas[right]));
+        let mut components = vec![usize::MAX; self.rings.len()];
+        for (component, &outer) in outers.iter().enumerate() {
+            components[outer] = component;
+        }
+        for (index, ring) in self.rings.iter().enumerate() {
+            if areas[index] > 0.0 {
+                continue;
+            }
+            let Some(&[x, y]) = ring.first() else {
+                continue;
+            };
+            let point = Point::new(x, y);
+            if let Some(&outer) = outers.iter().find(|&&outer| {
+                self.ring_bounds[outer].contains_point(point)
+                    && ring_contains_point(&self.rings[outer], point)
+            }) {
+                components[index] = components[outer];
+            }
+        }
+        components
+    }
+
+    /// The components in which two boundary walls face each other across
+    /// material within `material_mm` or across void within `void_mm`,
+    /// together with every component within `context_mm` of them. Walls
+    /// face when they are not incident: on one ring, neither adjacent nor
+    /// turned the same way, exactly as the width construction judges a
+    /// wall pair. Material lies to the left of travel, so two walls of one
+    /// component face across material when each has the other's nearest
+    /// point on its left and across void when each has it on its right; a
+    /// nearest point along a wall's own line, as at the corners of a notch
+    /// or of aligned holes, leaves the side open and both reaches apply.
+    /// Distinct components always face across void.
+    fn facing_components(&self, material_mm: f64, void_mm: f64, context_mm: f64) -> Self {
+        let components = self.ring_components();
+        let reach = material_mm.max(void_mm).max(context_mm);
+        let grid = SegmentGrid::new(source_boundary_segments(self), reach);
+        let segments = &grid.segments;
+        let sees_left = |wall: &OrientedBoundarySegment, across: Point| {
+            let along = wall.end - wall.start;
+            let turn = along.x * across.y - along.y * across.x;
+            let scale = 1e-6 * along.length() * across.length();
+            (turn.abs() > scale).then_some(turn > 0.0)
+        };
+        let faces = |left: &OrientedBoundarySegment, right: &OrientedBoundarySegment| {
+            if left.topology.ring == right.topology.ring
+                && (boundary_segments_are_incident(left.topology, right.topology)
+                    || left.tangent.x * right.tangent.x + left.tangent.y * right.tangent.y > 0.0)
+            {
+                return false;
+            }
+            if !left
+                .bbox
+                .expand(material_mm.max(void_mm))
+                .intersects(right.bbox)
+            {
+                return false;
+            }
+            let (separation, nearest_left, nearest_right) =
+                dist::segments(left.start, left.end, right.start, right.end);
+            let across = nearest_right - nearest_left;
+            let same_component = components[left.topology.ring] == components[right.topology.ring];
+            let reach = match (
+                same_component,
+                sees_left(left, across),
+                sees_left(right, -across),
+            ) {
+                (false, ..) | (true, Some(false), Some(false)) => void_mm,
+                (true, Some(true), Some(true)) => material_mm,
+                _ => material_mm.max(void_mm),
+            };
+            separation <= reach
+        };
+        let mut facing = vec![false; self.rings.len()];
+        for (id, segment) in segments.iter().enumerate() {
+            for other in grid.near_ids(segment.bbox.expand(material_mm.max(void_mm))) {
+                let partner = &segments[other as usize];
+                if other as usize <= id
+                    || (facing[segment.topology.ring] && facing[partner.topology.ring])
+                    || !faces(segment, partner)
+                {
+                    continue;
+                }
+                facing[segment.topology.ring] = true;
+                facing[partner.topology.ring] = true;
+            }
+        }
+        let mut selected = facing.clone();
+        for segment in segments
+            .iter()
+            .filter(|segment| facing[segment.topology.ring])
+        {
+            for other in grid.near_ids(segment.bbox.expand(context_mm)) {
+                selected[segments[other as usize].topology.ring] = true;
+            }
+        }
+        let mut kept = vec![false; self.rings.len()];
+        for (ring, &component) in components.iter().enumerate() {
+            kept[component] |= selected[ring];
+        }
+        Self::from_regularized(
+            self.rings
+                .iter()
+                .zip(&components)
+                .filter(|&(_, &component)| kept[component])
+                .map(|(ring, _)| ring.clone())
+                .collect(),
+            self.tolerance,
+        )
     }
 
     /// Whether the region contains each point, as a one-or-zero indicator.
@@ -1084,10 +1219,19 @@ impl ContourSet {
         &self,
         radius: f64,
     ) -> Vec<TwoSidedResidualComponent> {
-        // `M \ (X ∩ M)` is `M \ X`, so the opening's clip to the source is
-        // not needed to find what the opening removed.
+        // Opening is the union of the disks inside a region, and a disk is
+        // connected, so every component opens on its own: one whose walls
+        // never face each other across its material within the disk
+        // diameter opens to itself and has no residue. Separate components
+        // can share a width only where they touch within tolerance. The
+        // snap-rounded width construction moves walls by a tolerance, and
+        // `M \ (X ∩ M)` is `M \ X`, so the opening's clip to the source
+        // is not needed to find what the opening removed.
         self.two_sided_residual(radius, |region, radius| {
-            region.difference(&region.disk_erode(radius).disk_dilate(radius))
+            let diameter = 2.0 * (radius + 2.0 * region.tolerance);
+            let touching = 3.0 * region.tolerance + tol::FLATTEN_MM;
+            let candidates = region.facing_components(diameter, touching, 0.0);
+            candidates.difference(&candidates.disk_erode(radius).disk_dilate(radius))
         })
     }
 
@@ -1097,7 +1241,17 @@ impl ContourSet {
         &self,
         radius: f64,
     ) -> Vec<TwoSidedResidualComponent> {
-        self.two_sided_residual(radius, closing_residual)
+        // Closing fills only void narrower than the disk diameter, between
+        // walls facing across it. A residue point there lies within a radius
+        // of those walls, and the disks that decide it reach a diameter
+        // further, so everything within two diameters comes along as
+        // context and the closing of that neighbourhood is the closing of
+        // the whole region there.
+        self.two_sided_residual(radius, |region, radius| {
+            let diameter = 2.0 * (radius + 2.0 * region.tolerance);
+            let candidates = region.facing_components(0.0, diameter, 2.0 * diameter);
+            closing_residual(&candidates, radius)
+        })
     }
 
     /// Morphological residue of this region, kept only where two distinct
@@ -1465,15 +1619,22 @@ impl SegmentGrid {
         Self { segments, grid }
     }
 
+    /// Ids of the segments whose bounds meet `query`; a segment in several
+    /// cells repeats.
+    fn near_ids(&self, query: BBox) -> impl Iterator<Item = u32> + '_ {
+        self.grid
+            .rectangle(query)
+            .filter(move |&id| self.segments[id as usize].bbox.intersects(query))
+    }
+
     /// The segments whose bounds meet `query`, in index order, each once.
     fn near(&self, query: BBox) -> Vec<OrientedBoundarySegment> {
-        let mut indices = self.grid.rectangle(query).collect::<Vec<_>>();
+        let mut indices = self.near_ids(query).collect::<Vec<_>>();
         indices.sort_unstable();
         indices.dedup();
         indices
             .into_iter()
             .map(|index| self.segments[index as usize])
-            .filter(|segment| segment.bbox.intersects(query))
             .collect()
     }
 }
@@ -1575,47 +1736,20 @@ fn planar_grid_sites(
         .collect()
 }
 
-/// Whether the sites are one cyclic run of consecutive segments of one ring
-/// that turns the same way throughout by less than a half turn: a single
-/// convex corner or arc. Nothing in such a run faces anything else, so a
-/// residue it walls alone is the bite of one corner and has no width.
-fn convex_chain(sites: &[OrientedBoundarySegment]) -> bool {
-    let Some(first) = sites.first() else {
-        return true;
-    };
-    if sites
-        .iter()
-        .any(|site| site.topology.ring != first.topology.ring)
-    {
-        return false;
-    }
-    let ring_len = first.topology.ring_len;
-    let mut run = sites.to_vec();
-    run.sort_by_key(|site| site.topology.index);
-    // A run is contiguous when, read cyclically, exactly one step is not
-    // the next index: the step from its last segment back to its first.
-    let gaps = (0..run.len())
-        .filter(|&position| {
-            let next = run[(position + 1) % run.len()].topology.index;
-            (run[position].topology.index + 1) % ring_len != next
+/// Whether every two sites are incident, and so one wall: segments of one
+/// ring that are adjacent or turned less than a quarter turn from each
+/// other, the same judgement the width construction makes of a wall pair.
+/// Nothing in such a set faces anything else, so a residue it walls alone
+/// is the bite of one corner or gentle arc and has no width. A sharp tip
+/// turns its walls to face each other and is measured.
+fn one_wall(sites: &[OrientedBoundarySegment]) -> bool {
+    sites.iter().enumerate().all(|(position, left)| {
+        sites[position + 1..].iter().all(|right| {
+            left.topology.ring == right.topology.ring
+                && (boundary_segments_are_incident(left.topology, right.topology)
+                    || left.tangent.x * right.tangent.x + left.tangent.y * right.tangent.y > 0.0)
         })
-        .collect::<Vec<_>>();
-    let [gap] = gaps[..] else {
-        return false;
-    };
-    run.rotate_left(gap + 1);
-    let turns = run.windows(2).map(|pair| {
-        let a = pair[0].end - pair[0].start;
-        let b = pair[1].end - pair[1].start;
-        (a.x * b.y - a.y * b.x).atan2(a.x * b.x + a.y * b.y)
-    });
-    let (mut positive, mut negative, mut total) = (false, false, 0.0);
-    for turn in turns {
-        positive |= turn > 0.0;
-        negative |= turn < 0.0;
-        total += turn.abs();
-    }
-    !(positive && negative) && total < std::f64::consts::PI
+    })
 }
 
 /// A maximal inscribed disk of the boundary's Voronoi diagram: its center,
@@ -1669,7 +1803,7 @@ fn component_width(
     reach: f64,
     contact_tolerance: f64,
 ) -> Option<ComponentWidth> {
-    if convex_chain(sites) {
+    if one_wall(sites) {
         return None;
     }
     let origin = component.bbox.min;
@@ -2510,6 +2644,84 @@ mod tests {
         assert!((width.disk.width().mm - 0.101).abs() < 1e-9);
 
         assert!(measure(0.103).is_none());
+    }
+
+    #[test]
+    fn ring_components_group_holes_with_the_smallest_outer_ring_around_them() {
+        let region = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), tol::REGION_MM)
+            .difference(&ContourSet::rectangle(
+                rect(2.0, 2.0, 8.0, 8.0),
+                tol::REGION_MM,
+            ))
+            .union(&ContourSet::rectangle(
+                rect(3.0, 3.0, 7.0, 7.0),
+                tol::REGION_MM,
+            ))
+            .difference(&ContourSet::rectangle(
+                rect(4.0, 4.0, 6.0, 6.0),
+                tol::REGION_MM,
+            ))
+            .union(&ContourSet::rectangle(
+                rect(20.0, 0.0, 30.0, 10.0),
+                tol::REGION_MM,
+            ));
+        assert_eq!(region.rings.len(), 5);
+
+        let components = region.ring_components();
+        let component_of = |min_x: f64| {
+            let ring = region
+                .ring_bounds
+                .iter()
+                .position(|bounds| bounds.min.x == min_x)
+                .unwrap();
+            components[ring]
+        };
+        assert_eq!(component_of(0.0), component_of(2.0));
+        assert_eq!(component_of(3.0), component_of(4.0));
+        assert_ne!(component_of(0.0), component_of(3.0));
+        assert_ne!(component_of(0.0), component_of(20.0));
+        assert_ne!(component_of(3.0), component_of(20.0));
+    }
+
+    #[test]
+    fn facing_components_keep_only_walls_within_reach_of_each_other() {
+        let trace = ContourSet::rectangle(rect(0.0, 0.0, 5.0, 0.1), tol::REGION_MM);
+        let pad = ContourSet::rectangle(rect(10.0, 0.0, 12.0, 2.0), tol::REGION_MM);
+        let neighbour = ContourSet::rectangle(rect(12.15, 0.0, 14.0, 2.0), tol::REGION_MM);
+        let region = trace.union(&pad).union(&neighbour);
+        assert_eq!(region.rings.len(), 3);
+
+        let same_bounds = |left: BBox, right: BBox| {
+            left.min.distance_to(right.min) < 1e-6 && left.max.distance_to(right.max) < 1e-6
+        };
+        let material = region.facing_components(0.2, 0.01, 0.0);
+        assert_eq!(material.rings.len(), 1);
+        assert!(same_bounds(material.bbox, trace.bbox));
+
+        let void = region.facing_components(0.0, 0.2, 0.0);
+        assert_eq!(void.rings.len(), 2);
+        assert!(same_bounds(void.bbox, pad.bbox.union(neighbour.bbox)));
+
+        let with_context = region.facing_components(0.0, 0.2, 10.0);
+        assert_eq!(with_context.rings.len(), 3);
+
+        // A notch faces across void; a plane web between holes across material.
+        let notched = ContourSet::rectangle(rect(0.0, 0.0, 4.0, 4.0), tol::REGION_MM).difference(
+            &ContourSet::rectangle(rect(1.9, 2.0, 2.1, 4.5), tol::REGION_MM),
+        );
+        assert_eq!(notched.facing_components(0.0, 0.3, 0.0).rings.len(), 1);
+        assert!(notched.facing_components(0.15, 0.15, 0.0).is_empty());
+        let webbed = ContourSet::rectangle(rect(0.0, 0.0, 4.0, 4.0), tol::REGION_MM)
+            .difference(&ContourSet::rectangle(
+                rect(1.0, 1.0, 1.9, 3.0),
+                tol::REGION_MM,
+            ))
+            .difference(&ContourSet::rectangle(
+                rect(2.1, 1.0, 3.0, 3.0),
+                tol::REGION_MM,
+            ));
+        assert_eq!(webbed.facing_components(0.3, 0.0, 0.0).rings.len(), 3);
+        assert!(webbed.facing_components(0.0, 0.15, 0.0).is_empty());
     }
 
     #[test]
