@@ -90,22 +90,6 @@ impl KicadSymbolsClient {
         Ok(home.join(".pcb").join("kicad-symbols").join("symbols.db"))
     }
 
-    /// Get the default KiCad symbols version sidecar path (~/.pcb/kicad-symbols/symbols.db.version)
-    pub fn default_version_path() -> Result<PathBuf> {
-        Ok(Self::default_db_path()?.with_extension("db.version"))
-    }
-
-    /// Returns true when the default KiCad symbols cache exists locally.
-    pub fn is_cached() -> Result<bool> {
-        Ok(Self::default_db_path()?.exists())
-    }
-
-    /// Returns the locally cached KiCad symbols version token, if present.
-    pub fn local_version() -> Result<Option<String>> {
-        let path = Self::default_db_path()?;
-        Ok(download::load_local_version(&path))
-    }
-
     /// Ensure the default KiCad symbols index exists locally.
     ///
     /// A prefetched metadata object can be provided to avoid a duplicate API request.
