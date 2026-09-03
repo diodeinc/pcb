@@ -158,6 +158,10 @@ fn serialize_net(net: &FrozenNetValue) -> JsonValue {
                 "id".to_string(),
                 JsonValue::Number(JsonNumber::from(net.id())),
             ),
+            (
+                "kind".to_string(),
+                JsonValue::String(net.net_kind_name().to_owned()),
+            ),
             ("name".to_string(), JsonValue::String(net.name().to_owned())),
             ("properties".to_string(), properties),
         ])),

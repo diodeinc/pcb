@@ -478,6 +478,40 @@ fn generated_hierarchy_connects_sheet_ports_without_label_bridges() {
 }
 
 #[test]
+fn nested_not_connected_interface_members_do_not_create_sheet_ports() {
+    let netlist = common::compile_fixture("hierarchy", "nested_not_connected.zen");
+    let document = plan_reconciliation(None, &netlist, "NestedNotConnected.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+
+    let sheet = document.pages[0]
+        .items
+        .iter()
+        .find_map(|item| match item {
+            SchItem::Sheet(sheet) => Some(sheet),
+            _ => None,
+        })
+        .expect("linked child sheet");
+    let port_names = sheet
+        .pins
+        .iter()
+        .map(|pin| pin.name.as_str())
+        .collect::<BTreeSet<_>>();
+
+    assert_eq!(
+        port_names,
+        BTreeSet::from(["USB.CC1", "USB.CC2", "USB.D.N", "USB.D.P"])
+    );
+    assert!(
+        inspect_schematic(&document, &netlist)
+            .unwrap()
+            .analysis
+            .is_equivalent()
+    );
+}
+
+#[test]
 fn missing_symbols_use_attached_net_symbol_orientation() {
     let mut netlist = common::compile_fixture("analysis", "initial_orientation.zen");
     netlist.net_mut("VCC_LIKE_NAME").unwrap().properties.insert(

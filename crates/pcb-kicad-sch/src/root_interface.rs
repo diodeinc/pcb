@@ -78,10 +78,12 @@ fn visit_signature_value(
     net_names: &BTreeMap<u64, &str>,
     visit: &mut SignatureNetVisitor,
 ) -> Result<()> {
-    if value.get("Net").and_then(Value::as_object).is_some() {
-        let id = value
-            .get("Net")
-            .and_then(|net| net.get("id"))
+    if let Some(net) = value.get("Net").and_then(Value::as_object) {
+        if net.get("kind").and_then(Value::as_str) == Some("NotConnected") {
+            return Ok(());
+        }
+        let id = net
+            .get("id")
             .and_then(Value::as_u64)
             .with_context(|| format!("{owner} signature net {io_path} has no integer id"))?;
         let net_name = net_names.get(&id).with_context(|| {

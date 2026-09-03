@@ -1,0 +1,11 @@
+"""Linked child receiving a USB Type-C interface."""
+
+Project(name="NestedNotConnectedChild", path="kicad", layout=False)
+
+load("@stdlib/interfaces.zen", "UsbTypeC")
+
+Resistor = Module("@stdlib/generics/Resistor.zen")
+
+USB = io("USB", UsbTypeC)
+
+Resistor(name="R1", value="1kohms", package="0402", P1=USB.D.P, P2=USB.D.N)
