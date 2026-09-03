@@ -1084,8 +1084,10 @@ impl ContourSet {
         &self,
         radius: f64,
     ) -> Vec<TwoSidedResidualComponent> {
+        // `M \ (X ∩ M)` is `M \ X`, so the opening's clip to the source is
+        // not needed to find what the opening removed.
         self.two_sided_residual(radius, |region, radius| {
-            region.difference(&region.disk_open(radius))
+            region.difference(&region.disk_erode(radius).disk_dilate(radius))
         })
     }
 
