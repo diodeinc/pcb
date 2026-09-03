@@ -1227,18 +1227,21 @@ impl ContourSet {
         width_mm: f64,
     ) -> Vec<TwoSidedResidualComponent> {
         // Opening is the union of the disks inside a region, and a disk is
-        // connected, so every component opens on its own. A width is a disk
-        // touching two facing walls, so it is at least their separation: a
-        // component whose walls never face each other across its material
-        // that closely has no width to find. Separate components share a
-        // width only where they touch within tolerance. The snap-rounded
-        // width construction moves walls by a tolerance, and `M \ (X ∩ M)`
-        // is `M \ X`, so the opening's clip to the source is not needed to
-        // find what the opening removed.
+        // connected, so every component opens on its own, and the disks
+        // through a residue point reach a diameter from it. A width is a
+        // disk touching two facing walls, so it is at least their
+        // separation: material whose walls never face each other that
+        // closely has no width to find, and only the material within a
+        // diameter of facing walls decides their residue. Separate
+        // components share a width only where they touch within tolerance.
+        // The snap-rounded width construction moves walls by a tolerance,
+        // and `M \ (X ∩ M)` is `M \ X`, so the opening's clip to the
+        // source is not needed to find what the opening removed.
         self.two_sided_residual(radius, |region, radius| {
             let facing = width_mm + 4.0 * region.tolerance;
             let touching = 3.0 * region.tolerance + tol::FLATTEN_MM;
-            let candidates = region.facing_components(facing, touching, 0.0);
+            let context = 2.0 * (radius + 2.0 * region.tolerance);
+            let candidates = region.facing_components(facing, touching, context);
             candidates.difference(&candidates.disk_erode(radius).disk_dilate(radius))
         })
     }
