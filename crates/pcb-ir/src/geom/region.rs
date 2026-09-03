@@ -599,10 +599,11 @@ impl ContourSet {
             .collect()
     }
 
-    /// The component of each ring, by ring index. Regularized rings nest
-    /// without crossing and holes are wound opposite their outer ring, so
-    /// a hole belongs to the smallest outer ring around it.
-    fn ring_components(&self) -> Vec<usize> {
+    /// The component of each ring, by ring index, and the outer ring of
+    /// each component. Regularized rings nest without crossing and holes
+    /// are wound opposite their outer ring, so a hole belongs to the
+    /// smallest outer ring around it.
+    fn ring_components(&self) -> (Vec<usize>, Vec<usize>) {
         let areas = self.rings.iter().map(ring_signed_area).collect::<Vec<_>>();
         let mut outers = (0..self.rings.len())
             .filter(|&ring| areas[ring] > 0.0)
@@ -627,22 +628,24 @@ impl ContourSet {
                 components[index] = components[outer];
             }
         }
-        components
+        (components, outers)
     }
 
-    /// The components in which two boundary walls face each other across
-    /// material within `material_mm` or across void within `void_mm`,
-    /// together with every component within `context_mm` of them. Walls
-    /// face when they are not incident: on one ring, neither adjacent nor
-    /// turned the same way, exactly as the width construction judges a
-    /// wall pair. Material lies to the left of travel, so two walls of one
-    /// component face across material when each has the other's nearest
-    /// point on its left and across void when each has it on its right; a
-    /// nearest point along a wall's own line, as at the corners of a notch
-    /// or of aligned holes, leaves the side open and both reaches apply.
-    /// Distinct components always face across void.
+    /// The material around walls that face each other across material
+    /// within `material_mm` or across void within `void_mm`: every ring
+    /// within `context_mm` of such a wall, with the outer ring of each
+    /// component so reached. A hole farther away is filled, since nothing
+    /// it does reaches the facing walls. Walls face when they are not
+    /// incident: on one ring, neither adjacent nor turned the same way,
+    /// exactly as the width construction judges a wall pair. Material lies
+    /// to the left of travel, so two walls of one component face across
+    /// material when each has the other's nearest point on its left and
+    /// across void when each has it on its right; a nearest point along a
+    /// wall's own line, as at the corners of a notch or of aligned holes,
+    /// leaves the side open and both reaches apply. Distinct components
+    /// always face across void.
     fn facing_components(&self, material_mm: f64, void_mm: f64, context_mm: f64) -> Self {
-        let components = self.ring_components();
+        let (components, outers) = self.ring_components();
         let reach = material_mm.max(void_mm).max(context_mm);
         let grid = SegmentGrid::new(source_boundary_segments(self), reach);
         let segments = &grid.segments;
@@ -705,15 +708,17 @@ impl ContourSet {
                 selected[segments[other as usize].topology.ring] = true;
             }
         }
-        let mut kept = vec![false; self.rings.len()];
+        let mut kept = selected;
         for (ring, &component) in components.iter().enumerate() {
-            kept[component] |= selected[ring];
+            if kept[ring] {
+                kept[outers[component]] = true;
+            }
         }
         Self::from_regularized(
             self.rings
                 .iter()
-                .zip(&components)
-                .filter(|&(_, &component)| kept[component])
+                .zip(&kept)
+                .filter(|&(_, &keep)| keep)
                 .map(|(ring, _)| ring.clone())
                 .collect(),
             self.tolerance,
@@ -2682,7 +2687,7 @@ mod tests {
             ));
         assert_eq!(region.rings.len(), 5);
 
-        let components = region.ring_components();
+        let (components, _) = region.ring_components();
         let component_of = |min_x: f64| {
             let ring = region
                 .ring_bounds
@@ -2726,7 +2731,7 @@ mod tests {
         );
         assert_eq!(notched.facing_components(0.0, 0.3, 0.0).rings.len(), 1);
         assert!(notched.facing_components(0.15, 0.15, 0.0).is_empty());
-        let webbed = ContourSet::rectangle(rect(0.0, 0.0, 4.0, 4.0), tol::REGION_MM)
+        let webbed = ContourSet::rectangle(rect(0.0, 0.0, 8.0, 4.0), tol::REGION_MM)
             .difference(&ContourSet::rectangle(
                 rect(1.0, 1.0, 1.9, 3.0),
                 tol::REGION_MM,
@@ -2734,8 +2739,14 @@ mod tests {
             .difference(&ContourSet::rectangle(
                 rect(2.1, 1.0, 3.0, 3.0),
                 tol::REGION_MM,
+            ))
+            .difference(&ContourSet::rectangle(
+                rect(6.0, 1.0, 7.0, 3.0),
+                tol::REGION_MM,
             ));
-        assert_eq!(webbed.facing_components(0.3, 0.0, 0.0).rings.len(), 3);
+        let nearby_web = webbed.facing_components(0.3, 0.0, 0.0);
+        assert_eq!(nearby_web.rings.len(), 3);
+        assert!(nearby_web.contains_point(Point::new(6.5, 2.0)));
         assert!(webbed.facing_components(0.0, 0.15, 0.0).is_empty());
     }
 
