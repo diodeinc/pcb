@@ -5,10 +5,11 @@
 //! it was measured against. Deciding whether a distance violates a limit is
 //! the caller's policy, via [`Distance::certainly_below`].
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 
 use crate::geom::bbox::BBox;
 use crate::geom::dist;
+use crate::geom::grid::CellGrid;
 use crate::geom::point::Point;
 use crate::geom::region::{ContourSet, Ring, TwoSidedResidualComponent, ring_edges};
 use crate::geom::tol;
@@ -104,10 +105,9 @@ impl BBoxIndex {
 /// answer counts the region boundary as one flattened input.
 #[derive(Debug, Clone)]
 pub struct RegionBoundaryIndex {
-    cell_size_mm: f64,
     segments: Vec<(Point, Point)>,
     bounds: Vec<BBox>,
-    cells: HashMap<(i64, i64), Vec<u32>>,
+    grid: CellGrid,
 }
 
 /// Grid pitch bounds. Queries stay correct for any pitch; these only keep the
@@ -120,30 +120,32 @@ impl RegionBoundaryIndex {
     ///
     /// The radius is a pitch hint, not a limit: queries may pass any distance.
     pub fn new(region: &ContourSet, search_radius_mm: f64) -> Self {
-        let cell_size_mm = search_radius_mm.clamp(MIN_CELL_MM, MAX_CELL_MM);
+        let pitch = CellGrid::pitch(
+            search_radius_mm.clamp(MIN_CELL_MM, MAX_CELL_MM),
+            region.bbox,
+        );
         let segments = region.rings.iter().flat_map(ring_edges).collect::<Vec<_>>();
         let bounds = segments
             .iter()
             .map(|&(start, end)| segment_bounds(start, end))
             .collect();
-        let mut cells: HashMap<(i64, i64), Vec<u32>> = HashMap::new();
-        for (index, &(start, end)) in segments.iter().enumerate() {
-            for cell in corridor_cells(start, end, 0.0, cell_size_mm) {
-                cells.entry(cell).or_default().push(index as u32);
-            }
-        }
+        let grid = CellGrid::new(
+            pitch,
+            region.bbox,
+            segments.iter().enumerate().flat_map(|(id, &(start, end))| {
+                corridor_cells(start, end, 0.0, pitch).map(move |cell| (id as u32, cell))
+            }),
+        );
         Self {
-            cell_size_mm,
             segments,
             bounds,
-            cells,
+            grid,
         }
     }
 
     /// Nearest boundary point no farther than `max_distance_mm` from `point`.
     pub fn nearest_within(&self, point: Point, max_distance_mm: f64) -> Option<Distance> {
-        indexed_edge_ids_near_in_encounter_order(self, point, point, max_distance_mm)
-            .into_iter()
+        self.near(point, point, max_distance_mm)
             .map(|index| {
                 let (start, end) = self.segments[index as usize];
                 let (mm, boundary) = dist::point_segment(point, start, end);
@@ -161,8 +163,7 @@ impl RegionBoundaryIndex {
         end: Point,
         max_distance_mm: f64,
     ) -> Option<Distance> {
-        indexed_edge_ids_near_in_encounter_order(self, start, end, max_distance_mm)
-            .into_iter()
+        self.near(start, end, max_distance_mm)
             .map(|index| {
                 let (edge_start, edge_end) = self.segments[index as usize];
                 let (mm, on_query, on_boundary) = dist::segments(start, end, edge_start, edge_end);
@@ -170,6 +171,20 @@ impl RegionBoundaryIndex {
             })
             .filter(|distance| distance.mm <= max_distance_mm + tol::EPSILON_MM)
             .min_by(|left, right| left.mm.total_cmp(&right.mm))
+    }
+
+    /// Ids of the indexed segments whose bounds come within `reach` of the
+    /// query segment, in grid order: column by column, row by row, then by
+    /// id. A segment spanning several cells is yielded once per cell. The
+    /// minimum a consumer takes is unchanged by the repeats, and of equal
+    /// minima it keeps the first, which is always the first cell's copy.
+    fn near(&self, start: Point, end: Point, reach: f64) -> impl Iterator<Item = u32> + '_ {
+        let query = segment_bounds(start, end).expand(reach + tol::EPSILON_MM);
+        corridor_columns(start, end, reach, self.grid.pitch_mm())
+            .flat_map(move |(column, min_row, max_row)| {
+                self.grid.column(column, min_row, max_row).iter().copied()
+            })
+            .filter(move |&id| self.bounds[id as usize].intersects(query))
     }
 
     /// Parameter intervals along a segment within `distance_mm` of the
@@ -232,19 +247,20 @@ fn grid_cell(value: f64, cell_size_mm: f64) -> i64 {
     (value / cell_size_mm).floor() as i64
 }
 
-/// Every grid cell within `radius_mm` of the segment, column by column, so
-/// long diagonal segments touch a linear number of cells instead of their
-/// whole bounding box. A zero-length segment yields the cells around a point.
-fn corridor_cells(
+/// Every grid column within `radius_mm` of the segment with the rows it
+/// covers there, so long diagonal segments touch a linear number of cells
+/// instead of their whole bounding box. A zero-length segment yields the
+/// cells around a point.
+fn corridor_columns(
     start: Point,
     end: Point,
     radius_mm: f64,
     cell_size_mm: f64,
-) -> impl Iterator<Item = (i64, i64)> {
+) -> impl Iterator<Item = (i64, i64, i64)> {
     let min_column = grid_cell(start.x.min(end.x) - radius_mm, cell_size_mm);
     let max_column = grid_cell(start.x.max(end.x) + radius_mm, cell_size_mm);
     let delta = end - start;
-    (min_column..=max_column).flat_map(move |column| {
+    (min_column..=max_column).map(move |column| {
         let column_min = column as f64 * cell_size_mm - radius_mm;
         let column_max = (column + 1) as f64 * cell_size_mm + radius_mm;
         let (t_min, t_max) = if delta.x.abs() <= f64::EPSILON {
@@ -261,8 +277,19 @@ fn corridor_cells(
         let y_at_max = start.y + delta.y * t_max;
         let min_row = grid_cell(y_at_min.min(y_at_max) - radius_mm, cell_size_mm);
         let max_row = grid_cell(y_at_min.max(y_at_max) + radius_mm, cell_size_mm);
-        (min_row..=max_row).map(move |row| (column, row))
+        (column, min_row, max_row)
     })
+}
+
+/// Every grid cell of the corridor, column by column and row by row.
+fn corridor_cells(
+    start: Point,
+    end: Point,
+    radius_mm: f64,
+    cell_size_mm: f64,
+) -> impl Iterator<Item = (i64, i64)> {
+    corridor_columns(start, end, radius_mm, cell_size_mm)
+        .flat_map(|(column, min_row, max_row)| (min_row..=max_row).map(move |row| (column, row)))
 }
 
 /// Set distance between two closed disks: `max(0, ‖c₁ − c₂‖ − r₁ − r₂)`,
@@ -630,43 +657,17 @@ fn indexed_edges_near(
         .collect()
 }
 
+/// The distinct indexed segments near the query, by id.
 fn indexed_edge_ids_near(
     index: &RegionBoundaryIndex,
     start: Point,
     end: Point,
     reach: f64,
 ) -> Vec<u32> {
-    let mut ids = indexed_edge_candidates_near(index, start, end, reach);
+    let mut ids = index.near(start, end, reach).collect::<Vec<_>>();
     ids.sort_unstable();
     ids.dedup();
     ids
-}
-
-fn indexed_edge_ids_near_in_encounter_order(
-    index: &RegionBoundaryIndex,
-    start: Point,
-    end: Point,
-    reach: f64,
-) -> Vec<u32> {
-    let mut ids = indexed_edge_candidates_near(index, start, end, reach);
-    let mut seen = HashSet::new();
-    ids.retain(|id| seen.insert(*id));
-    ids
-}
-
-fn indexed_edge_candidates_near(
-    index: &RegionBoundaryIndex,
-    start: Point,
-    end: Point,
-    reach: f64,
-) -> Vec<u32> {
-    let query = segment_bounds(start, end).expand(reach + tol::EPSILON_MM);
-    corridor_cells(start, end, reach, index.cell_size_mm)
-        .filter_map(|cell| index.cells.get(&cell))
-        .flatten()
-        .copied()
-        .filter(|&id| index.bounds[id as usize].intersects(query))
-        .collect()
 }
 
 fn linear_interval(value: f64, slope: f64, minimum: f64, maximum: f64) -> Option<(f64, f64)> {

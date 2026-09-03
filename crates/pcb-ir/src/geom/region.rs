@@ -6,7 +6,6 @@
 //! dilation over filled point sets, shared by every dialect so IPC, Gerber,
 //! SVG, and comparison all use the same geometry semantics.
 
-use std::collections::HashMap;
 use std::fmt;
 
 use boostvoronoi::prelude::{
@@ -28,6 +27,7 @@ use i_overlay::mesh::style::{LineJoin as OutlineLineJoin, OutlineStyle};
 use crate::geom::affine::Affine2;
 use crate::geom::bbox::BBox;
 use crate::geom::dist::{self, Distance};
+use crate::geom::grid::CellGrid;
 use crate::geom::path::{ContourBuf, PathCmd, contours_to_kurbo, stroke_to_fill, transform_cmds};
 use crate::geom::point::Point;
 use crate::geom::store::{Path, PathArena};
@@ -365,6 +365,8 @@ pub fn rings_area(rings: &[Ring]) -> f64 {
 pub struct ContourSet {
     pub bbox: BBox,
     pub rings: Vec<Ring>,
+    /// Bounds of each ring, indexed like `rings`.
+    pub ring_bounds: Vec<BBox>,
     pub tolerance: f64,
 }
 
@@ -405,9 +407,14 @@ impl std::error::Error for GapRegularizationError {}
 impl ContourSet {
     pub fn new(rings: Vec<Ring>, fill_rule: FillRule, tolerance: f64) -> Self {
         let rings = filter_significant_rings(simplify_rings(rings, fill_rule), tolerance);
+        let ring_bounds = rings
+            .iter()
+            .map(|ring| rings_bbox(std::slice::from_ref(ring)))
+            .collect::<Vec<_>>();
         Self {
-            bbox: rings_bbox(&rings),
+            bbox: ring_bounds.iter().copied().fold(BBox::empty(), BBox::union),
             rings,
+            ring_bounds,
             tolerance,
         }
     }
@@ -416,6 +423,7 @@ impl ContourSet {
         Self {
             bbox: BBox::empty(),
             rings: Vec::new(),
+            ring_bounds: Vec::new(),
             tolerance,
         }
     }
@@ -588,17 +596,29 @@ impl ContourSet {
         if self.is_empty() {
             return result;
         }
-        if let [point] = points {
-            let winding = self
-                .rings
+        // Only a ring whose bounds reach the query line crosses it, and a
+        // ring wholly to one side of every point on the line contributes
+        // crossings that balance to nothing, so those rings are skipped.
+        let crossings_at = |y: f64, min_x: f64, max_x: f64| {
+            self.rings
                 .iter()
-                .flat_map(|ring| {
+                .zip(&self.ring_bounds)
+                .filter(move |(_, bounds)| {
+                    bounds.min.y <= y
+                        && y <= bounds.max.y
+                        && bounds.min.x <= max_x + tol::EPSILON_MM
+                        && min_x - tol::EPSILON_MM <= bounds.max.x
+                })
+                .flat_map(|(ring, _)| {
                     ring.iter()
                         .copied()
                         .zip(ring.iter().copied().cycle().skip(1))
                         .take(ring.len())
                 })
-                .filter_map(|edge| horizontal_crossing(edge, point.y))
+                .filter_map(move |edge| horizontal_crossing(edge, y))
+        };
+        if let [point] = points {
+            let winding = crossings_at(point.y, point.x, point.x)
                 .filter_map(|(x, direction)| (x <= point.x).then_some(direction))
                 .sum::<i32>();
             result[0] = f64::from(winding != 0);
@@ -611,16 +631,6 @@ impl ContourSet {
                 .total_cmp(&points[*right].y)
                 .then_with(|| points[*left].x.total_cmp(&points[*right].x))
         });
-        let edges = self
-            .rings
-            .iter()
-            .flat_map(|ring| {
-                ring.iter()
-                    .copied()
-                    .zip(ring.iter().copied().cycle().skip(1))
-                    .take(ring.len())
-            })
-            .collect::<Vec<_>>();
 
         let mut first = 0;
         while first < by_height.len() {
@@ -630,10 +640,13 @@ impl ContourSet {
             {
                 last += 1;
             }
-            let mut crossings = edges
+            let (min_x, max_x) = by_height[first..last]
                 .iter()
-                .filter_map(|&edge| horizontal_crossing(edge, y))
-                .collect::<Vec<_>>();
+                .map(|&point| points[point].x)
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |(low, high), x| {
+                    (low.min(x), high.max(x))
+                });
+            let mut crossings = crossings_at(y, min_x, max_x).collect::<Vec<_>>();
             crossings.sort_by(|left, right| left.0.total_cmp(&right.0));
             let mut crossing = 0;
             let mut winding = 0;
@@ -693,8 +706,7 @@ impl ContourSet {
                 .clamp(0.0, count as f64 - 1.0) as usize
         };
         let mut areas = vec![0.0; columns * rows];
-        for ring in &self.rings {
-            let ring_bbox = rings_bbox(std::slice::from_ref(ring));
+        for (ring, &ring_bbox) in self.rings.iter().zip(&self.ring_bounds) {
             for row in index(ring_bbox.min.y, bounds.min.y, height, rows)
                 ..=index(ring_bbox.max.y, bounds.min.y, height, rows)
             {
@@ -828,17 +840,21 @@ impl ContourSet {
         }
 
         let epsilon = self.tolerance.max(tol::EPSILON_MM);
-        if self
-            .rings
-            .iter()
-            .any(|ring| ring_boundary_distance(ring, point) <= epsilon)
-        {
+        let rings_near = |reach: f64| {
+            self.rings
+                .iter()
+                .zip(&self.ring_bounds)
+                .filter(move |(_, bounds)| bounds.expand(reach).contains_point(point))
+                .map(|(ring, _)| ring)
+        };
+        if rings_near(epsilon).any(|ring| ring_boundary_distance(ring, point) <= epsilon) {
             return true;
         }
 
         // Regularized boolean output nests pairwise-disjoint rings, so
         // even-odd parity across rings coincides with the nonzero fill rule.
-        self.rings.iter().fold(false, |inside, ring| {
+        // A ring whose bounds miss the point cannot enclose it.
+        rings_near(tol::EPSILON_MM).fold(false, |inside, ring| {
             inside ^ ring_contains_point(ring, point)
         })
     }
@@ -1422,9 +1438,8 @@ fn two_sided_residual_components(
 /// Boundary segments bucketed on a uniform grid, so the segments around one
 /// residue component are found without scanning the whole boundary.
 struct SegmentGrid {
-    cell_mm: f64,
     segments: Vec<OrientedBoundarySegment>,
-    cells: HashMap<(i64, i64), Vec<u32>>,
+    grid: CellGrid,
 }
 
 /// Grid pitch changes candidate lookup cost only. A fixed floor prevents a
@@ -1433,34 +1448,24 @@ const MIN_SEGMENT_GRID_CELL_MM: f64 = 1.0;
 
 impl SegmentGrid {
     fn new(segments: Vec<OrientedBoundarySegment>, cell_mm: f64) -> Self {
-        let cell_mm = cell_mm.max(MIN_SEGMENT_GRID_CELL_MM);
-        let mut cells: HashMap<(i64, i64), Vec<u32>> = HashMap::new();
-        for (index, segment) in segments.iter().enumerate() {
-            for cell in Self::cells_of(segment.bbox, cell_mm) {
-                cells.entry(cell).or_default().push(index as u32);
-            }
-        }
-        Self {
-            cell_mm,
-            segments,
-            cells,
-        }
-    }
-
-    fn cells_of(bbox: BBox, cell_mm: f64) -> impl Iterator<Item = (i64, i64)> {
-        let cell = move |value: f64| (value / cell_mm).floor() as i64;
-        let (min_x, max_x) = (cell(bbox.min.x), cell(bbox.max.x));
-        let (min_y, max_y) = (cell(bbox.min.y), cell(bbox.max.y));
-        (min_x..=max_x).flat_map(move |x| (min_y..=max_y).map(move |y| (x, y)))
+        let bounds = segments
+            .iter()
+            .map(|segment| segment.bbox)
+            .fold(BBox::empty(), BBox::union);
+        let pitch = CellGrid::pitch(cell_mm.max(MIN_SEGMENT_GRID_CELL_MM), bounds);
+        let grid = CellGrid::new(
+            pitch,
+            bounds,
+            segments.iter().enumerate().flat_map(|(id, segment)| {
+                CellGrid::cells_of(segment.bbox, pitch).map(move |cell| (id as u32, cell))
+            }),
+        );
+        Self { segments, grid }
     }
 
     /// The segments whose bounds meet `query`, in index order, each once.
     fn near(&self, query: BBox) -> Vec<OrientedBoundarySegment> {
-        let mut indices = Self::cells_of(query, self.cell_mm)
-            .filter_map(|cell| self.cells.get(&cell))
-            .flatten()
-            .copied()
-            .collect::<Vec<_>>();
+        let mut indices = self.grid.rectangle(query).collect::<Vec<_>>();
         indices.sort_unstable();
         indices.dedup();
         indices
@@ -2480,7 +2485,7 @@ mod tests {
         let region = ContourSet::rectangle(rect(0.0, 0.0, 400.0, 10.0), tol::REGION_MM);
         let grid = SegmentGrid::new(source_boundary_segments(&region), 0.05);
 
-        assert_eq!(grid.cell_mm, MIN_SEGMENT_GRID_CELL_MM);
+        assert_eq!(grid.grid.pitch_mm(), MIN_SEGMENT_GRID_CELL_MM);
         let near = grid.near(rect(199.9, -0.1, 200.1, 0.1));
         assert_eq!(near.len(), 1);
         assert_eq!(near[0].start.y, 0.0);

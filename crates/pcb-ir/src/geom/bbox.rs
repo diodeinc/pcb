@@ -62,6 +62,14 @@ impl BBox {
         x.hypot(y)
     }
 
+    /// Whether the closed bounds contain the point.
+    pub fn contains_point(&self, point: Point) -> bool {
+        self.min.x <= point.x
+            && point.x <= self.max.x
+            && self.min.y <= point.y
+            && point.y <= self.max.y
+    }
+
     pub fn expand(self, amount: f64) -> Self {
         if self.is_empty() {
             return self;

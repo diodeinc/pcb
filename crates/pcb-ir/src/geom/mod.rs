@@ -10,6 +10,7 @@ pub mod bridge;
 pub mod copper_balance;
 pub mod dfm;
 pub mod dist;
+mod grid;
 pub mod path;
 pub mod pattern;
 mod point;
