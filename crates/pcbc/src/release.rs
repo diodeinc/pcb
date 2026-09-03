@@ -59,7 +59,7 @@ struct ReleaseInfo {
     git_hash: String,
     staging_dir: PathBuf,
     layout: Option<ReleaseLayout>,
-    schematic: pcb_sch::Schematic,
+    design_bom: pcb_sch::bom::Bom,
     output_dir: PathBuf,
     output_name: String,
     suppress: Vec<String>,
@@ -251,7 +251,7 @@ pub fn build_board_release(
         let resolution = crate::resolve::resolve(Some(&zen_path), false)?;
         info_spinner.set_message("Evaluating zen file");
 
-        // Evaluate the zen file (still needed for schematic)
+        // Evaluate the zen file for layout discovery and the authored design BOM.
         // Pass resolution so Module() paths resolve correctly
         let eval_result = pcb_zen::eval(&zen_path, resolution.clone(), Default::default());
 
@@ -318,12 +318,7 @@ pub fn build_board_release(
             None => None,
         };
 
-        let mut schematic = eval_output.to_schematic()?;
-        pcb_diode_api::hydrate_schematic_from_bom(
-            &zen_path,
-            &mut schematic,
-            pcb_diode_api::BomMatchMode::Online,
-        );
+        let design_bom = eval_output.to_schematic()?.bom();
 
         let info = ReleaseInfo {
             zen_path,
@@ -332,7 +327,7 @@ pub fn build_board_release(
             git_hash,
             staging_dir,
             layout,
-            schematic,
+            design_bom,
             output_dir,
             output_name,
             suppress,
@@ -752,7 +747,7 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<Diagnostics> 
         )));
 
         crate::build::BuildEvalState::new(staged_resolution)
-            .with_bom_hydration(pcb_diode_api::BomMatchMode::Offline)
+            .with_bom_hydration(pcb_diode_api::BomMatchMode::Online)
             .build(
                 &staged_zen_path,
                 Default::default(),
@@ -913,9 +908,6 @@ fn check_bom_offers(info: &ReleaseInfo, spinner: &Spinner, bom: &pcb_sch::bom::B
 
 /// Generate design BOM JSON file (with optional KiCad fallback if layout exists)
 fn generate_design_bom(info: &ReleaseInfo, spinner: &Spinner) -> Result<Diagnostics> {
-    // Generate BOM entries from the schematic
-    let bom = info.schematic.bom();
-
     // Create bom directory in staging
     let bom_dir = info.staging_dir.join("bom");
     fs::create_dir_all(&bom_dir)?;
@@ -925,7 +917,7 @@ fn generate_design_bom(info: &ReleaseInfo, spinner: &Spinner) -> Result<Diagnost
         .layout
         .as_ref()
         .map(|l| info.workspace_root().join(l.layout_dir_rel()));
-    let final_bom = generate_bom_with_fallback(bom, layout_path.as_deref())?;
+    let final_bom = generate_bom_with_fallback(info.design_bom.clone(), layout_path.as_deref())?;
 
     let diagnostics = check_bom_offers(info, spinner, &final_bom);
 
