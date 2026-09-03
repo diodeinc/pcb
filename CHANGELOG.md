@@ -12,6 +12,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Allow 0.5 mm plated slots (0.6 mm preferred).
 
+### Fixed
+
+- Check netless pads as isolated copper in DFM reports.
+
 ## [0.4.46] - 2026-09-02
 
 ### Changed

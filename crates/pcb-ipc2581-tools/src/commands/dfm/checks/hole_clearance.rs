@@ -187,6 +187,7 @@ fn land_owns_conductor(land: &Land, conductor: ConductorId) -> bool {
             land.net == Some(net) && step == land.step && instance == land.provenance.instance_index
         }
         ConductorId::Auxiliary { .. } => false,
+        ConductorId::Isolated { occurrence, .. } => land.id.0 == occurrence,
         ConductorId::Unattributed {
             step,
             instance,
