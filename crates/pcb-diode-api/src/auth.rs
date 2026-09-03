@@ -555,11 +555,6 @@ fn unix_now() -> Result<i64> {
     i64::try_from(seconds).context("System time is too large")
 }
 
-pub fn login() -> Result<()> {
-    let ctx = WorkspaceContext::from_cwd().unwrap_or_default();
-    login_with_context(&ctx)
-}
-
 pub fn logout_with_context(ctx: &WorkspaceContext) -> Result<()> {
     pcb_zen::git::clear_diodehub_credential_cache();
     clear_tokens_with_context(ctx)?;
@@ -567,11 +562,6 @@ pub fn logout_with_context(ctx: &WorkspaceContext) -> Result<()> {
     let _ = fs::remove_dir_all(get_auth_dir()?.join("service-auth"));
     println!("✓ Logged out successfully");
     Ok(())
-}
-
-pub fn logout() -> Result<()> {
-    let ctx = WorkspaceContext::from_cwd().unwrap_or_default();
-    logout_with_context(&ctx)
 }
 
 pub fn status_with_context(ctx: &WorkspaceContext) -> Result<()> {
@@ -603,11 +593,6 @@ pub fn status_with_context(ctx: &WorkspaceContext) -> Result<()> {
     Ok(())
 }
 
-pub fn status() -> Result<()> {
-    let ctx = WorkspaceContext::from_cwd().unwrap_or_default();
-    status_with_context(&ctx)
-}
-
 pub fn refresh_with_context(ctx: &WorkspaceContext) -> Result<()> {
     let tokens = refresh_tokens_with_context(ctx)?;
     println!("✓ Token refreshed successfully");
@@ -616,11 +601,6 @@ pub fn refresh_with_context(ctx: &WorkspaceContext) -> Result<()> {
     }
     println!("  Token expires in: {}", tokens.time_until_expiry());
     Ok(())
-}
-
-pub fn refresh() -> Result<()> {
-    let ctx = WorkspaceContext::from_cwd().unwrap_or_default();
-    refresh_with_context(&ctx)
 }
 
 #[derive(Args, Debug)]
@@ -646,11 +626,6 @@ pub fn token_with_context(ctx: &WorkspaceContext) -> Result<()> {
     let token = get_valid_token_with_context(ctx)?;
     println!("{}", token);
     Ok(())
-}
-
-pub fn token() -> Result<()> {
-    let ctx = WorkspaceContext::from_cwd().unwrap_or_default();
-    token_with_context(&ctx)
 }
 
 pub fn execute(args: AuthArgs, ctx: &WorkspaceContext) -> Result<()> {

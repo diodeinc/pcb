@@ -21,7 +21,7 @@ pub mod routing;
 pub mod sandbox;
 pub mod scan;
 
-pub use auth::{AuthArgs, AuthCommand, AuthTokens, execute as execute_auth, login, logout, status};
+pub use auth::{AuthArgs, AuthCommand, AuthTokens, execute as execute_auth};
 pub use bom::{
     BomMatchMode, BomMatchOptions, fetch_and_populate_availability,
     fetch_and_populate_availability_with_context, hydrate_schematic_from_bom,
