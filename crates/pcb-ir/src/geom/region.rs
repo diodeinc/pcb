@@ -631,11 +631,15 @@ impl ContourSet {
         (components, outers)
     }
 
-    /// The material around walls that face each other across material
-    /// within `material_mm` or across void within `void_mm`: every ring
-    /// within `context_mm` of such a wall, with the outer ring of each
-    /// component so reached. A hole farther away is filled, since nothing
-    /// it does reaches the facing walls. Walls face when they are not
+    /// The material within `reach_mm` of walls that face each other across
+    /// material within `material_mm` or across void within `void_mm`:
+    /// every ring within reach of such a wall, with the outer ring of each
+    /// component so reached, clipped to the reach around the facing walls.
+    /// A hole farther away is filled and material farther away is cut,
+    /// since neither reaches the facing walls; the cut's own edges disturb
+    /// the morphology only within a disk diameter of themselves, so a reach
+    /// of three radii keeps the residue at the facing walls exact. Walls
+    /// face when they are not
     /// incident: on one ring, neither adjacent nor turned the same way,
     /// exactly as the width construction judges a wall pair. Material lies
     /// to the left of travel, so two walls of one component face across
@@ -644,9 +648,9 @@ impl ContourSet {
     /// wall's own line, as at the corners of a notch or of aligned holes,
     /// leaves the side open and both reaches apply. Distinct components
     /// always face across void.
-    fn facing_components(&self, material_mm: f64, void_mm: f64, context_mm: f64) -> Self {
+    fn facing_components(&self, material_mm: f64, void_mm: f64, reach_mm: f64) -> Self {
         let (components, outers) = self.ring_components();
-        let reach = material_mm.max(void_mm).max(context_mm);
+        let reach = material_mm.max(void_mm).max(reach_mm);
         let grid = SegmentGrid::new(source_boundary_segments(self), reach);
         let segments = &grid.segments;
         let sees_left = |wall: &OrientedBoundarySegment, across: Point| {
@@ -685,36 +689,44 @@ impl ContourSet {
             };
             separation <= reach
         };
-        let mut facing = vec![false; self.rings.len()];
+        let mut facing = vec![false; segments.len()];
         for (id, segment) in segments.iter().enumerate() {
             for other in grid.near_ids(segment.bbox.expand(material_mm.max(void_mm))) {
                 let partner = &segments[other as usize];
                 if other as usize <= id
-                    || (facing[segment.topology.ring] && facing[partner.topology.ring])
+                    || (facing[id] && facing[other as usize])
                     || !faces(segment, partner)
                 {
                     continue;
                 }
-                facing[segment.topology.ring] = true;
-                facing[partner.topology.ring] = true;
+                facing[id] = true;
+                facing[other as usize] = true;
             }
         }
-        let mut selected = facing.clone();
+        let mut kept = vec![false; self.rings.len()];
+        let mut windows = Vec::new();
         for segment in segments
             .iter()
-            .filter(|segment| facing[segment.topology.ring])
+            .zip(&facing)
+            .filter_map(|(segment, &facing)| facing.then_some(segment))
         {
-            for other in grid.near_ids(segment.bbox.expand(context_mm)) {
-                selected[segments[other as usize].topology.ring] = true;
+            let window = segment.bbox.expand(reach_mm);
+            windows.push(vec![
+                [window.min.x, window.min.y],
+                [window.max.x, window.min.y],
+                [window.max.x, window.max.y],
+                [window.min.x, window.max.y],
+            ]);
+            for other in grid.near_ids(window) {
+                kept[segments[other as usize].topology.ring] = true;
             }
         }
-        let mut kept = selected;
         for (ring, &component) in components.iter().enumerate() {
             if kept[ring] {
                 kept[outers[component]] = true;
             }
         }
-        Self::from_regularized(
+        let material = Self::from_regularized(
             self.rings
                 .iter()
                 .zip(&kept)
@@ -722,7 +734,8 @@ impl ContourSet {
                 .map(|(ring, _)| ring.clone())
                 .collect(),
             self.tolerance,
-        )
+        );
+        material.intersection(&Self::new(windows, FillRule::NonZero, self.tolerance))
     }
 
     /// Whether the region contains each point, as a one-or-zero indicator.
@@ -1232,16 +1245,17 @@ impl ContourSet {
         // disk touching two facing walls, so it is at least their
         // separation: material whose walls never face each other that
         // closely has no width to find, and only the material within a
-        // diameter of facing walls decides their residue. Separate
-        // components share a width only where they touch within tolerance.
+        // diameter of facing walls decides the residue within a radius of
+        // them, where any width lies. Separate components share a width
+        // only where they touch within tolerance.
         // The snap-rounded width construction moves walls by a tolerance,
         // and `M \ (X ∩ M)` is `M \ X`, so the opening's clip to the
         // source is not needed to find what the opening removed.
         self.two_sided_residual(radius, |region, radius| {
             let facing = width_mm + 4.0 * region.tolerance;
             let touching = 3.0 * region.tolerance + tol::FLATTEN_MM;
-            let context = 2.0 * (radius + 2.0 * region.tolerance);
-            let candidates = region.facing_components(facing, touching, context);
+            let reach = 3.0 * (radius + 2.0 * region.tolerance);
+            let candidates = region.facing_components(facing, touching, reach);
             candidates.difference(&candidates.disk_erode(radius).disk_dilate(radius))
         })
     }
@@ -1262,8 +1276,8 @@ impl ContourSet {
         // there.
         self.two_sided_residual(radius, |region, radius| {
             let facing = width_mm + 4.0 * region.tolerance;
-            let context = 4.0 * (radius + 2.0 * region.tolerance);
-            let candidates = region.facing_components(0.0, facing, context);
+            let reach = 4.0 * (radius + 2.0 * region.tolerance);
+            let candidates = region.facing_components(0.0, facing, reach);
             closing_residual(&candidates, radius)
         })
     }
@@ -2717,11 +2731,15 @@ mod tests {
         let same_bounds = |left: BBox, right: BBox| {
             left.min.distance_to(right.min) < 1e-6 && left.max.distance_to(right.max) < 1e-6
         };
-        let material = region.facing_components(0.2, 0.01, 0.0);
+        // The trace's long walls face across material; a reach past the
+        // whole trace keeps all of it and none of the pads.
+        let material = region.facing_components(0.2, 0.01, 1.0);
         assert_eq!(material.rings.len(), 1);
         assert!(same_bounds(material.bbox, trace.bbox));
 
-        let void = region.facing_components(0.0, 0.2, 0.0);
+        // The pads face each other across their gap, along their whole
+        // aligned edges, and the trace is out of reach.
+        let void = region.facing_components(0.0, 0.2, 0.5);
         assert_eq!(void.rings.len(), 2);
         assert!(same_bounds(void.bbox, pad.bbox.union(neighbour.bbox)));
 
@@ -2732,8 +2750,8 @@ mod tests {
         let notched = ContourSet::rectangle(rect(0.0, 0.0, 4.0, 4.0), tol::REGION_MM).difference(
             &ContourSet::rectangle(rect(1.9, 2.0, 2.1, 4.5), tol::REGION_MM),
         );
-        assert_eq!(notched.facing_components(0.0, 0.3, 0.0).rings.len(), 1);
-        assert!(notched.facing_components(0.15, 0.15, 0.0).is_empty());
+        assert_eq!(notched.facing_components(0.0, 0.3, 1.0).rings.len(), 1);
+        assert!(notched.facing_components(0.15, 0.15, 1.0).is_empty());
         let webbed = ContourSet::rectangle(rect(0.0, 0.0, 8.0, 4.0), tol::REGION_MM)
             .difference(&ContourSet::rectangle(
                 rect(1.0, 1.0, 1.9, 3.0),
@@ -2747,10 +2765,13 @@ mod tests {
                 rect(6.0, 1.0, 7.0, 3.0),
                 tol::REGION_MM,
             ));
-        let nearby_web = webbed.facing_components(0.3, 0.0, 0.0);
+        let nearby_web = webbed.facing_components(0.3, 0.0, 1.0);
         assert_eq!(nearby_web.rings.len(), 3);
-        assert!(nearby_web.contains_point(Point::new(6.5, 2.0)));
-        assert!(webbed.facing_components(0.0, 0.15, 0.0).is_empty());
+        assert!(nearby_web.contains_point(Point::new(2.0, 2.0)));
+        assert!(nearby_web.contains_point(Point::new(2.0, 3.5)));
+        assert!(!nearby_web.contains_point(Point::new(6.5, 2.0)));
+        assert!(!nearby_web.contains_point(Point::new(5.0, 3.5)));
+        assert!(webbed.facing_components(0.0, 0.15, 1.0).is_empty());
     }
 
     #[test]
