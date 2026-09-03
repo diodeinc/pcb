@@ -10,7 +10,9 @@
 use std::sync::OnceLock;
 
 use pcb_ir::geom::BBox;
-use pcb_ir::geom::dfm::{RegionBoundaryIndex, region_clearance_sites, region_clearance_within};
+use pcb_ir::geom::dfm::{
+    RegionBoundaryIndex, region_clearance_sites_with_index, region_clearance_within,
+};
 
 use crate::commands::dfm::design::{ConductorId, Design};
 use crate::commands::dfm::report::{Evidence, SourceLocator, Subject};
@@ -37,11 +39,10 @@ pub(super) fn evaluate(limit_mm: f64, conditions: &Conditions, design: &Design) 
             .iter()
             .map(|conductor| conductor.image.connected_components())
             .collect::<Vec<_>>();
-        for (index, left) in components.iter().enumerate() {
-            checked += components[index + 1..]
-                .iter()
-                .map(|right| left.len() * right.len())
-                .sum::<usize>();
+        let mut earlier_components = 0;
+        for conductor_components in &components {
+            checked += earlier_components * conductor_components.len();
+            earlier_components += conductor_components.len();
         }
 
         let mut pieces = components
@@ -100,16 +101,21 @@ pub(super) fn evaluate(limit_mm: f64, conditions: &Conditions, design: &Design) 
                         Evidence::bounds("second_conductor_component", right.region.bbox),
                     ],
                     sites: if violates(&distance, limit_mm) {
-                        region_clearance_sites(&left.region, &right.region, limit_mm)
-                            .into_iter()
-                            .map(|site| {
-                                linework_clearance::report_site(
-                                    site,
-                                    vec![layer.layer.clone()],
-                                    limit_mm,
-                                )
-                            })
-                            .collect()
+                        region_clearance_sites_with_index(
+                            &left.region,
+                            &right.region,
+                            right_boundary,
+                            limit_mm,
+                        )
+                        .into_iter()
+                        .map(|site| {
+                            linework_clearance::report_site(
+                                site,
+                                vec![layer.layer.clone()],
+                                limit_mm,
+                            )
+                        })
+                        .collect()
                     } else {
                         Vec::new()
                     },

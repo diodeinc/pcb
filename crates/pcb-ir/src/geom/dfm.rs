@@ -5,7 +5,7 @@
 //! it was measured against. Deciding whether a distance violates a limit is
 //! the caller's policy, via [`Distance::certainly_below`].
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::geom::bbox::BBox;
 use crate::geom::dist;
@@ -106,6 +106,7 @@ impl BBoxIndex {
 pub struct RegionBoundaryIndex {
     cell_size_mm: f64,
     segments: Vec<(Point, Point)>,
+    bounds: Vec<BBox>,
     cells: HashMap<(i64, i64), Vec<u32>>,
 }
 
@@ -121,6 +122,10 @@ impl RegionBoundaryIndex {
     pub fn new(region: &ContourSet, search_radius_mm: f64) -> Self {
         let cell_size_mm = search_radius_mm.clamp(MIN_CELL_MM, MAX_CELL_MM);
         let segments = region.rings.iter().flat_map(ring_edges).collect::<Vec<_>>();
+        let bounds = segments
+            .iter()
+            .map(|&(start, end)| segment_bounds(start, end))
+            .collect();
         let mut cells: HashMap<(i64, i64), Vec<u32>> = HashMap::new();
         for (index, &(start, end)) in segments.iter().enumerate() {
             for cell in corridor_cells(start, end, 0.0, cell_size_mm) {
@@ -130,15 +135,17 @@ impl RegionBoundaryIndex {
         Self {
             cell_size_mm,
             segments,
+            bounds,
             cells,
         }
     }
 
     /// Nearest boundary point no farther than `max_distance_mm` from `point`.
     pub fn nearest_within(&self, point: Point, max_distance_mm: f64) -> Option<Distance> {
-        let cells = corridor_cells(point, point, max_distance_mm, self.cell_size_mm);
-        self.segments_in(cells)
-            .map(|&(start, end)| {
+        indexed_edge_ids_near_in_encounter_order(self, point, point, max_distance_mm)
+            .into_iter()
+            .map(|index| {
+                let (start, end) = self.segments[index as usize];
                 let (mm, boundary) = dist::point_segment(point, start, end);
                 Distance::flattened(mm, point, boundary, 1)
             })
@@ -154,9 +161,10 @@ impl RegionBoundaryIndex {
         end: Point,
         max_distance_mm: f64,
     ) -> Option<Distance> {
-        let cells = corridor_cells(start, end, max_distance_mm, self.cell_size_mm);
-        self.segments_in(cells)
-            .map(|&(edge_start, edge_end)| {
+        indexed_edge_ids_near_in_encounter_order(self, start, end, max_distance_mm)
+            .into_iter()
+            .map(|index| {
+                let (edge_start, edge_end) = self.segments[index as usize];
                 let (mm, on_query, on_boundary) = dist::segments(start, end, edge_start, edge_end);
                 Distance::flattened(mm, on_query, on_boundary, 1)
             })
@@ -211,19 +219,13 @@ impl RegionBoundaryIndex {
             1,
         ))
     }
+}
 
-    /// Every indexed segment registered in any of `cells`. A segment spanning
-    /// several cells is yielded once per cell; every consumer takes a
-    /// minimum, for which repeats are harmless.
-    fn segments_in(
-        &self,
-        cells: impl Iterator<Item = (i64, i64)>,
-    ) -> impl Iterator<Item = &(Point, Point)> {
-        cells
-            .filter_map(|cell| self.cells.get(&cell))
-            .flatten()
-            .map(|&index| &self.segments[index as usize])
-    }
+fn segment_bounds(start: Point, end: Point) -> BBox {
+    BBox::new(
+        Point::new(start.x.min(end.x), start.y.min(end.y)),
+        Point::new(start.x.max(end.x), start.y.max(end.y)),
+    )
 }
 
 fn grid_cell(value: f64, cell_size_mm: f64) -> i64 {
@@ -344,7 +346,16 @@ fn contained_vertex(subject: &ContourSet, container: &ContourSet) -> Option<Poin
         .iter()
         .flat_map(|ring| ring.iter())
         .map(|&[x, y]| Point::new(x, y))
+        .filter(|point| {
+            point.x >= container.bbox.min.x
+                && point.x <= container.bbox.max.x
+                && point.y >= container.bbox.min.y
+                && point.y <= container.bbox.max.y
+        })
         .collect::<Vec<_>>();
+    if vertices.is_empty() {
+        return None;
+    }
     container
         .contains_points_batch(&vertices)
         .into_iter()
@@ -509,9 +520,19 @@ pub fn region_clearance_sites(
     second: &ContourSet,
     minimum_mm: f64,
 ) -> Vec<ClearanceSite> {
-    let lines = first.rings.iter().flat_map(ring_edges).collect::<Vec<_>>();
     let index = RegionBoundaryIndex::new(second, minimum_mm);
-    let mut sites = linework_clearance_sites(&lines, second, &index, minimum_mm, 1);
+    region_clearance_sites_with_index(first, second, &index, minimum_mm)
+}
+
+/// Local sites between two filled regions, reusing an index of `second`.
+pub fn region_clearance_sites_with_index(
+    first: &ContourSet,
+    second: &ContourSet,
+    second_boundary: &RegionBoundaryIndex,
+    minimum_mm: f64,
+) -> Vec<ClearanceSite> {
+    let lines = first.rings.iter().flat_map(ring_edges).collect::<Vec<_>>();
+    let mut sites = linework_clearance_sites(&lines, second, second_boundary, minimum_mm, 1);
     for overlap in first.intersection(second).connected_components() {
         let Some(point) = overlap
             .rings
@@ -615,14 +636,37 @@ fn indexed_edge_ids_near(
     end: Point,
     reach: f64,
 ) -> Vec<u32> {
-    let mut ids = corridor_cells(start, end, reach, index.cell_size_mm)
-        .filter_map(|cell| index.cells.get(&cell))
-        .flatten()
-        .copied()
-        .collect::<Vec<_>>();
+    let mut ids = indexed_edge_candidates_near(index, start, end, reach);
     ids.sort_unstable();
     ids.dedup();
     ids
+}
+
+fn indexed_edge_ids_near_in_encounter_order(
+    index: &RegionBoundaryIndex,
+    start: Point,
+    end: Point,
+    reach: f64,
+) -> Vec<u32> {
+    let mut ids = indexed_edge_candidates_near(index, start, end, reach);
+    let mut seen = HashSet::new();
+    ids.retain(|id| seen.insert(*id));
+    ids
+}
+
+fn indexed_edge_candidates_near(
+    index: &RegionBoundaryIndex,
+    start: Point,
+    end: Point,
+    reach: f64,
+) -> Vec<u32> {
+    let query = segment_bounds(start, end).expand(reach + tol::EPSILON_MM);
+    corridor_cells(start, end, reach, index.cell_size_mm)
+        .filter_map(|cell| index.cells.get(&cell))
+        .flatten()
+        .copied()
+        .filter(|&id| index.bounds[id as usize].intersects(query))
+        .collect()
 }
 
 fn linear_interval(value: f64, slope: f64, minimum: f64, maximum: f64) -> Option<(f64, f64)> {

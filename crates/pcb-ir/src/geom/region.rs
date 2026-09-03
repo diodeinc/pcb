@@ -588,6 +588,22 @@ impl ContourSet {
         if self.is_empty() {
             return result;
         }
+        if let [point] = points {
+            let winding = self
+                .rings
+                .iter()
+                .flat_map(|ring| {
+                    ring.iter()
+                        .copied()
+                        .zip(ring.iter().copied().cycle().skip(1))
+                        .take(ring.len())
+                })
+                .filter_map(|edge| horizontal_crossing(edge, point.y))
+                .filter_map(|(x, direction)| (x <= point.x).then_some(direction))
+                .sum::<i32>();
+            result[0] = f64::from(winding != 0);
+            return result;
+        }
         let mut by_height = (0..points.len()).collect::<Vec<_>>();
         by_height.sort_by(|left, right| {
             points[*left]
@@ -616,18 +632,7 @@ impl ContourSet {
             }
             let mut crossings = edges
                 .iter()
-                .filter_map(|([x0, y0], [x1, y1])| {
-                    // Half-open in y so a vertex shared by two edges is counted
-                    // once, which is what keeps the winding number honest.
-                    let direction = if *y0 <= y && y < *y1 {
-                        1
-                    } else if *y1 <= y && y < *y0 {
-                        -1
-                    } else {
-                        return None;
-                    };
-                    Some((x0 + (y - y0) * (x1 - x0) / (y1 - y0), direction))
-                })
+                .filter_map(|&edge| horizontal_crossing(edge, y))
                 .collect::<Vec<_>>();
             crossings.sort_by(|left, right| left.0.total_cmp(&right.0));
             let mut crossing = 0;
@@ -1187,6 +1192,19 @@ pub(crate) fn overlay_fill_rule(fill_rule: FillRule) -> OverlayFillRule {
     }
 }
 
+fn horizontal_crossing(([x0, y0], [x1, y1]): ([f64; 2], [f64; 2]), y: f64) -> Option<(f64, i32)> {
+    // Half-open in y so a vertex shared by two edges is counted once, which
+    // keeps the winding number honest.
+    let direction = if y0 <= y && y < y1 {
+        1
+    } else if y1 <= y && y < y0 {
+        -1
+    } else {
+        return None;
+    };
+    Some((x0 + (y - y0) * (x1 - x0) / (y1 - y0), direction))
+}
+
 fn flatten_shapes(shapes: Vec<Shape>) -> Vec<Ring> {
     shapes.into_iter().flatten().collect()
 }
@@ -1379,6 +1397,9 @@ fn two_sided_residual_components(
     residual: &ContourSet,
     reach: f64,
 ) -> Vec<TwoSidedResidualComponent> {
+    if residual.is_empty() {
+        return Vec::new();
+    }
     let segments = SegmentGrid::new(source_boundary_segments(source), reach);
     let contact_tolerance = source.tolerance.max(residual.tolerance);
     residual
