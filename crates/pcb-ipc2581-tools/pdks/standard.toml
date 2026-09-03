@@ -4,7 +4,7 @@ default_profile = "standard"
 [pdk]
 id = "standard"
 name = "Standard"
-revision = "draft-2026-09-01"
+revision = "draft-2026-09-02"
 manufacturer = "Diode"
 process = "Standard"
 
@@ -34,7 +34,7 @@ limit = { minimum = "0.2 mm" }
 [[rules.drilling.slot_width]]
 id = "drilling.minimum_slot_width"
 select = { plating = "plated" }
-limit = { minimum = "31 mil" }
+limit = { minimum = "0.5 mm", preferred = "0.6 mm" }
 
 [[rules.drilling.slot_width]]
 id = "drilling.minimum_slot_width.nonplated"
