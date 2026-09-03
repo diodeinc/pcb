@@ -1051,15 +1051,23 @@ impl ArtworkLowering<Symbol, Option<ConductorId>> for CopperAttributionLowering 
 fn compose_attributed_copper(
     document: &mut GeometryDocument,
 ) -> Result<(ContourSet, Vec<CopperConductor>)> {
-    let composed =
-        compose_attributed_image(document, LayerRole::Copper, &mut CopperAttributionLowering)?;
-    let image = ContourSet::new(composed.image, FillRule::NonZero, tol::REGION_MM);
-    let conductors = composed
-        .owners
+    let owners =
+        compose_attributed_owners(document, LayerRole::Copper, &mut CopperAttributionLowering)?;
+    let image = ContourSet::from_regularized(
+        pcb_ir::geom::region::union_rings(
+            owners
+                .iter()
+                .flat_map(|(_, rings)| rings.iter().cloned())
+                .collect(),
+            FillRule::NonZero,
+        ),
+        tol::REGION_MM,
+    );
+    let conductors = owners
         .into_iter()
         .map(|(id, rings)| CopperConductor {
             id,
-            image: ContourSet::new(rings, FillRule::NonZero, tol::REGION_MM),
+            image: ContourSet::from_regularized(rings, tol::REGION_MM),
         })
         .collect();
     Ok((image, conductors))
@@ -1068,11 +1076,11 @@ fn compose_attributed_copper(
 /// Both copper and soldermask use the canonical ordered paint fold. Source
 /// ownership survives clear features and cutouts, rather than being inferred
 /// afterward from a feature's bounds or an enclosing board profile.
-fn compose_attributed_image<Owner: Clone + Eq + std::hash::Hash>(
+fn compose_attributed_owners<Owner: Clone + Eq + std::hash::Hash>(
     document: &mut GeometryDocument,
     role: LayerRole,
     lowering: &mut impl ArtworkLowering<Symbol, Option<Owner>>,
-) -> Result<artwork::AttributedImage<Owner>> {
+) -> Result<artwork::OwnerImages<Owner>> {
     pcb_ir::dialects::ipc::process::normalize_for_artwork(document);
     pcb_ir::dialects::ipc::validate_artwork_ready(document)
         .map_err(|error| anyhow::anyhow!("layer is not artwork-ready: {error}"))?;
@@ -1089,12 +1097,12 @@ fn compose_attributed_image<Owner: Clone + Eq + std::hash::Hash>(
         meta: layer.layer_function,
     };
     let attributed_artwork = lower_layer_to_artwork_with(document, 0, header, lowering);
-    let (mut composed, _) = artwork::compose_attributed(&attributed_artwork, Clone::clone);
-    let composed = composed
+    let (mut layers, _) =
+        artwork::compose_selected_owners(&attributed_artwork, |owner| Some(owner.clone()));
+    let owners = layers
         .pop()
         .context("attributed artwork composition produced no layer")?;
-    let owners = composed
-        .owners
+    owners
         .into_iter()
         .map(|(id, rings)| {
             Ok((
@@ -1104,11 +1112,7 @@ fn compose_attributed_image<Owner: Clone + Eq + std::hash::Hash>(
                 rings,
             ))
         })
-        .collect::<Result<Vec<_>>>()?;
-    Ok(artwork::AttributedImage {
-        image: composed.image,
-        owners,
-    })
+        .collect()
 }
 
 fn conductor_order(
@@ -1347,7 +1351,7 @@ fn collect_mask_layers(imported: &ImportedDesign, scope: ArtworkScope) -> Result
             let image =
                 crate::copper_balance::composed_copper_image_from_document(document.clone());
             pcb_ir::dialects::ipc::process::expand_feature_placement_groups(&mut document);
-            let composed = compose_attributed_image(
+            let owners = compose_attributed_owners(
                 &mut document,
                 LayerRole::Soldermask,
                 &mut MaskAttributionLowering,
@@ -1359,13 +1363,12 @@ fn collect_mask_layers(imported: &ImportedDesign, scope: ArtworkScope) -> Result
                     side_label(layers::ir_side(layer.side)),
                 ),
                 image,
-                owners: composed
-                    .owners
+                owners: owners
                     .into_iter()
                     .map(|((step, instance_index), rings)| MaskOwner {
                         step,
                         instance_index,
-                        image: ContourSet::new(rings, FillRule::NonZero, tol::REGION_MM),
+                        image: ContourSet::from_regularized(rings, tol::REGION_MM),
                     })
                     .collect(),
             })

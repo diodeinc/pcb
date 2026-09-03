@@ -419,8 +419,9 @@ impl ContourSet {
         }
     }
 
-    /// A region from rings that are already regularized, kept as they are.
-    fn from_regularized(rings: Vec<Ring>, tolerance: f64) -> Self {
+    /// A region from rings a regularized boolean operation produced, kept
+    /// as they are: non-overlapping, holes wound opposite their outer ring.
+    pub fn from_regularized(rings: Vec<Ring>, tolerance: f64) -> Self {
         let rings = filter_significant_rings(rings, tolerance);
         let ring_bounds = rings
             .iter()
@@ -595,7 +596,7 @@ impl ContourSet {
     pub fn connected_components(&self) -> Vec<Self> {
         simplify_shapes(self.rings.clone(), FillRule::NonZero)
             .into_iter()
-            .map(|shape| Self::new(shape, FillRule::NonZero, self.tolerance))
+            .map(|shape| Self::from_regularized(shape, self.tolerance))
             .collect()
     }
 
