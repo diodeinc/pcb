@@ -62,7 +62,7 @@ pub(super) fn evaluate(limit_mm: f64, conditions: &Conditions, design: &Design) 
         });
 
         // The pairs the bounds cannot separate, in sweep order along x. Only
-        // the pieces those pairs measure against need a boundary index.
+        // the pieces in those pairs need a boundary index.
         let pairs = pieces
             .iter()
             .enumerate()
@@ -81,7 +81,8 @@ pub(super) fn evaluate(limit_mm: f64, conditions: &Conditions, design: &Design) 
             })
             .collect::<Vec<_>>();
         let mut queried = vec![false; pieces.len()];
-        for &(_, right_index) in &pairs {
+        for &(left_index, right_index) in &pairs {
+            queried[left_index] = true;
             queried[right_index] = true;
         }
         let boundaries = pieces
@@ -94,12 +95,19 @@ pub(super) fn evaluate(limit_mm: f64, conditions: &Conditions, design: &Design) 
 
         for (left_index, right_index) in pairs {
             let (left, right) = (&pieces[left_index], &pieces[right_index]);
-            let right_boundary = boundaries[right_index]
-                .as_ref()
-                .expect("every measured piece is indexed");
-            let Some(distance) =
-                region_clearance_within(&left.region, &right.region, right_boundary, limit_mm)
-            else {
+            let boundary = |index: usize| {
+                boundaries[index]
+                    .as_ref()
+                    .expect("every paired piece is indexed")
+            };
+            let (left_boundary, right_boundary) = (boundary(left_index), boundary(right_index));
+            let Some(distance) = region_clearance_within(
+                &left.region,
+                left_boundary,
+                &right.region,
+                right_boundary,
+                limit_mm,
+            ) else {
                 continue;
             };
 

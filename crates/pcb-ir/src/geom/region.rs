@@ -1717,15 +1717,50 @@ fn component_width(
                 .any(|point| [lines[j].start, lines[j].end].contains(point))
         }
     };
-    // Any disk within the morphology reach that touches two eligible walls
-    // proves those walls are no farther apart than its diameter. Allow one
-    // contact tolerance at each wall for the snap-rounded residual, then
-    // leave every surviving measurement to the Voronoi construction below.
+    let component_edges = component
+        .rings
+        .iter()
+        .flat_map(ring_edges)
+        .collect::<Vec<_>>();
+    // A maximal disk centered in the component is no larger than the
+    // component's clearance to its nearest wall, which the farthest vertex
+    // from that wall bounds. Both walls of a width therefore lie within that
+    // reach of the component; a corner's own bite is walled by its two edges
+    // alone and never reaches the far side of the feature. Any disk within
+    // the morphology reach that touches two eligible walls also proves those
+    // walls are no farther apart than its diameter. Allow one contact
+    // tolerance at each wall for the snap-rounded residual, and the chord
+    // deviation of a sampled curved axis, then leave every surviving
+    // measurement to the Voronoi construction below.
     let candidate_diameter = 2.0 * (reach + contact_tolerance);
+    let farthest_vertex = |site: &OrientedBoundarySegment| {
+        component
+            .rings
+            .iter()
+            .flat_map(|ring| ring.iter())
+            .map(|&[x, y]| dist::point_segment(Point::new(x, y), site.start, site.end).0)
+            .fold(0.0, f64::max)
+    };
+    let clearance_bound = sites
+        .iter()
+        .map(farthest_vertex)
+        .fold(f64::INFINITY, f64::min)
+        + 2.0 * contact_tolerance
+        + tol::FLATTEN_MM;
+    let within_reach = sites
+        .iter()
+        .map(|site| {
+            component_edges.iter().any(|&(start, end)| {
+                dist::segments(start, end, site.start, site.end).0 <= clearance_bound
+            })
+        })
+        .collect::<Vec<_>>();
     let has_reachable_wall_pair = (0..sites.len())
         .flat_map(|first| (first + 1..sites.len()).map(move |second| (first, second)))
         .any(|(first, second)| {
-            !incident(first, second)
+            within_reach[first]
+                && within_reach[second]
+                && !incident(first, second)
                 && dist::segments(
                     sites[first].start,
                     sites[first].end,
@@ -1764,11 +1799,6 @@ fn component_width(
             second,
         }
     };
-    let component_edges = component
-        .rings
-        .iter()
-        .flat_map(ring_edges)
-        .collect::<Vec<_>>();
 
     // Vertices: tangent to every site around them; a width needs two that
     // are not incident.

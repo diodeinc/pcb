@@ -173,6 +173,17 @@ impl RegionBoundaryIndex {
             .min_by(|left, right| left.mm.total_cmp(&right.mm))
     }
 
+    /// The indexed segments whose bounds meet `bounds`, in boundary order,
+    /// each once.
+    pub fn segments_meeting(&self, bounds: BBox) -> impl Iterator<Item = (Point, Point)> + '_ {
+        let mut ids = self.grid.rectangle(bounds).collect::<Vec<_>>();
+        ids.sort_unstable();
+        ids.dedup();
+        ids.into_iter()
+            .filter(move |&id| self.bounds[id as usize].intersects(bounds))
+            .map(|id| self.segments[id as usize])
+    }
+
     /// Ids of the indexed segments whose bounds come within `reach` of the
     /// query segment, in grid order: column by column, row by row, then by
     /// id. A segment spanning several cells is yielded once per cell. The
@@ -334,11 +345,12 @@ pub fn region_clearance(first: &ContourSet, second: &ContourSet) -> Option<Dista
 /// Shortest clearance between two filled regions when it is no greater than
 /// `maximum_mm`.
 ///
-/// `second_boundary` must index `second`. Overlapping, contained, or touching
-/// regions have zero clearance. `None` means at least one input is empty or
-/// the clearance is greater than `maximum_mm`.
+/// Each boundary index must index its region. Overlapping, contained, or
+/// touching regions have zero clearance. `None` means at least one input is
+/// empty or the clearance is greater than `maximum_mm`.
 pub fn region_clearance_within(
     first: &ContourSet,
+    first_boundary: &RegionBoundaryIndex,
     second: &ContourSet,
     second_boundary: &RegionBoundaryIndex,
     maximum_mm: f64,
@@ -354,10 +366,10 @@ pub fn region_clearance_within(
         return Some(Distance::flattened(0.0, point, point, 2));
     }
 
-    first
-        .rings
-        .iter()
-        .flat_map(ring_edges)
+    // Only the first boundary's edges within reach of the second region's
+    // bounds can come within reach of its boundary.
+    first_boundary
+        .segments_meeting(second.bbox.expand(maximum_mm + tol::EPSILON_MM))
         .filter_map(|(first_start, first_end)| {
             second_boundary
                 .segment_nearest_within(first_start, first_end, maximum_mm)
@@ -1280,25 +1292,31 @@ mod tests {
     fn thresholded_region_clearance_matches_authoritative_measurement() {
         let left = rect_region(0.0, 0.0, 2.0, 2.0);
         let right = rect_region(3.5, 0.5, 5.0, 1.5);
-        let index = RegionBoundaryIndex::new(&right, 2.0);
+        let clearance_within = |first: &ContourSet, second: &ContourSet, maximum_mm: f64| {
+            region_clearance_within(
+                first,
+                &RegionBoundaryIndex::new(first, maximum_mm),
+                second,
+                &RegionBoundaryIndex::new(second, maximum_mm),
+                maximum_mm,
+            )
+        };
 
         assert_eq!(
-            region_clearance_within(&left, &right, &index, 2.0),
+            clearance_within(&left, &right, 2.0),
             region_clearance(&left, &right)
         );
-        assert_eq!(region_clearance_within(&left, &right, &index, 1.0), None);
+        assert_eq!(clearance_within(&left, &right, 1.0), None);
 
         let crossing = rect_region(1.0, -1.0, 1.5, 3.0);
-        let crossing_index = RegionBoundaryIndex::new(&crossing, 0.1);
         assert_eq!(
-            region_clearance_within(&left, &crossing, &crossing_index, 0.1),
+            clearance_within(&left, &crossing, 0.1),
             region_clearance(&left, &crossing)
         );
 
         let contained = rect_region(0.5, 0.5, 1.5, 1.5);
-        let contained_index = RegionBoundaryIndex::new(&contained, 0.1);
         assert_eq!(
-            region_clearance_within(&left, &contained, &contained_index, 0.1),
+            clearance_within(&left, &contained, 0.1),
             region_clearance(&left, &contained)
         );
     }
