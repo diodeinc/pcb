@@ -301,11 +301,11 @@ fn decimate_ring_inward(ring: &Ring, deviation_mm: f64) -> Ring {
 
 /// The closed edge cycle of one ring, as start/end point pairs.
 pub fn ring_edges(ring: &Ring) -> impl Iterator<Item = (Point, Point)> + '_ {
+    let point = |[x, y]: [f64; 2]| Point::new(x, y);
     ring.iter()
         .copied()
-        .zip(ring.iter().copied().cycle().skip(1))
-        .take(ring.len())
-        .map(|([x0, y0], [x1, y1])| (Point::new(x0, y0), Point::new(x1, y1)))
+        .zip(ring.iter().skip(1).chain(ring.first()).copied())
+        .map(move |(start, end)| (point(start), point(end)))
 }
 
 /// Signed area of one ring (positive when counter-clockwise).
@@ -616,7 +616,7 @@ impl ContourSet {
             let point = Point::new(x, y);
             if let Some(&outer) = outers.iter().find(|&&outer| {
                 self.ring_bounds[outer].contains_point(point)
-                    && ring_contains_point(&self.rings[outer], point)
+                    && ring_winding(&self.rings[outer], point) != 0
             }) {
                 components[index] = components[outer];
             }
@@ -758,13 +758,8 @@ impl ContourSet {
                         && bounds.min.x <= max_x + tol::EPSILON_MM
                         && min_x - tol::EPSILON_MM <= bounds.max.x
                 })
-                .flat_map(|(ring, _)| {
-                    ring.iter()
-                        .copied()
-                        .zip(ring.iter().copied().cycle().skip(1))
-                        .take(ring.len())
-                })
-                .filter_map(move |edge| horizontal_crossing(edge, y))
+                .flat_map(|(ring, _)| ring_edges(ring))
+                .filter_map(move |(start, end)| horizontal_crossing(start, end, y))
         };
         let mut by_height = (0..points.len()).collect::<Vec<_>>();
         by_height.sort_by(|left, right| {
@@ -993,12 +988,11 @@ impl ContourSet {
             return true;
         }
 
-        // Regularized boolean output nests pairwise-disjoint rings, so
-        // even-odd parity across rings coincides with the nonzero fill rule.
-        // A ring whose bounds miss the point cannot enclose it.
-        rings_near(tol::EPSILON_MM).fold(false, |inside, ring| {
-            inside ^ ring_contains_point(ring, point)
-        })
+        // A ring whose bounds miss the point cannot wind around it.
+        rings_near(tol::EPSILON_MM)
+            .map(|ring| ring_winding(ring, point))
+            .sum::<i32>()
+            != 0
     }
 
     /// Whether a closed disk is fully contained in the regularized region.
@@ -1376,17 +1370,29 @@ pub(crate) fn overlay_fill_rule(fill_rule: FillRule) -> OverlayFillRule {
     }
 }
 
-fn horizontal_crossing(([x0, y0], [x1, y1]): ([f64; 2], [f64; 2]), y: f64) -> Option<(f64, i32)> {
+/// Where an edge crosses the horizontal line at `y`, with its direction.
+fn horizontal_crossing(start: Point, end: Point, y: f64) -> Option<(f64, i32)> {
     // Half-open in y so a vertex shared by two edges is counted once, which
     // keeps the winding number honest.
-    let direction = if y0 <= y && y < y1 {
+    let direction = if start.y <= y && y < end.y {
         1
-    } else if y1 <= y && y < y0 {
+    } else if end.y <= y && y < start.y {
         -1
     } else {
         return None;
     };
-    Some((x0 + (y - y0) * (x1 - x0) / (y1 - y0), direction))
+    Some((
+        start.x + (y - start.y) * (end.x - start.x) / (end.y - start.y),
+        direction,
+    ))
+}
+
+/// The winding number of one ring around a point.
+fn ring_winding(ring: &Ring, point: Point) -> i32 {
+    ring_edges(ring)
+        .filter_map(|(start, end)| horizontal_crossing(start, end, point.y))
+        .filter_map(|(x, direction)| (x <= point.x).then_some(direction))
+        .sum()
 }
 
 fn flatten_shapes(shapes: Vec<Shape>) -> Vec<Ring> {
@@ -1431,36 +1437,9 @@ fn ring_to_contour(ring: Ring) -> Option<ContourBuf> {
     Some(ContourBuf::from_parts(bbox, cmds))
 }
 
-fn ring_contains_point(ring: &Ring, point: Point) -> bool {
-    if ring.len() < 3 {
-        return false;
-    }
-
-    let mut inside = false;
-    for index in 0..ring.len() {
-        let [x0, y0] = ring[index];
-        let [x1, y1] = ring[(index + 1) % ring.len()];
-        if (y0 > point.y) != (y1 > point.y) {
-            let crossing_x = x0 + (point.y - y0) * (x1 - x0) / (y1 - y0);
-            if point.x < crossing_x {
-                inside = !inside;
-            }
-        }
-    }
-    inside
-}
-
 fn ring_boundary_distance(ring: &Ring, point: Point) -> f64 {
-    if ring.is_empty() {
-        return f64::INFINITY;
-    }
-
-    (0..ring.len())
-        .map(|index| {
-            let [x0, y0] = ring[index];
-            let [x1, y1] = ring[(index + 1) % ring.len()];
-            dist::point_segment(point, Point::new(x0, y0), Point::new(x1, y1)).0
-        })
+    ring_edges(ring)
+        .map(|(start, end)| dist::point_segment(point, start, end).0)
         .fold(f64::INFINITY, f64::min)
 }
 
@@ -1519,7 +1498,7 @@ fn source_boundary_segments(source: &ContourSet) -> Vec<OrientedBoundarySegment>
                         start,
                         end,
                         tangent: metric.edge_tangent(edge, tangent_radius),
-                        bbox: segment_bbox(start, end),
+                        bbox: BBox::spanning(start, end),
                     },
                 )
         })
@@ -1847,7 +1826,7 @@ fn component_width(
                 start,
                 end,
                 tangent: source.tangent,
-                bbox: segment_bbox(start, end),
+                bbox: BBox::spanning(start, end),
             }
         })
         .collect::<Vec<_>>();
@@ -2223,17 +2202,15 @@ fn region_boundary_within_distance(
     end: Point,
     distance: f64,
 ) -> bool {
-    let expanded = segment_bbox(start, end).expand(distance);
-    region.rings.iter().any(|ring| {
-        (0..ring.len()).any(|index| {
-            let [other_start_x, other_start_y] = ring[index];
-            let [other_end_x, other_end_y] = ring[(index + 1) % ring.len()];
-            let other_start = Point::new(other_start_x, other_start_y);
-            let other_end = Point::new(other_end_x, other_end_y);
-            expanded.intersects(segment_bbox(other_start, other_end))
+    let expanded = BBox::spanning(start, end).expand(distance);
+    region
+        .rings
+        .iter()
+        .flat_map(ring_edges)
+        .any(|(other_start, other_end)| {
+            expanded.intersects(BBox::spanning(other_start, other_end))
                 && dist::segments(start, end, other_start, other_end).0 <= distance
         })
-    })
 }
 
 fn boundary_tangents_oppose(
@@ -2614,7 +2591,7 @@ fn regions_within_distance(left: &ContourSet, right: &ContourSet, distance: f64)
             let [left_end_x, left_end_y] = left_ring[(left_index + 1) % left_ring.len()];
             let left_start = Point::new(left_start_x, left_start_y);
             let left_end = Point::new(left_end_x, left_end_y);
-            let left_bbox = segment_bbox(left_start, left_end).expand(threshold);
+            let left_bbox = BBox::spanning(left_start, left_end).expand(threshold);
             for right_ring in &right.rings {
                 for right_index in 0..right_ring.len() {
                     let [right_start_x, right_start_y] = right_ring[right_index];
@@ -2622,7 +2599,7 @@ fn regions_within_distance(left: &ContourSet, right: &ContourSet, distance: f64)
                         right_ring[(right_index + 1) % right_ring.len()];
                     let right_start = Point::new(right_start_x, right_start_y);
                     let right_end = Point::new(right_end_x, right_end_y);
-                    if !left_bbox.intersects(segment_bbox(right_start, right_end)) {
+                    if !left_bbox.intersects(BBox::spanning(right_start, right_end)) {
                         continue;
                     }
                     let (separation, _, _) =
@@ -2635,13 +2612,6 @@ fn regions_within_distance(left: &ContourSet, right: &ContourSet, distance: f64)
         }
     }
     false
-}
-
-fn segment_bbox(start: Point, end: Point) -> BBox {
-    BBox::new(
-        Point::new(start.x.min(end.x), start.y.min(end.y)),
-        Point::new(start.x.max(end.x), start.y.max(end.y)),
-    )
 }
 
 #[cfg(test)]
@@ -2781,7 +2751,7 @@ mod tests {
             start: Point::new(start.0, start.1),
             end: Point::new(end.0, end.1),
             tangent: Point::new(end.0 - start.0, end.1 - start.1),
-            bbox: segment_bbox(Point::new(start.0, start.1), Point::new(end.0, end.1)),
+            bbox: BBox::spanning(Point::new(start.0, start.1), Point::new(end.0, end.1)),
         };
         // A right-to-left host touched at two interior points by other rings.
         let sites = [

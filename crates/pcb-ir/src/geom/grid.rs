@@ -35,12 +35,14 @@ impl CellGrid {
         bounds: BBox,
         registrations: impl Iterator<Item = (u32, (i64, i64))>,
     ) -> Self {
-        let cell = |value: f64| (value / pitch).floor() as i64;
         let (first_column, column_count) = if bounds.is_empty() {
             (0, 0)
         } else {
-            let first = cell(bounds.min.x);
-            (first, (cell(bounds.max.x) - first + 1) as usize)
+            let first = Self::cell(bounds.min.x, pitch);
+            (
+                first,
+                (Self::cell(bounds.max.x, pitch) - first + 1) as usize,
+            )
         };
         let mut pairs = registrations
             .filter(|&(_, (column, _))| {
@@ -77,22 +79,28 @@ impl CellGrid {
         }
     }
 
+    /// The cell coordinate of a value on a grid of `pitch`.
+    pub fn cell(value: f64, pitch: f64) -> i64 {
+        (value / pitch).floor() as i64
+    }
+
     /// Every cell of a grid of `pitch` that `bounds` meets, column by column
     /// and row by row.
     pub fn cells_of(bounds: BBox, pitch: f64) -> impl Iterator<Item = (i64, i64)> {
-        let cell = move |value: f64| (value / pitch).floor() as i64;
-        let (min_column, max_column) = (cell(bounds.min.x), cell(bounds.max.x));
-        let (min_row, max_row) = (cell(bounds.min.y), cell(bounds.max.y));
+        let (min_column, max_column) = (
+            Self::cell(bounds.min.x, pitch),
+            Self::cell(bounds.max.x, pitch),
+        );
+        let (min_row, max_row) = (
+            Self::cell(bounds.min.y, pitch),
+            Self::cell(bounds.max.y, pitch),
+        );
         (min_column..=max_column)
             .flat_map(move |column| (min_row..=max_row).map(move |row| (column, row)))
     }
 
     pub fn pitch_mm(&self) -> f64 {
         self.pitch
-    }
-
-    pub fn cell_of(&self, value: f64) -> i64 {
-        (value / self.pitch).floor() as i64
     }
 
     /// The ids of the cells of one column from `min_row` through `max_row`,
@@ -115,8 +123,9 @@ impl CellGrid {
     /// The ids of every cell meeting `bounds`, column by column, then row
     /// by row. An id in several cells appears once per cell.
     pub fn rectangle(&self, bounds: BBox) -> impl Iterator<Item = u32> + '_ {
-        let (min_column, max_column) = (self.cell_of(bounds.min.x), self.cell_of(bounds.max.x));
-        let (min_row, max_row) = (self.cell_of(bounds.min.y), self.cell_of(bounds.max.y));
+        let cell = |value: f64| Self::cell(value, self.pitch);
+        let (min_column, max_column) = (cell(bounds.min.x), cell(bounds.max.x));
+        let (min_row, max_row) = (cell(bounds.min.y), cell(bounds.max.y));
         (min_column..=max_column)
             .flat_map(move |column| self.column(column, min_row, max_row).iter().copied())
     }
