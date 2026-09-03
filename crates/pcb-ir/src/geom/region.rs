@@ -655,7 +655,7 @@ impl ContourSet {
         let faces = |left: &OrientedBoundarySegment, right: &OrientedBoundarySegment| {
             if left.topology.ring == right.topology.ring
                 && (boundary_segments_are_incident(left.topology, right.topology)
-                    || left.tangent.x * right.tangent.x + left.tangent.y * right.tangent.y > 0.0)
+                    || left.tangent.x * right.tangent.x + left.tangent.y * right.tangent.y >= 0.0)
             {
                 return false;
             }
@@ -1484,7 +1484,8 @@ fn closing_residual(region: &ContourSet, radius: f64) -> ContourSet {
 }
 
 /// Every source boundary edge longer than the region tolerance, in ring
-/// order.
+/// order. The kept edges are numbered consecutively, so two that meet
+/// across a dropped sub-tolerance edge remain adjacent.
 fn source_boundary_segments(source: &ContourSet) -> Vec<OrientedBoundarySegment> {
     source
         .rings
@@ -1495,20 +1496,26 @@ fn source_boundary_segments(source: &ContourSet) -> Vec<OrientedBoundarySegment>
             // Keep the two-sided chord local even when the whole ring is
             // smaller than the ordinary geometry resolution.
             let tangent_radius = tol::FLATTEN_MM.min(metric.perimeter() / 8.0);
-            ring_edges(ring)
+            let kept = ring_edges(ring)
                 .enumerate()
                 .filter(|(_, (start, end))| start.distance_to(*end) > source.tolerance)
-                .map(move |(index, (start, end))| OrientedBoundarySegment {
-                    topology: BoundarySegment {
-                        ring: ring_id,
-                        index,
-                        ring_len: ring.len(),
+                .collect::<Vec<_>>();
+            let ring_len = kept.len();
+            kept.into_iter()
+                .enumerate()
+                .map(
+                    move |(index, (edge, (start, end)))| OrientedBoundarySegment {
+                        topology: BoundarySegment {
+                            ring: ring_id,
+                            index,
+                            ring_len,
+                        },
+                        start,
+                        end,
+                        tangent: metric.edge_tangent(edge, tangent_radius),
+                        bbox: segment_bbox(start, end),
                     },
-                    start,
-                    end,
-                    tangent: metric.edge_tangent(index, tangent_radius),
-                    bbox: segment_bbox(start, end),
-                })
+                )
         })
         .collect()
 }
@@ -1743,7 +1750,7 @@ fn planar_grid_sites(
 }
 
 /// Whether every two sites are incident, and so one wall: segments of one
-/// ring that are adjacent or turned less than a quarter turn from each
+/// ring that are adjacent or turned no more than a quarter turn from each
 /// other, the same judgement the width construction makes of a wall pair.
 /// Nothing in such a set faces anything else, so a residue it walls alone
 /// is the bite of one corner or gentle arc and has no width. A sharp tip
@@ -1753,7 +1760,7 @@ fn one_wall(sites: &[OrientedBoundarySegment]) -> bool {
         sites[position + 1..].iter().all(|right| {
             left.topology.ring == right.topology.ring
                 && (boundary_segments_are_incident(left.topology, right.topology)
-                    || left.tangent.x * right.tangent.x + left.tangent.y * right.tangent.y > 0.0)
+                    || left.tangent.x * right.tangent.x + left.tangent.y * right.tangent.y >= 0.0)
         })
     })
 }
@@ -1844,15 +1851,17 @@ fn component_width(
     // Which sites are one wall. A ring's two sides of a channel are
     // traversed in opposite directions, so two segments of one ring face
     // each other only when their directions oppose; ring-adjacent segments
-    // and segments whose resolution-scale tangents are within a quarter turn
-    // are the same wall. The averaged tangent prevents a microscopic reversal
-    // from manufacturing an opposing branch. Segments of different rings are
-    // one wall only where they touch.
+    // and segments whose resolution-scale tangents are no more than a
+    // quarter turn apart are the same wall, as a disk touching both edges
+    // of a square corner is a corner disk, not a width. The averaged
+    // tangent prevents a microscopic reversal from manufacturing an
+    // opposing branch. Segments of different rings are one wall only where
+    // they touch.
     let incident = |i: usize, j: usize| {
         let (a, b) = (&sites[i], &sites[j]);
         if a.topology.ring == b.topology.ring {
             boundary_segments_are_incident(a.topology, b.topology)
-                || a.tangent.x * b.tangent.x + a.tangent.y * b.tangent.y > 0.0
+                || a.tangent.x * b.tangent.x + a.tangent.y * b.tangent.y >= 0.0
         } else {
             [lines[i].start, lines[i].end]
                 .iter()
