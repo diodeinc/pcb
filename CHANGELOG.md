@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.48] - 2026-09-04
+
 ### Added
 
 - Open DFM reports with `pcb open` or `pcb dfm --open`.
@@ -1825,7 +1827,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.47...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.48...HEAD
+[0.4.48]: https://github.com/diodeinc/pcb/compare/v0.4.47...v0.4.48
 [0.4.47]: https://github.com/diodeinc/pcb/compare/v0.4.46...v0.4.47
 [0.4.46]: https://github.com/diodeinc/pcb/compare/v0.4.45...v0.4.46
 [0.4.45]: https://github.com/diodeinc/pcb/compare/v0.4.44...v0.4.45
