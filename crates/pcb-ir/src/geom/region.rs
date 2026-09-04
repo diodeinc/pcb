@@ -6,6 +6,10 @@
 //! dilation over filled point sets, shared by every dialect so IPC, Gerber,
 //! SVG, and comparison all use the same geometry semantics.
 
+mod query;
+
+pub use query::PreparedRegion;
+
 use std::fmt;
 
 use boostvoronoi::prelude::{
