@@ -66,7 +66,8 @@ is an alias for the same PDK. It uses the conservative 0.13 mm soldermask-web
 limit published for black and white mask across every color. The `ipc` alias
 selects the opinionated Class 2 / Producibility Level B default. It and the
 explicit `ipc-1a` through `ipc-3c` profiles run Diode's opinionated partial
-baseline for plated-hole aspect ratio and via, PTH, and NPTH hole-to-copper
+baseline for plated-hole aspect ratio, via, PTH, and NPTH hole-to-copper
+clearance, and via, PTH, NPTH, plated-slot, and nonplated-slot board-edge
 clearance. Diode selected these values with IPC design topics as context; they
 are not licensed IPC numeric matrices, do not prove full IPC compliance, and
 do not imply IPC certification.
