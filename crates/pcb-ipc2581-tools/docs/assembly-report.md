@@ -1,4 +1,4 @@
-# PCBA assembly report v3
+# PCBA assembly report v4
 
 `assembly::build_report` lowers one cached `pcb-ir` imported design into the
 deterministic contract used by the CLI and native library. The report carries
