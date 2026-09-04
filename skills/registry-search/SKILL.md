@@ -44,6 +44,8 @@ If docs are incomplete or fail, use the source path or file tree from `pcb doc` 
 
 ## Choosing Results
 
+Before choosing a concrete MPN, use `preferred-parts` to check for a suitable house or extended part.
+
 Prefer the most reusable correct abstraction:
 
 1. A higher-level module or reference design that already implements the needed schematic circuit.
