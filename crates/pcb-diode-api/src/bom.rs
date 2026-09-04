@@ -331,7 +331,7 @@ fn build_availability_summary(
     target_qty: i32,
 ) -> AvailabilitySummary {
     let lcsc_part_ids = match (offer.distributor.as_deref(), &offer.distributor_part_id) {
-        (Some("lcsc"), Some(id)) => {
+        (Some(distributor), Some(id)) if distributor.eq_ignore_ascii_case("lcsc") => {
             let id = if id.starts_with('C') {
                 id.clone()
             } else {
