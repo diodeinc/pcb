@@ -82,25 +82,19 @@ impl WriteThroughCache {
             .map_err(Into::into)
     }
 
-    pub fn store_many(&mut self, entries: &[(String, Vec<u8>)]) -> Result<()> {
-        self.store_many_at(entries, unix_now()?)
+    pub fn store(&self, key: &str, value: &[u8]) -> Result<()> {
+        self.store_at(key, value, unix_now()?)
     }
 
-    fn store_many_at(&mut self, entries: &[(String, Vec<u8>)], updated_at: i64) -> Result<()> {
-        let transaction = self.connection.transaction()?;
-        {
-            let mut statement = transaction.prepare_cached(
-                "INSERT INTO entries (namespace, cache_key, value, updated_at)
-                 VALUES (?1, ?2, ?3, ?4)
-                 ON CONFLICT (namespace, cache_key) DO UPDATE SET
-                    value = excluded.value,
-                    updated_at = excluded.updated_at",
-            )?;
-            for (key, value) in entries {
-                statement.execute(params![self.namespace, key, value, updated_at])?;
-            }
-        }
-        transaction.commit()?;
+    fn store_at(&self, key: &str, value: &[u8], updated_at: i64) -> Result<()> {
+        self.connection.execute(
+            "INSERT INTO entries (namespace, cache_key, value, updated_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT (namespace, cache_key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = excluded.updated_at",
+            params![self.namespace, key, value, updated_at],
+        )?;
         Ok(())
     }
 }
@@ -142,15 +136,11 @@ mod tests {
     fn writes_are_upserted_and_isolated_by_namespace() {
         let tempdir = tempfile::tempdir().unwrap();
         let path = tempdir.path().join("cache.sqlite");
-        let mut first = WriteThroughCache::open_at(&path, "first").unwrap();
+        let first = WriteThroughCache::open_at(&path, "first").unwrap();
         let second = WriteThroughCache::open_at(&path, "second").unwrap();
 
-        first
-            .store_many_at(&[("key".to_string(), b"old".to_vec())], 100)
-            .unwrap();
-        first
-            .store_many_at(&[("key".to_string(), b"new".to_vec())], 200)
-            .unwrap();
+        first.store_at("key", b"old", 100).unwrap();
+        first.store_at("key", b"new", 200).unwrap();
 
         let entry = first.load("key").unwrap().unwrap();
         assert_eq!(entry.value, b"new");
