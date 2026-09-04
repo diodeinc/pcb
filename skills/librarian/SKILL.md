@@ -308,7 +308,7 @@ Prefer strong registry exemplars: `TPS709-Q1`, `TPSM336xx-Q1`, `TCPP01-M12`, `SN
 
 Among otherwise-equivalent orderable MPN variants, choose the one that is easiest to assemble with automated pick-and-place equipment. Prefer packaging in this order: tape and reel or cut tape, tray, tube, then bag or bulk. Prefer manufacturer-documented pickup aids, such as pick-and-place film or stickers, when the component is not flat on top. If a non-flat-top component has no variant suitable for reliable automated pickup, warn the designer before completing the package.
 
-Prefer house-matchable generic choices when technically valid. If rounding, clamping, or substituting values, document why. If a generic cannot reasonably match, ask whether to use an explicit part or suppress the warning with justification. Use `pcb doc --package @stdlib --list` to locate and inspect `bom/match_generics.zen` when generic matching matters.
+Express design requirements through stdlib generic parameters. Set `mpn` or `manufacturer` only when the parameter space cannot represent the design. Run `pcb bom <entrypoint>.zen -f json` to inspect matches and sourceability.
 
 Use comments for evidence and judgment only: datasheet section/table/equation references, rounded or clamped values, or stuffing strategy. Avoid comments that restate code. Do not add decorative banner/divider comments such as `====` or `----`.
 
