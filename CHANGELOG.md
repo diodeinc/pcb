@@ -10,6 +10,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- Add `yellow-green` as a supported `Led` color.
+- Remove `rgb` from the supported `Led` colors.
 - Report the standard PDK's 4 mil soldermask-web threshold as a warning.
 
 ### Fixed
