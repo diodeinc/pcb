@@ -573,7 +573,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                 waivers,
                 layout_target,
                 output,
-            } => commands::dfm::execute_check(
+            } => match commands::dfm::execute_check(
                 &file,
                 &commands::dfm::CheckOptions {
                     pdk,
@@ -581,7 +581,10 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                     output,
                     layout_target,
                 },
-            ),
+            )? {
+                commands::dfm::CheckOutcome::Passed => Ok(()),
+                commands::dfm::CheckOutcome::Failed(error) => Err(error),
+            },
         },
         Commands::Warp { file, report } => commands::warp::execute(&file, report.as_deref()),
         Commands::Gerber {

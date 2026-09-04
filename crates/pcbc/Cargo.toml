@@ -67,6 +67,7 @@ toml_edit = { workspace = true }
 zip = { workspace = true }
 chrono = { workspace = true }
 tempfile = { workspace = true }
+tiny_http = { workspace = true }
 ignore = { workspace = true }
 semver = { workspace = true }
 rayon = { workspace = true }
@@ -86,10 +87,10 @@ notify = { workspace = true }
 mimalloc = { workspace = true, optional = true }
 uuid = { workspace = true }
 base64 = { workspace = true }
+zstd = { workspace = true }
 
 [dev-dependencies]
 httpmock = { workspace = true }
 insta = { workspace = true }
 tempfile = { workspace = true }
 pcb-test-utils = { workspace = true }
-zstd = { workspace = true }

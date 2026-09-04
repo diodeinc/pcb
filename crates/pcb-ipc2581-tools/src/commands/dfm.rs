@@ -172,6 +172,12 @@ pub struct CheckOptions {
     pub layout_target: LayoutTarget,
 }
 
+#[cfg(feature = "cli")]
+pub enum CheckOutcome {
+    Passed,
+    Failed(anyhow::Error),
+}
+
 /// Reject an invalid destination before any layout preparation or output write.
 #[cfg(feature = "cli")]
 pub fn validate_output(file: &Path, options: &CheckOptions) -> Result<()> {
@@ -220,32 +226,32 @@ pub fn validate_output(file: &Path, options: &CheckOptions) -> Result<()> {
 }
 
 #[cfg(feature = "cli")]
-pub fn execute_check(file: &Path, options: &CheckOptions) -> Result<()> {
+pub fn execute_check(file: &Path, options: &CheckOptions) -> Result<CheckOutcome> {
     validate_output(file, options)?;
     let report = match build_report(file, options) {
         Ok(checked) => checked,
         Err(error) => {
             write_error_report(file, options, &error)
                 .with_context(|| format!("DFM check was incomplete: {error:#}"))?;
-            return Err(error);
+            return Ok(CheckOutcome::Failed(error));
         }
     };
     write_report(options, &report)?;
 
     let summary = &report.summary;
     if summary.errors > 0 {
-        bail!(
+        return Ok(CheckOutcome::Failed(anyhow::anyhow!(
             "DFM check failed with {} error finding(s){}",
             summary.errors,
             annotations(summary)
-        );
+        )));
     }
     eprintln!(
         "✓ DFM check passed ({} rule(s){})",
         summary.rules_configured,
         annotations(summary)
     );
-    Ok(())
+    Ok(CheckOutcome::Passed)
 }
 
 /// Preparation failures produce an incomplete report, never a passing result.
@@ -841,7 +847,7 @@ reason = "old finding"
         let bytes = zstd::encode_all(BOARD.as_bytes(), 0).unwrap();
         std::fs::write(&input, &bytes).unwrap();
         std::fs::write(&pdk, &pdk_source).unwrap();
-        let error = execute_check(
+        let outcome = execute_check(
             &input,
             &CheckOptions {
                 pdk: pdk.clone(),
@@ -850,7 +856,10 @@ reason = "old finding"
                 layout_target: LayoutTarget::Board,
             },
         )
-        .unwrap_err();
+        .unwrap();
+        let CheckOutcome::Failed(error) = outcome else {
+            panic!("expected the DFM check to fail");
+        };
         assert!(
             error
                 .to_string()

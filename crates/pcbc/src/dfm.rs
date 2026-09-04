@@ -21,29 +21,76 @@ pub struct DfmArgs {
     #[arg(short, long, value_hint = clap::ValueHint::FilePath)]
     pub output: Option<PathBuf>,
 
+    /// Open the report in dfm.diode.computer after writing it
+    #[arg(long)]
+    pub open: bool,
+
     /// Disable network access (offline mode) - only use vendored dependencies
     #[arg(long = "offline")]
     pub offline: bool,
 }
 
 pub fn execute(args: DfmArgs) -> Result<()> {
+    let temporary_output = if args.open && args.output.is_none() {
+        Some(tempfile::tempdir().context("failed to create temporary DFM report directory")?)
+    } else {
+        None
+    };
+    let output = args.output.clone().or_else(|| {
+        temporary_output.as_ref().map(|directory| {
+            let filename = args
+                .file
+                .with_extension("dfm.json")
+                .file_name()
+                .unwrap_or_default()
+                .to_owned();
+            directory.path().join(filename)
+        })
+    });
     let options = commands::dfm::CheckOptions {
         pdk: args.pdk.clone(),
         waivers: None,
-        output: args.output.clone(),
+        output,
         layout_target: LayoutTarget::Board,
     };
     commands::dfm::validate_output(&args.file, &options)?;
-    let (_temporary_dir, ipc_path) = match export_layout(&args) {
-        Ok(exported) => exported,
+    let dfm_result = match export_layout(&args) {
+        Ok((_temporary_dir, ipc_path)) => {
+            match commands::dfm::execute_check(&ipc_path, &options)? {
+                commands::dfm::CheckOutcome::Passed => Ok(()),
+                commands::dfm::CheckOutcome::Failed(error) => Err(error),
+            }
+        }
         Err(error) => {
             commands::dfm::write_error_report(&args.file, &options, &error)
                 .with_context(|| format!("DFM check was incomplete: {error:#}"))?;
-            return Err(error);
+            Err(error)
         }
     };
 
-    commands::dfm::execute_check(&ipc_path, &options)
+    if !args.open {
+        return dfm_result;
+    }
+
+    if let Err(open_error) = crate::open::open_dfm_report(
+        options
+            .output
+            .as_deref()
+            .expect("--open always selects a report file"),
+    ) {
+        if let Some(directory) = temporary_output {
+            let _ = directory.keep();
+            anstream::eprintln!(
+                "DFM report kept at {}",
+                options.output.as_deref().unwrap().display()
+            );
+        }
+        if dfm_result.is_ok() {
+            return Err(open_error);
+        }
+        anstream::eprintln!("Warning: {open_error:#}");
+    }
+    dfm_result
 }
 
 fn export_layout(args: &DfmArgs) -> Result<(tempfile::TempDir, PathBuf)> {

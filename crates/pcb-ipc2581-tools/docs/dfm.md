@@ -324,6 +324,8 @@ silently.
 ```bash
 pcb ipc dfm check board.xml --pdk standard -o board.dfm.json
 pcb dfm board.zen --pdk standard -o board.dfm.json
+pcb dfm board.zen --pdk standard --open
+pcb open board.dfm.json
 ```
 
 `pcb dfm` prepares and synchronizes the board's KiCad layout before exporting
@@ -365,6 +367,17 @@ Output is UTF-8 JSON on stdout unless `-o` / `--output` is supplied. The
 recommended suffix is `.dfm.json`. Every complete report includes the native
 scene and PDK source for viewing without companion files. PCB generates no
 DFM HTML or viewer application.
+
+`pcb open <report.dfm.json>` opens an existing report in
+`https://dfm.diode.computer`. A one-shot local page redirects the same browser
+tab with the compressed report in a temporary URL fragment. The viewer removes
+the fragment before loading the report, and no report bytes are uploaded.
+`pcb dfm --open` performs the same handoff after generating the report. With
+`-o`, it saves and opens that file; without `-o`, it uses a temporary report
+instead of writing JSON to stdout. Fresh `pass`, `fail`, and `incomplete`
+reports are all opened, while the DFM command keeps its normal exit status.
+Reports over 16 MiB or encoded URLs over 900 KiB must be selected in the
+viewer manually.
 
 A completed report is written before the command returns a failing status.
 Only unwaived error findings fail its verdict. Preparation and output errors
