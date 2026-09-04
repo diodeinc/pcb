@@ -5,7 +5,7 @@ load("../utils.zen", "format_value")
 
 Mount = enum("SMD")
 Package = enum("0201", "0402", "0603", "0805", "1206", "1210", "2010", "2512", "1812")
-Color = enum("red", "green", "blue", "yellow", "white", "amber", "orange", "pink", "uv", "rgb", "other")
+Color = enum("red", "green", "blue", "yellow", "yellow-green", "white", "amber", "orange", "pink", "uv", "other")
 package = config(Package)
 color = config(Color)
 mpn = config(str, optional=True, help="Manufacturer Part Number")
@@ -51,6 +51,7 @@ def _symbol_name(color: Color):
         Color("green"): "LED_Small_Filled_Green",
         Color("blue"): "LED_Small_Filled_Blue",
         Color("yellow"): "LED_Small_Filled_Yellow",
+        Color("yellow-green"): "LED_Small_Filled_Green",
         Color("white"): "LED_Small_Filled_White",
         Color("amber"): "LED_Small_Filled_Amber",
         Color("orange"): "LED_Small_Filled_Orange",
@@ -73,12 +74,12 @@ def _spice_subcircuit_name(color: Color):
         Color("green"): "LED_Green",
         Color("blue"): "LED_Blue",
         Color("yellow"): "LED_Yellow",
+        Color("yellow-green"): "LED_YellowGreen",
         Color("white"): "LED_White",
         Color("amber"): "LED_Amber",
         Color("orange"): "LED_Orange",
         Color("pink"): "LED_Pink",
         Color("uv"): "LED_UV",
-        Color("rgb"): "LED_RGB",
         Color("other"): "LED_Other",
     }
     return subcircuits[color]
@@ -93,12 +94,12 @@ def _spice_args(color: Color, forward_voltage, forward_current):
         Color("green"): "1e-18",  # ~2.2V
         Color("blue"): "1e-20",  # ~3.2V
         Color("yellow"): "1e-17",  # ~2.0V
+        Color("yellow-green"): "5e-18",  # ~2.1V
         Color("white"): "1e-20",  # ~3.2V
         Color("amber"): "5e-18",  # ~2.1V
         Color("orange"): "1e-17",  # ~2.0V
         Color("pink"): "1e-19",  # ~2.8V
         Color("uv"): "1e-21",  # ~3.5V
-        Color("rgb"): "1e-20",  # ~3.2V
         Color("other"): "1e-17",  # ~2.0V
     }
 

@@ -33,6 +33,12 @@ D1 1 2 LED_YELLOW_MODEL
 .MODEL LED_YELLOW_MODEL D(IS={IS} N={N} RS={RS} CJO={CJO})
 .ENDS LED_Yellow
 
+* Yellow-green LED - ~2.1V forward voltage
+.SUBCKT LED_YellowGreen 1 2 PARAMS: IS=5e-18 N=2.0 RS=1 CJO=10p
+D1 1 2 LED_YELLOW_GREEN_MODEL
+.MODEL LED_YELLOW_GREEN_MODEL D(IS={IS} N={N} RS={RS} CJO={CJO})
+.ENDS LED_YellowGreen
+
 * White LED - ~3.2V forward voltage (similar to blue)
 .SUBCKT LED_White 1 2 PARAMS: IS=1e-20 N=2.0 RS=1 CJO=10p
 D1 1 2 LED_WHITE_MODEL
@@ -62,12 +68,6 @@ D1 1 2 LED_PINK_MODEL
 D1 1 2 LED_UV_MODEL
 .MODEL LED_UV_MODEL D(IS={IS} N={N} RS={RS} CJO={CJO})
 .ENDS LED_UV
-
-* RGB LED - uses blue LED characteristics (highest voltage)
-.SUBCKT LED_RGB 1 2 PARAMS: IS=1e-20 N=2.0 RS=1 CJO=10p
-D1 1 2 LED_RGB_MODEL
-.MODEL LED_RGB_MODEL D(IS={IS} N={N} RS={RS} CJO={CJO})
-.ENDS LED_RGB
 
 * Generic LED - default characteristics (~2.0V)
 .SUBCKT LED_Other 1 2 PARAMS: IS=1e-17 N=2.0 RS=1 CJO=10p
