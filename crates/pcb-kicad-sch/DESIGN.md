@@ -31,10 +31,13 @@ structure.
 
 ## Shared core
 
-`reconcile::plan_reconciliation` is the single semantic entrypoint for both
+`reconcile::plan_reconciliation` is the topology-repair entrypoint shared by
 `pcb apply` and interactive editors. It accepts typed in-memory inputs, returns
 exact reversible document edits, and verifies the resulting document before it
-returns. It does not read or write files.
+returns. It does not read or write files. For refreshing netlist-derived symbol
+assembly flags without repairing topology, interactive editors use the
+narrower `reconcile::sync_netlist_derived_symbol_properties`, which mutates the
+document in place.
 
 The `pcbc` persistence adapter resolves linked project paths, converts the
 verified typed result into minimal source patches, writes them atomically,
@@ -81,7 +84,7 @@ PCB verifies.
   realizer calls `verify_connectivity_repair`, which additionally requires
   that nothing outside the intent changed.
 
-Two invariants follow. A schematic equivalent to its netlist is never touched.
-Otherwise the repair is the least change that restores equivalence: PCB's
-removals are minimal, realizers add the least they can, and everything else is
-preserved exactly.
+Two invariants follow. A schematic equivalent to its netlist is never touched
+except to refresh netlist-derived symbol assembly flags. Otherwise the repair
+is the least change that restores equivalence: PCB's removals are minimal,
+realizers add the least they can, and everything else is preserved exactly.
