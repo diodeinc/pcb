@@ -238,14 +238,6 @@ exact MPN matches. Workspace manifests can opt out to use fuzzy matching:
 strict = false
 ```
 
-Normalized BOM matches are cached independently per sourcing group. Lines that
-the planner can source together refresh and fall back atomically, preserving
-their combined quantity and selected offer. `pcb bom` treats groups updated
-within the last ten minutes as fresh and refreshes only stale or missing groups.
-`pcb bom --offline` never contacts the API and uses each available cached group
-regardless of age; cache misses retain the locally generated BOM data without
-availability.
-
 ## Registry search scope
 
 Registry-backed `pcb search` searches the public Diode registry and the

@@ -22,7 +22,7 @@ use crate::{
 };
 
 const BOM_MATCH_TIMEOUT_SECS: u64 = 120;
-const BOM_MATCH_CACHE_NAMESPACE: &str = "bom-match-v2";
+const BOM_MATCH_CACHE_NAMESPACE: &str = "bom-match-v3";
 const DEFAULT_BOM_CACHE_TTL: Duration = Duration::from_secs(10 * 60);
 const SCHEMATIC_BOM_CACHE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
@@ -181,26 +181,7 @@ struct PreparedBomMatch {
     availability: HashMap<String, Availability>,
 }
 
-struct PreparedBomResponse {
-    prepared: PreparedBomMatch,
-    retry_paths: HashSet<String>,
-}
-
-impl PreparedBomResponse {
-    fn into_complete(self) -> Result<PreparedBomMatch> {
-        anyhow::ensure!(
-            self.retry_paths.is_empty(),
-            "BOM matching could not complete"
-        );
-        Ok(self.prepared)
-    }
-}
-
 impl PreparedBomMatch {
-    fn extend(&mut self, other: Self) {
-        self.availability.extend(other.availability);
-    }
-
     fn apply(self, bom: &mut pcb_sch::bom::Bom) {
         for (path, availability) in &self.availability {
             let Some((mpn, manufacturer)) = availability.compatible_part() else {
@@ -420,11 +401,11 @@ fn bom_match_url(api_base_url: &str, strict: bool) -> String {
     )
 }
 
-fn prepare_bom_match_for_paths(
+fn prepare_bom_match(
     bom: &pcb_sch::bom::Bom,
     match_response: &MatchBomResponse,
-    expected_paths: &HashSet<String>,
-) -> Result<PreparedBomResponse> {
+) -> Result<PreparedBomMatch> {
+    let expected_paths = bom.entries.keys().cloned().collect::<HashSet<_>>();
     anyhow::ensure!(
         match_response.results.len() == expected_paths.len(),
         "BOM match response returned {} results for {} requested paths",
@@ -434,7 +415,6 @@ fn prepare_bom_match_for_paths(
 
     let mut seen_paths = HashSet::with_capacity(expected_paths.len());
     let mut availability = HashMap::with_capacity(expected_paths.len());
-    let mut retry_paths = HashSet::new();
 
     for bom_line in &match_response.results {
         let path = bom_line
@@ -450,10 +430,10 @@ fn prepare_bom_match_for_paths(
             seen_paths.insert(path.to_string()),
             "BOM match response returned duplicate path: {path}"
         );
-        if bom_line.match_status == BomMatchStatus::NeedsRetry {
-            retry_paths.insert(path.to_string());
-            continue;
-        }
+        anyhow::ensure!(
+            bom_line.match_status != BomMatchStatus::NeedsRetry,
+            "BOM matching could not complete"
+        );
 
         let mut resolved_offers = Vec::with_capacity(bom_line.offer_ids.len());
         for offer_id in &bom_line.offer_ids {
@@ -554,33 +534,22 @@ fn prepare_bom_match_for_paths(
         }
     }
 
-    Ok(PreparedBomResponse {
-        prepared: PreparedBomMatch { availability },
-        retry_paths,
-    })
+    Ok(PreparedBomMatch { availability })
 }
 
-fn prepare_bom_match(
-    bom: &pcb_sch::bom::Bom,
-    match_response: &MatchBomResponse,
-) -> Result<PreparedBomMatch> {
-    let expected_paths = bom.entries.keys().cloned().collect();
-    prepare_bom_match_for_paths(bom, match_response, &expected_paths)?.into_complete()
-}
-
-struct CachedBomGroup {
+struct CachedBomMatch {
     prepared: PreparedBomMatch,
     fresh: bool,
 }
 
-fn load_cached_bom_group(
+fn load_cached_bom_match(
     cache: Option<&WriteThroughCache>,
     key: &str,
     bom: &pcb_sch::bom::Bom,
     paths: &[String],
     ttl: Duration,
     now: i64,
-) -> Result<Option<CachedBomGroup>> {
+) -> Result<Option<CachedBomMatch>> {
     let Some(cache) = cache else {
         return Ok(None);
     };
@@ -591,9 +560,8 @@ fn load_cached_bom_group(
     for (line, path) in response.results.iter_mut().zip(paths) {
         line.design_entry.path = Some(path.clone());
     }
-    let expected_paths = paths.iter().cloned().collect();
-    let prepared = prepare_bom_match_for_paths(bom, &response, &expected_paths)?.into_complete()?;
-    Ok(Some(CachedBomGroup {
+    let prepared = prepare_bom_match(bom, &response)?;
+    Ok(Some(CachedBomMatch {
         prepared,
         fresh: cached.is_fresh(ttl, now),
     }))
@@ -605,133 +573,56 @@ fn bom_request_entries(bom: &pcb_sch::bom::Bom) -> Result<Vec<serde_json::Value>
     serde_json::from_str(&request_bom.ungrouped_json()).context("Failed to parse BOM JSON")
 }
 
-#[derive(Clone, PartialEq, Eq, Hash)]
-enum BomMatchGroupKey {
-    Part {
-        manufacturer: String,
-        mpn: String,
-        dnp: bool,
-        skip_bom: bool,
-    },
-    Entry(Box<BomEntry>),
-    Path(String),
-}
-
-fn normalized_part(value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_uppercase)
-}
-
-/// A conservative pre-match version of the API planner's grouping key.
-/// Lines the API may plan together always share this key. The API may split a
-/// group further when its discovered offer sets differ.
-fn bom_match_group_key(path: &str, entry: &BomEntry) -> BomMatchGroupKey {
-    match (
-        normalized_part(entry.manufacturer.as_deref()),
-        normalized_part(entry.mpn.as_deref()),
-    ) {
-        (Some(manufacturer), Some(mpn)) => BomMatchGroupKey::Part {
-            manufacturer,
-            mpn,
-            dnp: entry.dnp,
-            skip_bom: entry.skip_bom,
-        },
-        _ if entry.has_stable_aggregation_identity() => {
-            BomMatchGroupKey::Entry(Box::new(entry.clone()))
-        }
-        _ => BomMatchGroupKey::Path(path.to_string()),
-    }
-}
-
-/// Remove instance-only correlation fields from stable cache identities.
-fn bom_match_cache_entry(
-    request_entry: serde_json::Value,
-    entry: &BomEntry,
-) -> Result<serde_json::Value> {
-    Ok(if entry.has_stable_aggregation_identity() {
-        serde_json::to_value(entry)?
-    } else {
-        request_entry
-    })
-}
-
-struct BomMatchRequestGroup {
+struct CanonicalBomMatchRequest {
     paths: Vec<String>,
     entries: Vec<serde_json::Value>,
     cache_key: String,
-    cached: Option<CachedBomGroup>,
 }
 
-fn bom_match_request_groups(
+fn canonical_bom_match_request(
     url: &str,
     bom: &pcb_sch::bom::Bom,
-) -> Result<Vec<BomMatchRequestGroup>> {
-    let mut groups = Vec::<(Vec<String>, Vec<serde_json::Value>)>::new();
-    let mut group_indices = HashMap::<BomMatchGroupKey, usize>::new();
-
-    for entry in bom_request_entries(bom)? {
-        let path = entry
-            .get("path")
-            .and_then(serde_json::Value::as_str)
-            .context("BOM entry omitted its path")?
-            .to_string();
-        let key = bom_match_group_key(
-            &path,
-            bom.entries
-                .get(&path)
-                .context("BOM entry path was not present in the BOM")?,
-        );
-        let group_index = match group_indices.get(&key) {
-            Some(index) => *index,
-            None => {
-                let index = groups.len();
-                group_indices.insert(key, index);
-                groups.push((Vec::new(), Vec::new()));
-                index
-            }
-        };
-        groups[group_index].0.push(path);
-        groups[group_index].1.push(entry);
-    }
-
-    groups
+) -> Result<CanonicalBomMatchRequest> {
+    let mut lines = bom_request_entries(bom)?
         .into_iter()
-        .map(|(paths, entries)| {
-            let mut lines = paths
-                .into_iter()
-                .zip(entries)
-                .map(|(path, entry)| {
-                    let cache_entry = bom_match_cache_entry(
-                        entry.clone(),
-                        bom.entries.get(&path).expect("validated BOM request path"),
-                    )?;
-                    let sort_key = serde_json::to_vec(&cache_entry)?;
-                    Ok((sort_key, path, entry, cache_entry))
-                })
-                .collect::<Result<Vec<_>>>()?;
-            lines.sort_by(|left, right| left.0.cmp(&right.0));
-
-            let canonical_entries = lines
-                .iter()
-                .map(|(_, _, _, entry)| entry.clone())
-                .collect::<Vec<_>>();
-            let request = bom_match_request(&canonical_entries);
-            Ok(BomMatchRequestGroup {
-                paths: lines.iter().map(|(_, path, _, _)| path.clone()).collect(),
-                entries: lines.into_iter().map(|(_, _, entry, _)| entry).collect(),
-                cache_key: cache_key(&(url, request))?,
-                cached: None,
-            })
+        .map(|entry| {
+            let path = entry
+                .get("path")
+                .and_then(serde_json::Value::as_str)
+                .context("BOM entry omitted its path")?
+                .to_string();
+            let bom_entry = bom
+                .entries
+                .get(&path)
+                .context("BOM entry path was not present in the BOM")?;
+            // Remove instance-only correlation fields from stable cache identities.
+            let cache_entry = if bom_entry.has_stable_aggregation_identity() {
+                serde_json::to_value(bom_entry)?
+            } else {
+                entry.clone()
+            };
+            let sort_key = serde_json::to_vec(&cache_entry)?;
+            Ok((sort_key, path, entry, cache_entry))
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    lines.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let canonical_entries = lines
+        .iter()
+        .map(|(_, _, _, entry)| entry.clone())
+        .collect::<Vec<_>>();
+    let request = bom_match_request(&canonical_entries);
+    let paths = lines.iter().map(|(_, path, _, _)| path.clone()).collect();
+    let entries = lines.into_iter().map(|(_, _, entry, _)| entry).collect();
+
+    Ok(CanonicalBomMatchRequest {
+        paths,
+        entries,
+        cache_key: cache_key(&(url, request))?,
+    })
 }
 
-fn serialize_completed_bom_match_group(
-    response: &MatchBomResponse,
-    paths: &[String],
-) -> Result<Vec<u8>> {
+fn serialize_completed_bom_match(response: &MatchBomResponse, paths: &[String]) -> Result<Vec<u8>> {
     let results = paths
         .iter()
         .map(|path| {
@@ -793,14 +684,14 @@ pub fn match_bom_with_context(
     strict: bool,
     options: BomMatchOptions,
 ) -> Result<()> {
-    let mut cache = open_bom_cache();
+    let cache = open_bom_cache();
     match_bom_with_cache(
         ctx,
         auth_token,
         bom,
         strict,
         options,
-        cache.as_mut(),
+        cache.as_ref(),
         unix_now()?,
     )
 }
@@ -821,7 +712,7 @@ fn match_bom_with_cache(
     bom: &mut pcb_sch::bom::Bom,
     strict: bool,
     options: BomMatchOptions,
-    cache: Option<&mut WriteThroughCache>,
+    cache: Option<&WriteThroughCache>,
     now: i64,
 ) -> Result<()> {
     prepare_bom_match_with_cache(ctx, auth_token, bom, strict, options, cache, now)?.apply(bom);
@@ -834,144 +725,72 @@ fn prepare_bom_match_with_cache(
     bom: &pcb_sch::bom::Bom,
     strict: bool,
     options: BomMatchOptions,
-    cache: Option<&mut WriteThroughCache>,
+    cache: Option<&WriteThroughCache>,
     now: i64,
 ) -> Result<PreparedBomMatch> {
+    if bom.is_empty() {
+        return Ok(PreparedBomMatch::default());
+    }
+
     let url = bom_match_url(ctx.api_base_url(), strict);
-    let mut groups = bom_match_request_groups(&url, bom)?;
-    for group in &mut groups {
-        group.cached = match load_cached_bom_group(
-            cache.as_deref(),
-            &group.cache_key,
-            bom,
-            &group.paths,
-            options.cache_ttl,
-            now,
-        ) {
-            Ok(cached) => cached,
-            Err(error) => {
-                log::warn!("Ignoring invalid BOM cache entry: {error:#}");
-                None
-            }
-        };
-    }
+    let request = canonical_bom_match_request(&url, bom)?;
+    let cached = match load_cached_bom_match(
+        cache,
+        &request.cache_key,
+        bom,
+        &request.paths,
+        options.cache_ttl,
+        now,
+    ) {
+        Ok(cached) => cached,
+        Err(error) => {
+            log::warn!("Ignoring invalid BOM cache entry: {error:#}");
+            None
+        }
+    };
 
-    let mut prepared = PreparedBomMatch::default();
     if options.mode == BomMatchMode::Offline {
-        for group in groups {
-            if let Some(cached) = group.cached {
-                prepared.extend(cached.prepared);
-            }
-        }
-        return Ok(prepared);
+        return Ok(cached.map(|cached| cached.prepared).unwrap_or_default());
     }
 
-    let mut refresh_groups = Vec::new();
-    for mut group in groups {
-        match group.cached.take() {
-            Some(cached) if cached.fresh => prepared.extend(cached.prepared),
-            cached => {
-                group.cached = cached;
-                refresh_groups.push(group);
-            }
-        }
+    if cached.as_ref().is_some_and(|cached| cached.fresh) {
+        return Ok(cached.expect("checked fresh cache entry").prepared);
     }
 
-    if refresh_groups.is_empty() {
-        return Ok(prepared);
-    }
-
-    let refresh_entries = refresh_groups
-        .iter()
-        .flat_map(|group| group.entries.iter().cloned())
-        .collect::<Vec<_>>();
-    let expected_paths = refresh_groups
-        .iter()
-        .flat_map(|group| group.paths.iter().cloned())
-        .collect::<HashSet<_>>();
     let live = call_bom_match_api(
         ctx,
         auth_token,
-        &refresh_entries,
+        &request.entries,
         BOM_MATCH_TIMEOUT_SECS,
         strict,
     )
     .and_then(|response| {
-        let mut prepared = prepare_bom_match_for_paths(bom, &response, &expected_paths)?;
-        let retry_paths = prepared.retry_paths.clone();
-        let unresolved_paths = refresh_groups
-            .iter()
-            .filter(|group| group.paths.iter().any(|path| retry_paths.contains(path)))
-            .flat_map(|group| group.paths.iter().cloned())
-            .collect::<HashSet<_>>();
-        for path in &unresolved_paths {
-            prepared.prepared.availability.remove(path);
-        }
-        prepared.retry_paths = unresolved_paths;
-
-        let writes = refresh_groups
-            .iter()
-            .filter(|group| {
-                !group
-                    .paths
-                    .iter()
-                    .any(|path| prepared.retry_paths.contains(path))
-            })
-            .map(|group| {
-                Ok((
-                    group.cache_key.clone(),
-                    serialize_completed_bom_match_group(&response, &group.paths)?,
-                ))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        if let Some(cache) = cache
-            && let Err(error) = cache.store_many(&writes)
-        {
-            log::warn!("Failed to update local BOM cache: {error:#}");
+        let prepared = prepare_bom_match(bom, &response)?;
+        if let Some(cache) = cache {
+            let value = serialize_completed_bom_match(&response, &request.paths)?;
+            if let Err(error) = cache.store(&request.cache_key, &value) {
+                log::warn!("Failed to update local BOM cache: {error:#}");
+            }
         }
         Ok(prepared)
     });
 
-    let (live_prepared, unresolved_paths, live_error) = match live {
-        Ok(response) => {
-            let error = (!response.retry_paths.is_empty())
-                .then(|| anyhow::anyhow!("BOM matching could not complete"));
-            (response.prepared, response.retry_paths, error)
-        }
-        Err(error) => (
-            PreparedBomMatch::default(),
-            refresh_groups
-                .iter()
-                .flat_map(|group| group.paths.iter().cloned())
-                .collect(),
-            Some(error),
-        ),
-    };
-
-    prepared.extend(live_prepared);
-    for group in refresh_groups {
-        if group
-            .paths
-            .iter()
-            .any(|path| unresolved_paths.contains(path))
-            && let Some(cached) = group.cached
-        {
-            prepared.extend(cached.prepared);
+    match live {
+        Ok(prepared) => Ok(prepared),
+        Err(error) => {
+            let Some(cached) = cached else {
+                return Err(error);
+            };
+            log::warn!("BOM matching failed; using stale cache: {error:#}");
+            Ok(cached.prepared)
         }
     }
-    if let Some(error) = live_error {
-        if prepared.availability.is_empty() {
-            return Err(error);
-        }
-        log::warn!("BOM matching incomplete; using available lines: {error:#}");
-    }
-    Ok(prepared)
 }
 
 /// Opportunistically hydrate a schematic from BOM matches.
 ///
-/// Online mode refreshes stale and missing cache groups. Any failure falls back
-/// to stale group data, while unresolved components remain unchanged.
+/// Online mode refreshes a stale or missing whole-BOM cache entry. Any failure
+/// falls back to the matching stale entry.
 pub fn hydrate_schematic_from_bom(
     source_path: &Path,
     schematic: &mut Schematic,
@@ -989,13 +808,13 @@ fn try_hydrate_schematic_from_bom(
 ) -> Result<usize> {
     let ctx = WorkspaceContext::from_path(source_path);
     let strict = ctx.bom_strict()?;
-    let mut cache = open_bom_cache();
+    let cache = open_bom_cache();
     hydrate_schematic_from_bom_with_cache(
         &ctx,
         schematic,
         strict,
         mode,
-        cache.as_mut(),
+        cache.as_ref(),
         unix_now()?,
     )
 }
@@ -1005,7 +824,7 @@ fn hydrate_schematic_from_bom_with_cache(
     schematic: &mut Schematic,
     strict: bool,
     mode: BomMatchMode,
-    cache: Option<&mut WriteThroughCache>,
+    cache: Option<&WriteThroughCache>,
     now: i64,
 ) -> Result<usize> {
     let mut component_paths = HashSet::new();
@@ -1728,7 +1547,7 @@ mod tests {
         });
         let context = WorkspaceContext::from_api_base_url(server.base_url());
         let tempdir = tempfile::tempdir().unwrap();
-        let mut cache = cache_for(&tempdir);
+        let cache = cache_for(&tempdir);
         let now = unix_now().unwrap();
 
         for (mode, expected_mpn, expected_calls) in [
@@ -1742,7 +1561,7 @@ mod tests {
                 &mut schematic,
                 true,
                 mode,
-                Some(&mut cache),
+                Some(&cache),
                 now,
             )
             .unwrap();
@@ -1837,34 +1656,89 @@ mod tests {
     }
 
     #[test]
-    fn identityless_entries_keep_path_specific_cache_groups() {
-        let groups = bom_match_request_groups("https://example.com", &test_identityless_bom())
+    fn identityless_entries_keep_paths_in_cache_identity() {
+        let original = canonical_bom_match_request("https://example.com", &test_identityless_bom())
             .expect("identityless BOM should serialize");
+        let mut renamed = test_identityless_bom();
+        let entry = renamed.entries.remove("root.U1").unwrap();
+        let designator = renamed.designators.remove("root.U1").unwrap();
+        renamed.entries.insert("nested.U1".to_string(), entry);
+        renamed
+            .designators
+            .insert("nested.U1".to_string(), designator);
+        let renamed = canonical_bom_match_request("https://example.com", &renamed).unwrap();
 
-        assert_eq!(groups.len(), 2);
-        assert!(groups.iter().all(|group| group.paths.len() == 1));
+        assert_eq!(original.paths.len(), 2);
+        assert_ne!(original.cache_key, renamed.cache_key);
     }
 
     #[test]
-    fn cache_identity_uses_sourcing_group_not_instances() {
-        let first = bom_match_request_groups(
+    fn cache_identity_canonicalizes_instances_but_covers_the_whole_bom() {
+        let first = canonical_bom_match_request(
             "https://example.com/api/boms/match?strict=true",
             &test_bom_at("root.U1", "U1"),
         )
         .unwrap();
-        let renamed = bom_match_request_groups(
+        let renamed = canonical_bom_match_request(
             "https://example.com/api/boms/match?strict=true",
             &test_bom_at("nested.R99", "R99"),
         )
         .unwrap();
-        let doubled = bom_match_request_groups(
+        let doubled = canonical_bom_match_request(
             "https://example.com/api/boms/match?strict=true",
             &test_bom_with_second_line(),
         )
         .unwrap();
+        let distinct = canonical_bom_match_request(
+            "https://example.com/api/boms/match?strict=true",
+            &test_bom_with_distinct_second_line(),
+        )
+        .unwrap();
 
-        assert_eq!(first[0].cache_key, renamed[0].cache_key);
-        assert_ne!(first[0].cache_key, doubled[0].cache_key);
+        assert_eq!(first.cache_key, renamed.cache_key);
+        assert_ne!(first.cache_key, doubled.cache_key);
+        assert_ne!(doubled.cache_key, distinct.cache_key);
+    }
+
+    #[test]
+    fn empty_boms_do_not_call_match_api_online() {
+        let server = MockServer::start();
+        let network = server.mock(|when, then| {
+            when.method(POST).path("/api/boms/match");
+            then.status(500);
+        });
+        let context = WorkspaceContext::from_api_base_url(server.base_url());
+        let now = unix_now().unwrap();
+
+        let mut empty = Bom::new(HashMap::new(), HashMap::new());
+        match_bom_with_cache(
+            &context,
+            None,
+            &mut empty,
+            true,
+            match_options(BomMatchMode::Online),
+            None,
+            now,
+        )
+        .unwrap();
+
+        let mut excluded = test_bom();
+        excluded.entries.get_mut("root.U1").unwrap().skip_bom = true;
+        let mut fully_excluded = excluded.filter_excluded();
+        match_bom_with_cache(
+            &context,
+            None,
+            &mut fully_excluded,
+            true,
+            match_options(BomMatchMode::Online),
+            None,
+            now,
+        )
+        .unwrap();
+
+        assert!(empty.availability.is_empty());
+        assert!(fully_excluded.availability.is_empty());
+        network.assert_calls(0);
     }
 
     #[test]
@@ -1877,7 +1751,7 @@ mod tests {
             then.status(200).json_body(compatible_response());
         });
         let tempdir = tempfile::tempdir().unwrap();
-        let mut cache = cache_for(&tempdir);
+        let cache = cache_for(&tempdir);
         let context = WorkspaceContext::from_api_base_url(server.base_url());
         let now = unix_now().unwrap();
 
@@ -1888,7 +1762,7 @@ mod tests {
             &mut offline_miss,
             true,
             match_options(BomMatchMode::Offline),
-            Some(&mut cache),
+            Some(&cache),
             now,
         )
         .unwrap();
@@ -1902,7 +1776,7 @@ mod tests {
             &mut network,
             true,
             match_options(BomMatchMode::Online),
-            Some(&mut cache),
+            Some(&cache),
             now,
         )
         .unwrap();
@@ -1916,7 +1790,7 @@ mod tests {
             &mut fresh,
             true,
             match_options(BomMatchMode::Online),
-            Some(&mut cache),
+            Some(&cache),
             now + 100,
         )
         .unwrap();
@@ -1939,7 +1813,7 @@ mod tests {
                 mode: BomMatchMode::Online,
                 cache_ttl: Duration::from_secs(10),
             },
-            Some(&mut cache),
+            Some(&cache),
             now + 100,
         )
         .unwrap();
@@ -1963,7 +1837,7 @@ mod tests {
             &mut stale,
             true,
             match_options(BomMatchMode::Online),
-            Some(&mut cache),
+            Some(&cache),
             now + 1_000,
         )
         .unwrap();
@@ -1983,7 +1857,7 @@ mod tests {
             &mut offline,
             true,
             match_options(BomMatchMode::Offline),
-            Some(&mut cache),
+            Some(&cache),
             now + 1_000,
         )
         .unwrap();
@@ -2014,14 +1888,16 @@ mod tests {
     }
 
     #[test]
-    fn completed_lines_are_served_and_cached_when_another_line_needs_retry() {
+    fn incomplete_response_is_neither_served_nor_cached() {
         let server = MockServer::start();
         let tempdir = tempfile::tempdir().unwrap();
-        let mut cache = cache_for(&tempdir);
+        let cache = cache_for(&tempdir);
         let context = WorkspaceContext::from_api_base_url(server.base_url());
         let now = unix_now().unwrap();
         let mut bom = test_bom_with_distinct_second_line();
-        let entries = bom_request_entries(&bom).unwrap();
+        let request =
+            canonical_bom_match_request(&bom_match_url(context.api_base_url(), true), &bom)
+                .unwrap();
 
         let mut initial_response = compatible_response();
         initial_response["results"]
@@ -2032,61 +1908,47 @@ mod tests {
             when.method(POST)
                 .path("/api/boms/match")
                 .query_param("strict", "true")
-                .json_body(bom_match_request(&entries));
+                .json_body(bom_match_request(&request.entries));
             then.status(200).json_body(initial_response);
         });
 
-        match_bom_with_cache(
-            &context,
-            None,
-            &mut bom,
-            true,
-            match_options(BomMatchMode::Online),
-            Some(&mut cache),
-            now,
-        )
-        .unwrap();
-        assert_eq!(bom.entries["root.U1"].mpn.as_deref(), Some("API-MPN"));
+        assert!(
+            match_bom_with_cache(
+                &context,
+                None,
+                &mut bom,
+                true,
+                match_options(BomMatchMode::Online),
+                Some(&cache),
+                now,
+            )
+            .is_err()
+        );
+        assert!(bom.entries["root.U1"].mpn.is_none());
         assert!(bom.entries["root.U2"].mpn.is_none());
-        assert!(bom.availability.contains_key("root.U1"));
-        assert!(!bom.availability.contains_key("root.U2"));
+        assert!(bom.availability.is_empty());
 
-        let retry_entry = entries
-            .into_iter()
-            .find(|entry| entry["path"] == "root.U2")
-            .unwrap();
-        let retry = server.mock(|when, then| {
-            when.method(POST)
-                .path("/api/boms/match")
-                .query_param("strict", "true")
-                .json_body(bom_match_request(&[retry_entry]));
-            then.status(200).json_body(retry_response("root.U2"));
-        });
-        let mut cached = test_bom_with_distinct_second_line();
+        let mut offline = test_bom_with_distinct_second_line();
         match_bom_with_cache(
             &context,
             None,
-            &mut cached,
+            &mut offline,
             true,
-            match_options(BomMatchMode::Online),
-            Some(&mut cache),
+            match_options(BomMatchMode::Offline),
+            Some(&cache),
             now + 1,
         )
         .unwrap();
 
-        assert_eq!(cached.entries["root.U1"].mpn.as_deref(), Some("API-MPN"));
-        assert!(cached.entries["root.U2"].mpn.is_none());
-        assert!(cached.availability.contains_key("root.U1"));
-        assert!(!cached.availability.contains_key("root.U2"));
+        assert!(offline.availability.is_empty());
         initial.assert_calls(1);
-        retry.assert_calls(1);
     }
 
     #[test]
-    fn cache_refreshes_identical_parts_as_one_planner_group() {
+    fn whole_request_cache_is_atomic_across_line_count() {
         let server = MockServer::start();
         let tempdir = tempfile::tempdir().unwrap();
-        let mut cache = cache_for(&tempdir);
+        let cache = cache_for(&tempdir);
         let context = WorkspaceContext::from_api_base_url(server.base_url());
         let now = unix_now().unwrap();
 
@@ -2106,25 +1968,25 @@ mod tests {
             &mut initial_bom,
             true,
             match_options(BomMatchMode::Online),
-            Some(&mut cache),
+            Some(&cache),
             now,
         )
         .unwrap();
         initial.assert_calls(1);
 
-        let mut partial_offline = test_bom_with_second_line();
+        let mut different_request_offline = test_bom_with_second_line();
         match_bom_with_cache(
             &context,
             None,
-            &mut partial_offline,
+            &mut different_request_offline,
             true,
             match_options(BomMatchMode::Offline),
-            Some(&mut cache),
+            Some(&cache),
             now + 100,
         )
         .unwrap();
-        assert!(partial_offline.entries["root.U1"].mpn.is_none());
-        assert!(partial_offline.entries["root.U2"].mpn.is_none());
+        assert!(different_request_offline.entries["root.U1"].mpn.is_none());
+        assert!(different_request_offline.entries["root.U2"].mpn.is_none());
         initial.assert_calls(1);
 
         let grouped_bom = test_bom_with_second_line();
@@ -2145,7 +2007,7 @@ mod tests {
                 &mut failed,
                 true,
                 match_options(BomMatchMode::Online),
-                Some(&mut cache),
+                Some(&cache),
                 now + 100,
             )
             .is_err()
@@ -2171,7 +2033,7 @@ mod tests {
             &mut online_bom,
             true,
             match_options(BomMatchMode::Online),
-            Some(&mut cache),
+            Some(&cache),
             now + 100,
         )
         .unwrap();
@@ -2196,7 +2058,7 @@ mod tests {
             &mut offline,
             true,
             match_options(BomMatchMode::Offline),
-            Some(&mut cache),
+            Some(&cache),
             now + 1_000,
         )
         .unwrap();
