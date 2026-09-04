@@ -167,7 +167,7 @@ shared SVG/PNG renderers.
 
 `assembly::build_report` builds the deterministic, schema-versioned PCBA
 assembly contract from that same imported design. See the
-[assembly report v1 contract](docs/assembly-report.md) for scope, units,
+[assembly report contract](docs/assembly-report.md) for scope, units,
 identities, physical evidence, and readiness semantics.
 
 For browser and Node.js bindings, see [`pcb-ipc-wasm`](../pcb-ipc-wasm/README.md).
