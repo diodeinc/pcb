@@ -153,12 +153,12 @@ pub(crate) fn calculate_sha256(path: &Path) -> Result<String> {
 
 pub(crate) fn create_datasheet_from_url(
     client: &Client,
-    token: Option<&str>,
+    ctx: &crate::WorkspaceContext,
     url: &str,
 ) -> Result<DatasheetResponse> {
-    let endpoint = format!("{}/api/datasheets", crate::get_api_base_url());
+    let endpoint = format!("{}/api/datasheets", ctx.api_base_url());
 
-    let response = crate::auth::apply_bearer_auth(client.post(&endpoint), token)
+    let response = crate::auth::apply_api_auth_with_context(ctx, client.post(&endpoint))?
         .json(&CreateDatasheetRequest {
             url: url.to_string(),
         })
@@ -173,10 +173,10 @@ pub(crate) fn create_datasheet_from_url(
 
 pub(crate) fn create_datasheet_from_pdf(
     client: &Client,
-    token: Option<&str>,
+    ctx: &crate::WorkspaceContext,
     pdf_path: &Path,
 ) -> Result<DatasheetResponse> {
-    let endpoint = format!("{}/api/datasheets", crate::get_api_base_url());
+    let endpoint = format!("{}/api/datasheets", ctx.api_base_url());
     let form = multipart::Form::new()
         .file("file", pdf_path)
         .with_context(|| {
@@ -186,7 +186,7 @@ pub(crate) fn create_datasheet_from_pdf(
             )
         })?;
 
-    let response = crate::auth::apply_bearer_auth(client.post(&endpoint), token)
+    let response = crate::auth::apply_api_auth_with_context(ctx, client.post(&endpoint))?
         .multipart(form)
         .send()?;
 
@@ -199,17 +199,17 @@ pub(crate) fn create_datasheet_from_pdf(
 
 pub(crate) fn scan_datasheet(
     client: &Client,
-    token: Option<&str>,
+    ctx: &crate::WorkspaceContext,
     datasheet_id: &str,
     page_range: Option<PageRange>,
 ) -> Result<DatasheetScanOutcome> {
     let endpoint = format!(
         "{}/api/datasheets/{}/scan",
-        crate::get_api_base_url(),
+        ctx.api_base_url(),
         datasheet_id
     );
 
-    let response = crate::auth::apply_bearer_auth(client.post(&endpoint), token)
+    let response = crate::auth::apply_api_auth_with_context(ctx, client.post(&endpoint))?
         .json(&ScanDatasheetRequest { page_range })
         .send()?;
 
@@ -339,7 +339,7 @@ pub struct ScanArgs {
 pub fn execute(args: ScanArgs) -> Result<()> {
     let input = parse_scan_input(&args.input)?;
 
-    let token = crate::auth::get_api_token()?;
+    let ctx = crate::WorkspaceContext::from_cwd()?;
     let (resolve_input, input_pdf_path) = match input {
         ScanInput::LocalPdf(file) => (
             crate::datasheet::ResolveDatasheetInput::PdfPath(file.clone()),
@@ -351,8 +351,7 @@ pub fn execute(args: ScanArgs) -> Result<()> {
         ),
     };
     let spinner = Spinner::builder("Resolving datasheet...").start();
-    let response =
-        crate::datasheet::resolve_datasheet(token.as_deref(), &resolve_input, args.pages)?;
+    let response = crate::datasheet::resolve_datasheet(&ctx, &resolve_input, args.pages)?;
     let pdf_path = input_pdf_path
         .unwrap_or_else(|| PathBuf::from(&response.pdf_path))
         .display()

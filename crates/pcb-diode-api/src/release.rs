@@ -34,24 +34,14 @@ pub fn upload_release(
     workspace: &str,
     ctx: &WorkspaceContext,
 ) -> Result<ReleaseResult> {
-    let token = crate::auth::get_api_token_with_context(ctx)?;
-    let base_url = ctx.api_base_url();
-
     let client = Client::builder()
         .user_agent(format!("diode-pcb/{}", env!("CARGO_PKG_VERSION")))
         .timeout(Duration::from_secs(300))
         .build()?;
 
     let (sha256_hex, sha256_b64) = calculate_sha256(zip_path)?;
-    stage_artifact(
-        &client,
-        base_url,
-        token.as_deref(),
-        zip_path,
-        &sha256_hex,
-        &sha256_b64,
-    )?;
-    create_release(&client, base_url, token.as_deref(), workspace, &sha256_hex)
+    stage_artifact(&client, ctx, zip_path, &sha256_hex, &sha256_b64)?;
+    create_release(&client, ctx, workspace, &sha256_hex)
 }
 
 fn calculate_sha256(path: &Path) -> Result<(String, String)> {
@@ -74,14 +64,13 @@ fn calculate_sha256(path: &Path) -> Result<(String, String)> {
 
 fn stage_artifact(
     client: &Client,
-    base_url: &str,
-    token: Option<&str>,
+    ctx: &WorkspaceContext,
     zip_path: &Path,
     sha256_hex: &str,
     sha256_b64: &str,
 ) -> Result<()> {
-    let url = format!("{}/api/file/{}", base_url, sha256_hex);
-    let resp = crate::auth::apply_bearer_auth(client.post(&url), token)
+    let url = format!("{}/api/file/{}", ctx.api_base_url(), sha256_hex);
+    let resp = crate::auth::apply_api_auth_with_context(ctx, client.post(&url))?
         .send()
         .context("Failed to connect to Diode API")?;
 
@@ -113,18 +102,17 @@ fn stage_artifact(
 
 fn create_release(
     client: &Client,
-    base_url: &str,
-    token: Option<&str>,
+    ctx: &WorkspaceContext,
     workspace: &str,
     sha256_hex: &str,
 ) -> Result<ReleaseResult> {
     let url = format!(
         "{}/api/workspaces/{}/releases",
-        base_url,
+        ctx.api_base_url(),
         urlencoding::encode(workspace)
     );
 
-    let resp = crate::auth::apply_bearer_auth(client.post(&url), token)
+    let resp = crate::auth::apply_api_auth_with_context(ctx, client.post(&url))?
         .json(&serde_json::json!({ "artifactHash": sha256_hex }))
         .send()
         .context("Failed to connect to Diode API")?;

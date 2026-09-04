@@ -15,6 +15,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::WorkspaceContext;
 
+mod service_account;
+
 const NOT_AUTHENTICATED_MESSAGE: &str = "Not authenticated. Run `pcb auth login` to authenticate.";
 const DIODE_API_AUTH_NONE: &str = "none";
 
@@ -28,6 +30,13 @@ pub struct AuthTokens {
     pub token_endpoint: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_id: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum StoredAuth {
+    User(AuthTokens),
+    ServiceAccount(service_account::ServiceAccountAuth),
 }
 
 impl AuthTokens {
@@ -91,13 +100,32 @@ fn get_auth_file_path(ctx: &WorkspaceContext) -> Result<PathBuf> {
     Ok(scoped_dir.join(format!("{slug}.toml")))
 }
 
-fn load_tokens_with_context(ctx: &WorkspaceContext) -> Result<Option<AuthTokens>> {
+fn load_auth(ctx: &WorkspaceContext) -> Result<Option<StoredAuth>> {
     let path = get_auth_file_path(ctx)?;
     if !path.exists() {
         return Ok(None);
     }
     let contents = fs::read_to_string(&path)?;
-    Ok(Some(toml::from_str(&contents)?))
+    // TOML errors include the input. Never include credential contents in diagnostics.
+    let value: toml::Value = toml::from_str(&contents)
+        .map_err(|_| anyhow::anyhow!("Invalid authentication file: {}", path.display()))?;
+    let auth = if value.get("kind").is_some() {
+        value.try_into()
+    } else {
+        value.try_into().map(StoredAuth::User)
+    }
+    .map_err(|_| anyhow::anyhow!("Invalid authentication file: {}", path.display()))?;
+    Ok(Some(auth))
+}
+
+fn load_tokens_with_context(ctx: &WorkspaceContext) -> Result<Option<AuthTokens>> {
+    match load_auth(ctx)? {
+        Some(StoredAuth::User(tokens)) => Ok(Some(tokens)),
+        Some(StoredAuth::ServiceAccount(_)) => {
+            anyhow::bail!("Service accounts use client credentials, not human refresh tokens")
+        }
+        None => Ok(None),
+    }
 }
 
 pub fn load_tokens() -> Result<Option<AuthTokens>> {
@@ -122,11 +150,30 @@ fn save_tokens(
         token_endpoint: token_endpoint.map(str::to_string),
         client_id: client_id.map(str::to_string),
     };
-    let contents = toml::to_string(&tokens)?;
+    save_auth(ctx, &StoredAuth::User(tokens))
+}
+
+fn lock_auth(ctx: &WorkspaceContext) -> Result<LockFile> {
+    let mut lock = LockFile::open(&get_auth_file_path(ctx)?.with_extension("toml.lock"))?;
+    lock.lock()?;
+    Ok(lock)
+}
+
+fn save_auth(ctx: &WorkspaceContext, auth: &StoredAuth) -> Result<()> {
+    // Human files retain their legacy shape for older PCB toolchains.
+    let contents = match auth {
+        StoredAuth::User(tokens) => toml::to_string(tokens),
+        StoredAuth::ServiceAccount(_) => toml::to_string(auth),
+    }?;
 
     let auth_path = get_auth_file_path(ctx)?;
     AtomicFile::new(&auth_path, OverwriteBehavior::AllowOverwrite)
         .write(|f| {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                f.set_permissions(fs::Permissions::from_mode(0o600))?;
+            }
             f.write_all(contents.as_bytes())?;
             f.flush()
         })
@@ -136,6 +183,7 @@ fn save_tokens(
 }
 
 fn clear_tokens_with_context(ctx: &WorkspaceContext) -> Result<()> {
+    let _lock = lock_auth(ctx)?;
     let path = get_auth_file_path(ctx)?;
     if path.exists() {
         fs::remove_file(&path)?;
@@ -170,9 +218,7 @@ fn oauth_client() -> Result<Client> {
 }
 
 fn refresh_tokens_with_context(ctx: &WorkspaceContext) -> Result<AuthTokens> {
-    let lock_path = get_auth_file_path(ctx)?.with_extension("toml.lock");
-    let mut lock = LockFile::open(&lock_path)?;
-    lock.lock()?;
+    let _lock = lock_auth(ctx)?;
 
     let tokens = load_tokens_with_context(ctx)?.context("No tokens to refresh")?;
     if !tokens.is_expired() {
@@ -266,8 +312,16 @@ fn get_valid_token_with_sources(
 ) -> Result<String> {
     let not_authenticated = || anyhow::anyhow!(NOT_AUTHENTICATED_MESSAGE);
 
-    let Some(tokens) = load_tokens_with_context(ctx)? else {
-        return Err(not_authenticated());
+    if let Some(token) = service_account::environment_token(ctx, false)? {
+        return Ok(token.access_token);
+    }
+
+    let tokens = match load_auth(ctx)? {
+        Some(StoredAuth::User(tokens)) => tokens,
+        Some(StoredAuth::ServiceAccount(account)) => {
+            return Ok(service_account::saved_token(ctx, account, false)?.access_token);
+        }
+        None => return Err(not_authenticated()),
     };
 
     if !tokens.is_expired() {
@@ -462,6 +516,7 @@ pub fn login_with_context(ctx: &WorkspaceContext) -> Result<()> {
         .checked_add(tokens.expires_in)
         .context("Token expiry is too large")?;
 
+    let _lock = lock_auth(ctx)?;
     save_tokens(
         ctx,
         &tokens.access_token,
@@ -561,20 +616,35 @@ pub fn logout_with_context(ctx: &WorkspaceContext) -> Result<()> {
     // Bearer tokens left behind by the retired AWS credential exchange.
     let _ = fs::remove_dir_all(get_auth_dir()?.join("service-auth"));
     println!("✓ Logged out successfully");
+    if service_account::environment_configured() {
+        eprintln!(
+            "Environment credentials remain active. Unset DIODE_CLIENT_ID and DIODE_CLIENT_SECRET to stop using them."
+        );
+    }
     Ok(())
 }
 
 pub fn status_with_context(ctx: &WorkspaceContext) -> Result<()> {
     println!("Authentication Status:");
+    println!("  Endpoint: {}", ctx.api_base_url());
     if api_auth_disabled() {
         println!("  Status: API auth disabled");
         println!("  Method: DIODE_API_AUTH=none");
         return Ok(());
     }
 
-    match load_tokens_with_context(ctx)? {
-        Some(tokens) => {
+    if let Some(account) = service_account::from_environment(ctx)? {
+        account.print_status("environment");
+        return Ok(());
+    }
+    match load_auth(ctx)? {
+        Some(StoredAuth::ServiceAccount(account)) => {
+            account.validate(ctx)?;
+            account.print_status("saved login");
+        }
+        Some(StoredAuth::User(tokens)) => {
             println!("  Status: Logged in");
+            println!("  Method: human login");
             if let Some(email) = &tokens.email {
                 println!("  Email: {}", email);
             }
@@ -594,6 +664,21 @@ pub fn status_with_context(ctx: &WorkspaceContext) -> Result<()> {
 }
 
 pub fn refresh_with_context(ctx: &WorkspaceContext) -> Result<()> {
+    if let Some(token) = service_account::environment_token(ctx, true)? {
+        println!(
+            "✓ Service-account token renewed (expires in {})",
+            time_until_expiry(token.expires_at)
+        );
+        return Ok(());
+    }
+    if let Some(StoredAuth::ServiceAccount(account)) = load_auth(ctx)? {
+        let token = service_account::saved_token(ctx, account, true)?;
+        println!(
+            "✓ Service-account token renewed (expires in {})",
+            time_until_expiry(token.expires_at)
+        );
+        return Ok(());
+    }
     let tokens = refresh_tokens_with_context(ctx)?;
     println!("✓ Token refreshed successfully");
     if let Some(email) = &tokens.email {
@@ -603,16 +688,16 @@ pub fn refresh_with_context(ctx: &WorkspaceContext) -> Result<()> {
     Ok(())
 }
 
-#[derive(Args, Debug)]
+#[derive(Args)]
 #[command(about = "Manage authentication")]
 pub struct AuthArgs {
     #[command(subcommand)]
     command: Option<AuthCommand>,
 }
 
-#[derive(Subcommand, Debug)]
+#[derive(Subcommand)]
 pub enum AuthCommand {
-    Login,
+    Login(LoginArgs),
     Logout,
     Status,
     Refresh,
@@ -622,15 +707,37 @@ pub enum AuthCommand {
     Git(crate::git_auth::GitAuthArgs),
 }
 
+#[derive(Args, Default)]
+pub struct LoginArgs {
+    /// Configure a service account with client credentials
+    #[arg(long, conflicts_with = "setup_code")]
+    service_account: bool,
+    /// Read service-account credentials as JSON from stdin
+    #[arg(long = "stdin", requires = "service_account")]
+    from_stdin: bool,
+    /// Redeem a one-time setup code from the service-account console
+    #[arg(long, value_name = "CODE", conflicts_with = "service_account")]
+    setup_code: Option<String>,
+}
+
 pub fn token_with_context(ctx: &WorkspaceContext) -> Result<()> {
     let token = get_valid_token_with_context(ctx)?;
-    println!("{}", token);
+    pcb_ui::write_stdout(|out| writeln!(out, "{token}"))?;
     Ok(())
 }
 
 pub fn execute(args: AuthArgs, ctx: &WorkspaceContext) -> Result<()> {
     match args.command {
-        Some(AuthCommand::Login) | None => login_with_context(ctx),
+        Some(AuthCommand::Login(args)) => {
+            if let Some(code) = args.setup_code {
+                service_account::setup(ctx, &code)
+            } else if args.service_account {
+                service_account::login(ctx, args.from_stdin)
+            } else {
+                login_with_context(ctx)
+            }
+        }
+        None => login_with_context(ctx),
         Some(AuthCommand::Logout) => logout_with_context(ctx),
         Some(AuthCommand::Status) => status_with_context(ctx),
         Some(AuthCommand::Refresh) => refresh_with_context(ctx),
@@ -646,13 +753,13 @@ mod tests {
     use std::cell::Cell;
     use std::ffi::OsString;
 
-    struct EnvGuard {
+    pub(super) struct EnvGuard {
         key: &'static str,
         previous: Option<OsString>,
     }
 
     impl EnvGuard {
-        fn set(key: &'static str, value: &std::path::Path) -> Self {
+        pub(super) fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
             let previous = std::env::var_os(key);
             unsafe {
                 std::env::set_var(key, value);
@@ -660,10 +767,10 @@ mod tests {
             Self { key, previous }
         }
 
-        fn set_str(key: &'static str, value: &str) -> Self {
+        fn unset(key: &'static str) -> Self {
             let previous = std::env::var_os(key);
             unsafe {
-                std::env::set_var(key, value);
+                std::env::remove_var(key);
             }
             Self { key, previous }
         }
@@ -688,10 +795,19 @@ mod tests {
             .as_secs() as i64
     }
 
-    fn isolated_context() -> (tempfile::TempDir, EnvGuard, WorkspaceContext) {
+    pub(super) fn isolated_context() -> (tempfile::TempDir, Vec<EnvGuard>, WorkspaceContext) {
         let tempdir = tempfile::tempdir().unwrap();
-        let guard = EnvGuard::set("PCB_CONFIG_DIR", tempdir.path());
-        (tempdir, guard, WorkspaceContext::default())
+        let mut guards: Vec<_> = [
+            "DIODE_CLIENT_ID",
+            "DIODE_CLIENT_SECRET",
+            "DIODE_API_URL",
+            "DIODE_API_AUTH",
+        ]
+        .into_iter()
+        .map(EnvGuard::unset)
+        .collect();
+        guards.push(EnvGuard::set("PCB_CONFIG_DIR", tempdir.path()));
+        (tempdir, guards, WorkspaceContext::default())
     }
 
     #[test]
@@ -714,7 +830,7 @@ mod tests {
     #[serial]
     fn api_auth_none_returns_no_api_token() {
         let (_tempdir, _config_guard, ctx) = isolated_context();
-        let _auth_guard = EnvGuard::set_str("DIODE_API_AUTH", "none");
+        let _auth_guard = EnvGuard::set("DIODE_API_AUTH", "none");
 
         assert_eq!(get_api_token_with_context(&ctx).unwrap(), None);
     }
