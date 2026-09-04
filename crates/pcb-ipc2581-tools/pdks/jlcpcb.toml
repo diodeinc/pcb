@@ -1,10 +1,10 @@
 schema_version = 2
-default_profile = "one-ounce-standard-color"
+default_profile = "one-ounce"
 
 [pdk]
 id = "jlcpcb-rigid-fr4"
 name = "JLCPCB rigid FR-4"
-revision = "capabilities-2026-09-01"
+revision = "conservative-2026-09-03"
 manufacturer = "JLCPCB"
 process = "Rigid FR-4, 1 oz outer copper"
 
@@ -12,40 +12,22 @@ process = "Rigid FR-4, 1 oz outer copper"
 title = "JLCPCB PCB Capabilities"
 url = "https://jlcpcb.com/capabilities/pcb-capabilities"
 accessed = "2026-09-01"
-note = "Public capability table. Rules use standard service values and exclude special local BGA exceptions."
+note = "Public capability table. Rules use standard service values, apply the largest published color-specific soldermask web, and exclude special local BGA exceptions."
 
-[profiles.one-ounce-standard-color]
-name = "1 oz, green/red/yellow/blue/purple soldermask"
-description = "Standard rigid FR-4 service. Green is assumed when the design does not state a mask color."
+[profiles.one-ounce]
+name = "1 oz rigid FR-4"
+description = "Standard rigid FR-4 service using the conservative 0.13 mm soldermask-web requirement for every mask color."
 technologies = ["rigid"]
-coverage = ["2-32 copper layers", "1 oz outer copper", "standard-color LPI soldermask"]
+coverage = ["2-32 copper layers", "1 oz outer copper", "all soldermask colors at 0.13 mm minimum web"]
 source = "jlc-capabilities"
 
-[profiles.one-ounce-standard-color.defaults]
+[profiles.one-ounce.defaults]
 material = "FR-4"
 board_thickness = "1.6 mm"
 outer_copper_weight = "1 oz"
 inner_copper_weight = "0.5 oz"
-soldermask_color = "green"
 
-[profiles.one-ounce-standard-color.support]
-copper_layers = { minimum = 2, maximum = 32 }
-
-[profiles.one-ounce-black-white]
-name = "1 oz, black/white soldermask"
-description = "Standard rigid FR-4 service with the larger published mask-web requirement for black or white mask. Black is assumed when color is absent."
-technologies = ["rigid"]
-coverage = ["2-32 copper layers", "1 oz outer copper", "black or white LPI soldermask"]
-source = "jlc-capabilities"
-
-[profiles.one-ounce-black-white.defaults]
-material = "FR-4"
-board_thickness = "1.6 mm"
-outer_copper_weight = "1 oz"
-inner_copper_weight = "0.5 oz"
-soldermask_color = "black"
-
-[profiles.one-ounce-black-white.support]
+[profiles.one-ounce.support]
 copper_layers = { minimum = 2, maximum = 32 }
 
 [[rules.drilling.hole_diameter]]
@@ -159,13 +141,6 @@ limit = { minimum = "0.40 mm" }
 source = "jlc-capabilities"
 
 [[rules.soldermask.web]]
-id = "jlc.soldermask.minimum_web.standard_color"
-profiles = ["one-ounce-standard-color"]
-limit = { minimum = "0.10 mm" }
-source = "jlc-capabilities"
-
-[[rules.soldermask.web]]
-id = "jlc.soldermask.minimum_web.black_white"
-profiles = ["one-ounce-black-white"]
+id = "jlc.soldermask.minimum_web"
 limit = { minimum = "0.13 mm" }
 source = "jlc-capabilities"

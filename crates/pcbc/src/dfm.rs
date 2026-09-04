@@ -13,8 +13,8 @@ pub struct DfmArgs {
     #[arg(value_name = "FILE", value_hint = clap::ValueHint::FilePath)]
     pub file: PathBuf,
 
-    /// Built-in PDK name or fabrication PDK TOML path (standard, JLCPCB, or IPC profile)
-    #[arg(long)]
+    /// Built-in PDK name or fabrication PDK TOML path
+    #[arg(long, default_value = "standard")]
     pub pdk: PathBuf,
 
     /// Output self-contained JSON report path. Omit to write to stdout.
