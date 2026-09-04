@@ -3,8 +3,8 @@
 //! A rule is pure data: an identity, a limit, a severity, and a [`RuleKind`]
 //! naming which measurement the engine runs. Rule ids are the PDK capability
 //! paths, so a report consumer can find every limit's source line in the PDK
-//! verbatim; a capability's preferred tier lowers to a second, warning-level
-//! rule under `<capability>.preferred`.
+//! verbatim; a capability's preferred tier lowers to a warning-level rule
+//! under `<capability>.preferred`, with or without a binding minimum.
 
 use anyhow::Result;
 
@@ -564,7 +564,7 @@ pub(super) fn pools(rules: &[Rule]) -> Pools {
 
 /// Lower the selected profile's support envelope and typed rules. Rules with
 /// no `profiles` selector apply to every executable profile in the kit.
-/// Required limits are errors; optional preferred limits become warning rules.
+/// Required limits are errors; preferred limits become warning rules.
 pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rule>> {
     pdk.validate_rule_references()?;
     let (profile_name, profile) = pdk.selected_profile(selected_profile)?;
@@ -801,16 +801,17 @@ fn lower_limit(
     kind: RuleKind,
 ) -> Vec<Rule> {
     let conditions = conditions(when, profile);
-    let required = Rule {
+    let required = limit.minimum.as_ref().map(|minimum| Rule {
         id: id.to_owned(),
         title: title.clone(),
         severity: Severity::Error,
         comparison: Comparison::Minimum,
-        limit: LimitValue::Length(limit.minimum.clone()),
+        limit: LimitValue::Length(minimum.clone()),
         kind,
         conditions: conditions.clone(),
-    };
-    std::iter::once(required)
+    });
+    required
+        .into_iter()
         .chain(limit.preferred.as_ref().map(|preferred| Rule {
             id: format!("{id}.preferred"),
             title: format!("{title} (preferred)"),
@@ -980,6 +981,34 @@ limit = { minimum = "0.30 mm" }
             RuleKind::HoleToCopperClearance(HoleClass::Via)
         ));
         assert_eq!(lowered[1].limit.length().millimeters(), 0.25);
+    }
+
+    #[test]
+    fn lowers_preferred_only_limit_to_warning() {
+        let pdk = Pdk::parse(
+            r#"schema_version = 2
+default_profile = "standard"
+
+[pdk]
+id = "test"
+name = "Test"
+revision = "1"
+
+[profiles.standard]
+name = "Standard"
+
+[[rules.soldermask.web]]
+id = "soldermask.minimum_web"
+limit = { preferred = "4 mil" }
+"#,
+        )
+        .unwrap();
+
+        let lowered = lower(&pdk, None).unwrap();
+        assert_eq!(lowered.len(), 1);
+        assert_eq!(lowered[0].id, "soldermask.minimum_web.preferred");
+        assert_eq!(lowered[0].severity, Severity::Warning);
+        assert_eq!(lowered[0].limit.length().millimeters(), 0.1016);
     }
 
     const EDGE_CLEARANCE_PDK: &str = r#"
