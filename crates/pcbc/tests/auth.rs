@@ -139,21 +139,15 @@ fn component_command_uses_environment_credentials_without_a_login_file() {
 }
 
 #[test]
-fn credential_export_selects_its_endpoint_and_rejects_a_conflicting_override() {
+fn credential_import_rejects_an_unconfigured_endpoint() {
     let fixture = Fixture::new();
     let token = fixture.token("imported-token");
     let mut command = fixture.command(&["auth", "login", "--service-account", "--stdin"]);
     command.env_remove("DIODE_API_URL");
-    success(fixture.login(command));
-    assert_eq!(
-        success(fixture.command(&["auth", "token"]).output().unwrap()),
-        "imported-token\n"
-    );
-    let mut command = fixture.command(&["auth", "login", "--service-account", "--stdin"]);
-    command.env("DIODE_API_URL", "https://wrong.example");
     let output = fixture.login(command);
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("differs from DIODE_API_URL"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("active endpoint"));
     assert!(!String::from_utf8_lossy(&output.stderr).contains(SECRET));
-    token.assert_calls(1);
+    assert!(!fixture.dir.path().join("config").exists());
+    token.assert_calls(0);
 }

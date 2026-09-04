@@ -252,24 +252,19 @@ fn require_direct_auth() -> Result<()> {
 
 pub(super) fn login(ctx: &WorkspaceContext, from_stdin: bool) -> Result<()> {
     require_direct_auth()?;
-    let (ctx, credentials) = if from_stdin {
+    let credentials = if from_stdin {
         let import: CredentialImport =
             serde_json::from_reader(io::stdin().lock()).map_err(|_| {
                 anyhow::anyhow!("Invalid credential JSON; expected client_id and client_secret")
             })?;
-        let imported_url = import.api_base_url.as_deref().map(api_url).transpose()?;
-        if let Some(url) = &imported_url
-            && std::env::var_os("DIODE_API_URL").is_some()
-            && *url != api_url(ctx.api_base_url())?
+        if let Some(url) = &import.api_base_url
+            && api_url(url)? != api_url(ctx.api_base_url())?
         {
-            bail!("Credential JSON endpoint differs from DIODE_API_URL");
+            bail!(
+                "Credential JSON endpoint differs from the active endpoint. Set DIODE_API_URL to its api_base_url before importing."
+            );
         }
-        let import_ctx = match imported_url {
-            Some(url) if url == api_url(ctx.api_base_url())? => ctx.clone(),
-            Some(url) => WorkspaceContext::from_api_base_url(url),
-            None => ctx.clone(),
-        };
-        (import_ctx, import.credentials)
+        import.credentials
     } else {
         if !io::stdin().is_terminal() {
             bail!(
@@ -283,17 +278,14 @@ pub(super) fn login(ctx: &WorkspaceContext, from_stdin: bool) -> Result<()> {
         let client_secret = inquire::Password::new("Client secret:")
             .without_confirmation()
             .prompt()?;
-        (
-            ctx.clone(),
-            Credentials {
-                client_id,
-                client_secret: client_secret.trim().to_string(),
-                service_account_name: None,
-            },
-        )
+        Credentials {
+            client_id,
+            client_secret: client_secret.trim().to_string(),
+            service_account_name: None,
+        }
     };
     configure(
-        &ctx,
+        ctx,
         ServiceAccountAuth {
             api_base_url: api_url(ctx.api_base_url())?,
             credentials,
