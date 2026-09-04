@@ -95,11 +95,11 @@ impl PreparedRegion {
         } else {
             direction / direction.length()
         };
-        Some(Distance::flattened(
+        Some(Distance::with_uncertainty(
             nearest.mm - cutout_radius_mm,
             center + direction * cutout_radius_mm,
             nearest.second,
-            1,
+            self.uncertainty_mm,
         ))
     }
 }
@@ -178,7 +178,12 @@ pub fn region_clearance_within(
             )
         })
     {
-        return Some(Distance::flattened(0.0, point, point, 2));
+        return Some(Distance::with_uncertainty(
+            0.0,
+            point,
+            point,
+            first.uncertainty_mm + second.uncertainty_mm,
+        ));
     }
 
     // Only the first boundary's edges within reach of the second region's
@@ -188,7 +193,7 @@ pub fn region_clearance_within(
         .filter_map(|(first_start, first_end)| {
             second_boundary
                 .segment_nearest_within(first_start, first_end, maximum_mm)
-                .map(|distance| distance.also_flattened(1))
+                .map(|distance| distance.also_uncertain(first.uncertainty_mm))
         })
         .min_by(|left, right| left.mm.total_cmp(&right.mm))
 }
@@ -233,8 +238,24 @@ pub fn linework_clearance_sites(
     minimum_mm: f64,
     flattened_linework: u32,
 ) -> Vec<ClearanceSite> {
-    let flattened = flattened_linework + 1;
-    let reach = minimum_mm - f64::from(flattened) * tol::FLATTEN_MM - 1e-6;
+    linework_clearance_sites_with_uncertainty(
+        lines,
+        material,
+        index,
+        minimum_mm,
+        f64::from(flattened_linework) * tol::FLATTEN_MM,
+    )
+}
+
+fn linework_clearance_sites_with_uncertainty(
+    lines: &[(Point, Point)],
+    material: &ContourSet,
+    index: &RegionBoundaryIndex,
+    minimum_mm: f64,
+    linework_uncertainty_mm: f64,
+) -> Vec<ClearanceSite> {
+    let uncertainty_mm = linework_uncertainty_mm + material.uncertainty_mm;
+    let reach = minimum_mm - uncertainty_mm - 1e-6;
     if reach <= 0.0 || material.is_empty() {
         return Vec::new();
     }
@@ -295,13 +316,18 @@ pub fn linework_clearance_sites(
                 bbox.include_point(start);
                 bbox.include_point(end);
                 let distance = if endpoint_inside[2 * span_index] {
-                    Some(Distance::flattened(0.0, start, start, flattened))
+                    Some(Distance::with_uncertainty(
+                        0.0,
+                        start,
+                        start,
+                        uncertainty_mm,
+                    ))
                 } else if endpoint_inside[2 * span_index + 1] {
-                    Some(Distance::flattened(0.0, end, end, flattened))
+                    Some(Distance::with_uncertainty(0.0, end, end, uncertainty_mm))
                 } else {
                     index
                         .segment_nearest_within(start, end, minimum_mm)
-                        .map(|distance| distance.also_flattened(flattened_linework))
+                        .map(|distance| distance.also_uncertain(linework_uncertainty_mm))
                 };
                 if let Some(distance) = distance
                     && nearest.is_none_or(|best| distance.mm < best.mm)
@@ -365,7 +391,13 @@ pub fn region_clearance_sites_with_index(
     minimum_mm: f64,
 ) -> Vec<ClearanceSite> {
     let lines = first.rings.iter().flat_map(ring_edges).collect::<Vec<_>>();
-    let mut sites = linework_clearance_sites(&lines, second, second_boundary, minimum_mm, 1);
+    let mut sites = linework_clearance_sites_with_uncertainty(
+        &lines,
+        second,
+        second_boundary,
+        minimum_mm,
+        first.uncertainty_mm,
+    );
     for overlap in first.intersection(second).connected_components() {
         let Some(point) = overlap
             .rings
@@ -376,7 +408,12 @@ pub fn region_clearance_sites_with_index(
             continue;
         };
         let mut joined = ClearanceSite {
-            distance: Distance::flattened(0.0, point, point, 2),
+            distance: Distance::with_uncertainty(
+                0.0,
+                point,
+                point,
+                first.uncertainty_mm + second.uncertainty_mm,
+            ),
             bbox: overlap.bbox,
             first_paths: Vec::new(),
             second_paths: Vec::new(),
@@ -714,9 +751,11 @@ fn pieces(components: Vec<TwoSidedResidualComponent>, minimum_mm: f64) -> Vec<Th
                 .axis
                 .iter()
                 .flat_map(|axis| {
-                    let reach =
-                        (minimum_mm - 2.0 * tol::FLATTEN_MM - 2.0 * axis.uncertainty_mm - 1e-6)
-                            / 2.0;
+                    let reach = (minimum_mm
+                        - component.width.uncertainty_mm
+                        - 2.0 * axis.uncertainty_mm
+                        - 1e-6)
+                        / 2.0;
                     if reach <= 0.0 {
                         return Vec::new();
                     }
@@ -785,7 +824,12 @@ fn pieces(components: Vec<TwoSidedResidualComponent>, minimum_mm: f64) -> Vec<Th
                                     dist::point_segment(end, a, b).1,
                                 )
                             });
-                            let mut width = Distance::flattened(2.0 * radius_mm, first, second, 2);
+                            let mut width = Distance::with_uncertainty(
+                                2.0 * radius_mm,
+                                first,
+                                second,
+                                component.width.uncertainty_mm,
+                            );
                             width.uncertainty_mm += 2.0 * axis.uncertainty_mm;
                             (
                                 (start, end),
@@ -906,7 +950,7 @@ mod tests {
             0,
         );
         assert_eq!(sites.len(), 2);
-        let reach = 0.3 - tol::FLATTEN_MM - 1e-6;
+        let reach = 0.3 - material.uncertainty_mm - 1e-6;
         let extension = (reach * reach - 0.1_f64.powi(2)).sqrt();
         for (site, left) in sites.iter().zip([2.0, 7.0]) {
             assert!((site.distance.mm - 0.1).abs() < 1e-9);
@@ -1133,7 +1177,7 @@ mod tests {
             .circular_enclosure(Point::new(1.3, 0.0), 1.35, 0.125)
             .expect("hole extending beyond copper must measure");
         assert!((measurement.mm + 0.15).abs() < tol::FLATTEN_MM);
-        assert_eq!(measurement.uncertainty_mm, tol::FLATTEN_MM);
+        assert_eq!(measurement.uncertainty_mm, copper.uncertainty_mm);
         assert!((measurement.first.x - 2.65).abs() < tol::FLATTEN_MM);
         assert!((measurement.second.x - 2.5).abs() < tol::FLATTEN_MM);
     }
@@ -1371,7 +1415,7 @@ mod tests {
             "width {}",
             width.mm
         );
-        assert_eq!(width.uncertainty_mm, 2.0 * tol::FLATTEN_MM);
+        assert_eq!(width.uncertainty_mm, 2.0 * stadium.uncertainty_mm);
 
         let plate = rect_region(0.0, 0.0, 10.0, 3.0);
         assert!((min_width(&plate).unwrap().mm - 3.0).abs() < 1e-9);

@@ -93,6 +93,11 @@ impl PathCmd {
 pub struct ContourBuf {
     pub bbox: BBox,
     pub cmds: Vec<PathCmd>,
+    /// Approximation already present in these commands. Zero means the
+    /// commands themselves are the source geometry, not that they are lines.
+    pub uncertainty_mm: f64,
+    /// Retained analytic unit-circle placement for ellipse refinement.
+    pub(crate) ellipse_source: Option<crate::geom::Affine2>,
 }
 
 impl ContourBuf {
@@ -101,12 +106,88 @@ impl ContourBuf {
         Self {
             bbox: contour_bbox(&cmds),
             cmds,
+            uncertainty_mm: 0.0,
+            ellipse_source: None,
         }
     }
 
     /// Build from commands with a precomputed bounding box.
     pub fn from_parts(bbox: BBox, cmds: Vec<PathCmd>) -> Self {
-        Self { bbox, cmds }
+        Self {
+            bbox,
+            cmds,
+            uncertainty_mm: 0.0,
+            ellipse_source: None,
+        }
+    }
+
+    /// Set command uncertainty, discarding retained analytic provenance.
+    pub fn with_uncertainty(mut self, uncertainty_mm: f64) -> Self {
+        self.uncertainty_mm = uncertainty_mm;
+        self.ellipse_source = None;
+        self
+    }
+
+    pub(crate) fn with_ellipse_source(mut self, transform: crate::geom::Affine2) -> Self {
+        self.ellipse_source = Some(transform);
+        self
+    }
+
+    /// Transform a contour without discarding its approximation history.
+    pub fn transformed(self, transform: crate::geom::Affine2) -> Self {
+        let mut contour = transform_cmds(self.cmds, transform);
+        contour.uncertainty_mm += self.uncertainty_mm * transform.max_scale();
+        contour.ellipse_source = self.ellipse_source.map(|source| transform.concat(source));
+        contour
+    }
+
+    pub(crate) fn refined(
+        &self,
+        accuracy: crate::geom::GeometryAccuracy,
+    ) -> Result<Self, crate::geom::AccuracyError> {
+        if let Some(transform) = self.ellipse_source {
+            return crate::geom::shapes::circle(2.0)
+                .expect("unit circle")
+                .transformed_with_accuracy(transform, accuracy);
+        }
+        Ok(self.clone())
+    }
+
+    /// Transform retained arcs using a caller-controlled conversion budget.
+    pub fn transformed_with_accuracy(
+        self,
+        transform: crate::geom::Affine2,
+        accuracy: crate::geom::GeometryAccuracy,
+    ) -> Result<Self, crate::geom::AccuracyError> {
+        let scale = transform.max_scale();
+        if !scale.is_finite()
+            || scale <= 0.0
+            || transform.determinant() == 0.0
+            || !transform.m02.is_finite()
+            || !transform.m12.is_finite()
+        {
+            return Err(crate::geom::AccuracyError::InvalidGeometry(
+                "singular or non-finite transform",
+            ));
+        }
+        let numeric = crate::geom::accuracy::numerical_error(self.bbox.transformed(transform));
+        accuracy.check(numeric)?;
+        let source = if self.ellipse_source.is_some() {
+            self.refined(crate::geom::GeometryAccuracy::new(
+                accuracy.remaining(numeric)? / scale,
+            )?)?
+        } else {
+            self
+        };
+        let allowance =
+            accuracy.remaining(source.uncertainty_mm * scale + numeric)? / (4.0 * scale);
+        if allowance < f64::EPSILON {
+            return Err(crate::geom::AccuracyError::SubdivisionLimit);
+        }
+        let mut out = transform_cmds_impl(source.cmds, transform, Some(allowance));
+        out.uncertainty_mm += source.uncertainty_mm * scale + numeric;
+        accuracy.check(out.uncertainty_mm)?;
+        Ok(out)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -329,6 +410,25 @@ pub fn transform_cmds(
     cmds: impl IntoIterator<Item = PathCmd>,
     transform: crate::geom::affine::Affine2,
 ) -> ContourBuf {
+    transform_cmds_impl(cmds, transform, None)
+}
+
+fn transform_cmds_impl(
+    cmds: impl IntoIterator<Item = PathCmd>,
+    transform: crate::geom::affine::Affine2,
+    accuracy: Option<f64>,
+) -> ContourBuf {
+    let cmds = cmds.into_iter().collect::<Vec<_>>();
+    if !transform.preserves_circles(1e-12 * transform.max_scale().powi(2))
+        && cmds.iter().any(|c| c.op == PathOp::ArcTo)
+    {
+        let (path, error) = contours_to_kurbo_impl(&[ContourBuf::new(cmds)], accuracy);
+        let mut commands = Vec::new();
+        for contour in kurbo_path_to_contours(&path) {
+            commands.extend(contour.cmds);
+        }
+        return transform_cmds(commands, transform).with_uncertainty(error * transform.max_scale());
+    }
     let mut bbox = BBox::empty();
     let mut current = Point::default();
     let mut transformed_cmds = Vec::new();
@@ -432,12 +532,70 @@ pub fn stroke_to_fill(
     contours: &[ContourBuf],
     style: StrokeToFillStyle,
 ) -> Option<Vec<ContourBuf>> {
+    stroke_to_fill_impl(contours, style, None)
+}
+
+/// Outline a stroke with an explicit total approximation allowance.
+/// The returned contours retain both source and outline uncertainty.
+pub fn stroke_to_fill_with_accuracy(
+    contours: &[ContourBuf],
+    style: StrokeToFillStyle,
+    accuracy: crate::geom::GeometryAccuracy,
+) -> Result<Option<Vec<ContourBuf>>, crate::geom::AccuracyError> {
+    if !style.width.is_finite()
+        || contours
+            .iter()
+            .any(|c| !c.bbox.is_valid() || !c.uncertainty_mm.is_finite() || c.uncertainty_mm < 0.0)
+    {
+        return Err(crate::geom::AccuracyError::InvalidGeometry(
+            "invalid stroke geometry",
+        ));
+    }
+    if !matches!(style.pattern, LinePattern::Solid | LinePattern::Erase) {
+        return Err(crate::geom::AccuracyError::InvalidGeometry(
+            "patterned stroke placement has no accuracy contract",
+        ));
+    }
+    let refined = contours
+        .iter()
+        .map(|c| c.refined(accuracy))
+        .collect::<Result<Vec<_>, _>>()?;
+    let contours = refined.as_slice();
+    let prior = contours
+        .iter()
+        .map(|c| c.uncertainty_mm)
+        .fold(0.0, f64::max);
+    let remaining = accuracy.remaining(prior + stroke_rounding_error(style))?;
+    let bbox = contours
+        .iter()
+        .fold(BBox::empty(), |bbox, c| bbox.union(c.bbox))
+        .expand(style.width.max(0.0));
+    accuracy.check(prior + crate::geom::accuracy::numerical_error(bbox))?;
+    if remaining < f64::EPSILON
+        || (bbox.width().max(bbox.height()) / remaining).sqrt() > 1_000_000.0
+    {
+        return Err(crate::geom::AccuracyError::SubdivisionLimit);
+    }
+    let out = stroke_to_fill_impl(contours, style, Some(remaining / 4.0));
+    if let Some(out) = &out {
+        for contour in out {
+            accuracy.check(contour.uncertainty_mm)?;
+        }
+    }
+    Ok(out)
+}
+
+fn stroke_to_fill_impl(
+    contours: &[ContourBuf],
+    style: StrokeToFillStyle,
+    accuracy: Option<f64>,
+) -> Option<Vec<ContourBuf>> {
     if style.width <= 0.0 {
         return None;
     }
 
     if matches!(style.pattern, LinePattern::Solid | LinePattern::Erase) {
-        return solid_stroke_to_fill(contours, style);
+        return solid_stroke_to_fill(contours, style, accuracy);
     }
 
     let solid_style = StrokeToFillStyle {
@@ -450,10 +608,12 @@ pub fn stroke_to_fill(
         for mark in stroke_pattern_marks(&segments, style.pattern, style.width) {
             match mark {
                 StrokePatternMark::Dash(segments) => {
-                    let Some(contour) = contour_from_segments(&segments) else {
+                    let Some(dash) = contour_from_segments(&segments) else {
                         continue;
                     };
-                    if let Some(mut contours) = solid_stroke_to_fill(&[contour], solid_style) {
+                    let dash = dash.with_uncertainty(contour.uncertainty_mm);
+                    if let Some(mut contours) = solid_stroke_to_fill(&[dash], solid_style, accuracy)
+                    {
                         out.append(&mut contours);
                     }
                 }
@@ -472,11 +632,22 @@ pub fn stroke_to_fill(
     (!out.is_empty()).then_some(out)
 }
 
+// Kurbo's round caps/joins use a fixed unit-circle tolerance, independently
+// of the tolerance passed to stroke().
+fn stroke_rounding_error(style: StrokeToFillStyle) -> f64 {
+    if matches!(style.line_cap, LineCap::Round) || matches!(style.line_join, LineJoin::Round) {
+        0.0004 * style.width.max(0.0) / 2.0
+    } else {
+        0.0
+    }
+}
+
 fn solid_stroke_to_fill(
     contours: &[ContourBuf],
     style: StrokeToFillStyle,
+    accuracy: Option<f64>,
 ) -> Option<Vec<ContourBuf>> {
-    let source = contours_to_kurbo(contours);
+    let (source, conversion_error) = contours_to_kurbo_impl(contours, accuracy);
     if source.elements().is_empty() {
         return None;
     }
@@ -487,10 +658,17 @@ fn solid_stroke_to_fill(
         source,
         &stroke,
         &StrokeOpts::default(),
-        tol::STROKE_OUTLINE_MM,
+        accuracy.unwrap_or(tol::STROKE_OUTLINE_MM),
     );
     let mut out = kurbo_path_to_contours(&outline);
     for contour in &mut out {
+        contour.uncertainty_mm = contours
+            .iter()
+            .map(|c| c.uncertainty_mm)
+            .fold(0.0, f64::max)
+            + conversion_error
+            + stroke_rounding_error(style)
+            + accuracy.unwrap_or(tol::STROKE_OUTLINE_MM);
         if contour
             .cmds
             .last()
@@ -526,9 +704,13 @@ fn contour_from_segments(segments: &[Segment]) -> Option<ContourBuf> {
     Some(ContourBuf::new(cmds))
 }
 
-pub(crate) fn contours_to_kurbo(contours: &[ContourBuf]) -> BezPath {
+pub(crate) fn contours_to_kurbo_impl(
+    contours: &[ContourBuf],
+    accuracy: Option<f64>,
+) -> (BezPath, f64) {
     let mut out = BezPath::new();
     let mut current = Point::default();
+    let mut conversion_error: f64 = 0.0;
     for contour in contours {
         for cmd in &contour.cmds {
             match cmd.op {
@@ -541,7 +723,14 @@ pub(crate) fn contours_to_kurbo(contours: &[ContourBuf]) -> BezPath {
                     out.line_to(kurbo_point(cmd.p0));
                 }
                 PathOp::ArcTo => {
-                    append_arc_to_kurbo(&mut out, current, cmd.p0, cmd.p1, cmd.clockwise);
+                    conversion_error = conversion_error.max(append_arc_to_kurbo(
+                        &mut out,
+                        current,
+                        cmd.p0,
+                        cmd.p1,
+                        cmd.clockwise,
+                        accuracy,
+                    ));
                     current = cmd.p0;
                 }
                 PathOp::CubicTo => {
@@ -556,7 +745,7 @@ pub(crate) fn contours_to_kurbo(contours: &[ContourBuf]) -> BezPath {
             }
         }
     }
-    out
+    (out, conversion_error)
 }
 
 fn append_arc_to_kurbo(
@@ -565,19 +754,26 @@ fn append_arc_to_kurbo(
     end: Point,
     center: Point,
     clockwise: bool,
-) {
+    accuracy: Option<f64>,
+) -> f64 {
     let arc = Arc::new(start, end, center, clockwise);
     let radius = arc.radius();
     if radius == 0.0 {
         out.line_to(kurbo_point(end));
-        return;
+        return 0.0;
     }
 
     let sweep = arc.sweep_radians();
     let signed_sweep = if clockwise { -sweep } else { sweep };
-    let segment_count = (signed_sweep.abs() / std::f64::consts::FRAC_PI_2)
-        .ceil()
-        .max(1.0) as usize;
+    // A tangent-matched cubic over an angle <= pi/2 has radial error at
+    // most r * angle^6 / 40000. Subdivide the existing arc conversion,
+    // rather than imposing a fixed four-cubic circle accuracy floor.
+    let max_angle = accuracy.map_or(std::f64::consts::FRAC_PI_2, |mm| {
+        (mm * 40_000.0 / radius)
+            .powf(1.0 / 6.0)
+            .min(std::f64::consts::FRAC_PI_2)
+    });
+    let segment_count = (signed_sweep.abs() / max_angle).ceil().max(1.0) as usize;
     let delta = signed_sweep / segment_count as f64;
     let mut angle = start.angle_from(center);
 
@@ -597,6 +793,7 @@ fn append_arc_to_kurbo(
         out.curve_to(kurbo_point(c1), kurbo_point(c2), kurbo_point(p3));
         angle = next_angle;
     }
+    radius * delta.abs().powi(6) / 40_000.0 + (radius - end.distance_to(center)).abs()
 }
 
 fn kurbo_path_to_contours(path: &BezPath) -> Vec<ContourBuf> {

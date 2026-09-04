@@ -493,15 +493,22 @@ where
     LayerMeta: Clone,
     ObjectMeta: Clone,
 {
+    expand_native_geometry_with_accuracy(doc, None).expect("default artwork preparation")
+}
+
+fn expand_native_geometry_with_accuracy<LayerMeta: Clone, ObjectMeta: Clone>(
+    doc: Document<LayerMeta, ObjectMeta>,
+    accuracy: Option<crate::geom::GeometryAccuracy>,
+) -> Result<Document<LayerMeta, ObjectMeta>, crate::geom::AccuracyError> {
     let mut doc = if doc.blocks.is_empty() {
         doc
     } else {
         expand_instances(&doc)
     };
-    expand_strokes_to_regions(&mut doc);
+    expand_strokes_to_regions(&mut doc, accuracy)?;
     expand_flashes_to_regions(&mut doc);
     normalize_bounds(&mut doc);
-    doc
+    Ok(doc)
 }
 
 /// Compose ordered dark/clear objects into final positive per-layer images.
@@ -600,7 +607,37 @@ pub fn compose_selected_owners<LayerMeta: Clone, ObjectMeta: Clone, Owner: Clone
     doc: &Document<LayerMeta, ObjectMeta>,
     owner: impl Fn(&ObjectMeta) -> Option<Owner>,
 ) -> (Vec<OwnerImages<Owner>>, Vec<Diagnostic>) {
-    let doc = expand_native_geometry_to_regions(doc.clone());
+    let (layers, diagnostics) =
+        compose_owner_regions(doc, owner, 0.0, None).expect("default artwork preparation");
+    (
+        layers
+            .into_iter()
+            .map(|owners| {
+                owners
+                    .into_iter()
+                    .map(|(owner, region)| (owner, region.rings))
+                    .collect()
+            })
+            .collect(),
+        diagnostics,
+    )
+}
+
+/// Compose owner regions using retained source curves and an explicit budget.
+/// Returned regions carry the errors of strokes, transforms, and paint folds.
+/// `tolerance` controls ring significance independently of approximation.
+pub fn compose_owner_regions<LayerMeta: Clone, ObjectMeta: Clone, Owner: Clone + Eq + Hash>(
+    doc: &Document<LayerMeta, ObjectMeta>,
+    owner: impl Fn(&ObjectMeta) -> Option<Owner>,
+    tolerance: f64,
+    accuracy: Option<crate::geom::GeometryAccuracy>,
+) -> Result<(Vec<Vec<(Owner, region::ContourSet)>>, Vec<Diagnostic>), crate::geom::AccuracyError> {
+    if !tolerance.is_finite() || tolerance < 0.0 {
+        return Err(crate::geom::AccuracyError::InvalidGeometry(
+            "invalid significance tolerance",
+        ));
+    }
+    let doc = expand_native_geometry_with_accuracy(doc.clone(), accuracy)?;
     struct OwnerState {
         composer: region::PaintComposer,
         bbox: BBox,
@@ -633,7 +670,7 @@ pub fn compose_selected_owners<LayerMeta: Clone, ObjectMeta: Clone, Owner: Clone
                 }
                 Polarity::Clear => None,
             };
-            let image = object_image_rings(&doc, object);
+            let image = object_image_region(&doc, object, accuracy)?;
             if image.is_empty() {
                 continue;
             }
@@ -657,7 +694,7 @@ pub fn compose_selected_owners<LayerMeta: Clone, ObjectMeta: Clone, Owner: Clone
                     };
                     let state = &mut states[index].1;
                     state.bbox = state.bbox.union(object.bbox);
-                    state.composer.push(Polarity::Dark, image);
+                    state.composer.push_region(Polarity::Dark, image);
                 }
                 Polarity::Clear => {
                     for state in states
@@ -665,23 +702,25 @@ pub fn compose_selected_owners<LayerMeta: Clone, ObjectMeta: Clone, Owner: Clone
                         .map(|(_, state)| state)
                         .filter(|state| state.bbox.intersects(object.bbox))
                     {
-                        state.composer.push(Polarity::Clear, image.clone());
+                        state.composer.push_region(Polarity::Clear, image.clone());
                     }
                 }
             }
         }
 
-        layers.push(
-            states
-                .into_iter()
-                .filter_map(|(owner, state)| {
-                    let image = state.composer.finish();
-                    (!image.is_empty()).then_some((owner, image))
-                })
-                .collect::<Vec<_>>(),
-        );
+        let mut images = Vec::with_capacity(states.len());
+        for (owner, state) in states {
+            let image = state.composer.finish_set(tolerance);
+            if let Some(accuracy) = accuracy {
+                accuracy.check(image.uncertainty_mm)?;
+            }
+            if !image.is_empty() {
+                images.push((owner, image));
+            }
+        }
+        layers.push(images);
     }
-    (layers, doc.diagnostics)
+    Ok((layers, doc.diagnostics))
 }
 
 pub fn compose_to_mask<LayerMeta: Clone, ObjectMeta: Clone>(
@@ -712,7 +751,10 @@ pub fn compose_to_mask<LayerMeta: Clone, ObjectMeta: Clone>(
     mask
 }
 
-fn expand_strokes_to_regions<LayerMeta, ObjectMeta>(doc: &mut Document<LayerMeta, ObjectMeta>) {
+fn expand_strokes_to_regions<LayerMeta, ObjectMeta>(
+    doc: &mut Document<LayerMeta, ObjectMeta>,
+    accuracy: Option<crate::geom::GeometryAccuracy>,
+) -> Result<(), crate::geom::AccuracyError> {
     for object_index in 0..doc.objects.len() {
         let Geometry::Stroke { path: path_index } = doc.objects[object_index].geometry else {
             continue;
@@ -725,9 +767,16 @@ fn expand_strokes_to_regions<LayerMeta, ObjectMeta>(doc: &mut Document<LayerMeta
             doc.warn("Skipping artwork stroke with fill paint");
             continue;
         };
-        let Some(contours) =
-            crate::geom::path::stroke_to_fill(&doc.arena.path_contours(&path), stroke.into())
-        else {
+        let source = doc.arena.path_contours(&path);
+        let contours = match accuracy {
+            Some(accuracy) => crate::geom::path::stroke_to_fill_with_accuracy(
+                &source,
+                stroke.into(),
+                crate::geom::GeometryAccuracy::new(accuracy.max_error_mm() / 2.0)?,
+            )?,
+            None => crate::geom::path::stroke_to_fill(&source, stroke.into()),
+        };
+        let Some(contours) = contours else {
             continue;
         };
         let path_id = doc.push_path(
@@ -739,6 +788,7 @@ fn expand_strokes_to_regions<LayerMeta, ObjectMeta>(doc: &mut Document<LayerMeta
         doc.objects[object_index].geometry = Geometry::Region { path: path_id };
         doc.objects[object_index].bbox = doc.path_bbox(path_id);
     }
+    Ok(())
 }
 
 fn expand_flashes_to_regions<LayerMeta, ObjectMeta>(doc: &mut Document<LayerMeta, ObjectMeta>) {
@@ -757,7 +807,7 @@ fn expand_flashes_to_regions<LayerMeta, ObjectMeta>(doc: &mut Document<LayerMeta
         let contours = aperture
             .contours()
             .into_iter()
-            .map(|contour| crate::geom::path::transform_cmds(contour.cmds, transform))
+            .map(|contour| contour.transformed(transform))
             .collect::<Vec<_>>();
         let path_id = doc.push_path(
             Paint::Fill {
@@ -770,27 +820,20 @@ fn expand_flashes_to_regions<LayerMeta, ObjectMeta>(doc: &mut Document<LayerMeta
     }
 }
 
-fn object_image_rings<LayerMeta, ObjectMeta>(
+fn object_image_region<LayerMeta, ObjectMeta>(
     doc: &Document<LayerMeta, ObjectMeta>,
     object: &Object<ObjectMeta>,
-) -> Vec<Ring> {
-    match object.geometry {
-        Geometry::Region { path } => doc
-            .arena
-            .paths
-            .get(path as usize)
-            .map(|path| {
-                region::simplify_rings(
-                    region::rings_from_contours(&doc.arena.path_contours(path)),
-                    path.fill_rule().unwrap_or(FillRule::NonZero),
-                )
-            })
-            .unwrap_or_default(),
-        Geometry::Flash { .. }
-        | Geometry::Stroke { .. }
-        | Geometry::Instance { .. }
-        | Geometry::GridInstance { .. } => Vec::new(),
-    }
+    accuracy: Option<crate::geom::GeometryAccuracy>,
+) -> Result<region::ContourSet, crate::geom::AccuracyError> {
+    let Geometry::Region { path } = object.geometry else {
+        return Ok(region::ContourSet::empty(0.0));
+    };
+    let Some(path) = doc.arena.paths.get(path as usize) else {
+        return Ok(region::ContourSet::empty(0.0));
+    };
+    let contours = doc.arena.path_contours(path);
+    let rule = path.fill_rule().unwrap_or(FillRule::NonZero);
+    region::ContourSet::prepare_contours(&contours, rule, 0.0, accuracy)
 }
 
 fn geometry_bbox<LayerMeta, ObjectMeta>(
@@ -814,7 +857,7 @@ fn geometry_bbox<LayerMeta, ObjectMeta>(
                 aperture
                     .contours()
                     .into_iter()
-                    .map(|contour| crate::geom::path::transform_cmds(contour.cmds, transform))
+                    .map(|contour| contour.transformed(transform))
                     .fold(BBox::empty(), |bbox, contour| bbox.union(contour.bbox))
             })
             .unwrap_or_else(BBox::empty),

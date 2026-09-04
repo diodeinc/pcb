@@ -3,6 +3,7 @@
 //! All geometry is in millimeters. Unit conversion belongs at format
 //! boundaries (parsers and writers); see [`Unit`].
 
+pub(crate) mod accuracy;
 mod affine;
 mod arc;
 mod bbox;
@@ -21,6 +22,7 @@ mod style;
 pub mod tol;
 pub mod warp;
 
+pub use accuracy::{AccuracyError, GeometryAccuracy};
 pub use affine::Affine2;
 pub use arc::Arc;
 pub use bbox::BBox;

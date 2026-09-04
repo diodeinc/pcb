@@ -58,6 +58,40 @@ where
     normalize_bounds(doc);
 }
 
+/// Prepare curves before void/cutout composition can flatten them at defaults.
+pub fn normalize_for_artwork_with_accuracy<S: Copy + Eq + Hash, L: Clone>(
+    doc: &mut Document<S, L>,
+    accuracy: crate::geom::GeometryAccuracy,
+) -> Result<(), crate::geom::AccuracyError> {
+    compact(doc);
+    let mut arena = crate::geom::PathArena::default();
+    let preparation = crate::geom::GeometryAccuracy::new(accuracy.max_error_mm() * 0.75)?;
+    for path in &doc.arena.paths {
+        if matches!(path.paint, Paint::None) {
+            arena.push_path(path.paint, doc.arena.path_contours(path));
+        } else {
+            let region = ContourSet::from_placed_painted_paths_with_accuracy(
+                &doc.arena,
+                [(path, Affine2::IDENTITY)],
+                0.0,
+                preparation,
+            )?;
+            arena.push_path(
+                Paint::Fill {
+                    rule: FillRule::NonZero,
+                },
+                region.to_contours(),
+            );
+        }
+    }
+    doc.arena = arena;
+    normalize_for_artwork(doc);
+    for contour in &doc.arena.contours {
+        accuracy.check(contour.uncertainty_mm)?;
+    }
+    Ok(())
+}
+
 /// Resolve source geometry into a composed rendering image.
 ///
 /// This is intentionally destructive: it outlines strokes, applies boolean
@@ -717,11 +751,10 @@ where
                 }
 
                 if feature.flags.clears_previous_in_set {
-                    let cutters = feature_filled_rings(doc, &doc.features[feature_index]);
+                    let cutters = feature_filled_region(doc, &doc.features[feature_index], 0.0);
                     if !cutters.is_empty() {
-                        let bounds = ring_bounds(&cutters);
                         for subject_index in previous.iter().copied() {
-                            subtract_rings_from_feature(doc, subject_index, &cutters, &bounds);
+                            subtract_region_from_feature(doc, subject_index, &cutters);
                         }
                     }
                     clear_feature_paths(doc, feature_index);
@@ -784,17 +817,18 @@ where
                 continue;
             }
 
-            let cutters = cutouts
+            let mut composer = region::PaintComposer::default();
+            for cutout in cutouts
                 .iter()
                 .filter(|cutout| feature_bbox.intersects(cutout.bbox))
-                .flat_map(|cutout| cutout.rings.iter().cloned())
-                .collect::<Vec<_>>();
+            {
+                composer.push_region(Polarity::Dark, cutout.clone());
+            }
+            let cutters = composer.finish_set(0.0);
             if cutters.is_empty() {
                 continue;
             }
-
-            let bounds = ring_bounds(&cutters);
-            subtract_rings_from_feature(doc, feature_index, &cutters, &bounds);
+            subtract_region_from_feature(doc, feature_index, &cutters);
         }
     }
 }
@@ -906,32 +940,12 @@ fn clear_feature_paths<S, L>(doc: &mut Document<S, L>, feature_index: usize) {
     feature.primitive_ref = None;
 }
 
-fn ring_bounds(rings: &[Ring]) -> Vec<BBox> {
-    rings
-        .iter()
-        .map(|ring| rings_bbox(std::slice::from_ref(ring)))
-        .collect()
-}
-
-fn rings_bbox(rings: &[Ring]) -> BBox {
-    rings
-        .iter()
-        .flat_map(|ring| ring.iter())
-        .fold(BBox::empty(), |bbox, &[x, y]| {
-            bbox.union(BBox::new(
-                crate::geom::Point::new(x, y),
-                crate::geom::Point::new(x, y),
-            ))
-        })
-}
-
-fn subtract_rings_from_feature<S, L>(
+fn subtract_region_from_feature<S, L>(
     doc: &mut Document<S, L>,
     feature_index: usize,
-    cutters: &[Ring],
-    cutter_bounds: &[BBox],
+    cutters: &ContourSet,
 ) {
-    let subject = feature_filled_rings(doc, &doc.features[feature_index]);
+    let subject = feature_filled_region(doc, &doc.features[feature_index], 0.0);
     if subject.is_empty() {
         return;
     }
@@ -940,18 +954,19 @@ fn subtract_rings_from_feature<S, L>(
     // a layer are nowhere near any of them, and dense generated cutter sets
     // (balance void lattices) would otherwise make every subtraction sweep
     // the whole set.
-    let subject_bounds = rings_bbox(&subject);
     let near = cutters
+        .rings
         .iter()
-        .zip(cutter_bounds)
-        .filter(|(_, bounds)| bounds.intersects(subject_bounds))
+        .zip(&cutters.ring_bounds)
+        .filter(|(_, bounds)| bounds.intersects(subject.bbox))
         .map(|(ring, _)| ring.clone())
         .collect::<Vec<_>>();
     if near.is_empty() {
         return;
     }
 
-    let contours = region::rings_to_contours(region::difference_rings(subject, near));
+    let near = ContourSet::from_regularized_with_uncertainty(near, 0.0, cutters.uncertainty_mm);
+    let contours = subject.difference(&near).to_contours();
     if contours.is_empty() {
         clear_feature_paths(doc, feature_index);
         return;
@@ -973,38 +988,36 @@ fn layer_cutout_sets<S, L>(doc: &Document<S, L>, layer: &Layer<S, L>) -> Vec<Con
         .slice(&doc.features)
         .iter()
         .filter(|feature| feature.bucket == FeatureBucket::Cutout)
-        .filter_map(|feature| {
-            let rings = feature_filled_rings(doc, feature);
-            if rings.is_empty() {
-                None
-            } else {
-                Some(ContourSet::new(rings, FillRule::NonZero, tol::REGION_MM))
-            }
-        })
+        .map(|feature| feature_filled_region(doc, feature, tol::REGION_MM))
+        .filter(|region| !region.is_empty())
         .collect()
 }
 
 /// The regularized filled image of a feature's fill paths, grouped by fill
 /// rule before the final union.
-fn feature_filled_rings<S, L>(doc: &Document<S, L>, feature: &Feature<S>) -> Vec<Ring> {
-    let mut groups: HashMap<FillRule, Vec<Ring>> = HashMap::new();
+fn feature_filled_region<S, L>(
+    doc: &Document<S, L>,
+    feature: &Feature<S>,
+    tolerance: f64,
+) -> ContourSet {
+    let mut groups: HashMap<FillRule, Vec<ContourBuf>> = HashMap::new();
     for path in feature.paths.slice(&doc.arena.paths) {
         if let Some(rule) = path.fill_rule() {
             groups
                 .entry(rule)
                 .or_default()
-                .extend(path_rings(doc, path));
+                .extend(doc.arena.path_contours(path));
         }
     }
 
-    let mut rings = groups
-        .into_iter()
-        .flat_map(|(fill_rule, rings)| region::simplify_rings(rings, fill_rule))
-        .collect::<Vec<_>>();
-    if rings.len() > 1 {
-        rings = region::simplify_rings(rings, FillRule::NonZero);
+    let mut composer = region::PaintComposer::default();
+    for (fill_rule, contours) in groups {
+        composer.push_region(
+            Polarity::Dark,
+            ContourSet::from_contours(&contours, fill_rule, 0.0),
+        );
     }
-    rings
+    composer.finish_set(tolerance)
 }
 
 fn feature_rings<S, L>(doc: &Document<S, L>, feature: &Feature<S>) -> Vec<Ring> {

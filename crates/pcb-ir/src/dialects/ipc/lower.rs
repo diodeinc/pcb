@@ -15,7 +15,7 @@ use crate::dialects::ipc::layout::{LayoutPurpose, StepProfile};
 use crate::dialects::ipc::{Document, relief};
 use crate::dialects::{LayerRole, Side};
 use crate::dialects::{artwork, nc};
-use crate::geom::path::{ContourBuf, transform_cmds};
+use crate::geom::path::ContourBuf;
 use crate::geom::{
     Affine2, BBox, ContourSet, FillRule, Paint, Point, Polarity, Span, StrokeStyle, tol,
 };
@@ -359,7 +359,7 @@ pub fn contour_flash_aperture<Symbol, LayerFunction>(
         .arena
         .path_contours(path)
         .iter()
-        .map(|contour| transform_cmds(contour.cmds.iter().copied(), inverse))
+        .map(|contour| contour.clone().transformed(inverse))
         .collect::<Vec<_>>();
     let [outline] = local.try_into().ok()?;
     Some(artwork::ApertureShape::Contour {

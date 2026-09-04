@@ -1,7 +1,7 @@
 //! Gerber importer legalization for ordered artwork.
 
 use super::{Aperture, ApertureShape, Document, Geometry, normalize_bounds};
-use crate::geom::path::{ContourBuf, transform_cmds};
+use crate::geom::path::ContourBuf;
 use crate::geom::{Affine2, Point};
 
 const TRANSFORM_EPSILON: f64 = 1e-9;
@@ -178,13 +178,21 @@ fn axis_aligned_dimensions(width: f64, height: f64, basis: Affine2) -> Option<(f
 
 fn contour_aperture(aperture: &Aperture, basis: Affine2) -> Aperture {
     let fill_rule = aperture.fill_rule();
-    let cmds = aperture
+    let contours = aperture
         .contours()
         .into_iter()
-        .flat_map(|contour| transform_cmds(contour.cmds, basis).cmds)
+        .map(|contour| contour.transformed(basis))
+        .collect::<Vec<_>>();
+    let uncertainty_mm = contours
+        .iter()
+        .map(|contour| contour.uncertainty_mm)
+        .fold(0.0, f64::max);
+    let cmds = contours
+        .into_iter()
+        .flat_map(|contour| contour.cmds)
         .collect();
     Aperture::solid(ApertureShape::Contour {
-        outline: ContourBuf::new(cmds),
+        outline: ContourBuf::new(cmds).with_uncertainty(uncertainty_mm),
         fill_rule,
     })
 }

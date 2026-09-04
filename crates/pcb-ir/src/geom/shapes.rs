@@ -47,30 +47,38 @@ pub fn ellipse(width: f64, height: f64) -> Option<ContourBuf> {
     let rx = width / 2.0;
     let ry = height / 2.0;
     let k = KAPPA;
-    Some(ContourBuf::new(vec![
-        PathCmd::move_to(Point::new(rx, 0.0)),
-        PathCmd::cubic_to(
-            Point::new(rx, k * ry),
-            Point::new(k * rx, ry),
-            Point::new(0.0, ry),
-        ),
-        PathCmd::cubic_to(
-            Point::new(-k * rx, ry),
-            Point::new(-rx, k * ry),
-            Point::new(-rx, 0.0),
-        ),
-        PathCmd::cubic_to(
-            Point::new(-rx, -k * ry),
-            Point::new(-k * rx, -ry),
-            Point::new(0.0, -ry),
-        ),
-        PathCmd::cubic_to(
-            Point::new(k * rx, -ry),
-            Point::new(rx, -k * ry),
-            Point::new(rx, 0.0),
-        ),
-        PathCmd::close(),
-    ]))
+    Some(
+        ContourBuf::new(vec![
+            PathCmd::move_to(Point::new(rx, 0.0)),
+            PathCmd::cubic_to(
+                Point::new(rx, k * ry),
+                Point::new(k * rx, ry),
+                Point::new(0.0, ry),
+            ),
+            PathCmd::cubic_to(
+                Point::new(-k * rx, ry),
+                Point::new(-rx, k * ry),
+                Point::new(-rx, 0.0),
+            ),
+            PathCmd::cubic_to(
+                Point::new(-rx, -k * ry),
+                Point::new(-k * rx, -ry),
+                Point::new(0.0, -ry),
+            ),
+            PathCmd::cubic_to(
+                Point::new(k * rx, -ry),
+                Point::new(rx, -k * ry),
+                Point::new(rx, 0.0),
+            ),
+            PathCmd::close(),
+        ])
+        .with_uncertainty(0.0003 * rx.max(ry))
+        .with_ellipse_source(crate::geom::Affine2 {
+            m00: rx,
+            m11: ry,
+            ..crate::geom::Affine2::IDENTITY
+        }),
+    )
 }
 
 /// An axis-aligned centered rectangle.
@@ -202,7 +210,7 @@ pub fn rounded_rect(
     }
     cmds.push(PathCmd::close());
 
-    Some(ContourBuf::new(cmds))
+    Some(ContourBuf::new(cmds).with_uncertainty(if arcs { 0.0 } else { 0.0003 * r }))
 }
 
 /// A centered rectangle with the selected corners cut at 45° by `chamfer`.
@@ -343,7 +351,11 @@ pub fn obround(width: f64, height: f64, arcs: bool) -> Option<ContourBuf> {
         }
     };
 
-    Some(ContourBuf::new(cmds))
+    Some(ContourBuf::new(cmds).with_uncertainty(if arcs {
+        0.0
+    } else {
+        0.0003 * width.min(height) / 2.0
+    }))
 }
 
 /// A regular polygon inscribed in a circle of `outer_diameter`, with the

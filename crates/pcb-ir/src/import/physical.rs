@@ -568,7 +568,10 @@ impl ImportedDesign {
                 if !matches!(feature.kind, FeatureKind::Hole | FeatureKind::Slot) {
                     continue;
                 }
-                let image = self.feature_region(occurrence);
+                let image = match self.region_accuracy {
+                    Some(accuracy) => self.feature_region_with_accuracy(occurrence, accuracy)?,
+                    None => self.feature_region(occurrence),
+                };
                 let evidence = self.feature_evidence(occurrence.id);
                 let mut layer_lands = Vec::new();
                 for (&copper_layer, candidates) in &lands_by_layer {
@@ -839,7 +842,13 @@ impl ImportedDesign {
             .collect::<std::collections::HashMap<_, _>>();
         let mut document = self.materialize_layer(layer, scope)?;
         crate::dialects::ipc::process::expand_feature_placement_groups(&mut document);
-        crate::dialects::ipc::process::normalize_for_artwork(&mut document);
+        match self.region_accuracy {
+            Some(accuracy) => crate::dialects::ipc::process::normalize_for_artwork_with_accuracy(
+                &mut document,
+                accuracy,
+            )?,
+            None => crate::dialects::ipc::process::normalize_for_artwork(&mut document),
+        }
         crate::dialects::ipc::validate_artwork_ready(&document).map_err(anyhow::Error::msg)?;
         let header = artwork::Layer {
             name: document.layers[0].name.clone(),
@@ -850,23 +859,28 @@ impl ImportedDesign {
             meta: definition.layer_function,
         };
         let artwork = lower_layer_to_artwork_with(&document, 0, header, &mut OccurrenceAttribution);
-        let (mut layers, _) = artwork::compose_selected_owners(&artwork, |owner| {
-            let owner = (*owner)?;
-            self.feature_definition(owner.feature)
-                .filter(|feature| include(feature))
-                .map(|_| owner)
-        });
+        let (mut layers, _) = artwork::compose_owner_regions(
+            &artwork,
+            |owner| {
+                let owner = (*owner)?;
+                self.feature_definition(owner.feature)
+                    .filter(|feature| include(feature))
+                    .map(|_| owner)
+            },
+            tol::REGION_MM,
+            self.region_accuracy,
+        )?;
         let owners = layers
             .pop()
             .context("attributed physical composition produced no layer")?;
         owners
             .into_iter()
-            .map(|(owner, rings)| {
+            .map(|(owner, image)| {
                 Ok((
                     *occurrences
                         .get(&owner)
                         .context("composed feature has no canonical occurrence")?,
-                    ContourSet::from_regularized(rings, tol::REGION_MM),
+                    image,
                 ))
             })
             .collect()
@@ -1734,6 +1748,63 @@ mod tests {
             ])],
         );
         imported.geometry.features[feature].paths = Span::new(start, 2);
+    }
+
+    #[test]
+    fn physical_preparation_can_refine_retained_source_geometry() {
+        let ipc = Ipc2581::parse(physical_fixture()).unwrap();
+        let mut imported = crate::import::ipc2581::import_design(&ipc).unwrap();
+        let coarse = imported.physical_view(ArtworkScope::Board).unwrap();
+        let accuracy = crate::geom::GeometryAccuracy::new(0.0001).unwrap();
+        imported.region_accuracy = Some(accuracy);
+        let fine = imported.physical_view(ArtworkScope::Board).unwrap();
+        assert_eq!(fine.lands.len(), coarse.lands.len());
+        assert_eq!(fine.paste_islands.len(), coarse.paste_islands.len());
+        for (coarse, fine) in coarse.lands.iter().zip(&fine.lands) {
+            assert!(fine.image.uncertainty_mm < coarse.image.uncertainty_mm);
+            accuracy.check(fine.image.uncertainty_mm).unwrap();
+        }
+        for region in fine
+            .paste_islands
+            .iter()
+            .map(|p| &p.image)
+            .chain(fine.mask_openings.iter().map(|p| &p.image))
+            .chain(fine.holes.iter().map(|p| &p.image))
+        {
+            accuracy.check(region.uncertainty_mm).unwrap();
+        }
+        let layer = imported.layer_id("TOP").unwrap();
+        let image = imported
+            .composed_layer_image(layer, ArtworkScope::Board)
+            .unwrap();
+        accuracy.check(image.uncertainty_mm).unwrap();
+    }
+
+    #[test]
+    fn headless_preparation_rejects_already_coarse_feature_commands() {
+        let ipc = Ipc2581::parse(physical_fixture()).unwrap();
+        let mut imported = crate::import::ipc2581::import_design(&ipc).unwrap();
+        let layer = imported.layer_id("TOP").unwrap();
+        let occurrence = imported
+            .feature_occurrences(layer, ArtworkScope::Board)
+            .unwrap()[0];
+        let coarse = imported.feature_region(occurrence);
+        let start = imported.geometry.arena.paths.len() as u32;
+        imported.geometry.arena.push_path(
+            crate::geom::Paint::Fill {
+                rule: crate::geom::FillRule::NonZero,
+            },
+            coarse.to_contours(),
+        );
+        imported.geometry.features[occurrence.id.feature.0 as usize].paths = Span::single(start);
+        let accuracy = crate::geom::GeometryAccuracy::new(0.0001).unwrap();
+        assert!(
+            imported
+                .feature_region_with_accuracy(occurrence, accuracy)
+                .is_err()
+        );
+        imported.region_accuracy = Some(accuracy);
+        assert!(imported.physical_view(ArtworkScope::Board).is_err());
     }
 
     fn physical_fixture() -> &'static str {

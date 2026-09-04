@@ -6,12 +6,10 @@ use crate::geom::tol;
 /// A measured length between two witness points, in the IR's canonical
 /// millimeters, with the uncertainty its inputs carry.
 ///
-/// Flattening places each curved boundary up to [`tol::FLATTEN_MM`] from
-/// its source, so a length measured against `n` flattened boundaries is
-/// known only to within `n · FLATTEN_MM`. A consumer comparing against a
-/// minimum uses [`Distance::certainly_below`], so tessellation alone can
-/// never manufacture a violation. `mm` is signed where the quantity is: a
-/// negative enclosure is the depth of a breach.
+/// `uncertainty_mm` carries the preparation history of the measured inputs.
+/// Use [`Distance::with_uncertainty`] for prepared regions. The legacy
+/// [`Distance::flattened`] helper is for untracked default-tolerance linework.
+/// `mm` is signed where the quantity is: a negative enclosure is a breach.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Distance {
     pub mm: f64,
@@ -29,6 +27,23 @@ impl Distance {
             uncertainty_mm: 0.0,
             first,
             second,
+        }
+    }
+
+    /// A measurement using the accumulated positional errors of its inputs.
+    pub fn with_uncertainty(mm: f64, first: Point, second: Point, uncertainty_mm: f64) -> Self {
+        Self {
+            mm,
+            first,
+            second,
+            uncertainty_mm,
+        }
+    }
+
+    pub fn also_uncertain(self, uncertainty_mm: f64) -> Self {
+        Self {
+            uncertainty_mm: self.uncertainty_mm + uncertainty_mm,
+            ..self
         }
     }
 
