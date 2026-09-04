@@ -22,13 +22,8 @@ macro_rules! builtin {
 
 pub(super) const BUILTIN_PDKS: &[BuiltinPdk] = &[
     builtin!("standard", "standard", STANDARD),
-    builtin!("jlcpcb", "one-ounce-standard-color", JLCPCB),
-    builtin!(
-        "jlcpcb-1oz-standard-color",
-        "one-ounce-standard-color",
-        JLCPCB
-    ),
-    builtin!("jlcpcb-1oz-black-white", "one-ounce-black-white", JLCPCB),
+    builtin!("jlcpcb-1oz", "one-ounce", JLCPCB),
+    builtin!("jlc", "one-ounce", JLCPCB),
     builtin!("ipc", "2b", IPC),
     builtin!("ipc-1a", "1a", IPC),
     builtin!("ipc-1b", "1b", IPC),
@@ -52,7 +47,8 @@ mod tests {
     #[test]
     fn names_are_exact_references() {
         assert!(find("standard").is_some());
-        assert!(find("jlcpcb").is_some());
+        assert!(find("jlcpcb-1oz").is_some());
+        assert!(find("jlc").is_some());
         assert_eq!(find("ipc").unwrap().profile, "2b");
         assert!(find("ipc-3c").is_some());
         assert!(find("./standard").is_none());

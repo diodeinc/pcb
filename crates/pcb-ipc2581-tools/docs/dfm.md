@@ -322,9 +322,9 @@ silently.
 ## CLI
 
 ```bash
-pcb ipc dfm check board.xml --pdk standard -o board.dfm.json
-pcb dfm board.zen --pdk standard -o board.dfm.json
-pcb dfm board.zen --pdk standard --open
+pcb ipc dfm check board.xml -o board.dfm.json
+pcb dfm board.zen -o board.dfm.json
+pcb dfm board.zen --open
 pcb open board.dfm.json
 ```
 
@@ -332,21 +332,21 @@ pcb open board.dfm.json
 temporary IPC-2581 and checking the canonical board. Use `pcb ipc dfm check`
 to inspect existing manufacturing files without changing their source layout.
 
-`--pdk` accepts an exact built-in name or a TOML path. `standard`, `jlcpcb`,
-`jlcpcb-1oz-standard-color`, `jlcpcb-1oz-black-white`, and `ipc-1a` through
-`ipc-3c` are bundled. `jlcpcb` selects the standard-color profile; `ipc`
-selects the opinionated Class 2 / Producibility Level B default. Use
-`./standard` to select a same-named file. Both sources use the same parser and
-checks. `--layout-target` accepts
+`--pdk` defaults to `standard` and accepts an exact built-in name or a TOML
+path. `standard`, `jlcpcb-1oz` (`jlc`), and `ipc-1a` through `ipc-3c` are
+bundled. `ipc` selects the opinionated Class 2 / Producibility Level B default.
+Use `./standard` to select a same-named file. Both sources use the same parser
+and checks. `--layout-target` accepts
 `board` or `board-array` and defaults to `board-array`. Add
 `--waivers waivers.toml` to apply a [waiver file](#waivers).
 
-The JLCPCB profiles execute the public rigid FR-4 capability table for 2-32
-copper layers and 1 oz outer copper. They deliberately omit the one-layer
-NPTH-only service, 2 oz rules, local 3 mil BGA exceptions, and panel spacing,
-which depends on the chosen routing, mouse-bite, or V-cut process. The
-standard-color profile uses the published 0.10 mm mask web; the black/white
-profile uses 0.13 mm.
+The `jlcpcb-1oz` PDK, also available as `jlc`, executes the public rigid FR-4
+capability table for 2-32 copper layers and 1 oz outer copper. It deliberately
+omits the one-layer NPTH-only service, 2 oz rules, local 3 mil BGA exceptions,
+and panel spacing, which depends on the chosen routing, mouse-bite, or V-cut
+process. JLCPCB publishes a 0.10 mm soldermask web for standard colors and 0.13
+mm for black or white; this combined PDK conservatively uses 0.13 mm for every
+color.
 
 The nine `ipc-1a` through `ipc-3c` built-ins preserve performance Classes 1-3
 crossed with Producibility Levels A-C, but they are executable **partial Diode

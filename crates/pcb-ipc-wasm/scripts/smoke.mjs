@@ -38,7 +38,7 @@ if (!isMainThread) {
     const builtins = builtinPdks();
     assert.equal(builtins[0].name, 'standard');
     assert.ok(builtins[0].source.includes('[pdk]'));
-    assert.equal(builtins.find(pdk => pdk.name === 'jlcpcb').profile, 'one-ounce-standard-color');
+    assert.equal(builtins.find(pdk => pdk.name === 'jlcpcb-1oz').profile, 'one-ounce');
     assert.equal(builtins.find(pdk => pdk.name === 'ipc').profile, '2b');
     const bom = JSON.parse(text(document.export({ format: 'bom' })[0]));
     assert.equal(bom[0].designator, 'J1');

@@ -43,7 +43,7 @@ fn dfm_resolves_zen_exports_temporary_ipc_and_checks_standard_pdk() {
         .write("eda/BMI270.kicad_mod", FOOTPRINT)
         .write("eda/BMI270.kicad_sym", SYMBOL);
 
-    let output = run_pcbc(&mut sandbox, ["dfm", "MyBoard.zen", "--pdk", "standard"]);
+    let output = run_pcbc(&mut sandbox, ["dfm", "MyBoard.zen"]);
     let mut report: Value =
         serde_json::from_slice(&output.stdout).expect("stdout should contain only the DFM report");
 
@@ -70,14 +70,7 @@ fn dfm_resolves_zen_exports_temporary_ipc_and_checks_standard_pdk() {
 
     let file_output = run_pcbc(
         &mut sandbox,
-        [
-            "dfm",
-            "MyBoard.zen",
-            "--pdk",
-            "standard",
-            "--output",
-            "report.dfm.json",
-        ],
+        ["dfm", "MyBoard.zen", "--output", "report.dfm.json"],
     );
     assert!(file_output.stdout.is_empty());
     assert_eq!(file_output.status.code(), output.status.code());

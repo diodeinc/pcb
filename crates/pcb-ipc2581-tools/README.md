@@ -49,24 +49,27 @@ by the retained geometry.
 ## DFM process design kits
 
 `dfm check` accepts a built-in process design kit name or a strict, versioned
-TOML file. Built-ins include `standard`, executable JLCPCB 1 oz profiles, and
-the nine IPC Class/Producibility profile identities:
+TOML file. Built-ins include `standard`, `jlcpcb-1oz` (`jlc`), and the nine IPC
+Class/Producibility profile identities:
 
 ```bash
 pcb ipc dfm check fabrication-panel.xml \
-  --pdk standard \
   --output dfm-report.json
 ```
 
+The PDK defaults to `standard`. Pass `--pdk` with a built-in name or a path to
+select another process definition.
+
 `standard` currently supports 2 through 10 copper layers.
-`jlcpcb` selects the standard-color 1 oz rigid FR-4 profile;
-`jlcpcb-1oz-black-white` selects its larger mask-web requirement. The
-`ipc` alias selects the opinionated Class 2 / Producibility Level B default.
-It and the explicit `ipc-1a` through `ipc-3c` profiles run Diode's opinionated
-partial baseline for plated-hole aspect ratio and via, PTH, and NPTH
-hole-to-copper clearance. Diode selected these values with IPC design topics as
-context; they are not licensed IPC numeric matrices, do not prove full IPC
-compliance, and do not imply IPC certification.
+`jlcpcb-1oz` checks JLCPCB's rigid FR-4 service with 1 oz outer copper; `jlc`
+is an alias for the same PDK. It uses the conservative 0.13 mm soldermask-web
+limit published for black and white mask across every color. The `ipc` alias
+selects the opinionated Class 2 / Producibility Level B default. It and the
+explicit `ipc-1a` through `ipc-3c` profiles run Diode's opinionated partial
+baseline for plated-hole aspect ratio and via, PTH, and NPTH hole-to-copper
+clearance. Diode selected these values with IPC design topics as context; they
+are not licensed IPC numeric matrices, do not prove full IPC compliance, and
+do not imply IPC certification.
 
 Pass a path such as `--pdk ./fab-process.toml` to use a custom PDK. Exact
 built-in names take precedence, so prefix a same-named file with `./`.

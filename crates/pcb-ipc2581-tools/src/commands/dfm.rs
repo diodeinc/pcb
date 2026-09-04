@@ -679,20 +679,15 @@ limit = { minimum = "300 mil" }
 
         let jlc = builtin_pdks()
             .iter()
-            .find(|pdk| pdk.name == "jlcpcb-1oz-black-white")
+            .find(|pdk| pdk.name == "jlcpcb-1oz")
             .unwrap();
         let parsed = pdk::Pdk::parse(jlc.source).unwrap();
         let rules = rules::lower(&parsed, Some(jlc.profile)).unwrap();
         let mask = rules
             .iter()
-            .find(|rule| rule.id == "jlc.soldermask.minimum_web.black_white")
+            .find(|rule| rule.id == "jlc.soldermask.minimum_web")
             .unwrap();
         assert_eq!(mask.limit.length().millimeters(), 0.13);
-        assert!(
-            rules
-                .iter()
-                .all(|rule| rule.id != "jlc.soldermask.minimum_web.standard_color")
-        );
         let two_layer = rules
             .iter()
             .find(|rule| rule.id == "jlc.copper.minimum_feature_width.2-layer")
