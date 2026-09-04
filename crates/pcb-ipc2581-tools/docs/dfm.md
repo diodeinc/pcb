@@ -284,8 +284,8 @@ when fewer than two exist.
   notches and same-net islands are not clearance subjects; touching or
   overlapping distinct conductors have zero clearance. Functional copper
   without a net fails extraction when this rule is configured instead of
-  being guessed into an electrical domain. Fiducials and copper-balance
-  support remain explicit auxiliary conductors.
+  being guessed into an electrical domain. Fiducials, copper-balance
+  support, and netless pads remain explicit auxiliary conductors.
 - Soldermask-web rules report mask webs — gaps between mask openings —
   narrower than the limit. Morphology finds candidates; the medial-axis
   width decides each finding.
