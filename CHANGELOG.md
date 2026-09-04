@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Open DFM reports with `pcb open` or `pcb dfm --open`.
+
 ### Changed
 
 - Add `yellow-green` as a supported `Led` color.
