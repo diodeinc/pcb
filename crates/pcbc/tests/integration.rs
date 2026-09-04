@@ -1,4 +1,5 @@
 mod apply;
+mod auth;
 mod auth_git;
 mod bom;
 mod broken_pipe;

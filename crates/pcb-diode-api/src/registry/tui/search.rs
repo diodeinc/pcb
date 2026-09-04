@@ -854,8 +854,6 @@ pub fn spawn_availability_worker(
     resp_tx: Sender<PricingResponse>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
-        let mut auth_token: Option<String> = None;
-        let mut auth_checked = false;
         while let Ok(mut queue) = req_rx.recv() {
             while let Ok(next) = req_rx.try_recv() {
                 queue = next;
@@ -865,23 +863,15 @@ pub fn spawn_availability_worker(
                 let chunk_len = queue.len().min(AVAILABILITY_WORKER_CHUNK_SIZE);
                 let chunk: Vec<_> = queue.drain(..chunk_len).collect();
 
-                let response = if !auth_checked {
-                    match crate::auth::get_api_token() {
-                        Ok(token) => {
-                            auth_token = token;
-                            auth_checked = true;
-                            fetch_pricing_chunk(auth_token.as_deref(), &chunk)
-                        }
-                        Err(e) => {
-                            log::warn!("Pricing auth failed: {}", e);
-                            chunk
-                                .into_iter()
-                                .map(|request| (request.key, PricingResult::Failed))
-                                .collect()
-                        }
+                let response = match crate::auth::get_api_token() {
+                    Ok(token) => fetch_pricing_chunk(token.as_deref(), &chunk),
+                    Err(e) => {
+                        log::warn!("Pricing auth failed: {}", e);
+                        chunk
+                            .into_iter()
+                            .map(|request| (request.key, PricingResult::Failed))
+                            .collect()
                     }
-                } else {
-                    fetch_pricing_chunk(auth_token.as_deref(), &chunk)
                 };
 
                 let _ = resp_tx.send(response);

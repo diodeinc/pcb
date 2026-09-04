@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Support service-account authentication.
+
 ### Changed
 
 - Default DFM to `standard` and consolidate the bundled JLCPCB PDK.

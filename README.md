@@ -196,6 +196,12 @@ pcb import <KICAD_SCH|KICAD_PRO> <OUTPUT_DIR> # Import a KiCad schematic or proj
 
 Run `pcb help` or `pcb help <command>` for the full command reference.
 
+Authenticate a machine with `pcb auth login --service-account`, or import
+JSON (`client_id`, `client_secret`) with
+`pcb auth login --service-account --stdin < credentials.json`.
+For CI, set `DIODE_API_URL`, `DIODE_CLIENT_ID`, and `DIODE_CLIENT_SECRET`.
+PCB renews access tokens automatically.
+
 ## License
 
 Diode-authored code and docs are licensed under the MIT License except where

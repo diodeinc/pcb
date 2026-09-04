@@ -127,7 +127,7 @@ pub fn parse_resolve_request(args: Option<&Value>) -> Result<ResolveDatasheetInp
 }
 
 pub fn resolve_datasheet(
-    auth_token: Option<&str>,
+    ctx: &crate::WorkspaceContext,
     input: &ResolveDatasheetInput,
     page_range: Option<PageRange>,
 ) -> Result<ResolveDatasheetResponse> {
@@ -136,24 +136,24 @@ pub fn resolve_datasheet(
     match input {
         ResolveDatasheetInput::DatasheetUrl(url) => {
             let canonical_url = canonicalize_url(url)?;
-            resolve_source_url_datasheet(&client, auth_token, canonical_url, page_range)
+            resolve_source_url_datasheet(&client, ctx, canonical_url, page_range)
         }
         ResolveDatasheetInput::PdfPath(path) => {
             let pdf_path = path.clone();
             let execution = ResolveExecution::from_pdf_path(pdf_path, None)?;
-            execute_resolve_execution(&client, auth_token, execution, page_range)
+            execute_resolve_execution(&client, ctx, execution, page_range)
         }
         ResolveDatasheetInput::KicadSymPath { path, symbol_name } => {
             let reference =
                 extract_datasheet_reference_from_kicad_sym(path, symbol_name.as_deref())?;
             if is_http_datasheet_url(&reference) {
                 let canonical_url = canonicalize_url(&reference)?;
-                resolve_source_url_datasheet(&client, auth_token, canonical_url, page_range)
+                resolve_source_url_datasheet(&client, ctx, canonical_url, page_range)
             } else {
                 let pdf_path = resolve_local_datasheet_path_from_kicad_sym(path, &reference)?;
                 validate_local_pdf(&pdf_path)?;
                 let execution = ResolveExecution::from_pdf_path(pdf_path, None)?;
-                execute_resolve_execution(&client, auth_token, execution, page_range)
+                execute_resolve_execution(&client, ctx, execution, page_range)
             }
         }
     }
@@ -161,18 +161,18 @@ pub fn resolve_datasheet(
 
 fn resolve_source_url_datasheet(
     client: &Client,
-    auth_token: Option<&str>,
+    ctx: &crate::WorkspaceContext,
     canonical_url: String,
     page_range: Option<PageRange>,
 ) -> Result<ResolveDatasheetResponse> {
-    let pdf_path = ensure_url_pdf_cached(client, auth_token, &canonical_url)?;
+    let pdf_path = ensure_url_pdf_cached(client, ctx, &canonical_url)?;
     let execution = ResolveExecution::from_pdf_path(pdf_path, Some(canonical_url))?;
-    execute_resolve_execution(client, auth_token, execution, page_range)
+    execute_resolve_execution(client, ctx, execution, page_range)
 }
 
 fn ensure_url_pdf_cached(
     client: &Client,
-    auth_token: Option<&str>,
+    ctx: &crate::WorkspaceContext,
     canonical_url: &str,
 ) -> Result<PathBuf> {
     let url_cache_dir = url_pdf_cache_dir(canonical_url)?;
@@ -181,12 +181,12 @@ fn ensure_url_pdf_cached(
     if let Some(cached_pdf) = first_valid_file_in_dir(&url_cache_dir, None, is_valid_cached_pdf)? {
         return Ok(cached_pdf);
     }
-    fetch_url_pdf_via_backend(client, auth_token, canonical_url, &url_cache_dir)
+    fetch_url_pdf_via_backend(client, ctx, canonical_url, &url_cache_dir)
 }
 
 fn execute_resolve_execution(
     client: &Client,
-    auth_token: Option<&str>,
+    ctx: &crate::WorkspaceContext,
     execution: ResolveExecution,
     page_range: Option<PageRange>,
 ) -> Result<ResolveDatasheetResponse> {
@@ -220,7 +220,7 @@ fn execute_resolve_execution(
     }
     reset_materialized_cache(&materialized_dir, &images_dir, &complete_marker);
 
-    let scan = ensure_datasheet_scanned(client, auth_token, &execution, page_range)?;
+    let scan = ensure_datasheet_scanned(client, ctx, &execution, page_range)?;
 
     materialize_scan_outputs(
         client,
@@ -242,11 +242,11 @@ fn execute_resolve_execution(
 
 fn fetch_url_pdf_via_backend(
     client: &Client,
-    auth_token: Option<&str>,
+    ctx: &crate::WorkspaceContext,
     canonical_url: &str,
     url_cache_dir: &Path,
 ) -> Result<PathBuf> {
-    let datasheet = create_datasheet_from_url(client, auth_token, canonical_url)?;
+    let datasheet = create_datasheet_from_url(client, ctx, canonical_url)?;
     let pdf_path = url_cache_dir.join(cached_pdf_filename(&datasheet.filename));
 
     download_file(client, &datasheet.file_url, &pdf_path)
@@ -265,20 +265,20 @@ fn fetch_url_pdf_via_backend(
 
 fn ensure_datasheet_scanned(
     client: &Client,
-    auth_token: Option<&str>,
+    ctx: &crate::WorkspaceContext,
     execution: &ResolveExecution,
     page_range: Option<PageRange>,
 ) -> Result<DatasheetScanResponse> {
     let datasheet_id = datasheet_id_for_sha256(&execution.pdf_sha256);
     if let DatasheetScanOutcome::Scanned(scan) =
-        scan_datasheet(client, auth_token, &datasheet_id, page_range)?
+        scan_datasheet(client, ctx, &datasheet_id, page_range)?
     {
         return Ok(scan);
     }
 
     // The backend has no PDF cached under this content hash yet — upload ours, then scan.
-    let datasheet = create_datasheet_from_pdf(client, auth_token, &execution.pdf_path)?;
-    match scan_datasheet(client, auth_token, &datasheet.id, page_range)? {
+    let datasheet = create_datasheet_from_pdf(client, ctx, &execution.pdf_path)?;
+    match scan_datasheet(client, ctx, &datasheet.id, page_range)? {
         DatasheetScanOutcome::Scanned(scan) => Ok(scan),
         DatasheetScanOutcome::NotCached => {
             anyhow::bail!("Datasheet {} not found after upload", datasheet.id)

@@ -52,7 +52,7 @@ thiserror = { workspace = true }
 toml = { workspace = true }
 url = { workspace = true }
 urlencoding = { workspace = true }
-uuid = { workspace = true }
+uuid = { workspace = true, features = ["serde"] }
 walkdir = { workspace = true }
 zip = { workspace = true }
 zstd = { workspace = true }
