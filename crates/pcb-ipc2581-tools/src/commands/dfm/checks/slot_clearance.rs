@@ -197,6 +197,17 @@ limit = {{ minimum = "0.20 mm" }}
     }
 
     #[test]
+    fn width_only_report_omits_unproven_span_with_shuffled_layers() {
+        let source = pdk("plated")
+            .replace("rules.copper.slot_clearance", "rules.drilling.slot_width")
+            .replace("0.20 mm", "0.80 mm");
+        let result = check(&board("PLATED", "", ""), &source, LayoutTarget::Board).unwrap();
+        let finding = &result.findings[0];
+        assert!((finding.measurement.actual_mm().unwrap() - 0.6).abs() < 1e-8);
+        assert!(finding.subjects[0].drill_span.is_none());
+    }
+
+    #[test]
     fn standard_slot_clearance_warns_without_failing_but_requires_a_span() {
         let standard = dfm::builtin_pdks()
             .iter()
