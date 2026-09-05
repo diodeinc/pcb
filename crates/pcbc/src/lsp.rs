@@ -11,17 +11,18 @@ const RESOLVE_DATASHEET_METHOD: &str = "pcb/resolveDatasheet";
 
 pub fn execute(args: LspArgs) -> anyhow::Result<()> {
     let offline = args.offline;
-    let bom_match_mode = if args.offline {
-        pcb_diode_api::BomMatchMode::Offline
-    } else {
-        pcb_diode_api::BomMatchMode::Online
-    };
     pcb_zen::lsp_with_custom_request_handler(
         false,
         offline,
         move |method, params| handle_custom_request(method, params, offline),
-        move |source_path, schematic| {
-            pcb_diode_api::hydrate_schematic_from_bom(source_path, schematic, bom_match_mode);
+        |source_path, schematic| {
+            // Evaluation and viewer-state requests must not wait for supplier APIs.
+            // Reuse cached BOM matches, even when dependency resolution is online.
+            pcb_diode_api::hydrate_schematic_from_bom(
+                source_path,
+                schematic,
+                pcb_diode_api::BomMatchMode::Offline,
+            );
         },
     )
 }

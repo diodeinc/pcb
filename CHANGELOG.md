@@ -23,6 +23,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- Keep LSP schematic evaluation responsive by using cached BOM matches without supplier API requests; dependency resolution is unchanged.
 - Preserve deleted hierarchical sheet instances as restorable project metadata while keeping child schematic content loaded.
 - Use physical stackup order for PCBIR slot cutouts and hole-to-land associations when layer declarations are shuffled.
 - Preserve PCBIR hole-to-land associations after routing or copper clears remove land copper.

@@ -11,6 +11,7 @@ mod import;
 mod info;
 mod ipc2581;
 mod layout;
+mod lsp;
 mod migrate;
 mod moved;
 mod netlist;
