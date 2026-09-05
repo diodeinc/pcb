@@ -10,7 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
-- Place generated schematic content outside the page when it cannot fit, instead of failing schematic apply.
+- Place generated schematic content outside the page when it cannot fit, instead of failing schematic apply, and reserve space for existing text and graphics.
 
 ## [0.4.49] - 2026-09-04
 

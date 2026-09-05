@@ -265,8 +265,9 @@ impl GridPacker {
     }
 
     fn place_outside(&mut self, relative: GridRect, align_anchor: bool) -> GridPoint {
-        // Include off-page items, which are not represented in the occupancy
-        // bitmap, so repeated applies never stack overflow on existing work.
+        // Include known off-page bounds, which are not represented in the
+        // occupancy bitmap. Opaque items without known geometry remain a
+        // best-effort limitation of automatic placement.
         let right = self.occupied_bounds.map_or(self.usable.max_x, |bounds| {
             bounds.max_x.max(self.usable.max_x)
         });

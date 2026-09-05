@@ -964,8 +964,8 @@ fn pack_generated_symbols(
             .filter(|block| block.page_index == page_index)
             .collect::<Vec<_>>();
         // Fit and placement share one occupancy: the title block, hierarchy
-        // sheets, and every preserved item. If no grid fits, placement spills
-        // outside the page rather than covering preserved work.
+        // sheets, and preserved items with known bounds. If no grid fits,
+        // placement spills outside the page rather than covering that work.
         let relocatable_ids = relocatable
             .iter()
             .map(|slot| slot.symbol_id())
@@ -1025,9 +1025,8 @@ fn arrange_existing_page_blocks(
     Ok((packer, bounds, offsets))
 }
 
-/// A packer for `paper` with the page's title block and every item other than
-/// the excluded symbols occupied: the one occupancy fit checks and final
-/// placement must agree on.
+/// A packer for `paper` with the title block and known item bounds occupied,
+/// except excluded symbols: fit checks and final placement share this occupancy.
 fn occupied_page_packer(
     page: &SchPage,
     paper: &Paper,
@@ -1483,7 +1482,12 @@ fn occupy_page_items_except(
             }
             SchItem::Junction(junction) => packer.occupy(point_rect(junction.at)),
             SchItem::NoConnect(no_connect) => packer.occupy(point_rect(no_connect.at)),
-            SchItem::Symbol(_) | SchItem::Unsupported(_) => {}
+            SchItem::Unsupported(item) => {
+                if let Some(bounds) = field_autoplace::page_graphic_bounds(item) {
+                    packer.occupy(GridRect::from_bounds(bounds));
+                }
+            }
+            SchItem::Symbol(_) => {}
         }
     }
     Ok(())
@@ -3809,6 +3813,48 @@ mod tests {
         let placed = bounds.translated(packer.place_anchored(bounds));
         assert!(placed.min_x > packer.usable_bounds().max_x);
         assert_eq!(page.paper, Paper::default());
+    }
+
+    #[test]
+    fn overflow_avoids_opaque_page_text_and_graphics() {
+        for (source, right_edge) in [
+            (
+                r#"(text "off-page note\nsecond line" (at 500 10 90)
+                (effects (font (size 2 2)) (justify left bottom)))"#,
+                532.0,
+            ),
+            ("(text_box \"note\" (at 500 10 90) (size 100 20))", 620.0),
+            (
+                "(rectangle (start 500 10) (end 600 100) (stroke (width 10)))",
+                605.0,
+            ),
+            ("(polyline (pts (xy 500 10) (xy 600 100)))", 600.0),
+            ("(bezier (pts (xy 500 10) (xy 700 20) (xy 600 100)))", 700.0),
+            ("(circle (center 500 10) (radius 50))", 550.0),
+            // A major arc whose rightmost point is not a control point.
+            ("(arc (start 470 40) (mid 540 30) (end 470 -40))", 550.0),
+        ] {
+            let mut page = test_page_with_sheet("opaque");
+            let opaque = SchItem::Unsupported(pcb_sexpr::parse(source).unwrap());
+            page.items.push(opaque.clone());
+            let block = test_placement_block(
+                "new",
+                GridRect {
+                    min_x: 0,
+                    min_y: 0,
+                    max_x: 100,
+                    max_y: 60,
+                },
+            );
+            let (mut packer, bounds, _) =
+                arrange_existing_page_blocks(&page, &[&block], &BTreeSet::new()).unwrap();
+            let placed = bounds.translated(packer.place_anchored(bounds));
+            assert!(
+                f64::from(placed.min_x) * CONNECTION_GRID_MM > right_edge,
+                "{source}"
+            );
+            assert_eq!(page.items.last(), Some(&opaque));
+        }
     }
 
     #[test]

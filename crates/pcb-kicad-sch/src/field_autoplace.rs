@@ -363,10 +363,18 @@ fn include_primitives(bounds: &mut Option<Bounds>, items: &[Sexpr], placed: &Sym
 }
 
 fn include_primitive(bounds: &mut Option<Bounds>, items: &[Sexpr], placed: &Symbol) {
-    let Some(tag) = items.first().and_then(Sexpr::as_sym) else {
+    let Some(local) = primitive_bounds(items) else {
         return;
     };
-    let local = match tag {
+    let transformed = transform_bounds(local, placed);
+    match bounds {
+        Some(bounds) => bounds.union(transformed),
+        None => *bounds = Some(transformed),
+    }
+}
+
+fn primitive_bounds(items: &[Sexpr]) -> Option<Bounds> {
+    match items.first().and_then(Sexpr::as_sym)? {
         "polyline" | "bezier" => pcb_sexpr::find_child_list(items, "pts").and_then(|pts| {
             Bounds::from_points(
                 pts.iter()
@@ -400,15 +408,87 @@ fn include_primitive(bounds: &mut Option<Bounds>, items: &[Sexpr], placed: &Symb
                 .filter_map(|tag| pcb_sexpr::find_child_list(items, tag).and_then(parse_xy)),
         ),
         _ => None,
-    };
-    let Some(local) = local else {
-        return;
-    };
-    let transformed = transform_bounds(local, placed);
-    match bounds {
-        Some(bounds) => bounds.union(transformed),
-        None => *bounds = Some(transformed),
     }
+}
+
+/// Conservative placement envelopes for common opaque page graphics. These
+/// stay in page coordinates; unlike library primitives, their Y is not flipped.
+/// Unknown item types remain preserved but do not have a placement envelope.
+pub(crate) fn page_graphic_bounds(item: &Sexpr) -> Option<Bounds> {
+    let items = item.as_list()?;
+    let child_point = |tag| pcb_sexpr::find_child_list(items, tag).and_then(parse_xy);
+    let mut bounds = match items.first().and_then(Sexpr::as_sym)? {
+        "text" => {
+            let at = child_point("at")?;
+            let text = items.get(1)?.as_atom()?;
+            let effects = pcb_sexpr::find_child_list(items, "effects")?;
+            let font = pcb_sexpr::find_child_list(effects, "font")?;
+            let size = pcb_sexpr::find_child_list(font, "size").and_then(parse_xy)?;
+            let width = text
+                .lines()
+                .map(|line| line.chars().count())
+                .max()
+                .unwrap_or(0) as f64
+                * size.x.abs()
+                * ESTIMATED_TEXT_WIDTH_EM;
+            let height = text.lines().count().max(1) as f64 * size.y.abs() * 1.5;
+            // Reserve the full text extent in every direction to cover any
+            // rotation and justification, including multiline annotations.
+            let radius = width + height;
+            Bounds::from_points([
+                Point::new(at.x - radius, at.y - radius),
+                Point::new(at.x + radius, at.y + radius),
+            ])?
+        }
+        "text_box" => {
+            let at = child_point("at")?;
+            let size = child_point("size")?;
+            let radius = size.x.abs() + size.y.abs();
+            Bounds::from_points([
+                Point::new(at.x - radius, at.y - radius),
+                Point::new(at.x + radius, at.y + radius),
+            ])?
+        }
+        "arc" => {
+            let start = child_point("start")?;
+            let mid = child_point("mid")?;
+            let end = child_point("end")?;
+            let bx = mid.x - start.x;
+            let by = mid.y - start.y;
+            let cx = end.x - start.x;
+            let cy = end.y - start.y;
+            let determinant = 2.0 * (bx * cy - by * cx);
+            if determinant.abs() <= GEOMETRY_EPS_MM {
+                Bounds::from_points([start, mid, end])?
+            } else {
+                // The full circumcircle conservatively includes extrema that
+                // lie between the three control points, even for major arcs.
+                let b2 = bx * bx + by * by;
+                let c2 = cx * cx + cy * cy;
+                let dx = (cy * b2 - by * c2) / determinant;
+                let dy = (bx * c2 - cx * b2) / determinant;
+                let radius = dx.hypot(dy);
+                let center = Point::new(start.x + dx, start.y + dy);
+                Bounds::from_points([
+                    Point::new(center.x - radius, center.y - radius),
+                    Point::new(center.x + radius, center.y + radius),
+                ])?
+            }
+        }
+        _ => primitive_bounds(items)?,
+    };
+    let stroke = pcb_sexpr::find_child_list(items, "stroke")
+        .and_then(|stroke| pcb_sexpr::find_child_list(stroke, "width"))
+        .and_then(|width| width.get(1))
+        .and_then(number)
+        .unwrap_or(0.0)
+        .abs()
+        * 0.5;
+    bounds.min_x -= stroke;
+    bounds.min_y -= stroke;
+    bounds.max_x += stroke;
+    bounds.max_y += stroke;
+    Some(bounds)
 }
 
 fn transform_bounds(bounds: Bounds, placed: &Symbol) -> Bounds {
