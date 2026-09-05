@@ -1004,11 +1004,11 @@ fn arrange_new_page_blocks(
 ) -> Result<(GridPacker, GridRect, Vec<GridPoint>)> {
     for paper in placement_paper_candidates(&page.paper) {
         let packer = occupied_page_packer(page, &paper, excluded_symbol_ids)?;
-        if let Some((bounds, offsets)) = arrange_placement_blocks(blocks, &packer) {
-            if packer.can_place_without_overlap(bounds) {
-                page.paper = paper;
-                return Ok((packer, bounds, offsets));
-            }
+        if let Some((bounds, offsets)) = arrange_placement_blocks(blocks, &packer)
+            && packer.can_place_without_overlap(bounds)
+        {
+            page.paper = paper;
+            return Ok((packer, bounds, offsets));
         }
     }
     arrange_existing_page_blocks(page, blocks, excluded_symbol_ids)
