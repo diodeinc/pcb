@@ -64,31 +64,57 @@ pub fn normalize_for_artwork_with_accuracy<S: Copy + Eq + Hash, L: Clone>(
     accuracy: crate::geom::GeometryAccuracy,
 ) -> Result<(), crate::geom::AccuracyError> {
     compact(doc);
-    let mut arena = crate::geom::PathArena::default();
-    for path in &doc.arena.paths {
-        if matches!(path.paint, Paint::None) {
-            arena.push_path(path.paint, doc.arena.path_contours(path));
-        } else {
-            let region = ContourSet::from_placed_painted_paths_with_accuracy(
-                &doc.arena,
-                [(path, Affine2::IDENTITY)],
-                0.0,
-                accuracy,
-            )?;
-            arena.push_path(
-                Paint::Fill {
-                    rule: FillRule::NonZero,
-                },
-                region.to_contours(),
-            );
+    let mut refinement = 1.0;
+    let mut previous_error = f64::INFINITY;
+    loop {
+        let mut prepared = doc.clone();
+        let mut arena = crate::geom::PathArena::default();
+        for path in &doc.arena.paths {
+            let contours = doc.arena.path_contours(path);
+            if matches!(path.paint, Paint::None) {
+                arena.push_path(path.paint, contours);
+            } else {
+                let inherited = contours
+                    .iter()
+                    .map(|c| c.uncertainty_mm)
+                    .fold(0.0, f64::max);
+                let remaining = accuracy.remaining(inherited)?;
+                let preparation =
+                    crate::geom::GeometryAccuracy::new(inherited + remaining * refinement)?;
+                let region = ContourSet::from_placed_painted_paths_with_accuracy(
+                    &doc.arena,
+                    [(path, Affine2::IDENTITY)],
+                    0.0,
+                    preparation,
+                )?;
+                arena.push_path(
+                    Paint::Fill {
+                        rule: FillRule::NonZero,
+                    },
+                    region.to_contours(),
+                );
+            }
+        }
+        prepared.arena = arena;
+        normalize_for_artwork(&mut prepared);
+        let uncertainty = prepared
+            .arena
+            .contours
+            .iter()
+            .map(|c| c.uncertainty_mm)
+            .fold(0.0, f64::max);
+        match accuracy.check(uncertainty) {
+            Ok(()) => {
+                *doc = prepared;
+                return Ok(());
+            }
+            Err(error) if uncertainty >= previous_error => return Err(error),
+            Err(_) => {
+                previous_error = uncertainty;
+                refinement *= 0.25;
+            }
         }
     }
-    doc.arena = arena;
-    normalize_for_artwork(doc);
-    for contour in &doc.arena.contours {
-        accuracy.check(contour.uncertainty_mm)?;
-    }
-    Ok(())
 }
 
 /// Resolve source geometry into a composed rendering image.
@@ -1687,6 +1713,35 @@ mod tests {
                 .collect::<Vec<_>>(),
             [10.0, 12.0, 20.0, 22.0]
         );
+    }
+
+    #[test]
+    fn normalization_refines_curves_for_intersecting_cutouts() {
+        let mut doc = TestDoc::new();
+        let paint = Paint::Fill {
+            rule: FillRule::NonZero,
+        };
+        doc.push_path(paint, [crate::geom::shapes::circle(2.0).unwrap()]);
+        doc.features.push(Feature {
+            paths: Span::new(0, 1),
+            ..copper_trace_feature()
+        });
+        doc.push_path(paint, [rect_contour(0.0, -3.0, 3.0, 3.0)]);
+        doc.features.push(Feature {
+            paths: Span::new(1, 1),
+            ..Feature::new(FeatureKind::Slot, Polarity::Dark)
+        });
+        doc.layers.push(test_layer(Span::new(0, 2)));
+        normalize_for_artwork_with_accuracy(
+            &mut doc,
+            crate::geom::GeometryAccuracy::new(0.001).unwrap(),
+        )
+        .unwrap();
+        let image = feature_filled_region(&doc, &doc.features[0], 0.0);
+        assert!(!image.is_empty());
+        assert!(image.uncertainty_mm <= 0.001);
+        assert!(image.contains_point(Point::new(-0.5, 0.0)));
+        assert!(!image.contains_point(Point::new(0.5, 0.0)));
     }
 
     #[test]
