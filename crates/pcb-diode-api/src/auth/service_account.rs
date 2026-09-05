@@ -12,10 +12,25 @@ use uuid::Uuid;
 
 #[derive(Clone, Serialize, Deserialize)]
 struct Credentials {
-    client_id: Uuid,
+    client_id: String,
     client_secret: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     service_account_name: Option<String>,
+}
+
+impl Credentials {
+    fn authenticate(
+        &self,
+        request: reqwest::blocking::RequestBuilder,
+    ) -> reqwest::blocking::RequestBuilder {
+        // OAuth client_secret_basic encodes each component before Basic joins them
+        // with a colon (RFC 6749 section 2.3.1).
+        let client_id: String =
+            url::form_urlencoded::byte_serialize(self.client_id.as_bytes()).collect();
+        let client_secret: String =
+            url::form_urlencoded::byte_serialize(self.client_secret.as_bytes()).collect();
+        request.basic_auth(client_id, Some(client_secret))
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -45,6 +60,9 @@ impl ServiceAccountAuth {
     pub(super) fn validate(&self, ctx: &WorkspaceContext) -> Result<()> {
         if api_url(&self.api_base_url)? != api_url(ctx.api_base_url())? {
             bail!("Service-account credentials belong to a different API endpoint");
+        }
+        if self.credentials.client_id.is_empty() {
+            bail!("Invalid service-account client ID: must not be empty");
         }
         if self.credentials.client_secret.is_empty() {
             bail!("Invalid service-account client secret");
@@ -106,9 +124,7 @@ pub(super) fn from_environment(ctx: &WorkspaceContext) -> Result<Option<ServiceA
         return Ok(None);
     }
     let client_id = std::env::var("DIODE_CLIENT_ID")
-        .ok()
-        .and_then(|id| Uuid::parse_str(&id).ok())
-        .context("Set DIODE_CLIENT_ID to the service-account client UUID")?;
+        .map_err(|_| anyhow::anyhow!("Set DIODE_CLIENT_ID to the service-account client ID"))?;
     let client_secret = std::env::var("DIODE_CLIENT_SECRET")
         .map_err(|_| anyhow::anyhow!("Set DIODE_CLIENT_SECRET with DIODE_CLIENT_ID"))?;
     // An explicit URL keeps repository configuration from redirecting CI secrets.
@@ -196,12 +212,10 @@ struct TokenResponse {
 }
 
 fn exchange(account: &ServiceAccountAuth) -> Result<AccessToken> {
-    let response = oauth_client()?
-        .post(format!("{}/api/auth/token", account.api_base_url))
-        .basic_auth(
-            account.credentials.client_id,
-            Some(&account.credentials.client_secret),
-        )
+    let request = oauth_client()?.post(format!("{}/api/auth/token", account.api_base_url));
+    let response = account
+        .credentials
+        .authenticate(request)
         .header(
             reqwest::header::CONTENT_TYPE,
             "application/x-www-form-urlencoded",
@@ -273,8 +287,7 @@ pub(super) fn login(ctx: &WorkspaceContext, from_stdin: bool) -> Result<()> {
         }
         println!("Endpoint: {}", api_url(ctx.api_base_url())?);
         let client_id = inquire::Text::new("Client ID:").prompt()?;
-        let client_id = Uuid::parse_str(client_id.trim())
-            .map_err(|_| anyhow::anyhow!("Client ID must be a UUID"))?;
+        let client_id = client_id.trim().to_string();
         let client_secret = inquire::Password::new("Client secret:")
             .without_confirmation()
             .prompt()?;
@@ -368,16 +381,11 @@ fn finish_setup(ctx: &WorkspaceContext, account: &mut ServiceAccountAuth) {
         return;
     };
     let confirm = (|| -> Result<()> {
-        let response = oauth_client()?
-            .post(format!(
-                "{}/api/auth/service-account-setup/{setup_id}/confirm",
-                account.api_base_url
-            ))
-            .basic_auth(
-                account.credentials.client_id,
-                Some(&account.credentials.client_secret),
-            )
-            .send()?;
+        let request = oauth_client()?.post(format!(
+            "{}/api/auth/service-account-setup/{setup_id}/confirm",
+            account.api_base_url
+        ));
+        let response = account.credentials.authenticate(request).send()?;
         if response.status() != reqwest::StatusCode::NO_CONTENT {
             bail!("Console confirmation failed: {}", response.status());
         }

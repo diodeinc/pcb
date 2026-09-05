@@ -14,7 +14,7 @@ fn account(endpoint: &str) -> ServiceAccountAuth {
     ServiceAccountAuth {
         api_base_url: endpoint.to_string(),
         credentials: Credentials {
-            client_id: CLIENT_ID.parse().unwrap(),
+            client_id: CLIENT_ID.to_string(),
             client_secret: SECRET.to_string(),
             service_account_name: Some("test-runner".to_string()),
         },
@@ -144,4 +144,64 @@ fn mismatched_endpoint_and_malformed_credentials_fail_without_exposing_secrets()
     let error = get_valid_token_with_context(&ctx).unwrap_err();
     assert!(!format!("{error:#}").contains(SECRET));
     assert!(error.to_string().contains("Invalid authentication file"));
+}
+
+#[test]
+fn credential_ids_and_oauth_basic_encoding() {
+    let client = reqwest::blocking::Client::new();
+    for (id, secret, encoded) in [
+        (CLIENT_ID, SECRET, format!("{CLIENT_ID}:{SECRET}")),
+        (
+            "sandbox:test-sandbox",
+            SECRET,
+            format!("sandbox%3Atest-sandbox:{SECRET}"),
+        ),
+        (
+            "sandbox:id%+ café",
+            "dsc_secret:%+ café",
+            "sandbox%3Aid%25%2B+caf%C3%A9:dsc_secret%3A%25%2B+caf%C3%A9".into(),
+        ),
+    ] {
+        let import: CredentialImport = serde_json::from_value(json!({
+            "client_id": id, "client_secret": secret,
+        }))
+        .unwrap();
+        assert_eq!(import.credentials.client_id, id);
+        let request = import
+            .credentials
+            .authenticate(client.post("https://api.example/api/auth/token"))
+            .build()
+            .unwrap();
+        assert_eq!(
+            request.headers()[reqwest::header::AUTHORIZATION],
+            format!(
+                "Basic {}",
+                base64::engine::general_purpose::STANDARD.encode(encoded)
+            )
+        );
+    }
+}
+
+#[test]
+fn credentials_reject_missing_or_empty_ids() {
+    let ctx = WorkspaceContext::from_api_base_url("https://api.example");
+    assert!(
+        serde_json::from_value::<CredentialImport>(json!({
+            "client_secret": SECRET,
+        }))
+        .is_err()
+    );
+    let import: CredentialImport = serde_json::from_value(json!({
+        "client_id": "", "client_secret": SECRET,
+    }))
+    .unwrap();
+    let mut invalid = account(ctx.api_base_url());
+    invalid.credentials = import.credentials;
+    assert!(
+        invalid
+            .validate(&ctx)
+            .unwrap_err()
+            .to_string()
+            .contains("must not be empty")
+    );
 }
