@@ -415,7 +415,6 @@ pub enum MeasurementKind {
     InscribedWidth,
     Clearance,
     RadialEnclosure,
-    BoundaryEnclosure,
     Overlap,
     OutsideBoard,
     MissingCopper,

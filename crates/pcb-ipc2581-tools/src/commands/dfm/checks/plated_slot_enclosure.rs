@@ -96,7 +96,7 @@ pub(super) fn evaluate(limit_mm: f64, conditions: &Conditions, design: &Design) 
                 if distance.mm <= f64::EPSILON {
                     MeasurementKind::MissingCopper
                 } else {
-                    MeasurementKind::BoundaryEnclosure
+                    MeasurementKind::Clearance
                 },
             );
             site.subjects = vec![slot_subject(design, slot, "slot")];
@@ -229,6 +229,12 @@ limit = { minimum = "0.2 mm", preferred = "0.3 mm" }
             for finding in &report.findings {
                 assert!((finding.measurement.actual_mm().unwrap() - (right - 1.0)).abs() < 1e-8);
                 assert_eq!(finding.sites.len(), 2);
+                assert!(
+                    finding
+                        .sites
+                        .iter()
+                        .all(|site| matches!(site.measurement_kind, MeasurementKind::Clearance))
+                );
             }
         }
     }
