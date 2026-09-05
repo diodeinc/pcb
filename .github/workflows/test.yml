@@ -40,7 +40,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Check stdlib .zen formatting
-        run: cargo run -p pcb -- fmt --check lib/std
+        run: cargo run -p pcbc -- fmt --check lib/std
 
       - name: Run Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
