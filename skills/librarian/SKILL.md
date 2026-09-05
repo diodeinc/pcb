@@ -1,101 +1,54 @@
 ---
 name: librarian
-description: Use before creating or modifying reusable PCB registry content, including component packages, symbols, footprints, STEP models, datasheets, or reusable Zener modules. Also use when working inside a registry component package or changing KiCad/Zener files that define reusable parts. Covers search-before-authoring, datasheet-backed cleanup, package structure, sourcing, and artifact evidence.
+description: Create or repair reusable component and module packages in a PCB registry.
 ---
 
 # Librarian
 
-Create sourceable, evidence-backed registry packages that board designers can search, trust, and instantiate.
+Create sourceable, evidence-backed packages that board designers can search
+and instantiate. Work in the current registry; dispatch another librarian
+only when the user asks. Use the artifact skills as needed: `kicad-symbol`,
+`kicad-footprint`, `zener-language`, and `module-layout`.
 
-Use this for new registry components, package fixes, family selectors, symbol/footprint cleanup, datasheet-backed reference circuitry, and requests produced by registry search during board work.
+## Package scope
 
-If you are already operating inside a registry checkout or remote librarian session, continue authoring in that registry unless the user explicitly asks you to dispatch another librarian. Remote librarian dispatch is for agents working outside the registry, such as board or spec work that discovers missing reusable content.
-
-## Guardrails
-
-- Do not invent datasheet facts, pin mappings, footprints, passive values, limits, sourceability, or application topology. Find evidence or ask.
-- Do not build reusable circuitry on untrusted symbols, footprints, or pin maps. Curate artifacts against the manufacturer datasheet first.
-- Do not manually create scratch footprints or synthetic 3D models without explicit user confirmation. “Add a footprint/model” means find, verify, and embed trusted artifacts first. When no provider or library footprint exists for the part, generate one from the manufacturer datasheet with the `kicad-footprint` skill; if the datasheet cannot establish the geometry, stop and ask.
-- Do not add new packages under `reference/`; that tree is deprecated. A component's reference design belongs inside the component package. Prefer one `.zen` file per reference design: instantiate `Component()` directly in that file with its support circuitry, not through a separate primitive-only local wrapper. Use `modules/` for higher-level reusable functional blocks and subsystem schematics that are not simply one component's reference design.
-- Treat registry packages as public integration contracts. If existing consumers must change Zener, layout, or assumptions to adopt the new version, it is breaking; obvious examples include `io()`/`config()`/entrypoint changes and substantial layout changes. Note the migration and mark the commit accordingly.
-
-## Intake And Scope
-
-Start by clarifying the deliverable. A request to add a component package includes judging whether a datasheet-backed reference design is warranted; if it is, include it unless the user asks for a primitive-only package.
-
-- primitive component package only
-- component package with built-in required support circuitry
-- component package with reusable reference-design circuitry
-- connector/module wrapper around existing components
-- family selector covering multiple orderable MPNs
-
-Search existing registry modules and components first:
+Search before creating a package:
 
 ```bash
 pcb search -m registry:modules <query> -f json
 pcb search -m registry:components <query> -f json
 ```
 
-Patch or extend an existing package when it is the right home. Create a new package only when no suitable package exists or the physical package/footprint, pinout, or fundamental schematic topology differs.
+Inspect and extend a suitable existing package, including published results.
+Group a family when it shares footprint, pinout, feature set, and fundamental
+schematic topology. Use separate packages when those contracts differ. For a
+new package, establish its final directory and `pcb.toml` before authoring so
+its evolving content is discoverable.
 
-Once search and family scoping show that a new package is the right home, establish its final directory and create `pcb.toml` before package-local authoring. `pcb.toml` declares the package boundary: it makes the work discoverable as a module and gives its evolving artifacts a stable home while curation continues.
+Keep simple parts such as connectors and passives primitive unless user
+requirements or manufacturer guidance establish an application circuit. An
+unspecified request for a reference design does not justify inventing board
+wiring, protection, passive values, or a layout. Include datasheet-required or
+strongly recommended support circuitry when warranted by the requested package;
+respect a primitive-only request.
 
-## Family-First, Symbol-First
+Curate the relevant symbols, footprints, and pin maps before building circuitry
+on them. Do not invent datasheet facts, limits, or sourcing claims. Focused
+repairs need only the relevant curation stages.
 
-When a request names one MPN, first look for the related part family before authoring. A good component package usually covers all parts with the same physical package/footprint, pinout, feature set, and fundamental schematic topology.
+## Acquire artifacts
 
-Curate symbols before writing reference-design `.zen`. The symbol library defines the functional variants and primitive interface that the `.zen` package will select and wire.
-
-A typical flow:
-
-1. Understand the request and intended deliverable, including whether reference circuitry is warranted.
-2. Find the related part group/family.
-3. Establish the package directory and `pcb.toml`.
-4. Fetch or import ECAD artifacts.
-5. Clean the symbols against the datasheet.
-6. Represent each functional variant symbol without duplicating order-code variants.
-7. Review the footprint candidate against authoritative package evidence before curating it further.
-8. Clean the footprint and embedded STEP against the datasheet.
-9. Ensure the footprint has an embedded STEP: find and embed any referenced local model, otherwise download a matching model and embed it with `pcb embed-step`.
-10. Write the primitive API, reference circuitry, or selector logic.
-
-Treat this as the default direction, not a rigid script. Focused patches may only touch one stage.
-
-Functional variants need symbols; order-code variants do not. For example, fixed-output LDO voltages get separate symbols because the selected silicon changes electrical behavior, but tape/reel, temperature grade, RoHS, and packing suffixes do not.
-
-Use `kicad-symbol` for symbol-file structure, editing, `extends`, rendering, and signature rules. The librarian-level rule is to curate the family symbols before `.zen` work and to cover functional variants without duplicating order-code variants.
-
-Use `kicad-footprint` whenever inspecting, changing, or generating a footprint, including review of downloaded or imported candidates. Use `zener-language` for `.zen` semantics, dependency reconciliation, formatting, build diagnostics, and sourcing inspection.
-
-## Artifact Acquisition
-
-Use `pcb component` for authenticated catalog and EDA access. The CLI resolves
-the configured API server and authentication. Use JSON output when composing
-commands with `jq`.
+Use `pcb component` for authenticated catalog and EDA access; it resolves the
+configured API and credentials. Use command-specific help for current flags.
 
 ```text
-pcb component search QUERY
-  [--backends cse,lcsc,ncti | --backends none] [--limit 1..100] -f json
+pcb component search QUERY [--backends cse,lcsc,ncti | --backends none] -f json
   -> [{mpn, manufacturer, cse, lcsc, ncti, digikey, offers}, ...]
 
-pcb component download
-  --mpn <MPN>
-  --manufacturer <MANUFACTURER>
-  exactly one of:
-    --cse-part-ref <REF>
-    --lcsc-part-number <PART_NUMBER>
-    --ncti-component-id <ID>
-  -f json
-  -> {mpn, manufacturer, <provider>: {
-       <provider-id>, symbol_url, footprint_url, step_url
-     }}
+pcb component download --mpn MPN --manufacturer MANUFACTURER \
+  <one provider option> -f json
+  -> {mpn, manufacturer, <provider>: {<provider-id>, symbol_url, footprint_url, step_url}}
 ```
-
-Search always returns an array. `cse`, `lcsc`, and `ncti` are null or contain
-the provider reference, description, category, package, `symbol`, `footprint`,
-`step`, and `datasheet_url`. `digikey` contains catalog metadata, including
-`datasheet_url`; `offers` contains sourcing data. Download returns only the
-selected provider. Its `footprint_url` and `step_url` may be null.
 
 | Provider | Search reference | Download option |
 | --- | --- | --- |
@@ -103,225 +56,114 @@ selected provider. Its `footprint_url` and `step_url` may be null.
 | LCSC | `.lcsc.part_number` | `--lcsc-part-number` |
 | NCTI | `.ncti.component_id` | `--ncti-component-id` |
 
-Search merges catalog and EDA data by canonical manufacturer and MPN. Omit
-`--backends` to search all EDA providers and enrich results with DigiKey data.
-Use `--backends none` for DigiKey catalog data without EDA providers. Require
-an exact MPN and manufacturer match before using a provider reference. Download
-with exactly one provider reference so the symbol, footprint, and STEP remain
-one coherent asset set. Download URLs are signed and temporary.
+Search returns an array merged by canonical manufacturer and MPN. Select an
+exact match and pass its reference unchanged. Provider records may be null;
+otherwise they contain availability flags, package metadata, and
+`datasheet_url`. Omit `--backends` for all EDA providers plus DigiKey metadata;
+`--backends none` requests DigiKey catalog data only. `offers` holds sourcing
+information.
 
-Prefer URL references over checked-in PDFs. Use the selected EDA provider's
-verified `datasheet_url` in the curated symbol's `Datasheet` property. If that
-provider has no usable datasheet URL, use `digikey.datasheet_url` from the same
-search row. Keep the source URL in metadata and use `datasheet-reader` to
-inspect it; never copy the PDF into `docs/`.
+Download one provider's coherent asset set. Only that provider is returned,
+and `footprint_url` or `step_url` may be null. Fetch available signed URLs to
+task-local files with `curl -fL`; the URLs expire. If an asset remains
+unavailable after a reasonable attempt, use another trusted provider or the
+authoring path below and report the gap.
 
-Run the acquisition stages below only after registry search confirms that no suitable package exists. A published package returned by registry search still counts as existing content; inspect and patch that package instead of creating a duplicate.
+Use the selected provider's verified `datasheet_url`, falling back to
+`digikey.datasheet_url` from the same search row. Keep the source URL in
+metadata and inspect it with `datasheet-reader`; do not check downloaded PDFs
+into the package.
 
-For a justified new package, keep acquisition inspectable: select one exact search row, request one provider's asset set, select the datasheet URL, then fetch the signed assets. Pass provider references exactly as returned. If a provider asset cannot be downloaded after one reasonable attempt, treat it as unavailable and continue with another trusted provider or the documented authoring fallback. Mention the unavailable source briefly in the task result.
+## Curate symbols, footprints, and models
 
-### Search One Part
+- Use `kicad-symbol` for pin signatures, ERC types, units, inheritance, and
+  rendering. Functional silicon variants need distinct symbols; ordering-only
+  variants such as tape/reel, temperature grade, or RoHS suffixes do not.
+- Use `kicad-footprint` to validate the exact package geometry. An MPN match or
+  resemblance to a reference footprint does not establish correctness.
+  Requested creation or repair includes replacing an incorrect candidate or
+  generating one from authoritative evidence; ask only if required geometry
+  remains unresolved. Review-only work produces findings.
+- For an accepted footprint, set `Datasheet` to the authoritative geometry
+  source and `Description` to its package and evidence basis. Include a real
+  `.kicad_mod`; record whether it is vendor-derived, stock-derived, generated,
+  or intentionally adjusted.
+- For generated footprints, retain the final generator YAML beside the
+  footprint with the same stem (`Foo.kicad_mod` and `Foo.yaml`). Preserve the
+  provenance and generator version required by `kicad-footprint`. Downloaded
+  and stock footprints do not need invented generator inputs.
+- Embed a verified STEP for the exact package, or make its absence and impact
+  explicit. A known-wrong model is not an acceptable substitute. Scratch 3D
+  geometry requires explicit user confirmation; after approval, label it as
+  generated, cite its basis, inspect it, and disclose its limits.
 
-```bash
-search_json="/tmp/tps54331dr-search.json"
-part_json="/tmp/tps54331dr-part.json"
-
-pcb component search TPS54331DR \
-  --backends cse \
-  --limit 10 \
-  -f json > "$search_json"
-
-jq -e '
-  [.[] | select(
-    .mpn == "TPS54331DR" and
-    .manufacturer == "Texas Instruments"
-  )] |
-  if length == 1 then .[0] else error("expected one exact match") end
-' "$search_json" > "$part_json"
-```
-
-### Discover A Family
-
-```bash
-for mpn in TPS70912QDRVRQ1 TPS70933QDRVRQ1 TPS70950QDRVRQ1; do
-  pcb component search "$mpn" \
-    --backends cse \
-    --limit 10 \
-    -f json |
-    jq --arg mpn "$mpn" '
-      .[] |
-      select(
-        .mpn == $mpn and
-        .manufacturer == "Texas Instruments"
-      )
-    '
-done
-```
-
-### Download One CSE Asset Set
-
-```bash
-part_json="/tmp/tps54331dr-part.json"
-assets_json="/tmp/tps54331dr-assets.json"
-
-jq -e '.cse.symbol and .cse.footprint and .cse.step' "$part_json" \
-  > /dev/null
-
-pcb component download \
-  --mpn "$(jq -r '.mpn' "$part_json")" \
-  --manufacturer "$(jq -r '.manufacturer' "$part_json")" \
-  --cse-part-ref "$(jq -r '.cse.part_ref' "$part_json")" \
-  -f json > "$assets_json"
-
-jq -e '.cse.symbol_url and .cse.footprint_url and .cse.step_url' \
-  "$assets_json" > /dev/null
-```
-
-### Select The Datasheet URL
-
-```bash
-part_json="/tmp/tps54331dr-part.json"
-datasheet_url="$(
-  jq -er '.cse.datasheet_url // .digikey.datasheet_url' "$part_json"
-)"
-printf '%s\n' "$datasheet_url"
-```
-
-### Fetch The Signed Assets
-
-```bash
-assets_json="/tmp/tps54331dr-assets.json"
-out="components/Texas_Instruments/TPS54331DR"
-
-mkdir -p "$(dirname "$out")"
-mkdir "$out"
-touch "$out/pcb.toml"
-curl -fL "$(jq -er '.cse.symbol_url' "$assets_json")" \
-  -o "$out/TPS54331DR.kicad_sym"
-curl -fL "$(jq -er '.cse.footprint_url' "$assets_json")" \
-  -o "$out/TPS54331DR.kicad_mod"
-curl -fL "$(jq -er '.cse.step_url' "$assets_json")" \
-  -o "$out/TPS54331DR.step"
-```
-
-Treat downloaded artifacts as inputs to curation, not finished registry content. Review the symbol, pins, footprint, package, datasheet, sourcing fields, and model against manufacturer evidence. Set the symbol's `Datasheet` property, embed the trusted STEP, author the package `.zen` and README, and apply the relevant artifact skills before finishing.
-
-When no provider or library footprint exists for the part, generate one from the manufacturer datasheet with the `kicad-footprint` skill. Copy its workspace deliverables into the package directory: `candidate.kicad_mod` becomes `<footprint>.kicad_mod`, and `generator-input.yaml` becomes `<footprint>.yaml` beside it — same stem, same directory. The YAML carries the provenance and the generator version, and it is what makes the footprint editable at the source rather than by patching S-expressions.
-
-### Footprint Acceptance
-
-Apply `kicad-footprint` to every footprint candidate. A provider match, matching MPN string, or resemblance to a reference footprint is not evidence that the geometry fits the exact manufacturer and package variant.
-
-For an accepted registry footprint, set `Datasheet` to the authoritative document that established its geometry. Set `Description` to a one-line package and evidence basis, such as `SOT-23-5 (TI DBV0005A); reviewed against manufacturer land pattern`. If the evidence contradicts the candidate or cannot establish required geometry, report which case applies and ask before replacing or generating the footprint.
-
-If a trusted STEP model is unavailable, report what you checked and ask before creating scratch geometry. After approved scratch work, label it as scratch/generated, cite the evidence used, render and inspect it, and call out the risk in the README and completion report.
-
-Upgrade downloaded or imported KiCad files before editing. Keep one verified model transform before embedding because `pcb embed-step` rewrites every model reference.
+Upgrade imported KiCad files before editing. Preserve one verified model
+transform before embedding because `pcb embed-step` rewrites every model
+reference:
 
 ```bash
 kicad-cli sym upgrade <symbol.kicad_sym>
 kicad-cli fp upgrade <package-directory>
-rg -n '^\s*\(model ' <footprint.kicad_mod>
 pcb embed-step <footprint.kicad_mod> <model.step>
 ```
 
-Do not commit the standalone STEP after inspecting the embedded model.
+Inspect the embedded result; do not commit the standalone STEP.
 
-## Package Shape
+## Public API and reference circuits
 
-New reusable registry content belongs in a component package path:
+Component packages belong under `components/<Manufacturer>/<NAME>/` with
+`pcb.toml`, `.zen` entrypoints, curated symbol/footprint files, and `README.md`.
+Use `modules/` for higher-level functional blocks; do not add to the legacy
+`reference/` or `connectors/` trees.
 
-```text
-components/<Manufacturer>/<NAME>/
-├── <NAME>.zen                  # primitive package, or primary reference design
-├── <reference-design>.zen       # optional additional reference designs
-├── <NAME>.kicad_sym
-├── <NAME or footprint>.kicad_mod
-├── <NAME or footprint>.yaml     # generator input; same stem as the .kicad_mod; only for a generated footprint
-├── pcb.toml
-└── README.md
-```
+Each top-level `.zen` beside `pcb.toml` is a public entrypoint. Represent one
+coherent primitive or application circuit per entrypoint; instantiate
+`Component()` and its support circuitry directly instead of adding a thin
+primitive-only wrapper. Additional application circuits can use separate
+entrypoints. Follow `zener-language` for stable topology and layout declarations.
 
-Include a real `.kicad_mod`. Note in its `Description` field whether it is datasheet-exact, KiCad-stock-derived, vendor-derived, or intentionally adjusted; footprint facts belong on the footprint.
+Expose application-level IO and configs. Keep implementation nodes internal
+unless access is necessary. Include only reusable support circuitry: decoupling,
+feedback, compensation, bootstrap, bias, reset, straps, or a supported
+application topology. Leave board-specific, underspecified, already-provided,
+or unverified circuitry to the integrator. A `Layout()` is useful when the
+reference circuit has reusable physical relationships worth capturing.
 
-A generated footprint also carries its `kicad-footprint` generator input beside it, renamed from the skill's workspace `generator-input.yaml` to share the footprint's stem (`Foo.kicad_mod` → `Foo.yaml` in the same package directory). Keep it: the geometry cannot be recovered from the footprint file, because several generator families and several sets of declared dimensions produce identical lands, and the file does not distinguish a declared value from a generator default. Without the input, the next change to that footprint means re-deriving it from the datasheet or editing copper by hand. Downloaded and stock footprints have no generator input and do not gain one.
+Choose decoupling from the datasheet, effective capacitance, ESL, placement,
+inrush, and regulator stability. Prefer one compact low-ESL MLCC per supply
+pin when valid; do not add a 100 nF/bulk pair by habit. A larger capacitor in
+the same package may suffice, but account for DC bias and resonance.
 
-Every top-level `.zen` file in a directory containing `pcb.toml` is a public package entrypoint. Each should therefore represent a coherent primitive component or reusable subschematic/reference design with a complete public API. A package may contain multiple entrypoints when one curated part/family has multiple useful datasheet-backed application circuits; avoid thin local wrappers that only re-export another `.zen`.
+Put usage examples and concise integration notes in `README.md`. Put design
+evidence in the `.zen` docstring: application mode, exact package/family,
+operating envelope, IO/config assumptions, included versus integrator-owned
+circuitry, physical constraints, and the datasheet equations or tables behind
+important choices. If consumers must change code, layout, or assumptions to
+adopt an update, document the migration and mark it breaking.
 
-The README is for realistic usage examples and concise integration notes only. Put rationale and design evidence in the `.zen` docstring.
+## Families and sourcing
 
-## Reference Circuit Quality
+Derive package names from the functional MPN pattern, dropping ordering-only
+suffixes and using lowercase `x` for meaningful family differences. Excessive
+masking indicates an overbroad family. A selector can use a compact table of
+MPNs, symbols, limits, and properties filtered by `config()`.
 
-A good reference design is one coherent schematic circuit around the curated symbols. It exposes application-level IO and keeps implementation-detail nodes internal unless access is necessary. Implement it as a single `.zen` entrypoint that instantiates `Component()` directly and includes the support circuitry in the same file.
+Use the first match as `part=` and put remaining drop-in equivalents of that
+selection in `properties={"alternatives": ...}`. Alternatives must be freely
+swappable without changing electrical behavior, footprint, or fit; mutually
+exclusive functional or mechanical configurations are not alternatives.
 
-Not every component needs a reference design. Add one when the datasheet defines required or strongly recommended application circuitry, typically for ICs/modules such as regulators, converters, chargers, transceivers, PHYs, sensors, clocks, MCUs, protection/controllers, and analog front ends.
+For otherwise equivalent MPNs, prefer automated-assembly packaging: tape/reel
+or cut tape, then tray, tube, and bulk. Prefer manufacturer pickup aids for
+non-flat parts; flag an unavoidable pickup limitation.
 
-Keep simple parts primitive unless there is a reusable circuit worth capturing: resistors, capacitors, inductors, ferrites, diodes, LEDs, MOSFETs/BJTs, simple protection parts, connectors, switches, crystals, and similar parts. A primitive `.zen` should still expose a clean public API with appropriate nets/interfaces and clear names.
+Use `preferred-parts` when selecting generics, without weakening requirements.
+Express requirements through stdlib generic parameters; set `mpn` or
+`manufacturer` only when those parameters cannot represent the design. Use
+`pcb bom <entrypoint>.zen -f json` when checking changed part selection or
+sourceability.
 
-When a reference design is warranted, start from the primitive facts: symbols, footprint, pins, sourcing, and datasheet guidance. Add surrounding schematic circuitry only when it is part of the reusable way to use the IC: required decoupling, compensation, feedback, bootstrap, bias, reset, straps, or a datasheet-recommended application circuit with clear defaults. Include a `Layout()` for reference circuitry to capture intended placement or physical relationships where useful, e.g. `Layout(name="TLV62568DBVR", path="layout/TLV62568DBVR")`.
-
-For decoupling, do not cargo-cult 100 nF or 100 nF + bulk pairs. Prefer one compact low-ESL MLCC, often 1 uF 0402, at each power pin when valid; check inrush and regulator stability. Motivation: modern MLCCs provide much higher capacitance density than the historical parts that made 100 nF a useful default, and a larger capacitor in the same small package generally has lower impedance across the relevant range. Package and placement often matter more than folklore value-splitting: smaller packages and shorter power/ground loops reduce ESL, move self-resonance higher, and keep high-frequency currents local. Parallel 100 nF + bulk capacitors can waste BOM/placement area and may introduce undamped impedance peaks, especially when the farther capacitor's trace inductance dominates. Caveats still apply: account for DC-bias derating, total rail capacitance/inrush, and regulator stability or phase margin. See Graham Sutherland, [Proper decoupling practices, and why you should leave 100nF behind](https://codeinsecurity.wordpress.com/2025/01/25/proper-decoupling-practices-and-why-you-should-leave-100nf-behind/).
-
-Keep the `.zen` primitive if the surrounding circuit is board-specific, underspecified, already handled by another package, or blocked by untrusted symbol/footprint/pin data.
-
-If one IC has fundamentally different schematic topologies for different modes, keep them in the same component Zener package and select or expose the topology there when practical. Split only when the public API or schematic topology is too different to keep coherent.
-
-The `.zen` docstring is the design document. It should explain:
-
-- circuit/application mode
-- exact IC/physical package or family and selector behavior
-- operating envelope, interfaces, configs, and assumptions
-- included support circuitry vs integrator-owned circuitry
-- evidence for important choices and sourceability compromises
-
-Capture the facts that drive the circuit:
-
-- typical application or recommended topology
-- rails, limits, sequencing, and required passives
-- straps, reset/enable, bias, compensation, timing, and mode selects
-- equations and datasheet-recommended example points
-- oscillator/crystal requirements and sensitive nets
-- physical-package caveats that affect the public API
-
-## Family Scope And Naming
-
-One component Zener package may cover a part family when the parts share the same physical package/footprint, pinout, feature set, and fundamental schematic topology. Values or selected silicon may vary by config. Fixed-output LDO trims in the same physical package/pinout are a good grouping.
-
-Use separate Zener packages when physical package/footprint, pinout, or fundamental schematic topology differs. Electrical grouping requires judgment: if the same schematic shape still applies, grouping is usually fine; if you are masking most of the MPN or combining unrelated feature sets, split the package.
-
-Name the Zener package from the functional MPN pattern, not the full orderable SKU:
-
-- derive the name from the MPNs being covered
-- drop ordering-only suffixes such as temperature, tape/reel, and RoHS markings
-- use lowercase `x` to mask patterned MPN differences inside a family
-- if the name needs too many `x`s, the family is probably too broad
-
-Examples: `DP83867ISRGZR` -> `DP83867`; `TPS3430WDRCR` -> `TPS3430WDRC`; `SN74LXC1T45DRYR` / `SN74AXC1T45QDRYRQ1` -> `SN74x1T45-DRY`.
-
-For selectable families, use a compact table/list of variants with MPN, symbol, limits, and properties. Filter by `config()` values, use the first match as `part=`, and put remaining drop-in equivalents *of that same selection* in `properties={"alternatives": ...}`.
-
-`alternatives` is for parts a sourcing system may freely swap in without changing behavior, footprint, or fit. Functional/mechanical variants that `config()` chooses between are mutually exclusive; true equivalents are second sources or order-code siblings (tape/reel, RoHS, temp grade) of the selected variant.
-
-## Sourceability And Style
-
-Prefer strong registry exemplars: `TPS709-Q1`, `TPSM336xx-Q1`, `TCPP01-M12`, `SN74x1T45-DRY`, `SSM3KxxxCT`, `W25QxxUX`, `Wago/2060-4xx_998-404`, `FTSH-105-01-L-DV-K-A-P-TR`.
-
-Among otherwise-equivalent orderable MPN variants, choose the one that is easiest to assemble with automated pick-and-place equipment. Prefer packaging in this order: tape and reel or cut tape, tray, tube, then bag or bulk. Prefer manufacturer-documented pickup aids, such as pick-and-place film or stickers, when the component is not flat on top. If a non-flat-top component has no variant suitable for reliable automated pickup, warn the designer before completing the package.
-
-When defining a generic component, use `preferred-parts` and keep suitable house or extended candidates matchable through its parameters. Do not weaken requirements to force a catalog match.
-
-Express design requirements through stdlib generic parameters. Set `mpn` or `manufacturer` only when the parameter space cannot represent the design. Run `pcb bom <entrypoint>.zen -f json` to inspect matches and sourceability.
-
-Use comments for evidence and judgment only: datasheet section/table/equation references, rounded or clamped values, or stuffing strategy. Avoid comments that restate code. Do not add decorative banner/divider comments such as `====` or `----`.
-
-## Completion Evidence
-
-Before finishing a component package, establish the outcomes relevant to the requested work:
-
-- the symbol's pin signature and datasheet evidence are established according to `kicad-symbol`;
-- the footprint's geometry and evidence basis are established according to `kicad-footprint`, with that basis recorded in `Datasheet` and `Description`;
-- a trusted STEP model is embedded, or its absence and impact are explicit;
-- the public `.zen` API, reference circuitry, and `Layout()` are appropriate for the package; and
-- sourceability has been reviewed when the public entrypoints or part choices make it relevant.
-
-Report commands actually run and their results separately from artifact judgments and cited evidence. If any outcome cannot be established, identify what was checked, what remains unverified, and the impact; do not manufacture a pass.
+Complete the relevant artifact checks and Zener validation. Report verified
+results, public API or layout effects, sourcing compromises, and any remaining
+evidence or model gaps. A focused repair does not require re-curating an
+unchanged package.

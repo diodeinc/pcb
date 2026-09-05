@@ -1,79 +1,39 @@
 ---
 name: registry-search
-description: Use during board work to find and evaluate existing registry modules, reference designs, or component packages before authoring anything new.
+description: Find reusable registry modules and component packages for a board or specification.
 ---
 
 # Registry Search
 
-Find prepared registry content before designing a circuit or choosing a new part by hand.
+Find suitable prepared content before authoring a new reusable package.
 
-Use this when working on a board, subsystem, or spec and you need a reusable schematic module, reference design, primitive component package, concrete MPN, symbol, footprint, datasheet, or sourcing signal.
+| Need | Command |
+| --- | --- |
+| Reusable circuit or entrypoint | `pcb search -m registry:modules <query> -f json` |
+| Concrete MPN, footprint, availability, or package behind a symbol | `pcb search -m registry:components <query> -f json` |
+| Candidate public API and source root | `pcb doc --package <module-url>@<version>` |
 
-## Search Modes
+Use functional queries for functional needs and MPN/manufacturer queries for
+named parts. If docs are incomplete, inspect the reported source path or tree;
+do not infer IO/config names from a search snippet.
 
-- **`registry:modules`** — reusable Zener packages and `.zen` entrypoints. This is the primary search mode for schematic reuse.
-- **`registry:components`** — registry symbols/parts with MPN, manufacturer, footprint, datasheet, availability, and `moduleUrl`. Use this for concrete part discovery and to find the package behind a symbol.
+Prefer a reusable module or reference circuit that matches the actual need,
+then a component with the required support circuitry, or a primitive when only
+the raw part is needed. Compare electrical fit, package, pinout, sourcing, and
+public API. Use `preferred-parts` when choosing a concrete MPN. Ask only about
+material unresolved tradeoffs.
 
-Do not create, import, or patch component packages in this workflow. If the registry does not contain a suitable result, or the closest result needs even a small package/API/circuit tweak, produce a librarian request.
+Instantiate the chosen `.zen` entrypoint directly in the consuming design.
+For example:
 
-## Search Workflow
-
-Start with reusable schematic content:
-
-```bash
-pcb search -m registry:modules <query> -f json
+```zen
+PartModule = Module("code.diode.computer/diode/registry/components/<Manufacturer>/<NAME>/<NAME>.zen")
 ```
 
-Use functional queries when the board need is functional: `"usb c source"`, `"3.3v ldo"`, `"128mb spi flash"`, `"automotive high side switch"`.
+Follow `zener-language` for dependencies and validation; do not hand-edit
+`pcb.toml` to add the dependency.
 
-Search symbols/parts when you need a concrete MPN, footprint, availability, or the package behind a primitive:
-
-```bash
-pcb search -m registry:components <query> -f json
-```
-
-Use MPN/manufacturer queries when the user named a part: `TPS70933`, `Texas Instruments TPSM336`, `USB4105`.
-
-Then inspect the candidate API before instantiating it:
-
-```bash
-pcb doc --package <module-url>@<version>
-```
-
-If docs are incomplete or fail, use the source path or file tree from `pcb doc` to inspect the package source instead of guessing the IO/config interface.
-
-## Choosing Results
-
-Before choosing a concrete MPN, use `preferred-parts` to check for a suitable house or extended part.
-
-Prefer the most reusable correct abstraction:
-
-1. A higher-level module or reference design that already implements the needed schematic circuit.
-2. A component package with included support circuitry when that is exactly the intended use.
-3. A primitive component package when the board genuinely needs only the raw part.
-
-Use `registry:components` results to compare physical package, pinout, MPN, stock, price, datasheet, and `moduleUrl`. Use `registry:modules` results to compare entrypoints, dependencies, dependents, and package descriptions.
-
-Ask only when tradeoffs are real: package size, cost, stock, electrical margin, automotive/industrial grade, interface differences, or user-visible feature choices.
-
-## Using Results In A Board
-
-Instantiate the `.zen` entrypoint from the chosen `registry:modules` result directly in the consuming `.zen` file.
-
-```python
-PartModule = Module(
-    "code.diode.computer/diode/registry/components/<Manufacturer>/<NAME>/<NAME>.zen"
-)
-```
-
-Do not manually edit `pcb.toml` to add the dependency; follow the dependency workflow in `zener-language`.
-
-Use `pcb doc --package` and its reported source path for exact IO and configs. Do not infer pin names from search snippets.
-
-After adding the package to a board or module, finish the consuming `.zen` change according to `zener-language`.
-
-## Librarian Requests
-
-When no suitable registry content exists, or a close match needs to be changed before it is safe to use, stop the registry search workflow. Do not author or patch reusable packages inline.
-
-If you are inside a registry checkout or explicit registry-authoring task, use `librarian`. Otherwise use `librarian-dispatch`.
+If no suitable result exists or a candidate needs a package/API/circuit fix,
+use `librarian` within a registry-authoring task. From board or spec work,
+prepare a `librarian-dispatch` request instead of patching reusable packages
+inline.

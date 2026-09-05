@@ -1,6 +1,6 @@
 ---
 name: zener-language
-description: Use before reading or changing `.zen` files for Zener semantics, package APIs, dependency workflow, stable topology, and completion evidence.
+description: Read or edit Zener HDL, package APIs, and tool-managed dependencies.
 ---
 
 # Zener Language
@@ -38,7 +38,7 @@ Use refdes-like names only when the user explicitly asks. In that case, set `pre
 
 Use `Symbol(library, name=...)` for multi-symbol libraries. Use `Part(mpn=..., manufacturer=...)` only when the symbol does not already provide part identity.
 
-`Layout(name, path)` associates reusable layout metadata with a module. A root-level `Project(name, path)` links persistent KiCad project files; its path is relative to the root `.zen` file.
+`Layout(name, path)` associates reusable layout metadata with a module. Each entrypoint may declare at most one layout, with a config-independent path; use separate entrypoints for distinct layouts. A root-level `Project(name, path)` links persistent KiCad project files; its path is relative to the root `.zen` file.
 
 ## IO and Config
 
@@ -70,9 +70,7 @@ output_voltage = config(Voltage, default="3.3V", allowed=["3.3V", "5V"])
 
 Load physical value types from `@stdlib/units.zen`: `Voltage`, `Current`, `Resistance`, `Capacitance`, `Inductance`, `Impedance`, `Frequency`, `Temperature`, `Time`, and `Power`. String defaults and allowed values auto-convert to the declared physical type. Use enums for non-physical modes and strategies. Expose application-level choices rather than internal passive values or implementation details.
 
-Physical constructors accept point values, engineering notation, ranges, and tolerances. Arithmetic tracks units. Equality between two physical values is strict; use `.matches(...)` for coercive comparison with a string or scalar.
-
-Useful physical-value operations include `.with_tolerance(...)`, `.with_value(...)`, `.abs()`, `.diff(...)`, `.within(...)`, and `.matches(...)`.
+Physical constructors accept point values, engineering notation, ranges, and tolerances. Arithmetic tracks units. Equality between two physical values is strict; use `.matches(...)` for coercive comparison with a string or scalar. Inspect the installed API for other operations.
 
 Enum defaults use the selected string value:
 
@@ -153,4 +151,4 @@ Use each supported primitive for its own purpose:
 - run `pcb build <path>` for affected entrypoints to evaluate the design and collect diagnostics; for registry package curation, use `pcb build -Wstyle <path>` to promote style advice to warnings; and
 - use `pcb bom <entrypoint>.zen -f json` only when sourceability or part selection is relevant.
 
-Command success is evidence, not a complete correctness verdict. Separately review the public API, electrical constraints, stable topology, dependencies, applicable sourceability, and preservation of schematic position state. Report commands actually run and their results separately from engineering conclusions; call unavailable or unperformed work unverified.
+Use the applicable checks and engineering evidence for the changed API, circuit, or dependencies. Preserve schematic position state and report unverified work.
