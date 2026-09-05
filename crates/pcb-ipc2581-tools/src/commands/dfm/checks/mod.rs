@@ -653,7 +653,9 @@ fn slot_subject(design: &Design, slot: &Slot, role: &'static str) -> Subject {
         slot.source_feature_index,
     );
     subject.provenance = Some(slot.provenance.clone());
-    subject.drill_span = Some(slot.drill_span.clone());
+    // Width and board-edge checks need not resolve the physical stackup.
+    // Do not present their declaration-order fallback as a physical span.
+    subject.drill_span = design.stackup.as_ref().map(|_| slot.drill_span.clone());
     subject
 }
 
