@@ -892,3 +892,49 @@ fn assert_external_parser_accepts(content: &str) {
 fn close(a: f64, b: f64) -> bool {
     (a - b).abs() <= 1e-9
 }
+
+#[test]
+fn shaped_draws_sweep_continuously_with_recorded_accuracy() {
+    use pcb_ir::geom::{ContourSet, FillRule, Point};
+    for (draw, witness) in [
+        ("G01*X0Y0D02*X100000Y0D01*", Point::new(0.0125, 0.0)),
+        (
+            "G75*X100000Y0D02*G03*X0Y100000I-100000J0D01*",
+            Point::new(0.1 / 2.0_f64.sqrt(), 0.1 / 2.0_f64.sqrt()),
+        ),
+    ] {
+        let gerber = GerberX2::parse(&format!(
+            "%FSLAX26Y26*%%MOMM*%%AMthin*21,1,0.002,0.002,0,0,0*%%ADD10thin*%D10*{draw}M02*"
+        ))
+        .unwrap();
+        for budget in [0.001, 0.0001] {
+            let accuracy = GeometryAccuracy::new(budget).unwrap();
+            let doc = gerberx2::geometry::extract_document(&gerber, accuracy).unwrap();
+            let path = &doc.arena.paths[0];
+            let region = ContourSet::from_contours(
+                &doc.arena.path_contours(path),
+                FillRule::NonZero,
+                0.0,
+                accuracy,
+            )
+            .unwrap();
+            assert_eq!(region.connected_components().len(), 1);
+            assert!(region.contains_point(witness));
+            assert!(region.uncertainty_mm > 0.0 && region.uncertainty_mm <= budget);
+        }
+    }
+    let gerber = GerberX2::parse(
+        "%FSLAX26Y26*%%MOMM*%%AMhole*21,1,0.1,0.1,0,0,0*21,0,0.05,0.05,0,0,0*%%ADD10hole*%D10*G01*X0Y0D02*X10000Y0D01*M02*"
+    ).unwrap();
+    let accuracy = GeometryAccuracy::default();
+    let doc = gerberx2::geometry::extract_document(&gerber, accuracy).unwrap();
+    let region = ContourSet::from_contours(
+        &doc.arena.path_contours(&doc.arena.paths[0]),
+        FillRule::NonZero,
+        0.0,
+        accuracy,
+    )
+    .unwrap();
+    assert!(!region.contains_point(Point::new(0.005, 0.0)));
+    assert!(region.contains_point(Point::new(0.005, 0.04)));
+}

@@ -19,7 +19,7 @@ use crate::dialects::ipc::feature::{Feature, FeatureBucket, FeatureIntent, Featu
 use crate::geom::path::ContourBuf;
 use crate::geom::region::{self};
 use crate::geom::{
-    Affine2, BBox, ContourSet, FillRule, Paint, PaintKind, Path, Polarity, Span, tol,
+    Affine2, BBox, ContourSet, FillRule, Paint, PaintKind, Path, PathArena, Polarity, Span, tol,
 };
 
 /// Run only structure-preserving cleanup passes.
@@ -316,10 +316,8 @@ pub fn expand_feature_placement_groups<S: Clone, L>(
         return Ok(());
     }
 
-    let mut old_features = std::mem::take(&mut doc.features)
-        .into_iter()
-        .map(Some)
-        .collect::<Vec<_>>();
+    let mut arena = doc.arena.clone();
+    let mut old_features = doc.features.iter().cloned().map(Some).collect::<Vec<_>>();
     let mut expanded = Vec::with_capacity(old_features.len());
     let mut mapping = vec![Span::EMPTY; old_features.len()];
 
@@ -353,7 +351,7 @@ pub fn expand_feature_placement_groups<S: Clone, L>(
                             })
                             .unwrap_or(placement_index),
                     );
-                    materialize_feature_placement(doc, &mut instance, placement, accuracy)?;
+                    materialize_feature_placement(&mut arena, &mut instance, placement, accuracy)?;
                     expanded.push(instance);
                 }
             }
@@ -373,6 +371,7 @@ pub fn expand_feature_placement_groups<S: Clone, L>(
     for set in &mut doc.feature_sets {
         set.features = expanded_span(set.features, &mapping);
     }
+    doc.arena = arena;
     doc.features = expanded;
     doc.feature_placement_groups.clear();
     doc.feature_placements.clear();
@@ -380,22 +379,20 @@ pub fn expand_feature_placement_groups<S: Clone, L>(
     Ok(())
 }
 
-fn materialize_feature_placement<S, L>(
-    doc: &mut Document<S, L>,
+fn materialize_feature_placement<S>(
+    arena: &mut PathArena,
     feature: &mut Feature<S>,
     placement: Affine2,
     accuracy: GeometryAccuracy,
 ) -> Result<(), AccuracyError> {
     let scale = placement.m00.hypot(placement.m10);
-    let path_start = doc.arena.paths.len() as u32;
+    let path_start = arena.paths.len() as u32;
     for path_index in feature.paths.indices() {
-        let path = doc.arena.paths[path_index as usize];
-        let contours = doc
-            .arena
-            .transformed_contour_bufs(path.contours, placement, accuracy)?;
-        doc.arena.push_path(path.paint.scaled(scale), contours);
+        let path = arena.paths[path_index as usize];
+        let contours = arena.transformed_contour_bufs(path.contours, placement, accuracy)?;
+        arena.push_path(path.paint.scaled(scale), contours);
     }
-    let paths = Span::new(path_start, doc.arena.paths.len() as u32 - path_start);
+    let paths = Span::new(path_start, arena.paths.len() as u32 - path_start);
     feature.placement_group = None;
     feature.transform = placement.concat(feature.transform);
     feature.center = placement.transform_point(feature.center);
@@ -405,7 +402,7 @@ fn materialize_feature_placement<S, L>(
     feature.stroke_width *= scale;
     feature.outer_diameter *= scale;
     feature.inner_diameter *= scale;
-    feature.bbox = doc.arena.paths_bbox(paths);
+    feature.bbox = arena.paths_bbox(paths);
 
     Ok(())
 }
@@ -1587,6 +1584,13 @@ mod tests {
             features: Span::single(0),
         });
         doc.layers.push(test_layer(Span::single(0)));
+
+        let original_placement = doc.feature_placements[1];
+        doc.feature_placements[1] = Affine2::translation(Point::new(1e15, 0.0));
+        let before = format!("{doc:?}");
+        assert!(expand_feature_placement_groups(&mut doc, accuracy).is_err());
+        assert_eq!(format!("{doc:?}"), before);
+        doc.feature_placements[1] = original_placement;
 
         flatten_layers_to_masks(&mut doc, accuracy).unwrap();
 

@@ -624,11 +624,11 @@ fn layer_function_name(function: LayerFunction) -> String {
 
 fn generated_metadata_value(xml: &str, name: &str) -> Option<String> {
     let marker = format!("name=\"{name}\"");
-    let start = xml.find(&marker).unwrap();
-    let tag = &xml[start..start + xml[start..].find('>').unwrap()];
-    let value_start = tag.find("value=\"").unwrap() + "value=\"".len();
+    let start = xml.find(&marker)?;
+    let tag = &xml[start..start + xml[start..].find('>')?];
+    let value_start = tag.find("value=\"")? + "value=\"".len();
     let value = &tag[value_start..];
-    Some(value[..value.find('"').unwrap()].to_string())
+    Some(value[..value.find('"')?].to_string())
 }
 
 fn write_artifacts(

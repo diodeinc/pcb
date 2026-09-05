@@ -14,8 +14,6 @@ use pcb_ir::geom::path::{ContourBuf, PathCmd};
 use pcb_ir::geom::region::{self, PaintComposer};
 use pcb_ir::geom::{Affine2, Arc, BBox, FillRule, Paint, Point, Polarity, Span, StrokeStyle};
 
-const SWEEP_SAMPLE_MM: f64 = 0.025;
-
 pub type GerberArtworkDocument = Document<Vec<String>, GerberObjectMeta>;
 
 /// Which Gerber operation produced an object.
@@ -218,7 +216,13 @@ fn extract_object(
                     doc,
                     target,
                     meta,
-                    sampled_line_sweep(point(*start), point(*end), object, geometry, accuracy)?,
+                    swept_aperture(
+                        &[point(*start), point(*end)],
+                        0.0,
+                        object,
+                        geometry,
+                        accuracy,
+                    )?,
                     accuracy,
                 )?;
             } else {
@@ -255,7 +259,7 @@ fn extract_object(
                     doc,
                     target,
                     meta,
-                    sampled_arc_sweep(
+                    arc_sweep(
                         start,
                         point(*end),
                         center,
@@ -534,28 +538,68 @@ fn arc_path(start: Point, end: Point, center: Point, clockwise: bool, width: f64
     }
 }
 
-fn sampled_line_sweep(
-    start: Point,
-    end: Point,
+fn swept_aperture(
+    points: &[Point],
+    path_error: f64,
     object: &gerber::GraphicalObject,
     geometry: &gerber::ApertureGeometry,
     accuracy: GeometryAccuracy,
 ) -> std::result::Result<Vec<ExtractedPath>, AccuracyError> {
-    let length = start.distance_to(end);
-    let steps = sample_steps(length);
-    Ok((0..=steps)
-        .map(|index| {
-            let t = index as f64 / steps.max(1) as f64;
-            let at = start + (end - start) * t;
-            aperture_paths(geometry, object_transform(object, at), accuracy)
-        })
-        .collect::<std::result::Result<Vec<_>, _>>()?
-        .into_iter()
-        .flatten()
-        .collect())
+    let mut composer = PaintComposer::default();
+    for path in aperture_paths(geometry, object_transform(object, Point::ZERO), accuracy)? {
+        composer.push(
+            path.polarity,
+            region::ContourSet::from_contours(&path.contours, FillRule::NonZero, 0.0, accuracy)?,
+        );
+    }
+    let aperture = composer.finish(0.0);
+    let edge_count: usize = aperture.rings.iter().map(Vec::len).sum();
+    if points.len().saturating_mul(edge_count) > 1_000_000 {
+        return Err(AccuracyError::SubdivisionLimit);
+    }
+    let mut rings = Vec::new();
+    for at in points {
+        rings.extend(
+            aperture
+                .rings
+                .iter()
+                .map(|ring| ring.iter().map(|[x, y]| [x + at.x, y + at.y]).collect()),
+        );
+    }
+    // Sweep each boundary edge continuously, including the boundaries of holes.
+    for pair in points.windows(2) {
+        for ring in &aperture.rings {
+            for (a, b) in ring
+                .iter()
+                .zip(ring.iter().cycle().skip(1))
+                .take(ring.len())
+            {
+                let mut quad = vec![
+                    [a[0] + pair[0].x, a[1] + pair[0].y],
+                    [b[0] + pair[0].x, b[1] + pair[0].y],
+                    [b[0] + pair[1].x, b[1] + pair[1].y],
+                    [a[0] + pair[1].x, a[1] + pair[1].y],
+                ];
+                if region::ring_signed_area(&quad) < 0.0 {
+                    quad.reverse();
+                }
+                rings.push(quad);
+            }
+        }
+    }
+    let mut swept = region::ContourSet::new(rings, FillRule::NonZero, 0.0);
+    swept.uncertainty_mm += aperture.uncertainty_mm + path_error;
+    accuracy.check(swept.uncertainty_mm)?;
+    Ok(vec![ExtractedPath {
+        polarity: Polarity::Dark,
+        paint: Paint::Fill {
+            rule: FillRule::NonZero,
+        },
+        contours: swept.to_contours(),
+    }])
 }
 
-fn sampled_arc_sweep(
+fn arc_sweep(
     start: Point,
     end: Point,
     center: Point,
@@ -567,19 +611,19 @@ fn sampled_arc_sweep(
     let arc = Arc::new(start, end, center, clockwise);
     let radius = arc.radius();
     let sweep = arc.sweep_radians();
-    let steps = sample_steps(radius * sweep);
+    let path_error = accuracy.max_error_mm() / 4.0;
+    let angle = 4.0 * (path_error / (2.0 * radius)).min(1.0).sqrt().asin();
+    let steps = (sweep / angle).ceil().max(1.0);
+    if !steps.is_finite() || steps > 1_000_000.0 {
+        return Err(AccuracyError::SubdivisionLimit);
+    }
+    let steps = steps as usize;
     let signed_sweep = if clockwise { -sweep } else { sweep };
     let start_angle = start.angle_from(center);
-    Ok((0..=steps)
-        .map(|index| {
-            let t = index as f64 / steps.max(1) as f64;
-            let at = arc.point_at(start_angle + signed_sweep * t);
-            aperture_paths(geometry, object_transform(object, at), accuracy)
-        })
-        .collect::<std::result::Result<Vec<_>, _>>()?
-        .into_iter()
-        .flatten()
-        .collect())
+    let points = (0..=steps)
+        .map(|index| arc.point_at(start_angle + signed_sweep * index as f64 / steps as f64))
+        .collect::<Vec<_>>();
+    swept_aperture(&points, path_error, object, geometry, accuracy)
 }
 
 fn object_transform(object: &gerber::GraphicalObject, at: Point) -> Affine2 {
@@ -589,10 +633,6 @@ fn object_transform(object: &gerber::GraphicalObject, at: Point) -> Affine2 {
         object.mirroring.into(),
         object.scaling,
     )
-}
-
-fn sample_steps(length: f64) -> usize {
-    (length / SWEEP_SAMPLE_MM).ceil().max(1.0) as usize
 }
 
 fn region_paths(contours: &[gerber::Contour]) -> Vec<ExtractedPath> {
