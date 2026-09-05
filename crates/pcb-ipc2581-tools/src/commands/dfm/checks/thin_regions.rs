@@ -29,10 +29,8 @@
 //! electrical-conductor boundary-distance check; morphology must not
 //! reinterpret a same-net notch as spacing between conductors.
 
-use pcb_ir::geom::dfm::{
-    RegionBoundaryIndex, ThinPiece, circular_region, thin_features, thin_gaps,
-};
-use pcb_ir::geom::{BBox, ContourSet, Point, tol};
+use pcb_ir::geom::dfm::{ThinPiece, circular_region, thin_features, thin_gaps};
+use pcb_ir::geom::{BBox, ContourSet, Point, PreparedRegion, tol};
 #[cfg(not(target_family = "wasm"))]
 use rayon::prelude::*;
 
@@ -116,12 +114,7 @@ pub(super) fn soldermask_web(limit_mm: f64, design: &Design) -> Evaluation {
         let boundaries = layer
             .owners
             .iter()
-            .map(|owner| {
-                (
-                    owner.image.bbox,
-                    RegionBoundaryIndex::new(&owner.image, limit_mm),
-                )
-            })
+            .map(|owner| (owner.image.bbox, owner.image.prepare_query()))
             .collect::<Vec<_>>();
         thin_gaps(&layer.image, limit_mm)
             .into_iter()
@@ -241,7 +234,7 @@ fn mask_subject(design: &Design, owner: &MaskOwner, layer: &LayerRef) -> Subject
 /// overlapping ownership of the same span remains explicitly unknown.
 fn wall_owners(
     walls: &[(Point, Point)],
-    boundaries: &[(BBox, RegionBoundaryIndex)],
+    boundaries: &[(BBox, PreparedRegion)],
 ) -> Option<Vec<usize>> {
     const BOUNDARY_EPSILON_MM: f64 = 1e-6;
     let mut owners = Vec::new();
@@ -357,10 +350,10 @@ mod tests {
         }
     }
 
-    fn boundaries(images: &[ContourSet]) -> Vec<(BBox, RegionBoundaryIndex)> {
+    fn boundaries(images: &[ContourSet]) -> Vec<(BBox, PreparedRegion)> {
         images
             .iter()
-            .map(|image| (image.bbox, RegionBoundaryIndex::new(image, 0.2)))
+            .map(|image| (image.bbox, image.prepare_query()))
             .collect()
     }
 

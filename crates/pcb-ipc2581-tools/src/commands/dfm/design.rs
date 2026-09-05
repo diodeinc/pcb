@@ -19,10 +19,10 @@ use pcb_ir::dialects::ipc::{
     lower_layer_to_artwork_with, profile_occurrences_for,
 };
 use pcb_ir::dialects::{LayerRole, Side, artwork};
-use pcb_ir::geom::dfm::{Distance, RegionBoundaryIndex, WidthDisk, min_width_disk};
+use pcb_ir::geom::dfm::{Distance, WidthDisk, min_width_disk};
 use pcb_ir::geom::path::ContourBuf;
 use pcb_ir::geom::region::{Ring, union_rings};
-use pcb_ir::geom::{BBox, ContourSet, FillRule, Point, Polarity, Span, tol};
+use pcb_ir::geom::{BBox, ContourSet, FillRule, Point, Polarity, PreparedRegion, Span, tol};
 #[cfg(not(target_family = "wasm"))]
 use rayon::prelude::*;
 
@@ -47,9 +47,9 @@ pub(super) struct Design<'a> {
     pub copper_layers: Vec<CopperLayer>,
     /// One boundary index per copper layer, for clearance and enclosure
     /// queries against the composed copper.
-    pub copper_boundaries: Vec<RegionBoundaryIndex>,
+    pub copper_boundaries: Vec<PreparedRegion>,
     /// One boundary index per attributed conductor on each copper layer.
-    pub conductor_boundaries: Vec<Vec<RegionBoundaryIndex>>,
+    pub conductor_boundaries: Vec<Vec<PreparedRegion>>,
     /// Each hole's lands, one per copper layer it owns a land on, indexed
     /// like `holes`.
     pub hole_lands: Vec<Vec<HoleLand>>,
@@ -83,17 +83,6 @@ impl<'a> Design<'a> {
         let layout = when(pools.board_outlines || pools.board_arrays, || {
             Ok(Some(&imported.geometry))
         })?;
-        // A pitch hint for the boundary grids, from the rule limits alone:
-        // queries stay correct at any pitch, and sizing cells by hole radii
-        // would let one large hole coarsen every fine-clearance query.
-        let boundary_search_mm = rules
-            .iter()
-            .filter(|rule| {
-                let pools = rule.kind.semantics().pools;
-                pools.copper_boundaries || pools.conductor_boundaries
-            })
-            .map(|rule| rule.limit.length().millimeters())
-            .fold(1.0, f64::max);
         let design = Self {
             imported,
             scope,
@@ -103,9 +92,7 @@ impl<'a> Design<'a> {
                 let layers = copper_layers.par_iter();
                 #[cfg(target_family = "wasm")]
                 let layers = copper_layers.iter();
-                Ok(layers
-                    .map(|layer| RegionBoundaryIndex::new(&layer.image, boundary_search_mm))
-                    .collect())
+                Ok(layers.map(|layer| layer.image.prepare_query()).collect())
             })?,
             conductor_boundaries: when(pools.conductor_boundaries, || {
                 #[cfg(not(target_family = "wasm"))]
@@ -117,9 +104,7 @@ impl<'a> Design<'a> {
                         layer
                             .conductors
                             .iter()
-                            .map(|conductor| {
-                                RegionBoundaryIndex::new(&conductor.image, boundary_search_mm)
-                            })
+                            .map(|conductor| conductor.image.prepare_query())
                             .collect()
                     })
                     .collect())
@@ -717,7 +702,7 @@ pub(super) struct BoardOutline {
     pub contours: Vec<Ring>,
     /// Finished board material: the filled outer profile minus every cutout.
     pub region: ContourSet,
-    pub boundary: RegionBoundaryIndex,
+    pub boundary: PreparedRegion,
     /// Native outer and cutout contours in the checked frame.
     pub native_outline: Vec<ContourBuf>,
     pub bbox: BBox,
@@ -1505,7 +1490,7 @@ fn collect_board_outlines(
                 .and_then(|step| layout.layout.steps.get(step as usize))
                 .map(|step| imported.resolve(step.source_step_ref).to_owned())
                 .unwrap_or_else(|| "board".to_owned());
-            let boundary = RegionBoundaryIndex::new(&region, 1.0);
+            let boundary = region.prepare_query();
             Some(BoardOutline {
                 name,
                 instance_index: occurrence.instance,

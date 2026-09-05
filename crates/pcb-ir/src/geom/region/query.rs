@@ -5,11 +5,12 @@ use std::ops::Range;
 
 /// An owned [`ContourSet`] snapshot with a bounding-box hierarchy for nearest
 /// boundary and winding queries. Preparation takes O(n log n) time and O(n)
-/// space; queries allocate no scratch storage and take O(n) in the worst case.
+/// space; point queries allocate no scratch storage and take O(n) in the worst case.
 /// Coordinates and distances use the source region's frame, in millimeters.
 #[derive(Debug, Clone)]
 pub struct PreparedRegion {
-    segments: Vec<(Point, Point)>,
+    pub(crate) segments: Vec<(Point, Point)>,
+    order: Vec<usize>,
     nodes: Vec<Node>,
     uncertainty_mm: f64,
 }
@@ -45,13 +46,21 @@ impl ContourSet {
     /// assert_eq!(inside.second, Point::new(2.0, 0.0));
     /// ```
     pub fn prepare_query(&self) -> PreparedRegion {
-        let mut prepared = PreparedRegion {
-            segments: self
-                .rings
+        PreparedRegion::from_segments(
+            self.rings
                 .iter()
                 .filter(|ring| ring_signed_area(ring) != 0.0)
                 .flat_map(ring_edges)
                 .collect(),
+        )
+    }
+}
+
+impl PreparedRegion {
+    pub(super) fn from_segments(segments: Vec<(Point, Point)>) -> Self {
+        let mut prepared = Self {
+            order: (0..segments.len()).collect(),
+            segments,
             nodes: Vec::new(),
             uncertainty_mm: tol::FLATTEN_MM,
         };
@@ -60,9 +69,7 @@ impl ContourSet {
         }
         prepared
     }
-}
 
-impl PreparedRegion {
     /// Euclidean distance to the polygon boundary: negative inside,
     /// zero on the boundary, positive outside (including inside a hole).
     ///
@@ -75,19 +82,29 @@ impl PreparedRegion {
     /// it does not bound prior approximations, offsets, or discarded features.
     /// The source geometry's sign is uncertain when this band includes zero.
     pub fn signed_distance(&self, point: Point) -> Option<Distance> {
+        self.point_distance(point, f64::INFINITY, true)
+    }
+
+    /// Nearest boundary point within `max_distance_mm`, with unsigned distance.
+    pub fn nearest_within(&self, point: Point, max_distance_mm: f64) -> Option<Distance> {
+        self.point_distance(point, max_distance_mm + tol::EPSILON_MM, false)
+    }
+
+    fn point_distance(&self, point: Point, maximum: f64, signed: bool) -> Option<Distance> {
         let root = self.nodes.first()?;
         if !point.is_finite() {
             return None;
         }
         let mut query = Query {
             point,
-            distance: f64::INFINITY,
+            distance: maximum,
+            found: false,
             boundary: Point::ZERO,
             winding: 0,
-            needs_winding: root.bounds.contains_point(point),
+            needs_winding: signed && root.bounds.contains_point(point),
         };
         self.visit(0, &mut query);
-        Some(Distance {
+        query.found.then_some(Distance {
             mm: if query.winding == 0 {
                 query.distance
             } else {
@@ -107,10 +124,86 @@ impl PreparedRegion {
             .collect()
     }
 
+    /// Nearest points between the query segment and boundary within the limit.
+    pub fn segment_nearest_within(
+        &self,
+        start: Point,
+        end: Point,
+        max_distance_mm: f64,
+    ) -> Option<Distance> {
+        self.segment_ids_near(start, end, max_distance_mm)
+            .into_iter()
+            .map(|id| {
+                let (a, b) = self.segments[id];
+                let (mm, first, second) = dist::segments(start, end, a, b);
+                Distance {
+                    mm,
+                    first,
+                    second,
+                    uncertainty_mm: self.uncertainty_mm,
+                }
+            })
+            .filter(|distance| distance.mm <= max_distance_mm + tol::EPSILON_MM)
+            .min_by(|left, right| left.mm.total_cmp(&right.mm))
+    }
+
+    /// Boundary segments whose bounds meet `bounds`, once each in source order.
+    pub fn segments_meeting(&self, bounds: BBox) -> impl Iterator<Item = (Point, Point)> + '_ {
+        self.segment_ids_meeting(bounds)
+            .into_iter()
+            .map(|id| self.segments[id])
+    }
+
+    pub(crate) fn segment_ids_near(&self, start: Point, end: Point, reach: f64) -> Vec<usize> {
+        let query = BBox::spanning(start, end);
+        let delta = end - start;
+        self.segment_ids_where(&|bounds| {
+            let bounds = bounds.expand(reach + tol::EPSILON_MM);
+            let offset = bounds.center() - start;
+            // The segment normal is the separating axis beyond x and y.
+            query.intersects(bounds)
+                && (delta.x * offset.y - delta.y * offset.x).abs()
+                    <= (delta.x.abs() * bounds.height() + delta.y.abs() * bounds.width()) * 0.5
+        })
+    }
+
+    pub(crate) fn segment_ids_meeting(&self, bounds: BBox) -> Vec<usize> {
+        self.segment_ids_where(&|candidate| candidate.intersects(bounds))
+    }
+
+    fn segment_ids_where(&self, meets: &impl Fn(BBox) -> bool) -> Vec<usize> {
+        let mut ids = Vec::new();
+        if !self.nodes.is_empty() {
+            self.collect_meeting(0, meets, &mut ids);
+        }
+        ids.sort_unstable();
+        ids
+    }
+
+    fn collect_meeting(&self, index: usize, meets: &impl Fn(BBox) -> bool, ids: &mut Vec<usize>) {
+        let node = &self.nodes[index];
+        if !meets(node.bounds) {
+            return;
+        }
+        match &node.kind {
+            NodeKind::Leaf(range) => {
+                ids.extend(self.order[range.clone()].iter().copied().filter(|&id| {
+                    let (start, end) = self.segments[id];
+                    meets(BBox::spanning(start, end))
+                }))
+            }
+            NodeKind::Branch(left, right) => {
+                self.collect_meeting(*left, meets, ids);
+                self.collect_meeting(*right, meets, ids);
+            }
+        }
+    }
+
     fn build(&mut self, range: Range<usize>) -> usize {
-        let bounds = self.segments[range.clone()]
+        let bounds = self.order[range.clone()]
             .iter()
-            .fold(BBox::empty(), |bounds, &(start, end)| {
+            .fold(BBox::empty(), |bounds, &id| {
+                let (start, end) = self.segments[id];
                 bounds.union(BBox::spanning(start, end))
             });
         let node = self.nodes.len();
@@ -120,7 +213,8 @@ impl PreparedRegion {
         });
         if range.len() > LEAF_SEGMENTS {
             let middle = range.start + range.len() / 2;
-            let center = |&(start, end): &(Point, Point)| {
+            let center = |&id: &usize| {
+                let (start, end) = self.segments[id];
                 let midpoint = start.midpoint(end);
                 if bounds.width() >= bounds.height() {
                     midpoint.x
@@ -128,7 +222,7 @@ impl PreparedRegion {
                     midpoint.y
                 }
             };
-            self.segments[range.clone()].select_nth_unstable_by(range.len() / 2, |left, right| {
+            self.order[range.clone()].select_nth_unstable_by(range.len() / 2, |left, right| {
                 center(left).total_cmp(&center(right))
             });
             let left = self.build(range.start..middle);
@@ -151,10 +245,12 @@ impl PreparedRegion {
         }
         match &node.kind {
             NodeKind::Leaf(range) => {
-                for &(start, end) in &self.segments[range.clone()] {
+                for &id in &self.order[range.clone()] {
+                    let (start, end) = self.segments[id];
                     if measure {
                         let (distance, boundary) = dist::point_segment(query.point, start, end);
-                        if distance < query.distance {
+                        if distance <= query.distance {
+                            query.found = true;
                             query.distance = distance;
                             query.boundary = boundary;
                         }
@@ -186,6 +282,7 @@ impl PreparedRegion {
 struct Query {
     point: Point,
     distance: f64,
+    found: bool,
     boundary: Point,
     winding: i32,
     needs_winding: bool,

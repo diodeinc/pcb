@@ -203,6 +203,39 @@ fn batches_match_exhaustive_measurements_and_repeated_queries() {
             .map(|(start, end)| dist::point_segment(distance.second, start, end).0)
             .fold(f64::INFINITY, f64::min);
         near(witness_distance, 0.0);
+        let end = point + Point::new(13.1, -9.7);
+        let segment_distance = region
+            .rings
+            .iter()
+            .flat_map(ring_edges)
+            .map(|(a, b)| dist::segments(point, end, a, b).0)
+            .fold(f64::INFINITY, f64::min);
+        for limit in [0.0, 0.3, 2.0] {
+            let nearest = prepared.nearest_within(point, limit);
+            assert_eq!(nearest.is_some(), expected <= limit + tol::EPSILON_MM);
+            if let Some(nearest) = nearest {
+                near(nearest.mm, expected);
+            }
+            let nearest = prepared.segment_nearest_within(point, end, limit);
+            assert_eq!(
+                nearest.is_some(),
+                segment_distance <= limit + tol::EPSILON_MM
+            );
+            if let Some(nearest) = nearest {
+                near(nearest.mm, segment_distance);
+                near(nearest.first.distance_to(nearest.second), segment_distance);
+            }
+        }
+        let bounds = BBox::spanning(point, end);
+        assert_eq!(
+            prepared.segments_meeting(bounds).collect::<Vec<_>>(),
+            region
+                .rings
+                .iter()
+                .flat_map(ring_edges)
+                .filter(|&(a, b)| BBox::spanning(a, b).intersects(bounds))
+                .collect::<Vec<_>>()
+        );
     }
 }
 

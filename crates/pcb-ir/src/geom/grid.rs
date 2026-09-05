@@ -99,10 +99,6 @@ impl CellGrid {
             .flat_map(move |column| (min_row..=max_row).map(move |row| (column, row)))
     }
 
-    pub fn pitch_mm(&self) -> f64 {
-        self.pitch
-    }
-
     /// The ids of the cells of one column from `min_row` through `max_row`,
     /// row by row. Cells outside the grid are empty.
     pub fn column(&self, column: i64, min_row: i64, max_row: i64) -> &[u32] {
