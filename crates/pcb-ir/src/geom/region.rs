@@ -796,6 +796,7 @@ impl ContourSet {
                 .iter()
                 .map(|segment| (segment.start, segment.end))
                 .collect(),
+            self.uncertainty_mm,
         );
         let sees_left = |wall: &OrientedBoundarySegment, across: Point| {
             let along = wall.end - wall.start;
@@ -1833,6 +1834,7 @@ fn two_sided_residual_components(
             .iter()
             .map(|segment| (segment.start, segment.end))
             .collect(),
+        source.uncertainty_mm,
     );
     let contact_tolerance = source.tolerance.max(residual.tolerance);
     residual

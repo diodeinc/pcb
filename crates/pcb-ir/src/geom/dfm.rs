@@ -250,7 +250,7 @@ pub fn linework_clearance_sites(
 fn linework_clearance_sites_with_uncertainty(
     lines: &[(Point, Point)],
     material: &ContourSet,
-    index: &RegionBoundaryIndex,
+    index: &PreparedRegion,
     minimum_mm: f64,
     linework_uncertainty_mm: f64,
 ) -> Vec<ClearanceSite> {

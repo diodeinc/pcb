@@ -1,4 +1,4 @@
-use pcb_ir::geom::dfm::{RegionBoundaryIndex, region_clearance};
+use pcb_ir::geom::dfm::region_clearance;
 use pcb_ir::geom::dist::point_segment;
 use pcb_ir::geom::{
     Affine2, BBox, ContourBuf, ContourSet, FillRule, GeometryAccuracy, Paint, PathArena, Point,
@@ -48,7 +48,8 @@ fn circles_converge_below_the_old_cubic_floor() {
         assert!(region.uncertainty_mm <= budget);
         assert!(error < previous);
         previous = error;
-        let measured = RegionBoundaryIndex::new(&region, 2.0)
+        let measured = region
+            .prepare_query()
             .nearest_within(Point::ZERO, 2.0)
             .unwrap();
         assert_eq!(measured.uncertainty_mm, region.uncertainty_mm);
