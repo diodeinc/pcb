@@ -2,6 +2,7 @@
 //! Nonplated slots exempt nothing. Plated slots exempt only occurrence-scoped
 //! net ownership or canonical physical lands; proximity never implies ownership.
 
+use pcb_ir::geom::GeometryAccuracy;
 use pcb_ir::geom::dfm::{region_clearance_sites_with_index, region_clearance_within};
 
 use crate::commands::dfm::design::{ConductorId, Design};
@@ -18,7 +19,8 @@ pub(super) fn evaluate(
     plating: SlotPlating,
     conditions: &Conditions,
     design: &Design,
-) -> Evaluation {
+    accuracy: GeometryAccuracy,
+) -> anyhow::Result<Evaluation> {
     let mut checked = 0;
     let mut measured = Vec::new();
     for (slot_index, slot) in design
@@ -97,13 +99,17 @@ pub(super) fn evaluate(
             )
             .into_iter()
             .map(|geometry| {
-                let mut site =
-                    linework_clearance::report_site(geometry, finding_layers.clone(), limit_mm);
+                let mut site = linework_clearance::report_site(
+                    geometry,
+                    finding_layers.clone(),
+                    limit_mm,
+                    accuracy,
+                )?;
                 site.subjects = subjects.clone();
                 site.evidence.extend(evidence.clone());
-                site
+                Ok(site)
             })
-            .collect();
+            .collect::<anyhow::Result<Vec<_>>>()?;
             measured.push(Measured {
                 distance,
                 bbox: slot
@@ -116,7 +122,7 @@ pub(super) fn evaluate(
             });
         }
     }
-    Evaluation { checked, measured }
+    Ok(Evaluation { checked, measured })
 }
 
 #[cfg(test)]
@@ -124,6 +130,7 @@ mod tests {
     use crate::LayoutTarget;
     use crate::commands::dfm::{self, CheckRequest, PdkSource, TextSource, report};
     use crate::ipc2581::Ipc2581;
+    use pcb_ir::geom::GeometryAccuracy;
 
     fn pdk(plating: &str) -> String {
         format!(
@@ -180,7 +187,10 @@ limit = {{ minimum = "0.20 mm" }}
     }
 
     fn check(xml: &str, source: &str, target: LayoutTarget) -> anyhow::Result<report::DfmReport> {
-        let imported = pcb_ir::import::ipc2581::import_design(&Ipc2581::parse(xml)?)?;
+        let imported = pcb_ir::import::ipc2581::import_design(
+            &Ipc2581::parse(xml)?,
+            GeometryAccuracy::default(),
+        )?;
         dfm::check(
             &imported,
             CheckRequest {
@@ -193,6 +203,7 @@ limit = {{ minimum = "0.20 mm" }}
                 layout_target: target,
                 generated_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
             },
+            GeometryAccuracy::default(),
         )
     }
 

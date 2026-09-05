@@ -390,7 +390,7 @@ fn evaluate(
             hole_clearance::evaluate(limit(), class, &rule.conditions, design, accuracy)?.into()
         }
         RuleKind::SlotToCopperClearance(plating) => {
-            slot_clearance::evaluate(limit(), plating, &rule.conditions, design).into()
+            slot_clearance::evaluate(limit(), plating, &rule.conditions, design, accuracy)?.into()
         }
         RuleKind::LineworkToCopperClearance(linework) => {
             linework_clearance::evaluate(limit(), linework, &rule.conditions, design, accuracy)?

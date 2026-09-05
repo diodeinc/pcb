@@ -104,7 +104,7 @@ impl<'a> Design<'a> {
         })?;
         let (physical_holes, land_indices) = when(pools.hole_lands || pools.slot_lands, || {
             let physical_holes = imported
-                .physical_holes(scope)?
+                .physical_holes(scope, accuracy)?
                 .into_iter()
                 .map(|hole| (hole.id.0, hole))
                 .collect();
