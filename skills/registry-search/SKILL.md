@@ -7,6 +7,13 @@ description: Find reusable registry modules and component packages for a board o
 
 Find suitable prepared content before authoring a new reusable package.
 
+Only discover or clone other boards when the user explicitly asks to find or
+inspect them; do not search other boards proactively as part of registry
+package search. For requested board discovery, use `diode_list_boards` with
+the workspace name. If inspection is requested, `git clone` the returned HTTPS
+URL outside the current checkout; sandbox DiodeHub authentication is already
+configured.
+
 | Need | Command |
 | --- | --- |
 | Reusable circuit or entrypoint | `pcb search -m registry:modules <query> -f json` |
