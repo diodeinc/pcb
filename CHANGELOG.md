@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Keep cutout-only copper layers empty in artwork composition and rendering while preserving visible drill artwork.
+- Fix IPC-2581 tools tests failing to compile without default features.
 
 ## [0.4.50] - 2026-09-05
 
