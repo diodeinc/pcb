@@ -4,9 +4,9 @@
 //! geometry remains owned once by the canonical IPC document and final images
 //! are composed on demand for the requested layout scope.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use ipc2581::types::{
     LayerFunction, PackagePinElectricalType, PackagePinMountType, PackagePinType,
 };
@@ -541,6 +541,13 @@ impl ImportedDesign {
         scope: ArtworkScope,
         lands: &[PhysicalLand],
     ) -> Result<Vec<PhysicalHole>> {
+        let layer_order = physical_stackup_layers(&self.stackups, &self.layer_definitions)?
+            .unwrap_or_else(|| {
+                self.layer_definitions
+                    .iter()
+                    .map(|layer| layer.name)
+                    .collect()
+            });
         let mut lands_by_layer = BTreeMap::<_, Vec<_>>::new();
         for land in lands {
             lands_by_layer.entry(land.layer).or_default().push(land);
@@ -567,8 +574,8 @@ impl ImportedDesign {
                 for (&copper_layer, candidates) in &lands_by_layer {
                     if !feature_spans_layer(
                         feature.intent.span,
-                        copper_layer,
-                        &self.layer_definitions,
+                        self.layer_definitions[copper_layer.0 as usize].name,
+                        &layer_order,
                     ) {
                         continue;
                     }
@@ -626,7 +633,7 @@ impl ImportedDesign {
         terminations: &[PhysicalTermination],
         holes: &mut [PhysicalHole],
     ) -> Result<()> {
-        let stackup = physical_stackup_layers(&self.stackups);
+        let stackup = physical_stackup_layers(&self.stackups, &self.layer_definitions)?;
         let land_by_id = lands
             .iter()
             .map(|land| (land.id, land))
@@ -689,8 +696,7 @@ impl ImportedDesign {
                         && land.side == termination.side
                         && feature_definitely_spans_layer(
                             hole.span,
-                            land.layer,
-                            &self.layer_definitions,
+                            self.layer_definitions[land.layer.0 as usize].name,
                             stackup,
                         )
                         && land.image.bbox().intersects(hole.image.bbox())
@@ -1075,29 +1081,22 @@ fn protection_side_compatible(assembly_side: Side, protection_side: Side) -> boo
         || (assembly_side != Side::None && assembly_side == protection_side)
 }
 
-fn feature_spans_layer(
-    span: FeatureSpan<Symbol>,
-    target: LayerId,
-    layers: &[ipc2581::types::Layer],
-) -> bool {
-    let target_index = target.0 as usize;
-    if let FeatureSpan::Layer(layer) = span {
-        return layers
-            .get(target_index)
-            .is_some_and(|target| target.name == layer);
+fn feature_spans_layer(span: FeatureSpan<Symbol>, target: Symbol, layer_order: &[Symbol]) -> bool {
+    // Source-land links retain candidates for unresolved spans, unlike exact
+    // assembly evidence. Resolve known spans with the same physical predicate.
+    if let FeatureSpan::FromTo { .. } | FeatureSpan::Unknown = span
+        && span_endpoints(span).is_none_or(|ends| ends.iter().any(|end| !layer_order.contains(end)))
+    {
+        return true;
     }
-    resolved_feature_span(span, layers).is_none_or(|(from, to)| (from..=to).contains(&target_index))
+    feature_definitely_spans_layer(span, target, Some(layer_order))
 }
 
-fn feature_definitely_spans_layer(
+pub(super) fn feature_definitely_spans_layer(
     span: FeatureSpan<Symbol>,
-    target: LayerId,
-    layers: &[ipc2581::types::Layer],
+    target: Symbol,
     stackup: Option<&[Symbol]>,
 ) -> bool {
-    let Some(target) = layers.get(target.0 as usize).map(|layer| layer.name) else {
-        return false;
-    };
     let (from, to) = match span {
         FeatureSpan::Unknown | FeatureSpan::FromTo { from: None, .. } => return false,
         FeatureSpan::ThroughBoard => return true,
@@ -1172,40 +1171,57 @@ fn span_range_in_stackup(span: [Symbol; 2], stackup: &[Symbol]) -> Option<(usize
     Some((from.min(to), from.max(to)))
 }
 
-fn physical_stackup_layers(stackups: &[ipc2581::types::Stackup]) -> Option<Vec<Symbol>> {
-    let [stackup] = stackups else {
-        return None;
+/// Resolve physical order, distinguishing absent stackups from malformed ones.
+/// Unnumbered stacks retain their source order, as in the canonical IPC view.
+pub(super) fn physical_stackup_layers(
+    stackups: &[ipc2581::types::Stackup],
+    declarations: &[ipc2581::types::Layer],
+) -> Result<Option<Vec<Symbol>>> {
+    let stackup = match stackups {
+        [] => return Ok(None),
+        [stackup] => stackup,
+        _ => bail!("physical layer spans require exactly one stackup"),
     };
     let mut layers = stackup.layers.iter().collect::<Vec<_>>();
+    ensure!(!layers.is_empty(), "physical stackup contains no layers");
     if layers.iter().all(|layer| layer.layer_number.is_some()) {
         layers.sort_by_key(|layer| layer.layer_number);
+        ensure!(
+            !layers
+                .windows(2)
+                .any(|pair| pair[0].layer_number == pair[1].layer_number),
+            "physical stackup has duplicate layer sequence numbers"
+        );
+    } else {
+        ensure!(
+            layers.iter().all(|layer| layer.layer_number.is_none()),
+            "physical stackup mixes numbered and unnumbered layers"
+        );
     }
-    Some(layers.into_iter().map(|layer| layer.layer_ref).collect())
-}
-
-fn resolved_feature_span(
-    span: FeatureSpan<Symbol>,
-    layers: &[ipc2581::types::Layer],
-) -> Option<(usize, usize)> {
-    let (from, to) = match span {
-        FeatureSpan::Unknown => return None,
-        FeatureSpan::ThroughBoard => (0, layers.len().checked_sub(1)?),
-        FeatureSpan::Layer(layer) => {
-            let layer = layers
-                .iter()
-                .position(|candidate| candidate.name == layer)?;
-            (layer, layer)
-        }
-        FeatureSpan::FromTo {
-            from: Some(from),
-            to: Some(to),
-        } => (
-            layers.iter().position(|layer| layer.name == from)?,
-            layers.iter().position(|layer| layer.name == to)?,
-        ),
-        FeatureSpan::FromTo { .. } => return None,
-    };
-    Some((from.min(to), from.max(to)))
+    let order = layers
+        .into_iter()
+        .map(|layer| layer.layer_ref)
+        .collect::<Vec<_>>();
+    let unique = order.iter().copied().collect::<HashSet<_>>();
+    ensure!(
+        unique.len() == order.len(),
+        "physical stackup repeats a layer reference"
+    );
+    let mut copper = HashSet::new();
+    for layer in declarations
+        .iter()
+        .filter(|layer| is_copper(layer.layer_function))
+    {
+        ensure!(
+            copper.insert(layer.name),
+            "duplicate copper layer declarations make physical spans ambiguous"
+        );
+        ensure!(
+            unique.contains(&layer.name),
+            "physical stackup omits declared copper layers"
+        );
+    }
+    Ok(Some(order))
 }
 
 #[cfg(test)]
@@ -1333,6 +1349,173 @@ mod tests {
                     .land,
                 Association::Resolved(land)
             );
+        }
+    }
+
+    fn spanned_slot_fixture(order: [&str; 3], clear_inner: bool) -> String {
+        let layers = order.map(|name| {
+            let side = match name {
+                "L0" => "TOP",
+                "L1" => "INTERNAL",
+                "L2" => "BOTTOM",
+                _ => unreachable!(),
+            };
+            format!(r#"<Layer name="{name}" layerFunction="SIGNAL" side="{side}" polarity="POSITIVE"/>"#)
+        }).join("\n");
+        let clear = if clear_inner {
+            r#"<Set polarity="NEGATIVE"><Features><Location x="0" y="0"/><Contour><Polygon>
+              <PolyBegin x="-3" y="-3"/><PolyStepSegment x="3" y="-3"/>
+              <PolyStepSegment x="3" y="3"/><PolyStepSegment x="-3" y="3"/>
+              <PolyStepSegment x="-3" y="-3"/>
+            </Polygon></Contour></Features></Set>"#
+        } else {
+            ""
+        };
+        format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner"><FunctionMode mode="FABRICATION"/><StepRef name="board"/>
+    <DictionaryStandard units="MILLIMETER"><EntryStandard id="land"><Oval width="2.6" height="1"/></EntryStandard></DictionaryStandard>
+  </Content>
+  <Ecad name="design"><CadHeader units="MILLIMETER"/><CadData>
+    {layers}
+    <Layer name="ROUT" layerFunction="ROUT" side="ALL" polarity="POSITIVE"><Span fromLayer="L0" toLayer="L2"/></Layer>
+    <Stackup name="stack"><StackupGroup name="group">
+      <StackupLayer layerOrGroupRef="L2" sequence="2"/>
+      <StackupLayer layerOrGroupRef="L0" sequence="0"/>
+      <StackupLayer layerOrGroupRef="L1" sequence="1"/>
+    </StackupGroup></Stackup>
+    <Step name="board" type="BOARD">
+      <PadStackDef name="P"/>
+      <LayerFeature layerRef="L0"><Set><Pad padstackDefRef="P"><Location x="0" y="0"/><StandardPrimitiveRef id="land"/></Pad></Set></LayerFeature>
+      <LayerFeature layerRef="L1"><Set><Pad padstackDefRef="P"><Location x="0" y="0"/><StandardPrimitiveRef id="land"/></Pad></Set>{clear}</LayerFeature>
+      <LayerFeature layerRef="L2"><Set><Pad padstackDefRef="P"><Location x="0" y="0"/><StandardPrimitiveRef id="land"/></Pad></Set></LayerFeature>
+      <LayerFeature layerRef="ROUT"><Set geometry="P">
+        <SlotCavity name="slot" platingStatus="PLATED" plusTol="0" minusTol="0"><Location x="0" y="0"/><Oval width="2" height="0.6"/></SlotCavity>
+      </Set></LayerFeature>
+    </Step>
+  </CadData></Ecad>
+</IPC-2581>"#
+        )
+    }
+
+    #[test]
+    fn hole_land_links_follow_physical_order_under_declaration_permutations() {
+        for order in [["L0", "L1", "L2"], ["L2", "L0", "L1"], ["L1", "L2", "L0"]] {
+            let xml = spanned_slot_fixture(order, true);
+            let imported = import_design(&Ipc2581::parse(&xml).unwrap()).unwrap();
+            let holes = imported.physical_holes(ArtworkScope::Board).unwrap();
+            assert_eq!(holes.len(), 1);
+            let inner = imported.layer_id("L1").unwrap();
+            assert!(
+                imported
+                    .composed_layer_image(inner, ArtworkScope::Board)
+                    .unwrap()
+                    .is_empty()
+            );
+            let linked_layers = holes[0]
+                .lands
+                .iter()
+                .map(|link| {
+                    assert!(link.land.resolved().is_some());
+                    imported.resolve(imported.layer_definitions[link.layer.0 as usize].name)
+                })
+                .collect::<BTreeSet<_>>();
+            assert_eq!(
+                linked_layers,
+                BTreeSet::from(["L0", "L1", "L2"]),
+                "declarations {order:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn slot_cutouts_follow_physical_order_under_declaration_permutations() {
+        let mut reference = None;
+        for order in [["L0", "L1", "L2"], ["L2", "L0", "L1"], ["L1", "L2", "L0"]] {
+            let xml = spanned_slot_fixture(order, false);
+            let imported = import_design(&Ipc2581::parse(&xml).unwrap()).unwrap();
+            let holes = imported.physical_holes(ArtworkScope::Board).unwrap();
+            for name in ["L0", "L1", "L2"] {
+                let layer = imported.layer_id(name).unwrap();
+                let image = imported
+                    .composed_layer_image(layer, ArtworkScope::Board)
+                    .unwrap();
+                assert!(!image.is_empty());
+                assert!(
+                    image.intersection(&holes[0].image).is_empty(),
+                    "{name}, declarations {order:?}"
+                );
+                let expected = reference.get_or_insert_with(|| image.clone());
+                assert!(image.difference(expected).is_empty());
+                assert!(expected.difference(&image).is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn malformed_physical_stacks_do_not_fall_back_to_declarations() {
+        let xml = spanned_slot_fixture(["L0", "L1", "L2"], false);
+        for (from, to, message) in [
+            (
+                "sequence=\"1\"",
+                "sequence=\"0\"",
+                "duplicate layer sequence",
+            ),
+            ("sequence=\"1\"", "", "mixes numbered and unnumbered"),
+            (
+                "layerOrGroupRef=\"L1\"",
+                "layerOrGroupRef=\"L0\"",
+                "repeats a layer reference",
+            ),
+            (
+                "<StackupLayer layerOrGroupRef=\"L1\" sequence=\"1\"/>",
+                "",
+                "omits declared copper",
+            ),
+            (
+                "</Stackup>",
+                "</Stackup><Stackup name=\"extra\"/>",
+                "exactly one stackup",
+            ),
+        ] {
+            let invalid = Ipc2581::parse(&xml.replace(from, to)).unwrap();
+            let error = import_design(&invalid).unwrap_err();
+            assert!(error.to_string().contains(message), "{error}");
+
+            // The association query must also reject bad metadata, even when
+            // no slot extraction is needed to construct the canonical design.
+            let mut imported = import_design(&Ipc2581::parse(&xml).unwrap()).unwrap();
+            imported.stackups = invalid.ecad().unwrap().cad_data.stackups.clone();
+            let error = imported.physical_holes(ArtworkScope::Board).unwrap_err();
+            assert!(error.to_string().contains(message), "{error}");
+        }
+    }
+
+    #[test]
+    fn slot_spans_preserve_unnumbered_and_absent_stackup_order() {
+        let xml = spanned_slot_fixture(["L0", "L1", "L2"], false);
+        let start = xml.find("<Stackup name=").unwrap();
+        let end = xml.find("</Stackup>").unwrap() + "</Stackup>".len();
+        for stackup in [
+            "",
+            r#"<Stackup name="stack"><StackupGroup name="group">
+              <StackupLayer layerOrGroupRef="L0"/>
+              <StackupLayer layerOrGroupRef="L1"/>
+              <StackupLayer layerOrGroupRef="L2"/>
+            </StackupGroup></Stackup>"#,
+        ] {
+            let mut xml = xml.clone();
+            xml.replace_range(start..end, stackup);
+            let imported = import_design(&Ipc2581::parse(&xml).unwrap()).unwrap();
+            let holes = imported.physical_holes(ArtworkScope::Board).unwrap();
+            assert_eq!(holes[0].lands.len(), 3);
+            let inner = imported.layer_id("L1").unwrap();
+            let image = imported
+                .composed_layer_image(inner, ArtworkScope::Board)
+                .unwrap();
+            assert!(!image.is_empty());
+            assert!(image.intersection(&holes[0].image).is_empty());
         }
     }
 
