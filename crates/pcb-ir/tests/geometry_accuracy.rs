@@ -119,6 +119,19 @@ fn coarse_polygon_history_prevents_finer_preparation_and_offsets() {
         .is_err()
     );
     assert!(coarse.disk_dilate(0.01, accuracy(0.0001)).is_err());
+    let mut source = PathArena::default();
+    let path = source.push_path(
+        Paint::Fill {
+            rule: FillRule::NonZero,
+        },
+        coarse.to_contours(),
+    );
+    assert!(
+        PathArena::default()
+            .append_path_from(&source, path, Affine2::IDENTITY, accuracy(0.0001))
+            .is_err()
+    );
+
     assert!(coarse.disk_erode(0.0, accuracy(0.0001)).is_err());
     let fine = prepare(&[circle], 0.0001);
     assert!(fine.uncertainty_mm < coarse.uncertainty_mm);

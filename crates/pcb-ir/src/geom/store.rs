@@ -272,11 +272,7 @@ impl PathArena {
         accuracy: GeometryAccuracy,
     ) -> Result<u32, AccuracyError> {
         let source = other.paths[path as usize];
-        let contours = if transform.is_identity() {
-            other.path_contours(&source)
-        } else {
-            other.transformed_contour_bufs(source.contours, transform, accuracy)?
-        };
+        let contours = other.transformed_contour_bufs(source.contours, transform, accuracy)?;
         Ok(self.push_path(source.paint, contours))
     }
 

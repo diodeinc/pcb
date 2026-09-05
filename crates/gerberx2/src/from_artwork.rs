@@ -648,17 +648,8 @@ impl ApertureTable {
                 // rule so winding is canonical: each shape is an outer ring
                 // followed by its holes, wound opposite. Larger shapes paint
                 // first so an island inside a hole survives the hole's erase.
-                let mut shapes = region::simplify_shapes_on_grid(
-                    region::ContourSet::from_contours(
-                        std::slice::from_ref(&outline),
-                        fill_rule,
-                        0.0,
-                        accuracy,
-                    )?
-                    .rings,
-                    fill_rule,
-                    GERBER_GEOMETRY_GRID_MM,
-                );
+                let mut shapes =
+                    prepare_on_grid(std::slice::from_ref(&outline), fill_rule, accuracy)?;
                 shapes.sort_by(|a, b| {
                     let area = |shape: &region::Shape| {
                         shape
@@ -1095,13 +1086,26 @@ fn lower_contours_as_regions(
         .collect())
 }
 
+fn prepare_on_grid(
+    payloads: &[ContourBuf],
+    fill_rule: FillRule,
+    accuracy: GeometryAccuracy,
+) -> Result<Vec<region::Shape>> {
+    let region = region::ContourSet::from_contours(payloads, fill_rule, 0.0, accuracy)?;
+    accuracy.check(region.uncertainty_mm + GERBER_GEOMETRY_GRID_MM / std::f64::consts::SQRT_2)?;
+    Ok(region::simplify_shapes_on_grid(
+        region.rings,
+        fill_rule,
+        GERBER_GEOMETRY_GRID_MM,
+    ))
+}
+
 fn lower_region_image_contours(
     payloads: &[ContourBuf],
     fill_rule: FillRule,
     accuracy: GeometryAccuracy,
 ) -> Result<Vec<Contour>> {
-    let rings = region::ContourSet::from_contours(payloads, fill_rule, 0.0, accuracy)?.rings;
-    region::simplify_shapes_on_grid(rings, fill_rule, GERBER_GEOMETRY_GRID_MM)
+    prepare_on_grid(payloads, fill_rule, accuracy)?
         .into_iter()
         .filter_map(region_shape_contour)
         .collect::<Result<Vec<_>>>()
@@ -1248,6 +1252,19 @@ mod tests {
     };
     use pcb_ir::dialects::{LayerRole, Side};
     use pcb_ir::geom::{BBox, Mirror, Paint, Span};
+
+    #[test]
+    fn grid_preparation_rejects_subgrid_budgets() {
+        let contour = rect_payload(0.0001, 0.0001, 0.0002, 0.0002);
+        assert!(
+            prepare_on_grid(
+                &[contour],
+                FillRule::NonZero,
+                GeometryAccuracy::new(0.0001).unwrap()
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn sanitizes_net_names_for_gerber_attribute_fields() {

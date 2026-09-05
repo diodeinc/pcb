@@ -381,7 +381,7 @@ fn automatic_balancing_regions_scope_panel_fiducials_to_both_surface_copper_laye
     let top = safe_area("TOP");
     let bottom = safe_area("BOTTOM");
     assert!(
-        (bottom - top).abs() <= 1e-6,
+        (bottom - top).abs() <= accuracy.max_error_mm().powi(2),
         "two-sided fiducials and mask openings should reserve equal surface-copper area: top {top:.6} mm², bottom {bottom:.6} mm²",
     );
 }
