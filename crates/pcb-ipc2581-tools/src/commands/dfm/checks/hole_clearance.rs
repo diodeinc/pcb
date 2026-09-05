@@ -177,7 +177,7 @@ fn owned_by_hole(
     })
 }
 
-fn land_owns_conductor(land: &Land, conductor: ConductorId) -> bool {
+pub(super) fn land_owns_conductor(land: &Land, conductor: ConductorId) -> bool {
     match conductor {
         ConductorId::Net {
             step,

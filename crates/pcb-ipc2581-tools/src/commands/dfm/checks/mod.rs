@@ -18,6 +18,7 @@ mod hole_diameter;
 mod hole_pair_clearance;
 mod layer_count;
 mod linework_clearance;
+mod slot_clearance;
 mod slot_width;
 mod thin_regions;
 
@@ -312,7 +313,7 @@ fn skip_reason(rule: &Rule, design: &Design) -> Option<String> {
             .iter()
             .all(|hole| hole.class != class)
             .then(|| format!("{} holes", class.label())),
-        RuleKind::SlotWidth(plating) => design
+        RuleKind::SlotWidth(plating) | RuleKind::SlotToCopperClearance(plating) => design
             .slots
             .iter()
             .all(|slot| !slot_matches(slot.plating, plating))
@@ -371,6 +372,9 @@ fn evaluate(rule: &Rule, design: &Design) -> RuleEvaluation {
         RuleKind::HoleToCopperClearance(class) => {
             hole_clearance::evaluate(limit(), class, &rule.conditions, design).into()
         }
+        RuleKind::SlotToCopperClearance(plating) => {
+            slot_clearance::evaluate(limit(), plating, &rule.conditions, design).into()
+        }
         RuleKind::LineworkToCopperClearance(linework) => {
             linework_clearance::evaluate(limit(), linework, &rule.conditions, design).into()
         }
@@ -385,7 +389,10 @@ fn evaluate(rule: &Rule, design: &Design) -> RuleEvaluation {
     }
 }
 
-fn slot_matches(actual: pcb_ir::dialects::ipc::PlatingKind, expected: SlotPlating) -> bool {
+pub(super) fn slot_matches(
+    actual: pcb_ir::dialects::ipc::PlatingKind,
+    expected: SlotPlating,
+) -> bool {
     matches!(
         (actual, expected),
         (
@@ -646,6 +653,7 @@ fn slot_subject(design: &Design, slot: &Slot, role: &'static str) -> Subject {
         slot.source_feature_index,
     );
     subject.provenance = Some(slot.provenance.clone());
+    subject.drill_span = Some(slot.drill_span.clone());
     subject
 }
 

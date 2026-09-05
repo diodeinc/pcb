@@ -348,6 +348,12 @@ impl Rules {
             )
             .chain(
                 self.copper
+                    .slot_clearance
+                    .iter()
+                    .map(RuleDefinition::SlotClearance),
+            )
+            .chain(
+                self.copper
                     .feature_width
                     .iter()
                     .map(RuleDefinition::CopperLength),
@@ -389,6 +395,7 @@ enum RuleDefinition<'a> {
     SlotToBoardEdge(&'a SlotToBoardEdgeClearanceRule),
     AnnularRing(&'a AnnularRingRule),
     HoleClearance(&'a HoleClearanceRule),
+    SlotClearance(&'a SlotClearanceRule),
     CopperLength(&'a LengthRule),
     OtherLength(&'a LengthRule),
 }
@@ -404,6 +411,7 @@ impl RuleDefinition<'_> {
             Self::SlotToBoardEdge(rule) => &rule.metadata,
             Self::AnnularRing(rule) => &rule.metadata,
             Self::HoleClearance(rule) => &rule.metadata,
+            Self::SlotClearance(rule) => &rule.metadata,
             Self::CopperLength(rule) | Self::OtherLength(rule) => &rule.metadata,
         }
     }
@@ -420,6 +428,7 @@ impl RuleDefinition<'_> {
             Self::SlotToBoardEdge(rule) => (rule.limit.as_ref(), &rule.cases),
             Self::AnnularRing(rule) => (rule.limit.as_ref(), &rule.cases),
             Self::HoleClearance(rule) => (rule.limit.as_ref(), &rule.cases),
+            Self::SlotClearance(rule) => (rule.limit.as_ref(), &rule.cases),
             Self::CopperLength(rule) | Self::OtherLength(rule) => {
                 (rule.limit.as_ref(), &rule.cases)
             }
@@ -438,7 +447,10 @@ impl RuleDefinition<'_> {
             cases,
             matches!(
                 self,
-                Self::AnnularRing(_) | Self::HoleClearance(_) | Self::CopperLength(_)
+                Self::AnnularRing(_)
+                    | Self::HoleClearance(_)
+                    | Self::SlotClearance(_)
+                    | Self::CopperLength(_)
             ),
         )
     }
@@ -490,6 +502,8 @@ pub struct CopperRules {
     pub annular_ring: Vec<AnnularRingRule>,
     #[serde(default)]
     pub hole_clearance: Vec<HoleClearanceRule>,
+    #[serde(default)]
+    pub slot_clearance: Vec<SlotClearanceRule>,
     #[serde(default)]
     pub feature_width: Vec<LengthRule>,
     #[serde(default)]
@@ -824,6 +838,18 @@ pub struct HoleClearanceRule {
     #[serde(flatten)]
     pub metadata: RuleMetadata,
     pub select: HoleSelector,
+    #[serde(default)]
+    pub limit: Option<LengthLimit>,
+    #[serde(default)]
+    pub cases: Vec<LengthCase>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SlotClearanceRule {
+    #[serde(flatten)]
+    pub metadata: RuleMetadata,
+    pub select: SlotSelector,
     #[serde(default)]
     pub limit: Option<LengthLimit>,
     #[serde(default)]
