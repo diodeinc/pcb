@@ -45,6 +45,10 @@ impl NetAnalysis {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SchematicIssue {
+    MissingSheet {
+        page_id: String,
+        sheet_id: String,
+    },
     MissingSymbol {
         slot: SymbolSlotKey,
     },
@@ -96,6 +100,7 @@ impl SchematicIssue {
     /// suppression patterns.
     pub fn kind(&self) -> &'static str {
         match self {
+            SchematicIssue::MissingSheet { .. } => "missing_sheet",
             SchematicIssue::MissingSymbol { .. } => "missing_symbol",
             SchematicIssue::DuplicateSymbol { .. } => "duplicate_symbol",
             SchematicIssue::MismatchedSymbolId { .. } => "mismatched_symbol_id",
@@ -112,6 +117,9 @@ impl SchematicIssue {
     /// One-line human summary, for error messages and logs.
     pub fn summary(&self) -> String {
         match self {
+            SchematicIssue::MissingSheet { page_id, sheet_id } => {
+                format!("sheet '{sheet_id}' is not placed on page '{page_id}'")
+            }
             SchematicIssue::MissingSymbol { slot } => {
                 format!(
                     "component '{}' unit {} is not placed",
@@ -188,6 +196,10 @@ impl SchematicIssue {
 /// retaining UI selection across repeated analysis.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SchematicIssueKey {
+    MissingSheet {
+        page_id: String,
+        sheet_id: String,
+    },
     MissingSymbol(SymbolSlotKey),
     DuplicateSymbol(SymbolSlotKey),
     MismatchedSymbolId {
@@ -259,7 +271,19 @@ pub fn inspect_schematic(
     let mut expected = expected_reconcilable_connectivity(document, netlist)?;
     apply_symbol_or_label_endpoint_requirements(document, netlist, &mut expected)?;
     let physical = observed_reconcilable_connectivity(document, netlist)?;
-    let analysis = analyze_connectivity(&expected, &physical.graph);
+    let mut analysis = analyze_connectivity(&expected, &physical.graph);
+    analysis.issues.splice(
+        0..0,
+        document.pages.iter().flat_map(|page| {
+            page.items.iter().filter_map(|item| match item {
+                SchItem::Sheet(sheet) if !sheet.placed => Some(SchematicIssue::MissingSheet {
+                    page_id: page.id.clone(),
+                    sheet_id: sheet.id.clone(),
+                }),
+                _ => None,
+            })
+        }),
+    );
     let issues = analysis
         .issues()
         .iter()
@@ -330,6 +354,13 @@ pub(crate) fn issue_context(
             .collect::<BTreeSet<_>>()
     };
     let (key, items) = match &issue {
+        SchematicIssue::MissingSheet { page_id, sheet_id } => (
+            SchematicIssueKey::MissingSheet {
+                page_id: page_id.clone(),
+                sheet_id: sheet_id.clone(),
+            },
+            BTreeSet::new(),
+        ),
         SchematicIssue::MissingSymbol { slot } => (
             SchematicIssueKey::MissingSymbol(slot.clone()),
             BTreeSet::new(),
@@ -420,7 +451,8 @@ pub(crate) fn coarse_key(key: &SchematicIssueKey) -> SchematicIssueKey {
         SchematicIssueKey::UnexpectedNet { items, .. }
         | SchematicIssueKey::UnexpectedConnection { items, .. }
         | SchematicIssueKey::Shorted { items, .. } => items.clear(),
-        SchematicIssueKey::MissingSymbol(_)
+        SchematicIssueKey::MissingSheet { .. }
+        | SchematicIssueKey::MissingSymbol(_)
         | SchematicIssueKey::DuplicateSymbol(_)
         | SchematicIssueKey::MismatchedSymbolId { .. }
         | SchematicIssueKey::UnexpectedSymbol(_)

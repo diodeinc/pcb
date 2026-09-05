@@ -220,7 +220,12 @@ fn format_kicad_sch_page(page: &SchPage) -> String {
         library_to_sexpr(&page.library),
     ];
 
-    root.extend(page.items.iter().map(|item| item_to_sexpr(item, page)));
+    root.extend(
+        page.items
+            .iter()
+            .filter(|item| !matches!(item, SchItem::Sheet(sheet) if !sheet.placed))
+            .map(|item| item_to_sexpr(item, page)),
+    );
 
     format!(
         "{}\n",
@@ -479,6 +484,15 @@ fn parse_no_connect(items: SexprList<'_>) -> Result<NoConnect> {
     })
 }
 
+pub(crate) fn parse_sheet_source(source: &str) -> Result<Sheet> {
+    let root = parse(source)?;
+    let list = SexprList::from_sexpr(&root).context("expected sheet expression")?;
+    if list.tag() != Some("sheet") {
+        bail!("expected sheet expression");
+    }
+    parse_sheet(list)
+}
+
 fn parse_sheet(items: SexprList<'_>) -> Result<Sheet> {
     let mut id = None;
     let mut at = None;
@@ -512,6 +526,7 @@ fn parse_sheet(items: SexprList<'_>) -> Result<Sheet> {
 
     Ok(Sheet {
         id: id.context("sheet missing uuid")?,
+        placed: true,
         at,
         size,
         name,
@@ -913,7 +928,7 @@ fn no_connect_to_sexpr(no_connect: &NoConnect) -> Sexpr {
     Sexpr::list(items)
 }
 
-fn sheet_to_sexpr(sheet: &Sheet) -> Sexpr {
+pub(crate) fn sheet_to_sexpr(sheet: &Sheet) -> Sexpr {
     let mut items = vec![Sexpr::symbol("sheet")];
     if let Some(at) = sheet.at {
         items.push(Sexpr::list(vec![

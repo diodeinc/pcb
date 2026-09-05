@@ -29,6 +29,7 @@ fn user_reorganized_page_stays_reconcilable() {
     document.pages.push(user_page);
     document.pages[0].items.push(SchItem::Sheet(Box::new(Sheet {
         id: "user-sheet".to_string(),
+        placed: true,
         at: Some(Point::new(200.0, 100.0)),
         size: Some(Point::new(40.0, 20.0)),
         name: Some(SymbolField::new(
@@ -106,6 +107,7 @@ fn cross_page_net_with_stale_page_scoped_drivers_repairs_to_global() {
     document.pages.push(user_page);
     document.pages[0].items.push(SchItem::Sheet(Box::new(Sheet {
         id: "user-sheet".to_string(),
+        placed: true,
         at: Some(Point::new(200.0, 100.0)),
         size: Some(Point::new(40.0, 20.0)),
         name: Some(SymbolField::new(

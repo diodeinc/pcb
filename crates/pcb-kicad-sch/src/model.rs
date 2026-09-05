@@ -100,6 +100,9 @@ impl SchItem {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Sheet {
     pub id: Id,
+    /// Whether this logical sheet instance is physically present in its parent source.
+    #[serde(default = "default_true")]
+    pub placed: bool,
     pub at: Option<Point>,
     pub size: Option<Point>,
     pub name: Option<SymbolField>,
