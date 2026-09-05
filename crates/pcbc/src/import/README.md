@@ -6,11 +6,9 @@ This module converts a KiCad project or standalone schematic into a Zener board 
 pcb import <design.kicad_sch|project.kicad_pro> <output-directory>
 ```
 
-`flow.rs` coordinates the pipeline, and `mod.rs` defines the module boundary.
-
 ## Pipeline
 
-Import runs these phases in order:
+`flow.rs` runs these phases in order:
 
 1. `discover` resolves the input schematic hierarchy and optional project files.
 2. `validate` runs ERC and, for project imports, DRC and schematic-layout parity checks.
@@ -27,11 +25,10 @@ Import resolves the generated Zener workspace offline during final validation.
 
 ## Output behavior
 
-Import keeps the existing repository-creation and overwrite behavior.
-A new output directory is initialized with the same Git repository, README, manifest, and standard-library setup used by the existing project importer.
-Import refuses an existing board repository unless the caller supplies `--force`.
-`--force` removes generated board, module, component, report, and archive files before regeneration.
-For project imports, it also replaces the generated layout output.
+A new output directory receives a Git repository, README, manifest, and
+standard-library setup. Import refuses an existing board repository unless
+`--force` is supplied. That flag removes generated board, module, component,
+report, and archive files before regeneration, and replaces project layout output.
 
 For a board named `<board>`, a standalone schematic import produces:
 
@@ -53,7 +50,7 @@ For a board named `<board>`, a standalone schematic import produces:
 A standalone import does not create a KiCad project, PCB, or source archive.
 The generated board declares the standard `layout` path so a later `pcb layout` command can create layout files.
 
-A project import additionally preserves the existing output:
+A project import also creates:
 
 ```text
 <output-directory>/
@@ -97,14 +94,12 @@ Pins with duplicate displayed names remain distinct unless the source netlist co
 Separate no-connect pins remain separate open terminals.
 Mechanical and documentation footprints with no numbered pads remain pinless components.
 
-The importer builds a physical-pin plan before rendering each component.
-The shared `pcb-component-gen` renderer consumes this plan, so import and component generation use one `Component(...)` renderer.
+`pcb-component-gen` renders each physical-pin plan as `Component(...)`.
 
 ## Generated-board validation
 
-After generation, import builds the board offline.
-This validation suppresses the existing `bom.unspecified` and `bom.underspecified` diagnostics locally because sourcing completion is not part of structural import.
-The global BOM diagnostic behavior is unchanged.
+The offline build suppresses `bom.unspecified` and `bom.underspecified` locally;
+sourcing completion is not part of structural import.
 
 Validation compares the complete generated physical-pin set and net partitions with the KiCad source.
 It rejects missing pins, unexpected pins, lost source endpoints, and shorts that are absent from the source schematic.
@@ -113,23 +108,17 @@ It must not share that net with another endpoint.
 
 ## Cross-file identity
 
-Import joins schematic, netlist, and layout records with `KiCadUuidPathKey`, not with reference designators.
-The key contains the instance sheet UUID path and symbol UUID:
-
-```text
-KiCadUuidPathKey = (sheetpath.tstamps, symbol_uuid)
-```
-
-Reference designators can change or collide across hierarchical sheets and are not stable cross-file identifiers.
+Import joins schematic, netlist, and layout records by `KiCadUuidPathKey`:
+the instance sheet UUID path (`sheetpath.tstamps`) and symbol UUID.
+Reference designators are unsuitable because they can change or collide across sheets.
 
 ## Footprint de-instancing
 
-Project imports cannot assume that the original `.kicad_mod` libraries remain available.
-They convert each embedded board footprint instance into a standalone footprint file.
-
-The conversion removes instance-only placement, path, UUID, property, and net data.
-It preserves local geometry, converts back-side geometry and layers, transforms embedded zones into footprint-local coordinates, and converts pad angles to local angles.
-`pcb-sexpr::board::transform_board_instance_footprint_to_standalone` implements these rules.
+Project imports extract standalone footprints from the board, without requiring
+the original `.kicad_mod` libraries.
+`pcb-sexpr::board::transform_board_instance_footprint_to_standalone` removes
+instance placement, path, UUID, property, and net data. It preserves local geometry,
+converts back-side geometry and layers, and makes embedded zones and pad angles local.
 
 ## Schematic positions
 

@@ -10,11 +10,9 @@ symbol-slot identity stored on each managed symbol. Deterministic UUIDs on
 generated labels, wires, sheets, and other items do not grant continued
 ownership of those items.
 
-Analysis is pure and interprets the schematic as KiCad does. Reconciliation
-must preserve a netlist-equivalent schematic without changing its files. When
-the netlist changes, the repair planner can use the managed symbol identities
-to make the smallest repair needed to restore equivalence. It must not treat
-tool-generated geometry or hierarchy as a canonical form.
+Analysis interprets the schematic as KiCad does. Reconciliation preserves an
+equivalent schematic except to refresh netlist-derived symbol assembly flags.
+Otherwise, it makes the smallest repair needed to restore equivalence.
 
 KiCad power symbols are adopted by their exact effective net name and
 connectivity. They do not require Zener identity metadata or a particular
@@ -22,45 +20,30 @@ library definition. A net symbol specified by Zener is the preferred way to
 create a missing name driver; it is not a canonical representation imposed on
 an existing equivalent schematic.
 
-Generation can use a prescriptive layout to produce a useful initial project.
-In particular, a newly materialized module instance can receive its own child
-sheet and `.kicad_sch` file. This is an initialization policy only. After the
-user edits or reorganizes the project in KiCad, later applications must operate
-on the resulting valid KiCad structure rather than reconstructing the initial
-structure.
+Generation may give a new module instance its own child sheet and file. Later
+applications preserve user reorganizations rather than restoring that layout.
 
 ## Shared core
 
-`reconcile::plan_reconciliation` is the topology-repair entrypoint shared by
-`pcb apply` and interactive editors. It accepts typed in-memory inputs, returns
-exact reversible document edits, and verifies the resulting document before it
-returns. It does not read or write files. For refreshing netlist-derived symbol
-assembly flags without repairing topology, interactive editors use the
-narrower `reconcile::sync_netlist_derived_symbol_properties`, which mutates the
-document in place.
+`pcb-kicad-sch` owns parsing, serialization, connectivity analysis,
+reconciliation, in-memory edits, and source patching. It has no filesystem
+operations and supports WASM without a separate feature mode.
 
-The `pcbc` persistence adapter resolves linked project paths, converts the
-verified typed result into minimal source patches, writes them atomically,
-reloads the project, and verifies it again. It must not make additional
+- `reconcile::plan_reconciliation` serves `pcb apply` and interactive editors.
+  It returns verified, reversible document edits for topology repair.
+- `reconcile::sync_netlist_derived_symbol_properties` refreshes assembly flags
+  in place without repairing topology.
+- Read-only queries expose symbol pin placement, visual bounds, and the source
+  items behind connectivity results.
+
+The caller owns project discovery, loading, atomic writes, and rollback.
+The `pcbc` adapter converts the verified edits into minimal source patches,
+writes them, then reloads and verifies the project. It makes no additional
 semantic decisions.
-
-Physical connectivity includes item provenance so an editor can associate an
-analysis result with the symbols, wires, labels, junctions, and sheet pins that
-formed it. Symbol pin placement and visual bounds are also public read-only
-queries.
-
-`pcb-kicad-sch` contains no filesystem operations. It owns parsing,
-serialization, connectivity reduction, analysis, reconciliation planning,
-in-memory plan application, and pure source patching. Project discovery, file
-loading, atomic writes, and rollback belong to the calling application. The
-normal crate build is therefore usable in WASM without a separate feature
-mode.
 
 ## Repair model
 
-Every repair, whether `pcb apply` or an interactive editor action, is one
-pipeline with different inputs: PCB inspects, PCB decides, a realizer draws,
-PCB verifies.
+`pcb apply` and interactive repairs share four stages:
 
 - **Inspect** (`analysis::inspect_schematic`) reduces the document and the
   netlist to one connectivity graph and reports issues with the exact items
@@ -83,8 +66,3 @@ PCB verifies.
   through reconciliation, which also proves its edits reversible. An external
   realizer calls `verify_connectivity_repair`, which additionally requires
   that nothing outside the intent changed.
-
-Two invariants follow. A schematic equivalent to its netlist is never touched
-except to refresh netlist-derived symbol assembly flags. Otherwise the repair
-is the least change that restores equivalence: PCB's removals are minimal,
-realizers add the least they can, and everything else is preserved exactly.
