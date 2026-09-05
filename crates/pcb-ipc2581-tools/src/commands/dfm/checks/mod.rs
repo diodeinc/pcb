@@ -384,7 +384,7 @@ fn evaluate(
             annular_ring::evaluate(limit(), class, &rule.conditions, design, accuracy)?.into()
         }
         RuleKind::PlatedSlotEnclosure => {
-            plated_slot_enclosure::evaluate(limit(), &rule.conditions, design).into()
+            plated_slot_enclosure::evaluate(limit(), &rule.conditions, design, accuracy)?.into()
         }
         RuleKind::HoleToCopperClearance(class) => {
             hole_clearance::evaluate(limit(), class, &rule.conditions, design, accuracy)?.into()
