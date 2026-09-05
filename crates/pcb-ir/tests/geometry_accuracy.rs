@@ -497,3 +497,16 @@ fn polygon_rounding_and_filled_union_respect_total_budget() {
             .is_err()
     );
 }
+
+#[test]
+fn compound_offsets_check_final_rounding_and_noop_inputs() {
+    let region = ContourSet::rectangle(
+        BBox::new(Point::new(1e9, 0.0), Point::new(1e9 + 1.0, 1.0)),
+        0.0,
+    );
+    let tight = accuracy(1e-6);
+    for operation in [ContourSet::disk_open, ContourSet::disk_close] {
+        assert!(operation(&region, 0.0, tight).is_err());
+        assert!(operation(&region, -1.0, GeometryAccuracy::default()).is_err());
+    }
+}

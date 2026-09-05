@@ -433,6 +433,11 @@ impl From<AccuracyError> for GapRegularizationError {
 }
 
 impl ContourSet {
+    fn checked(self, accuracy: GeometryAccuracy) -> Result<Self, AccuracyError> {
+        accuracy.check(self.uncertainty_mm)?;
+        Ok(self)
+    }
+
     pub fn new(rings: Vec<Ring>, fill_rule: FillRule, tolerance: f64) -> Self {
         let uncertainty = numerical_error(rings_bbox(&rings));
         Self::from_regularized(simplify_rings(rings, fill_rule), tolerance, uncertainty)
@@ -524,8 +529,7 @@ impl ContourSet {
             tolerance,
             prior + added + numeric,
         );
-        accuracy.check(region.uncertainty_mm)?;
-        Ok(region)
+        region.checked(accuracy)
     }
 
     /// Build the union of independently filled contours.
@@ -552,8 +556,7 @@ impl ContourSet {
             );
         }
         let result = composer.finish(tolerance);
-        accuracy.check(result.uncertainty_mm)?;
-        Ok(result)
+        result.checked(accuracy)
     }
 
     /// Build the union of the geometric images painted by a set of paths.
@@ -616,8 +619,7 @@ impl ContourSet {
             );
         }
         let result = composer.finish(tolerance);
-        accuracy.check(result.uncertainty_mm)?;
-        Ok(result)
+        result.checked(accuracy)
     }
 
     pub fn rectangle(bbox: BBox, tolerance: f64) -> Self {
@@ -1142,10 +1144,6 @@ impl ContourSet {
             .all(|ring| ring_boundary_distance(ring, center) + epsilon >= radius)
     }
 
-    /// Minkowski sum with a disk: `self ⊕ D_radius`. This is the standard
-    /// "buffer out" operation used for manufacturability checks. The
-    /// topology-aware offset expands outer contours, contracts holes, and
-    /// regularizes all resulting contours together.
     /// Morphological opening by a disk: `(self ⊖ D_radius) ⊕ D_radius`.
     ///
     /// Equivalently, this is the union of every radius-sized disk contained in
@@ -1157,17 +1155,11 @@ impl ContourSet {
         radius: f64,
         accuracy: GeometryAccuracy,
     ) -> Result<Self, AccuracyError> {
-        if self.is_empty() || radius <= 0.0 {
-            return Ok(self.clone());
-        }
-
-        // Round-offset tessellation approximates the mathematical disks. Clip
-        // the regrown result to the source so the operation retains its
-        // defining anti-extensive property at polygon tolerance.
-        Ok(self
+        let result = self
             .disk_erode(radius, accuracy)?
             .disk_dilate(radius, accuracy)?
-            .intersection(self))
+            .intersection(self);
+        result.checked(accuracy)
     }
 
     /// Morphological closing by a disk: `(self ⊕ D_radius) ⊖ D_radius`.
@@ -1181,17 +1173,11 @@ impl ContourSet {
         radius: f64,
         accuracy: GeometryAccuracy,
     ) -> Result<Self, AccuracyError> {
-        if self.is_empty() || radius <= 0.0 {
-            return Ok(self.clone());
-        }
-
-        // Round-offset tessellation approximates the mathematical disks. Union
-        // the contracted result with the source so the operation retains its
-        // defining extensive property at polygon tolerance.
-        Ok(self
+        let result = self
             .disk_dilate(radius, accuracy)?
             .disk_erode(radius, accuracy)?
-            .union(self))
+            .union(self);
+        result.checked(accuracy)
     }
 
     /// Diagnose distinct components whose Euclidean separation is less than
@@ -1286,8 +1272,8 @@ impl ContourSet {
             kept = next;
         }
         Ok(DiskGapRegularization {
-            removed: self.difference(&kept),
-            kept,
+            removed: self.difference(&kept).checked(accuracy)?,
+            kept: kept.checked(accuracy)?,
         })
     }
 
@@ -1309,7 +1295,8 @@ impl ContourSet {
         Ok(Some(
             self.difference(&keep_out)
                 .disk_open(filled_radius, accuracy)?
-                .intersection(self),
+                .intersection(self)
+                .checked(accuracy)?,
         ))
     }
 
@@ -1330,10 +1317,7 @@ impl ContourSet {
         if self.is_empty() || !(radius > 0.0 && radius.is_finite()) {
             return Ok(Self::empty(self.tolerance));
         }
-        Ok(two_sided_gap_residual(
-            self,
-            &closing_residual(self, radius, accuracy)?,
-        ))
+        two_sided_gap_residual(self, &closing_residual(self, radius, accuracy)?).checked(accuracy)
     }
 
     /// Connected material residues of the opening by `radius` whose local
@@ -1467,8 +1451,7 @@ impl ContourSet {
         let achievable = inherited + 2.0 * offset.abs() * (join_angle / 2.0).sin().powi(2);
         accuracy.check(achievable)?;
         let result = self.offset_with_angle(offset, join_angle);
-        accuracy.check(result.uncertainty_mm)?;
-        Ok(result)
+        result.checked(accuracy)
     }
 
     fn offset_with_angle(&self, offset: f64, join_angle: f64) -> Self {
@@ -1635,7 +1618,10 @@ fn closing_residual(
     radius: f64,
     accuracy: GeometryAccuracy,
 ) -> Result<ContourSet, AccuracyError> {
-    Ok(region.disk_close(radius, accuracy)?.difference(region))
+    region
+        .disk_close(radius, accuracy)?
+        .difference(region)
+        .checked(accuracy)
 }
 
 /// Every source boundary edge longer than the region tolerance, in ring
