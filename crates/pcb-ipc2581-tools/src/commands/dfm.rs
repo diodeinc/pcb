@@ -704,6 +704,42 @@ limit = { minimum = "300 mil" }
     }
 
     #[test]
+    fn ipc_copper_clearance_checks_profile_cutouts() {
+        let ipc = builtin_pdks().iter().find(|pdk| pdk.name == "ipc").unwrap();
+        let id = "diode.ipc_baseline.copper.minimum_board_edge_clearance";
+        let board = BOARD.replace(
+            r#"<Set polarity="POSITIVE">"#,
+            r#"<Set polarity="POSITIVE" net="N1">"#,
+        );
+        let clear = check_with_pdk(&board, LayoutTarget::Board, ipc.source);
+        assert!(matches!(rule(&clear, id).status, report::RuleStatus::Pass));
+
+        // The trace is 0.9 mm from the outer edge, but only 0.2 mm from
+        // this cutout. Exercise import, profile extraction, and the shared
+        // copper evaluator together rather than duplicating PCB IR geometry tests.
+        let board = board.replace(
+            "</Profile>",
+            r#"<Cutout>
+              <PolyBegin x="10" y="1.3"/><PolyStepSegment x="20" y="1.3"/>
+              <PolyStepSegment x="20" y="5"/><PolyStepSegment x="10" y="5"/>
+              <PolyStepSegment x="10" y="1.3"/>
+            </Cutout></Profile>"#,
+        );
+        let results = check_with_pdk(&board, LayoutTarget::Board, ipc.source);
+        let edge = rule(&results, id);
+        assert!(matches!(edge.status, report::RuleStatus::Fail));
+        assert_eq!(edge.finding_count, 1);
+        let finding = results.findings.iter().find(|f| f.rule_id == id).unwrap();
+        let actual = finding.measurement.actual_mm().unwrap();
+        assert!(
+            (actual - 0.2).abs() < pcb_ir::geom::tol::REGION_MM,
+            "actual clearance: {actual}"
+        );
+        assert_eq!(finding.layers[0].name, "TOP");
+        assert!(!finding.sites.is_empty());
+    }
+
+    #[test]
     fn standard_soldermask_web_warns_without_failing_verdict() {
         let mask_web = r#"
         <LayerFeature layerRef="F.Mask">

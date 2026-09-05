@@ -380,6 +380,7 @@ requirements or qualified capabilities for every technology or copper weight.
 | Hole diameter | Required minimum 0.20 mm for vias/NPTHs, 15 mil (0.381 mm) for PTHs | Source-declared circular hole diameter, interpreted as finished size |
 | Slot width | Required minimum 0.5 mm plated, 31 mil (0.7874 mm) nonplated | IPC primitive width or PCB IR outline minimum width; excludes the optional 0.6 mm plated preferred tier |
 | Hole-to-hole clearance | Required minimum 10 mil (0.254 mm) | All six unordered circular via/PTH/NPTH pair classes with overlapping physical drill spans; excludes routed-slot pairs |
+| Copper-to-board-edge clearance | Required minimum 15 mil (0.381 mm) | Each layer's composed copper image against board edges, including cutouts; intentional edge plating uses finding-specific [waivers](#waivers) |
 
 Hole-diameter checks do not model a separate drill-tool diameter, plating
 allowance, or manufacturing tolerance, and cannot verify the exporter's
