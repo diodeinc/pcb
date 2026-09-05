@@ -363,6 +363,15 @@ licensed IPC numeric matrices, do not prove full IPC compliance, and do not
 imply IPC certification. A pass covers only the checks listed in the selected
 profile's `coverage` metadata.
 
+All nine IPC profiles also adopt the following thresholds from the bundled
+Diode `standard.toml` PDK, cited as `diode-standard`. These general-purpose
+baselines apply uniformly across classes and levels; they are not IPC
+requirements or qualified capabilities for every technology or copper weight.
+
+| Check | Standard-derived limit | Scope |
+| --- | --- | --- |
+| Copper feature width | Required minimum 5 mil (0.127 mm) | Local widths of final composed copper on every copper layer, not just nominal trace widths |
+
 Output is UTF-8 JSON on stdout unless `-o` / `--output` is supplied. The
 recommended suffix is `.dfm.json`. Every complete report includes the native
 scene and PDK source for viewing without companion files. PCB generates no
