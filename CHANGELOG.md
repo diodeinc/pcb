@@ -16,6 +16,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Check minimum via, PTH, and NPTH hole diameters in all nine IPC DFM profiles.
 - Check minimum plated and nonplated slot widths in all nine IPC DFM profiles using Diode baseline limits.
 - Add circular hole-to-hole clearance to all nine IPC-informed DFM profiles using Diode's standard 10 mil baseline.
+- Check copper-to-board-edge and cutout clearance at 15 mil in all nine IPC-informed DFM profiles.
 
 ### Fixed
 
