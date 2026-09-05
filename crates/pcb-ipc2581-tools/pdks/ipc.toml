@@ -435,46 +435,47 @@ id = "diode.ipc_baseline.soldermask.minimum_web"
 limit = { preferred = "4 mil" }
 source = "diode-standard"
 
-# Diode routing margin, deliberately larger than circular-hole copper clearance.
-# These are conservative baseline choices, not IPC-specified numeric limits.
+# Diode preferred routing margin, larger than circular-hole copper clearance.
+# Shortfalls warn: these are opinionated guidance, not IPC requirements.
+# A physical stackup and declared/resolved slot span are still required inputs.
 [[rules.copper.slot_clearance]]
 id = "diode.ipc_baseline.copper.plated_slot_clearance.level_a"
 profiles = ["1a", "2a", "3a"]
 select = { plating = "plated" }
-limit = { minimum = "0.50 mm" }
+limit = { preferred = "0.50 mm" }
 source = "ipc-design-topics"
 
 [[rules.copper.slot_clearance]]
 id = "diode.ipc_baseline.copper.nonplated_slot_clearance.level_a"
 profiles = ["1a", "2a", "3a"]
 select = { plating = "nonplated" }
-limit = { minimum = "0.50 mm" }
+limit = { preferred = "0.50 mm" }
 source = "ipc-design-topics"
 
 [[rules.copper.slot_clearance]]
 id = "diode.ipc_baseline.copper.plated_slot_clearance.level_b"
 profiles = ["1b", "2b", "3b"]
 select = { plating = "plated" }
-limit = { minimum = "0.40 mm" }
+limit = { preferred = "0.40 mm" }
 source = "ipc-design-topics"
 
 [[rules.copper.slot_clearance]]
 id = "diode.ipc_baseline.copper.nonplated_slot_clearance.level_b"
 profiles = ["1b", "2b", "3b"]
 select = { plating = "nonplated" }
-limit = { minimum = "0.40 mm" }
+limit = { preferred = "0.40 mm" }
 source = "ipc-design-topics"
 
 [[rules.copper.slot_clearance]]
 id = "diode.ipc_baseline.copper.plated_slot_clearance.level_c"
 profiles = ["1c", "2c", "3c"]
 select = { plating = "plated" }
-limit = { minimum = "0.30 mm" }
+limit = { preferred = "0.30 mm" }
 source = "ipc-design-topics"
 
 [[rules.copper.slot_clearance]]
 id = "diode.ipc_baseline.copper.nonplated_slot_clearance.level_c"
 profiles = ["1c", "2c", "3c"]
 select = { plating = "nonplated" }
-limit = { minimum = "0.30 mm" }
+limit = { preferred = "0.30 mm" }
 source = "ipc-design-topics"
