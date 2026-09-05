@@ -7,6 +7,17 @@ Package versions identify immutable source snapshots. A dependency on
 `component-lib@0.3.2` selects the same source for every build until the manifest
 changes.
 
+## Repository structure
+
+A board repository has a root `pcb.toml` with `[workspace]` and `[board]`
+metadata, a board `.zen` entrypoint, and generated KiCad files under `layout/`.
+Create one with `pcb new board <NAME> <REPO_URL>`.
+
+A registry repository has a root `[workspace]` but no `[board]`. Both repository
+types can own reusable packages under `components/` and `modules/`. Each package
+has its own `pcb.toml` and `.zen` entrypoints; component packages also carry
+their symbols and footprints. `vendor/` holds vendored dependencies.
+
 ## Version policy
 
 PCB packages use semantic versions with hardware-specific compatibility rules:
