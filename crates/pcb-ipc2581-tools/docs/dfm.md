@@ -371,6 +371,7 @@ requirements or qualified capabilities for every technology or copper weight.
 | Check | Standard-derived limit | Scope |
 | --- | --- | --- |
 | Copper feature width | Required minimum 5 mil (0.127 mm) | Local widths of final composed copper on every copper layer, not just nominal trace widths |
+| Copper spacing | Required minimum 5 mil (0.127 mm) | Distinct final conductors on every copper layer; fabrication spacing, not voltage-dependent insulation clearance |
 
 Output is UTF-8 JSON on stdout unless `-o` / `--output` is supplied. The
 recommended suffix is `.dfm.json`. Every complete report includes the native
