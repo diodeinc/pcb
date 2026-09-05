@@ -10,6 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- Fix IPC-2581 tools tests failing to compile without default features.
 - Keep cutout-only copper layers empty in artwork composition and rendering while preserving visible drill artwork.
 - Report hole-to-copper clearance violations when unrelated copper reuses a land's source indices.
 
