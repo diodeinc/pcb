@@ -601,6 +601,8 @@ pub(super) struct CopperLayer {
     pub copper_weight_oz: Option<f64>,
     pub image: ContourSet,
     pub conductors: Vec<CopperConductor>,
+    /// Source lands, including those fully removed from the final copper image.
+    /// Hole links still require these for annular-ring subjects and provenance.
     pub lands: Vec<Land>,
 }
 
