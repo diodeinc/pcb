@@ -1,22 +1,61 @@
 (kicad_symbol_lib
-	(version 20241209)
+	(version 20251024)
 	(generator "kicad_symbol_editor")
-	(generator_version "9.0")
+	(generator_version "10.0")
 	(symbol "QR"
 		(exclude_from_sim no)
 		(in_bom yes)
 		(on_board yes)
+		(in_pos_files yes)
+		(duplicate_pin_numbers_are_jumpers no)
 		(property "Reference" "QR"
 			(at 0 0 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(hide yes)
 			(effects
 				(font
 					(size 1.27 1.27)
 				)
-				(hide yes)
 			)
 		)
 		(property "Value" "QR"
-			(at 0 -12.000 0)
+			(at 0 -12 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Footprint" ""
+			(at 0 0 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(hide yes)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 0 0 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(hide yes)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 0 0 0)
+			(show_name no)
+			(do_not_autoplace no)
+			(hide yes)
 			(effects
 				(font
 					(size 1.27 1.27)
@@ -24,241 +63,2591 @@
 			)
 		)
 		(symbol "QR_0_1"
-			(rectangle (start -10.500 10.500) (end 10.500 -10.500) (stroke (width 0) (type default)) (fill (type none)))
-			(rectangle (start -10.500 10.500) (end -9.500 9.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -9.500 10.500) (end -8.500 9.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -8.500 10.500) (end -7.500 9.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -7.500 10.500) (end -6.500 9.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -6.500 10.500) (end -5.500 9.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -5.500 10.500) (end -4.500 9.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -4.500 10.500) (end -3.500 9.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -2.500 10.500) (end -1.500 9.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 1.500 10.500) (end 2.500 9.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 3.500 10.500) (end 4.500 9.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 4.500 10.500) (end 5.500 9.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 5.500 10.500) (end 6.500 9.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 6.500 10.500) (end 7.500 9.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 7.500 10.500) (end 8.500 9.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 8.500 10.500) (end 9.500 9.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 9.500 10.500) (end 10.500 9.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -10.500 9.500) (end -9.500 8.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -4.500 9.500) (end -3.500 8.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -0.500 9.500) (end 0.500 8.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 1.500 9.500) (end 2.500 8.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 3.500 9.500) (end 4.500 8.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 9.500 9.500) (end 10.500 8.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -10.500 8.500) (end -9.500 7.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -8.500 8.500) (end -7.500 7.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -7.500 8.500) (end -6.500 7.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -6.500 8.500) (end -5.500 7.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -4.500 8.500) (end -3.500 7.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 0.500 8.500) (end 1.500 7.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 1.500 8.500) (end 2.500 7.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 3.500 8.500) (end 4.500 7.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 5.500 8.500) (end 6.500 7.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 6.500 8.500) (end 7.500 7.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 7.500 8.500) (end 8.500 7.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 9.500 8.500) (end 10.500 7.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -10.500 7.500) (end -9.500 6.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -8.500 7.500) (end -7.500 6.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -7.500 7.500) (end -6.500 6.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -6.500 7.500) (end -5.500 6.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -4.500 7.500) (end -3.500 6.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -0.500 7.500) (end 0.500 6.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 1.500 7.500) (end 2.500 6.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 3.500 7.500) (end 4.500 6.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 5.500 7.500) (end 6.500 6.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 6.500 7.500) (end 7.500 6.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 7.500 7.500) (end 8.500 6.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 9.500 7.500) (end 10.500 6.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -10.500 6.500) (end -9.500 5.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -8.500 6.500) (end -7.500 5.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -7.500 6.500) (end -6.500 5.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -6.500 6.500) (end -5.500 5.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -4.500 6.500) (end -3.500 5.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -1.500 6.500) (end -0.500 5.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 0.500 6.500) (end 1.500 5.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 1.500 6.500) (end 2.500 5.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 3.500 6.500) (end 4.500 5.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 5.500 6.500) (end 6.500 5.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 6.500 6.500) (end 7.500 5.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 7.500 6.500) (end 8.500 5.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 9.500 6.500) (end 10.500 5.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -10.500 5.500) (end -9.500 4.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -4.500 5.500) (end -3.500 4.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -1.500 5.500) (end -0.500 4.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -0.500 5.500) (end 0.500 4.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 3.500 5.500) (end 4.500 4.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 9.500 5.500) (end 10.500 4.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -10.500 4.500) (end -9.500 3.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -9.500 4.500) (end -8.500 3.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -8.500 4.500) (end -7.500 3.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -7.500 4.500) (end -6.500 3.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -6.500 4.500) (end -5.500 3.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -5.500 4.500) (end -4.500 3.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -4.500 4.500) (end -3.500 3.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -2.500 4.500) (end -1.500 3.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -0.500 4.500) (end 0.500 3.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 1.500 4.500) (end 2.500 3.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 3.500 4.500) (end 4.500 3.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 4.500 4.500) (end 5.500 3.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 5.500 4.500) (end 6.500 3.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 6.500 4.500) (end 7.500 3.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 7.500 4.500) (end 8.500 3.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 8.500 4.500) (end 9.500 3.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 9.500 4.500) (end 10.500 3.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -2.500 3.500) (end -1.500 2.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -10.500 2.500) (end -9.500 1.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -9.500 2.500) (end -8.500 1.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -7.500 2.500) (end -6.500 1.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -6.500 2.500) (end -5.500 1.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -4.500 2.500) (end -3.500 1.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -0.500 2.500) (end 0.500 1.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 0.500 2.500) (end 1.500 1.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 3.500 2.500) (end 4.500 1.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 9.500 2.500) (end 10.500 1.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -10.500 1.500) (end -9.500 0.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -6.500 1.500) (end -5.500 0.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -3.500 1.500) (end -2.500 0.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -2.500 1.500) (end -1.500 0.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -1.500 1.500) (end -0.500 0.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -0.500 1.500) (end 0.500 0.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 0.500 1.500) (end 1.500 0.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 1.500 1.500) (end 2.500 0.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 2.500 1.500) (end 3.500 0.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 4.500 1.500) (end 5.500 0.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 5.500 1.500) (end 6.500 0.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 7.500 1.500) (end 8.500 0.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 8.500 1.500) (end 9.500 0.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 9.500 1.500) (end 10.500 0.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -10.500 0.500) (end -9.500 -0.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -8.500 0.500) (end -7.500 -0.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -6.500 0.500) (end -5.500 -0.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -4.500 0.500) (end -3.500 -0.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -2.500 0.500) (end -1.500 -0.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -1.500 0.500) (end -0.500 -0.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 0.500 0.500) (end 1.500 -0.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 1.500 0.500) (end 2.500 -0.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 4.500 0.500) (end 5.500 -0.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 6.500 0.500) (end 7.500 -0.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 9.500 0.500) (end 10.500 -0.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -10.500 -0.500) (end -9.500 -1.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -9.500 -0.500) (end -8.500 -1.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -8.500 -0.500) (end -7.500 -1.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -7.500 -0.500) (end -6.500 -1.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -5.500 -0.500) (end -4.500 -1.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -2.500 -0.500) (end -1.500 -1.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -1.500 -0.500) (end -0.500 -1.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 1.500 -0.500) (end 2.500 -1.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 2.500 -0.500) (end 3.500 -1.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 3.500 -0.500) (end 4.500 -1.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 4.500 -0.500) (end 5.500 -1.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 5.500 -0.500) (end 6.500 -1.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 8.500 -0.500) (end 9.500 -1.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 9.500 -0.500) (end 10.500 -1.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -9.500 -1.500) (end -8.500 -2.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -6.500 -1.500) (end -5.500 -2.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -4.500 -1.500) (end -3.500 -2.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -3.500 -1.500) (end -2.500 -2.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -1.500 -1.500) (end -0.500 -2.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 0.500 -1.500) (end 1.500 -2.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 1.500 -1.500) (end 2.500 -2.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 2.500 -1.500) (end 3.500 -2.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 3.500 -1.500) (end 4.500 -2.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 4.500 -1.500) (end 5.500 -2.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 5.500 -1.500) (end 6.500 -2.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 6.500 -1.500) (end 7.500 -2.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 7.500 -1.500) (end 8.500 -2.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 9.500 -1.500) (end 10.500 -2.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -2.500 -2.500) (end -1.500 -3.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -0.500 -2.500) (end 0.500 -3.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 1.500 -2.500) (end 2.500 -3.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 2.500 -2.500) (end 3.500 -3.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 3.500 -2.500) (end 4.500 -3.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 7.500 -2.500) (end 8.500 -3.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 8.500 -2.500) (end 9.500 -3.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 9.500 -2.500) (end 10.500 -3.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -10.500 -3.500) (end -9.500 -4.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -9.500 -3.500) (end -8.500 -4.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -8.500 -3.500) (end -7.500 -4.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -7.500 -3.500) (end -6.500 -4.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -6.500 -3.500) (end -5.500 -4.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -5.500 -3.500) (end -4.500 -4.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -4.500 -3.500) (end -3.500 -4.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -0.500 -3.500) (end 0.500 -4.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 0.500 -3.500) (end 1.500 -4.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 7.500 -3.500) (end 8.500 -4.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 9.500 -3.500) (end 10.500 -4.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -10.500 -4.500) (end -9.500 -5.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -4.500 -4.500) (end -3.500 -5.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -1.500 -4.500) (end -0.500 -5.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 3.500 -4.500) (end 4.500 -5.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 7.500 -4.500) (end 8.500 -5.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 8.500 -4.500) (end 9.500 -5.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 9.500 -4.500) (end 10.500 -5.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -10.500 -5.500) (end -9.500 -6.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -8.500 -5.500) (end -7.500 -6.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -7.500 -5.500) (end -6.500 -6.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -6.500 -5.500) (end -5.500 -6.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -4.500 -5.500) (end -3.500 -6.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -2.500 -5.500) (end -1.500 -6.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -1.500 -5.500) (end -0.500 -6.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -0.500 -5.500) (end 0.500 -6.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 2.500 -5.500) (end 3.500 -6.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 3.500 -5.500) (end 4.500 -6.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 5.500 -5.500) (end 6.500 -6.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 6.500 -5.500) (end 7.500 -6.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 7.500 -5.500) (end 8.500 -6.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 9.500 -5.500) (end 10.500 -6.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -10.500 -6.500) (end -9.500 -7.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -8.500 -6.500) (end -7.500 -7.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -7.500 -6.500) (end -6.500 -7.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -6.500 -6.500) (end -5.500 -7.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -4.500 -6.500) (end -3.500 -7.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -2.500 -6.500) (end -1.500 -7.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -0.500 -6.500) (end 0.500 -7.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 1.500 -6.500) (end 2.500 -7.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 2.500 -6.500) (end 3.500 -7.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 3.500 -6.500) (end 4.500 -7.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 4.500 -6.500) (end 5.500 -7.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 5.500 -6.500) (end 6.500 -7.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -10.500 -7.500) (end -9.500 -8.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -8.500 -7.500) (end -7.500 -8.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -7.500 -7.500) (end -6.500 -8.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -6.500 -7.500) (end -5.500 -8.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -4.500 -7.500) (end -3.500 -8.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -1.500 -7.500) (end -0.500 -8.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 0.500 -7.500) (end 1.500 -8.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 1.500 -7.500) (end 2.500 -8.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 2.500 -7.500) (end 3.500 -8.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 4.500 -7.500) (end 5.500 -8.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 5.500 -7.500) (end 6.500 -8.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 6.500 -7.500) (end 7.500 -8.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 8.500 -7.500) (end 9.500 -8.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 9.500 -7.500) (end 10.500 -8.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -10.500 -8.500) (end -9.500 -9.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -4.500 -8.500) (end -3.500 -9.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -2.500 -8.500) (end -1.500 -9.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -0.500 -8.500) (end 0.500 -9.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 0.500 -8.500) (end 1.500 -9.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 1.500 -8.500) (end 2.500 -9.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 4.500 -8.500) (end 5.500 -9.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 6.500 -8.500) (end 7.500 -9.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 8.500 -8.500) (end 9.500 -9.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -10.500 -9.500) (end -9.500 -10.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -9.500 -9.500) (end -8.500 -10.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -8.500 -9.500) (end -7.500 -10.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -7.500 -9.500) (end -6.500 -10.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -6.500 -9.500) (end -5.500 -10.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -5.500 -9.500) (end -4.500 -10.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -4.500 -9.500) (end -3.500 -10.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start -2.500 -9.500) (end -1.500 -10.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 1.500 -9.500) (end 2.500 -10.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 2.500 -9.500) (end 3.500 -10.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 4.500 -9.500) (end 5.500 -10.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 5.500 -9.500) (end 6.500 -10.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 7.500 -9.500) (end 8.500 -10.500) (stroke (width 0) (type default)) (fill (type outline)))
-			(rectangle (start 8.500 -9.500) (end 9.500 -10.500) (stroke (width 0) (type default)) (fill (type outline)))
+			(rectangle
+				(start -10.5 10.5)
+				(end -9.5 9.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -10.5 10.5)
+				(end 10.5 -10.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type none)
+				)
+			)
+			(rectangle
+				(start -10.5 9.5)
+				(end -9.5 8.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -10.5 8.5)
+				(end -9.5 7.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -10.5 7.5)
+				(end -9.5 6.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -10.5 6.5)
+				(end -9.5 5.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -10.5 5.5)
+				(end -9.5 4.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -10.5 4.5)
+				(end -9.5 3.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -10.5 2.5)
+				(end -9.5 1.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -10.5 1.5)
+				(end -9.5 0.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -10.5 0.5)
+				(end -9.5 -0.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -10.5 -0.5)
+				(end -9.5 -1.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -10.5 -3.5)
+				(end -9.5 -4.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -10.5 -4.5)
+				(end -9.5 -5.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -10.5 -5.5)
+				(end -9.5 -6.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -10.5 -6.5)
+				(end -9.5 -7.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -10.5 -7.5)
+				(end -9.5 -8.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -10.5 -8.5)
+				(end -9.5 -9.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -10.5 -9.5)
+				(end -9.5 -10.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -9.5 10.5)
+				(end -8.5 9.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -9.5 4.5)
+				(end -8.5 3.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -9.5 2.5)
+				(end -8.5 1.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -9.5 -0.5)
+				(end -8.5 -1.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -9.5 -1.5)
+				(end -8.5 -2.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -9.5 -3.5)
+				(end -8.5 -4.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -9.5 -9.5)
+				(end -8.5 -10.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -8.5 10.5)
+				(end -7.5 9.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -8.5 8.5)
+				(end -7.5 7.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -8.5 7.5)
+				(end -7.5 6.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -8.5 6.5)
+				(end -7.5 5.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -8.5 4.5)
+				(end -7.5 3.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -8.5 0.5)
+				(end -7.5 -0.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -8.5 -0.5)
+				(end -7.5 -1.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -8.5 -3.5)
+				(end -7.5 -4.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -8.5 -5.5)
+				(end -7.5 -6.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -8.5 -6.5)
+				(end -7.5 -7.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -8.5 -7.5)
+				(end -7.5 -8.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -8.5 -9.5)
+				(end -7.5 -10.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -7.5 10.5)
+				(end -6.5 9.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -7.5 8.5)
+				(end -6.5 7.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -7.5 7.5)
+				(end -6.5 6.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -7.5 6.5)
+				(end -6.5 5.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -7.5 4.5)
+				(end -6.5 3.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -7.5 2.5)
+				(end -6.5 1.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -7.5 -0.5)
+				(end -6.5 -1.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -7.5 -3.5)
+				(end -6.5 -4.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -7.5 -5.5)
+				(end -6.5 -6.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -7.5 -6.5)
+				(end -6.5 -7.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -7.5 -7.5)
+				(end -6.5 -8.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -7.5 -9.5)
+				(end -6.5 -10.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -6.5 10.5)
+				(end -5.5 9.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -6.5 8.5)
+				(end -5.5 7.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -6.5 7.5)
+				(end -5.5 6.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -6.5 6.5)
+				(end -5.5 5.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -6.5 4.5)
+				(end -5.5 3.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -6.5 2.5)
+				(end -5.5 1.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -6.5 1.5)
+				(end -5.5 0.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -6.5 0.5)
+				(end -5.5 -0.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -6.5 -1.5)
+				(end -5.5 -2.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -6.5 -3.5)
+				(end -5.5 -4.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -6.5 -5.5)
+				(end -5.5 -6.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -6.5 -6.5)
+				(end -5.5 -7.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -6.5 -7.5)
+				(end -5.5 -8.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -6.5 -9.5)
+				(end -5.5 -10.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -5.5 10.5)
+				(end -4.5 9.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -5.5 4.5)
+				(end -4.5 3.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -5.5 -0.5)
+				(end -4.5 -1.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -5.5 -3.5)
+				(end -4.5 -4.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -5.5 -9.5)
+				(end -4.5 -10.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -4.5 10.5)
+				(end -3.5 9.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -4.5 9.5)
+				(end -3.5 8.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -4.5 8.5)
+				(end -3.5 7.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -4.5 7.5)
+				(end -3.5 6.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -4.5 6.5)
+				(end -3.5 5.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -4.5 5.5)
+				(end -3.5 4.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -4.5 4.5)
+				(end -3.5 3.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -4.5 2.5)
+				(end -3.5 1.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -4.5 0.5)
+				(end -3.5 -0.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -4.5 -1.5)
+				(end -3.5 -2.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -4.5 -3.5)
+				(end -3.5 -4.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -4.5 -4.5)
+				(end -3.5 -5.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -4.5 -5.5)
+				(end -3.5 -6.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -4.5 -6.5)
+				(end -3.5 -7.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -4.5 -7.5)
+				(end -3.5 -8.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -4.5 -8.5)
+				(end -3.5 -9.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -4.5 -9.5)
+				(end -3.5 -10.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -3.5 1.5)
+				(end -2.5 0.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -3.5 -1.5)
+				(end -2.5 -2.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -2.5 10.5)
+				(end -1.5 9.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -2.5 4.5)
+				(end -1.5 3.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -2.5 3.5)
+				(end -1.5 2.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -2.5 1.5)
+				(end -1.5 0.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -2.5 0.5)
+				(end -1.5 -0.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -2.5 -0.5)
+				(end -1.5 -1.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -2.5 -2.5)
+				(end -1.5 -3.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -2.5 -5.5)
+				(end -1.5 -6.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -2.5 -6.5)
+				(end -1.5 -7.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -2.5 -8.5)
+				(end -1.5 -9.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -2.5 -9.5)
+				(end -1.5 -10.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -1.5 6.5)
+				(end -0.5 5.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -1.5 5.5)
+				(end -0.5 4.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -1.5 1.5)
+				(end -0.5 0.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -1.5 0.5)
+				(end -0.5 -0.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -1.5 -0.5)
+				(end -0.5 -1.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -1.5 -1.5)
+				(end -0.5 -2.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -1.5 -4.5)
+				(end -0.5 -5.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -1.5 -5.5)
+				(end -0.5 -6.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -1.5 -7.5)
+				(end -0.5 -8.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -0.5 9.5)
+				(end 0.5 8.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -0.5 7.5)
+				(end 0.5 6.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -0.5 5.5)
+				(end 0.5 4.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -0.5 4.5)
+				(end 0.5 3.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -0.5 2.5)
+				(end 0.5 1.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -0.5 1.5)
+				(end 0.5 0.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -0.5 -2.5)
+				(end 0.5 -3.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -0.5 -3.5)
+				(end 0.5 -4.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -0.5 -5.5)
+				(end 0.5 -6.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -0.5 -6.5)
+				(end 0.5 -7.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start -0.5 -8.5)
+				(end 0.5 -9.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 0.5 8.5)
+				(end 1.5 7.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 0.5 6.5)
+				(end 1.5 5.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 0.5 2.5)
+				(end 1.5 1.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 0.5 1.5)
+				(end 1.5 0.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 0.5 0.5)
+				(end 1.5 -0.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 0.5 -1.5)
+				(end 1.5 -2.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 0.5 -3.5)
+				(end 1.5 -4.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 0.5 -7.5)
+				(end 1.5 -8.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 0.5 -8.5)
+				(end 1.5 -9.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 1.5 10.5)
+				(end 2.5 9.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 1.5 9.5)
+				(end 2.5 8.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 1.5 8.5)
+				(end 2.5 7.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 1.5 7.5)
+				(end 2.5 6.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 1.5 6.5)
+				(end 2.5 5.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 1.5 4.5)
+				(end 2.5 3.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 1.5 1.5)
+				(end 2.5 0.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 1.5 0.5)
+				(end 2.5 -0.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 1.5 -0.5)
+				(end 2.5 -1.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 1.5 -1.5)
+				(end 2.5 -2.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 1.5 -2.5)
+				(end 2.5 -3.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 1.5 -6.5)
+				(end 2.5 -7.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 1.5 -7.5)
+				(end 2.5 -8.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 1.5 -8.5)
+				(end 2.5 -9.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 1.5 -9.5)
+				(end 2.5 -10.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 2.5 1.5)
+				(end 3.5 0.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 2.5 -0.5)
+				(end 3.5 -1.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 2.5 -1.5)
+				(end 3.5 -2.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 2.5 -2.5)
+				(end 3.5 -3.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 2.5 -5.5)
+				(end 3.5 -6.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 2.5 -6.5)
+				(end 3.5 -7.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 2.5 -7.5)
+				(end 3.5 -8.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 2.5 -9.5)
+				(end 3.5 -10.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 3.5 10.5)
+				(end 4.5 9.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 3.5 9.5)
+				(end 4.5 8.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 3.5 8.5)
+				(end 4.5 7.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 3.5 7.5)
+				(end 4.5 6.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 3.5 6.5)
+				(end 4.5 5.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 3.5 5.5)
+				(end 4.5 4.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 3.5 4.5)
+				(end 4.5 3.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 3.5 2.5)
+				(end 4.5 1.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 3.5 -0.5)
+				(end 4.5 -1.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 3.5 -1.5)
+				(end 4.5 -2.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 3.5 -2.5)
+				(end 4.5 -3.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 3.5 -4.5)
+				(end 4.5 -5.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 3.5 -5.5)
+				(end 4.5 -6.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 3.5 -6.5)
+				(end 4.5 -7.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 4.5 10.5)
+				(end 5.5 9.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 4.5 4.5)
+				(end 5.5 3.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 4.5 1.5)
+				(end 5.5 0.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 4.5 0.5)
+				(end 5.5 -0.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 4.5 -0.5)
+				(end 5.5 -1.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 4.5 -1.5)
+				(end 5.5 -2.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 4.5 -6.5)
+				(end 5.5 -7.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 4.5 -7.5)
+				(end 5.5 -8.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 4.5 -8.5)
+				(end 5.5 -9.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 4.5 -9.5)
+				(end 5.5 -10.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 5.5 10.5)
+				(end 6.5 9.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 5.5 8.5)
+				(end 6.5 7.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 5.5 7.5)
+				(end 6.5 6.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 5.5 6.5)
+				(end 6.5 5.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 5.5 4.5)
+				(end 6.5 3.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 5.5 1.5)
+				(end 6.5 0.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 5.5 -0.5)
+				(end 6.5 -1.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 5.5 -1.5)
+				(end 6.5 -2.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 5.5 -5.5)
+				(end 6.5 -6.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 5.5 -6.5)
+				(end 6.5 -7.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 5.5 -7.5)
+				(end 6.5 -8.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 5.5 -9.5)
+				(end 6.5 -10.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 6.5 10.5)
+				(end 7.5 9.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 6.5 8.5)
+				(end 7.5 7.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 6.5 7.5)
+				(end 7.5 6.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 6.5 6.5)
+				(end 7.5 5.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 6.5 4.5)
+				(end 7.5 3.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 6.5 0.5)
+				(end 7.5 -0.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 6.5 -1.5)
+				(end 7.5 -2.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 6.5 -5.5)
+				(end 7.5 -6.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 6.5 -7.5)
+				(end 7.5 -8.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 6.5 -8.5)
+				(end 7.5 -9.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 7.5 10.5)
+				(end 8.5 9.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 7.5 8.5)
+				(end 8.5 7.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 7.5 7.5)
+				(end 8.5 6.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 7.5 6.5)
+				(end 8.5 5.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 7.5 4.5)
+				(end 8.5 3.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 7.5 1.5)
+				(end 8.5 0.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 7.5 -1.5)
+				(end 8.5 -2.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 7.5 -2.5)
+				(end 8.5 -3.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 7.5 -3.5)
+				(end 8.5 -4.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 7.5 -4.5)
+				(end 8.5 -5.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 7.5 -5.5)
+				(end 8.5 -6.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 7.5 -9.5)
+				(end 8.5 -10.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 8.5 10.5)
+				(end 9.5 9.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 8.5 4.5)
+				(end 9.5 3.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 8.5 1.5)
+				(end 9.5 0.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 8.5 -0.5)
+				(end 9.5 -1.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 8.5 -2.5)
+				(end 9.5 -3.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 8.5 -4.5)
+				(end 9.5 -5.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 8.5 -7.5)
+				(end 9.5 -8.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 8.5 -8.5)
+				(end 9.5 -9.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 8.5 -9.5)
+				(end 9.5 -10.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 9.5 10.5)
+				(end 10.5 9.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 9.5 9.5)
+				(end 10.5 8.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 9.5 8.5)
+				(end 10.5 7.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 9.5 7.5)
+				(end 10.5 6.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 9.5 6.5)
+				(end 10.5 5.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 9.5 5.5)
+				(end 10.5 4.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 9.5 4.5)
+				(end 10.5 3.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 9.5 2.5)
+				(end 10.5 1.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 9.5 1.5)
+				(end 10.5 0.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 9.5 0.5)
+				(end 10.5 -0.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 9.5 -0.5)
+				(end 10.5 -1.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 9.5 -1.5)
+				(end 10.5 -2.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 9.5 -2.5)
+				(end 10.5 -3.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 9.5 -3.5)
+				(end 10.5 -4.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 9.5 -4.5)
+				(end 10.5 -5.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 9.5 -5.5)
+				(end 10.5 -6.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
+			(rectangle
+				(start 9.5 -7.5)
+				(end 10.5 -8.5)
+				(stroke
+					(width 0)
+					(type default)
+				)
+				(fill
+					(type outline)
+				)
+			)
 		)
 		(embedded_fonts no)
 	)

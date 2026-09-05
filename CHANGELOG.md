@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- Upgrade all remaining bundled standard-library and example symbols to KiCad 10 format.
+
 ## [0.4.51] - 2026-09-05
 
 ### Added
