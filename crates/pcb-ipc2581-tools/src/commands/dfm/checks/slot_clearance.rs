@@ -36,9 +36,9 @@ pub(super) fn evaluate(
         for (copper_index, copper) in design.copper_layers.iter().enumerate() {
             // Extraction orders copper layers and drill spans by the same
             // validated physical stackup.
-            let span = usize::from(slot.drill_span.first_copper_index)
-                ..=usize::from(slot.drill_span.last_copper_index);
-            if !span.contains(&copper_index) || !conditions.applies_to_layer(copper) {
+            if !slot.drill_span.contains_copper(copper_index)
+                || !conditions.applies_to_layer(copper)
+            {
                 continue;
             }
             checked += 1;

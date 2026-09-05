@@ -34,7 +34,9 @@ pub(super) fn evaluate(
     for (hole_index, hole) in holes_of_class(design, class) {
         let radius_mm = hole.diameter_mm / 2.0;
         for (copper_index, copper) in design.copper_layers.iter().enumerate() {
-            if !hole.spans_copper(copper_index) || !conditions.applies_to_layer(copper) {
+            if !hole.drill_span.contains_copper(copper_index)
+                || !conditions.applies_to_layer(copper)
+            {
                 continue;
             }
             checked += 1;
@@ -566,7 +568,7 @@ limit = {{ minimum = "0.20 mm" }}
                     .copper_layers
                     .iter()
                     .enumerate()
-                    .filter(|(index, _)| design.holes[0].spans_copper(*index))
+                    .filter(|(index, _)| design.holes[0].drill_span.contains_copper(*index))
                     .map(|(_, layer)| layer.layer.name.as_str())
                     .collect::<Vec<_>>();
                 included.sort_unstable();

@@ -25,19 +25,16 @@ pub(super) fn evaluate(limit_mm: f64, conditions: &Conditions, design: &Design) 
         .enumerate()
         .filter(|(_, slot)| slot_matches(slot.plating, SlotPlating::Plated))
     {
-        let first = usize::from(slot.drill_span.first_copper_index);
-        let last = usize::from(slot.drill_span.last_copper_index);
         let mut sites = Vec::new();
         for (index, copper) in design
             .copper_layers
             .iter()
             .enumerate()
             .filter(|(index, copper)| {
-                (first..=last).contains(index) && conditions.applies_to_layer(copper)
+                slot.drill_span.contains_copper(*index) && conditions.applies_to_layer(copper)
             })
         {
-            let required = index == first
-                || index == last
+            let required = slot.drill_span.terminates_on(index)
                 || design.slot_lands[slot_index]
                     .iter()
                     .any(|land| land.copper_index as usize == index);

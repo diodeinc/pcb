@@ -53,7 +53,7 @@ pub(super) fn evaluate(
                     let y_gap = (second.bbox.min.y - first.bbox.max.y)
                         .max(first.bbox.min.y - second.bbox.max.y)
                         .max(0.0);
-                    classes_match && y_gap < reach && first.span_overlaps(second)
+                    classes_match && y_gap < reach && first.drill_span.overlaps(&second.drill_span)
                 })
                 .map(move |second| {
                     let distance = disk_clearance(

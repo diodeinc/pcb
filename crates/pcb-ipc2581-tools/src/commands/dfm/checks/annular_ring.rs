@@ -105,7 +105,7 @@ pub(super) fn evaluate(
             let enclosures = copper_layers
                 .iter()
                 .enumerate()
-                .filter(|(copper_index, _)| hole.spans_copper(*copper_index))
+                .filter(|(copper_index, _)| hole.drill_span.contains_copper(*copper_index))
                 .filter(|(_, copper)| conditions.applies_to_layer(copper))
                 .filter_map(|(copper_index, copper)| {
                     let land = hole_lands[hole_index]
@@ -113,7 +113,7 @@ pub(super) fn evaluate(
                         .find(|link| link.copper_index as usize == copper_index)
                         .map(|link: &HoleLand| &copper.lands[link.land_index as usize]);
                     let in_copper = contains[copper_index][position];
-                    let required = land.is_some() || hole.terminates_on(copper_index);
+                    let required = land.is_some() || hole.drill_span.terminates_on(copper_index);
                     (in_copper || required).then_some((
                         copper_index,
                         RingSubject {
