@@ -377,6 +377,11 @@ requirements or qualified capabilities for every technology or copper weight.
 | Copper feature width | Required minimum 5 mil (0.127 mm) | Local widths of final composed copper on every copper layer, not just nominal trace widths |
 | Copper spacing | Required minimum 5 mil (0.127 mm) | Distinct final conductors on every copper layer; fabrication spacing, not voltage-dependent insulation clearance |
 | Annular ring | Required minimum 0.125 mm for vias, 7 mil (0.1778 mm) for PTHs | Nominal circular-hole enclosure on applicable copper layers, not tolerance-aware finished-board acceptance |
+| Hole diameter | Required minimum 0.20 mm for vias/NPTHs, 15 mil (0.381 mm) for PTHs | Source-declared circular hole diameter, interpreted as finished size |
+
+Hole-diameter checks do not model a separate drill-tool diameter, plating
+allowance, or manufacturing tolerance, and cannot verify the exporter's
+finished-size interpretation.
 
 Output is UTF-8 JSON on stdout unless `-o` / `--output` is supplied. The
 recommended suffix is `.dfm.json`. Every complete report includes the native
