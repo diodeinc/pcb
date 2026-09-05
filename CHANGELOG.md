@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.51] - 2026-09-05
+
 ### Added
 
 - Expand all nine IPC-informed DFM profiles with Diode baseline checks.
@@ -1864,7 +1866,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.50...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.51...HEAD
+[0.4.51]: https://github.com/diodeinc/pcb/compare/v0.4.50...v0.4.51
 [0.4.50]: https://github.com/diodeinc/pcb/compare/v0.4.49...v0.4.50
 [0.4.49]: https://github.com/diodeinc/pcb/compare/v0.4.48...v0.4.49
 [0.4.48]: https://github.com/diodeinc/pcb/compare/v0.4.47...v0.4.48
