@@ -8,6 +8,9 @@ use crate::{SchDocument, SchItem, SchPage};
 
 #[derive(Serialize, Deserialize)]
 struct Entry {
+    // Legacy entries are matched by filename until the next metadata sync.
+    #[serde(default)]
+    parent_id: Option<String>,
     parent_file: String,
     /// Native sheet syntax avoids persisting parser spans or Rust model details.
     sheet: String,
@@ -65,7 +68,10 @@ pub fn restore_sheet_placements(page: &mut SchPage, project: &Value) -> Result<(
         .filter_map(SchItem::id)
         .map(str::to_owned)
         .collect::<std::collections::BTreeSet<_>>();
-    for entry in entries.into_iter().filter(|e| e.parent_file == parent_file) {
+    for entry in entries.into_iter().filter(|e| match &e.parent_id {
+        Some(id) => id == &page.id,
+        None => e.parent_file == parent_file,
+    }) {
         let mut sheet = crate::kicad::parse_sheet_source(&entry.sheet)?;
         normalized(parent_file, sheet.file_name())?;
         if !existing_ids.insert(sheet.id.clone()) {
@@ -88,6 +94,7 @@ pub fn sync_sheet_placements(project: &mut Value, document: &SchDocument) -> Res
         for item in &page.items {
             if let SchItem::Sheet(sheet) = item {
                 next.push(Entry {
+                    parent_id: Some(page.id.clone()),
                     parent_file: parent_file.clone(),
                     sheet: pcb_sexpr::formatter::format_tree(
                         &crate::kicad::sheet_to_sexpr(sheet),

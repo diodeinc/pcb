@@ -90,6 +90,7 @@ pub(crate) fn reconcile_document(
         remove_locations,
         connectivity: selected_connectivity,
     } = repair_targets(issue_selection, inspection_before, &expected_slots)?;
+    let restores_missing_sheets = !missing_sheets.is_empty();
     for (page_id, sheet_id) in missing_sheets {
         let sheet = document
             .pages
@@ -261,8 +262,10 @@ pub(crate) fn reconcile_document(
         // Any selected mutation (projection or removal) shifts issue keys, so
         // connectivity issues that appear only after the mutation belong to
         // this repair's scope.
-        let document_mutated =
-            !project_slots.is_empty() || !remove_slots.is_empty() || !remove_locations.is_empty();
+        let document_mutated = restores_missing_sheets
+            || !project_slots.is_empty()
+            || !remove_slots.is_empty()
+            || !remove_locations.is_empty();
         current
             .issues
             .iter()

@@ -221,3 +221,32 @@ fn invalid_metadata_and_escaping_paths_are_rejected() {
             .contains("escapes project directory")
     );
 }
+
+#[test]
+fn legacy_parent_filenames_migrate_to_stable_ids() {
+    let mut builder = KicadBuilder::new();
+    builder.sheet("child.kicad_sch", &[]);
+    let mut document = builder.build();
+    let mut metadata = json!({});
+    sync_sheet_placements(&mut metadata, &document).unwrap();
+    metadata["diode"]["schematic_sheets"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("parent_id");
+    document.pages[0].items.clear();
+    restore_sheet_placements(&mut document.pages[0], &metadata).unwrap();
+    assert_eq!(sheets(&document).count(), 1);
+    sync_sheet_placements(&mut metadata, &document).unwrap();
+    assert_eq!(
+        metadata["diode"]["schematic_sheets"][0]["parent_id"],
+        document.pages[0].id
+    );
+    let mut unrelated = document.pages[0].clone();
+    unrelated.id = "replacement-page-at-same-path".into();
+    unrelated.items.clear();
+    restore_sheet_placements(&mut unrelated, &metadata).unwrap();
+    assert!(
+        unrelated.items.is_empty(),
+        "UUID takes precedence over a reused filename"
+    );
+}

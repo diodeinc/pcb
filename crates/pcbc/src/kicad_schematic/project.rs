@@ -102,20 +102,28 @@ fn load_schematic_hierarchy(
         let relative = relative.to_string_lossy().replace('\\', "/");
         let mut page = parse_kicad_sch_page(Some(&relative), &content)
             .with_context(|| format!("failed to parse {}", path.display()))?;
-        restore_sheet_placements(&mut page, project)
-            .with_context(|| format!("failed to restore sheet metadata for {}", path.display()))?;
         if let Some(root_id) = root_by_path.get(&normalize_schematic_path(&path)) {
             if let Some(root_id) = root_id {
                 page.id = (*root_id).to_string();
             }
             root_page_ids.push(page.id.clone());
         }
+        restore_sheet_placements(&mut page, project)
+            .with_context(|| format!("failed to restore sheet metadata for {}", path.display()))?;
         let parent = path.parent().unwrap_or(directory);
+        let mut removed_sheets = BTreeSet::new();
         for sheet in page.items.iter().filter_map(|item| match item {
             SchItem::Sheet(sheet) => Some(sheet),
             _ => None,
         }) {
             let child = project_schematic_path(directory, parent, sheet.file_name())?;
+            // Files are authoritative: a removed child invalidates retained
+            // placement metadata. Reconciliation can recreate netlist content.
+            // Keep errors for live placements and unreadable/non-file paths.
+            if !sheet.placed && !child.try_exists()? {
+                removed_sheets.insert(sheet.id.clone());
+                continue;
+            }
             if !child.is_file() {
                 bail!(
                     "sheet {} references missing schematic {}",
@@ -127,6 +135,9 @@ fn load_schematic_hierarchy(
                 schematic_files.push(child);
             }
         }
+        page.items.retain(
+            |item| !matches!(item, SchItem::Sheet(sheet) if removed_sheets.contains(&sheet.id)),
+        );
         pages.push(page);
     }
     Ok((
@@ -438,6 +449,64 @@ mod tests {
         assert!(project.document.pages[0].items.iter().any(
             |item| matches!(item, SchItem::Sheet(sheet) if sheet.id == "sheet-1" && !sheet.placed)
         ));
+    }
+
+    #[test]
+    fn root_and_nested_parent_renames_preserve_metadata_only_children() {
+        for nested in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let parent = parse_kicad_sch_page(
+                Some("old.kicad_sch"),
+                &schematic_with_child("parent", "child.kicad_sch"),
+            )
+            .unwrap();
+            let mut metadata = serde_json::json!({
+                "schematic": {"top_level_sheets": [{
+                    "filename": if nested { "root.kicad_sch" } else { "renamed.kicad_sch" }
+                }]}
+            });
+            sync_sheet_placements(
+                &mut metadata,
+                &SchDocument {
+                    pages: vec![parent],
+                    root_page_ids: vec!["parent".into()],
+                },
+            )
+            .unwrap();
+            fs::write(
+                directory.path().join("demo.kicad_pro"),
+                serde_json::to_string(&metadata).unwrap(),
+            )
+            .unwrap();
+            fs::write(
+                directory.path().join("renamed.kicad_sch"),
+                schematic("parent"),
+            )
+            .unwrap();
+            fs::write(directory.path().join("child.kicad_sch"), schematic("child")).unwrap();
+            if nested {
+                fs::write(
+                    directory.path().join("root.kicad_sch"),
+                    schematic_with_child("root", "renamed.kicad_sch"),
+                )
+                .unwrap();
+            }
+            let project = KicadProject::load(directory.path()).unwrap();
+            assert!(project.document.pages.iter().any(|page| page.id == "child"));
+            let parent = project
+                .document
+                .pages
+                .iter()
+                .find(|page| page.id == "parent")
+                .unwrap();
+            assert!(
+                parent
+                    .items
+                    .iter()
+                    .any(|item| matches!(item, SchItem::Sheet(sheet) if !sheet.placed))
+            );
+            assert_eq!(parent.file_name.as_deref(), Some("renamed.kicad_sch"));
+        }
     }
 
     #[cfg(unix)]

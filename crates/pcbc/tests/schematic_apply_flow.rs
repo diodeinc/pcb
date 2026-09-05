@@ -135,6 +135,61 @@ fn apply_restores_deleted_sheet_instance_without_recreating_child_files() {
     assert!(!apply_linked_schematic(&netlist).unwrap().unwrap().changed);
 }
 
+#[test]
+fn apply_recreates_child_deleted_after_its_sheet_placement() {
+    let workspace = tempfile::tempdir().unwrap();
+    let project_dir = workspace.path().join("hardware");
+    let netlist = linked_hierarchy_fixture(&project_dir);
+    apply_linked_schematic(&netlist).unwrap().unwrap();
+    let mut project = KicadProject::load(&project_dir).unwrap();
+    let parent = project
+        .document
+        .pages
+        .iter_mut()
+        .find(|page| {
+            page.items
+                .iter()
+                .any(|item| matches!(item, SchItem::Sheet(_)))
+        })
+        .unwrap();
+    let parent_file = project_dir.join(parent.file_name.as_ref().unwrap());
+    let child_file = parent
+        .items
+        .iter_mut()
+        .find_map(|item| match item {
+            SchItem::Sheet(sheet) => {
+                sheet.placed = false;
+                Some(parent_file.parent().unwrap().join(sheet.file_name()))
+            }
+            _ => None,
+        })
+        .unwrap();
+    let source = fs::read_to_string(&parent_file).unwrap();
+    fs::write(
+        &parent_file,
+        pcb_kicad_sch::patch_page_source(&source, parent)
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    fs::remove_file(&child_file).unwrap();
+
+    KicadProject::load(&project_dir).expect("stale placement metadata must not block loading");
+    assert!(apply_linked_schematic(&netlist).unwrap().unwrap().changed);
+    assert!(
+        child_file.is_file(),
+        "netlist content recreates the missing child"
+    );
+    let repaired = KicadProject::load(&project_dir).unwrap();
+    assert!(
+        inspect_schematic(&repaired.document, &netlist)
+            .unwrap()
+            .analysis
+            .is_equivalent()
+    );
+    assert!(!apply_linked_schematic(&netlist).unwrap().unwrap().changed);
+}
+
 fn expose_root_port(netlist: &mut pcb_sch::Schematic, port_name: &str, net_name: &str) {
     let net_id = netlist
         .nets
