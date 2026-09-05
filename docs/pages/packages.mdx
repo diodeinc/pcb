@@ -28,29 +28,13 @@ PCB packages use semantic versions with hardware-specific compatibility rules:
 | Minor, such as `0.3` to `0.4` | New compatible behavior after `1.0`; a breaking compatibility lane before `1.0`. |
 | Major, such as `1.x` to `2.0` | Breaking changes such as changed pins, interfaces, or removed behavior. |
 
-<Warning>
-Per the [Semantic Versioning specification](https://semver.org/#spec-item-4),
-pre-1.0 packages have no stable public API. PCB therefore treats `0.3.x` and
-`0.4.x` as separate compatibility families.
-</Warning>
+Compatibility families are minor-version lanes before `1.0` (`0.3.x`, `0.4.x`)
+and major-version lanes afterward (`1.x`, `2.x`). Do not publish breaking changes
+within a family.
 
-Versions within one family must remain compatible:
-
-```
-v0.3.x family: 0.3.0, 0.3.1, 0.3.2, ...  (compatible)
-v0.4.x family: 0.4.0, 0.4.1, ...          (compatible)
-v0.3.x and v0.4.x: different families     (potentially incompatible)
-```
-
-When a dependency graph requires several versions from one family, resolution
-selects the highest required version in that family. Authors must not publish a
-breaking change within a family.
-
-PCB combines Minimal Version Selection (MVS) with hydrated `pcb.toml` manifests
-for reproducible builds. `pcb sync` records the selected dependency graph,
-including immutable pseudo-versions for branch and commit dependencies. Build
-commands then reuse that recorded graph without selecting newly published
-versions.
+`pcb sync` records the selected dependency graph in `pcb.toml`, resolving branches
+and commits to immutable pseudo-versions. Builds reuse this hydrated state rather
+than selecting newly published versions.
 
 ## Workspace package discovery
 
@@ -71,33 +55,15 @@ cache directories such as
 
 ## Coexisting versions
 
-A build can contain multiple incompatible families of one package. For example:
-
-```toml
-# Library X
-[dependencies]
-"github.com/acme/component-lib" = "0.3"
-
-# Library Y
-[dependencies]
-"github.com/acme/component-lib" = "1.0"
-```
-
-The resolver retains separate copies of `component-lib@0.3.x` and
-`component-lib@1.x` for their respective dependents. This permits incremental
-migration and diamond dependencies. Values from the two families have distinct
-types and cannot be passed across the compatibility boundary.
+A build can contain incompatible families of one package, such as
+`component-lib@0.3.x` and `component-lib@1.x`. The resolver keeps separate copies
+for their dependents. Their values have distinct types and cannot cross the
+compatibility boundary.
 
 ## Minimal Version Selection
 
-PCB uses MVS, based on [Go modules](https://go.dev/ref/mod). For each package
-family, MVS selects the lowest version that satisfies every explicit minimum in
-the dependency graph. Newly published versions do not change the result unless a
-manifest requires them.
-
-### How MVS works
-
-Consider this dependency graph:
+Minimal Version Selection (MVS), based on [Go modules](https://go.dev/ref/mod),
+selects the highest explicit minimum required within each package family:
 
 ```
 Board
@@ -115,36 +81,10 @@ Require a newer version explicitly when the project is ready to test it:
 "github.com/acme/component-lib" = "0.3.9"
 ```
 
-MVS is deterministic and does not backtrack. Within each compatibility family,
-the selected version is the highest minimum requested by any dependent.
-
-### Resolution algorithm
-
-1. **Seed:** Collect direct dependencies from all workspace packages. Group by
-   package path and compatibility family. Initialize each family to the highest version
-   explicitly required.
-
-2. **Discover:** Fetch manifests for selected versions. For each transitive
-   dependency, if it requires a higher version within an existing family, upgrade.
-   Repeat until the selected graph no longer changes.
-
-3. **Build closure:** Trace the dependency graph from workspace roots using final
-   versions. This filters out any versions that were superseded during discovery.
-
-For multiple compatibility families:
-
-```
-WV0001: component-lib = 0.2.13
-WV0002: component-lib = 0.3.2, regulator = 1.0
-WV0003: component-lib = 0.3.1
-regulator@1.0.0: component-lib = 0.3.0
-
-Result:
-  v0.2.x family → component-lib@0.2.13
-  v0.3.x family → component-lib@0.3.2 (max of 0.3.2, 0.3.1, 0.3.0)
-```
-
-Both versions remain in the build because they belong to different families.
+Resolution starts with all workspace packages' direct dependencies, fetches
+selected manifests, and raises versions to satisfy transitive requirements until
+the graph stops changing. It then traces the final graph from workspace roots,
+discarding superseded versions. MVS is deterministic and does not backtrack.
 
 ## Import paths as identity
 
@@ -155,20 +95,13 @@ load("@stdlib/units.zen", "Voltage")
 load("github.com/myorg/components/capacitor.zen", "Capacitor")
 ```
 
-The path identifies the package owner and source repository without a central
-namespace. A file's imports also state which packages its source requires.
-
-Import paths omit versions. The `pcb.toml` manifest declares which version of
-each package to use:
+Paths identify the owner and repository, without versions. Declare versions in
+`pcb.toml` so imports remain stable across upgrades:
 
 ```toml
 [dependencies]
 "code.diode.computer/diode/registry/components/ti/tps54331" = "1.0"
 ```
-
-This separation keeps import statements stable across upgrades and confines
-version changes to manifests. The same source file can use different selected
-versions in different workspaces.
 
 ## Hydrated manifests
 
@@ -371,17 +304,11 @@ lane and the latest newer breaking lane when available. It does not update manif
 
 ### `pcb update`
 
-`pcb update` is disabled. Use `pcb add -u` instead.
-
-```bash
-pcb add -u                   # Upgrade all direct remote dependencies
-pcb add -u github.com/acme/regulators/Buck
-```
+`pcb update` is disabled. Use [`pcb add -u`](#pcb-add) instead.
 
 ### `pcb publish`
 
-Publishes packages by creating annotated git tags. Discovers which packages
-have changed since their last published version and tags them.
+Publishes changed packages with annotated Git tags.
 
 ```bash
 pcb publish                  # Publish all changed packages

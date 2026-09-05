@@ -1,18 +1,11 @@
 ---
 title: "Antenna matching network"
-description: "Build a reusable RF matching network with modern Zener packages"
+description: "Build a reusable RF matching network with Zener packages"
 ---
 
-This guide builds an antenna signal path from three Zener elements:
-
-- `Component()` wrappers for the connector and antenna
-- a reusable matching-network module
-- a board that connects the complete RF path
-
-The example uses the repository model defined in the
-[language specification](/pages/spec): the board calls `Board()`, reusable
-blocks live under `modules/` and `components/`, and local modules use relative
-paths.
+Build an RF signal path using connector and antenna wrappers, a reusable matching
+module, and a board that connects them. See the [language reference](/pages/spec)
+for the Zener APIs used here.
 
 ![Rendered antenna matching board](/images/Antenna_PCB_Render.png)
 
@@ -114,16 +107,6 @@ Component(
 )
 ```
 
-<Tip>
-Use raw `Component()` only when a standard-library generic does not represent
-the physical part. Standard-library generics provide maintained symbols,
-footprints, and BOM behavior for the matching components.
-</Tip>
-
-<Tip>
-Hover over `pins` in the editor to inspect the pin names loaded from the symbol.
-</Tip>
-
 ## 2. Build the matching module
 
 The module reserves three tuning footprints: a series inductor, a shunt
@@ -175,15 +158,8 @@ Resistor(
 Layout(name = "AntennaMatch", path = "layout/AntennaMatch")
 ```
 
-<Tip>
-Use `io()` for parent connections and `Net()` for internal nodes such as
-`MATCH_NODE`.
-</Tip>
-
-<Tip>
-The declared `config()` types convert parent-supplied strings such as `"6.8nH"`,
-`"1.5pF"`, and `"0ohm"` to physical quantities.
-</Tip>
+`io()` exposes parent connections; `Net()` creates internal nodes. The `config()`
+types convert parent-supplied strings such as `"6.8nH"` to physical quantities.
 
 ## 3. Compose the board
 
@@ -256,29 +232,3 @@ RF performance depends on placement and stackup. Place the matching components
 close to the antenna feed, route the RF trace for the required impedance, and
 leave access for component changes during bringup.
 </Warning>
-
-## Optional mounting holes
-
-Add mounting holes with the standard-library generic:
-
-```python
-MountingHole = Module("@stdlib/generics/MountingHole.zen")
-
-for i in range(4):
-    MountingHole(
-        name = "H" + str(i + 1),
-        diameter = "M2",
-    )
-```
-
-Run `pcb layout` again, then place the holes to satisfy the enclosure and copper
-keep-out requirements.
-
-## Design rationale
-
-- The antenna and connector packages contain only physical-part definitions.
-- The matching network owns the topology and tuning values.
-- The board file contains only board-level composition.
-
-This separation permits changes to matching values, footprints, or the antenna
-package without changing board-level connectivity.

@@ -5,98 +5,33 @@ description: "Write practical README files for boards and reusable packages"
 
 # README conventions
 
-Every board and package must have a `README.md` in its root directory. The
-README must identify the artifact, explain its purpose, and give a technically
-competent reader enough information to build or use it.
-
-Keep the document current with the source. Remove empty sections, placeholders,
-historical plans, and implementation details that do not affect the reader.
+Every board and package needs a root `README.md` that explains its purpose and
+how to build or use it. Include only sections with useful content, not placeholders.
 
 ## Board README
 
-A board README serves engineers who build, manufacture, flash, or test the
-board. Include its purpose, main devices, key interfaces, operating limits, and
-the exact build commands. State any required tools or external assets before the
-procedure.
-
-Use this structure:
-
-````markdown
-# <BoardName>
-
-Describe the board, its main function, and its important operating limits.
-
-## Features
-
-- List the main controller or processor.
-- List the external interfaces.
-- List significant power or safety features.
-
-## Build
-
-State nonstandard prerequisites, then run:
+Describe the main devices, interfaces, operating limits, and license. Give exact
+build commands, with required tools or external assets listed first:
 
 ```bash
 pcb build <BoardName>.zen
 pcb layout <BoardName>.zen
 ```
 
-Describe the generated output and any expected warnings.
-
-## License
-
-State the applicable license.
-````
-
-Add pin assignments, design constraints, firmware instructions, or related
-datasheets only when they are required to use the board.
+Explain the output and expected warnings. Add pin assignments, design constraints,
+firmware instructions, or datasheets when needed to use the board. Put versioned
+rework and test procedures in [bringup documentation](/pages/docs_bringup).
 
 ## Package README
 
-A package README serves engineers who import a reusable component or module.
-Identify every public symbol and provide one complete import or instantiation
-example.
-
-Use this structure:
-
-````markdown
-# <package_name>
-
-Describe what the package exports and when to use it.
-
-## Usage
-
-```python
-load("<package_name>.zen", "ExportedSymbol")
-```
-
-## Exports
-
-| Symbol | Description |
-|---|---|
-| `ExportedSymbol` | State its function and important limits. |
-
-## Configuration
-
-```python
-instance = ExportedSymbol(
-    required_input = value,
-)
-```
-````
-
-Document required inputs, defaults, units, limitations, and layout constraints
-where they affect correct use. Omit the configuration section if the package has
-no configurable behavior.
+Identify public symbols and provide one complete import or instantiation example.
+Document required inputs, defaults, units, limits, and layout constraints alongside
+the example. Do not add a configuration section for a package with no configuration.
 
 ## Style
 
-- Start with purpose and scope. Define a term before using it.
-- Use active voice and direct instructions. Use the same term for the same
-  concept throughout the document.
+- Use direct instructions and consistent terminology.
 - Put identifiers, file names, commands, and pin names in backticks.
-- Use numbered steps for procedures and bullets only for short collections.
-- Include complete commands and examples. State prerequisites, output, side
-  effects, and common failure conditions when relevant.
-- Delete redundant prose, speculative plans, and sections with no reader-facing
-  content.
+- Number procedural steps; mention side effects and common failures when relevant.
+- Keep examples current with the source. Remove repeated prose, historical plans,
+  and implementation details that do not help the reader use the board or package.
