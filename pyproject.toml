@@ -8,25 +8,15 @@ dependencies = ["click>=8.5.0"]
 dev = ["pytest>=9.1.1", "hypothesis>=6.167.0", "ruff>=0.16.5", "ty>=0.0.75"]
 
 [tool.ruff]
-# These scripts execute inside KiCad's bundled interpreter, which is Python
-# 3.9.13 as of KiCad 10 -- NOT the >=3.10 above, which only describes the uv
-# dev/test environment. Without this, ruff infers py310 from requires-python and
-# rewrites `Optional[X]` to PEP 604 `X | None`, which raises
-# `TypeError: unsupported operand type(s) for |` at import time under KiCad.
-# pytest and ty both run on 3.12 and do not catch it.
+# KiCad embeds Python 3.9; requires-python describes only the dev/test environment.
 target-version = "py39"
 
 [tool.ruff.lint]
-# `required-imports` below is only enforced by I002, which is NOT part of ruff's
-# default selection (that only includes I001), so it must be selected explicitly
-# or the setting is silently inert.
+# Enforce required-imports (not enabled by default).
 extend-select = ["I002"]
 
 [tool.ruff.lint.isort]
-# Paired with target-version above: `from __future__ import annotations` makes
-# every annotation a lazy string, so modern `list[str]` / `X | None` spellings
-# are safe to write even though KiCad's interpreter is 3.9. Without it those
-# spellings would be evaluated at import time and raise.
+# Defer annotation evaluation so modern type syntax is safe under KiCad's Python.
 required-imports = ["from __future__ import annotations"]
 
 [tool.ty.src]
