@@ -531,3 +531,44 @@ fn empty_paint_does_not_add_uncertainty() {
     assert!(!image.is_empty());
     accuracy(0.000001).check(image.uncertainty_mm).unwrap();
 }
+
+#[test]
+fn later_paint_does_not_change_an_earlier_runs_accuracy() {
+    use pcb_ir::geom::{Polarity, region::PaintComposer};
+    let mut paint = PaintComposer::default();
+    paint.push_region(
+        Polarity::Dark,
+        ContourSet::rectangle(BBox::new(Point::new(-2.0, -1.0), Point::new(2.0, 0.0)), 0.0),
+    );
+    paint.push_region(
+        Polarity::Dark,
+        ContourSet::from_regularized_with_uncertainty(
+            vec![vec![[-2.0, -0.02], [2.0, 0.02], [2.0, 1.0], [-2.0, 1.0]]],
+            0.0,
+            0.0,
+        ),
+    );
+    let mut clear =
+        ContourSet::rectangle(BBox::new(Point::new(3.0, 0.0), Point::new(4.0, 1.0)), 0.0);
+    clear.uncertainty_mm = 0.001;
+    paint.push_region(Polarity::Clear, clear);
+    let result = paint.finish_set(0.0);
+    assert!(!result.is_empty());
+    accuracy(0.002).check(result.uncertainty_mm).unwrap();
+}
+
+#[test]
+fn explicit_ellipse_transforms_keep_refinable_source() {
+    let ellipse = shapes::ellipse(0.4, 0.2)
+        .unwrap()
+        .transformed_with_accuracy(
+            Affine2 {
+                m00: 2.0,
+                ..Affine2::IDENTITY
+            },
+            accuracy(0.005),
+        )
+        .unwrap();
+    let fine = prepare(&[ellipse], 0.000001);
+    assert!(radial_error(&fine, 0.4, 0.1) <= fine.uncertainty_mm);
+}

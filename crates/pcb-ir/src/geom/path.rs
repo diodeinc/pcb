@@ -172,6 +172,7 @@ impl ContourBuf {
         }
         let numeric = crate::geom::accuracy::numerical_error(self.bbox.transformed(transform));
         accuracy.check(numeric)?;
+        let ellipse_source = self.ellipse_source.map(|source| transform.concat(source));
         let source = if self.ellipse_source.is_some() {
             self.refined(crate::geom::GeometryAccuracy::new(
                 accuracy.remaining(numeric)? / scale,
@@ -186,6 +187,7 @@ impl ContourBuf {
         }
         let mut out = transform_cmds_impl(source.cmds, transform, Some(allowance));
         out.uncertainty_mm += source.uncertainty_mm * scale + numeric;
+        out.ellipse_source = ellipse_source;
         accuracy.check(out.uncertainty_mm)?;
         Ok(out)
     }

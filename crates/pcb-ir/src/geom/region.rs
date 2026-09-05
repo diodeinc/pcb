@@ -1574,11 +1574,11 @@ impl PaintComposer {
         if rings.is_empty() {
             return;
         }
-        self.uncertainty_mm = self.uncertainty_mm.max(uncertainty_mm);
         if self.run_polarity != Some(polarity) {
             self.flush_run();
             self.run_polarity = Some(polarity);
         }
+        self.uncertainty_mm = self.uncertainty_mm.max(uncertainty_mm);
         self.run.append(&mut rings);
     }
 
@@ -1596,9 +1596,6 @@ impl PaintComposer {
         let Some(polarity) = self.run_polarity.take() else {
             return;
         };
-        if self.run.is_empty() {
-            return;
-        }
         self.uncertainty_mm = overlay_uncertainty(
             &self.image.iter().chain(&self.run).collect::<Vec<_>>(),
             self.uncertainty_mm
