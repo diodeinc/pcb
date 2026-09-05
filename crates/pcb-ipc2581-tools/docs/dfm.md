@@ -86,6 +86,11 @@ id = "copper.via_hole_clearance"
 select = { hole = "via" }
 limit = { minimum = "0.20 mm", preferred = "0.25 mm" }
 
+[[rules.copper.slot_clearance]]
+id = "copper.plated_slot_clearance"
+select = { plating = "plated" }
+limit = { minimum = "0.40 mm", preferred = "0.50 mm" }
+
 [[rules.copper.feature_width]]
 id = "copper.feature_width"
 cases = [
@@ -178,6 +183,7 @@ high-level pass is never allowed to suppress a later authoritative failure.
 | Slot-to-board-edge clearance | Materialized filled route outline against its enclosing physical board profile, including cutouts | Indexed profile boundaries |
 | Annular ring | Drill circle and final composed copper image on each applicable layer | Batched containment and an indexed copper boundary |
 | Hole-to-copper clearance | Analytic drill circle and attributed final composed copper on each layer in its drill span | Indexed attributed-copper boundaries |
+| Slot-to-copper clearance | Materialized filled route outline and attributed final composed copper on each layer in its physical span | Indexed region boundaries |
 | Copper width | Final composed copper image, medial-axis width of each residue | Guarded opening localizes candidates |
 | Copper clearance | Final composed copper attributed to occurrence-scoped electrical conductors | Sorted bounds prune conductor components already proven clear |
 | Soldermask web | Final composed mask-opening image, medial-axis width of each residue | Guarded closing localizes candidates |
@@ -282,6 +288,16 @@ when fewer than two exist.
   layer in its declared span. Via and PTH copper is exempt only when net or
   physical-land identity proves that it belongs to the hole. NPTH copper is
   never exempt. Missing drill-span identity makes the check incomplete.
+- Slot-to-copper clearance (`rules.copper.slot_clearance`) measures the true
+  materialized filled slot outline, including its ends, against unrelated
+  final copper on its physical span. Touching or overlapping copper has zero
+  clearance. Select `plated` or `nonplated` with `select.plating`. Plated slots
+  exempt only occurrence-scoped own-net copper or resolved physical lands
+  with matching stated padstack identity and no contradictory stated net;
+  netless functional and foreign copper remain offenders. Nonplated slots
+  exempt nothing. The rule requires one unambiguous physical stackup and a
+  declared through or resolvable layer span; missing data fails extraction.
+  Copper layer declaration order does not determine the physical span.
 - Copper feature-width rules report narrow copper piece by piece after final
   polarity composition. Copper-clearance rules measure the shortest
   boundary distance between distinct final conductor images. Same-net
@@ -359,8 +375,10 @@ ratio at 6.0 for Level A, 8.0 for Level B, and 10.0 for Level C. They also
 check via, PTH, and NPTH hole-to-copper clearance at 0.25 mm for Level A,
 0.20 mm for Level B, and 0.15 mm for Level C. They check via, PTH, NPTH,
 plated-slot, and nonplated-slot clearance to the board edge at 0.50 mm for
-Level A, 0.40 mm for Level B, and 0.30 mm for Level C. These values apply
-across all three performance classes. Each profile assumes 1.6 mm board
+Level A, 0.40 mm for Level B, and 0.30 mm for Level C. Plated and nonplated
+slot-to-copper clearance uses the same 0.50 / 0.40 / 0.30 mm A/B/C limits:
+Diode deliberately allows more routing margin than for circular drills.
+These values apply across all three performance classes. Each profile assumes 1.6 mm board
 thickness for the through-hole aspect-ratio fallback described above. Diode
 chose these opinionated values using IPC design topics as context; they are not
 licensed IPC numeric matrices, do not prove full IPC compliance, and do not

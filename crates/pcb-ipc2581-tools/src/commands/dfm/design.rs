@@ -54,6 +54,7 @@ pub(super) struct Design<'a> {
     /// Each hole's lands, one per copper layer it owns a land on, indexed
     /// like `holes`.
     pub hole_lands: Vec<Vec<HoleLand>>,
+    pub slot_lands: Vec<Vec<HoleLand>>,
     pub mask_layers: Vec<MaskLayer>,
     pub scores: Vec<Score>,
     pub board_outlines: Vec<BoardOutline>,
@@ -93,6 +94,9 @@ impl<'a> Design<'a> {
         let copper_layers = when(pools.copper, || {
             collect_copper_layers(imported, scope, pools.conductor_ownership, stackup.as_ref())
         })?;
+        let physical_holes = when(pools.hole_lands || pools.slot_lands, || {
+            imported.physical_holes(scope)
+        })?;
         let layout = when(pools.board_outlines || pools.board_arrays, || {
             Ok(Some(&imported.geometry))
         })?;
@@ -123,8 +127,18 @@ impl<'a> Design<'a> {
                     .collect())
             })?,
             hole_lands: when(pools.hole_lands, || {
-                let physical_holes = imported.physical_holes(scope)?;
-                link_lands(&holes, &copper_layers, &physical_holes)
+                link_lands(
+                    holes.iter().map(|hole| hole.id),
+                    &copper_layers,
+                    &physical_holes,
+                )
+            })?,
+            slot_lands: when(pools.slot_lands, || {
+                link_lands(
+                    slots.iter().map(|slot| slot.id),
+                    &copper_layers,
+                    &physical_holes,
+                )
             })?,
             mask_layers: when(pools.masks, || collect_mask_layers(imported, scope))?,
             scores: when(pools.scores, || collect_scores(imported, scope))?,
@@ -224,6 +238,25 @@ impl<'a> Design<'a> {
 }
 
 fn validate_hole_clearance_spans(design: &Design, rules: &[Rule]) -> Result<()> {
+    for slot in &design.slots {
+        let selected = rules.iter().any(|rule| {
+            matches!(rule.kind, rules::RuleKind::SlotToCopperClearance(plating)
+                if super::checks::slot_matches(slot.plating, plating))
+                && rule.conditions.applies_to_design(design)
+                && design
+                    .copper_layers
+                    .iter()
+                    .any(|layer| rule.conditions.applies_to_layer(layer))
+        });
+        if selected
+            && (!slot.span_declared || slot.drill_span.interpretation == "assumed_whole_stack")
+        {
+            bail!(
+                "routed slot on layer '{}' has no resolvable drill span; slot-to-copper clearance cannot be certified",
+                slot.layer.name
+            );
+        }
+    }
     for hole in &design.holes {
         let selected = rules.iter().any(|rule| {
             matches!(
@@ -578,6 +611,9 @@ pub(super) struct HoleLand {
 /// local width.
 #[derive(Debug, Clone)]
 pub(super) struct Slot {
+    pub id: FeatureOccurrenceId,
+    pub span_declared: bool,
+    pub drill_span: DrillSpan,
     pub plating: PlatingKind,
     pub width: Distance,
     pub width_disk: WidthDisk,
@@ -822,6 +858,15 @@ fn collect_drilled(
                         bail!("{at} has no measurable outline");
                     };
                     slots.push(Slot {
+                        id: feature_occurrence_id(feature)
+                            .context("materialized slot has no occurrence identity")?,
+                        span_declared: source_layer.span.is_some(),
+                        drill_span: drill_span(
+                            feature.intent.span,
+                            &imported.layer_definitions,
+                            whole_stack,
+                            stackup,
+                        ),
                         plating: feature.intent.plating,
                         width: slot_width(feature.outer_diameter, width_disk.width)
                             .with_context(|| at)?,
@@ -836,7 +881,7 @@ fn collect_drilled(
                         layer: layer_ref(layer_name, source_layer.layer_function, None),
                         step: feature.source_step_ref,
                         padstack: feature.padstack_ref,
-                        net: feature.net,
+                        net: source_net(&document, feature),
                         source_set_index: feature.source.set_index,
                         source_feature_index: feature.source.feature_index,
                     });
@@ -1392,7 +1437,7 @@ fn collect_mask_layers(imported: &ImportedDesign, scope: ArtworkScope) -> Result
 /// ambiguous or conflicting relationship fails closed; DFM never chooses the
 /// nearest candidate.
 fn link_lands(
-    holes: &[Hole],
+    holes: impl ExactSizeIterator<Item = FeatureOccurrenceId>,
     copper_layers: &[CopperLayer],
     physical_holes: &[PhysicalHole],
 ) -> Result<Vec<Vec<HoleLand>>> {
@@ -1420,9 +1465,9 @@ fn link_lands(
         })
         .collect::<HashMap<_, _>>();
     let mut hole_lands = vec![Vec::new(); holes.len()];
-    for (hole_index, hole) in holes.iter().enumerate() {
+    for (hole_index, hole) in holes.enumerate() {
         let physical_hole = physical_holes
-            .get(&hole.id)
+            .get(&hole)
             .context("DFM hole is missing from the canonical physical view")?;
         for relationship in &physical_hole.lands {
             match &relationship.land {

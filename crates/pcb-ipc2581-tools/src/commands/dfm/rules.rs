@@ -151,6 +151,8 @@ pub(super) enum RuleKind {
     AnnularRing(HoleClass),
     /// Clearance: a circular drill stays clear of unrelated final copper.
     HoleToCopperClearance(HoleClass),
+    /// Clearance: a materialized slot stays clear of unrelated final copper.
+    SlotToCopperClearance(SlotPlating),
     /// Clearance: reference linework stays clear of each copper image.
     LineworkToCopperClearance(Linework),
     /// Clearance: sibling board-array outlines keep their spacing.
@@ -194,6 +196,7 @@ pub(super) struct Pools {
     pub copper_boundaries: bool,
     pub conductor_boundaries: bool,
     pub hole_lands: bool,
+    pub slot_lands: bool,
     pub resolved_drill_spans: bool,
     pub masks: bool,
     pub scores: bool,
@@ -213,6 +216,7 @@ impl std::ops::BitOr for Pools {
             copper_boundaries: self.copper_boundaries || other.copper_boundaries,
             conductor_boundaries: self.conductor_boundaries || other.conductor_boundaries,
             hole_lands: self.hole_lands || other.hole_lands,
+            slot_lands: self.slot_lands || other.slot_lands,
             resolved_drill_spans: self.resolved_drill_spans || other.resolved_drill_spans,
             masks: self.masks || other.masks,
             scores: self.scores || other.scores,
@@ -230,6 +234,7 @@ const DRILLED: Pools = Pools {
     copper_boundaries: false,
     conductor_boundaries: false,
     hole_lands: false,
+    slot_lands: false,
     resolved_drill_spans: false,
     masks: false,
     scores: false,
@@ -304,6 +309,12 @@ impl RuleKind {
             Self::HoleToCopperClearance(_) => (
                 "hole_to_copper_clearance",
                 "Hole-to-copper clearance",
+                true,
+                &["copper", "drills", "board_outlines"],
+            ),
+            Self::SlotToCopperClearance(_) => (
+                "slot_to_copper_clearance",
+                "Slot-to-copper clearance",
                 true,
                 &["copper", "drills", "board_outlines"],
             ),
@@ -468,6 +479,27 @@ impl RuleKind {
                 pools: Pools {
                     conductor_boundaries: true,
                     hole_lands: true,
+                    resolved_drill_spans: true,
+                    ..COPPER
+                },
+            },
+            Self::SlotToCopperClearance(plating) => Semantics {
+                subject: "slot_layer_pair",
+                quantity: "slot_edge_to_unrelated_copper_clearance",
+                method: "materialized_slot_to_attributed_composed_copper_distance",
+                finding_title: format!(
+                    "{} slot clearance to unrelated copper is below minimum",
+                    slot_label(plating)
+                ),
+                quantity_label: format!(
+                    "{} slot edge-to-unrelated-copper clearance",
+                    slot_label(plating)
+                ),
+                witness_roles: Some(["routed_slot", "offending_copper"]),
+                pools: Pools {
+                    stackup: true,
+                    conductor_boundaries: true,
+                    slot_lands: true,
                     resolved_drill_spans: true,
                     ..COPPER
                 },
@@ -705,6 +737,20 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
             profile,
             format!("Minimum {} hole-to-copper clearance", class.label()),
             RuleKind::HoleToCopperClearance(class),
+        ));
+    }
+    for rule in &pdk.rules.copper.slot_clearance {
+        rules.extend(lower_length_rule(
+            &rule.metadata,
+            rule.limit.as_ref(),
+            &rule.cases,
+            profile_name,
+            profile,
+            format!(
+                "Minimum {} slot-to-copper clearance",
+                slot_label(rule.select.plating)
+            ),
+            RuleKind::SlotToCopperClearance(rule.select.plating),
         ));
     }
     for (ruleset, title, kind) in [
