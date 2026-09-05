@@ -37,56 +37,20 @@ documentation from `main`, not from the release archive.
 
 ## Document structure
 
-```markdown
-# <Board> <Version> Bringup
+Diode Glass parses `## Reworks` into structured items and renders other level-two
+sections, such as `## Firmware` and `## Testing`, as collapsible Markdown.
 
-Overview text.
-
-## Reworks
-
-### 1. Title of first rework
-
-...
-
-### 2. Title of second rework
-
-...
-
-## Firmware
-
-Free-form markdown.
-
-## Testing
-
-Free-form markdown.
-```
-
-Diode Glass parses `## Reworks` into structured items. It renders other level-two
-sections as collapsible Markdown.
-
-## Rework items
-
-Start each rework with a `### N. Title` heading. State the observed problem, the
-required correction, its board location, and the version in which the design was
-fixed. Do not encode status in a separate field.
-
-### Link to components
-
-Use the `pcb://` scheme for reference designators, for example
-`[R1](pcb://R1)`. Diode Glass links these references to the PCB viewer.
-
-### Add images
-
-Store each image under `./images/` and use descriptive alternative text:
-`![Reworked ESTOP resistor](./images/estop-rework.png)`.
+- Start each rework with `### N. Title`. State the problem, correction, board
+  location, and version containing the fix. Do not use a separate status field.
+- Link components with `[R1](pcb://R1)` to open them in the PCB viewer.
+- Link images with descriptive alt text: `![Reworked resistor](./images/rework.png)`.
 
 ## Example
 
 ```markdown
 # DM0001 v1.0 Bringup
 
-Board version v1.0 requires three reworks before bringup.
-Items 1–2 are fixed in v1.1. Item 3 requires a physical fix on each board.
+Apply the rework below before installing firmware. The design is fixed in v1.1.
 
 ## Reworks
 
@@ -100,26 +64,9 @@ part beside the ESTOP connector, between the `ESTOP_RAW` and `ESTOP` nets.
 
 ![Bridged ESTOP debounce resistor](./images/estop-rework.png)
 
-### 2. Replace decoupling capacitors (fixed in v1.1)
-
-[C5](pcb://C5) and [C6](pcb://C6) provide insufficient 10 uF decoupling for
-the [U1](pcb://U1) LDO. Replace both with 22 uF, 16 V X5R capacitors,
-manufacturer part number `GRM188R61C226ME15`. Both parts are on the bottom side
-beside [U1](pcb://U1).
-
-### 3. CAN termination resistor
-
-The [R12](pcb://R12) footprint is unpopulated. Install a 120 ohm 0402 resistor
-to terminate the CAN bus.
-
 ## Firmware
 
-### Prerequisites
-
-- J-Link programmer
-- Firmware v1.0.2: `dm0001-v1.0.2.bin`
-
-### Flash procedure
+Requires a J-Link programmer and firmware file `dm0001-v1.0.2.bin`.
 
 1. Connect the J-Link programmer to SWD header [J5](pcb://J5).
 2. Apply 12 V power to the board.
@@ -135,12 +82,6 @@ to terminate the CAN bus.
 | 3.3 V | [TP1](pcb://TP1) | 3.30 V | ±50 mV |
 | 1.8 V | [TP2](pcb://TP2) | 1.80 V | ±30 mV |
 | 5.0 V | [TP3](pcb://TP3) | 5.00 V | ±100 mV |
-
-### CAN bus test
-
-1. Connect a CAN analyzer to [J2](pcb://J2).
-2. Send a frame with identifier `0x100`, DLC 8, and payload `0xFF`.
-3. Confirm that the board responds on identifier `0x101` within 10 ms.
 
 ### ESTOP functional test
 
