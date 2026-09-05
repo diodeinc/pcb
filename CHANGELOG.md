@@ -16,6 +16,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- Use physical stackup order for PCBIR slot cutouts and hole-to-land associations when layer declarations are shuffled.
 - Preserve PCBIR hole-to-land associations after routing or copper clears remove land copper.
 - Fix IPC-2581 tools tests failing to compile without default features.
 - Keep cutout-only copper layers empty in artwork composition and rendering while preserving visible drill artwork.

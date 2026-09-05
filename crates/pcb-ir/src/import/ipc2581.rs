@@ -13,6 +13,7 @@ use crate::dialects::ipc::*;
 use crate::geom::Polarity as GeometryPolarity;
 use crate::geom::path::transform_cmds;
 use crate::geom::*;
+use crate::import::physical::{feature_definitely_spans_layer, physical_stackup_layers};
 
 mod assembly;
 
@@ -1629,9 +1630,13 @@ pub fn extract_step_layer_local(
 
             if is_fabrication_layer {
                 for (feature_index, set_feature) in set.features.iter().enumerate() {
-                    if let SetFeature::Slot(slot) = set_feature
-                        && slot_applies_to_layer(source_layer, layer, layers, slot)
-                    {
+                    if let SetFeature::Slot(slot) = set_feature {
+                        let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
+                        let layer_order = physical_stackup_layers(&ecad.cad_data.stackups, layers)?
+                            .unwrap_or_else(|| layers.iter().map(|layer| layer.name).collect());
+                        if !slot_applies_to_layer(source_layer, layer, &layer_order, slot) {
+                            continue;
+                        }
                         let feature = extract_slot(
                             &context,
                             SourceRef {
@@ -2273,7 +2278,7 @@ fn is_board_step(step: &Step) -> bool {
 fn slot_applies_to_layer(
     source_layer: &Layer,
     target_layer: &Layer,
-    layers: &[Layer],
+    layer_order: &[Symbol],
     slot: &ipc2581::types::Slot,
 ) -> bool {
     if source_layer.name != target_layer.name && target_layer.layer_function.is_fabrication() {
@@ -2284,13 +2289,13 @@ fn slot_applies_to_layer(
         return source_layer.name == target_layer.name;
     }
 
-    layer_span_applies_to_layer(source_layer, target_layer, layers)
+    layer_span_applies_to_layer(source_layer, target_layer, layer_order)
 }
 
 fn layer_span_applies_to_layer(
     source_layer: &Layer,
     target_layer: &Layer,
-    layers: &[Layer],
+    layer_order: &[Symbol],
 ) -> bool {
     if source_layer.name == target_layer.name {
         return true;
@@ -2300,25 +2305,14 @@ fn layer_span_applies_to_layer(
         return false;
     };
 
-    let Some(target_index) = layer_index(layers, target_layer.name) else {
-        return false;
-    };
-    let from_index = span
-        .from_layer
-        .and_then(|layer| layer_index(layers, layer))
-        .unwrap_or(0);
-    let to_index = span
-        .to_layer
-        .and_then(|layer| layer_index(layers, layer))
-        .unwrap_or(layers.len().saturating_sub(1));
-    let start = from_index.min(to_index);
-    let end = from_index.max(to_index);
-
-    (start..=end).contains(&target_index)
-}
-
-fn layer_index(layers: &[Layer], layer_ref: Symbol) -> Option<usize> {
-    layers.iter().position(|layer| layer.name == layer_ref)
+    feature_definitely_spans_layer(
+        FeatureSpan::FromTo {
+            from: span.from_layer.or_else(|| layer_order.first().copied()),
+            to: span.to_layer.or_else(|| layer_order.last().copied()),
+        },
+        target_layer.name,
+        Some(layer_order),
+    )
 }
 
 fn extract_pad(
@@ -5802,7 +5796,7 @@ mod tests {
                 to_layer: Some(l2.name),
             }),
         );
-        let layers = [l1.clone(), l2.clone(), l3.clone(), route.clone()];
+        let layers = [l1.name, l2.name, l3.name, route.name];
         let slot = test_slot(false);
 
         assert!(slot_applies_to_layer(&route, &l1, &layers, &slot));
@@ -5820,7 +5814,7 @@ mod tests {
         let mut interner = ipc2581::Interner::new();
         let l1 = test_layer(&mut interner, "L1", LayerFunction::Signal, None);
         let route = test_layer(&mut interner, "ROUT", LayerFunction::Rout, None);
-        let layers = [l1.clone(), route.clone()];
+        let layers = [l1.name, route.name];
         let slot = test_slot(true);
 
         assert!(!slot_applies_to_layer(&route, &l1, &layers, &slot));
@@ -5832,7 +5826,7 @@ mod tests {
         let mut interner = ipc2581::Interner::new();
         let l1 = test_layer(&mut interner, "L1", LayerFunction::Signal, None);
         let route = test_layer(&mut interner, "ROUT", LayerFunction::Rout, None);
-        let layers = [l1.clone(), route.clone()];
+        let layers = [l1.name, route.name];
         let slot = test_slot(false);
 
         assert!(!slot_applies_to_layer(&route, &l1, &layers, &slot));
