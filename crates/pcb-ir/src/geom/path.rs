@@ -565,20 +565,21 @@ pub fn stroke_to_fill_with_accuracy(
         .iter()
         .map(|c| c.uncertainty_mm)
         .fold(0.0, f64::max);
-    let remaining = accuracy.remaining(prior + stroke_rounding_error(style))?;
     let bbox = contours
         .iter()
         .fold(BBox::empty(), |bbox, c| bbox.union(c.bbox))
         .expand(style.width.max(0.0));
-    accuracy.check(prior + crate::geom::accuracy::numerical_error(bbox))?;
+    let numeric = crate::geom::accuracy::numerical_error(bbox);
+    let remaining = accuracy.remaining(prior + stroke_rounding_error(style) + numeric)?;
     if remaining < f64::EPSILON
         || (bbox.width().max(bbox.height()) / remaining).sqrt() > 1_000_000.0
     {
         return Err(crate::geom::AccuracyError::SubdivisionLimit);
     }
-    let out = stroke_to_fill_impl(contours, style, Some(remaining / 4.0));
-    if let Some(out) = &out {
+    let mut out = stroke_to_fill_impl(contours, style, Some(remaining / 4.0));
+    if let Some(out) = &mut out {
         for contour in out {
+            contour.uncertainty_mm += numeric;
             accuracy.check(contour.uncertainty_mm)?;
         }
     }

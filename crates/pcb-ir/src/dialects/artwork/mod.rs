@@ -503,10 +503,10 @@ fn expand_native_geometry_with_accuracy<LayerMeta: Clone, ObjectMeta: Clone>(
     let mut doc = if doc.blocks.is_empty() {
         doc
     } else {
-        expand_instances(&doc)
+        expand_instances_with_grid_policy(&doc, false, accuracy)?
     };
     expand_strokes_to_regions(&mut doc, accuracy)?;
-    expand_flashes_to_regions(&mut doc);
+    expand_flashes_to_regions(&mut doc, accuracy)?;
     normalize_bounds(&mut doc);
     Ok(doc)
 }
@@ -793,7 +793,24 @@ fn expand_strokes_to_regions<LayerMeta, ObjectMeta>(
     Ok(())
 }
 
-fn expand_flashes_to_regions<LayerMeta, ObjectMeta>(doc: &mut Document<LayerMeta, ObjectMeta>) {
+fn transform_contours(
+    contours: Vec<ContourBuf>,
+    transform: Affine2,
+    accuracy: Option<crate::geom::GeometryAccuracy>,
+) -> Result<Vec<ContourBuf>, crate::geom::AccuracyError> {
+    contours
+        .into_iter()
+        .map(|contour| match accuracy {
+            Some(accuracy) => contour.transformed_with_accuracy(transform, accuracy),
+            None => Ok(contour.transformed(transform)),
+        })
+        .collect()
+}
+
+fn expand_flashes_to_regions<LayerMeta, ObjectMeta>(
+    doc: &mut Document<LayerMeta, ObjectMeta>,
+    accuracy: Option<crate::geom::GeometryAccuracy>,
+) -> Result<(), crate::geom::AccuracyError> {
     for object_index in 0..doc.objects.len() {
         let Geometry::Flash {
             aperture,
@@ -806,11 +823,7 @@ fn expand_flashes_to_regions<LayerMeta, ObjectMeta>(doc: &mut Document<LayerMeta
             doc.warn("Skipping artwork flash with invalid aperture reference");
             continue;
         };
-        let contours = aperture
-            .contours()
-            .into_iter()
-            .map(|contour| contour.transformed(transform))
-            .collect::<Vec<_>>();
+        let contours = transform_contours(aperture.contours(), transform, accuracy)?;
         let path_id = doc.push_path(
             Paint::Fill {
                 rule: aperture.fill_rule(),
@@ -820,6 +833,7 @@ fn expand_flashes_to_regions<LayerMeta, ObjectMeta>(doc: &mut Document<LayerMeta
         doc.objects[object_index].geometry = Geometry::Region { path: path_id };
         doc.objects[object_index].bbox = doc.path_bbox(path_id);
     }
+    Ok(())
 }
 
 fn object_image_region<LayerMeta, ObjectMeta>(
@@ -888,7 +902,7 @@ fn geometry_bbox<LayerMeta, ObjectMeta>(
 pub fn expand_instances<LayerMeta: Clone, ObjectMeta: Clone>(
     doc: &Document<LayerMeta, ObjectMeta>,
 ) -> Document<LayerMeta, ObjectMeta> {
-    expand_instances_with_grid_policy(doc, false)
+    expand_instances_with_grid_policy(doc, false, None).expect("default instance expansion")
 }
 
 /// Materialize ordinary hierarchy while preserving explicit regular grids.
@@ -900,13 +914,14 @@ pub fn expand_instances<LayerMeta: Clone, ObjectMeta: Clone>(
 pub fn expand_instances_preserving_grids<LayerMeta: Clone, ObjectMeta: Clone>(
     doc: &Document<LayerMeta, ObjectMeta>,
 ) -> Document<LayerMeta, ObjectMeta> {
-    expand_instances_with_grid_policy(doc, true)
+    expand_instances_with_grid_policy(doc, true, None).expect("default instance expansion")
 }
 
 fn expand_instances_with_grid_policy<LayerMeta: Clone, ObjectMeta: Clone>(
     doc: &Document<LayerMeta, ObjectMeta>,
     preserve_grids: bool,
-) -> Document<LayerMeta, ObjectMeta> {
+    accuracy: Option<crate::geom::GeometryAccuracy>,
+) -> Result<Document<LayerMeta, ObjectMeta>, crate::geom::AccuracyError> {
     let mut out = Document::new();
     out.apertures = doc.apertures.clone();
     out.arena = doc.arena.clone();
@@ -925,7 +940,7 @@ fn expand_instances_with_grid_policy<LayerMeta: Clone, ObjectMeta: Clone>(
         }));
     }
     if preserve_grids {
-        flatten_leaf_blocks(doc, &mut out, &block_contains_grid);
+        flatten_leaf_blocks(doc, &mut out, &block_contains_grid, accuracy)?;
     }
 
     for layer in &doc.layers {
@@ -950,14 +965,15 @@ fn expand_instances_with_grid_policy<LayerMeta: Clone, ObjectMeta: Clone>(
                     transform: Affine2::IDENTITY,
                     polarity: Polarity::Dark,
                     preserve_grids,
+                    accuracy,
                     block_contains_grid: &block_contains_grid,
                 },
                 doc.blocks.len(),
-            );
+            )?;
         }
     }
     normalize_bounds(&mut out);
-    out
+    Ok(out)
 }
 
 /// Rebuild every grid-free block as primitive-only geometry so retained
@@ -967,7 +983,8 @@ fn flatten_leaf_blocks<LayerMeta, ObjectMeta: Clone>(
     doc: &Document<LayerMeta, ObjectMeta>,
     out: &mut Document<LayerMeta, ObjectMeta>,
     block_contains_grid: &[bool],
-) {
+    accuracy: Option<crate::geom::GeometryAccuracy>,
+) -> Result<(), crate::geom::AccuracyError> {
     for (index, block) in doc.blocks.iter().enumerate() {
         let id = out.push_block();
         for object in &block.objects {
@@ -984,8 +1001,12 @@ fn flatten_leaf_blocks<LayerMeta, ObjectMeta: Clone>(
                     }
                     let children = out.blocks[child as usize].objects.clone();
                     for child_object in children {
-                        let geometry =
-                            transform_primitive_geometry(out, child_object.geometry, transform);
+                        let geometry = transform_primitive_geometry(
+                            out,
+                            child_object.geometry,
+                            transform,
+                            accuracy,
+                        )?;
                         out.push_block_object(
                             id,
                             Object {
@@ -1004,6 +1025,7 @@ fn flatten_leaf_blocks<LayerMeta, ObjectMeta: Clone>(
             }
         }
     }
+    Ok(())
 }
 
 /// Apply `transform` to primitive geometry within one document, copying
@@ -1012,8 +1034,9 @@ fn transform_primitive_geometry<LayerMeta, ObjectMeta>(
     doc: &mut Document<LayerMeta, ObjectMeta>,
     geometry: Geometry,
     transform: Affine2,
-) -> Geometry {
-    match geometry {
+    accuracy: Option<crate::geom::GeometryAccuracy>,
+) -> Result<Geometry, crate::geom::AccuracyError> {
+    Ok(match geometry {
         Geometry::Flash {
             aperture,
             transform: flash,
@@ -1027,9 +1050,8 @@ fn transform_primitive_geometry<LayerMeta, ObjectMeta>(
             } else {
                 let source_path = doc.arena.path(path);
                 let paint = source_path.paint.scaled(transform.m00.hypot(transform.m10));
-                let contours = doc
-                    .arena
-                    .transformed_contour_bufs(source_path.contours, transform);
+                let contours =
+                    transform_contours(doc.arena.path_contours(source_path), transform, accuracy)?;
                 doc.push_path(paint, contours)
             };
             match geometry {
@@ -1041,7 +1063,7 @@ fn transform_primitive_geometry<LayerMeta, ObjectMeta>(
         Geometry::Instance { .. } | Geometry::GridInstance { .. } => {
             unreachable!("flattened blocks contain only primitive geometry")
         }
-    }
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -1050,6 +1072,7 @@ struct InstanceExpansion<'a> {
     polarity: Polarity,
     preserve_grids: bool,
     block_contains_grid: &'a [bool],
+    accuracy: Option<crate::geom::GeometryAccuracy>,
 }
 
 fn expand_object_into_layer<LayerMeta, ObjectMeta: Clone>(
@@ -1059,7 +1082,7 @@ fn expand_object_into_layer<LayerMeta, ObjectMeta: Clone>(
     object: &Object<ObjectMeta>,
     expansion: InstanceExpansion<'_>,
     block_limit: usize,
-) {
+) -> Result<(), crate::geom::AccuracyError> {
     let transform = expansion.transform;
     let polarity = expansion.polarity.compose(object.polarity);
     if let Geometry::Instance {
@@ -1071,13 +1094,13 @@ fn expand_object_into_layer<LayerMeta, ObjectMeta: Clone>(
             target.warn(format!(
                 "Skipping artwork instance of missing block {block}"
             ));
-            return;
+            return Ok(());
         };
         if block as usize >= block_limit {
             target.warn(format!(
                 "Skipping artwork instance of non-earlier block {block}"
             ));
-            return;
+            return Ok(());
         }
         let transform = transform.concat(placement);
         for child in &block_definition.objects {
@@ -1092,9 +1115,9 @@ fn expand_object_into_layer<LayerMeta, ObjectMeta: Clone>(
                     ..expansion
                 },
                 block as usize,
-            );
+            )?;
         }
-        return;
+        return Ok(());
     }
 
     if let Geometry::GridInstance {
@@ -1107,13 +1130,13 @@ fn expand_object_into_layer<LayerMeta, ObjectMeta: Clone>(
             target.warn(format!(
                 "Skipping artwork grid instance of missing block {block}"
             ));
-            return;
+            return Ok(());
         };
         if block as usize >= block_limit {
             target.warn(format!(
                 "Skipping artwork grid instance of non-earlier block {block}"
             ));
-            return;
+            return Ok(());
         }
         if expansion.preserve_grids
             && !expansion
@@ -1141,7 +1164,7 @@ fn expand_object_into_layer<LayerMeta, ObjectMeta: Clone>(
                     meta: object.meta.clone(),
                 },
             );
-            return;
+            return Ok(());
         }
         for offset in repeat.offsets() {
             let placement = Affine2 {
@@ -1162,15 +1185,16 @@ fn expand_object_into_layer<LayerMeta, ObjectMeta: Clone>(
                         ..expansion
                     },
                     block as usize,
-                );
+                )?;
             }
         }
-        return;
+        return Ok(());
     }
 
     // The target arena starts as a clone of the source arena, so source path
     // indices resolve identically in the target.
-    let geometry = transform_primitive_geometry(target, object.geometry, transform);
+    let geometry =
+        transform_primitive_geometry(target, object.geometry, transform, expansion.accuracy)?;
     target.push_object(
         layer,
         Object {
@@ -1181,6 +1205,7 @@ fn expand_object_into_layer<LayerMeta, ObjectMeta: Clone>(
             meta: object.meta.clone(),
         },
     );
+    Ok(())
 }
 
 /// Convenience constructors for stroked paths shared by lowerings.

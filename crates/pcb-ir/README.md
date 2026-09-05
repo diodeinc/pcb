@@ -24,6 +24,7 @@ Unmet budgets return `AccuracyError`, including these backend limits:
 
 - Ellipse cubics without retained source have a `0.0003 * max(width, height) / 2`
   error floor.
+- Boolean and paint composition include crossing-angle amplification.
 - Disk offsets include input uncertainty, miter amplification, and round-join
   error. The current minimum join angle is `0.01π`, requiring an additional
   allowance of at least `radius * (1 - cos(0.01π))`.

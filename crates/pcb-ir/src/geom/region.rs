@@ -723,8 +723,11 @@ impl ContourSet {
         Self::from_regularized_with_uncertainty(
             rings,
             self.tolerance,
-            self.uncertainty_mm.max(other.uncertainty_mm)
-                + numerical_error(self.bbox.union(other.bbox)),
+            overlay_uncertainty(
+                &self.rings.iter().chain(&other.rings).collect::<Vec<_>>(),
+                self.uncertainty_mm.max(other.uncertainty_mm)
+                    + numerical_error(self.bbox.union(other.bbox)),
+            ),
         )
     }
     /// Connected components, each retaining its own hole rings.
@@ -1600,8 +1603,11 @@ impl PaintComposer {
         if self.run.is_empty() {
             return;
         }
-        self.uncertainty_mm +=
-            numerical_error(rings_bbox(&self.image).union(rings_bbox(&self.run)));
+        self.uncertainty_mm = overlay_uncertainty(
+            &self.image.iter().chain(&self.run).collect::<Vec<_>>(),
+            self.uncertainty_mm
+                + numerical_error(rings_bbox(&self.image).union(rings_bbox(&self.run))),
+        );
 
         match polarity {
             Polarity::Dark => {
@@ -1619,6 +1625,41 @@ impl PaintComposer {
             }
         }
     }
+}
+
+fn overlay_uncertainty(rings: &[&Ring], prior: f64) -> f64 {
+    if prior == 0.0 || !prior.is_finite() {
+        return prior;
+    }
+    let segments = rings
+        .iter()
+        .enumerate()
+        .flat_map(|(ring, points)| ring_edges(points).map(move |(start, end)| (ring, start, end)))
+        .collect::<Vec<_>>();
+    let index = PreparedRegion::from_segments(
+        segments
+            .iter()
+            .map(|&(_, start, end)| (start, end))
+            .collect(),
+        prior,
+    );
+    let mut uncertainty = prior;
+    for (id, &(ring, start, end)) in segments.iter().enumerate() {
+        for other in index.segment_ids_meeting(BBox::spanning(start, end)) {
+            let (other_ring, other_start, other_end) = segments[other];
+            if other <= id || ring == other_ring {
+                continue;
+            }
+            let a = end - start;
+            let b = other_end - other_start;
+            let sine = (a.x * b.y - a.y * b.x).abs() / (a.length() * b.length());
+            if sine > 0.0 && dist::segments(start, end, other_start, other_end).0 == 0.0 {
+                // Solving two displaced line equations amplifies their error by 1/sin(angle).
+                uncertainty = uncertainty.max(2.0 * prior / sine);
+            }
+        }
+    }
+    uncertainty
 }
 
 pub(crate) fn overlay_fill_rule(fill_rule: FillRule) -> OverlayFillRule {

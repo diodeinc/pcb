@@ -347,3 +347,102 @@ fn stroke_expansion_carries_its_own_round_cap_floor() {
         .is_err()
     );
 }
+
+#[test]
+fn shallow_boolean_crossings_include_intersection_displacement() {
+    use pcb_ir::geom::{Polarity, region::PaintComposer};
+    let lower = ContourSet::rectangle(BBox::new(Point::new(-2.0, -1.0), Point::new(2.0, 0.0)), 0.0);
+    let wedge = |shift, uncertainty| {
+        ContourSet::from_regularized_with_uncertainty(
+            vec![vec![
+                [-2.0, -0.02 + shift],
+                [2.0, 0.02 + shift],
+                [2.0, 1.0],
+                [-2.0, 1.0],
+            ]],
+            0.0,
+            uncertainty,
+        )
+    };
+    let uncertain = wedge(0.0, 0.001);
+    let nominal = lower.intersection(&uncertain);
+    let shifted = lower.intersection(&wedge(0.001, 0.0));
+    let displacement = distance(&shifted, Point::ZERO);
+    assert!(displacement > 0.09);
+    assert!(nominal.uncertainty_mm >= displacement);
+    assert!(accuracy(0.01).check(nominal.uncertainty_mm).is_err());
+
+    let mut paint = PaintComposer::default();
+    paint.push_region(Polarity::Dark, lower);
+    paint.push_region(Polarity::Clear, uncertain);
+    assert!(
+        accuracy(0.01)
+            .check(paint.finish_set(0.0).uncertainty_mm)
+            .is_err()
+    );
+}
+
+#[test]
+fn fine_artwork_budgets_reach_flashes_and_instanced_arcs() {
+    use pcb_ir::dialects::{LayerRole, Side, artwork};
+    use pcb_ir::geom::Polarity;
+    for instance in [false, true] {
+        let mut doc = artwork::Document::<(), ()>::new();
+        let layer = doc.push_layer(artwork::Layer::new("F.Cu", LayerRole::Copper, Side::Top));
+        let transform = Affine2 {
+            m00: 2.0,
+            m11: 0.5,
+            ..Affine2::IDENTITY
+        };
+        let geometry = if instance {
+            let block = doc.push_block();
+            let path = doc.push_path(
+                Paint::Fill {
+                    rule: FillRule::NonZero,
+                },
+                vec![shapes::circle(2.0).unwrap()],
+            );
+            doc.push_block_object(
+                block,
+                artwork::Object::new(Polarity::Dark, artwork::Geometry::Region { path }),
+            );
+            artwork::Geometry::Instance { block, transform }
+        } else {
+            let aperture = doc.push_aperture(artwork::Aperture::circle(2.0));
+            artwork::Geometry::Flash {
+                aperture,
+                transform,
+            }
+        };
+        doc.push_object(layer, artwork::Object::new(Polarity::Dark, geometry));
+        let (layers, _) =
+            artwork::compose_owner_regions(&doc, |_| Some(()), 0.0, Some(accuracy(1e-6))).unwrap();
+        let region = &layers[0][0].1;
+        assert!(region.uncertainty_mm <= 1e-6);
+        assert!(radial_error(region, 2.0, 0.5) <= region.uncertainty_mm);
+    }
+}
+
+#[test]
+fn stroke_budget_reserves_and_records_coordinate_error() {
+    use pcb_ir::geom::{
+        LineCap, LineJoin, PathCmd,
+        path::{StrokeToFillStyle, stroke_to_fill_with_accuracy},
+    };
+    let line = ContourBuf::new(vec![
+        PathCmd::move_to(Point::new(1e9, 0.0)),
+        PathCmd::line_to(Point::new(1e9 + 1.0, 0.0)),
+    ])
+    .with_uncertainty(0.00005);
+    let style = StrokeToFillStyle::new(0.2, LineCap::Round, LineJoin::Round);
+    assert!(
+        stroke_to_fill_with_accuracy(std::slice::from_ref(&line), style, accuracy(0.0001)).is_err()
+    );
+    let outlines = stroke_to_fill_with_accuracy(&[line], style, accuracy(0.0002))
+        .unwrap()
+        .unwrap();
+    for outline in outlines {
+        assert!(outline.uncertainty_mm >= 0.00005 + 0.00004 + 64.0 * f64::EPSILON * 1e9);
+        assert!(outline.uncertainty_mm <= 0.0002);
+    }
+}
