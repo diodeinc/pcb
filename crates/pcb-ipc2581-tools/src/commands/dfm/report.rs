@@ -612,6 +612,25 @@ pub struct DrillSpan {
     pub interpretation: &'static str,
 }
 
+impl DrillSpan {
+    pub(super) fn contains_copper(&self, copper_index: usize) -> bool {
+        (usize::from(self.first_copper_index)..=usize::from(self.last_copper_index))
+            .contains(&copper_index)
+    }
+
+    /// Whether two drill spans coexist at some board depth.
+    pub(super) fn overlaps(&self, other: &Self) -> bool {
+        self.first_copper_index <= other.last_copper_index
+            && other.first_copper_index <= self.last_copper_index
+    }
+
+    /// Whether this is an end of the span, where the plating must land.
+    pub(super) fn terminates_on(&self, copper_index: usize) -> bool {
+        copper_index == usize::from(self.first_copper_index)
+            || copper_index == usize::from(self.last_copper_index)
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct SourceLocator {
     pub step: Option<String>,

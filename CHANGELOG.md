@@ -10,27 +10,19 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
-- Check all IPC DFM profiles against Diode's 5 mil copper-width baseline.
-- Apply Diode's 5 mil copper-spacing baseline to all nine IPC-informed profiles.
-- Add nominal via/PTH annular-ring checks to all nine IPC-informed PDK profiles using Diode baseline limits.
-- Check minimum via, PTH, and NPTH hole diameters in all nine IPC DFM profiles.
-- Check minimum plated and nonplated slot widths in all nine IPC DFM profiles using Diode baseline limits.
-- Add circular hole-to-hole clearance to all nine IPC-informed DFM profiles using Diode's standard 10 mil baseline.
-- Check copper-to-board-edge and cutout clearance at 15 mil in all nine IPC-informed DFM profiles.
-- Warn about soldermask webs below 4 mil in all nine IPC-informed DFM profiles.
-- Check plated and nonplated slot-to-copper clearance, with Diode guidance warnings in standard and IPC profiles.
-- Warn on plated-slot copper enclosure below 0.25 mm in Standard and IPC profiles.
+- Expand all nine IPC-informed DFM profiles with Diode baseline checks.
+- Warn about soldermask webs below 4 mil in IPC profiles.
+- Warn about slot clearance and plated-slot enclosure in standard and IPC profiles.
 
 ### Fixed
 
-- Keep LSP schematic evaluation responsive by using cached BOM matches without supplier API requests; dependency resolution is unchanged.
-- Preserve deleted hierarchical sheet instances as restorable project metadata while keeping child schematic content loaded.
-- Use physical stackup order for PCBIR slot cutouts and hole-to-land associations when layer declarations are shuffled.
-- Preserve PCBIR hole-to-land associations after routing or copper clears remove land copper.
-- Fix IPC-2581 tools tests failing to compile without default features.
-- Keep cutout-only copper layers empty in artwork composition and rendering while preserving visible drill artwork.
-- Report hole-to-copper clearance violations when unrelated copper reuses a land's source indices.
-- Use physical stackup order for circular-hole DFM clearance and annular-ring checks when copper layer declarations are shuffled.
+- Avoid supplier API requests during LSP evaluation.
+- Keep deleted sheet instances restorable and child schematics loaded.
+- Respect physical stackup order in slot cutouts, land links, and DFM checks.
+- Preserve hole-to-land links after routing or copper clears.
+- Fix IPC-2581 tools test compilation without default features.
+- Remove phantom copper on cutout-only layers without hiding drill artwork.
+- Fix false hole-clearance exemptions from shared source indices.
 
 ## [0.4.50] - 2026-09-05
 

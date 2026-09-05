@@ -94,8 +94,32 @@ impl<'a> Design<'a> {
         let copper_layers = when(pools.copper, || {
             collect_copper_layers(imported, scope, pools.conductor_ownership, stackup.as_ref())
         })?;
-        let physical_holes = when(pools.hole_lands || pools.slot_lands, || {
-            imported.physical_holes(scope)
+        let (physical_holes, land_indices) = when(pools.hole_lands || pools.slot_lands, || {
+            let physical_holes = imported
+                .physical_holes(scope)?
+                .into_iter()
+                .map(|hole| (hole.id.0, hole))
+                .collect();
+            let land_indices = copper_layers
+                .iter()
+                .enumerate()
+                .flat_map(|(copper_index, layer)| {
+                    layer
+                        .lands
+                        .iter()
+                        .enumerate()
+                        .map(move |(land_index, land)| {
+                            (
+                                land.id,
+                                HoleLand {
+                                    copper_index: copper_index as u32,
+                                    land_index: land_index as u32,
+                                },
+                            )
+                        })
+                })
+                .collect();
+            Ok((physical_holes, land_indices))
         })?;
         let layout = when(pools.board_outlines || pools.board_arrays, || {
             Ok(Some(&imported.geometry))
@@ -129,14 +153,14 @@ impl<'a> Design<'a> {
             hole_lands: when(pools.hole_lands, || {
                 link_lands(
                     holes.iter().map(|hole| hole.id),
-                    &copper_layers,
+                    &land_indices,
                     &physical_holes,
                 )
             })?,
             slot_lands: when(pools.slot_lands, || {
                 link_lands(
                     slots.iter().map(|slot| slot.id),
-                    &copper_layers,
+                    &land_indices,
                     &physical_holes,
                 )
             })?,
@@ -157,7 +181,7 @@ impl<'a> Design<'a> {
             copper_layers,
         };
         if pools.resolved_drill_spans {
-            validate_hole_clearance_spans(&design, rules)?;
+            validate_drill_spans(&design, rules)?;
         }
         Ok(design)
     }
@@ -237,7 +261,7 @@ impl<'a> Design<'a> {
     }
 }
 
-fn validate_hole_clearance_spans(design: &Design, rules: &[Rule]) -> Result<()> {
+fn validate_drill_spans(design: &Design, rules: &[Rule]) -> Result<()> {
     for slot in &design.slots {
         let selected = rules.iter().any(|rule| {
             (matches!(rule.kind, rules::RuleKind::SlotToCopperClearance(plating)
@@ -270,7 +294,8 @@ fn validate_hole_clearance_spans(design: &Design, rules: &[Rule]) -> Result<()> 
                     .iter()
                     .enumerate()
                     .any(|(index, layer)| {
-                        hole.spans_copper(index) && rule.conditions.applies_to_layer(layer)
+                        hole.drill_span.contains_copper(index)
+                            && rule.conditions.applies_to_layer(layer)
                     })
         });
         if selected
@@ -572,32 +597,6 @@ pub(super) struct Hole {
     pub net: Option<Symbol>,
     pub source_set_index: u32,
     pub source_feature_index: u32,
-}
-
-impl Hole {
-    pub fn spans_copper(&self, copper_index: usize) -> bool {
-        let (low, high) = (
-            self.drill_span.first_copper_index,
-            self.drill_span.last_copper_index,
-        );
-        (usize::from(low)..=usize::from(high)).contains(&copper_index)
-    }
-
-    /// Whether two drill spans coexist at some board depth.
-    pub fn span_overlaps(&self, other: &Hole) -> bool {
-        self.drill_span.first_copper_index <= other.drill_span.last_copper_index
-            && other.drill_span.first_copper_index <= self.drill_span.last_copper_index
-    }
-
-    /// Whether `copper_index` is an end of the drill span: a layer the
-    /// plating barrel must land on.
-    pub fn terminates_on(&self, copper_index: usize) -> bool {
-        let (low, high) = (
-            self.drill_span.first_copper_index,
-            self.drill_span.last_copper_index,
-        );
-        copper_index == usize::from(low) || copper_index == usize::from(high)
-    }
 }
 
 /// One hole's land on one copper layer, by pool indices.
@@ -1440,32 +1439,9 @@ fn collect_mask_layers(imported: &ImportedDesign, scope: ArtworkScope) -> Result
 /// nearest candidate.
 fn link_lands(
     holes: impl ExactSizeIterator<Item = FeatureOccurrenceId>,
-    copper_layers: &[CopperLayer],
-    physical_holes: &[PhysicalHole],
+    land_indices: &HashMap<LandId, HoleLand>,
+    physical_holes: &HashMap<FeatureOccurrenceId, PhysicalHole>,
 ) -> Result<Vec<Vec<HoleLand>>> {
-    let physical_holes = physical_holes
-        .iter()
-        .map(|hole| (hole.id.0, hole))
-        .collect::<HashMap<_, _>>();
-    let land_indices = copper_layers
-        .iter()
-        .enumerate()
-        .flat_map(|(copper_index, layer)| {
-            layer
-                .lands
-                .iter()
-                .enumerate()
-                .map(move |(land_index, land)| {
-                    (
-                        land.id,
-                        HoleLand {
-                            copper_index: copper_index as u32,
-                            land_index: land_index as u32,
-                        },
-                    )
-                })
-        })
-        .collect::<HashMap<_, _>>();
     let mut hole_lands = vec![Vec::new(); holes.len()];
     for (hole_index, hole) in holes.enumerate() {
         let physical_hole = physical_holes
