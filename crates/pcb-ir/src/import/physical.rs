@@ -168,6 +168,8 @@ pub struct PhysicalHole {
     pub termination_basis: Option<AssociationBasis>,
     pub protection: Vec<HoleProtectionEvidence>,
     /// One explicit result per copper layer the opening geometrically reaches.
+    /// Associations use source geometry before routing and clears, so links
+    /// can name lands with no surviving final copper.
     pub lands: Vec<LayerLandAssociation>,
 }
 
@@ -181,6 +183,8 @@ pub struct LayerLandAssociation {
 /// coordinate frame for a selected layout scope.
 #[derive(Debug, Clone, Default)]
 pub struct PhysicalView {
+    /// Surviving final copper lands. Hole links can also name fully removed
+    /// source lands by their canonical feature occurrence IDs.
     pub lands: Vec<PhysicalLand>,
     pub terminations: Vec<PhysicalTermination>,
     pub paste_islands: Vec<PasteIsland>,
@@ -221,11 +225,11 @@ fn exact_coordinate(value: f64) -> u64 {
 }
 
 impl ImportedDesign {
-    /// Derive physical copper lands without materializing unrelated physical
-    /// layers.
+    /// Derive surviving final copper lands without materializing unrelated
+    /// physical layers.
     pub fn physical_lands(&self, scope: ArtworkScope) -> Result<Vec<PhysicalLand>> {
         let components = self.component_occurrences(scope)?;
-        self.derive_physical_lands(scope, &components)
+        self.derive_physical_lands(scope, &components, false)
     }
 
     /// Derive electrical package contacts using only exact IPC identities.
@@ -234,10 +238,11 @@ impl ImportedDesign {
         Ok(self.derive_physical_terminations(&lands))
     }
 
-    /// Derive drilled openings and their copper-land relationships without
-    /// materializing assembly, paste, or mask layers.
+    /// Derive drilled openings and their source-land relationships without
+    /// composing final copper or materializing assembly, paste, or mask layers.
     pub fn physical_holes(&self, scope: ArtworkScope) -> Result<Vec<PhysicalHole>> {
-        let lands = self.physical_lands(scope)?;
+        let components = self.component_occurrences(scope)?;
+        let lands = self.derive_physical_lands(scope, &components, true)?;
         self.derive_physical_holes(scope, &lands)
     }
 
@@ -246,11 +251,12 @@ impl ImportedDesign {
     /// source XML or duplicating geometry.
     pub fn physical_view(&self, scope: ArtworkScope) -> Result<PhysicalView> {
         let components = self.component_occurrences(scope)?;
-        let lands = self.derive_physical_lands(scope, &components)?;
+        let lands = self.derive_physical_lands(scope, &components, false)?;
         let terminations = self.derive_physical_terminations(&lands);
         let paste_islands = self.paste_islands(scope, &components, &terminations)?;
         let mask_openings = self.mask_openings(scope, &lands)?;
-        let mut holes = self.derive_physical_holes(scope, &lands)?;
+        let source_lands = self.derive_physical_lands(scope, &components, true)?;
+        let mut holes = self.derive_physical_holes(scope, &source_lands)?;
         self.attach_hole_assembly_evidence(scope, &lands, &terminations, &mut holes)?;
         Ok(PhysicalView {
             lands,
@@ -265,6 +271,7 @@ impl ImportedDesign {
         &self,
         scope: ArtworkScope,
         components: &[ComponentOccurrence],
+        source_geometry: bool,
     ) -> Result<Vec<PhysicalLand>> {
         let mut lands = Vec::new();
         for (layer_index, layer) in self.layer_definitions.iter().enumerate() {
@@ -273,7 +280,20 @@ impl ImportedDesign {
             }
             let layer_id = LayerId(layer_index as u32);
             let side = physical_side(layer.side);
-            for (occurrence, image) in self.attributed_land_images(layer_id, scope)? {
+            // Associations need source lands even when composition removes
+            // their entire copper image. Share identity extraction below.
+            let images = if source_geometry {
+                self.feature_occurrences(layer_id, scope)?
+                    .into_iter()
+                    .map(|occurrence| (occurrence, None))
+                    .collect::<Vec<_>>()
+            } else {
+                self.attributed_land_images(layer_id, scope)?
+                    .into_iter()
+                    .map(|(occurrence, image)| (occurrence, Some(image)))
+                    .collect()
+            };
+            for (occurrence, image) in images {
                 let source = occurrence.id;
                 let feature = self
                     .feature_definition(source.feature)
@@ -291,7 +311,7 @@ impl ImportedDesign {
                     layer: layer_id,
                     side,
                     at,
-                    image,
+                    image: image.unwrap_or_else(|| self.feature_region(occurrence)),
                     board: occurrence.board,
                     component: self.component_association(source, &evidence, components),
                     component_refs: evidence.component_refs.clone(),
@@ -1267,6 +1287,53 @@ mod tests {
             imported.physical_view(ArtworkScope::Board).unwrap().holes[0].termination,
             Association::Unresolved
         );
+    }
+
+    #[test]
+    fn slot_land_links_survive_routing_without_changing_final_copper() {
+        for height in [0.4, 1.2] {
+            let xml = physical_fixture().replace(
+                "<Layer name=\"DRILL\" layerFunction=\"DRILL\" side=\"ALL\" polarity=\"POSITIVE\"/>",
+                "<Layer name=\"DRILL\" layerFunction=\"DRILL\" side=\"ALL\" polarity=\"POSITIVE\"><Span fromLayer=\"TOP\" toLayer=\"BOTTOM\"/></Layer>",
+            ).replace(
+                "<Hole name=\"H1\" diameter=\"0.3\" platingStatus=\"PLATED\" plusTol=\"0\" minusTol=\"0\" x=\"5\" y=\"5\"/>",
+                &format!("<SlotCavity name=\"S1\" platingStatus=\"PLATED\" plusTol=\"0\" minusTol=\"0\"><Location x=\"5\" y=\"5\"/><Oval width=\"2\" height=\"{height}\"/></SlotCavity>"),
+            );
+            Ipc2581::validate(&xml).unwrap();
+            let imported = import_design(&Ipc2581::parse(&xml).unwrap()).unwrap();
+            let holes = imported.physical_holes(ArtworkScope::Board).unwrap();
+            assert_eq!(holes.len(), 1);
+            let hole = &holes[0];
+            assert_eq!(hole.kind, PhysicalHoleKind::Slot);
+            let top = imported.layer_id("TOP").unwrap();
+            let link = hole.lands.iter().find(|link| link.layer == top).unwrap();
+            let land = *link
+                .land
+                .resolved()
+                .expect("routing must not erase source identity");
+            let source = imported.feature_definition(land.0.feature).unwrap();
+            assert_eq!(source.center, Point::new(5.0, 5.0));
+            let final_lands = imported.physical_lands(ArtworkScope::Board).unwrap();
+            let residue = final_lands.iter().find(|candidate| candidate.id == land);
+            if height < 1.0 {
+                let residue = residue.expect("narrow slot leaves copper on both sides");
+                assert_eq!(residue.image.connected_components().len(), 2);
+                assert!(residue.image.intersection(&hole.image).is_empty());
+            } else {
+                assert!(residue.is_none(), "wide slot removes all land copper");
+            }
+            let view = imported.physical_view(ArtworkScope::Board).unwrap();
+            assert_eq!(view.lands.len(), final_lands.len());
+            assert_eq!(
+                view.holes[0]
+                    .lands
+                    .iter()
+                    .find(|link| link.layer == top)
+                    .unwrap()
+                    .land,
+                Association::Resolved(land)
+            );
+        }
     }
 
     #[test]

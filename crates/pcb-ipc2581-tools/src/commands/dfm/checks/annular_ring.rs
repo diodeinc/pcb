@@ -385,6 +385,57 @@ limit = { minimum = "0.2 mm" }
     }
 
     #[test]
+    fn fully_cleared_intermediate_source_land_still_requires_an_annular_ring() {
+        let ipc = Ipc2581::parse(
+            r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner"><FunctionMode mode="FABRICATION"/><StepRef name="board"/>
+    <DictionaryStandard units="MILLIMETER">
+      <EntryStandard id="land"><Circle diameter="2"/></EntryStandard>
+    </DictionaryStandard>
+  </Content>
+  <Ecad><CadHeader units="MILLIMETER"/><CadData>
+    <Layer name="L0" layerFunction="CONDUCTOR" side="TOP" polarity="POSITIVE"/>
+    <Layer name="L1" layerFunction="CONDUCTOR" side="INTERNAL" polarity="POSITIVE"/>
+    <Layer name="L2" layerFunction="CONDUCTOR" side="BOTTOM" polarity="POSITIVE"/>
+    <Layer name="DRILL" layerFunction="DRILL" side="ALL" polarity="POSITIVE">
+      <Span fromLayer="L0" toLayer="L2"/>
+    </Layer>
+    <Step name="board" type="BOARD"><Datum x="0" y="0"/>
+      <LayerFeature layerRef="L0"><Set><Pad padstackDefRef="stack"><Location x="0" y="0"/><StandardPrimitiveRef id="land"/></Pad></Set></LayerFeature>
+      <LayerFeature layerRef="L1">
+        <Set><Pad padstackDefRef="stack"><Location x="0" y="0"/><StandardPrimitiveRef id="land"/></Pad></Set>
+        <Set polarity="NEGATIVE"><Features><Location x="0" y="0"/><StandardPrimitiveRef id="land"/></Features></Set>
+      </LayerFeature>
+      <LayerFeature layerRef="L2"><Set><Pad padstackDefRef="stack"><Location x="0" y="0"/><StandardPrimitiveRef id="land"/></Pad></Set></LayerFeature>
+      <LayerFeature layerRef="DRILL"><Set geometry="stack">
+        <Hole name="H1" diameter="1" platingStatus="PLATED" x="0" y="0"/>
+      </Set></LayerFeature>
+    </Step>
+  </CadData></Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+        let imported = pcb_ir::import::ipc2581::import_design(&ipc).unwrap();
+        let middle = imported.layer_id("L1").unwrap();
+        assert!(
+            imported
+                .physical_lands(ArtworkScope::Board)
+                .unwrap()
+                .iter()
+                .all(|land| land.layer != middle),
+            "the source land has no final copper"
+        );
+        let evaluation = evaluate_pth(&ipc);
+        assert_eq!(evaluation.checked, 3, "source identity makes L1 required");
+        assert_eq!(evaluation.measured.len(), 1);
+        let measured = &evaluation.measured[0];
+        assert_eq!(measured.distance.mm, 0.0);
+        assert_eq!(measured.layers[1].name, "L1");
+        assert_eq!(measured.subjects[1].kind, "padstack_land");
+        assert_eq!(measured.subjects[1].padstack_ref.as_deref(), Some("stack"));
+    }
+
+    #[test]
     fn known_blind_span_requires_copper_at_its_own_terminal_layers() {
         let evaluation = evaluate_pth(&board(4, &[2], Some((1, 2))));
 
