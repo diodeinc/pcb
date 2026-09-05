@@ -268,9 +268,13 @@ when fewer than two exist.
   board never measures against another board or its panel outline. A feature
   crossing or outside its board material has zero clearance.
 - Annular ring measures the radial copper enclosure of each via or PTH hole
-  on every applicable layer. A genuine intermediate plane anti-pad with no
-  matching source land has no ring to measure. Both terminal layers, and any
-  layer with a matching source land, must retain copper at the hole center;
+  from its nominal circular geometry on every applicable layer. It is not
+  tolerance-aware finished-board acceptance: drill size/position, registration,
+  and plating tolerances are not modeled. Geometric flattening uncertainty is
+  not a fabrication tolerance. Plated-slot enclosure is outside this check.
+  A genuine intermediate plane anti-pad with no matching source land has no
+  ring to measure. Both terminal layers, and any layer with a matching source
+  land, must retain copper at the hole center;
   missing copper there is a zero-enclosure failure. One finding per hole
   reports the worst layer.
 - Hole-to-copper clearance measures the edge-to-edge distance from each
@@ -372,6 +376,7 @@ requirements or qualified capabilities for every technology or copper weight.
 | --- | --- | --- |
 | Copper feature width | Required minimum 5 mil (0.127 mm) | Local widths of final composed copper on every copper layer, not just nominal trace widths |
 | Copper spacing | Required minimum 5 mil (0.127 mm) | Distinct final conductors on every copper layer; fabrication spacing, not voltage-dependent insulation clearance |
+| Annular ring | Required minimum 0.125 mm for vias, 7 mil (0.1778 mm) for PTHs | Nominal circular-hole enclosure on applicable copper layers, not tolerance-aware finished-board acceptance |
 
 Output is UTF-8 JSON on stdout unless `-o` / `--output` is supplied. The
 recommended suffix is `.dfm.json`. Every complete report includes the native

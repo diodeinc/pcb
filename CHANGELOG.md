@@ -12,6 +12,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Check all IPC DFM profiles against Diode's 5 mil copper-width baseline.
 - Apply Diode's 5 mil copper-spacing baseline to all nine IPC-informed profiles.
+- Add nominal via/PTH annular-ring checks to all nine IPC-informed PDK profiles using Diode baseline limits.
 
 ### Fixed
 
