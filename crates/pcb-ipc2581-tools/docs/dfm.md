@@ -304,8 +304,9 @@ when fewer than two exist.
   flattening tolerance heals quantization seams where the cavity is filled;
   enclosure within that tolerance is reported as zero with geometric uncertainty.
   One finding per slot retains all failing layer sites, with
-  `boundary_enclosure` or `missing_copper` measurements. This is not a residual
-  ring prediction after routing, plating, or registration tolerances.
+  `clearance` measurements for positive boundary distances and `missing_copper`
+  for zero enclosure. This is not a residual ring prediction after routing,
+  plating, or registration tolerances.
 - Hole-to-copper clearance measures the edge-to-edge distance from each
   circular drill to the nearest unrelated final copper owner on every copper
   layer in its declared span. Via and PTH copper is exempt only when net or
