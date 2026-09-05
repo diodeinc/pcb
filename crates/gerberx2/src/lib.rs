@@ -5,6 +5,7 @@ pub mod types;
 pub mod write;
 
 pub use pcb_intern::{Interner, Symbol};
+use pcb_ir::geom::AccuracyError;
 pub use types::*;
 pub use write::{
     AttributeValue, GerberLayer, WriterAperture, WriterApertureMacro, WriterApertureTemplate,
@@ -19,6 +20,8 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum GerberError {
+    #[error(transparent)]
+    Accuracy(#[from] AccuracyError),
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 

@@ -1,3 +1,4 @@
+use crate::geom::GeometryAccuracy;
 use std::collections::HashMap;
 
 use anyhow::Result;
@@ -12,7 +13,11 @@ use crate::geom::{Affine2, Paint, Point, Polarity, StrokeStyle};
 impl ImportedDesign {
     /// Lower source-faithful IPC-2581 assembly data into the canonical
     /// assembly dialect for one explicit layout scope.
-    pub fn assembly_document(&self, scope: ir::Scope) -> Result<ir::Document> {
+    pub fn assembly_document(
+        &self,
+        scope: ir::Scope,
+        accuracy: GeometryAccuracy,
+    ) -> Result<ir::Document> {
         let artwork_scope = match scope {
             ir::Scope::Board => ArtworkScope::Board,
             ir::Scope::BoardArray => ArtworkScope::ArrayFlattened,
@@ -59,7 +64,8 @@ impl ImportedDesign {
                         .map(|profile| ir::Profile {
                             outer: self
                                 .geometry
-                                .transformed_path_contours(profile.outer_path, Affine2::IDENTITY)
+                                .arena
+                                .path_contours(self.geometry.arena.path(profile.outer_path))
                                 .into_iter()
                                 .next()
                                 .expect("IPC step profile has one outer contour"),
@@ -69,7 +75,8 @@ impl ImportedDesign {
                                 .iter()
                                 .map(|cutout| {
                                     self.geometry
-                                        .transformed_path_contours(cutout.path, Affine2::IDENTITY)
+                                        .arena
+                                        .path_contours(self.geometry.arena.path(cutout.path))
                                         .into_iter()
                                         .next()
                                         .expect("IPC step profile cutout has one contour")
@@ -86,7 +93,9 @@ impl ImportedDesign {
                 .packages
                 .iter()
                 .enumerate()
-                .map(|(index, package)| map_package(self, &package_context, index as u32, package))
+                .map(|(index, package)| {
+                    map_package(self, &package_context, index as u32, package, accuracy)
+                })
                 .collect::<Result<Vec<_>>>()?,
             components: self
                 .components
@@ -152,17 +161,17 @@ fn map_package(
     context: &super::ExtractContext<'_>,
     index: u32,
     package: &super::PackageDefinition,
+    accuracy: GeometryAccuracy,
 ) -> Result<ir::PackageDefinition> {
     let source = &package.source;
     let pins = source
         .pins
         .iter()
-        .map(|pin| map_package_pin(design, context, ir::PackagePinView::Primary, pin))
+        .map(|pin| map_package_pin(design, context, ir::PackagePinView::Primary, pin, accuracy))
         .chain(source.topside.iter().flat_map(|topside| {
-            topside
-                .pins
-                .iter()
-                .map(|pin| map_package_pin(design, context, ir::PackagePinView::Topside, pin))
+            topside.pins.iter().map(|pin| {
+                map_package_pin(design, context, ir::PackagePinView::Topside, pin, accuracy)
+            })
         }))
         .collect::<Result<Vec<_>>>()?;
     let views = std::iter::once(map_package_view(
@@ -173,6 +182,7 @@ fn map_package(
         source.land_pattern.as_ref(),
         source.silkscreen.as_ref(),
         source.assembly_drawing.as_ref(),
+        accuracy,
     ))
     .chain(source.topside.iter().map(|topside| {
         map_package_view(
@@ -183,6 +193,7 @@ fn map_package(
             topside.land_pattern.as_ref(),
             topside.silkscreen.as_ref(),
             topside.assembly_drawing.as_ref(),
+            accuracy,
         )
     }))
     .chain(source.other_side_view.iter().map(|other| {
@@ -194,6 +205,7 @@ fn map_package(
             None,
             other.silkscreen.as_ref(),
             other.assembly_drawing.as_ref(),
+            accuracy,
         )
     }))
     .collect::<Result<Vec<_>>>()?;
@@ -221,6 +233,7 @@ fn map_package_pin(
     context: &super::ExtractContext<'_>,
     view: ir::PackagePinView,
     pin: &types::PackagePin,
+    accuracy: GeometryAccuracy,
 ) -> Result<ir::PackagePin> {
     Ok(ir::PackagePin {
         view,
@@ -265,10 +278,11 @@ fn map_package_pin(
             .location
             .map(|location| Point::new(location.x, location.y)),
         transform: pin.xform.map(map_transform),
-        shape: map_standard_shape(design, context, &pin.shape)?,
+        shape: map_standard_shape(design, context, &pin.shape, accuracy)?,
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn map_package_view(
     design: &ImportedDesign,
     context: &super::ExtractContext<'_>,
@@ -277,18 +291,19 @@ fn map_package_view(
     land_pattern: Option<&types::PackageLandPattern>,
     silkscreen: Option<&types::PackageSilkscreen>,
     assembly_drawing: Option<&types::PackageAssemblyDrawing>,
+    accuracy: GeometryAccuracy,
 ) -> Result<ir::PackageView> {
     Ok(ir::PackageView {
         kind,
         outline: outline.map(|outline| map_package_outline(design, context, outline)),
         land_pattern: land_pattern
-            .map(|land_pattern| map_land_pattern(design, context, land_pattern))
+            .map(|land_pattern| map_land_pattern(design, context, land_pattern, accuracy))
             .transpose()?,
         silkscreen: silkscreen
-            .map(|silkscreen| map_silkscreen(design, context, silkscreen))
+            .map(|silkscreen| map_silkscreen(design, context, silkscreen, accuracy))
             .transpose()?,
         assembly_drawing: assembly_drawing
-            .map(|drawing| map_assembly_drawing(design, context, drawing))
+            .map(|drawing| map_assembly_drawing(design, context, drawing, accuracy))
             .transpose()?,
     })
 }
@@ -352,7 +367,7 @@ fn map_package_outline(
             polarity: Polarity::Dark,
             paths: vec![ir::PackagePath {
                 paint,
-                contours: vec![super::polygon_contour(&outline.polygon, Affine2::IDENTITY)],
+                contours: vec![super::polygon_contour(&outline.polygon)],
             }],
         },
     }
@@ -362,6 +377,7 @@ fn map_land_pattern(
     design: &ImportedDesign,
     context: &super::ExtractContext<'_>,
     land_pattern: &types::PackageLandPattern,
+    accuracy: GeometryAccuracy,
 ) -> Result<ir::PackageLandPattern> {
     Ok(ir::PackageLandPattern {
         pads: land_pattern
@@ -373,9 +389,11 @@ fn map_land_pattern(
                     pad.standard_primitive_ref,
                     pad.user_primitive_ref,
                 ) {
-                    (Some(feature), _, _) => Some(map_feature_shape(design, context, feature)?),
+                    (Some(feature), _, _) => {
+                        Some(map_feature_shape(design, context, feature, accuracy)?)
+                    }
                     (None, Some(reference), _) => Some(ir::PackageGraphic::Shape(
-                        map_standard_reference(design, context, reference)?,
+                        map_standard_reference(design, context, reference, accuracy)?,
                     )),
                     (None, None, Some(reference)) => Some(ir::PackageGraphic::Shape(
                         map_user_reference(design, context, reference),
@@ -403,7 +421,7 @@ fn map_land_pattern(
                 Ok(ir::PackageTarget {
                     location: Point::new(target.location.x, target.location.y),
                     transform: target.xform.map(map_transform),
-                    shape: map_standard_shape(design, context, &target.shape)?,
+                    shape: map_standard_shape(design, context, &target.shape, accuracy)?,
                 })
             })
             .collect::<Result<Vec<_>>>()?,
@@ -414,6 +432,7 @@ fn map_assembly_drawing(
     design: &ImportedDesign,
     context: &super::ExtractContext<'_>,
     drawing: &types::PackageAssemblyDrawing,
+    accuracy: GeometryAccuracy,
 ) -> Result<ir::PackageAssemblyDrawing> {
     Ok(ir::PackageAssemblyDrawing {
         outline: drawing
@@ -423,7 +442,7 @@ fn map_assembly_drawing(
         markings: drawing
             .markings
             .iter()
-            .map(|marking| map_package_marking(design, context, marking))
+            .map(|marking| map_package_marking(design, context, marking, accuracy))
             .collect::<Result<Vec<_>>>()?,
     })
 }
@@ -432,6 +451,7 @@ fn map_silkscreen(
     design: &ImportedDesign,
     context: &super::ExtractContext<'_>,
     silkscreen: &types::PackageSilkscreen,
+    accuracy: GeometryAccuracy,
 ) -> Result<ir::PackageSilkscreen> {
     Ok(ir::PackageSilkscreen {
         outlines: silkscreen
@@ -442,7 +462,7 @@ fn map_silkscreen(
         markings: silkscreen
             .markings
             .iter()
-            .map(|marking| map_package_marking(design, context, marking))
+            .map(|marking| map_package_marking(design, context, marking, accuracy))
             .collect::<Result<Vec<_>>>()?,
     })
 }
@@ -451,6 +471,7 @@ fn map_package_marking(
     design: &ImportedDesign,
     context: &super::ExtractContext<'_>,
     marking: &types::PackageMarking,
+    accuracy: GeometryAccuracy,
 ) -> Result<ir::PackageMarking> {
     Ok(ir::PackageMarking {
         usage: resolve_optional(design, marking.usage),
@@ -458,7 +479,7 @@ fn map_package_marking(
             .location
             .map(|location| Point::new(location.x, location.y)),
         transform: marking.xform.map(map_transform),
-        graphic: map_feature_shape(design, context, &marking.feature)?,
+        graphic: map_feature_shape(design, context, &marking.feature, accuracy)?,
     })
 }
 
@@ -466,14 +487,15 @@ fn map_feature_shape(
     design: &ImportedDesign,
     context: &super::ExtractContext<'_>,
     shape: &types::FeatureShape,
+    accuracy: GeometryAccuracy,
 ) -> Result<ir::PackageGraphic> {
     Ok(match shape {
         types::FeatureShape::StandardPrimitive(primitive) => ir::PackageGraphic::Shape(
-            lower_standard_primitive(design, context, primitive, Vec::new())?,
+            lower_standard_primitive(design, context, primitive, Vec::new(), accuracy)?,
         ),
-        types::FeatureShape::StandardPrimitiveRef(reference) => {
-            ir::PackageGraphic::Shape(map_standard_reference(design, context, *reference)?)
-        }
+        types::FeatureShape::StandardPrimitiveRef(reference) => ir::PackageGraphic::Shape(
+            map_standard_reference(design, context, *reference, accuracy)?,
+        ),
         types::FeatureShape::UserPrimitive(_) | types::FeatureShape::UserShape(_) => {
             ir::PackageGraphic::Shape(unsupported_user_shape(Vec::new()))
         }
@@ -505,13 +527,14 @@ fn map_standard_shape(
     design: &ImportedDesign,
     context: &super::ExtractContext<'_>,
     shape: &types::StandardShape,
+    accuracy: GeometryAccuracy,
 ) -> Result<ir::PackageShape> {
     match shape {
         types::StandardShape::Primitive(primitive) => {
-            lower_standard_primitive(design, context, primitive, Vec::new())
+            lower_standard_primitive(design, context, primitive, Vec::new(), accuracy)
         }
         types::StandardShape::PrimitiveRef(reference) => {
-            map_standard_reference(design, context, *reference)
+            map_standard_reference(design, context, *reference, accuracy)
         }
     }
 }
@@ -520,6 +543,7 @@ fn map_standard_reference(
     design: &ImportedDesign,
     context: &super::ExtractContext<'_>,
     reference: Symbol,
+    accuracy: GeometryAccuracy,
 ) -> Result<ir::PackageShape> {
     let references = vec![geometry_reference(
         design,
@@ -527,7 +551,9 @@ fn map_standard_reference(
         reference,
     )];
     match context.standard_primitives.get(&reference) {
-        Some(primitive) => lower_standard_primitive(design, context, primitive, references),
+        Some(primitive) => {
+            lower_standard_primitive(design, context, primitive, references, accuracy)
+        }
         None => Ok(empty_shape(
             ir::PackageGeometryStatus::Unresolved,
             references,
@@ -557,6 +583,7 @@ fn lower_standard_primitive(
     context: &super::ExtractContext<'_>,
     primitive: &types::StandardPrimitive,
     mut references: Vec<ir::PackageGeometryReference>,
+    accuracy: GeometryAccuracy,
 ) -> Result<ir::PackageShape> {
     let style = super::primitive_style(primitive);
     references.extend(
@@ -586,8 +613,13 @@ fn lower_standard_primitive(
         Some(types::FillProperty::Hatch | types::FillProperty::Mesh)
     );
     let mut geometry = super::GeometryDocument::new();
-    let primitive_paint =
-        super::lower_standard_primitive(context, &mut geometry, primitive, Affine2::IDENTITY)?;
+    let primitive_paint = super::lower_standard_primitive(
+        context,
+        &mut geometry,
+        primitive,
+        Affine2::IDENTITY,
+        accuracy,
+    )?;
     let status = geometry_status(
         unresolved_style,
         unsupported_fill || !geometry.diagnostics.is_empty(),

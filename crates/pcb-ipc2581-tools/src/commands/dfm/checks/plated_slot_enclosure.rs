@@ -6,7 +6,7 @@
 //! intermediate layer with neither a land nor copper meeting S is exempt.
 
 use pcb_ir::geom::region::ring_edges;
-use pcb_ir::geom::tol;
+use pcb_ir::geom::{GeometryAccuracy, tol};
 
 use crate::commands::dfm::design::Design;
 use crate::commands::dfm::pdk::SlotPlating;
@@ -16,7 +16,12 @@ use crate::commands::dfm::rules::Conditions;
 use super::drilled_board_edge_clearance::slot_evidence;
 use super::{Evaluation, Measured, MeasuredSite, layers, slot_matches, slot_subject, violates};
 
-pub(super) fn evaluate(limit_mm: f64, conditions: &Conditions, design: &Design) -> Evaluation {
+pub(super) fn evaluate(
+    limit_mm: f64,
+    conditions: &Conditions,
+    design: &Design,
+    accuracy: GeometryAccuracy,
+) -> anyhow::Result<Evaluation> {
     let mut checked = 0;
     let mut measured = Vec::new();
     for (slot_index, slot) in design
@@ -57,7 +62,7 @@ pub(super) fn evaluate(limit_mm: f64, conditions: &Conditions, design: &Design) 
             // within the existing flattening uncertainty, not a fab tolerance.
             let filled = copper
                 .image
-                .union(&slot.outline.disk_dilate(tol::REGION_MM));
+                .union(&slot.outline.disk_dilate(tol::REGION_MM, accuracy)?);
             let boundary = filled.prepare_query();
             let distance = slot
                 .outline
@@ -67,7 +72,7 @@ pub(super) fn evaluate(limit_mm: f64, conditions: &Conditions, design: &Design) 
                 .filter_map(|(start, end)| boundary.segment_nearest_within(start, end, limit_mm))
                 .min_by(|a, b| a.mm.total_cmp(&b.mm))
                 .map(|distance| {
-                    let mut distance = distance.also_flattened(1);
+                    let mut distance = distance.also_uncertain(slot.outline.uncertainty_mm);
                     if distance.mm <= tol::REGION_MM {
                         distance.mm = 0.0;
                         distance.second = distance.first;
@@ -77,7 +82,7 @@ pub(super) fn evaluate(limit_mm: f64, conditions: &Conditions, design: &Design) 
             let Some(distance) = distance.filter(|distance| violates(distance, limit_mm)) else {
                 continue;
             };
-            let envelope = slot.outline.disk_dilate(limit_mm);
+            let envelope = slot.outline.disk_dilate(limit_mm, accuracy)?;
             let mut site = MeasuredSite::new(
                 distance,
                 envelope.bbox,
@@ -116,7 +121,7 @@ pub(super) fn evaluate(limit_mm: f64, conditions: &Conditions, design: &Design) 
             });
         }
     }
-    Evaluation { checked, measured }
+    Ok(Evaluation { checked, measured })
 }
 
 #[cfg(test)]
@@ -184,7 +189,8 @@ limit = { minimum = "0.2 mm", preferred = "0.3 mm" }
     }
 
     fn check(xml: &str) -> dfm::DfmReport {
-        let imported = import_design(&Ipc2581::parse(xml).unwrap()).unwrap();
+        let imported =
+            import_design(&Ipc2581::parse(xml).unwrap(), GeometryAccuracy::default()).unwrap();
         dfm::check(
             &imported,
             CheckRequest {
@@ -197,6 +203,7 @@ limit = { minimum = "0.2 mm", preferred = "0.3 mm" }
                 layout_target: LayoutTarget::Board,
                 generated_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
             },
+            GeometryAccuracy::default(),
         )
         .unwrap()
     }
@@ -323,13 +330,19 @@ limit = { minimum = "0.2 mm", preferred = "0.3 mm" }
         let rules = rules::lower(&Pdk::parse(PDK).unwrap(), None).unwrap();
         for span in ["", r#"<Span fromLayer="L0"/>"#, THROUGH] {
             let xml = board(OVAL, [&copper, "", &copper], span);
-            let mut imported = import_design(&Ipc2581::parse(&xml).unwrap()).unwrap();
+            let mut imported =
+                import_design(&Ipc2581::parse(&xml).unwrap(), GeometryAccuracy::default()).unwrap();
             if span == THROUGH {
                 imported.stackups.clear();
             }
-            let error = Design::extract(&imported, ArtworkScope::Board, &rules)
-                .err()
-                .unwrap();
+            let error = Design::extract(
+                &imported,
+                ArtworkScope::Board,
+                &rules,
+                GeometryAccuracy::default(),
+            )
+            .err()
+            .unwrap();
             assert!(error.to_string().contains(if span == THROUGH {
                 "physical stackup"
             } else {

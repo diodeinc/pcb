@@ -5,11 +5,12 @@
 //! [`PathCmd`]s. [`PathArena`] owns the three arrays and every push/read/copy
 //! operation over them, so dialects and consumers never index by hand.
 
+use crate::geom::{AccuracyError, GeometryAccuracy};
 use std::ops::Range;
 
 use crate::geom::affine::Affine2;
 use crate::geom::bbox::BBox;
-use crate::geom::path::{ContourBuf, PathCmd, contour_bbox, transform_cmds, validate_cmd_points};
+use crate::geom::path::{ContourBuf, PathCmd, contour_bbox, validate_cmd_points};
 use crate::geom::style::{FillRule, Paint, StrokeStyle};
 
 /// A half-open range of `u32` indices into one of a document's flat arenas.
@@ -88,6 +89,8 @@ impl Span {
 pub struct Contour {
     pub cmds: Span,
     pub bbox: BBox,
+    pub uncertainty_mm: f64,
+    pub(crate) ellipse_source: Option<Affine2>,
 }
 
 /// A styled path: how a contour span is painted.
@@ -191,6 +194,8 @@ impl PathArena {
         self.contours.push(Contour {
             cmds: Span::new(cmd_start, self.cmds.len() as u32 - cmd_start),
             bbox: contour.bbox,
+            uncertainty_mm: contour.uncertainty_mm,
+            ellipse_source: contour.ellipse_source,
         });
         id
     }
@@ -211,7 +216,12 @@ impl PathArena {
     pub fn contour_bufs(&self, span: Span) -> Vec<ContourBuf> {
         self.contours(span)
             .iter()
-            .map(|contour| ContourBuf::from_parts(contour.bbox, self.cmds(*contour).to_vec()))
+            .map(|contour| ContourBuf {
+                bbox: contour.bbox,
+                cmds: self.cmds(*contour).to_vec(),
+                uncertainty_mm: contour.uncertainty_mm,
+                ellipse_source: contour.ellipse_source,
+            })
             .collect()
     }
 
@@ -221,10 +231,15 @@ impl PathArena {
     }
 
     /// Detach a contour span, transformed.
-    pub fn transformed_contour_bufs(&self, span: Span, transform: Affine2) -> Vec<ContourBuf> {
-        self.contours(span)
-            .iter()
-            .map(|contour| transform_cmds(self.cmds(*contour).iter().copied(), transform))
+    pub fn transformed_contour_bufs(
+        &self,
+        span: Span,
+        transform: Affine2,
+        accuracy: GeometryAccuracy,
+    ) -> Result<Vec<ContourBuf>, AccuracyError> {
+        self.contour_bufs(span)
+            .into_iter()
+            .map(|contour| contour.transformed(transform, accuracy))
             .collect()
     }
 
@@ -237,9 +252,7 @@ impl PathArena {
 
     /// Union of contour bounds over a transformed contour span.
     pub fn transformed_contours_bbox(&self, span: Span, transform: Affine2) -> BBox {
-        self.transformed_contour_bufs(span, transform)
-            .iter()
-            .fold(BBox::empty(), |bbox, contour| bbox.union(contour.bbox))
+        self.contours_bbox(span).transformed(transform)
     }
 
     /// Union of path bounds over a path span.
@@ -251,14 +264,16 @@ impl PathArena {
 
     /// Copy a path (with its contours) from another arena, optionally
     /// transformed. Returns the new path index.
-    pub fn append_path_from(&mut self, other: &PathArena, path: u32, transform: Affine2) -> u32 {
+    pub fn append_path_from(
+        &mut self,
+        other: &PathArena,
+        path: u32,
+        transform: Affine2,
+        accuracy: GeometryAccuracy,
+    ) -> Result<u32, AccuracyError> {
         let source = other.paths[path as usize];
-        let contours = if transform.is_identity() {
-            other.path_contours(&source)
-        } else {
-            other.transformed_contour_bufs(source.contours, transform)
-        };
-        self.push_path(source.paint, contours)
+        let contours = other.transformed_contour_bufs(source.contours, transform, accuracy)?;
+        Ok(self.push_path(source.paint, contours))
     }
 
     /// Recompute contour and path bounds bottom-up from the command stream.
@@ -297,6 +312,8 @@ impl PathArena {
                 contours.push(Contour {
                     cmds: Span::new(cmd_start, cmds.len() as u32 - cmd_start),
                     bbox: contour.bbox,
+                    uncertainty_mm: contour.uncertainty_mm,
+                    ellipse_source: contour.ellipse_source,
                 });
             }
             mapping[index] = Some(paths.len() as u32);
@@ -372,6 +389,8 @@ mod tests {
 
     #[test]
     fn push_path_records_contours_and_bounds() {
+        let _accuracy = GeometryAccuracy::default();
+
         let mut arena = PathArena::default();
 
         let path = arena.push_path(
@@ -406,6 +425,8 @@ mod tests {
 
     #[test]
     fn append_path_from_copies_across_arenas_with_transform() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut source = PathArena::default();
         let path = source.push_path(
             Paint::Fill {
@@ -415,8 +436,14 @@ mod tests {
         );
 
         let mut target = PathArena::default();
-        let copied =
-            target.append_path_from(&source, path, Affine2::translation(Point::new(10.0, 0.0)));
+        let copied = target
+            .append_path_from(
+                &source,
+                path,
+                Affine2::translation(Point::new(10.0, 0.0)),
+                accuracy,
+            )
+            .unwrap();
 
         assert_eq!(target.path(copied).bbox.min, Point::new(10.0, 0.0));
         assert_eq!(target.path(copied).bbox.max, Point::new(11.0, 1.0));
@@ -425,6 +452,8 @@ mod tests {
 
     #[test]
     fn compact_drops_dead_paths_and_remaps() {
+        let _accuracy = GeometryAccuracy::default();
+
         let mut arena = PathArena::default();
         let a = arena.push_path(
             Paint::Fill {

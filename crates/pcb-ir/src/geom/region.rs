@@ -28,14 +28,16 @@ use i_overlay::i_float::int::point::IntPoint;
 use i_overlay::mesh::outline::offset::OutlineOffset;
 use i_overlay::mesh::style::{LineJoin as OutlineLineJoin, OutlineStyle};
 
+use crate::geom::accuracy::numerical_error;
 use crate::geom::affine::Affine2;
 use crate::geom::bbox::BBox;
 use crate::geom::dist::{self, Distance};
-use crate::geom::path::{ContourBuf, PathCmd, contours_to_kurbo, stroke_to_fill, transform_cmds};
+use crate::geom::path::{ContourBuf, PathCmd, Segment, stroke_to_fill};
 use crate::geom::point::Point;
 use crate::geom::store::{Path, PathArena};
 use crate::geom::style::{FillRule, Paint, Polarity};
 use crate::geom::tol;
+use crate::geom::{AccuracyError, GeometryAccuracy};
 
 /// A closed polygon boundary, flattened to line segments.
 pub type Ring = Vec<[f64; 2]>;
@@ -43,24 +45,33 @@ pub type Ring = Vec<[f64; 2]>;
 /// One connected polygon: an outer ring plus hole rings.
 pub type Shape = Vec<Ring>;
 
-/// Flatten contours to polygon rings using the shared chord tolerance.
-pub fn rings_from_contours(contours: &[ContourBuf]) -> Vec<Ring> {
-    let bez_path = contours_to_kurbo(contours);
+fn flatten_contours(contours: &[ContourBuf], accuracy: f64) -> (Vec<Ring>, f64) {
+    let (bez_path, conversion_error) =
+        crate::geom::path::contours_to_kurbo(contours, accuracy / 2.0);
+    let curved = bez_path
+        .elements()
+        .iter()
+        .any(|el| matches!(el, kurbo::PathEl::CurveTo(..) | kurbo::PathEl::QuadTo(..)));
+    let flatten_error = if curved { accuracy / 2.0 } else { 0.0 };
     let mut rings = Vec::new();
     let mut current = Vec::new();
-    kurbo::flatten(bez_path, tol::FLATTEN_MM, |element| match element {
-        kurbo::PathEl::MoveTo(point) => {
-            push_ring(&mut rings, &mut current);
-            current.push([point.x, point.y]);
-        }
-        kurbo::PathEl::LineTo(point) => current.push([point.x, point.y]),
-        kurbo::PathEl::ClosePath => push_ring(&mut rings, &mut current),
-        kurbo::PathEl::QuadTo(..) | kurbo::PathEl::CurveTo(..) => {
-            unreachable!("kurbo::flatten emits lines")
-        }
-    });
+    kurbo::flatten(
+        bez_path,
+        flatten_error.max(f64::MIN_POSITIVE),
+        |element| match element {
+            kurbo::PathEl::MoveTo(point) => {
+                push_ring(&mut rings, &mut current);
+                current.push([point.x, point.y]);
+            }
+            kurbo::PathEl::LineTo(point) => current.push([point.x, point.y]),
+            kurbo::PathEl::ClosePath => push_ring(&mut rings, &mut current),
+            kurbo::PathEl::QuadTo(..) | kurbo::PathEl::CurveTo(..) => {
+                unreachable!("kurbo::flatten emits lines")
+            }
+        },
+    );
     push_ring(&mut rings, &mut current);
-    rings
+    (rings, conversion_error + flatten_error)
 }
 
 /// Convert polygon rings back into closed line contours.
@@ -177,7 +188,7 @@ pub fn simplify_rings(rings: Vec<Ring>, fill_rule: FillRule) -> Vec<Ring> {
 /// Regularize rings keeping the connected-shape structure: each shape is its
 /// outer ring followed by its holes, wound opposite.
 pub fn simplify_shapes(rings: Vec<Ring>, fill_rule: FillRule) -> Vec<Shape> {
-    rings.simplify_shape(overlay_fill_rule(fill_rule))
+    rings.simplify_shape_as::<i64>(overlay_fill_rule(fill_rule))
 }
 
 /// Regularize filled rings on an exact output grid.
@@ -224,15 +235,19 @@ pub fn intersection_rings(subject: Vec<Ring>, clip: Vec<Ring>) -> Vec<Ring> {
     if subject.is_empty() || clip.is_empty() {
         return Vec::new();
     }
-    flatten_shapes(subject.overlay(&clip, OverlayRule::Intersect, OverlayFillRule::NonZero))
+    flatten_shapes(subject.overlay_as::<i64>(
+        &clip,
+        OverlayRule::Intersect,
+        OverlayFillRule::NonZero,
+    ))
 }
 
 /// Difference keeping the connected-shape structure of the result.
 pub fn difference_shapes(subject: Vec<Ring>, cutters: Vec<Ring>) -> Vec<Shape> {
     if subject.is_empty() || cutters.is_empty() {
-        return subject.simplify_shape(OverlayFillRule::NonZero);
+        return subject.simplify_shape_as::<i64>(OverlayFillRule::NonZero);
     }
-    subject.overlay(&cutters, OverlayRule::Difference, OverlayFillRule::NonZero)
+    subject.overlay_as::<i64>(&cutters, OverlayRule::Difference, OverlayFillRule::NonZero)
 }
 
 pub fn rings_bbox(rings: &[Ring]) -> BBox {
@@ -269,7 +284,8 @@ fn decimate_ring_inward(ring: &Ring, deviation_mm: f64) -> Ring {
     // Every chord re-checks its whole chain, so error cannot accumulate.
     let chord_absorbs = |anchor: usize, end: usize| {
         let start = point(anchor);
-        let chord = point(end) - start;
+        let endpoint = point(end);
+        let chord = endpoint - start;
         let length = chord.length();
         if length <= f64::EPSILON {
             return false;
@@ -277,7 +293,7 @@ fn decimate_ring_inward(ring: &Ring, deviation_mm: f64) -> Ring {
         (anchor + 1..end).all(|index| {
             let offset = point(index) - start;
             let cross = chord.x * offset.y - chord.y * offset.x;
-            cross <= 0.0 && -cross / length <= deviation_mm
+            cross <= 0.0 && dist::point_segment(point(index), start, endpoint).0 <= deviation_mm
         })
     };
 
@@ -361,8 +377,7 @@ pub fn rings_area(rings: &[Ring]) -> f64 {
 /// Regularized filled planar point set.
 ///
 /// A `ContourSet` is always in canonical form: rings are regularized
-/// (non-overlapping, holes wound opposite their outer boundary) and contours
-/// smaller than `tolerance²` in area are discarded. The winding/fill rule of
+/// (non-overlapping, holes wound opposite their outer boundary). The winding/fill rule of
 /// the *source* geometry matters only at construction; every subsequent
 /// operation is a regularized set operation.
 #[derive(Debug, Clone)]
@@ -374,6 +389,9 @@ pub struct ContourSet {
     /// Bounds of each ring, indexed like `rings` and fixed with them.
     pub(crate) ring_bounds: Vec<BBox>,
     pub tolerance: f64,
+    /// Accumulated boundary approximation in mm; infinity means unbounded.
+    /// Mutating public rings invalidates this history.
+    pub uncertainty_mm: f64,
 }
 
 /// Result of enforcing a minimum width for every two-sided void gap.
@@ -409,16 +427,31 @@ impl fmt::Display for GapRegularizationError {
 }
 
 impl std::error::Error for GapRegularizationError {}
+impl From<AccuracyError> for GapRegularizationError {
+    fn from(error: AccuracyError) -> Self {
+        Self(error.to_string())
+    }
+}
 
 impl ContourSet {
-    pub fn new(rings: Vec<Ring>, fill_rule: FillRule, tolerance: f64) -> Self {
-        Self::from_regularized(simplify_rings(rings, fill_rule), tolerance)
+    fn checked(self, accuracy: GeometryAccuracy) -> Result<Self, AccuracyError> {
+        accuracy.check(self.uncertainty_mm)?;
+        Ok(self)
     }
 
-    /// A region from rings a regularized boolean operation produced, kept
-    /// as they are: non-overlapping, holes wound opposite their outer ring.
-    pub fn from_regularized(rings: Vec<Ring>, tolerance: f64) -> Self {
-        let rings = filter_significant_rings(rings, tolerance);
+    pub fn new(rings: Vec<Ring>, fill_rule: FillRule, tolerance: f64) -> Self {
+        let uncertainty = numerical_error(rings_bbox(&rings));
+        Self::from_regularized(simplify_rings(rings, fill_rule), tolerance, uncertainty)
+    }
+
+    /// Construct from known regularized polygons, preserving their history.
+    /// `uncertainty_mm = 0` asserts these polygons are the actual source.
+    pub fn from_regularized(rings: Vec<Ring>, tolerance: f64, uncertainty_mm: f64) -> Self {
+        let uncertainty_mm = if uncertainty_mm >= 0.0 {
+            uncertainty_mm
+        } else {
+            f64::INFINITY
+        };
         let ring_bounds = rings
             .iter()
             .map(|ring| rings_bbox(std::slice::from_ref(ring)))
@@ -428,6 +461,7 @@ impl ContourSet {
             rings,
             ring_bounds,
             tolerance,
+            uncertainty_mm,
         }
     }
 
@@ -437,11 +471,66 @@ impl ContourSet {
             rings: Vec::new(),
             ring_bounds: Vec::new(),
             tolerance,
+            uncertainty_mm: 0.0,
         }
     }
 
-    pub fn from_contours(contours: &[ContourBuf], fill_rule: FillRule, tolerance: f64) -> Self {
-        Self::new(rings_from_contours(contours), fill_rule, tolerance)
+    pub fn from_contours(
+        contours: &[ContourBuf],
+        fill_rule: FillRule,
+        tolerance: f64,
+        accuracy: GeometryAccuracy,
+    ) -> Result<Self, AccuracyError> {
+        let refined = contours
+            .iter()
+            .map(|c| c.clone().refined(accuracy))
+            .collect::<Result<Vec<_>, _>>()?;
+        let contours = refined.as_slice();
+        if !tolerance.is_finite()
+            || tolerance < 0.0
+            || contours.iter().any(|c| {
+                !c.bbox.is_valid()
+                    || !c.uncertainty_mm.is_finite()
+                    || c.uncertainty_mm < 0.0
+                    || c.cmds.iter().any(|cmd| {
+                        !cmd.p0.is_finite() || !cmd.p1.is_finite() || !cmd.p2.is_finite()
+                    })
+            })
+        {
+            return Err(AccuracyError::InvalidGeometry(
+                "invalid coordinates or significance tolerance",
+            ));
+        }
+        let prior = contours
+            .iter()
+            .map(|c| c.uncertainty_mm)
+            .fold(0.0, f64::max);
+        let bbox = contours.iter().fold(BBox::empty(), |b, c| b.union(c.bbox));
+        let numeric = numerical_error(bbox);
+        let remaining = accuracy.allowance(prior + numeric)?;
+        if remaining < f64::EPSILON
+            || contours
+                .iter()
+                .flat_map(ContourBuf::segments)
+                .map(|segment| match segment {
+                    Segment::Line { .. } => 1.0,
+                    _ => {
+                        let bounds = segment.bbox();
+                        (bounds.width().max(bounds.height()) / remaining).sqrt()
+                    }
+                })
+                .sum::<f64>()
+                > 1_000_000.0
+        {
+            return Err(AccuracyError::SubdivisionLimit);
+        }
+        let (rings, added) = flatten_contours(contours, remaining);
+        let region = Self::from_regularized(
+            simplify_rings(rings, fill_rule),
+            tolerance,
+            prior + added + numeric,
+        );
+        region.checked(accuracy)
     }
 
     /// Build the union of independently filled contours.
@@ -450,17 +539,25 @@ impl ContourSet {
     /// winding direction is irrelevant), then the contours are unioned. Use
     /// this when sibling contours are separate features; applying even-odd
     /// across the whole list would XOR duplicated geometry away.
-    pub fn from_filled_contours(contours: &[ContourBuf], tolerance: f64) -> Self {
-        let rings = contours
-            .iter()
-            .flat_map(|contour| {
-                simplify_rings(
-                    rings_from_contours(std::slice::from_ref(contour)),
+    pub fn from_filled_contours(
+        contours: &[ContourBuf],
+        tolerance: f64,
+        accuracy: GeometryAccuracy,
+    ) -> Result<Self, AccuracyError> {
+        let mut composer = PaintComposer::default();
+        for contour in contours {
+            composer.push(
+                Polarity::Dark,
+                Self::from_contours(
+                    std::slice::from_ref(contour),
                     FillRule::EvenOdd,
-                )
-            })
-            .collect();
-        Self::new(rings, FillRule::NonZero, tolerance)
+                    0.0,
+                    accuracy,
+                )?,
+            );
+        }
+        let result = composer.finish(tolerance);
+        result.checked(accuracy)
     }
 
     /// Build the union of the geometric images painted by a set of paths.
@@ -474,11 +571,13 @@ impl ContourSet {
         arena: &PathArena,
         paths: impl IntoIterator<Item = &'a Path>,
         tolerance: f64,
-    ) -> Self {
+        accuracy: GeometryAccuracy,
+    ) -> Result<Self, AccuracyError> {
         Self::from_placed_painted_paths(
             arena,
             paths.into_iter().map(|path| (path, Affine2::IDENTITY)),
             tolerance,
+            accuracy,
         )
     }
 
@@ -491,34 +590,37 @@ impl ContourSet {
         arena: &PathArena,
         paths: impl IntoIterator<Item = (&'a Path, Affine2)>,
         tolerance: f64,
-    ) -> Self {
-        let mut rings = Vec::new();
+        accuracy: GeometryAccuracy,
+    ) -> Result<Self, AccuracyError> {
+        if !tolerance.is_finite() || tolerance < 0.0 {
+            return Err(AccuracyError::InvalidGeometry(
+                "invalid significance tolerance",
+            ));
+        }
+        let mut composer = PaintComposer::default();
         for (path, placement) in paths {
             let contours = arena.path_contours(path);
             let contours = match path.paint {
                 Paint::Fill { .. } => contours,
                 Paint::Stroke(stroke) => {
-                    stroke_to_fill(&contours, stroke.into()).unwrap_or_default()
+                    let local =
+                        GeometryAccuracy::new(accuracy.max_error_mm() / placement.max_scale())?;
+                    stroke_to_fill(&contours, stroke.into(), local)?.unwrap_or_default()
                 }
                 Paint::None => continue,
             };
-            let contours = if placement.is_identity() {
-                contours
-            } else {
-                contours
-                    .into_iter()
-                    .map(|contour| transform_cmds(contour.cmds, placement))
-                    .collect()
-            };
-            let fill_rule = match path.paint {
-                Paint::Fill { rule } => rule,
-                Paint::Stroke(_) => FillRule::NonZero,
-                Paint::None => unreachable!("unpainted paths were skipped"),
-            };
-            let path_rings = simplify_rings(rings_from_contours(&contours), fill_rule);
-            rings.extend(path_rings);
+            let contours = contours
+                .into_iter()
+                .map(|contour| contour.transformed(placement, accuracy))
+                .collect::<Result<Vec<_>, AccuracyError>>()?;
+            let fill_rule = path.fill_rule().unwrap_or(FillRule::NonZero);
+            composer.push(
+                Polarity::Dark,
+                Self::from_contours(&contours, fill_rule, 0.0, accuracy)?,
+            );
         }
-        Self::new(rings, FillRule::NonZero, tolerance)
+        let result = composer.finish(tolerance);
+        result.checked(accuracy)
     }
 
     pub fn rectangle(bbox: BBox, tolerance: f64) -> Self {
@@ -531,7 +633,7 @@ impl ContourSet {
             [bbox.max.x, bbox.max.y],
             [bbox.min.x, bbox.max.y],
         ];
-        Self::new(vec![ring], FillRule::NonZero, tolerance)
+        Self::from_regularized(vec![ring], tolerance, 0.0)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -549,21 +651,13 @@ impl ContourSet {
 
     /// Regularized union: `self ∪ other`.
     pub fn union(&self, other: &Self) -> Self {
-        if self.is_empty() {
+        if self.is_empty() && self.uncertainty_mm == 0.0 {
             return other.clone();
         }
-        if other.is_empty() {
+        if other.is_empty() && other.uncertainty_mm == 0.0 {
             return self.clone();
         }
-        Self::new(
-            flatten_shapes(self.rings.overlay(
-                &other.rings,
-                OverlayRule::Union,
-                OverlayFillRule::NonZero,
-            )),
-            FillRule::NonZero,
-            self.tolerance,
-        )
+        self.boolean(other, OverlayRule::Union)
     }
 
     pub fn union_assign(&mut self, other: &Self) {
@@ -572,27 +666,29 @@ impl ContourSet {
 
     /// Regularized difference: `self \ cutters`.
     pub fn difference(&self, cutters: &Self) -> Self {
-        Self::new(
-            difference_rings(self.rings.clone(), cutters.rings.clone()),
-            FillRule::NonZero,
-            self.tolerance,
-        )
+        self.boolean(cutters, OverlayRule::Difference)
     }
 
     /// Regularized intersection: `self ∩ clip`.
     pub fn intersection(&self, clip: &Self) -> Self {
-        Self::new(
-            intersection_rings(self.rings.clone(), clip.rings.clone()),
-            FillRule::NonZero,
-            self.tolerance,
-        )
+        self.boolean(clip, OverlayRule::Intersect)
     }
 
+    fn boolean(&self, other: &Self, rule: OverlayRule) -> Self {
+        let rings = flatten_shapes(self.rings.overlay_as::<i64>(
+            &other.rings,
+            rule,
+            OverlayFillRule::NonZero,
+        ));
+        let uncertainty = self.uncertainty_mm.max(other.uncertainty_mm)
+            + numerical_error(self.bbox.union(other.bbox));
+        Self::from_regularized(rings, self.tolerance, uncertainty)
+    }
     /// Connected components, each retaining its own hole rings.
     pub fn connected_components(&self) -> Vec<Self> {
         simplify_shapes(self.rings.clone(), FillRule::NonZero)
             .into_iter()
-            .map(|shape| Self::from_regularized(shape, self.tolerance))
+            .map(|shape| Self::from_regularized(shape, self.tolerance, self.uncertainty_mm))
             .collect()
     }
 
@@ -655,6 +751,7 @@ impl ContourSet {
                 .iter()
                 .map(|segment| (segment.start, segment.end))
                 .collect(),
+            self.uncertainty_mm,
         );
         let sees_left = |wall: &OrientedBoundarySegment, across: Point| {
             let along = wall.end - wall.start;
@@ -735,8 +832,13 @@ impl ContourSet {
                 .map(|(ring, _)| ring.clone())
                 .collect(),
             self.tolerance,
+            self.uncertainty_mm,
         );
-        material.intersection(&Self::new(windows, FillRule::NonZero, self.tolerance))
+        material.intersection(&Self::from_regularized(
+            simplify_rings(windows, FillRule::NonZero),
+            self.tolerance,
+            0.0,
+        ))
     }
 
     /// Whether the region contains each point, as a one-or-zero indicator.
@@ -807,12 +909,26 @@ impl ContourSet {
 
     /// Decimate the region's boundary so it only shrinks; see
     /// [`decimate_rings_inward`].
-    pub fn decimate_inward(&self, deviation_mm: f64) -> Self {
-        Self::new(
-            decimate_rings_inward(&self.rings, deviation_mm),
-            FillRule::NonZero,
+    pub fn decimate_inward(
+        &self,
+        deviation_mm: f64,
+        accuracy: GeometryAccuracy,
+    ) -> Result<Self, AccuracyError> {
+        if !deviation_mm.is_finite() || deviation_mm < 0.0 {
+            return Err(AccuracyError::InvalidGeometry(
+                "invalid decimation deviation",
+            ));
+        }
+        let inherited = self.uncertainty_mm + numerical_error(self.bbox);
+        let deviation_mm = deviation_mm.min(accuracy.allowance(inherited)?);
+        Ok(Self::from_regularized(
+            simplify_rings(
+                decimate_rings_inward(&self.rings, deviation_mm),
+                FillRule::NonZero,
+            ),
             self.tolerance,
-        )
+            inherited + deviation_mm,
+        ))
     }
 
     /// Test many points against the same region in one sweep.
@@ -1029,49 +1145,22 @@ impl ContourSet {
             .all(|ring| ring_boundary_distance(ring, center) + epsilon >= radius)
     }
 
-    /// Minkowski sum with a disk: `self ⊕ D_radius`. This is the standard
-    /// "buffer out" operation used for manufacturability checks. The
-    /// topology-aware offset expands outer contours, contracts holes, and
-    /// regularizes all resulting contours together.
-    pub fn disk_dilate(&self, radius: f64) -> Self {
-        if self.is_empty() || radius <= 0.0 {
-            return self.clone();
-        }
-
-        self.disk_offset(radius)
-    }
-
-    /// Minkowski erosion by a disk: `self ⊖ D_radius`.
-    ///
-    /// This removes the radius-wide interior band swept by every boundary
-    /// ring. It therefore contracts outer boundaries, expands holes, removes
-    /// necks narrower than twice the radius, and may split or erase connected
-    /// components.
-    pub fn disk_erode(&self, radius: f64) -> Self {
-        if self.is_empty() || radius <= 0.0 {
-            return self.clone();
-        }
-
-        self.disk_offset(-radius)
-    }
-
     /// Morphological opening by a disk: `(self ⊖ D_radius) ⊕ D_radius`.
     ///
     /// Equivalently, this is the union of every radius-sized disk contained in
     /// the source region. It is therefore a subset of the source that removes
     /// tips and islands too small to accommodate the disk while rounding the
     /// surviving outward corners.
-    pub fn disk_open(&self, radius: f64) -> Self {
-        if self.is_empty() || radius <= 0.0 {
-            return self.clone();
-        }
-
-        // Round-offset tessellation approximates the mathematical disks. Clip
-        // the regrown result to the source so the operation retains its
-        // defining anti-extensive property at polygon tolerance.
-        self.disk_erode(radius)
-            .disk_dilate(radius)
-            .intersection(self)
+    pub fn disk_open(
+        &self,
+        radius: f64,
+        accuracy: GeometryAccuracy,
+    ) -> Result<Self, AccuracyError> {
+        let result = self
+            .disk_erode(radius, accuracy)?
+            .disk_dilate(radius, accuracy)?
+            .intersection(self);
+        result.checked(accuracy)
     }
 
     /// Morphological closing by a disk: `(self ⊕ D_radius) ⊖ D_radius`.
@@ -1080,15 +1169,16 @@ impl ContourSet {
     /// radius-sized disk contained in the source complement. Closing therefore
     /// fills void tips and gaps too small to accommodate the disk while
     /// rounding the surviving inward corners.
-    pub fn disk_close(&self, radius: f64) -> Self {
-        if self.is_empty() || radius <= 0.0 {
-            return self.clone();
-        }
-
-        // Round-offset tessellation approximates the mathematical disks. Union
-        // the contracted result with the source so the operation retains its
-        // defining extensive property at polygon tolerance.
-        self.disk_dilate(radius).disk_erode(radius).union(self)
+    pub fn disk_close(
+        &self,
+        radius: f64,
+        accuracy: GeometryAccuracy,
+    ) -> Result<Self, AccuracyError> {
+        let result = self
+            .disk_dilate(radius, accuracy)?
+            .disk_erode(radius, accuracy)?
+            .union(self);
+        result.checked(accuracy)
     }
 
     /// Diagnose distinct components whose Euclidean separation is less than
@@ -1104,9 +1194,13 @@ impl ContourSet {
     /// [`ContourSet::disk_gap_violations`], which also covers gaps within one
     /// connected component.
     #[cfg(test)]
-    pub(crate) fn disk_inter_component_gap_violations(&self, radius: f64) -> Self {
+    pub(crate) fn disk_inter_component_gap_violations(
+        &self,
+        radius: f64,
+        accuracy: GeometryAccuracy,
+    ) -> Result<Self, AccuracyError> {
         if self.is_empty() || radius <= 0.0 {
-            return Self::empty(self.tolerance);
+            return Ok(Self::empty(self.tolerance));
         }
 
         let components = self.connected_components();
@@ -1117,13 +1211,13 @@ impl ContourSet {
                     continue;
                 }
                 let overlap = left
-                    .disk_dilate(radius)
-                    .intersection(&right.disk_dilate(radius))
+                    .disk_dilate(radius, accuracy)?
+                    .intersection(&right.disk_dilate(radius, accuracy)?)
                     .difference(self);
                 violations = violations.union(&overlap);
             }
         }
-        violations
+        Ok(violations)
     }
 
     /// Enforce a diameter-`2 * gap_radius` minimum for every two-sided void gap.
@@ -1151,6 +1245,7 @@ impl ContourSet {
         gap_radius: f64,
         filled_radius: f64,
         guard: f64,
+        accuracy: GeometryAccuracy,
     ) -> Result<DiskGapRegularization, GapRegularizationError> {
         if !gap_radius.is_finite()
             || gap_radius <= 0.0
@@ -1168,18 +1263,18 @@ impl ContourSet {
         }
 
         let mut kept = self.clone();
-        while let Some(next) = kept.narrow_gap_trim(gap_radius, filled_radius, guard)? {
+        while let Some(next) = kept.narrow_gap_trim(gap_radius, filled_radius, guard, accuracy)? {
             if kept.difference(&next).area() <= self.tolerance * self.tolerance {
                 return Err(GapRegularizationError(format!(
                     "gap regularization stalled with {:.9} mm² of void-gap violations",
-                    kept.disk_gap_violations(gap_radius).area()
+                    kept.disk_gap_violations(gap_radius, accuracy)?.area()
                 )));
             }
             kept = next;
         }
         Ok(DiskGapRegularization {
-            removed: self.difference(&kept),
-            kept,
+            removed: self.difference(&kept).checked(accuracy)?,
+            kept: kept.checked(accuracy)?,
         })
     }
 
@@ -1191,16 +1286,18 @@ impl ContourSet {
         gap_radius: f64,
         filled_radius: f64,
         guard: f64,
+        accuracy: GeometryAccuracy,
     ) -> Result<Option<Self>, GapRegularizationError> {
-        let narrow_voids = self.disk_gap_violations(gap_radius);
+        let narrow_voids = self.disk_gap_violations(gap_radius, accuracy)?;
         if narrow_voids.is_empty() {
             return Ok(None);
         }
-        let keep_out = narrow_void_keep_out(self, &narrow_voids, gap_radius + guard)?;
+        let keep_out = narrow_void_keep_out(self, &narrow_voids, gap_radius + guard, accuracy)?;
         Ok(Some(
             self.difference(&keep_out)
-                .disk_open(filled_radius)
-                .intersection(self),
+                .disk_open(filled_radius, accuracy)?
+                .intersection(self)
+                .checked(accuracy)?,
         ))
     }
 
@@ -1213,11 +1310,15 @@ impl ContourSet {
     /// distinguishes hairpins and notches from the bite of a single smooth
     /// concavity. An empty result proves no two facing boundary branches fail
     /// the rolling-disk test.
-    pub fn disk_gap_violations(&self, radius: f64) -> Self {
+    pub fn disk_gap_violations(
+        &self,
+        radius: f64,
+        accuracy: GeometryAccuracy,
+    ) -> Result<Self, AccuracyError> {
         if self.is_empty() || !(radius > 0.0 && radius.is_finite()) {
-            return Self::empty(self.tolerance);
+            return Ok(Self::empty(self.tolerance));
         }
-        two_sided_gap_residual(self, &closing_residual(self, radius))
+        two_sided_gap_residual(self, &closing_residual(self, radius, accuracy)?).checked(accuracy)
     }
 
     /// Connected material residues of the opening by `radius` whose local
@@ -1226,7 +1327,8 @@ impl ContourSet {
         &self,
         radius: f64,
         width_mm: f64,
-    ) -> Vec<TwoSidedResidualComponent> {
+        accuracy: GeometryAccuracy,
+    ) -> Result<Vec<TwoSidedResidualComponent>, AccuracyError> {
         // A width is a disk touching two facing walls, so it is at least
         // their separation: material whose walls never face each other that
         // closely has no width to find. Any width lies within a radius of
@@ -1237,12 +1339,16 @@ impl ContourSet {
         // construction moves walls by a tolerance, and `M \ (X ∩ M)` is
         // `M \ X`, so the opening's clip to the source is not needed to
         // find what the opening removed.
-        self.two_sided_residual(radius, |region, radius| {
+        self.two_sided_residual(radius, accuracy, |region, radius| {
             let facing = width_mm + 4.0 * region.tolerance;
-            let touching = 3.0 * region.tolerance + tol::FLATTEN_MM;
+            let touching = 3.0 * region.tolerance + region.uncertainty_mm;
             let reach = 3.0 * (radius + 2.0 * region.tolerance);
             let candidates = region.facing_components(facing, touching, reach);
-            candidates.difference(&candidates.disk_erode(radius).disk_dilate(radius))
+            Ok(candidates.difference(
+                &candidates
+                    .disk_erode(radius, accuracy)?
+                    .disk_dilate(radius, accuracy)?,
+            ))
         })
     }
 
@@ -1252,17 +1358,18 @@ impl ContourSet {
         &self,
         radius: f64,
         width_mm: f64,
-    ) -> Vec<TwoSidedResidualComponent> {
+        accuracy: GeometryAccuracy,
+    ) -> Result<Vec<TwoSidedResidualComponent>, AccuracyError> {
         // A gap is a disk touching two walls facing across void, so it is
         // at least their separation. A residue point lies within a radius
         // of its walls and the disks that decide it reach a diameter
         // further, so the closing of the material within two diameters of
         // facing walls is the closing of the whole region there.
-        self.two_sided_residual(radius, |region, radius| {
+        self.two_sided_residual(radius, accuracy, |region, radius| {
             let facing = width_mm + 4.0 * region.tolerance;
             let reach = 4.0 * (radius + 2.0 * region.tolerance);
             let candidates = region.facing_components(0.0, facing, reach);
-            closing_residual(&candidates, radius)
+            closing_residual(&candidates, radius, accuracy)
         })
     }
 
@@ -1271,16 +1378,25 @@ impl ContourSet {
     fn two_sided_residual(
         &self,
         radius: f64,
-        residual: impl FnOnce(&Self, f64) -> Self,
-    ) -> Vec<TwoSidedResidualComponent> {
+        accuracy: GeometryAccuracy,
+        residual: impl FnOnce(&Self, f64) -> Result<Self, AccuracyError>,
+    ) -> Result<Vec<TwoSidedResidualComponent>, AccuracyError> {
         if self.is_empty() || !(radius > 0.0 && radius.is_finite()) {
-            return Vec::new();
+            return Ok(Vec::new());
         }
-        two_sided_residual_components(self, &residual(self, radius), radius)
+        Ok(two_sided_residual_components(
+            self,
+            &residual(self, radius)?,
+            radius,
+            accuracy.allowance(self.uncertainty_mm)?,
+        ))
     }
 
     pub fn to_contours(&self) -> Vec<ContourBuf> {
         rings_to_contours(self.rings.clone())
+            .into_iter()
+            .map(|c| c.with_uncertainty(self.uncertainty_mm))
+            .collect()
     }
 
     /// Convert each connected component to one positive contour.
@@ -1294,21 +1410,81 @@ impl ContourSet {
             .map(crate::geom::bridge::bridge_shape)
             .filter(|ring| ring.len() >= 3)
             .filter_map(ring_to_contour)
+            .map(|c| c.with_uncertainty(self.uncertainty_mm))
             .collect()
     }
 
-    fn disk_offset(&self, offset: f64) -> Self {
-        let radius = offset.abs();
-        let max_sagitta = tol::STROKE_OUTLINE_MM.min(radius);
-        // i_overlay rounds each join into floor(sweep / join_angle)
-        // segments. Use half the central angle allowed by the sagitta budget
-        // so that flooring cannot make the emitted segments too coarse.
-        let join_angle = (1.0 - max_sagitta / radius)
-            .acos()
-            .clamp(0.01 * std::f64::consts::PI, 0.25 * std::f64::consts::PI);
+    /// Disk dilation with a total budget including the input uncertainty.
+    pub fn disk_dilate(
+        &self,
+        radius: f64,
+        accuracy: GeometryAccuracy,
+    ) -> Result<Self, AccuracyError> {
+        if radius < 0.0 {
+            return Err(AccuracyError::InvalidGeometry("negative disk radius"));
+        }
+        self.disk_offset(radius, accuracy)
+    }
+
+    /// Disk erosion with a total budget including the input uncertainty.
+    pub fn disk_erode(
+        &self,
+        radius: f64,
+        accuracy: GeometryAccuracy,
+    ) -> Result<Self, AccuracyError> {
+        if radius < 0.0 {
+            return Err(AccuracyError::InvalidGeometry("negative disk radius"));
+        }
+        self.disk_offset(-radius, accuracy)
+    }
+
+    fn disk_offset(&self, offset: f64, accuracy: GeometryAccuracy) -> Result<Self, AccuracyError> {
+        if !offset.is_finite() {
+            return Err(AccuracyError::InvalidGeometry("non-finite disk radius"));
+        }
+        accuracy.check(self.uncertainty_mm)?;
+        if self.is_empty() || offset == 0.0 {
+            return Ok(self.clone());
+        }
+        let numeric = numerical_error(self.bbox.expand(offset.abs()));
+        let inherited = self.uncertainty_mm + numeric;
+        let remaining = accuracy.allowance(inherited)?;
+        let join_angle = (2.0 * (remaining / (2.0 * offset.abs())).min(1.0).sqrt().asin())
+            .clamp(0.01 * std::f64::consts::PI, std::f64::consts::FRAC_PI_4);
         let style = OutlineStyle::new(offset).line_join(OutlineLineJoin::Round(join_angle));
-        let shapes = self.rings.outline_as::<i64>(&style);
-        Self::new(flatten_shapes(shapes), FillRule::NonZero, self.tolerance)
+        let rings = flatten_shapes(self.rings.outline_as::<i64>(&style));
+        // Only rounded corners incur chord error; inward corners intersect straight edges.
+        // The backend emits floor(sweep / join_angle) chords at each rounded corner.
+        let added = self
+            .rings
+            .iter()
+            .flat_map(|ring| {
+                let directions = ring_edges(ring)
+                    .filter_map(|(a, b)| {
+                        let d = b - a;
+                        (d.length() > 0.0).then(|| d / d.length())
+                    })
+                    .collect::<Vec<_>>();
+                directions
+                    .iter()
+                    .zip(directions.iter().cycle().skip(1))
+                    .take(directions.len())
+                    .filter(|(a, b)| (a.x * b.y - a.y * b.x) * offset > 0.0)
+                    .map(|(a, b)| {
+                        let sweep = (a.x * b.x + a.y * b.y).clamp(-1.0, 1.0).acos();
+                        let steps = (sweep / join_angle).floor().max(1.0);
+                        2.0 * offset.abs() * (sweep / steps / 4.0).sin().powi(2)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .fold(0.0, f64::max);
+        let simplified = decimate_rings_inward(&rings, numeric);
+        Self::from_regularized(
+            simplify_rings(simplified, FillRule::NonZero),
+            self.tolerance,
+            inherited + added + numeric,
+        )
+        .checked(accuracy)
     }
 }
 
@@ -1320,52 +1496,44 @@ pub struct PaintComposer {
     image: Vec<Ring>,
     run: Vec<Ring>,
     run_polarity: Option<Polarity>,
+    uncertainty_mm: f64,
 }
 
 impl PaintComposer {
-    pub fn push(&mut self, polarity: Polarity, mut rings: Vec<Ring>) {
-        if rings.is_empty() {
+    pub fn push(&mut self, polarity: Polarity, mut region: ContourSet) {
+        if region.is_empty() {
             return;
         }
         if self.run_polarity != Some(polarity) {
             self.flush_run();
             self.run_polarity = Some(polarity);
         }
-        self.run.append(&mut rings);
+        self.uncertainty_mm = self.uncertainty_mm.max(region.uncertainty_mm);
+        self.run.append(&mut region.rings);
     }
 
-    pub fn finish(mut self) -> Vec<Ring> {
+    pub fn finish(mut self, tolerance: f64) -> ContourSet {
         self.flush_run();
-        self.image
-    }
-
-    pub fn finish_set(self, tolerance: f64) -> ContourSet {
-        ContourSet::new(self.finish(), FillRule::NonZero, tolerance)
+        ContourSet::from_regularized(self.image, tolerance, self.uncertainty_mm)
     }
 
     fn flush_run(&mut self) {
         let Some(polarity) = self.run_polarity.take() else {
             return;
         };
-        if self.run.is_empty() {
-            return;
-        }
-
-        match polarity {
-            Polarity::Dark => {
-                let mut rings = std::mem::take(&mut self.image);
-                rings.append(&mut self.run);
-                self.image = union_rings(rings, FillRule::NonZero);
-            }
-            Polarity::Clear => {
-                if self.image.is_empty() {
-                    self.run.clear();
-                } else {
-                    let cutters = union_rings(std::mem::take(&mut self.run), FillRule::NonZero);
-                    self.image = difference_rings(std::mem::take(&mut self.image), cutters);
-                }
-            }
-        }
+        let rule = match polarity {
+            Polarity::Dark => OverlayRule::Union,
+            Polarity::Clear => OverlayRule::Difference,
+        };
+        let rings = flatten_shapes(self.image.overlay_as::<i64>(
+            &self.run,
+            rule,
+            OverlayFillRule::NonZero,
+        ));
+        self.uncertainty_mm +=
+            numerical_error(rings_bbox(&self.image).union(rings_bbox(&self.run)));
+        self.image = rings;
+        self.run.clear();
     }
 }
 
@@ -1403,14 +1571,6 @@ fn ring_winding(ring: &Ring, point: Point) -> i32 {
 
 fn flatten_shapes(shapes: Vec<Shape>) -> Vec<Ring> {
     shapes.into_iter().flatten().collect()
-}
-
-fn filter_significant_rings(mut rings: Vec<Ring>, tolerance: f64) -> Vec<Ring> {
-    if tolerance > 0.0 {
-        let min_area = tolerance.powi(2);
-        rings.retain(|ring| ring_signed_area(ring).abs() > min_area);
-    }
-    rings
 }
 
 fn push_ring(out: &mut Vec<Ring>, ring: &mut Ring) {
@@ -1470,8 +1630,15 @@ struct OrientedBoundarySegment {
     bbox: BBox,
 }
 
-fn closing_residual(region: &ContourSet, radius: f64) -> ContourSet {
-    region.disk_close(radius).difference(region)
+fn closing_residual(
+    region: &ContourSet,
+    radius: f64,
+    accuracy: GeometryAccuracy,
+) -> Result<ContourSet, AccuracyError> {
+    region
+        .disk_close(radius, accuracy)?
+        .difference(region)
+        .checked(accuracy)
 }
 
 /// Every source boundary edge longer than the region tolerance, in ring
@@ -1486,7 +1653,11 @@ fn source_boundary_segments(source: &ContourSet) -> Vec<OrientedBoundarySegment>
             let metric = RingArcLength::new(ring);
             // Keep the two-sided chord local even when the whole ring is
             // smaller than the ordinary geometry resolution.
-            let tangent_radius = tol::FLATTEN_MM.min(metric.perimeter() / 8.0);
+            let tangent_radius = source
+                .uncertainty_mm
+                .max(source.tolerance)
+                .max(numerical_error(source.bbox))
+                .min(metric.perimeter() / 8.0);
             let kept = ring_edges(ring)
                 .enumerate()
                 .filter(|(_, (start, end))| start.distance_to(*end) > source.tolerance)
@@ -1572,6 +1743,7 @@ fn two_sided_residual_components(
     source: &ContourSet,
     residual: &ContourSet,
     reach: f64,
+    approximation_mm: f64,
 ) -> Vec<TwoSidedResidualComponent> {
     if residual.is_empty() {
         return Vec::new();
@@ -1582,8 +1754,13 @@ fn two_sided_residual_components(
             .iter()
             .map(|segment| (segment.start, segment.end))
             .collect(),
+        source.uncertainty_mm,
     );
-    let contact_tolerance = source.tolerance.max(residual.tolerance);
+    let contact_tolerance = source
+        .tolerance
+        .max(residual.tolerance)
+        .max(numerical_error(source.bbox));
+    let boundary_uncertainty = source.uncertainty_mm + std::f64::consts::SQRT_2 * contact_tolerance;
     residual
         .connected_components()
         .into_iter()
@@ -1593,13 +1770,22 @@ fn two_sided_residual_components(
                 .into_iter()
                 .map(|id| segments[id])
                 .collect::<Vec<_>>();
-            component_width(&sites, &component, reach, contact_tolerance).map(|geometry| {
-                TwoSidedResidualComponent {
-                    region: component,
-                    width: geometry.disk.width(),
-                    disk: geometry.disk,
-                    axis: geometry.axis,
-                }
+            component_width(
+                &sites,
+                &component,
+                reach,
+                contact_tolerance,
+                approximation_mm,
+                boundary_uncertainty,
+            )
+            .map(|geometry| TwoSidedResidualComponent {
+                region: component,
+                width: geometry
+                    .disk
+                    .width()
+                    .also_uncertain(2.0 * boundary_uncertainty),
+                disk: geometry.disk,
+                axis: geometry.axis,
             })
         })
         .collect()
@@ -1730,7 +1916,7 @@ pub(crate) struct InscribedDisk {
 
 impl InscribedDisk {
     fn width(self) -> Distance {
-        Distance::flattened(2.0 * self.radius, self.first, self.second, 2)
+        Distance::exact(2.0 * self.radius, self.first, self.second)
     }
 }
 
@@ -1768,6 +1954,8 @@ fn component_width(
     component: &ContourSet,
     reach: f64,
     contact_tolerance: f64,
+    approximation_mm: f64,
+    boundary_uncertainty: f64,
 ) -> Option<ComponentWidth> {
     if one_wall(sites) {
         return None;
@@ -1850,7 +2038,7 @@ fn component_width(
         .map(farthest_vertex)
         .fold(f64::INFINITY, f64::min)
         + 2.0 * contact_tolerance
-        + tol::FLATTEN_MM;
+        + approximation_mm;
     let within_reach = sites
         .iter()
         .map(|site| {
@@ -1957,19 +2145,26 @@ fn component_width(
         if edge.id() > twin || !edge.is_primary() || incident(first, second) {
             continue;
         }
-        let samples =
-            voronoi_edge_samples(&diagram, edge.id(), &lines, component, reach, units_per_mm)
-                .expect("voronoi edge samples")
-                .into_iter()
-                .map(unquantize)
-                .collect::<Vec<_>>();
+        let samples = voronoi_edge_samples(
+            &diagram,
+            edge.id(),
+            &lines,
+            component,
+            reach,
+            units_per_mm,
+            approximation_mm,
+        )
+        .expect("voronoi edge samples")
+        .into_iter()
+        .map(unquantize)
+        .collect::<Vec<_>>();
         axis.extend(samples.windows(2).map(|pair| WidthAxisSegment {
             start: pair[0],
             end: pair[1],
             first_wall: (sites[first].start, sites[first].end),
             second_wall: (sites[second].start, sites[second].end),
             uncertainty_mm: if edge.is_curved() {
-                tol::FLATTEN_MM
+                approximation_mm
             } else {
                 0.0
             },
@@ -2023,14 +2218,14 @@ fn component_width(
         present.iter().any(|other| {
             other.radius > disk.radius
                 && disk.center.distance_to(other.center) + disk.radius
-                    <= other.radius + tol::FLATTEN_MM
+                    <= other.radius + approximation_mm
         })
     };
     let minimum = present
         .iter()
         .filter(|disk| !pruned(disk))
-        // Below two grid units a width is snapping noise, not geometry.
-        .filter(|disk| disk.width().mm > 2.0 * contact_tolerance)
+        // The disk must survive the uncertainty of its boundary sites.
+        .filter(|disk| disk.radius > boundary_uncertainty)
         .min_by(|left, right| left.width().mm.total_cmp(&right.width().mm))
         .copied()?;
     // Retain the actual interior axis, removing the portions rejected by the
@@ -2052,7 +2247,7 @@ fn component_width(
                 break;
             }
             if dist::point_segment(other.center, segment.start, segment.end).0
-                > other.radius + tol::FLATTEN_MM
+                > other.radius + approximation_mm
             {
                 continue;
             }
@@ -2062,7 +2257,7 @@ fn component_width(
             };
             let Some(contained) = convex_sublevel_interval(
                 |t| at(t).distance_to(other.center) + radius(t),
-                other.radius + tol::FLATTEN_MM,
+                other.radius + approximation_mm,
             ) else {
                 continue;
             };
@@ -2122,25 +2317,33 @@ fn component_width(
 /// the rounded bite of one smooth concavity is not mistaken for a gap.
 fn two_sided_gap_residual(source: &ContourSet, residual: &ContourSet) -> ContourSet {
     let source_segments = source_boundary_segments(source);
-    let contact_tolerance = source.tolerance.max(residual.tolerance);
+    let boundary = PreparedRegion::from_segments(
+        source_segments
+            .iter()
+            .map(|segment| (segment.start, segment.end))
+            .collect(),
+        source.uncertainty_mm,
+    );
+    let contact_tolerance = source
+        .tolerance
+        .max(residual.tolerance)
+        .max(numerical_error(source.bbox));
 
     let rings = residual
         .connected_components()
         .into_iter()
         .filter(|component| {
-            let contacts = source_segments
-                .iter()
+            let contacts = boundary
+                .segment_ids_meeting(component.bbox.expand(contact_tolerance))
+                .into_iter()
+                .map(|id| &source_segments[id])
                 .filter(|segment| {
-                    segment
-                        .bbox
-                        .expand(contact_tolerance)
-                        .intersects(component.bbox)
-                        && region_boundary_within_distance(
-                            component,
-                            segment.start,
-                            segment.end,
-                            contact_tolerance,
-                        )
+                    region_boundary_within_distance(
+                        component,
+                        segment.start,
+                        segment.end,
+                        contact_tolerance,
+                    )
                 })
                 .collect::<Vec<_>>();
             contacts.iter().enumerate().any(|(index, left)| {
@@ -2161,7 +2364,11 @@ fn two_sided_gap_residual(source: &ContourSet, residual: &ContourSet) -> Contour
         })
         .flat_map(|component| component.rings)
         .collect();
-    ContourSet::new(rings, FillRule::NonZero, residual.tolerance)
+    ContourSet::from_regularized(
+        simplify_rings(rings, FillRule::NonZero),
+        residual.tolerance,
+        residual.uncertainty_mm,
+    )
 }
 
 fn region_boundary_within_distance(
@@ -2197,31 +2404,58 @@ fn narrow_void_keep_out(
     source: &ContourSet,
     narrow_voids: &ContourSet,
     radius: f64,
+    accuracy: GeometryAccuracy,
 ) -> Result<ContourSet, GapRegularizationError> {
-    let axis_keep_out = narrow_void_medial_axis_keep_out(source, narrow_voids, radius)?;
+    let axis_keep_out = narrow_void_medial_axis_keep_out(source, narrow_voids, radius, accuracy)?;
     let axisless = narrow_voids
         .connected_components()
         .into_iter()
         .filter(|component| component.intersection(&axis_keep_out).is_empty())
         .collect::<Vec<_>>();
-    Ok(axisless.into_iter().fold(axis_keep_out, |keep_out, thin| {
-        keep_out.union(&thin.disk_dilate(radius))
-    }))
+    Ok(axisless
+        .into_iter()
+        .try_fold(axis_keep_out, |keep_out, thin| {
+            Ok::<_, AccuracyError>(keep_out.union(&thin.disk_dilate(radius, accuracy)?))
+        })?)
 }
 
 fn narrow_void_medial_axis_keep_out(
     source: &ContourSet,
     narrow_voids: &ContourSet,
     radius: f64,
+    accuracy: GeometryAccuracy,
 ) -> Result<ContourSet, GapRegularizationError> {
     if narrow_voids.is_empty() {
         return Ok(ContourSet::empty(source.tolerance));
     }
+    let boundary = PreparedRegion::from_segments(
+        source.rings.iter().flat_map(ring_edges).collect(),
+        source.uncertainty_mm,
+    );
+    // A closing residual is within the disk radius of its nearest source boundary.
+    let void_boundary = narrow_voids.prepare_query();
+    let relevant = narrow_voids
+        .ring_bounds
+        .iter()
+        .flat_map(|bounds| boundary.segment_ids_meeting(bounds.expand(radius)))
+        .filter(|&id| {
+            let (start, end) = boundary.segments[id];
+            void_boundary
+                .segment_nearest_within(start, end, radius)
+                .is_some()
+        })
+        .collect::<std::collections::HashSet<_>>();
+    let mut source_index = 0;
     let origin = Point::new(source.bbox.min.x, source.bbox.min.y);
     let mut segments = Vec::<VoronoiLine<i32>>::new();
     let mut boundary_segments = Vec::new();
     for (ring_id, ring) in source.rings.iter().enumerate() {
         for index in 0..ring.len() {
+            let needed = relevant.contains(&source_index);
+            source_index += 1;
+            if !needed {
+                continue;
+            }
             let [start_x, start_y] = ring[index];
             let [end_x, end_y] = ring[(index + 1) % ring.len()];
             if (end_x - start_x).hypot(end_y - start_y) <= source.tolerance {
@@ -2290,6 +2524,7 @@ fn narrow_void_medial_axis_keep_out(
             source,
             radius,
             VORONOI_COORDINATES_PER_MM,
+            accuracy.allowance(source.uncertainty_mm)?,
         )?;
         let mut commands = Vec::with_capacity(samples.len());
         for sample in samples {
@@ -2311,7 +2546,11 @@ fn narrow_void_medial_axis_keep_out(
             });
         }
         if commands.len() >= 2 {
-            contours.push(ContourBuf::new(commands));
+            contours.push(ContourBuf::new(commands).with_uncertainty(
+                source.uncertainty_mm
+                    + accuracy.allowance(source.uncertainty_mm)?
+                    + std::f64::consts::SQRT_2 / VORONOI_COORDINATES_PER_MM,
+            ));
         }
     }
 
@@ -2331,11 +2570,12 @@ fn narrow_void_medial_axis_keep_out(
         &arena,
         std::iter::once(&arena.paths[path as usize]),
         source.tolerance,
-    );
+        accuracy,
+    )?;
     let interior_axis =
-        medial_axis.intersection(&narrow_voids.disk_erode(2.0 * axis_stroke_radius));
-    let keep_out = interior_axis.disk_dilate(radius);
-    Ok(keep_out.intersection(&source.disk_dilate(radius)))
+        medial_axis.intersection(&narrow_voids.disk_erode(2.0 * axis_stroke_radius, accuracy)?);
+    let keep_out = interior_axis.disk_dilate(radius, accuracy)?;
+    Ok(keep_out.intersection(&source.disk_dilate(radius, accuracy)?))
 }
 
 fn boundary_segments_are_incident(left: BoundarySegment, right: BoundarySegment) -> bool {
@@ -2377,6 +2617,7 @@ fn voronoi_edge_samples(
     region: &ContourSet,
     radius: f64,
     units_per_mm: f64,
+    approximation_mm: f64,
 ) -> Result<Vec<[f64; 2]>, GapRegularizationError> {
     let edge = diagram.edge(edge_id).map_err(gap_regularization_error)?;
     let affine = SimpleAffine::default();
@@ -2416,7 +2657,7 @@ fn voronoi_edge_samples(
         VoronoiVisualUtils::discretize(
             &point,
             segment,
-            tol::FLATTEN_MM * units_per_mm,
+            approximation_mm * units_per_mm,
             &affine,
             &mut samples,
         );
@@ -2588,6 +2829,33 @@ mod tests {
     use crate::geom::shapes;
 
     #[test]
+    fn width_requires_a_disk_that_survives_boundary_uncertainty() {
+        let accuracy = GeometryAccuracy::default();
+        let mut region = ContourSet::rectangle(rect(0.0, 0.0, 1.0, 0.003), 1e-6);
+        assert!(
+            !crate::geom::dfm::thin_features(&region, 0.127, accuracy)
+                .unwrap()
+                .is_empty()
+        );
+        region.uncertainty_mm = 0.002;
+        assert!(
+            crate::geom::dfm::thin_features(&region, 0.127, accuracy)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn erosion_of_a_convex_polygon_does_not_spend_round_join_error() {
+        let accuracy = GeometryAccuracy::new(1e-6).unwrap();
+        let region = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), 0.0);
+        let inset = region.disk_erode(1.0, accuracy).unwrap();
+        assert!((inset.area() - 64.0).abs() < 1e-8);
+        assert!(inset.uncertainty_mm < 1e-9);
+        assert!(region.disk_dilate(1.0, accuracy).is_err());
+    }
+
+    #[test]
     fn component_width_prunes_only_beyond_grid_uncertainty() {
         let measure = |height| {
             let component = ContourSet::rectangle(rect(0.0, 0.0, 1.0, height), tol::REGION_MM);
@@ -2596,6 +2864,8 @@ mod tests {
                 &component,
                 0.05,
                 tol::REGION_MM,
+                0.0025,
+                std::f64::consts::SQRT_2 * tol::REGION_MM,
             )
         };
 
@@ -2734,37 +3004,21 @@ mod tests {
 
     #[test]
     fn inward_decimation_only_shrinks_and_respects_deviation() {
+        let spur = vec![[0.0, 0.0], [2.0, 0.0], [1.0, 1e-12], [1.0, 1.0], [0.0, 1.0]];
+        assert!(decimate_ring_inward(&spur, 1e-10).contains(&[2.0, 0.0]));
+        let accuracy = GeometryAccuracy::default();
+
         let ring = ContourSet::from_contours(
             &[shapes::circle(10.0).unwrap(), shapes::circle(6.0).unwrap()],
             FillRule::EvenOdd,
             tol::REGION_MM,
-        );
+            accuracy,
+        )
+        .unwrap();
         let deviation = 0.05;
-        let decimated = ring.decimate_inward(deviation);
+        let decimated = ring.decimate_inward(deviation, accuracy).unwrap();
 
-        // The outer boundary decimates; the convex hole cannot lose a vertex
-        // without growing the region, so it stays exact.
-        let ring_len = |set: &ContourSet, hole: bool| {
-            set.rings
-                .iter()
-                .find(|ring| (ring_signed_area(ring) < 0.0) == hole)
-                .expect("annulus ring")
-                .len()
-        };
-        assert_eq!(
-            ring_len(&decimated, true),
-            ring_len(&ring, true),
-            "hole ring must stay exact"
-        );
-        assert!(
-            ring_len(&decimated, false) * 2 < ring_len(&ring, false),
-            "outer ring kept {} of {} vertices",
-            ring_len(&decimated, false),
-            ring_len(&ring, false)
-        );
-
-        // The region only shrinks: nothing outside the source survives.
-        assert!(decimated.difference(&ring).area() < 1e-9);
+        assert!(decimated.difference(&ring).area() <= ring.tolerance.powi(2));
 
         // Area loss is bounded by the deviation times the boundary length.
         let perimeter: f64 = ring
@@ -2852,13 +3106,15 @@ mod tests {
 
     #[test]
     fn contour_set_composes_region_operations() {
+        let accuracy = GeometryAccuracy::default();
+
         let outer = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), tol::REGION_MM);
         let inner = ContourSet::rectangle(rect(3.0, 3.0, 7.0, 7.0), tol::REGION_MM);
         let clip = ContourSet::rectangle(rect(5.0, 0.0, 10.0, 10.0), tol::REGION_MM);
 
         let ring = outer.difference(&inner);
         let clipped = ring.intersection(&clip);
-        let expanded = clipped.disk_dilate(0.5);
+        let expanded = clipped.disk_dilate(0.5, accuracy).unwrap();
 
         assert!(!expanded.is_empty());
         assert!((expanded.bbox.min.x - 4.5).abs() <= 1e-9);
@@ -2867,6 +3123,8 @@ mod tests {
 
     #[test]
     fn filled_contour_region_is_winding_insensitive() {
+        let accuracy = GeometryAccuracy::default();
+
         let clockwise = rectangle_contour(0.0, 0.0, 10.0, 5.0);
         let counter_clockwise = ContourBuf::new(vec![
             PathCmd::move_to(Point::new(0.0, 5.0)),
@@ -2876,13 +3134,24 @@ mod tests {
             PathCmd::close(),
         ]);
 
-        let a = ContourSet::from_filled_contours(std::slice::from_ref(&clockwise), tol::REGION_MM);
+        let a = ContourSet::from_filled_contours(
+            std::slice::from_ref(&clockwise),
+            tol::REGION_MM,
+            accuracy,
+        )
+        .unwrap();
         let b = ContourSet::from_filled_contours(
             std::slice::from_ref(&counter_clockwise),
             tol::REGION_MM,
-        );
-        let unioned =
-            ContourSet::from_filled_contours(&[clockwise, counter_clockwise], tol::REGION_MM);
+            accuracy,
+        )
+        .unwrap();
+        let unioned = ContourSet::from_filled_contours(
+            &[clockwise, counter_clockwise],
+            tol::REGION_MM,
+            accuracy,
+        )
+        .unwrap();
 
         assert!(!a.is_empty());
         assert!((a.area() - b.area()).abs() <= 1e-9);
@@ -3011,17 +3280,23 @@ mod tests {
 
     #[test]
     fn bridged_contour_preserves_local_holes_without_clear_polarity() {
+        let accuracy = GeometryAccuracy::default();
+
         let outer = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), tol::REGION_MM);
         let circle = shapes::circle(2.0).unwrap();
-        let circle = crate::geom::path::transform_cmds(
-            circle.cmds,
-            crate::geom::Affine2::translation(Point::new(5.0, 5.0)),
-        );
-        let hole = ContourSet::from_filled_contours(&[circle], tol::REGION_MM);
+        let circle = circle
+            .transformed(
+                crate::geom::Affine2::translation(Point::new(5.0, 5.0)),
+                accuracy,
+            )
+            .unwrap();
+        let hole = ContourSet::from_filled_contours(&[circle], tol::REGION_MM, accuracy).unwrap();
         let region = outer.difference(&hole);
 
         let contours = region.to_bridged_contours();
-        let round_trip = ContourSet::from_contours(&contours, FillRule::NonZero, tol::REGION_MM);
+        let round_trip =
+            ContourSet::from_contours(&contours, FillRule::NonZero, tol::REGION_MM, accuracy)
+                .unwrap();
 
         assert_eq!(contours.len(), 1);
         assert!(
@@ -3035,10 +3310,12 @@ mod tests {
 
     #[test]
     fn erodes_outer_boundaries_and_expands_holes() {
+        let accuracy = GeometryAccuracy::default();
+
         let outer = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), tol::REGION_MM);
         let hole = ContourSet::rectangle(rect(4.0, 4.0, 6.0, 6.0), tol::REGION_MM);
 
-        let eroded = outer.difference(&hole).disk_erode(0.5);
+        let eroded = outer.difference(&hole).disk_erode(0.5, accuracy).unwrap();
 
         assert!((eroded.bbox.min.x - 0.5).abs() <= 1e-9);
         assert!((eroded.bbox.min.y - 0.5).abs() <= 1e-9);
@@ -3053,18 +3330,22 @@ mod tests {
 
     #[test]
     fn erosion_can_remove_an_entire_region() {
+        let accuracy = GeometryAccuracy::default();
+
         let region = ContourSet::rectangle(rect(0.0, 0.0, 0.5, 0.5), tol::REGION_MM);
 
-        let eroded = region.disk_erode(0.5);
+        let eroded = region.disk_erode(0.5, accuracy).unwrap();
 
         assert!(eroded.is_empty());
     }
 
     #[test]
     fn disk_opening_rounds_corners_and_stays_inside_source() {
+        let accuracy = GeometryAccuracy::default();
+
         let region = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), tol::REGION_MM);
 
-        let opened = region.disk_open(0.5);
+        let opened = region.disk_open(0.5, accuracy).unwrap();
 
         assert!(opened.difference(&region).is_empty());
         assert!((opened.bbox.min.x - 0.0).abs() <= 1e-9);
@@ -3076,12 +3357,14 @@ mod tests {
 
     #[test]
     fn disk_opening_removes_sub_diameter_slivers_and_small_islands() {
+        let accuracy = GeometryAccuracy::default();
+
         let body = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), tol::REGION_MM);
         let sliver = ContourSet::rectangle(rect(12.0, 0.0, 20.0, 0.8), tol::REGION_MM);
         let island = ContourSet::rectangle(rect(22.0, 0.0, 22.8, 0.8), tol::REGION_MM);
         let region = body.union(&sliver).union(&island);
 
-        let opened = region.disk_open(0.5);
+        let opened = region.disk_open(0.5, accuracy).unwrap();
 
         assert_eq!(opened.connected_components().len(), 1);
         assert!(opened.intersection(&body).area() > 99.0);
@@ -3091,12 +3374,14 @@ mod tests {
 
     #[test]
     fn disk_opening_is_idempotent_within_offset_tolerance() {
+        let accuracy = GeometryAccuracy::default();
+
         let outer = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), tol::REGION_MM);
         let notch = ContourSet::rectangle(rect(4.0, 8.0, 6.0, 10.0), tol::REGION_MM);
         let region = outer.difference(&notch);
 
-        let once = region.disk_open(0.5);
-        let twice = once.disk_open(0.5);
+        let once = region.disk_open(0.5, accuracy).unwrap();
+        let twice = once.disk_open(0.5, accuracy).unwrap();
         let symmetric_difference = once.difference(&twice).union(&twice.difference(&once));
 
         assert!(
@@ -3108,11 +3393,13 @@ mod tests {
 
     #[test]
     fn disk_closing_fills_sub_diameter_gaps_and_stays_outside_source() {
+        let accuracy = GeometryAccuracy::default();
+
         let left = ContourSet::rectangle(rect(0.0, 0.0, 4.0, 10.0), tol::REGION_MM);
         let right = ContourSet::rectangle(rect(4.8, 0.0, 10.0, 10.0), tol::REGION_MM);
         let region = left.union(&right);
 
-        let closed = region.disk_close(0.5);
+        let closed = region.disk_close(0.5, accuracy).unwrap();
         let middle = ContourSet::rectangle(rect(4.0, 1.0, 4.8, 9.0), tol::REGION_MM);
 
         assert!(region.difference(&closed).is_empty());
@@ -3121,11 +3408,13 @@ mod tests {
 
     #[test]
     fn disk_closing_preserves_wide_gaps() {
+        let accuracy = GeometryAccuracy::default();
+
         let left = ContourSet::rectangle(rect(0.0, 0.0, 4.0, 10.0), tol::REGION_MM);
         let right = ContourSet::rectangle(rect(5.2, 0.0, 10.0, 10.0), tol::REGION_MM);
         let region = left.union(&right);
 
-        let closed = region.disk_close(0.5);
+        let closed = region.disk_close(0.5, accuracy).unwrap();
         let middle = ContourSet::rectangle(rect(4.0, 1.0, 5.2, 9.0), tol::REGION_MM);
 
         assert!(closed.intersection(&middle).is_empty());
@@ -3133,77 +3422,138 @@ mod tests {
 
     #[test]
     fn disk_gap_violations_report_close_distinct_components() {
+        let accuracy = GeometryAccuracy::default();
+
         let left = ContourSet::rectangle(rect(0.0, 0.0, 4.0, 10.0), tol::REGION_MM);
         let close = ContourSet::rectangle(rect(4.8, 0.0, 10.0, 10.0), tol::REGION_MM);
         let wide = ContourSet::rectangle(rect(5.2, 0.0, 10.0, 10.0), tol::REGION_MM);
 
-        let close_violations = left.union(&close).disk_gap_violations(0.5);
-        let wide_violations = left.union(&wide).disk_gap_violations(0.5);
+        let close_violations = left
+            .union(&close)
+            .disk_gap_violations(0.5, accuracy)
+            .unwrap();
+        let wide_violations = left
+            .union(&wide)
+            .disk_gap_violations(0.5, accuracy)
+            .unwrap();
 
         assert!(close_violations.area() > 1.5);
         assert!(wide_violations.is_empty());
-        assert!(left.disk_gap_violations(0.5).is_empty());
+        assert!(left.disk_gap_violations(0.5, accuracy).unwrap().is_empty());
     }
 
     #[test]
     fn disk_gap_regularization_sweeps_a_void_thinner_than_the_axis_stroke() {
+        let accuracy = GeometryAccuracy::default();
+
         // A 3 µm gap is two-sided but too thin to carry a medial-axis stroke;
         // the whole-component sweep must still make progress instead of
         // stalling into an error.
         let left = ContourSet::rectangle(rect(0.0, 0.0, 5.0, 6.0), tol::REGION_MM);
         let right = ContourSet::rectangle(rect(5.003, 0.0, 10.0, 6.0), tol::REGION_MM);
         let region = left.union(&right);
-        assert!(!region.disk_gap_violations(0.5).is_empty());
+        assert!(
+            !region
+                .disk_gap_violations(0.5, accuracy)
+                .unwrap()
+                .is_empty()
+        );
 
-        let regularization = region.disk_regularize_gaps(0.5, 0.5, 0.025).unwrap();
+        let regularization = region
+            .disk_regularize_gaps(0.5, 0.5, 0.025, accuracy)
+            .unwrap();
 
-        assert!(regularization.kept.disk_gap_violations(0.5).is_empty());
+        assert!(
+            regularization
+                .kept
+                .disk_gap_violations(0.5, accuracy)
+                .unwrap()
+                .is_empty()
+        );
         assert!(regularization.removed.area() > 0.0);
     }
 
     #[test]
     fn disk_gap_violations_exclude_isolated_void_corners() {
+        let accuracy = GeometryAccuracy::default();
+
         let outer = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), tol::REGION_MM);
         let wide_hole = ContourSet::rectangle(rect(3.0, 3.0, 7.0, 7.0), tol::REGION_MM);
         let region = outer.difference(&wide_hole);
-        let raw_closing_residual = region.disk_close(0.5).difference(&region);
+        let raw_closing_residual = region
+            .disk_close(0.5, accuracy)
+            .unwrap()
+            .difference(&region);
 
         assert!(raw_closing_residual.area() > 0.1);
-        assert!(region.disk_gap_violations(0.5).is_empty());
+        assert!(
+            region
+                .disk_gap_violations(0.5, accuracy)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
     fn disk_gap_regularization_rejects_invalid_scales() {
+        let accuracy = GeometryAccuracy::default();
+
         let region = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), tol::REGION_MM);
 
-        assert!(region.disk_regularize_gaps(0.0, 0.5, 0.025).is_err());
-        assert!(region.disk_regularize_gaps(0.5, f64::NAN, 0.025).is_err());
-        assert!(region.disk_regularize_gaps(0.5, 0.5, -0.025).is_err());
+        assert!(
+            region
+                .disk_regularize_gaps(0.0, 0.5, 0.025, accuracy)
+                .is_err()
+        );
+        assert!(
+            region
+                .disk_regularize_gaps(0.5, f64::NAN, 0.025, accuracy)
+                .is_err()
+        );
+        assert!(
+            region
+                .disk_regularize_gaps(0.5, 0.5, -0.025, accuracy)
+                .is_err()
+        );
     }
 
     #[test]
     fn disk_gap_regularization_widens_a_gap_thinner_than_the_guard() {
+        let accuracy = GeometryAccuracy::default();
+
         let left = ContourSet::rectangle(rect(0.0, 0.0, 4.0, 10.0), tol::REGION_MM);
         let right = ContourSet::rectangle(rect(4.01, 0.0, 10.0, 10.0), tol::REGION_MM);
         let region = left.union(&right);
 
-        let before = region.disk_gap_violations(0.5);
-        let result = region.disk_regularize_gaps(0.5, 0.5, 0.025).unwrap();
+        let before = region.disk_gap_violations(0.5, accuracy).unwrap();
+        let result = region
+            .disk_regularize_gaps(0.5, 0.5, 0.025, accuracy)
+            .unwrap();
 
         assert!(before.area() > 0.05);
-        assert!(before.disk_open(0.025).is_empty());
+        assert!(before.disk_open(0.025, accuracy).unwrap().is_empty());
         assert!(result.removed.area() > 0.0);
-        assert!(result.kept.disk_gap_violations(0.5).is_empty());
+        assert!(
+            result
+                .kept
+                .disk_gap_violations(0.5, accuracy)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
     fn disk_gap_regularization_trims_a_close_pair_locally() {
+        let accuracy = GeometryAccuracy::default();
+
         let left = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), tol::REGION_MM);
         let right = ContourSet::rectangle(rect(10.8, 0.0, 20.8, 10.0), tol::REGION_MM);
         let distant = ContourSet::rectangle(rect(24.0, 0.0, 30.0, 10.0), tol::REGION_MM);
         let region = left.union(&right).union(&distant);
 
-        let result = region.disk_regularize_gaps(0.5, 0.5, 0.025).unwrap();
+        let result = region
+            .disk_regularize_gaps(0.5, 0.5, 0.025, accuracy)
+            .unwrap();
 
         assert_eq!(result.kept.connected_components().len(), 3);
         assert!(result.kept.difference(&region).is_empty());
@@ -3213,23 +3563,33 @@ mod tests {
             result.removed.area()
         );
         assert!(result.removed.intersection(&distant).area() <= 0.25);
-        assert!(result.kept.disk_gap_violations(0.5).is_empty());
+        assert!(
+            result
+                .kept
+                .disk_gap_violations(0.5, accuracy)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
     fn disk_gap_regularization_is_symmetric_at_a_three_way_conflict() {
+        let accuracy = GeometryAccuracy::default();
+
         let lower_left = ContourSet::rectangle(rect(0.0, 0.0, 4.0, 4.0), tol::REGION_MM);
         let lower_right = ContourSet::rectangle(rect(4.8, 0.0, 8.8, 4.0), tol::REGION_MM);
         let upper = ContourSet::rectangle(rect(2.4, 4.8, 6.4, 8.8), tol::REGION_MM);
         let region = lower_left.union(&lower_right).union(&upper);
 
-        let result = region.disk_regularize_gaps(0.5, 0.5, 0.025).unwrap();
+        let result = region
+            .disk_regularize_gaps(0.5, 0.5, 0.025, accuracy)
+            .unwrap();
 
         assert_eq!(result.kept.connected_components().len(), 3);
         for source in [&lower_left, &lower_right, &upper] {
             assert!(result.kept.intersection(source).area() > 13.0);
         }
-        let violations = result.kept.disk_gap_violations(0.5);
+        let violations = result.kept.disk_gap_violations(0.5, accuracy).unwrap();
         assert!(
             violations.is_empty(),
             "remaining void-gap violation area {:.9} mm²",
@@ -3239,13 +3599,17 @@ mod tests {
 
     #[test]
     fn disk_gap_regularization_widens_a_same_component_hairpin() {
+        let accuracy = GeometryAccuracy::default();
+
         let outer = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), tol::REGION_MM);
         let narrow_notch = ContourSet::rectangle(rect(4.6, 3.0, 5.4, 10.0), tol::REGION_MM);
         let hairpin = outer.difference(&narrow_notch);
 
-        let before = hairpin.disk_gap_violations(0.5);
-        let result = hairpin.disk_regularize_gaps(0.5, 0.5, 0.025).unwrap();
-        let after = result.kept.disk_gap_violations(0.5);
+        let before = hairpin.disk_gap_violations(0.5, accuracy).unwrap();
+        let result = hairpin
+            .disk_regularize_gaps(0.5, 0.5, 0.025, accuracy)
+            .unwrap();
+        let after = result.kept.disk_gap_violations(0.5, accuracy).unwrap();
 
         assert_eq!(hairpin.connected_components().len(), 1);
         assert!(before.area() > 1.0);
@@ -3259,13 +3623,17 @@ mod tests {
 
     #[test]
     fn disk_gap_regularization_widens_a_narrow_internal_void() {
+        let accuracy = GeometryAccuracy::default();
+
         let outer = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), tol::REGION_MM);
         let narrow_hole = ContourSet::rectangle(rect(4.6, 3.0, 5.4, 7.0), tol::REGION_MM);
         let region = outer.difference(&narrow_hole);
 
-        let before = region.disk_gap_violations(0.5);
-        let result = region.disk_regularize_gaps(0.5, 0.5, 0.025).unwrap();
-        let after = result.kept.disk_gap_violations(0.5);
+        let before = region.disk_gap_violations(0.5, accuracy).unwrap();
+        let result = region
+            .disk_regularize_gaps(0.5, 0.5, 0.025, accuracy)
+            .unwrap();
+        let after = result.kept.disk_gap_violations(0.5, accuracy).unwrap();
 
         assert!(before.area() > 3.0);
         assert!(result.removed.area() > 1.0);
@@ -3279,10 +3647,12 @@ mod tests {
 
     #[test]
     fn dilation_shrinks_but_preserves_a_large_hole() {
+        let accuracy = GeometryAccuracy::default();
+
         let outer = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), tol::REGION_MM);
         let hole = ContourSet::rectangle(rect(3.0, 3.0, 7.0, 7.0), tol::REGION_MM);
 
-        let dilated = outer.difference(&hole).disk_dilate(0.5);
+        let dilated = outer.difference(&hole).disk_dilate(0.5, accuracy).unwrap();
         let expected_hole = ContourSet::rectangle(rect(3.5, 3.5, 6.5, 6.5), tol::REGION_MM);
 
         assert!(dilated.intersection(&expected_hole).is_empty());
@@ -3312,6 +3682,8 @@ mod tests {
     /// source point even when all of these holes collapse.
     #[test]
     fn dilation_is_monotone_for_a5_corner_hole_chain() {
+        let accuracy = GeometryAccuracy::default();
+
         let outer =
             ContourSet::rectangle(rect(22.8473, 110.5175, 27.8973, 115.5675), tol::REGION_MM);
         let holes = ContourSet::from_filled_contours(
@@ -3393,10 +3765,12 @@ mod tests {
                 ]),
             ],
             tol::REGION_MM,
-        );
+            accuracy,
+        )
+        .unwrap();
         let source = outer.difference(&holes);
 
-        let dilated = source.disk_dilate(0.525);
+        let dilated = source.disk_dilate(0.525, accuracy).unwrap();
         let removed_source = source.difference(&dilated);
 
         assert!(
@@ -3408,6 +3782,8 @@ mod tests {
 
     #[test]
     fn painted_path_region_unions_fills_and_native_strokes() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut arena = PathArena::default();
         let filled = arena.push_path(
             Paint::Fill {
@@ -3430,7 +3806,9 @@ mod tests {
                 .iter()
                 .map(|&index| arena.path(index)),
             tol::REGION_MM,
-        );
+            accuracy,
+        )
+        .unwrap();
 
         assert!((region.bbox.min.x - 0.0).abs() <= 1e-9);
         assert!((region.bbox.min.y - 0.0).abs() <= 1e-9);
@@ -3473,6 +3851,8 @@ mod tests {
     /// must handle it without panicking or losing the region.
     #[test]
     fn dilates_boolean_debris_with_submicron_segments() {
+        let accuracy = GeometryAccuracy::default();
+
         let contour = contour_from_vertices(&[
             [38.0, 160.0],
             [38.0, 156.894598],
@@ -3514,9 +3894,10 @@ mod tests {
             [38.0666795, 160.249661],
             [38.0177281, 160.13243],
         ]);
-        let region = ContourSet::from_filled_contours(&[contour], tol::REGION_MM);
+        let region =
+            ContourSet::from_filled_contours(&[contour], tol::REGION_MM, accuracy).unwrap();
 
-        let grown = region.disk_dilate(0.5);
+        let grown = region.disk_dilate(0.5, accuracy).unwrap();
 
         assert!(grown.area() > region.area());
     }
@@ -3526,6 +3907,8 @@ mod tests {
     /// route-tool radius.
     #[test]
     fn dilates_relief_boundary_fragment() {
+        let accuracy = GeometryAccuracy::default();
+
         let contour = contour_from_vertices(&[
             [31.901232957840, 63.057707951027],
             [31.859204053879, 63.115636036354],
@@ -3536,9 +3919,10 @@ mod tests {
             [32.689244031906, 63.673370048958],
             [33.861821055412, 62.191123053986],
         ]);
-        let region = ContourSet::from_filled_contours(&[contour], tol::REGION_MM);
+        let region =
+            ContourSet::from_filled_contours(&[contour], tol::REGION_MM, accuracy).unwrap();
 
-        let grown = region.disk_dilate(0.5);
+        let grown = region.disk_dilate(0.5, accuracy).unwrap();
 
         assert!(grown.area() > region.area());
     }

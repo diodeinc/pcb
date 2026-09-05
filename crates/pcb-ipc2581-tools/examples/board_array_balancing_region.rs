@@ -3,6 +3,7 @@
 //! This is intentionally an example target rather than a user-facing
 //! `pcb ipc` command while the geometry contract is still being explored.
 
+use pcb_ir::geom::GeometryAccuracy;
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -21,9 +22,8 @@ use pcb_ipc2581_tools::utils::file::load_ipc_file;
 use pcb_ir::dialects::ipc::{
     BalancingRegionOptions, BoardArrayBalancingResult, BoardArraySupportDocument,
     BoardArraySupportLayerGeometry, DEFAULT_BALANCING_CLEARANCE_MM,
-    DEFAULT_BALANCING_GAP_RADIUS_MM, DEFAULT_BALANCING_NUMERICAL_GUARD_MM,
-    DEFAULT_BALANCING_REGULARIZATION_RADIUS_MM, board_array_balancing_region,
-    inspect_board_array_balancing_input, root_panel_step,
+    DEFAULT_BALANCING_GAP_RADIUS_MM, DEFAULT_BALANCING_REGULARIZATION_RADIUS_MM,
+    board_array_balancing_region, inspect_board_array_balancing_input, root_panel_step,
 };
 use pcb_ir::geom::{BBox, ContourSet};
 use serde::Serialize;
@@ -57,10 +57,6 @@ struct Args {
     /// Rolling-disk radius for two-sided void gaps; minimum gap is twice this.
     #[arg(long, default_value_t = DEFAULT_BALANCING_GAP_RADIUS_MM)]
     gap_radius_mm: f64,
-
-    /// Extra construction clearance reserved for polygonization/offset error.
-    #[arg(long, default_value_t = DEFAULT_BALANCING_NUMERICAL_GUARD_MM)]
-    numerical_guard_mm: f64,
 
     /// Maximum tolerated area for each set-theoretic validation violation.
     #[arg(long, default_value_t = DEFAULT_CHECK_AREA_TOLERANCE_MM2)]
@@ -294,6 +290,8 @@ fn component_areas(region: &ContourSet) -> Vec<f64> {
 }
 
 fn main() -> Result<()> {
+    let accuracy = GeometryAccuracy::default();
+
     let args = Args::parse();
     // The radius and clearance options are validated by
     // `board_array_balancing_region` itself.
@@ -332,13 +330,16 @@ fn main() -> Result<()> {
         bail!("input is not a board array: the IPC root step is not a panel");
     }
 
-    let score_lines =
-        board_array_vscore_lines(&ipc).context("failed to extract board-array V-score lines")?;
+    let score_lines = board_array_vscore_lines(&ipc, accuracy)
+        .context("failed to extract board-array V-score lines")?;
     let (fabrication_profile, relief_debug) =
-        board_array_fabrication_profile_with_debug(&ipc, &layout, &score_lines)
+        board_array_fabrication_profile_with_debug(&ipc, &layout, &score_lines, accuracy)
             .context("failed to compose board-array fabrication profile")?;
 
-    let support_sources = extract_array_support_layers(&ipc)?;
+    let support_sources = extract_array_support_layers(
+        &pcb_ir::import::ipc2581::import_design(&ipc, accuracy)?,
+        accuracy,
+    )?;
     let collection = inspect_board_array_balancing_input(
         &layout,
         &fabrication_profile,
@@ -346,6 +347,7 @@ fn main() -> Result<()> {
         support_sources
             .iter()
             .map(|source| BoardArraySupportDocument::new(&source.document, source.policy)),
+        accuracy,
     )
     .context("failed to collect board-array balancing inputs")?;
     let balancing_input = collection.input_for_layer(selected_copper.name);
@@ -353,11 +355,10 @@ fn main() -> Result<()> {
         clearance_mm: args.clearance_mm,
         regularization_radius_mm: args.regularization_radius_mm,
         gap_radius_mm: args.gap_radius_mm,
-        numerical_guard_mm: args.numerical_guard_mm,
     };
-    let result = board_array_balancing_region(&balancing_input, options)
+    let result = board_array_balancing_region(&balancing_input, options, accuracy)
         .context("failed to compute board-array balancing region")?;
-    let construction_clearance_mm = options.construction_clearance_mm();
+    let construction_clearance_mm = options.clearance_mm + 2.0 * accuracy.max_error_mm();
     let certificate_passed = result.certificate.passes(args.check_area_tolerance_mm2);
     let support_features = balancing_input.support_features;
     let panel_outer = collection.panel_outer;
@@ -380,7 +381,8 @@ fn main() -> Result<()> {
         .iter()
         .filter(|component| {
             component
-                .disk_erode(args.regularization_radius_mm)
+                .disk_erode(args.regularization_radius_mm, accuracy)
+                .unwrap()
                 .is_empty()
         })
         .cloned()
@@ -393,7 +395,8 @@ fn main() -> Result<()> {
         .union(&intermediates.removed_by_gap_regularization);
     let narrow_voids = intermediates
         .opened_candidates
-        .disk_gap_violations(args.gap_radius_mm);
+        .disk_gap_violations(args.gap_radius_mm, accuracy)
+        .unwrap();
     let regions = Regions {
         panel_outer,
         board_footprints,
@@ -476,7 +479,7 @@ fn main() -> Result<()> {
         nominal_clearance_mm: args.clearance_mm,
         regularization_radius_mm: args.regularization_radius_mm,
         gap_radius_mm: args.gap_radius_mm,
-        numerical_guard_mm: args.numerical_guard_mm,
+        numerical_guard_mm: 2.0 * accuracy.max_error_mm(),
         construction_clearance_mm,
         check_area_tolerance_mm2: args.check_area_tolerance_mm2,
         panelization,

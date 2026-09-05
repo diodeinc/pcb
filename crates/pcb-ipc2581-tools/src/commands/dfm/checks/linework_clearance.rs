@@ -22,6 +22,7 @@
 //! curves and count toward the measurement's uncertainty; a score line is
 //! exact.
 
+use pcb_ir::geom::GeometryAccuracy;
 use std::ops::Range;
 
 use pcb_ir::geom::dfm::{ClearanceSite, Distance, linework_clearance_sites, linework_envelope};
@@ -40,7 +41,7 @@ use super::{Evaluation, Measured, MeasuredSite, layers, violates};
 /// of bare segments plus its report identity.
 struct LineworkItem {
     segments: Range<usize>,
-    flattened_boundaries: u32,
+    uncertainty_mm: f64,
     layer: Option<LayerRef>,
     subject: Subject,
     evidence: Evidence,
@@ -66,7 +67,7 @@ fn linework_items(linework: Linework, design: &Design) -> LineworkPool {
             .iter()
             .map(|score| LineworkItem {
                 segments: push(vec![(score.start, score.end)]),
-                flattened_boundaries: 0,
+                uncertainty_mm: 0.0,
                 layer: Some(score.layer.clone()),
                 subject: Subject {
                     role: "reference",
@@ -83,7 +84,7 @@ fn linework_items(linework: Linework, design: &Design) -> LineworkPool {
             .iter()
             .map(|outline| LineworkItem {
                 segments: push(outline.contours.iter().flat_map(ring_edges).collect()),
-                flattened_boundaries: 1,
+                uncertainty_mm: outline.region.uncertainty_mm,
                 layer: None,
                 subject: outline_subject(outline, "reference"),
                 evidence: Evidence::bounds("board_outline", outline.bbox),
@@ -98,7 +99,8 @@ pub(super) fn evaluate(
     linework: Linework,
     conditions: &Conditions,
     design: &Design,
-) -> Evaluation {
+    accuracy: GeometryAccuracy,
+) -> anyhow::Result<Evaluation> {
     let copper_layers = &design.copper_layers;
     let boundaries = &design.copper_boundaries;
     let pool = linework_items(linework, design);
@@ -108,66 +110,80 @@ pub(super) fn evaluate(
         .flat_map(|&(start, end)| [start, end])
         .collect::<Vec<_>>();
 
-    let measured = copper_layers
+    let mut measured = Vec::new();
+    for (copper_index, copper) in copper_layers
         .iter()
         .enumerate()
         .filter(|(_, copper)| conditions.applies_to_layer(copper))
-        .flat_map(|(copper_index, copper)| {
-            let inside = copper.image.contains_points_batch(&endpoints);
-            items.iter().filter_map(move |item| {
-                let nearest = item
-                    .segments
-                    .clone()
-                    .filter_map(|segment_index| {
-                        let (start, end) = segments[segment_index];
-                        let (start_inside, end_inside) =
-                            (inside[2 * segment_index], inside[2 * segment_index + 1]);
-                        // A segment touching copper measures zero at the
-                        // contained endpoint; otherwise both ends are outside
-                        // and the boundary distance is the set distance.
-                        match (start_inside, end_inside) {
-                            (true, _) => Some(Distance::flattened(0.0, start, start, 1)),
-                            (_, true) => Some(Distance::flattened(0.0, end, end, 1)),
-                            _ => boundaries[copper_index]
-                                .segment_nearest_within(start, end, limit_mm),
-                        }
-                    })
-                    .min_by(|left, right| left.mm.total_cmp(&right.mm))?;
-                let distance = nearest.also_flattened(item.flattened_boundaries);
-                let site_layers = layers(item.layer.iter().chain([&copper.layer]));
-                let sites = if violates(&distance, limit_mm) {
-                    linework_clearance_sites(
-                        &segments[item.segments.clone()],
-                        &copper.image,
-                        &boundaries[copper_index],
-                        limit_mm,
-                        item.flattened_boundaries,
-                    )
-                    .into_iter()
-                    .map(|site| report_site(site, site_layers.clone(), limit_mm))
-                    .collect()
-                } else {
-                    Vec::new()
-                };
-                Some(Measured {
-                    distance,
-                    bbox: BBox::from_point(distance.first).union(BBox::from_point(distance.second)),
-                    layers: site_layers,
-                    subjects: vec![item.subject.clone(), copper_subject(copper)],
-                    evidence: vec![item.evidence.clone()],
-                    sites,
+    {
+        let inside = copper.image.contains_points_batch(&endpoints);
+        for item in items {
+            let Some(nearest) = item
+                .segments
+                .clone()
+                .filter_map(|segment_index| {
+                    let (start, end) = segments[segment_index];
+                    let (start_inside, end_inside) =
+                        (inside[2 * segment_index], inside[2 * segment_index + 1]);
+                    // A segment touching copper measures zero at the
+                    // contained endpoint; otherwise both ends are outside
+                    // and the boundary distance is the set distance.
+                    match (start_inside, end_inside) {
+                        (true, _) => Some(Distance::with_uncertainty(
+                            0.0,
+                            start,
+                            start,
+                            copper.image.uncertainty_mm,
+                        )),
+                        (_, true) => Some(Distance::with_uncertainty(
+                            0.0,
+                            end,
+                            end,
+                            copper.image.uncertainty_mm,
+                        )),
+                        _ => boundaries[copper_index].segment_nearest_within(start, end, limit_mm),
+                    }
                 })
-            })
-        })
-        .collect();
-    Evaluation {
+                .min_by(|left, right| left.mm.total_cmp(&right.mm))
+            else {
+                continue;
+            };
+            let distance = nearest.also_uncertain(item.uncertainty_mm);
+            let site_layers = layers(item.layer.iter().chain([&copper.layer]));
+            let sites = if violates(&distance, limit_mm) {
+                linework_clearance_sites(
+                    &segments[item.segments.clone()],
+                    &copper.image,
+                    &boundaries[copper_index],
+                    limit_mm,
+                    item.uncertainty_mm,
+                )
+                .into_iter()
+                .map(|site| report_site(site, site_layers.clone(), limit_mm, accuracy))
+                .collect::<anyhow::Result<Vec<_>>>()?
+                .into_iter()
+                .collect()
+            } else {
+                Vec::new()
+            };
+            measured.push(Measured {
+                distance,
+                bbox: BBox::from_point(distance.first).union(BBox::from_point(distance.second)),
+                layers: site_layers,
+                subjects: vec![item.subject.clone(), copper_subject(copper)],
+                evidence: vec![item.evidence.clone()],
+                sites,
+            });
+        }
+    }
+    Ok(Evaluation {
         checked: copper_layers
             .iter()
             .filter(|layer| conditions.applies_to_layer(layer))
             .count()
             * items.len(),
         measured,
-    }
+    })
 }
 
 /// All clearance families share the same local path/constraint construction;
@@ -176,7 +192,8 @@ pub(super) fn report_site(
     geometry: ClearanceSite,
     layers: Vec<LayerRef>,
     limit_mm: f64,
-) -> MeasuredSite {
+    accuracy: GeometryAccuracy,
+) -> anyhow::Result<MeasuredSite> {
     let mut evidence = [
         ("first_boundary", &geometry.first_paths),
         ("second_boundary", &geometry.second_paths),
@@ -190,7 +207,7 @@ pub(super) fn report_site(
         ..Evidence::default()
     })
     .collect::<Vec<_>>();
-    let band = linework_envelope(&geometry.first_paths, limit_mm);
+    let band = linework_envelope(&geometry.first_paths, limit_mm, accuracy)?;
     if !band.is_empty() {
         evidence.push(Evidence {
             display: Some(EvidenceDisplay::RoundStroke {
@@ -227,7 +244,7 @@ pub(super) fn report_site(
     } else {
         site.note = Some("Highlighted boundary spans are below the limit after accounting for geometric uncertainty.".to_owned());
     }
-    site
+    Ok(site)
 }
 
 /// Consecutive open paths that share an exact endpoint describe the same
@@ -290,19 +307,26 @@ mod tests {
 
     #[test]
     fn clearance_display_keeps_certified_spans_and_an_exact_round_stroke() {
+        let accuracy = GeometryAccuracy::default();
+
         let first_paths = vec![
             vec![Point::new(1.0, 2.0), Point::new(3.0, 2.0)],
             vec![Point::new(3.0, 2.0), Point::new(3.0, 4.0)],
             vec![Point::new(8.0, 8.0), Point::new(9.0, 9.0)],
         ];
         let geometry = ClearanceSite {
-            distance: Distance::flattened(0.1, Point::new(3.0, 2.0), Point::new(3.1, 2.0), 1),
+            distance: Distance::with_uncertainty(
+                0.1,
+                Point::new(3.0, 2.0),
+                Point::new(3.1, 2.0),
+                0.005,
+            ),
             bbox: BBox::new(Point::new(1.0, 2.0), Point::new(9.0, 9.0)),
             first_paths,
             second_paths: vec![vec![Point::new(3.1, 2.0), Point::new(3.1, 4.0)]],
             overlap: pcb_ir::geom::ContourSet::empty(pcb_ir::geom::tol::REGION_MM),
         };
-        let site = report_site(geometry, Vec::new(), 0.2);
+        let site = report_site(geometry, Vec::new(), 0.2, accuracy).unwrap();
         let band = site
             .evidence
             .iter()
@@ -329,7 +353,7 @@ mod tests {
             "measured polygon evidence remains available"
         );
         assert_eq!(site.distance.mm, 0.1);
-        assert_eq!(site.distance.uncertainty_mm, pcb_ir::geom::tol::FLATTEN_MM);
+        assert_eq!(site.distance.uncertainty_mm, 0.005);
     }
 
     #[test]

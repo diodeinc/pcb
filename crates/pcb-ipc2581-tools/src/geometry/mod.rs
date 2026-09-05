@@ -11,7 +11,8 @@ use pcb_ir::dialects::ipc::{
         vscore_lines_for,
     },
 };
-use pcb_ir::geom::{BBox, ContourBuf, ContourSet, Point, Polarity};
+use pcb_ir::geom::GeometryAccuracy;
+use pcb_ir::geom::{BBox, ContourSet, Point, Polarity};
 use pcb_ir::import::ipc2581::{ImportedDesign, LayerId, import_design};
 
 pub use pcb_ir::import::ipc2581::{extract_layer, extract_layer_for_view, extract_layout};
@@ -25,14 +26,16 @@ pub(crate) type GeometryDocument =
 pub fn vscore_lines(
     ipc: &Ipc2581,
     scope: ArtworkScope,
+    accuracy: GeometryAccuracy,
 ) -> Result<Vec<(ipc2581::Symbol, LayerFunction, VScoreLine)>> {
-    let imported = import_design(ipc)?;
-    vscore_lines_from_design(&imported, scope)
+    let imported = import_design(ipc, accuracy)?;
+    vscore_lines_from_design(&imported, scope, accuracy)
 }
 
 pub fn vscore_lines_from_design(
     imported: &ImportedDesign,
     scope: ArtworkScope,
+    accuracy: GeometryAccuracy,
 ) -> Result<Vec<(ipc2581::Symbol, LayerFunction, VScoreLine)>> {
     let mut lines = Vec::new();
     for (layer_index, source_layer) in
@@ -49,7 +52,7 @@ pub fn vscore_lines_from_design(
     {
         let layer_name = imported.resolve(source_layer.name);
         let doc = imported
-            .materialize_layer(LayerId(layer_index as u32), scope)
+            .materialize_layer(LayerId(layer_index as u32), scope, accuracy)
             .with_context(|| format!("failed to extract IPC-2581 V-score layer '{layer_name}'"))?;
         lines.extend(
             vscore_lines_for(&doc)
@@ -60,16 +63,22 @@ pub fn vscore_lines_from_design(
     Ok(lines)
 }
 
-pub fn board_array_vscore_lines(ipc: &Ipc2581) -> Result<Vec<VScoreLine>> {
-    Ok(vscore_lines(ipc, ArtworkScope::ArrayFlattened)?
+pub fn board_array_vscore_lines(
+    ipc: &Ipc2581,
+    accuracy: GeometryAccuracy,
+) -> Result<Vec<VScoreLine>> {
+    Ok(vscore_lines(ipc, ArtworkScope::ArrayFlattened, accuracy)?
         .into_iter()
         .map(|(_, _, line)| line)
         .collect())
 }
 
-pub fn board_array_vscore_lines_from_design(imported: &ImportedDesign) -> Result<Vec<VScoreLine>> {
+pub fn board_array_vscore_lines_from_design(
+    imported: &ImportedDesign,
+    accuracy: GeometryAccuracy,
+) -> Result<Vec<VScoreLine>> {
     Ok(
-        vscore_lines_from_design(imported, ArtworkScope::ArrayFlattened)?
+        vscore_lines_from_design(imported, ArtworkScope::ArrayFlattened, accuracy)?
             .into_iter()
             .map(|(_, _, line)| line)
             .collect(),
@@ -80,8 +89,10 @@ pub fn board_array_fabrication_profile(
     ipc: &Ipc2581,
     layout: &GeometryDocument,
     score_lines: &[VScoreLine],
+    accuracy: GeometryAccuracy,
 ) -> Result<BoardArrayFabricationProfile> {
-    let (profile, _) = board_array_fabrication_profile_with_debug(ipc, layout, score_lines)?;
+    let (profile, _) =
+        board_array_fabrication_profile_with_debug(ipc, layout, score_lines, accuracy)?;
     Ok(profile)
 }
 
@@ -89,21 +100,27 @@ pub fn board_array_fabrication_profile_with_debug(
     ipc: &Ipc2581,
     layout: &GeometryDocument,
     score_lines: &[VScoreLine],
+    accuracy: GeometryAccuracy,
 ) -> Result<(
     BoardArrayFabricationProfile,
     pcb_ir::dialects::ipc::relief::VScoreReliefDebug,
 )> {
-    let imported = import_design(ipc)?;
-    board_array_fabrication_profile_from_design_with_debug(&imported, layout, score_lines)
+    let imported = import_design(ipc, accuracy)?;
+    board_array_fabrication_profile_from_design_with_debug(&imported, layout, score_lines, accuracy)
 }
 
 pub fn board_array_fabrication_profile_from_design(
     imported: &ImportedDesign,
     layout: &GeometryDocument,
     score_lines: &[VScoreLine],
+    accuracy: GeometryAccuracy,
 ) -> Result<BoardArrayFabricationProfile> {
-    let (profile, _) =
-        board_array_fabrication_profile_from_design_with_debug(imported, layout, score_lines)?;
+    let (profile, _) = board_array_fabrication_profile_from_design_with_debug(
+        imported,
+        layout,
+        score_lines,
+        accuracy,
+    )?;
     Ok(profile)
 }
 
@@ -111,11 +128,12 @@ pub fn board_array_fabrication_profile_from_design_with_debug(
     imported: &ImportedDesign,
     layout: &GeometryDocument,
     score_lines: &[VScoreLine],
+    accuracy: GeometryAccuracy,
 ) -> Result<(
     BoardArrayFabricationProfile,
     pcb_ir::dialects::ipc::relief::VScoreReliefDebug,
 )> {
-    let relief_features = board_array_relief_features(imported, score_lines)?;
+    let relief_features = board_array_relief_features(imported, score_lines, accuracy)?;
     Ok(pcb_ir::dialects::ipc::board_array_fabrication_profile(
         layout,
         score_lines,
@@ -123,28 +141,37 @@ pub fn board_array_fabrication_profile_from_design_with_debug(
             relief_features,
             debug: true,
         },
+        accuracy,
     )?)
 }
 
 fn board_array_relief_features(
     imported: &ImportedDesign,
     score_lines: &[VScoreLine],
+    accuracy: GeometryAccuracy,
 ) -> Result<BoardArrayReliefFeatures> {
     if score_lines.is_empty() {
         return Ok(BoardArrayReliefFeatures::default());
     }
 
-    let (cutouts, envelopes) = collect_relief_feature_candidates(imported)?;
-    let mut score_blockers = Vec::new();
-    for cutout in cutouts
-        .into_iter()
-        .filter(|cutout| payloads_touch_score_lines(&cutout.payloads, score_lines))
-    {
+    let (cutouts, envelopes) = collect_relief_feature_candidates(imported, accuracy)?;
+    let mut score_blockers = ContourSet::empty(DEFAULT_RELIEF_TOLERANCE_MM);
+    for cutout in cutouts {
+        if !score_lines.iter().any(|line| {
+            !cutout
+                .region
+                .intersection(&score_line_strip(*line))
+                .is_empty()
+        }) {
+            continue;
+        }
         if plated_like(cutout.plating) {
-            let matches = envelopes
-                .iter()
-                .filter(|envelope| envelope_matches_cutout(envelope, &cutout))
-                .collect::<Vec<_>>();
+            let mut matches = Vec::new();
+            for envelope in &envelopes {
+                if envelope_matches_cutout(envelope, &cutout) {
+                    matches.push(envelope);
+                }
+            }
             if matches.is_empty() {
                 bail!(
                     "plated edge cutout at [{:.3}, {:.3}]..[{:.3}, {:.3}] has no matching pad envelope for V-score relief generation",
@@ -155,21 +182,22 @@ fn board_array_relief_features(
                 );
             }
             for envelope in matches {
-                score_blockers.extend(envelope.payloads.clone());
+                score_blockers = score_blockers.union(&envelope.region);
             }
         } else {
-            score_blockers.extend(cutout.payloads);
+            score_blockers = score_blockers.union(&cutout.region);
         }
     }
 
-    let blockers = ContourSet::from_filled_contours(&score_blockers, DEFAULT_RELIEF_TOLERANCE_MM);
+    accuracy.check(score_blockers.uncertainty_mm)?;
     Ok(BoardArrayReliefFeatures {
-        score_blockers: blockers.to_contours(),
+        score_blockers: score_blockers.to_contours(),
     })
 }
 
 fn collect_relief_feature_candidates(
     imported: &ImportedDesign,
+    accuracy: GeometryAccuracy,
 ) -> Result<(Vec<ReliefFeatureCandidate>, Vec<ReliefFeatureCandidate>)> {
     let mut cutouts = Vec::new();
     let mut envelopes = Vec::new();
@@ -182,13 +210,17 @@ fn collect_relief_feature_candidates(
     {
         let layer_name = imported.resolve(layer.name);
         let doc = imported
-            .materialize_layer(LayerId(layer_index as u32), ArtworkScope::ArrayFlattened)
+            .materialize_layer(
+                LayerId(layer_index as u32),
+                ArtworkScope::ArrayFlattened,
+                accuracy,
+            )
             .with_context(|| format!("failed to extract IPC-2581 layer '{layer_name}'"))?;
         for feature in &doc.features {
             if is_through_cutout(feature) {
-                cutouts.push(ReliefFeatureCandidate::new(&doc, feature));
+                cutouts.push(ReliefFeatureCandidate::new(&doc, feature, accuracy)?);
             } else if is_pad_envelope(feature) {
-                envelopes.push(ReliefFeatureCandidate::new(&doc, feature));
+                envelopes.push(ReliefFeatureCandidate::new(&doc, feature, accuracy)?);
             }
         }
     }
@@ -198,7 +230,7 @@ fn collect_relief_feature_candidates(
 
 #[derive(Debug, Clone)]
 struct ReliefFeatureCandidate {
-    payloads: Vec<ContourBuf>,
+    region: ContourSet,
     bbox: BBox,
     plating: PlatingKind,
     padstack_ref: Option<Symbol>,
@@ -206,19 +238,23 @@ struct ReliefFeatureCandidate {
 }
 
 impl ReliefFeatureCandidate {
-    fn new(doc: &GeometryDocument, feature: &Feature<Symbol>) -> Self {
-        Self {
-            payloads: feature_contours(doc, feature),
+    fn new(
+        doc: &GeometryDocument,
+        feature: &Feature<Symbol>,
+        accuracy: GeometryAccuracy,
+    ) -> anyhow::Result<Self> {
+        Ok(Self {
+            region: ContourSet::from_filled_contours(
+                &doc.placed_feature_contours(feature, accuracy)?,
+                DEFAULT_RELIEF_TOLERANCE_MM,
+                accuracy,
+            )?,
             bbox: feature.bbox,
             plating: feature.intent.plating,
             padstack_ref: feature.padstack_ref,
             net: feature.net,
-        }
+        })
     }
-}
-
-fn feature_contours(doc: &GeometryDocument, feature: &Feature<Symbol>) -> Vec<ContourBuf> {
-    doc.placed_feature_contours(feature)
 }
 
 fn relief_feature_layer(layer_function: LayerFunction) -> bool {
@@ -249,20 +285,6 @@ fn plated_like(plating: PlatingKind) -> bool {
         plating,
         PlatingKind::Plated | PlatingKind::Via | PlatingKind::ViaCapped
     )
-}
-
-fn payloads_touch_score_lines(payloads: &[ContourBuf], score_lines: &[VScoreLine]) -> bool {
-    if payloads.is_empty() {
-        return false;
-    }
-    let bbox = payloads
-        .iter()
-        .fold(BBox::empty(), |bbox, payload| bbox.union(payload.bbox));
-    let region = ContourSet::from_filled_contours(payloads, DEFAULT_RELIEF_TOLERANCE_MM);
-    score_lines.iter().any(|line| {
-        let strip = score_line_strip(*line);
-        bbox.intersects(strip.bbox) && !region.intersection(&strip).is_empty()
-    })
 }
 
 fn score_line_strip(line: VScoreLine) -> ContourSet {
@@ -298,11 +320,5 @@ fn envelope_matches_cutout(
     {
         return true;
     }
-    payloads_intersect(&envelope.payloads, &cutout.payloads)
-}
-
-fn payloads_intersect(left: &[ContourBuf], right: &[ContourBuf]) -> bool {
-    let left_region = ContourSet::from_filled_contours(left, DEFAULT_RELIEF_TOLERANCE_MM);
-    let right_region = ContourSet::from_filled_contours(right, DEFAULT_RELIEF_TOLERANCE_MM);
-    !left_region.intersection(&right_region).is_empty()
+    !envelope.region.intersection(&cutout.region).is_empty()
 }

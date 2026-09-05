@@ -26,11 +26,11 @@
 //! `T_i` is the legal tool-center region, `W_i` is the swept tool area, and
 //! `R_i` is the material-removal region emitted as closed profile contours.
 
+use crate::geom::{AccuracyError, GeometryAccuracy};
 use std::fmt;
 
 use crate::dialects::ipc::{Document, SpecItemKind};
 use crate::geom::path::{ContourBuf, PathCmd, PathOp};
-use crate::geom::region::{Ring, rings_from_contours, simplify_rings};
 use crate::geom::{BBox, ContourSet, FillRule, PaintKind, Point};
 
 pub const DEFAULT_ROUTE_TOOL_DIAMETER_MM: f64 = 1.0;
@@ -90,6 +90,7 @@ pub struct VScoreReliefDebugEntry {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum VScoreReliefError {
+    Accuracy(AccuracyError),
     EmptyScoreLines,
     InvalidToolDiameter(f64),
     InvalidTolerance(f64),
@@ -100,6 +101,7 @@ pub enum VScoreReliefError {
 impl fmt::Display for VScoreReliefError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Accuracy(error) => error.fmt(f),
             Self::EmptyScoreLines => write!(f, "V-score relief score lines are empty"),
             Self::InvalidToolDiameter(value) => {
                 write!(
@@ -122,19 +124,22 @@ impl std::error::Error for VScoreReliefError {}
 
 pub fn vscore_route_reliefs(
     input: &VScoreReliefInput,
+    accuracy: GeometryAccuracy,
 ) -> Result<Vec<ContourBuf>, VScoreReliefError> {
-    Ok(vscore_route_reliefs_inner(input, false)?.relief_contours)
+    Ok(vscore_route_reliefs_inner(input, false, accuracy)?.relief_contours)
 }
 
 pub fn vscore_route_reliefs_with_debug(
     input: &VScoreReliefInput,
+    accuracy: GeometryAccuracy,
 ) -> Result<VScoreReliefOutput, VScoreReliefError> {
-    vscore_route_reliefs_inner(input, true)
+    vscore_route_reliefs_inner(input, true, accuracy)
 }
 
 fn vscore_route_reliefs_inner(
     input: &VScoreReliefInput,
     include_debug: bool,
+    accuracy: GeometryAccuracy,
 ) -> Result<VScoreReliefOutput, VScoreReliefError> {
     if input.score_lines.is_empty() {
         return Err(VScoreReliefError::EmptyScoreLines);
@@ -151,20 +156,21 @@ fn vscore_route_reliefs_inner(
         return Err(VScoreReliefError::EmptyBoundary);
     }
 
-    let protected_material = protected_board_material(input)?;
+    let protected_material = protected_board_material(input, accuracy)?;
     let mut debug = VScoreReliefDebug::default();
-    let mut relief_contours = Vec::new();
+    let mut relief_region = ContourSet::empty(input.tolerance_mm);
     for boundary in &input.board_boundaries {
-        let Some(boundary_relief) = boundary_pocket_relief(boundary, &protected_material, input)?
+        let Some(boundary_relief) =
+            boundary_pocket_relief(boundary, &protected_material, input, accuracy)?
         else {
             continue;
         };
         if include_debug {
             debug.entries.push(boundary_relief.debug_entry(boundary));
         }
-        relief_contours.extend(boundary_relief.geometry.material_removal.rings);
+        relief_region = relief_region.union(&boundary_relief.geometry.material_removal);
     }
-    let relief_region = ContourSet::new(relief_contours, FillRule::NonZero, input.tolerance_mm);
+    accuracy.check(relief_region.uncertainty_mm)?;
     let relief_payloads = relief_region.to_contours();
     if include_debug {
         debug.merged_relief_contours = relief_payloads.clone();
@@ -317,6 +323,7 @@ fn boundary_pocket_relief(
     boundary: &ContourBuf,
     base_protected_material: &ContourSet,
     input: &VScoreReliefInput,
+    accuracy: GeometryAccuracy,
 ) -> Result<Option<BoundaryRelief>, VScoreReliefError> {
     if boundary.bbox.is_empty()
         || boundary.bbox.width() <= input.tolerance_mm
@@ -339,7 +346,8 @@ fn boundary_pocket_relief(
         score_cell,
         score_tolerance,
         input.tolerance_mm,
-    );
+        accuracy,
+    )?;
     let protected_material = if score_blockers.is_empty() {
         base_protected_material.clone()
     } else {
@@ -354,7 +362,8 @@ fn boundary_pocket_relief(
         input.tool_diameter_mm / 2.0,
         score_tolerance,
         input.tolerance_mm,
-    );
+        accuracy,
+    )?;
     let has_dead_space = !geometry.dead_space.is_empty();
 
     if has_dead_space && geometry.legal_tool_centers.is_empty() {
@@ -398,6 +407,7 @@ struct ReliefGeometry {
 ///
 /// The returned `material_removal` is a filled region. Callers emit its
 /// boundary (`∂R_i`) as closed profile contours.
+#[allow(clippy::too_many_arguments)]
 fn compute_relief_geometry(
     boundary: &ContourBuf,
     protected_material: &ContourSet,
@@ -406,7 +416,8 @@ fn compute_relief_geometry(
     tool_radius: f64,
     score_tolerance: f64,
     area_tolerance: f64,
-) -> ReliefGeometry {
+    accuracy: GeometryAccuracy,
+) -> Result<ReliefGeometry, AccuracyError> {
     // C_i: the V-score cell around this board instance.
     let score_cell_region = ContourSet::rectangle(score_cell, area_tolerance);
     // B_i: this board instance before score-alignment tolerance is applied.
@@ -414,21 +425,23 @@ fn compute_relief_geometry(
         std::slice::from_ref(boundary),
         FillRule::NonZero,
         area_tolerance,
-    );
+        accuracy,
+    )?;
     // B'_i: absorb tolerance-scale slivers along score-cell edges so tiny
     // source/score mismatches do not become false relief pockets.
-    let aligned_board = score_aligned_board_region(current_board, score_cell, score_tolerance)
-        .difference(score_blockers);
+    let aligned_board =
+        score_aligned_board_region(current_board, score_cell, score_tolerance, accuracy)?
+            .difference(score_blockers);
     // P_i = C_i \ B'_i.
     let dead_space = score_cell_region.difference(&aligned_board);
     let (legal_tool_centers, material_removal) =
-        tool_aware_material_removal(&dead_space, protected_material, tool_radius);
+        tool_aware_material_removal(&dead_space, protected_material, tool_radius, accuracy)?;
 
-    ReliefGeometry {
+    Ok(ReliefGeometry {
         dead_space,
         legal_tool_centers,
         material_removal,
-    }
+    })
 }
 
 /// Compute the tool-center free region and resulting material-removal region.
@@ -441,30 +454,34 @@ fn tool_aware_material_removal(
     dead_space: &ContourSet,
     protected_material: &ContourSet,
     tool_radius: f64,
-) -> (ContourSet, ContourSet) {
+    accuracy: GeometryAccuracy,
+) -> Result<(ContourSet, ContourSet), AccuracyError> {
     // T_i = (P_i ⊕ D_r) \ (B ⊕ D_r).
-    let sacrificial_center_window = dead_space.disk_dilate(tool_radius);
-    let protected_clearance = protected_material.disk_dilate(tool_radius);
+    let sacrificial_center_window = dead_space.disk_dilate(tool_radius, accuracy)?;
+    let protected_clearance = protected_material.disk_dilate(tool_radius, accuracy)?;
     let legal_tool_centers = sacrificial_center_window.difference(&protected_clearance);
 
     // W_i = (T_i ⊕ D_r) \ B.
     let tool_sweep = legal_tool_centers
         .clone()
-        .disk_dilate(tool_radius)
+        .disk_dilate(tool_radius, accuracy)?
         .difference(protected_material);
 
     // R_i = P_i ∪ W_i.
     let material_removal = dead_space.union(&tool_sweep);
-    (legal_tool_centers, material_removal)
+    Ok((legal_tool_centers, material_removal))
 }
 
 /// Finished-board material that the route tool must not touch.
-fn protected_board_material(input: &VScoreReliefInput) -> Result<ContourSet, VScoreReliefError> {
-    let board_contours = finished_board_contours(&input.board_boundaries)?;
-    let mut board_region = ContourSet::new(board_contours, FillRule::NonZero, input.tolerance_mm);
+fn protected_board_material(
+    input: &VScoreReliefInput,
+    accuracy: GeometryAccuracy,
+) -> Result<ContourSet, VScoreReliefError> {
+    let mut board_region =
+        finished_board_region(&input.board_boundaries, input.tolerance_mm, accuracy)?;
     if !input.board_cutouts.is_empty() {
         let cutout_region =
-            ContourSet::from_filled_contours(&input.board_cutouts, input.tolerance_mm);
+            ContourSet::from_filled_contours(&input.board_cutouts, input.tolerance_mm, accuracy)?;
         board_region = board_region.difference(&cutout_region);
     }
     Ok(board_region)
@@ -475,22 +492,29 @@ fn score_blockers_for_cell(
     score_cell: BBox,
     score_tolerance: f64,
     area_tolerance: f64,
-) -> ContourSet {
+    accuracy: GeometryAccuracy,
+) -> Result<ContourSet, AccuracyError> {
     if score_blockers.is_empty() {
-        return ContourSet::empty(area_tolerance);
+        return Ok(ContourSet::empty(area_tolerance));
     }
     let score_strip = score_cell_strip_region(score_cell, score_tolerance, area_tolerance);
-    let selected = score_blockers
+    let mut selected = Vec::new();
+    for payload in score_blockers
         .iter()
-        .filter(|payload| payload.bbox.intersects(score_strip.bbox))
-        .filter(|payload| {
-            !ContourSet::from_filled_contours(std::slice::from_ref(payload), area_tolerance)
-                .intersection(&score_strip)
-                .is_empty()
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    ContourSet::from_filled_contours(&selected, area_tolerance)
+        .filter(|p| p.bbox.intersects(score_strip.bbox))
+    {
+        if !ContourSet::from_filled_contours(
+            std::slice::from_ref(payload),
+            area_tolerance,
+            accuracy,
+        )?
+        .intersection(&score_strip)
+        .is_empty()
+        {
+            selected.push(payload.clone());
+        }
+    }
+    ContourSet::from_filled_contours(&selected, area_tolerance, accuracy)
 }
 
 /// Snap tolerance-scale boundary slivers onto score-cell edges.
@@ -502,14 +526,15 @@ fn score_aligned_board_region(
     board: ContourSet,
     score_cell: BBox,
     score_tolerance: f64,
-) -> ContourSet {
+    accuracy: GeometryAccuracy,
+) -> Result<ContourSet, AccuracyError> {
     let cell_strip = score_cell_strip_region(score_cell, score_tolerance, board.tolerance);
     if cell_strip.is_empty() {
-        return board;
+        return Ok(board);
     }
-    let dilated_board = board.disk_dilate(score_tolerance);
+    let dilated_board = board.disk_dilate(score_tolerance, accuracy)?;
     let score_slivers = cell_strip.intersection(&dilated_board);
-    board.union(&score_slivers)
+    Ok(board.union(&score_slivers))
 }
 
 fn score_cell_strip_region(score_cell: BBox, width: f64, tolerance: f64) -> ContourSet {
@@ -524,18 +549,18 @@ fn score_cell_strip_region(score_cell: BBox, width: f64, tolerance: f64) -> Cont
     cell.difference(&ContourSet::rectangle(inner, tolerance))
 }
 
-fn finished_board_contours(boundaries: &[ContourBuf]) -> Result<Vec<Ring>, VScoreReliefError> {
-    let contours = boundaries
-        .iter()
-        .flat_map(|boundary| rings_from_contours(std::slice::from_ref(boundary)))
-        .collect::<Vec<_>>();
-    let contours = simplify_rings(contours, FillRule::NonZero);
-    if contours.is_empty() {
+fn finished_board_region(
+    boundaries: &[ContourBuf],
+    tolerance: f64,
+    accuracy: GeometryAccuracy,
+) -> Result<ContourSet, VScoreReliefError> {
+    let region = ContourSet::from_contours(boundaries, FillRule::NonZero, tolerance, accuracy)?;
+    if region.is_empty() {
         Err(VScoreReliefError::InvalidBoundary(
             "boundary does not form a polygon",
         ))
     } else {
-        Ok(contours)
+        Ok(region)
     }
 }
 
@@ -650,6 +675,12 @@ fn rectangle_payload(bbox: BBox) -> ContourBuf {
     )
 }
 
+impl From<AccuracyError> for VScoreReliefError {
+    fn from(error: AccuracyError) -> Self {
+        Self::Accuracy(error)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -689,6 +720,8 @@ mod tests {
 
     #[test]
     fn rectangle_boundary_needs_no_reliefs() {
+        let accuracy = GeometryAccuracy::default();
+
         let input = VScoreReliefInput::new(
             path(vec![
                 PathCmd::move_to(Point::new(0.0, 0.0)),
@@ -700,7 +733,7 @@ mod tests {
             rectangle_score_lines(10.0, 5.0),
         );
 
-        let output = vscore_route_reliefs_with_debug(&input).unwrap();
+        let output = vscore_route_reliefs_with_debug(&input, accuracy).unwrap();
 
         assert!(output.relief_contours.is_empty());
         assert_eq!(output.debug.entries.len(), 1);
@@ -771,6 +804,8 @@ mod tests {
 
     #[test]
     fn score_edge_blocker_creates_relief() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut input = VScoreReliefInput::new(
             path(vec![
                 PathCmd::move_to(Point::new(0.0, 0.0)),
@@ -786,7 +821,7 @@ mod tests {
             max: Point::new(1.2, 3.0),
         })];
 
-        let output = vscore_route_reliefs_with_debug(&input).unwrap();
+        let output = vscore_route_reliefs_with_debug(&input, accuracy).unwrap();
 
         assert!(!output.relief_contours.is_empty());
         assert!(!output.debug.entries[0].dead_space_pockets.is_empty());
@@ -794,6 +829,8 @@ mod tests {
 
     #[test]
     fn internal_score_blocker_is_ignored() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut input = VScoreReliefInput::new(
             path(vec![
                 PathCmd::move_to(Point::new(0.0, 0.0)),
@@ -809,7 +846,7 @@ mod tests {
             max: Point::new(6.0, 3.0),
         })];
 
-        let output = vscore_route_reliefs_with_debug(&input).unwrap();
+        let output = vscore_route_reliefs_with_debug(&input, accuracy).unwrap();
 
         assert!(output.relief_contours.is_empty());
         assert!(output.debug.entries[0].dead_space_pockets.is_empty());
@@ -817,6 +854,8 @@ mod tests {
 
     #[test]
     fn inset_boundary_creates_closed_dead_space_pocket() {
+        let accuracy = GeometryAccuracy::default();
+
         let input = VScoreReliefInput::new(
             path(vec![
                 PathCmd::move_to(Point::new(0.0, 0.0)),
@@ -831,7 +870,7 @@ mod tests {
             rectangle_score_lines(10.0, 5.0),
         );
 
-        let output = vscore_route_reliefs_with_debug(&input).unwrap();
+        let output = vscore_route_reliefs_with_debug(&input, accuracy).unwrap();
         let relief_contours = &output.relief_contours;
         let debug = &output.debug.entries[0];
 
@@ -855,6 +894,8 @@ mod tests {
 
     #[test]
     fn overlapping_relief_regions_are_merged_before_emit() {
+        let accuracy = GeometryAccuracy::default();
+
         let boundary = path(vec![
             PathCmd::move_to(Point::new(0.0, 0.0)),
             PathCmd::line_to(Point::new(10.0, 0.0)),
@@ -869,7 +910,7 @@ mod tests {
         board_boundary.extend(boundary);
         let input = VScoreReliefInput::new(board_boundary, rectangle_score_lines(10.0, 5.0));
 
-        let output = vscore_route_reliefs_with_debug(&input).unwrap();
+        let output = vscore_route_reliefs_with_debug(&input, accuracy).unwrap();
 
         assert_eq!(output.debug.entries.len(), 2);
         assert!(!output.relief_contours.is_empty());
@@ -882,6 +923,8 @@ mod tests {
 
     #[test]
     fn missing_score_cell_side_yields_no_relief_candidate() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut score_lines = rectangle_score_lines(10.0, 5.0);
         score_lines.remove(2);
         let input = VScoreReliefInput::new(
@@ -895,11 +938,13 @@ mod tests {
             score_lines,
         );
 
-        assert!(vscore_route_reliefs(&input).unwrap().is_empty());
+        assert!(vscore_route_reliefs(&input, accuracy).unwrap().is_empty());
     }
 
     #[test]
     fn curved_boundary_creates_closed_dead_space_pocket() {
+        let accuracy = GeometryAccuracy::default();
+
         let input = VScoreReliefInput::new(
             path(vec![
                 PathCmd::move_to(Point::new(0.0, 0.0)),
@@ -913,7 +958,7 @@ mod tests {
             rectangle_score_lines(10.0, 10.0),
         );
 
-        let output = vscore_route_reliefs_with_debug(&input).unwrap();
+        let output = vscore_route_reliefs_with_debug(&input, accuracy).unwrap();
         let relief_contours = &output.relief_contours;
 
         assert!(!relief_contours.is_empty());
@@ -930,6 +975,8 @@ mod tests {
 
     #[test]
     fn rounded_corners_smaller_than_tool_radius_still_get_relief() {
+        let accuracy = GeometryAccuracy::default();
+
         let input = VScoreReliefInput::new(
             path(vec![
                 PathCmd::move_to(Point::new(1.0, 0.0)),
@@ -946,7 +993,7 @@ mod tests {
             rectangle_score_lines(10.0, 10.0),
         );
 
-        let output = vscore_route_reliefs_with_debug(&input).unwrap();
+        let output = vscore_route_reliefs_with_debug(&input, accuracy).unwrap();
         let relief_contours = &output.relief_contours;
         let debug = &output.debug.entries[0];
 
@@ -971,6 +1018,8 @@ mod tests {
 
     #[test]
     fn narrow_pocket_routes_from_sacrificial_margin() {
+        let accuracy = GeometryAccuracy::default();
+
         let input = VScoreReliefInput::new(
             path(vec![
                 PathCmd::move_to(Point::new(0.0, 0.0)),
@@ -985,7 +1034,7 @@ mod tests {
             rectangle_score_lines(10.0, 5.0),
         );
 
-        let output = vscore_route_reliefs_with_debug(&input).unwrap();
+        let output = vscore_route_reliefs_with_debug(&input, accuracy).unwrap();
         let relief_contours = &output.relief_contours;
 
         assert!(!relief_contours.is_empty());
@@ -995,6 +1044,8 @@ mod tests {
 
     #[test]
     fn slightly_slanted_score_edges_are_treated_as_scored() {
+        let accuracy = GeometryAccuracy::default();
+
         let input = VScoreReliefInput::new(
             path(vec![
                 PathCmd::move_to(Point::new(0.05, 0.0)),
@@ -1006,7 +1057,7 @@ mod tests {
             rectangle_score_lines(10.0, 10.0),
         );
 
-        let output = vscore_route_reliefs_with_debug(&input).unwrap();
+        let output = vscore_route_reliefs_with_debug(&input, accuracy).unwrap();
 
         assert!(output.relief_contours.is_empty());
         assert!(output.debug.entries[0].dead_space_pockets.is_empty());
@@ -1014,6 +1065,8 @@ mod tests {
 
     #[test]
     fn score_alignment_tolerance_keeps_real_pockets() {
+        let accuracy = GeometryAccuracy::default();
+
         let input = VScoreReliefInput::new(
             path(vec![
                 PathCmd::move_to(Point::new(0.0, 0.0)),
@@ -1027,7 +1080,7 @@ mod tests {
             rectangle_score_lines(10.0, 10.0),
         );
 
-        let output = vscore_route_reliefs_with_debug(&input).unwrap();
+        let output = vscore_route_reliefs_with_debug(&input, accuracy).unwrap();
         let pocket_bbox = payloads_bbox(&output.debug.entries[0].dead_space_pockets);
 
         assert!(!output.relief_contours.is_empty());
@@ -1039,6 +1092,8 @@ mod tests {
 
     #[test]
     fn stepped_outline_routes_only_unscored_boundary_runs() {
+        let accuracy = GeometryAccuracy::default();
+
         let input = VScoreReliefInput::new(
             path(vec![
                 PathCmd::move_to(Point::new(0.0, 0.0)),
@@ -1054,7 +1109,7 @@ mod tests {
             rectangle_score_lines(10.0, 10.0),
         );
 
-        let output = vscore_route_reliefs_with_debug(&input).unwrap();
+        let output = vscore_route_reliefs_with_debug(&input, accuracy).unwrap();
         let relief_bbox = output
             .relief_contours
             .iter()
@@ -1069,6 +1124,8 @@ mod tests {
 
     #[test]
     fn no_score_lines_errors_instead_of_inferring_bbox_scores() {
+        let accuracy = GeometryAccuracy::default();
+
         let input = VScoreReliefInput::new(
             path(vec![
                 PathCmd::move_to(Point::new(0.0, 0.0)),
@@ -1079,7 +1136,7 @@ mod tests {
         );
 
         assert_eq!(
-            vscore_route_reliefs(&input).unwrap_err(),
+            vscore_route_reliefs(&input, accuracy).unwrap_err(),
             VScoreReliefError::EmptyScoreLines
         );
     }

@@ -117,6 +117,8 @@ fn incomplete(
 
 #[cfg(test)]
 mod tests {
+    use pcb_ir::geom::GeometryAccuracy;
+
     use crate::LayoutTarget;
     use crate::commands::dfm::{
         CheckRequest, PdkSource, TextSource, check,
@@ -206,8 +208,10 @@ cases = [
 "#;
 
     fn run(xml: &str, pdk: &str) -> DfmReport {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = Ipc2581::parse(xml).unwrap();
-        let imported = import_design(&ipc).unwrap();
+        let imported = import_design(&ipc, accuracy).unwrap();
         check(
             &imported,
             CheckRequest {
@@ -220,6 +224,7 @@ cases = [
                 layout_target: LayoutTarget::Board,
                 generated_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
             },
+            accuracy,
         )
         .unwrap()
     }

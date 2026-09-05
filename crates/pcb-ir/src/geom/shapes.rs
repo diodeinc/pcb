@@ -4,13 +4,9 @@
 //! (IPC-2581 standard primitives, Gerber standard apertures) and by aperture
 //! flattening. All shapes are built in local coordinates centered on the
 //! origin; apply an [`Affine2`](crate::geom::Affine2) placement with
-//! [`transform_cmds`](crate::geom::path::transform_cmds).
+//! [`ContourBuf::transformed`].
 //!
-//! Builders that can represent corners either as circular arcs or as cubic
-//! Beziers take an `arcs` flag: arcs are exact and preferred, but only
-//! transform correctly under similarity transforms
-//! ([`Affine2::preserves_circles`](crate::geom::Affine2::preserves_circles)); pass
-//! `arcs = false` when the placement may skew or scale non-uniformly.
+//! Transformations convert arcs only when required by the placement.
 //!
 //! Constructors return `None` for degenerate dimensions.
 
@@ -39,38 +35,49 @@ pub fn circle(diameter: f64) -> Option<ContourBuf> {
 }
 
 /// An axis-aligned ellipse as four cubic segments. Safe under any affine
-/// transform; also the cubic fallback for circles.
+/// transform; circles retain exact arcs.
 pub fn ellipse(width: f64, height: f64) -> Option<ContourBuf> {
     if width <= 0.0 || height <= 0.0 {
         return None;
     }
+    if width == height {
+        return circle(width);
+    }
     let rx = width / 2.0;
     let ry = height / 2.0;
     let k = KAPPA;
-    Some(ContourBuf::new(vec![
-        PathCmd::move_to(Point::new(rx, 0.0)),
-        PathCmd::cubic_to(
-            Point::new(rx, k * ry),
-            Point::new(k * rx, ry),
-            Point::new(0.0, ry),
-        ),
-        PathCmd::cubic_to(
-            Point::new(-k * rx, ry),
-            Point::new(-rx, k * ry),
-            Point::new(-rx, 0.0),
-        ),
-        PathCmd::cubic_to(
-            Point::new(-rx, -k * ry),
-            Point::new(-k * rx, -ry),
-            Point::new(0.0, -ry),
-        ),
-        PathCmd::cubic_to(
-            Point::new(k * rx, -ry),
-            Point::new(rx, -k * ry),
-            Point::new(rx, 0.0),
-        ),
-        PathCmd::close(),
-    ]))
+    Some(
+        ContourBuf::new(vec![
+            PathCmd::move_to(Point::new(rx, 0.0)),
+            PathCmd::cubic_to(
+                Point::new(rx, k * ry),
+                Point::new(k * rx, ry),
+                Point::new(0.0, ry),
+            ),
+            PathCmd::cubic_to(
+                Point::new(-k * rx, ry),
+                Point::new(-rx, k * ry),
+                Point::new(-rx, 0.0),
+            ),
+            PathCmd::cubic_to(
+                Point::new(-rx, -k * ry),
+                Point::new(-k * rx, -ry),
+                Point::new(0.0, -ry),
+            ),
+            PathCmd::cubic_to(
+                Point::new(k * rx, -ry),
+                Point::new(rx, -k * ry),
+                Point::new(rx, 0.0),
+            ),
+            PathCmd::close(),
+        ])
+        .with_uncertainty(0.0003 * rx.max(ry))
+        .with_ellipse_source(crate::geom::Affine2 {
+            m00: rx,
+            m11: ry,
+            ..crate::geom::Affine2::IDENTITY
+        }),
+    )
 }
 
 /// An axis-aligned centered rectangle.
@@ -95,13 +102,7 @@ pub type Corners = [bool; 4];
 pub const ALL_CORNERS: Corners = [true; 4];
 
 /// A centered rectangle with the selected corners rounded to `radius`.
-pub fn rounded_rect(
-    width: f64,
-    height: f64,
-    radius: f64,
-    corners: Corners,
-    arcs: bool,
-) -> Option<ContourBuf> {
+pub fn rounded_rect(width: f64, height: f64, radius: f64, corners: Corners) -> Option<ContourBuf> {
     if width <= 0.0 || height <= 0.0 {
         return None;
     }
@@ -112,7 +113,6 @@ pub fn rounded_rect(
         return rect(width, height);
     }
 
-    let k = KAPPA;
     let [upper_right, lower_right, lower_left, upper_left] = corners;
     let mut cmds = Vec::new();
 
@@ -126,19 +126,11 @@ pub fn rounded_rect(
         -hh,
     )));
     if lower_right {
-        if arcs {
-            cmds.push(PathCmd::arc_to(
-                Point::new(hw, -hh + r),
-                Point::new(hw - r, -hh + r),
-                false,
-            ));
-        } else {
-            cmds.push(PathCmd::cubic_to(
-                Point::new(hw - r + k * r, -hh),
-                Point::new(hw, -hh + r - k * r),
-                Point::new(hw, -hh + r),
-            ));
-        }
+        cmds.push(PathCmd::arc_to(
+            Point::new(hw, -hh + r),
+            Point::new(hw - r, -hh + r),
+            false,
+        ));
     }
 
     cmds.push(PathCmd::line_to(Point::new(
@@ -146,19 +138,11 @@ pub fn rounded_rect(
         hh - if upper_right { r } else { 0.0 },
     )));
     if upper_right {
-        if arcs {
-            cmds.push(PathCmd::arc_to(
-                Point::new(hw - r, hh),
-                Point::new(hw - r, hh - r),
-                false,
-            ));
-        } else {
-            cmds.push(PathCmd::cubic_to(
-                Point::new(hw, hh - r + k * r),
-                Point::new(hw - r + k * r, hh),
-                Point::new(hw - r, hh),
-            ));
-        }
+        cmds.push(PathCmd::arc_to(
+            Point::new(hw - r, hh),
+            Point::new(hw - r, hh - r),
+            false,
+        ));
     }
 
     cmds.push(PathCmd::line_to(Point::new(
@@ -166,19 +150,11 @@ pub fn rounded_rect(
         hh,
     )));
     if upper_left {
-        if arcs {
-            cmds.push(PathCmd::arc_to(
-                Point::new(-hw, hh - r),
-                Point::new(-hw + r, hh - r),
-                false,
-            ));
-        } else {
-            cmds.push(PathCmd::cubic_to(
-                Point::new(-hw + r - k * r, hh),
-                Point::new(-hw, hh - r + k * r),
-                Point::new(-hw, hh - r),
-            ));
-        }
+        cmds.push(PathCmd::arc_to(
+            Point::new(-hw, hh - r),
+            Point::new(-hw + r, hh - r),
+            false,
+        ));
     }
 
     cmds.push(PathCmd::line_to(Point::new(
@@ -186,19 +162,11 @@ pub fn rounded_rect(
         -hh + if lower_left { r } else { 0.0 },
     )));
     if lower_left {
-        if arcs {
-            cmds.push(PathCmd::arc_to(
-                Point::new(-hw + r, -hh),
-                Point::new(-hw + r, -hh + r),
-                false,
-            ));
-        } else {
-            cmds.push(PathCmd::cubic_to(
-                Point::new(-hw, -hh + r - k * r),
-                Point::new(-hw + r - k * r, -hh),
-                Point::new(-hw + r, -hh),
-            ));
-        }
+        cmds.push(PathCmd::arc_to(
+            Point::new(-hw + r, -hh),
+            Point::new(-hw + r, -hh + r),
+            false,
+        ));
     }
     cmds.push(PathCmd::close());
 
@@ -248,102 +216,8 @@ pub fn chamfered_rect(
 }
 
 /// A stadium/obround: a rectangle with full-radius caps on the short axis.
-pub fn obround(width: f64, height: f64, arcs: bool) -> Option<ContourBuf> {
-    if width <= 0.0 || height <= 0.0 {
-        return None;
-    }
-    if (width - height).abs() < f64::EPSILON {
-        return if arcs {
-            circle(width)
-        } else {
-            ellipse(width, height)
-        };
-    }
-
-    let k = KAPPA;
-    let cmds = if width > height {
-        let r = height / 2.0;
-        let a = (width - height) / 2.0;
-        if arcs {
-            vec![
-                PathCmd::move_to(Point::new(-a, -r)),
-                PathCmd::line_to(Point::new(a, -r)),
-                PathCmd::arc_to(Point::new(a, r), Point::new(a, 0.0), false),
-                PathCmd::line_to(Point::new(-a, r)),
-                PathCmd::arc_to(Point::new(-a, -r), Point::new(-a, 0.0), false),
-                PathCmd::close(),
-            ]
-        } else {
-            vec![
-                PathCmd::move_to(Point::new(a, -r)),
-                PathCmd::line_to(Point::new(-a, -r)),
-                PathCmd::cubic_to(
-                    Point::new(-a - k * r, -r),
-                    Point::new(-a - r, -k * r),
-                    Point::new(-a - r, 0.0),
-                ),
-                PathCmd::cubic_to(
-                    Point::new(-a - r, k * r),
-                    Point::new(-a - k * r, r),
-                    Point::new(-a, r),
-                ),
-                PathCmd::line_to(Point::new(a, r)),
-                PathCmd::cubic_to(
-                    Point::new(a + k * r, r),
-                    Point::new(a + r, k * r),
-                    Point::new(a + r, 0.0),
-                ),
-                PathCmd::cubic_to(
-                    Point::new(a + r, -k * r),
-                    Point::new(a + k * r, -r),
-                    Point::new(a, -r),
-                ),
-                PathCmd::close(),
-            ]
-        }
-    } else {
-        let r = width / 2.0;
-        let a = (height - width) / 2.0;
-        if arcs {
-            vec![
-                PathCmd::move_to(Point::new(r, -a)),
-                PathCmd::line_to(Point::new(r, a)),
-                PathCmd::arc_to(Point::new(-r, a), Point::new(0.0, a), false),
-                PathCmd::line_to(Point::new(-r, -a)),
-                PathCmd::arc_to(Point::new(r, -a), Point::new(0.0, -a), false),
-                PathCmd::close(),
-            ]
-        } else {
-            vec![
-                PathCmd::move_to(Point::new(r, -a)),
-                PathCmd::line_to(Point::new(r, a)),
-                PathCmd::cubic_to(
-                    Point::new(r, a + k * r),
-                    Point::new(k * r, a + r),
-                    Point::new(0.0, a + r),
-                ),
-                PathCmd::cubic_to(
-                    Point::new(-k * r, a + r),
-                    Point::new(-r, a + k * r),
-                    Point::new(-r, a),
-                ),
-                PathCmd::line_to(Point::new(-r, -a)),
-                PathCmd::cubic_to(
-                    Point::new(-r, -a - k * r),
-                    Point::new(-k * r, -a - r),
-                    Point::new(0.0, -a - r),
-                ),
-                PathCmd::cubic_to(
-                    Point::new(k * r, -a - r),
-                    Point::new(r, -a - k * r),
-                    Point::new(r, -a),
-                ),
-                PathCmd::close(),
-            ]
-        }
-    };
-
-    Some(ContourBuf::new(cmds))
+pub fn obround(width: f64, height: f64) -> Option<ContourBuf> {
+    rounded_rect(width, height, width.min(height) / 2.0, ALL_CORNERS)
 }
 
 /// A regular polygon inscribed in a circle of `outer_diameter`, with the
@@ -438,9 +312,10 @@ pub fn closed_polygon(points: Vec<Point>) -> Option<ContourBuf> {
 
 #[cfg(test)]
 mod tests {
+    use crate::geom::GeometryAccuracy;
+
     use super::*;
     use crate::geom::affine::Affine2;
-    use crate::geom::path::transform_cmds;
     use crate::geom::point::Mirror;
 
     #[test]
@@ -460,33 +335,20 @@ mod tests {
 
     #[test]
     fn rounded_rect_with_zero_radius_is_a_rect() {
-        let rounded = rounded_rect(4.0, 2.0, 0.0, ALL_CORNERS, true).unwrap();
+        let rounded = rounded_rect(4.0, 2.0, 0.0, ALL_CORNERS).unwrap();
         let plain = rect(4.0, 2.0).unwrap();
 
         assert_eq!(rounded.cmds, plain.cmds);
     }
 
     #[test]
-    fn obround_arcs_and_cubics_agree_on_bounds() {
-        let arcs = obround(5.0, 2.0, true).unwrap();
-        let cubics = obround(5.0, 2.0, false).unwrap();
-
-        for (a, c) in [
-            (arcs.bbox.min.x, cubics.bbox.min.x),
-            (arcs.bbox.min.y, cubics.bbox.min.y),
-            (arcs.bbox.max.x, cubics.bbox.max.x),
-            (arcs.bbox.max.y, cubics.bbox.max.y),
-        ] {
-            assert!((a - c).abs() <= 1e-9, "expected {a} to be close to {c}");
-        }
-    }
-
-    #[test]
     fn placement_transform_moves_shape() {
+        let accuracy = GeometryAccuracy::default();
+
         let contour = circle(2.0).unwrap();
         let transform = Affine2::placement(Point::new(10.0, 5.0), 0.0, Mirror::NONE, 1.0);
 
-        let placed = transform_cmds(contour.cmds, transform);
+        let placed = contour.transformed(transform, accuracy).unwrap();
 
         assert!((placed.bbox.min.x - 9.0).abs() <= 1e-9);
         assert!((placed.bbox.max.y - 6.0).abs() <= 1e-9);

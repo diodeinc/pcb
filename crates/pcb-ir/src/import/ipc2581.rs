@@ -1,3 +1,4 @@
+use crate::geom::{AccuracyError, GeometryAccuracy};
 use std::collections::{BTreeSet, HashMap};
 
 use anyhow::{Context, Result, bail};
@@ -11,7 +12,6 @@ use ipc2581::{Interner, Ipc2581, Symbol};
 
 use crate::dialects::ipc::*;
 use crate::geom::Polarity as GeometryPolarity;
-use crate::geom::path::transform_cmds;
 use crate::geom::*;
 use crate::import::physical::{feature_definitely_spans_layer, physical_stackup_layers};
 
@@ -739,7 +739,7 @@ fn plating_kind(status: PlatingStatus) -> PlatingKind {
 }
 
 /// Import the complete source design once, retaining step-local geometry.
-pub fn import_design(ipc: &Ipc2581) -> Result<ImportedDesign> {
+pub fn import_design(ipc: &Ipc2581, accuracy: GeometryAccuracy) -> Result<ImportedDesign> {
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
     let mut geometry = extract_layout(ipc)?;
 
@@ -766,6 +766,7 @@ pub fn import_design(ipc: &Ipc2581) -> Result<ImportedDesign> {
                 &ecad.cad_data.layers,
                 source_layer,
                 layer_name,
+                accuracy,
             )?;
             if local.features.is_empty() {
                 continue;
@@ -782,6 +783,7 @@ pub fn import_design(ipc: &Ipc2581) -> Result<ImportedDesign> {
                 0,
                 None,
                 document_layer,
+                accuracy,
             )?;
             for definition in feature_start..geometry.features.len() as u32 {
                 let feature = &mut geometry.features[definition as usize];
@@ -1037,7 +1039,12 @@ impl ImportedDesign {
     /// Materialize one canonical step-local layer definition without layout
     /// occurrences. This is the source-faithful input for hierarchical
     /// manufacturing lowerings.
-    pub fn materialize_step_layer(&self, step: u32, layer: LayerId) -> Result<GeometryDocument> {
+    pub fn materialize_step_layer(
+        &self,
+        step: u32,
+        layer: LayerId,
+        accuracy: GeometryAccuracy,
+    ) -> Result<GeometryDocument> {
         let definition = self
             .layer_definition(layer)
             .context("layer id is outside the imported design")?;
@@ -1053,7 +1060,7 @@ impl ImportedDesign {
             .find(|candidate| candidate.step == step && candidate.layer == layer);
 
         let mut target = GeometryDocument::new();
-        self.copy_step_layout_sidecar(&mut target, step);
+        self.copy_step_layout_sidecar(&mut target, step, accuracy)?;
         target.diagnostics = self.geometry.diagnostics.clone();
         target.specs = self.geometry.specs.clone();
         target.spec_items = self.geometry.spec_items.clone();
@@ -1068,6 +1075,7 @@ impl ImportedDesign {
                 0,
                 None,
                 0,
+                accuracy,
             )?
         } else {
             BBox::empty()
@@ -1153,8 +1161,18 @@ impl ImportedDesign {
         }
     }
 
-    pub fn feature_region(&self, occurrence: FeatureOccurrence) -> ContourSet {
-        let feature = &self.geometry.features[occurrence.id.feature.0 as usize];
+    /// Prepare this occurrence from the retained source curves. Any earlier
+    /// approximation in those curves remains part of the total budget.
+    pub fn feature_region(
+        &self,
+        occurrence: FeatureOccurrence,
+        accuracy: GeometryAccuracy,
+    ) -> Result<ContourSet, AccuracyError> {
+        let feature = self
+            .geometry
+            .features
+            .get(occurrence.id.feature.0 as usize)
+            .ok_or(AccuracyError::InvalidGeometry("unknown feature occurrence"))?;
         ContourSet::from_placed_painted_paths(
             &self.geometry.arena,
             feature
@@ -1163,6 +1181,7 @@ impl ImportedDesign {
                 .iter()
                 .map(|path| (path, occurrence.root_from_local)),
             tol::REGION_MM,
+            accuracy,
         )
     }
 
@@ -1199,6 +1218,7 @@ impl ImportedDesign {
         &self,
         layer: LayerId,
         scope: ArtworkScope,
+        accuracy: GeometryAccuracy,
     ) -> Result<GeometryDocument> {
         let definition = self
             .layer_definitions
@@ -1208,10 +1228,10 @@ impl ImportedDesign {
         let mut target = GeometryDocument::new();
         if matches!(scope, ArtworkScope::Board | ArtworkScope::ArrayLocal) {
             if let Some(occurrence) = step_occurrences.first() {
-                self.copy_step_layout_sidecar(&mut target, occurrence.step);
+                self.copy_step_layout_sidecar(&mut target, occurrence.step, accuracy)?;
             }
         } else {
-            self.copy_layout_sidecar(&mut target);
+            self.copy_layout_sidecar(&mut target, accuracy)?;
         }
         target.diagnostics = self.geometry.diagnostics.clone();
         target.specs = self.geometry.specs.clone();
@@ -1238,6 +1258,7 @@ impl ImportedDesign {
                 source_set_offset,
                 occurrence.layout.source_instance(),
                 0,
+                accuracy,
             )?);
             source_set_offset = source_set_offset
                 .checked_add(source_layer_set_span(&self.geometry, source_layer)?)
@@ -1257,34 +1278,50 @@ impl ImportedDesign {
         Ok(target)
     }
 
-    fn copy_layout_sidecar(&self, target: &mut GeometryDocument) {
+    fn copy_layout_sidecar(
+        &self,
+        target: &mut GeometryDocument,
+        accuracy: GeometryAccuracy,
+    ) -> Result<(), AccuracyError> {
         let mut copied_paths = HashMap::new();
-        let mut copy_path = |source: u32, target: &mut GeometryDocument| {
-            *copied_paths.entry(source).or_insert_with(|| {
-                let copied = target.arena.paths.len() as u32;
-                target
-                    .arena
-                    .append_path_from(&self.geometry.arena, source, Affine2::IDENTITY);
-                copied
-            })
-        };
+        let mut copy_path =
+            |source: u32, target: &mut GeometryDocument| -> Result<u32, AccuracyError> {
+                if let Some(&copied) = copied_paths.get(&source) {
+                    return Ok(copied);
+                }
+                let copied = target.arena.append_path_from(
+                    &self.geometry.arena,
+                    source,
+                    Affine2::IDENTITY,
+                    accuracy,
+                )?;
+                copied_paths.insert(source, copied);
+                Ok(copied)
+            };
 
         target.profiles = self.geometry.profiles.clone();
         target.profile_cutouts = self.geometry.profile_cutouts.clone();
         for profile_index in 0..target.profiles.len() {
             let source = target.profiles[profile_index].outer_path;
-            let copied = copy_path(source, target);
+            let copied = copy_path(source, target)?;
             target.profiles[profile_index].outer_path = copied;
         }
         for cutout_index in 0..target.profile_cutouts.len() {
             let source = target.profile_cutouts[cutout_index].path;
-            let copied = copy_path(source, target);
+            let copied = copy_path(source, target)?;
             target.profile_cutouts[cutout_index].path = copied;
         }
         target.layout = self.geometry.layout.clone();
+
+        Ok(())
     }
 
-    fn copy_step_layout_sidecar(&self, target: &mut GeometryDocument, step: u32) {
+    fn copy_step_layout_sidecar(
+        &self,
+        target: &mut GeometryDocument,
+        step: u32,
+        accuracy: GeometryAccuracy,
+    ) -> Result<(), AccuracyError> {
         let source_step = &self.geometry.layout.steps[step as usize];
         for profile_index in source_step.profiles.indices() {
             let source_profile = &self.geometry.profiles[profile_index as usize];
@@ -1293,7 +1330,8 @@ impl ImportedDesign {
                 &self.geometry.arena,
                 source_profile.outer_path,
                 Affine2::IDENTITY,
-            );
+                accuracy,
+            )?;
             let cutout_start = target.profile_cutouts.len() as u32;
             for source_cutout in source_profile.cutouts.slice(&self.geometry.profile_cutouts) {
                 let path = target.arena.paths.len() as u32;
@@ -1301,7 +1339,8 @@ impl ImportedDesign {
                     &self.geometry.arena,
                     source_cutout.path,
                     Affine2::IDENTITY,
-                );
+                    accuracy,
+                )?;
                 target.profile_cutouts.push(StepProfileCutout {
                     path,
                     bbox: source_cutout.bbox,
@@ -1320,27 +1359,28 @@ impl ImportedDesign {
         step.profiles = Span::new(0, target.profiles.len() as u32);
         target.layout.steps.push(step);
         target.layout.root_step = Some(0);
+
+        Ok(())
     }
 
-    pub fn composed_layer_image(&self, layer: LayerId, scope: ArtworkScope) -> Result<ContourSet> {
+    pub fn composed_layer_image(
+        &self,
+        layer: LayerId,
+        scope: ArtworkScope,
+        accuracy: GeometryAccuracy,
+    ) -> Result<ContourSet> {
         let definition = self
             .layer_definitions
             .get(layer.0 as usize)
             .context("layer id is outside the imported design")?;
-        let mut document = self.materialize_layer(layer, scope)?;
-        crate::dialects::ipc::process::normalize_for_artwork(&mut document);
-        crate::dialects::ipc::validate_artwork_ready(&document).map_err(anyhow::Error::msg)?;
-        let artwork = crate::dialects::ipc::lower_layer_to_artwork(
-            &document,
-            0,
-            layer_role(definition.layer_function),
-            side_for_layer(definition.side),
-        );
-        let (mut images, _) = crate::dialects::artwork::compose_attributed(&artwork, |_| ());
-        Ok(images.pop().map_or_else(
-            || ContourSet::empty(tol::REGION_MM),
-            |image| ContourSet::new(image.image, FillRule::NonZero, tol::REGION_MM),
-        ))
+        Ok(self
+            .materialize_layer(layer, scope, accuracy)?
+            .into_layer_image(
+                0,
+                layer_role(definition.layer_function),
+                side_for_layer(definition.side),
+                accuracy,
+            )?)
     }
 
     fn step_occurrences(&self, scope: ArtworkScope) -> Result<Vec<StepOccurrence>> {
@@ -1453,20 +1493,25 @@ impl ImportedDesign {
     }
 }
 
-pub fn extract_layer(ipc: &Ipc2581, layer_name: &str) -> Result<GeometryDocument> {
-    extract_layer_for_view(ipc, layer_name, ArtworkScope::ArrayFlattened)
+pub fn extract_layer(
+    ipc: &Ipc2581,
+    layer_name: &str,
+    accuracy: GeometryAccuracy,
+) -> Result<GeometryDocument> {
+    extract_layer_for_view(ipc, layer_name, ArtworkScope::ArrayFlattened, accuracy)
 }
 
 pub fn extract_layer_for_view(
     ipc: &Ipc2581,
     layer_name: &str,
     view: ArtworkScope,
+    accuracy: GeometryAccuracy,
 ) -> Result<GeometryDocument> {
-    let design = import_design(ipc)?;
+    let design = import_design(ipc, accuracy)?;
     let layer = design
         .layer_id(layer_name)
         .with_context(|| format!("IPC-2581 layer '{layer_name}' was not found"))?;
-    design.materialize_layer(layer, view)
+    design.materialize_layer(layer, view, accuracy)
 }
 
 pub fn extract_layout(ipc: &Ipc2581) -> Result<GeometryDocument> {
@@ -1491,6 +1536,7 @@ pub fn extract_step_layer_local(
     layers: &[Layer],
     layer: &Layer,
     layer_name: &str,
+    accuracy: GeometryAccuracy,
 ) -> Result<GeometryDocument> {
     let content = ipc.content();
     let context = ExtractContext {
@@ -1575,8 +1621,15 @@ pub fn extract_step_layer_local(
                     source,
                     set_feature,
                     &mut doc,
+                    accuracy,
                 )?;
-                validate_copper_balance_structure(copper_balance, set_feature, &features, &doc)?;
+                validate_copper_balance_structure(
+                    copper_balance,
+                    set_feature,
+                    &features,
+                    &doc,
+                    accuracy,
+                )?;
 
                 for mut feature in features {
                     feature.source_step_ref = Some(step.name);
@@ -1624,7 +1677,8 @@ pub fn extract_step_layer_local(
                             set.geometry,
                             hole,
                             &mut doc,
-                        );
+                            accuracy,
+                        )?;
                         emitted.push(feature);
                     }
                 }
@@ -1670,6 +1724,7 @@ pub fn extract_step_layer_local(
                             set.geometry,
                             slot,
                             &mut doc,
+                            accuracy,
                         )?;
                         emitted.push(feature);
                     }
@@ -1704,6 +1759,7 @@ pub fn extract_step_layer_local(
     Ok(doc)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn extract_set_feature(
     context: &ExtractContext<'_>,
     layer_ref: Symbol,
@@ -1712,15 +1768,16 @@ fn extract_set_feature(
     source: SourceRef,
     set_feature: &SetFeature,
     doc: &mut GeometryDocument,
+    accuracy: GeometryAccuracy,
 ) -> Result<Vec<GeometryFeature>> {
     match set_feature {
         SetFeature::Pad(pad) => Ok(extract_pad(
-            context, layer_ref, net, polarity, source, pad, doc,
+            context, layer_ref, net, polarity, source, pad, doc, accuracy,
         )?
         .into_iter()
         .collect()),
         SetFeature::Fiducial(fiducial) => Ok(extract_fiducial(
-            context, net, polarity, source, fiducial, doc,
+            context, net, polarity, source, fiducial, doc, accuracy,
         )?
         .into_iter()
         .collect()),
@@ -1728,7 +1785,7 @@ fn extract_set_feature(
             .into_iter()
             .collect()),
         SetFeature::UserPrimitive(primitive) => {
-            extract_inline_user_primitive(context, net, polarity, source, primitive, doc)
+            extract_inline_user_primitive(context, net, polarity, source, primitive, doc, accuracy)
         }
         SetFeature::Polygon(polygon) => {
             Ok(vec![extract_polygon(net, polarity, source, polygon, doc)])
@@ -1748,6 +1805,7 @@ fn extract_set_feature(
             primitive_ref,
             FeaturePrimitiveKind::Standard,
             doc,
+            accuracy,
         ),
         SetFeature::UserPrimitiveRef(primitive_ref) => extract_feature_primitive(
             context,
@@ -1757,14 +1815,16 @@ fn extract_set_feature(
             primitive_ref,
             FeaturePrimitiveKind::User,
             doc,
+            accuracy,
         ),
-        SetFeature::PlacementGroup(group) => {
-            extract_feature_placement_group(context, layer_ref, net, polarity, source, group, doc)
-        }
+        SetFeature::PlacementGroup(group) => extract_feature_placement_group(
+            context, layer_ref, net, polarity, source, group, doc, accuracy,
+        ),
         SetFeature::Hole(_) | SetFeature::Slot(_) => Ok(Vec::new()),
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn extract_feature_placement_group(
     context: &ExtractContext<'_>,
     layer_ref: Symbol,
@@ -1773,6 +1833,7 @@ fn extract_feature_placement_group(
     source: SourceRef,
     group: &ipc2581::types::ecad::FeaturePlacementGroup,
     doc: &mut GeometryDocument,
+    accuracy: GeometryAccuracy,
 ) -> Result<Vec<GeometryFeature>> {
     let placement_start = doc.feature_placements.len() as u32;
     doc.feature_placements.extend(
@@ -1793,9 +1854,9 @@ fn extract_feature_placement_group(
     let feature_start = doc.features.len() as u32;
     let mut features = Vec::new();
     for child in &group.features {
-        for mut feature in
-            extract_set_feature(context, layer_ref, net, polarity, source, child, doc)?
-        {
+        for mut feature in extract_set_feature(
+            context, layer_ref, net, polarity, source, child, doc, accuracy,
+        )? {
             if feature.placement_group.is_some() {
                 bail!("nested IPC feature placement groups are not supported");
             }
@@ -1817,6 +1878,7 @@ fn validate_copper_balance_structure(
     set_feature: &SetFeature,
     features: &[GeometryFeature],
     doc: &GeometryDocument,
+    accuracy: GeometryAccuracy,
 ) -> Result<()> {
     let Some(void) = metadata.and_then(|metadata| metadata.void) else {
         return Ok(());
@@ -1837,7 +1899,7 @@ fn validate_copper_balance_structure(
     if group.placements.len() != source_group.locations.len() {
         bail!("copper-balance lattice locations did not produce matching placements");
     }
-    validate_copper_balance_void_shape(doc, feature, void)?;
+    validate_copper_balance_void_shape(doc, feature, void, accuracy)?;
 
     let lattice = crate::geom::copper_balance::DenseCopperLattice {
         origin: void.lattice_origin,
@@ -1867,8 +1929,9 @@ fn validate_copper_balance_void_shape(
     doc: &GeometryDocument,
     feature: &GeometryFeature,
     metadata: CopperBalanceVoidMetadata,
+    accuracy: GeometryAccuracy,
 ) -> Result<()> {
-    let actual = crate::dialects::ipc::contour_flash_aperture(doc, feature)
+    let actual = crate::dialects::ipc::contour_flash_aperture(doc, feature, accuracy)?
         .context("copper-balance void is not one filled rigid contour")?;
     let crate::dialects::artwork::ApertureShape::Contour { outline, fill_rule } = actual else {
         bail!("copper-balance void did not lower to a contour aperture");
@@ -1876,8 +1939,8 @@ fn validate_copper_balance_void_shape(
     let expected =
         crate::geom::shapes::rounded_hexagon(metadata.radius_mm, metadata.corner_radius_mm, 0.0)
             .context("copper-balance rounded-hex dimensions are invalid")?;
-    let actual = ContourSet::from_contours(&[outline], fill_rule, 1e-5);
-    let expected = ContourSet::from_contours(&[expected], FillRule::NonZero, 1e-5);
+    let actual = ContourSet::from_contours(&[outline], fill_rule, 1e-5, accuracy)?;
+    let expected = ContourSet::from_contours(&[expected], FillRule::NonZero, 1e-5, accuracy)?;
     let mismatch = actual.difference(&expected).area() + expected.difference(&actual).area();
     if mismatch > 1e-5 {
         bail!(
@@ -1918,6 +1981,7 @@ fn append_span<T: Clone>(target: &mut Vec<T>, source: &[T], span: Span) -> Span 
     Span::new(start, span.count)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn append_transformed_layer(
     target: &mut GeometryDocument,
     source: &GeometryDocument,
@@ -1926,6 +1990,7 @@ fn append_transformed_layer(
     source_set_offset: u32,
     source_instance: Option<u32>,
     target_layer: u32,
+    accuracy: GeometryAccuracy,
 ) -> Result<BBox> {
     let layer = &source.layers[layer_index];
     let mut layer_bbox = BBox::empty();
@@ -1998,7 +2063,8 @@ fn append_transformed_layer(
                     } else {
                         transform
                     },
-                );
+                    accuracy,
+                )?;
             }
             let path_count = target.arena.paths.len() as u32 - path_start;
             let paths = Span::new(path_start, path_count);
@@ -2326,6 +2392,7 @@ fn slot_applies_to_layer<'a>(
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn extract_pad(
     context: &ExtractContext<'_>,
     layer_ref: Symbol,
@@ -2334,6 +2401,7 @@ fn extract_pad(
     source: SourceRef,
     pad: &ipc2581::types::Pad,
     doc: &mut GeometryDocument,
+    accuracy: GeometryAccuracy,
 ) -> Result<Option<GeometryFeature>> {
     let Some(padstack_ref) = pad.padstack_def_ref else {
         doc.warn("Skipping pad without PadStackDefRef");
@@ -2380,7 +2448,7 @@ fn extract_pad(
                 ));
                 return Ok(None);
             };
-            lower_standard_primitive(context, doc, primitive, placement.transform)?
+            lower_standard_primitive(context, doc, primitive, placement.transform, accuracy)?
         }
         PrimitiveRef::User(primitive_ref) => {
             let Some(primitive) = context.user_primitives.get(&primitive_ref).copied() else {
@@ -2391,7 +2459,7 @@ fn extract_pad(
                 ));
                 return Ok(None);
             };
-            lower_user_primitive(context, doc, primitive, placement.transform)
+            lower_user_primitive(context, doc, primitive, placement.transform, accuracy)?
         }
     };
     let path_count = doc.arena.paths.len() as u32 - path_start;
@@ -2469,6 +2537,7 @@ enum FeaturePrimitiveKind {
     User,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn extract_feature_primitive(
     context: &ExtractContext<'_>,
     net: Option<Symbol>,
@@ -2477,6 +2546,7 @@ fn extract_feature_primitive(
     primitive_ref: &ipc2581::types::ecad::FeaturePrimitiveRef,
     primitive_kind: FeaturePrimitiveKind,
     doc: &mut GeometryDocument,
+    accuracy: GeometryAccuracy,
 ) -> Result<Vec<GeometryFeature>> {
     let transform = Affine2::placement(
         Point::new(primitive_ref.x, primitive_ref.y),
@@ -2496,7 +2566,7 @@ fn extract_feature_primitive(
                 return Ok(Vec::new());
             };
             (
-                lower_standard_primitive(context, doc, primitive, transform)?,
+                lower_standard_primitive(context, doc, primitive, transform, accuracy)?,
                 PrimitiveRef::Standard(primitive_ref.id),
             )
         }
@@ -2509,7 +2579,7 @@ fn extract_feature_primitive(
                 return Ok(Vec::new());
             };
             (
-                lower_user_primitive(context, doc, primitive, transform),
+                lower_user_primitive(context, doc, primitive, transform, accuracy)?,
                 PrimitiveRef::User(primitive_ref.id),
             )
         }
@@ -2536,11 +2606,12 @@ fn extract_inline_user_primitive(
     source: SourceRef,
     primitive: &ipc2581::types::ecad::FeatureUserPrimitive,
     doc: &mut GeometryDocument,
+    accuracy: GeometryAccuracy,
 ) -> Result<Vec<GeometryFeature>> {
     let transform =
         Affine2::placement(Point::new(primitive.x, primitive.y), 0.0, Mirror::NONE, 1.0);
     let path_start = doc.arena.paths.len() as u32;
-    let paint = lower_user_primitive(context, doc, &primitive.primitive, transform);
+    let paint = lower_user_primitive(context, doc, &primitive.primitive, transform, accuracy)?;
     primitive_features_from_paths(
         doc,
         primitive_path_feature(net, polarity, source, transform, path_start, paint, None),
@@ -2593,6 +2664,7 @@ fn extract_fiducial(
     source: SourceRef,
     fiducial: &ipc2581::types::ecad::Fiducial,
     doc: &mut GeometryDocument,
+    accuracy: GeometryAccuracy,
 ) -> Result<Option<GeometryFeature>> {
     let placement = ipc_placement(
         Point::new(fiducial.location.x, fiducial.location.y),
@@ -2602,7 +2674,7 @@ fn extract_fiducial(
     let path_start = doc.arena.paths.len() as u32;
     let (paint, primitive_ref, outer_diameter) = match &fiducial.shape {
         ipc2581::types::ecad::FiducialShape::Primitive(primitive) => (
-            lower_standard_primitive(context, doc, primitive, placement.transform)?,
+            lower_standard_primitive(context, doc, primitive, placement.transform, accuracy)?,
             None,
             standard_primitive_outer_diameter(primitive),
         ),
@@ -2615,7 +2687,7 @@ fn extract_fiducial(
                 return Ok(None);
             };
             (
-                lower_standard_primitive(context, doc, primitive, placement.transform)?,
+                lower_standard_primitive(context, doc, primitive, placement.transform, accuracy)?,
                 Some(PrimitiveRef::Standard(*primitive_ref)),
                 standard_primitive_outer_diameter(primitive),
             )
@@ -2843,7 +2915,12 @@ fn extract_polygon(
     doc: &mut GeometryDocument,
 ) -> GeometryFeature {
     let path_start = doc.arena.paths.len() as u32;
-    push_polygon_path(doc, polygon, Affine2::identity(), FillRule::NonZero);
+    doc.push_path(
+        Paint::Fill {
+            rule: FillRule::NonZero,
+        },
+        [polygon_contour(polygon)],
+    );
     let paths = Span::new(path_start, doc.arena.paths.len() as u32 - path_start);
 
     let mut feature = GeometryFeature::new(FeatureKind::Polygon, polarity);
@@ -2889,7 +2966,7 @@ fn append_step_profile(doc: &mut GeometryDocument, step: &Step) -> ProfileRange 
 }
 
 fn push_profile_polygon(doc: &mut GeometryDocument, polygon: &ipc2581::types::Polygon) -> u32 {
-    let contour = polygon_contour(polygon, Affine2::identity());
+    let contour = polygon_contour(polygon);
     doc.push_path(Paint::None, [contour])
 }
 
@@ -2986,29 +3063,10 @@ fn push_stroked_steps(
     begin: Point,
     steps: &[PolyStep],
 ) -> GeometryFeature {
-    let mut current = begin;
-    let mut bbox = BBox::from_point(current);
-    let mut cmds = vec![PathCmd::move_to(current)];
-    for step in steps {
-        match step {
-            PolyStep::Segment(segment) => {
-                current = Point::new(segment.point.x, segment.point.y);
-                bbox.include_point(current);
-                cmds.push(PathCmd::line_to(current));
-            }
-            PolyStep::Curve(curve) => {
-                let end = Point::new(curve.point.x, curve.point.y);
-                let center = Point::new(curve.center.x, curve.center.y);
-                bbox = bbox.union(Arc::new(current, end, center, curve.clockwise).bbox());
-                cmds.push(PathCmd::arc_to(end, center, curve.clockwise));
-                current = end;
-            }
-        }
-    }
-
+    let contour = ContourBuf::new(poly_step_commands(begin, steps));
+    let bbox = contour.bbox.expand(style.width / 2.0);
     let path_start = doc.arena.paths.len() as u32;
-    doc.push_path(stroked_paint(style), [ContourBuf::from_parts(bbox, cmds)]);
-    bbox = bbox.expand(style.width / 2.0);
+    doc.push_path(stroked_paint(style), [contour]);
 
     let mut feature = GeometryFeature::new(FeatureKind::Trace, style.polarity);
     feature.net = style.net;
@@ -3032,16 +3090,23 @@ fn extract_hole(
     padstack_ref: Option<Symbol>,
     hole: &ipc2581::types::Hole,
     doc: &mut GeometryDocument,
-) -> GeometryFeature {
+    accuracy: GeometryAccuracy,
+) -> Result<GeometryFeature, AccuracyError> {
     let placement = ipc_placement(Point::new(hole.x, hole.y), hole.xform);
     let path_start = doc.arena.paths.len() as u32;
     match hole.shape {
-        IpcHoleShape::Circle => {
-            push_ellipse_path(doc, placement.transform, hole.diameter, hole.diameter)
-        }
-        IpcHoleShape::Square => {
-            push_rect_path(doc, placement.transform, hole.diameter, hole.diameter)
-        }
+        IpcHoleShape::Circle => push_filled_shape(
+            doc,
+            placement.transform,
+            shapes::ellipse(hole.diameter, hole.diameter),
+            accuracy,
+        )?,
+        IpcHoleShape::Square => push_filled_shape(
+            doc,
+            placement.transform,
+            shapes::rect(hole.diameter, hole.diameter),
+            accuracy,
+        )?,
     }
     let paths = Span::new(path_start, doc.arena.paths.len() as u32 - path_start);
 
@@ -3060,7 +3125,7 @@ fn extract_hole(
     feature.padstack_ref = padstack_ref;
     feature.intent.plating = plating_kind(hole.plating_status);
     feature.flags.lowered_to_paths = true;
-    feature
+    Ok(feature)
 }
 
 fn extract_slot(
@@ -3069,6 +3134,7 @@ fn extract_slot(
     padstack_ref: Option<Symbol>,
     slot: &ipc2581::types::Slot,
     doc: &mut GeometryDocument,
+    accuracy: GeometryAccuracy,
 ) -> Result<GeometryFeature> {
     let placement = ipc_placement(Point::new(slot.x, slot.y), slot.xform);
     let path_start = doc.arena.paths.len() as u32;
@@ -3076,13 +3142,20 @@ fn extract_slot(
 
     match &slot.shape {
         SlotShape::Outline(polygon) => {
-            push_polygon_path(doc, polygon, placement.transform, FillRule::NonZero);
+            push_polygon_path(
+                doc,
+                polygon,
+                placement.transform,
+                FillRule::NonZero,
+                accuracy,
+            )?;
         }
         SlotShape::Primitive(primitive) => {
             if let StandardPrimitive::Oval(oval) = primitive {
                 primitive_size = Some((oval.shape.size.width, oval.shape.size.height));
             }
-            let _ = lower_standard_primitive(context, doc, primitive, placement.transform)?;
+            let _ =
+                lower_standard_primitive(context, doc, primitive, placement.transform, accuracy)?;
         }
     }
 
@@ -3110,6 +3183,7 @@ fn lower_standard_primitive(
     doc: &mut GeometryDocument,
     primitive: &StandardPrimitive,
     transform: Affine2,
+    accuracy: GeometryAccuracy,
 ) -> Result<PrimitivePaint> {
     let paint = primitive_paint(context, primitive);
     if standard_primitive_has_no_area(primitive) {
@@ -3119,31 +3193,36 @@ fn lower_standard_primitive(
     let path_start = doc.arena.paths.len() as u32;
     match primitive {
         StandardPrimitive::Circle(circle) => {
-            push_ellipse_path(doc, transform, circle.shape.diameter, circle.shape.diameter);
+            push_filled_shape(
+                doc,
+                transform,
+                shapes::ellipse(circle.shape.diameter, circle.shape.diameter),
+                accuracy,
+            )?;
         }
         StandardPrimitive::Ellipse(ellipse) => {
-            push_ellipse_path(
+            push_filled_shape(
                 doc,
                 transform,
-                ellipse.shape.size.width,
-                ellipse.shape.size.height,
-            );
+                shapes::ellipse(ellipse.shape.size.width, ellipse.shape.size.height),
+                accuracy,
+            )?;
         }
         StandardPrimitive::Oval(oval) => {
-            push_oval_path(
+            push_filled_shape(
                 doc,
                 transform,
-                oval.shape.size.width,
-                oval.shape.size.height,
-            );
+                shapes::obround(oval.shape.size.width, oval.shape.size.height),
+                accuracy,
+            )?;
         }
         StandardPrimitive::RectCenter(rect) => {
-            push_rect_path(
+            push_filled_shape(
                 doc,
                 transform,
-                rect.shape.size.width,
-                rect.shape.size.height,
-            );
+                shapes::rect(rect.shape.size.width, rect.shape.size.height),
+                accuracy,
+            )?;
         }
         StandardPrimitive::RectCorner(rect) => {
             let points = vec![
@@ -3152,42 +3231,52 @@ fn lower_standard_primitive(
                 Point::new(rect.shape.upper_right.x, rect.shape.upper_right.y),
                 Point::new(rect.shape.lower_left.x, rect.shape.upper_right.y),
             ];
-            push_closed_points_path(doc, transform, points, FillRule::NonZero);
+            push_filled_shape(doc, transform, shapes::closed_polygon(points), accuracy)?;
         }
         StandardPrimitive::Diamond(diamond) => {
             let hw = diamond.shape.size.width / 2.0;
             let hh = diamond.shape.size.height / 2.0;
-            push_closed_points_path(
+            push_filled_shape(
                 doc,
                 transform,
-                vec![
+                shapes::closed_polygon(vec![
                     Point::new(0.0, -hh),
                     Point::new(hw, 0.0),
                     Point::new(0.0, hh),
                     Point::new(-hw, 0.0),
-                ],
-                FillRule::NonZero,
-            );
+                ]),
+                accuracy,
+            )?;
         }
         StandardPrimitive::Hexagon(hexagon) => {
-            push_regular_polygon_path(doc, transform, 6, hexagon.shape.point_to_point / 2.0);
+            push_filled_shape(
+                doc,
+                transform,
+                shapes::regular_polygon(2.0 * (hexagon.shape.point_to_point / 2.0), 6, -90.0),
+                accuracy,
+            )?;
         }
         StandardPrimitive::Octagon(octagon) => {
-            push_regular_polygon_path(doc, transform, 8, octagon.shape.point_to_point / 2.0);
+            push_filled_shape(
+                doc,
+                transform,
+                shapes::regular_polygon(2.0 * (octagon.shape.point_to_point / 2.0), 8, -90.0),
+                accuracy,
+            )?;
         }
         StandardPrimitive::Triangle(triangle) => {
             let hw = triangle.shape.base / 2.0;
             let hh = triangle.shape.height / 2.0;
-            push_closed_points_path(
+            push_filled_shape(
                 doc,
                 transform,
-                vec![
+                shapes::closed_polygon(vec![
                     Point::new(0.0, -hh),
                     Point::new(hw, hh),
                     Point::new(-hw, hh),
-                ],
-                FillRule::NonZero,
-            );
+                ]),
+                accuracy,
+            )?;
         }
         StandardPrimitive::Donut(donut) => {
             push_donut_path(
@@ -3195,7 +3284,8 @@ fn lower_standard_primitive(
                 transform,
                 donut.shape.outer_diameter,
                 donut.shape.inner_diameter,
-            );
+                accuracy,
+            )?;
         }
         StandardPrimitive::Thermal(thermal) => {
             let spoke_width = thermal
@@ -3211,46 +3301,59 @@ fn lower_standard_primitive(
                 spoke_width,
                 thermal.shape.spoke_count,
                 thermal.shape.spoke_start_angle.unwrap_or(45.0),
-            );
+                accuracy,
+            )?;
         }
         StandardPrimitive::Contour(contour) => {
-            push_contour_path(doc, contour, transform);
+            push_contour_path(doc, contour, transform, accuracy)?;
         }
         StandardPrimitive::RectRound(rect) => {
-            push_rounded_rect_path(
+            push_filled_shape(
                 doc,
                 transform,
-                rect.shape.size.width,
-                rect.shape.size.height,
-                rect.shape.radius,
-                [
-                    rect.shape.upper_right,
-                    rect.shape.lower_right,
-                    rect.shape.lower_left,
-                    rect.shape.upper_left,
-                ],
-            );
+                shapes::rounded_rect(
+                    rect.shape.size.width,
+                    rect.shape.size.height,
+                    rect.shape.radius,
+                    [
+                        rect.shape.upper_right,
+                        rect.shape.lower_right,
+                        rect.shape.lower_left,
+                        rect.shape.upper_left,
+                    ],
+                ),
+                accuracy,
+            )?;
         }
         StandardPrimitive::RectCham(rect) => {
-            push_chamfered_rect_path(
+            push_filled_shape(
                 doc,
                 transform,
-                rect.shape.size.width,
-                rect.shape.size.height,
-                rect.shape.chamfer,
-                [
-                    rect.shape.upper_right,
-                    rect.shape.lower_right,
-                    rect.shape.lower_left,
-                    rect.shape.upper_left,
-                ],
-            );
+                shapes::chamfered_rect(
+                    rect.shape.size.width,
+                    rect.shape.size.height,
+                    rect.shape.chamfer,
+                    [
+                        rect.shape.upper_right,
+                        rect.shape.lower_right,
+                        rect.shape.lower_left,
+                        rect.shape.upper_left,
+                    ],
+                ),
+                accuracy,
+            )?;
         }
         StandardPrimitive::Butterfly(butterfly) => {
-            push_butterfly_path(doc, transform, butterfly.shape.shape, butterfly.shape.size);
+            push_butterfly_path(
+                doc,
+                transform,
+                butterfly.shape.shape,
+                butterfly.shape.size,
+                accuracy,
+            )?;
         }
         StandardPrimitive::Moire(moire) => {
-            push_moire_path(doc, transform, moire);
+            push_moire_path(doc, transform, moire, accuracy)?;
         }
     }
 
@@ -3322,8 +3425,9 @@ fn lower_user_primitive(
     doc: &mut GeometryDocument,
     primitive: &UserPrimitive,
     transform: Affine2,
-) -> PrimitivePaint {
-    match primitive {
+    accuracy: GeometryAccuracy,
+) -> Result<PrimitivePaint, AccuracyError> {
+    Ok(match primitive {
         UserPrimitive::UserSpecial(user_special) => {
             let mut paint = PrimitivePaint::Fill;
             let mut pending_contours = Vec::new();
@@ -3335,7 +3439,12 @@ fn lower_user_primitive(
                         flush_user_contours(doc, &mut pending_contours);
                     }
                     pending_fill_key = fill_key;
-                    push_user_shape_contours(&mut pending_contours, &shape.shape, transform);
+                    push_user_shape_contours(
+                        &mut pending_contours,
+                        &shape.shape,
+                        transform,
+                        accuracy,
+                    )?;
                     continue;
                 }
                 flush_user_contours(doc, &mut pending_contours);
@@ -3343,52 +3452,102 @@ fn lower_user_primitive(
                 let mut nested_paint = None;
                 match &shape.shape {
                     UserShapeType::Circle(circle) => {
-                        push_ellipse_path(doc, transform, circle.diameter, circle.diameter);
-                    }
-                    UserShapeType::RectCenter(rect) => {
-                        push_rect_path(doc, transform, rect.size.width, rect.size.height);
-                    }
-                    UserShapeType::Oval(oval) => {
-                        push_oval_path(doc, transform, oval.size.width, oval.size.height);
-                    }
-                    UserShapeType::RectRound(rect) => {
-                        push_rounded_rect_path(
+                        push_filled_shape(
                             doc,
                             transform,
-                            rect.size.width,
-                            rect.size.height,
-                            rect.radius,
-                            [
-                                rect.upper_right,
-                                rect.lower_right,
-                                rect.lower_left,
-                                rect.upper_left,
-                            ],
-                        );
+                            shapes::ellipse(circle.diameter, circle.diameter),
+                            accuracy,
+                        )?;
+                    }
+                    UserShapeType::RectCenter(rect) => {
+                        push_filled_shape(
+                            doc,
+                            transform,
+                            shapes::rect(rect.size.width, rect.size.height),
+                            accuracy,
+                        )?;
+                    }
+                    UserShapeType::Oval(oval) => {
+                        push_filled_shape(
+                            doc,
+                            transform,
+                            shapes::obround(oval.size.width, oval.size.height),
+                            accuracy,
+                        )?;
+                    }
+                    UserShapeType::RectRound(rect) => {
+                        push_filled_shape(
+                            doc,
+                            transform,
+                            shapes::rounded_rect(
+                                rect.size.width,
+                                rect.size.height,
+                                rect.radius,
+                                [
+                                    rect.upper_right,
+                                    rect.lower_right,
+                                    rect.lower_left,
+                                    rect.upper_left,
+                                ],
+                            ),
+                            accuracy,
+                        )?;
                     }
                     UserShapeType::Polygon(polygon) => {
-                        push_polygon_path(doc, polygon, transform, FillRule::NonZero);
+                        push_polygon_path(doc, polygon, transform, FillRule::NonZero, accuracy)?;
                     }
                     UserShapeType::Contour(contour) => {
-                        push_contour_path(doc, contour, transform);
+                        push_contour_path(doc, contour, transform, accuracy)?;
                     }
                     UserShapeType::Line(line) => {
                         let line_desc = user_shape_line_desc(context, shape);
-                        push_user_line_path(doc, line, transform, line_desc);
+                        push_user_stroke(
+                            doc,
+                            ContourBuf::new(vec![
+                                PathCmd::move_to(Point::new(line.start.x, line.start.y)),
+                                PathCmd::line_to(Point::new(line.end.x, line.end.y)),
+                            ]),
+                            transform,
+                            line_desc,
+                            accuracy,
+                        )?;
                     }
                     UserShapeType::Arc(arc) => {
                         let line_desc = user_shape_line_desc(context, shape);
-                        push_user_arc_path(doc, arc, transform, line_desc);
+                        push_user_stroke(
+                            doc,
+                            ContourBuf::new(vec![
+                                PathCmd::move_to(Point::new(arc.start.x, arc.start.y)),
+                                PathCmd::arc_to(
+                                    Point::new(arc.end.x, arc.end.y),
+                                    Point::new(arc.center.x, arc.center.y),
+                                    arc.clockwise,
+                                ),
+                            ]),
+                            transform,
+                            line_desc,
+                            accuracy,
+                        )?;
                     }
                     UserShapeType::Polyline(polyline) => {
                         let line_desc = user_shape_line_desc(context, shape);
-                        push_user_polyline_path(doc, polyline, transform, line_desc);
+                        push_user_stroke(
+                            doc,
+                            ContourBuf::new(poly_step_commands(
+                                Point::new(polyline.begin.x, polyline.begin.y),
+                                &polyline.steps,
+                            )),
+                            transform,
+                            line_desc,
+                            accuracy,
+                        )?;
                     }
                     UserShapeType::UserPrimitiveRef(primitive_ref) => {
                         if let Some(primitive) = context.user_primitives.get(primitive_ref).copied()
                         {
-                            nested_paint =
-                                Some(lower_user_primitive(context, doc, primitive, transform));
+                            nested_paint = Some(lower_user_primitive(
+                                context, doc, primitive, transform, accuracy,
+                            )?);
                         } else {
                             make_paths_unpainted(doc, path_start);
                         }
@@ -3424,7 +3583,7 @@ fn lower_user_primitive(
             flush_user_contours(doc, &mut pending_contours);
             paint
         }
-    }
+    })
 }
 
 /// Grouping key for consecutive filled user-shape contours: contours sharing a
@@ -3449,12 +3608,22 @@ fn user_shape_is_filled_contour(shape: &ipc2581::types::UserShape) -> bool {
     )
 }
 
-fn push_user_shape_contours(out: &mut Vec<ContourBuf>, shape: &UserShapeType, transform: Affine2) {
+fn push_user_shape_contours(
+    out: &mut Vec<ContourBuf>,
+    shape: &UserShapeType,
+    transform: Affine2,
+    accuracy: GeometryAccuracy,
+) -> Result<(), AccuracyError> {
     match shape {
-        UserShapeType::Polygon(polygon) => out.push(polygon_contour(polygon, transform)),
-        UserShapeType::Contour(contour) => push_contour_payloads(out, contour, transform),
+        UserShapeType::Polygon(polygon) => {
+            out.push(polygon_contour(polygon).transformed(transform, accuracy)?)
+        }
+        UserShapeType::Contour(contour) => {
+            push_contour_payloads(out, contour, transform, accuracy)?
+        }
         _ => {}
     }
+    Ok(())
 }
 
 fn flush_user_contours(doc: &mut GeometryDocument, contours: &mut Vec<ContourBuf>) {
@@ -3480,110 +3649,23 @@ fn user_shape_line_desc(
     })
 }
 
-fn push_user_line_path(
+fn push_user_stroke(
     doc: &mut GeometryDocument,
-    line: &ipc2581::types::primitives::Line,
+    contour: ContourBuf,
     transform: Affine2,
     line_desc: Option<ipc2581::types::LineDesc>,
-) {
-    let start = transform.transform_point(Point::new(line.start.x, line.start.y));
-    let end = transform.transform_point(Point::new(line.end.x, line.end.y));
-    let width = line_desc.map(|desc| desc.line_width).unwrap_or(0.25);
-    let line_cap = line_desc
-        .map(|desc| map_line_cap(desc.line_end))
-        .unwrap_or(LineCap::Round);
-    let line_pattern = map_line_pattern(line_desc.and_then(|desc| desc.line_property));
-    let bbox = BBox::from_point(start).union(BBox::from_point(end));
-    let mut stroke = StrokeStyle::new(width, line_cap);
-    stroke.pattern = line_pattern;
+    accuracy: GeometryAccuracy,
+) -> Result<(), AccuracyError> {
+    let mut stroke = StrokeStyle::new(
+        line_desc.map_or(0.25, |desc| desc.line_width),
+        line_desc.map_or(LineCap::Round, |desc| map_line_cap(desc.line_end)),
+    );
+    stroke.pattern = map_line_pattern(line_desc.and_then(|desc| desc.line_property));
     doc.push_path(
         Paint::Stroke(stroke),
-        [ContourBuf::from_parts(
-            bbox,
-            vec![PathCmd::move_to(start), PathCmd::line_to(end)],
-        )],
+        [contour.transformed(transform, accuracy)?],
     );
-}
-
-fn push_user_arc_path(
-    doc: &mut GeometryDocument,
-    arc: &ipc2581::types::Arc,
-    transform: Affine2,
-    line_desc: Option<ipc2581::types::LineDesc>,
-) {
-    let start = transform.transform_point(Point::new(arc.start.x, arc.start.y));
-    let end = transform.transform_point(Point::new(arc.end.x, arc.end.y));
-    let center = transform.transform_point(Point::new(arc.center.x, arc.center.y));
-    let clockwise = if transform.determinant() < 0.0 {
-        !arc.clockwise
-    } else {
-        arc.clockwise
-    };
-    let width = line_desc.map(|desc| desc.line_width).unwrap_or(0.25);
-    let line_cap = line_desc
-        .map(|desc| map_line_cap(desc.line_end))
-        .unwrap_or(LineCap::Round);
-    let line_pattern = map_line_pattern(line_desc.and_then(|desc| desc.line_property));
-    let bbox = Arc::new(start, end, center, clockwise).bbox();
-    let mut stroke = StrokeStyle::new(width, line_cap);
-    stroke.pattern = line_pattern;
-    doc.push_path(
-        Paint::Stroke(stroke),
-        [ContourBuf::from_parts(
-            bbox,
-            vec![
-                PathCmd::move_to(start),
-                PathCmd::arc_to(end, center, clockwise),
-            ],
-        )],
-    );
-}
-
-fn push_user_polyline_path(
-    doc: &mut GeometryDocument,
-    polyline: &ipc2581::types::Polyline,
-    transform: Affine2,
-    line_desc: Option<ipc2581::types::LineDesc>,
-) {
-    let width = line_desc.map(|desc| desc.line_width).unwrap_or(0.25);
-    let line_cap = line_desc
-        .map(|desc| map_line_cap(desc.line_end))
-        .unwrap_or(LineCap::Round);
-    let line_pattern = map_line_pattern(line_desc.and_then(|desc| desc.line_property));
-    let mut current = Point::new(polyline.begin.x, polyline.begin.y);
-    let start = transform.transform_point(current);
-    let mut bbox = BBox::from_point(start);
-    let mut cmds = vec![PathCmd::move_to(start)];
-
-    for step in &polyline.steps {
-        match step {
-            PolyStep::Segment(segment) => {
-                current = Point::new(segment.point.x, segment.point.y);
-                let point = transform.transform_point(current);
-                bbox.include_point(point);
-                cmds.push(PathCmd::line_to(point));
-            }
-            PolyStep::Curve(curve) => {
-                let end = Point::new(curve.point.x, curve.point.y);
-                let center = Point::new(curve.center.x, curve.center.y);
-                let start = transform.transform_point(current);
-                let end = transform.transform_point(end);
-                let center = transform.transform_point(center);
-                let clockwise = if transform.determinant() < 0.0 {
-                    !curve.clockwise
-                } else {
-                    curve.clockwise
-                };
-                bbox = bbox.union(Arc::new(start, end, center, clockwise).bbox());
-                cmds.push(PathCmd::arc_to(end, center, clockwise));
-                current = Point::new(curve.point.x, curve.point.y);
-            }
-        }
-    }
-
-    let mut stroke = StrokeStyle::new(width, line_cap);
-    stroke.pattern = line_pattern;
-    doc.push_path(Paint::Stroke(stroke), [ContourBuf::from_parts(bbox, cmds)]);
+    Ok(())
 }
 
 fn push_polygon_path(
@@ -3591,9 +3673,11 @@ fn push_polygon_path(
     polygon: &ipc2581::types::Polygon,
     transform: Affine2,
     fill_rule: FillRule,
-) {
-    let contour = polygon_contour(polygon, transform);
+    accuracy: GeometryAccuracy,
+) -> Result<(), AccuracyError> {
+    let contour = polygon_contour(polygon).transformed(transform, accuracy)?;
     doc.push_path(Paint::Fill { rule: fill_rule }, [contour]);
+    Ok(())
 }
 
 fn primitive_paint(context: &ExtractContext<'_>, primitive: &StandardPrimitive) -> PrimitivePaint {
@@ -3691,475 +3775,104 @@ fn make_paths_unpainted(doc: &mut GeometryDocument, path_start: u32) {
     }
 }
 
-fn polygon_contour(polygon: &ipc2581::types::Polygon, transform: Affine2) -> ContourBuf {
-    let mut cmds = Vec::new();
-    let mut current = Point::new(polygon.begin.x, polygon.begin.y);
-    let start = transform.transform_point(current);
-    let mut bbox = BBox::from_point(start);
-    cmds.push(PathCmd::move_to(start));
-
-    for step in &polygon.steps {
-        match step {
+fn poly_step_commands(begin: Point, steps: &[PolyStep]) -> Vec<PathCmd> {
+    std::iter::once(PathCmd::move_to(begin))
+        .chain(steps.iter().map(|step| match step {
             PolyStep::Segment(segment) => {
-                current = Point::new(segment.point.x, segment.point.y);
-                let p = transform.transform_point(current);
-                bbox.include_point(p);
-                cmds.push(PathCmd::line_to(p));
+                PathCmd::line_to(Point::new(segment.point.x, segment.point.y))
             }
-            PolyStep::Curve(curve) => {
-                let end = Point::new(curve.point.x, curve.point.y);
-                let center = Point::new(curve.center.x, curve.center.y);
-                let start = transform.transform_point(current);
-                let end = transform.transform_point(end);
-                let center = transform.transform_point(center);
-                let clockwise = if transform.determinant() < 0.0 {
-                    !curve.clockwise
-                } else {
-                    curve.clockwise
-                };
-                bbox = bbox.union(Arc::new(start, end, center, clockwise).bbox());
-                cmds.push(PathCmd::arc_to(end, center, clockwise));
-                current = Point::new(curve.point.x, curve.point.y);
-            }
-        }
-    }
+            PolyStep::Curve(curve) => PathCmd::arc_to(
+                Point::new(curve.point.x, curve.point.y),
+                Point::new(curve.center.x, curve.center.y),
+                curve.clockwise,
+            ),
+        }))
+        .collect()
+}
+
+fn polygon_contour(polygon: &ipc2581::types::Polygon) -> ContourBuf {
+    let mut cmds = poly_step_commands(Point::new(polygon.begin.x, polygon.begin.y), &polygon.steps);
     cmds.push(PathCmd::close());
-    ContourBuf::from_parts(bbox, cmds)
+    ContourBuf::new(cmds)
 }
 
 fn push_contour_path(
     doc: &mut GeometryDocument,
     contour: &ipc2581::types::Contour,
     transform: Affine2,
-) {
+    accuracy: GeometryAccuracy,
+) -> Result<(), AccuracyError> {
     let mut contours = Vec::new();
-    push_contour_payloads(&mut contours, contour, transform);
+    push_contour_payloads(&mut contours, contour, transform, accuracy)?;
     doc.push_path(
         Paint::Fill {
             rule: FillRule::EvenOdd,
         },
         contours,
     );
+    Ok(())
 }
 
 fn push_contour_payloads(
     out: &mut Vec<ContourBuf>,
     contour: &ipc2581::types::Contour,
     transform: Affine2,
-) {
+    accuracy: GeometryAccuracy,
+) -> Result<(), AccuracyError> {
     out.reserve(1 + contour.cutouts.len());
-    out.push(polygon_contour(&contour.polygon, transform));
+    out.push(polygon_contour(&contour.polygon).transformed(transform, accuracy)?);
     for cutout in &contour.cutouts {
-        out.push(polygon_contour(cutout, transform));
+        out.push(polygon_contour(cutout).transformed(transform, accuracy)?);
     }
+    Ok(())
 }
 
-fn push_closed_points_path(
+fn push_filled_shape(
     doc: &mut GeometryDocument,
     transform: Affine2,
-    points: Vec<Point>,
-    fill_rule: FillRule,
-) {
-    if points.is_empty() {
-        return;
+    contour: Option<ContourBuf>,
+    accuracy: GeometryAccuracy,
+) -> Result<(), AccuracyError> {
+    if let Some(contour) = contour {
+        doc.push_path(
+            Paint::Fill {
+                rule: FillRule::NonZero,
+            },
+            [contour.transformed(transform, accuracy)?],
+        );
     }
-    let mut bbox = BBox::empty();
-    let mut cmds = Vec::with_capacity(points.len() + 1);
-    for (index, point) in points.into_iter().enumerate() {
-        let p = transform.transform_point(point);
-        bbox.include_point(p);
-        cmds.push(if index == 0 {
-            PathCmd::move_to(p)
-        } else {
-            PathCmd::line_to(p)
-        });
-    }
-    cmds.push(PathCmd::close());
-    doc.push_path(
-        Paint::Fill { rule: fill_rule },
-        [ContourBuf::from_parts(bbox, cmds)],
-    );
+    Ok(())
 }
 
-fn push_rect_path(doc: &mut GeometryDocument, transform: Affine2, width: f64, height: f64) {
-    let hw = width / 2.0;
-    let hh = height / 2.0;
-    push_closed_points_path(
-        doc,
-        transform,
-        vec![
-            Point::new(-hw, -hh),
-            Point::new(hw, -hh),
-            Point::new(hw, hh),
-            Point::new(-hw, hh),
-        ],
-        FillRule::NonZero,
-    );
-}
-
-fn push_rounded_rect_path(
-    doc: &mut GeometryDocument,
+fn ellipse_contour(
     transform: Affine2,
     width: f64,
     height: f64,
-    radius: f64,
-    corners: [bool; 4],
-) {
-    let hw = width / 2.0;
-    let hh = height / 2.0;
-    let r = radius.min(hw).min(hh).max(0.0);
-    if r == 0.0 || !corners.iter().any(|corner| *corner) {
-        push_rect_path(doc, transform, width, height);
-        return;
-    }
-
-    let k = 0.552_284_749_830_793_6;
-    let use_arcs = affine_preserves_circles(transform);
-    let [upper_right, lower_right, lower_left, upper_left] = corners;
-    let mut cmds = Vec::new();
-
-    cmds.push(PathCmd::move_to(Point::new(
-        -hw + if lower_left { r } else { 0.0 },
-        -hh,
-    )));
-
-    cmds.push(PathCmd::line_to(Point::new(
-        hw - if lower_right { r } else { 0.0 },
-        -hh,
-    )));
-    if lower_right {
-        if use_arcs {
-            cmds.push(PathCmd::arc_to(
-                Point::new(hw, -hh + r),
-                Point::new(hw - r, -hh + r),
-                false,
-            ));
-        } else {
-            cmds.push(PathCmd::cubic_to(
-                Point::new(hw - r + k * r, -hh),
-                Point::new(hw, -hh + r - k * r),
-                Point::new(hw, -hh + r),
-            ));
-        }
-    }
-
-    cmds.push(PathCmd::line_to(Point::new(
-        hw,
-        hh - if upper_right { r } else { 0.0 },
-    )));
-    if upper_right {
-        if use_arcs {
-            cmds.push(PathCmd::arc_to(
-                Point::new(hw - r, hh),
-                Point::new(hw - r, hh - r),
-                false,
-            ));
-        } else {
-            cmds.push(PathCmd::cubic_to(
-                Point::new(hw, hh - r + k * r),
-                Point::new(hw - r + k * r, hh),
-                Point::new(hw - r, hh),
-            ));
-        }
-    }
-
-    cmds.push(PathCmd::line_to(Point::new(
-        -hw + if upper_left { r } else { 0.0 },
-        hh,
-    )));
-    if upper_left {
-        if use_arcs {
-            cmds.push(PathCmd::arc_to(
-                Point::new(-hw, hh - r),
-                Point::new(-hw + r, hh - r),
-                false,
-            ));
-        } else {
-            cmds.push(PathCmd::cubic_to(
-                Point::new(-hw + r - k * r, hh),
-                Point::new(-hw, hh - r + k * r),
-                Point::new(-hw, hh - r),
-            ));
-        }
-    }
-
-    cmds.push(PathCmd::line_to(Point::new(
-        -hw,
-        -hh + if lower_left { r } else { 0.0 },
-    )));
-    if lower_left {
-        if use_arcs {
-            cmds.push(PathCmd::arc_to(
-                Point::new(-hw + r, -hh),
-                Point::new(-hw + r, -hh + r),
-                false,
-            ));
-        } else {
-            cmds.push(PathCmd::cubic_to(
-                Point::new(-hw, -hh + r - k * r),
-                Point::new(-hw + r - k * r, -hh),
-                Point::new(-hw + r, -hh),
-            ));
-        }
-    }
-    cmds.push(PathCmd::close());
-
-    let contour = transform_cmds(cmds, transform);
-    doc.push_path(
-        Paint::Fill {
-            rule: FillRule::NonZero,
-        },
-        [contour],
-    );
+    accuracy: GeometryAccuracy,
+) -> Result<ContourBuf, AccuracyError> {
+    shapes::ellipse(width, height)
+        .unwrap_or_default()
+        .transformed(transform, accuracy)
 }
-
-fn push_chamfered_rect_path(
-    doc: &mut GeometryDocument,
-    transform: Affine2,
-    width: f64,
-    height: f64,
-    chamfer: f64,
-    corners: [bool; 4],
-) {
-    let hw = width / 2.0;
-    let hh = height / 2.0;
-    let c = chamfer.min(hw).min(hh).max(0.0);
-    if c == 0.0 || !corners.iter().any(|corner| *corner) {
-        push_rect_path(doc, transform, width, height);
-        return;
-    }
-
-    let [upper_right, lower_right, lower_left, upper_left] = corners;
-    let mut points = Vec::with_capacity(8);
-
-    points.push(Point::new(-hw + if lower_left { c } else { 0.0 }, -hh));
-
-    points.push(Point::new(hw - if lower_right { c } else { 0.0 }, -hh));
-    if lower_right {
-        points.push(Point::new(hw, -hh + c));
-    }
-
-    points.push(Point::new(hw, hh - if upper_right { c } else { 0.0 }));
-    if upper_right {
-        points.push(Point::new(hw - c, hh));
-    }
-
-    points.push(Point::new(-hw + if upper_left { c } else { 0.0 }, hh));
-    if upper_left {
-        points.push(Point::new(-hw, hh - c));
-    }
-
-    points.push(Point::new(-hw, -hh + if lower_left { c } else { 0.0 }));
-
-    push_closed_points_path(doc, transform, points, FillRule::NonZero);
-}
-
-fn push_regular_polygon_path(
-    doc: &mut GeometryDocument,
-    transform: Affine2,
-    sides: usize,
-    radius: f64,
-) {
-    let points = (0..sides)
-        .map(|index| {
-            let angle = -std::f64::consts::FRAC_PI_2
-                + (index as f64 * std::f64::consts::TAU / sides as f64);
-            Point::new(radius * angle.cos(), radius * angle.sin())
-        })
-        .collect();
-    push_closed_points_path(doc, transform, points, FillRule::NonZero);
-}
-
-fn push_ellipse_path(doc: &mut GeometryDocument, transform: Affine2, width: f64, height: f64) {
-    let contour = if nearly_equal(width, height) && affine_preserves_circles(transform) {
-        circle_contour(transform, width)
-    } else {
-        ellipse_contour(transform, width, height)
-    };
-    doc.push_path(
-        Paint::Fill {
-            rule: FillRule::NonZero,
-        },
-        [contour],
-    );
-}
-
-fn circle_contour(transform: Affine2, diameter: f64) -> ContourBuf {
-    let radius = diameter / 2.0;
-    let center = transform.transform_point(Point::default());
-    let points = [
-        transform.transform_point(Point::new(radius, 0.0)),
-        transform.transform_point(Point::new(0.0, radius)),
-        transform.transform_point(Point::new(-radius, 0.0)),
-        transform.transform_point(Point::new(0.0, -radius)),
-        transform.transform_point(Point::new(radius, 0.0)),
-    ];
-    let clockwise = transform.determinant() < 0.0;
-    let mut bbox = BBox::empty();
-    for pair in points.windows(2) {
-        bbox = bbox.union(Arc::new(pair[0], pair[1], center, clockwise).bbox());
-    }
-    let cmds = vec![
-        PathCmd::move_to(points[0]),
-        PathCmd::arc_to(points[1], center, clockwise),
-        PathCmd::arc_to(points[2], center, clockwise),
-        PathCmd::arc_to(points[3], center, clockwise),
-        PathCmd::arc_to(points[4], center, clockwise),
-        PathCmd::close(),
-    ];
-    ContourBuf::from_parts(bbox, cmds)
-}
-
-fn ellipse_contour(transform: Affine2, width: f64, height: f64) -> ContourBuf {
-    let rx = width / 2.0;
-    let ry = height / 2.0;
-    let k = 0.552_284_749_830_793_6;
-    let local = [
-        (
-            Point::new(rx, 0.0),
-            Point::new(rx, k * ry),
-            Point::new(k * rx, ry),
-            Point::new(0.0, ry),
-        ),
-        (
-            Point::new(0.0, ry),
-            Point::new(-k * rx, ry),
-            Point::new(-rx, k * ry),
-            Point::new(-rx, 0.0),
-        ),
-        (
-            Point::new(-rx, 0.0),
-            Point::new(-rx, -k * ry),
-            Point::new(-k * rx, -ry),
-            Point::new(0.0, -ry),
-        ),
-        (
-            Point::new(0.0, -ry),
-            Point::new(k * rx, -ry),
-            Point::new(rx, -k * ry),
-            Point::new(rx, 0.0),
-        ),
-    ];
-
-    let start = transform.transform_point(local[0].0);
-    let mut bbox = BBox::from_point(start);
-    let mut cmds = vec![PathCmd::move_to(start)];
-    for (_, c1, c2, end) in local {
-        let c1 = transform.transform_point(c1);
-        let c2 = transform.transform_point(c2);
-        let end = transform.transform_point(end);
-        bbox.include_point(c1);
-        bbox.include_point(c2);
-        bbox.include_point(end);
-        cmds.push(PathCmd::cubic_to(c1, c2, end));
-    }
-    cmds.push(PathCmd::close());
-    ContourBuf::from_parts(bbox, cmds)
-}
-
-fn push_oval_path(doc: &mut GeometryDocument, transform: Affine2, width: f64, height: f64) {
-    if (width - height).abs() < 1e-9 {
-        push_ellipse_path(doc, transform, width, height);
-        return;
-    }
-
-    let k = 0.552_284_749_830_793_6;
-    let mut local_cmds = Vec::new();
-    if width > height {
-        let r = height / 2.0;
-        let a = (width - height) / 2.0;
-        local_cmds.push(PathCmd::move_to(Point::new(a, -r)));
-        local_cmds.push(PathCmd::line_to(Point::new(-a, -r)));
-        local_cmds.push(PathCmd::cubic_to(
-            Point::new(-a - k * r, -r),
-            Point::new(-a - r, -k * r),
-            Point::new(-a - r, 0.0),
-        ));
-        local_cmds.push(PathCmd::cubic_to(
-            Point::new(-a - r, k * r),
-            Point::new(-a - k * r, r),
-            Point::new(-a, r),
-        ));
-        local_cmds.push(PathCmd::line_to(Point::new(a, r)));
-        local_cmds.push(PathCmd::cubic_to(
-            Point::new(a + k * r, r),
-            Point::new(a + r, k * r),
-            Point::new(a + r, 0.0),
-        ));
-        local_cmds.push(PathCmd::cubic_to(
-            Point::new(a + r, -k * r),
-            Point::new(a + k * r, -r),
-            Point::new(a, -r),
-        ));
-    } else {
-        let r = width / 2.0;
-        let a = (height - width) / 2.0;
-        local_cmds.push(PathCmd::move_to(Point::new(r, -a)));
-        local_cmds.push(PathCmd::line_to(Point::new(r, a)));
-        local_cmds.push(PathCmd::cubic_to(
-            Point::new(r, a + k * r),
-            Point::new(k * r, a + r),
-            Point::new(0.0, a + r),
-        ));
-        local_cmds.push(PathCmd::cubic_to(
-            Point::new(-k * r, a + r),
-            Point::new(-r, a + k * r),
-            Point::new(-r, a),
-        ));
-        local_cmds.push(PathCmd::line_to(Point::new(-r, -a)));
-        local_cmds.push(PathCmd::cubic_to(
-            Point::new(-r, -a - k * r),
-            Point::new(-k * r, -a - r),
-            Point::new(0.0, -a - r),
-        ));
-        local_cmds.push(PathCmd::cubic_to(
-            Point::new(k * r, -a - r),
-            Point::new(r, -a - k * r),
-            Point::new(r, -a),
-        ));
-    }
-    local_cmds.push(PathCmd::close());
-
-    let contour = transform_cmds(local_cmds, transform);
-    doc.push_path(
-        Paint::Fill {
-            rule: FillRule::NonZero,
-        },
-        [contour],
-    );
-}
-
-fn affine_preserves_circles(transform: Affine2) -> bool {
-    let sx = transform.m00.hypot(transform.m10);
-    let sy = transform.m01.hypot(transform.m11);
-    let dot = transform.m00 * transform.m01 + transform.m10 * transform.m11;
-    sx > GEOMETRY_EPSILON
-        && sy > GEOMETRY_EPSILON
-        && nearly_equal(sx, sy)
-        && dot.abs() <= GEOMETRY_EPSILON * sx.max(sy).max(1.0)
-}
-
-fn nearly_equal(left: f64, right: f64) -> bool {
-    (left - right).abs() <= GEOMETRY_EPSILON * left.abs().max(right.abs()).max(1.0)
-}
-
-const GEOMETRY_EPSILON: f64 = 1e-9;
 
 fn push_donut_path(
     doc: &mut GeometryDocument,
     transform: Affine2,
     outer_diameter: f64,
     inner_diameter: f64,
-) {
+    accuracy: GeometryAccuracy,
+) -> Result<(), AccuracyError> {
     doc.push_path(
         Paint::Fill {
             rule: FillRule::EvenOdd,
         },
         [
-            ellipse_contour(transform, outer_diameter, outer_diameter),
-            ellipse_contour(transform, inner_diameter, inner_diameter),
+            ellipse_contour(transform, outer_diameter, outer_diameter, accuracy)?,
+            ellipse_contour(transform, inner_diameter, inner_diameter, accuracy)?,
         ],
     );
+
+    Ok(())
 }
 
 fn push_butterfly_path(
@@ -4167,7 +3880,8 @@ fn push_butterfly_path(
     transform: Affine2,
     shape: ipc2581::types::ButterflyShape,
     size: f64,
-) {
+    accuracy: GeometryAccuracy,
+) -> Result<(), AccuracyError> {
     let radius = size / 2.0;
     match shape {
         ipc2581::types::ButterflyShape::Round => doc.push_path(
@@ -4175,8 +3889,8 @@ fn push_butterfly_path(
                 rule: FillRule::NonZero,
             },
             [
-                circular_sector_contour(transform, radius, 90.0, 180.0),
-                circular_sector_contour(transform, radius, 270.0, 360.0),
+                circular_sector_contour(transform, radius, 90.0, 180.0, accuracy)?,
+                circular_sector_contour(transform, radius, 270.0, 360.0, accuracy)?,
             ],
         ),
         ipc2581::types::ButterflyShape::Square => doc.push_path(
@@ -4184,14 +3898,20 @@ fn push_butterfly_path(
                 rule: FillRule::NonZero,
             },
             [
-                rect_contour(transform, -radius, 0.0, 0.0, radius),
-                rect_contour(transform, 0.0, -radius, radius, 0.0),
+                rect_contour(transform, -radius, 0.0, 0.0, radius, accuracy)?,
+                rect_contour(transform, 0.0, -radius, radius, 0.0, accuracy)?,
             ],
         ),
     };
+    Ok(())
 }
 
-fn push_moire_path(doc: &mut GeometryDocument, transform: Affine2, moire: &ipc2581::types::Moire) {
+fn push_moire_path(
+    doc: &mut GeometryDocument,
+    transform: Affine2,
+    moire: &ipc2581::types::Moire,
+    accuracy: GeometryAccuracy,
+) -> Result<(), AccuracyError> {
     for index in 0..moire.ring_number {
         let centerline_diameter = moire.diameter - 2.0 * index as f64 * moire.ring_gap;
         let outer_diameter = centerline_diameter + moire.ring_width;
@@ -4201,15 +3921,20 @@ fn push_moire_path(doc: &mut GeometryDocument, transform: Affine2, moire: &ipc25
         }
 
         if inner_diameter > 0.0 {
-            push_donut_path(doc, transform, outer_diameter, inner_diameter);
+            push_donut_path(doc, transform, outer_diameter, inner_diameter, accuracy)?;
         } else {
-            push_ellipse_path(doc, transform, outer_diameter, outer_diameter);
+            push_filled_shape(
+                doc,
+                transform,
+                shapes::ellipse(outer_diameter, outer_diameter),
+                accuracy,
+            )?;
         }
     }
 
     if let (Some(width), Some(length)) = (moire.line_width, moire.line_length) {
         let angle = moire.line_angle.unwrap_or(0.0);
-        push_rect_path(
+        push_filled_shape(
             doc,
             transform.concat(Affine2::placement(
                 Point::default(),
@@ -4217,10 +3942,10 @@ fn push_moire_path(doc: &mut GeometryDocument, transform: Affine2, moire: &ipc25
                 Mirror::NONE,
                 1.0,
             )),
-            length,
-            width,
-        );
-        push_rect_path(
+            shapes::rect(length, width),
+            accuracy,
+        )?;
+        push_filled_shape(
             doc,
             transform.concat(Affine2::placement(
                 Point::default(),
@@ -4228,12 +3953,14 @@ fn push_moire_path(doc: &mut GeometryDocument, transform: Affine2, moire: &ipc25
                 Mirror::NONE,
                 1.0,
             )),
-            length,
-            width,
-        );
-    }
+            shapes::rect(length, width),
+            accuracy,
+        )?;
+    };
+    Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn push_thermal_path(
     doc: &mut GeometryDocument,
     transform: Affine2,
@@ -4242,10 +3969,11 @@ fn push_thermal_path(
     spoke_width: f64,
     spoke_count: u32,
     spoke_start_angle: f64,
-) {
+    accuracy: GeometryAccuracy,
+) -> Result<(), AccuracyError> {
     if spoke_count == 0 {
-        push_donut_path(doc, transform, outer_diameter, inner_diameter);
-        return;
+        push_donut_path(doc, transform, outer_diameter, inner_diameter, accuracy)?;
+        return Ok(());
     }
 
     let outer_radius = outer_diameter / 2.0;
@@ -4262,8 +3990,14 @@ fn push_thermal_path(
             Mirror::NONE,
             1.0,
         ));
-        push_rect_path(doc, spoke_transform, length, spoke_width);
+        push_filled_shape(
+            doc,
+            spoke_transform,
+            shapes::rect(length, spoke_width),
+            accuracy,
+        )?;
     }
+    Ok(())
 }
 
 fn circular_sector_contour(
@@ -4271,33 +4005,37 @@ fn circular_sector_contour(
     radius: f64,
     start_degrees: f64,
     end_degrees: f64,
-) -> ContourBuf {
+    accuracy: GeometryAccuracy,
+) -> Result<ContourBuf, AccuracyError> {
     let start_angle = start_degrees.to_radians();
     let end_angle = end_degrees.to_radians();
     let start = Point::new(radius * start_angle.cos(), radius * start_angle.sin());
     let end = Point::new(radius * end_angle.cos(), radius * end_angle.sin());
-    transform_cmds(
-        [
-            PathCmd::move_to(Point::default()),
-            PathCmd::line_to(start),
-            PathCmd::arc_to(end, Point::default(), false),
-            PathCmd::close(),
-        ],
-        transform,
-    )
+    ContourBuf::new(vec![
+        PathCmd::move_to(Point::default()),
+        PathCmd::line_to(start),
+        PathCmd::arc_to(end, Point::default(), false),
+        PathCmd::close(),
+    ])
+    .transformed(transform, accuracy)
 }
 
-fn rect_contour(transform: Affine2, x0: f64, y0: f64, x1: f64, y1: f64) -> ContourBuf {
-    transform_cmds(
-        [
-            PathCmd::move_to(Point::new(x0, y0)),
-            PathCmd::line_to(Point::new(x1, y0)),
-            PathCmd::line_to(Point::new(x1, y1)),
-            PathCmd::line_to(Point::new(x0, y1)),
-            PathCmd::close(),
-        ],
-        transform,
-    )
+fn rect_contour(
+    transform: Affine2,
+    x0: f64,
+    y0: f64,
+    x1: f64,
+    y1: f64,
+    accuracy: GeometryAccuracy,
+) -> Result<ContourBuf, AccuracyError> {
+    ContourBuf::new(vec![
+        PathCmd::move_to(Point::new(x0, y0)),
+        PathCmd::line_to(Point::new(x1, y0)),
+        PathCmd::line_to(Point::new(x1, y1)),
+        PathCmd::line_to(Point::new(x0, y1)),
+        PathCmd::close(),
+    ])
+    .transformed(transform, accuracy)
 }
 
 fn map_polarity(polarity: Polarity) -> GeometryPolarity {
@@ -4361,6 +4099,8 @@ mod tests {
 
     #[test]
     fn preserves_inline_feature_line_property() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -4390,7 +4130,7 @@ mod tests {
         )
         .unwrap();
 
-        let layer = extract_layer_for_view(&ipc, "TOP", ArtworkScope::Board).unwrap();
+        let layer = extract_layer_for_view(&ipc, "TOP", ArtworkScope::Board, accuracy).unwrap();
         let path = &layer.arena.paths[layer.features[0].paths.start as usize];
 
         assert_eq!(path.stroke().unwrap().pattern, LinePattern::Phantom);
@@ -4398,6 +4138,8 @@ mod tests {
 
     #[test]
     fn carries_spec_refs_fiducials_and_vcut_intent() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -4450,7 +4192,8 @@ mod tests {
         )
         .unwrap();
 
-        let top = extract_layer_for_view(&ipc, "TOP", ArtworkScope::ArrayFlattened).unwrap();
+        let top =
+            extract_layer_for_view(&ipc, "TOP", ArtworkScope::ArrayFlattened, accuracy).unwrap();
         assert_eq!(top.specs.len(), 1);
         assert_eq!(top.layers[0].spec_refs.count, 1);
         assert_eq!(top.feature_sets.len(), 1);
@@ -4469,7 +4212,8 @@ mod tests {
         assert_eq!(top.features[0].pin_refs.count, 1);
         assert_eq!(ipc.resolve(top.pin_refs[0].pin), "1");
 
-        let vcut = extract_layer_for_view(&ipc, "VCUT", ArtworkScope::ArrayFlattened).unwrap();
+        let vcut =
+            extract_layer_for_view(&ipc, "VCUT", ArtworkScope::ArrayFlattened, accuracy).unwrap();
         assert_eq!(vcut.layers[0].spec_refs.count, 1);
         assert_eq!(vcut.feature_sets[0].spec_refs.count, 1);
         assert_eq!(vcut.features[0].intent.domain, FeatureDomain::VCut);
@@ -4479,6 +4223,8 @@ mod tests {
 
     #[test]
     fn lowers_moire_as_rings_and_crosshair() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut doc = GeometryDocument::new();
 
         push_moire_path(
@@ -4493,7 +4239,9 @@ mod tests {
                 line_length: Some(10.0),
                 line_angle: Some(0.0),
             },
-        );
+            accuracy,
+        )
+        .unwrap();
 
         assert_eq!(doc.arena.paths.len(), 5);
         assert_eq!(doc.arena.paths[0].fill_rule(), Some(FillRule::EvenOdd));
@@ -4550,6 +4298,8 @@ mod tests {
 
     #[test]
     fn zero_area_standard_primitive_emits_no_paths() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = Ipc2581::parse(
             r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581"><Content roleRef="Owner"><FunctionMode mode="FABRICATION"/></Content></IPC-2581>"#,
         )
@@ -4577,8 +4327,14 @@ mod tests {
             fill_desc_ref: None,
         });
 
-        let paint =
-            lower_standard_primitive(&context, &mut doc, &primitive, Affine2::identity()).unwrap();
+        let paint = lower_standard_primitive(
+            &context,
+            &mut doc,
+            &primitive,
+            Affine2::identity(),
+            accuracy,
+        )
+        .unwrap();
 
         assert_eq!(paint, PrimitivePaint::Fill);
         assert!(doc.arena.paths.is_empty());
@@ -4665,6 +4421,8 @@ mod tests {
 
     #[test]
     fn lowers_hollow_user_circle_as_stroked_path() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut doc = GeometryDocument::new();
         let primitive = UserPrimitive::UserSpecial(ipc2581::types::UserSpecial {
             shapes: vec![ipc2581::types::UserShape {
@@ -4700,7 +4458,14 @@ mod tests {
             standard_primitives: HashMap::new(),
             user_primitives: HashMap::new(),
         };
-        let paint = lower_user_primitive(&context, &mut doc, &primitive, Affine2::identity());
+        let paint = lower_user_primitive(
+            &context,
+            &mut doc,
+            &primitive,
+            Affine2::identity(),
+            accuracy,
+        )
+        .unwrap();
 
         assert_eq!(paint, PrimitivePaint::Hollow);
         assert_eq!(doc.arena.paths.len(), 1);
@@ -4715,6 +4480,8 @@ mod tests {
 
     #[test]
     fn lowers_user_special_lines_polylines_and_line_desc_refs() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = Ipc2581::parse(
             r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
   <Content roleRef="Owner">
@@ -4767,7 +4534,14 @@ mod tests {
             ],
         });
 
-        let paint = lower_user_primitive(&context, &mut doc, &primitive, Affine2::identity());
+        let paint = lower_user_primitive(
+            &context,
+            &mut doc,
+            &primitive,
+            Affine2::identity(),
+            accuracy,
+        )
+        .unwrap();
 
         assert_eq!(paint, PrimitivePaint::Fill);
         assert_eq!(doc.arena.paths.len(), 2);
@@ -4783,6 +4557,8 @@ mod tests {
 
     #[test]
     fn extracts_inline_stroked_user_primitive_as_trace_feature() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = Ipc2581::parse(
             r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581"><Content roleRef="Owner"><FunctionMode mode="FABRICATION"/></Content></IPC-2581>"#,
         )
@@ -4824,6 +4600,7 @@ mod tests {
             SourceRef::default(),
             &primitive,
             &mut doc,
+            accuracy,
         )
         .unwrap();
 
@@ -4836,6 +4613,8 @@ mod tests {
 
     #[test]
     fn lowers_inline_user_contour_as_compound_path_at_feature_location() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = Ipc2581::parse(
             r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581"><Content roleRef="Owner"><FunctionMode mode="FABRICATION"/></Content></IPC-2581>"#,
         )
@@ -4885,6 +4664,7 @@ mod tests {
             SourceRef::default(),
             &primitive,
             &mut doc,
+            accuracy,
         )
         .unwrap();
 
@@ -4899,6 +4679,8 @@ mod tests {
 
     #[test]
     fn splits_mixed_inline_user_primitive_into_trace_and_fill_features() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = Ipc2581::parse(
             r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581"><Content roleRef="Owner"><FunctionMode mode="FABRICATION"/></Content></IPC-2581>"#,
         )
@@ -4952,6 +4734,7 @@ mod tests {
             SourceRef::default(),
             &primitive,
             &mut doc,
+            accuracy,
         )
         .unwrap();
 
@@ -4966,6 +4749,8 @@ mod tests {
 
     #[test]
     fn lowers_butterfly_with_removed_quadrants() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut doc = GeometryDocument::new();
 
         push_butterfly_path(
@@ -4973,13 +4758,17 @@ mod tests {
             Affine2::identity(),
             ipc2581::types::ButterflyShape::Square,
             4.0,
-        );
+            accuracy,
+        )
+        .unwrap();
         push_butterfly_path(
             &mut doc,
             Affine2::identity(),
             ipc2581::types::ButterflyShape::Round,
             4.0,
-        );
+            accuracy,
+        )
+        .unwrap();
 
         assert_eq!(doc.arena.paths.len(), 2);
         assert_eq!(doc.arena.paths[0].contours.count, 2);
@@ -5009,9 +4798,21 @@ mod tests {
 
     #[test]
     fn lowers_thermal_as_spokes_without_redundant_ring() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut doc = GeometryDocument::new();
 
-        push_thermal_path(&mut doc, Affine2::identity(), 10.0, 6.0, 2.0, 4, 0.0);
+        push_thermal_path(
+            &mut doc,
+            Affine2::identity(),
+            10.0,
+            6.0,
+            2.0,
+            4,
+            0.0,
+            accuracy,
+        )
+        .unwrap();
 
         assert_eq!(doc.arena.paths.len(), 4);
         assert!(doc.arena.paths.iter().all(|path| {
@@ -5023,9 +4824,21 @@ mod tests {
 
     #[test]
     fn lowers_spokeless_thermal_as_donut() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut doc = GeometryDocument::new();
 
-        push_thermal_path(&mut doc, Affine2::identity(), 10.0, 6.0, 2.0, 0, 0.0);
+        push_thermal_path(
+            &mut doc,
+            Affine2::identity(),
+            10.0,
+            6.0,
+            2.0,
+            0,
+            0.0,
+            accuracy,
+        )
+        .unwrap();
 
         assert_eq!(doc.arena.paths.len(), 1);
         assert_eq!(doc.arena.paths[0].fill_rule(), Some(FillRule::EvenOdd));
@@ -5034,9 +4847,11 @@ mod tests {
 
     #[test]
     fn extracts_panel_and_repeated_layer_instances() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = ipc2581::Ipc2581::parse(panel_layer_fixture())
             .expect("synthetic panel fixture should parse");
-        let doc = extract_layer(&ipc, "TOP").expect("panel layer should extract");
+        let doc = extract_layer(&ipc, "TOP", accuracy).expect("panel layer should extract");
         let layer = &doc.layers[0];
         let features = layer.features.slice(&doc.features);
 
@@ -5083,10 +4898,12 @@ mod tests {
 
     #[test]
     fn imported_design_owns_strings_and_reuses_step_local_geometry() {
+        let accuracy = GeometryAccuracy::default();
+
         let imported = {
             let ipc = ipc2581::Ipc2581::parse(panel_layer_fixture())
                 .expect("synthetic panel fixture should parse");
-            import_design(&ipc).expect("complete design should import")
+            import_design(&ipc, accuracy).expect("complete design should import")
         };
 
         let top = imported.layer_id("TOP").unwrap();
@@ -5134,6 +4951,8 @@ mod tests {
 
     #[test]
     fn imported_design_carries_global_bom_and_package_associations() {
+        let accuracy = GeometryAccuracy::default();
+
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
   <Content roleRef="owner">
@@ -5205,7 +5024,7 @@ mod tests {
         ipc2581::validate(xml).expect("association fixture conforms to IPC-2581C");
         let ipc = Ipc2581::parse(xml).unwrap();
 
-        let imported = import_design(&ipc).unwrap();
+        let imported = import_design(&ipc, accuracy).unwrap();
         assert_eq!(imported.boms.len(), 3);
         assert!(imported.logistic_header.is_some());
         assert!(imported.avl.is_some());
@@ -5213,7 +5032,7 @@ mod tests {
         assert_eq!(imported.components.len(), 5);
 
         let assembly = imported
-            .assembly_document(crate::dialects::assembly::Scope::BoardArray)
+            .assembly_document(crate::dialects::assembly::Scope::BoardArray, accuracy)
             .unwrap();
         assert_eq!(assembly.primary_bom, Some(0));
         assert_eq!(assembly.boms.len(), 3);
@@ -5322,6 +5141,8 @@ mod tests {
 
     #[test]
     fn board_scope_rejects_an_unreachable_board_definition() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -5337,11 +5158,11 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let imported = import_design(&ipc).unwrap();
+        let imported = import_design(&ipc, accuracy).unwrap();
         let top = imported.layer_id("TOP").unwrap();
 
         let error = imported
-            .materialize_layer(top, ArtworkScope::Board)
+            .materialize_layer(top, ArtworkScope::Board, accuracy)
             .unwrap_err();
         assert!(
             error
@@ -5353,6 +5174,8 @@ mod tests {
 
     #[test]
     fn flattened_nested_panels_preserve_depth_first_paint_order() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -5386,10 +5209,10 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let imported = import_design(&ipc).unwrap();
+        let imported = import_design(&ipc, accuracy).unwrap();
         let top = imported.layer_id("TOP").unwrap();
         let document = imported
-            .materialize_layer(top, ArtworkScope::ArrayFlattened)
+            .materialize_layer(top, ArtworkScope::ArrayFlattened, accuracy)
             .unwrap();
 
         assert_eq!(
@@ -5406,13 +5229,15 @@ mod tests {
             ]
         );
         let image = imported
-            .composed_layer_image(top, ArtworkScope::ArrayFlattened)
+            .composed_layer_image(top, ArtworkScope::ArrayFlattened, accuracy)
             .unwrap();
         assert!(image.contains_point(Point::new(10.0, 0.0)));
     }
 
     #[test]
     fn component_occurrence_ids_survive_mirrored_board_repeats() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -5434,7 +5259,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let imported = import_design(&ipc).unwrap();
+        let imported = import_design(&ipc, accuracy).unwrap();
 
         let occurrences = imported
             .component_occurrences(ArtworkScope::ArrayFlattened)
@@ -5453,10 +5278,12 @@ mod tests {
 
     #[test]
     fn extracts_layer_for_geometry_view_board_or_board_array() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = ipc2581::Ipc2581::parse(panel_layer_fixture())
             .expect("synthetic panel fixture should parse");
 
-        let board = extract_layer_for_view(&ipc, "TOP", ArtworkScope::Board)
+        let board = extract_layer_for_view(&ipc, "TOP", ArtworkScope::Board, accuracy)
             .expect("board layer should extract");
         let board_layer = &board.layers[0];
         let board_features = board_layer.features.slice(&board.features);
@@ -5472,7 +5299,7 @@ mod tests {
             1
         );
 
-        let panel = extract_layer_for_view(&ipc, "TOP", ArtworkScope::ArrayFlattened)
+        let panel = extract_layer_for_view(&ipc, "TOP", ArtworkScope::ArrayFlattened, accuracy)
             .expect("panel layer should extract");
         let panel_layer = &panel.layers[0];
         let panel_features = panel_layer.features.slice(&panel.features);
@@ -5491,9 +5318,11 @@ mod tests {
 
     #[test]
     fn step_only_panel_extraction_omits_repeat_graph_expansion() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = ipc2581::Ipc2581::parse(panel_layer_fixture())
             .expect("synthetic panel fixture should parse");
-        let doc = extract_layer_for_view(&ipc, "TOP", ArtworkScope::ArrayLocal)
+        let doc = extract_layer_for_view(&ipc, "TOP", ArtworkScope::ArrayLocal, accuracy)
             .expect("panel layer should extract");
         let layer = &doc.layers[0];
         let features = layer.features.slice(&doc.features);
@@ -5600,9 +5429,11 @@ mod tests {
 
     #[test]
     fn nested_panel_layer_extraction_materializes_descendant_board_features() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = ipc2581::Ipc2581::parse(nested_panel_fixture())
             .expect("synthetic nested panel fixture should parse");
-        let doc = extract_layer_for_view(&ipc, "TOP", ArtworkScope::ArrayFlattened)
+        let doc = extract_layer_for_view(&ipc, "TOP", ArtworkScope::ArrayFlattened, accuracy)
             .expect("nested panel layer should extract");
         let layer = &doc.layers[0];
         let features = layer.features.slice(&doc.features);
@@ -5628,19 +5459,28 @@ mod tests {
     /// support geometry.
     #[test]
     fn nested_panel_render_draws_every_descendant_board_instance() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = ipc2581::Ipc2581::parse(nested_panel_fixture())
             .expect("synthetic nested panel fixture should parse");
-        let mut doc = extract_layer_for_view(&ipc, "TOP", ArtworkScope::ArrayFlattened)
+        let mut doc = extract_layer_for_view(&ipc, "TOP", ArtworkScope::ArrayFlattened, accuracy)
             .expect("nested panel layer should extract");
-        crate::dialects::ipc::process::normalize_for_artwork(&mut doc);
+        crate::dialects::ipc::process::normalize_for_artwork(&mut doc, accuracy).unwrap();
 
         let artwork = crate::dialects::ipc::lower_layer_to_artwork(
             &doc,
             0,
             crate::dialects::LayerRole::Copper,
             crate::dialects::Side::None,
-        );
-        let svg = crate::render::artwork_svg(&artwork, &crate::render::RenderOptions::default());
+            accuracy,
+        )
+        .unwrap();
+        let svg = crate::render::artwork_svg(
+            &artwork,
+            &crate::render::RenderOptions::default(),
+            accuracy,
+        )
+        .unwrap();
 
         // One drawn pad per board across both nested repeat levels.
         assert_eq!(svg.matches("<path d=").count(), 4, "{svg}");
@@ -5662,16 +5502,19 @@ mod tests {
 
     #[test]
     fn repeated_panel_traces_keep_distinct_source_sets_after_processing() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = ipc2581::Ipc2581::parse(panel_trace_fixture())
             .expect("synthetic panel fixture should parse");
-        let imported = import_design(&ipc).expect("panel should import");
+        let imported = import_design(&ipc, accuracy).expect("panel should import");
         let mut doc = imported
             .materialize_layer(
                 imported.layer_id("TOP").unwrap(),
                 ArtworkScope::ArrayFlattened,
+                accuracy,
             )
             .expect("panel layer should extract");
-        crate::dialects::ipc::process::compose_for_rendering(&mut doc);
+        crate::dialects::ipc::process::compose_for_rendering(&mut doc, accuracy).unwrap();
 
         let layer = &doc.layers[0];
         let traces = layer
@@ -5700,9 +5543,11 @@ mod tests {
 
     #[test]
     fn extracts_step_profile_and_cutouts_as_physical_board_profiles() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = ipc2581::Ipc2581::parse(profile_fixture())
             .expect("synthetic profile fixture should parse");
-        let doc = extract_layer(&ipc, "TOP").expect("profile outline should extract");
+        let doc = extract_layer(&ipc, "TOP", accuracy).expect("profile outline should extract");
 
         assert_eq!(doc.profiles.len(), 1);
         assert_eq!(doc.profile_cutouts.len(), 1);
@@ -5724,14 +5569,13 @@ mod tests {
     fn chamfered_rect_respects_corner_flags() {
         let mut doc = GeometryDocument::new();
 
-        push_chamfered_rect_path(
+        push_filled_shape(
             &mut doc,
             Affine2::identity(),
-            10.0,
-            6.0,
-            1.0,
-            [true, false, false, false],
-        );
+            shapes::chamfered_rect(10.0, 6.0, 1.0, [true, false, false, false]),
+            GeometryAccuracy::default(),
+        )
+        .unwrap();
 
         let path = &doc.arena.paths[0];
         let contour = &doc.arena.contours[path.contours.start as usize];
@@ -5749,9 +5593,17 @@ mod tests {
 
     #[test]
     fn rounded_rect_preserves_arcs_when_transform_preserves_circles() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut doc = GeometryDocument::new();
 
-        push_rounded_rect_path(&mut doc, Affine2::identity(), 10.0, 6.0, 1.0, [true; 4]);
+        push_filled_shape(
+            &mut doc,
+            Affine2::identity(),
+            shapes::rounded_rect(10.0, 6.0, 1.0, [true; 4]),
+            accuracy,
+        )
+        .unwrap();
 
         let path = &doc.arena.paths[0];
         let contour = &doc.arena.contours[path.contours.start as usize];
@@ -5763,9 +5615,11 @@ mod tests {
 
     #[test]
     fn rounded_rect_uses_cubics_when_transform_distorts_circles() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut doc = GeometryDocument::new();
 
-        push_rounded_rect_path(
+        push_filled_shape(
             &mut doc,
             Affine2 {
                 m00: 2.0,
@@ -5775,11 +5629,10 @@ mod tests {
                 m11: 1.0,
                 m12: 0.0,
             },
-            10.0,
-            6.0,
-            1.0,
-            [true; 4],
-        );
+            shapes::rounded_rect(10.0, 6.0, 1.0, [true; 4]),
+            accuracy,
+        )
+        .unwrap();
 
         let path = &doc.arena.paths[0];
         let contour = &doc.arena.contours[path.contours.start as usize];
@@ -5843,6 +5696,8 @@ mod tests {
 
     #[test]
     fn rotated_slot_cavity_xform_orients_route_slot() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -5874,7 +5729,7 @@ mod tests {
         )
         .unwrap();
 
-        let doc = extract_layer(&ipc, "F.Cu_B.Cu_1").unwrap();
+        let doc = extract_layer(&ipc, "F.Cu_B.Cu_1", accuracy).unwrap();
         assert_eq!(doc.features.len(), 1);
 
         let slot = &doc.features[0];
@@ -5891,6 +5746,8 @@ mod tests {
 
     #[test]
     fn padstack_shape_offsets_do_not_reposition_pad_locations() {
+        let accuracy = GeometryAccuracy::default();
+
         // KiCad exports a pad's final shape center in the Pad Location. The
         // PadstackPadDef offset describes the padstack but must not be applied
         // again when placing layer artwork.
@@ -5938,7 +5795,7 @@ mod tests {
         )
         .unwrap();
 
-        let doc = extract_layer(&ipc, "TOP").unwrap();
+        let doc = extract_layer(&ipc, "TOP", accuracy).unwrap();
         assert_eq!(doc.features.len(), 2);
 
         let unrotated = doc.features[0].bbox;
@@ -5952,6 +5809,8 @@ mod tests {
 
     #[test]
     fn extracts_nonplated_padstack_artwork_on_soldermask_layers() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -5991,7 +5850,7 @@ mod tests {
         )
         .unwrap();
 
-        let doc = extract_layer(&ipc, "F.Mask").unwrap();
+        let doc = extract_layer(&ipc, "F.Mask", accuracy).unwrap();
 
         assert_eq!(doc.features.len(), 1);
         let feature = &doc.features[0];

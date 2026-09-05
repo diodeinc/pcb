@@ -1,3 +1,4 @@
+use pcb_ir::geom::GeometryAccuracy;
 use std::fmt::Write;
 
 use pcb_ir::dialects::ipc::{Document, ProfileSet, profile_occurrences_for};
@@ -19,7 +20,8 @@ struct DxfVertex {
 pub fn render_profile_set_dxf<Symbol, LayerFunction>(
     doc: &Document<Symbol, LayerFunction>,
     profile_set: ProfileSet,
-) -> String {
+    accuracy: GeometryAccuracy,
+) -> anyhow::Result<String> {
     let mut dxf = String::new();
     write_header(&mut dxf);
     write_tables(&mut dxf);
@@ -30,13 +32,14 @@ pub fn render_profile_set_dxf<Symbol, LayerFunction>(
             doc,
             occurrence.profile.outer_path,
             occurrence.transform,
-        );
+            accuracy,
+        )?;
         for cutout in occurrence.profile.cutouts.slice(&doc.profile_cutouts) {
-            write_path(&mut dxf, doc, cutout.path, occurrence.transform);
+            write_path(&mut dxf, doc, cutout.path, occurrence.transform, accuracy)?;
         }
     }
     write_footer(&mut dxf);
-    dxf
+    Ok(dxf)
 }
 
 fn write_header(dxf: &mut String) {
@@ -66,10 +69,12 @@ fn write_path<Symbol, LayerFunction>(
     doc: &Document<Symbol, LayerFunction>,
     path_index: u32,
     transform: pcb_ir::geom::Affine2,
-) {
-    for contour in doc.transformed_path_contours(path_index, transform) {
+    accuracy: GeometryAccuracy,
+) -> anyhow::Result<()> {
+    for contour in doc.transformed_path_contours(path_index, transform, accuracy)? {
         write_polyline(dxf, &contour_vertices(&contour.cmds));
     }
+    Ok(())
 }
 
 fn write_polyline(dxf: &mut String, vertices: &[DxfVertex]) {
@@ -221,9 +226,11 @@ mod tests {
 
     #[test]
     fn renders_profile_ir_as_mm_dxf_with_closed_outline_layer() {
+        let accuracy = GeometryAccuracy::default();
+
         let doc = rect_profile_doc();
 
-        let dxf = render_profile_set_dxf(&doc, ProfileSet::FabricationOutlines);
+        let dxf = render_profile_set_dxf(&doc, ProfileSet::FabricationOutlines, accuracy).unwrap();
 
         assert!(dxf.contains("9\n$INSUNITS\n70\n4\n"));
         assert!(dxf.contains("2\nBOARD_OUTLINE\n"));
@@ -234,6 +241,8 @@ mod tests {
 
     #[test]
     fn preserves_profile_arcs_as_lwpolyline_bulges() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut doc = Document::<u32, ()>::new();
         let path = doc.push_path(
             Paint::None,
@@ -250,7 +259,7 @@ mod tests {
             bbox: BBox::empty(),
         });
 
-        let dxf = render_profile_set_dxf(&doc, ProfileSet::FabricationOutlines);
+        let dxf = render_profile_set_dxf(&doc, ProfileSet::FabricationOutlines, accuracy).unwrap();
 
         assert!(dxf.contains("42\n1\n"));
     }

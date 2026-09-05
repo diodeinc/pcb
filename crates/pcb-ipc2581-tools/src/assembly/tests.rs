@@ -1,3 +1,4 @@
+use pcb_ir::geom::GeometryAccuracy;
 use std::io::Cursor;
 
 use ipc2581::Ipc2581;
@@ -14,10 +15,12 @@ fn report(target: LayoutTarget) -> report::AssemblyReport {
 }
 
 fn report_xml(xml: &str, target: LayoutTarget) -> report::AssemblyReport {
+    let accuracy = GeometryAccuracy::default();
+
     ipc2581::validate(xml).expect("assembly report fixture conforms to IPC-2581C");
     let ipc = Ipc2581::parse(xml).unwrap();
-    let imported = import_design(&ipc).unwrap();
-    build_report(&imported, target).unwrap()
+    let imported = import_design(&ipc, accuracy).unwrap();
+    build_report(&imported, target, accuracy).unwrap()
 }
 
 #[test]
@@ -775,8 +778,10 @@ fn board_scope_is_one_canonical_board() {
 
 #[test]
 fn reports_missing_style_references_without_guessing() {
+    let accuracy = GeometryAccuracy::default();
+
     let ipc = Ipc2581::parse(FIXTURE).unwrap();
-    let mut imported = import_design(&ipc).unwrap();
+    let mut imported = import_design(&ipc, accuracy).unwrap();
     let void = imported
         .content
         .dictionary_fill_desc
@@ -791,7 +796,7 @@ fn reports_missing_style_references_without_guessing() {
         .entries
         .retain(|entry| entry.id != void);
 
-    let report = build_report(&imported, LayoutTarget::BoardArray).unwrap();
+    let report = build_report(&imported, LayoutTarget::BoardArray, accuracy).unwrap();
     let package = report
         .packages
         .iter()
@@ -810,6 +815,8 @@ fn reports_missing_style_references_without_guessing() {
 
 #[test]
 fn panel_without_root_profile_does_not_invent_an_envelope() {
+    let accuracy = GeometryAccuracy::default();
+
     let mut xml = FIXTURE.to_owned();
     let panel = xml.find("      <Step name=\"panel\"").unwrap();
     let profile_start = panel + xml[panel..].find("        <Profile>").unwrap();
@@ -819,9 +826,9 @@ fn panel_without_root_profile_does_not_invent_an_envelope() {
     xml.replace_range(profile_start..profile_end, "");
     ipc2581::validate(&xml).expect("panel without a Profile conforms to IPC-2581C");
     let ipc = Ipc2581::parse(&xml).unwrap();
-    let imported = import_design(&ipc).unwrap();
+    let imported = import_design(&ipc, accuracy).unwrap();
 
-    let report = build_report(&imported, LayoutTarget::BoardArray).unwrap();
+    let report = build_report(&imported, LayoutTarget::BoardArray, accuracy).unwrap();
 
     assert!(report.scope.profile_ids.is_empty());
     assert_eq!(report.scope.bounds_mm, None);
@@ -885,11 +892,13 @@ fn pad_shape_with_reference<'a>(
 
 #[test]
 fn rejects_non_finite_report_numbers() {
+    let accuracy = GeometryAccuracy::default();
+
     let ipc = Ipc2581::parse(FIXTURE).unwrap();
-    let mut imported = import_design(&ipc).unwrap();
+    let mut imported = import_design(&ipc, accuracy).unwrap();
     imported.packages[0].source.height = Some(f64::NAN);
 
-    let error = build_report(&imported, LayoutTarget::BoardArray).unwrap_err();
+    let error = build_report(&imported, LayoutTarget::BoardArray, accuracy).unwrap_err();
 
     assert_eq!(
         error.to_string(),
@@ -899,12 +908,14 @@ fn rejects_non_finite_report_numbers() {
 
 #[test]
 fn dm0002_excludes_document_objects_from_assembly_work() {
+    let accuracy = GeometryAccuracy::default();
+
     let compressed = include_bytes!("../../../ipc2581/tests/data/DM0002-IPC-2518.xml.zst");
     let xml = zstd::decode_all(Cursor::new(compressed)).unwrap();
     let ipc = Ipc2581::parse(std::str::from_utf8(&xml).unwrap()).unwrap();
-    let imported = import_design(&ipc).unwrap();
+    let imported = import_design(&ipc, accuracy).unwrap();
 
-    let report = build_report(&imported, LayoutTarget::BoardArray).unwrap();
+    let report = build_report(&imported, LayoutTarget::BoardArray, accuracy).unwrap();
 
     assert_eq!(report.summary.components.total, 59);
     assert_eq!(report.summary.components.included, 53);

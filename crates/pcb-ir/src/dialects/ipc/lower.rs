@@ -1,6 +1,7 @@
 //! Lowerings out of the IPC dialect: per-layer artwork, NC drill/rout
 //! documents, and fabrication profiles.
 
+use crate::geom::{AccuracyError, GeometryAccuracy};
 use std::collections::HashMap;
 use std::hash::Hash;
 
@@ -15,7 +16,7 @@ use crate::dialects::ipc::layout::{LayoutPurpose, StepProfile};
 use crate::dialects::ipc::{Document, relief};
 use crate::dialects::{LayerRole, Side};
 use crate::dialects::{artwork, nc};
-use crate::geom::path::{ContourBuf, transform_cmds};
+use crate::geom::path::ContourBuf;
 use crate::geom::{
     Affine2, BBox, ContourSet, FillRule, Paint, Point, Polarity, Span, StrokeStyle, tol,
 };
@@ -46,8 +47,9 @@ pub trait ArtworkLowering<Symbol, ObjectMeta> {
     fn source_aperture(
         &mut self,
         _feature: &Feature<Symbol>,
-    ) -> Option<(artwork::Aperture, Affine2, BBox)> {
-        None
+        _accuracy: GeometryAccuracy,
+    ) -> Result<Option<(artwork::Aperture, Affine2, BBox)>, AccuracyError> {
+        Ok(None)
     }
 
     /// Rewrite a stroke into what the target can express. Gerber traces, for
@@ -87,7 +89,8 @@ pub fn lower_layer_to_artwork<Symbol, LayerFunction>(
     layer_index: usize,
     role: LayerRole,
     side: Side,
-) -> artwork::Document<LayerFunction, Option<Symbol>>
+    accuracy: GeometryAccuracy,
+) -> Result<artwork::Document<LayerFunction, Option<Symbol>>, AccuracyError>
 where
     Symbol: Copy + Eq + Hash,
     LayerFunction: Clone,
@@ -105,6 +108,7 @@ where
             meta: layer.layer_function.clone(),
         },
         &mut NetMetaLowering,
+        accuracy,
     )
 }
 
@@ -121,18 +125,21 @@ pub fn lower_layer_to_artwork_with<Symbol, LayerFunction, LayerMeta, ObjectMeta>
     layer_index: usize,
     header: artwork::Layer<LayerMeta>,
     lowering: &mut impl ArtworkLowering<Symbol, ObjectMeta>,
-) -> artwork::Document<LayerMeta, ObjectMeta>
+    accuracy: GeometryAccuracy,
+) -> Result<artwork::Document<LayerMeta, ObjectMeta>, AccuracyError>
 where
     Symbol: Copy + Eq + Hash,
     ObjectMeta: Default,
 {
     let mut out = artwork::Document::new();
     let artwork_layer = out.push_layer(header);
-    for object in lower_layer_to_artwork_objects_with(doc, layer_index, &mut out, lowering) {
+    for object in
+        lower_layer_to_artwork_objects_with(doc, layer_index, &mut out, lowering, accuracy)?
+    {
         out.push_object(artwork_layer, object);
     }
     artwork::normalize_bounds(&mut out);
-    out
+    Ok(out)
 }
 
 /// Lower one IPC layer's features into artwork objects for the caller to
@@ -147,7 +154,8 @@ pub fn lower_layer_to_artwork_objects_with<Symbol, LayerFunction, LayerMeta, Obj
     layer_index: usize,
     out: &mut artwork::Document<LayerMeta, ObjectMeta>,
     lowering: &mut impl ArtworkLowering<Symbol, ObjectMeta>,
-) -> Vec<artwork::Object<ObjectMeta>>
+    accuracy: GeometryAccuracy,
+) -> Result<Vec<artwork::Object<ObjectMeta>>, AccuracyError>
 where
     Symbol: Copy + Eq + Hash,
     ObjectMeta: Default,
@@ -166,7 +174,8 @@ where
                 lowering,
                 &mut instance_apertures,
                 &mut objects,
-            );
+                accuracy,
+            )?;
             continue;
         };
         let group = doc.feature_placement_groups[group_id as usize];
@@ -183,7 +192,8 @@ where
                 lowering,
                 &mut instance_apertures,
                 &mut block_objects,
-            );
+                accuracy,
+            )?;
         }
         // Partition lowered members by polarity and paint stage: each class
         // becomes one reusable block whose instances carry the class polarity
@@ -220,7 +230,7 @@ where
         }
     }
     out.diagnostics.extend(doc.diagnostics.clone());
-    objects
+    Ok(objects)
 }
 
 fn lower_feature_artwork<Symbol, LayerFunction, LayerMeta, ObjectMeta>(
@@ -230,11 +240,13 @@ fn lower_feature_artwork<Symbol, LayerFunction, LayerMeta, ObjectMeta>(
     lowering: &mut impl ArtworkLowering<Symbol, ObjectMeta>,
     instance_apertures: &mut HashMap<Symbol, u32>,
     objects: &mut Vec<artwork::Object<ObjectMeta>>,
-) where
+    accuracy: GeometryAccuracy,
+) -> Result<(), AccuracyError>
+where
     Symbol: Copy + Eq + Hash,
 {
     if let Some((aperture, transform, bbox)) =
-        flash_for(out, doc, feature, lowering, instance_apertures)
+        flash_for(out, doc, feature, lowering, instance_apertures, accuracy)?
     {
         objects.push(artwork::Object {
             polarity: feature.polarity,
@@ -246,7 +258,7 @@ fn lower_feature_artwork<Symbol, LayerFunction, LayerMeta, ObjectMeta>(
             bbox,
             meta: lowering.object_meta(feature, ArtworkObjectKind::Flash),
         });
-        return;
+        return Ok(());
     }
 
     objects.extend(
@@ -279,6 +291,8 @@ fn lower_feature_artwork<Symbol, LayerFunction, LayerMeta, ObjectMeta>(
                 })
             }),
     );
+
+    Ok(())
 }
 
 /// The shared aperture a feature flashes through, if any: one the source
@@ -290,22 +304,26 @@ fn flash_for<Symbol, LayerFunction, LayerMeta, ObjectMeta>(
     feature: &Feature<Symbol>,
     lowering: &mut impl ArtworkLowering<Symbol, ObjectMeta>,
     apertures: &mut HashMap<Symbol, u32>,
-) -> Option<(u32, Affine2, BBox)>
+    accuracy: GeometryAccuracy,
+) -> Result<Option<(u32, Affine2, BBox)>, AccuracyError>
 where
     Symbol: Copy + Eq + Hash,
 {
-    if let Some((aperture, transform, bbox)) = lowering.source_aperture(feature) {
-        return Some((out.push_aperture(aperture), transform, bbox));
+    if let Some((aperture, transform, bbox)) = lowering.source_aperture(feature, accuracy)? {
+        return Ok(Some((out.push_aperture(aperture), transform, bbox)));
     }
-    if let Some((aperture, transform)) = instance_aperture(out, doc, feature, apertures) {
-        return Some((aperture, transform, feature.bbox));
+    if let Some((aperture, transform)) = instance_aperture(out, doc, feature, apertures, accuracy)?
+    {
+        return Ok(Some((aperture, transform, feature.bbox)));
     }
-    let (at, diameter) = circle_flash(doc, feature)?;
-    Some((
+    let Some((at, diameter)) = circle_flash(doc, feature) else {
+        return Ok(None);
+    };
+    Ok(Some((
         out.push_aperture(artwork::Aperture::circle(diameter)),
         Affine2::translation(at),
         BBox::from_point(at).expand(diameter / 2.0),
-    ))
+    )))
 }
 
 /// A user-dictionary instance feature: a placed reference whose local shape
@@ -319,25 +337,28 @@ fn instance_aperture<Symbol, LayerFunction, LayerMeta, ObjectMeta>(
     doc: &Document<Symbol, LayerFunction>,
     feature: &Feature<Symbol>,
     apertures: &mut HashMap<Symbol, u32>,
-) -> Option<(u32, Affine2)>
+    accuracy: GeometryAccuracy,
+) -> Result<Option<(u32, Affine2)>, AccuracyError>
 where
     Symbol: Copy + Eq + Hash,
 {
     let Some(PrimitiveRef::User(primitive)) = feature.primitive_ref else {
-        return None;
+        return Ok(None);
     };
     if feature.kind != FeatureKind::Primitive || !is_rigid(feature.transform) {
-        return None;
+        return Ok(None);
     }
     if let Some(&aperture) = apertures.get(&primitive) {
-        return Some((aperture, feature.transform));
+        return Ok(Some((aperture, feature.transform)));
     }
     // Derive the origin-local template from this first instance; every
     // sibling shares the aperture and differs only by its rigid transform.
-    let shape = contour_flash_aperture(doc, feature)?;
+    let Some(shape) = contour_flash_aperture(doc, feature, accuracy)? else {
+        return Ok(None);
+    };
     let aperture = out.push_aperture(artwork::Aperture::solid(shape));
     apertures.insert(primitive, aperture);
-    Some((aperture, feature.transform))
+    Ok(Some((aperture, feature.transform)))
 }
 
 /// The feature's whole image as an origin-local contour aperture: its single
@@ -347,25 +368,30 @@ where
 pub fn contour_flash_aperture<Symbol, LayerFunction>(
     doc: &Document<Symbol, LayerFunction>,
     feature: &Feature<Symbol>,
-) -> Option<artwork::ApertureShape> {
+    accuracy: GeometryAccuracy,
+) -> Result<Option<artwork::ApertureShape>, AccuracyError> {
     let [path] = feature.paths.slice(&doc.arena.paths) else {
-        return None;
+        return Ok(None);
     };
     if !path.is_filled() {
-        return None;
+        return Ok(None);
     }
-    let inverse = feature.transform.inverse()?;
+    let Some(inverse) = feature.transform.inverse() else {
+        return Ok(None);
+    };
     let local = doc
         .arena
         .path_contours(path)
         .iter()
-        .map(|contour| transform_cmds(contour.cmds.iter().copied(), inverse))
-        .collect::<Vec<_>>();
-    let [outline] = local.try_into().ok()?;
-    Some(artwork::ApertureShape::Contour {
+        .map(|contour| contour.clone().transformed(inverse, accuracy))
+        .collect::<Result<Vec<_>, _>>()?;
+    let Ok([outline]) = <Vec<_> as TryInto<[_; 1]>>::try_into(local) else {
+        return Ok(None);
+    };
+    Ok(Some(artwork::ApertureShape::Contour {
         outline,
         fill_rule: path.fill_rule().unwrap_or(FillRule::NonZero),
-    })
+    }))
 }
 
 /// A drilled or fiducial feature whose whole image is one filled circle.
@@ -573,6 +599,7 @@ pub fn board_array_fabrication_profile<Symbol, LayerFunction>(
     doc: &Document<Symbol, LayerFunction>,
     score_lines: &[relief::VScoreLine],
     options: FabricationProfileOptions,
+    accuracy: GeometryAccuracy,
 ) -> Result<(BoardArrayFabricationProfile, relief::VScoreReliefDebug), relief::VScoreReliefError> {
     let Some((_, root_panel)) = root_panel_step(doc) else {
         return Ok((
@@ -581,8 +608,8 @@ pub fn board_array_fabrication_profile<Symbol, LayerFunction>(
         ));
     };
 
-    let input = collect_board_array_fabrication_profile_input(doc, root_panel.purpose);
-    compose_board_array_fabrication_profile(input, score_lines, options)
+    let input = collect_board_array_fabrication_profile_input(doc, root_panel.purpose, accuracy)?;
+    compose_board_array_fabrication_profile(input, score_lines, options, accuracy)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -598,38 +625,48 @@ struct BoardArrayFabricationProfileInput {
 fn collect_board_array_fabrication_profile_input<Symbol, LayerFunction>(
     doc: &Document<Symbol, LayerFunction>,
     purpose: LayoutPurpose,
-) -> BoardArrayFabricationProfileInput {
+    accuracy: GeometryAccuracy,
+) -> Result<BoardArrayFabricationProfileInput, AccuracyError> {
     let mut input = BoardArrayFabricationProfileInput {
         purpose,
         ..BoardArrayFabricationProfileInput::default()
     };
 
     for occurrence in profile_occurrences_for(doc, ProfileSet::RootOnly) {
-        input.array_outlines.push(
-            doc.transformed_path_contours(occurrence.profile.outer_path, occurrence.transform),
-        );
+        input.array_outlines.push(doc.transformed_path_contours(
+            occurrence.profile.outer_path,
+            occurrence.transform,
+            accuracy,
+        )?);
         input
             .source_material_removal
             .extend(transformed_profile_cutout_contours(
                 doc,
                 occurrence.profile,
                 occurrence.transform,
-            ));
+                accuracy,
+            )?);
     }
 
     for occurrence in profile_occurrences_for(doc, ProfileSet::FabricationOutlines)
         .into_iter()
         .filter(|occurrence| occurrence.role == ProfileOccurrenceRole::BoardInstance)
     {
-        let cutouts =
-            transformed_profile_cutout_contours(doc, occurrence.profile, occurrence.transform);
+        let cutouts = transformed_profile_cutout_contours(
+            doc,
+            occurrence.profile,
+            occurrence.transform,
+            accuracy,
+        )?;
         input
             .board_cutouts
             .extend(cutouts.iter().flatten().cloned());
         input.source_material_removal.extend(cutouts);
-        input.board_boundaries.extend(
-            doc.transformed_path_contours(occurrence.profile.outer_path, occurrence.transform),
-        );
+        input.board_boundaries.extend(doc.transformed_path_contours(
+            occurrence.profile.outer_path,
+            occurrence.transform,
+            accuracy,
+        )?);
     }
 
     if purpose == LayoutPurpose::FabricationPanel {
@@ -639,26 +676,32 @@ fn collect_board_array_fabrication_profile_input<Symbol, LayerFunction>(
                 occurrence.role == ProfileOccurrenceRole::PanelInstance && occurrence.depth == 1
             })
         {
-            input.assembly_panel_outlines.push(
-                doc.transformed_path_contours(occurrence.profile.outer_path, occurrence.transform),
-            );
+            input
+                .assembly_panel_outlines
+                .push(doc.transformed_path_contours(
+                    occurrence.profile.outer_path,
+                    occurrence.transform,
+                    accuracy,
+                )?);
             input
                 .source_material_removal
                 .extend(transformed_profile_cutout_contours(
                     doc,
                     occurrence.profile,
                     occurrence.transform,
-                ));
+                    accuracy,
+                )?);
         }
     }
 
-    input
+    Ok(input)
 }
 
 fn compose_board_array_fabrication_profile(
     input: BoardArrayFabricationProfileInput,
     score_lines: &[relief::VScoreLine],
     options: FabricationProfileOptions,
+    accuracy: GeometryAccuracy,
 ) -> Result<(BoardArrayFabricationProfile, relief::VScoreReliefDebug), relief::VScoreReliefError> {
     // M = source cutouts ∪ board cutouts ∪ V-score relief material.
     // Store M as a `ContourSet` until the end so every contribution is merged
@@ -669,7 +712,8 @@ fn compose_board_array_fabrication_profile(
         material_removal.union_assign(&ContourSet::from_filled_contours(
             contours,
             relief::DEFAULT_RELIEF_TOLERANCE_MM,
-        ));
+            accuracy,
+        )?);
     }
 
     let mut relief_debug = relief::VScoreReliefDebug::default();
@@ -683,16 +727,17 @@ fn compose_board_array_fabrication_profile(
             tolerance_mm: relief::DEFAULT_RELIEF_TOLERANCE_MM,
         };
         let reliefs = if options.debug {
-            let output = relief::vscore_route_reliefs_with_debug(&relief_input)?;
+            let output = relief::vscore_route_reliefs_with_debug(&relief_input, accuracy)?;
             relief_debug = output.debug;
             output.relief_contours
         } else {
-            relief::vscore_route_reliefs(&relief_input)?
+            relief::vscore_route_reliefs(&relief_input, accuracy)?
         };
         material_removal.union_assign(&ContourSet::from_filled_contours(
             &reliefs,
             relief::DEFAULT_RELIEF_TOLERANCE_MM,
-        ));
+            accuracy,
+        )?);
     }
 
     Ok((
@@ -710,13 +755,14 @@ fn transformed_profile_cutout_contours<Symbol, LayerFunction>(
     doc: &Document<Symbol, LayerFunction>,
     step_profile: &StepProfile,
     transform: Affine2,
-) -> Vec<Vec<ContourBuf>> {
+    accuracy: GeometryAccuracy,
+) -> Result<Vec<Vec<ContourBuf>>, AccuracyError> {
     step_profile
         .cutouts
         .slice(&doc.profile_cutouts)
         .iter()
-        .map(|cutout| doc.transformed_path_contours(cutout.path, transform))
-        .collect()
+        .map(|cutout| doc.transformed_path_contours(cutout.path, transform, accuracy))
+        .collect::<Result<Vec<_>, _>>()
 }
 
 #[cfg(test)]
@@ -728,6 +774,8 @@ mod tests {
 
     #[test]
     fn preserves_shared_feature_group_when_lowered_or_expanded() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut doc = Document::<u32, ()>::new();
         let first_path = doc.push_path(
             Paint::Fill {
@@ -765,7 +813,8 @@ mod tests {
             bbox: BBox::empty(),
         });
 
-        let artwork = lower_layer_to_artwork(&doc, 0, LayerRole::Copper, Side::Top);
+        let artwork =
+            lower_layer_to_artwork(&doc, 0, LayerRole::Copper, Side::Top, accuracy).unwrap();
 
         assert_eq!(artwork.blocks.len(), 1);
         assert_eq!(artwork.blocks[0].objects.len(), 2);
@@ -776,7 +825,7 @@ mod tests {
             artwork::Geometry::Instance { block: 0, .. }
         )));
 
-        crate::dialects::ipc::process::expand_feature_placement_groups(&mut doc);
+        crate::dialects::ipc::process::expand_feature_placement_groups(&mut doc, accuracy).unwrap();
         assert_eq!(
             doc.features
                 .iter()
@@ -788,6 +837,8 @@ mod tests {
 
     #[test]
     fn placement_group_instances_carry_member_polarity_and_stage() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut doc = Document::<u32, ()>::new();
         let path = doc.push_path(
             Paint::Fill {
@@ -817,7 +868,8 @@ mod tests {
             bbox: BBox::empty(),
         });
 
-        let artwork = lower_layer_to_artwork(&doc, 0, LayerRole::Copper, Side::Top);
+        let artwork =
+            lower_layer_to_artwork(&doc, 0, LayerRole::Copper, Side::Top, accuracy).unwrap();
 
         // The instances stand in for clear features: they must form the same
         // polarity run the flat lowering produced, with block content stored
@@ -835,7 +887,7 @@ mod tests {
                 .iter()
                 .all(|object| object.polarity == Polarity::Dark)
         );
-        let expanded = artwork::expand_instances(&artwork);
+        let expanded = artwork::expand_instances(&artwork, accuracy).unwrap();
         assert_eq!(expanded.objects.len(), 2);
         assert!(
             expanded
@@ -847,16 +899,26 @@ mod tests {
 
     #[test]
     fn material_removal_union_is_winding_insensitive() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut region = ContourSet::empty(0.001);
 
-        region.union_assign(&ContourSet::from_filled_contours(
-            &[reversed_rectangle_contour(0.0, 0.0, 2.0, 2.0)],
-            0.001,
-        ));
-        region.union_assign(&ContourSet::from_filled_contours(
-            &[rectangle_contour(1.0, 0.0, 4.0, 2.0)],
-            0.001,
-        ));
+        region.union_assign(
+            &ContourSet::from_filled_contours(
+                &[reversed_rectangle_contour(0.0, 0.0, 2.0, 2.0)],
+                0.001,
+                accuracy,
+            )
+            .unwrap(),
+        );
+        region.union_assign(
+            &ContourSet::from_filled_contours(
+                &[rectangle_contour(1.0, 0.0, 4.0, 2.0)],
+                0.001,
+                accuracy,
+            )
+            .unwrap(),
+        );
 
         let bbox = region
             .to_contours()
@@ -868,6 +930,8 @@ mod tests {
 
     #[test]
     fn assembly_panel_outlines_remain_nominal_and_are_not_material_removal() {
+        let accuracy = GeometryAccuracy::default();
+
         let finished = rectangle_contour(10.0, 20.0, 110.0, 100.0);
         let input = BoardArrayFabricationProfileInput {
             purpose: LayoutPurpose::FabricationPanel,
@@ -875,7 +939,8 @@ mod tests {
             ..BoardArrayFabricationProfileInput::default()
         };
         let (profile, _) =
-            compose_board_array_fabrication_profile(input, &[], Default::default()).unwrap();
+            compose_board_array_fabrication_profile(input, &[], Default::default(), accuracy)
+                .unwrap();
 
         assert_eq!(profile.purpose, LayoutPurpose::FabricationPanel);
         assert!(profile.material_removal.is_empty());

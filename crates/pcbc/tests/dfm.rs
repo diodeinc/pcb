@@ -583,11 +583,18 @@ fn ipc_dfm_geometry_distinguishes_canonical_board_arrays_and_mixed_fab_scope() {
         board_margin_mm: EdgeInsetsMm::all(5.0),
         edge_rail_mm: EdgeInsetsMm::all(5.0),
     };
-    let first = create_board_array(IPC_BOARD, &array_options, false).unwrap();
+    let first = create_board_array(
+        IPC_BOARD,
+        &array_options,
+        false,
+        pcb_ir::geom::GeometryAccuracy::default(),
+    )
+    .unwrap();
     let second = create_board_array(
         &IPC_BOARD.replace("name=\"board\"", "name=\"other\""),
         &array_options,
         false,
+        pcb_ir::geom::GeometryAccuracy::default(),
     )
     .unwrap();
     let mut sandbox = Sandbox::new();

@@ -29,6 +29,7 @@
 //! electrical-conductor boundary-distance check; morphology must not
 //! reinterpret a same-net notch as spacing between conductors.
 
+use pcb_ir::geom::GeometryAccuracy;
 use pcb_ir::geom::dfm::{ThinPiece, circular_region, thin_features, thin_gaps};
 use pcb_ir::geom::{BBox, ContourSet, Point, PreparedRegion, tol};
 #[cfg(not(target_family = "wasm"))]
@@ -43,28 +44,32 @@ pub(super) fn copper_feature_width(
     limit_mm: f64,
     conditions: &Conditions,
     design: &Design,
-) -> Evaluation {
+    accuracy: GeometryAccuracy,
+) -> anyhow::Result<Evaluation> {
     let measure = |layer: &CopperLayer| {
-        thin_features(&layer.image, limit_mm)
+        thin_features(&layer.image, limit_mm, accuracy)?
             .into_iter()
             .map(move |piece| {
                 let mut measured = measured_piece(&piece, limit_mm, &layer.layer, "copper_image");
                 // Prove ownership against final composed material. A bounding box
                 // is only a broad phase; overlapping owners remain ambiguous.
-                let construction =
-                    piece
-                        .sites
-                        .iter()
-                        .fold(piece.candidate.clone(), |region, site| {
-                            region.union(&circular_region(site.disk.center, site.disk.radius_mm))
-                        });
+                let mut construction = piece.candidate.clone();
+                for site in &piece.sites {
+                    construction.union_assign(&circular_region(
+                        site.disk.center,
+                        site.disk.radius_mm,
+                        accuracy,
+                    )?);
+                }
                 let owner = unique_copper_owner(&construction, &layer.conductors);
                 if let Some(owner) = owner {
                     measured.subjects[0].provenance =
                         copper_subject(design, owner, &layer.layer).provenance;
                 }
                 for (geometry, site) in piece.sites.iter().zip(&mut measured.sites) {
-                    let local_owner = owner.or_else(|| {
+                    let local_owner = if owner.is_some() {
+                        owner
+                    } else {
                         let local = piece
                             .candidate
                             .intersection(&ContourSet::rectangle(
@@ -74,90 +79,97 @@ pub(super) fn copper_feature_width(
                             .union(&circular_region(
                                 geometry.disk.center,
                                 geometry.disk.radius_mm,
-                            ));
+                                accuracy,
+                            )?);
                         unique_copper_owner(&local, &layer.conductors)
-                    });
+                    };
                     if let Some(owner) = local_owner {
                         site.subjects = vec![copper_subject(design, owner, &layer.layer)];
                     }
                 }
-                measured
+                Ok::<_, anyhow::Error>(measured)
             })
-            .collect::<Vec<_>>()
+            .collect::<anyhow::Result<Vec<_>>>()
     };
     #[cfg(not(target_family = "wasm"))]
-    let measured = design
-        .copper_layers
-        .par_iter()
-        .filter(|layer| conditions.applies_to_layer(layer))
-        .flat_map_iter(measure)
-        .collect();
+    let layers = design.copper_layers.par_iter();
     #[cfg(target_family = "wasm")]
-    let measured = design
-        .copper_layers
-        .iter()
+    let layers = design.copper_layers.iter();
+    let measured = layers
         .filter(|layer| conditions.applies_to_layer(layer))
-        .flat_map(measure)
+        .map(measure)
+        .collect::<anyhow::Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
         .collect();
-    Evaluation {
+    Ok(Evaluation {
         checked: design
             .copper_layers
             .iter()
             .filter(|layer| conditions.applies_to_layer(layer))
             .count(),
         measured,
-    }
+    })
 }
 
-pub(super) fn soldermask_web(limit_mm: f64, design: &Design) -> Evaluation {
+pub(super) fn soldermask_web(
+    limit_mm: f64,
+    design: &Design,
+    accuracy: GeometryAccuracy,
+) -> anyhow::Result<Evaluation> {
     let measure = |layer: &MaskLayer| {
         let boundaries = layer
             .owners
             .iter()
             .map(|owner| (owner.image.bbox, owner.image.prepare_query()))
             .collect::<Vec<_>>();
-        thin_gaps(&layer.image, limit_mm)
-            .into_iter()
-            .map(move |piece| {
-                let mut measured =
-                    measured_piece(&piece, limit_mm, &layer.layer, "soldermask_image");
-                let mut aggregate_owner = None;
-                let mut one_owner = true;
-                for (geometry, site) in piece.sites.iter().zip(&mut measured.sites) {
-                    let Some(owners) = wall_owners(&geometry.walls, &boundaries) else {
-                        one_owner = false;
-                        continue;
-                    };
-                    if owners.len() != 1 || aggregate_owner.is_some_and(|owner| owners[0] != owner)
-                    {
-                        one_owner = false;
+        Ok::<_, anyhow::Error>(
+            thin_gaps(&layer.image, limit_mm, accuracy)?
+                .into_iter()
+                .map(move |piece| {
+                    let mut measured =
+                        measured_piece(&piece, limit_mm, &layer.layer, "soldermask_image");
+                    let mut aggregate_owner = None;
+                    let mut one_owner = true;
+                    for (geometry, site) in piece.sites.iter().zip(&mut measured.sites) {
+                        let Some(owners) = wall_owners(&geometry.walls, &boundaries) else {
+                            one_owner = false;
+                            continue;
+                        };
+                        if owners.len() != 1
+                            || aggregate_owner.is_some_and(|owner| owners[0] != owner)
+                        {
+                            one_owner = false;
+                        }
+                        aggregate_owner = aggregate_owner.or_else(|| owners.first().copied());
+                        site.subjects = owners
+                            .into_iter()
+                            .map(|index| mask_subject(design, &layer.owners[index], &layer.layer))
+                            .collect();
                     }
-                    aggregate_owner = aggregate_owner.or_else(|| owners.first().copied());
-                    site.subjects = owners
-                        .into_iter()
-                        .map(|index| mask_subject(design, &layer.owners[index], &layer.layer))
-                        .collect();
-                }
-                if one_owner && let Some(index) = aggregate_owner {
-                    measured.subjects[0].provenance =
-                        mask_subject(design, &layer.owners[index], &layer.layer).provenance;
-                }
-                measured
-            })
-            .collect::<Vec<_>>()
+                    if one_owner && let Some(index) = aggregate_owner {
+                        measured.subjects[0].provenance =
+                            mask_subject(design, &layer.owners[index], &layer.layer).provenance;
+                    }
+                    measured
+                })
+                .collect::<Vec<_>>(),
+        )
     };
     #[cfg(not(target_family = "wasm"))]
-    let measured = design
-        .mask_layers
-        .par_iter()
-        .flat_map_iter(measure)
-        .collect();
+    let layers = design.mask_layers.par_iter();
     #[cfg(target_family = "wasm")]
-    let measured = design.mask_layers.iter().flat_map(measure).collect();
-    Evaluation {
+    let layers = design.mask_layers.iter();
+    let measured = layers
+        .map(measure)
+        .collect::<anyhow::Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect();
+    Ok(Evaluation {
         checked: design.mask_layers.len(),
         measured,
-    }
+    })
 }
 
 fn measured_piece(

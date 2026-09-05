@@ -1,3 +1,5 @@
+#[cfg(feature = "cli")]
+use pcb_ir::geom::GeometryAccuracy;
 use std::cmp::Ordering;
 #[cfg(feature = "cli")]
 use std::fs;
@@ -38,9 +40,11 @@ pub struct CplOptions {
 
 #[cfg(feature = "cli")]
 pub fn execute(file: &Path, options: &CplOptions) -> Result<()> {
+    let accuracy = GeometryAccuracy::default();
+
     let ipc = Ipc2581::parse_file(file)?;
     let accessor = IpcAccessor::new(&ipc);
-    let placements = extract_single_board_placements(&accessor)?;
+    let placements = extract_single_board_placements(&accessor, accuracy)?;
     let cpl = emit_cpl_csv(&placements, options);
 
     if let Some(output) = &options.output {

@@ -23,6 +23,7 @@
 //! clear without walking its boundary segments; every pair counts as
 //! checked either way.
 
+use pcb_ir::geom::GeometryAccuracy;
 use pcb_ir::geom::dfm::{Distance, region_clearance, region_clearance_sites};
 
 use crate::commands::dfm::design::{BoardArray, Design};
@@ -30,7 +31,11 @@ use crate::commands::dfm::report::{Evidence, SourceLocator, Subject};
 
 use super::{Evaluation, Measured, linework_clearance, violates};
 
-pub(super) fn evaluate(limit_mm: f64, design: &Design) -> Evaluation {
+pub(super) fn evaluate(
+    limit_mm: f64,
+    design: &Design,
+    accuracy: GeometryAccuracy,
+) -> anyhow::Result<Evaluation> {
     let arrays = &design.board_arrays;
     let pairs = arrays.iter().enumerate().flat_map(|(index, first)| {
         arrays[index + 1..]
@@ -51,7 +56,7 @@ pub(super) fn evaluate(limit_mm: f64, design: &Design) -> Evaluation {
         .map(|(first, second)| {
             let distance = region_clearance(&first.region, &second.region)
                 .expect("board arrays are extracted with non-empty profiles");
-            Measured {
+            Ok::<_, anyhow::Error>(Measured {
                 distance,
                 bbox: first.region.bbox.union(second.region.bbox),
                 layers: Vec::new(),
@@ -66,18 +71,24 @@ pub(super) fn evaluate(limit_mm: f64, design: &Design) -> Evaluation {
                 sites: if violates(&distance, limit_mm) {
                     region_clearance_sites(&first.region, &second.region, limit_mm)
                         .into_iter()
-                        .map(|site| linework_clearance::report_site(site, Vec::new(), limit_mm))
+                        .map(|site| {
+                            linework_clearance::report_site(site, Vec::new(), limit_mm, accuracy)
+                        })
+                        .collect::<anyhow::Result<Vec<_>>>()?
+                        .into_iter()
                         .collect()
                 } else {
                     Vec::new()
                 },
-            }
+            })
         })
+        .collect::<anyhow::Result<Vec<_>>>()?
+        .into_iter()
         .collect();
-    Evaluation {
+    Ok(Evaluation {
         checked: pairs.count(),
         measured,
-    }
+    })
 }
 
 fn board_array_subject(array: &BoardArray, role: &'static str) -> Subject {

@@ -1,3 +1,4 @@
+use pcb_ir::geom::GeometryAccuracy;
 use std::fmt::Write;
 
 use anyhow::{Context, Result};
@@ -17,7 +18,10 @@ const OVERVIEW_STROKE_WIDTH_MM: f64 = 0.1;
 const OVERVIEW_VIEWBOX_PADDING_MM: f64 = 1.0;
 const POINT_EPSILON_MM: f64 = 1e-9;
 
-pub fn render_board_array_overview_svg(accessor: &IpcAccessor<'_>) -> Result<Option<String>> {
+pub fn render_board_array_overview_svg(
+    accessor: &IpcAccessor<'_>,
+    accuracy: GeometryAccuracy,
+) -> Result<Option<String>> {
     let Some(layout) = accessor.board_layout_info() else {
         return Ok(None);
     };
@@ -30,8 +34,8 @@ pub fn render_board_array_overview_svg(accessor: &IpcAccessor<'_>) -> Result<Opt
         return Ok(None);
     };
     let array_height = dimensions.height_mm();
-    let layer_overlays = board_array_layer_overlays(accessor, array_height);
-    render_board_array_svg(accessor.ipc(), board_array, &doc, &layer_overlays)
+    let layer_overlays = board_array_layer_overlays(accessor, array_height, accuracy)?;
+    render_board_array_svg(accessor.ipc(), board_array, &doc, &layer_overlays, accuracy)
 }
 
 fn render_board_array_svg(
@@ -39,6 +43,7 @@ fn render_board_array_svg(
     board_array: &BoardArrayInfo,
     doc: &GeometryDocument,
     layer_overlays: &[BoardArrayLayerOverlay],
+    accuracy: GeometryAccuracy,
 ) -> Result<Option<String>> {
     let Some(dimensions) = board_array.dimensions.as_ref() else {
         return Ok(None);
@@ -59,12 +64,12 @@ fn render_board_array_svg(
         return Ok(None);
     }
 
-    let board_fill_paths = board_instance_paths(doc, array_height, true);
-    let board_outline_paths = board_instance_paths(doc, array_height, false);
+    let board_fill_paths = board_instance_paths(doc, array_height, true, accuracy)?;
+    let board_outline_paths = board_instance_paths(doc, array_height, false, accuracy)?;
     if board_outline_paths.is_empty() {
         return Ok(None);
     }
-    let profile_paths = board_array_profile_paths(ipc, doc, array_height)?;
+    let profile_paths = board_array_profile_paths(ipc, doc, array_height, accuracy)?;
     let viewbox = overview_viewbox(array_width, array_height, layer_overlays);
     let viewbox_width = viewbox.width();
     let viewbox_height = viewbox.height();
@@ -163,32 +168,39 @@ struct BoardArrayLayerStyle {
 fn board_array_layer_overlays(
     accessor: &IpcAccessor<'_>,
     array_height: f64,
-) -> Vec<BoardArrayLayerOverlay> {
+    accuracy: GeometryAccuracy,
+) -> anyhow::Result<Vec<BoardArrayLayerOverlay>> {
     let Some(ecad) = accessor.ipc().ecad() else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
 
-    ecad.cad_data
+    Ok(ecad
+        .cad_data
         .layers
         .iter()
-        .filter_map(|layer| {
+        .map(|layer| {
             let layer_name = accessor.ipc().resolve(layer.name);
-            let Ok(doc) = crate::geometry::extract_layer_for_view(
+            let doc = crate::geometry::extract_layer_for_view(
                 accessor.ipc(),
                 layer_name,
                 ArtworkScope::ArraySupport,
-            ) else {
-                return None;
+                accuracy,
+            )?;
+            let Some(mut native) = crate::geometry::render::native_layer_document(&doc, accuracy)?
+            else {
+                return Ok(None);
             };
-            let mut native = crate::geometry::render::native_layer_document(&doc)?;
-            pcb_ir::dialects::ipc::process::compose_for_rendering(&mut native);
-            let paths = layer_paths(&native, array_height);
-            (!paths.is_empty()).then_some(BoardArrayLayerOverlay {
+            pcb_ir::dialects::ipc::process::compose_for_rendering(&mut native, accuracy)?;
+            let paths = layer_paths(&native, array_height, accuracy)?;
+            Ok::<_, anyhow::Error>((!paths.is_empty()).then_some(BoardArrayLayerOverlay {
                 function: layer.layer_function,
                 paths,
-            })
+            }))
         })
-        .collect()
+        .collect::<anyhow::Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect())
 }
 
 struct BoardArrayProfileSvgPaths {
@@ -200,29 +212,42 @@ fn board_array_profile_paths(
     ipc: &Ipc2581,
     doc: &GeometryDocument,
     array_height: f64,
+    accuracy: GeometryAccuracy,
 ) -> Result<BoardArrayProfileSvgPaths> {
-    let score_lines = crate::geometry::board_array_vscore_lines(ipc)?;
-    let profile = crate::geometry::board_array_fabrication_profile(ipc, doc, &score_lines)?;
+    let score_lines = crate::geometry::board_array_vscore_lines(ipc, accuracy)?;
+    let profile =
+        crate::geometry::board_array_fabrication_profile(ipc, doc, &score_lines, accuracy)?;
     let transform = y_flip_transform(array_height);
 
     Ok(BoardArrayProfileSvgPaths {
-        array_outlines: payload_groups_path_data(&profile.array_outlines, transform),
-        material_removal: payloads_path_data(&profile.material_removal, transform)
+        array_outlines: payload_groups_path_data(&profile.array_outlines, transform, accuracy)?,
+        material_removal: payloads_path_data(&profile.material_removal, transform, accuracy)?
             .into_iter()
             .collect(),
     })
 }
 
-fn payload_groups_path_data(payload_groups: &[Vec<ContourBuf>], transform: Affine2) -> Vec<String> {
-    payload_groups
+fn payload_groups_path_data(
+    payload_groups: &[Vec<ContourBuf>],
+    transform: Affine2,
+    accuracy: GeometryAccuracy,
+) -> anyhow::Result<Vec<String>> {
+    Ok(payload_groups
         .iter()
-        .filter_map(|payloads| payloads_path_data(payloads, transform))
-        .collect()
+        .map(|payloads| payloads_path_data(payloads, transform, accuracy))
+        .collect::<anyhow::Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect())
 }
 
-fn layer_paths(doc: &GeometryDocument, panel_height: f64) -> Vec<BoardArrayLayerPath> {
+fn layer_paths(
+    doc: &GeometryDocument,
+    panel_height: f64,
+    accuracy: GeometryAccuracy,
+) -> anyhow::Result<Vec<BoardArrayLayerPath>> {
     let Some(layer) = doc.layers.first() else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let transform = y_flip_transform(panel_height);
 
@@ -232,7 +257,10 @@ fn layer_paths(doc: &GeometryDocument, panel_height: f64) -> Vec<BoardArrayLayer
     let mut paths = features
         .iter()
         .filter(|feature| feature.is_vscore())
-        .flat_map(|feature| feature_paths(doc, feature, transform))
+        .map(|feature| feature_paths(doc, feature, transform, accuracy))
+        .collect::<anyhow::Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
         .collect::<Vec<_>>();
 
     let image_features = features
@@ -248,49 +276,53 @@ fn layer_paths(doc: &GeometryDocument, panel_height: f64) -> Vec<BoardArrayLayer
             &image,
             false,
             pcb_ir::dialects::ipc::ProfileSet::RootOnly,
-        );
-        paths.extend(mask_paths(&mask, transform));
+            accuracy,
+        )?;
+        paths.extend(mask_paths(&mask, transform, accuracy)?);
     }
 
-    paths
+    Ok(paths)
 }
 
 fn mask_paths(
     mask: &pcb_ir::dialects::mask::Document<LayerFunction>,
     transform: Affine2,
-) -> Vec<BoardArrayLayerPath> {
+    accuracy: GeometryAccuracy,
+) -> anyhow::Result<Vec<BoardArrayLayerPath>> {
     let Some(layer) = mask.layers.first() else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
 
-    mask.shapes(layer)
+    Ok(mask
+        .shapes(layer)
         .iter()
-        .filter_map(|shape| {
+        .map(|shape| {
             let mut data = String::new();
-            for contour in mask.arena.contours(shape.contours) {
-                let transformed = pcb_ir::geom::path::transform_cmds(
-                    mask.arena.cmds(*contour).iter().copied(),
-                    transform,
-                );
+            for contour in mask.arena.contour_bufs(shape.contours) {
+                let transformed = contour.transformed(transform, accuracy)?;
                 append_path_cmds(&mut data, &transformed.cmds);
             }
-            (!data.is_empty()).then_some(BoardArrayLayerPath {
+            Ok::<_, anyhow::Error>((!data.is_empty()).then_some(BoardArrayLayerPath {
                 data,
                 bbox: transform_bbox(shape.bbox, transform),
                 stroke_width: 0.0,
                 filled: true,
                 stroked: false,
                 vscore: false,
-            })
+            }))
         })
-        .collect()
+        .collect::<anyhow::Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect())
 }
 
 fn board_instance_paths(
     doc: &GeometryDocument,
     panel_height: f64,
     include_cutouts: bool,
-) -> Vec<String> {
+    accuracy: GeometryAccuracy,
+) -> anyhow::Result<Vec<String>> {
     let flip_y = y_flip_transform(panel_height);
     let mut paths = Vec::new();
 
@@ -303,12 +335,13 @@ fn board_instance_paths(
         }
 
         let transform = flip_y.concat(instance.transform);
-        if let Some(path) = step_profile_path_data(doc, step, transform, include_cutouts) {
+        if let Some(path) = step_profile_path_data(doc, step, transform, include_cutouts, accuracy)?
+        {
             paths.push(path);
         }
     }
 
-    paths
+    Ok(paths)
 }
 
 fn y_flip_transform(panel_height: f64) -> Affine2 {
@@ -327,20 +360,23 @@ fn step_profile_path_data(
     step: &LayoutStep<ipc2581::Symbol>,
     transform: Affine2,
     include_cutouts: bool,
-) -> Option<String> {
+    accuracy: GeometryAccuracy,
+) -> anyhow::Result<Option<String>> {
     let mut path_data = String::new();
     for profile_index in step.profiles.indices() {
-        let profile = doc.profiles.get(profile_index as usize)?;
-        append_transformed_path_data(&mut path_data, doc, profile.outer_path, transform)?;
+        let Some(profile) = doc.profiles.get(profile_index as usize) else {
+            return Ok(None);
+        };
+        append_transformed_path_data(&mut path_data, doc, profile.outer_path, transform, accuracy)?;
         if !include_cutouts {
             continue;
         }
         for cutout in profile.cutouts.slice(&doc.profile_cutouts) {
-            append_transformed_path_data(&mut path_data, doc, cutout.path, transform)?;
+            append_transformed_path_data(&mut path_data, doc, cutout.path, transform, accuracy)?;
         }
     }
 
-    (!path_data.is_empty()).then_some(path_data)
+    Ok((!path_data.is_empty()).then_some(path_data))
 }
 
 fn overview_viewbox(
@@ -366,24 +402,30 @@ fn feature_paths(
     doc: &GeometryDocument,
     feature: &pcb_ir::dialects::ipc::Feature<ipc2581::Symbol>,
     transform: Affine2,
-) -> Vec<BoardArrayLayerPath> {
-    feature
+    accuracy: GeometryAccuracy,
+) -> anyhow::Result<Vec<BoardArrayLayerPath>> {
+    Ok(feature
         .paths
         .indices()
-        .filter_map(|path_index| {
-            let path = doc.arena.paths.get(path_index as usize)?;
+        .map(|path_index| {
+            let Some(path) = doc.arena.paths.get(path_index as usize) else {
+                return Ok(None);
+            };
             let mut data = String::new();
-            append_transformed_path_data(&mut data, doc, path_index, transform)?;
-            (!data.is_empty()).then_some(BoardArrayLayerPath {
+            append_transformed_path_data(&mut data, doc, path_index, transform, accuracy)?;
+            Ok::<_, anyhow::Error>((!data.is_empty()).then_some(BoardArrayLayerPath {
                 data,
                 bbox: transform_bbox(path.bbox, transform),
                 stroke_width: path.stroke().map(|stroke| stroke.width).unwrap_or(0.0),
                 filled: path.is_filled(),
                 stroked: path.is_stroked(),
                 vscore: feature.is_vscore(),
-            })
+            }))
         })
-        .collect()
+        .collect::<anyhow::Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect())
 }
 
 fn transform_bbox(bbox: BBox, transform: Affine2) -> BBox {
@@ -409,24 +451,29 @@ fn append_transformed_path_data(
     doc: &GeometryDocument,
     path_index: u32,
     transform: Affine2,
-) -> Option<()> {
-    let path = doc.arena.paths.get(path_index as usize)?;
-    for contour in doc.arena.contours(path.contours) {
-        let transformed =
-            pcb_ir::geom::path::transform_cmds(doc.arena.cmds(*contour).iter().copied(), transform);
+    accuracy: GeometryAccuracy,
+) -> anyhow::Result<Option<()>> {
+    let Some(path) = doc.arena.paths.get(path_index as usize) else {
+        return Ok(None);
+    };
+    for contour in doc.arena.path_contours(path) {
+        let transformed = contour.transformed(transform, accuracy)?;
         append_path_cmds(path_data, &transformed.cmds);
     }
-    Some(())
+    Ok(Some(()))
 }
 
-fn payloads_path_data(payloads: &[ContourBuf], transform: Affine2) -> Option<String> {
+fn payloads_path_data(
+    payloads: &[ContourBuf],
+    transform: Affine2,
+    accuracy: GeometryAccuracy,
+) -> anyhow::Result<Option<String>> {
     let mut path_data = String::new();
     for payload in payloads {
-        let transformed =
-            pcb_ir::geom::path::transform_cmds(payload.cmds.iter().copied(), transform);
+        let transformed = payload.clone().transformed(transform, accuracy)?;
         append_path_cmds(&mut path_data, &transformed.cmds);
     }
-    (!path_data.is_empty()).then_some(path_data)
+    Ok((!path_data.is_empty()).then_some(path_data))
 }
 
 fn append_path_cmds(data: &mut String, cmds: &[PathCmd]) {
@@ -685,6 +732,8 @@ mod tests {
 
     #[test]
     fn renders_simple_board_array_overview_svg() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = ipc2581::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -729,7 +778,9 @@ mod tests {
         .unwrap();
         let accessor = IpcAccessor::new(&ipc);
 
-        let svg = render_board_array_overview_svg(&accessor).unwrap().unwrap();
+        let svg = render_board_array_overview_svg(&accessor, accuracy)
+            .unwrap()
+            .unwrap();
 
         assert!(svg.contains("data-board-array-overview='true'"));
         assert!(svg.contains("viewBox='-1 -1 46 26'"));
@@ -749,6 +800,8 @@ mod tests {
 
     #[test]
     fn renders_board_array_overview_from_array_profile() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = ipc2581::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -792,7 +845,9 @@ mod tests {
         .unwrap();
         let accessor = IpcAccessor::new(&ipc);
 
-        let svg = render_board_array_overview_svg(&accessor).unwrap().unwrap();
+        let svg = render_board_array_overview_svg(&accessor, accuracy)
+            .unwrap()
+            .unwrap();
 
         assert!(svg.contains("class='board-array-outline'"));
         assert!(svg.contains(" A3 3"));
@@ -801,6 +856,8 @@ mod tests {
 
     #[test]
     fn renders_board_array_overview_vcuts_from_vcut_layer_only() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = ipc2581::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -856,7 +913,9 @@ mod tests {
         .unwrap();
         let accessor = IpcAccessor::new(&ipc);
 
-        let svg = render_board_array_overview_svg(&accessor).unwrap().unwrap();
+        let svg = render_board_array_overview_svg(&accessor, accuracy)
+            .unwrap()
+            .unwrap();
 
         assert_eq!(svg.matches("vcut-guide").count(), 2);
         assert!(svg.contains("d='M5 24 L5 0'"));
@@ -873,6 +932,8 @@ mod tests {
 
     #[test]
     fn renders_board_array_overview_vcut_relief_contours() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = ipc2581::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -953,7 +1014,9 @@ mod tests {
         .unwrap();
         let accessor = IpcAccessor::new(&ipc);
 
-        let svg = render_board_array_overview_svg(&accessor).unwrap().unwrap();
+        let svg = render_board_array_overview_svg(&accessor, accuracy)
+            .unwrap()
+            .unwrap();
 
         assert!(svg.contains("class='board-array-profile-cutout'"));
         assert!(svg.contains("fill='#ffffff'"));
@@ -968,6 +1031,8 @@ mod tests {
 
     #[test]
     fn renders_nested_board_cell_support_geometry_without_board_features() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = ipc2581::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -1036,7 +1101,9 @@ mod tests {
         .unwrap();
         let accessor = IpcAccessor::new(&ipc);
 
-        let svg = render_board_array_overview_svg(&accessor).unwrap().unwrap();
+        let svg = render_board_array_overview_svg(&accessor, accuracy)
+            .unwrap()
+            .unwrap();
 
         assert_eq!(svg.matches("array-layer-copper").count(), 1);
         assert!(!svg.contains("M7 5.5 L15 5.5"));
@@ -1044,6 +1111,8 @@ mod tests {
 
     #[test]
     fn renders_clear_features_as_holes_in_the_layer_overlay() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = ipc2581::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -1116,7 +1185,9 @@ mod tests {
         .unwrap();
         let accessor = IpcAccessor::new(&ipc);
 
-        let svg = render_board_array_overview_svg(&accessor).unwrap().unwrap();
+        let svg = render_board_array_overview_svg(&accessor, accuracy)
+            .unwrap()
+            .unwrap();
 
         assert_eq!(
             svg.matches("array-layer-copper").count(),

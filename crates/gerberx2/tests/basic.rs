@@ -4,6 +4,7 @@ use gerberx2::{
     WriterApertureTemplate, WriterApertureTransform, WriterMacroExpression, WriterMacroPrimitive,
     WriterObject,
 };
+use pcb_ir::geom::GeometryAccuracy;
 use pcb_ir::geom::Polarity;
 
 #[test]
@@ -335,6 +336,8 @@ fn writes_modal_coordinates_with_explicit_operations() {
 
 #[test]
 fn writes_macro_and_block_apertures_without_flattening() {
+    let accuracy = GeometryAccuracy::default();
+
     let layer = GerberLayer {
         aperture_macros: vec![WriterApertureMacro {
             name: "ROUNDRECT".to_string(),
@@ -439,7 +442,7 @@ fn writes_macro_and_block_apertures_without_flattening() {
     ));
     assert_eq!(parsed.objects()[1].polarity, Polarity::Dark);
     assert_eq!(parsed.objects()[2].polarity, Polarity::Dark);
-    let artwork = gerberx2::geometry::extract_document(&parsed);
+    let artwork = gerberx2::geometry::extract_document(&parsed, accuracy).unwrap();
     assert_eq!(artwork.blocks.len(), 1);
     assert!(matches!(
         artwork.objects[1].geometry,
@@ -503,6 +506,8 @@ fn lowers_standard_apertures_to_geometry_paths() {
 
 #[test]
 fn normalizes_inch_coordinates_and_standard_apertures_to_mm() {
+    let accuracy = GeometryAccuracy::default();
+
     let gerber =
         GerberX2::parse("%FSLAX26Y26*%\n%MOIN*%\n%ADD10C,0.1X0.02*%\nD10*\nX1000000Y0D03*\nM02*\n")
             .unwrap();
@@ -519,7 +524,7 @@ fn normalizes_inch_coordinates_and_standard_apertures_to_mm() {
         ObjectKind::Flash { at, .. } if close(at.x, 25.4) && close(at.y, 0.0)
     ));
 
-    let geometry = gerberx2::geometry::extract_document(&gerber);
+    let geometry = gerberx2::geometry::extract_document(&gerber, accuracy).unwrap();
     let object = &geometry.objects[0];
     assert!(close(object.bbox.min.x, 25.4 - 1.27));
     assert!(close(object.bbox.max.x, 25.4 + 1.27));
@@ -559,6 +564,8 @@ fn normalizes_inch_macro_aperture_geometry_to_mm() {
 
 #[test]
 fn preserves_block_apertures_when_flashed() {
+    let accuracy = GeometryAccuracy::default();
+
     let gerber = GerberX2::parse(
         "%FSLAX26Y26*%\n%MOMM*%\n%ADD10C,0.1*%\n%ABD20*%\nD10*\n%LPC*%\nX1000000Y0D03*\n%AB*%\nD20*\n%LPC*%\nX2000000Y3000000D03*\nM02*\n",
     )
@@ -579,19 +586,21 @@ fn preserves_block_apertures_when_flashed() {
     ));
     assert_eq!(gerber.objects()[0].polarity, Polarity::Clear);
 
-    let artwork = gerberx2::geometry::extract_document(&gerber);
+    let artwork = gerberx2::geometry::extract_document(&gerber, accuracy).unwrap();
     assert_eq!(artwork.blocks.len(), 1);
     assert_eq!(artwork.blocks[0].objects.len(), 1);
     assert!(matches!(
         artwork.objects[0].geometry,
         pcb_ir::dialects::artwork::Geometry::Instance { block: 0, .. }
     ));
-    let expanded = pcb_ir::dialects::artwork::expand_instances(&artwork);
+    let expanded = pcb_ir::dialects::artwork::expand_instances(&artwork, accuracy).unwrap();
     assert_eq!(expanded.objects[0].polarity, Polarity::Dark);
 }
 
 #[test]
 fn preserves_block_apertures_with_flash_transform() {
+    let accuracy = GeometryAccuracy::default();
+
     let gerber = GerberX2::parse(
         "%FSLAX26Y26*%\n%MOMM*%\n%ADD10C,0.1*%\n%ABD20*%\nD10*\nX1000000Y0D03*\n%AB*%\n%LR90*%\n%LS2*%\nD20*\nX2000000Y3000000D03*\nM02*\n",
     )
@@ -608,7 +617,7 @@ fn preserves_block_apertures_with_flash_transform() {
     ));
     assert!(close(object.rotation_degrees, 90.0));
     assert!(close(object.scaling, 2.0));
-    let artwork = gerberx2::geometry::extract_document(&gerber);
+    let artwork = gerberx2::geometry::extract_document(&gerber, accuracy).unwrap();
     assert!(matches!(
         artwork.objects[0].geometry,
         pcb_ir::dialects::artwork::Geometry::Instance { block: 0, transform }
@@ -646,12 +655,14 @@ fn rejects_unclosed_region_contours() {
 
 #[test]
 fn extracts_render_artwork() {
+    let accuracy = GeometryAccuracy::default();
+
     let gerber = GerberX2::parse(
         "%FSLAX26Y26*%\n%MOMM*%\n%TF.FileFunction,Copper,L1,Top*%\n%ADD10C,0.2*%\nD10*\nG01*\nX0Y0D02*\nX1000000Y0D01*\nX1000000Y1000000D03*\nM02*\n",
     )
     .unwrap();
 
-    let geometry = gerberx2::geometry::extract_document(&gerber);
+    let geometry = gerberx2::geometry::extract_document(&gerber, accuracy).unwrap();
     assert_eq!(geometry.layers[0].meta, vec!["Copper", "L1", "Top"]);
     assert_eq!(geometry.objects.len(), 2);
     assert!(geometry.arena.paths.iter().any(|path| path.is_stroked()));
@@ -660,13 +671,15 @@ fn extracts_render_artwork() {
 
 #[test]
 fn artwork_composition_applies_clear_polarity_cutouts() {
+    let accuracy = GeometryAccuracy::default();
+
     let gerber = GerberX2::parse(
         "%FSLAX26Y26*%\n%MOMM*%\n%ADD10R,2.0X2.0*%\n%ADD11C,1.0*%\nD10*\nX0Y0D03*\n%LPC*%\nD11*\nX0Y0D03*\nM02*\n",
     )
     .unwrap();
 
-    let geometry = gerberx2::geometry::extract_document(&gerber);
-    let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry);
+    let geometry = gerberx2::geometry::extract_document(&gerber, accuracy).unwrap();
+    let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry, accuracy).unwrap();
     let expected_area = 4.0 - std::f64::consts::PI * 0.25;
     assert!(
         (summary.area_mm2 - expected_area).abs() < 0.02,
@@ -677,13 +690,15 @@ fn artwork_composition_applies_clear_polarity_cutouts() {
 
 #[test]
 fn region_contour_orientation_does_not_create_holes() {
+    let accuracy = GeometryAccuracy::default();
+
     let gerber = GerberX2::parse(
         "%FSLAX26Y26*%\n%MOMM*%\nG36*\nG01*\nX0Y0D02*\nX4000000Y0D01*\nX4000000Y4000000D01*\nX0Y4000000D01*\nX0Y0D01*\nX1000000Y1000000D02*\nX1000000Y3000000D01*\nX3000000Y3000000D01*\nX3000000Y1000000D01*\nX1000000Y1000000D01*\nG37*\nM02*\n",
     )
     .unwrap();
 
-    let geometry = gerberx2::geometry::extract_document(&gerber);
-    let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry);
+    let geometry = gerberx2::geometry::extract_document(&gerber, accuracy).unwrap();
+    let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry, accuracy).unwrap();
     assert!(
         close(summary.area_mm2, 16.0),
         "region contours are filled independently; area was {}",
@@ -693,13 +708,15 @@ fn region_contour_orientation_does_not_create_holes() {
 
 #[test]
 fn artwork_composition_keeps_clear_polarity_semantics_after_overlapping_dark_runs() {
+    let accuracy = GeometryAccuracy::default();
+
     let gerber = GerberX2::parse(
         "%FSLAX26Y26*%\n%MOMM*%\n%ADD10R,4.0X4.0*%\n%ADD11R,2.0X2.0*%\nD10*\nX0Y0D03*\nX0Y0D03*\n%LPC*%\nD11*\nX0Y0D03*\nM02*\n",
     )
     .unwrap();
 
-    let geometry = gerberx2::geometry::extract_document(&gerber);
-    let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry);
+    let geometry = gerberx2::geometry::extract_document(&gerber, accuracy).unwrap();
+    let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry, accuracy).unwrap();
 
     assert!(
         close(summary.area_mm2, 12.0),
@@ -710,13 +727,15 @@ fn artwork_composition_keeps_clear_polarity_semantics_after_overlapping_dark_run
 
 #[test]
 fn extraction_preserves_ordered_aperture_path_polarity() {
+    let accuracy = GeometryAccuracy::default();
+
     let gerber = GerberX2::parse(
         "%FSLAX26Y26*%\n%MOMM*%\n%AMORDERED*\n21,1,4,4,0,0,0*\n21,0,2,2,0,0,0*\n21,1,1,1,0,0,0*\n%\n%ADD10ORDERED*%\nD10*\nX0Y0D03*\nM02*\n",
     )
     .unwrap();
 
-    let geometry = gerberx2::geometry::extract_document(&gerber);
-    let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry);
+    let geometry = gerberx2::geometry::extract_document(&gerber, accuracy).unwrap();
+    let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry, accuracy).unwrap();
 
     assert!(
         close(summary.area_mm2, 13.0),
@@ -727,12 +746,14 @@ fn extraction_preserves_ordered_aperture_path_polarity() {
 
 #[test]
 fn extraction_applies_scaling_to_circular_draw_width() {
+    let accuracy = GeometryAccuracy::default();
+
     let gerber = GerberX2::parse(
         "%FSLAX26Y26*%\n%MOMM*%\n%ADD10C,0.2*%\n%LS2*%\nD10*\nG01*\nX0Y0D02*\nX1000000Y0D01*\nM02*\n",
     )
     .unwrap();
 
-    let geometry = gerberx2::geometry::extract_document(&gerber);
+    let geometry = gerberx2::geometry::extract_document(&gerber, accuracy).unwrap();
     let path = geometry
         .arena
         .paths
@@ -744,17 +765,20 @@ fn extraction_applies_scaling_to_circular_draw_width() {
 
 #[test]
 fn extraction_flips_mirrored_aperture_arc_direction() {
+    let accuracy = GeometryAccuracy::default();
+
     let gerber = GerberX2::parse(
         "%FSLAX26Y26*%\n%MOMM*%\n%ADD10O,2.0X1.0*%\n%LMX*%\nD10*\nX0Y0D03*\nM02*\n",
     )
     .unwrap();
 
-    let geometry = gerberx2::geometry::extract_document(&gerber);
+    let geometry = gerberx2::geometry::extract_document(&gerber, accuracy).unwrap();
     assert!(matches!(
         geometry.objects[0].geometry,
         pcb_ir::dialects::artwork::Geometry::Flash { .. }
     ));
-    let expanded = pcb_ir::dialects::artwork::expand_native_geometry_to_regions(geometry);
+    let expanded =
+        pcb_ir::dialects::artwork::expand_native_geometry_to_regions(geometry, accuracy).unwrap();
     let arc = expanded
         .arena
         .cmds
@@ -766,12 +790,14 @@ fn extraction_flips_mirrored_aperture_arc_direction() {
 
 #[test]
 fn extracts_non_circular_aperture_sweeps_without_diagnostics() {
+    let accuracy = GeometryAccuracy::default();
+
     let gerber = GerberX2::parse(
         "%FSLAX26Y26*%\n%MOMM*%\n%ADD10R,0.2X0.4*%\nD10*\nG01*\nX0Y0D02*\nX1000000Y0D01*\nM02*\n",
     )
     .unwrap();
 
-    let geometry = gerberx2::geometry::extract_document(&gerber);
+    let geometry = gerberx2::geometry::extract_document(&gerber, accuracy).unwrap();
     assert!(geometry.diagnostics.is_empty());
     assert_eq!(geometry.objects.len(), 1);
     assert!(geometry.arena.paths[0].is_filled());
@@ -779,13 +805,15 @@ fn extracts_non_circular_aperture_sweeps_without_diagnostics() {
 
 #[test]
 fn renders_svg_and_png_from_artwork() {
+    let accuracy = GeometryAccuracy::default();
+
     let gerber = GerberX2::parse(
         "%FSLAX26Y26*%\n%MOMM*%\n%TF.FileFunction,Paste,Top*%\n%ADD10R,1.0X1.0*%\nD10*\nX0Y0D03*\nM02*\n",
     )
     .unwrap();
 
-    let geometry = gerberx2::geometry::extract_document(&gerber);
-    let mask = pcb_ir::dialects::artwork::compose_to_mask(&geometry);
+    let geometry = gerberx2::geometry::extract_document(&gerber, accuracy).unwrap();
+    let mask = pcb_ir::dialects::artwork::compose_to_mask(&geometry, accuracy).unwrap();
     let svg = pcb_ir::render::svg(&mask, &pcb_ir::render::RenderOptions::default());
     assert!(svg.contains("<svg"));
     assert!(svg.contains("<path"));
@@ -801,13 +829,15 @@ fn renders_svg_and_png_from_artwork() {
 
 #[test]
 fn renders_profile_gerber_as_black_board_outline() {
+    let accuracy = GeometryAccuracy::default();
+
     let gerber = GerberX2::parse(
         "%FSLAX26Y26*%\n%MOMM*%\n%TF.FileFunction,Profile,NP*%\n%ADD10C,0.1*%\nD10*\nG01*\nX0Y0D02*\nX1000000Y0D01*\nX1000000Y1000000D01*\nX0Y1000000D01*\nX0Y0D01*\nM02*\n",
     )
     .unwrap();
 
-    let geometry = gerberx2::geometry::extract_document(&gerber);
-    let mask = pcb_ir::dialects::artwork::compose_to_mask(&geometry);
+    let geometry = gerberx2::geometry::extract_document(&gerber, accuracy).unwrap();
+    let mask = pcb_ir::dialects::artwork::compose_to_mask(&geometry, accuracy).unwrap();
     let svg = pcb_ir::render::svg(&mask, &pcb_ir::render::RenderOptions::default());
 
     assert!(svg.contains("fill='none' stroke='#000000'"));
@@ -861,4 +891,50 @@ fn assert_external_parser_accepts(content: &str) {
 
 fn close(a: f64, b: f64) -> bool {
     (a - b).abs() <= 1e-9
+}
+
+#[test]
+fn shaped_draws_sweep_continuously_with_recorded_accuracy() {
+    use pcb_ir::geom::{ContourSet, FillRule, Point};
+    for (draw, witness) in [
+        ("G01*X0Y0D02*X100000Y0D01*", Point::new(0.0125, 0.0)),
+        (
+            "G75*X100000Y0D02*G03*X0Y100000I-100000J0D01*",
+            Point::new(0.1 / 2.0_f64.sqrt(), 0.1 / 2.0_f64.sqrt()),
+        ),
+    ] {
+        let gerber = GerberX2::parse(&format!(
+            "%FSLAX26Y26*%%MOMM*%%AMthin*21,1,0.002,0.002,0,0,0*%%ADD10thin*%D10*{draw}M02*"
+        ))
+        .unwrap();
+        for budget in [0.001, 0.0001] {
+            let accuracy = GeometryAccuracy::new(budget).unwrap();
+            let doc = gerberx2::geometry::extract_document(&gerber, accuracy).unwrap();
+            let path = &doc.arena.paths[0];
+            let region = ContourSet::from_contours(
+                &doc.arena.path_contours(path),
+                FillRule::NonZero,
+                0.0,
+                accuracy,
+            )
+            .unwrap();
+            assert_eq!(region.connected_components().len(), 1);
+            assert!(region.contains_point(witness));
+            assert!(region.uncertainty_mm > 0.0 && region.uncertainty_mm <= budget);
+        }
+    }
+    let gerber = GerberX2::parse(
+        "%FSLAX26Y26*%%MOMM*%%AMhole*21,1,0.1,0.1,0,0,0*21,0,0.05,0.05,0,0,0*%%ADD10hole*%D10*G01*X0Y0D02*X10000Y0D01*M02*"
+    ).unwrap();
+    let accuracy = GeometryAccuracy::default();
+    let doc = gerberx2::geometry::extract_document(&gerber, accuracy).unwrap();
+    let region = ContourSet::from_contours(
+        &doc.arena.path_contours(&doc.arena.paths[0]),
+        FillRule::NonZero,
+        0.0,
+        accuracy,
+    )
+    .unwrap();
+    assert!(!region.contains_point(Point::new(0.005, 0.0)));
+    assert!(region.contains_point(Point::new(0.005, 0.04)));
 }

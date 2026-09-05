@@ -32,6 +32,7 @@
 //! over the boundary segments, searched only to `r + A_min` since farther
 //! boundaries cannot violate.
 
+use pcb_ir::geom::GeometryAccuracy;
 use pcb_ir::geom::dfm::{BBoxIndex, Distance, circular_region};
 use pcb_ir::geom::region::difference_rings;
 use pcb_ir::geom::{BBox, ContourSet, FillRule, Point};
@@ -59,7 +60,8 @@ pub(super) fn evaluate(
     class: HoleClass,
     conditions: &Conditions,
     design: &Design,
-) -> Evaluation {
+    accuracy: GeometryAccuracy,
+) -> anyhow::Result<Evaluation> {
     let holes = holes_of_class(design, class);
     let copper_layers = &design.copper_layers;
     let hole_lands = &design.hole_lands;
@@ -141,10 +143,10 @@ pub(super) fn evaluate(
                     measured(design, hole, subject, enclosure, radius + limit_mm)
                 });
             if let Some(worst) = &mut worst {
-                worst.sites = enclosures.iter().filter_map(|(subject, enclosure)| {
-                    let enclosure = (*enclosure).filter(|distance| violates(distance, limit_mm))?;
+                worst.sites = enclosures.iter().map(|(subject, enclosure)| {
+                    let Some(enclosure) = (*enclosure).filter(|distance| violates(distance, limit_mm)) else { return Ok(None); };
                     let mut detail = measured(design, hole, subject, enclosure, radius + limit_mm);
-                    let required = circular_region(hole.center, radius + limit_mm);
+                    let required = circular_region(hole.center, radius + limit_mm, accuracy)?;
                     detail.evidence.push(Evidence {
                         display: Some(EvidenceDisplay::CircleMinusLayer {
                             center: hole.center.into(),
@@ -165,20 +167,19 @@ pub(super) fn evaluate(
                     } else if enclosure.mm < 0.0 {
                         site.note = Some("The drilled hole breaches the copper boundary; the annular enclosure is signed.".to_owned());
                     }
-                    Some(site)
-                }).collect();
+                    Ok::<_, anyhow::Error>(Some(site))
+                }).collect::<anyhow::Result<Vec<_>>>()?.into_iter().flatten().collect();
             }
-            (enclosures.len(), worst)
-        })
-        .collect::<Vec<_>>();
+            Ok::<_, anyhow::Error>((enclosures.len(), worst))
+        }).collect::<anyhow::Result<Vec<_>>>()?;
 
-    Evaluation {
+    Ok(Evaluation {
         checked: per_hole.iter().map(|(checked, _)| checked).sum(),
         measured: per_hole
             .into_iter()
             .filter_map(|(_, measured)| measured)
             .collect(),
-    }
+    })
 }
 
 /// A ring whose bounds miss the required disk cannot change material inside
@@ -353,16 +354,25 @@ limit = { minimum = "0.2 mm" }
     }
 
     fn evaluate_pth(ipc: &Ipc2581) -> Evaluation {
+        let accuracy = GeometryAccuracy::default();
+
         let rule = rule();
-        let imported = pcb_ir::import::ipc2581::import_design(ipc).unwrap();
-        let design =
-            Design::extract(&imported, ArtworkScope::Board, std::slice::from_ref(&rule)).unwrap();
+        let imported = pcb_ir::import::ipc2581::import_design(ipc, accuracy).unwrap();
+        let design = Design::extract(
+            &imported,
+            ArtworkScope::Board,
+            std::slice::from_ref(&rule),
+            accuracy,
+        )
+        .unwrap();
         evaluate(
             rule.limit.length().millimeters(),
             HoleClass::Pth,
             &rule.conditions,
             &design,
+            accuracy,
         )
+        .unwrap()
     }
 
     #[test]
@@ -415,11 +425,12 @@ limit = { minimum = "0.2 mm" }
 </IPC-2581>"#,
         )
         .unwrap();
-        let imported = pcb_ir::import::ipc2581::import_design(&ipc).unwrap();
+        let imported =
+            pcb_ir::import::ipc2581::import_design(&ipc, GeometryAccuracy::default()).unwrap();
         let middle = imported.layer_id("L1").unwrap();
         assert!(
             imported
-                .physical_lands(ArtworkScope::Board)
+                .physical_lands(ArtworkScope::Board, GeometryAccuracy::default())
                 .unwrap()
                 .iter()
                 .all(|land| land.layer != middle),
@@ -537,6 +548,8 @@ limit = { minimum = "0.2 mm" }
 
     #[test]
     fn local_missing_copper_keeps_enclosing_planes_holes_and_repainted_islands() {
+        let accuracy = GeometryAccuracy::default();
+
         use pcb_ir::geom::tol;
         let rectangle = |x0, y0, x1, y1| {
             ContourSet::rectangle(
@@ -551,7 +564,7 @@ limit = { minimum = "0.2 mm" }
             .difference(&rectangle(-0.4, -0.4, 0.4, 0.4))
             .union(&rectangle(-0.1, -0.1, 0.1, 0.1))
             .union(&rectangle(200.0, 200.0, 201.0, 201.0));
-        let required = circular_region(Point::ZERO, 0.6);
+        let required = circular_region(Point::ZERO, 0.6, accuracy).unwrap();
         let bounds = copper
             .rings
             .iter()

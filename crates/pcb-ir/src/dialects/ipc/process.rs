@@ -9,6 +9,7 @@
 //! - [`compose_for_rendering`]: destructive image composition (outlines
 //!   strokes, unions fills) for final rendering targets.
 
+use crate::geom::{AccuracyError, GeometryAccuracy};
 use std::collections::HashMap;
 use std::hash::Hash;
 
@@ -16,9 +17,9 @@ use crate::dialects::ipc::Document;
 use crate::dialects::ipc::document::Layer;
 use crate::dialects::ipc::feature::{Feature, FeatureBucket, FeatureIntent, FeatureKind};
 use crate::geom::path::ContourBuf;
-use crate::geom::region::{self, Ring};
+use crate::geom::region::{self};
 use crate::geom::{
-    Affine2, BBox, ContourSet, FillRule, Paint, PaintKind, Path, Polarity, Span, tol,
+    Affine2, BBox, ContourSet, FillRule, Paint, PaintKind, Path, PathArena, Polarity, Span, tol,
 };
 
 /// Run only structure-preserving cleanup passes.
@@ -46,16 +47,19 @@ where
 /// native: ordered artwork carries per-object polarity with exactly IPC's
 /// sequential paint semantics, so resolving them here would only flatten
 /// repeated clear instances into unshareable boundary geometry.
-pub fn normalize_for_artwork<S, L>(doc: &mut Document<S, L>)
-where
-    S: Copy + Eq + Hash,
-    L: Clone,
-{
+pub fn normalize_for_artwork<S: Copy + Eq + Hash, L: Clone>(
+    doc: &mut Document<S, L>,
+    accuracy: GeometryAccuracy,
+) -> Result<(), AccuracyError> {
     normalize_preserving(doc);
-    resolve_set_voids(doc);
-    subtract_layer_cutouts(doc);
+    resolve_set_voids(doc, accuracy)?;
+    subtract_layer_cutouts(doc, accuracy)?;
     compact(doc);
     normalize_bounds(doc);
+    for contour in &doc.arena.contours {
+        accuracy.check(contour.uncertainty_mm)?;
+    }
+    Ok(())
 }
 
 /// Resolve source geometry into a composed rendering image.
@@ -65,20 +69,25 @@ where
 /// contours. Negative polarity stays native — mask composition paints
 /// polarity runs sequentially. Use it only when a target needs a final
 /// painted image.
-pub fn compose_for_rendering<S, L>(doc: &mut Document<S, L>)
+pub fn compose_for_rendering<S, L>(
+    doc: &mut Document<S, L>,
+    accuracy: GeometryAccuracy,
+) -> Result<(), AccuracyError>
 where
     S: Copy + Eq + Hash,
     L: Clone,
 {
-    expand_feature_placement_groups(doc);
+    expand_feature_placement_groups(doc, accuracy)?;
     normalize_preserving(doc);
-    expand_stroked_paths_to_fills(doc);
-    union_feature_filled_paths(doc);
-    coalesce_related_trace_features(doc);
-    resolve_set_voids(doc);
-    subtract_layer_cutouts(doc);
+    expand_stroked_paths_to_fills(doc, accuracy)?;
+    union_feature_filled_paths(doc, accuracy)?;
+    coalesce_related_trace_features(doc, accuracy)?;
+    resolve_set_voids(doc, accuracy)?;
+    subtract_layer_cutouts(doc, accuracy)?;
     compact(doc);
     normalize_bounds(doc);
+
+    Ok(())
 }
 
 /// Drop unpainted paths from feature path spans.
@@ -212,7 +221,8 @@ pub fn normalize_bounds<S, L>(doc: &mut Document<S, L>) {
 pub fn retain_features<S: Clone, L>(
     doc: &mut Document<S, L>,
     mut retain: impl FnMut(&Feature<S>) -> bool,
-) {
+    accuracy: GeometryAccuracy,
+) -> Result<(), AccuracyError> {
     let mut retained = doc.features.iter().map(&mut retain).collect::<Vec<_>>();
     let splits_group = doc.feature_placement_groups.iter().any(|group| {
         let kept = group
@@ -223,11 +233,11 @@ pub fn retain_features<S: Clone, L>(
         kept != 0 && kept != group.features.len()
     });
     if splits_group {
-        expand_feature_placement_groups(doc);
+        expand_feature_placement_groups(doc, accuracy)?;
         retained = doc.features.iter().map(&mut retain).collect();
     }
     if retained.iter().all(|&keep| keep) {
-        return;
+        return Ok(());
     }
 
     let mut retained_prefix = Vec::with_capacity(retained.len() + 1);
@@ -291,20 +301,23 @@ pub fn retain_features<S: Clone, L>(
         .collect();
     compact(doc);
     normalize_bounds(doc);
+
+    Ok(())
 }
 
 /// Materialize shared IPC feature placement groups only for passes that need
 /// one independent feature image per occurrence. Structure-preserving
 /// pipelines and artwork lowering keep the groups compact.
-pub fn expand_feature_placement_groups<S: Clone, L>(doc: &mut Document<S, L>) {
+pub fn expand_feature_placement_groups<S: Clone, L>(
+    doc: &mut Document<S, L>,
+    accuracy: GeometryAccuracy,
+) -> Result<(), AccuracyError> {
     if doc.feature_placement_groups.is_empty() {
-        return;
+        return Ok(());
     }
 
-    let mut old_features = std::mem::take(&mut doc.features)
-        .into_iter()
-        .map(Some)
-        .collect::<Vec<_>>();
+    let mut arena = doc.arena.clone();
+    let mut old_features = doc.features.iter().cloned().map(Some).collect::<Vec<_>>();
     let mut expanded = Vec::with_capacity(old_features.len());
     let mut mapping = vec![Span::EMPTY; old_features.len()];
 
@@ -338,7 +351,7 @@ pub fn expand_feature_placement_groups<S: Clone, L>(doc: &mut Document<S, L>) {
                             })
                             .unwrap_or(placement_index),
                     );
-                    materialize_feature_placement(doc, &mut instance, placement);
+                    materialize_feature_placement(&mut arena, &mut instance, placement, accuracy)?;
                     expanded.push(instance);
                 }
             }
@@ -358,24 +371,28 @@ pub fn expand_feature_placement_groups<S: Clone, L>(doc: &mut Document<S, L>) {
     for set in &mut doc.feature_sets {
         set.features = expanded_span(set.features, &mapping);
     }
+    doc.arena = arena;
     doc.features = expanded;
     doc.feature_placement_groups.clear();
     doc.feature_placements.clear();
+
+    Ok(())
 }
 
-fn materialize_feature_placement<S, L>(
-    doc: &mut Document<S, L>,
+fn materialize_feature_placement<S>(
+    arena: &mut PathArena,
     feature: &mut Feature<S>,
     placement: Affine2,
-) {
+    accuracy: GeometryAccuracy,
+) -> Result<(), AccuracyError> {
     let scale = placement.m00.hypot(placement.m10);
-    let path_start = doc.arena.paths.len() as u32;
+    let path_start = arena.paths.len() as u32;
     for path_index in feature.paths.indices() {
-        let path = doc.arena.paths[path_index as usize];
-        let contours = doc.arena.transformed_contour_bufs(path.contours, placement);
-        doc.arena.push_path(path.paint.scaled(scale), contours);
+        let path = arena.paths[path_index as usize];
+        let contours = arena.transformed_contour_bufs(path.contours, placement, accuracy)?;
+        arena.push_path(path.paint.scaled(scale), contours);
     }
-    let paths = Span::new(path_start, doc.arena.paths.len() as u32 - path_start);
+    let paths = Span::new(path_start, arena.paths.len() as u32 - path_start);
     feature.placement_group = None;
     feature.transform = placement.concat(feature.transform);
     feature.center = placement.transform_point(feature.center);
@@ -385,7 +402,9 @@ fn materialize_feature_placement<S, L>(
     feature.stroke_width *= scale;
     feature.outer_diameter *= scale;
     feature.inner_diameter *= scale;
-    feature.bbox = doc.arena.paths_bbox(paths);
+    feature.bbox = arena.paths_bbox(paths);
+
+    Ok(())
 }
 
 fn expanded_span(span: Span, mapping: &[Span]) -> Span {
@@ -445,7 +464,10 @@ fn remap_span(span: Span, mapping: &[Option<u32>]) -> Span {
 /// rendering and Gerber export, so strokes, flashes, and polarity sequencing
 /// flatten exactly as they manufacture instead of through a second
 /// composition implementation.
-pub fn flatten_layers_to_masks<S, L>(doc: &mut Document<S, L>)
+pub fn flatten_layers_to_masks<S, L>(
+    doc: &mut Document<S, L>,
+    accuracy: GeometryAccuracy,
+) -> Result<(), AccuracyError>
 where
     S: Copy + Eq + Hash,
     L: Clone,
@@ -461,8 +483,9 @@ where
             layer_index,
             crate::dialects::LayerRole::Other,
             crate::dialects::Side::None,
-        );
-        let mask = crate::dialects::artwork::compose_to_mask(&artwork);
+            accuracy,
+        )?;
+        let mask = crate::dialects::artwork::compose_to_mask(&artwork, accuracy)?;
         let contours = mask
             .layers
             .first()
@@ -508,6 +531,8 @@ where
 
     compact(doc);
     normalize_bounds(doc);
+
+    Ok(())
 }
 
 /// Merge a feature's identically painted paths into one compound path.
@@ -533,7 +558,10 @@ pub fn compose_feature_paths<S, L>(doc: &mut Document<S, L>) {
 }
 
 /// Convert copper-trace strokes into filled outlines.
-pub fn expand_stroked_paths_to_fills<S, L>(doc: &mut Document<S, L>) {
+pub fn expand_stroked_paths_to_fills<S, L>(
+    doc: &mut Document<S, L>,
+    accuracy: GeometryAccuracy,
+) -> Result<(), AccuracyError> {
     for feature_index in 0..doc.features.len() {
         let feature = &doc.features[feature_index];
         if !is_copper_trace_feature(feature) {
@@ -556,7 +584,8 @@ pub fn expand_stroked_paths_to_fills<S, L>(doc: &mut Document<S, L>) {
                     if let Some(contours) = crate::geom::path::stroke_to_fill(
                         &doc.arena.path_contours(&path),
                         stroke.into(),
-                    ) {
+                        accuracy,
+                    )? {
                         doc.arena.push_path(
                             Paint::Fill {
                                 rule: FillRule::NonZero,
@@ -572,10 +601,14 @@ pub fn expand_stroked_paths_to_fills<S, L>(doc: &mut Document<S, L>) {
         }
         doc.features[feature_index].paths = Span::new(start, doc.arena.paths.len() as u32 - start);
     }
+    Ok(())
 }
 
 /// Union a trace feature's filled paths into one region.
-pub fn union_feature_filled_paths<S, L>(doc: &mut Document<S, L>) {
+pub fn union_feature_filled_paths<S, L>(
+    doc: &mut Document<S, L>,
+    accuracy: GeometryAccuracy,
+) -> Result<(), AccuracyError> {
     for feature_index in 0..doc.features.len() {
         let feature = &doc.features[feature_index];
         if !is_copper_trace_feature(feature) {
@@ -590,12 +623,8 @@ pub fn union_feature_filled_paths<S, L>(doc: &mut Document<S, L>) {
             continue;
         };
 
-        let rings = feature_rings(doc, &doc.features[feature_index]);
-        if rings.len() < 2 {
-            continue;
-        }
-
-        let contours = region::rings_to_contours(region::union_rings(rings, fill_rule));
+        let image = feature_filled_region(doc, &doc.features[feature_index], 0.0, accuracy)?;
+        let contours = image.to_contours();
         if contours.is_empty() {
             continue;
         }
@@ -607,6 +636,7 @@ pub fn union_feature_filled_paths<S, L>(doc: &mut Document<S, L>) {
             contours,
         );
     }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -619,7 +649,10 @@ struct TraceGroupKey<S> {
 }
 
 /// Union filled trace features that share a net, source set, and intent.
-pub fn coalesce_related_trace_features<S, L>(doc: &mut Document<S, L>)
+pub fn coalesce_related_trace_features<S, L>(
+    doc: &mut Document<S, L>,
+    accuracy: GeometryAccuracy,
+) -> Result<(), AccuracyError>
 where
     S: Copy + Eq + Hash,
     L: Clone,
@@ -659,15 +692,14 @@ where
                 continue;
             }
 
-            let rings = group
-                .iter()
-                .flat_map(|&feature_index| feature_rings(doc, &doc.features[feature_index]))
-                .collect::<Vec<_>>();
-            if rings.len() < 2 {
-                continue;
+            let mut composer = region::PaintComposer::default();
+            for &feature_index in &group {
+                composer.push(
+                    Polarity::Dark,
+                    feature_filled_region(doc, &doc.features[feature_index], 0.0, accuracy)?,
+                );
             }
-
-            let contours = region::rings_to_contours(region::union_rings(rings, key.fill_rule));
+            let contours = composer.finish(0.0).to_contours();
             if contours.is_empty() {
                 continue;
             }
@@ -685,11 +717,15 @@ where
             }
         }
     }
+    Ok(())
 }
 
 /// Resolve IPC set-void semantics: a feature flagged `clears_previous_in_set`
 /// subtracts its filled image from earlier positive features of the same set.
-pub fn resolve_set_voids<S, L>(doc: &mut Document<S, L>)
+pub fn resolve_set_voids<S, L>(
+    doc: &mut Document<S, L>,
+    accuracy: GeometryAccuracy,
+) -> Result<(), AccuracyError>
 where
     S: Clone,
     L: Clone,
@@ -702,7 +738,7 @@ where
             .iter()
             .any(|feature| feature.flags.clears_previous_in_set)
     {
-        expand_feature_placement_groups(doc);
+        expand_feature_placement_groups(doc, accuracy)?;
     }
     for layer_index in 0..doc.layers.len() {
         let layer = doc.layers[layer_index].clone();
@@ -717,11 +753,11 @@ where
                 }
 
                 if feature.flags.clears_previous_in_set {
-                    let cutters = feature_filled_rings(doc, &doc.features[feature_index]);
+                    let cutters =
+                        feature_filled_region(doc, &doc.features[feature_index], 0.0, accuracy)?;
                     if !cutters.is_empty() {
-                        let bounds = ring_bounds(&cutters);
                         for subject_index in previous.iter().copied() {
-                            subtract_rings_from_feature(doc, subject_index, &cutters, &bounds);
+                            subtract_region_from_feature(doc, subject_index, &cutters, accuracy)?;
                         }
                     }
                     clear_feature_paths(doc, feature_index);
@@ -734,6 +770,7 @@ where
             }
         }
     }
+    Ok(())
 }
 
 fn layer_features_by_set<S, L>(
@@ -751,7 +788,10 @@ fn layer_features_by_set<S, L>(
 }
 
 /// Subtract cutout features from every other feature on their layer.
-pub fn subtract_layer_cutouts<S, L>(doc: &mut Document<S, L>)
+pub fn subtract_layer_cutouts<S, L>(
+    doc: &mut Document<S, L>,
+    accuracy: GeometryAccuracy,
+) -> Result<(), AccuracyError>
 where
     S: Clone,
     L: Clone,
@@ -764,11 +804,11 @@ where
             .iter()
             .any(|feature| feature.bucket == FeatureBucket::Cutout)
     {
-        expand_feature_placement_groups(doc);
+        expand_feature_placement_groups(doc, accuracy)?;
     }
     for layer_index in 0..doc.layers.len() {
         let layer = doc.layers[layer_index].clone();
-        let cutouts = layer_cutout_sets(doc, &layer);
+        let cutouts = layer_cutout_sets(doc, &layer, accuracy)?;
         if cutouts.is_empty() {
             continue;
         }
@@ -784,19 +824,21 @@ where
                 continue;
             }
 
-            let cutters = cutouts
+            let mut composer = region::PaintComposer::default();
+            for cutout in cutouts
                 .iter()
                 .filter(|cutout| feature_bbox.intersects(cutout.bbox))
-                .flat_map(|cutout| cutout.rings.iter().cloned())
-                .collect::<Vec<_>>();
+            {
+                composer.push(Polarity::Dark, cutout.clone());
+            }
+            let cutters = composer.finish(0.0);
             if cutters.is_empty() {
                 continue;
             }
-
-            let bounds = ring_bounds(&cutters);
-            subtract_rings_from_feature(doc, feature_index, &cutters, &bounds);
+            subtract_region_from_feature(doc, feature_index, &cutters, accuracy)?;
         }
     }
+    Ok(())
 }
 
 /// Split a lowered-primitive feature into per-paint-kind runs so each run can
@@ -906,55 +948,37 @@ fn clear_feature_paths<S, L>(doc: &mut Document<S, L>, feature_index: usize) {
     feature.primitive_ref = None;
 }
 
-fn ring_bounds(rings: &[Ring]) -> Vec<BBox> {
-    rings
-        .iter()
-        .map(|ring| rings_bbox(std::slice::from_ref(ring)))
-        .collect()
-}
-
-fn rings_bbox(rings: &[Ring]) -> BBox {
-    rings
-        .iter()
-        .flat_map(|ring| ring.iter())
-        .fold(BBox::empty(), |bbox, &[x, y]| {
-            bbox.union(BBox::new(
-                crate::geom::Point::new(x, y),
-                crate::geom::Point::new(x, y),
-            ))
-        })
-}
-
-fn subtract_rings_from_feature<S, L>(
+fn subtract_region_from_feature<S, L>(
     doc: &mut Document<S, L>,
     feature_index: usize,
-    cutters: &[Ring],
-    cutter_bounds: &[BBox],
-) {
-    let subject = feature_filled_rings(doc, &doc.features[feature_index]);
+    cutters: &ContourSet,
+    accuracy: GeometryAccuracy,
+) -> Result<(), AccuracyError> {
+    let subject = feature_filled_region(doc, &doc.features[feature_index], 0.0, accuracy)?;
     if subject.is_empty() {
-        return;
+        return Ok(());
     }
 
     // Only cutters that can reach this feature participate; most features on
     // a layer are nowhere near any of them, and dense generated cutter sets
     // (balance void lattices) would otherwise make every subtraction sweep
     // the whole set.
-    let subject_bounds = rings_bbox(&subject);
     let near = cutters
+        .rings
         .iter()
-        .zip(cutter_bounds)
-        .filter(|(_, bounds)| bounds.intersects(subject_bounds))
+        .zip(&cutters.ring_bounds)
+        .filter(|(_, bounds)| bounds.intersects(subject.bbox))
         .map(|(ring, _)| ring.clone())
         .collect::<Vec<_>>();
     if near.is_empty() {
-        return;
+        return Ok(());
     }
 
-    let contours = region::rings_to_contours(region::difference_rings(subject, near));
+    let near = ContourSet::from_regularized(near, 0.0, cutters.uncertainty_mm);
+    let contours = subject.difference(&near).to_contours();
     if contours.is_empty() {
         clear_feature_paths(doc, feature_index);
-        return;
+        return Ok(());
     }
 
     replace_feature_with_path(
@@ -965,59 +989,53 @@ fn subtract_rings_from_feature<S, L>(
         },
         contours,
     );
+
+    Ok(())
 }
 
-fn layer_cutout_sets<S, L>(doc: &Document<S, L>, layer: &Layer<S, L>) -> Vec<ContourSet> {
-    layer
+fn layer_cutout_sets<S, L>(
+    doc: &Document<S, L>,
+    layer: &Layer<S, L>,
+    accuracy: GeometryAccuracy,
+) -> Result<Vec<ContourSet>, AccuracyError> {
+    Ok(layer
         .features
         .slice(&doc.features)
         .iter()
         .filter(|feature| feature.bucket == FeatureBucket::Cutout)
-        .filter_map(|feature| {
-            let rings = feature_filled_rings(doc, feature);
-            if rings.is_empty() {
-                None
-            } else {
-                Some(ContourSet::new(rings, FillRule::NonZero, tol::REGION_MM))
-            }
-        })
-        .collect()
+        .map(|feature| feature_filled_region(doc, feature, tol::REGION_MM, accuracy))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .filter(|region| !region.is_empty())
+        .collect())
 }
 
 /// The regularized filled image of a feature's fill paths, grouped by fill
 /// rule before the final union.
-fn feature_filled_rings<S, L>(doc: &Document<S, L>, feature: &Feature<S>) -> Vec<Ring> {
-    let mut groups: HashMap<FillRule, Vec<Ring>> = HashMap::new();
+fn feature_filled_region<S, L>(
+    doc: &Document<S, L>,
+    feature: &Feature<S>,
+    tolerance: f64,
+    accuracy: GeometryAccuracy,
+) -> Result<ContourSet, AccuracyError> {
+    let mut groups: HashMap<FillRule, Vec<ContourBuf>> = HashMap::new();
     for path in feature.paths.slice(&doc.arena.paths) {
         if let Some(rule) = path.fill_rule() {
             groups
                 .entry(rule)
                 .or_default()
-                .extend(path_rings(doc, path));
+                .extend(doc.arena.path_contours(path));
         }
     }
 
-    let mut rings = groups
-        .into_iter()
-        .flat_map(|(fill_rule, rings)| region::simplify_rings(rings, fill_rule))
-        .collect::<Vec<_>>();
-    if rings.len() > 1 {
-        rings = region::simplify_rings(rings, FillRule::NonZero);
+    let mut composer = region::PaintComposer::default();
+    for (fill_rule, contours) in groups {
+        composer.push(
+            Polarity::Dark,
+            ContourSet::from_contours(&contours, fill_rule, 0.0, accuracy)?,
+        );
     }
-    rings
-}
-
-fn feature_rings<S, L>(doc: &Document<S, L>, feature: &Feature<S>) -> Vec<Ring> {
-    feature
-        .paths
-        .slice(&doc.arena.paths)
-        .iter()
-        .flat_map(|path| path_rings(doc, path))
-        .collect()
-}
-
-fn path_rings<S, L>(doc: &Document<S, L>, path: &Path) -> Vec<Ring> {
-    region::rings_from_contours(&doc.arena.path_contours(path))
+    Ok(composer.finish(tolerance))
 }
 
 /// Bounds of a set's own feature span, for sets with no linked features.
@@ -1050,6 +1068,8 @@ mod tests {
 
     #[test]
     fn composes_compatible_stroked_feature_paths() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut doc = TestDoc::new();
         doc.push_path(
             Paint::Stroke(StrokeStyle::new(2.0, LineCap::Round)),
@@ -1070,7 +1090,7 @@ mod tests {
             ..copper_trace_feature()
         });
 
-        compose_for_rendering(&mut doc);
+        compose_for_rendering(&mut doc, accuracy).unwrap();
 
         assert_eq!(doc.features[0].paths.len(), 1);
         let path = &doc.arena.paths[doc.features[0].paths.start as usize];
@@ -1081,6 +1101,8 @@ mod tests {
 
     #[test]
     fn process_prunes_unpainted_feature_paths_and_preserves_profile_paths() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut doc = TestDoc::new();
 
         let painted_feature_path = doc.push_path(
@@ -1122,7 +1144,7 @@ mod tests {
                 bbox: BBox::empty(),
             });
 
-        compose_for_rendering(&mut doc);
+        compose_for_rendering(&mut doc, accuracy).unwrap();
 
         let feature_paths = doc.features[0].paths.slice(&doc.arena.paths);
         assert_eq!(feature_paths.len(), 1);
@@ -1136,6 +1158,8 @@ mod tests {
 
     #[test]
     fn coalesces_related_trace_features_inside_one_source_set() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut doc = TestDoc::new();
         doc.push_path(
             Paint::Fill {
@@ -1187,7 +1211,7 @@ mod tests {
         });
         doc.layers.push(test_layer(Span::new(0, 3)));
 
-        compose_for_rendering(&mut doc);
+        compose_for_rendering(&mut doc, accuracy).unwrap();
 
         assert_eq!(doc.features[0].paths.len(), 1);
         assert_eq!(doc.features[1].paths.len(), 0);
@@ -1200,6 +1224,8 @@ mod tests {
 
     #[test]
     fn compose_keeps_clear_polarity_native() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut doc = TestDoc::new();
         doc.push_path(
             Paint::Fill {
@@ -1223,7 +1249,7 @@ mod tests {
         });
         doc.layers.push(test_layer(Span::new(0, 2)));
 
-        compose_for_rendering(&mut doc);
+        compose_for_rendering(&mut doc, accuracy).unwrap();
 
         // Both features keep their native geometry and polarity; the
         // sequential paint fold applies the subtraction at composition.
@@ -1237,20 +1263,26 @@ mod tests {
             0,
             crate::dialects::LayerRole::Copper,
             crate::dialects::Side::Top,
-        );
-        let mask = crate::dialects::artwork::compose_to_mask(&artwork);
+            accuracy,
+        )
+        .unwrap();
+        let mask = crate::dialects::artwork::compose_to_mask(&artwork, accuracy).unwrap();
         let shape = mask.layers[0].shapes.slice(&mask.arena.paths)[0];
         let image = crate::geom::region::ContourSet::from_contours(
             &mask.arena.path_contours(&shape),
             FillRule::NonZero,
             crate::geom::tol::REGION_MM,
-        );
+            accuracy,
+        )
+        .unwrap();
         assert!((image.area() - 12.0).abs() < 1e-6);
         assert!(!image.contains_point(Point::new(2.0, 2.0)));
     }
 
     #[test]
     fn subtracts_cutouts_after_trace_union() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut doc = TestDoc::new();
         doc.push_path(
             Paint::Stroke(StrokeStyle::new(1.0, LineCap::Round)),
@@ -1275,7 +1307,7 @@ mod tests {
         });
         doc.layers.push(test_layer(Span::new(0, 2)));
 
-        compose_for_rendering(&mut doc);
+        compose_for_rendering(&mut doc, accuracy).unwrap();
 
         let trace = &doc.features[0];
         let path = &doc.arena.paths[trace.paths.start as usize];
@@ -1287,6 +1319,8 @@ mod tests {
 
     #[test]
     fn splits_primitive_path_runs_by_paint_kind() {
+        let _accuracy = GeometryAccuracy::default();
+
         let mut doc = TestDoc::new();
         doc.push_path(
             Paint::Fill {
@@ -1316,6 +1350,8 @@ mod tests {
 
     #[test]
     fn artwork_ready_validation_rejects_mixed_feature_paint_kinds() {
+        let _accuracy = GeometryAccuracy::default();
+
         let mut doc = TestDoc::new();
         doc.push_path(
             Paint::Fill {
@@ -1342,6 +1378,8 @@ mod tests {
 
     #[test]
     fn artwork_ready_validation_accepts_clear_polarity() {
+        let _accuracy = GeometryAccuracy::default();
+
         let mut doc = TestDoc::new();
         doc.push_path(
             Paint::Fill {
@@ -1397,6 +1435,8 @@ mod tests {
 
     #[test]
     fn flattens_processed_layer_features_to_single_mask() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut doc = TestDoc::new();
         doc.push_path(
             Paint::Fill {
@@ -1420,8 +1460,8 @@ mod tests {
         });
         doc.layers.push(test_layer(Span::new(0, 2)));
 
-        compose_for_rendering(&mut doc);
-        flatten_layers_to_masks(&mut doc);
+        compose_for_rendering(&mut doc, accuracy).unwrap();
+        flatten_layers_to_masks(&mut doc, accuracy).unwrap();
 
         assert_eq!(doc.features[0].kind, FeatureKind::FlattenedBucket);
         assert_eq!(doc.features[0].bucket, FeatureBucket::Fill);
@@ -1437,6 +1477,8 @@ mod tests {
 
     #[test]
     fn flattening_expands_strokes_that_composition_left_unexpanded() {
+        let accuracy = GeometryAccuracy::default();
+
         // Only copper-trace features expand strokes during composition;
         // primitive strokes reach the flattener as strokes and must still
         // contribute their swept copper to the mask.
@@ -1454,14 +1496,14 @@ mod tests {
         });
         doc.layers.push(test_layer(Span::new(0, 1)));
 
-        compose_for_rendering(&mut doc);
+        compose_for_rendering(&mut doc, accuracy).unwrap();
         let path = &doc.arena.paths[doc.features[0].paths.start as usize];
         assert!(
             path.stroke().is_some(),
             "precondition: stroke survives composition"
         );
 
-        flatten_layers_to_masks(&mut doc);
+        flatten_layers_to_masks(&mut doc, accuracy).unwrap();
 
         assert_eq!(doc.features[0].kind, FeatureKind::FlattenedBucket);
         assert_eq!(doc.features[0].paths.len(), 1);
@@ -1473,6 +1515,8 @@ mod tests {
 
     #[test]
     fn flattening_keeps_layer_cutouts_clear() {
+        let accuracy = GeometryAccuracy::default();
+
         // Cutout features keep their dark-drawn geometry after composition;
         // flattening must subtract it, not union it back over the clearance.
         let mut doc = TestDoc::new();
@@ -1500,8 +1544,8 @@ mod tests {
         });
         doc.layers.push(test_layer(Span::new(0, 2)));
 
-        compose_for_rendering(&mut doc);
-        flatten_layers_to_masks(&mut doc);
+        compose_for_rendering(&mut doc, accuracy).unwrap();
+        flatten_layers_to_masks(&mut doc, accuracy).unwrap();
 
         assert_eq!(doc.features[0].kind, FeatureKind::FlattenedBucket);
         let path = &doc.arena.paths[doc.features[0].paths.start as usize];
@@ -1509,13 +1553,17 @@ mod tests {
             &doc.arena.path_contours(path),
             FillRule::NonZero,
             tol::REGION_MM,
-        );
+            accuracy,
+        )
+        .unwrap();
         assert!(image.contains_point(Point::new(0.5, 0.5)));
         assert!(!image.contains_point(Point::new(2.0, 2.0)));
     }
 
     #[test]
     fn flattening_consumes_feature_placement_groups() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut doc = TestDoc::new();
         doc.push_path(
             Paint::Fill {
@@ -1537,7 +1585,14 @@ mod tests {
         });
         doc.layers.push(test_layer(Span::single(0)));
 
-        flatten_layers_to_masks(&mut doc);
+        let original_placement = doc.feature_placements[1];
+        doc.feature_placements[1] = Affine2::translation(Point::new(1e15, 0.0));
+        let before = format!("{doc:?}");
+        assert!(expand_feature_placement_groups(&mut doc, accuracy).is_err());
+        assert_eq!(format!("{doc:?}"), before);
+        doc.feature_placements[1] = original_placement;
+
+        flatten_layers_to_masks(&mut doc, accuracy).unwrap();
 
         assert!(doc.feature_placement_groups.is_empty());
         assert!(doc.feature_placements.is_empty());
@@ -1549,7 +1604,9 @@ mod tests {
             &doc.arena.path_contours(path),
             FillRule::NonZero,
             tol::REGION_MM,
-        );
+            accuracy,
+        )
+        .unwrap();
         assert!(image.contains_point(Point::new(10.5, 0.5)));
         assert!(image.contains_point(Point::new(20.5, 0.5)));
         assert!(!image.contains_point(Point::new(30.5, 0.5)));
@@ -1557,6 +1614,8 @@ mod tests {
 
     #[test]
     fn compact_reclaims_orphaned_paths() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut doc = TestDoc::new();
         doc.push_path(
             Paint::Fill {
@@ -1584,7 +1643,7 @@ mod tests {
         });
         doc.layers.push(test_layer(Span::new(0, 2)));
 
-        compose_for_rendering(&mut doc);
+        compose_for_rendering(&mut doc, accuracy).unwrap();
 
         // The set void and the pre-subtraction positive path are gone.
         assert_eq!(doc.arena.paths.len(), 1);
@@ -1594,6 +1653,8 @@ mod tests {
 
     #[test]
     fn retaining_features_remaps_placement_and_owner_spans() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut doc = TestDoc::new();
         for (x0, x1) in [(0.0, 1.0), (0.0, 1.0), (2.0, 3.0)] {
             doc.push_path(
@@ -1648,7 +1709,12 @@ mod tests {
         });
         doc.layers.push(test_layer(Span::new(0, 3)));
 
-        retain_features(&mut doc, |feature| feature.source_layer_ref == Some(100));
+        retain_features(
+            &mut doc,
+            |feature| feature.source_layer_ref == Some(100),
+            accuracy,
+        )
+        .unwrap();
 
         assert_eq!(doc.features.len(), 2);
         assert_eq!(doc.layers[0].features, Span::new(0, 2));
@@ -1662,7 +1728,7 @@ mod tests {
                 .all(|feature| feature.placement_group == Some(0))
         );
 
-        expand_feature_placement_groups(&mut doc);
+        expand_feature_placement_groups(&mut doc, accuracy).unwrap();
 
         assert_eq!(doc.features.len(), 4);
         assert_eq!(doc.layers[0].features, Span::new(0, 4));
@@ -1674,6 +1740,62 @@ mod tests {
                 .map(|feature| feature.bbox.min.x)
                 .collect::<Vec<_>>(),
             [10.0, 12.0, 20.0, 22.0]
+        );
+    }
+
+    #[test]
+    fn normalization_refines_curves_for_intersecting_cutouts() {
+        let mut doc = TestDoc::new();
+        let paint = Paint::Fill {
+            rule: FillRule::NonZero,
+        };
+        doc.push_path(paint, [crate::geom::shapes::circle(2.0).unwrap()]);
+        doc.features.push(Feature {
+            paths: Span::new(0, 1),
+            ..copper_trace_feature()
+        });
+        doc.push_path(paint, [rect_contour(0.0, -3.0, 3.0, 3.0)]);
+        doc.features.push(Feature {
+            paths: Span::new(1, 1),
+            ..Feature::new(FeatureKind::Slot, Polarity::Dark)
+        });
+        doc.layers.push(test_layer(Span::new(0, 2)));
+        normalize_for_artwork(&mut doc, crate::geom::GeometryAccuracy::new(0.001).unwrap())
+            .unwrap();
+        let image = feature_filled_region(
+            &doc,
+            &doc.features[0],
+            0.0,
+            GeometryAccuracy::new(0.001).unwrap(),
+        )
+        .unwrap();
+        assert!(!image.is_empty());
+        assert!(image.uncertainty_mm <= 0.001);
+        assert!(image.contains_point(Point::new(-0.5, 0.0)));
+        assert!(!image.contains_point(Point::new(0.5, 0.0)));
+    }
+
+    #[test]
+    fn normalization_accepts_inherited_error_within_the_total_budget() {
+        let mut doc = TestDoc::new();
+        doc.push_path(
+            Paint::Fill {
+                rule: FillRule::NonZero,
+            },
+            [rect_contour(0.0, 0.0, 1.0, 1.0).with_uncertainty(0.008)],
+        );
+        doc.features.push(Feature {
+            paths: Span::new(0, 1),
+            ..copper_trace_feature()
+        });
+        doc.layers.push(test_layer(Span::new(0, 1)));
+        normalize_for_artwork(&mut doc, crate::geom::GeometryAccuracy::new(0.01).unwrap()).unwrap();
+        assert!(!doc.arena.contours.is_empty());
+        assert!(
+            doc.arena
+                .contours
+                .iter()
+                .all(|contour| (0.008..=0.01).contains(&contour.uncertainty_mm))
         );
     }
 
@@ -1710,6 +1832,8 @@ mod tests {
 
     #[test]
     fn split_path_runs_keep_primitive_identity_only_for_whole_entries() {
+        let _accuracy = GeometryAccuracy::default();
+
         let mut doc = TestDoc::new();
         doc.push_path(
             Paint::Fill {

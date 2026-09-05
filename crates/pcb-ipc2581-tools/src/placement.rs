@@ -1,20 +1,25 @@
 use anyhow::Result;
 use pcb_ir::dialects::assembly::Scope;
 use pcb_ir::dialects::placement::{Document as PlacementDocument, lower_single_board};
+use pcb_ir::geom::GeometryAccuracy;
 use pcb_ir::import::ipc2581::{ImportedDesign, import_design};
 
 use crate::accessors::IpcAccessor;
 
-pub fn extract_single_board_placements(accessor: &IpcAccessor<'_>) -> Result<PlacementDocument> {
+pub fn extract_single_board_placements(
+    accessor: &IpcAccessor<'_>,
+    accuracy: GeometryAccuracy,
+) -> Result<PlacementDocument> {
     let ipc = accessor.ipc();
-    let imported = import_design(ipc)?;
-    extract_single_board_placements_from_design(&imported)
+    let imported = import_design(ipc, accuracy)?;
+    extract_single_board_placements_from_design(&imported, accuracy)
 }
 
 pub fn extract_single_board_placements_from_design(
     imported: &ImportedDesign,
+    accuracy: GeometryAccuracy,
 ) -> Result<PlacementDocument> {
-    lower_single_board(&imported.assembly_document(Scope::BoardArray)?)
+    lower_single_board(&imported.assembly_document(Scope::BoardArray, accuracy)?)
 }
 
 #[cfg(test)]
@@ -30,6 +35,8 @@ mod tests {
 
     #[test]
     fn panel_cpl_uses_repeated_board_local_placements() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -55,7 +62,8 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let placements = extract_single_board_placements(&IpcAccessor::new(&ipc)).unwrap();
+        let placements =
+            extract_single_board_placements(&IpcAccessor::new(&ipc), accuracy).unwrap();
 
         assert_eq!(placements.components.len(), 1);
         let component = &placements.components[0];
@@ -67,12 +75,14 @@ mod tests {
 
     #[test]
     fn dm0002_preserves_bom_categories_in_placement() {
+        let accuracy = GeometryAccuracy::default();
+
         let compressed = include_bytes!("../../ipc2581/tests/data/DM0002-IPC-2518.xml.zst");
         let xml = zstd::decode_all(Cursor::new(compressed)).unwrap();
         let xml = std::str::from_utf8(&xml).unwrap();
-        let imported = import_design(&Ipc2581::parse(xml).unwrap()).unwrap();
+        let imported = import_design(&Ipc2581::parse(xml).unwrap(), accuracy).unwrap();
 
-        let placements = extract_single_board_placements_from_design(&imported).unwrap();
+        let placements = extract_single_board_placements_from_design(&imported, accuracy).unwrap();
         assert_eq!(placements.components.len(), 59);
         assert_eq!(
             placements
@@ -93,6 +103,8 @@ mod tests {
 
     #[test]
     fn panel_cpl_rejects_multiple_component_bearing_steps() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -124,7 +136,7 @@ mod tests {
         )
         .unwrap();
 
-        let error = extract_single_board_placements(&IpcAccessor::new(&ipc)).unwrap_err();
+        let error = extract_single_board_placements(&IpcAccessor::new(&ipc), accuracy).unwrap_err();
 
         assert!(
             error

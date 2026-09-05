@@ -1,3 +1,4 @@
+use pcb_ir::geom::GeometryAccuracy;
 #[cfg(feature = "cli")]
 use std::fs;
 #[cfg(feature = "cli")]
@@ -52,8 +53,9 @@ pub enum ManufacturingFileKind {
 pub fn export_manufacturing_package(
     ipc: &Ipc2581,
     options: &ManufacturingExportOptions,
+    accuracy: GeometryAccuracy,
 ) -> Result<ManufacturingPackage> {
-    let package = build_manufacturing_package_with_options(ipc, options)?;
+    let package = build_manufacturing_package_with_options(ipc, options, accuracy)?;
     write_manufacturing_package(&package, &options.output)?;
     Ok(package)
 }
@@ -61,31 +63,40 @@ pub fn export_manufacturing_package(
 pub fn build_manufacturing_package(
     ipc: &Ipc2581,
     view: ArtworkScope,
+    accuracy: GeometryAccuracy,
 ) -> Result<ManufacturingPackage> {
-    let imported = import_design(ipc)?;
-    build_manufacturing_package_from_design(&imported, view)
+    let imported = import_design(ipc, accuracy)?;
+    build_manufacturing_package_from_design(&imported, view, accuracy)
 }
 
 /// Export an already-imported design without repeating IPC ingestion.
 pub fn build_manufacturing_package_from_design(
     imported: &ImportedDesign,
     view: ArtworkScope,
+    accuracy: GeometryAccuracy,
 ) -> Result<ManufacturingPackage> {
-    build_manufacturing_package_inner(imported, view, None)
+    build_manufacturing_package_inner(imported, view, None, accuracy)
 }
 
 pub fn build_manufacturing_package_with_options(
     ipc: &Ipc2581,
     options: &ManufacturingExportOptions,
+    accuracy: GeometryAccuracy,
 ) -> Result<ManufacturingPackage> {
-    let imported = import_design(ipc)?;
-    build_manufacturing_package_inner(&imported, options.view, options.relief_debug_dir.as_deref())
+    let imported = import_design(ipc, accuracy)?;
+    build_manufacturing_package_inner(
+        &imported,
+        options.view,
+        options.relief_debug_dir.as_deref(),
+        accuracy,
+    )
 }
 
 fn build_manufacturing_package_inner(
     imported: &ImportedDesign,
     view: ArtworkScope,
     relief_debug_dir: Option<&Path>,
+    accuracy: GeometryAccuracy,
 ) -> Result<ManufacturingPackage> {
     let mut files = gerber::build_gerber_x2_files_from_design_with_options(
         imported,
@@ -93,6 +104,7 @@ fn build_manufacturing_package_inner(
         &gerber::GerberExportOptions {
             relief_debug_dir: relief_debug_dir.map(Path::to_path_buf),
         },
+        accuracy,
     )?
     .into_iter()
     .map(|file| ManufacturingFile {
@@ -102,7 +114,7 @@ fn build_manufacturing_package_inner(
     })
     .collect::<Vec<_>>();
     files.extend(super::drill::build_xnc_drill_files_from_design(
-        imported, view,
+        imported, view, accuracy,
     )?);
 
     Ok(ManufacturingPackage { files })
@@ -177,10 +189,11 @@ fn write_zip<W: Write + Seek>(package: &ManufacturingPackage, writer: W) -> Resu
 pub fn execute_file_with_options(
     input_file: &Path,
     options: &ManufacturingExportOptions,
+    accuracy: GeometryAccuracy,
 ) -> Result<ManufacturingPackage> {
     let content = crate::utils::file::load_ipc_file(input_file)?;
     let ipc = ipc::Ipc2581::parse(&content)?;
-    export_manufacturing_package(&ipc, options)
+    export_manufacturing_package(&ipc, options, accuracy)
 }
 
 #[cfg(test)]
