@@ -435,14 +435,6 @@ def rmv_quotes(s):
     return s
 
 
-def get_group_items(group: pcbnew.PCB_GROUP) -> list[pcbnew.BOARD_ITEM]:
-    return [
-        item.Cast()
-        for item in group.GetItemsDeque()
-        if item.GetClass() not in ["PCB_GENERATOR"]
-    ]
-
-
 def get_footprint_uuid(fp: pcbnew.FOOTPRINT) -> str:
     """Return the UUID of a footprint."""
     path = fp.GetPath().AsString()
@@ -488,7 +480,7 @@ class SyncState:
 
 # Import the lens module (extracted to temp dir by Rust and added to PYTHONPATH)
 from lens import run_lens_sync
-from lens.kicad_adapter import get_footprint_field
+from lens.kicad_adapter import get_footprint_field, get_group_items
 
 
 class ImportNetlist(Step):

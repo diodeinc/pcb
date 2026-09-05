@@ -1,5 +1,6 @@
 //! UI rendering
 
+use crate::bom::format_price;
 use crate::kicad_symbols::KicadSymbol;
 use crate::{RegistryModule, RegistryModuleDependency, RegistrySymbol, SearchHit};
 use ratatui::{
@@ -458,11 +459,6 @@ fn render_preview_panel(frame: &mut Frame, app: &mut App, area: Rect) {
             frame.render_widget(loading, inner);
         }
     }
-}
-
-/// Format a price value for display (re-export from bom)
-fn format_price(price: f64) -> String {
-    crate::bom::format_price(price)
 }
 
 /// Format availability line: "US:     $3.22 (1,234)" or "US:     ..." while loading
