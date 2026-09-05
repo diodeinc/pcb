@@ -18,7 +18,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Add circular hole-to-hole clearance to all nine IPC-informed DFM profiles using Diode's standard 10 mil baseline.
 - Check copper-to-board-edge and cutout clearance at 15 mil in all nine IPC-informed DFM profiles.
 - Warn about soldermask webs below 4 mil in all nine IPC-informed DFM profiles.
-- Check plated and nonplated slot clearance to unrelated copper, with Diode baseline limits in IPC profiles.
+- Check plated and nonplated slot-to-copper clearance, with Diode guidance warnings in standard and IPC profiles.
 
 ### Fixed
 

@@ -197,6 +197,41 @@ limit = {{ minimum = "0.20 mm" }}
     }
 
     #[test]
+    fn standard_slot_clearance_warns_without_failing_but_requires_a_span() {
+        let standard = dfm::builtin_pdks()
+            .iter()
+            .find(|pdk| pdk.name == "standard")
+            .unwrap();
+        for plating in ["PLATED", "NONPLATED"] {
+            let xml = board(plating, "net=\"N1\"", &copper("net=\"N2\""))
+                .replace("height=\"0.6\"", "height=\"0.8\"")
+                .replace(
+                    "<Datum x=\"0\" y=\"0\"/>",
+                    r#"<Datum x="0" y="0"/><Profile><Polygon>
+<PolyBegin x="-10" y="-10"/><PolyStepSegment x="10" y="-10"/>
+<PolyStepSegment x="10" y="10"/><PolyStepSegment x="-10" y="10"/>
+<PolyStepSegment x="-10" y="-10"/></Polygon></Profile>"#,
+                );
+            let result = check(&xml, standard.source, LayoutTarget::Board).unwrap();
+            assert!(matches!(result.verdict, report::Verdict::Pass));
+            assert_eq!(result.summary.errors, 0);
+            assert_eq!(result.summary.warnings, 1);
+            let finding = &result.findings[0];
+            assert_eq!(finding.severity, report::Severity::Warning);
+            assert!((finding.measurement.actual_mm().unwrap() - 0.1).abs() < 1e-8);
+            assert_eq!(finding.subjects[0].kind, "routed_slot");
+
+            let missing = xml.replace("<Span fromLayer=\"L0\" toLayer=\"L1\"/>", "");
+            assert!(
+                check(&missing, standard.source, LayoutTarget::Board)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("no resolvable drill span")
+            );
+        }
+    }
+
+    #[test]
     fn plated_ownership_and_nonplated_clearance_use_the_slot_ends_not_its_width() {
         for (plating, selector, net, fails) in [
             ("PLATED", "plated", "net=\"N1\"", false),

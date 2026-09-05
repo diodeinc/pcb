@@ -297,6 +297,8 @@ when fewer than two exist.
   netless functional and foreign copper remain offenders. Nonplated slots
   exempt nothing. The rule requires one unambiguous physical stackup and a
   declared through or resolvable layer span; missing data fails extraction.
+  This eligibility requirement also applies to preferred warning tiers: missing
+  data is an incomplete check, not a geometric shortfall or a valid pass.
   Copper layer declaration order does not determine the physical span.
 - Copper feature-width rules report narrow copper piece by piece after final
   polarity composition. Copper-clearance rules measure the shortest
@@ -360,6 +362,12 @@ and checks. `--layout-target` accepts
 `board` or `board-array` and defaults to `board-array`. Add
 `--waivers waivers.toml` to apply a [waiver file](#waivers).
 
+The `standard` PDK prefers 0.40 mm plated and nonplated slot-to-copper
+clearance. Shortfalls produce warnings, not a failed manufacturing verdict.
+This is conservative Diode routing guidance, not a manufacturer capability
+or an IPC requirement. Slot clearance is not enabled in `jlcpcb-1oz` without
+a manufacturer source.
+
 The `jlcpcb-1oz` PDK, also available as `jlc`, executes the public rigid FR-4
 capability table for 2-32 copper layers and 1 oz outer copper. It deliberately
 omits the one-layer NPTH-only service, 2 oz rules, local 3 mil BGA exceptions,
@@ -376,8 +384,9 @@ check via, PTH, and NPTH hole-to-copper clearance at 0.25 mm for Level A,
 0.20 mm for Level B, and 0.15 mm for Level C. They check via, PTH, NPTH,
 plated-slot, and nonplated-slot clearance to the board edge at 0.50 mm for
 Level A, 0.40 mm for Level B, and 0.30 mm for Level C. Plated and nonplated
-slot-to-copper clearance uses the same 0.50 / 0.40 / 0.30 mm A/B/C limits:
-Diode deliberately allows more routing margin than for circular drills.
+slot-to-copper clearance prefers 0.50 / 0.40 / 0.30 mm for A/B/C and warns
+on shortfalls. Diode deliberately allows more routing margin than for circular
+drills; these are opinionated guidance, not IPC requirements.
 These values apply across all three performance classes. Each profile assumes 1.6 mm board
 thickness for the through-hole aspect-ratio fallback described above. Diode
 chose these opinionated values using IPC design topics as context; they are not
