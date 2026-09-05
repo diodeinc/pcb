@@ -36,9 +36,7 @@
           "pages/vscode",
           "pages/spec",
           "pages/packages",
-          "pages/testing",
-          "pages/docs_readme",
-          "pages/docs_bringup"
+          "pages/testing"
         ]
       },
       {
