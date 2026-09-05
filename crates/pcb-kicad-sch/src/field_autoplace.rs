@@ -363,10 +363,18 @@ fn include_primitives(bounds: &mut Option<Bounds>, items: &[Sexpr], placed: &Sym
 }
 
 fn include_primitive(bounds: &mut Option<Bounds>, items: &[Sexpr], placed: &Symbol) {
-    let Some(tag) = items.first().and_then(Sexpr::as_sym) else {
+    let Some(local) = primitive_bounds(items) else {
         return;
     };
-    let local = match tag {
+    let transformed = transform_bounds(local, placed);
+    match bounds {
+        Some(bounds) => bounds.union(transformed),
+        None => *bounds = Some(transformed),
+    }
+}
+
+fn primitive_bounds(items: &[Sexpr]) -> Option<Bounds> {
+    match items.first().and_then(Sexpr::as_sym)? {
         "polyline" | "bezier" => pcb_sexpr::find_child_list(items, "pts").and_then(|pts| {
             Bounds::from_points(
                 pts.iter()
@@ -400,15 +408,111 @@ fn include_primitive(bounds: &mut Option<Bounds>, items: &[Sexpr], placed: &Symb
                 .filter_map(|tag| pcb_sexpr::find_child_list(items, tag).and_then(parse_xy)),
         ),
         _ => None,
-    };
-    let Some(local) = local else {
-        return;
-    };
-    let transformed = transform_bounds(local, placed);
-    match bounds {
-        Some(bounds) => bounds.union(transformed),
-        None => *bounds = Some(transformed),
     }
+}
+
+/// Conservative placement envelopes for common opaque page graphics. These
+/// stay in page coordinates; unlike library primitives, their Y is not flipped.
+/// Unknown item types remain preserved but do not have a placement envelope.
+pub(crate) fn page_graphic_bounds(item: &Sexpr) -> Option<Bounds> {
+    let items = item.as_list()?;
+    let child_point = |tag| pcb_sexpr::find_child_list(items, tag).and_then(parse_xy);
+    let mut bounds = match items.first().and_then(Sexpr::as_sym)? {
+        "text" => {
+            let at = child_point("at")?;
+            let text = items.get(1)?.as_atom()?;
+            let effects = pcb_sexpr::find_child_list(items, "effects")?;
+            let font = pcb_sexpr::find_child_list(effects, "font")?;
+            let size = pcb_sexpr::find_child_list(font, "size").and_then(parse_xy)?;
+            let width = text
+                .lines()
+                .map(|line| line.chars().count())
+                .max()
+                .unwrap_or(0) as f64
+                * size.x.abs()
+                * ESTIMATED_TEXT_WIDTH_EM;
+            let height = text.lines().count().max(1) as f64 * size.y.abs() * 1.5;
+            // Reserve the full text extent in every direction to cover any
+            // rotation and justification, including multiline annotations.
+            let radius = width + height;
+            Bounds::from_points([
+                Point::new(at.x - radius, at.y - radius),
+                Point::new(at.x + radius, at.y + radius),
+            ])?
+        }
+        "text_box" => {
+            let at = child_point("at")?;
+            let size = child_point("size")?;
+            let radius = size.x.abs() + size.y.abs();
+            Bounds::from_points([
+                Point::new(at.x - radius, at.y - radius),
+                Point::new(at.x + radius, at.y + radius),
+            ])?
+        }
+        "arc" => {
+            let start = child_point("start")?;
+            let mid = child_point("mid")?;
+            let end = child_point("end")?;
+            let bx = mid.x - start.x;
+            let by = mid.y - start.y;
+            let cx = end.x - start.x;
+            let cy = end.y - start.y;
+            let determinant = 2.0 * (bx * cy - by * cx);
+            if determinant.abs() <= GEOMETRY_EPS_MM {
+                Bounds::from_points([start, mid, end])?
+            } else {
+                let b2 = bx * bx + by * by;
+                let c2 = cx * cx + cy * cy;
+                let dx = (cy * b2 - by * c2) / determinant;
+                let dy = (bx * c2 - cx * b2) / determinant;
+                let radius = dx.hypot(dy);
+                let center = Point::new(start.x + dx, start.y + dy);
+                // The determinant selects the sweep through mid. Include only
+                // cardinal extrema on that sweep, not the rest of the circle.
+                let direction = determinant.signum();
+                let start_angle = (-dy).atan2(-dx);
+                let end_angle = (end.y - center.y).atan2(end.x - center.x);
+                let sweep =
+                    ((end_angle - start_angle) * direction).rem_euclid(std::f64::consts::TAU);
+                let mut bounds = Bounds::from_points([start, mid, end])?;
+                for (angle, point) in [
+                    (0.0, Point::new(center.x + radius, center.y)),
+                    (
+                        std::f64::consts::FRAC_PI_2,
+                        Point::new(center.x, center.y + radius),
+                    ),
+                    (
+                        std::f64::consts::PI,
+                        Point::new(center.x - radius, center.y),
+                    ),
+                    (
+                        3.0 * std::f64::consts::FRAC_PI_2,
+                        Point::new(center.x, center.y - radius),
+                    ),
+                ] {
+                    let distance =
+                        ((angle - start_angle) * direction).rem_euclid(std::f64::consts::TAU);
+                    if distance <= sweep + 1e-12 {
+                        bounds.include(point);
+                    }
+                }
+                bounds
+            }
+        }
+        _ => primitive_bounds(items)?,
+    };
+    let stroke = pcb_sexpr::find_child_list(items, "stroke")
+        .and_then(|stroke| pcb_sexpr::find_child_list(stroke, "width"))
+        .and_then(|width| width.get(1))
+        .and_then(number)
+        .unwrap_or(0.0)
+        .abs()
+        * 0.5;
+    bounds.min_x -= stroke;
+    bounds.min_y -= stroke;
+    bounds.max_x += stroke;
+    bounds.max_y += stroke;
+    Some(bounds)
 }
 
 fn transform_bounds(bounds: Bounds, placed: &Symbol) -> Bounds {
@@ -608,6 +712,62 @@ mod tests {
 
     use super::*;
     use crate::SymbolField;
+
+    #[test]
+    fn page_arc_bounds_follow_the_sweep_in_both_directions() {
+        for (start, mid, end, expected) in [
+            (
+                "10 10",
+                "20 9.9",
+                "30 10",
+                Bounds {
+                    min_x: 10.0,
+                    min_y: 9.9,
+                    max_x: 30.0,
+                    max_y: 10.0,
+                },
+            ),
+            (
+                "470 40",
+                "540 30",
+                "470 -40",
+                Bounds {
+                    min_x: 470.0,
+                    min_y: -50.0,
+                    max_x: 550.0,
+                    max_y: 50.0,
+                },
+            ),
+            (
+                "10 10",
+                "20 10",
+                "30 10",
+                Bounds {
+                    min_x: 10.0,
+                    min_y: 10.0,
+                    max_x: 30.0,
+                    max_y: 10.0,
+                },
+            ),
+        ] {
+            for (start, end) in [(start, end), (end, start)] {
+                let source =
+                    format!("(arc (start {start}) (mid {mid}) (end {end}) (stroke (width 2)))");
+                let actual = page_graphic_bounds(&pcb_sexpr::parse(&source).unwrap()).unwrap();
+                for (actual, expected) in [
+                    (actual.min_x, expected.min_x - 1.0),
+                    (actual.min_y, expected.min_y - 1.0),
+                    (actual.max_x, expected.max_x + 1.0),
+                    (actual.max_y, expected.max_y + 1.0),
+                ] {
+                    assert!(
+                        (actual - expected).abs() < GEOMETRY_EPS_MM,
+                        "{source}: {actual} != {expected}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn places_visible_fields_on_the_first_pin_free_side() {
