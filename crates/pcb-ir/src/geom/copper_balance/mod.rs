@@ -42,7 +42,7 @@ const SQRT_3: f64 = 1.732_050_807_568_877_2;
 /// Independent per-layer work, in source order. Browsers cannot spawn native
 /// threads; use the identical solve serially there, without requiring workers
 /// or shared WebAssembly memory. Native builds retain per-layer concurrency.
-fn map_layers<T: Send, R: Send>(
+pub fn map_layers<T: Send, R: Send>(
     items: impl IntoIterator<Item = T>,
     solve: impl Fn(T) -> R + Sync,
 ) -> Vec<R> {

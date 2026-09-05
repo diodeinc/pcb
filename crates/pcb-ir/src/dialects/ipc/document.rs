@@ -113,6 +113,35 @@ impl<Symbol, LayerFunction> Document<Symbol, LayerFunction> {
     }
 }
 
+impl<Symbol: Copy + Eq + std::hash::Hash, LayerFunction: Clone> Document<Symbol, LayerFunction> {
+    /// Consume a source layer into its final painted image through the artwork dialect.
+    pub fn into_layer_image(
+        mut self,
+        layer_index: usize,
+        role: crate::dialects::LayerRole,
+        side: crate::dialects::Side,
+        accuracy: GeometryAccuracy,
+    ) -> Result<crate::geom::ContourSet, AccuracyError> {
+        super::process::normalize_for_artwork(&mut self, accuracy)?;
+        super::validate_artwork_ready(&self)
+            .map_err(|_| AccuracyError::InvalidGeometry("IPC layer is not artwork-ready"))?;
+        let artwork = super::lower_layer_to_artwork(&self, layer_index, role, side, accuracy)?;
+        let (mut layers, _) = crate::dialects::artwork::compose_owner_regions(
+            &artwork,
+            |_| Some(()),
+            crate::geom::tol::REGION_MM,
+            accuracy,
+        )?;
+        Ok(layers
+            .pop()
+            .and_then(|mut owners| owners.pop())
+            .map_or_else(
+                || crate::geom::ContourSet::empty(crate::geom::tol::REGION_MM),
+                |(_, region)| region,
+            ))
+    }
+}
+
 impl<Symbol, LayerFunction> Default for Document<Symbol, LayerFunction> {
     fn default() -> Self {
         Self {

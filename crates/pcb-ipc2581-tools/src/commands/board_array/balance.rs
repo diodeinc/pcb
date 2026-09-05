@@ -10,10 +10,12 @@ use pcb_ir::dialects::ipc::{
     ArtworkScope, BalancingRegionOptions, BoardArraySupportDocument, BoardArraySupportLayerPolicy,
     board_array_balancing_region, collect_board_array_balancing_input,
 };
-use pcb_ir::geom::GeometryAccuracy;
+use pcb_ir::geom::copper_balance::map_layers;
+use pcb_ir::geom::{ContourSet, GeometryAccuracy};
+use pcb_ir::import::ipc2581::{ImportedDesign, LayerId, import_design};
 
 use crate::copper_balance::{
-    CERTIFICATE_AREA_TOLERANCE_MM2, CopperBalancePlan, PreparedCopperLayer, composed_copper_image,
+    CERTIFICATE_AREA_TOLERANCE_MM2, CopperBalancePlan, PreparedCopperLayer,
     physical_copper_stack_weights, solve_copper_balance,
 };
 use crate::geometry;
@@ -32,18 +34,22 @@ pub fn generate_automatic_board_array_copper_balance(
     ipc: &Ipc2581,
     accuracy: GeometryAccuracy,
 ) -> Result<CopperBalancePlan> {
-    let layout = geometry::extract_layout(ipc)
-        .context("failed to extract board-array layout for copper balancing")?;
-    let score_lines = geometry::board_array_vscore_lines(ipc, accuracy)
+    let imported = import_design(ipc, accuracy)?;
+    let layout = &imported.geometry;
+    let score_lines = geometry::board_array_vscore_lines_from_design(&imported, accuracy)
         .context("failed to extract board-array V-scores for copper balancing")?;
-    let fabrication_profile =
-        geometry::board_array_fabrication_profile(ipc, &layout, &score_lines, accuracy)
-            .context("failed to derive board-array fabrication profile for copper balancing")?;
+    let fabrication_profile = geometry::board_array_fabrication_profile_from_design(
+        &imported,
+        layout,
+        &score_lines,
+        accuracy,
+    )
+    .context("failed to derive board-array fabrication profile for copper balancing")?;
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
     let copper_layers = crate::layers::copper_layers(ecad);
-    let support_layers = extract_array_support_layers(ipc, accuracy)?;
+    let support_layers = extract_array_support_layers(&imported, accuracy)?;
     let collection = collect_board_array_balancing_input(
-        &layout,
+        layout,
         &fabrication_profile,
         &copper_layers,
         support_layers
@@ -57,84 +63,90 @@ pub fn generate_automatic_board_array_copper_balance(
     let board_area_mm2 = board_footprints.area();
     let stack_weights = physical_copper_stack_weights(ipc);
     let stack_weights_available = stack_weights.is_some();
-    let mut prepared: Vec<PreparedLayerBalance> = Vec::with_capacity(copper_layers.len());
+    let mut prepared: Vec<LayerCopper> = Vec::with_capacity(copper_layers.len());
+    let mut inputs = Vec::new();
     for layer in &copper_layers {
         let layer_name = ipc.resolve(layer.name).to_string();
-        let existing_copper =
-            composed_copper_image(ipc, &layer_name, accuracy)?.intersection(panel_outer);
-        let board_target_density = (existing_copper.intersection(board_footprints).area()
-            / board_area_mm2)
-            .clamp(0.0, 1.0);
+        let existing_copper = imported
+            .composed_layer_image(
+                imported
+                    .layer_id(&layer_name)
+                    .context("missing copper layer")?,
+                ArtworkScope::ArrayFlattened,
+                accuracy,
+            )?
+            .intersection(panel_outer);
         // Existing copper outside the board footprints participates as an
         // obstacle, so copper the array-support geometry does not capture
         // shrinks the certified safe region instead of failing the solve.
         let frame_copper = existing_copper.difference(board_footprints);
         let frame_copper_empty = frame_copper.is_empty();
-        let stack_weight_mm2 = stack_weights
-            .as_ref()
-            .and_then(|weights| weights.get(&layer_name).copied())
-            .unwrap_or(0.0);
-        let safe_region = if frame_copper_empty
-            && let Some(representative) = prepared.iter().find(|candidate| {
-                candidate.frame_copper_empty
+        let representative = prepared
+            .iter()
+            .find(|candidate| {
+                frame_copper_empty
+                    && candidate.frame.is_empty()
                     && collection.has_same_support_scope(candidate.layer, layer.name)
-            }) {
-            representative.inner.safe_region.clone()
-        } else {
-            let mut balancing_input = collection.input_for_layer(layer.name);
-            balancing_input.support_features =
-                balancing_input.support_features.union(&frame_copper);
-            let balancing_region = board_array_balancing_region(
-                &balancing_input,
-                BalancingRegionOptions::default(),
-                accuracy,
-            );
-            let balancing_region = balancing_region.context(format!(
-                "failed to compute balancing region for layer '{layer_name}'"
-            ))?;
-            if !balancing_region
-                .certificate
-                .passes(CERTIFICATE_AREA_TOLERANCE_MM2)
-            {
-                bail!(
-                    "computed board-array balancing region for layer '{layer_name}' failed clearance certification"
-                );
-            }
-            balancing_region.safe_region
-        };
-        // The panel material the solver may fill, plus the boards whose
-        // density set the target and any frame copper already present.
-        // Everything else inside the array — board clearance, rails, V-score
-        // relief, tooling holes — can never hold generated copper and so
-        // stays out of the density denominator.
-        let density_domain = board_footprints.union(&frame_copper).union(&safe_region);
-        prepared.push(PreparedLayerBalance {
+            })
+            .map(|candidate| candidate.region);
+        let input_index = representative.unwrap_or_else(|| {
+            let index = inputs.len();
+            let mut input = collection.input_for_layer(layer.name);
+            input.support_features = input.support_features.union(&frame_copper);
+            inputs.push((layer_name.clone(), input));
+            index
+        });
+        prepared.push(LayerCopper {
             layer: layer.name,
-            frame_copper_empty,
-            inner: PreparedCopperLayer {
-                layer_name,
-                target_density: board_target_density,
-                stack_weight_mm2,
-                existing_copper,
-                safe_region,
-                density_domain,
-            },
+            name: layer_name,
+            existing: existing_copper,
+            frame: frame_copper,
+            region: input_index,
         });
     }
+    let regions = map_layers(inputs, |(layer_name, input)| {
+        let region = board_array_balancing_region(&input, BalancingRegionOptions::default(), accuracy)
+            .with_context(|| format!("failed to compute balancing region for layer '{layer_name}'"))?;
+        if !region.certificate.passes(CERTIFICATE_AREA_TOLERANCE_MM2) {
+            bail!("computed board-array balancing region for layer '{layer_name}' failed clearance certification");
+        }
+        Ok(region.safe_region)
+    }).into_iter().collect::<Result<Vec<_>>>()?;
+    let prepared = prepared
+        .into_iter()
+        .map(|layer| {
+            let safe_region = regions[layer.region].clone();
+            PreparedCopperLayer {
+                target_density: (layer.existing.intersection(board_footprints).area()
+                    / board_area_mm2)
+                    .clamp(0.0, 1.0),
+                stack_weight_mm2: stack_weights
+                    .as_ref()
+                    .and_then(|weights| weights.get(&layer.name).copied())
+                    .unwrap_or(0.0),
+                density_domain: board_footprints.union(&layer.frame).union(&safe_region),
+                layer_name: layer.name,
+                existing_copper: layer.existing,
+                safe_region,
+            }
+        })
+        .collect();
 
     solve_copper_balance(
         panel_outer,
         board_footprints.clone(),
         stack_weights_available,
-        prepared.into_iter().map(|layer| layer.inner).collect(),
+        prepared,
         accuracy,
     )
 }
 
-struct PreparedLayerBalance {
+struct LayerCopper {
     layer: Symbol,
-    frame_copper_empty: bool,
-    inner: PreparedCopperLayer,
+    name: String,
+    existing: ContourSet,
+    frame: ContourSet,
+    region: usize,
 }
 
 /// One ECAD layer's `ArraySupport` view plus its physical-obstacle policy.
@@ -154,20 +166,20 @@ type SupportDocument = pcb_ir::dialects::ipc::Document<Symbol, LayerFunction>;
 /// Extract every ECAD layer as an `ArraySupport` document for safe-region
 /// discovery.
 pub fn extract_array_support_layers(
-    ipc: &Ipc2581,
+    imported: &ImportedDesign,
     accuracy: GeometryAccuracy,
 ) -> Result<Vec<ArraySupportLayerSource>> {
-    let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
-    ecad.cad_data
-        .layers
+    imported
+        .layer_definitions
         .iter()
-        .map(|layer| {
-            let name = ipc.resolve(layer.name).to_string();
-            let document =
-                geometry::extract_layer_for_view(ipc, &name, ArtworkScope::ArraySupport, accuracy)
-                    .with_context(|| {
-                        format!("failed to extract IPC-2581 array-support layer '{name}'")
-                    })?;
+        .enumerate()
+        .map(|(index, layer)| {
+            let name = imported.resolve(layer.name).to_string();
+            let document = imported
+                .materialize_layer(LayerId(index as u32), ArtworkScope::ArraySupport, accuracy)
+                .with_context(|| {
+                    format!("failed to extract IPC-2581 array-support layer '{name}'")
+                })?;
             let policy = if layer.layer_function == LayerFunction::VCut {
                 BoardArraySupportLayerPolicy::VCutOperationsOnly
             } else {

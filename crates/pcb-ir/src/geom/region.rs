@@ -284,7 +284,8 @@ fn decimate_ring_inward(ring: &Ring, deviation_mm: f64) -> Ring {
     // Every chord re-checks its whole chain, so error cannot accumulate.
     let chord_absorbs = |anchor: usize, end: usize| {
         let start = point(anchor);
-        let chord = point(end) - start;
+        let endpoint = point(end);
+        let chord = endpoint - start;
         let length = chord.length();
         if length <= f64::EPSILON {
             return false;
@@ -292,7 +293,7 @@ fn decimate_ring_inward(ring: &Ring, deviation_mm: f64) -> Ring {
         (anchor + 1..end).all(|index| {
             let offset = point(index) - start;
             let cross = chord.x * offset.y - chord.y * offset.x;
-            cross <= 0.0 && -cross / length <= deviation_mm
+            cross <= 0.0 && dist::point_segment(point(index), start, endpoint).0 <= deviation_mm
         })
     };
 
@@ -1450,26 +1451,40 @@ impl ContourSet {
         let remaining = accuracy.allowance(inherited)?;
         let join_angle = (2.0 * (remaining / (2.0 * offset.abs())).min(1.0).sqrt().asin())
             .clamp(0.01 * std::f64::consts::PI, std::f64::consts::FRAC_PI_4);
-        let achievable = inherited + 2.0 * offset.abs() * (join_angle / 2.0).sin().powi(2);
-        accuracy.check(achievable)?;
-        let result = self.offset_with_angle(offset, join_angle);
-        result.checked(accuracy)
-    }
-
-    fn offset_with_angle(&self, offset: f64, join_angle: f64) -> Self {
-        // i_overlay floors sweep/angle, so chords can span twice the angle,
-        // and clamps join angles to [0.01*pi, 0.25*pi].
-        let outline = |distance| {
-            let style = OutlineStyle::new(distance).line_join(OutlineLineJoin::Round(join_angle));
-            simplify_rings(
-                flatten_shapes(self.rings.outline_as::<i64>(&style)),
-                FillRule::NonZero,
-            )
-        };
-        let rings = outline(offset);
-        let input_error = self.uncertainty_mm + numerical_error(self.bbox.expand(offset.abs()));
-        let added = 2.0 * offset.abs() * (join_angle / 2.0).sin().powi(2);
-        Self::from_regularized(rings, self.tolerance, input_error + added)
+        let style = OutlineStyle::new(offset).line_join(OutlineLineJoin::Round(join_angle));
+        let rings = flatten_shapes(self.rings.outline_as::<i64>(&style));
+        // Only rounded corners incur chord error; inward corners intersect straight edges.
+        // The backend emits floor(sweep / join_angle) chords at each rounded corner.
+        let added = self
+            .rings
+            .iter()
+            .flat_map(|ring| {
+                let directions = ring_edges(ring)
+                    .filter_map(|(a, b)| {
+                        let d = b - a;
+                        (d.length() > 0.0).then(|| d / d.length())
+                    })
+                    .collect::<Vec<_>>();
+                directions
+                    .iter()
+                    .zip(directions.iter().cycle().skip(1))
+                    .take(directions.len())
+                    .filter(|(a, b)| (a.x * b.y - a.y * b.x) * offset > 0.0)
+                    .map(|(a, b)| {
+                        let sweep = (a.x * b.x + a.y * b.y).clamp(-1.0, 1.0).acos();
+                        let steps = (sweep / join_angle).floor().max(1.0);
+                        2.0 * offset.abs() * (sweep / steps / 4.0).sin().powi(2)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .fold(0.0, f64::max);
+        let simplified = decimate_rings_inward(&rings, numeric);
+        Self::from_regularized(
+            simplify_rings(simplified, FillRule::NonZero),
+            self.tolerance,
+            inherited + added + numeric,
+        )
+        .checked(accuracy)
     }
 }
 
@@ -1745,6 +1760,7 @@ fn two_sided_residual_components(
         .tolerance
         .max(residual.tolerance)
         .max(numerical_error(source.bbox));
+    let boundary_uncertainty = source.uncertainty_mm + std::f64::consts::SQRT_2 * contact_tolerance;
     residual
         .connected_components()
         .into_iter()
@@ -1760,12 +1776,14 @@ fn two_sided_residual_components(
                 reach,
                 contact_tolerance,
                 approximation_mm,
+                boundary_uncertainty,
             )
             .map(|geometry| TwoSidedResidualComponent {
                 region: component,
-                width: geometry.disk.width().also_uncertain(
-                    2.0 * source.uncertainty_mm + std::f64::consts::SQRT_2 * contact_tolerance,
-                ),
+                width: geometry
+                    .disk
+                    .width()
+                    .also_uncertain(2.0 * boundary_uncertainty),
                 disk: geometry.disk,
                 axis: geometry.axis,
             })
@@ -1937,6 +1955,7 @@ fn component_width(
     reach: f64,
     contact_tolerance: f64,
     approximation_mm: f64,
+    boundary_uncertainty: f64,
 ) -> Option<ComponentWidth> {
     if one_wall(sites) {
         return None;
@@ -2205,8 +2224,8 @@ fn component_width(
     let minimum = present
         .iter()
         .filter(|disk| !pruned(disk))
-        // Below two grid units a width is snapping noise, not geometry.
-        .filter(|disk| disk.width().mm > 2.0 * contact_tolerance)
+        // The disk must survive the uncertainty of its boundary sites.
+        .filter(|disk| disk.radius > boundary_uncertainty)
         .min_by(|left, right| left.width().mm.total_cmp(&right.width().mm))
         .copied()?;
     // Retain the actual interior axis, removing the portions rejected by the
@@ -2298,6 +2317,13 @@ fn component_width(
 /// the rounded bite of one smooth concavity is not mistaken for a gap.
 fn two_sided_gap_residual(source: &ContourSet, residual: &ContourSet) -> ContourSet {
     let source_segments = source_boundary_segments(source);
+    let boundary = PreparedRegion::from_segments(
+        source_segments
+            .iter()
+            .map(|segment| (segment.start, segment.end))
+            .collect(),
+        source.uncertainty_mm,
+    );
     let contact_tolerance = source
         .tolerance
         .max(residual.tolerance)
@@ -2307,19 +2333,17 @@ fn two_sided_gap_residual(source: &ContourSet, residual: &ContourSet) -> Contour
         .connected_components()
         .into_iter()
         .filter(|component| {
-            let contacts = source_segments
-                .iter()
+            let contacts = boundary
+                .segment_ids_meeting(component.bbox.expand(contact_tolerance))
+                .into_iter()
+                .map(|id| &source_segments[id])
                 .filter(|segment| {
-                    segment
-                        .bbox
-                        .expand(contact_tolerance)
-                        .intersects(component.bbox)
-                        && region_boundary_within_distance(
-                            component,
-                            segment.start,
-                            segment.end,
-                            contact_tolerance,
-                        )
+                    region_boundary_within_distance(
+                        component,
+                        segment.start,
+                        segment.end,
+                        contact_tolerance,
+                    )
                 })
                 .collect::<Vec<_>>();
             contacts.iter().enumerate().any(|(index, left)| {
@@ -2404,11 +2428,34 @@ fn narrow_void_medial_axis_keep_out(
     if narrow_voids.is_empty() {
         return Ok(ContourSet::empty(source.tolerance));
     }
+    let boundary = PreparedRegion::from_segments(
+        source.rings.iter().flat_map(ring_edges).collect(),
+        source.uncertainty_mm,
+    );
+    // A closing residual is within the disk radius of its nearest source boundary.
+    let void_boundary = narrow_voids.prepare_query();
+    let relevant = narrow_voids
+        .ring_bounds
+        .iter()
+        .flat_map(|bounds| boundary.segment_ids_meeting(bounds.expand(radius)))
+        .filter(|&id| {
+            let (start, end) = boundary.segments[id];
+            void_boundary
+                .segment_nearest_within(start, end, radius)
+                .is_some()
+        })
+        .collect::<std::collections::HashSet<_>>();
+    let mut source_index = 0;
     let origin = Point::new(source.bbox.min.x, source.bbox.min.y);
     let mut segments = Vec::<VoronoiLine<i32>>::new();
     let mut boundary_segments = Vec::new();
     for (ring_id, ring) in source.rings.iter().enumerate() {
         for index in 0..ring.len() {
+            let needed = relevant.contains(&source_index);
+            source_index += 1;
+            if !needed {
+                continue;
+            }
             let [start_x, start_y] = ring[index];
             let [end_x, end_y] = ring[(index + 1) % ring.len()];
             if (end_x - start_x).hypot(end_y - start_y) <= source.tolerance {
@@ -2782,6 +2829,33 @@ mod tests {
     use crate::geom::shapes;
 
     #[test]
+    fn width_requires_a_disk_that_survives_boundary_uncertainty() {
+        let accuracy = GeometryAccuracy::default();
+        let mut region = ContourSet::rectangle(rect(0.0, 0.0, 1.0, 0.003), 1e-6);
+        assert!(
+            !crate::geom::dfm::thin_features(&region, 0.127, accuracy)
+                .unwrap()
+                .is_empty()
+        );
+        region.uncertainty_mm = 0.002;
+        assert!(
+            crate::geom::dfm::thin_features(&region, 0.127, accuracy)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn erosion_of_a_convex_polygon_does_not_spend_round_join_error() {
+        let accuracy = GeometryAccuracy::new(1e-6).unwrap();
+        let region = ContourSet::rectangle(rect(0.0, 0.0, 10.0, 10.0), 0.0);
+        let inset = region.disk_erode(1.0, accuracy).unwrap();
+        assert!((inset.area() - 64.0).abs() < 1e-8);
+        assert!(inset.uncertainty_mm < 1e-9);
+        assert!(region.disk_dilate(1.0, accuracy).is_err());
+    }
+
+    #[test]
     fn component_width_prunes_only_beyond_grid_uncertainty() {
         let measure = |height| {
             let component = ContourSet::rectangle(rect(0.0, 0.0, 1.0, height), tol::REGION_MM);
@@ -2791,6 +2865,7 @@ mod tests {
                 0.05,
                 tol::REGION_MM,
                 0.0025,
+                std::f64::consts::SQRT_2 * tol::REGION_MM,
             )
         };
 
@@ -2929,6 +3004,8 @@ mod tests {
 
     #[test]
     fn inward_decimation_only_shrinks_and_respects_deviation() {
+        let spur = vec![[0.0, 0.0], [2.0, 0.0], [1.0, 1e-12], [1.0, 1.0], [0.0, 1.0]];
+        assert!(decimate_ring_inward(&spur, 1e-10).contains(&[2.0, 0.0]));
         let accuracy = GeometryAccuracy::default();
 
         let ring = ContourSet::from_contours(

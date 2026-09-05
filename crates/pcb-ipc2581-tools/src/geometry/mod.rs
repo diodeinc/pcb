@@ -12,7 +12,7 @@ use pcb_ir::dialects::ipc::{
     },
 };
 use pcb_ir::geom::GeometryAccuracy;
-use pcb_ir::geom::{BBox, ContourBuf, ContourSet, Point, Polarity};
+use pcb_ir::geom::{BBox, ContourSet, Point, Polarity};
 use pcb_ir::import::ipc2581::{ImportedDesign, LayerId, import_design};
 
 pub use pcb_ir::import::ipc2581::{extract_layer, extract_layer_for_view, extract_layout};
@@ -155,15 +155,20 @@ fn board_array_relief_features(
     }
 
     let (cutouts, envelopes) = collect_relief_feature_candidates(imported, accuracy)?;
-    let mut score_blockers = Vec::new();
+    let mut score_blockers = ContourSet::empty(DEFAULT_RELIEF_TOLERANCE_MM);
     for cutout in cutouts {
-        if !payloads_touch_score_lines(&cutout.payloads, score_lines, accuracy)? {
+        if !score_lines.iter().any(|line| {
+            !cutout
+                .region
+                .intersection(&score_line_strip(*line))
+                .is_empty()
+        }) {
             continue;
         }
         if plated_like(cutout.plating) {
             let mut matches = Vec::new();
             for envelope in &envelopes {
-                if envelope_matches_cutout(envelope, &cutout, accuracy)? {
+                if envelope_matches_cutout(envelope, &cutout) {
                     matches.push(envelope);
                 }
             }
@@ -177,17 +182,16 @@ fn board_array_relief_features(
                 );
             }
             for envelope in matches {
-                score_blockers.extend(envelope.payloads.clone());
+                score_blockers = score_blockers.union(&envelope.region);
             }
         } else {
-            score_blockers.extend(cutout.payloads);
+            score_blockers = score_blockers.union(&cutout.region);
         }
     }
 
-    let blockers =
-        ContourSet::from_filled_contours(&score_blockers, DEFAULT_RELIEF_TOLERANCE_MM, accuracy)?;
+    accuracy.check(score_blockers.uncertainty_mm)?;
     Ok(BoardArrayReliefFeatures {
-        score_blockers: blockers.to_contours(),
+        score_blockers: score_blockers.to_contours(),
     })
 }
 
@@ -226,7 +230,7 @@ fn collect_relief_feature_candidates(
 
 #[derive(Debug, Clone)]
 struct ReliefFeatureCandidate {
-    payloads: Vec<ContourBuf>,
+    region: ContourSet,
     bbox: BBox,
     plating: PlatingKind,
     padstack_ref: Option<Symbol>,
@@ -240,21 +244,17 @@ impl ReliefFeatureCandidate {
         accuracy: GeometryAccuracy,
     ) -> anyhow::Result<Self> {
         Ok(Self {
-            payloads: feature_contours(doc, feature, accuracy)?,
+            region: ContourSet::from_filled_contours(
+                &doc.placed_feature_contours(feature, accuracy)?,
+                DEFAULT_RELIEF_TOLERANCE_MM,
+                accuracy,
+            )?,
             bbox: feature.bbox,
             plating: feature.intent.plating,
             padstack_ref: feature.padstack_ref,
             net: feature.net,
         })
     }
-}
-
-fn feature_contours(
-    doc: &GeometryDocument,
-    feature: &Feature<Symbol>,
-    accuracy: GeometryAccuracy,
-) -> anyhow::Result<Vec<ContourBuf>> {
-    Ok(doc.placed_feature_contours(feature, accuracy)?)
 }
 
 fn relief_feature_layer(layer_function: LayerFunction) -> bool {
@@ -287,24 +287,6 @@ fn plated_like(plating: PlatingKind) -> bool {
     )
 }
 
-fn payloads_touch_score_lines(
-    payloads: &[ContourBuf],
-    score_lines: &[VScoreLine],
-    accuracy: GeometryAccuracy,
-) -> anyhow::Result<bool> {
-    if payloads.is_empty() {
-        return Ok(false);
-    }
-    let bbox = payloads
-        .iter()
-        .fold(BBox::empty(), |bbox, payload| bbox.union(payload.bbox));
-    let region = ContourSet::from_filled_contours(payloads, DEFAULT_RELIEF_TOLERANCE_MM, accuracy)?;
-    Ok(score_lines.iter().any(|line| {
-        let strip = score_line_strip(*line);
-        bbox.intersects(strip.bbox) && !region.intersection(&strip).is_empty()
-    }))
-}
-
 fn score_line_strip(line: VScoreLine) -> ContourSet {
     let width = DEFAULT_SCORE_ALIGNMENT_TOLERANCE_MM.max(line.width / 2.0);
     let bbox = BBox {
@@ -323,33 +305,20 @@ fn score_line_strip(line: VScoreLine) -> ContourSet {
 fn envelope_matches_cutout(
     envelope: &ReliefFeatureCandidate,
     cutout: &ReliefFeatureCandidate,
-    accuracy: GeometryAccuracy,
-) -> anyhow::Result<bool> {
+) -> bool {
     if !envelope.bbox.intersects(cutout.bbox) {
-        return Ok(false);
+        return false;
     }
     if let (Some(envelope_net), Some(cutout_net)) = (envelope.net, cutout.net)
         && envelope_net != cutout_net
     {
-        return Ok(false);
+        return false;
     }
     if let (Some(envelope_padstack), Some(cutout_padstack)) =
         (envelope.padstack_ref, cutout.padstack_ref)
         && envelope_padstack == cutout_padstack
     {
-        return Ok(true);
+        return true;
     }
-    payloads_intersect(&envelope.payloads, &cutout.payloads, accuracy)
-}
-
-fn payloads_intersect(
-    left: &[ContourBuf],
-    right: &[ContourBuf],
-    accuracy: GeometryAccuracy,
-) -> anyhow::Result<bool> {
-    let left_region =
-        ContourSet::from_filled_contours(left, DEFAULT_RELIEF_TOLERANCE_MM, accuracy)?;
-    let right_region =
-        ContourSet::from_filled_contours(right, DEFAULT_RELIEF_TOLERANCE_MM, accuracy)?;
-    Ok(!left_region.intersection(&right_region).is_empty())
+    !envelope.region.intersection(&cutout.region).is_empty()
 }

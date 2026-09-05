@@ -1421,12 +1421,10 @@ fn collect_mask_layers(
             let mut document = imported
                 .materialize_layer(LayerId(layer_index as u32), scope, accuracy)
                 .with_context(|| format!("failed to extract soldermask layer '{name}'"))?;
-            // Keep the historical all-material fold bit-for-bit for measurements
-            // and waiver IDs. Grouping boolean operations by source occurrence
-            // can shift snapped vertices by nanometers. The separate attributed
-            // fold supplies source labels only; it never replaces this image.
-            let image = crate::copper_balance::composed_copper_image_from_document(
-                document.clone(),
+            let image = document.clone().into_layer_image(
+                0,
+                LayerRole::Soldermask,
+                pcb_ir::dialects::Side::None,
                 accuracy,
             )?;
             pcb_ir::dialects::ipc::process::expand_feature_placement_groups(
@@ -1721,8 +1719,14 @@ mod tests {
                 accuracy,
             )
             .unwrap();
-        let previous =
-            crate::copper_balance::composed_copper_image_from_document(document, accuracy).unwrap();
+        let previous = document
+            .into_layer_image(
+                0,
+                LayerRole::Soldermask,
+                pcb_ir::dialects::Side::None,
+                accuracy,
+            )
+            .unwrap();
         let layer = collect_mask_layers(&imported, ArtworkScope::ArrayFlattened, accuracy)
             .unwrap()
             .remove(0);

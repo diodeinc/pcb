@@ -14,6 +14,7 @@ Contours, arenas, and regions carry `uncertainty_mm`. Transforms, composition,
 decimation, offsets, curved-axis sampling, and region distance measurements propagate it. Retained
 arcs and analytic ellipses can be prepared more finely, including after arena
 copies and affine placement. Polygon round trips cannot recover lost precision.
+Width sites must contain an inscribed disk that survives boundary and grid uncertainty.
 
 Raw command/ring extraction discards provenance. Supply the known error with
 `ContourBuf::with_uncertainty` or `ContourSet::from_regularized`
@@ -26,8 +27,9 @@ Unmet budgets return `AccuracyError`, including these backend limits:
   error floor.
 - Boolean and paint composition retain the largest input error and add rounding allowance.
 - Disk offsets include input uncertainty and round-join
-  error. The current minimum join angle is `0.01π`, requiring an additional
-  allowance of at least `radius * (1 - cos(0.01π))`.
+  error from the chords emitted at rounded corners. Straight intersections add no
+  chord error. The backend limits join angles to `0.01π`; requests below the
+  resulting error are rejected.
 - Kurbo's fixed round-cap/join conversion adds `0.0004 * stroke_width / 2`.
   Pattern placement requires lines or circular arcs.
 - Coordinate resolution and excessive subdivision can prevent meeting a budget.

@@ -336,7 +336,10 @@ fn main() -> Result<()> {
         board_array_fabrication_profile_with_debug(&ipc, &layout, &score_lines, accuracy)
             .context("failed to compose board-array fabrication profile")?;
 
-    let support_sources = extract_array_support_layers(&ipc, accuracy)?;
+    let support_sources = extract_array_support_layers(
+        &pcb_ir::import::ipc2581::import_design(&ipc, accuracy)?,
+        accuracy,
+    )?;
     let collection = inspect_board_array_balancing_input(
         &layout,
         &fabrication_profile,

@@ -168,7 +168,11 @@ fn generated_board_array_has_a_certified_safe_balancing_region() {
     let fabrication_profile =
         geometry::board_array_fabrication_profile(&ipc, &layout, &score_lines, accuracy).unwrap();
     let ecad = ipc.ecad().unwrap();
-    let support_layers = extract_array_support_layers(&ipc, accuracy).unwrap();
+    let support_layers = extract_array_support_layers(
+        &pcb_ir::import::ipc2581::import_design(&ipc, accuracy).unwrap(),
+        accuracy,
+    )
+    .unwrap();
     let copper_layers = crate::layers::copper_layers(ecad);
 
     let collection = collect_board_array_balancing_input(
@@ -331,9 +335,6 @@ fn board_array_creation_can_skip_copper_balancing() {
     Ipc2581::parse(&creation.xml).unwrap();
 }
 
-/// Two-sided fiducials and their mask openings must reserve area on both
-/// surface copper layers alike. That is a property of the balancing regions,
-/// so it is read off them directly rather than through a full solve.
 #[test]
 fn automatic_balancing_regions_scope_panel_fiducials_to_both_surface_copper_layers() {
     let accuracy = GeometryAccuracy::default();
@@ -353,7 +354,11 @@ fn automatic_balancing_regions_scope_panel_fiducials_to_both_surface_copper_laye
     let fabrication_profile =
         geometry::board_array_fabrication_profile(&provisional, &layout, &score_lines, accuracy)
             .unwrap();
-    let support_layers = extract_array_support_layers(&provisional, accuracy).unwrap();
+    let support_layers = extract_array_support_layers(
+        &pcb_ir::import::ipc2581::import_design(&provisional, accuracy).unwrap(),
+        accuracy,
+    )
+    .unwrap();
     let copper_layers = crate::layers::copper_layers(provisional.ecad().unwrap());
     let collection = collect_board_array_balancing_input(
         &layout,
@@ -366,23 +371,21 @@ fn automatic_balancing_regions_scope_panel_fiducials_to_both_surface_copper_laye
     )
     .unwrap();
 
-    let safe_area = |name: &str| {
+    let support_area = |name: &str| {
         let layer = copper_layers
             .iter()
             .find(|layer| provisional.resolve(layer.name) == name)
             .unwrap();
         let input = collection.input_for_layer(layer.name);
-        board_array_balancing_region(&input, BalancingRegionOptions::default(), accuracy)
-            .unwrap()
-            .safe_region
-            .area()
+        input.support_features.area()
     };
 
-    let top = safe_area("TOP");
-    let bottom = safe_area("BOTTOM");
+    let top = support_area("TOP");
+    let bottom = support_area("BOTTOM");
+    assert!(top > 0.0);
     assert!(
         (bottom - top).abs() <= accuracy.max_error_mm().powi(2),
-        "two-sided fiducials and mask openings should reserve equal surface-copper area: top {top:.6} mm², bottom {bottom:.6} mm²",
+        "two-sided fiducials and mask openings should provide equal surface-copper obstacle area: top {top:.6} mm², bottom {bottom:.6} mm²",
     );
 }
 
@@ -1106,8 +1109,15 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
     assert!(top_gerber.contents.contains("%LPC*%"));
 
     // The composed Gerber image must match the composed IPC image.
-    let ipc_copper =
-        crate::copper_balance::composed_copper_image(&parsed, "TOP", accuracy).unwrap();
+    let ipc_copper = {
+        let imported = pcb_ir::import::ipc2581::import_design(&parsed, accuracy).unwrap();
+        imported.composed_layer_image(
+            imported.layer_id("TOP").unwrap(),
+            pcb_ir::dialects::ipc::ArtworkScope::ArrayFlattened,
+            accuracy,
+        )
+    }
+    .unwrap();
     let gerber = gerberx2::GerberX2::parse(&top_gerber.contents).unwrap();
     let mask = pcb_ir::dialects::artwork::compose_to_mask(
         &gerberx2::geometry::extract_document(&gerber, accuracy).unwrap(),

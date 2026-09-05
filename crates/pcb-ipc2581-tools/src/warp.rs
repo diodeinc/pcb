@@ -11,8 +11,9 @@ use pcb_ir::geom::warp::{
 };
 use pcb_ir::geom::{BBox, ContourSet, Point};
 
-use crate::copper_balance::composed_copper_image;
 use crate::ipc2581::Ipc2581;
+use pcb_ir::dialects::ipc::ArtworkScope;
+use pcb_ir::import::ipc2581::import_design;
 
 /// Cells across the panel's longer side.
 ///
@@ -59,6 +60,7 @@ pub struct WarpAnalysis {
 /// Requires a stackup carrying a thickness for every layer: without it there is
 /// no neutral axis, no lever arms, and nothing to estimate.
 pub fn analyze(ipc: &Ipc2581, accuracy: GeometryAccuracy) -> Result<WarpAnalysis> {
+    let imported = import_design(ipc, accuracy)?;
     let (stack, copper_names) = physical_stack(ipc)?;
     let conductors = stack.conductor_weights();
     let bounds = panel_bounds(ipc, accuracy)?;
@@ -71,7 +73,14 @@ pub fn analyze(ipc: &Ipc2581, accuracy: GeometryAccuracy) -> Result<WarpAnalysis
     let layers = copper_names
         .iter()
         .map(|layer_name| {
-            let image: ContourSet = composed_copper_image(ipc, layer_name, accuracy)
+            let image: ContourSet = imported
+                .composed_layer_image(
+                    imported
+                        .layer_id(layer_name)
+                        .context("missing copper layer")?,
+                    ArtworkScope::ArrayFlattened,
+                    accuracy,
+                )
                 .with_context(|| format!("failed to extract copper on layer '{layer_name}'"))?;
             let coverage = image.grid_coverage(bounds, columns, rows);
             let mean = coverage.iter().sum::<f64>() / coverage.len() as f64;

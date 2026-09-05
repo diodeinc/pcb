@@ -3,7 +3,7 @@ use pcb_ir::dialects::ipc::{ArtworkScope, root_step};
 use pcb_ir::geom::GeometryAccuracy;
 use pcb_ir::geom::{BBox, ContourSet, Point, tol};
 
-use crate::copper_balance::{CopperBalanceMode, composed_copper_image};
+use crate::copper_balance::CopperBalanceMode;
 
 use super::*;
 
@@ -890,7 +890,15 @@ fn balances_gutters_at_the_assembly_panel_density_and_leaves_margins_bare() {
     let footprints =
         ContourSet::from_filled_contours(&panel_contours, tol::REGION_MM, accuracy).unwrap();
     let usable = ContourSet::rectangle(BALANCE_SPEC.usable_bbox().unwrap(), tol::REGION_MM);
-    let copper = composed_copper_image(&parsed, "TOP", accuracy).unwrap();
+    let copper = {
+        let imported = pcb_ir::import::ipc2581::import_design(&parsed, accuracy).unwrap();
+        imported.composed_layer_image(
+            imported.layer_id("TOP").unwrap(),
+            pcb_ir::dialects::ipc::ArtworkScope::ArrayFlattened,
+            accuracy,
+        )
+    }
+    .unwrap();
     let gutter_copper = copper.difference(&footprints);
 
     assert!(

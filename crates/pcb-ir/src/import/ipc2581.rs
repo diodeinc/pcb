@@ -1373,26 +1373,14 @@ impl ImportedDesign {
             .layer_definitions
             .get(layer.0 as usize)
             .context("layer id is outside the imported design")?;
-        let mut document = self.materialize_layer(layer, scope, accuracy)?;
-        crate::dialects::ipc::process::normalize_for_artwork(&mut document, accuracy)?;
-        crate::dialects::ipc::validate_artwork_ready(&document).map_err(anyhow::Error::msg)?;
-        let artwork = crate::dialects::ipc::lower_layer_to_artwork(
-            &document,
-            0,
-            layer_role(definition.layer_function),
-            side_for_layer(definition.side),
-            accuracy,
-        )?;
-        let (mut layers, _) = crate::dialects::artwork::compose_owner_regions(
-            &artwork,
-            |_| Some(()),
-            tol::REGION_MM,
-            accuracy,
-        )?;
-        Ok(layers
-            .pop()
-            .and_then(|mut owners| owners.pop())
-            .map_or_else(|| ContourSet::empty(tol::REGION_MM), |(_, region)| region))
+        Ok(self
+            .materialize_layer(layer, scope, accuracy)?
+            .into_layer_image(
+                0,
+                layer_role(definition.layer_function),
+                side_for_layer(definition.side),
+                accuracy,
+            )?)
     }
 
     fn step_occurrences(&self, scope: ArtworkScope) -> Result<Vec<StepOccurrence>> {

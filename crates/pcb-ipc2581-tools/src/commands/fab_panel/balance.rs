@@ -6,14 +6,17 @@
 //! own, so one certified safe region serves the whole copper stack.
 
 use anyhow::{Context, Result, bail};
+use pcb_ir::dialects::ipc::ArtworkScope;
 use pcb_ir::dialects::ipc::{
     BalancingRegionOptions, board_array_balancing_region, collect_fab_panel_balancing_input,
 };
 use pcb_ir::geom::GeometryAccuracy;
+use pcb_ir::geom::copper_balance::map_layers;
 use pcb_ir::geom::{BBox, ContourSet, tol};
+use pcb_ir::import::ipc2581::import_design;
 
 use crate::copper_balance::{
-    CERTIFICATE_AREA_TOLERANCE_MM2, CopperBalancePlan, PreparedCopperLayer, composed_copper_image,
+    CERTIFICATE_AREA_TOLERANCE_MM2, CopperBalancePlan, PreparedCopperLayer,
     physical_copper_stack_weights, solve_copper_balance,
 };
 use crate::geometry;
@@ -32,12 +35,12 @@ pub(super) fn generate_automatic_fab_panel_copper_balance(
     usable: BBox,
     accuracy: GeometryAccuracy,
 ) -> Result<CopperBalancePlan> {
-    let layout = geometry::extract_layout(ipc)
-        .context("failed to extract fabrication-panel layout for copper balancing")?;
+    let imported = import_design(ipc, accuracy)?;
+    let layout = &imported.geometry;
     // V-scores and profile cutouts all lie inside the placed assembly panels,
     // so the fabrication profile needs no relief geometry here.
     let fabrication_profile =
-        geometry::board_array_fabrication_profile(ipc, &layout, &[], accuracy)
+        geometry::board_array_fabrication_profile_from_design(&imported, layout, &[], accuracy)
             .context("failed to derive fabrication-panel profile for copper balancing")?;
     let usable_region = ContourSet::rectangle(usable, tol::REGION_MM);
     let mut input =
@@ -52,24 +55,18 @@ pub(super) fn generate_automatic_fab_panel_copper_balance(
         .map(|layer| ipc.resolve(layer.name).to_string())
         .collect::<Vec<_>>();
     let extract = |layer_name: &String| {
-        composed_copper_image(ipc, layer_name, accuracy)
+        imported
+            .composed_layer_image(
+                imported
+                    .layer_id(layer_name)
+                    .context("missing copper layer")?,
+                ArtworkScope::ArrayFlattened,
+                accuracy,
+            )
             .map(|image| (layer_name.clone(), image.intersection(&usable_region)))
     };
-    #[cfg(not(target_family = "wasm"))]
-    let copper_images = std::thread::scope(|scope| {
-        let extractions = layer_names
-            .iter()
-            .map(|layer_name| scope.spawn(|| extract(layer_name)))
-            .collect::<Vec<_>>();
-        extractions
-            .into_iter()
-            .map(|extraction| extraction.join().expect("copper-image extraction panicked"))
-            .collect::<Result<Vec<_>>>()
-    })?;
-    #[cfg(target_family = "wasm")]
-    let copper_images = layer_names
-        .iter()
-        .map(extract)
+    let copper_images = map_layers(&layer_names, extract)
+        .into_iter()
         .collect::<Result<Vec<_>>>()?;
     // Copper found outside the placed panels joins the shared obstacle set,
     // so unexpected overhang shrinks the certified safe region for every
