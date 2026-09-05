@@ -16,8 +16,7 @@ source, and generate a KiCad layout.
 
 ## 1. Install `pcb`
 
-The `pcb` launcher downloads and runs the `pcbc` toolchain selected by each
-project. Run the installer for your platform:
+Run the installer for your platform:
 
 <CodeGroup>
 
@@ -31,25 +30,16 @@ powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/dio
 
 </CodeGroup>
 
-The installer adds `pcb` to your user `PATH` when necessary. Restart the shell
-if the command is not available, then verify the installation:
+Default install directories are `$HOME/.local/bin` on Unix and
+`%USERPROFILE%\.pcb\bin` on Windows; override with `PCB_INSTALL_DIR`.
+
+The installer adds `pcb` to your user `PATH` when necessary. Verify installation:
 
 ```bash
 pcb --version
 ```
 
-<Accordion title="Install from source">
-
-Install Rust, then clone the [repository](https://github.com/diodeinc/pcb) and
-run the local installer:
-
-```bash
-git clone https://github.com/diodeinc/pcb
-cd pcb
-./install.sh --local
-```
-
-</Accordion>
+For source builds, see the [repository README](https://github.com/diodeinc/pcb#developing-from-source).
 
 ## 2. Create a board repository
 
@@ -60,8 +50,8 @@ pcb new board Blinky github.com/your-org/blinky
 cd Blinky
 ```
 
-`pcb new board` creates `pcb.toml`, `Blinky.zen`, and a Git repository. The
-generated design is empty but valid.
+The generated design is empty but valid. See [Packages](/pages/packages#repository-structure)
+for repository structure.
 
 ## 3. Build the board
 
@@ -70,8 +60,6 @@ Validate the board source and generate its netlist:
 ```bash
 pcb build Blinky.zen
 ```
-
-A successful build exits without validation errors.
 
 ## 4. Generate the layout
 
@@ -83,6 +71,35 @@ pcb layout --no-open Blinky.zen
 
 This command writes the generated board under `layout/`.
 
+## Toolchains
+
+`pcb` manages the compiler, stdlib, and sidecars as one toolchain. Workspace
+commands use `pcb-version`; `pcb auth` uses latest stable instead. An explicit
+`pcb +<version> <command>` overrides either selection.
+
+```bash
+pcb toolchain show              # Active and available versions; --offline avoids network
+pcb toolchain install latest    # Also accepts nightly, a lane (0.4), or an exact version
+pcb toolchain repair latest     # Validate and restore a toolchain
+pcb toolchain prune --dry-run   # Preview cleanup; omit --dry-run to remove files
+pcb self update                # Update the shim and managed channels
+```
+
+Pruning removes downloads and superseded patches, preserving the newest patch
+per lane, the active version, prereleases, nightly, and local toolchains.
+
+## Service accounts and CI
+
+Run `pcb auth login --service-account` interactively, or import JSON containing
+`client_id` and `client_secret`:
+
+```bash
+pcb auth login --service-account --stdin < credentials.json
+```
+
+For CI, supply `DIODE_API_URL`, `DIODE_CLIENT_ID`, and `DIODE_CLIENT_SECRET`
+through the CI secret store. PCB renews access tokens automatically.
+
 ## Troubleshooting
 
 - If the shell cannot find `pcb` after installation, restart the shell or
@@ -90,4 +107,8 @@ This command writes the generated board under `layout/`.
 - If `pcb layout` cannot find KiCad, install `kicad-cli` and `pcbnew`. Set
   `KICAD_CLI` or `KICAD_PCBNEW` if either executable is outside its default
   platform path.
+- Installers register `diode://` links for opening registry layouts in KiCad.
+  If opening fails, check `~/.pcb/pcb-launcher.log` (Windows:
+  `%USERPROFILE%\.pcb\pcb-launcher.log`). `./install.sh --local` registers the
+  local toolchain; release installation or `pcb self update` restores `latest`.
 - Run `pcb help` or `pcb help <command>` for the complete CLI reference.

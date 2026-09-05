@@ -20,61 +20,9 @@ For native Windows, run this command in PowerShell:
 powershell -ExecutionPolicy Bypass -c "irm https://raw.githubusercontent.com/diodeinc/pcb/main/install.ps1 | iex"
 ```
 
-The launcher downloads and runs the `pcbc` toolchain requested by each project.
-The Unix installer writes `pcb` to `$HOME/.local/bin` by default. The Windows
-installer writes `pcb.exe` to `%USERPROFILE%\.pcb\bin` by default. Set
-`PCB_INSTALL_DIR` to choose a different directory.
-
-The installer also registers the `diode://` URL scheme for the current user.
-The Diode registry can use these links to open sandbox layouts in KiCad
-without a terminal. `pcb self update` updates and re-registers the launcher together with
-the `pcb` shim. If a browser-launched open fails, the launcher displays the
-error and records command output in `~/.pcb/pcb-launcher.log` (or
-`%USERPROFILE%\.pcb\pcb-launcher.log` on Windows).
-
-KiCad 10.x is required only for generating and editing layouts. Building and
-validating Zener files does not require KiCad.
-
-Native Windows support is experimental. Use WSL2 if a command does not work in
-the native environment.
-
-### Toolchain management
-
-`pcb` manages `pcbc`, the standard library, and bundled sidecars such as
-`pcb-rectify` as one versioned toolchain.
-
-Workspace commands use the toolchain selected by `pcb-version`. `pcb auth`
-instead uses the latest stable toolchain; an explicit `+<toolchain>` override
-still wins. `pcb self` and `pcb toolchain` run directly in the launcher.
-
-```bash
-pcb toolchain show                 # Show the active and latest matching versions
-pcb toolchain show --offline       # Use installed and cached data only
-pcb toolchain install latest       # Install the latest stable toolchain
-pcb toolchain prune --dry-run      # Preview removable downloads and old patches
-pcb toolchain prune                # Remove them
-pcb toolchain repair latest        # Validate and restore a toolchain
-```
-
-Install and repair accept `latest`, `nightly`, a lane such as `0.4`, or an exact
-version such as `0.4.9`. Pruning preserves the newest patch in each lane, the
-active version, prereleases, nightly, and local toolchains. `pcb self update`
-updates the shim and managed channels and fails if any requested update fails.
-
-### Developing from source
-
-```bash
-git clone https://github.com/diodeinc/pcb.git
-cd pcb
-cargo build -p pcb -p pcbc
-./install.sh --local
-```
-
-Local installation registers `diode://` links against the local toolchain.
-Installing or self-updating a release registers them against `latest` again.
-
-Repository maintenance scripts are run by their explicit path, such as
-`./bin/embed-readme --check README.md`; no shell environment activation is needed.
+The launcher downloads the toolchain selected by each project. KiCad 10.x is
+required for layouts, but not for building Zener designs. Native Windows support
+is experimental; use WSL2 if needed.
 
 ## Quick start
 
@@ -99,108 +47,26 @@ Led(name="D1", package="0402", color="red", A=LED_ANODE, K=GND)
 Board(name="blinky", layers=4, layout_path="layout/blinky")
 ```
 
-Build the design:
+Build the design and generate a KiCad layout:
 
 ```bash
 pcb build blinky.zen
-```
-
-Generate a KiCad layout:
-
-```bash
 pcb layout blinky.zen
 ```
 
-## Repository layouts
+See [Getting Started](https://docs.pcb.new/pages/quickstart) for board setup,
+toolchains, and CI authentication, and [Packages](https://docs.pcb.new/pages/packages)
+for repository structure and dependencies. Run `pcb help` for commands.
 
-Zener projects use one of two repository shapes.
-
-### Board repository
-
-A board repository contains one board plus any local modules and components it
-owns:
-
-```text
-MyBoard/
-├── pcb.toml              # Workspace and board manifest
-├── MyBoard.zen           # Board schematic
-├── layout/               # KiCad layout files
-├── modules/              # Reusable circuit modules
-│   └── PowerSupply/
-│       ├── PowerSupply.zen
-│       └── pcb.toml
-├── components/           # Custom component definitions
-│   └── Manufacturer/
-│       └── MPN/
-│           ├── MPN.zen
-│           └── pcb.toml
-└── vendor/               # Vendored dependencies
-```
-
-Create one with:
+## Developing from source
 
 ```bash
-pcb new board MyBoard https://github.com/myorg/MyBoard
+git clone https://github.com/diodeinc/pcb.git
+cd pcb
+./install.sh --local
 ```
 
-Board repository `pcb.toml`:
-
-```toml
-[workspace]
-repository = "github.com/myorg/MyBoard"
-pcb-version = "0.4"
-
-[board]
-name = "MyBoard"
-path = "MyBoard.zen"
-description = "Replace with concise board description."
-```
-
-### Registry repository
-
-A registry repository contains reusable packages and no board:
-
-```text
-registry/
-├── pcb.toml              # Workspace manifest
-├── components/           # Component packages
-│   └── TPS54331/
-│       ├── TPS54331.zen
-│       ├── TPS54331.kicad_sym
-│       ├── TPS54331.kicad_mod
-│       └── pcb.toml
-└── modules/              # Reusable module packages
-    └── UsbCSink/
-        ├── UsbCSink.zen
-        └── pcb.toml
-```
-
-Registry `pcb.toml`:
-
-```toml
-[workspace]
-repository = "github.com/myorg/registry"
-pcb-version = "0.4"
-```
-
-## Common commands
-
-```bash
-pcb new board <NAME> <REPO_URL>              # Create a board repository
-pcb build [PATHS...]                         # Build and validate designs
-pcb sync                                     # Reconcile imports and dependency manifests
-pcb layout <FILE>                            # Generate layout files
-pcb dfm <FILE>                               # Check a .zen board for manufacturability
-pcb import <KICAD_SCH|KICAD_PRO> <OUTPUT_DIR> # Import a KiCad schematic or project
-```
-
-Run `pcb help` or `pcb help <command>` for the full command reference.
-
-Authenticate a machine with `pcb auth login --service-account`, or import
-JSON (`client_id`, `client_secret`) with
-`pcb auth login --service-account --stdin < credentials.json`.
-For CI, set `DIODE_API_URL`, `DIODE_CLIENT_ID`, and `DIODE_CLIENT_SECRET`.
-PCB renews access tokens automatically.
+Requires Rust. See [AGENTS.md](AGENTS.md) for test commands and repository conventions.
 
 ## License
 
