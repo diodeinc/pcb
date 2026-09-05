@@ -81,6 +81,10 @@ id = "copper.via_annular_ring"
 select = { hole = "via" }
 limit = { minimum = "100 um", preferred = "0.125 mm" }
 
+[[rules.copper.plated_slot_enclosure]]
+id = "copper.plated_slot_enclosure"
+limit = { preferred = "0.25 mm" }
+
 [[rules.copper.hole_clearance]]
 id = "copper.via_hole_clearance"
 select = { hole = "via" }
@@ -182,6 +186,7 @@ high-level pass is never allowed to suppress a later authoritative failure.
 | Hole-to-board-edge clearance | Analytic drill circle against its enclosing physical board profile, including cutouts | Indexed profile boundaries |
 | Slot-to-board-edge clearance | Materialized filled route outline against its enclosing physical board profile, including cutouts | Indexed profile boundaries |
 | Annular ring | Drill circle and final composed copper image on each applicable layer | Batched containment and an indexed copper boundary |
+| Plated-slot enclosure | Minimum distance from the materialized slot boundary to final copper with the cavity filled for the query | Indexed boundaries |
 | Hole-to-copper clearance | Analytic drill circle and attributed final composed copper on each layer in its drill span | Indexed attributed-copper boundaries |
 | Slot-to-copper clearance | Materialized filled route outline and attributed final composed copper on each layer in its physical span | Indexed region boundaries |
 | Copper width | Final composed copper image, medial-axis width of each residue | Guarded opening localizes candidates |
@@ -283,6 +288,24 @@ when fewer than two exist.
   land, must retain copper at the hole center;
   missing copper there is a zero-enclosure failure. One finding per hole
   reports the worst layer.
+- `rules.copper.plated_slot_enclosure` measures nominal artwork enclosure of
+  plated slots only (no selector). It supports the same limits and copper-layer
+  cases as annular ring. It measures the actual materialized slot, including
+  asymmetric and curved outlines, not a circular or bounding-box proxy. Within
+  the slot's span, terminal layers and matching physical source lands require
+  copper; an intermediate layer without a land or copper meeting the slot is exempt.
+  The rule requires one physical stackup and a declared, resolvable slot span;
+  missing data fails extraction rather than assuming a passing whole-stack check.
+  Layers use physical stackup order, not XML declaration order. Copper is
+  required around the opening, not inside the routed cavity:
+  the query fills that cavity, then measures the minimum distance from the slot
+  boundary to the resulting copper boundary, including other copper cutouts.
+  Absent or breached surrounding copper has zero enclosure. The existing
+  flattening tolerance heals quantization seams where the cavity is filled;
+  enclosure within that tolerance is reported as zero with geometric uncertainty.
+  One finding per slot retains all failing layer sites, with
+  `boundary_enclosure` or `missing_copper` measurements. This is not a residual
+  ring prediction after routing, plating, or registration tolerances.
 - Hole-to-copper clearance measures the edge-to-edge distance from each
   circular drill to the nearest unrelated final copper owner on every copper
   layer in its declared span. Via and PTH copper is exempt only when net or
@@ -413,6 +436,10 @@ requirements or qualified capabilities for every technology or copper weight.
 Hole-diameter checks do not model a separate drill-tool diameter, plating
 allowance, or manufacturing tolerance, and cannot verify the exporter's
 finished-size interpretation.
+
+Standard and all nine IPC profiles warn below 0.25 mm nominal plated-slot
+copper enclosure through a preferred tier. Custom PDKs can supply a required
+minimum. JLCPCB profiles do not enable this check.
 
 Output is UTF-8 JSON on stdout unless `-o` / `--output` is supplied. The
 recommended suffix is `.dfm.json`. Every complete report includes the native

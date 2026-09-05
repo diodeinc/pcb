@@ -208,7 +208,7 @@ limit = {{ minimum = "0.20 mm" }}
     }
 
     #[test]
-    fn standard_slot_clearance_warns_without_failing_but_requires_a_span() {
+    fn standard_slot_copper_checks_warn_without_failing_but_require_a_span() {
         let standard = dfm::builtin_pdks()
             .iter()
             .find(|pdk| pdk.name == "standard")
@@ -226,11 +226,26 @@ limit = {{ minimum = "0.20 mm" }}
             let result = check(&xml, standard.source, LayoutTarget::Board).unwrap();
             assert!(matches!(result.verdict, report::Verdict::Pass));
             assert_eq!(result.summary.errors, 0);
-            assert_eq!(result.summary.warnings, 1);
-            let finding = &result.findings[0];
+            let finding = result
+                .findings
+                .iter()
+                .find(|finding| finding.rule_id.contains("slot_clearance"))
+                .unwrap();
             assert_eq!(finding.severity, report::Severity::Warning);
             assert!((finding.measurement.actual_mm().unwrap() - 0.1).abs() < 1e-8);
             assert_eq!(finding.subjects[0].kind, "routed_slot");
+
+            let enclosure = result
+                .findings
+                .iter()
+                .find(|finding| finding.rule_id.contains("plated_slot_enclosure"));
+            if plating == "PLATED" {
+                let enclosure = enclosure.unwrap();
+                assert_eq!(enclosure.severity, report::Severity::Warning);
+                assert_eq!(enclosure.measurement.actual_mm(), Some(0.0));
+            } else {
+                assert!(enclosure.is_none(), "nonplated slots need no copper land");
+            }
 
             let missing = xml.replace("<Span fromLayer=\"L0\" toLayer=\"L1\"/>", "");
             assert!(

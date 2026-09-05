@@ -295,7 +295,7 @@ fn measured_slot(
     }
 }
 
-fn slot_evidence(slot: &Slot) -> Evidence {
+pub(super) fn slot_evidence(slot: &Slot) -> Evidence {
     Evidence {
         display: Some(EvidenceDisplay::Path {
             paths: slot

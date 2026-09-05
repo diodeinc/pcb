@@ -336,6 +336,12 @@ impl Rules {
             )
             .chain(
                 self.copper
+                    .plated_slot_enclosure
+                    .iter()
+                    .map(RuleDefinition::CopperLength),
+            )
+            .chain(
+                self.copper
                     .annular_ring
                     .iter()
                     .map(RuleDefinition::AnnularRing),
@@ -498,6 +504,8 @@ pub struct DrillingRules {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CopperRules {
+    #[serde(default)]
+    pub plated_slot_enclosure: Vec<LengthRule>,
     #[serde(default)]
     pub annular_ring: Vec<AnnularRingRule>,
     #[serde(default)]

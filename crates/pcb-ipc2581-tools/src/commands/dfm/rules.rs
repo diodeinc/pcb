@@ -149,6 +149,8 @@ pub(super) enum RuleKind {
     SlotToBoardEdgeClearance(SlotPlating),
     /// Enclosure: radial copper around each hole on the layers it lands on.
     AnnularRing(HoleClass),
+    /// Enclosure: nominal copper around the full materialized plated slot.
+    PlatedSlotEnclosure,
     /// Clearance: a circular drill stays clear of unrelated final copper.
     HoleToCopperClearance(HoleClass),
     /// Clearance: a materialized slot stays clear of unrelated final copper.
@@ -300,6 +302,12 @@ impl RuleKind {
                 true,
                 &["drills", "board_outlines"],
             ),
+            Self::PlatedSlotEnclosure => (
+                "plated_slot_enclosure",
+                "Plated-slot copper enclosure",
+                true,
+                &["copper", "drills", "board_outlines"],
+            ),
             Self::AnnularRing(_) => (
                 "annular_ring",
                 "Annular ring",
@@ -449,6 +457,20 @@ impl RuleKind {
                 pools: Pools {
                     board_outlines: true,
                     ..DRILLED
+                },
+            },
+            Self::PlatedSlotEnclosure => Semantics {
+                subject: "slot_layer_pair",
+                quantity: "plated_slot_copper_enclosure",
+                method: "materialized_slot_to_cavity_filled_copper_boundary",
+                finding_title: "Plated-slot copper enclosure is below minimum".to_owned(),
+                quantity_label: "plated-slot copper enclosure".to_owned(),
+                witness_roles: Some(["slot_boundary", "copper_boundary"]),
+                pools: Pools {
+                    stackup: true,
+                    slot_lands: true,
+                    resolved_drill_spans: true,
+                    ..COPPER_BOUNDARIES
                 },
             },
             Self::AnnularRing(class) => Semantics {
@@ -754,6 +776,11 @@ pub(super) fn lower(pdk: &Pdk, selected_profile: Option<&str>) -> Result<Vec<Rul
         ));
     }
     for (ruleset, title, kind) in [
+        (
+            &pdk.rules.copper.plated_slot_enclosure,
+            "Minimum plated-slot copper enclosure",
+            RuleKind::PlatedSlotEnclosure,
+        ),
         (
             &pdk.rules.copper.feature_width,
             "Minimum copper feature width",
