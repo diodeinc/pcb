@@ -186,19 +186,8 @@ fn land_owns_conductor(land: &Land, conductor: ConductorId) -> bool {
         } => {
             land.net == Some(net) && step == land.step && instance == land.provenance.instance_index
         }
-        ConductorId::Auxiliary { .. } => false,
+        ConductorId::Auxiliary { .. } | ConductorId::Unattributed { .. } => false,
         ConductorId::Isolated { occurrence, .. } => land.id.0 == occurrence,
-        ConductorId::Unattributed {
-            step,
-            instance,
-            source_set_index,
-            source_feature_index,
-        } => {
-            step == land.step
-                && instance == land.provenance.instance_index
-                && source_set_index == land.source_set_index
-                && source_feature_index == land.source_feature_index
-        }
     }
 }
 
@@ -484,6 +473,28 @@ limit = {{ minimum = "0.20 mm" }}
                 .feature_index,
             Some(1)
         );
+    }
+
+    #[test]
+    fn checks_unattributed_copper_when_layer_features_reuse_land_source_indices() {
+        // Both the owned land and the unrelated contour are set 0, feature 0,
+        // but they belong to separate LayerFeatures on the same copper layer.
+        let xml = board_with_unowned_land(false).replace(
+            r#"<LayerFeature layerRef="DRILL">"#,
+            &format!(
+                "{}\n<LayerFeature layerRef=\"DRILL\">",
+                copper(0, None, 0.55)
+            ),
+        );
+        let results = run(&xml, "pth");
+        assert_eq!(results.findings.len(), 1);
+        let finding = &results.findings[0];
+        assert!((finding.measurement.actual_mm().unwrap() - 0.05).abs() < 1e-9);
+        let offender = &finding.subjects[1];
+        assert_eq!(offender.kind, "unattributed_copper");
+        let source = offender.source.as_ref().unwrap();
+        assert_eq!(source.set_index, Some(0));
+        assert_eq!(source.feature_index, Some(0));
     }
 
     #[test]
