@@ -92,5 +92,4 @@ zstd = { workspace = true }
 [dev-dependencies]
 httpmock = { workspace = true }
 insta = { workspace = true }
-tempfile = { workspace = true }
 pcb-test-utils = { workspace = true }

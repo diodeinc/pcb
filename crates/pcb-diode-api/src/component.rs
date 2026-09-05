@@ -908,7 +908,11 @@ fn execute_registry_symbol_search(
         return Ok(());
     }
 
-    let availability_map = registry_symbol_search_availability(&hits);
+    let groups: Vec<_> = hits
+        .iter()
+        .map(|hit| hit.availability_lookups.clone())
+        .collect();
+    let availability_map = search_availability(&groups);
 
     if json {
         let results: Vec<_> = hits
@@ -1010,7 +1014,11 @@ fn execute_kicad_symbols_search(query: &str, json: bool) -> Result<()> {
         return Ok(());
     }
 
-    let availability_map = kicad_symbol_search_availability(&results);
+    let groups: Vec<_> = results
+        .iter()
+        .map(crate::kicad_symbols::KicadSymbol::availability_lookup_keys)
+        .collect();
+    let availability_map = search_availability(&groups);
 
     if json {
         let combined: Vec<_> = results
@@ -1070,14 +1078,9 @@ fn execute_kicad_symbols_search(query: &str, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn registry_symbol_search_availability(
-    results: &[crate::RegistrySymbolHit],
+fn search_availability(
+    groups: &[Vec<crate::bom::ComponentKey>],
 ) -> std::collections::HashMap<usize, pcb_sch::bom::Availability> {
-    let groups: Vec<_> = results
-        .iter()
-        .map(|hit| hit.availability_lookups.clone())
-        .collect();
-
     if groups.iter().all(Vec::is_empty) {
         return std::collections::HashMap::new();
     }
@@ -1086,40 +1089,13 @@ fn registry_symbol_search_availability(
         return std::collections::HashMap::new();
     };
     let pricing =
-        crate::bom::fetch_pricing_grouped_batch(token.as_deref(), &groups).unwrap_or_default();
+        crate::bom::fetch_pricing_grouped_batch(token.as_deref(), groups).unwrap_or_default();
 
     pricing
         .into_iter()
         .enumerate()
         .filter(|(_, availability)| crate::bom::has_search_availability(availability))
         .collect()
-}
-
-fn kicad_symbol_search_availability(
-    results: &[crate::kicad_symbols::KicadSymbol],
-) -> std::collections::HashMap<usize, pcb_sch::bom::Availability> {
-    let groups: Vec<_> = results
-        .iter()
-        .map(crate::kicad_symbols::KicadSymbol::availability_lookup_keys)
-        .collect();
-
-    if groups.iter().all(Vec::is_empty) {
-        return std::collections::HashMap::new();
-    }
-
-    let Ok(token) = crate::auth::get_api_token() else {
-        return std::collections::HashMap::new();
-    };
-    let pricing =
-        crate::bom::fetch_pricing_grouped_batch(token.as_deref(), &groups).unwrap_or_default();
-
-    let mut map = std::collections::HashMap::new();
-    for (result_idx, availability) in pricing.into_iter().enumerate() {
-        if crate::bom::has_search_availability(&availability) {
-            map.insert(result_idx, availability);
-        }
-    }
-    map
 }
 
 fn print_search_scoring(scoring: Option<&crate::registry::tui::search::SearchScoring>) {

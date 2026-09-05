@@ -907,23 +907,8 @@ pub fn has_search_availability(availability: &Availability) -> bool {
     availability.us.is_some() || availability.global.is_some() || !availability.offers.is_empty()
 }
 
-/// Fetch pricing for multiple components in a single batch request
-pub fn fetch_pricing_batch(
-    auth_token: Option<&str>,
-    components: &[ComponentKey],
-) -> Result<Vec<Availability>> {
-    fetch_pricing_batch_once(auth_token, components)
-}
-
 /// Fetch pricing for grouped alternate components as one planned BOM line per group.
 pub fn fetch_pricing_grouped_batch(
-    auth_token: Option<&str>,
-    groups: &[Vec<ComponentKey>],
-) -> Result<Vec<Availability>> {
-    fetch_pricing_grouped_batch_once(auth_token, groups)
-}
-
-fn fetch_pricing_grouped_batch_once(
     auth_token: Option<&str>,
     groups: &[Vec<ComponentKey>],
 ) -> Result<Vec<Availability>> {
@@ -975,7 +960,8 @@ fn fetch_pricing_grouped_batch_once(
     Ok(results)
 }
 
-fn fetch_pricing_batch_once(
+/// Fetch pricing for multiple components in a single batch request
+pub fn fetch_pricing_batch(
     auth_token: Option<&str>,
     components: &[ComponentKey],
 ) -> Result<Vec<Availability>> {
