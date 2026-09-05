@@ -9,9 +9,9 @@ manufacturer = "Diode"
 process = "Standard"
 
 [sources.diode-slot-guidance]
-title = "Diode slot-to-copper routing guidance"
+title = "Diode slot copper guidance"
 url = "https://github.com/diodeinc/pcb/blob/main/crates/pcb-ipc2581-tools/docs/dfm.md"
-note = "Diode prefers 0.40 mm clearance for plated and nonplated slots as conservative routing guidance, not a manufacturer capability or IPC requirement. Shortfalls warn; missing physical stackup or declared slot span remains an input error."
+note = "Diode prefers 0.40 mm clearance for plated and nonplated slots and 0.25 mm copper enclosure for plated slots as conservative routing guidance, not a manufacturer capability or IPC requirement. Shortfalls warn; missing physical stackup or declared slot span remains an input error."
 
 [profiles.standard]
 name = "Diode standard"
@@ -89,6 +89,11 @@ limit = { minimum = "7 mil" }
 [[rules.copper.feature_width]]
 id = "copper.minimum_feature_width"
 limit = { minimum = "5 mil" }
+
+[[rules.copper.plated_slot_enclosure]]
+id = "copper.plated_slot_enclosure"
+limit = { preferred = "0.25 mm" }
+source = "diode-slot-guidance"
 
 [[rules.copper.clearance]]
 id = "copper.minimum_copper_clearance"

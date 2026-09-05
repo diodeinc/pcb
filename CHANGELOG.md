@@ -19,6 +19,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Check copper-to-board-edge and cutout clearance at 15 mil in all nine IPC-informed DFM profiles.
 - Warn about soldermask webs below 4 mil in all nine IPC-informed DFM profiles.
 - Check plated and nonplated slot-to-copper clearance, with Diode guidance warnings in standard and IPC profiles.
+- Warn on plated-slot copper enclosure below 0.25 mm in Standard and IPC profiles.
 
 ### Fixed
 

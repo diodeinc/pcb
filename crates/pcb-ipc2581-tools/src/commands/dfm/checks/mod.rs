@@ -18,6 +18,7 @@ mod hole_diameter;
 mod hole_pair_clearance;
 mod layer_count;
 mod linework_clearance;
+mod plated_slot_enclosure;
 mod slot_clearance;
 mod slot_width;
 mod thin_regions;
@@ -313,6 +314,11 @@ fn skip_reason(rule: &Rule, design: &Design) -> Option<String> {
             .iter()
             .all(|hole| hole.class != class)
             .then(|| format!("{} holes", class.label())),
+        RuleKind::PlatedSlotEnclosure => design
+            .slots
+            .iter()
+            .all(|slot| !slot_matches(slot.plating, SlotPlating::Plated))
+            .then(|| "plated routed slots".to_owned()),
         RuleKind::SlotWidth(plating) | RuleKind::SlotToCopperClearance(plating) => design
             .slots
             .iter()
@@ -368,6 +374,9 @@ fn evaluate(rule: &Rule, design: &Design) -> RuleEvaluation {
         }
         RuleKind::AnnularRing(class) => {
             annular_ring::evaluate(limit(), class, &rule.conditions, design).into()
+        }
+        RuleKind::PlatedSlotEnclosure => {
+            plated_slot_enclosure::evaluate(limit(), &rule.conditions, design).into()
         }
         RuleKind::HoleToCopperClearance(class) => {
             hole_clearance::evaluate(limit(), class, &rule.conditions, design).into()

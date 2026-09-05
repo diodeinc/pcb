@@ -240,8 +240,10 @@ impl<'a> Design<'a> {
 fn validate_hole_clearance_spans(design: &Design, rules: &[Rule]) -> Result<()> {
     for slot in &design.slots {
         let selected = rules.iter().any(|rule| {
-            matches!(rule.kind, rules::RuleKind::SlotToCopperClearance(plating)
+            (matches!(rule.kind, rules::RuleKind::SlotToCopperClearance(plating)
                 if super::checks::slot_matches(slot.plating, plating))
+                || (rule.kind == rules::RuleKind::PlatedSlotEnclosure
+                    && slot.plating == PlatingKind::Plated))
                 && rule.conditions.applies_to_design(design)
                 && design
                     .copper_layers
@@ -252,7 +254,7 @@ fn validate_hole_clearance_spans(design: &Design, rules: &[Rule]) -> Result<()> 
             && (!slot.span_declared || slot.drill_span.interpretation == "assumed_whole_stack")
         {
             bail!(
-                "routed slot on layer '{}' has no resolvable drill span; slot-to-copper clearance cannot be certified",
+                "routed slot on layer '{}' has no resolvable drill span; slot copper checks cannot be certified",
                 slot.layer.name
             );
         }
