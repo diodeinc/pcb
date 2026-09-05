@@ -1595,6 +1595,8 @@ pub fn extract_step_layer_local(
         }
     }
 
+    // Resolve once, and only if a slot needs cross-layer span membership.
+    let mut slot_layer_order: Option<Vec<Symbol>> = None;
     for layer_feature in &step.layer_features {
         let Some(source_layer) = layers
             .iter()
@@ -1631,10 +1633,31 @@ pub fn extract_step_layer_local(
             if is_fabrication_layer {
                 for (feature_index, set_feature) in set.features.iter().enumerate() {
                     if let SetFeature::Slot(slot) = set_feature {
-                        let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
-                        let layer_order = physical_stackup_layers(&ecad.cad_data.stackups, layers)?
-                            .unwrap_or_else(|| layers.iter().map(|layer| layer.name).collect());
-                        if !slot_applies_to_layer(source_layer, layer, &layer_order, slot) {
+                        if !slot_applies_to_layer(
+                            source_layer,
+                            layer,
+                            || {
+                                let order = match &mut slot_layer_order {
+                                    Some(order) => order,
+                                    empty @ None => {
+                                        let ecad = ipc
+                                            .ecad()
+                                            .context("IPC-2581 file has no ECAD section")?;
+                                        empty.insert(
+                                            physical_stackup_layers(
+                                                &ecad.cad_data.stackups,
+                                                layers,
+                                            )?
+                                            .unwrap_or_else(|| {
+                                                layers.iter().map(|layer| layer.name).collect()
+                                            }),
+                                        )
+                                    }
+                                };
+                                Ok(order.as_slice())
+                            },
+                            slot,
+                        )? {
                             continue;
                         }
                         let feature = extract_slot(
@@ -2275,44 +2298,32 @@ fn is_board_step(step: &Step) -> bool {
         || (step.step_type.is_none() && step.step_repeats.is_empty())
 }
 
-fn slot_applies_to_layer(
+fn slot_applies_to_layer<'a>(
     source_layer: &Layer,
     target_layer: &Layer,
-    layer_order: &[Symbol],
+    layer_order: impl FnOnce() -> Result<&'a [Symbol]>,
     slot: &ipc2581::types::Slot,
-) -> bool {
-    if source_layer.name != target_layer.name && target_layer.layer_function.is_fabrication() {
-        return false;
-    }
-
-    if slot.z_axis_dim {
-        return source_layer.name == target_layer.name;
-    }
-
-    layer_span_applies_to_layer(source_layer, target_layer, layer_order)
-}
-
-fn layer_span_applies_to_layer(
-    source_layer: &Layer,
-    target_layer: &Layer,
-    layer_order: &[Symbol],
-) -> bool {
+) -> Result<bool> {
     if source_layer.name == target_layer.name {
-        return true;
+        return Ok(true);
+    }
+    if target_layer.layer_function.is_fabrication() || slot.z_axis_dim {
+        return Ok(false);
     }
 
     let Some(span) = source_layer.span else {
-        return false;
+        return Ok(false);
     };
 
-    feature_definitely_spans_layer(
+    let layer_order = layer_order()?;
+    Ok(feature_definitely_spans_layer(
         FeatureSpan::FromTo {
             from: span.from_layer.or_else(|| layer_order.first().copied()),
             to: span.to_layer.or_else(|| layer_order.last().copied()),
         },
         target_layer.name,
         Some(layer_order),
-    )
+    ))
 }
 
 fn extract_pad(
@@ -5797,16 +5808,13 @@ mod tests {
             }),
         );
         let layers = [l1.name, l2.name, l3.name, route.name];
+        let layer_order = || Ok(layers.as_slice());
         let slot = test_slot(false);
 
-        assert!(slot_applies_to_layer(&route, &l1, &layers, &slot));
-        assert!(slot_applies_to_layer(&route, &l2, &layers, &slot));
-        assert!(!slot_applies_to_layer(&route, &l3, &layers, &slot));
-        assert!(slot_applies_to_layer(&route, &route, &layers, &slot));
-        assert!(layer_span_applies_to_layer(&route, &l1, &layers));
-        assert!(layer_span_applies_to_layer(&route, &l2, &layers));
-        assert!(!layer_span_applies_to_layer(&route, &l3, &layers));
-        assert!(layer_span_applies_to_layer(&route, &route, &layers));
+        assert!(slot_applies_to_layer(&route, &l1, layer_order, &slot).unwrap());
+        assert!(slot_applies_to_layer(&route, &l2, layer_order, &slot).unwrap());
+        assert!(!slot_applies_to_layer(&route, &l3, layer_order, &slot).unwrap());
+        assert!(slot_applies_to_layer(&route, &route, layer_order, &slot).unwrap());
     }
 
     #[test]
@@ -5814,11 +5822,11 @@ mod tests {
         let mut interner = ipc2581::Interner::new();
         let l1 = test_layer(&mut interner, "L1", LayerFunction::Signal, None);
         let route = test_layer(&mut interner, "ROUT", LayerFunction::Rout, None);
-        let layers = [l1.name, route.name];
+        let layer_order = || unreachable!("Z-axis slots need no layer order");
         let slot = test_slot(true);
 
-        assert!(!slot_applies_to_layer(&route, &l1, &layers, &slot));
-        assert!(slot_applies_to_layer(&route, &route, &layers, &slot));
+        assert!(!slot_applies_to_layer(&route, &l1, layer_order, &slot).unwrap());
+        assert!(slot_applies_to_layer(&route, &route, layer_order, &slot).unwrap());
     }
 
     #[test]
@@ -5826,11 +5834,11 @@ mod tests {
         let mut interner = ipc2581::Interner::new();
         let l1 = test_layer(&mut interner, "L1", LayerFunction::Signal, None);
         let route = test_layer(&mut interner, "ROUT", LayerFunction::Rout, None);
-        let layers = [l1.name, route.name];
+        let layer_order = || unreachable!("unspanned slots need no layer order");
         let slot = test_slot(false);
 
-        assert!(!slot_applies_to_layer(&route, &l1, &layers, &slot));
-        assert!(slot_applies_to_layer(&route, &route, &layers, &slot));
+        assert!(!slot_applies_to_layer(&route, &l1, layer_order, &slot).unwrap());
+        assert!(slot_applies_to_layer(&route, &route, layer_order, &slot).unwrap());
     }
 
     #[test]

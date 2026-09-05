@@ -1171,7 +1171,7 @@ fn span_range_in_stackup(span: [Symbol; 2], stackup: &[Symbol]) -> Option<(usize
     Some((from.min(to), from.max(to)))
 }
 
-/// Resolve physical order, distinguishing absent stackups from malformed ones.
+/// Resolve physical order, distinguishing absent, invalid, and ambiguous stacks.
 /// Unnumbered stacks retain their source order, as in the canonical IPC view.
 pub(super) fn physical_stackup_layers(
     stackups: &[ipc2581::types::Stackup],
@@ -1180,7 +1180,9 @@ pub(super) fn physical_stackup_layers(
     let stackup = match stackups {
         [] => return Ok(None),
         [stackup] => stackup,
-        _ => bail!("physical layer spans require exactly one stackup"),
+        _ => bail!(
+            "physical layer spans require exactly one stackup; per-step stackup selection is unsupported"
+        ),
     };
     let mut layers = stackup.layers.iter().collect::<Vec<_>>();
     ensure!(!layers.is_empty(), "physical stackup contains no layers");
@@ -1454,7 +1456,7 @@ mod tests {
     }
 
     #[test]
-    fn malformed_physical_stacks_do_not_fall_back_to_declarations() {
+    fn invalid_or_ambiguous_physical_stacks_do_not_fall_back_to_declarations() {
         let xml = spanned_slot_fixture(["L0", "L1", "L2"], false);
         for (from, to, message) in [
             (
@@ -1483,12 +1485,64 @@ mod tests {
             let error = import_design(&invalid).unwrap_err();
             assert!(error.to_string().contains(message), "{error}");
 
-            // The association query must also reject bad metadata, even when
+            // The association query must also reject unusable ordering, even when
             // no slot extraction is needed to construct the canonical design.
             let mut imported = import_design(&Ipc2581::parse(&xml).unwrap()).unwrap();
             imported.stackups = invalid.ecad().unwrap().cad_data.stackups.clone();
             let error = imported.physical_holes(ArtworkScope::Board).unwrap_err();
             assert!(error.to_string().contains(message), "{error}");
+        }
+    }
+
+    #[test]
+    fn slot_extraction_ignores_irrelevant_malformed_stackup() {
+        let xml = spanned_slot_fixture(["L0", "L1", "L2"], false)
+            .replace("sequence=\"1\"", "sequence=\"0\"")
+            .replace(
+                "<Stackup name=",
+                "<Layer name=\"DRILL\" layerFunction=\"DRILL\" side=\"ALL\"/><Stackup name=",
+            );
+        for z_axis in [false, true] {
+            let xml = if z_axis {
+                xml.replace("</SlotCavity>", "<MaterialCut depth=\"0.1\"/></SlotCavity>")
+            } else {
+                xml.clone()
+            };
+            let ipc = Ipc2581::parse(&xml).unwrap();
+            let cad = &ipc.ecad().unwrap().cad_data;
+            for (name, expected_slots) in [("ROUT", 1), ("DRILL", 0), ("L1", 0)] {
+                let layer = cad
+                    .layers
+                    .iter()
+                    .find(|layer| ipc.resolve(layer.name) == name)
+                    .unwrap();
+                let result = crate::import::ipc2581::extract_step_layer_local(
+                    &ipc,
+                    &cad.steps[0],
+                    &cad.layers,
+                    layer,
+                    name,
+                );
+                if name == "L1" && !z_axis {
+                    assert!(
+                        result
+                            .unwrap_err()
+                            .to_string()
+                            .contains("duplicate layer sequence")
+                    );
+                } else {
+                    let document = result
+                        .expect("source/fabrication/Z-axis extraction needs no physical order");
+                    assert_eq!(
+                        document
+                            .features
+                            .iter()
+                            .filter(|feature| feature.kind == FeatureKind::Slot)
+                            .count(),
+                        expected_slots
+                    );
+                }
+            }
         }
     }
 
