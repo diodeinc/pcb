@@ -22,6 +22,7 @@ mod placement;
 pub mod reconcile;
 mod repair;
 mod root_interface;
+mod sheet_placements;
 mod source;
 mod symbol;
 
@@ -44,5 +45,6 @@ pub use net_symbols::NetSymbolSpec;
 pub use repair::{
     ConnectivityRepairIntent, NetDriverKind, plan_connectivity_repair, verify_connectivity_repair,
 };
+pub use sheet_placements::{restore_sheet_placements, sync_sheet_placements};
 pub use source::patch_page_source;
 pub use symbol::PlacedPin;

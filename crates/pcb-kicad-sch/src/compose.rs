@@ -84,11 +84,27 @@ pub(crate) fn reconcile_document(
         .into_iter()
         .collect::<BTreeSet<_>>();
     let RepairTargets {
+        missing_sheets,
         project_slots,
         remove_slots,
         remove_locations,
         connectivity: selected_connectivity,
     } = repair_targets(issue_selection, inspection_before, &expected_slots)?;
+    let restores_missing_sheets = !missing_sheets.is_empty();
+    for (page_id, sheet_id) in missing_sheets {
+        let sheet = document
+            .pages
+            .iter_mut()
+            .find(|page| page.id == page_id)
+            .and_then(|page| {
+                page.items.iter_mut().find_map(|item| match item {
+                    SchItem::Sheet(sheet) if sheet.id == sheet_id => Some(sheet),
+                    _ => None,
+                })
+            })
+            .with_context(|| format!("missing sheet {sheet_id} on page {page_id} is absent"))?;
+        sheet.placed = true;
+    }
     let instances = component_slots::component_instances(netlist)?;
     let mut selected_existing = BTreeMap::new();
     for slot in &project_slots {
@@ -246,8 +262,10 @@ pub(crate) fn reconcile_document(
         // Any selected mutation (projection or removal) shifts issue keys, so
         // connectivity issues that appear only after the mutation belong to
         // this repair's scope.
-        let document_mutated =
-            !project_slots.is_empty() || !remove_slots.is_empty() || !remove_locations.is_empty();
+        let document_mutated = restores_missing_sheets
+            || !project_slots.is_empty()
+            || !remove_slots.is_empty()
+            || !remove_locations.is_empty();
         current
             .issues
             .iter()
@@ -303,6 +321,7 @@ fn is_connectivity_issue(issue: &SchematicIssue) -> bool {
 }
 
 struct RepairTargets {
+    missing_sheets: Vec<(String, String)>,
     project_slots: BTreeSet<SymbolSlotKey>,
     remove_slots: BTreeSet<SymbolSlotKey>,
     remove_locations: BTreeSet<SymbolLocation>,
@@ -319,6 +338,7 @@ fn repair_targets(
     } else {
         BTreeSet::new()
     };
+    let mut missing_sheets = Vec::new();
     let mut remove_slots = BTreeSet::new();
     let mut remove_locations = BTreeSet::new();
     let mut selected_connectivity = BTreeSet::new();
@@ -338,6 +358,9 @@ fn repair_targets(
         };
         for context in selected {
             match &context.issue {
+                SchematicIssue::MissingSheet { page_id, sheet_id } => {
+                    missing_sheets.push((page_id.clone(), sheet_id.clone()));
+                }
                 SchematicIssue::MissingSymbol { slot }
                 | SchematicIssue::DuplicateSymbol { slot, .. }
                 | SchematicIssue::MismatchedSymbolId { slot, .. } => {
@@ -362,6 +385,7 @@ fn repair_targets(
         bail!("repairing selected issues requires a valid inspection");
     }
     Ok(RepairTargets {
+        missing_sheets,
         project_slots,
         remove_slots,
         remove_locations,
@@ -835,6 +859,7 @@ fn materialize_hierarchy(
         };
         let sheet = Sheet {
             id: hierarchy::sheet_id(&sheet_plan.module_path),
+            placed: true,
             at: Some(at),
             size: Some(size),
             name: Some(name_field),
@@ -3718,6 +3743,7 @@ mod tests {
         let mut page = SchPage::new(id);
         page.items.push(SchItem::Sheet(Box::new(Sheet {
             id: format!("{id}-sheet"),
+            placed: true,
             at: Some(Point::new(10.0, 10.0)),
             size: Some(Point::new(200.0, 180.0)),
             name: None,

@@ -65,6 +65,7 @@ fn singleton_primary_issue_and_complete_issue_set_produce_the_same_repair() {
 
 fn issue_kind(issue: &SchematicIssue) -> &'static str {
     match issue {
+        SchematicIssue::MissingSheet { .. } => "missing-sheet",
         SchematicIssue::MissingSymbol { .. } => "missing",
         SchematicIssue::DuplicateSymbol { .. } => "duplicate",
         SchematicIssue::MismatchedSymbolId { .. } => "mismatched-id",
@@ -862,6 +863,7 @@ fn nets_split_into_a_user_created_subsheet_are_repairable() {
     };
     let sheet = Sheet {
         id: "sheet-sub".to_string(),
+        placed: true,
         at: Some(Point::new(0.0, 0.0)),
         size: Some(Point::new(25.4, 25.4)),
         name: Some(SymbolField::new("Sheetname", "sub", Point::new(0.0, 0.0))),

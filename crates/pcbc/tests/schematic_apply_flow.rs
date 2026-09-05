@@ -55,6 +55,141 @@ fn linked_hierarchy_fixture(path: &std::path::Path) -> pcb_sch::Schematic {
     netlist
 }
 
+#[test]
+fn apply_restores_deleted_sheet_instance_without_recreating_child_files() {
+    let workspace = tempfile::tempdir().unwrap();
+    let project_dir = workspace.path().join("hardware");
+    let netlist = linked_hierarchy_fixture(&project_dir);
+    let created = apply_linked_schematic(&netlist).unwrap().unwrap();
+    let mut project = KicadProject::load(&project_dir).unwrap();
+    let original = project.document.clone();
+    let parent = project
+        .document
+        .pages
+        .iter_mut()
+        .find(|page| {
+            page.items
+                .iter()
+                .any(|item| matches!(item, SchItem::Sheet(_)))
+        })
+        .unwrap();
+    let parent_file = project_dir.join(parent.file_name.as_ref().unwrap());
+    let originals = created
+        .schematic_files
+        .iter()
+        .map(|path| (path.clone(), fs::read(path).unwrap()))
+        .collect::<Vec<_>>();
+    let SchItem::Sheet(sheet) = parent
+        .items
+        .iter_mut()
+        .find(|item| matches!(item, SchItem::Sheet(_)))
+        .unwrap()
+    else {
+        unreachable!()
+    };
+    sheet.placed = false;
+    let source = fs::read_to_string(&parent_file).unwrap();
+    let deleted = pcb_kicad_sch::patch_page_source(&source, parent)
+        .unwrap()
+        .unwrap();
+    fs::write(&parent_file, deleted).unwrap();
+
+    let reopened = KicadProject::load(&project_dir).unwrap();
+    assert_eq!(reopened.document.pages.len(), original.pages.len());
+    let inspection = inspect_schematic(&reopened.document, &netlist).unwrap();
+    assert!(
+        inspection
+            .issues
+            .iter()
+            .any(|issue| matches!(issue.issue, SchematicIssue::MissingSheet { .. }))
+    );
+    assert!(
+        !inspection
+            .issues
+            .iter()
+            .any(|issue| matches!(issue.issue, SchematicIssue::MissingSymbol { .. }))
+    );
+    assert!(apply_linked_schematic(&netlist).unwrap().unwrap().changed);
+    let restored = KicadProject::load(&project_dir).unwrap().document;
+    for page in &original.pages {
+        let actual = restored
+            .pages
+            .iter()
+            .find(|other| other.id == page.id)
+            .unwrap();
+        let mut expected_items = page.items.iter().collect::<Vec<_>>();
+        let mut actual_items = actual.items.iter().collect::<Vec<_>>();
+        expected_items.sort_by_key(|item| item.id());
+        actual_items.sort_by_key(|item| item.id());
+        assert_eq!(actual_items, expected_items);
+    }
+    for (path, contents) in originals {
+        if path != parent_file {
+            assert_eq!(
+                fs::read(path).unwrap(),
+                contents,
+                "child file must be reused unchanged"
+            );
+        }
+    }
+    assert!(!apply_linked_schematic(&netlist).unwrap().unwrap().changed);
+}
+
+#[test]
+fn apply_recreates_child_deleted_after_its_sheet_placement() {
+    let workspace = tempfile::tempdir().unwrap();
+    let project_dir = workspace.path().join("hardware");
+    let netlist = linked_hierarchy_fixture(&project_dir);
+    apply_linked_schematic(&netlist).unwrap().unwrap();
+    let mut project = KicadProject::load(&project_dir).unwrap();
+    let parent = project
+        .document
+        .pages
+        .iter_mut()
+        .find(|page| {
+            page.items
+                .iter()
+                .any(|item| matches!(item, SchItem::Sheet(_)))
+        })
+        .unwrap();
+    let parent_file = project_dir.join(parent.file_name.as_ref().unwrap());
+    let child_file = parent
+        .items
+        .iter_mut()
+        .find_map(|item| match item {
+            SchItem::Sheet(sheet) => {
+                sheet.placed = false;
+                Some(parent_file.parent().unwrap().join(sheet.file_name()))
+            }
+            _ => None,
+        })
+        .unwrap();
+    let source = fs::read_to_string(&parent_file).unwrap();
+    fs::write(
+        &parent_file,
+        pcb_kicad_sch::patch_page_source(&source, parent)
+            .unwrap()
+            .unwrap(),
+    )
+    .unwrap();
+    fs::remove_file(&child_file).unwrap();
+
+    KicadProject::load(&project_dir).expect("stale placement metadata must not block loading");
+    assert!(apply_linked_schematic(&netlist).unwrap().unwrap().changed);
+    assert!(
+        child_file.is_file(),
+        "netlist content recreates the missing child"
+    );
+    let repaired = KicadProject::load(&project_dir).unwrap();
+    assert!(
+        inspect_schematic(&repaired.document, &netlist)
+            .unwrap()
+            .analysis
+            .is_equivalent()
+    );
+    assert!(!apply_linked_schematic(&netlist).unwrap().unwrap().changed);
+}
+
 fn expose_root_port(netlist: &mut pcb_sch::Schematic, port_name: &str, net_name: &str) {
     let net_id = netlist
         .nets
@@ -324,7 +459,9 @@ fn initializes_each_linked_module_instance_as_its_own_child_sheet() {
 
     let unchanged = apply_linked_schematic(&netlist).unwrap().unwrap();
 
-    assert!(!unchanged.changed);
+    // Source aliases are preserved; only their recovery metadata is refreshed.
+    assert!(unchanged.changed);
+    assert!(!apply_linked_schematic(&netlist).unwrap().unwrap().changed);
     for (path, source) in before {
         assert_eq!(fs::read(path).unwrap(), source);
     }
@@ -355,6 +492,12 @@ fn adds_an_uninitialized_linked_module_to_an_existing_project() {
         )
         .unwrap();
     }
+    pcb_kicad_sch::sync_sheet_placements(&mut incomplete.project, &incomplete.document).unwrap();
+    fs::write(
+        &created.project_file,
+        serde_json::to_string_pretty(&incomplete.project).unwrap(),
+    )
+    .unwrap();
     fs::remove_file(&missing_file).unwrap();
 
     let repaired = apply_linked_schematic(&netlist).unwrap().unwrap();

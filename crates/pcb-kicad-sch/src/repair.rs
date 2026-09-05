@@ -212,7 +212,8 @@ pub(crate) fn plan_connectivity_repair_core(
                     }
                 }
             }
-            SchematicIssue::UnboundSymbol { .. }
+            SchematicIssue::MissingSheet { .. }
+            | SchematicIssue::UnboundSymbol { .. }
             | SchematicIssue::MissingSymbol { .. }
             | SchematicIssue::DuplicateSymbol { .. }
             | SchematicIssue::MismatchedSymbolId { .. }
@@ -877,7 +878,8 @@ fn repair_problems(issue: &SchematicIssue) -> BTreeSet<RepairProblem> {
             .cloned()
             .map(RepairProblem::UnexpectedConnection)
             .collect(),
-        SchematicIssue::DisconnectedNet { .. }
+        SchematicIssue::MissingSheet { .. }
+        | SchematicIssue::DisconnectedNet { .. }
         | SchematicIssue::MissingPort { .. }
         | SchematicIssue::UnboundSymbol { .. }
         | SchematicIssue::MissingSymbol { .. }
@@ -1369,6 +1371,7 @@ mod tests {
         });
         let sheet = SchItem::Sheet(Box::new(Sheet {
             id: "sheet".to_string(),
+            placed: true,
             at: Some(Point::new(10.0, 0.0)),
             size: Some(Point::new(20.0, 20.0)),
             name: None,
