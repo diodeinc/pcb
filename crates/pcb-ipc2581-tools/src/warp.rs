@@ -4,6 +4,7 @@
 //! supplies it with a stackup and the per-layer copper it needs.
 
 use anyhow::{Context, Result, bail};
+use pcb_ir::geom::GeometryAccuracy;
 use pcb_ir::geom::warp::{
     LAMINATE_RELAXATION_DROP_K, Material, PanelField, StackLayer, ThermalStack, WarpEstimate,
     estimate_warp,
@@ -57,10 +58,10 @@ pub struct WarpAnalysis {
 ///
 /// Requires a stackup carrying a thickness for every layer: without it there is
 /// no neutral axis, no lever arms, and nothing to estimate.
-pub fn analyze(ipc: &Ipc2581) -> Result<WarpAnalysis> {
+pub fn analyze(ipc: &Ipc2581, accuracy: GeometryAccuracy) -> Result<WarpAnalysis> {
     let (stack, copper_names) = physical_stack(ipc)?;
     let conductors = stack.conductor_weights();
-    let bounds = panel_bounds(ipc)?;
+    let bounds = panel_bounds(ipc, accuracy)?;
     let sample_pitch_mm =
         (bounds.width().max(bounds.height()) / SAMPLES_ACROSS).max(MIN_SAMPLE_PITCH_MM);
     let columns = (bounds.width() / sample_pitch_mm).ceil().max(1.0) as usize;
@@ -70,7 +71,7 @@ pub fn analyze(ipc: &Ipc2581) -> Result<WarpAnalysis> {
     let layers = copper_names
         .iter()
         .map(|layer_name| {
-            let image: ContourSet = composed_copper_image(ipc, layer_name)
+            let image: ContourSet = composed_copper_image(ipc, layer_name, accuracy)
                 .with_context(|| format!("failed to extract copper on layer '{layer_name}'"))?;
             let coverage = image.grid_coverage(bounds, columns, rows);
             let mean = coverage.iter().sum::<f64>() / coverage.len() as f64;
@@ -180,10 +181,10 @@ pub(crate) fn physical_stack(ipc: &Ipc2581) -> Result<(ThermalStack, Vec<String>
     Ok((stack, copper_names))
 }
 
-fn panel_bounds(ipc: &Ipc2581) -> Result<BBox> {
+fn panel_bounds(ipc: &Ipc2581, accuracy: GeometryAccuracy) -> Result<BBox> {
     let layout =
         crate::geometry::extract_layout(ipc).context("failed to extract the panel outline")?;
-    let profile = crate::geometry::board_array_fabrication_profile(ipc, &layout, &[])
+    let profile = crate::geometry::board_array_fabrication_profile(ipc, &layout, &[], accuracy)
         .context("failed to derive the panel profile")?;
     let outline = ContourSet::from_filled_contours(
         &profile
@@ -193,7 +194,8 @@ fn panel_bounds(ipc: &Ipc2581) -> Result<BBox> {
             .cloned()
             .collect::<Vec<_>>(),
         pcb_ir::geom::tol::REGION_MM,
-    );
+        accuracy,
+    )?;
     if outline.is_empty() {
         bail!("panel has no outline to measure");
     }

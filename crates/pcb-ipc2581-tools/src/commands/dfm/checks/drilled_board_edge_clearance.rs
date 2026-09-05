@@ -8,6 +8,7 @@
 //! profile boundary. A feature that crosses or lies outside its board region
 //! has zero clearance.
 
+use pcb_ir::geom::GeometryAccuracy;
 use pcb_ir::geom::dfm::{Distance, circular_region};
 use pcb_ir::geom::region::ring_edges;
 use pcb_ir::geom::{BBox, Point};
@@ -21,7 +22,12 @@ use super::{
     slot_subject,
 };
 
-pub(super) fn evaluate_holes(limit_mm: f64, class: HoleClass, design: &Design) -> Evaluation {
+pub(super) fn evaluate_holes(
+    limit_mm: f64,
+    class: HoleClass,
+    design: &Design,
+    accuracy: GeometryAccuracy,
+) -> anyhow::Result<Evaluation> {
     let holes = design
         .holes
         .iter()
@@ -29,25 +35,35 @@ pub(super) fn evaluate_holes(limit_mm: f64, class: HoleClass, design: &Design) -
         .collect::<Vec<_>>();
     let measured = holes
         .iter()
-        .filter_map(|&hole| {
+        .map(|&hole| {
             let outline = enclosing_outline(
                 &design.board_outlines,
                 hole.provenance.instance_index,
                 hole.center,
             );
-            let (distance, outside) = hole_clearance(hole, outline, limit_mm)?;
-            Some(measured_hole(
-                design, hole, outline, distance, outside, limit_mm,
-            ))
+            let Some((distance, outside)) = hole_clearance(hole, outline, limit_mm) else {
+                return Ok(None);
+            };
+            Ok::<_, anyhow::Error>(Some(measured_hole(
+                design, hole, outline, distance, outside, limit_mm, accuracy,
+            )?))
         })
+        .collect::<anyhow::Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
         .collect();
-    Evaluation {
+    Ok(Evaluation {
         checked: holes.len(),
         measured,
-    }
+    })
 }
 
-pub(super) fn evaluate_slots(limit_mm: f64, plating: SlotPlating, design: &Design) -> Evaluation {
+pub(super) fn evaluate_slots(
+    limit_mm: f64,
+    plating: SlotPlating,
+    design: &Design,
+    accuracy: GeometryAccuracy,
+) -> anyhow::Result<Evaluation> {
     let slots = design
         .slots
         .iter()
@@ -55,22 +71,27 @@ pub(super) fn evaluate_slots(limit_mm: f64, plating: SlotPlating, design: &Desig
         .collect::<Vec<_>>();
     let measured = slots
         .iter()
-        .filter_map(|&slot| {
+        .map(|&slot| {
             let outline = enclosing_outline(
                 &design.board_outlines,
                 slot.provenance.instance_index,
                 slot.bbox.center(),
             );
-            let (distance, outside) = slot_clearance(slot, outline, limit_mm)?;
-            Some(measured_slot(
-                design, slot, outline, distance, outside, limit_mm,
-            ))
+            let Some((distance, outside)) = slot_clearance(slot, outline, limit_mm) else {
+                return Ok(None);
+            };
+            Ok::<_, anyhow::Error>(Some(measured_slot(
+                design, slot, outline, distance, outside, limit_mm, accuracy,
+            )?))
         })
+        .collect::<anyhow::Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
         .collect();
-    Evaluation {
+    Ok(Evaluation {
         checked: slots.len(),
         measured,
-    }
+    })
 }
 
 /// Select only among profiles carrying the feature's occurrence identity.
@@ -120,7 +141,10 @@ fn hole_clearance(
             .circular_enclosure(hole.center, hole.diameter_mm / 2.0, limit_mm)?;
     if distance.mm <= 0.0 {
         Some((
-            Distance::flattened(0.0, distance.first, distance.second, 1),
+            Distance {
+                mm: 0.0,
+                ..distance
+            },
             true,
         ))
     } else {
@@ -138,11 +162,11 @@ fn zero_hole_clearance(hole: &Hole, outline: &BoardOutline, search_mm: f64) -> D
     } else {
         radial / radial.length()
     };
-    Distance::flattened(
+    Distance::with_uncertainty(
         0.0,
         hole.center + direction * (hole.diameter_mm / 2.0),
         nearest.second,
-        1,
+        nearest.uncertainty_mm,
     )
 }
 
@@ -172,10 +196,13 @@ fn slot_clearance(
                 .segment_nearest_within(start, end, search_mm)
         })
         .min_by(|left, right| left.mm.total_cmp(&right.mm))?
-        .also_flattened(1);
+        .also_uncertain(slot.outline.uncertainty_mm);
     if outside {
         Some((
-            Distance::flattened(0.0, distance.first, distance.second, 2),
+            Distance {
+                mm: 0.0,
+                ..distance
+            },
             true,
         ))
     } else {
@@ -195,7 +222,8 @@ fn measured_hole(
     distance: Distance,
     outside: bool,
     limit_mm: f64,
-) -> Measured {
+    accuracy: GeometryAccuracy,
+) -> anyhow::Result<Measured> {
     let feature = Evidence::circle("drilled_hole", hole.center, hole.diameter_mm);
     let mut evidence = vec![feature.clone()];
     let mut site_evidence = vec![
@@ -212,8 +240,8 @@ fn measured_hole(
         evidence.push(Evidence::bounds("board_profile", outline.bbox));
         site_evidence.push(profile_evidence(outline));
         if outside {
-            let outside_region =
-                circular_region(hole.center, hole.diameter_mm / 2.0).difference(&outline.region);
+            let outside_region = circular_region(hole.center, hole.diameter_mm / 2.0, accuracy)?
+                .difference(&outline.region);
             if !outside_region.is_empty() {
                 site_evidence.push(Evidence::region("outside_board_material", &outside_region));
             }
@@ -233,14 +261,14 @@ fn measured_hole(
     if outside {
         site.note = Some(outside_note(outline.is_some()));
     }
-    Measured {
+    Ok(Measured {
         distance,
         bbox: hole.bbox,
         layers: vec![hole.layer.clone()],
         subjects,
         evidence,
         sites: vec![site],
-    }
+    })
 }
 
 fn measured_slot(
@@ -250,11 +278,12 @@ fn measured_slot(
     distance: Distance,
     outside: bool,
     limit_mm: f64,
-) -> Measured {
+    accuracy: GeometryAccuracy,
+) -> anyhow::Result<Measured> {
     let feature = slot_evidence(slot);
     let mut evidence = vec![Evidence::bounds("routed_slot", slot.bbox)];
     let mut site_evidence = vec![feature];
-    let clearance_region = slot.outline.disk_dilate(limit_mm);
+    let clearance_region = slot.outline.disk_dilate(limit_mm, accuracy)?;
     site_evidence.push(Evidence::region(
         "required_board_edge_clearance",
         &clearance_region,
@@ -285,14 +314,14 @@ fn measured_slot(
     if outside {
         site.note = Some(outside_note(outline.is_some()));
     }
-    Measured {
+    Ok(Measured {
         distance,
         bbox: slot.bbox,
         layers: vec![slot.layer.clone()],
         subjects,
         evidence,
         sites: vec![site],
-    }
+    })
 }
 
 pub(super) fn slot_evidence(slot: &Slot) -> Evidence {
@@ -383,7 +412,9 @@ name = "Test"
     }
 
     fn check(xml: &str, pdk_source: &str, target: LayoutTarget) -> super::super::super::DfmReport {
-        let imported = import_design(&Ipc2581::parse(xml).unwrap()).unwrap();
+        let accuracy = GeometryAccuracy::default();
+
+        let imported = import_design(&Ipc2581::parse(xml).unwrap(), accuracy).unwrap();
         super::super::super::check(
             &imported,
             CheckRequest {
@@ -399,6 +430,7 @@ name = "Test"
                 layout_target: target,
                 generated_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
             },
+            accuracy,
         )
         .unwrap()
     }

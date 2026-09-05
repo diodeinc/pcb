@@ -30,6 +30,7 @@
 //! gaps admit a disk of radius `v`, without component ranking or
 //! feature-specific rules.
 
+use crate::geom::{AccuracyError, GeometryAccuracy};
 use std::fmt;
 
 use crate::dialects::Side;
@@ -306,6 +307,7 @@ impl<Symbol: Copy + PartialEq> BoardArrayBalancingCollection<Symbol> {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum BalancingRegionError {
+    Accuracy(AccuracyError),
     InvalidClearance(f64),
     InvalidRegularizationRadius(f64),
     InvalidGapRadius(f64),
@@ -321,6 +323,7 @@ pub enum BalancingRegionError {
 impl fmt::Display for BalancingRegionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Accuracy(error) => error.fmt(f),
             Self::InvalidClearance(value) => write!(
                 f,
                 "balancing-region clearance must be finite and positive; got {value}"
@@ -383,6 +386,7 @@ impl std::error::Error for BalancingRegionError {}
 pub fn board_array_balancing_region(
     input: &BoardArrayBalancingInput,
     options: BalancingRegionOptions,
+    accuracy: GeometryAccuracy,
 ) -> Result<BoardArrayBalancingResult, BalancingRegionError> {
     validate_options(options)?;
     if input.panel_outer.is_empty() {
@@ -397,16 +401,20 @@ pub fn board_array_balancing_region(
         .union(&input.material_removal)
         .union(&input.support_features);
     let construction_clearance_mm = options.construction_clearance_mm();
-    let panel_keep_in = input.panel_outer.disk_erode(construction_clearance_mm);
-    let obstacle_keep_out = raw_obstacles.disk_dilate(construction_clearance_mm);
+    let panel_keep_in = input
+        .panel_outer
+        .disk_erode(construction_clearance_mm, accuracy)?;
+    let obstacle_keep_out = raw_obstacles.disk_dilate(construction_clearance_mm, accuracy)?;
     let clearance_safe_region = panel_keep_in.difference(&obstacle_keep_out);
-    let opened_candidates = clearance_safe_region.disk_open(options.regularization_radius_mm);
+    let opened_candidates =
+        clearance_safe_region.disk_open(options.regularization_radius_mm, accuracy)?;
     let removed_by_opening = clearance_safe_region.difference(&opened_candidates);
     let gap_regularization = opened_candidates
         .disk_regularize_gaps(
             options.gap_radius_mm,
             options.regularization_radius_mm,
             options.numerical_guard_mm,
+            accuracy,
         )
         .map_err(|error| BalancingRegionError::GapRegularization(error.to_string()))?;
     let safe_region = gap_regularization.kept;
@@ -414,11 +422,11 @@ pub fn board_array_balancing_region(
 
     // Certify against the nominal requirement, independently of the
     // construction guard used above.
-    let swept_safe_region = safe_region.disk_dilate(options.clearance_mm);
+    let swept_safe_region = safe_region.disk_dilate(options.clearance_mm, accuracy)?;
     let regularization_violations = safe_region
-        .difference(&safe_region.disk_open(options.regularization_radius_mm))
-        .disk_open(options.numerical_guard_mm);
-    let gap_violations = safe_region.disk_gap_violations(options.gap_radius_mm);
+        .difference(&safe_region.disk_open(options.regularization_radius_mm, accuracy)?)
+        .disk_open(options.numerical_guard_mm, accuracy)?;
+    let gap_violations = safe_region.disk_gap_violations(options.gap_radius_mm, accuracy)?;
     let certificate = ClearanceCertificate {
         safe_outside_clearance_region: safe_region.difference(&clearance_safe_region),
         regularization_violations,
@@ -453,6 +461,7 @@ pub fn collect_board_array_balancing_input<'a, Symbol, LayerFunction>(
     fabrication_profile: &BoardArrayFabricationProfile,
     copper_layers: &[BoardArrayCopperLayer<Symbol>],
     support_documents: impl IntoIterator<Item = BoardArraySupportDocument<'a, Symbol, LayerFunction>>,
+    accuracy: GeometryAccuracy,
 ) -> Result<BoardArrayBalancingCollection<Symbol>, BalancingRegionError>
 where
     Symbol: Copy + PartialEq + 'a,
@@ -463,6 +472,7 @@ where
         fabrication_profile,
         copper_layers,
         support_documents,
+        accuracy,
     )?;
     let unpainted_path_count = collection
         .support_layers
@@ -489,6 +499,7 @@ where
 pub fn collect_fab_panel_balancing_input(
     usable_region: ContourSet,
     fabrication_profile: &BoardArrayFabricationProfile,
+    accuracy: GeometryAccuracy,
 ) -> Result<BoardArrayBalancingInput, BalancingRegionError> {
     if fabrication_profile.purpose != LayoutPurpose::FabricationPanel {
         return Err(BalancingRegionError::NotAFabricationPanel);
@@ -499,7 +510,8 @@ pub fn collect_fab_panel_balancing_input(
         .flatten()
         .cloned()
         .collect::<Vec<_>>();
-    let board_footprints = ContourSet::from_filled_contours(&panel_contours, tol::REGION_MM);
+    let board_footprints =
+        ContourSet::from_filled_contours(&panel_contours, tol::REGION_MM, accuracy)?;
     if board_footprints.is_empty() {
         return Err(BalancingRegionError::EmptyAssemblyPanels);
     }
@@ -511,7 +523,8 @@ pub fn collect_fab_panel_balancing_input(
             &fabrication_profile.material_removal,
             FillRule::NonZero,
             tol::REGION_MM,
-        ),
+            accuracy,
+        )?,
         support_features: ContourSet::empty(tol::REGION_MM),
     })
 }
@@ -528,6 +541,7 @@ pub fn inspect_board_array_balancing_input<'a, Symbol, LayerFunction>(
     fabrication_profile: &BoardArrayFabricationProfile,
     copper_layers: &[BoardArrayCopperLayer<Symbol>],
     support_documents: impl IntoIterator<Item = BoardArraySupportDocument<'a, Symbol, LayerFunction>>,
+    accuracy: GeometryAccuracy,
 ) -> Result<BoardArrayBalancingCollection<Symbol>, BalancingRegionError>
 where
     Symbol: Copy + PartialEq + 'a,
@@ -539,7 +553,7 @@ where
         .flatten()
         .cloned()
         .collect::<Vec<_>>();
-    let panel_outer = ContourSet::from_filled_contours(&panel_contours, tol::REGION_MM);
+    let panel_outer = ContourSet::from_filled_contours(&panel_contours, tol::REGION_MM, accuracy)?;
     if panel_outer.is_empty() {
         return Err(BalancingRegionError::EmptyPanelOutline);
     }
@@ -551,11 +565,14 @@ where
         .filter(|occurrence| occurrence.role == ProfileOccurrenceRole::BoardInstance)
     {
         board_instance_count += 1;
-        board_contours.extend(
-            layout.transformed_path_contours(occurrence.profile.outer_path, occurrence.transform),
-        );
+        board_contours.extend(layout.transformed_path_contours(
+            occurrence.profile.outer_path,
+            occurrence.transform,
+            accuracy,
+        )?);
     }
-    let board_footprints = ContourSet::from_filled_contours(&board_contours, tol::REGION_MM);
+    let board_footprints =
+        ContourSet::from_filled_contours(&board_contours, tol::REGION_MM, accuracy)?;
     if board_instance_count == 0 || board_footprints.is_empty() {
         return Err(BalancingRegionError::EmptyBoardFootprints);
     }
@@ -564,11 +581,12 @@ where
         &fabrication_profile.material_removal,
         FillRule::NonZero,
         tol::REGION_MM,
-    );
+        accuracy,
+    )?;
     let support_layers = support_documents
         .into_iter()
-        .map(|source| collect_support_layer_geometry(source, copper_layers))
-        .collect::<Vec<_>>();
+        .map(|source| collect_support_layer_geometry(source, copper_layers, accuracy))
+        .collect::<Result<Vec<_>, _>>()?;
 
     Ok(BoardArrayBalancingCollection {
         panel_outer,
@@ -582,7 +600,8 @@ where
 fn collect_support_layer_geometry<Symbol: Copy + PartialEq, LayerFunction>(
     source: BoardArraySupportDocument<'_, Symbol, LayerFunction>,
     copper_layers: &[BoardArrayCopperLayer<Symbol>],
-) -> BoardArraySupportLayerGeometry<Symbol> {
+    accuracy: GeometryAccuracy,
+) -> Result<BoardArraySupportLayerGeometry<Symbol>, AccuracyError> {
     let source_path_count = source
         .document
         .features
@@ -639,12 +658,13 @@ fn collect_support_layer_geometry<Symbol: Copy + PartialEq, LayerFunction>(
                         })
                 }),
                 tol::REGION_MM,
-            );
-            BoardArrayScopedObstacle { reach, region }
+                accuracy,
+            )?;
+            Ok::<_, AccuracyError>(BoardArrayScopedObstacle { reach, region })
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
 
-    BoardArraySupportLayerGeometry {
+    Ok(BoardArraySupportLayerGeometry {
         source_feature_count: source.document.features.len(),
         feature_count: features.len(),
         source_path_count,
@@ -652,7 +672,7 @@ fn collect_support_layer_geometry<Symbol: Copy + PartialEq, LayerFunction>(
         excluded_documentation_path_count: source_path_count.saturating_sub(paths.len()),
         unpainted_path_count,
         obstacles,
-    }
+    })
 }
 
 /// Resolve physical feature span to copper reach without recognizing feature
@@ -704,6 +724,12 @@ fn validate_options(options: BalancingRegionOptions) -> Result<(), BalancingRegi
     Ok(())
 }
 
+impl From<AccuracyError> for BalancingRegionError {
+    fn from(error: AccuracyError) -> Self {
+        Self::Accuracy(error)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -720,10 +746,13 @@ mod tests {
 
     #[test]
     fn computes_and_certifies_safe_region() {
+        let accuracy = GeometryAccuracy::default();
+
         let input = balancing_input(0.0, ContourSet::empty(tol::REGION_MM));
 
         let result =
-            board_array_balancing_region(&input, BalancingRegionOptions::default()).unwrap();
+            board_array_balancing_region(&input, BalancingRegionOptions::default(), accuracy)
+                .unwrap();
 
         assert!(!result.safe_region.is_empty());
         assert!(
@@ -768,6 +797,8 @@ mod tests {
 
     #[test]
     fn larger_clearance_shrinks_clearance_safe_region_for_simple_fixture() {
+        let accuracy = GeometryAccuracy::default();
+
         let input = balancing_input(0.0, ContourSet::empty(tol::REGION_MM));
         let smaller = board_array_balancing_region(
             &input,
@@ -777,6 +808,7 @@ mod tests {
                 gap_radius_mm: 0.5,
                 numerical_guard_mm: 0.0,
             },
+            accuracy,
         )
         .unwrap();
         let larger = board_array_balancing_region(
@@ -787,6 +819,7 @@ mod tests {
                 gap_radius_mm: 0.5,
                 numerical_guard_mm: 0.0,
             },
+            accuracy,
         )
         .unwrap();
 
@@ -807,6 +840,8 @@ mod tests {
 
     #[test]
     fn larger_regularization_disk_shrinks_opened_region_for_simple_fixture() {
+        let accuracy = GeometryAccuracy::default();
+
         let input = balancing_input(0.0, ContourSet::empty(tol::REGION_MM));
         let smaller = board_array_balancing_region(
             &input,
@@ -816,6 +851,7 @@ mod tests {
                 gap_radius_mm: 0.5,
                 numerical_guard_mm: 0.0,
             },
+            accuracy,
         )
         .unwrap();
         let larger = board_array_balancing_region(
@@ -826,6 +862,7 @@ mod tests {
                 gap_radius_mm: 0.5,
                 numerical_guard_mm: 0.0,
             },
+            accuracy,
         )
         .unwrap();
 
@@ -846,6 +883,8 @@ mod tests {
 
     #[test]
     fn regularization_does_not_inflate_obstacle_clearance() {
+        let accuracy = GeometryAccuracy::default();
+
         let input = BoardArrayBalancingInput {
             panel_outer: ContourSet::rectangle(bbox(0.0, 0.0, 30.0, 20.0), tol::REGION_MM),
             board_footprints: ContourSet::rectangle(bbox(2.0, 2.0, 4.0, 4.0), tol::REGION_MM),
@@ -860,6 +899,7 @@ mod tests {
                 gap_radius_mm: 0.5,
                 numerical_guard_mm: 0.025,
             },
+            accuracy,
         )
         .unwrap();
 
@@ -885,13 +925,15 @@ mod tests {
 
     #[test]
     fn adding_an_obstacle_shrinks_clearance_safe_region_for_simple_fixture() {
+        let accuracy = GeometryAccuracy::default();
+
         let baseline_input = balancing_input(0.0, ContourSet::empty(tol::REGION_MM));
         let added_obstacle = ContourSet::rectangle(bbox(10.0, 1.0, 11.0, 9.0), tol::REGION_MM);
         let blocked_input = balancing_input(0.0, added_obstacle);
         let options = BalancingRegionOptions::default();
 
-        let baseline = board_array_balancing_region(&baseline_input, options).unwrap();
-        let blocked = board_array_balancing_region(&blocked_input, options).unwrap();
+        let baseline = board_array_balancing_region(&baseline_input, options, accuracy).unwrap();
+        let blocked = board_array_balancing_region(&blocked_input, options, accuracy).unwrap();
 
         assert!(
             blocked
@@ -908,13 +950,17 @@ mod tests {
 
     #[test]
     fn translation_preserves_safe_region_area_and_certificate() {
+        let accuracy = GeometryAccuracy::default();
+
         let original = balancing_input(0.0, ContourSet::empty(tol::REGION_MM));
         let translated = balancing_input(37.0, ContourSet::empty(tol::REGION_MM));
 
         let original =
-            board_array_balancing_region(&original, BalancingRegionOptions::default()).unwrap();
+            board_array_balancing_region(&original, BalancingRegionOptions::default(), accuracy)
+                .unwrap();
         let translated =
-            board_array_balancing_region(&translated, BalancingRegionOptions::default()).unwrap();
+            board_array_balancing_region(&translated, BalancingRegionOptions::default(), accuracy)
+                .unwrap();
 
         assert!((translated.safe_region.area() - original.safe_region.area()).abs() <= 1e-6);
         assert!(
@@ -939,6 +985,8 @@ mod tests {
 
     #[test]
     fn an_empty_safe_region_is_valid() {
+        let accuracy = GeometryAccuracy::default();
+
         let panel = ContourSet::rectangle(bbox(0.0, 0.0, 10.0, 10.0), tol::REGION_MM);
         let input = BoardArrayBalancingInput {
             panel_outer: panel.clone(),
@@ -948,7 +996,8 @@ mod tests {
         };
 
         let result =
-            board_array_balancing_region(&input, BalancingRegionOptions::default()).unwrap();
+            board_array_balancing_region(&input, BalancingRegionOptions::default(), accuracy)
+                .unwrap();
 
         assert!(result.safe_region.is_empty());
         assert!(result.certificate.passes(0.0));
@@ -956,6 +1005,8 @@ mod tests {
 
     #[test]
     fn rejects_invalid_options_and_required_empty_inputs() {
+        let accuracy = GeometryAccuracy::default();
+
         let input = balancing_input(0.0, ContourSet::empty(tol::REGION_MM));
         assert_eq!(
             board_array_balancing_region(
@@ -965,7 +1016,8 @@ mod tests {
                     regularization_radius_mm: 0.5,
                     gap_radius_mm: 0.5,
                     numerical_guard_mm: 0.0,
-                }
+                },
+                accuracy
             )
             .unwrap_err(),
             BalancingRegionError::InvalidClearance(0.0)
@@ -978,7 +1030,8 @@ mod tests {
                     regularization_radius_mm: 0.0,
                     gap_radius_mm: 0.5,
                     numerical_guard_mm: 0.0,
-                }
+                },
+                accuracy
             )
             .unwrap_err(),
             BalancingRegionError::InvalidRegularizationRadius(0.0)
@@ -991,7 +1044,8 @@ mod tests {
                     regularization_radius_mm: 1.0,
                     gap_radius_mm: 0.0,
                     numerical_guard_mm: 0.0,
-                }
+                },
+                accuracy
             )
             .unwrap_err(),
             BalancingRegionError::InvalidGapRadius(0.0)
@@ -1004,7 +1058,8 @@ mod tests {
                     regularization_radius_mm: 0.5,
                     gap_radius_mm: 0.5,
                     numerical_guard_mm: -0.1,
-                }
+                },
+                accuracy
             )
             .unwrap_err(),
             BalancingRegionError::InvalidNumericalGuard(-0.1)
@@ -1013,7 +1068,7 @@ mod tests {
         let mut empty_panel = input.clone();
         empty_panel.panel_outer = ContourSet::empty(tol::REGION_MM);
         assert_eq!(
-            board_array_balancing_region(&empty_panel, BalancingRegionOptions::default())
+            board_array_balancing_region(&empty_panel, BalancingRegionOptions::default(), accuracy)
                 .unwrap_err(),
             BalancingRegionError::EmptyPanelOutline
         );
@@ -1021,14 +1076,20 @@ mod tests {
         let mut empty_boards = input;
         empty_boards.board_footprints = ContourSet::empty(tol::REGION_MM);
         assert_eq!(
-            board_array_balancing_region(&empty_boards, BalancingRegionOptions::default())
-                .unwrap_err(),
+            board_array_balancing_region(
+                &empty_boards,
+                BalancingRegionOptions::default(),
+                accuracy
+            )
+            .unwrap_err(),
             BalancingRegionError::EmptyBoardFootprints
         );
     }
 
     #[test]
     fn collector_derives_panel_boards_material_removal_and_support() {
+        let accuracy = GeometryAccuracy::default();
+
         let (layout, profile) = layout_and_profile();
         let mut support = TestDocument::new();
         let path = support.push_path(
@@ -1056,6 +1117,7 @@ mod tests {
                 &support,
                 BoardArraySupportLayerPolicy::AllPaintedFeatures,
             )],
+            accuracy,
         )
         .unwrap();
 
@@ -1073,6 +1135,8 @@ mod tests {
 
     #[test]
     fn support_geometry_applies_shared_feature_placements() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut support = TestDocument::new();
         let path = support.push_path(
             Paint::Fill {
@@ -1102,7 +1166,9 @@ mod tests {
                 BoardArraySupportLayerPolicy::AllPaintedFeatures,
             ),
             &[BoardArrayCopperLayer::new(100, Side::Top)],
-        );
+            accuracy,
+        )
+        .unwrap();
         let region = geometry.region_for_layer(100);
 
         assert_eq!(geometry.feature_count, 1);
@@ -1115,6 +1181,8 @@ mod tests {
 
     #[test]
     fn support_geometry_follows_ir_feature_span_and_surface_side() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut support = TestDocument::new();
         let top_surface_path = support.push_path(
             Paint::Fill {
@@ -1162,7 +1230,9 @@ mod tests {
                 BoardArraySupportLayerPolicy::AllPaintedFeatures,
             ),
             &copper_layers,
-        );
+            accuracy,
+        )
+        .unwrap();
         let top = geometry.region_for_layer(100);
         let bottom = geometry.region_for_layer(200);
 
@@ -1191,6 +1261,8 @@ mod tests {
 
     #[test]
     fn vcut_policy_excludes_documentation_but_keeps_operation_geometry() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut support = TestDocument::new();
         let operation_path = support.push_path(
             Paint::Stroke(StrokeStyle::new(0.1, LineCap::Round)),
@@ -1245,7 +1317,9 @@ mod tests {
                 BoardArraySupportLayerPolicy::VCutOperationsOnly,
             ),
             &[BoardArrayCopperLayer::new(100, Side::Top)],
-        );
+            accuracy,
+        )
+        .unwrap();
 
         assert_eq!(geometry.source_feature_count, 2);
         assert_eq!(geometry.feature_count, 1);
@@ -1257,6 +1331,8 @@ mod tests {
 
     #[test]
     fn fab_panel_collector_uses_assembly_panels_as_the_only_footprints() {
+        let accuracy = GeometryAccuracy::default();
+
         let usable_region = ContourSet::rectangle(bbox(10.0, 10.0, 90.0, 60.0), tol::REGION_MM);
         let profile = BoardArrayFabricationProfile {
             purpose: LayoutPurpose::FabricationPanel,
@@ -1268,7 +1344,8 @@ mod tests {
             material_removal: vec![rectangle_contour(20.0, 20.0, 22.0, 22.0)],
         };
 
-        let input = collect_fab_panel_balancing_input(usable_region.clone(), &profile).unwrap();
+        let input =
+            collect_fab_panel_balancing_input(usable_region.clone(), &profile, accuracy).unwrap();
 
         assert!((input.panel_outer.area() - usable_region.area()).abs() <= 1e-9);
         assert!((input.board_footprints.area() - (30.0 * 40.0 + 35.0 * 40.0)).abs() <= 1e-6);
@@ -1276,7 +1353,8 @@ mod tests {
         assert!(input.support_features.is_empty());
 
         let result =
-            board_array_balancing_region(&input, BalancingRegionOptions::default()).unwrap();
+            board_array_balancing_region(&input, BalancingRegionOptions::default(), accuracy)
+                .unwrap();
         assert!(result.certificate.passes(1e-4));
         assert!(!result.safe_region.is_empty());
         assert!(
@@ -1290,6 +1368,8 @@ mod tests {
 
     #[test]
     fn fab_panel_collector_rejects_wrong_purpose_and_missing_panels() {
+        let accuracy = GeometryAccuracy::default();
+
         let usable_region = ContourSet::rectangle(bbox(0.0, 0.0, 50.0, 50.0), tol::REGION_MM);
         let mut profile = BoardArrayFabricationProfile {
             purpose: LayoutPurpose::Product,
@@ -1299,20 +1379,23 @@ mod tests {
         };
 
         assert_eq!(
-            collect_fab_panel_balancing_input(usable_region.clone(), &profile).unwrap_err(),
+            collect_fab_panel_balancing_input(usable_region.clone(), &profile, accuracy)
+                .unwrap_err(),
             BalancingRegionError::NotAFabricationPanel
         );
 
         profile.purpose = LayoutPurpose::FabricationPanel;
         profile.assembly_panel_outlines.clear();
         assert_eq!(
-            collect_fab_panel_balancing_input(usable_region, &profile).unwrap_err(),
+            collect_fab_panel_balancing_input(usable_region, &profile, accuracy).unwrap_err(),
             BalancingRegionError::EmptyAssemblyPanels
         );
     }
 
     #[test]
     fn collector_fails_closed_on_unpainted_support_geometry() {
+        let accuracy = GeometryAccuracy::default();
+
         let (layout, profile) = layout_and_profile();
         let mut support = TestDocument::new();
         let path = support.push_path(Paint::None, [rectangle_contour(1.0, 1.0, 2.0, 2.0)]);
@@ -1329,6 +1412,7 @@ mod tests {
                 &support,
                 BoardArraySupportLayerPolicy::AllPaintedFeatures,
             )],
+            accuracy,
         )
         .unwrap_err();
 

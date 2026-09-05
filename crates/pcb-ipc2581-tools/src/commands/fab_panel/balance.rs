@@ -9,6 +9,7 @@ use anyhow::{Context, Result, bail};
 use pcb_ir::dialects::ipc::{
     BalancingRegionOptions, board_array_balancing_region, collect_fab_panel_balancing_input,
 };
+use pcb_ir::geom::GeometryAccuracy;
 use pcb_ir::geom::{BBox, ContourSet, tol};
 
 use crate::copper_balance::{
@@ -29,16 +30,19 @@ use crate::ipc2581::Ipc2581;
 pub(super) fn generate_automatic_fab_panel_copper_balance(
     ipc: &Ipc2581,
     usable: BBox,
+    accuracy: GeometryAccuracy,
 ) -> Result<CopperBalancePlan> {
     let layout = geometry::extract_layout(ipc)
         .context("failed to extract fabrication-panel layout for copper balancing")?;
     // V-scores and profile cutouts all lie inside the placed assembly panels,
     // so the fabrication profile needs no relief geometry here.
-    let fabrication_profile = geometry::board_array_fabrication_profile(ipc, &layout, &[])
-        .context("failed to derive fabrication-panel profile for copper balancing")?;
+    let fabrication_profile =
+        geometry::board_array_fabrication_profile(ipc, &layout, &[], accuracy)
+            .context("failed to derive fabrication-panel profile for copper balancing")?;
     let usable_region = ContourSet::rectangle(usable, tol::REGION_MM);
-    let mut input = collect_fab_panel_balancing_input(usable_region.clone(), &fabrication_profile)
-        .context("failed to collect fabrication-panel balancing obstacles")?;
+    let mut input =
+        collect_fab_panel_balancing_input(usable_region.clone(), &fabrication_profile, accuracy)
+            .context("failed to collect fabrication-panel balancing obstacles")?;
     let footprints = input.board_footprints.clone();
     let footprint_area_mm2 = footprints.area();
 
@@ -48,7 +52,7 @@ pub(super) fn generate_automatic_fab_panel_copper_balance(
         .map(|layer| ipc.resolve(layer.name).to_string())
         .collect::<Vec<_>>();
     let extract = |layer_name: &String| {
-        composed_copper_image(ipc, layer_name)
+        composed_copper_image(ipc, layer_name, accuracy)
             .map(|image| (layer_name.clone(), image.intersection(&usable_region)))
     };
     #[cfg(not(target_family = "wasm"))]
@@ -80,8 +84,9 @@ pub(super) fn generate_automatic_fab_panel_copper_balance(
         input.support_features = input.support_features.union(stray);
     }
 
-    let balancing_region = board_array_balancing_region(&input, BalancingRegionOptions::default())
-        .context("failed to compute fabrication-panel balancing region")?;
+    let balancing_region =
+        board_array_balancing_region(&input, BalancingRegionOptions::default(), accuracy)
+            .context("failed to compute fabrication-panel balancing region")?;
     if !balancing_region
         .certificate
         .passes(CERTIFICATE_AREA_TOLERANCE_MM2)
@@ -125,5 +130,6 @@ pub(super) fn generate_automatic_fab_panel_copper_balance(
         footprints,
         stack_weights_available,
         prepared,
+        accuracy,
     )
 }

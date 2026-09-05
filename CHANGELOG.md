@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Require accuracy budgets for PCBIR geometry operations.
+
 ## [0.4.51] - 2026-09-05
 
 ### Added

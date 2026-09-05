@@ -4,7 +4,7 @@
 //! (IPC-2581 standard primitives, Gerber standard apertures) and by aperture
 //! flattening. All shapes are built in local coordinates centered on the
 //! origin; apply an [`Affine2`](crate::geom::Affine2) placement with
-//! [`transform_cmds`](crate::geom::path::transform_cmds).
+//! [`ContourBuf::transformed`].
 //!
 //! Builders that can represent corners either as circular arcs or as cubic
 //! Beziers take an `arcs` flag: arcs are exact and preferred, but only
@@ -450,9 +450,10 @@ pub fn closed_polygon(points: Vec<Point>) -> Option<ContourBuf> {
 
 #[cfg(test)]
 mod tests {
+    use crate::geom::GeometryAccuracy;
+
     use super::*;
     use crate::geom::affine::Affine2;
-    use crate::geom::path::transform_cmds;
     use crate::geom::point::Mirror;
 
     #[test]
@@ -495,10 +496,12 @@ mod tests {
 
     #[test]
     fn placement_transform_moves_shape() {
+        let accuracy = GeometryAccuracy::default();
+
         let contour = circle(2.0).unwrap();
         let transform = Affine2::placement(Point::new(10.0, 5.0), 0.0, Mirror::NONE, 1.0);
 
-        let placed = transform_cmds(contour.cmds, transform);
+        let placed = contour.transformed(transform, accuracy).unwrap();
 
         assert!((placed.bbox.min.x - 9.0).abs() <= 1e-9);
         assert!((placed.bbox.max.y - 6.0).abs() <= 1e-9);

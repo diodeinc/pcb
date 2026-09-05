@@ -1,4 +1,5 @@
 use clap::{Args, Subcommand, ValueEnum};
+use pcb_ir::geom::GeometryAccuracy;
 use std::path::PathBuf;
 
 use pcb_ipc2581_tools::{
@@ -339,6 +340,8 @@ impl FabPanelSize {
 }
 
 pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
+    let accuracy = GeometryAccuracy::default();
+
     utils::color::init_color();
 
     match args.command {
@@ -349,8 +352,8 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
         } => commands::info::execute(&file, format, units),
         Commands::Assembly { file, scope } => {
             let ipc = pcb_ipc2581_tools::ipc2581::Ipc2581::parse_file(&file)?;
-            let imported = pcb_ir::import::ipc2581::import_design(&ipc)?;
-            let report = pcb_ipc2581_tools::assembly::build_report(&imported, scope)?;
+            let imported = pcb_ir::import::ipc2581::import_design(&ipc, accuracy)?;
+            let report = pcb_ipc2581_tools::assembly::build_report(&imported, scope, accuracy)?;
             let output = serde_json::to_vec_pretty(&report)?;
             pcb_ui::write_stdout(|stdout| {
                 stdout.write_all(&output)?;
@@ -475,7 +478,13 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                             "--auto/--sheet cannot be combined with manual board array options"
                         );
                     }
-                    commands::board_array::execute_auto(&input, &output, sheet, copper_balance)
+                    commands::board_array::execute_auto(
+                        &input,
+                        &output,
+                        sheet,
+                        copper_balance,
+                        accuracy,
+                    )
                 } else {
                     let board_margin_mm = if board_margin.is_empty() {
                         commands::board_array::BoardMarginMm::all(5.0)
@@ -581,6 +590,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                     output,
                     layout_target,
                 },
+                accuracy,
             )? {
                 commands::dfm::CheckOutcome::Passed => Ok(()),
                 commands::dfm::CheckOutcome::Failed(error) => Err(error),
@@ -600,6 +610,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                     view: layout_target.artwork_scope(),
                     relief_debug_dir: debug_reliefs,
                 },
+                accuracy,
             )?;
             println!(
                 "✓ IPC-2581 exported {} manufacturing file(s) to {}",

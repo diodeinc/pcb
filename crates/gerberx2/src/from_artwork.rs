@@ -5,6 +5,7 @@
 //! can be emitted as a Gerber file, regardless of which source dialect
 //! produced it.
 
+use pcb_ir::geom::GeometryAccuracy;
 use std::collections::HashMap;
 
 use crate::{
@@ -50,9 +51,10 @@ pub type ArtworkDocument = pcb_ir::dialects::artwork::Document<LayerAttributes, 
 /// carry its X2 attributes across, and lower it back to idiomatic Gerber.
 /// Source flashes survive as flashes unless explicit copper feature semantics
 /// require region output; block instances are expanded.
-pub fn normalize_layer(gerber: &crate::GerberX2) -> Result<String> {
-    let annotated = annotate_for_export(gerber, crate::geometry::extract_document(gerber));
-    crate::write_layer(&lower_artwork_layer(&annotated)?)
+pub fn normalize_layer(gerber: &crate::GerberX2, accuracy: GeometryAccuracy) -> Result<String> {
+    let annotated =
+        annotate_for_export(gerber, crate::geometry::extract_document(gerber, accuracy)?);
+    crate::write_layer(&lower_artwork_layer(&annotated, accuracy)?)
 }
 
 /// Convert an extracted layer's interned Gerber metadata into the resolved
@@ -160,9 +162,12 @@ fn resolve_fields(gerber: &crate::GerberX2, attribute: &crate::types::Attribute)
         .collect()
 }
 
-pub fn lower_artwork_layer(layer: &ArtworkDocument) -> Result<GerberLayer> {
-    let mut layer = pcb_ir::dialects::artwork::expand_instances_preserving_grids(layer);
-    pcb_ir::dialects::artwork::legalize::legalize_for_jlcpcb(&mut layer);
+pub fn lower_artwork_layer(
+    layer: &ArtworkDocument,
+    accuracy: GeometryAccuracy,
+) -> Result<GerberLayer> {
+    let mut layer = pcb_ir::dialects::artwork::expand_instances_preserving_grids(layer, accuracy)?;
+    pcb_ir::dialects::artwork::legalize::legalize_for_jlcpcb(&mut layer, accuracy)?;
     let mut apertures = ApertureTable::default();
     let mut plan = GerberPlan::default();
     let layer_attributes = layer
@@ -187,6 +192,7 @@ pub fn lower_artwork_layer(layer: &ArtworkDocument) -> Result<GerberLayer> {
                     object.polarity,
                     &mut apertures,
                     &mut plan,
+                    accuracy,
                 )?;
             }
             _ => {
@@ -196,6 +202,7 @@ pub fn lower_artwork_layer(layer: &ArtworkDocument) -> Result<GerberLayer> {
                     Affine2::IDENTITY,
                     object.polarity,
                     &mut apertures,
+                    accuracy,
                 )?;
                 plan.push_group(object.order.stage, object.polarity, objects);
             }
@@ -213,6 +220,7 @@ pub fn lower_artwork_layer(layer: &ArtworkDocument) -> Result<GerberLayer> {
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn lower_grid_objects(
     layer: &ArtworkDocument,
     block: u32,
@@ -221,11 +229,14 @@ fn lower_grid_objects(
     polarity: Polarity,
     apertures: &mut ApertureTable,
     plan: &mut GerberPlan,
+    accuracy: GeometryAccuracy,
 ) -> Result<()> {
     if let Some((base, step_repeat)) = gerber_step_repeat(placement, grid) {
         let repeat =
             (step_repeat.x_repeats > 1 || step_repeat.y_repeats > 1).then_some(step_repeat);
-        lower_grid_occurrence(layer, block, base, polarity, repeat, apertures, plan)
+        lower_grid_occurrence(
+            layer, block, base, polarity, repeat, apertures, plan, accuracy,
+        )
     } else {
         for offset in grid.offsets() {
             let occurrence = Affine2 {
@@ -233,12 +244,15 @@ fn lower_grid_objects(
                 m12: placement.m12 + offset.y,
                 ..placement
             };
-            lower_grid_occurrence(layer, block, occurrence, polarity, None, apertures, plan)?;
+            lower_grid_occurrence(
+                layer, block, occurrence, polarity, None, apertures, plan, accuracy,
+            )?;
         }
         Ok(())
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn lower_grid_occurrence(
     layer: &ArtworkDocument,
     block: u32,
@@ -247,10 +261,12 @@ fn lower_grid_occurrence(
     repeat: Option<crate::StepRepeat>,
     apertures: &mut ApertureTable,
     plan: &mut GerberPlan,
+    accuracy: GeometryAccuracy,
 ) -> Result<()> {
     for child in &layer.blocks[block as usize].objects {
         let child_polarity = polarity.compose(child.polarity);
-        let mut objects = lower_artwork_object(layer, child, base, child_polarity, apertures)?;
+        let mut objects =
+            lower_artwork_object(layer, child, base, child_polarity, apertures, accuracy)?;
         for object in &mut objects {
             object.repeat = repeat;
         }
@@ -314,6 +330,7 @@ fn lower_artwork_object(
     transform: Affine2,
     polarity: Polarity,
     apertures: &mut ApertureTable,
+    accuracy: GeometryAccuracy,
 ) -> Result<Vec<WriterObject>> {
     let attributes = lower_object_attributes(&object.meta);
     let aperture_attributes = lower_aperture_attributes(&object.meta);
@@ -327,6 +344,7 @@ fn lower_artwork_object(
                 polarity,
                 &aperture_attributes,
                 &attributes,
+                accuracy,
             )?);
         }
         ArtworkGeometry::Stroke { path } => {
@@ -344,8 +362,9 @@ fn lower_artwork_object(
                 .arena
                 .path_contours(artwork_path)
                 .into_iter()
-                .map(|contour| geom_path::transform_cmds(contour.cmds, transform))
+                .map(|contour| contour.transformed(transform, accuracy))
             {
+                let contour = contour?;
                 let segments = contour_segments(&contour.cmds);
                 for mark in
                     pcb_ir::geom::stroke_pattern_marks(&segments, stroke.pattern, stroke_width)
@@ -369,6 +388,7 @@ fn lower_artwork_object(
                                     polarity,
                                     &region_aperture_attributes,
                                     &attributes,
+                                    accuracy,
                                 )?);
                             } else {
                                 objects.push(WriterObject {
@@ -412,7 +432,8 @@ fn lower_artwork_object(
                 artwork_aperture = pcb_ir::dialects::artwork::legalize::bake_aperture_basis(
                     &artwork_aperture,
                     basis,
-                );
+                    accuracy,
+                )?;
                 transform = Affine2::translation(Point::new(transform.m02, transform.m12));
             }
             let aperture_function = object.meta.aperture_function.as_deref().unwrap_or_default();
@@ -424,9 +445,11 @@ fn lower_artwork_object(
                     polarity,
                     &region_aperture_attributes,
                     &attributes,
+                    accuracy,
                 );
             }
-            let aperture = apertures.artwork_aperture(artwork_aperture, aperture_function)?;
+            let aperture =
+                apertures.artwork_aperture(artwork_aperture, aperture_function, accuracy)?;
             objects.push(WriterObject {
                 kind: ObjectKind::Flash {
                     at: lower_point(Point::new(transform.m02, transform.m12)),
@@ -612,7 +635,12 @@ impl ApertureTable {
         )
     }
 
-    fn artwork_aperture(&mut self, aperture: Aperture, function: &[String]) -> Result<i32> {
+    fn artwork_aperture(
+        &mut self,
+        aperture: Aperture,
+        function: &[String],
+        accuracy: GeometryAccuracy,
+    ) -> Result<i32> {
         let hole_diameter = (aperture.hole_diameter > 0.0).then_some(aperture.hole_diameter);
         match aperture.shape {
             ApertureShape::Contour { outline, fill_rule } => {
@@ -621,7 +649,13 @@ impl ApertureTable {
                 // followed by its holes, wound opposite. Larger shapes paint
                 // first so an island inside a hole survives the hole's erase.
                 let mut shapes = region::simplify_shapes_on_grid(
-                    region::rings_from_contours(std::slice::from_ref(&outline)),
+                    region::ContourSet::from_contours(
+                        std::slice::from_ref(&outline),
+                        fill_rule,
+                        0.0,
+                        accuracy,
+                    )?
+                    .rings,
                     fill_rule,
                     GERBER_GEOMETRY_GRID_MM,
                 );
@@ -796,6 +830,7 @@ impl ApertureTable {
                         fill_rule: FillRule::NonZero,
                     }),
                     function,
+                    accuracy,
                 )
             }
         }
@@ -999,6 +1034,7 @@ fn lower_region_objects(
     polarity: Polarity,
     aperture_attributes: &[AttributeValue],
     attributes: &[AttributeValue],
+    accuracy: GeometryAccuracy,
 ) -> Result<Vec<WriterObject>> {
     let artwork_path = &layer.arena.paths[path_index as usize];
     lower_contours_as_regions(
@@ -1008,6 +1044,7 @@ fn lower_region_objects(
         polarity,
         aperture_attributes,
         attributes,
+        accuracy,
     )
 }
 
@@ -1017,6 +1054,7 @@ fn lower_aperture_as_regions(
     polarity: Polarity,
     aperture_attributes: &[AttributeValue],
     attributes: &[AttributeValue],
+    accuracy: GeometryAccuracy,
 ) -> Result<Vec<WriterObject>> {
     lower_contours_as_regions(
         aperture.contours(),
@@ -1025,6 +1063,7 @@ fn lower_aperture_as_regions(
         polarity,
         aperture_attributes,
         attributes,
+        accuracy,
     )
 }
 
@@ -1035,12 +1074,13 @@ fn lower_contours_as_regions(
     polarity: Polarity,
     aperture_attributes: &[AttributeValue],
     attributes: &[AttributeValue],
+    accuracy: GeometryAccuracy,
 ) -> Result<Vec<WriterObject>> {
     let payloads = contours
         .into_iter()
-        .map(|contour| geom_path::transform_cmds(contour.cmds, transform))
-        .collect::<Vec<_>>();
-    Ok(lower_region_image_contours(&payloads, fill_rule)?
+        .map(|contour| contour.transformed(transform, accuracy))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(lower_region_image_contours(&payloads, fill_rule, accuracy)?
         .into_iter()
         .map(|contour| WriterObject {
             kind: ObjectKind::Region {
@@ -1058,8 +1098,9 @@ fn lower_contours_as_regions(
 fn lower_region_image_contours(
     payloads: &[ContourBuf],
     fill_rule: FillRule,
+    accuracy: GeometryAccuracy,
 ) -> Result<Vec<Contour>> {
-    let rings = region::rings_from_contours(payloads);
+    let rings = region::ContourSet::from_contours(payloads, fill_rule, 0.0, accuracy)?.rings;
     region::simplify_shapes_on_grid(rings, fill_rule, GERBER_GEOMETRY_GRID_MM)
         .into_iter()
         .filter_map(region_shape_contour)
@@ -1253,6 +1294,8 @@ mod tests {
 
     #[test]
     fn lowering_bakes_off_origin_aperture_rotation() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut artwork = ArtworkDocument::new();
         let aperture = artwork.push_aperture(Aperture::solid(ApertureShape::Contour {
             outline: ContourBuf::new(vec![
@@ -1294,7 +1337,7 @@ mod tests {
         );
         pcb_ir::dialects::artwork::normalize_bounds(&mut artwork);
 
-        let gerber = crate::write_layer(&lower_artwork_layer(&artwork).unwrap()).unwrap();
+        let gerber = crate::write_layer(&lower_artwork_layer(&artwork, accuracy).unwrap()).unwrap();
 
         assert!(!gerber.contains("%LR"));
         assert!(!gerber.contains("%LM"));
@@ -1305,6 +1348,8 @@ mod tests {
 
     #[test]
     fn repeated_translated_regions_remain_expanded() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut artwork = ArtworkDocument::new();
         let layer_id = artwork.push_layer(IrArtworkDocument {
             name: "F.Cu".to_string(),
@@ -1333,7 +1378,7 @@ mod tests {
             );
         }
 
-        let gerber = lower_artwork_layer(&artwork).expect("lower repeated regions");
+        let gerber = lower_artwork_layer(&artwork, accuracy).expect("lower repeated regions");
         assert!(
             gerber
                 .objects
@@ -1346,13 +1391,15 @@ mod tests {
         assert!(!contents.contains("%AM"));
         assert_external_parser_accepts(&contents);
         let parsed = crate::GerberX2::parse(&contents).expect("parse repeated regions");
-        let geometry = crate::geometry::extract_document(&parsed);
-        let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry);
+        let geometry = crate::geometry::extract_document(&parsed, accuracy).unwrap();
+        let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry, accuracy).unwrap();
         assert!((summary.area_mm2 - 200.0).abs() < 0.001);
     }
 
     #[test]
     fn overlapping_clear_regions_remain_independent() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut artwork = ArtworkDocument::new();
         let layer = artwork.push_layer(IrArtworkDocument {
             name: "F.Cu".to_string(),
@@ -1397,15 +1444,18 @@ mod tests {
             );
         }
 
-        let expected_mask = pcb_ir::dialects::artwork::compose_to_mask(&artwork);
+        let expected_mask = pcb_ir::dialects::artwork::compose_to_mask(&artwork, accuracy).unwrap();
         let expected_layer = &expected_mask.layers[0];
         let expected_area = pcb_ir::geom::ContourSet::from_painted_paths(
             &expected_mask.arena,
             expected_mask.shapes(expected_layer),
             pcb_ir::geom::tol::REGION_MM,
+            accuracy,
         )
+        .unwrap()
         .area();
-        let gerber = lower_artwork_layer(&artwork).expect("lower overlapping clear regions");
+        let gerber =
+            lower_artwork_layer(&artwork, accuracy).expect("lower overlapping clear regions");
         let clear_regions = gerber
             .objects
             .iter()
@@ -1419,13 +1469,15 @@ mod tests {
         let contents = crate::write_layer(&gerber).expect("write overlapping clear regions");
         assert_external_parser_accepts(&contents);
         let parsed = crate::GerberX2::parse(&contents).expect("parse overlapping clear regions");
-        let geometry = crate::geometry::extract_document(&parsed);
-        let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry);
+        let geometry = crate::geometry::extract_document(&parsed, accuracy).unwrap();
+        let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry, accuracy).unwrap();
         assert!((summary.area_mm2 - expected_area).abs() < 0.001);
     }
 
     #[test]
     fn nested_clear_regions_expand_without_aperture_blocks() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut artwork = ArtworkDocument::new();
         let layer = artwork.push_layer(IrArtworkDocument {
             name: "F.Cu".to_string(),
@@ -1484,7 +1536,7 @@ mod tests {
             },
         );
 
-        let gerber = lower_artwork_layer(&artwork).expect("lower repeated clear arcs");
+        let gerber = lower_artwork_layer(&artwork, accuracy).expect("lower repeated clear arcs");
         assert!(gerber.objects.iter().all(|object| {
             matches!(
                 &object.kind,
@@ -1499,17 +1551,23 @@ mod tests {
         assert!(!contents.contains("%ABD"));
         assert_external_parser_accepts(&contents);
         let parsed = crate::GerberX2::parse(&contents).expect("parse repeated clear arcs");
-        let geometry = crate::geometry::extract_document(&parsed);
+        let geometry = crate::geometry::extract_document(&parsed, accuracy).unwrap();
         fn image<M>(mask: &pcb_ir::dialects::mask::Document<M>) -> pcb_ir::geom::ContourSet {
+            let accuracy = GeometryAccuracy::default();
+
             let layer = &mask.layers[0];
             pcb_ir::geom::ContourSet::from_painted_paths(
                 &mask.arena,
                 mask.shapes(layer),
                 pcb_ir::geom::tol::REGION_MM,
+                accuracy,
             )
+            .unwrap()
         }
-        let expected = image(&pcb_ir::dialects::artwork::compose_to_mask(&artwork));
-        let actual = image(&pcb_ir::dialects::artwork::compose_to_mask(&geometry));
+        let expected =
+            image(&pcb_ir::dialects::artwork::compose_to_mask(&artwork, accuracy).unwrap());
+        let actual =
+            image(&pcb_ir::dialects::artwork::compose_to_mask(&geometry, accuracy).unwrap());
         let symmetric_difference =
             expected.difference(&actual).area() + actual.difference(&expected).area();
         assert!(symmetric_difference < 0.01, "{symmetric_difference}");
@@ -1517,6 +1575,8 @@ mod tests {
 
     #[test]
     fn single_flash_instances_expand_without_losing_placement_or_polarity() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut artwork = ArtworkDocument::new();
         let aperture = artwork.push_aperture(Aperture::circle(1.0));
         let block = artwork.push_block();
@@ -1558,7 +1618,7 @@ mod tests {
             },
         );
 
-        let gerber = lower_artwork_layer(&artwork).expect("lower aliased placement");
+        let gerber = lower_artwork_layer(&artwork, accuracy).expect("lower aliased placement");
         assert!(
             !gerber
                 .apertures
@@ -1580,6 +1640,8 @@ mod tests {
 
     #[test]
     fn empty_blocks_do_not_reach_gerber() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut artwork = ArtworkDocument::new();
         let empty = artwork.push_block();
         let layer = artwork.push_layer(IrArtworkDocument {
@@ -1604,7 +1666,7 @@ mod tests {
             },
         );
 
-        let gerber = lower_artwork_layer(&artwork).expect("lower empty block");
+        let gerber = lower_artwork_layer(&artwork, accuracy).expect("lower empty block");
         assert!(gerber.objects.is_empty());
         assert!(
             !gerber
@@ -1619,6 +1681,8 @@ mod tests {
 
     #[test]
     fn lowers_compound_region_holes_as_local_cut_ins() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut artwork = ArtworkDocument::new();
         let layer_id = artwork.push_layer(IrArtworkDocument {
             name: "F.SilkS".to_string(),
@@ -1648,7 +1712,7 @@ mod tests {
             },
         );
 
-        let gerber = lower_artwork_layer(&artwork).expect("lower artwork");
+        let gerber = lower_artwork_layer(&artwork, accuracy).expect("lower artwork");
 
         assert_eq!(gerber.objects.len(), 1);
         assert_eq!(gerber.objects[0].polarity, Polarity::Dark);
@@ -1665,6 +1729,8 @@ mod tests {
 
     #[test]
     fn deep_nested_even_odd_compound_regions_preserve_topology() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut artwork = ArtworkDocument::new();
         let layer_id = artwork.push_layer(IrArtworkDocument {
             name: "F.Cu".to_string(),
@@ -1696,7 +1762,7 @@ mod tests {
             },
         );
 
-        let gerber = lower_artwork_layer(&artwork).expect("lower artwork");
+        let gerber = lower_artwork_layer(&artwork, accuracy).expect("lower artwork");
 
         assert_eq!(gerber.objects.len(), 2);
         assert!(
@@ -1709,8 +1775,8 @@ mod tests {
         let contents = crate::write_layer(&gerber).expect("write Gerber");
         assert_external_parser_accepts(&contents);
         let parsed = crate::GerberX2::parse(&contents).expect("parse Gerber");
-        let geometry = crate::geometry::extract_document(&parsed);
-        let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry);
+        let geometry = crate::geometry::extract_document(&parsed, accuracy).unwrap();
+        let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry, accuracy).unwrap();
         assert!(
             (summary.area_mm2 - 56.0).abs() < 0.001,
             "deep even-odd topology exported wrong area: {}",
@@ -1720,6 +1786,8 @@ mod tests {
 
     #[test]
     fn non_pad_copper_contours_lower_to_regions() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut artwork = ArtworkDocument::new();
         let layer_id = artwork.push_layer(IrArtworkDocument {
             name: "F.Cu".to_string(),
@@ -1783,7 +1851,7 @@ mod tests {
             },
         );
 
-        let gerber = lower_artwork_layer(&artwork).expect("lower artwork");
+        let gerber = lower_artwork_layer(&artwork, accuracy).expect("lower artwork");
         let contents = crate::write_layer(&gerber).expect("write Gerber");
         assert_external_parser_accepts(&contents);
         assert_eq!(contents.matches("%ABD").count(), 0);
@@ -1791,8 +1859,8 @@ mod tests {
         assert_eq!(contents.matches("G36*").count(), 1);
         assert!(contents.contains("%TA.AperFunction,Conductor*%"));
         let parsed = crate::GerberX2::parse(&contents).expect("parse Gerber");
-        let geometry = crate::geometry::extract_document(&parsed);
-        let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry);
+        let geometry = crate::geometry::extract_document(&parsed, accuracy).unwrap();
+        let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry, accuracy).unwrap();
         assert!(
             (summary.area_mm2 - 64.0).abs() < 0.01,
             "the hole ring must survive inside the aperture macro: {}",
@@ -1802,6 +1870,8 @@ mod tests {
 
     #[test]
     fn full_copper_balance_cells_remain_shared_flashes() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut artwork = ArtworkDocument::new();
         let layer_id = artwork.push_layer(IrArtworkDocument {
             name: "F.Cu".to_string(),
@@ -1834,7 +1904,7 @@ mod tests {
             },
         );
 
-        let gerber = lower_artwork_layer(&artwork).expect("lower balance cell");
+        let gerber = lower_artwork_layer(&artwork, accuracy).expect("lower balance cell");
         // The exact rounded hex flattens once into a concrete one-primitive
         // outline macro; legacy CAM importers never evaluate compound
         // parameterized macros per flash.
@@ -1848,8 +1918,10 @@ mod tests {
         let contents = crate::write_layer(&gerber).expect("write balance cell");
         assert_external_parser_accepts(&contents);
         let parsed = crate::GerberX2::parse(&contents).expect("parse balance cell");
-        let geometry = crate::geometry::extract_document(&parsed);
-        let actual_area = pcb_ir::dialects::artwork::compare::summarize(&geometry).area_mm2;
+        let geometry = crate::geometry::extract_document(&parsed, accuracy).unwrap();
+        let actual_area = pcb_ir::dialects::artwork::compare::summarize(&geometry, accuracy)
+            .unwrap()
+            .area_mm2;
         let expected_area = 3.0 * 3.0_f64.sqrt() / 2.0
             - (2.0 * 3.0_f64.sqrt() - std::f64::consts::PI) * 0.15_f64.powi(2);
         assert!(
@@ -1860,6 +1932,8 @@ mod tests {
 
     #[test]
     fn zero_count_grids_emit_nothing() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut artwork = ArtworkDocument::new();
         let layer_id = artwork.push_layer(IrArtworkDocument {
             name: "F.Cu".to_string(),
@@ -1898,12 +1972,14 @@ mod tests {
             ),
         );
 
-        let gerber = lower_artwork_layer(&artwork).expect("lower empty grid");
+        let gerber = lower_artwork_layer(&artwork, accuracy).expect("lower empty grid");
         assert!(gerber.objects.is_empty());
     }
 
     #[test]
     fn contour_apertures_honor_even_odd_fill() {
+        let accuracy = GeometryAccuracy::default();
+
         // Two same-winding nested loops: NonZero fills solid, EvenOdd carves
         // the inner loop out. The aperture's fill rule must decide.
         let mut artwork = ArtworkDocument::new();
@@ -1946,12 +2022,12 @@ mod tests {
             },
         );
 
-        let gerber = lower_artwork_layer(&artwork).expect("lower artwork");
+        let gerber = lower_artwork_layer(&artwork, accuracy).expect("lower artwork");
         let contents = crate::write_layer(&gerber).expect("write Gerber");
         assert_external_parser_accepts(&contents);
         let parsed = crate::GerberX2::parse(&contents).expect("parse Gerber");
-        let geometry = crate::geometry::extract_document(&parsed);
-        let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry);
+        let geometry = crate::geometry::extract_document(&parsed, accuracy).unwrap();
+        let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry, accuracy).unwrap();
         assert!(
             (summary.area_mm2 - 64.0).abs() < 0.01,
             "even-odd fill must carve the nested loop out: {}",
@@ -1961,6 +2037,8 @@ mod tests {
 
     #[test]
     fn contour_apertures_normalize_material_winding() {
+        let accuracy = GeometryAccuracy::default();
+
         // A clockwise-wound solitary loop is still material under NonZero;
         // winding normalization must not turn it into an exposure-off ring.
         let mut artwork = ArtworkDocument::new();
@@ -2013,12 +2091,12 @@ mod tests {
             },
         );
 
-        let gerber = lower_artwork_layer(&artwork).expect("lower artwork");
+        let gerber = lower_artwork_layer(&artwork, accuracy).expect("lower artwork");
         let contents = crate::write_layer(&gerber).expect("write Gerber");
         assert_external_parser_accepts(&contents);
         let parsed = crate::GerberX2::parse(&contents).expect("parse Gerber");
-        let geometry = crate::geometry::extract_document(&parsed);
-        let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry);
+        let geometry = crate::geometry::extract_document(&parsed, accuracy).unwrap();
+        let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry, accuracy).unwrap();
         assert!(
             (summary.area_mm2 - 100.0).abs() < 0.01,
             "a clockwise material loop must keep its full area: {}",
@@ -2028,6 +2106,8 @@ mod tests {
 
     #[test]
     fn contour_apertures_survive_mirrored_bases() {
+        let accuracy = GeometryAccuracy::default();
+
         // A mirrored basis reverses ring winding when it is baked into the
         // aperture outline; normalization happens after baking, so the
         // material must survive with its full area.
@@ -2088,12 +2168,12 @@ mod tests {
             },
         );
 
-        let gerber = lower_artwork_layer(&artwork).expect("lower artwork");
+        let gerber = lower_artwork_layer(&artwork, accuracy).expect("lower artwork");
         let contents = crate::write_layer(&gerber).expect("write Gerber");
         assert_external_parser_accepts(&contents);
         let parsed = crate::GerberX2::parse(&contents).expect("parse Gerber");
-        let geometry = crate::geometry::extract_document(&parsed);
-        let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry);
+        let geometry = crate::geometry::extract_document(&parsed, accuracy).unwrap();
+        let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry, accuracy).unwrap();
         assert!(
             (summary.area_mm2 - 100.0).abs() < 0.01,
             "a mirrored basis must not invert the loop into a hole: {}",
@@ -2103,6 +2183,8 @@ mod tests {
 
     #[test]
     fn lowers_single_self_cut_even_odd_region_before_emitting_gerber() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut artwork = ArtworkDocument::new();
         let layer_id = artwork.push_layer(IrArtworkDocument {
             name: "F.Cu".to_string(),
@@ -2129,7 +2211,7 @@ mod tests {
             },
         );
 
-        let gerber = lower_artwork_layer(&artwork).expect("lower artwork");
+        let gerber = lower_artwork_layer(&artwork, accuracy).expect("lower artwork");
 
         assert_eq!(gerber.objects[0].polarity, Polarity::Dark);
         assert!(
@@ -2143,6 +2225,8 @@ mod tests {
 
     #[test]
     fn local_compound_region_holes_do_not_clear_prior_base_copper() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut artwork = ArtworkDocument::new();
         let layer_id = artwork.push_layer(IrArtworkDocument {
             name: "F.Cu".to_string(),
@@ -2192,7 +2276,7 @@ mod tests {
             },
         );
 
-        let gerber = lower_artwork_layer(&artwork).expect("lower artwork");
+        let gerber = lower_artwork_layer(&artwork, accuracy).expect("lower artwork");
 
         assert!(
             gerber
@@ -2204,8 +2288,8 @@ mod tests {
         let contents = crate::write_layer(&gerber).expect("write Gerber");
         assert_external_parser_accepts(&contents);
         let parsed = crate::GerberX2::parse(&contents).expect("parse Gerber");
-        let geometry = crate::geometry::extract_document(&parsed);
-        let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry);
+        let geometry = crate::geometry::extract_document(&parsed, accuracy).unwrap();
+        let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry, accuracy).unwrap();
         assert!(
             (summary.area_mm2 - 100.0).abs() < 0.001,
             "donut hole cleared prior base copper; area was {}",
@@ -2215,6 +2299,8 @@ mod tests {
 
     #[test]
     fn places_compound_regions_before_overlay_objects() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut artwork = ArtworkDocument::new();
         let layer_id = artwork.push_layer(IrArtworkDocument {
             name: "F.Cu".to_string(),
@@ -2270,7 +2356,7 @@ mod tests {
             },
         );
 
-        let gerber = lower_artwork_layer(&artwork).expect("lower artwork");
+        let gerber = lower_artwork_layer(&artwork, accuracy).expect("lower artwork");
 
         let pour_index = gerber
             .objects

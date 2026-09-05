@@ -10,6 +10,7 @@ use pcb_ir::dialects::ipc::{
     ArtworkScope, BalancingRegionOptions, BoardArraySupportDocument, BoardArraySupportLayerPolicy,
     board_array_balancing_region, collect_board_array_balancing_input,
 };
+use pcb_ir::geom::GeometryAccuracy;
 
 use crate::copper_balance::{
     CERTIFICATE_AREA_TOLERANCE_MM2, CopperBalancePlan, PreparedCopperLayer, composed_copper_image,
@@ -27,16 +28,20 @@ use crate::ipc2581::{Ipc2581, Symbol};
 /// `ipc` must describe the completed, not-yet-balanced array so that generated
 /// rails, V-scores, tooling holes, and fiducials participate in safe-region
 /// discovery while balance copper itself does not.
-pub fn generate_automatic_board_array_copper_balance(ipc: &Ipc2581) -> Result<CopperBalancePlan> {
+pub fn generate_automatic_board_array_copper_balance(
+    ipc: &Ipc2581,
+    accuracy: GeometryAccuracy,
+) -> Result<CopperBalancePlan> {
     let layout = geometry::extract_layout(ipc)
         .context("failed to extract board-array layout for copper balancing")?;
-    let score_lines = geometry::board_array_vscore_lines(ipc)
+    let score_lines = geometry::board_array_vscore_lines(ipc, accuracy)
         .context("failed to extract board-array V-scores for copper balancing")?;
-    let fabrication_profile = geometry::board_array_fabrication_profile(ipc, &layout, &score_lines)
-        .context("failed to derive board-array fabrication profile for copper balancing")?;
+    let fabrication_profile =
+        geometry::board_array_fabrication_profile(ipc, &layout, &score_lines, accuracy)
+            .context("failed to derive board-array fabrication profile for copper balancing")?;
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
     let copper_layers = crate::layers::copper_layers(ecad);
-    let support_layers = extract_array_support_layers(ipc)?;
+    let support_layers = extract_array_support_layers(ipc, accuracy)?;
     let collection = collect_board_array_balancing_input(
         &layout,
         &fabrication_profile,
@@ -44,6 +49,7 @@ pub fn generate_automatic_board_array_copper_balance(ipc: &Ipc2581) -> Result<Co
         support_layers
             .iter()
             .map(|source| BoardArraySupportDocument::new(&source.document, source.policy)),
+        accuracy,
     )
     .context("failed to collect board-array balancing obstacles")?;
     let panel_outer = &collection.panel_outer;
@@ -54,7 +60,8 @@ pub fn generate_automatic_board_array_copper_balance(ipc: &Ipc2581) -> Result<Co
     let mut prepared: Vec<PreparedLayerBalance> = Vec::with_capacity(copper_layers.len());
     for layer in &copper_layers {
         let layer_name = ipc.resolve(layer.name).to_string();
-        let existing_copper = composed_copper_image(ipc, &layer_name)?.intersection(panel_outer);
+        let existing_copper =
+            composed_copper_image(ipc, &layer_name, accuracy)?.intersection(panel_outer);
         let board_target_density = (existing_copper.intersection(board_footprints).area()
             / board_area_mm2)
             .clamp(0.0, 1.0);
@@ -77,8 +84,11 @@ pub fn generate_automatic_board_array_copper_balance(ipc: &Ipc2581) -> Result<Co
             let mut balancing_input = collection.input_for_layer(layer.name);
             balancing_input.support_features =
                 balancing_input.support_features.union(&frame_copper);
-            let balancing_region =
-                board_array_balancing_region(&balancing_input, BalancingRegionOptions::default());
+            let balancing_region = board_array_balancing_region(
+                &balancing_input,
+                BalancingRegionOptions::default(),
+                accuracy,
+            );
             let balancing_region = balancing_region.context(format!(
                 "failed to compute balancing region for layer '{layer_name}'"
             ))?;
@@ -117,6 +127,7 @@ pub fn generate_automatic_board_array_copper_balance(ipc: &Ipc2581) -> Result<Co
         board_footprints.clone(),
         stack_weights_available,
         prepared.into_iter().map(|layer| layer.inner).collect(),
+        accuracy,
     )
 }
 
@@ -142,17 +153,21 @@ type SupportDocument = pcb_ir::dialects::ipc::Document<Symbol, LayerFunction>;
 
 /// Extract every ECAD layer as an `ArraySupport` document for safe-region
 /// discovery.
-pub fn extract_array_support_layers(ipc: &Ipc2581) -> Result<Vec<ArraySupportLayerSource>> {
+pub fn extract_array_support_layers(
+    ipc: &Ipc2581,
+    accuracy: GeometryAccuracy,
+) -> Result<Vec<ArraySupportLayerSource>> {
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
     ecad.cad_data
         .layers
         .iter()
         .map(|layer| {
             let name = ipc.resolve(layer.name).to_string();
-            let document = geometry::extract_layer_for_view(ipc, &name, ArtworkScope::ArraySupport)
-                .with_context(|| {
-                    format!("failed to extract IPC-2581 array-support layer '{name}'")
-                })?;
+            let document =
+                geometry::extract_layer_for_view(ipc, &name, ArtworkScope::ArraySupport, accuracy)
+                    .with_context(|| {
+                        format!("failed to extract IPC-2581 array-support layer '{name}'")
+                    })?;
             let policy = if layer.layer_function == LayerFunction::VCut {
                 BoardArraySupportLayerPolicy::VCutOperationsOnly
             } else {

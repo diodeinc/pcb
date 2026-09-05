@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use ipc2581::types::LayerFunction;
 use pcb_ir::dialects::ipc::ArtworkScope;
 use pcb_ir::dialects::nc;
+use pcb_ir::geom::GeometryAccuracy;
 use pcb_ir::import::ipc2581::{ImportedDesign, LayerId};
 
 use crate::manufacturing::{ManufacturingFile, ManufacturingFileKind};
@@ -10,6 +11,7 @@ use crate::xnc::{XncAttribute, XncBuilder, XncUnit, write_xnc};
 pub(crate) fn build_xnc_drill_files_from_design(
     imported: &ImportedDesign,
     view: ArtworkScope,
+    accuracy: GeometryAccuracy,
 ) -> Result<Vec<ManufacturingFile>> {
     let copper_layers = copper_layer_refs(&imported.layer_definitions);
     let mut nc = nc::Document::new();
@@ -23,7 +25,7 @@ pub(crate) fn build_xnc_drill_files_from_design(
         }
         let layer_name = imported.resolve(layer.name);
         let doc = imported
-            .materialize_layer(LayerId(layer_index as u32), view)
+            .materialize_layer(LayerId(layer_index as u32), view, accuracy)
             .with_context(|| {
                 format!("failed to extract IPC-2581 drill/rout layer '{layer_name}'")
             })?;

@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use clap::ValueEnum;
 use log::{debug, warn};
+use pcb_ir::geom::GeometryAccuracy;
 use pcb_kicad::{KiCadCliBuilder, ensure_board_compatible_with_installed_kicad};
 use pcb_layout::utils as layout_utils;
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
@@ -1332,6 +1333,8 @@ fn generate_odb(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
 
 /// Generate IPC-2581 file
 fn generate_ipc2581(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
+    let accuracy = GeometryAccuracy::default();
+
     let manufacturing_dir = info.staging_dir.join("manufacturing");
     fs::create_dir_all(&manufacturing_dir)?;
 
@@ -1352,6 +1355,7 @@ fn generate_ipc2581(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let html = pcb_ipc2581_tools::commands::html_export::generate_html(
         &accessor,
         pcb_ipc2581_tools::UnitFormat::Mm,
+        accuracy,
     )
     .context("Failed to generate HTML from IPC-2581")?;
     fs::write(&ipc2581_html_path, html).context("Failed to write IPC-2581 HTML export")?;

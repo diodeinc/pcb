@@ -2,23 +2,30 @@
 
 use std::fmt;
 
-/// Maximum accumulated boundary approximation error, in millimetres.
+/// Budget for accumulated numerical approximation error, in millimetres.
 ///
+/// This accounting does not certify topology or final Hausdorff distance.
 /// Independent of feature significance and coincidence. Unmet budgets return
 /// an error, including when earlier approximation cannot be refined.
 ///
 /// ```
 /// use pcb_ir::geom::{ContourSet, FillRule, GeometryAccuracy, shapes};
 /// let source = shapes::circle(0.2).unwrap();
-/// let region = ContourSet::from_contours_with_accuracy(
+/// let region = ContourSet::from_contours(
 ///     &[source], FillRule::NonZero, 0.000001, GeometryAccuracy::new(0.0001)?,
 /// )?;
-/// let inset = region.disk_erode_with_accuracy(0.025, GeometryAccuracy::new(0.0005)?)?;
+/// let inset = region.disk_erode(0.025, GeometryAccuracy::new(0.0005)?)?;
 /// assert!(inset.uncertainty_mm <= 0.0005);
 /// # Ok::<(), pcb_ir::geom::AccuracyError>(())
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GeometryAccuracy(f64);
+
+impl Default for GeometryAccuracy {
+    fn default() -> Self {
+        Self(0.01)
+    }
+}
 
 impl GeometryAccuracy {
     pub fn new(max_error_mm: f64) -> Result<Self, AccuracyError> {
@@ -42,6 +49,10 @@ impl GeometryAccuracy {
                 uncertainty_mm,
             })
         }
+    }
+
+    pub(crate) fn allowance(self, uncertainty_mm: f64) -> Result<f64, AccuracyError> {
+        Ok(self.remaining(uncertainty_mm)? / 4.0)
     }
 
     pub fn check(self, uncertainty_mm: f64) -> Result<(), AccuracyError> {
@@ -92,7 +103,7 @@ impl fmt::Display for AccuracyError {
 impl std::error::Error for AccuracyError {}
 
 /// Floating arithmetic allowance. Overlay uses an automatic integer grid;
-/// its default i32 adapter has roughly 29 significant coordinate bits.
+/// the i64 adapter retains the floating point coordinate precision.
 pub(crate) fn numerical_error(bbox: super::BBox) -> f64 {
     if bbox.is_empty() {
         return 0.0;
@@ -102,5 +113,5 @@ pub(crate) fn numerical_error(bbox: super::BBox) -> f64 {
         .into_iter()
         .map(f64::abs)
         .fold(1.0, f64::max);
-    16.0 * extent / (1_u64 << 29) as f64 + 64.0 * f64::EPSILON * magnitude
+    16.0 * extent / (1_u64 << 52) as f64 + 64.0 * f64::EPSILON * magnitude
 }

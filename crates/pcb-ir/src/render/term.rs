@@ -1,3 +1,4 @@
+use crate::geom::GeometryAccuracy;
 use std::io::{self, IsTerminal, Write};
 
 use base64::Engine;
@@ -27,8 +28,13 @@ pub fn to_terminal<LayerMeta>(
 pub fn artwork_to_terminal<LayerMeta: Clone, ObjectMeta: Clone>(
     doc: &crate::dialects::artwork::Document<LayerMeta, ObjectMeta>,
     options: &RenderOptions,
+    accuracy: GeometryAccuracy,
 ) -> Result<(), String> {
-    write_terminal_png(crate::render::artwork_png(doc, &terminal_options(options))?)
+    write_terminal_png(crate::render::artwork_png(
+        doc,
+        &terminal_options(options),
+        accuracy,
+    )?)
 }
 
 fn terminal_options(options: &RenderOptions) -> RenderOptions {

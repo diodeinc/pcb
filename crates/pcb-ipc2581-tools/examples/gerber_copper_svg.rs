@@ -9,17 +9,19 @@
 //! rasterizers accept, even for planes perforated by tens of thousands of
 //! voids.
 
+use pcb_ir::geom::GeometryAccuracy;
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use pcb_ir::geom::region::rings_from_contours;
 use pcb_ir::geom::{ContourSet, FillRule};
 
 const COPPER: &str = "#d87822";
 const BACKGROUND: &str = "#ffffff";
 
 fn main() -> Result<()> {
+    let accuracy = GeometryAccuracy::default();
+
     let mut args = std::env::args().skip(1);
     let usage = "usage: gerber_copper_svg <input.gbr> <output.svg>";
     let input = PathBuf::from(args.next().context(usage)?);
@@ -28,12 +30,21 @@ fn main() -> Result<()> {
     let contents = std::fs::read_to_string(&input)
         .with_context(|| format!("failed to read {}", input.display()))?;
     let gerber = gerberx2::GerberX2::parse(&contents)?;
-    let doc = gerberx2::geometry::extract_document(&gerber);
-    let mask = pcb_ir::dialects::artwork::compose_to_mask(&doc);
+    let doc = gerberx2::geometry::extract_document(&gerber, accuracy).unwrap();
+    let mask = pcb_ir::dialects::artwork::compose_to_mask(&doc, accuracy).unwrap();
     let mut rings = Vec::new();
     for layer in &mask.layers {
         for shape in mask.shapes(layer) {
-            rings.extend(rings_from_contours(&mask.arena.path_contours(shape)));
+            rings.extend(
+                pcb_ir::geom::ContourSet::from_contours(
+                    &mask.arena.path_contours(shape),
+                    pcb_ir::geom::FillRule::NonZero,
+                    0.0,
+                    accuracy,
+                )
+                .unwrap()
+                .rings,
+            );
         }
     }
     let region = ContourSet::new(rings, FillRule::NonZero, 1e-4);

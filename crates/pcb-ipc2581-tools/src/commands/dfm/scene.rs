@@ -5,12 +5,13 @@
 //! evidence keeps its measured geometry and uncertainty separately; a camera
 //! never clips, reconstructs, or replaces the checked finding.
 
+use pcb_ir::geom::GeometryAccuracy;
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, ensure};
 use pcb_ir::dialects::ipc::{ArtworkScope, ProfileSet, profile_occurrences_for};
 use pcb_ir::dialects::{LayerRole, Side, mask};
-use pcb_ir::geom::path::{ContourBuf, PathCmd, transform_cmds};
+use pcb_ir::geom::path::{ContourBuf, PathCmd};
 use pcb_ir::geom::{Affine2, BBox, FillRule, Point, shapes};
 use pcb_ir::render::RenderOptions;
 
@@ -84,14 +85,14 @@ impl GeometryPass {
         }
     }
 
-    fn svg(&self, design: &Design<'_>, bounds: BBox) -> Result<String> {
+    fn svg(&self, design: &Design<'_>, bounds: BBox, accuracy: GeometryAccuracy) -> Result<String> {
         let options = RenderOptions::default().with_viewport(bounds);
         match &self.source {
             GeometrySource::Layer => {
                 let layer = self.layer.as_deref().context("artwork pass has no layer")?;
-                let artwork = native_artwork(design, layer)
+                let artwork = native_artwork(design, layer, accuracy)
                     .with_context(|| format!("failed to prepare DFM scene layer {layer}"))?;
-                Ok(pcb_ir::render::artwork_svg(&artwork, &options))
+                Ok(pcb_ir::render::artwork_svg(&artwork, &options, accuracy)?)
             }
             GeometrySource::Shapes { shapes, fill_rule } => {
                 let mut doc = mask::Document::<()>::new();
@@ -110,15 +111,12 @@ impl GeometryPass {
 fn native_artwork(
     design: &Design<'_>,
     layer: &str,
+    accuracy: GeometryAccuracy,
 ) -> Result<
     pcb_ir::dialects::artwork::Document<ipc2581::types::LayerFunction, Option<ipc2581::Symbol>>,
 > {
-    let geometry = geometry::render::prepare_layer(design.imported, layer, design.scope)?;
-    Ok(geometry::render::layer_artwork(
-        &geometry,
-        false,
-        design.scope.profile_set(),
-    ))
+    let geometry = geometry::render::prepare_layer(design.imported, layer, design.scope, accuracy)?;
+    geometry::render::layer_artwork(&geometry, false, design.scope.profile_set(), accuracy)
 }
 
 pub(super) fn export(
@@ -126,8 +124,9 @@ pub(super) fn export(
     layout: &LayoutContext,
     rules: &[RuleResult],
     findings: &[Finding],
+    accuracy: GeometryAccuracy,
 ) -> Result<Scene> {
-    let sources = scene_passes(rules, design);
+    let sources = scene_passes(rules, design, accuracy)?;
     let mut bounds = scene_bounds(layout.bounding_box, &sources);
     for finding in findings {
         let rule = rules
@@ -181,7 +180,7 @@ pub(super) fn export(
                 feature: source.feature,
                 layer: source.layer.clone(),
                 color: source.color,
-                svg: source.svg(design, bounds)?,
+                svg: source.svg(design, bounds, accuracy)?,
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -206,7 +205,11 @@ fn scene_bounds(layout: Option<ReportBBox>, sources: &[GeometryPass]) -> BBox {
     )
 }
 
-fn scene_passes(rules: &[RuleResult], design: &Design<'_>) -> Vec<GeometryPass> {
+fn scene_passes(
+    rules: &[RuleResult],
+    design: &Design<'_>,
+    accuracy: GeometryAccuracy,
+) -> anyhow::Result<Vec<GeometryPass>> {
     let layout = &design.imported.geometry;
     let wanted = rules
         .iter()
@@ -244,10 +247,9 @@ fn scene_passes(rules: &[RuleResult], design: &Design<'_>) -> Vec<GeometryPass> 
                 layers
                     .entry(hole.layer.name.clone())
                     .or_default()
-                    .push(vec![transform_cmds(
-                        circle.cmds,
-                        Affine2::translation(hole.center),
-                    )]);
+                    .push(vec![
+                        circle.transformed(Affine2::translation(hole.center), accuracy)?,
+                    ]);
             }
         }
         for slot in &design.slots {
@@ -308,14 +310,22 @@ fn scene_passes(rules: &[RuleResult], design: &Design<'_>) -> Vec<GeometryPass> 
     let outlines = profile_occurrences_for(layout, profile_set)
         .into_iter()
         .map(|occurrence| {
-            let mut contours = layout
-                .transformed_path_contours(occurrence.profile.outer_path, occurrence.transform);
+            let mut contours = layout.transformed_path_contours(
+                occurrence.profile.outer_path,
+                occurrence.transform,
+                accuracy,
+            )?;
             for cutout in occurrence.profile.cutouts.slice(&layout.profile_cutouts) {
-                contours
-                    .extend(layout.transformed_path_contours(cutout.path, occurrence.transform));
+                contours.extend(layout.transformed_path_contours(
+                    cutout.path,
+                    occurrence.transform,
+                    accuracy,
+                )?);
             }
-            contours
+            Ok::<_, anyhow::Error>(contours)
         })
+        .collect::<anyhow::Result<Vec<_>>>()?
+        .into_iter()
         .collect::<Vec<_>>();
     passes.push(GeometryPass::shapes(
         "Physical outlines".into(),
@@ -342,9 +352,14 @@ fn scene_passes(rules: &[RuleResult], design: &Design<'_>) -> Vec<GeometryPass> 
             .map(|occurrence| {
                 // Retain native profile arcs instead of reconstructing the
                 // check's tessellated array region for display.
-                layout
-                    .transformed_path_contours(occurrence.profile.outer_path, occurrence.transform)
+                Ok::<_, anyhow::Error>(layout.transformed_path_contours(
+                    occurrence.profile.outer_path,
+                    occurrence.transform,
+                    accuracy,
+                )?)
             })
+            .collect::<anyhow::Result<Vec<_>>>()?
+            .into_iter()
             .collect();
         passes.push(GeometryPass::shapes(
             "Array / panel outlines".into(),
@@ -356,7 +371,7 @@ fn scene_passes(rules: &[RuleResult], design: &Design<'_>) -> Vec<GeometryPass> 
             outlines,
         ));
     }
-    passes
+    Ok(passes)
 }
 
 #[cfg(test)]
@@ -395,18 +410,22 @@ mod tests {
 
     #[test]
     fn native_mask_scene_preserves_openings_voids_and_world_coordinates() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = Ipc2581::parse(MASK_BOARD).unwrap();
         let rules = rules::lower(&pdk::Pdk::parse(MASK_PDK).unwrap(), None).unwrap();
-        let imported = pcb_ir::import::ipc2581::import_design(&ipc).unwrap();
-        let design = Design::extract(&imported, ArtworkScope::Board, &rules).unwrap();
-        let artwork = native_artwork(&design, "F.Mask").unwrap();
-        let rendered = pcb_ir::dialects::artwork::compose_to_mask(&artwork);
+        let imported = pcb_ir::import::ipc2581::import_design(&ipc, accuracy).unwrap();
+        let design = Design::extract(&imported, ArtworkScope::Board, &rules, accuracy).unwrap();
+        let artwork = native_artwork(&design, "F.Mask", accuracy).unwrap();
+        let rendered = pcb_ir::dialects::artwork::compose_to_mask(&artwork, accuracy).unwrap();
         let contours = rendered
             .shapes(&rendered.layers[0])
             .iter()
             .flat_map(|shape| rendered.arena.path_contours(shape))
             .collect::<Vec<_>>();
-        let image = ContourSet::from_contours(&contours, FillRule::NonZero, tol::REGION_MM);
+        let image =
+            ContourSet::from_contours(&contours, FillRule::NonZero, tol::REGION_MM, accuracy)
+                .unwrap();
         let samples = [Point::ZERO, Point::new(8.0, 0.0), Point::new(15.0, 0.0)];
         assert_eq!(image.contains_points_batch(&samples), [false, true, false]);
         assert_eq!(
@@ -424,7 +443,7 @@ mod tests {
             image.bbox,
         );
         let bounds = BBox::new(Point::new(-20.0, -20.0), Point::new(20.0, 20.0));
-        let svg = pass.svg(&design, bounds).unwrap();
+        let svg = pass.svg(&design, bounds, accuracy).unwrap();
         assert!(svg.contains("viewBox='-20 -20 40 40'"));
         assert_eq!(svg.matches("scale(1 -1)").count(), 1);
         assert!(svg.contains("<mask "));
@@ -434,10 +453,12 @@ mod tests {
 
     #[test]
     fn outlines_and_drills_remain_full_native_paths_outside_any_site() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = Ipc2581::parse(MASK_BOARD).unwrap();
         let rules = rules::lower(&pdk::Pdk::parse(MASK_PDK).unwrap(), None).unwrap();
-        let imported = pcb_ir::import::ipc2581::import_design(&ipc).unwrap();
-        let design = Design::extract(&imported, ArtworkScope::Board, &rules).unwrap();
+        let imported = pcb_ir::import::ipc2581::import_design(&ipc, accuracy).unwrap();
+        let design = Design::extract(&imported, ArtworkScope::Board, &rules, accuracy).unwrap();
         let outline = ContourSet::rectangle(
             BBox::new(Point::new(-50.0, -50.0), Point::new(50.0, 50.0)),
             tol::REGION_MM,
@@ -454,16 +475,16 @@ mod tests {
         // Even a viewport wholly inside the board does not remove its distant
         // perimeter from the vector document. Panning can always reach it.
         let viewport = BBox::new(Point::new(-2.0, -2.0), Point::new(2.0, 2.0));
-        let svg = pass.svg(&design, viewport).unwrap();
+        let svg = pass.svg(&design, viewport, accuracy).unwrap();
         assert!(svg.contains("data-board-outline='true'"));
         assert!(svg.contains("-50"));
         assert!(svg.contains("50"));
         assert!(svg.contains("fill='none'"));
 
-        let circle = transform_cmds(
-            shapes::circle(1.0).unwrap().cmds,
-            Affine2::translation(Point::new(40.0, -30.0)),
-        );
+        let circle = shapes::circle(1.0)
+            .unwrap()
+            .transformed(Affine2::translation(Point::new(40.0, -30.0)), accuracy)
+            .unwrap();
         let drill = GeometryPass::shapes(
             "Drills".into(),
             "drills",
@@ -473,7 +494,7 @@ mod tests {
             FillRule::EvenOdd,
             vec![vec![circle]],
         );
-        let svg = drill.svg(&design, outline.bbox).unwrap();
+        let svg = drill.svg(&design, outline.bbox, accuracy).unwrap();
         assert!(svg.contains('A'), "round drills retain analytic arcs");
         assert!(svg.contains("40.5 -30"));
     }

@@ -1,5 +1,6 @@
 use ipc2581::edit::Doc;
 use pcb_ir::dialects::ipc::{ArtworkScope, root_step};
+use pcb_ir::geom::GeometryAccuracy;
 use pcb_ir::geom::{BBox, ContourSet, Point, tol};
 
 use crate::copper_balance::{CopperBalanceMode, composed_copper_image};
@@ -222,6 +223,8 @@ fn assembly_panel_with_non_manufacturing_data() -> String {
 
 #[test]
 fn exports_separate_nominal_panel_outlines_and_board_cutouts() {
+    let accuracy = GeometryAccuracy::default();
+
     let sources = vec![
         assembly_panel_with_profile_cutouts_xml(100.0, 80.0),
         assembly_panel_xml_at(-15.0, 7.0, 120.0, 90.0),
@@ -231,7 +234,8 @@ fn exports_separate_nominal_panel_outlines_and_board_cutouts() {
     Ipc2581::validate(&generated).unwrap();
     let parsed = Ipc2581::parse(&generated).unwrap();
     let layout = geometry::extract_layout(&parsed).unwrap();
-    let profile = geometry::board_array_fabrication_profile(&parsed, &layout, &[]).unwrap();
+    let profile =
+        geometry::board_array_fabrication_profile(&parsed, &layout, &[], accuracy).unwrap();
     let placed_panels = layout
         .layout
         .instances
@@ -283,9 +287,12 @@ fn exports_separate_nominal_panel_outlines_and_board_cutouts() {
         .expand(profile_stroke_radius);
     let expected_cutout_bbox =
         contour_bbox(profile.material_removal.iter()).expand(profile_stroke_radius);
-    let package =
-        crate::manufacturing::build_manufacturing_package(&parsed, ArtworkScope::ArrayFlattened)
-            .unwrap();
+    let package = crate::manufacturing::build_manufacturing_package(
+        &parsed,
+        ArtworkScope::ArrayFlattened,
+        accuracy,
+    )
+    .unwrap();
     for (filename, expected_bbox) in [
         ("Fab_Panel_Outline.gm1", expected_fab_bbox),
         ("Assembly_Panel_Outlines.gm1", expected_assembly_bbox),
@@ -302,7 +309,7 @@ fn exports_separate_nominal_panel_outlines_and_board_cutouts() {
         assert!(file.contents.contains("%ADD10C,0.05*%"));
         assert!(!file.contents.contains("C,1*%"));
         let parsed_gerber = gerberx2::GerberX2::parse(&file.contents).unwrap();
-        let artwork = gerberx2::geometry::extract_document(&parsed_gerber);
+        let artwork = gerberx2::geometry::extract_document(&parsed_gerber, accuracy).unwrap();
         assert_bbox_close(artwork.layers[0].bbox, expected_bbox);
         let crate::manufacturing::ManufacturingFileKind::GerberX2(layer) = &file.kind else {
             panic!("{filename} is not a Gerber layer");
@@ -452,6 +459,8 @@ fn repeating_an_input_reuses_its_definitions_and_adds_placements() {
 
 #[test]
 fn creates_supported_standard_fabrication_panel_sizes() {
+    let accuracy = GeometryAccuracy::default();
+
     let sources = vec![assembly_panel_xml(100.0, 80.0)];
 
     for (spec, usable_width, usable_height) in [
@@ -460,7 +469,9 @@ fn creates_supported_standard_fabrication_panel_sizes() {
         (FabPanelSpec::INCHES_18_X_24, 406.4, 508.0),
         (FabPanelSpec::INCHES_21_X_24, 482.6, 508.0),
     ] {
-        let generated = create_fab_panel(&sources, &[0], spec, false).unwrap().xml;
+        let generated = create_fab_panel(&sources, &[0], spec, false, accuracy)
+            .unwrap()
+            .xml;
         Ipc2581::validate(&generated).unwrap();
         let parsed = Ipc2581::parse(&generated).unwrap();
         let layout = geometry::extract_layout(&parsed).unwrap();
@@ -496,6 +507,8 @@ fn writes_default_process_margin_and_usable_area_metadata() {
 
 #[test]
 fn emits_usable_area_profile_rebased_to_origin() {
+    let accuracy = GeometryAccuracy::default();
+
     let stock_spec = FabPanelSpec {
         edge_margin_mm: EdgeInsetsMm::all(25.4),
         ..FabPanelSpec::INCHES_18_X_24
@@ -505,10 +518,10 @@ fn emits_usable_area_profile_rebased_to_origin() {
         ..stock_spec
     };
     let sources = [assembly_panel_xml(100.0, 80.0)];
-    let stock_xml = create_fab_panel(&sources, &[0], stock_spec, false)
+    let stock_xml = create_fab_panel(&sources, &[0], stock_spec, false, accuracy)
         .unwrap()
         .xml;
-    let emitted_xml = create_fab_panel(&sources, &[0], emitted_spec, false)
+    let emitted_xml = create_fab_panel(&sources, &[0], emitted_spec, false, accuracy)
         .unwrap()
         .xml;
 
@@ -548,16 +561,19 @@ fn emits_usable_area_profile_rebased_to_origin() {
         r#"<NonstandardAttribute name="diode.fab_panel.output_region" type="STRING" value="usable"/>"#
     ));
 
-    let package =
-        crate::manufacturing::build_manufacturing_package(&emitted, ArtworkScope::ArrayFlattened)
-            .unwrap();
+    let package = crate::manufacturing::build_manufacturing_package(
+        &emitted,
+        ArtworkScope::ArrayFlattened,
+        accuracy,
+    )
+    .unwrap();
     let outline = package
         .files
         .iter()
         .find(|file| file.filename == "Fab_Panel_Outline.gm1")
         .unwrap();
     let parsed_gerber = gerberx2::GerberX2::parse(&outline.contents).unwrap();
-    let artwork = gerberx2::geometry::extract_document(&parsed_gerber);
+    let artwork = gerberx2::geometry::extract_document(&parsed_gerber, accuracy).unwrap();
     assert_bbox_close(
         artwork.layers[0].bbox,
         BBox::new(Point::new(0.0, 0.0), Point::new(406.4, 558.8)).expand(0.025),
@@ -566,14 +582,22 @@ fn emits_usable_area_profile_rebased_to_origin() {
 
 #[test]
 fn applies_asymmetric_process_margin_and_gap_overrides() {
+    let accuracy = GeometryAccuracy::default();
+
     let spec = FabPanelSpec {
         edge_margin_mm: EdgeInsetsMm::new(30.0, 20.0, 10.0, 40.0),
         panel_gap_mm: 7.0,
         ..FabPanelSpec::INCHES_12_X_18
     };
-    let generated = create_fab_panel(&[assembly_panel_xml(100.0, 80.0)], &[0], spec, false)
-        .unwrap()
-        .xml;
+    let generated = create_fab_panel(
+        &[assembly_panel_xml(100.0, 80.0)],
+        &[0],
+        spec,
+        false,
+        accuracy,
+    )
+    .unwrap()
+    .xml;
     let parsed = Ipc2581::parse(&generated).unwrap();
     let layout = geometry::extract_layout(&parsed).unwrap();
     let instance = layout
@@ -600,6 +624,8 @@ fn applies_asymmetric_process_margin_and_gap_overrides() {
 
 #[test]
 fn accepts_subtool_spacing_and_rejects_invalid_fabrication_panel_domains() {
+    let accuracy = GeometryAccuracy::default();
+
     let sources = [assembly_panel_xml(100.0, 80.0)];
 
     let subtool_spacing = FabPanelSpec {
@@ -607,13 +633,13 @@ fn accepts_subtool_spacing_and_rejects_invalid_fabrication_panel_domains() {
         panel_gap_mm: 0.5,
         ..FabPanelSpec::INCHES_18_X_24
     };
-    create_fab_panel(&sources, &[0], subtool_spacing, false).unwrap();
+    create_fab_panel(&sources, &[0], subtool_spacing, false, accuracy).unwrap();
 
     let negative_margin = FabPanelSpec {
         edge_margin_mm: EdgeInsetsMm::new(50.8, 25.4, 50.8, -0.5),
         ..FabPanelSpec::INCHES_18_X_24
     };
-    let error = create_fab_panel(&sources, &[0], negative_margin, false).unwrap_err();
+    let error = create_fab_panel(&sources, &[0], negative_margin, false, accuracy).unwrap_err();
     assert!(
         error
             .to_string()
@@ -624,7 +650,7 @@ fn accepts_subtool_spacing_and_rejects_invalid_fabrication_panel_domains() {
         panel_gap_mm: -0.5,
         ..FabPanelSpec::INCHES_18_X_24
     };
-    let error = create_fab_panel(&sources, &[0], negative_gap, false).unwrap_err();
+    let error = create_fab_panel(&sources, &[0], negative_gap, false, accuracy).unwrap_err();
     assert!(
         error
             .to_string()
@@ -635,7 +661,7 @@ fn accepts_subtool_spacing_and_rejects_invalid_fabrication_panel_domains() {
         edge_margin_mm: EdgeInsetsMm::new(50.8, 250.0, 50.8, 250.0),
         ..FabPanelSpec::INCHES_18_X_24
     };
-    let error = create_fab_panel(&sources, &[0], no_usable_width, false).unwrap_err();
+    let error = create_fab_panel(&sources, &[0], no_usable_width, false, accuracy).unwrap_err();
     assert!(
         error
             .to_string()
@@ -645,6 +671,8 @@ fn accepts_subtool_spacing_and_rejects_invalid_fabrication_panel_domains() {
 
 #[test]
 fn strips_non_manufacturing_data_and_preserves_manufacturing_exports() {
+    let accuracy = GeometryAccuracy::default();
+
     let generated = create_fab_panel_xml(&[assembly_panel_with_non_manufacturing_data()], &[0])
         .expect("fabrication panel should be generated");
 
@@ -673,9 +701,12 @@ fn strips_non_manufacturing_data_and_preserves_manufacturing_exports() {
 
     Ipc2581::validate(&generated).expect("fabrication panel should validate against IPC-2581C");
     let parsed = Ipc2581::parse(&generated).expect("fabrication panel should parse");
-    let package =
-        crate::manufacturing::build_manufacturing_package(&parsed, ArtworkScope::ArrayFlattened)
-            .expect("fabrication panel should export manufacturing files");
+    let package = crate::manufacturing::build_manufacturing_package(
+        &parsed,
+        ArtworkScope::ArrayFlattened,
+        accuracy,
+    )
+    .expect("fabrication panel should export manufacturing files");
     assert!(package.files.iter().any(|file| file.filename == "F_Cu.gtl"));
     assert!(package.files.iter().any(|file| file.filename == "PTH.drl"));
     assert!(
@@ -797,11 +828,13 @@ fn dense_assembly_panel_xml(width_mm: f64, height_mm: f64) -> String {
 
 #[test]
 fn balances_gutters_at_the_assembly_panel_density_and_leaves_margins_bare() {
+    let accuracy = GeometryAccuracy::default();
+
     let sources = vec![
         dense_assembly_panel_xml(90.0, 40.0),
         dense_assembly_panel_xml(25.0, 20.0),
     ];
-    let creation = create_fab_panel(&sources, &[0, 1], BALANCE_SPEC, true).unwrap();
+    let creation = create_fab_panel(&sources, &[0, 1], BALANCE_SPEC, true, accuracy).unwrap();
 
     let report = creation.copper_balance.as_ref().unwrap();
     assert!(report.stack_weights_available);
@@ -846,16 +879,18 @@ fn balances_gutters_at_the_assembly_panel_density_and_leaves_margins_bare() {
                 && (instance.bbox.height() - 90.0).abs() < 1e-6)
     );
 
-    let profile = geometry::board_array_fabrication_profile(&parsed, &layout, &[]).unwrap();
+    let profile =
+        geometry::board_array_fabrication_profile(&parsed, &layout, &[], accuracy).unwrap();
     let panel_contours = profile
         .assembly_panel_outlines
         .iter()
         .flatten()
         .cloned()
         .collect::<Vec<_>>();
-    let footprints = ContourSet::from_filled_contours(&panel_contours, tol::REGION_MM);
+    let footprints =
+        ContourSet::from_filled_contours(&panel_contours, tol::REGION_MM, accuracy).unwrap();
     let usable = ContourSet::rectangle(BALANCE_SPEC.usable_bbox().unwrap(), tol::REGION_MM);
-    let copper = composed_copper_image(&parsed, "TOP").unwrap();
+    let copper = composed_copper_image(&parsed, "TOP", accuracy).unwrap();
     let gutter_copper = copper.difference(&footprints);
 
     assert!(
@@ -869,21 +904,26 @@ fn balances_gutters_at_the_assembly_panel_density_and_leaves_margins_bare() {
     );
     assert!(
         gutter_copper
-            .intersection(&footprints.disk_dilate(0.4))
+            .intersection(&footprints.disk_dilate(0.4, accuracy).unwrap())
             .area()
             <= 1e-6,
         "generated copper must keep clearance from the placed panels"
     );
     assert!(
-        gutter_copper.difference(&usable.disk_erode(0.4)).area() <= 1e-6,
+        gutter_copper
+            .difference(&usable.disk_erode(0.4, accuracy).unwrap())
+            .area()
+            <= 1e-6,
         "generated copper must keep clearance from the usable-area boundary"
     );
 }
 
 #[test]
 fn fab_panel_creation_skips_copper_balancing_unless_enabled() {
+    let accuracy = GeometryAccuracy::default();
+
     let sources = vec![dense_assembly_panel_xml(30.0, 25.0)];
-    let creation = create_fab_panel(&sources, &[0], BALANCE_SPEC, false).unwrap();
+    let creation = create_fab_panel(&sources, &[0], BALANCE_SPEC, false, accuracy).unwrap();
 
     assert!(creation.copper_balance.is_none());
     assert_eq!(
@@ -899,8 +939,10 @@ fn fab_panel_creation_skips_copper_balancing_unless_enabled() {
 
 #[test]
 fn single_panel_filling_the_usable_area_generates_no_fill() {
+    let accuracy = GeometryAccuracy::default();
+
     let sources = vec![dense_assembly_panel_xml(66.0, 116.0)];
-    let creation = create_fab_panel(&sources, &[0], BALANCE_SPEC, true).unwrap();
+    let creation = create_fab_panel(&sources, &[0], BALANCE_SPEC, true, accuracy).unwrap();
 
     let layer = &creation.copper_balance.unwrap().layers[0];
     assert_eq!(layer.mode, CopperBalanceMode::None);

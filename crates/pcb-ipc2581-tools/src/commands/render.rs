@@ -1,3 +1,4 @@
+use pcb_ir::geom::GeometryAccuracy;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -20,18 +21,20 @@ pub struct RenderOptions {
 /// The layer runs through the same normalization Gerber export uses, so a
 /// render and a fabrication file describe the same image.
 pub fn execute(input_file: &Path, options: &RenderOptions) -> Result<()> {
+    let accuracy = GeometryAccuracy::default();
+
     let target = resolve_target(options)?;
     let content = file_utils::load_ipc_file(input_file)?;
     let ipc = ipc2581::Ipc2581::parse(&content)?;
     let view = options.layout_target.artwork_scope();
-    let imported = pcb_ir::import::ipc2581::import_design(&ipc)?;
-    let geometry = geometry::render::prepare_layer(&imported, &options.layer, view)?;
+    let imported = pcb_ir::import::ipc2581::import_design(&ipc, accuracy)?;
+    let geometry = geometry::render::prepare_layer(&imported, &options.layer, view, accuracy)?;
 
     match target {
-        RenderTarget::Svg => render_svg(&geometry, options, view)?,
-        RenderTarget::Png => render_png(&geometry, options, view)?,
+        RenderTarget::Svg => render_svg(&geometry, options, view, accuracy)?,
+        RenderTarget::Png => render_png(&geometry, options, view, accuracy)?,
         RenderTarget::Terminal => {
-            geometry::render::render_layer_terminal(&geometry, true, view.profile_set())
+            geometry::render::render_layer_terminal(&geometry, true, view.profile_set(), accuracy)
                 .map_err(anyhow::Error::msg)?;
         }
     }
@@ -87,8 +90,9 @@ fn render_svg(
     geometry: &pcb_ir::dialects::ipc::Document<ipc2581::Symbol, ipc2581::types::LayerFunction>,
     options: &RenderOptions,
     view: pcb_ir::dialects::ipc::ArtworkScope,
+    accuracy: GeometryAccuracy,
 ) -> Result<()> {
-    let svg = geometry::render::render_layer_svg(geometry, true, view.profile_set());
+    let svg = geometry::render::render_layer_svg(geometry, true, view.profile_set(), accuracy)?;
 
     if let Some(output) = &options.output {
         std::fs::write(output, svg)
@@ -109,8 +113,9 @@ fn render_png(
     geometry: &pcb_ir::dialects::ipc::Document<ipc2581::Symbol, ipc2581::types::LayerFunction>,
     options: &RenderOptions,
     view: pcb_ir::dialects::ipc::ArtworkScope,
+    accuracy: GeometryAccuracy,
 ) -> Result<()> {
-    let png = geometry::render::render_layer_png(geometry, true, view.profile_set())
+    let png = geometry::render::render_layer_png(geometry, true, view.profile_set(), accuracy)
         .map_err(anyhow::Error::msg)?;
 
     if let Some(output) = &options.output {

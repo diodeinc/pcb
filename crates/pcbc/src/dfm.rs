@@ -1,3 +1,4 @@
+use pcb_ir::geom::GeometryAccuracy;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -31,6 +32,8 @@ pub struct DfmArgs {
 }
 
 pub fn execute(args: DfmArgs) -> Result<()> {
+    let accuracy = GeometryAccuracy::default();
+
     let temporary_output = if args.open && args.output.is_none() {
         Some(tempfile::tempdir().context("failed to create temporary DFM report directory")?)
     } else {
@@ -56,7 +59,7 @@ pub fn execute(args: DfmArgs) -> Result<()> {
     commands::dfm::validate_output(&args.file, &options)?;
     let dfm_result = match export_layout(&args) {
         Ok((_temporary_dir, ipc_path)) => {
-            match commands::dfm::execute_check(&ipc_path, &options)? {
+            match commands::dfm::execute_check(&ipc_path, &options, accuracy)? {
                 commands::dfm::CheckOutcome::Passed => Ok(()),
                 commands::dfm::CheckOutcome::Failed(error) => Err(error),
             }

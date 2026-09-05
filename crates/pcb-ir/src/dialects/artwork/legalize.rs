@@ -2,6 +2,7 @@
 
 use super::{Aperture, ApertureShape, Document, Geometry, normalize_bounds};
 use crate::geom::path::ContourBuf;
+use crate::geom::{AccuracyError, GeometryAccuracy};
 use crate::geom::{Affine2, Point};
 
 const TRANSFORM_EPSILON: f64 = 1e-9;
@@ -10,53 +11,67 @@ const TRANSFORM_EPSILON: f64 = 1e-9;
 ///
 /// JLCPCB renders primitive 21 rounded rectangles oversized and shifts
 /// off-origin custom apertures using `%LR`.
-pub fn legalize_for_jlcpcb<LayerMeta, ObjectMeta>(doc: &mut Document<LayerMeta, ObjectMeta>) {
-    replace_round_rect_apertures(doc);
-    bake_flash_transforms(doc);
+pub fn legalize_for_jlcpcb<LayerMeta, ObjectMeta>(
+    doc: &mut Document<LayerMeta, ObjectMeta>,
+    accuracy: GeometryAccuracy,
+) -> Result<(), AccuracyError> {
+    replace_round_rect_apertures(doc, accuracy)?;
+    bake_flash_transforms(doc, accuracy)?;
     normalize_bounds(doc);
+
+    Ok(())
 }
 
-fn replace_round_rect_apertures<LayerMeta, ObjectMeta>(doc: &mut Document<LayerMeta, ObjectMeta>) {
-    for aperture in &mut doc.apertures {
+fn replace_round_rect_apertures<LayerMeta, ObjectMeta>(
+    doc: &mut Document<LayerMeta, ObjectMeta>,
+    accuracy: GeometryAccuracy,
+) -> Result<(), AccuracyError> {
+    let _: () = for aperture in &mut doc.apertures {
         if matches!(aperture.shape, ApertureShape::RoundRect { .. }) {
-            *aperture = contour_aperture(aperture, Affine2::IDENTITY);
+            *aperture = contour_aperture(aperture, Affine2::IDENTITY, accuracy)?;
         }
-    }
+    };
+    Ok(())
 }
 
-fn bake_flash_transforms<LayerMeta, ObjectMeta>(doc: &mut Document<LayerMeta, ObjectMeta>) {
+fn bake_flash_transforms<LayerMeta, ObjectMeta>(
+    doc: &mut Document<LayerMeta, ObjectMeta>,
+    accuracy: GeometryAccuracy,
+) -> Result<(), AccuracyError> {
     for object_index in 0..doc.objects.len() {
         let geometry = doc.objects[object_index].geometry;
-        doc.objects[object_index].geometry = legalize_flash_geometry(doc, geometry);
+        doc.objects[object_index].geometry = legalize_flash_geometry(doc, geometry, accuracy)?;
     }
-    for block_index in 0..doc.blocks.len() {
+    let _: () = for block_index in 0..doc.blocks.len() {
         for object_index in 0..doc.blocks[block_index].objects.len() {
             let geometry = doc.blocks[block_index].objects[object_index].geometry;
-            let geometry = legalize_flash_geometry(doc, geometry);
+            let geometry = legalize_flash_geometry(doc, geometry, accuracy)?;
             doc.blocks[block_index].objects[object_index].geometry = geometry;
         }
-    }
+    };
+    Ok(())
 }
 
 fn legalize_flash_geometry<LayerMeta, ObjectMeta>(
     doc: &mut Document<LayerMeta, ObjectMeta>,
     geometry: Geometry,
-) -> Geometry {
+    accuracy: GeometryAccuracy,
+) -> Result<Geometry, AccuracyError> {
     let Geometry::Flash {
         aperture,
         transform,
     } = geometry
     else {
-        return geometry;
+        return Ok(geometry);
     };
     if transform.is_translation() {
-        return geometry;
+        return Ok(geometry);
     }
     let Some(source) = doc.apertures.get(aperture as usize).cloned() else {
         doc.warn(format!(
             "Skipping target legalization for flash with missing aperture {aperture}"
         ));
-        return geometry;
+        return Ok(geometry);
     };
 
     let basis = Affine2 {
@@ -64,20 +79,24 @@ fn legalize_flash_geometry<LayerMeta, ObjectMeta>(
         m12: 0.0,
         ..transform
     };
-    let aperture = doc.push_aperture(bake_aperture_basis(&source, basis));
-    Geometry::Flash {
+    let aperture = doc.push_aperture(bake_aperture_basis(&source, basis, accuracy)?);
+    Ok(Geometry::Flash {
         aperture,
         transform: Affine2::translation(Point::new(transform.m02, transform.m12)),
-    }
+    })
 }
 
 /// Apply a translation-free affine basis directly to an aperture definition.
-pub fn bake_aperture_basis(aperture: &Aperture, basis: Affine2) -> Aperture {
+pub fn bake_aperture_basis(
+    aperture: &Aperture,
+    basis: Affine2,
+    accuracy: GeometryAccuracy,
+) -> Result<Aperture, AccuracyError> {
     let similarity = basis.preserves_circles(TRANSFORM_EPSILON);
     let scale = basis.m00.hypot(basis.m10);
     let scaled_hole = || aperture.hole_diameter * scale;
 
-    match &aperture.shape {
+    Ok(match &aperture.shape {
         ApertureShape::Circle { diameter } if similarity => Aperture {
             shape: ApertureShape::Circle {
                 diameter: diameter * scale,
@@ -91,7 +110,7 @@ pub fn bake_aperture_basis(aperture: &Aperture, basis: Affine2) -> Aperture {
                     hole_diameter: scaled_hole(),
                 }
             } else {
-                contour_aperture(aperture, basis)
+                contour_aperture(aperture, basis, accuracy)?
             }
         }
         ApertureShape::Obround { width, height } => {
@@ -101,7 +120,7 @@ pub fn bake_aperture_basis(aperture: &Aperture, basis: Affine2) -> Aperture {
                     hole_diameter: scaled_hole(),
                 }
             } else {
-                contour_aperture(aperture, basis)
+                contour_aperture(aperture, basis, accuracy)?
             }
         }
         ApertureShape::Polygon {
@@ -135,7 +154,7 @@ pub fn bake_aperture_basis(aperture: &Aperture, basis: Affine2) -> Aperture {
                     hole_diameter: scaled_hole(),
                 }
             } else {
-                contour_aperture(aperture, basis)
+                contour_aperture(aperture, basis, accuracy)?
             }
         }
         ApertureShape::RoundedHex {
@@ -157,8 +176,8 @@ pub fn bake_aperture_basis(aperture: &Aperture, basis: Affine2) -> Aperture {
         ApertureShape::Contour { .. }
         | ApertureShape::Circle { .. }
         | ApertureShape::Polygon { .. }
-        | ApertureShape::RoundedHex { .. } => contour_aperture(aperture, basis),
-    }
+        | ApertureShape::RoundedHex { .. } => contour_aperture(aperture, basis, accuracy)?,
+    })
 }
 
 fn axis_aligned_dimensions(width: f64, height: f64, basis: Affine2) -> Option<(f64, f64)> {
@@ -176,13 +195,17 @@ fn axis_aligned_dimensions(width: f64, height: f64, basis: Affine2) -> Option<(f
     }
 }
 
-fn contour_aperture(aperture: &Aperture, basis: Affine2) -> Aperture {
+fn contour_aperture(
+    aperture: &Aperture,
+    basis: Affine2,
+    accuracy: GeometryAccuracy,
+) -> Result<Aperture, AccuracyError> {
     let fill_rule = aperture.fill_rule();
     let contours = aperture
         .contours()
         .into_iter()
-        .map(|contour| contour.transformed(basis))
-        .collect::<Vec<_>>();
+        .map(|contour| contour.transformed(basis, accuracy))
+        .collect::<Result<Vec<_>, _>>()?;
     let uncertainty_mm = contours
         .iter()
         .map(|contour| contour.uncertainty_mm)
@@ -191,10 +214,10 @@ fn contour_aperture(aperture: &Aperture, basis: Affine2) -> Aperture {
         .into_iter()
         .flat_map(|contour| contour.cmds)
         .collect();
-    Aperture::solid(ApertureShape::Contour {
+    Ok(Aperture::solid(ApertureShape::Contour {
         outline: ContourBuf::new(cmds).with_uncertainty(uncertainty_mm),
         fill_rule,
-    })
+    }))
 }
 
 #[cfg(test)]
@@ -238,9 +261,11 @@ mod tests {
 
     #[test]
     fn legalizes_shapes_and_transforms_without_flattening_flashes() {
+        let accuracy = GeometryAccuracy::default();
+
         let reference = round_rect_document();
         let mut candidate = reference.clone();
-        legalize_for_jlcpcb(&mut candidate);
+        legalize_for_jlcpcb(&mut candidate, accuracy).unwrap();
 
         assert!(
             candidate
@@ -269,7 +294,9 @@ mod tests {
                 bbox_mm: 1e-6,
                 area_mm2: 1e-6,
             },
-        );
+            accuracy,
+        )
+        .unwrap();
         assert!(report.is_match(), "{:#?}", report.mismatches);
     }
 }

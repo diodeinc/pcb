@@ -2,6 +2,7 @@ use crate::dialects::ipc::feature::{Feature, FeaturePlacementGroup, FeatureSet, 
 use crate::dialects::ipc::layout::{LayoutGraph, StepProfile, StepProfileCutout};
 use crate::dialects::ipc::spec::{Spec, SpecItem, SpecProperty, SpecRef};
 use crate::geom::path::ContourBuf;
+use crate::geom::{AccuracyError, GeometryAccuracy};
 use crate::geom::{Affine2, BBox, Diagnostic, Paint, PathArena};
 
 const IDENTITY_PLACEMENT: [Affine2; 1] = [Affine2::IDENTITY];
@@ -45,14 +46,19 @@ impl<Symbol, LayerFunction> Document<Symbol, LayerFunction> {
     }
 
     /// Detach the contours of a path, transformed into another frame.
-    pub fn transformed_path_contours(&self, path: u32, transform: Affine2) -> Vec<ContourBuf> {
+    pub fn transformed_path_contours(
+        &self,
+        path: u32,
+        transform: Affine2,
+        accuracy: GeometryAccuracy,
+    ) -> Result<Vec<ContourBuf>, AccuracyError> {
         let path = self.arena.path(path);
-        if transform.is_identity() {
+        Ok(if transform.is_identity() {
             self.arena.path_contours(path)
         } else {
             self.arena
-                .transformed_contour_bufs(path.contours, transform)
-        }
+                .transformed_contour_bufs(path.contours, transform, accuracy)?
+        })
     }
 
     /// Bounding box of a path transformed into another frame.
@@ -88,16 +94,18 @@ impl<Symbol, LayerFunction> Document<Symbol, LayerFunction> {
     }
 
     /// Detach every contour occurrence of a feature in layer coordinates.
-    pub fn placed_feature_contours(&self, feature: &Feature<Symbol>) -> Vec<ContourBuf> {
-        self.placements_for_feature(feature)
-            .iter()
-            .flat_map(|&placement| {
-                feature
-                    .paths
-                    .indices()
-                    .flat_map(move |path| self.transformed_path_contours(path, placement))
-            })
-            .collect()
+    pub fn placed_feature_contours(
+        &self,
+        feature: &Feature<Symbol>,
+        accuracy: GeometryAccuracy,
+    ) -> Result<Vec<ContourBuf>, AccuracyError> {
+        let mut contours = Vec::new();
+        for &placement in self.placements_for_feature(feature) {
+            for path in feature.paths.indices() {
+                contours.extend(self.transformed_path_contours(path, placement, accuracy)?);
+            }
+        }
+        Ok(contours)
     }
 
     pub fn warn(&mut self, message: impl Into<String>) {

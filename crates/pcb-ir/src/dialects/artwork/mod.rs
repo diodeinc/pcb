@@ -9,13 +9,14 @@
 pub mod compare;
 pub mod legalize;
 
+use crate::geom::{AccuracyError, GeometryAccuracy};
 use std::collections::HashMap;
 use std::hash::Hash;
 
 use crate::dialects::mask;
 use crate::dialects::{LayerRole, Side};
 use crate::geom::path::ContourBuf;
-use crate::geom::region::{self, Ring};
+use crate::geom::region::{self};
 use crate::geom::{
     Affine2, BBox, Diagnostic, FillRule, Paint, PathArena, Point, Polarity, Span, StrokeStyle,
     shapes,
@@ -486,24 +487,14 @@ pub fn normalize_bounds<LayerMeta, ObjectMeta>(doc: &mut Document<LayerMeta, Obj
 }
 
 /// Rewrite flashes and strokes into filled region objects.
-pub fn expand_native_geometry_to_regions<LayerMeta, ObjectMeta>(
+pub fn expand_native_geometry_to_regions<LayerMeta: Clone, ObjectMeta: Clone>(
     doc: Document<LayerMeta, ObjectMeta>,
-) -> Document<LayerMeta, ObjectMeta>
-where
-    LayerMeta: Clone,
-    ObjectMeta: Clone,
-{
-    expand_native_geometry_with_accuracy(doc, None).expect("default artwork preparation")
-}
-
-fn expand_native_geometry_with_accuracy<LayerMeta: Clone, ObjectMeta: Clone>(
-    doc: Document<LayerMeta, ObjectMeta>,
-    accuracy: Option<crate::geom::GeometryAccuracy>,
-) -> Result<Document<LayerMeta, ObjectMeta>, crate::geom::AccuracyError> {
+    accuracy: GeometryAccuracy,
+) -> Result<Document<LayerMeta, ObjectMeta>, AccuracyError> {
     let mut doc = if doc.blocks.is_empty() {
         doc
     } else {
-        expand_instances_with_grid_policy(&doc, false, accuracy)?
+        expand_instances(&doc, accuracy)?
     };
     expand_strokes_to_regions(&mut doc, accuracy)?;
     expand_flashes_to_regions(&mut doc, accuracy)?;
@@ -549,8 +540,8 @@ pub fn paint_ordered<ObjectMeta>(objects: &[Object<ObjectMeta>]) -> Vec<&Object<
 /// always exactly `image`.
 #[derive(Debug)]
 pub struct AttributedImage<Owner> {
-    pub image: Vec<Ring>,
-    pub owners: Vec<(Owner, Vec<Ring>)>,
+    pub image: region::ContourSet,
+    pub owners: Vec<(Owner, region::ContourSet)>,
 }
 
 /// Ordered artwork composition with caller-defined ownership.
@@ -562,8 +553,9 @@ pub struct AttributedImage<Owner> {
 pub fn compose_attributed<LayerMeta: Clone, ObjectMeta: Clone, Owner: Clone + Eq + Hash>(
     doc: &Document<LayerMeta, ObjectMeta>,
     owner: impl Fn(&ObjectMeta) -> Owner,
-) -> (Vec<AttributedImage<Owner>>, Vec<Diagnostic>) {
-    compose_selected_attributed(doc, |meta| Some(owner(meta)))
+    accuracy: GeometryAccuracy,
+) -> Result<(Vec<AttributedImage<Owner>>, Vec<Diagnostic>), AccuracyError> {
+    compose_selected_attributed(doc, |meta| Some(owner(meta)), accuracy)
 }
 
 /// Ordered artwork composition for only the owners selected by the caller,
@@ -579,51 +571,29 @@ pub(crate) fn compose_selected_attributed<
 >(
     doc: &Document<LayerMeta, ObjectMeta>,
     owner: impl Fn(&ObjectMeta) -> Option<Owner>,
-) -> (Vec<AttributedImage<Owner>>, Vec<Diagnostic>) {
-    let (layers, diagnostics) = compose_selected_owners(doc, owner);
+    accuracy: GeometryAccuracy,
+) -> Result<(Vec<AttributedImage<Owner>>, Vec<Diagnostic>), AccuracyError> {
+    let (layers, diagnostics) = compose_owner_regions(doc, owner, 0.0, accuracy)?;
     let layers = layers
         .into_iter()
-        .map(|owners| AttributedImage {
-            image: region::union_rings(
-                owners
-                    .iter()
-                    .flat_map(|(_, image)| image.iter().cloned())
-                    .collect(),
-                FillRule::NonZero,
-            ),
-            owners,
+        .map(|owners| {
+            let mut composer = region::PaintComposer::default();
+            for (_, image) in &owners {
+                composer.push(Polarity::Dark, image.clone());
+            }
+            let image = composer.finish(0.0);
+            accuracy.check(image.uncertainty_mm)?;
+            Ok(AttributedImage { image, owners })
         })
-        .collect();
-    (layers, diagnostics)
+        .collect::<Result<_, AccuracyError>>()?;
+    Ok((layers, diagnostics))
 }
 
 /// One layer's owner images in first-paint order; every image is a
 /// regularized ring set.
-pub type OwnerImages<Owner> = Vec<(Owner, Vec<Ring>)>;
+pub type OwnerImages<Owner> = Vec<(Owner, region::ContourSet)>;
 
 pub type OwnerRegionLayers<Owner> = Vec<Vec<(Owner, region::ContourSet)>>;
-
-/// Each layer's owner images from the ordered paint fold, for only the
-/// owners selected by the caller.
-pub fn compose_selected_owners<LayerMeta: Clone, ObjectMeta: Clone, Owner: Clone + Eq + Hash>(
-    doc: &Document<LayerMeta, ObjectMeta>,
-    owner: impl Fn(&ObjectMeta) -> Option<Owner>,
-) -> (Vec<OwnerImages<Owner>>, Vec<Diagnostic>) {
-    let (layers, diagnostics) =
-        compose_owner_regions(doc, owner, 0.0, None).expect("default artwork preparation");
-    (
-        layers
-            .into_iter()
-            .map(|owners| {
-                owners
-                    .into_iter()
-                    .map(|(owner, region)| (owner, region.rings))
-                    .collect()
-            })
-            .collect(),
-        diagnostics,
-    )
-}
 
 /// Compose owner regions using retained source curves and an explicit budget.
 /// Returned regions carry the errors of strokes, transforms, and paint folds.
@@ -632,14 +602,14 @@ pub fn compose_owner_regions<LayerMeta: Clone, ObjectMeta: Clone, Owner: Clone +
     doc: &Document<LayerMeta, ObjectMeta>,
     owner: impl Fn(&ObjectMeta) -> Option<Owner>,
     tolerance: f64,
-    accuracy: Option<crate::geom::GeometryAccuracy>,
-) -> Result<(OwnerRegionLayers<Owner>, Vec<Diagnostic>), crate::geom::AccuracyError> {
+    accuracy: GeometryAccuracy,
+) -> Result<(OwnerRegionLayers<Owner>, Vec<Diagnostic>), AccuracyError> {
     if !tolerance.is_finite() || tolerance < 0.0 {
-        return Err(crate::geom::AccuracyError::InvalidGeometry(
+        return Err(AccuracyError::InvalidGeometry(
             "invalid significance tolerance",
         ));
     }
-    let doc = expand_native_geometry_with_accuracy(doc.clone(), accuracy)?;
+    let doc = expand_native_geometry_to_regions(doc.clone(), accuracy)?;
     struct OwnerState {
         composer: region::PaintComposer,
         bbox: BBox,
@@ -696,7 +666,7 @@ pub fn compose_owner_regions<LayerMeta: Clone, ObjectMeta: Clone, Owner: Clone +
                     };
                     let state = &mut states[index].1;
                     state.bbox = state.bbox.union(object.bbox);
-                    state.composer.push_region(Polarity::Dark, image);
+                    state.composer.push(Polarity::Dark, image);
                 }
                 Polarity::Clear => {
                     for state in states
@@ -704,7 +674,7 @@ pub fn compose_owner_regions<LayerMeta: Clone, ObjectMeta: Clone, Owner: Clone +
                         .map(|(_, state)| state)
                         .filter(|state| state.bbox.intersects(object.bbox))
                     {
-                        state.composer.push_region(Polarity::Clear, image.clone());
+                        state.composer.push(Polarity::Clear, image.clone());
                     }
                 }
             }
@@ -712,10 +682,8 @@ pub fn compose_owner_regions<LayerMeta: Clone, ObjectMeta: Clone, Owner: Clone +
 
         let mut images = Vec::with_capacity(states.len());
         for (owner, state) in states {
-            let image = state.composer.finish_set(tolerance);
-            if let Some(accuracy) = accuracy {
-                accuracy.check(image.uncertainty_mm)?;
-            }
+            let image = state.composer.finish(tolerance);
+            accuracy.check(image.uncertainty_mm)?;
             if !image.is_empty() {
                 images.push((owner, image));
             }
@@ -727,8 +695,9 @@ pub fn compose_owner_regions<LayerMeta: Clone, ObjectMeta: Clone, Owner: Clone +
 
 pub fn compose_to_mask<LayerMeta: Clone, ObjectMeta: Clone>(
     doc: &Document<LayerMeta, ObjectMeta>,
-) -> mask::Document<LayerMeta> {
-    let (images, diagnostics) = compose_attributed(doc, |_| ());
+    accuracy: GeometryAccuracy,
+) -> Result<mask::Document<LayerMeta>, AccuracyError> {
+    let (images, diagnostics) = compose_attributed(doc, |_| (), accuracy)?;
     let mut mask = mask::Document::new();
 
     for layer in &doc.layers {
@@ -743,20 +712,20 @@ pub fn compose_to_mask<LayerMeta: Clone, ObjectMeta: Clone>(
     }
 
     for (layer_index, image) in images.into_iter().enumerate() {
-        let contours = region::rings_to_contours(image.image);
+        let contours = image.image.to_contours();
         if !contours.is_empty() {
             mask.push_shape(layer_index as u32, FillRule::NonZero, contours);
         }
     }
 
     mask.diagnostics.extend(diagnostics);
-    mask
+    Ok(mask)
 }
 
 fn expand_strokes_to_regions<LayerMeta, ObjectMeta>(
     doc: &mut Document<LayerMeta, ObjectMeta>,
-    accuracy: Option<crate::geom::GeometryAccuracy>,
-) -> Result<(), crate::geom::AccuracyError> {
+    accuracy: GeometryAccuracy,
+) -> Result<(), AccuracyError> {
     for object_index in 0..doc.objects.len() {
         let Geometry::Stroke { path: path_index } = doc.objects[object_index].geometry else {
             continue;
@@ -770,12 +739,7 @@ fn expand_strokes_to_regions<LayerMeta, ObjectMeta>(
             continue;
         };
         let source = doc.arena.path_contours(&path);
-        let contours = match accuracy {
-            Some(accuracy) => {
-                crate::geom::path::stroke_to_fill_with_accuracy(&source, stroke.into(), accuracy)?
-            }
-            None => crate::geom::path::stroke_to_fill(&source, stroke.into()),
-        };
+        let contours = crate::geom::path::stroke_to_fill(&source, stroke.into(), accuracy)?;
         let Some(contours) = contours else {
             continue;
         };
@@ -791,25 +755,11 @@ fn expand_strokes_to_regions<LayerMeta, ObjectMeta>(
     Ok(())
 }
 
-fn transform_contours(
-    contours: Vec<ContourBuf>,
-    transform: Affine2,
-    accuracy: Option<crate::geom::GeometryAccuracy>,
-) -> Result<Vec<ContourBuf>, crate::geom::AccuracyError> {
-    contours
-        .into_iter()
-        .map(|contour| match accuracy {
-            Some(accuracy) => contour.transformed_with_accuracy(transform, accuracy),
-            None => Ok(contour.transformed(transform)),
-        })
-        .collect()
-}
-
 fn expand_flashes_to_regions<LayerMeta, ObjectMeta>(
     doc: &mut Document<LayerMeta, ObjectMeta>,
-    accuracy: Option<crate::geom::GeometryAccuracy>,
-) -> Result<(), crate::geom::AccuracyError> {
-    for object_index in 0..doc.objects.len() {
+    accuracy: GeometryAccuracy,
+) -> Result<(), AccuracyError> {
+    let _: () = for object_index in 0..doc.objects.len() {
         let Geometry::Flash {
             aperture,
             transform,
@@ -821,7 +771,11 @@ fn expand_flashes_to_regions<LayerMeta, ObjectMeta>(
             doc.warn("Skipping artwork flash with invalid aperture reference");
             continue;
         };
-        let contours = transform_contours(aperture.contours(), transform, accuracy)?;
+        let contours = aperture
+            .contours()
+            .into_iter()
+            .map(|contour| contour.transformed(transform, accuracy))
+            .collect::<Result<Vec<_>, _>>()?;
         let path_id = doc.push_path(
             Paint::Fill {
                 rule: aperture.fill_rule(),
@@ -830,15 +784,15 @@ fn expand_flashes_to_regions<LayerMeta, ObjectMeta>(
         );
         doc.objects[object_index].geometry = Geometry::Region { path: path_id };
         doc.objects[object_index].bbox = doc.path_bbox(path_id);
-    }
+    };
     Ok(())
 }
 
 fn object_image_region<LayerMeta, ObjectMeta>(
     doc: &Document<LayerMeta, ObjectMeta>,
     object: &Object<ObjectMeta>,
-    accuracy: Option<crate::geom::GeometryAccuracy>,
-) -> Result<region::ContourSet, crate::geom::AccuracyError> {
+    accuracy: GeometryAccuracy,
+) -> Result<region::ContourSet, AccuracyError> {
     let Geometry::Region { path } = object.geometry else {
         return Ok(region::ContourSet::empty(0.0));
     };
@@ -847,7 +801,7 @@ fn object_image_region<LayerMeta, ObjectMeta>(
     };
     let contours = doc.arena.path_contours(path);
     let rule = path.fill_rule().unwrap_or(FillRule::NonZero);
-    region::ContourSet::prepare_contours(&contours, rule, 0.0, accuracy)
+    region::ContourSet::from_contours(&contours, rule, 0.0, accuracy)
 }
 
 fn geometry_bbox<LayerMeta, ObjectMeta>(
@@ -871,8 +825,8 @@ fn geometry_bbox<LayerMeta, ObjectMeta>(
                 aperture
                     .contours()
                     .into_iter()
-                    .map(|contour| contour.transformed(transform))
-                    .fold(BBox::empty(), |bbox, contour| bbox.union(contour.bbox))
+                    .map(|contour| contour.bbox.transformed(transform))
+                    .fold(BBox::empty(), |bbox, bound| bbox.union(bound))
             })
             .unwrap_or_else(BBox::empty),
         Geometry::Instance { block, transform } => doc
@@ -899,8 +853,9 @@ fn geometry_bbox<LayerMeta, ObjectMeta>(
 /// aperture flashes retain composed affine transforms.
 pub fn expand_instances<LayerMeta: Clone, ObjectMeta: Clone>(
     doc: &Document<LayerMeta, ObjectMeta>,
-) -> Document<LayerMeta, ObjectMeta> {
-    expand_instances_with_grid_policy(doc, false, None).expect("default instance expansion")
+    accuracy: GeometryAccuracy,
+) -> Result<Document<LayerMeta, ObjectMeta>, AccuracyError> {
+    expand_instances_with_grid_policy(doc, false, accuracy)
 }
 
 /// Materialize ordinary hierarchy while preserving explicit regular grids.
@@ -911,15 +866,16 @@ pub fn expand_instances<LayerMeta: Clone, ObjectMeta: Clone>(
 /// and block contents.
 pub fn expand_instances_preserving_grids<LayerMeta: Clone, ObjectMeta: Clone>(
     doc: &Document<LayerMeta, ObjectMeta>,
-) -> Document<LayerMeta, ObjectMeta> {
-    expand_instances_with_grid_policy(doc, true, None).expect("default instance expansion")
+    accuracy: GeometryAccuracy,
+) -> Result<Document<LayerMeta, ObjectMeta>, AccuracyError> {
+    expand_instances_with_grid_policy(doc, true, accuracy)
 }
 
 fn expand_instances_with_grid_policy<LayerMeta: Clone, ObjectMeta: Clone>(
     doc: &Document<LayerMeta, ObjectMeta>,
     preserve_grids: bool,
-    accuracy: Option<crate::geom::GeometryAccuracy>,
-) -> Result<Document<LayerMeta, ObjectMeta>, crate::geom::AccuracyError> {
+    accuracy: GeometryAccuracy,
+) -> Result<Document<LayerMeta, ObjectMeta>, AccuracyError> {
     let mut out = Document::new();
     out.apertures = doc.apertures.clone();
     out.arena = doc.arena.clone();
@@ -963,10 +919,10 @@ fn expand_instances_with_grid_policy<LayerMeta: Clone, ObjectMeta: Clone>(
                     transform: Affine2::IDENTITY,
                     polarity: Polarity::Dark,
                     preserve_grids,
-                    accuracy,
                     block_contains_grid: &block_contains_grid,
                 },
                 doc.blocks.len(),
+                accuracy,
             )?;
         }
     }
@@ -981,9 +937,9 @@ fn flatten_leaf_blocks<LayerMeta, ObjectMeta: Clone>(
     doc: &Document<LayerMeta, ObjectMeta>,
     out: &mut Document<LayerMeta, ObjectMeta>,
     block_contains_grid: &[bool],
-    accuracy: Option<crate::geom::GeometryAccuracy>,
-) -> Result<(), crate::geom::AccuracyError> {
-    for (index, block) in doc.blocks.iter().enumerate() {
+    accuracy: GeometryAccuracy,
+) -> Result<(), AccuracyError> {
+    let _: () = for (index, block) in doc.blocks.iter().enumerate() {
         let id = out.push_block();
         for object in &block.objects {
             match object.geometry {
@@ -1022,7 +978,7 @@ fn flatten_leaf_blocks<LayerMeta, ObjectMeta: Clone>(
                 }
             }
         }
-    }
+    };
     Ok(())
 }
 
@@ -1032,8 +988,8 @@ fn transform_primitive_geometry<LayerMeta, ObjectMeta>(
     doc: &mut Document<LayerMeta, ObjectMeta>,
     geometry: Geometry,
     transform: Affine2,
-    accuracy: Option<crate::geom::GeometryAccuracy>,
-) -> Result<Geometry, crate::geom::AccuracyError> {
+    accuracy: GeometryAccuracy,
+) -> Result<Geometry, AccuracyError> {
     Ok(match geometry {
         Geometry::Flash {
             aperture,
@@ -1048,8 +1004,11 @@ fn transform_primitive_geometry<LayerMeta, ObjectMeta>(
             } else {
                 let source_path = doc.arena.path(path);
                 let paint = source_path.paint.scaled(transform.m00.hypot(transform.m10));
-                let contours =
-                    transform_contours(doc.arena.path_contours(source_path), transform, accuracy)?;
+                let contours = doc.arena.transformed_contour_bufs(
+                    source_path.contours,
+                    transform,
+                    accuracy,
+                )?;
                 doc.push_path(paint, contours)
             };
             match geometry {
@@ -1070,7 +1029,6 @@ struct InstanceExpansion<'a> {
     polarity: Polarity,
     preserve_grids: bool,
     block_contains_grid: &'a [bool],
-    accuracy: Option<crate::geom::GeometryAccuracy>,
 }
 
 fn expand_object_into_layer<LayerMeta, ObjectMeta: Clone>(
@@ -1080,7 +1038,8 @@ fn expand_object_into_layer<LayerMeta, ObjectMeta: Clone>(
     object: &Object<ObjectMeta>,
     expansion: InstanceExpansion<'_>,
     block_limit: usize,
-) -> Result<(), crate::geom::AccuracyError> {
+    accuracy: GeometryAccuracy,
+) -> Result<(), AccuracyError> {
     let transform = expansion.transform;
     let polarity = expansion.polarity.compose(object.polarity);
     if let Geometry::Instance {
@@ -1113,6 +1072,7 @@ fn expand_object_into_layer<LayerMeta, ObjectMeta: Clone>(
                     ..expansion
                 },
                 block as usize,
+                accuracy,
             )?;
         }
         return Ok(());
@@ -1183,6 +1143,7 @@ fn expand_object_into_layer<LayerMeta, ObjectMeta: Clone>(
                         ..expansion
                     },
                     block as usize,
+                    accuracy,
                 )?;
             }
         }
@@ -1191,8 +1152,7 @@ fn expand_object_into_layer<LayerMeta, ObjectMeta: Clone>(
 
     // The target arena starts as a clone of the source arena, so source path
     // indices resolve identically in the target.
-    let geometry =
-        transform_primitive_geometry(target, object.geometry, transform, expansion.accuracy)?;
+    let geometry = transform_primitive_geometry(target, object.geometry, transform, accuracy)?;
     target.push_object(
         layer,
         Object {
@@ -1203,6 +1163,7 @@ fn expand_object_into_layer<LayerMeta, ObjectMeta: Clone>(
             meta: object.meta.clone(),
         },
     );
+
     Ok(())
 }
 
@@ -1244,6 +1205,8 @@ mod tests {
 
     #[test]
     fn expanding_scaled_instances_scales_stroke_widths() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut doc = Document::<(), ()>::new();
         let block = doc.push_block();
         let path = doc.push_path(
@@ -1275,7 +1238,7 @@ mod tests {
         );
         normalize_bounds(&mut doc);
 
-        let expanded = expand_instances(&doc);
+        let expanded = expand_instances(&doc, accuracy).unwrap();
         let stroke = expanded
             .objects
             .iter()
@@ -1289,6 +1252,8 @@ mod tests {
 
     #[test]
     fn preserves_nested_reusable_blocks_until_explicit_expansion() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut doc = Document::<(), ()>::new();
         let aperture = doc.push_aperture(Aperture::circle(1.0));
         let board = doc.push_block();
@@ -1339,7 +1304,7 @@ mod tests {
         assert_eq!(doc.layers[0].bbox.min, Point::new(9.5, 19.5));
         assert_eq!(doc.layers[0].bbox.max, Point::new(10.5, 22.5));
 
-        let expanded = expand_instances(&doc);
+        let expanded = expand_instances(&doc, accuracy).unwrap();
         assert_eq!(expanded.objects.len(), 2);
         assert!(
             expanded
@@ -1353,6 +1318,8 @@ mod tests {
 
     #[test]
     fn composes_ordered_artwork_to_mask() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut doc = Document::<(), ()>::new();
         let layer = doc.push_layer(Layer::new("F.Cu", LayerRole::Copper, Side::Top));
         let path = doc.push_path(
@@ -1368,7 +1335,7 @@ mod tests {
             Object::new(Polarity::Dark, Geometry::Stroke { path }),
         );
 
-        let mask = compose_to_mask(&doc);
+        let mask = compose_to_mask(&doc, accuracy).unwrap();
 
         assert_eq!(mask.layers.len(), 1);
         assert_eq!(mask.layers[0].shapes.len(), 1);
@@ -1378,6 +1345,8 @@ mod tests {
 
     #[test]
     fn composition_stages_overlays_over_base_clears_and_final_cutouts_last() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut doc = Document::<(), ()>::new();
         let layer = doc.push_layer(Layer::new("F.Cu", LayerRole::Copper, Side::Top));
         let rect = |doc: &mut Document<(), ()>, x0: f64, y0: f64, x1: f64, y1: f64| {
@@ -1422,13 +1391,15 @@ mod tests {
             stage_object(Polarity::Dark, cutout, PaintStage::FinalCutout),
         );
 
-        let mask = compose_to_mask(&doc);
+        let mask = compose_to_mask(&doc, accuracy).unwrap();
         let shape = mask.layers[0].shapes.slice(&mask.arena.paths)[0];
         let image = region::ContourSet::from_contours(
             &mask.arena.path_contours(&shape),
             FillRule::NonZero,
             crate::geom::tol::REGION_MM,
-        );
+            accuracy,
+        )
+        .unwrap();
 
         // The overlay trace follows the clear in paint order and survives.
         assert!(image.contains_point(Point::new(5.0, 5.0)));
@@ -1441,6 +1412,8 @@ mod tests {
 
     #[test]
     fn attributed_composition_preserves_owner_claims_through_clear_and_overlay() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut doc = Document::<(), &'static str>::new();
         let layer = doc.push_layer(Layer::new("F.Cu", LayerRole::Copper, Side::Top));
         let rect = |doc: &mut Document<(), &'static str>, x0, y0, x1, y1| {
@@ -1482,14 +1455,10 @@ mod tests {
             object(Polarity::Dark, overlap, PaintStage::Overlay, "C"),
         );
 
-        let (mut layers, diagnostics) = compose_attributed(&doc, |meta| *meta);
+        let (mut layers, diagnostics) = compose_attributed(&doc, |meta| *meta, accuracy).unwrap();
         assert!(diagnostics.is_empty());
         let composed = layers.remove(0);
-        let physical = region::ContourSet::new(
-            composed.image,
-            FillRule::NonZero,
-            crate::geom::tol::REGION_MM,
-        );
+        let physical = composed.image;
         assert_eq!(
             composed
                 .owners
@@ -1498,16 +1467,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["A", "B", "C"]
         );
-        let owners = composed
-            .owners
-            .into_iter()
-            .map(|(owner, rings)| {
-                (
-                    owner,
-                    region::ContourSet::new(rings, FillRule::NonZero, crate::geom::tol::REGION_MM),
-                )
-            })
-            .collect::<HashMap<_, _>>();
+        let owners = composed.owners.into_iter().collect::<HashMap<_, _>>();
 
         assert!(owners["A"].contains_point(Point::new(2.0, 2.0)));
         assert!(!owners["A"].contains_point(Point::new(5.0, 5.0)));
@@ -1518,7 +1478,8 @@ mod tests {
         assert!(physical.contains_point(Point::new(8.5, 8.5)));
 
         let (mut selected, diagnostics) =
-            compose_selected_attributed(&doc, |meta| (*meta != "C").then_some(*meta));
+            compose_selected_attributed(&doc, |meta| (*meta != "C").then_some(*meta), accuracy)
+                .unwrap();
         assert!(diagnostics.is_empty());
         let selected = selected.remove(0);
         assert_eq!(
@@ -1529,22 +1490,15 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["A", "B"]
         );
-        let selected = selected
-            .owners
-            .into_iter()
-            .map(|(owner, rings)| {
-                (
-                    owner,
-                    region::ContourSet::new(rings, FillRule::NonZero, crate::geom::tol::REGION_MM),
-                )
-            })
-            .collect::<HashMap<_, _>>();
+        let selected = selected.owners.into_iter().collect::<HashMap<_, _>>();
         assert!(!selected["A"].contains_point(Point::new(5.0, 5.0)));
         assert!(selected["B"].contains_point(Point::new(5.0, 5.0)));
     }
 
     #[test]
     fn flash_expansion_honors_aperture_holes() {
+        let accuracy = GeometryAccuracy::default();
+
         let mut doc = Document::<(), ()>::new();
         let layer = doc.push_layer(Layer::new("F.Cu", LayerRole::Copper, Side::Top));
         let aperture = doc.push_aperture(Aperture {
@@ -1562,14 +1516,16 @@ mod tests {
             ),
         );
 
-        let mask = compose_to_mask(&doc);
+        let mask = compose_to_mask(&doc, accuracy).unwrap();
         let expected = std::f64::consts::PI * (1.0 - 0.25);
         let shape = mask.layers[0].shapes.slice(&mask.arena.paths)[0];
         let area = region::ContourSet::from_contours(
             &mask.arena.path_contours(&shape),
             FillRule::NonZero,
             crate::geom::tol::REGION_MM,
+            accuracy,
         )
+        .unwrap()
         .area();
 
         assert!(

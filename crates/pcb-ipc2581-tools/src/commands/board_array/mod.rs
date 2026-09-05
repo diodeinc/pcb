@@ -1,3 +1,4 @@
+use pcb_ir::geom::GeometryAccuracy;
 use std::collections::HashSet;
 #[cfg(feature = "cli")]
 use std::path::Path;
@@ -411,8 +412,10 @@ pub fn execute(
     options: &BoardArrayCreateOptions,
     balance_copper: bool,
 ) -> Result<()> {
+    let accuracy = GeometryAccuracy::default();
+
     let content = file_utils::load_ipc_file(input)?;
-    let creation = create_board_array(&content, options, balance_copper)?;
+    let creation = create_board_array(&content, options, balance_copper, accuracy)?;
     print_copper_balance_summary(creation.copper_balance.as_ref());
     write_board_array_output(output, &creation.xml)?;
     Ok(())
@@ -424,9 +427,10 @@ pub fn execute_auto(
     output: &Path,
     sheet: Option<AutoSheetSize>,
     balance_copper: bool,
+    accuracy: GeometryAccuracy,
 ) -> Result<()> {
     let content = file_utils::load_ipc_file(input)?;
-    let creation = create_auto_board_array(&content, sheet, balance_copper)?;
+    let creation = create_auto_board_array(&content, sheet, balance_copper, accuracy)?;
     print_copper_balance_summary(creation.copper_balance.as_ref());
     write_board_array_output(output, &creation.xml)?;
     Ok(())
@@ -459,6 +463,7 @@ pub fn create_board_array(
     xml: &str,
     options: &BoardArrayCreateOptions,
     balance_copper: bool,
+    accuracy: GeometryAccuracy,
 ) -> Result<BoardArrayCreation> {
     let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
     let spec = build_board_array_spec(
@@ -471,7 +476,7 @@ pub fn create_board_array(
             sheet_target_mm: None,
         },
     )?;
-    write_board_array_creation(xml, spec, balance_copper)
+    write_board_array_creation(xml, spec, balance_copper, accuracy)
 }
 
 #[cfg(test)]
@@ -480,7 +485,9 @@ pub fn create_board_array(
 /// it ask for it.
 #[cfg(test)]
 fn create_board_array_xml(xml: &str, options: &BoardArrayCreateOptions) -> Result<String> {
-    Ok(create_board_array(xml, options, false)?.xml)
+    let accuracy = GeometryAccuracy::default();
+
+    Ok(create_board_array(xml, options, false, accuracy)?.xml)
 }
 
 #[cfg(test)]
@@ -493,11 +500,12 @@ pub fn create_auto_board_array(
     xml: &str,
     sheet: Option<AutoSheetSize>,
     balance_copper: bool,
+    accuracy: GeometryAccuracy,
 ) -> Result<BoardArrayCreation> {
     let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
-    let (options, validation_mode, panelization) = auto_board_array_options(&ipc, sheet)?;
+    let (options, validation_mode, panelization) = auto_board_array_options(&ipc, sheet, accuracy)?;
     let spec = build_board_array_spec(&ipc, &options, validation_mode, panelization)?;
-    write_board_array_creation(xml, spec, balance_copper)
+    write_board_array_creation(xml, spec, balance_copper, accuracy)
 }
 
 #[cfg(test)]
@@ -505,19 +513,22 @@ fn create_auto_board_array_xml_with_sheet(
     xml: &str,
     sheet: Option<AutoSheetSize>,
 ) -> Result<String> {
-    Ok(create_auto_board_array(xml, sheet, false)?.xml)
+    let accuracy = GeometryAccuracy::default();
+
+    Ok(create_auto_board_array(xml, sheet, false, accuracy)?.xml)
 }
 
 fn auto_board_array_options(
     ipc: &Ipc2581,
     sheet: Option<AutoSheetSize>,
+    accuracy: GeometryAccuracy,
 ) -> Result<(
     BoardArrayCreateOptions,
     BoardArrayValidationMode,
     BoardArrayPanelizationMetadata,
 )> {
     let board = primary_board_layout(ipc)?;
-    let board_margin = auto_board_margin(ipc, board.bbox)?;
+    let board_margin = auto_board_margin(ipc, board.bbox, accuracy)?;
     let board_width = board.bbox.width();
     let board_height = board.bbox.height();
 
@@ -568,8 +579,12 @@ fn minimum_single_board_auto_options(board_margin: BoardMarginMm) -> BoardArrayC
     }
 }
 
-fn auto_board_margin(ipc: &Ipc2581, board_bbox: BBox) -> Result<BoardMarginMm> {
-    let safe_bbox = board_bbox.union(board_courtyard_bbox(ipc)?);
+fn auto_board_margin(
+    ipc: &Ipc2581,
+    board_bbox: BBox,
+    accuracy: GeometryAccuracy,
+) -> Result<BoardMarginMm> {
+    let safe_bbox = board_bbox.union(board_courtyard_bbox(ipc, accuracy)?);
     Ok(BoardMarginMm {
         top: (safe_bbox.max.y - board_bbox.max.y).max(0.0) + MIN_BOARD_CELL_FIDUCIAL_MARGIN_MM,
         right: (safe_bbox.max.x - board_bbox.max.x).max(0.0) + MIN_BOARD_CELL_FIDUCIAL_MARGIN_MM,
@@ -578,7 +593,7 @@ fn auto_board_margin(ipc: &Ipc2581, board_bbox: BBox) -> Result<BoardMarginMm> {
     })
 }
 
-fn board_courtyard_bbox(ipc: &Ipc2581) -> Result<BBox> {
+fn board_courtyard_bbox(ipc: &Ipc2581, accuracy: GeometryAccuracy) -> Result<BBox> {
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
     let mut bbox = BBox::empty();
 
@@ -593,6 +608,7 @@ fn board_courtyard_bbox(ipc: &Ipc2581) -> Result<BBox> {
             ipc,
             layer_name,
             pcb_ir::dialects::ipc::ArtworkScope::Board,
+            accuracy,
         )
         .with_context(|| format!("failed to extract IPC-2581 courtyard layer '{layer_name}'"))?;
         for feature in doc
@@ -641,6 +657,7 @@ fn write_board_array_creation(
     xml: &str,
     mut spec: BoardArraySpec,
     balance_copper: bool,
+    accuracy: GeometryAccuracy,
 ) -> Result<BoardArrayCreation> {
     if !balance_copper {
         return Ok(BoardArrayCreation {
@@ -654,7 +671,7 @@ fn write_board_array_creation(
     let provisional_xml = board_array_edited_xml(xml, &spec)?;
     let provisional = Ipc2581::parse(&provisional_xml)
         .context("Failed to parse provisional IPC-2581 board array")?;
-    let balance = balance::generate_automatic_board_array_copper_balance(&provisional)?;
+    let balance = balance::generate_automatic_board_array_copper_balance(&provisional, accuracy)?;
     let copper_balance = balance.report();
 
     for layer in balance.layers {

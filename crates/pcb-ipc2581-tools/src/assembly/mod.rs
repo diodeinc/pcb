@@ -1,5 +1,6 @@
 //! Deterministic PCBA assembly reports over the canonical imported design.
 
+use pcb_ir::geom::GeometryAccuracy;
 use std::collections::{BTreeSet, HashMap};
 
 use anyhow::{Result, bail};
@@ -30,13 +31,17 @@ pub use report::AssemblyReport;
 /// The report uses source-backed assembly IR and conservative physical
 /// relationships. Geometry can establish only a unique exact overlap; the
 /// report applies no quote or shop policy.
-pub fn build_report(imported: &ImportedDesign, target: LayoutTarget) -> Result<AssemblyReport> {
+pub fn build_report(
+    imported: &ImportedDesign,
+    target: LayoutTarget,
+    accuracy: GeometryAccuracy,
+) -> Result<AssemblyReport> {
     let scope = match target {
         LayoutTarget::Board => ir::Scope::Board,
         LayoutTarget::BoardArray => ir::Scope::BoardArray,
     };
-    let assembly = imported.assembly_document(scope)?;
-    let physical = imported.physical_view(target.artwork_scope())?;
+    let assembly = imported.assembly_document(scope, accuracy)?;
+    let physical = imported.physical_view(target.artwork_scope(), accuracy)?;
     let mut ids = IdAllocator::default();
     let (profiles, profile_ids) = physical_profiles(&assembly, &mut ids);
     let (scope_bounds, scope_area) = assembly

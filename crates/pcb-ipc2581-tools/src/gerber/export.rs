@@ -1,3 +1,4 @@
+use pcb_ir::geom::{AccuracyError, GeometryAccuracy};
 use std::collections::{HashMap, HashSet};
 #[cfg(feature = "cli")]
 use std::fmt::Write as _;
@@ -71,23 +72,29 @@ impl Default for ProfileGerberStyle {
     }
 }
 
-pub fn build_gerber_x2_files(ipc: &Ipc2581, view: ArtworkScope) -> Result<Vec<GerberX2File>> {
-    build_gerber_x2_files_with_options(ipc, view, &GerberExportOptions::default())
+pub fn build_gerber_x2_files(
+    ipc: &Ipc2581,
+    view: ArtworkScope,
+    accuracy: GeometryAccuracy,
+) -> Result<Vec<GerberX2File>> {
+    build_gerber_x2_files_with_options(ipc, view, &GerberExportOptions::default(), accuracy)
 }
 
 pub fn build_gerber_x2_files_with_options(
     ipc: &Ipc2581,
     view: ArtworkScope,
     options: &GerberExportOptions,
+    accuracy: GeometryAccuracy,
 ) -> Result<Vec<GerberX2File>> {
-    let imported = import_design(ipc)?;
-    build_gerber_x2_files_from_design_with_options(&imported, view, options)
+    let imported = import_design(ipc, accuracy)?;
+    build_gerber_x2_files_from_design_with_options(&imported, view, options, accuracy)
 }
 
 pub(crate) fn build_gerber_x2_files_from_design_with_options(
     imported: &ImportedDesign,
     view: ArtworkScope,
     options: &GerberExportOptions,
+    accuracy: GeometryAccuracy,
 ) -> Result<Vec<GerberX2File>> {
     // With no repeated instances, a board-array request denotes this board
     // itself. Use the board path so its Step/Profile remains authoritative
@@ -118,23 +125,29 @@ pub(crate) fn build_gerber_x2_files_from_design_with_options(
             view,
         };
         let artwork = if view == ArtworkScope::ArrayFlattened {
-            hierarchical_artwork_from_ipc_layer(imported, plan.layer_id, layer_name, spec)?
+            hierarchical_artwork_from_ipc_layer(
+                imported,
+                plan.layer_id,
+                layer_name,
+                spec,
+                accuracy,
+            )?
         } else {
             let mut doc = imported
-                .materialize_layer(plan.layer_id, view)
+                .materialize_layer(plan.layer_id, view, accuracy)
                 .with_context(|| format!("failed to extract IPC-2581 layer '{layer_name}'"))?;
-            pcb_ir::dialects::ipc::process::normalize_for_artwork(&mut doc);
+            pcb_ir::dialects::ipc::process::normalize_for_artwork(&mut doc, accuracy)?;
             if let Err(error) = pcb_ir::dialects::ipc::validate_artwork_ready(&doc) {
                 bail!("IPC-2581 layer '{layer_name}' is not artwork-ready: {error}");
             }
-            artwork_from_ipc_layer(imported, &doc, 0, spec)?
+            artwork_from_ipc_layer(imported, &doc, 0, spec, accuracy)?
         };
         if matches!(plan.role, GerberLayerRole::Vcut | GerberLayerRole::Score)
             && artwork.layers[0].objects.is_empty()
         {
             continue;
         }
-        let layer = lower_artwork_layer(&artwork)?;
+        let layer = lower_artwork_layer(&artwork, accuracy)?;
         if plan.role == GerberLayerRole::Profile && layer.objects.is_empty() {
             continue;
         }
@@ -149,8 +162,11 @@ pub(crate) fn build_gerber_x2_files_from_design_with_options(
         files.extend(board_array_profile_gerber_files(
             imported,
             options.relief_debug_dir.as_deref(),
+            accuracy,
         )?);
-    } else if !has_profile_plan && let Some(file) = synthetic_profile_gerber_file(imported, view)? {
+    } else if !has_profile_plan
+        && let Some(file) = synthetic_profile_gerber_file(imported, view, accuracy)?
+    {
         files.push(file);
     }
 
@@ -519,6 +535,7 @@ fn artwork_from_ipc_layer(
     doc: &IpcGeometryDocument,
     layer_index: usize,
     spec: GerberArtworkSpec,
+    accuracy: GeometryAccuracy,
 ) -> Result<GerberArtwork> {
     let layer = &doc.layers[layer_index];
     let header = pcb_ir::dialects::artwork::Layer {
@@ -535,7 +552,8 @@ fn artwork_from_ipc_layer(
         role: spec.role,
         side: spec.side,
     };
-    let mut artwork = lower_layer_to_artwork_with(doc, layer_index, header, &mut lowering);
+    let mut artwork =
+        lower_layer_to_artwork_with(doc, layer_index, header, &mut lowering, accuracy)?;
 
     if spec.role == GerberLayerRole::Profile
         && spec.view != ArtworkScope::ArrayFlattened
@@ -547,7 +565,8 @@ fn artwork_from_ipc_layer(
             doc,
             spec.view.profile_set(),
             ProfileGerberStyle::default(),
-        );
+            accuracy,
+        )?;
     }
     Ok(artwork)
 }
@@ -565,6 +584,7 @@ fn hierarchical_artwork_from_ipc_layer(
     layer: LayerId,
     layer_name: &str,
     spec: GerberArtworkSpec,
+    accuracy: GeometryAccuracy,
 ) -> Result<GerberArtwork> {
     let root = primary_step(imported)?;
     let mut artwork = GerberArtwork::new();
@@ -584,7 +604,7 @@ fn hierarchical_artwork_from_ipc_layer(
         side: spec.side,
     };
     let mut blocks = HashMap::from([(root.name, None)]);
-    let objects = build_step_artwork_objects(&context, root, &mut artwork, &mut blocks)?;
+    let objects = build_step_artwork_objects(&context, root, &mut artwork, &mut blocks, accuracy)?;
     for object in objects {
         artwork.push_object(artwork_layer, object);
     }
@@ -608,6 +628,7 @@ fn build_step_artwork_block(
     step: &Step,
     artwork: &mut GerberArtwork,
     blocks: &mut HashMap<ipc2581::Symbol, Option<u32>>,
+    accuracy: GeometryAccuracy,
 ) -> Result<u32> {
     match blocks.get(&step.name).copied() {
         Some(Some(block)) => return Ok(block),
@@ -618,7 +639,7 @@ fn build_step_artwork_block(
         None => {}
     }
     blocks.insert(step.name, None);
-    let objects = build_step_artwork_objects(context, step, artwork, blocks)?;
+    let objects = build_step_artwork_objects(context, step, artwork, blocks, accuracy)?;
     let block = artwork.push_block();
     for object in objects {
         artwork.push_block_object(block, object);
@@ -632,6 +653,7 @@ fn build_step_artwork_objects(
     step: &Step,
     artwork: &mut GerberArtwork,
     blocks: &mut HashMap<ipc2581::Symbol, Option<u32>>,
+    accuracy: GeometryAccuracy,
 ) -> Result<Vec<ArtworkObject<ObjectAttributes>>> {
     let children = step
         .step_repeats
@@ -648,7 +670,7 @@ fn build_step_artwork_objects(
                         context.imported.resolve(repeat.step_ref)
                     )
                 })?;
-            let child = build_step_artwork_block(context, child_step, artwork, blocks)?;
+            let child = build_step_artwork_block(context, child_step, artwork, blocks, accuracy)?;
             Ok((child, repeat))
         })
         .collect::<Result<Vec<_>>>()?;
@@ -659,7 +681,7 @@ fn build_step_artwork_objects(
         .context("source Step is missing from the canonical layout graph")?;
     let mut local = context
         .imported
-        .materialize_step_layer(step_id, context.layer)
+        .materialize_step_layer(step_id, context.layer, accuracy)
         .with_context(|| {
             format!(
                 "failed to materialize IPC-2581 Step '{}' layer '{}'",
@@ -667,7 +689,7 @@ fn build_step_artwork_objects(
                 context.layer_name
             )
         })?;
-    pcb_ir::dialects::ipc::process::normalize_for_artwork(&mut local);
+    pcb_ir::dialects::ipc::process::normalize_for_artwork(&mut local, accuracy)?;
     if let Err(error) = pcb_ir::dialects::ipc::validate_artwork_ready(&local) {
         bail!(
             "IPC-2581 Step '{}' layer '{}' is not artwork-ready: {error}",
@@ -682,7 +704,8 @@ fn build_step_artwork_objects(
         role: context.role,
         side: context.side,
     };
-    let mut objects = lower_layer_to_artwork_objects_with(&local, 0, artwork, &mut lowering);
+    let mut objects =
+        lower_layer_to_artwork_objects_with(&local, 0, artwork, &mut lowering, accuracy)?;
     for (child, repeat) in children {
         if artwork.blocks[child as usize].objects.is_empty() || repeat.nx == 0 || repeat.ny == 0 {
             continue;
@@ -728,7 +751,8 @@ impl ArtworkLowering<ipc2581::Symbol, ObjectAttributes> for GerberLowering<'_> {
     fn source_aperture(
         &mut self,
         feature: &Feature<ipc2581::Symbol>,
-    ) -> Option<(Aperture, Affine2, BBox)> {
+        accuracy: GeometryAccuracy,
+    ) -> std::result::Result<Option<(Aperture, Affine2, BBox)>, AccuracyError> {
         if let Some(void) = feature.flags.copper_balance_void {
             let aperture = Aperture::solid(ApertureShape::RoundedHex {
                 radius: void.radius_mm,
@@ -736,9 +760,9 @@ impl ArtworkLowering<ipc2581::Symbol, ObjectAttributes> for GerberLowering<'_> {
                 rotation_degrees: 0.0,
             });
             let bbox = aperture.bbox().transformed(feature.transform);
-            return Some((aperture, feature.transform, bbox));
+            return Ok(Some((aperture, feature.transform, bbox)));
         }
-        standard_flash_aperture(self.imported, self.doc, feature)
+        standard_flash_aperture(self.imported, self.doc, feature, accuracy)
     }
 
     fn stroke_style(&mut self, stroke: StrokeStyle) -> StrokeStyle {
@@ -790,6 +814,7 @@ struct GerberArtworkSpec {
 fn synthetic_profile_gerber_file(
     imported: &ImportedDesign,
     view: ArtworkScope,
+    accuracy: GeometryAccuracy,
 ) -> Result<Option<GerberX2File>> {
     let doc = &imported.geometry;
     let mut artwork = GerberArtwork::new();
@@ -811,12 +836,13 @@ fn synthetic_profile_gerber_file(
         doc,
         view.profile_set(),
         ProfileGerberStyle::default(),
-    );
+        accuracy,
+    )?;
     if artwork.layers[artwork_layer as usize].objects.is_empty() {
         return Ok(None);
     }
 
-    let layer = lower_artwork_layer(&artwork)?;
+    let layer = lower_artwork_layer(&artwork, accuracy)?;
     let contents = write_layer(&layer)?;
     Ok(Some(GerberX2File {
         filename: "Edge_Cuts.gm1".to_string(),
@@ -828,9 +854,10 @@ fn synthetic_profile_gerber_file(
 fn board_array_profile_gerber_files(
     imported: &ImportedDesign,
     relief_debug_dir: Option<&Path>,
+    accuracy: GeometryAccuracy,
 ) -> Result<Vec<GerberX2File>> {
     let doc = &imported.geometry;
-    let score_lines = geometry::board_array_vscore_lines_from_design(imported)?;
+    let score_lines = geometry::board_array_vscore_lines_from_design(imported, accuracy)?;
     #[cfg(not(feature = "cli"))]
     if relief_debug_dir.is_some() {
         bail!("filesystem debug output requires the cli feature");
@@ -842,15 +869,25 @@ fn board_array_profile_gerber_files(
                 imported,
                 doc,
                 &score_lines,
+                accuracy,
             )?;
         write_vscore_relief_debug(debug_dir, &relief_debug)?;
         profile
     } else {
-        geometry::board_array_fabrication_profile_from_design(imported, doc, &score_lines)?
+        geometry::board_array_fabrication_profile_from_design(
+            imported,
+            doc,
+            &score_lines,
+            accuracy,
+        )?
     };
     #[cfg(not(feature = "cli"))]
-    let profile =
-        geometry::board_array_fabrication_profile_from_design(imported, doc, &score_lines)?;
+    let profile = geometry::board_array_fabrication_profile_from_design(
+        imported,
+        doc,
+        &score_lines,
+        accuracy,
+    )?;
     if profile.purpose == LayoutPurpose::Product {
         let mut contour_groups = profile.array_outlines;
         contour_groups.push(profile.material_removal);
@@ -859,6 +896,7 @@ fn board_array_profile_gerber_files(
             "Board_Array_Profile.gm1",
             contour_groups,
             GerberPart::Array,
+            accuracy,
         )?
         .into_iter()
         .collect());
@@ -870,18 +908,21 @@ fn board_array_profile_gerber_files(
             "Fab_Panel_Outline.gm1",
             profile.array_outlines,
             GerberPart::FabricationPanel,
+            accuracy,
         )?,
         profile_gerber_file(
             "Assembly Panel Outlines",
             "Assembly_Panel_Outlines.gm1",
             profile.assembly_panel_outlines,
             GerberPart::FabricationPanel,
+            accuracy,
         )?,
         profile_gerber_file(
             "Board Cutouts",
             "Board_Cutouts.gm1",
             vec![profile.material_removal],
             GerberPart::FabricationPanel,
+            accuracy,
         )?,
     ]
     .into_iter()
@@ -894,6 +935,7 @@ fn profile_gerber_file(
     filename: &str,
     contour_groups: Vec<Vec<ContourBuf>>,
     part: GerberPart,
+    accuracy: GeometryAccuracy,
 ) -> Result<Option<GerberX2File>> {
     let mut artwork = GerberArtwork::new();
     let artwork_layer = artwork.push_layer(pcb_ir::dialects::artwork::Layer {
@@ -919,7 +961,7 @@ fn profile_gerber_file(
         return Ok(None);
     }
 
-    let layer = lower_artwork_layer(&artwork)?;
+    let layer = lower_artwork_layer(&artwork, accuracy)?;
     let contents = write_layer(&layer)?;
     Ok(Some(GerberX2File {
         filename: filename.to_string(),
@@ -1206,8 +1248,9 @@ fn append_profile_occurrences(
     doc: &IpcGeometryDocument,
     profile_set: ProfileSet,
     style: ProfileGerberStyle,
-) {
-    for occurrence in profile_occurrences_for(doc, profile_set) {
+    accuracy: GeometryAccuracy,
+) -> anyhow::Result<()> {
+    let _: () = for occurrence in profile_occurrences_for(doc, profile_set) {
         append_profile_path(
             artwork,
             layer,
@@ -1215,7 +1258,8 @@ fn append_profile_occurrences(
             occurrence.profile.outer_path,
             occurrence.transform,
             style,
-        );
+            accuracy,
+        )?;
         append_profile_cutouts(
             artwork,
             layer,
@@ -1223,8 +1267,10 @@ fn append_profile_occurrences(
             occurrence.profile,
             occurrence.transform,
             style,
-        );
-    }
+            accuracy,
+        )?;
+    };
+    Ok(())
 }
 
 fn append_profile_cutouts(
@@ -1234,10 +1280,12 @@ fn append_profile_cutouts(
     profile: &pcb_ir::dialects::ipc::StepProfile,
     transform: Affine2,
     style: ProfileGerberStyle,
-) {
-    for cutout in profile.cutouts.slice(&doc.profile_cutouts) {
-        append_profile_path(artwork, layer, doc, cutout.path, transform, style);
-    }
+    accuracy: GeometryAccuracy,
+) -> anyhow::Result<()> {
+    let _: () = for cutout in profile.cutouts.slice(&doc.profile_cutouts) {
+        append_profile_path(artwork, layer, doc, cutout.path, transform, style, accuracy)?;
+    };
+    Ok(())
 }
 
 fn append_profile_path(
@@ -1247,13 +1295,16 @@ fn append_profile_path(
     path: u32,
     transform: Affine2,
     style: ProfileGerberStyle,
-) {
+    accuracy: GeometryAccuracy,
+) -> anyhow::Result<()> {
     append_profile_payloads(
         artwork,
         layer,
-        doc.transformed_path_contours(path, transform),
+        doc.transformed_path_contours(path, transform, accuracy)?,
         style,
     );
+
+    Ok(())
 }
 
 fn append_profile_payloads(
@@ -1301,27 +1352,36 @@ fn standard_flash_aperture(
     imported: &ImportedDesign,
     doc: &IpcGeometryDocument,
     feature: &Feature<ipc2581::Symbol>,
-) -> Option<(Aperture, Affine2, BBox)> {
+    accuracy: GeometryAccuracy,
+) -> std::result::Result<Option<(Aperture, Affine2, BBox)>, AccuracyError> {
     if !standard_flash_feature_is_eligible(feature) {
-        return None;
+        return Ok(None);
     }
 
-    let primitive = standard_primitive_for_feature(imported, feature)?;
+    let Some(primitive) = standard_primitive_for_feature(imported, feature) else {
+        return Ok(None);
+    };
     if !standard_primitive_is_solid_fill(primitive) {
-        return None;
+        return Ok(None);
     }
 
     if let Some(aperture) = exact_flash_aperture(primitive, feature.transform) {
         let at = feature.center;
         let bbox = flash_bbox(at, &aperture);
-        return Some((aperture, Affine2::translation(at), bbox));
+        return Ok(Some((aperture, Affine2::translation(at), bbox)));
     }
 
     // Every other solid catalogue shape flashes through a contour aperture
     // shared per shape, keeping repeated pads one definition each instead of
     // re-painting a region at every placement.
-    let shape = pcb_ir::dialects::ipc::contour_flash_aperture(doc, feature)?;
-    Some((Aperture::solid(shape), feature.transform, feature.bbox))
+    let Some(shape) = pcb_ir::dialects::ipc::contour_flash_aperture(doc, feature, accuracy)? else {
+        return Ok(None);
+    };
+    Ok(Some((
+        Aperture::solid(shape),
+        feature.transform,
+        feature.bbox,
+    )))
 }
 
 /// The catalogue primitives Gerber expresses as exact standard apertures.
@@ -1649,6 +1709,8 @@ mod tests {
 
     #[test]
     fn negative_set_before_a_later_fill_is_repainted_by_it() {
+        let accuracy = GeometryAccuracy::default();
+
         // Sequential set semantics: a fill written after the clear repaints
         // the cleared area, so the fill survives intact.
         let ipc = ipc::Ipc2581::parse(
@@ -1712,7 +1774,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let files = build_gerber_x2_files(&ipc, ArtworkScope::Board).unwrap();
+        let files = build_gerber_x2_files(&ipc, ArtworkScope::Board, accuracy).unwrap();
         let copper = files
             .iter()
             .find(|file| file.filename == "F_Cu.gtl")
@@ -1720,14 +1782,23 @@ mod tests {
         let parsed = gerberx2::GerberX2::parse(&copper.contents).unwrap();
 
         let mask = pcb_ir::dialects::artwork::compose_to_mask(
-            &gerberx2::geometry::extract_document(&parsed),
-        );
+            &gerberx2::geometry::extract_document(&parsed, accuracy).unwrap(),
+            accuracy,
+        )
+        .unwrap();
         let mut rings = Vec::new();
         for layer in &mask.layers {
             for shape in mask.shapes(layer) {
-                rings.extend(pcb_ir::geom::region::rings_from_contours(
-                    &mask.arena.path_contours(shape),
-                ));
+                rings.extend(
+                    pcb_ir::geom::ContourSet::from_contours(
+                        &mask.arena.path_contours(shape),
+                        pcb_ir::geom::FillRule::NonZero,
+                        0.0,
+                        accuracy,
+                    )
+                    .unwrap()
+                    .rings,
+                );
             }
         }
         let copper_area = pcb_ir::geom::ContourSet::new(
@@ -1746,6 +1817,8 @@ mod tests {
 
     #[test]
     fn catalogue_pads_flash_through_shared_apertures() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = ipc::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -1800,7 +1873,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let files = build_gerber_x2_files(&ipc, ArtworkScope::Board).unwrap();
+        let files = build_gerber_x2_files(&ipc, ArtworkScope::Board, accuracy).unwrap();
         let copper = files
             .iter()
             .find(|file| file.filename == "F_Cu.gtl")
@@ -1821,14 +1894,23 @@ mod tests {
 
         let parsed = gerberx2::GerberX2::parse(&copper.contents).unwrap();
         let mask = pcb_ir::dialects::artwork::compose_to_mask(
-            &gerberx2::geometry::extract_document(&parsed),
-        );
+            &gerberx2::geometry::extract_document(&parsed, accuracy).unwrap(),
+            accuracy,
+        )
+        .unwrap();
         let mut rings = Vec::new();
         for layer in &mask.layers {
             for shape in mask.shapes(layer) {
-                rings.extend(pcb_ir::geom::region::rings_from_contours(
-                    &mask.arena.path_contours(shape),
-                ));
+                rings.extend(
+                    pcb_ir::geom::ContourSet::from_contours(
+                        &mask.arena.path_contours(shape),
+                        pcb_ir::geom::FillRule::NonZero,
+                        0.0,
+                        accuracy,
+                    )
+                    .unwrap()
+                    .rings,
+                );
             }
         }
         let copper_area = pcb_ir::geom::ContourSet::new(
@@ -1847,6 +1929,8 @@ mod tests {
 
     #[test]
     fn oversized_corner_radius_clamps_to_the_obround_image() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = ipc::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -1892,21 +1976,30 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let files = build_gerber_x2_files(&ipc, ArtworkScope::Board).unwrap();
+        let files = build_gerber_x2_files(&ipc, ArtworkScope::Board, accuracy).unwrap();
         let copper = files
             .iter()
             .find(|file| file.filename == "F_Cu.gtl")
             .unwrap();
         let parsed = gerberx2::GerberX2::parse(&copper.contents).unwrap();
         let mask = pcb_ir::dialects::artwork::compose_to_mask(
-            &gerberx2::geometry::extract_document(&parsed),
-        );
+            &gerberx2::geometry::extract_document(&parsed, accuracy).unwrap(),
+            accuracy,
+        )
+        .unwrap();
         let mut rings = Vec::new();
         for layer in &mask.layers {
             for shape in mask.shapes(layer) {
-                rings.extend(pcb_ir::geom::region::rings_from_contours(
-                    &mask.arena.path_contours(shape),
-                ));
+                rings.extend(
+                    pcb_ir::geom::ContourSet::from_contours(
+                        &mask.arena.path_contours(shape),
+                        pcb_ir::geom::FillRule::NonZero,
+                        0.0,
+                        accuracy,
+                    )
+                    .unwrap()
+                    .rings,
+                );
             }
         }
         let copper_area = pcb_ir::geom::ContourSet::new(
@@ -1926,6 +2019,8 @@ mod tests {
 
     #[test]
     fn negative_set_after_an_overlay_pad_erases_it_natively() {
+        let accuracy = GeometryAccuracy::default();
+
         // Sequential set semantics: the clear paints after the pad, erasing
         // the overlap, and exports natively as clear polarity.
         let ipc = ipc::Ipc2581::parse(
@@ -1988,7 +2083,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let files = build_gerber_x2_files(&ipc, ArtworkScope::Board).unwrap();
+        let files = build_gerber_x2_files(&ipc, ArtworkScope::Board, accuracy).unwrap();
         let copper = files
             .iter()
             .find(|file| file.filename == "F_Cu.gtl")
@@ -2003,14 +2098,23 @@ mod tests {
         );
 
         let mask = pcb_ir::dialects::artwork::compose_to_mask(
-            &gerberx2::geometry::extract_document(&parsed),
-        );
+            &gerberx2::geometry::extract_document(&parsed, accuracy).unwrap(),
+            accuracy,
+        )
+        .unwrap();
         let mut rings = Vec::new();
         for layer in &mask.layers {
             for shape in mask.shapes(layer) {
-                rings.extend(pcb_ir::geom::region::rings_from_contours(
-                    &mask.arena.path_contours(shape),
-                ));
+                rings.extend(
+                    pcb_ir::geom::ContourSet::from_contours(
+                        &mask.arena.path_contours(shape),
+                        pcb_ir::geom::FillRule::NonZero,
+                        0.0,
+                        accuracy,
+                    )
+                    .unwrap()
+                    .rings,
+                );
             }
         }
         let copper_area = pcb_ir::geom::ContourSet::new(
@@ -2028,6 +2132,8 @@ mod tests {
 
     #[test]
     fn standard_dictionary_fiducials_keep_exact_circle_apertures() {
+        let accuracy = GeometryAccuracy::default();
+
         // Repeated references to a standard catalogue entry are exact
         // primitives, not user-dictionary instances: they must flash as
         // circle apertures rather than flatten into outline macros.
@@ -2075,7 +2181,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let files = build_gerber_x2_files(&ipc, ArtworkScope::Board).unwrap();
+        let files = build_gerber_x2_files(&ipc, ArtworkScope::Board, accuracy).unwrap();
         let copper = files
             .iter()
             .find(|file| file.filename == "F_Cu.gtl")
@@ -2092,6 +2198,8 @@ mod tests {
 
     #[test]
     fn drill_and_route_layers_are_not_exported_as_gerber_layers() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = ipc::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -2108,7 +2216,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let imported = import_design(&ipc).unwrap();
+        let imported = import_design(&ipc, accuracy).unwrap();
 
         let filenames = export_layer_plans(&imported, &imported.layer_definitions)
             .into_iter()
@@ -2120,6 +2228,8 @@ mod tests {
 
     #[test]
     fn assembly_layers_use_source_names_and_valid_gerber_x2_functions() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = ipc::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -2138,7 +2248,7 @@ mod tests {
         )
         .unwrap();
 
-        let imported = import_design(&ipc).unwrap();
+        let imported = import_design(&ipc, accuracy).unwrap();
         let plans = export_layer_plans(&imported, &imported.layer_definitions);
         let outputs = plans
             .iter()
@@ -2170,6 +2280,8 @@ mod tests {
 
     #[test]
     fn assembly_gerbers_preserve_phantom_patterns_for_boards_and_arrays() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = ipc::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -2202,7 +2314,7 @@ mod tests {
         )
         .unwrap();
 
-        let board_files = build_gerber_x2_files(&ipc, ArtworkScope::Board).unwrap();
+        let board_files = build_gerber_x2_files(&ipc, ArtworkScope::Board, accuracy).unwrap();
         let board_fab = board_files
             .iter()
             .find(|file| file.filename == "F_Fab.gbr")
@@ -2231,7 +2343,8 @@ mod tests {
             2
         );
 
-        let array_files = build_gerber_x2_files(&ipc, ArtworkScope::ArrayFlattened).unwrap();
+        let array_files =
+            build_gerber_x2_files(&ipc, ArtworkScope::ArrayFlattened, accuracy).unwrap();
         let array_fab = array_files
             .iter()
             .find(|file| file.filename == "F_Fab.gbr")
@@ -2241,13 +2354,15 @@ mod tests {
         assert!(array_fab.contents.contains("%SRX2Y1I30J0*%"));
         let parsed = gerberx2::GerberX2::parse(&array_fab.contents).unwrap();
         assert_eq!(parsed.objects().len(), 8);
-        let artwork = gerberx2::geometry::extract_document(&parsed);
+        let artwork = gerberx2::geometry::extract_document(&parsed, accuracy).unwrap();
         assert!(artwork.blocks.is_empty());
         assert_eq!(artwork.objects.len(), 8);
     }
 
     #[test]
     fn repeated_fabrication_layer_roles_export_to_unique_filenames() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = ipc::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -2267,7 +2382,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let imported = import_design(&ipc).unwrap();
+        let imported = import_design(&ipc, accuracy).unwrap();
 
         let filenames = export_layer_plans(&imported, &imported.layer_definitions)
             .into_iter()
@@ -2284,6 +2399,8 @@ mod tests {
 
     #[test]
     fn gerber_export_renders_step_profile_only_as_canonical_edge_cuts() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = ipc::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -2313,7 +2430,7 @@ mod tests {
         )
         .unwrap();
 
-        let files = build_gerber_x2_files(&ipc, ArtworkScope::Board).unwrap();
+        let files = build_gerber_x2_files(&ipc, ArtworkScope::Board, accuracy).unwrap();
         let edge_cuts = files
             .iter()
             .find(|file| file.filename == "Edge_Cuts.gm1")
@@ -2327,6 +2444,8 @@ mod tests {
 
     #[test]
     fn standalone_profile_export_matches_both_layout_targets() {
+        let accuracy = GeometryAccuracy::default();
+
         for outline_layer in [
             "",
             r#"<Layer name="Edge.Cuts" layerFunction="BOARD_OUTLINE" side="ALL" polarity="POSITIVE"/>"#,
@@ -2362,8 +2481,9 @@ mod tests {
 </IPC-2581>"#,
             ))
             .unwrap();
-            let board = build_manufacturing_package(&ipc, ArtworkScope::Board).unwrap();
-            let array = build_manufacturing_package(&ipc, ArtworkScope::ArrayFlattened).unwrap();
+            let board = build_manufacturing_package(&ipc, ArtworkScope::Board, accuracy).unwrap();
+            let array =
+                build_manufacturing_package(&ipc, ArtworkScope::ArrayFlattened, accuracy).unwrap();
             assert_eq!(
                 board
                     .files
@@ -2385,7 +2505,7 @@ mod tests {
             assert!(profile.contains("%TF.FileFunction,Profile,NP*%"));
             assert!(profile.contains("%TF.Part,Single*%"));
             let parsed = gerberx2::GerberX2::parse(profile).unwrap();
-            let geometry = gerberx2::geometry::extract_document(&parsed);
+            let geometry = gerberx2::geometry::extract_document(&parsed, accuracy).unwrap();
             geometry.validate().unwrap();
             assert_eq!(geometry.layers[0].objects.count, 8);
         }
@@ -2393,6 +2513,8 @@ mod tests {
 
     #[test]
     fn exports_ipc_layer_to_parseable_gerber_x2() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = ipc::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -2437,7 +2559,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let files = build_gerber_x2_files(&ipc, ArtworkScope::Board).unwrap();
+        let files = build_gerber_x2_files(&ipc, ArtworkScope::Board, accuracy).unwrap();
 
         assert!(files.iter().any(|file| file.filename == "F_Cu.gtl"));
         for file in &files {
@@ -2464,7 +2586,8 @@ mod tests {
                 .any(|object| matches!(object.kind, gerberx2::ObjectKind::Flash { .. }))
         );
 
-        let panel_target_files = build_gerber_x2_files(&ipc, ArtworkScope::ArrayFlattened).unwrap();
+        let panel_target_files =
+            build_gerber_x2_files(&ipc, ArtworkScope::ArrayFlattened, accuracy).unwrap();
 
         let panel_target_copper = panel_target_files
             .iter()
@@ -2476,6 +2599,8 @@ mod tests {
 
     #[test]
     fn mask_and_paste_use_specification_correct_attributes() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = ipc::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -2526,7 +2651,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let files = build_gerber_x2_files(&ipc, ArtworkScope::Board).unwrap();
+        let files = build_gerber_x2_files(&ipc, ArtworkScope::Board, accuracy).unwrap();
 
         let mask = files
             .iter()
@@ -2557,6 +2682,8 @@ mod tests {
 
     #[test]
     fn gerber_export_places_pad_flashes_after_local_fill_cut_ins() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = ipc::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -2614,7 +2741,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let files = build_gerber_x2_files(&ipc, ArtworkScope::Board).unwrap();
+        let files = build_gerber_x2_files(&ipc, ArtworkScope::Board, accuracy).unwrap();
 
         let copper = files
             .iter()
@@ -2643,8 +2770,8 @@ mod tests {
             .expect("standard circular pad should export as a flash");
         assert!(region_index < pad_flash_index);
 
-        let geometry = gerberx2::geometry::extract_document(&parsed);
-        let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry);
+        let geometry = gerberx2::geometry::extract_document(&parsed, accuracy).unwrap();
+        let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry, accuracy).unwrap();
         assert!(
             summary.area_mm2 > 96.7,
             "pad flash was not restored after local clear; area was {}",
@@ -2654,6 +2781,8 @@ mod tests {
 
     #[test]
     fn gerber_export_places_multi_contour_traces_after_local_fill_cut_ins() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = ipc::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -2711,7 +2840,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let files = build_gerber_x2_files(&ipc, ArtworkScope::Board).unwrap();
+        let files = build_gerber_x2_files(&ipc, ArtworkScope::Board, accuracy).unwrap();
 
         let copper = files
             .iter()
@@ -2732,8 +2861,8 @@ mod tests {
         assert!(fill_end_index < trace_index);
 
         let parsed = gerberx2::GerberX2::parse(&copper.contents).unwrap();
-        let geometry = gerberx2::geometry::extract_document(&parsed);
-        let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry);
+        let geometry = gerberx2::geometry::extract_document(&parsed, accuracy).unwrap();
+        let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry, accuracy).unwrap();
         assert!(
             summary.area_mm2 > 97.0,
             "multi-contour trace was not restored after local clear; area was {}",
@@ -2743,6 +2872,8 @@ mod tests {
 
     #[test]
     fn gerber_export_writes_separate_nc_drill_files_with_routes() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = ipc::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -2789,7 +2920,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let package = build_manufacturing_package(&ipc, ArtworkScope::Board).unwrap();
+        let package = build_manufacturing_package(&ipc, ArtworkScope::Board, accuracy).unwrap();
 
         assert!(
             !package
@@ -2851,6 +2982,8 @@ mod tests {
     #[cfg(feature = "cli")]
     #[test]
     fn gerber_export_writes_zip_when_output_has_zip_extension() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = ipc::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -2891,6 +3024,7 @@ mod tests {
                 view: ArtworkScope::Board,
                 relief_debug_dir: None,
             },
+            accuracy,
         )
         .unwrap();
 
@@ -2916,6 +3050,8 @@ mod tests {
 
     #[test]
     fn gerber_export_preserves_user_special_counter_holes() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = ipc::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -2961,7 +3097,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let files = build_gerber_x2_files(&ipc, ArtworkScope::Board).unwrap();
+        let files = build_gerber_x2_files(&ipc, ArtworkScope::Board, accuracy).unwrap();
 
         let silk = files
             .iter()
@@ -2972,8 +3108,8 @@ mod tests {
             "positive compound region holes should not export as layer-global clear regions"
         );
         let parsed = gerberx2::GerberX2::parse(&silk.contents).unwrap();
-        let geometry = gerberx2::geometry::extract_document(&parsed);
-        let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry);
+        let geometry = gerberx2::geometry::extract_document(&parsed, accuracy).unwrap();
+        let summary = pcb_ir::dialects::artwork::compare::summarize(&geometry, accuracy).unwrap();
         assert!(
             (summary.area_mm2 - 12.0).abs() < 1e-6,
             "compound region should preserve its counter hole; area was {}",
@@ -2983,6 +3119,8 @@ mod tests {
 
     #[test]
     fn gerber_preserves_leaf_board_repeats_without_nesting() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = ipc::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -3037,7 +3175,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let files = build_gerber_x2_files(&ipc, ArtworkScope::ArrayFlattened).unwrap();
+        let files = build_gerber_x2_files(&ipc, ArtworkScope::ArrayFlattened, accuracy).unwrap();
 
         let top = files
             .iter()
@@ -3058,13 +3196,15 @@ mod tests {
         assert!(!top.contents.contains("%LS"));
         let parsed = gerberx2::GerberX2::parse(&top.contents).unwrap();
         assert_eq!(parsed.objects().len(), 6);
-        let artwork = gerberx2::geometry::extract_document(&parsed);
+        let artwork = gerberx2::geometry::extract_document(&parsed, accuracy).unwrap();
         assert!(artwork.blocks.is_empty());
         assert_eq!(artwork.objects.len(), 6);
     }
 
     #[test]
     fn board_array_profile_does_not_infer_reliefs_without_vcut_lines() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = ipc::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -3104,7 +3244,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let files = build_gerber_x2_files(&ipc, ArtworkScope::ArrayFlattened).unwrap();
+        let files = build_gerber_x2_files(&ipc, ArtworkScope::ArrayFlattened, accuracy).unwrap();
 
         assert!(files.iter().all(|file| file.filename != "V_Cut.gbr"));
         let profile = files
@@ -3119,6 +3259,8 @@ mod tests {
 
     #[test]
     fn gerber_export_carries_vcut_and_fiducial_x2_metadata() {
+        let accuracy = GeometryAccuracy::default();
+
         let ipc = ipc::Ipc2581::parse(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
@@ -3185,7 +3327,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let files = build_gerber_x2_files(&ipc, ArtworkScope::ArrayFlattened).unwrap();
+        let files = build_gerber_x2_files(&ipc, ArtworkScope::ArrayFlattened, accuracy).unwrap();
 
         let top = files
             .iter()
@@ -3219,10 +3361,12 @@ mod tests {
     #[cfg(feature = "cli")]
     #[test]
     fn real_board_export_parseback_and_svg_paths_smoke() {
+        let accuracy = GeometryAccuracy::default();
+
         let compressed = include_bytes!("../../../ipc2581/tests/data/DM0002-IPC-2518.xml.zst");
         let content = zstd::decode_all(Cursor::new(compressed)).unwrap();
         let ipc = ipc::Ipc2581::parse(std::str::from_utf8(&content).unwrap()).unwrap();
-        let files = build_gerber_x2_files(&ipc, ArtworkScope::Board).unwrap();
+        let files = build_gerber_x2_files(&ipc, ArtworkScope::Board, accuracy).unwrap();
 
         assert!(files.len() >= 10);
         assert!(files.iter().any(|file| file.filename == "F_Cu.gtl"));
@@ -3230,39 +3374,44 @@ mod tests {
 
         for file in &files {
             let parsed = gerberx2::GerberX2::parse(&file.contents).unwrap();
-            let geometry = gerberx2::geometry::extract_document(&parsed);
+            let geometry = gerberx2::geometry::extract_document(&parsed, accuracy).unwrap();
             geometry.validate().unwrap();
 
-            let mask = pcb_ir::dialects::artwork::compose_to_mask(&geometry);
+            let mask = pcb_ir::dialects::artwork::compose_to_mask(&geometry, accuracy).unwrap();
             mask.validate().unwrap();
             let svg = pcb_ir::render::svg(&mask, &pcb_ir::render::RenderOptions::layer(0));
             assert!(svg.contains("<svg"), "{} did not render SVG", file.filename);
         }
 
-        let mut layer = geometry::extract_layer(&ipc, "F.Cu").unwrap();
-        pcb_ir::dialects::ipc::process::compose_for_rendering(&mut layer);
+        let mut layer = geometry::extract_layer(&ipc, "F.Cu", accuracy).unwrap();
+        pcb_ir::dialects::ipc::process::compose_for_rendering(&mut layer, accuracy).unwrap();
         let artwork = pcb_ir::dialects::ipc::lower_layer_to_artwork(
             &layer,
             0,
             LayerRole::Copper,
             pcb_ir::dialects::Side::Top,
-        );
+            accuracy,
+        )
+        .unwrap();
         artwork.validate().unwrap();
-        let mask = pcb_ir::dialects::artwork::compose_to_mask(&artwork);
+        let mask = pcb_ir::dialects::artwork::compose_to_mask(&artwork, accuracy).unwrap();
         mask.validate().unwrap();
         assert!(
             pcb_ir::render::svg(&mask, &pcb_ir::render::RenderOptions::layer(0)).contains("<svg")
         );
 
-        pcb_ir::dialects::ipc::process::flatten_layers_to_masks(&mut layer);
+        pcb_ir::dialects::ipc::process::flatten_layers_to_masks(&mut layer, accuracy).unwrap();
         let flat_artwork = pcb_ir::dialects::ipc::lower_layer_to_artwork(
             &layer,
             0,
             LayerRole::Copper,
             pcb_ir::dialects::Side::Top,
-        );
+            accuracy,
+        )
+        .unwrap();
         flat_artwork.validate().unwrap();
-        let flat_mask = pcb_ir::dialects::artwork::compose_to_mask(&flat_artwork);
+        let flat_mask =
+            pcb_ir::dialects::artwork::compose_to_mask(&flat_artwork, accuracy).unwrap();
         flat_mask.validate().unwrap();
         assert!(
             pcb_ir::render::svg(&flat_mask, &pcb_ir::render::RenderOptions::layer(0))

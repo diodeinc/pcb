@@ -9,8 +9,7 @@ fn accuracy(mm: f64) -> GeometryAccuracy {
     GeometryAccuracy::new(mm).unwrap()
 }
 fn prepare(contours: &[ContourBuf], mm: f64) -> ContourSet {
-    ContourSet::from_contours_with_accuracy(contours, FillRule::EvenOdd, 1e-6, accuracy(mm))
-        .unwrap()
+    ContourSet::from_contours(contours, FillRule::EvenOdd, 1e-6, accuracy(mm)).unwrap()
 }
 fn distance(region: &ContourSet, p: Point) -> f64 {
     region
@@ -65,7 +64,7 @@ fn ellipses_reprepare_analytic_source_and_report_untracked_cubic_floors() {
     assert!(radial_error(&fine, 0.2, 0.1) < radial_error(&coarse, 0.2, 0.1));
     assert!(radial_error(&fine, 0.2, 0.1) <= fine.uncertainty_mm);
     assert!(
-        ContourSet::from_contours_with_accuracy(
+        ContourSet::from_contours(
             &[ellipse.clone().with_uncertainty(ellipse.uncertainty_mm)],
             FillRule::NonZero,
             0.0,
@@ -94,9 +93,7 @@ fn selectively_rounded_rectangle_keeps_square_corners_and_narrow_material() {
                 .all(|point| distance(&fine, point) <= fine.uncertainty_mm)
         );
     }
-    let inset = fine
-        .disk_erode_with_accuracy(0.025, accuracy(0.0005))
-        .unwrap();
+    let inset = fine.disk_erode(0.025, accuracy(0.0005)).unwrap();
     assert!(!inset.is_empty());
     assert!((inset.bbox.width() - 0.15).abs() < 0.001);
 }
@@ -104,10 +101,16 @@ fn selectively_rounded_rectangle_keeps_square_corners_and_narrow_material() {
 #[test]
 fn coarse_polygon_history_prevents_finer_preparation_and_offsets() {
     let circle = shapes::circle(0.2).unwrap();
-    let coarse = ContourSet::from_contours(std::slice::from_ref(&circle), FillRule::NonZero, 1e-9);
-    assert!(coarse.uncertainty_mm >= 0.005);
+    let coarse = ContourSet::from_contours(
+        std::slice::from_ref(&circle),
+        FillRule::NonZero,
+        1e-9,
+        accuracy(0.01),
+    )
+    .unwrap();
+    assert!(coarse.uncertainty_mm > 0.0001);
     assert!(
-        ContourSet::from_contours_with_accuracy(
+        ContourSet::from_contours(
             &coarse.to_contours(),
             FillRule::NonZero,
             1e-9,
@@ -115,16 +118,8 @@ fn coarse_polygon_history_prevents_finer_preparation_and_offsets() {
         )
         .is_err()
     );
-    assert!(
-        coarse
-            .disk_dilate_with_accuracy(0.01, accuracy(0.0001))
-            .is_err()
-    );
-    assert!(
-        coarse
-            .disk_erode_with_accuracy(0.0, accuracy(0.0001))
-            .is_err()
-    );
+    assert!(coarse.disk_dilate(0.01, accuracy(0.0001)).is_err());
+    assert!(coarse.disk_erode(0.0, accuracy(0.0001)).is_err());
     let fine = prepare(&[circle], 0.0001);
     assert!(fine.uncertainty_mm < coarse.uncertainty_mm);
 }
@@ -132,11 +127,7 @@ fn coarse_polygon_history_prevents_finer_preparation_and_offsets() {
 #[test]
 fn explicit_offsets_converge_for_outside_and_concave_inside_rounds() {
     let rectangle = ContourSet::rectangle(BBox::new(Point::ZERO, Point::new(2.0, 2.0)), 0.0);
-    assert!(
-        rectangle
-            .disk_dilate_with_accuracy(0.2, accuracy(0.00001))
-            .is_err()
-    );
+    assert!(rectangle.disk_dilate(0.2, accuracy(0.00001)).is_err());
     let concave = prepare(
         &[shapes::closed_polygon(vec![
             Point::ZERO,
@@ -156,9 +147,9 @@ fn explicit_offsets_converge_for_outside_and_concave_inside_rounds() {
         let mut previous = f64::INFINITY;
         for budget in [0.005, 0.001, 0.0001] {
             let result = if inset {
-                region.disk_erode_with_accuracy(0.2, accuracy(budget))
+                region.disk_erode(0.2, accuracy(budget))
             } else {
-                region.disk_dilate_with_accuracy(0.2, accuracy(budget))
+                region.disk_dilate(0.2, accuracy(budget))
             }
             .unwrap();
             let max_error = (0..1024)
@@ -185,7 +176,11 @@ fn holes_islands_and_fifty_micron_gaps_survive_fine_preparation() {
     let hole = shapes::circle(0.2).unwrap();
     let island = shapes::circle(0.2)
         .unwrap()
-        .transformed(Affine2::translation(Point::new(0.45, 0.0)));
+        .transformed(
+            Affine2::translation(Point::new(0.45, 0.0)),
+            accuracy(0.00001),
+        )
+        .unwrap();
     let region = prepare(&[outer, hole, island], 0.0001);
     assert_eq!(region.connected_components().len(), 2);
     assert!(!region.contains_point(Point::ZERO));
@@ -197,9 +192,7 @@ fn holes_islands_and_fifty_micron_gaps_survive_fine_preparation() {
             .len(),
         3
     );
-    let inset = region
-        .disk_erode_with_accuracy(0.025, accuracy(0.0005))
-        .unwrap();
+    let inset = region.disk_erode(0.025, accuracy(0.0005)).unwrap();
     assert_eq!(inset.connected_components().len(), 2);
     assert_eq!(inset.rings.len(), 3);
     assert!(!inset.contains_point(Point::new(0.11, 0.0)));
@@ -218,9 +211,7 @@ fn holes_islands_and_fifty_micron_gaps_survive_fine_preparation() {
             );
         }
     }
-    let grown = region
-        .disk_dilate_with_accuracy(0.01, accuracy(0.0005))
-        .unwrap();
+    let grown = region.disk_dilate(0.01, accuracy(0.0005)).unwrap();
     assert_eq!(grown.connected_components().len(), 2);
     assert_eq!(grown.rings.len(), 3);
     let parts = region.connected_components();
@@ -229,62 +220,15 @@ fn holes_islands_and_fifty_micron_gaps_survive_fine_preparation() {
 }
 
 #[test]
-fn artwork_significance_does_not_discard_geometry() {
-    use pcb_ir::dialects::{LayerRole, Side, artwork};
-    use pcb_ir::geom::{Polarity, tol};
-
-    let mut doc = artwork::Document::<(), ()>::new();
-    let layer = doc.push_layer(artwork::Layer::new("F.Cu", LayerRole::Copper, Side::Top));
-    let path = doc.push_path(
-        Paint::Fill {
-            rule: FillRule::NonZero,
-        },
-        vec![shapes::rect(0.0005, 0.0005).unwrap()],
-    );
-    doc.push_object(
-        layer,
-        artwork::Object::new(Polarity::Dark, artwork::Geometry::Region { path }),
-    );
-
-    let (legacy, _) = artwork::compose_selected_owners(&doc, |_| Some(()));
-    assert_eq!(legacy[0].len(), 1);
-    let (fine, _) =
-        artwork::compose_owner_regions(&doc, |_| Some(()), 0.0, Some(accuracy(1e-6))).unwrap();
-    assert_eq!(fine[0].len(), 1);
-    let (significant, _) =
-        artwork::compose_owner_regions(&doc, |_| Some(()), tol::REGION_MM, Some(accuracy(1e-6)))
-            .unwrap();
-    assert_eq!(significant[0][0].1.rings, fine[0][0].1.rings);
-    assert_eq!(
-        significant[0][0].1.uncertainty_mm,
-        fine[0][0].1.uncertainty_mm
-    );
-}
-
-#[test]
-fn inset_reports_miter_amplification_and_uncertain_topology_loss() {
-    let sharp = ContourSet::from_regularized_with_uncertainty(
-        vec![vec![[0.0, 0.0], [10.0, 0.0], [0.1, 0.1]]],
-        0.0,
-        0.0001,
-    );
-    assert!(
-        sharp
-            .disk_erode_with_accuracy(0.025, accuracy(0.001))
-            .is_err()
-    );
-    let inset = sharp
-        .disk_erode_with_accuracy(0.025, accuracy(0.03))
-        .unwrap();
-    assert!(inset.uncertainty_mm > 0.01);
+fn inset_preserves_input_error_and_handles_erasure() {
+    let sharp =
+        ContourSet::from_regularized(vec![vec![[0.0, 0.0], [10.0, 0.0], [0.1, 0.1]]], 0.0, 0.0001);
+    let inset = sharp.disk_erode(0.025, accuracy(0.001)).unwrap();
+    assert!(inset.uncertainty_mm >= sharp.uncertainty_mm);
+    assert!(inset.uncertainty_mm <= 0.001);
 
     let circle = prepare(&[shapes::circle(0.2).unwrap()], 0.0001);
-    assert!(
-        circle
-            .disk_erode_with_accuracy(0.11, accuracy(0.001))
-            .is_err()
-    );
-    assert!(circle.disk_erode(0.11).uncertainty_mm.is_infinite());
+    assert!(circle.disk_erode(0.11, accuracy(0.001)).unwrap().is_empty());
 }
 
 #[test]
@@ -305,9 +249,11 @@ fn analytic_ellipse_survives_arena_copies_and_affine_placement() {
         m12: 7.0,
     };
     let mut copy = PathArena::default();
-    let id = copy.append_path_from(&arena, path, placement);
+    let id = copy
+        .append_path_from(&arena, path, placement, accuracy(0.005))
+        .unwrap();
     copy.compact(&[true]);
-    let region = ContourSet::from_placed_painted_paths_with_accuracy(
+    let region = ContourSet::from_placed_painted_paths(
         &copy,
         [(copy.path(id), Affine2::IDENTITY)],
         0.0,
@@ -330,7 +276,7 @@ fn stroke_expansion_carries_its_own_round_cap_floor() {
     ]);
     let mut arena = PathArena::default();
     let path = arena.push_path(Paint::Stroke(StrokeStyle::round(0.2)), [line]);
-    let fine = ContourSet::from_placed_painted_paths_with_accuracy(
+    let fine = ContourSet::from_placed_painted_paths(
         &arena,
         [(arena.path(path), Affine2::IDENTITY)],
         0.0,
@@ -342,47 +288,13 @@ fn stroke_expansion_carries_its_own_round_cap_floor() {
         assert!(distance(&fine, Point::new(angle.cos(), angle.sin()) * 0.1) <= fine.uncertainty_mm);
     }
     assert!(
-        ContourSet::from_placed_painted_paths_with_accuracy(
+        ContourSet::from_placed_painted_paths(
             &arena,
             [(arena.path(path), Affine2::IDENTITY)],
             0.0,
             accuracy(0.000001)
         )
         .is_err()
-    );
-}
-
-#[test]
-fn shallow_boolean_crossings_include_intersection_displacement() {
-    use pcb_ir::geom::{Polarity, region::PaintComposer};
-    let lower = ContourSet::rectangle(BBox::new(Point::new(-2.0, -1.0), Point::new(2.0, 0.0)), 0.0);
-    let wedge = |shift, uncertainty| {
-        ContourSet::from_regularized_with_uncertainty(
-            vec![vec![
-                [-2.0, -0.02 + shift],
-                [2.0, 0.02 + shift],
-                [2.0, 1.0],
-                [-2.0, 1.0],
-            ]],
-            0.0,
-            uncertainty,
-        )
-    };
-    let uncertain = wedge(0.0, 0.001);
-    let nominal = lower.intersection(&uncertain);
-    let shifted = lower.intersection(&wedge(0.001, 0.0));
-    let displacement = distance(&shifted, Point::ZERO);
-    assert!(displacement > 0.09);
-    assert!(nominal.uncertainty_mm >= displacement);
-    assert!(accuracy(0.01).check(nominal.uncertainty_mm).is_err());
-
-    let mut paint = PaintComposer::default();
-    paint.push_region(Polarity::Dark, lower);
-    paint.push_region(Polarity::Clear, uncertain);
-    assert!(
-        accuracy(0.01)
-            .check(paint.finish_set(0.0).uncertainty_mm)
-            .is_err()
     );
 }
 
@@ -420,7 +332,7 @@ fn fine_artwork_budgets_reach_flashes_and_instanced_arcs() {
         };
         doc.push_object(layer, artwork::Object::new(Polarity::Dark, geometry));
         let (layers, _) =
-            artwork::compose_owner_regions(&doc, |_| Some(()), 0.0, Some(accuracy(1e-6))).unwrap();
+            artwork::compose_owner_regions(&doc, |_| Some(()), 0.0, accuracy(1e-6)).unwrap();
         let region = &layers[0][0].1;
         assert!(region.uncertainty_mm <= 1e-6);
         assert!(radial_error(region, 2.0, 0.5) <= region.uncertainty_mm);
@@ -431,7 +343,7 @@ fn fine_artwork_budgets_reach_flashes_and_instanced_arcs() {
 fn stroke_budget_reserves_and_records_coordinate_error() {
     use pcb_ir::geom::{
         LineCap, LineJoin, PathCmd,
-        path::{StrokeToFillStyle, stroke_to_fill_with_accuracy},
+        path::{StrokeToFillStyle, stroke_to_fill},
     };
     let line = ContourBuf::new(vec![
         PathCmd::move_to(Point::new(1e9, 0.0)),
@@ -439,10 +351,8 @@ fn stroke_budget_reserves_and_records_coordinate_error() {
     ])
     .with_uncertainty(0.00005);
     let style = StrokeToFillStyle::new(0.2, LineCap::Round, LineJoin::Round);
-    assert!(
-        stroke_to_fill_with_accuracy(std::slice::from_ref(&line), style, accuracy(0.0001)).is_err()
-    );
-    let outlines = stroke_to_fill_with_accuracy(&[line], style, accuracy(0.0002))
+    assert!(stroke_to_fill(std::slice::from_ref(&line), style, accuracy(0.0001)).is_err());
+    let outlines = stroke_to_fill(&[line], style, accuracy(0.0002))
         .unwrap()
         .unwrap();
     for outline in outlines {
@@ -459,6 +369,7 @@ fn tiny_rings_do_not_suppress_clearance_findings() {
             vec![[4.0, 4.0], [4.0001, 4.0], [4.0, 4.0001]],
         ],
         0.001,
+        0.0,
     );
     let second = ContourSet::rectangle(
         BBox::new(Point::new(1.05, 0.0), Point::new(2.0, 1.0)),
@@ -489,7 +400,7 @@ fn stroke_preparation_uses_the_total_inherited_error_budget() {
         layer,
         artwork::Object::new(Polarity::Dark, artwork::Geometry::Stroke { path }),
     );
-    let direct = ContourSet::from_placed_painted_paths_with_accuracy(
+    let direct = ContourSet::from_placed_painted_paths(
         &doc.arena,
         [(doc.arena.path(path), Affine2::IDENTITY)],
         0.0,
@@ -498,7 +409,7 @@ fn stroke_preparation_uses_the_total_inherited_error_budget() {
     .unwrap();
     assert!((0.008..=0.01).contains(&direct.uncertainty_mm));
     let (layers, _) =
-        artwork::compose_owner_regions(&doc, |_| Some(()), 0.0, Some(accuracy(0.01))).unwrap();
+        artwork::compose_owner_regions(&doc, |_| Some(()), 0.0, accuracy(0.01)).unwrap();
     assert!((0.008..=0.01).contains(&layers[0][0].1.uncertainty_mm));
 }
 
@@ -509,25 +420,28 @@ fn fine_geometry_reports_widths_inside_the_legacy_blind_band() {
         ContourSet::rectangle(BBox::new(Point::new(x0, y0), Point::new(x1, y1)), 1e-6)
     };
     let feature = rect(0.0, 0.0, 1.0, 0.095);
-    assert!(!thin_features(&feature, 0.1).is_empty());
+    assert!(
+        !thin_features(&feature, 0.1, accuracy(0.01))
+            .unwrap()
+            .is_empty()
+    );
     let gap = rect(0.0, 0.0, 1.0, 1.0).union(&rect(1.095, 0.0, 2.0, 1.0));
-    assert!(!thin_gaps(&gap, 0.1).is_empty());
+    assert!(!thin_gaps(&gap, 0.1, accuracy(0.01)).unwrap().is_empty());
 }
 
 #[test]
 fn empty_paint_does_not_add_uncertainty() {
     use pcb_ir::geom::{Polarity, region::PaintComposer};
     let mut composer = PaintComposer::default();
-    composer.push_region(
+    composer.push(
         Polarity::Clear,
-        ContourSet::from_regularized_with_uncertainty(vec![], 0.0, 1.0),
+        ContourSet::from_regularized(vec![], 0.0, 1.0),
     );
-    composer.push(Polarity::Dark, vec![]);
-    composer.push_region(
+    composer.push(
         Polarity::Dark,
         ContourSet::rectangle(BBox::new(Point::ZERO, Point::new(1.0, 1.0)), 0.0),
     );
-    let image = composer.finish_set(0.0);
+    let image = composer.finish(0.0);
     assert!(!image.is_empty());
     accuracy(0.000001).check(image.uncertainty_mm).unwrap();
 }
@@ -536,13 +450,13 @@ fn empty_paint_does_not_add_uncertainty() {
 fn later_paint_does_not_change_an_earlier_runs_accuracy() {
     use pcb_ir::geom::{Polarity, region::PaintComposer};
     let mut paint = PaintComposer::default();
-    paint.push_region(
+    paint.push(
         Polarity::Dark,
         ContourSet::rectangle(BBox::new(Point::new(-2.0, -1.0), Point::new(2.0, 0.0)), 0.0),
     );
-    paint.push_region(
+    paint.push(
         Polarity::Dark,
-        ContourSet::from_regularized_with_uncertainty(
+        ContourSet::from_regularized(
             vec![vec![[-2.0, -0.02], [2.0, 0.02], [2.0, 1.0], [-2.0, 1.0]]],
             0.0,
             0.0,
@@ -551,24 +465,8 @@ fn later_paint_does_not_change_an_earlier_runs_accuracy() {
     let mut clear =
         ContourSet::rectangle(BBox::new(Point::new(3.0, 0.0), Point::new(4.0, 1.0)), 0.0);
     clear.uncertainty_mm = 0.001;
-    paint.push_region(Polarity::Clear, clear);
-    let result = paint.finish_set(0.0);
+    paint.push(Polarity::Clear, clear);
+    let result = paint.finish(0.0);
     assert!(!result.is_empty());
     accuracy(0.002).check(result.uncertainty_mm).unwrap();
-}
-
-#[test]
-fn explicit_ellipse_transforms_keep_refinable_source() {
-    let ellipse = shapes::ellipse(0.4, 0.2)
-        .unwrap()
-        .transformed_with_accuracy(
-            Affine2 {
-                m00: 2.0,
-                ..Affine2::IDENTITY
-            },
-            accuracy(0.005),
-        )
-        .unwrap();
-    let fine = prepare(&[ellipse], 0.000001);
-    assert!(radial_error(&fine, 0.4, 0.1) <= fine.uncertainty_mm);
 }

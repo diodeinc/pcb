@@ -1,14 +1,11 @@
 //! Euclidean distance primitives with closest-point witnesses.
 
 use crate::geom::point::Point;
-use crate::geom::tol;
 
 /// A measured length between two witness points, in the IR's canonical
 /// millimeters, with the uncertainty its inputs carry.
 ///
 /// `uncertainty_mm` carries the preparation history of the measured inputs.
-/// Use [`Distance::with_uncertainty`] for prepared regions. The legacy
-/// [`Distance::flattened`] helper is for untracked default-tolerance linework.
 /// `mm` is signed where the quantity is: a negative enclosure is a breach.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Distance {
@@ -43,25 +40,6 @@ impl Distance {
     pub fn also_uncertain(self, uncertainty_mm: f64) -> Self {
         Self {
             uncertainty_mm: self.uncertainty_mm + uncertainty_mm,
-            ..self
-        }
-    }
-
-    /// A length measured against `flattened_boundaries` tessellated curves.
-    pub fn flattened(mm: f64, first: Point, second: Point, flattened_boundaries: u32) -> Self {
-        Self {
-            mm,
-            uncertainty_mm: f64::from(flattened_boundaries) * tol::FLATTEN_MM,
-            first,
-            second,
-        }
-    }
-
-    /// The same length, with `flattened_boundaries` more tessellated inputs
-    /// counted toward its uncertainty.
-    pub fn also_flattened(self, flattened_boundaries: u32) -> Self {
-        Self {
-            uncertainty_mm: self.uncertainty_mm + f64::from(flattened_boundaries) * tol::FLATTEN_MM,
             ..self
         }
     }

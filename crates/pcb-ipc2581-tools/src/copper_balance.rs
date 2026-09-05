@@ -4,6 +4,7 @@
 //! targets; the shared solve distributes the selected copper spatially across
 //! the stackup and lowers the result to positive IPC-2581 features.
 
+use pcb_ir::geom::GeometryAccuracy;
 use std::collections::HashMap;
 
 use anyhow::{Context, Result, bail};
@@ -394,6 +395,7 @@ pub fn solve_copper_balance(
     footprints: ContourSet,
     stack_weights_available: bool,
     prepared: Vec<PreparedCopperLayer>,
+    accuracy: GeometryAccuracy,
 ) -> Result<CopperBalancePlan> {
     let spatial_layers = prepared
         .iter()
@@ -412,6 +414,7 @@ pub fn solve_copper_balance(
             lattice_origin: panel_region.bbox.min,
             layers: &spatial_layers,
         },
+        accuracy,
     )
     .context("failed to generate spatial copper balance")?;
 
@@ -419,7 +422,7 @@ pub fn solve_copper_balance(
         .into_iter()
         .zip(balance.layers)
         .map(|(layer, result)| {
-            let features = balance_features(&result)?;
+            let features = balance_features(&result, accuracy)?;
             Ok(CopperBalanceLayer {
                 layer_name: layer.layer_name,
                 target_density: layer.target_density,
@@ -442,7 +445,10 @@ pub fn solve_copper_balance(
 }
 
 /// Convert a solved layer to IPC features; empty when nothing was generated.
-pub fn balance_features(result: &DenseCopperBalanceResult) -> Result<BalanceFeatureSets> {
+pub fn balance_features(
+    result: &DenseCopperBalanceResult,
+    accuracy: GeometryAccuracy,
+) -> Result<BalanceFeatureSets> {
     match result.solution.mode {
         DenseCopperBalanceMode::None => Ok(BalanceFeatureSets::default()),
         DenseCopperBalanceMode::Solid => Ok(BalanceFeatureSets {
@@ -456,7 +462,9 @@ pub fn balance_features(result: &DenseCopperBalanceResult) -> Result<BalanceFeat
                 plane: ipc_region_features(&result.usable)?,
                 // The plane covers the web exactly, so its decimation is free.
                 boundary_web: ipc_region_features(
-                    &result.boundary_web().decimate_inward(tol::FLATTEN_MM),
+                    &result
+                        .boundary_web()
+                        .decimate_inward(tol::FLATTEN_MM, accuracy)?,
                 )?,
                 templates,
                 void_sets,
@@ -511,10 +519,15 @@ fn void_sets(
 ///
 /// Composition goes through the artwork mask fold so clear-polarity
 /// features subtract in paint order instead of being unioned as copper.
-pub fn composed_copper_image(ipc: &Ipc2581, layer_name: &str) -> Result<ContourSet> {
-    let document = geometry::extract_layer_for_view(ipc, layer_name, ArtworkScope::ArrayFlattened)
-        .with_context(|| format!("failed to extract IPC-2581 copper layer '{layer_name}'"))?;
-    Ok(composed_copper_image_from_document(document))
+pub fn composed_copper_image(
+    ipc: &Ipc2581,
+    layer_name: &str,
+    accuracy: GeometryAccuracy,
+) -> Result<ContourSet> {
+    let document =
+        geometry::extract_layer_for_view(ipc, layer_name, ArtworkScope::ArrayFlattened, accuracy)
+            .with_context(|| format!("failed to extract IPC-2581 copper layer '{layer_name}'"))?;
+    composed_copper_image_from_document(document, accuracy)
 }
 
 /// Compose an already extracted copper document into its final painted image.
@@ -523,24 +536,24 @@ pub fn composed_copper_image(ipc: &Ipc2581, layer_name: &str) -> Result<ContourS
 /// structure-preserving document before handing it to this destructive fold.
 pub(crate) fn composed_copper_image_from_document(
     mut document: geometry::GeometryDocument,
-) -> ContourSet {
-    pcb_ir::dialects::ipc::process::compose_for_rendering(&mut document);
+    accuracy: GeometryAccuracy,
+) -> anyhow::Result<ContourSet> {
+    pcb_ir::dialects::ipc::process::compose_for_rendering(&mut document, accuracy)?;
     let artwork = pcb_ir::dialects::ipc::lower_layer_to_artwork(
         &document,
         0,
         pcb_ir::dialects::LayerRole::Copper,
         pcb_ir::dialects::Side::None,
-    );
-    let mask = pcb_ir::dialects::artwork::compose_to_mask(&artwork);
-    let mut rings = Vec::new();
-    for layer in &mask.layers {
-        for shape in mask.shapes(layer) {
-            rings.extend(pcb_ir::geom::region::rings_from_contours(
-                &mask.arena.path_contours(shape),
-            ));
-        }
+        accuracy,
+    )?;
+    let (layers, _) = pcb_ir::dialects::artwork::compose_attributed(&artwork, |_| (), accuracy)?;
+    let mut composer = pcb_ir::geom::region::PaintComposer::default();
+    for layer in layers {
+        composer.push(pcb_ir::geom::Polarity::Dark, layer.image);
     }
-    ContourSet::new(rings, FillRule::NonZero, tol::REGION_MM)
+    let image = composer.finish(tol::REGION_MM);
+    accuracy.check(image.uncertainty_mm)?;
+    Ok(image)
 }
 
 /// Signed first-moment weight `t * z` per copper layer, arms measured from
@@ -660,6 +673,8 @@ mod tests {
 
     #[test]
     fn converts_perforated_region_to_positive_ipc_contours() {
+        let accuracy = GeometryAccuracy::default();
+
         let safe_region = ContourSet::rectangle(
             BBox::new(Point::new(0.0, 0.0), Point::new(20.0, 10.0)),
             tol::REGION_MM,
@@ -679,12 +694,13 @@ mod tests {
                 lattice_origin: Point::new(10.0, 5.0),
                 layers: &layers,
             },
+            accuracy,
         )
         .unwrap()
         .layers
         .pop()
         .unwrap();
-        let features = balance_features(&result).unwrap();
+        let features = balance_features(&result, accuracy).unwrap();
 
         assert!(
             matches!(
