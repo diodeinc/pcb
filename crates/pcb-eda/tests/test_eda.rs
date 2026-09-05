@@ -3,6 +3,53 @@ use std::collections::{BTreeSet, HashMap};
 use std::fs;
 use std::path::Path;
 
+#[test]
+fn test_shipped_symbols_use_kicad10_format() {
+    fn check_directory(directory: &Path) -> usize {
+        let mut checked = 0;
+        for entry in fs::read_dir(directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                checked += check_directory(&path);
+            } else if path.extension().is_some_and(|ext| ext == "kicad_sym") {
+                let contents = fs::read_to_string(&path).unwrap();
+                let root = pcb_sexpr::parse(&contents)
+                    .unwrap_or_else(|err| panic!("{}: {err}", path.display()));
+                let items = root.as_list().expect("Expected a symbol library list");
+                assert_eq!(
+                    items.first().and_then(pcb_sexpr::Sexpr::as_sym),
+                    Some("kicad_symbol_lib"),
+                    "{}: expected a KiCad symbol library",
+                    path.display()
+                );
+                let version = pcb_sexpr::find_child_list(items, "version")
+                    .and_then(|items| items.get(1))
+                    .and_then(pcb_sexpr::Sexpr::as_int);
+                assert_eq!(
+                    version,
+                    Some(20251024),
+                    "{}: expected KiCad 10 format; run with KiCad 10: kicad-cli sym upgrade \"{}\"",
+                    path.display(),
+                    path.display()
+                );
+                SymbolLibrary::from_string(&contents, "kicad_sym")
+                    .unwrap_or_else(|err| panic!("{}: {err}", path.display()));
+                checked += 1;
+            }
+        }
+        checked
+    }
+
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    // Only shipped assets: legacy test fixtures must retain compatibility coverage.
+    for directory in ["lib", "examples"] {
+        assert!(
+            check_directory(&repository.join(directory)) > 0,
+            "No symbol libraries found in {directory}"
+        );
+    }
+}
+
 fn setup_symbol(name: &str) -> Symbol {
     let name_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/resources/kicad")
