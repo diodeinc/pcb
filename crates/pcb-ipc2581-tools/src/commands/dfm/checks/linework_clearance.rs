@@ -353,7 +353,7 @@ mod tests {
             "measured polygon evidence remains available"
         );
         assert_eq!(site.distance.mm, 0.1);
-        assert_eq!(site.distance.uncertainty_mm, pcb_ir::geom::tol::FLATTEN_MM);
+        assert_eq!(site.distance.uncertainty_mm, 0.005);
     }
 
     #[test]

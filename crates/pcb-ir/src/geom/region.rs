@@ -47,7 +47,7 @@ pub type Shape = Vec<Ring>;
 
 fn flatten_contours(contours: &[ContourBuf], accuracy: f64) -> (Vec<Ring>, f64) {
     let (bez_path, conversion_error) =
-        crate::geom::path::contours_to_kurbo_impl(contours, accuracy / 2.0);
+        crate::geom::path::contours_to_kurbo(contours, accuracy / 2.0);
     let curved = bez_path
         .elements()
         .iter()
@@ -1338,9 +1338,9 @@ impl ContourSet {
         // construction moves walls by a tolerance, and `M \ (X ∩ M)` is
         // `M \ X`, so the opening's clip to the source is not needed to
         // find what the opening removed.
-        self.two_sided_residual(radius, |region, radius| {
+        self.two_sided_residual(radius, accuracy, |region, radius| {
             let facing = width_mm + 4.0 * region.tolerance;
-            let touching = 3.0 * region.tolerance + tol::FLATTEN_MM;
+            let touching = 3.0 * region.tolerance + region.uncertainty_mm;
             let reach = 3.0 * (radius + 2.0 * region.tolerance);
             let candidates = region.facing_components(facing, touching, reach);
             Ok(candidates.difference(
@@ -1364,7 +1364,7 @@ impl ContourSet {
         // of its walls and the disks that decide it reach a diameter
         // further, so the closing of the material within two diameters of
         // facing walls is the closing of the whole region there.
-        self.two_sided_residual(radius, |region, radius| {
+        self.two_sided_residual(radius, accuracy, |region, radius| {
             let facing = width_mm + 4.0 * region.tolerance;
             let reach = 4.0 * (radius + 2.0 * region.tolerance);
             let candidates = region.facing_components(0.0, facing, reach);
@@ -1377,6 +1377,7 @@ impl ContourSet {
     fn two_sided_residual(
         &self,
         radius: f64,
+        accuracy: GeometryAccuracy,
         residual: impl FnOnce(&Self, f64) -> Result<Self, AccuracyError>,
     ) -> Result<Vec<TwoSidedResidualComponent>, AccuracyError> {
         if self.is_empty() || !(radius > 0.0 && radius.is_finite()) {
@@ -1386,6 +1387,7 @@ impl ContourSet {
             self,
             &residual(self, radius)?,
             radius,
+            accuracy.allowance(self.uncertainty_mm)?,
         ))
     }
 
@@ -1636,7 +1638,11 @@ fn source_boundary_segments(source: &ContourSet) -> Vec<OrientedBoundarySegment>
             let metric = RingArcLength::new(ring);
             // Keep the two-sided chord local even when the whole ring is
             // smaller than the ordinary geometry resolution.
-            let tangent_radius = tol::FLATTEN_MM.min(metric.perimeter() / 8.0);
+            let tangent_radius = source
+                .uncertainty_mm
+                .max(source.tolerance)
+                .max(numerical_error(source.bbox))
+                .min(metric.perimeter() / 8.0);
             let kept = ring_edges(ring)
                 .enumerate()
                 .filter(|(_, (start, end))| start.distance_to(*end) > source.tolerance)
@@ -1722,6 +1728,7 @@ fn two_sided_residual_components(
     source: &ContourSet,
     residual: &ContourSet,
     reach: f64,
+    approximation_mm: f64,
 ) -> Vec<TwoSidedResidualComponent> {
     if residual.is_empty() {
         return Vec::new();
@@ -1747,15 +1754,20 @@ fn two_sided_residual_components(
                 .into_iter()
                 .map(|id| segments[id])
                 .collect::<Vec<_>>();
-            component_width(&sites, &component, reach, contact_tolerance).map(|geometry| {
-                TwoSidedResidualComponent {
-                    region: component,
-                    width: geometry.disk.width().also_uncertain(
-                        2.0 * source.uncertainty_mm + std::f64::consts::SQRT_2 * contact_tolerance,
-                    ),
-                    disk: geometry.disk,
-                    axis: geometry.axis,
-                }
+            component_width(
+                &sites,
+                &component,
+                reach,
+                contact_tolerance,
+                approximation_mm,
+            )
+            .map(|geometry| TwoSidedResidualComponent {
+                region: component,
+                width: geometry.disk.width().also_uncertain(
+                    2.0 * source.uncertainty_mm + std::f64::consts::SQRT_2 * contact_tolerance,
+                ),
+                disk: geometry.disk,
+                axis: geometry.axis,
             })
         })
         .collect()
@@ -1924,6 +1936,7 @@ fn component_width(
     component: &ContourSet,
     reach: f64,
     contact_tolerance: f64,
+    approximation_mm: f64,
 ) -> Option<ComponentWidth> {
     if one_wall(sites) {
         return None;
@@ -2006,7 +2019,7 @@ fn component_width(
         .map(farthest_vertex)
         .fold(f64::INFINITY, f64::min)
         + 2.0 * contact_tolerance
-        + tol::FLATTEN_MM;
+        + approximation_mm;
     let within_reach = sites
         .iter()
         .map(|site| {
@@ -2113,19 +2126,26 @@ fn component_width(
         if edge.id() > twin || !edge.is_primary() || incident(first, second) {
             continue;
         }
-        let samples =
-            voronoi_edge_samples(&diagram, edge.id(), &lines, component, reach, units_per_mm)
-                .expect("voronoi edge samples")
-                .into_iter()
-                .map(unquantize)
-                .collect::<Vec<_>>();
+        let samples = voronoi_edge_samples(
+            &diagram,
+            edge.id(),
+            &lines,
+            component,
+            reach,
+            units_per_mm,
+            approximation_mm,
+        )
+        .expect("voronoi edge samples")
+        .into_iter()
+        .map(unquantize)
+        .collect::<Vec<_>>();
         axis.extend(samples.windows(2).map(|pair| WidthAxisSegment {
             start: pair[0],
             end: pair[1],
             first_wall: (sites[first].start, sites[first].end),
             second_wall: (sites[second].start, sites[second].end),
             uncertainty_mm: if edge.is_curved() {
-                tol::FLATTEN_MM
+                approximation_mm
             } else {
                 0.0
             },
@@ -2179,7 +2199,7 @@ fn component_width(
         present.iter().any(|other| {
             other.radius > disk.radius
                 && disk.center.distance_to(other.center) + disk.radius
-                    <= other.radius + tol::FLATTEN_MM
+                    <= other.radius + approximation_mm
         })
     };
     let minimum = present
@@ -2208,7 +2228,7 @@ fn component_width(
                 break;
             }
             if dist::point_segment(other.center, segment.start, segment.end).0
-                > other.radius + tol::FLATTEN_MM
+                > other.radius + approximation_mm
             {
                 continue;
             }
@@ -2218,7 +2238,7 @@ fn component_width(
             };
             let Some(contained) = convex_sublevel_interval(
                 |t| at(t).distance_to(other.center) + radius(t),
-                other.radius + tol::FLATTEN_MM,
+                other.radius + approximation_mm,
             ) else {
                 continue;
             };
@@ -2457,6 +2477,7 @@ fn narrow_void_medial_axis_keep_out(
             source,
             radius,
             VORONOI_COORDINATES_PER_MM,
+            accuracy.allowance(source.uncertainty_mm)?,
         )?;
         let mut commands = Vec::with_capacity(samples.len());
         for sample in samples {
@@ -2478,7 +2499,11 @@ fn narrow_void_medial_axis_keep_out(
             });
         }
         if commands.len() >= 2 {
-            contours.push(ContourBuf::new(commands));
+            contours.push(ContourBuf::new(commands).with_uncertainty(
+                source.uncertainty_mm
+                    + accuracy.allowance(source.uncertainty_mm)?
+                    + std::f64::consts::SQRT_2 / VORONOI_COORDINATES_PER_MM,
+            ));
         }
     }
 
@@ -2545,6 +2570,7 @@ fn voronoi_edge_samples(
     region: &ContourSet,
     radius: f64,
     units_per_mm: f64,
+    approximation_mm: f64,
 ) -> Result<Vec<[f64; 2]>, GapRegularizationError> {
     let edge = diagram.edge(edge_id).map_err(gap_regularization_error)?;
     let affine = SimpleAffine::default();
@@ -2584,7 +2610,7 @@ fn voronoi_edge_samples(
         VoronoiVisualUtils::discretize(
             &point,
             segment,
-            tol::FLATTEN_MM * units_per_mm,
+            approximation_mm * units_per_mm,
             &affine,
             &mut samples,
         );
@@ -2764,6 +2790,7 @@ mod tests {
                 &component,
                 0.05,
                 tol::REGION_MM,
+                0.0025,
             )
         };
 

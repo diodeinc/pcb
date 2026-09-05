@@ -71,9 +71,9 @@ fn write_path<Symbol, LayerFunction>(
     transform: pcb_ir::geom::Affine2,
     accuracy: GeometryAccuracy,
 ) -> anyhow::Result<()> {
-    let _: () = for contour in doc.transformed_path_contours(path_index, transform, accuracy)? {
+    for contour in doc.transformed_path_contours(path_index, transform, accuracy)? {
         write_polyline(dxf, &contour_vertices(&contour.cmds));
-    };
+    }
     Ok(())
 }
 

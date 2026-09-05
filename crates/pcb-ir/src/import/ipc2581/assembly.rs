@@ -367,7 +367,7 @@ fn map_package_outline(
             polarity: Polarity::Dark,
             paths: vec![ir::PackagePath {
                 paint,
-                contours: vec![super::polygon_contour(&outline.polygon, Affine2::IDENTITY)],
+                contours: vec![super::polygon_contour(&outline.polygon)],
             }],
         },
     }

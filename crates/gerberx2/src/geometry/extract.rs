@@ -121,7 +121,7 @@ fn extract_objects(
     blocks: &HashMap<i32, u32>,
     accuracy: GeometryAccuracy,
 ) -> std::result::Result<(), AccuracyError> {
-    let _: () = for (object_index, object) in objects.iter().enumerate() {
+    for (object_index, object) in objects.iter().enumerate() {
         extract_object(
             doc,
             target,
@@ -131,7 +131,7 @@ fn extract_objects(
             blocks,
             accuracy,
         )?;
-    };
+    }
     Ok(())
 }
 
@@ -144,7 +144,7 @@ fn extract_object(
     blocks: &HashMap<i32, u32>,
     accuracy: GeometryAccuracy,
 ) -> std::result::Result<(), AccuracyError> {
-    let _: () = match &object.kind {
+    match &object.kind {
         gerber::ObjectKind::Flash { at, aperture } => {
             let Some(definition) = apertures.get(aperture) else {
                 doc.warn(format!("flash references undefined aperture D{aperture}"));

@@ -22,9 +22,8 @@ use pcb_ipc2581_tools::utils::file::load_ipc_file;
 use pcb_ir::dialects::ipc::{
     BalancingRegionOptions, BoardArrayBalancingResult, BoardArraySupportDocument,
     BoardArraySupportLayerGeometry, DEFAULT_BALANCING_CLEARANCE_MM,
-    DEFAULT_BALANCING_GAP_RADIUS_MM, DEFAULT_BALANCING_NUMERICAL_GUARD_MM,
-    DEFAULT_BALANCING_REGULARIZATION_RADIUS_MM, board_array_balancing_region,
-    inspect_board_array_balancing_input, root_panel_step,
+    DEFAULT_BALANCING_GAP_RADIUS_MM, DEFAULT_BALANCING_REGULARIZATION_RADIUS_MM,
+    board_array_balancing_region, inspect_board_array_balancing_input, root_panel_step,
 };
 use pcb_ir::geom::{BBox, ContourSet};
 use serde::Serialize;
@@ -58,10 +57,6 @@ struct Args {
     /// Rolling-disk radius for two-sided void gaps; minimum gap is twice this.
     #[arg(long, default_value_t = DEFAULT_BALANCING_GAP_RADIUS_MM)]
     gap_radius_mm: f64,
-
-    /// Extra construction clearance reserved for polygonization/offset error.
-    #[arg(long, default_value_t = DEFAULT_BALANCING_NUMERICAL_GUARD_MM)]
-    numerical_guard_mm: f64,
 
     /// Maximum tolerated area for each set-theoretic validation violation.
     #[arg(long, default_value_t = DEFAULT_CHECK_AREA_TOLERANCE_MM2)]
@@ -357,11 +352,10 @@ fn main() -> Result<()> {
         clearance_mm: args.clearance_mm,
         regularization_radius_mm: args.regularization_radius_mm,
         gap_radius_mm: args.gap_radius_mm,
-        numerical_guard_mm: args.numerical_guard_mm,
     };
     let result = board_array_balancing_region(&balancing_input, options, accuracy)
         .context("failed to compute board-array balancing region")?;
-    let construction_clearance_mm = options.construction_clearance_mm();
+    let construction_clearance_mm = options.clearance_mm + 2.0 * accuracy.max_error_mm();
     let certificate_passed = result.certificate.passes(args.check_area_tolerance_mm2);
     let support_features = balancing_input.support_features;
     let panel_outer = collection.panel_outer;
@@ -482,7 +476,7 @@ fn main() -> Result<()> {
         nominal_clearance_mm: args.clearance_mm,
         regularization_radius_mm: args.regularization_radius_mm,
         gap_radius_mm: args.gap_radius_mm,
-        numerical_guard_mm: args.numerical_guard_mm,
+        numerical_guard_mm: 2.0 * accuracy.max_error_mm(),
         construction_clearance_mm,
         check_area_tolerance_mm2: args.check_area_tolerance_mm2,
         panelization,

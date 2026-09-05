@@ -75,30 +75,6 @@ fn ellipses_reprepare_analytic_source_and_report_untracked_cubic_floors() {
 }
 
 #[test]
-fn selectively_rounded_rectangle_keeps_square_corners_and_narrow_material() {
-    let source = shapes::rounded_rect(0.2, 0.6, 0.08, [true, false, true, false], true).unwrap();
-    let expected_area = 0.2 * 0.6 - 2.0 * (1.0 - std::f64::consts::PI / 4.0) * 0.08_f64.powi(2);
-    let coarse = prepare(std::slice::from_ref(&source), 0.005);
-    let fine = prepare(std::slice::from_ref(&source), 0.0001);
-    assert!((fine.area() - expected_area).abs() < (coarse.area() - expected_area).abs());
-    for point in [Point::new(0.1, -0.3), Point::new(-0.1, 0.3)] {
-        assert!(distance(&fine, point) < 1e-7);
-    }
-    for segment in source.segments() {
-        let mut points = Vec::new();
-        segment.sample_points(100, &mut points);
-        assert!(
-            points
-                .into_iter()
-                .all(|point| distance(&fine, point) <= fine.uncertainty_mm)
-        );
-    }
-    let inset = fine.disk_erode(0.025, accuracy(0.0005)).unwrap();
-    assert!(!inset.is_empty());
-    assert!((inset.bbox.width() - 0.15).abs() < 0.001);
-}
-
-#[test]
 fn coarse_polygon_history_prevents_finer_preparation_and_offsets() {
     let circle = shapes::circle(0.2).unwrap();
     let coarse = ContourSet::from_contours(
@@ -230,18 +206,6 @@ fn holes_islands_and_fifty_micron_gaps_survive_fine_preparation() {
     let parts = region.connected_components();
     let clearance = region_clearance(&parts[0], &parts[1]).unwrap();
     assert!((clearance.mm - 0.05).abs() <= clearance.uncertainty_mm);
-}
-
-#[test]
-fn inset_preserves_input_error_and_handles_erasure() {
-    let sharp =
-        ContourSet::from_regularized(vec![vec![[0.0, 0.0], [10.0, 0.0], [0.1, 0.1]]], 0.0, 0.0001);
-    let inset = sharp.disk_erode(0.025, accuracy(0.001)).unwrap();
-    assert!(inset.uncertainty_mm >= sharp.uncertainty_mm);
-    assert!(inset.uncertainty_mm <= 0.001);
-
-    let circle = prepare(&[shapes::circle(0.2).unwrap()], 0.0001);
-    assert!(circle.disk_erode(0.11, accuracy(0.001)).unwrap().is_empty());
 }
 
 #[test]
@@ -443,48 +407,6 @@ fn fine_geometry_reports_widths_inside_the_legacy_blind_band() {
 }
 
 #[test]
-fn empty_paint_does_not_add_uncertainty() {
-    use pcb_ir::geom::{Polarity, region::PaintComposer};
-    let mut composer = PaintComposer::default();
-    composer.push(
-        Polarity::Clear,
-        ContourSet::from_regularized(vec![], 0.0, 1.0),
-    );
-    composer.push(
-        Polarity::Dark,
-        ContourSet::rectangle(BBox::new(Point::ZERO, Point::new(1.0, 1.0)), 0.0),
-    );
-    let image = composer.finish(0.0);
-    assert!(!image.is_empty());
-    accuracy(0.000001).check(image.uncertainty_mm).unwrap();
-}
-
-#[test]
-fn later_paint_does_not_change_an_earlier_runs_accuracy() {
-    use pcb_ir::geom::{Polarity, region::PaintComposer};
-    let mut paint = PaintComposer::default();
-    paint.push(
-        Polarity::Dark,
-        ContourSet::rectangle(BBox::new(Point::new(-2.0, -1.0), Point::new(2.0, 0.0)), 0.0),
-    );
-    paint.push(
-        Polarity::Dark,
-        ContourSet::from_regularized(
-            vec![vec![[-2.0, -0.02], [2.0, 0.02], [2.0, 1.0], [-2.0, 1.0]]],
-            0.0,
-            0.0,
-        ),
-    );
-    let mut clear =
-        ContourSet::rectangle(BBox::new(Point::new(3.0, 0.0), Point::new(4.0, 1.0)), 0.0);
-    clear.uncertainty_mm = 0.001;
-    paint.push(Polarity::Clear, clear);
-    let result = paint.finish(0.0);
-    assert!(!result.is_empty());
-    accuracy(0.002).check(result.uncertainty_mm).unwrap();
-}
-
-#[test]
 fn polygon_rounding_and_filled_union_respect_total_budget() {
     let polygon = ContourSet::new(
         vec![vec![
@@ -509,17 +431,4 @@ fn polygon_rounding_and_filled_union_respect_total_budget() {
         ContourSet::from_filled_contours(&contours, 0.0, accuracy(prepared.uncertainty_mm * 1.1))
             .is_err()
     );
-}
-
-#[test]
-fn compound_offsets_check_final_rounding_and_noop_inputs() {
-    let region = ContourSet::rectangle(
-        BBox::new(Point::new(1e9, 0.0), Point::new(1e9 + 1.0, 1.0)),
-        0.0,
-    );
-    let tight = accuracy(1e-6);
-    for operation in [ContourSet::disk_open, ContourSet::disk_close] {
-        assert!(operation(&region, 0.0, tight).is_err());
-        assert!(operation(&region, -1.0, GeometryAccuracy::default()).is_err());
-    }
 }

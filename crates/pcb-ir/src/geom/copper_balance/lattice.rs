@@ -8,7 +8,7 @@ use super::{
     DenseCopperBalanceProfile, DenseCopperLattice, DenseCopperLatticeSite, DenseCopperVoid, SQRT_3,
 };
 use crate::geom::shapes;
-use crate::geom::{Affine2, BBox, ContourBuf, ContourSet, Point, tol};
+use crate::geom::{Affine2, BBox, ContourBuf, ContourSet, Point};
 
 pub const ROUNDED_HEXAGON_CORNER_RADIUS_RATIO: f64 = 0.15;
 // A sharp regular hexagon has area 3√3 R² / 2. Rounding each 120° corner
@@ -192,7 +192,11 @@ fn minimum_partial_candidates(
             .enumerate()
             .filter_map(|(index, (center, bounds))| {
                 let &(low, high) = bounds.as_ref()?;
-                (high - low > tol::FLATTEN_MM).then_some((index, center, (low + high) / 2.0))
+                (high - low > accuracy.max_error_mm() / 4.0).then_some((
+                    index,
+                    center,
+                    (low + high) / 2.0,
+                ))
             })
             .collect::<Vec<_>>();
         if trials.is_empty() {
@@ -231,10 +235,12 @@ fn fully_contained_hexagons(
     let outside =
         hexagon_set_with_radii(&candidates, voidable.tolerance, accuracy)?.difference(voidable);
     let outside_points = representative_points(&outside);
-    Ok(candidate_point_mask(&candidates, &outside_points, profile)
-        .into_iter()
-        .map(|has_outside_point| !has_outside_point)
-        .collect())
+    Ok(
+        candidate_point_mask(&candidates, &outside_points, profile, accuracy)
+            .into_iter()
+            .map(|has_outside_point| !has_outside_point)
+            .collect(),
+    )
 }
 
 fn uniform_candidates(centers: &[Point], radius: f64) -> Vec<(Point, f64)> {
@@ -250,7 +256,12 @@ fn accepted_candidate_mask(
     let raw =
         hexagon_set_with_radii(candidates, voidable.tolerance, accuracy)?.intersection(voidable);
     let core_points = minimum_disk_core_points(&raw, voidable, candidates, profile, accuracy)?;
-    Ok(candidate_point_mask(candidates, &core_points, profile))
+    Ok(candidate_point_mask(
+        candidates,
+        &core_points,
+        profile,
+        accuracy,
+    ))
 }
 
 /// The clipped partial-void geometry the solver accounts with: components of
@@ -289,7 +300,7 @@ pub(super) fn emission_partial_voids(
 ) -> Result<ContourSet, AccuracyError> {
     clipped_partial_voids(voidable, candidates, profile, accuracy)?
         .disk_open(profile.void_regularization_radius_mm(), accuracy)?
-        .decimate_inward(tol::FLATTEN_MM, accuracy)
+        .decimate_inward(accuracy.max_error_mm(), accuracy)
 }
 
 fn minimum_disk_core_points(
@@ -331,6 +342,7 @@ fn candidate_point_mask(
     candidates: &[(Point, f64)],
     points: &[Point],
     profile: DenseCopperBalanceProfile,
+    accuracy: GeometryAccuracy,
 ) -> Vec<bool> {
     let mut matched = vec![false; candidates.len()];
     let mut by_x = candidates
@@ -339,14 +351,14 @@ fn candidate_point_mask(
         .map(|(index, (center, radius))| (index, *center, *radius))
         .collect::<Vec<_>>();
     by_x.sort_by(|left, right| left.1.x.total_cmp(&right.1.x));
-    let search_radius = profile.max_void_radius_mm + tol::FLATTEN_MM;
+    let search_radius = profile.max_void_radius_mm + accuracy.max_error_mm() / 4.0;
     for point in points {
         let first = by_x.partition_point(|(_, center, _)| center.x < point.x - search_radius);
         let owner = by_x[first..]
             .iter()
             .take_while(|(_, center, _)| center.x <= point.x + search_radius)
             .find(|&&(_, center, radius)| {
-                hexagon_contains(center, radius, *point, tol::FLATTEN_MM)
+                hexagon_contains(center, radius, *point, accuracy.max_error_mm() / 4.0)
             });
         if let Some((index, _, _)) = owner {
             matched[*index] = true;
@@ -427,7 +439,8 @@ pub(super) fn lattice_index(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geom::{BBox, ContourSet, PathOp, Point, tol};
+    use crate::geom::tol;
+    use crate::geom::{BBox, ContourSet, PathOp, Point};
 
     #[test]
     fn rejects_partial_voids_that_cannot_hold_the_minimum_disk() {

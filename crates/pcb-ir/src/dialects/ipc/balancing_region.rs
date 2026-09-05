@@ -49,10 +49,6 @@ pub const DEFAULT_BALANCING_REGULARIZATION_RADIUS_MM: f64 = 0.5;
 /// Half the default minimum width of a two-sided void gap.
 pub const DEFAULT_BALANCING_GAP_RADIUS_MM: f64 = 0.5;
 
-/// Conservative allowance for curve flattening and round-offset construction.
-pub const DEFAULT_BALANCING_NUMERICAL_GUARD_MM: f64 =
-    2.0 * tol::STROKE_OUTLINE_MM + tol::FLATTEN_MM;
-
 /// Inputs to the geometry-only safe-region computation.
 #[derive(Debug, Clone)]
 pub struct BoardArrayBalancingInput {
@@ -118,8 +114,6 @@ pub struct BalancingRegionOptions {
     /// Radius of the rolling-disk test for two-sided void gaps. The minimum
     /// nominal gap width is twice this radius.
     pub gap_radius_mm: f64,
-    /// Additional conservative allowance for numerical approximation.
-    pub numerical_guard_mm: f64,
 }
 
 impl Default for BalancingRegionOptions {
@@ -128,15 +122,7 @@ impl Default for BalancingRegionOptions {
             clearance_mm: DEFAULT_BALANCING_CLEARANCE_MM,
             regularization_radius_mm: DEFAULT_BALANCING_REGULARIZATION_RADIUS_MM,
             gap_radius_mm: DEFAULT_BALANCING_GAP_RADIUS_MM,
-            numerical_guard_mm: DEFAULT_BALANCING_NUMERICAL_GUARD_MM,
         }
-    }
-}
-
-impl BalancingRegionOptions {
-    /// `clearance_mm + numerical_guard_mm`.
-    pub fn construction_clearance_mm(self) -> f64 {
-        self.clearance_mm + self.numerical_guard_mm
     }
 }
 
@@ -311,7 +297,6 @@ pub enum BalancingRegionError {
     InvalidClearance(f64),
     InvalidRegularizationRadius(f64),
     InvalidGapRadius(f64),
-    InvalidNumericalGuard(f64),
     EmptyPanelOutline,
     EmptyBoardFootprints,
     EmptyAssemblyPanels,
@@ -335,10 +320,6 @@ impl fmt::Display for BalancingRegionError {
             Self::InvalidGapRadius(value) => write!(
                 f,
                 "balancing-region gap radius must be finite and positive; got {value}"
-            ),
-            Self::InvalidNumericalGuard(value) => write!(
-                f,
-                "balancing-region numerical guard must be finite and non-negative; got {value}"
             ),
             Self::EmptyPanelOutline => {
                 write!(f, "board array has no usable root panel outline")
@@ -400,7 +381,8 @@ pub fn board_array_balancing_region(
         .board_footprints
         .union(&input.material_removal)
         .union(&input.support_features);
-    let construction_clearance_mm = options.construction_clearance_mm();
+    let numerical_guard_mm = 2.0 * accuracy.max_error_mm();
+    let construction_clearance_mm = options.clearance_mm + numerical_guard_mm;
     let panel_keep_in = input
         .panel_outer
         .disk_erode(construction_clearance_mm, accuracy)?;
@@ -413,7 +395,7 @@ pub fn board_array_balancing_region(
         .disk_regularize_gaps(
             options.gap_radius_mm,
             options.regularization_radius_mm,
-            options.numerical_guard_mm,
+            numerical_guard_mm,
             accuracy,
         )
         .map_err(|error| BalancingRegionError::GapRegularization(error.to_string()))?;
@@ -425,7 +407,7 @@ pub fn board_array_balancing_region(
     let swept_safe_region = safe_region.disk_dilate(options.clearance_mm, accuracy)?;
     let regularization_violations = safe_region
         .difference(&safe_region.disk_open(options.regularization_radius_mm, accuracy)?)
-        .disk_open(options.numerical_guard_mm, accuracy)?;
+        .disk_open(numerical_guard_mm, accuracy)?;
     let gap_violations = safe_region.disk_gap_violations(options.gap_radius_mm, accuracy)?;
     let certificate = ClearanceCertificate {
         safe_outside_clearance_region: safe_region.difference(&clearance_safe_region),
@@ -716,11 +698,6 @@ fn validate_options(options: BalancingRegionOptions) -> Result<(), BalancingRegi
             options.gap_radius_mm,
         ));
     }
-    if !options.numerical_guard_mm.is_finite() || options.numerical_guard_mm < 0.0 {
-        return Err(BalancingRegionError::InvalidNumericalGuard(
-            options.numerical_guard_mm,
-        ));
-    }
     Ok(())
 }
 
@@ -806,7 +783,6 @@ mod tests {
                 clearance_mm: 0.25,
                 regularization_radius_mm: 0.5,
                 gap_radius_mm: 0.5,
-                numerical_guard_mm: 0.0,
             },
             accuracy,
         )
@@ -817,7 +793,6 @@ mod tests {
                 clearance_mm: 1.0,
                 regularization_radius_mm: 0.5,
                 gap_radius_mm: 0.5,
-                numerical_guard_mm: 0.0,
             },
             accuracy,
         )
@@ -849,7 +824,6 @@ mod tests {
                 clearance_mm: 0.5,
                 regularization_radius_mm: 0.25,
                 gap_radius_mm: 0.5,
-                numerical_guard_mm: 0.0,
             },
             accuracy,
         )
@@ -860,7 +834,6 @@ mod tests {
                 clearance_mm: 0.5,
                 regularization_radius_mm: 1.0,
                 gap_radius_mm: 0.5,
-                numerical_guard_mm: 0.0,
             },
             accuracy,
         )
@@ -897,7 +870,6 @@ mod tests {
                 clearance_mm: 0.5,
                 regularization_radius_mm: 1.0,
                 gap_radius_mm: 0.5,
-                numerical_guard_mm: 0.025,
             },
             accuracy,
         )
@@ -1015,7 +987,6 @@ mod tests {
                     clearance_mm: 0.0,
                     regularization_radius_mm: 0.5,
                     gap_radius_mm: 0.5,
-                    numerical_guard_mm: 0.0,
                 },
                 accuracy
             )
@@ -1029,7 +1000,6 @@ mod tests {
                     clearance_mm: 0.5,
                     regularization_radius_mm: 0.0,
                     gap_radius_mm: 0.5,
-                    numerical_guard_mm: 0.0,
                 },
                 accuracy
             )
@@ -1043,28 +1013,12 @@ mod tests {
                     clearance_mm: 0.5,
                     regularization_radius_mm: 1.0,
                     gap_radius_mm: 0.0,
-                    numerical_guard_mm: 0.0,
                 },
                 accuracy
             )
             .unwrap_err(),
             BalancingRegionError::InvalidGapRadius(0.0)
         );
-        assert_eq!(
-            board_array_balancing_region(
-                &input,
-                BalancingRegionOptions {
-                    clearance_mm: 0.5,
-                    regularization_radius_mm: 0.5,
-                    gap_radius_mm: 0.5,
-                    numerical_guard_mm: -0.1,
-                },
-                accuracy
-            )
-            .unwrap_err(),
-            BalancingRegionError::InvalidNumericalGuard(-0.1)
-        );
-
         let mut empty_panel = input.clone();
         empty_panel.panel_outer = ContourSet::empty(tol::REGION_MM);
         assert_eq!(

@@ -399,7 +399,7 @@ impl Aperture {
         let outer = match &self.shape {
             ApertureShape::Circle { diameter } => shapes::circle(*diameter),
             ApertureShape::Rectangle { width, height } => shapes::rect(*width, *height),
-            ApertureShape::Obround { width, height } => shapes::obround(*width, *height, true),
+            ApertureShape::Obround { width, height } => shapes::obround(*width, *height),
             ApertureShape::Polygon {
                 diameter,
                 vertices,
@@ -409,7 +409,7 @@ impl Aperture {
                 width,
                 height,
                 radius,
-            } => shapes::rounded_rect(*width, *height, *radius, shapes::ALL_CORNERS, true),
+            } => shapes::rounded_rect(*width, *height, *radius, shapes::ALL_CORNERS),
             ApertureShape::RoundedHex {
                 radius,
                 corner_radius,
@@ -759,7 +759,7 @@ fn expand_flashes_to_regions<LayerMeta, ObjectMeta>(
     doc: &mut Document<LayerMeta, ObjectMeta>,
     accuracy: GeometryAccuracy,
 ) -> Result<(), AccuracyError> {
-    let _: () = for object_index in 0..doc.objects.len() {
+    for object_index in 0..doc.objects.len() {
         let Geometry::Flash {
             aperture,
             transform,
@@ -784,7 +784,7 @@ fn expand_flashes_to_regions<LayerMeta, ObjectMeta>(
         );
         doc.objects[object_index].geometry = Geometry::Region { path: path_id };
         doc.objects[object_index].bbox = doc.path_bbox(path_id);
-    };
+    }
     Ok(())
 }
 
@@ -939,7 +939,7 @@ fn flatten_leaf_blocks<LayerMeta, ObjectMeta: Clone>(
     block_contains_grid: &[bool],
     accuracy: GeometryAccuracy,
 ) -> Result<(), AccuracyError> {
-    let _: () = for (index, block) in doc.blocks.iter().enumerate() {
+    for (index, block) in doc.blocks.iter().enumerate() {
         let id = out.push_block();
         for object in &block.objects {
             match object.geometry {
@@ -978,7 +978,7 @@ fn flatten_leaf_blocks<LayerMeta, ObjectMeta: Clone>(
                 }
             }
         }
-    };
+    }
     Ok(())
 }
 

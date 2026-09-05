@@ -26,11 +26,11 @@ fn replace_round_rect_apertures<LayerMeta, ObjectMeta>(
     doc: &mut Document<LayerMeta, ObjectMeta>,
     accuracy: GeometryAccuracy,
 ) -> Result<(), AccuracyError> {
-    let _: () = for aperture in &mut doc.apertures {
+    for aperture in &mut doc.apertures {
         if matches!(aperture.shape, ApertureShape::RoundRect { .. }) {
             *aperture = contour_aperture(aperture, Affine2::IDENTITY, accuracy)?;
         }
-    };
+    }
     Ok(())
 }
 
@@ -42,13 +42,13 @@ fn bake_flash_transforms<LayerMeta, ObjectMeta>(
         let geometry = doc.objects[object_index].geometry;
         doc.objects[object_index].geometry = legalize_flash_geometry(doc, geometry, accuracy)?;
     }
-    let _: () = for block_index in 0..doc.blocks.len() {
+    for block_index in 0..doc.blocks.len() {
         for object_index in 0..doc.blocks[block_index].objects.len() {
             let geometry = doc.blocks[block_index].objects[object_index].geometry;
             let geometry = legalize_flash_geometry(doc, geometry, accuracy)?;
             doc.blocks[block_index].objects[object_index].geometry = geometry;
         }
-    };
+    }
     Ok(())
 }
 

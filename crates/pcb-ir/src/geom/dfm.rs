@@ -1187,7 +1187,11 @@ mod tests {
         let index = copper.prepare_query();
 
         assert_eq!(
-            index.circular_enclosure(Point::default(), 1.35, 0.125 - tol::FLATTEN_MM),
+            index.circular_enclosure(
+                Point::default(),
+                1.35,
+                0.125 - accuracy.max_error_mm() / 2.0
+            ),
             None,
             "a satisfied enclosure exceeds the search bound"
         );
@@ -1195,10 +1199,10 @@ mod tests {
         let measurement = index
             .circular_enclosure(Point::new(1.3, 0.0), 1.35, 0.125)
             .expect("hole extending beyond copper must measure");
-        assert!((measurement.mm + 0.15).abs() < tol::FLATTEN_MM);
+        assert!((measurement.mm + 0.15).abs() < accuracy.max_error_mm() / 2.0);
         assert_eq!(measurement.uncertainty_mm, copper.uncertainty_mm);
-        assert!((measurement.first.x - 2.65).abs() < tol::FLATTEN_MM);
-        assert!((measurement.second.x - 2.5).abs() < tol::FLATTEN_MM);
+        assert!((measurement.first.x - 2.65).abs() < accuracy.max_error_mm() / 2.0);
+        assert!((measurement.second.x - 2.5).abs() < accuracy.max_error_mm() / 2.0);
     }
 
     #[test]
@@ -1465,7 +1469,7 @@ mod tests {
         let accuracy = GeometryAccuracy::default();
 
         let stadium = ContourSet::from_contours(
-            &[shapes::obround(1.8, 0.6, true).expect("valid obround")],
+            &[shapes::obround(1.8, 0.6).expect("valid obround")],
             FillRule::NonZero,
             tol::REGION_MM,
             accuracy,

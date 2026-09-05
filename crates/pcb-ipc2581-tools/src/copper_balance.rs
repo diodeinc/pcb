@@ -464,7 +464,7 @@ pub fn balance_features(
                 boundary_web: ipc_region_features(
                     &result
                         .boundary_web()
-                        .decimate_inward(tol::FLATTEN_MM, accuracy)?,
+                        .decimate_inward(accuracy.max_error_mm(), accuracy)?,
                 )?,
                 templates,
                 void_sets,

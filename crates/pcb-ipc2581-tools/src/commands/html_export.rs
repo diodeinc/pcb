@@ -441,7 +441,7 @@ fn render_extracted_layer(
         profile_set,
         accuracy,
     )?);
-    let _: () = if !geometry.diagnostics.is_empty() {
+    if !geometry.diagnostics.is_empty() {
         rendered.warning = Some(format!("{} warning(s)", geometry.diagnostics.len()));
     };
     Ok(())

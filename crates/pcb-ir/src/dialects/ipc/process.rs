@@ -565,7 +565,7 @@ pub fn expand_stroked_paths_to_fills<S, L>(
     doc: &mut Document<S, L>,
     accuracy: GeometryAccuracy,
 ) -> Result<(), AccuracyError> {
-    let _: () = for feature_index in 0..doc.features.len() {
+    for feature_index in 0..doc.features.len() {
         let feature = &doc.features[feature_index];
         if !is_copper_trace_feature(feature) {
             continue;
@@ -603,7 +603,7 @@ pub fn expand_stroked_paths_to_fills<S, L>(
             }
         }
         doc.features[feature_index].paths = Span::new(start, doc.arena.paths.len() as u32 - start);
-    };
+    }
     Ok(())
 }
 
@@ -612,7 +612,7 @@ pub fn union_feature_filled_paths<S, L>(
     doc: &mut Document<S, L>,
     accuracy: GeometryAccuracy,
 ) -> Result<(), AccuracyError> {
-    let _: () = for feature_index in 0..doc.features.len() {
+    for feature_index in 0..doc.features.len() {
         let feature = &doc.features[feature_index];
         if !is_copper_trace_feature(feature) {
             continue;
@@ -638,7 +638,7 @@ pub fn union_feature_filled_paths<S, L>(
             Paint::Fill { rule: fill_rule },
             contours,
         );
-    };
+    }
     Ok(())
 }
 
@@ -660,7 +660,7 @@ where
     S: Copy + Eq + Hash,
     L: Clone,
 {
-    let _: () = for layer_index in 0..doc.layers.len() {
+    for layer_index in 0..doc.layers.len() {
         let layer = doc.layers[layer_index].clone();
         let mut groups: HashMap<TraceGroupKey<S>, Vec<usize>> = HashMap::new();
 
@@ -719,7 +719,7 @@ where
                 clear_feature_paths(doc, feature_index);
             }
         }
-    };
+    }
     Ok(())
 }
 
@@ -743,7 +743,7 @@ where
     {
         expand_feature_placement_groups(doc, accuracy)?;
     }
-    let _: () = for layer_index in 0..doc.layers.len() {
+    for layer_index in 0..doc.layers.len() {
         let layer = doc.layers[layer_index].clone();
         for mut feature_indices in layer_features_by_set(doc, &layer).into_values() {
             feature_indices.sort_by_key(|&index| doc.features[index].source.feature_index);
@@ -772,7 +772,7 @@ where
                 }
             }
         }
-    };
+    }
     Ok(())
 }
 
@@ -809,7 +809,7 @@ where
     {
         expand_feature_placement_groups(doc, accuracy)?;
     }
-    let _: () = for layer_index in 0..doc.layers.len() {
+    for layer_index in 0..doc.layers.len() {
         let layer = doc.layers[layer_index].clone();
         let cutouts = layer_cutout_sets(doc, &layer, accuracy)?;
         if cutouts.is_empty() {
@@ -840,7 +840,7 @@ where
             }
             subtract_region_from_feature(doc, feature_index, &cutters, accuracy)?;
         }
-    };
+    }
     Ok(())
 }
 

@@ -1250,7 +1250,7 @@ fn append_profile_occurrences(
     style: ProfileGerberStyle,
     accuracy: GeometryAccuracy,
 ) -> anyhow::Result<()> {
-    let _: () = for occurrence in profile_occurrences_for(doc, profile_set) {
+    for occurrence in profile_occurrences_for(doc, profile_set) {
         append_profile_path(
             artwork,
             layer,
@@ -1269,7 +1269,7 @@ fn append_profile_occurrences(
             style,
             accuracy,
         )?;
-    };
+    }
     Ok(())
 }
 
@@ -1282,9 +1282,9 @@ fn append_profile_cutouts(
     style: ProfileGerberStyle,
     accuracy: GeometryAccuracy,
 ) -> anyhow::Result<()> {
-    let _: () = for cutout in profile.cutouts.slice(&doc.profile_cutouts) {
+    for cutout in profile.cutouts.slice(&doc.profile_cutouts) {
         append_profile_path(artwork, layer, doc, cutout.path, transform, style, accuracy)?;
-    };
+    }
     Ok(())
 }
 

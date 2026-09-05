@@ -1420,18 +1420,18 @@ mod tests {
             .unwrap();
         let voids = result_voids(&result).connected_components();
         let touches_each_boundary = [
-            voids
-                .iter()
-                .any(|void| (void.bbox.min.x - voidable.bbox.min.x).abs() <= 2.0 * tol::FLATTEN_MM),
-            voids
-                .iter()
-                .any(|void| (void.bbox.min.y - voidable.bbox.min.y).abs() <= 2.0 * tol::FLATTEN_MM),
-            voids
-                .iter()
-                .any(|void| (void.bbox.max.x - voidable.bbox.max.x).abs() <= 2.0 * tol::FLATTEN_MM),
-            voids
-                .iter()
-                .any(|void| (void.bbox.max.y - voidable.bbox.max.y).abs() <= 2.0 * tol::FLATTEN_MM),
+            voids.iter().any(|void| {
+                (void.bbox.min.x - voidable.bbox.min.x).abs() <= 2.0 * accuracy.max_error_mm() / 2.0
+            }),
+            voids.iter().any(|void| {
+                (void.bbox.min.y - voidable.bbox.min.y).abs() <= 2.0 * accuracy.max_error_mm() / 2.0
+            }),
+            voids.iter().any(|void| {
+                (void.bbox.max.x - voidable.bbox.max.x).abs() <= 2.0 * accuracy.max_error_mm() / 2.0
+            }),
+            voids.iter().any(|void| {
+                (void.bbox.max.y - voidable.bbox.max.y).abs() <= 2.0 * accuracy.max_error_mm() / 2.0
+            }),
         ];
         assert!(touches_each_boundary.into_iter().all(|touches| touches));
     }

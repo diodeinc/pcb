@@ -166,7 +166,7 @@ fn write_artwork_object<LayerMeta, ObjectMeta>(
     object: &artwork::Object<ObjectMeta>,
     accuracy: GeometryAccuracy,
 ) -> Result<(), AccuracyError> {
-    let _: () = match object.geometry {
+    match object.geometry {
         Geometry::Flash {
             aperture,
             transform,

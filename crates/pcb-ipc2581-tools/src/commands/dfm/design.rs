@@ -934,9 +934,7 @@ fn slot_width(stated_mm: f64, measured: Distance) -> Result<Distance> {
     if !(stated_mm > 0.0 && stated_mm.is_finite()) {
         return Ok(measured);
     }
-    // The outline's width is short by up to its uncertainty, plus the
-    // flattening slack the medial-axis pruning allows.
-    if (measured.mm - stated_mm).abs() > measured.uncertainty_mm + tol::FLATTEN_MM {
+    if (measured.mm - stated_mm).abs() > measured.uncertainty_mm {
         bail!(
             "states width {stated_mm:.6} mm but its outline measures {:.6} mm",
             measured.mm

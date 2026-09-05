@@ -11,7 +11,7 @@ Use `ContourSet::from_contours` to prepare source curves, then
 The `GeometryAccuracy` API documentation includes an example.
 
 Contours, arenas, and regions carry `uncertainty_mm`. Transforms, composition,
-decimation, offsets, and region distance measurements propagate it. Retained
+decimation, offsets, curved-axis sampling, and region distance measurements propagate it. Retained
 arcs and analytic ellipses can be prepared more finely, including after arena
 copies and affine placement. Polygon round trips cannot recover lost precision.
 
@@ -35,6 +35,7 @@ Unmet budgets return `AccuracyError`, including these backend limits:
 Small rings remain in prepared geometry so significance thresholds do not
 discard geometry or its accuracy. Operations allocate one quarter of the remaining
 budget to new approximation, divided among their approximation stages.
+Balancing construction reserves twice the requested budget for numerical clearance.
 This practical accounting does not certify final Hausdorff distance, topology, area error, or grazing
 line-span endpoints. Containment, coverage, and line spans describe the prepared
 polygons; manufacturing policy remains with the consumer.

@@ -167,7 +167,7 @@ impl ContourBuf {
         if allowance < f64::EPSILON {
             return Err(AccuracyError::SubdivisionLimit);
         }
-        let mut out = transform_cmds_impl(source.cmds, transform, allowance);
+        let mut out = transform_cmds(source.cmds, transform, allowance);
         out.uncertainty_mm += source.uncertainty_mm * scale + numeric;
         out.ellipse_source = ellipse_source;
         accuracy.check(out.uncertainty_mm)?;
@@ -390,7 +390,7 @@ pub fn contour_bbox(cmds: &[PathCmd]) -> BBox {
     bbox
 }
 
-fn transform_cmds_impl(
+fn transform_cmds(
     mut cmds: Vec<PathCmd>,
     transform: crate::geom::affine::Affine2,
     accuracy: f64,
@@ -399,7 +399,7 @@ fn transform_cmds_impl(
     if !transform.preserves_circles(1e-12 * transform.max_scale().powi(2))
         && cmds.iter().any(|c| c.op == PathOp::ArcTo)
     {
-        let (path, error) = contours_to_kurbo_impl(&[ContourBuf::new(cmds)], accuracy);
+        let (path, error) = contours_to_kurbo(&[ContourBuf::new(cmds)], accuracy);
         cmds = kurbo_path_to_contours(&path)
             .into_iter()
             .flat_map(|contour| contour.cmds)
@@ -607,7 +607,7 @@ fn solid_stroke_to_fill(
     style: StrokeToFillStyle,
     accuracy: f64,
 ) -> Option<Vec<ContourBuf>> {
-    let (source, conversion_error) = contours_to_kurbo_impl(contours, accuracy);
+    let (source, conversion_error) = contours_to_kurbo(contours, accuracy);
     if source.elements().is_empty() {
         return None;
     }
@@ -659,7 +659,7 @@ fn contour_from_segments(segments: &[Segment]) -> Option<ContourBuf> {
     Some(ContourBuf::new(cmds))
 }
 
-pub(crate) fn contours_to_kurbo_impl(contours: &[ContourBuf], accuracy: f64) -> (BezPath, f64) {
+pub(crate) fn contours_to_kurbo(contours: &[ContourBuf], accuracy: f64) -> (BezPath, f64) {
     let mut out = BezPath::new();
     let mut current = Point::default();
     let mut conversion_error: f64 = 0.0;
