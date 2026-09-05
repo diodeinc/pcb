@@ -8,6 +8,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+## [0.4.50] - 2026-09-05
+
 ### Added
 
 - Add prepared signed-distance queries for PCBIR regions and use one boundary index across DFM.
@@ -1846,7 +1848,8 @@ Tvs(package="DO-214AA", direction="Unidirectional", reverse_standoff_voltage="24
 - Error on invalid type passed to `io()`
 - Format the auto-generated component .zen files
 
-[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.49...HEAD
+[Unreleased]: https://github.com/diodeinc/pcb/compare/v0.4.50...HEAD
+[0.4.50]: https://github.com/diodeinc/pcb/compare/v0.4.49...v0.4.50
 [0.4.49]: https://github.com/diodeinc/pcb/compare/v0.4.48...v0.4.49
 [0.4.48]: https://github.com/diodeinc/pcb/compare/v0.4.47...v0.4.48
 [0.4.47]: https://github.com/diodeinc/pcb/compare/v0.4.46...v0.4.47
