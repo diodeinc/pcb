@@ -316,11 +316,12 @@ pub fn ring_signed_area(ring: &Ring) -> f64 {
     if ring.len() < 3 {
         return 0.0;
     }
+    let [origin_x, origin_y] = ring[0];
     let mut area = 0.0;
-    for index in 0..ring.len() {
-        let [x0, y0] = ring[index];
-        let [x1, y1] = ring[(index + 1) % ring.len()];
-        area += x0 * y1 - x1 * y0;
+    for edge in ring[1..].windows(2) {
+        let [x0, y0] = edge[0];
+        let [x1, y1] = edge[1];
+        area += (x0 - origin_x) * (y1 - origin_y) - (x1 - origin_x) * (y0 - origin_y);
     }
     area / 2.0
 }

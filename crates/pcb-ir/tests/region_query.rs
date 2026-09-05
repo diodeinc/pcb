@@ -280,3 +280,26 @@ fn short_nonzero_edges_remain_segments() {
     assert!((distance.mm + 1e-9).abs() < 1e-20, "{distance:?}");
     assert!(distance.second.distance_to(Point::new(0.0, 5e-9)) < 1e-20);
 }
+
+#[test]
+fn far_translated_rings_keep_area_holes_and_distances() {
+    for origin in [1e9, -1e9] {
+        let outer = rectangle(origin, origin, origin + 4.0, origin + 4.0);
+        let mut hole = rectangle(origin + 1.0, origin + 1.0, origin + 3.0, origin + 3.0);
+        hole.reverse();
+        assert_eq!(pcb_ir::geom::region::ring_signed_area(&outer), 16.0);
+        assert_eq!(pcb_ir::geom::region::ring_signed_area(&hole), -4.0);
+        for tolerance in [0.0, tol::REGION_MM] {
+            let region = ContourSet::from_regularized(vec![outer.clone(), hole.clone()], tolerance);
+            assert_eq!(region.rings.len(), 2);
+            let prepared = region.prepare_query();
+            for (offset, expected) in [(0.5, -0.5), (2.0, 1.0), (5.0, 1.0)] {
+                query(
+                    &prepared,
+                    Point::new(origin + offset, origin + 2.0),
+                    expected,
+                );
+            }
+        }
+    }
+}
