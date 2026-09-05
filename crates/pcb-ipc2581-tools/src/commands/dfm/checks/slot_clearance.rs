@@ -21,10 +21,6 @@ pub(super) fn evaluate(
 ) -> Evaluation {
     let mut checked = 0;
     let mut measured = Vec::new();
-    let stackup = design
-        .stackup
-        .as_ref()
-        .expect("slot clearance requires a physical stackup");
     for (slot_index, slot) in design
         .slots
         .iter()
@@ -38,13 +34,11 @@ pub(super) fn evaluate(
             net,
         });
         for (copper_index, copper) in design.copper_layers.iter().enumerate() {
-            let span_layers = &stackup.copper_layers[usize::from(slot.drill_span.first_copper_index)
-                ..=usize::from(slot.drill_span.last_copper_index)];
-            if !span_layers
-                .iter()
-                .any(|layer| layer.name == copper.layer.name)
-                || !conditions.applies_to_layer(copper)
-            {
+            // Extraction orders copper layers and drill spans by the same
+            // validated physical stackup.
+            let span = usize::from(slot.drill_span.first_copper_index)
+                ..=usize::from(slot.drill_span.last_copper_index);
+            if !span.contains(&copper_index) || !conditions.applies_to_layer(copper) {
                 continue;
             }
             checked += 1;
