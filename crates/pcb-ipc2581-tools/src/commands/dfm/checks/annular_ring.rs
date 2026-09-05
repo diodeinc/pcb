@@ -292,6 +292,10 @@ limit = { minimum = "0.2 mm" }
     /// with a 2 mm copper square on each layer named in `copper_on`, and
     /// an optional drill span.
     fn board(layer_count: usize, copper_on: &[usize], span: Option<(usize, usize)>) -> Ipc2581 {
+        Ipc2581::parse(&board_xml(layer_count, copper_on, span)).unwrap()
+    }
+
+    fn board_xml(layer_count: usize, copper_on: &[usize], span: Option<(usize, usize)>) -> String {
         let layer_names = (0..layer_count).map(|index| format!("L{index}"));
         let refs = layer_names
             .clone()
@@ -319,7 +323,7 @@ limit = { minimum = "0.2 mm" }
                 )
             })
             .collect::<String>();
-        Ipc2581::parse(&format!(
+        format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
   <Content roleRef="owner">
@@ -345,8 +349,7 @@ limit = { minimum = "0.2 mm" }
     </CadData>
   </Ecad>
 </IPC-2581>"#
-        ))
-        .unwrap()
+        )
     }
 
     fn evaluate_pth(ipc: &Ipc2581) -> Evaluation {
@@ -390,6 +393,37 @@ limit = { minimum = "0.2 mm" }
         let measured = &evaluation.measured[0];
         assert_eq!(measured.layers[1].name, "L1");
         assert_eq!(measured.distance.mm, 0.0);
+    }
+
+    #[test]
+    fn physical_terminals_are_independent_of_copper_declaration_order() {
+        let stackup = [0, 1, 2, 3].map(|i| format!(r#"<StackupLayer layerOrGroupRef="L{i}" thickness="0.035" tolPlus="0" tolMinus="0" sequence="{i}"/>"#)).join("");
+        for span in [None, Some((1, 2))] {
+            let terminals = if span.is_some() { [1, 2] } else { [0, 3] };
+            for copper_on in [&terminals[..], &terminals[..1]] {
+                let xml = board_xml(4, copper_on, span).replace(r#"<Step name="board""#, &format!(r#"
+                    <Stackup name="Primary" overallThickness="0.14" tolPlus="0" tolMinus="0" whereMeasured="METAL" stackupStatus="PROPOSED">
+                      <StackupGroup name="Group" thickness="0.14" tolPlus="0" tolMinus="0">{stackup}</StackupGroup>
+                    </Stackup><Step name="board""#));
+                let shuffled = xml
+                    .replace(r#"<Layer name="L1""#, r#"<Layer name="TEMP""#)
+                    .replace(r#"<Layer name="L3""#, r#"<Layer name="L1""#)
+                    .replace(r#"<Layer name="TEMP""#, r#"<Layer name="L3""#);
+                for xml in [&xml, &shuffled] {
+                    let evaluation = evaluate_pth(&Ipc2581::parse(xml).unwrap());
+                    assert_eq!(evaluation.checked, 2, "span {span:?}");
+                    assert_eq!(
+                        evaluation.measured.len(),
+                        2 - copper_on.len(),
+                        "span {span:?}"
+                    );
+                    if let Some(finding) = evaluation.measured.first() {
+                        assert_eq!(finding.layers[1].name, format!("L{}", terminals[1]));
+                        assert_eq!(finding.distance.mm, 0.0);
+                    }
+                }
+            }
+        }
     }
 
     #[test]
