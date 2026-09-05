@@ -1561,21 +1561,20 @@ pub struct PaintComposer {
 
 impl PaintComposer {
     pub fn push_region(&mut self, polarity: Polarity, region: ContourSet) {
-        self.uncertainty_mm = self.uncertainty_mm.max(region.uncertainty_mm);
-        self.push_impl(polarity, region.rings);
+        self.push_impl(polarity, region.rings, region.uncertainty_mm);
     }
 
     /// Legacy untracked polygons use the default flattening allowance.
     /// Use `push_region` when their preparation history is known.
     pub fn push(&mut self, polarity: Polarity, rings: Vec<Ring>) {
-        self.uncertainty_mm = self.uncertainty_mm.max(tol::FLATTEN_MM);
-        self.push_impl(polarity, rings);
+        self.push_impl(polarity, rings, tol::FLATTEN_MM);
     }
 
-    fn push_impl(&mut self, polarity: Polarity, mut rings: Vec<Ring>) {
+    fn push_impl(&mut self, polarity: Polarity, mut rings: Vec<Ring>, uncertainty_mm: f64) {
         if rings.is_empty() {
             return;
         }
+        self.uncertainty_mm = self.uncertainty_mm.max(uncertainty_mm);
         if self.run_polarity != Some(polarity) {
             self.flush_run();
             self.run_polarity = Some(polarity);

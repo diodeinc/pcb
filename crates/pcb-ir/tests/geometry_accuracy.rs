@@ -501,3 +501,33 @@ fn stroke_preparation_uses_the_total_inherited_error_budget() {
         artwork::compose_owner_regions(&doc, |_| Some(()), 0.0, Some(accuracy(0.01))).unwrap();
     assert!((0.008..=0.01).contains(&layers[0][0].1.uncertainty_mm));
 }
+
+#[test]
+fn fine_geometry_reports_widths_inside_the_legacy_blind_band() {
+    use pcb_ir::geom::dfm::{thin_features, thin_gaps};
+    let rect = |x0, y0, x1, y1| {
+        ContourSet::rectangle(BBox::new(Point::new(x0, y0), Point::new(x1, y1)), 1e-6)
+    };
+    let feature = rect(0.0, 0.0, 1.0, 0.095);
+    assert!(!thin_features(&feature, 0.1).is_empty());
+    let gap = rect(0.0, 0.0, 1.0, 1.0).union(&rect(1.095, 0.0, 2.0, 1.0));
+    assert!(!thin_gaps(&gap, 0.1).is_empty());
+}
+
+#[test]
+fn empty_paint_does_not_add_uncertainty() {
+    use pcb_ir::geom::{Polarity, region::PaintComposer};
+    let mut composer = PaintComposer::default();
+    composer.push_region(
+        Polarity::Clear,
+        ContourSet::from_regularized_with_uncertainty(vec![], 0.0, 1.0),
+    );
+    composer.push(Polarity::Dark, vec![]);
+    composer.push_region(
+        Polarity::Dark,
+        ContourSet::rectangle(BBox::new(Point::ZERO, Point::new(1.0, 1.0)), 0.0),
+    );
+    let image = composer.finish_set(0.0);
+    assert!(!image.is_empty());
+    accuracy(0.000001).check(image.uncertainty_mm).unwrap();
+}

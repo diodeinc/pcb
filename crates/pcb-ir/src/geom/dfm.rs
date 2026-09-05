@@ -695,16 +695,10 @@ pub fn thin_features(region: &ContourSet, min_width_mm: f64) -> Vec<ThinPiece> {
     pieces(
         region.disk_feature_violation_components(
             (min_width_mm + MORPHOLOGY_CANDIDATE_GUARD_MM) / 2.0,
-            reportable_width(min_width_mm),
+            min_width_mm - 2.0 * region.uncertainty_mm,
         ),
         min_width_mm,
     )
-}
-
-/// The widest measurement certainly below `min_mm` once both flattened
-/// walls' uncertainty is counted, as [`pieces`] requires.
-fn reportable_width(min_mm: f64) -> f64 {
-    min_mm - 2.0 * tol::FLATTEN_MM
 }
 
 /// Gaps in the material certainly narrower than `min_gap_mm`, including
@@ -715,7 +709,7 @@ pub fn thin_gaps(region: &ContourSet, min_gap_mm: f64) -> Vec<ThinPiece> {
     pieces(
         region.disk_gap_violation_components(
             (min_gap_mm + MORPHOLOGY_CANDIDATE_GUARD_MM) / 2.0,
-            reportable_width(min_gap_mm),
+            min_gap_mm - 2.0 * region.uncertainty_mm,
         ),
         min_gap_mm,
     )
