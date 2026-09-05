@@ -103,7 +103,7 @@ fn selectively_rounded_rectangle_keeps_square_corners_and_narrow_material() {
 #[test]
 fn coarse_polygon_history_prevents_finer_preparation_and_offsets() {
     let circle = shapes::circle(0.2).unwrap();
-    let coarse = ContourSet::from_contours(&[circle.clone()], FillRule::NonZero, 1e-9);
+    let coarse = ContourSet::from_contours(std::slice::from_ref(&circle), FillRule::NonZero, 1e-9);
     assert!(coarse.uncertainty_mm >= 0.005);
     assert!(
         ContourSet::from_contours_with_accuracy(

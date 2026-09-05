@@ -601,6 +601,8 @@ pub(crate) fn compose_selected_attributed<
 /// regularized ring set.
 pub type OwnerImages<Owner> = Vec<(Owner, Vec<Ring>)>;
 
+pub type OwnerRegionLayers<Owner> = Vec<Vec<(Owner, region::ContourSet)>>;
+
 /// Each layer's owner images from the ordered paint fold, for only the
 /// owners selected by the caller.
 pub fn compose_selected_owners<LayerMeta: Clone, ObjectMeta: Clone, Owner: Clone + Eq + Hash>(
@@ -631,7 +633,7 @@ pub fn compose_owner_regions<LayerMeta: Clone, ObjectMeta: Clone, Owner: Clone +
     owner: impl Fn(&ObjectMeta) -> Option<Owner>,
     tolerance: f64,
     accuracy: Option<crate::geom::GeometryAccuracy>,
-) -> Result<(Vec<Vec<(Owner, region::ContourSet)>>, Vec<Diagnostic>), crate::geom::AccuracyError> {
+) -> Result<(OwnerRegionLayers<Owner>, Vec<Diagnostic>), crate::geom::AccuracyError> {
     if !tolerance.is_finite() || tolerance < 0.0 {
         return Err(crate::geom::AccuracyError::InvalidGeometry(
             "invalid significance tolerance",
