@@ -139,6 +139,57 @@ mod tests {
     use pcb_ir::dialects::ipc::ArtworkScope;
 
     #[test]
+    fn physical_overlap_is_independent_of_copper_declaration_order() {
+        for order in [[0, 1, 2, 3], [0, 2, 1, 3], [0, 3, 1, 2]] {
+            // Disjoint blind spans must not interact; nested spans must.
+            for (first, second, findings) in [((0, 1), (2, 3), 0), ((0, 3), (1, 2), 1)] {
+                let layers = order.map(|i| format!(r#"<Layer name="L{i}" layerFunction="CONDUCTOR" side="INTERNAL" polarity="POSITIVE"/>"#)).join("");
+                let stackup = [0, 1, 2, 3].map(|i| format!(r#"<StackupLayer layerOrGroupRef="L{i}" thickness="0.035" tolPlus="0" tolMinus="0" sequence="{i}"/>"#)).join("");
+                let ipc = Ipc2581::parse(&format!(r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+                  <Content roleRef="owner"><FunctionMode mode="FABRICATION"/><StepRef name="board"/>
+                    <LayerRef name="L0"/><LayerRef name="L1"/><LayerRef name="L2"/><LayerRef name="L3"/><LayerRef name="D1"/><LayerRef name="D2"/>
+                  </Content><Ecad><CadHeader units="MILLIMETER"/><CadData>{layers}
+                    <Layer name="D1" layerFunction="DRILL" side="ALL" polarity="POSITIVE"><Span fromLayer="L{}" toLayer="L{}"/></Layer>
+                    <Layer name="D2" layerFunction="DRILL" side="ALL" polarity="POSITIVE"><Span fromLayer="L{}" toLayer="L{}"/></Layer>
+                    <Stackup name="Primary" overallThickness="0.14" tolPlus="0" tolMinus="0" whereMeasured="METAL" stackupStatus="PROPOSED">
+                      <StackupGroup name="Group" thickness="0.14" tolPlus="0" tolMinus="0">{stackup}</StackupGroup>
+                    </Stackup>
+                    <Step name="board" type="BOARD">
+                      <LayerFeature layerRef="D1"><Set><Hole name="H1" diameter="1" platingStatus="PLATED" x="0" y="0"/></Set></LayerFeature>
+                      <LayerFeature layerRef="D2"><Set><Hole name="H2" diameter="1" platingStatus="PLATED" x="0.1" y="0"/></Set></LayerFeature>
+                    </Step>
+                  </CadData></Ecad></IPC-2581>"#, first.0, first.1, second.0, second.1)).unwrap();
+                let pdk = Pdk::parse(
+                    r#"schema_version = 2
+                    default_profile = "test"
+                    [pdk]
+                    id = "test"
+                    name = "Test"
+                    revision = "1"
+                    [profiles.test]
+                    name = "Test"
+                    [[rules.drilling.hole_to_hole_clearance]]
+                    id = "hole-clearance"
+                    select = { first_hole = "pth", second_hole = "pth" }
+                    limit = { minimum = "0.2 mm" }
+                "#,
+                )
+                .unwrap();
+                let rules = rules::lower(&pdk, None).unwrap();
+                let imported = pcb_ir::import::ipc2581::import_design(&ipc).unwrap();
+                let design = Design::extract(&imported, ArtworkScope::Board, &rules).unwrap();
+                let evaluation = evaluate(0.2, HoleClass::Pth, HoleClass::Pth, &design);
+                assert_eq!(evaluation.checked, 2);
+                assert_eq!(
+                    evaluation.measured.len(),
+                    findings,
+                    "declarations {order:?}, spans {first:?}, {second:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn overlapping_drills_retain_exact_circle_intersection_parameters() {
         let ipc = Ipc2581::parse(r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
           <Content roleRef="owner"><FunctionMode mode="FABRICATION"/><StepRef name="board"/><LayerRef name="DRILL"/></Content>

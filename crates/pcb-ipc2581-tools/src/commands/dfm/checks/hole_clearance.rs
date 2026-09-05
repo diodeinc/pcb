@@ -527,6 +527,56 @@ limit = {{ minimum = "0.20 mm" }}
     }
 
     #[test]
+    fn physical_drill_span_is_independent_of_copper_declaration_order() {
+        for order in [
+            [0, 1, 2],
+            [0, 2, 1],
+            [1, 0, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
+        ] {
+            for (offender, expected_findings) in [(1, 1), (2, 0)] {
+                let xml = board("VIA", Some((0, 1)), &[copper(offender, Some("N2"), 0.55)]);
+                let declarations = xml
+                    .lines()
+                    .filter(|line| line.contains("<Layer name=\"L"))
+                    .collect::<Vec<_>>();
+                let xml = xml.replace(
+                    &declarations.join("\n"),
+                    &order.map(|i| declarations[i]).join("\n"),
+                );
+                let ipc = Ipc2581::parse(&xml).unwrap();
+                let pdk = Pdk::parse(&pdk("via")).unwrap();
+                let rules = rules::lower(&pdk, None).unwrap();
+                let imported = pcb_ir::import::ipc2581::import_design(&ipc).unwrap();
+                let design = Design::extract(&imported, ArtworkScope::Board, &rules).unwrap();
+                let mut included = design
+                    .copper_layers
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, _)| design.holes[0].spans_copper(*index))
+                    .map(|(_, layer)| layer.layer.name.as_str())
+                    .collect::<Vec<_>>();
+                included.sort_unstable();
+                assert_eq!(included, ["L0", "L1"], "declarations {order:?}");
+                let results = checks::run(
+                    &rules,
+                    &design,
+                    None,
+                    NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
+                );
+                assert_eq!(results.rules[0].checked, 2);
+                assert_eq!(
+                    results.findings.len(),
+                    expected_findings,
+                    "declarations {order:?}, copper L{offender}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn does_not_require_a_span_for_a_nonapplicable_named_case() {
         let xml = board("VIA", None, &[copper(0, Some("N2"), 0.55)]);
         let source = pdk("via").replace(

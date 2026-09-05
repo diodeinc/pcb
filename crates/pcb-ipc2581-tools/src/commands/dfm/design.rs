@@ -2,7 +2,8 @@
 //! one layout target, in plain millimeters.
 //!
 //! Exactly the pools the configured rules read are extracted; the rest stay
-//! empty. Each pool is a flat vector in source order; derived facts that
+//! empty. Pools are flat vectors; copper follows physical stackup order
+//! when available, otherwise declaration order. Derived facts that
 //! relate pools (a hole's lands, a copper layer's boundary index) are side
 //! tables indexed like their primary pool. Extraction fails closed: a
 //! drilled feature whose plating, diameter, or outline the file does not
@@ -71,14 +72,26 @@ impl<'a> Design<'a> {
         rules: &[Rule],
     ) -> Result<Self> {
         let pools = rules::pools(rules);
-        let stackup = when(pools.stackup, || {
-            collect_physical_stackup(imported).map(Some)
-        })?;
+        // Circular drill checks must use the declared physical order even
+        // when no thickness or layer-count rule requests the stackup pool.
+        // Keep the legacy declaration-order fallback for files without one.
+        let span_checks = rules.iter().any(|rule| {
+            matches!(
+                rule.kind,
+                rules::RuleKind::HoleToCopperClearance(_)
+                    | rules::RuleKind::AnnularRing(_)
+                    | rules::RuleKind::HolePairClearance(_, _)
+            )
+        });
+        let stackup = when(
+            pools.stackup || (span_checks && !imported.stackups.is_empty()),
+            || collect_physical_stackup(imported).map(Some),
+        )?;
         let (holes, slots) = when(pools.drilled, || {
             collect_drilled(imported, scope, stackup.as_ref())
         })?;
         let copper_layers = when(pools.copper, || {
-            collect_copper_layers(imported, scope, pools.conductor_ownership)
+            collect_copper_layers(imported, scope, pools.conductor_ownership, stackup.as_ref())
         })?;
         let layout = when(pools.board_outlines || pools.board_arrays, || {
             Ok(Some(&imported.geometry))
@@ -514,10 +527,9 @@ pub(super) struct Hole {
     pub diameter_mm: f64,
     pub bbox: BBox,
     pub layer: LayerRef,
-    /// Inclusive ordinal range over the copper stackup the drill spans. A
-    /// through-board or unstated span covers every copper layer.
-    pub copper_span: (u16, u16),
     pub span_declared: bool,
+    /// Inclusive indices in the same order as `Design::copper_layers`.
+    /// Through-board or unstated spans cover every copper layer.
     pub drill_span: DrillSpan,
     pub provenance: SourceLocator,
     pub step: Option<Symbol>,
@@ -529,21 +541,26 @@ pub(super) struct Hole {
 
 impl Hole {
     pub fn spans_copper(&self, copper_index: usize) -> bool {
-        let (low, high) = self.copper_span;
+        let (low, high) = (
+            self.drill_span.first_copper_index,
+            self.drill_span.last_copper_index,
+        );
         (usize::from(low)..=usize::from(high)).contains(&copper_index)
     }
 
     /// Whether two drill spans coexist at some board depth.
     pub fn span_overlaps(&self, other: &Hole) -> bool {
-        let (self_low, self_high) = self.copper_span;
-        let (other_low, other_high) = other.copper_span;
-        self_low <= other_high && other_low <= self_high
+        self.drill_span.first_copper_index <= other.drill_span.last_copper_index
+            && other.drill_span.first_copper_index <= self.drill_span.last_copper_index
     }
 
     /// Whether `copper_index` is an end of the drill span: a layer the
     /// plating barrel must land on.
     pub fn terminates_on(&self, copper_index: usize) -> bool {
-        let (low, high) = self.copper_span;
+        let (low, high) = (
+            self.drill_span.first_copper_index,
+            self.drill_span.last_copper_index,
+        );
         copper_index == usize::from(low) || copper_index == usize::from(high)
     }
 }
@@ -770,8 +787,6 @@ fn collect_drilled(
                         diameter_mm: feature.outer_diameter,
                         bbox: BBox::from_point(feature.center).expand(feature.outer_diameter / 2.0),
                         layer: layer_ref(layer_name, source_layer.layer_function, None),
-                        copper_span: copper_span(feature.intent.span, &imported.layer_definitions)
-                            .unwrap_or(whole_stack),
                         span_declared: source_layer.span.is_some(),
                         drill_span: drill_span(
                             feature.intent.span,
@@ -1179,13 +1194,23 @@ fn collect_copper_layers(
     imported: &ImportedDesign,
     scope: ArtworkScope,
     require_conductor_ownership: bool,
+    stackup: Option<&PhysicalStackup>,
 ) -> Result<Vec<CopperLayer>> {
-    let copper_layers = imported
+    let mut copper_layers = imported
         .layer_definitions
         .iter()
         .enumerate()
         .filter(|(_, layer)| layers::is_copper(layer.layer_function))
         .collect::<Vec<_>>();
+    if let Some(stackup) = stackup {
+        copper_layers.sort_by_key(|(_, layer)| {
+            stackup
+                .copper_layers
+                .iter()
+                .position(|physical| physical.name == imported.resolve(layer.name))
+                .expect("validated stackup includes every copper layer")
+        });
+    }
     let total = copper_layers.len();
     #[cfg(not(target_family = "wasm"))]
     let copper_layers = copper_layers.into_par_iter();
