@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Check all IPC DFM profiles against Diode's 5 mil copper-width baseline.
+
 ### Fixed
 
 - Preserve PCBIR hole-to-land associations after routing or copper clears remove land copper.

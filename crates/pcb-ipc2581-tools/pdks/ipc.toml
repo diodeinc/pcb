@@ -14,13 +14,18 @@ url = "https://www.electronics.org/design-manufacturing-confirmed-ipc-standards"
 accessed = "2026-09-01"
 note = "IPC public material identifies the class/producibility taxonomy and relevant design topics. Diode chose the numeric baseline values in this PDK; they are not licensed IPC numeric matrices, do not establish full IPC compliance, and do not imply IPC certification."
 
+[sources.diode-standard]
+title = "Diode standard PDK baselines"
+url = "https://github.com/diodeinc/pcb/blob/c8254cb36eab64e4c82f1b1cce23eb82e72b2b83/crates/pcb-ipc2581-tools/pdks/standard.toml"
+note = "Adopted thresholds are general-purpose Diode baselines from standard.toml, not IPC requirements or technology- and copper-weight-qualified manufacturing capabilities. Coverage remains partial."
+
 [profiles.1a]
 name = "IPC Class 1 / Producibility Level A — Diode partial baseline"
 description = "Diode's opinionated partial baseline informed by IPC design topics; not an IPC numeric matrix, certification, or proof of full IPC compliance."
 performance_class = 1
 producibility_level = "A"
 technologies = ["rigid", "flex", "rigid_flex", "hdi"]
-coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio", "Diode baseline: via, PTH, and NPTH hole-to-copper clearance at 0.25 mm", "Diode baseline: via, PTH, NPTH, plated-slot, and nonplated-slot board-edge clearance at 0.50 mm"]
+coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio", "Diode baseline: via, PTH, and NPTH hole-to-copper clearance at 0.25 mm", "Diode baseline: via, PTH, NPTH, plated-slot, and nonplated-slot board-edge clearance at 0.50 mm", "Diode standard baseline: minimum final copper feature width at 5 mil (0.127 mm) on every copper layer"]
 source = "ipc-design-topics"
 
 [profiles.1a.defaults]
@@ -32,7 +37,7 @@ description = "Diode's opinionated partial baseline informed by IPC design topic
 performance_class = 1
 producibility_level = "B"
 technologies = ["rigid", "flex", "rigid_flex", "hdi"]
-coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio", "Diode baseline: via, PTH, and NPTH hole-to-copper clearance at 0.20 mm", "Diode baseline: via, PTH, NPTH, plated-slot, and nonplated-slot board-edge clearance at 0.40 mm"]
+coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio", "Diode baseline: via, PTH, and NPTH hole-to-copper clearance at 0.20 mm", "Diode baseline: via, PTH, NPTH, plated-slot, and nonplated-slot board-edge clearance at 0.40 mm", "Diode standard baseline: minimum final copper feature width at 5 mil (0.127 mm) on every copper layer"]
 source = "ipc-design-topics"
 
 [profiles.1b.defaults]
@@ -44,7 +49,7 @@ description = "Diode's opinionated partial baseline informed by IPC design topic
 performance_class = 1
 producibility_level = "C"
 technologies = ["rigid", "flex", "rigid_flex", "hdi"]
-coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio", "Diode baseline: via, PTH, and NPTH hole-to-copper clearance at 0.15 mm", "Diode baseline: via, PTH, NPTH, plated-slot, and nonplated-slot board-edge clearance at 0.30 mm"]
+coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio", "Diode baseline: via, PTH, and NPTH hole-to-copper clearance at 0.15 mm", "Diode baseline: via, PTH, NPTH, plated-slot, and nonplated-slot board-edge clearance at 0.30 mm", "Diode standard baseline: minimum final copper feature width at 5 mil (0.127 mm) on every copper layer"]
 source = "ipc-design-topics"
 
 [profiles.1c.defaults]
@@ -56,7 +61,7 @@ description = "Diode's opinionated partial baseline informed by IPC design topic
 performance_class = 2
 producibility_level = "A"
 technologies = ["rigid", "flex", "rigid_flex", "hdi"]
-coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio", "Diode baseline: via, PTH, and NPTH hole-to-copper clearance at 0.25 mm", "Diode baseline: via, PTH, NPTH, plated-slot, and nonplated-slot board-edge clearance at 0.50 mm"]
+coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio", "Diode baseline: via, PTH, and NPTH hole-to-copper clearance at 0.25 mm", "Diode baseline: via, PTH, NPTH, plated-slot, and nonplated-slot board-edge clearance at 0.50 mm", "Diode standard baseline: minimum final copper feature width at 5 mil (0.127 mm) on every copper layer"]
 source = "ipc-design-topics"
 
 [profiles.2a.defaults]
@@ -68,7 +73,7 @@ description = "Diode's opinionated partial baseline informed by IPC design topic
 performance_class = 2
 producibility_level = "B"
 technologies = ["rigid", "flex", "rigid_flex", "hdi"]
-coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio", "Diode baseline: via, PTH, and NPTH hole-to-copper clearance at 0.20 mm", "Diode baseline: via, PTH, NPTH, plated-slot, and nonplated-slot board-edge clearance at 0.40 mm"]
+coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio", "Diode baseline: via, PTH, and NPTH hole-to-copper clearance at 0.20 mm", "Diode baseline: via, PTH, NPTH, plated-slot, and nonplated-slot board-edge clearance at 0.40 mm", "Diode standard baseline: minimum final copper feature width at 5 mil (0.127 mm) on every copper layer"]
 source = "ipc-design-topics"
 
 [profiles.2b.defaults]
@@ -80,7 +85,7 @@ description = "Diode's opinionated partial baseline informed by IPC design topic
 performance_class = 2
 producibility_level = "C"
 technologies = ["rigid", "flex", "rigid_flex", "hdi"]
-coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio", "Diode baseline: via, PTH, and NPTH hole-to-copper clearance at 0.15 mm", "Diode baseline: via, PTH, NPTH, plated-slot, and nonplated-slot board-edge clearance at 0.30 mm"]
+coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio", "Diode baseline: via, PTH, and NPTH hole-to-copper clearance at 0.15 mm", "Diode baseline: via, PTH, NPTH, plated-slot, and nonplated-slot board-edge clearance at 0.30 mm", "Diode standard baseline: minimum final copper feature width at 5 mil (0.127 mm) on every copper layer"]
 source = "ipc-design-topics"
 
 [profiles.2c.defaults]
@@ -92,7 +97,7 @@ description = "Diode's opinionated partial baseline informed by IPC design topic
 performance_class = 3
 producibility_level = "A"
 technologies = ["rigid", "flex", "rigid_flex", "hdi"]
-coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio", "Diode baseline: via, PTH, and NPTH hole-to-copper clearance at 0.25 mm", "Diode baseline: via, PTH, NPTH, plated-slot, and nonplated-slot board-edge clearance at 0.50 mm"]
+coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio", "Diode baseline: via, PTH, and NPTH hole-to-copper clearance at 0.25 mm", "Diode baseline: via, PTH, NPTH, plated-slot, and nonplated-slot board-edge clearance at 0.50 mm", "Diode standard baseline: minimum final copper feature width at 5 mil (0.127 mm) on every copper layer"]
 source = "ipc-design-topics"
 
 [profiles.3a.defaults]
@@ -104,7 +109,7 @@ description = "Diode's opinionated partial baseline informed by IPC design topic
 performance_class = 3
 producibility_level = "B"
 technologies = ["rigid", "flex", "rigid_flex", "hdi"]
-coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio", "Diode baseline: via, PTH, and NPTH hole-to-copper clearance at 0.20 mm", "Diode baseline: via, PTH, NPTH, plated-slot, and nonplated-slot board-edge clearance at 0.40 mm"]
+coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio", "Diode baseline: via, PTH, and NPTH hole-to-copper clearance at 0.20 mm", "Diode baseline: via, PTH, NPTH, plated-slot, and nonplated-slot board-edge clearance at 0.40 mm", "Diode standard baseline: minimum final copper feature width at 5 mil (0.127 mm) on every copper layer"]
 source = "ipc-design-topics"
 
 [profiles.3b.defaults]
@@ -116,11 +121,16 @@ description = "Diode's opinionated partial baseline informed by IPC design topic
 performance_class = 3
 producibility_level = "C"
 technologies = ["rigid", "flex", "rigid_flex", "hdi"]
-coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio", "Diode baseline: via, PTH, and NPTH hole-to-copper clearance at 0.15 mm", "Diode baseline: via, PTH, NPTH, plated-slot, and nonplated-slot board-edge clearance at 0.30 mm"]
+coverage = ["Diode baseline: maximum via aspect ratio", "Diode baseline: maximum PTH aspect ratio", "Diode baseline: via, PTH, and NPTH hole-to-copper clearance at 0.15 mm", "Diode baseline: via, PTH, NPTH, plated-slot, and nonplated-slot board-edge clearance at 0.30 mm", "Diode standard baseline: minimum final copper feature width at 5 mil (0.127 mm) on every copper layer"]
 source = "ipc-design-topics"
 
 [profiles.3c.defaults]
 board_thickness = "1.6 mm"
+
+[[rules.copper.feature_width]]
+id = "diode.ipc_baseline.copper.minimum_feature_width"
+limit = { minimum = "5 mil" }
+source = "diode-standard"
 
 [[rules.drilling.hole_aspect_ratio]]
 id = "diode.ipc.maximum_via_aspect_ratio.level_a"

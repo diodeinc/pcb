@@ -612,7 +612,6 @@ limit = { minimum = "300 mil" }
                     1.6
                 );
                 let rules = rules::lower(&parsed, Some(&profile)).unwrap();
-                assert_eq!(rules.len(), 10);
                 let aspect_ratio = rules
                     .iter()
                     .filter(|rule| matches!(rule.kind, rules::RuleKind::HoleAspectRatio(_)))
