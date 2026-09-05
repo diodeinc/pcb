@@ -470,3 +470,30 @@ fn later_paint_does_not_change_an_earlier_runs_accuracy() {
     assert!(!result.is_empty());
     accuracy(0.002).check(result.uncertainty_mm).unwrap();
 }
+
+#[test]
+fn polygon_rounding_and_filled_union_respect_total_budget() {
+    let polygon = ContourSet::new(
+        vec![vec![
+            [1e9, 0.0],
+            [1e9 + 1.0, 0.0],
+            [1e9 + 1.0, 1.0],
+            [1e9, 1.0],
+        ]],
+        FillRule::NonZero,
+        0.0,
+    );
+    assert!(polygon.uncertainty_mm > 0.0);
+    assert!(
+        polygon
+            .disk_dilate(0.0, accuracy(polygon.uncertainty_mm / 2.0))
+            .is_err()
+    );
+    let contours = polygon.to_contours();
+    let prepared =
+        ContourSet::from_contours(&contours, FillRule::EvenOdd, 0.0, accuracy(0.01)).unwrap();
+    assert!(
+        ContourSet::from_filled_contours(&contours, 0.0, accuracy(prepared.uncertainty_mm * 1.1))
+            .is_err()
+    );
+}

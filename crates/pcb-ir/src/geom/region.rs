@@ -434,7 +434,8 @@ impl From<AccuracyError> for GapRegularizationError {
 
 impl ContourSet {
     pub fn new(rings: Vec<Ring>, fill_rule: FillRule, tolerance: f64) -> Self {
-        Self::from_regularized(simplify_rings(rings, fill_rule), tolerance, 0.0)
+        let uncertainty = numerical_error(rings_bbox(&rings));
+        Self::from_regularized(simplify_rings(rings, fill_rule), tolerance, uncertainty)
     }
 
     /// Construct from known regularized polygons, preserving their history.
@@ -550,7 +551,9 @@ impl ContourSet {
                 )?,
             );
         }
-        Ok(composer.finish(tolerance))
+        let result = composer.finish(tolerance);
+        accuracy.check(result.uncertainty_mm)?;
+        Ok(result)
     }
 
     /// Build the union of the geometric images painted by a set of paths.
