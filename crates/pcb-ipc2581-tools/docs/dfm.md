@@ -379,6 +379,7 @@ requirements or qualified capabilities for every technology or copper weight.
 | Annular ring | Required minimum 0.125 mm for vias, 7 mil (0.1778 mm) for PTHs | Nominal circular-hole enclosure on applicable copper layers, not tolerance-aware finished-board acceptance |
 | Hole diameter | Required minimum 0.20 mm for vias/NPTHs, 15 mil (0.381 mm) for PTHs | Source-declared circular hole diameter, interpreted as finished size |
 | Slot width | Required minimum 0.5 mm plated, 31 mil (0.7874 mm) nonplated | IPC primitive width or PCB IR outline minimum width; excludes the optional 0.6 mm plated preferred tier |
+| Hole-to-hole clearance | Required minimum 10 mil (0.254 mm) | All six unordered circular via/PTH/NPTH pair classes with overlapping physical drill spans; excludes routed-slot pairs |
 
 Hole-diameter checks do not model a separate drill-tool diameter, plating
 allowance, or manufacturing tolerance, and cannot verify the exporter's
