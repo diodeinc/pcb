@@ -27,7 +27,9 @@ pub use bbox::BBox;
 pub use path::{ContourBuf, PathCmd, PathOp, Segment, StrokeToFillStyle};
 pub use pattern::{StrokePatternMark, stroke_pattern_marks};
 pub use point::{Mirror, Point};
-pub use region::{ContourSet, DiskGapRegularization, GapRegularizationError, PaintComposer, Ring};
+pub use region::{
+    ContourSet, DiskGapRegularization, GapRegularizationError, PaintComposer, PreparedRegion, Ring,
+};
 pub(crate) use store::validate_bbox;
 pub use store::{Contour, Path, PathArena, Span};
 pub use style::{

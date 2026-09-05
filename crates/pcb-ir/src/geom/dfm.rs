@@ -11,7 +11,7 @@ use crate::geom::bbox::BBox;
 use crate::geom::dist;
 use crate::geom::grid::CellGrid;
 use crate::geom::point::Point;
-use crate::geom::region::{ContourSet, TwoSidedResidualComponent, ring_edges};
+use crate::geom::region::{ContourSet, PreparedRegion, TwoSidedResidualComponent, ring_edges};
 use crate::geom::tol;
 
 pub use crate::geom::dist::Distance;
@@ -51,104 +51,7 @@ impl BBoxIndex {
     }
 }
 
-/// Uniform-grid index over a region's boundary segments.
-///
-/// DFM rules ask whether thousands of points and segments lie within a small
-/// clearance of the same composed layer boundary. This keeps those queries
-/// local instead of walking every polygon edge for every query. Every
-/// answer counts the region boundary as one flattened input.
-#[derive(Debug, Clone)]
-pub struct RegionBoundaryIndex {
-    segments: Vec<(Point, Point)>,
-    bounds: Vec<BBox>,
-    grid: CellGrid,
-}
-
-/// Grid pitch bounds. Queries stay correct for any pitch; these only keep the
-/// cell count proportionate when a caller's search radius is extreme.
-const MIN_CELL_MM: f64 = 0.5;
-const MAX_CELL_MM: f64 = 50.0;
-
-impl RegionBoundaryIndex {
-    /// Index a region's boundary for queries out to about `search_radius_mm`.
-    ///
-    /// The radius is a pitch hint, not a limit: queries may pass any distance.
-    pub fn new(region: &ContourSet, search_radius_mm: f64) -> Self {
-        let pitch = search_radius_mm.clamp(MIN_CELL_MM, MAX_CELL_MM);
-        let segments = region.rings.iter().flat_map(ring_edges).collect::<Vec<_>>();
-        let bounds = segments
-            .iter()
-            .map(|&(start, end)| BBox::spanning(start, end))
-            .collect();
-        let grid = CellGrid::new(
-            pitch,
-            region.bbox,
-            segments.iter().enumerate().flat_map(|(id, &(start, end))| {
-                corridor_cells(start, end, 0.0, pitch).map(move |cell| (id as u32, cell))
-            }),
-        );
-        Self {
-            segments,
-            bounds,
-            grid,
-        }
-    }
-
-    /// Nearest boundary point no farther than `max_distance_mm` from `point`.
-    pub fn nearest_within(&self, point: Point, max_distance_mm: f64) -> Option<Distance> {
-        self.near(point, point, max_distance_mm)
-            .map(|index| {
-                let (start, end) = self.segments[index as usize];
-                let (mm, boundary) = dist::point_segment(point, start, end);
-                Distance::flattened(mm, point, boundary, 1)
-            })
-            .filter(|distance| distance.mm <= max_distance_mm + tol::EPSILON_MM)
-            .min_by(|left, right| left.mm.total_cmp(&right.mm))
-    }
-
-    /// Nearest boundary point no farther than `max_distance_mm` from the
-    /// query segment. A segment crossing the boundary measures zero.
-    pub fn segment_nearest_within(
-        &self,
-        start: Point,
-        end: Point,
-        max_distance_mm: f64,
-    ) -> Option<Distance> {
-        self.near(start, end, max_distance_mm)
-            .map(|index| {
-                let (edge_start, edge_end) = self.segments[index as usize];
-                let (mm, on_query, on_boundary) = dist::segments(start, end, edge_start, edge_end);
-                Distance::flattened(mm, on_query, on_boundary, 1)
-            })
-            .filter(|distance| distance.mm <= max_distance_mm + tol::EPSILON_MM)
-            .min_by(|left, right| left.mm.total_cmp(&right.mm))
-    }
-
-    /// The indexed segments whose bounds meet `bounds`, in boundary order,
-    /// each once.
-    pub fn segments_meeting(&self, bounds: BBox) -> impl Iterator<Item = (Point, Point)> + '_ {
-        let mut ids = self.grid.rectangle(bounds).collect::<Vec<_>>();
-        ids.sort_unstable();
-        ids.dedup();
-        ids.into_iter()
-            .filter(move |&id| self.bounds[id as usize].intersects(bounds))
-            .map(|id| self.segments[id as usize])
-    }
-
-    /// Ids of the indexed segments whose bounds come within `reach` of the
-    /// query segment, in grid order: column by column, row by row, then by
-    /// id. A segment spanning several cells is yielded once per cell. The
-    /// minimum a consumer takes is unchanged by the repeats, and of equal
-    /// minima it keeps the first, which is always the first cell's copy.
-    fn near(&self, start: Point, end: Point, reach: f64) -> impl Iterator<Item = u32> + '_ {
-        let query = BBox::spanning(start, end).expand(reach + tol::EPSILON_MM);
-        corridor_columns(start, end, reach, self.grid.pitch_mm())
-            .flat_map(move |(column, min_row, max_row)| {
-                self.grid.column(column, min_row, max_row).iter().copied()
-            })
-            .filter(move |&id| self.bounds[id as usize].intersects(query))
-    }
-
+impl PreparedRegion {
     /// Parameter intervals along a segment within `distance_mm` of the
     /// indexed boundary. Unlike a nearest-point query, these certify the
     /// complete covered extent, including gaps between disjoint boundaries.
@@ -159,9 +62,12 @@ impl RegionBoundaryIndex {
         distance_mm: f64,
     ) -> Vec<(f64, f64)> {
         merge_intervals(
-            indexed_edges_near(self, start, end, distance_mm)
+            self.segment_ids_near(start, end, distance_mm)
                 .into_iter()
-                .flat_map(|(a, b)| segment_capsule_intervals(start, end, a, b, distance_mm))
+                .flat_map(|id| {
+                    let (a, b) = self.segments[id];
+                    segment_capsule_intervals(start, end, a, b, distance_mm)
+                })
                 .collect(),
         )
     }
@@ -196,51 +102,6 @@ impl RegionBoundaryIndex {
             1,
         ))
     }
-}
-
-/// Every grid column within `radius_mm` of the segment with the rows it
-/// covers there, so long diagonal segments touch a linear number of cells
-/// instead of their whole bounding box. A zero-length segment yields the
-/// cells around a point.
-fn corridor_columns(
-    start: Point,
-    end: Point,
-    radius_mm: f64,
-    cell_size_mm: f64,
-) -> impl Iterator<Item = (i64, i64, i64)> {
-    let min_column = CellGrid::cell(start.x.min(end.x) - radius_mm, cell_size_mm);
-    let max_column = CellGrid::cell(start.x.max(end.x) + radius_mm, cell_size_mm);
-    let delta = end - start;
-    (min_column..=max_column).map(move |column| {
-        let column_min = column as f64 * cell_size_mm - radius_mm;
-        let column_max = (column + 1) as f64 * cell_size_mm + radius_mm;
-        let (t_min, t_max) = if delta.x.abs() <= f64::EPSILON {
-            (0.0, 1.0)
-        } else {
-            let enter = (column_min - start.x) / delta.x;
-            let exit = (column_max - start.x) / delta.x;
-            (
-                enter.min(exit).clamp(0.0, 1.0),
-                enter.max(exit).clamp(0.0, 1.0),
-            )
-        };
-        let y_at_min = start.y + delta.y * t_min;
-        let y_at_max = start.y + delta.y * t_max;
-        let min_row = CellGrid::cell(y_at_min.min(y_at_max) - radius_mm, cell_size_mm);
-        let max_row = CellGrid::cell(y_at_min.max(y_at_max) + radius_mm, cell_size_mm);
-        (column, min_row, max_row)
-    })
-}
-
-/// Every grid cell of the corridor, column by column and row by row.
-fn corridor_cells(
-    start: Point,
-    end: Point,
-    radius_mm: f64,
-    cell_size_mm: f64,
-) -> impl Iterator<Item = (i64, i64)> {
-    corridor_columns(start, end, radius_mm, cell_size_mm)
-        .flat_map(|(column, min_row, max_row)| (min_row..=max_row).map(move |row| (column, row)))
 }
 
 /// Set distance between two closed disks: `max(0, ‖c₁ − c₂‖ − r₁ − r₂)`,
@@ -278,9 +139,9 @@ pub fn region_clearance(first: &ContourSet, second: &ContourSet) -> Option<Dista
     let reach = span.width().hypot(span.height());
     region_clearance_within(
         first,
-        &RegionBoundaryIndex::new(first, reach),
+        &first.prepare_query(),
         second,
-        &RegionBoundaryIndex::new(second, reach),
+        &second.prepare_query(),
         reach,
     )
 }
@@ -293,9 +154,9 @@ pub fn region_clearance(first: &ContourSet, second: &ContourSet) -> Option<Dista
 /// empty or the clearance is greater than `maximum_mm`.
 pub fn region_clearance_within(
     first: &ContourSet,
-    first_boundary: &RegionBoundaryIndex,
+    first_boundary: &PreparedRegion,
     second: &ContourSet,
-    second_boundary: &RegionBoundaryIndex,
+    second_boundary: &PreparedRegion,
     maximum_mm: f64,
 ) -> Option<Distance> {
     if first.is_empty() || second.is_empty() {
@@ -368,7 +229,7 @@ pub struct ClearanceSite {
 pub fn linework_clearance_sites(
     lines: &[(Point, Point)],
     material: &ContourSet,
-    index: &RegionBoundaryIndex,
+    index: &PreparedRegion,
     minimum_mm: f64,
     flattened_linework: u32,
 ) -> Vec<ClearanceSite> {
@@ -380,11 +241,14 @@ pub fn linework_clearance_sites(
     let mut pending = Vec::with_capacity(lines.len());
     let mut midpoints = Vec::new();
     for &(start, end) in lines {
-        let edges = indexed_edges_near(index, start, end, reach);
+        let edges = index.segment_ids_near(start, end, reach);
         let near = merge_intervals(
             edges
-                .iter()
-                .flat_map(|&(a, b)| segment_capsule_intervals(start, end, a, b, reach))
+                .into_iter()
+                .flat_map(|id| {
+                    let (a, b) = index.segments[id];
+                    segment_capsule_intervals(start, end, a, b, reach)
+                })
                 .collect(),
         );
         // A segment can run deep inside material, beyond every boundary
@@ -423,7 +287,7 @@ pub fn linework_clearance_sites(
         .filter_map(|group| {
             let mut nearest: Option<Distance> = None;
             let mut first_paths = Vec::new();
-            let mut second_intervals: BTreeMap<u32, Vec<(f64, f64)>> = BTreeMap::new();
+            let mut second_intervals: BTreeMap<usize, Vec<(f64, f64)>> = BTreeMap::new();
             let mut bbox = BBox::empty();
             for span_index in group {
                 let (start, end) = spans[span_index];
@@ -444,8 +308,8 @@ pub fn linework_clearance_sites(
                 {
                     nearest = Some(distance);
                 }
-                for edge_id in indexed_edge_ids_near(index, start, end, reach) {
-                    let (a, b) = index.segments[edge_id as usize];
+                for edge_id in index.segment_ids_near(start, end, reach) {
+                    let (a, b) = index.segments[edge_id];
                     second_intervals
                         .entry(edge_id)
                         .or_default()
@@ -458,7 +322,7 @@ pub fn linework_clearance_sites(
             let second_paths = second_intervals
                 .into_iter()
                 .flat_map(|(edge_id, intervals)| {
-                    let (start, end) = index.segments[edge_id as usize];
+                    let (start, end) = index.segments[edge_id];
                     let delta = end - start;
                     merge_intervals(intervals)
                         .into_iter()
@@ -489,7 +353,7 @@ pub fn region_clearance_sites(
     second: &ContourSet,
     minimum_mm: f64,
 ) -> Vec<ClearanceSite> {
-    let index = RegionBoundaryIndex::new(second, minimum_mm);
+    let index = second.prepare_query();
     region_clearance_sites_with_index(first, second, &index, minimum_mm)
 }
 
@@ -497,7 +361,7 @@ pub fn region_clearance_sites(
 pub fn region_clearance_sites_with_index(
     first: &ContourSet,
     second: &ContourSet,
-    second_boundary: &RegionBoundaryIndex,
+    second_boundary: &PreparedRegion,
     minimum_mm: f64,
 ) -> Vec<ClearanceSite> {
     let lines = first.rings.iter().flat_map(ring_edges).collect::<Vec<_>>();
@@ -518,7 +382,7 @@ pub fn region_clearance_sites_with_index(
             second_paths: Vec::new(),
             overlap,
         };
-        let overlap_boundary = RegionBoundaryIndex::new(&joined.overlap, tol::REGION_MM);
+        let overlap_boundary = joined.overlap.prepare_query();
         let mut position = 0;
         while position < sites.len() {
             let touches = sites[position].first_paths.iter().any(|path| {
@@ -581,31 +445,6 @@ pub fn circular_region(center: Point, radius_mm: f64) -> ContourSet {
     let circle =
         crate::geom::path::transform_cmds(circle.cmds, crate::geom::Affine2::translation(center));
     ContourSet::from_filled_contours(&[circle], tol::REGION_MM)
-}
-
-fn indexed_edges_near(
-    index: &RegionBoundaryIndex,
-    start: Point,
-    end: Point,
-    reach: f64,
-) -> Vec<(Point, Point)> {
-    indexed_edge_ids_near(index, start, end, reach)
-        .into_iter()
-        .map(|id| index.segments[id as usize])
-        .collect()
-}
-
-/// The distinct indexed segments near the query, by id.
-fn indexed_edge_ids_near(
-    index: &RegionBoundaryIndex,
-    start: Point,
-    end: Point,
-    reach: f64,
-) -> Vec<u32> {
-    let mut ids = index.near(start, end, reach).collect::<Vec<_>>();
-    ids.sort_unstable();
-    ids.dedup();
-    ids
 }
 
 fn linear_interval(value: f64, slope: f64, minimum: f64, maximum: f64) -> Option<(f64, f64)> {
@@ -1062,7 +901,7 @@ mod tests {
         let sites = linework_clearance_sites(
             &[(Point::new(0.0, 0.0), Point::new(10.0, 0.0))],
             &material,
-            &RegionBoundaryIndex::new(&material, 0.3),
+            &material.prepare_query(),
             0.3,
             0,
         );
@@ -1082,13 +921,7 @@ mod tests {
     fn clearance_sites_include_segments_deep_inside_material() {
         let material = rect_region(0.0, 0.0, 10.0, 10.0);
         let line = (Point::new(2.0, 5.0), Point::new(8.0, 5.0));
-        let sites = linework_clearance_sites(
-            &[line],
-            &material,
-            &RegionBoundaryIndex::new(&material, 0.2),
-            0.2,
-            0,
-        );
+        let sites = linework_clearance_sites(&[line], &material, &material.prepare_query(), 0.2, 0);
         assert_eq!(sites.len(), 1);
         assert_eq!(sites[0].distance.mm, 0.0);
         assert_eq!(sites[0].first_paths, vec![vec![line.0, line.1]]);
@@ -1098,7 +931,7 @@ mod tests {
     fn clearance_sites_merge_repeated_contacts_on_the_same_source_edge() {
         let material =
             ContourSet::from_filled_contours(&[rect_at(0.0, 0.0, 1.0, 1.0)], tol::REGION_MM);
-        let index = RegionBoundaryIndex::new(&material, 0.2);
+        let index = material.prepare_query();
         let sites = linework_clearance_sites(
             &[
                 (Point::new(0.0, -0.1), Point::new(0.5, -0.1)),
@@ -1132,7 +965,7 @@ mod tests {
         let sites = linework_clearance_sites(
             &[(point, point)],
             &material,
-            &RegionBoundaryIndex::new(&material, 0.2),
+            &material.prepare_query(),
             0.2,
             0,
         );
@@ -1195,7 +1028,7 @@ mod tests {
         assert!((between_regions.first.x - 2.0).abs() < 1e-9);
         assert!((between_regions.second.x - 3.5).abs() < 1e-9);
 
-        let index = RegionBoundaryIndex::new(&left, 1.5);
+        let index = left.prepare_query();
         let from_segment = index
             .segment_nearest_within(Point::new(-1.0, 3.0), Point::new(3.0, 3.0), 1.5)
             .unwrap();
@@ -1235,9 +1068,9 @@ mod tests {
         let clearance_within = |first: &ContourSet, second: &ContourSet, maximum_mm: f64| {
             region_clearance_within(
                 first,
-                &RegionBoundaryIndex::new(first, maximum_mm),
+                &first.prepare_query(),
                 second,
-                &RegionBoundaryIndex::new(second, maximum_mm),
+                &second.prepare_query(),
                 maximum_mm,
             )
         };
@@ -1262,7 +1095,7 @@ mod tests {
     }
 
     #[test]
-    fn corridor_indexing_covers_long_diagonal_segments() {
+    fn prepared_boundary_covers_long_diagonal_segments() {
         let diagonal = ContourSet::from_contours(
             &[ContourBuf::new(vec![
                 PathCmd::move_to(Point::new(0.0, 0.0)),
@@ -1274,7 +1107,7 @@ mod tests {
             FillRule::NonZero,
             tol::REGION_MM,
         );
-        let index = RegionBoundaryIndex::new(&diagonal, 0.5);
+        let index = diagonal.prepare_query();
         let near_middle = index
             .nearest_within(Point::new(40.3, 40.0), 0.5)
             .expect("mid-segment boundary within reach");
@@ -1288,7 +1121,7 @@ mod tests {
             FillRule::NonZero,
             tol::REGION_MM,
         );
-        let index = RegionBoundaryIndex::new(&copper, 1.475);
+        let index = copper.prepare_query();
 
         assert_eq!(
             index.circular_enclosure(Point::default(), 1.35, 0.125 - tol::FLATTEN_MM),
@@ -1308,7 +1141,7 @@ mod tests {
     #[test]
     fn circular_enclosure_handles_noncircular_lands() {
         let copper = rect_region(-3.0, -1.5, 3.0, 1.5);
-        let index = RegionBoundaryIndex::new(&copper, 1.6);
+        let index = copper.prepare_query();
 
         let measurement = index
             .circular_enclosure(Point::default(), 1.0, 0.6)

@@ -128,7 +128,7 @@ fn disk_to_copper_clearance(
     center: Point,
     radius_mm: f64,
     copper: &pcb_ir::geom::ContourSet,
-    boundary: &pcb_ir::geom::dfm::RegionBoundaryIndex,
+    boundary: &pcb_ir::geom::PreparedRegion,
     limit_mm: f64,
 ) -> Option<Distance> {
     if copper.contains_point(center) {

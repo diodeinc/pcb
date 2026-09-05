@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Add prepared signed-distance queries for PCBIR regions and use one boundary index across DFM.
+
 ### Fixed
 
 - Place generated schematic content outside the page when it cannot fit, instead of failing schematic apply, and reserve space for existing text and graphics.

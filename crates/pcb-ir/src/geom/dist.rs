@@ -67,7 +67,7 @@ impl Distance {
 pub fn point_segment(point: Point, start: Point, end: Point) -> (f64, Point) {
     let delta = end - start;
     let length_squared = delta.x * delta.x + delta.y * delta.y;
-    let closest = if length_squared <= f64::EPSILON {
+    let closest = if length_squared == 0.0 {
         start
     } else {
         let t = (((point.x - start.x) * delta.x + (point.y - start.y) * delta.y) / length_squared)

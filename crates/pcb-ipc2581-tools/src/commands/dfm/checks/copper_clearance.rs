@@ -8,9 +8,7 @@
 //! or contained distinct-owner regions measure zero.
 
 use pcb_ir::geom::BBox;
-use pcb_ir::geom::dfm::{
-    RegionBoundaryIndex, region_clearance_sites_with_index, region_clearance_within,
-};
+use pcb_ir::geom::dfm::{region_clearance_sites_with_index, region_clearance_within};
 
 use crate::commands::dfm::design::{ConductorId, Design};
 use crate::commands::dfm::report::{Evidence, SourceLocator, Subject};
@@ -63,7 +61,7 @@ pub(super) fn evaluate(limit_mm: f64, conditions: &Conditions, design: &Design) 
 
         let boundaries = pieces
             .iter()
-            .map(|piece| RegionBoundaryIndex::new(&piece.region, limit_mm))
+            .map(|piece| piece.region.prepare_query())
             .collect::<Vec<_>>();
         // The pairs the bounds cannot separate, in sweep order along x.
         let pairs = pieces

@@ -6,6 +6,10 @@
 //! dilation over filled point sets, shared by every dialect so IPC, Gerber,
 //! SVG, and comparison all use the same geometry semantics.
 
+mod query;
+
+pub use query::PreparedRegion;
+
 use std::fmt;
 
 use boostvoronoi::prelude::{
@@ -27,7 +31,6 @@ use i_overlay::mesh::style::{LineJoin as OutlineLineJoin, OutlineStyle};
 use crate::geom::affine::Affine2;
 use crate::geom::bbox::BBox;
 use crate::geom::dist::{self, Distance};
-use crate::geom::grid::CellGrid;
 use crate::geom::path::{ContourBuf, PathCmd, contours_to_kurbo, stroke_to_fill, transform_cmds};
 use crate::geom::point::Point;
 use crate::geom::store::{Path, PathArena};
@@ -313,11 +316,12 @@ pub fn ring_signed_area(ring: &Ring) -> f64 {
     if ring.len() < 3 {
         return 0.0;
     }
+    let [origin_x, origin_y] = ring[0];
     let mut area = 0.0;
-    for index in 0..ring.len() {
-        let [x0, y0] = ring[index];
-        let [x1, y1] = ring[(index + 1) % ring.len()];
-        area += x0 * y1 - x1 * y0;
+    for edge in ring[1..].windows(2) {
+        let [x0, y0] = edge[0];
+        let [x1, y1] = edge[1];
+        area += (x0 - origin_x) * (y1 - origin_y) - (x1 - origin_x) * (y0 - origin_y);
     }
     area / 2.0
 }
@@ -645,9 +649,13 @@ impl ContourSet {
     /// Distinct components always face across void.
     fn facing_components(&self, material_mm: f64, void_mm: f64, reach_mm: f64) -> Self {
         let (components, outers) = self.ring_components();
-        let pitch = material_mm.max(void_mm).max(reach_mm);
-        let grid = SegmentGrid::new(source_boundary_segments(self), pitch);
-        let segments = &grid.segments;
+        let segments = source_boundary_segments(self);
+        let boundary = PreparedRegion::from_segments(
+            segments
+                .iter()
+                .map(|segment| (segment.start, segment.end))
+                .collect(),
+        );
         let sees_left = |wall: &OrientedBoundarySegment, across: Point| {
             let along = wall.end - wall.start;
             let turn = along.x * across.y - along.y * across.x;
@@ -686,16 +694,14 @@ impl ContourSet {
         };
         let mut facing = vec![false; segments.len()];
         for (id, segment) in segments.iter().enumerate() {
-            for other in grid.near_ids(segment.bbox.expand(material_mm.max(void_mm))) {
-                let partner = &segments[other as usize];
-                if other as usize <= id
-                    || (facing[id] && facing[other as usize])
-                    || !faces(segment, partner)
-                {
+            for other in boundary.segment_ids_meeting(segment.bbox.expand(material_mm.max(void_mm)))
+            {
+                let partner = &segments[other];
+                if other <= id || (facing[id] && facing[other]) || !faces(segment, partner) {
                     continue;
                 }
                 facing[id] = true;
-                facing[other as usize] = true;
+                facing[other] = true;
             }
         }
         let mut kept = vec![false; self.rings.len()];
@@ -712,8 +718,8 @@ impl ContourSet {
                 [window.max.x, window.max.y],
                 [window.min.x, window.max.y],
             ]);
-            for other in grid.near_ids(window) {
-                kept[segments[other as usize].topology.ring] = true;
+            for other in boundary.segment_ids_meeting(window) {
+                kept[segments[other].topology.ring] = true;
             }
         }
         for (ring, &component) in components.iter().enumerate() {
@@ -1570,13 +1576,23 @@ fn two_sided_residual_components(
     if residual.is_empty() {
         return Vec::new();
     }
-    let segments = SegmentGrid::new(source_boundary_segments(source), reach);
+    let segments = source_boundary_segments(source);
+    let boundary = PreparedRegion::from_segments(
+        segments
+            .iter()
+            .map(|segment| (segment.start, segment.end))
+            .collect(),
+    );
     let contact_tolerance = source.tolerance.max(residual.tolerance);
     residual
         .connected_components()
         .into_iter()
         .filter_map(|component| {
-            let sites = segments.near(component.bbox.expand(reach));
+            let sites = boundary
+                .segment_ids_meeting(component.bbox.expand(reach))
+                .into_iter()
+                .map(|id| segments[id])
+                .collect::<Vec<_>>();
             component_width(&sites, &component, reach, contact_tolerance).map(|geometry| {
                 TwoSidedResidualComponent {
                     region: component,
@@ -1587,54 +1603,6 @@ fn two_sided_residual_components(
             })
         })
         .collect()
-}
-
-/// Boundary segments bucketed on a uniform grid, so the segments around one
-/// residue component are found without scanning the whole boundary.
-struct SegmentGrid {
-    segments: Vec<OrientedBoundarySegment>,
-    grid: CellGrid,
-}
-
-/// Grid pitch changes candidate lookup cost only. A fixed floor prevents a
-/// small DFM limit from dividing a board-length edge into thousands of cells.
-const MIN_SEGMENT_GRID_CELL_MM: f64 = 1.0;
-
-impl SegmentGrid {
-    fn new(segments: Vec<OrientedBoundarySegment>, cell_mm: f64) -> Self {
-        let bounds = segments
-            .iter()
-            .map(|segment| segment.bbox)
-            .fold(BBox::empty(), BBox::union);
-        let pitch = cell_mm.max(MIN_SEGMENT_GRID_CELL_MM);
-        let grid = CellGrid::new(
-            pitch,
-            bounds,
-            segments.iter().enumerate().flat_map(|(id, segment)| {
-                CellGrid::cells_of(segment.bbox, pitch).map(move |cell| (id as u32, cell))
-            }),
-        );
-        Self { segments, grid }
-    }
-
-    /// Ids of the segments whose bounds meet `query`; a segment in several
-    /// cells repeats.
-    fn near_ids(&self, query: BBox) -> impl Iterator<Item = u32> + '_ {
-        self.grid
-            .rectangle(query)
-            .filter(move |&id| self.segments[id as usize].bbox.intersects(query))
-    }
-
-    /// The segments whose bounds meet `query`, in index order, each once.
-    fn near(&self, query: BBox) -> Vec<OrientedBoundarySegment> {
-        let mut indices = self.near_ids(query).collect::<Vec<_>>();
-        indices.sort_unstable();
-        indices.dedup();
-        indices
-            .into_iter()
-            .map(|index| self.segments[index as usize])
-            .collect()
-    }
 }
 
 /// A boundary segment snapped to the tolerance grid, with its topology.
@@ -2726,18 +2694,6 @@ mod tests {
         assert!(!nearby_web.contains_point(Point::new(6.5, 2.0)));
         assert!(!nearby_web.contains_point(Point::new(5.0, 3.5)));
         assert!(webbed.facing_components(0.0, 0.15, 1.0).is_empty());
-    }
-
-    #[test]
-    fn segment_grid_uses_coarse_cells_without_losing_local_edges() {
-        let region = ContourSet::rectangle(rect(0.0, 0.0, 400.0, 10.0), tol::REGION_MM);
-        let grid = SegmentGrid::new(source_boundary_segments(&region), 0.05);
-
-        assert_eq!(grid.grid.pitch_mm(), MIN_SEGMENT_GRID_CELL_MM);
-        let near = grid.near(rect(199.9, -0.1, 200.1, 0.1));
-        assert_eq!(near.len(), 1);
-        assert_eq!(near[0].start.y, 0.0);
-        assert_eq!(near[0].end.y, 0.0);
     }
 
     #[test]
