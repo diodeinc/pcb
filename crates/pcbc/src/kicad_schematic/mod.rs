@@ -15,6 +15,7 @@ use serde_json::{Value, json};
 
 use pcb_kicad_sch::{
     SchDocument, analysis::inspect_schematic, patch_page_source, reconcile::plan_reconciliation,
+    sync_sheet_placements,
 };
 
 mod project;
@@ -89,7 +90,7 @@ fn project_state(path: &Path) -> Result<ProjectState> {
     }
 }
 
-fn apply_existing(project: KicadProject, netlist: &Schematic) -> Result<SchematicApplyResult> {
+fn apply_existing(mut project: KicadProject, netlist: &Schematic) -> Result<SchematicApplyResult> {
     let root_schematic = project
         .root_schematics
         .first()
@@ -104,9 +105,6 @@ fn apply_existing(project: KicadProject, netlist: &Schematic) -> Result<Schemati
     // Semantic equality is the no-op boundary. Do not run a parsed KiCad file
     // through our serializer merely because its valid item ordering or
     // formatting differs from generated output.
-    if plan.is_empty() {
-        return Ok(unchanged(project, root_schematic));
-    }
     let desired = plan.apply(Some(&project.document))?;
 
     let mut writes = Vec::new();
@@ -150,6 +148,17 @@ fn apply_existing(project: KicadProject, netlist: &Schematic) -> Result<Schemati
                 next,
             });
         }
+    }
+    if sync_sheet_placements(&mut project.project, &desired)? {
+        let source = fs::read_to_string(&project.project_file)
+            .with_context(|| format!("failed to read {}", project.project_file.display()))?;
+        let mut next = serde_json::to_string_pretty(&project.project)?;
+        next.push('\n');
+        writes.push(PendingWrite {
+            path: project.project_file.clone(),
+            source: Some(source),
+            next,
+        });
     }
     if writes.is_empty() {
         return Ok(unchanged(project, root_schematic));
@@ -267,6 +276,9 @@ fn initialize_project(project_file: PathBuf, netlist: &Schematic) -> Result<Sche
         &schematic_name,
         file_name,
     )?;
+    let mut project: Value = serde_json::from_str(&project_source)?;
+    sync_sheet_placements(&mut project, &document)?;
+    let project_source = format!("{}\n", serde_json::to_string_pretty(&project)?);
 
     fs::create_dir_all(&directory)
         .with_context(|| format!("failed to create {}", directory.display()))?;

@@ -9,7 +9,9 @@ use pcb_sch::{AttributeValue, Schematic};
 use serde_json::Value;
 use uuid::Uuid;
 
-use pcb_kicad_sch::{SchDocument, SchItem, normalize_schematic_path, parse_kicad_sch_page};
+use pcb_kicad_sch::{
+    SchDocument, SchItem, normalize_schematic_path, parse_kicad_sch_page, restore_sheet_placements,
+};
 
 /// A KiCad schematic project loaded from one project directory.
 #[derive(Debug, Clone)]
@@ -19,6 +21,7 @@ pub struct KicadProject {
     pub root_schematics: Vec<PathBuf>,
     pub schematic_files: Vec<PathBuf>,
     pub document: SchDocument,
+    pub project: Value,
 }
 
 impl KicadProject {
@@ -46,15 +49,19 @@ impl KicadProject {
                 }
                 (requested.to_path_buf(), project_files.remove(0))
             };
+        let project: Value = serde_json::from_str(&fs::read_to_string(&project_file)?)
+            .with_context(|| format!("failed to parse {}", project_file.display()))?;
         let project_roots = project_root_schematics(&directory, &project_file)?;
         let root_schematics = project_roots.iter().map(|root| root.path.clone()).collect();
-        let (schematic_files, document) = load_schematic_hierarchy(&directory, &project_roots)?;
+        let (schematic_files, document) =
+            load_schematic_hierarchy(&directory, &project_roots, &project)?;
         Ok(Self {
             directory,
             project_file,
             root_schematics,
             schematic_files,
             document,
+            project,
         })
     }
 }
@@ -67,6 +74,7 @@ struct ProjectRoot {
 fn load_schematic_hierarchy(
     directory: &Path,
     roots: &[ProjectRoot],
+    project: &Value,
 ) -> Result<(Vec<PathBuf>, SchDocument)> {
     let mut schematic_files = Vec::new();
     let mut root_by_path = std::collections::BTreeMap::new();
@@ -100,12 +108,22 @@ fn load_schematic_hierarchy(
             }
             root_page_ids.push(page.id.clone());
         }
+        restore_sheet_placements(&mut page, project)
+            .with_context(|| format!("failed to restore sheet metadata for {}", path.display()))?;
         let parent = path.parent().unwrap_or(directory);
+        let mut removed_sheets = BTreeSet::new();
         for sheet in page.items.iter().filter_map(|item| match item {
             SchItem::Sheet(sheet) => Some(sheet),
             _ => None,
         }) {
             let child = project_schematic_path(directory, parent, sheet.file_name())?;
+            // Files are authoritative: a removed child invalidates retained
+            // placement metadata. Reconciliation can recreate netlist content.
+            // Keep errors for live placements and unreadable/non-file paths.
+            if !sheet.placed && !child.try_exists()? {
+                removed_sheets.insert(sheet.id.clone());
+                continue;
+            }
             if !child.is_file() {
                 bail!(
                     "sheet {} references missing schematic {}",
@@ -117,6 +135,9 @@ fn load_schematic_hierarchy(
                 schematic_files.push(child);
             }
         }
+        page.items.retain(
+            |item| !matches!(item, SchItem::Sheet(sheet) if removed_sheets.contains(&sheet.id)),
+        );
         pages.push(page);
     }
     Ok((
@@ -279,6 +300,8 @@ pub(crate) fn files_with_extension(directory: &Path, extension: &str) -> Result<
 mod tests {
     use std::fs;
 
+    use pcb_kicad_sch::sync_sheet_placements;
+
     use super::*;
 
     #[test]
@@ -383,6 +406,107 @@ mod tests {
         let error = KicadProject::load(&directory).unwrap_err();
 
         assert!(error.to_string().contains("escapes project directory"));
+    }
+
+    #[test]
+    fn loads_metadata_only_child_when_parent_source_no_longer_has_sheet() {
+        let directory = tempfile::tempdir().unwrap();
+        let parent = parse_kicad_sch_page(
+            Some("demo.kicad_sch"),
+            &schematic_with_child("root", "child.kicad_sch"),
+        )
+        .unwrap();
+        let mut metadata = serde_json::json!({});
+        sync_sheet_placements(
+            &mut metadata,
+            &SchDocument {
+                pages: vec![parent],
+                root_page_ids: vec!["root".into()],
+            },
+        )
+        .unwrap();
+        fs::write(
+            directory.path().join("demo.kicad_pro"),
+            serde_json::to_string(&metadata).unwrap(),
+        )
+        .unwrap();
+        fs::write(directory.path().join("demo.kicad_sch"), schematic("root")).unwrap();
+        fs::write(directory.path().join("child.kicad_sch"), schematic("child")).unwrap();
+
+        let project = KicadProject::load(directory.path()).unwrap();
+
+        assert_eq!(
+            project.document.pages.len(),
+            2,
+            "restored metadata relationship keeps its child loadable"
+        );
+        assert!(
+            project
+                .schematic_files
+                .iter()
+                .any(|path| path.ends_with("child.kicad_sch"))
+        );
+        assert!(project.document.pages[0].items.iter().any(
+            |item| matches!(item, SchItem::Sheet(sheet) if sheet.id == "sheet-1" && !sheet.placed)
+        ));
+    }
+
+    #[test]
+    fn root_and_nested_parent_renames_preserve_metadata_only_children() {
+        for nested in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let parent = parse_kicad_sch_page(
+                Some("old.kicad_sch"),
+                &schematic_with_child("parent", "child.kicad_sch"),
+            )
+            .unwrap();
+            let mut metadata = serde_json::json!({
+                "schematic": {"top_level_sheets": [{
+                    "filename": if nested { "root.kicad_sch" } else { "renamed.kicad_sch" }
+                }]}
+            });
+            sync_sheet_placements(
+                &mut metadata,
+                &SchDocument {
+                    pages: vec![parent],
+                    root_page_ids: vec!["parent".into()],
+                },
+            )
+            .unwrap();
+            fs::write(
+                directory.path().join("demo.kicad_pro"),
+                serde_json::to_string(&metadata).unwrap(),
+            )
+            .unwrap();
+            fs::write(
+                directory.path().join("renamed.kicad_sch"),
+                schematic("parent"),
+            )
+            .unwrap();
+            fs::write(directory.path().join("child.kicad_sch"), schematic("child")).unwrap();
+            if nested {
+                fs::write(
+                    directory.path().join("root.kicad_sch"),
+                    schematic_with_child("root", "renamed.kicad_sch"),
+                )
+                .unwrap();
+            }
+            let project = KicadProject::load(directory.path()).unwrap();
+            assert!(project.document.pages.iter().any(|page| page.id == "child"));
+            let parent = project
+                .document
+                .pages
+                .iter()
+                .find(|page| page.id == "parent")
+                .unwrap();
+            assert!(
+                parent
+                    .items
+                    .iter()
+                    .any(|item| matches!(item, SchItem::Sheet(sheet) if !sheet.placed))
+            );
+            assert_eq!(parent.file_name.as_deref(), Some("renamed.kicad_sch"));
+        }
     }
 
     #[cfg(unix)]

@@ -89,6 +89,9 @@ fn managed_values(page: &SchPage) -> BTreeMap<String, ManagedValue<'_>> {
         ManagedValue::Library(&page.library),
     )]);
     for item in &page.items {
+        if matches!(item, SchItem::Sheet(sheet) if !sheet.placed) {
+            continue;
+        }
         let Some(id) = item.id() else {
             continue;
         };

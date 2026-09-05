@@ -382,6 +382,9 @@ fn collect_page_connectables(
                 }),
             }),
             SchItem::Sheet(sheet) => {
+                if !sheet.placed {
+                    continue;
+                }
                 let child_id = instance.child_ids.get(&sheet.id).with_context(|| {
                     format!(
                         "sheet {} on page {} has no hierarchy instance",

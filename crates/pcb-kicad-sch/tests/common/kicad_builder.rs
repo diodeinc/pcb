@@ -126,6 +126,7 @@ impl KicadBuilder {
             .collect();
         self.push(SchItem::Sheet(Box::new(Sheet {
             id,
+            placed: true,
             at: None,
             size: None,
             name: None,
