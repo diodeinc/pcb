@@ -21,21 +21,8 @@ alias provides the same commands.
 
 Run `pcb ipc2581 <command> --help` for arguments and output options.
 
-Use `assembly` to emit the complete board-array report, or select one canonical
-board with `--scope board`:
-
-```bash
-pcb ipc assembly design.xml --scope board-array > assembly-report.json
-```
-
-Board-array creation balances copper by default; pass `--no-copper-balance`
-to disable it. Fabrication-panel creation leaves copper unchanged by default;
-pass `--copper-balance` to enable balancing. Both commands accept the inverse
-flag as an explicit override, and reject using both flags together.
-
-The mathematical and geometric strategy for automatic copper balancing — both
-the board-array and fabrication-panel passes — is documented in
-[`docs/copper-balancing.md`](docs/copper-balancing.md).
+`assembly` reports the complete board array by default; `--scope board` selects
+one canonical board. See the [assembly report contract](docs/assembly-report.md).
 
 `edit bom` modifies the input file when `--output` is omitted. Specify an output
 path when the source document must remain unchanged.
@@ -48,17 +35,12 @@ by the retained geometry.
 
 ## DFM process design kits
 
-`dfm check` accepts a built-in process design kit name or a strict, versioned
-TOML file. Built-ins include `standard`, `jlcpcb-1oz` (`jlc`), and the nine IPC
-Class/Producibility profile identities:
+`dfm check` defaults to the `standard` PDK. Use `--pdk` to select a built-in name
+or a strict, versioned TOML file:
 
 ```bash
-pcb ipc dfm check fabrication-panel.xml \
-  --output dfm-report.json
+pcb ipc dfm check fabrication-panel.xml --pdk standard --output dfm-report.json
 ```
-
-The PDK defaults to `standard`. Pass `--pdk` with a built-in name or a path to
-select another process definition.
 
 `standard` currently supports 2 through 10 copper layers.
 `jlcpcb-1oz` checks JLCPCB's rigid FR-4 service with 1 oz outer copper; `jlc`
@@ -81,9 +63,15 @@ PDK source for external viewers. PCB does not generate DFM HTML or host a viewer
 See the [PDK, waiver, and JSON formats](docs/dfm.md) and the
 [standard PDK](pdks/standard.toml) for details.
 
-`fab-panel create` supports the common 12 by 18, 16 by 18, 18 by 24, and 21 by
-24 inch fabrication panel sizes through `--panel-size`. The default is 18 by 24
-inches:
+## Panels and copper balancing
+
+Board-array creation balances copper by default; use `--no-copper-balance`
+to disable it. Fabrication-panel creation requires `--copper-balance` to enable
+balancing. Both commands accept either flag, but not both together. See the
+[copper-balancing strategy](docs/copper-balancing.md).
+
+`fab-panel create` supports `--panel-size` values `12x18`, `16x18`, `18x24`
+(default), and `21x24`, in inches. Repeat an input path to request multiple copies:
 
 ```bash
 pcb ipc2581 fab-panel create \
@@ -92,42 +80,14 @@ pcb ipc2581 fab-panel create \
   assembly-a.xml assembly-a.xml assembly-b.xml
 ```
 
-By default, the command reserves 25.4 mm on the left and right and 50.8 mm on
-the top and bottom of every stock panel. This gives the following packing areas:
+Default process margins are 25.4 mm left/right and 50.8 mm top/bottom; the gap
+between assembly panels is 7.62 mm. Override them with `--edge-margin` (one to
+four CSS-shorthand values in millimeters) and `--panel-gap`.
 
-| Stock panel | Usable packing area |
-| --- | --- |
-| 12 by 18 in | 10 by 14 in |
-| 16 by 18 in | 14 by 14 in |
-| 18 by 24 in | 16 by 20 in |
-| 21 by 24 in | 19 by 20 in |
-
-Use `--edge-margin` with one to four CSS-shorthand values to override the
-process margins in millimeters. Use `--panel-gap` to override the default 7.62 mm
-gap between assembly panels:
-
-```bash
-pcb ipc2581 fab-panel create \
-  --panel-size 18x24 \
-  --edge-margin 50.8 25.4 \
-  --panel-gap 7.62 \
-  --output fabrication-panel.xml \
-  assembly-a.xml assembly-b.xml
-```
-
-Use `--emit-usable-area` to omit the reserved process margins from the generated
-profile and rebase the usable packing area to the origin. For example, an 18 by
-24 inch stock panel with a 25.4 mm margin on every side emits a 16 by 22 inch
-profile while retaining the stock size and process margins in metadata:
-
-```bash
-pcb ipc2581 fab-panel create \
-  --panel-size 18x24 \
-  --edge-margin 25.4 \
-  --emit-usable-area \
-  --output fabrication-panel.xml \
-  assembly-a.xml assembly-b.xml
-```
+`--emit-usable-area` omits process margins from the output profile and rebases
+the packing area to the origin, retaining stock size and margins in metadata.
+For example, an 18 by 24 inch panel with `--edge-margin 25.4` emits a 16 by
+22 inch profile.
 
 All inputs must have identical physical stackups. The first input provides the
 fab panel stackup and canonical physical layer definitions. Each input must have
@@ -146,13 +106,8 @@ manufacturing export separates profile geometry by purpose:
 The outline files do not apply cutter compensation. Drill and route features
 remain in their XNC files.
 
-Repeat an input path to request more than one copy. The command supports up to
-32 assembly panels and fails without writing an output when it cannot find a
-layout.
-
-```bash
-cargo test -p pcb-ipc2581-tools
-```
+The command supports up to 32 assembly panels and fails without writing an
+output when it cannot find a layout.
 
 ## In-memory library and WebAssembly
 
@@ -166,13 +121,12 @@ design; the resulting package exposes individual files and `to_zip()` for an
 in-memory archive. `geometry::render::prepare_layer` prepares a layer for the
 shared SVG/PNG renderers.
 
-`assembly::build_report` builds the deterministic, schema-versioned PCBA
-assembly contract from that same imported design. See the
-[assembly report contract](docs/assembly-report.md) for scope, units,
-identities, physical evidence, and readiness semantics.
+`assembly::build_report` builds the assembly report from the same imported design.
 
 For browser and Node.js bindings, see [`pcb-ipc-wasm`](../pcb-ipc-wasm/README.md).
 
 ```bash
 cargo check -p pcb-ipc2581-tools --no-default-features --target wasm32-unknown-unknown
 ```
+
+Run native tests with `cargo test -p pcb-ipc2581-tools`.
