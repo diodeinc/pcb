@@ -96,7 +96,9 @@ fn write_artwork_layer<LayerMeta, ObjectMeta>(
     let mut run = String::new();
     let mut run_polarity = Polarity::Dark;
     for object in objects {
-        let polarity = if object.order.stage == PaintStage::FinalCutout && has_material {
+        let polarity = if object.order.stage == PaintStage::FinalCutout
+            && (has_material || layer.role == LayerRole::Copper)
+        {
             Polarity::Clear
         } else {
             object.polarity
@@ -611,6 +613,43 @@ mod tests {
         let rendered = artwork_svg(&doc, &RenderOptions::default());
         assert_eq!(rendered.matches("<mask ").count(), 2);
         assert_eq!(rendered.matches(" A").count(), 12);
+    }
+
+    #[test]
+    fn a_cutout_only_copper_layer_is_empty_but_drill_artwork_remains_visible() {
+        let mut doc = copper_artwork();
+        let aperture = doc.push_aperture(artwork::Aperture {
+            shape: artwork::ApertureShape::Obround {
+                width: 2.0,
+                height: 1.0,
+            },
+            hole_diameter: 0.0,
+        });
+        let mut cutout = artwork::Object::new(
+            Polarity::Dark,
+            Geometry::Flash {
+                aperture,
+                transform: Affine2::translation(Point::new(1.5, 1.0)),
+            },
+        );
+        cutout.order.stage = PaintStage::FinalCutout;
+        doc.push_object(0, cutout);
+        artwork::normalize_bounds(&mut doc);
+        let bounds = BBox::new(Point::ZERO, Point::new(3.0, 2.0));
+        for (role, filled) in [(LayerRole::Copper, false), (LayerRole::Drill, true)] {
+            doc.layers[0].role = role;
+            assert_native_and_composed_samples(
+                &doc,
+                bounds,
+                &[
+                    (Point::new(1.5, 1.0), filled),
+                    (Point::new(0.75, 1.0), filled),
+                    (Point::new(2.25, 1.0), filled),
+                    (Point::new(0.25, 1.0), false),
+                    (Point::new(1.5, 1.75), false),
+                ],
+            );
+        }
     }
 
     #[test]

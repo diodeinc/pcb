@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep cutout-only copper layers empty in artwork composition and rendering while preserving visible drill artwork.
+
 ## [0.4.50] - 2026-09-05
 
 ### Added

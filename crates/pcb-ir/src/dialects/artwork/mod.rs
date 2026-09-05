@@ -509,9 +509,9 @@ where
 /// Objects paint stage by stage — [`PaintStage::Base`], then
 /// [`PaintStage::Overlay`], then [`PaintStage::FinalCutout`] — preserving
 /// paint order within each stage, so overlay objects survive base-stage
-/// clears and final cutouts remove painted material. A layer containing only
-/// final-cutout objects, such as a drill or rout document, images the
-/// removals themselves.
+/// clears and final cutouts remove painted material. A non-copper layer
+/// containing only final-cutout objects, such as a drill or rout document,
+/// images the removals themselves; cutout-only copper layers remain empty.
 /// Order a layer's objects for painting.
 ///
 /// Dark paint commutes with dark paint and clear with clear, but not across
@@ -617,7 +617,9 @@ pub fn compose_selected_owners<LayerMeta: Clone, ObjectMeta: Clone, Owner: Clone
         let mut owner_indices: HashMap<Owner, usize> = HashMap::new();
         let mut states: Vec<(Owner, OwnerState)> = Vec::new();
         for object in objects {
-            let polarity = if object.order.stage == PaintStage::FinalCutout && has_material {
+            let polarity = if object.order.stage == PaintStage::FinalCutout
+                && (has_material || layer.role == LayerRole::Copper)
+            {
                 Polarity::Clear
             } else {
                 object.polarity
