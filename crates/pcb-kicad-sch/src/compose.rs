@@ -964,9 +964,8 @@ fn pack_generated_symbols(
             .filter(|block| block.page_index == page_index)
             .collect::<Vec<_>>();
         // Fit and placement share one occupancy: the title block, hierarchy
-        // sheets, and every preserved item. A batch that fits therefore has
-        // a collision-free spot, and place_anchored takes that spot rather
-        // than its least-overlap fallback over preserved work.
+        // sheets, and every preserved item. If no grid fits, placement spills
+        // outside the page rather than covering preserved work.
         let relocatable_ids = relocatable
             .iter()
             .map(|slot| slot.symbol_id())
@@ -1006,14 +1005,13 @@ fn arrange_new_page_blocks(
     for paper in placement_paper_candidates(&page.paper) {
         let packer = occupied_page_packer(page, &paper, excluded_symbol_ids)?;
         if let Some((bounds, offsets)) = arrange_placement_blocks(blocks, &packer) {
-            page.paper = paper;
-            return Ok((packer, bounds, offsets));
+            if packer.can_place_without_overlap(bounds) {
+                page.paper = paper;
+                return Ok((packer, bounds, offsets));
+            }
         }
     }
-    bail!(
-        "generated component batch is too large for automatic schematic placement on {}",
-        page.file_name.as_deref().unwrap_or(&page.id)
-    )
+    arrange_existing_page_blocks(page, blocks, excluded_symbol_ids)
 }
 
 fn arrange_existing_page_blocks(
@@ -1022,12 +1020,8 @@ fn arrange_existing_page_blocks(
     excluded_symbol_ids: &BTreeSet<String>,
 ) -> Result<(GridPacker, GridRect, Vec<GridPoint>)> {
     let packer = occupied_page_packer(page, &page.paper, excluded_symbol_ids)?;
-    let Some((bounds, offsets)) = arrange_placement_blocks(blocks, &packer) else {
-        bail!(
-            "generated component batch does not fit existing schematic page {}",
-            page.file_name.as_deref().unwrap_or(&page.id)
-        );
-    };
+    let (bounds, offsets) =
+        arrange_placement_blocks(blocks, &packer).expect("a generated cohort has blocks");
     Ok((packer, bounds, offsets))
 }
 
@@ -1093,21 +1087,25 @@ fn arrange_placement_blocks(
     packer: &GridPacker,
 ) -> Option<(GridRect, Vec<GridPoint>)> {
     // Pick one page-shaped shelf grid for the whole generated cohort, among
-    // the column counts the page still has room for. Placing the grid as a
-    // unit avoids the radial pattern produced by repeatedly extending a
-    // centered cluster one block at a time.
+    // the column counts, preferring those the page still has room for.
+    // Placing the grid as a unit avoids the radial pattern produced by
+    // repeatedly extending a centered cluster one block at a time.
     let usable = packer.usable_bounds();
     (1..=blocks.len())
         .map(|columns| {
             let (bounds, offsets) = placement_grid_with_columns(blocks, columns);
             (columns, bounds, offsets)
         })
-        .filter(|(_, bounds, _)| packer.can_place_without_overlap(*bounds))
         .min_by_key(|(columns, bounds, _)| {
             let aspect_error = (i64::from(bounds.width()) * i64::from(usable.height())
                 - i64::from(bounds.height()) * i64::from(usable.width()))
             .abs();
-            (aspect_error, bounds.area(), *columns)
+            (
+                !packer.can_place_without_overlap(*bounds),
+                aspect_error,
+                bounds.area(),
+                *columns,
+            )
         })
         .map(|(_, bounds, offsets)| (bounds, offsets))
 }
@@ -3804,18 +3802,48 @@ mod tests {
         assert!(
             arrange_existing_page_blocks(&SchPage::new("empty"), &blocks, &BTreeSet::new()).is_ok()
         );
-        let error = arrange_existing_page_blocks(
-            &test_page_with_sheet("occupied"),
-            &blocks,
-            &BTreeSet::new(),
-        )
-        .err()
-        .expect("a covered page rejects the batch");
-        assert!(
-            error
-                .to_string()
-                .contains("does not fit existing schematic page")
+        let page = test_page_with_sheet("occupied");
+        let (mut packer, bounds, _) =
+            arrange_existing_page_blocks(&page, &blocks, &BTreeSet::new()).unwrap();
+        assert!(!packer.can_place_without_overlap(bounds));
+        let placed = bounds.translated(packer.place_anchored(bounds));
+        assert!(placed.min_x > packer.usable_bounds().max_x);
+        assert_eq!(page.paper, Paper::default());
+    }
+
+    #[test]
+    fn oversized_batches_spill_outside_new_and_existing_pages() {
+        let block = test_placement_block(
+            "oversized",
+            GridRect {
+                min_x: -10,
+                min_y: -20,
+                max_x: 2000,
+                max_y: 2000,
+            },
         );
+        for paper in [
+            Paper::default(),
+            Paper::Custom {
+                width_mm: 5.0,
+                height_mm: 5.0,
+            },
+        ] {
+            let mut page = SchPage::new("overflow");
+            page.paper = paper.clone();
+            for new_page in [false, true] {
+                let (mut packer, bounds, offsets) = if new_page {
+                    arrange_new_page_blocks(&mut page, &[&block], &BTreeSet::new())
+                } else {
+                    arrange_existing_page_blocks(&page, &[&block], &BTreeSet::new())
+                }
+                .unwrap();
+                let placed = bounds.translated(packer.place_anchored(bounds));
+                assert!(placed.min_x > packer.usable_bounds().max_x);
+                assert_eq!(offsets.len(), 1);
+                assert_eq!(page.paper, paper);
+            }
+        }
     }
 
     fn multi_pad_symbol() -> BTreeMap<SymbolSlotKey, PlacedSymbol> {

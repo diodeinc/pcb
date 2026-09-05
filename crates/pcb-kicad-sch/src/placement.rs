@@ -100,6 +100,7 @@ pub(crate) struct GridPacker {
     usable: GridRect,
     width: usize,
     occupied: Vec<bool>,
+    occupied_bounds: Option<GridRect>,
     placed_cluster: Option<GridRect>,
     placement_anchors: Vec<GridPoint>,
 }
@@ -110,18 +111,16 @@ impl GridPacker {
         let usable = GridRect {
             min_x: PACKING_MARGIN_CELLS,
             min_y: PACKING_MARGIN_CELLS,
-            max_x: grid_floor(width_mm) - PACKING_MARGIN_CELLS,
-            max_y: grid_floor(height_mm) - PACKING_MARGIN_CELLS,
+            max_x: (grid_floor(width_mm) - PACKING_MARGIN_CELLS).max(PACKING_MARGIN_CELLS + 1),
+            max_y: (grid_floor(height_mm) - PACKING_MARGIN_CELLS).max(PACKING_MARGIN_CELLS + 1),
         };
-        if usable.max_x <= usable.min_x || usable.max_y <= usable.min_y {
-            bail!("schematic page is too small for automatic placement");
-        }
         let width = usable.width() as usize;
         let height = usable.height() as usize;
         let mut packer = Self {
             usable,
             width,
             occupied: vec![false; width * height],
+            occupied_bounds: None,
             placed_cluster: None,
             placement_anchors: Vec::new(),
         };
@@ -140,6 +139,10 @@ impl GridPacker {
 
     pub(crate) fn occupy(&mut self, rect: GridRect) {
         let rect = rect.expanded(PACKING_CLEARANCE_CELLS);
+        self.occupied_bounds = Some(
+            self.occupied_bounds
+                .map_or(rect, |bounds| bounds.union(rect)),
+        );
         let min_x = rect.min_x.max(self.usable.min_x);
         let min_y = rect.min_y.max(self.usable.min_y);
         let max_x = rect.max_x.min(self.usable.max_x);
@@ -198,9 +201,7 @@ impl GridPacker {
         let max_anchor_x = self.usable.max_x - relative.max_x;
         let max_anchor_y = self.usable.max_y - relative.max_y;
         if max_anchor_x < min_anchor_x || max_anchor_y < min_anchor_y {
-            let anchor = self.centered_anchor(relative);
-            self.record_placement(relative.translated(anchor), align_anchor.then_some(anchor));
-            return anchor;
+            return self.place_outside(relative, align_anchor);
         }
         let occupied = self.occupancy_prefix();
         let aligned_x = self
@@ -244,10 +245,12 @@ impl GridPacker {
                 }
             }
         }
-        let anchor = best_aligned
+        let (rank, anchor) = best_aligned
             .or(best_fallback)
-            .expect("a non-empty anchor range has a candidate")
-            .1;
+            .expect("a non-empty anchor range has a candidate");
+        if rank.0 > 0 {
+            return self.place_outside(relative, align_anchor);
+        }
         self.record_placement(relative.translated(anchor), align_anchor.then_some(anchor));
         anchor
     }
@@ -261,17 +264,18 @@ impl GridPacker {
         self.placement_anchors.extend(anchor);
     }
 
-    fn centered_anchor(&self, relative: GridRect) -> GridPoint {
-        let x2 = i64::from(self.usable.min_x) + i64::from(self.usable.max_x)
-            - i64::from(relative.min_x)
-            - i64::from(relative.max_x);
-        let y2 = i64::from(self.usable.min_y) + i64::from(self.usable.max_y)
-            - i64::from(relative.min_y)
-            - i64::from(relative.max_y);
-        GridPoint {
-            x: x2.div_euclid(2) as i32,
-            y: y2.div_euclid(2) as i32,
-        }
+    fn place_outside(&mut self, relative: GridRect, align_anchor: bool) -> GridPoint {
+        // Include off-page items, which are not represented in the occupancy
+        // bitmap, so repeated applies never stack overflow on existing work.
+        let right = self.occupied_bounds.map_or(self.usable.max_x, |bounds| {
+            bounds.max_x.max(self.usable.max_x)
+        });
+        let anchor = GridPoint {
+            x: right + PACKING_MARGIN_CELLS - relative.min_x,
+            y: self.usable.min_y - relative.min_y,
+        };
+        self.record_placement(relative.translated(anchor), align_anchor.then_some(anchor));
+        anchor
     }
 
     fn distance_from_center_squared(&self, rect: GridRect) -> i64 {
@@ -380,6 +384,32 @@ mod tests {
         let center_dy = placed.min_y + placed.max_y - packer.usable.min_y - packer.usable.max_y;
         assert!(center_dx.abs() <= 1);
         assert!(center_dy.abs() <= 1);
+    }
+
+    #[test]
+    fn overflow_avoids_existing_off_page_items_and_other_overflow() {
+        let mut packer = GridPacker::for_page(&Paper::default()).unwrap();
+        packer.occupy(packer.usable_bounds());
+        let existing = GridRect {
+            min_x: 1000,
+            min_y: 0,
+            max_x: 1100,
+            max_y: 100,
+        };
+        packer.occupy(existing);
+        let relative = GridRect {
+            min_x: -2,
+            min_y: -3,
+            max_x: 2,
+            max_y: 3,
+        };
+
+        let first = relative.translated(packer.place_anchored(relative));
+        let second = relative.translated(packer.place(relative));
+
+        assert!(first.min_x > existing.max_x + PACKING_CLEARANCE_CELLS);
+        assert!(second.min_x > first.max_x + PACKING_CLEARANCE_CELLS);
+        assert_eq!(first.min_y, packer.usable.min_y);
     }
 
     #[test]
