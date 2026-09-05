@@ -461,18 +461,42 @@ pub(crate) fn page_graphic_bounds(item: &Sexpr) -> Option<Bounds> {
             if determinant.abs() <= GEOMETRY_EPS_MM {
                 Bounds::from_points([start, mid, end])?
             } else {
-                // The full circumcircle conservatively includes extrema that
-                // lie between the three control points, even for major arcs.
                 let b2 = bx * bx + by * by;
                 let c2 = cx * cx + cy * cy;
                 let dx = (cy * b2 - by * c2) / determinant;
                 let dy = (bx * c2 - cx * b2) / determinant;
                 let radius = dx.hypot(dy);
                 let center = Point::new(start.x + dx, start.y + dy);
-                Bounds::from_points([
-                    Point::new(center.x - radius, center.y - radius),
-                    Point::new(center.x + radius, center.y + radius),
-                ])?
+                // The determinant selects the sweep through mid. Include only
+                // cardinal extrema on that sweep, not the rest of the circle.
+                let direction = determinant.signum();
+                let start_angle = (-dy).atan2(-dx);
+                let end_angle = (end.y - center.y).atan2(end.x - center.x);
+                let sweep =
+                    ((end_angle - start_angle) * direction).rem_euclid(std::f64::consts::TAU);
+                let mut bounds = Bounds::from_points([start, mid, end])?;
+                for (angle, point) in [
+                    (0.0, Point::new(center.x + radius, center.y)),
+                    (
+                        std::f64::consts::FRAC_PI_2,
+                        Point::new(center.x, center.y + radius),
+                    ),
+                    (
+                        std::f64::consts::PI,
+                        Point::new(center.x - radius, center.y),
+                    ),
+                    (
+                        3.0 * std::f64::consts::FRAC_PI_2,
+                        Point::new(center.x, center.y - radius),
+                    ),
+                ] {
+                    let distance =
+                        ((angle - start_angle) * direction).rem_euclid(std::f64::consts::TAU);
+                    if distance <= sweep + 1e-12 {
+                        bounds.include(point);
+                    }
+                }
+                bounds
             }
         }
         _ => primitive_bounds(items)?,
@@ -688,6 +712,62 @@ mod tests {
 
     use super::*;
     use crate::SymbolField;
+
+    #[test]
+    fn page_arc_bounds_follow_the_sweep_in_both_directions() {
+        for (start, mid, end, expected) in [
+            (
+                "10 10",
+                "20 9.9",
+                "30 10",
+                Bounds {
+                    min_x: 10.0,
+                    min_y: 9.9,
+                    max_x: 30.0,
+                    max_y: 10.0,
+                },
+            ),
+            (
+                "470 40",
+                "540 30",
+                "470 -40",
+                Bounds {
+                    min_x: 470.0,
+                    min_y: -50.0,
+                    max_x: 550.0,
+                    max_y: 50.0,
+                },
+            ),
+            (
+                "10 10",
+                "20 10",
+                "30 10",
+                Bounds {
+                    min_x: 10.0,
+                    min_y: 10.0,
+                    max_x: 30.0,
+                    max_y: 10.0,
+                },
+            ),
+        ] {
+            for (start, end) in [(start, end), (end, start)] {
+                let source =
+                    format!("(arc (start {start}) (mid {mid}) (end {end}) (stroke (width 2)))");
+                let actual = page_graphic_bounds(&pcb_sexpr::parse(&source).unwrap()).unwrap();
+                for (actual, expected) in [
+                    (actual.min_x, expected.min_x - 1.0),
+                    (actual.min_y, expected.min_y - 1.0),
+                    (actual.max_x, expected.max_x + 1.0),
+                    (actual.max_y, expected.max_y + 1.0),
+                ] {
+                    assert!(
+                        (actual - expected).abs() < GEOMETRY_EPS_MM,
+                        "{source}: {actual} != {expected}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn places_visible_fields_on_the_first_pin_free_side() {

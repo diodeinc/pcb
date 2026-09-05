@@ -3816,6 +3816,30 @@ mod tests {
     }
 
     #[test]
+    fn shallow_page_arc_does_not_force_overflow() {
+        let mut page = SchPage::new("shallow-arc");
+        page.items.push(SchItem::Unsupported(
+            pcb_sexpr::parse("(arc (start 10 10) (mid 20 9.9) (end 30 10))").unwrap(),
+        ));
+        let block = test_placement_block(
+            "new",
+            GridRect {
+                min_x: 0,
+                min_y: 0,
+                max_x: 100,
+                max_y: 60,
+            },
+        );
+        let (mut packer, bounds, _) =
+            arrange_existing_page_blocks(&page, &[&block], &BTreeSet::new()).unwrap();
+        assert!(packer.can_place_without_overlap(bounds));
+        let placed = bounds.translated(packer.place_anchored(bounds));
+        let usable = packer.usable_bounds();
+        assert!(placed.min_x >= usable.min_x && placed.max_x <= usable.max_x);
+        assert!(placed.min_y >= usable.min_y && placed.max_y <= usable.max_y);
+    }
+
+    #[test]
     fn overflow_avoids_opaque_page_text_and_graphics() {
         for (source, right_edge) in [
             (
