@@ -771,11 +771,9 @@ fn expand_strokes_to_regions<LayerMeta, ObjectMeta>(
         };
         let source = doc.arena.path_contours(&path);
         let contours = match accuracy {
-            Some(accuracy) => crate::geom::path::stroke_to_fill_with_accuracy(
-                &source,
-                stroke.into(),
-                crate::geom::GeometryAccuracy::new(accuracy.max_error_mm() / 2.0)?,
-            )?,
+            Some(accuracy) => {
+                crate::geom::path::stroke_to_fill_with_accuracy(&source, stroke.into(), accuracy)?
+            }
             None => crate::geom::path::stroke_to_fill(&source, stroke.into()),
         };
         let Some(contours) = contours else {

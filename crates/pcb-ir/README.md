@@ -1,8 +1,8 @@
 # PCBIR geometry accuracy
 
 `GeometryAccuracy::new(mm)` requests a total accumulated boundary approximation
-allowance in millimetres. It is independent of `ContourSet::tolerance` (minimum
-ring area and containment slack) and `tol::EPSILON_MM` (numerical coincidence).
+allowance in millimetres. It is independent of `ContourSet::tolerance` (feature significance
+and containment slack) and `tol::EPSILON_MM` (numerical coincidence).
 Existing APIs keep their default 5 µm curve and 10 µm outline sampling.
 
 Use `ContourSet::from_contours_with_accuracy` to prepare source curves, then
@@ -32,8 +32,9 @@ Unmet budgets return `AccuracyError`, including these backend limits:
   Patterned strokes have no bounded preparation path.
 - Coordinate resolution and excessive subdivision can prevent meeting a budget.
 
-Significance filtering that removes a ring makes uncertainty infinite. Offsets
-also report unbounded uncertainty when an uncertain input changes ring count.
+Small rings remain in prepared geometry so significance thresholds do not
+discard geometry or its accuracy. Offsets report unbounded uncertainty when
+an uncertain input changes ring count.
 The allowance does not certify topology near tangencies, area error, or grazing
 line-span endpoints. Containment, coverage, and line spans describe the prepared
 polygons; manufacturing policy remains with the consumer.

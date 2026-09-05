@@ -381,8 +381,7 @@ pub fn rings_area(rings: &[Ring]) -> f64 {
 /// Regularized filled planar point set.
 ///
 /// A `ContourSet` is always in canonical form: rings are regularized
-/// (non-overlapping, holes wound opposite their outer boundary) and contours
-/// smaller than `tolerance²` in area are discarded. The winding/fill rule of
+/// (non-overlapping, holes wound opposite their outer boundary). The winding/fill rule of
 /// the *source* geometry matters only at construction; every subsequent
 /// operation is a regularized set operation.
 #[derive(Debug, Clone)]
@@ -451,9 +450,7 @@ impl ContourSet {
         tolerance: f64,
         uncertainty_mm: f64,
     ) -> Self {
-        let count = rings.len();
-        let rings = filter_significant_rings(rings, tolerance);
-        let uncertainty_mm = if count == rings.len() && uncertainty_mm >= 0.0 {
+        let uncertainty_mm = if uncertainty_mm >= 0.0 {
             uncertainty_mm
         } else {
             f64::INFINITY
@@ -631,7 +628,7 @@ impl ContourSet {
                 Paint::Stroke(stroke) => match accuracy {
                     Some(accuracy) => {
                         let scale = placement.max_scale();
-                        let local = GeometryAccuracy::new(accuracy.max_error_mm() / (2.0 * scale))?;
+                        let local = GeometryAccuracy::new(accuracy.max_error_mm() / scale)?;
                         crate::geom::path::stroke_to_fill_with_accuracy(
                             &contours,
                             stroke.into(),
@@ -1696,14 +1693,6 @@ fn ring_winding(ring: &Ring, point: Point) -> i32 {
 
 fn flatten_shapes(shapes: Vec<Shape>) -> Vec<Ring> {
     shapes.into_iter().flatten().collect()
-}
-
-fn filter_significant_rings(mut rings: Vec<Ring>, tolerance: f64) -> Vec<Ring> {
-    if tolerance > 0.0 {
-        let min_area = tolerance.powi(2);
-        rings.retain(|ring| ring_signed_area(ring).abs() > min_area);
-    }
-    rings
 }
 
 fn push_ring(out: &mut Vec<Ring>, ring: &mut Ring) {
@@ -3064,8 +3053,7 @@ mod tests {
             ring_len(&ring, false)
         );
 
-        // The region only shrinks: nothing outside the source survives.
-        assert!(decimated.difference(&ring).area() < 1e-9);
+        assert!(decimated.difference(&ring).area() <= ring.tolerance.powi(2));
 
         // Area loss is bounded by the deviation times the boundary length.
         let perimeter: f64 = ring

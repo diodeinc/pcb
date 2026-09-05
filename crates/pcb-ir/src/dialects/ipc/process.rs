@@ -65,7 +65,6 @@ pub fn normalize_for_artwork_with_accuracy<S: Copy + Eq + Hash, L: Clone>(
 ) -> Result<(), crate::geom::AccuracyError> {
     compact(doc);
     let mut arena = crate::geom::PathArena::default();
-    let preparation = crate::geom::GeometryAccuracy::new(accuracy.max_error_mm() * 0.75)?;
     for path in &doc.arena.paths {
         if matches!(path.paint, Paint::None) {
             arena.push_path(path.paint, doc.arena.path_contours(path));
@@ -74,7 +73,7 @@ pub fn normalize_for_artwork_with_accuracy<S: Copy + Eq + Hash, L: Clone>(
                 &doc.arena,
                 [(path, Affine2::IDENTITY)],
                 0.0,
-                preparation,
+                accuracy,
             )?;
             arena.push_path(
                 Paint::Fill {
@@ -1687,6 +1686,34 @@ mod tests {
                 .map(|feature| feature.bbox.min.x)
                 .collect::<Vec<_>>(),
             [10.0, 12.0, 20.0, 22.0]
+        );
+    }
+
+    #[test]
+    fn normalization_accepts_inherited_error_within_the_total_budget() {
+        let mut doc = TestDoc::new();
+        doc.push_path(
+            Paint::Fill {
+                rule: FillRule::NonZero,
+            },
+            [rect_contour(0.0, 0.0, 1.0, 1.0).with_uncertainty(0.008)],
+        );
+        doc.features.push(Feature {
+            paths: Span::new(0, 1),
+            ..copper_trace_feature()
+        });
+        doc.layers.push(test_layer(Span::new(0, 1)));
+        normalize_for_artwork_with_accuracy(
+            &mut doc,
+            crate::geom::GeometryAccuracy::new(0.01).unwrap(),
+        )
+        .unwrap();
+        assert!(!doc.arena.contours.is_empty());
+        assert!(
+            doc.arena
+                .contours
+                .iter()
+                .all(|contour| (0.008..=0.01).contains(&contour.uncertainty_mm))
         );
     }
 

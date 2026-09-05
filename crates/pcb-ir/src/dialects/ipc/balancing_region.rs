@@ -739,7 +739,8 @@ mod tests {
             result
                 .safe_region
                 .difference(&result.intermediates.clearance_safe_region)
-                .is_empty()
+                .area()
+                <= result.safe_region.tolerance.powi(2)
         );
         assert!(
             result
@@ -753,13 +754,15 @@ mod tests {
             result
                 .safe_region
                 .difference(&result.intermediates.panel_keep_in)
-                .is_empty()
+                .area()
+                <= result.safe_region.tolerance.powi(2)
         );
         assert!(
             result
                 .safe_region
                 .intersection(&result.intermediates.obstacle_keep_out)
-                .is_empty()
+                .area()
+                <= result.safe_region.tolerance.powi(2)
         );
     }
 
@@ -792,7 +795,7 @@ mod tests {
             .clearance_safe_region
             .difference(&smaller.intermediates.clearance_safe_region);
         assert!(
-            larger_outside_smaller.is_empty(),
+            larger_outside_smaller.area() <= larger_outside_smaller.tolerance.powi(2),
             "larger clearance added {:.9} mm² to the maximal region",
             larger_outside_smaller.area()
         );
@@ -831,7 +834,7 @@ mod tests {
             .opened_candidates
             .difference(&smaller.intermediates.opened_candidates);
         assert!(
-            larger_outside_smaller.is_empty(),
+            larger_outside_smaller.area() <= larger_outside_smaller.tolerance.powi(2),
             "larger feature disk added {:.9} mm² to the opened region",
             larger_outside_smaller.area()
         );

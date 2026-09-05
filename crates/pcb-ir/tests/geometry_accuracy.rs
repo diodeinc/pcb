@@ -229,7 +229,7 @@ fn holes_islands_and_fifty_micron_gaps_survive_fine_preparation() {
 }
 
 #[test]
-fn artwork_significance_is_separate_and_cannot_hide_an_unmet_budget() {
+fn artwork_significance_does_not_discard_geometry() {
     use pcb_ir::dialects::{LayerRole, Side, artwork};
     use pcb_ir::geom::{Polarity, tol};
 
@@ -251,9 +251,13 @@ fn artwork_significance_is_separate_and_cannot_hide_an_unmet_budget() {
     let (fine, _) =
         artwork::compose_owner_regions(&doc, |_| Some(()), 0.0, Some(accuracy(1e-6))).unwrap();
     assert_eq!(fine[0].len(), 1);
-    assert!(
+    let (significant, _) =
         artwork::compose_owner_regions(&doc, |_| Some(()), tol::REGION_MM, Some(accuracy(1e-6)))
-            .is_err()
+            .unwrap();
+    assert_eq!(significant[0][0].1.rings, fine[0][0].1.rings);
+    assert_eq!(
+        significant[0][0].1.uncertainty_mm,
+        fine[0][0].1.uncertainty_mm
     );
 }
 
@@ -445,4 +449,55 @@ fn stroke_budget_reserves_and_records_coordinate_error() {
         assert!(outline.uncertainty_mm >= 0.00005 + 0.00004 + 64.0 * f64::EPSILON * 1e9);
         assert!(outline.uncertainty_mm <= 0.0002);
     }
+}
+
+#[test]
+fn tiny_rings_do_not_suppress_clearance_findings() {
+    let first = ContourSet::from_regularized(
+        vec![
+            vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            vec![[4.0, 4.0], [4.0001, 4.0], [4.0, 4.0001]],
+        ],
+        0.001,
+    );
+    let second = ContourSet::rectangle(
+        BBox::new(Point::new(1.05, 0.0), Point::new(2.0, 1.0)),
+        0.001,
+    );
+    let clipped = first.difference(&second);
+    let clearance = region_clearance(&clipped, &second).unwrap();
+    assert!(clearance.certainly_below(0.1));
+}
+
+#[test]
+fn stroke_preparation_uses_the_total_inherited_error_budget() {
+    use pcb_ir::dialects::{LayerRole, Side, artwork};
+    use pcb_ir::geom::{LineCap, LineJoin, PathCmd, Polarity, StrokeStyle};
+    let source = ContourBuf::new(vec![
+        PathCmd::move_to(Point::ZERO),
+        PathCmd::line_to(Point::new(1.0, 0.0)),
+    ])
+    .with_uncertainty(0.008);
+    let paint = Paint::Stroke(StrokeStyle {
+        join: LineJoin::Miter,
+        ..StrokeStyle::new(0.2, LineCap::Butt)
+    });
+    let mut doc = artwork::Document::<(), ()>::new();
+    let layer = doc.push_layer(artwork::Layer::new("F.Cu", LayerRole::Copper, Side::Top));
+    let path = doc.push_path(paint, vec![source]);
+    doc.push_object(
+        layer,
+        artwork::Object::new(Polarity::Dark, artwork::Geometry::Stroke { path }),
+    );
+    let direct = ContourSet::from_placed_painted_paths_with_accuracy(
+        &doc.arena,
+        [(doc.arena.path(path), Affine2::IDENTITY)],
+        0.0,
+        accuracy(0.01),
+    )
+    .unwrap();
+    assert!((0.008..=0.01).contains(&direct.uncertainty_mm));
+    let (layers, _) =
+        artwork::compose_owner_regions(&doc, |_| Some(()), 0.0, Some(accuracy(0.01))).unwrap();
+    assert!((0.008..=0.01).contains(&layers[0][0].1.uncertainty_mm));
 }
