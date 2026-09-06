@@ -48,6 +48,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Support opaque service-account client IDs and proper OAuth Basic encoding.
 - Allow off-page schematic placement and avoid existing text and graphics.
+- Bound inward ring decimation by point-to-segment distance so the `deviation_mm` guarantee holds for forward spikes.
 
 ## [0.4.49] - 2026-09-04
 

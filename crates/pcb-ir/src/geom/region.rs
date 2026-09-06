@@ -277,7 +277,12 @@ fn decimate_ring_inward(ring: &Ring, deviation_mm: f64) -> Ring {
         (anchor + 1..end).all(|index| {
             let offset = point(index) - start;
             let cross = chord.x * offset.y - chord.y * offset.x;
-            cross <= 0.0 && -cross / length <= deviation_mm
+            // `cross <= 0.0` keeps material on the chord's right (the removed
+            // bulge is inward). The deviation is measured to the chord
+            // *segment* — the decimated boundary edge — not to its supporting
+            // line: a subchain that backtracks past a kept endpoint has a
+            // tiny perpendicular drop but a large distance to that endpoint.
+            cross <= 0.0 && dist::point_segment(point(index), start, point(end)).0 <= deviation_mm
         })
     };
 
@@ -2774,6 +2779,240 @@ mod tests {
             .map(|(start, end)| start.distance_to(end))
             .sum();
         assert!(ring.area() - decimated.area() <= deviation * perimeter);
+
+        // The documented per-vertex guarantee: every source vertex lies
+        // within `deviation` of the decimated boundary, measured as
+        // point-to-segment distance to the decimated rings.
+        let max_dist = ring
+            .rings
+            .iter()
+            .flat_map(|source_ring| source_ring.iter().copied())
+            .map(|[x, y]| {
+                let p = Point::new(x, y);
+                decimated
+                    .rings
+                    .iter()
+                    .flat_map(ring_edges)
+                    .map(|(a, b)| dist::point_segment(p, a, b).0)
+                    .fold(f64::INFINITY, f64::min)
+            })
+            .fold(0.0_f64, f64::max);
+        assert!(
+            max_dist <= deviation,
+            "per-vertex deviation {max_dist} exceeds budget {deviation}",
+        );
+    }
+
+    /// A forward extension past the next kept vertex must not be absorbed by
+    /// the chord: the perpendicular distance to the chord's supporting line
+    /// is tiny, but the true distance to the decimated boundary edge — the
+    /// chord *segment* — is the distance to the chord endpoint. The
+    /// `deviation_mm` guarantee is on distance to the boundary, so the spike
+    /// must survive.
+    #[test]
+    fn inward_decimation_bounds_distance_to_segment_not_line() {
+        // CCW outer ring: a unit square whose bottom edge detours out to a
+        // thin forward extension past the next kept vertex, then returns. The
+        // spike tip (12, -0.01) projects BEYOND the chord endpoint (10, 0):
+        // its perpendicular distance to the chord line (0,0)->(10,0) is
+        // 0.01 mm (passes the buggy line check), but its real distance to the
+        // decimated segment is ~2.0 mm.
+        let ring: Ring = vec![
+            [0.0, 0.0],
+            [12.0, -0.01],
+            [10.0, 0.0],
+            [10.0, 10.0],
+            [0.0, 10.0],
+        ];
+        assert!(ring_signed_area(&ring) > 0.0, "ring is CCW (outer)");
+
+        // Route through the PUBLIC API: ContourSet::new regularizes with
+        // simplify_rings, then decimate_inward runs decimate_ring_inward.
+        let source = ContourSet::new(vec![ring.clone()], FillRule::NonZero, tol::REGION_MM);
+        let deviation = 0.05_f64;
+        let decimated = source.decimate_inward(deviation);
+
+        // The fix refuses to absorb the spike: its point-to-segment distance
+        // to the chord (0,0)->(10,0) is ~2.0 mm, far beyond the budget.
+        assert!(
+            decimated
+                .rings
+                .concat()
+                .iter()
+                .any(|p| (p[0] - 12.0).abs() < 1e-6),
+            "spike tip must be preserved, got decimated = {:?}",
+            decimated.rings,
+        );
+
+        // Contract: every source vertex lies within `deviation` of the
+        // decimated boundary, measured as point-to-segment distance to the
+        // decimated rings.
+        let max_dist = ring
+            .iter()
+            .map(|&[x, y]| {
+                let p = Point::new(x, y);
+                decimated
+                    .rings
+                    .iter()
+                    .flat_map(ring_edges)
+                    .map(|(a, b)| dist::point_segment(p, a, b).0)
+                    .fold(f64::INFINITY, f64::min)
+            })
+            .fold(0.0_f64, f64::max);
+        assert!(
+            max_dist <= deviation,
+            "per-vertex deviation {max_dist} exceeds budget {deviation}",
+        );
+
+        // The only-shrinks half of the contract still holds: nothing outside
+        // the source survives decimation.
+        assert!(decimated.difference(&source).area() < 1e-9);
+    }
+
+    /// Measures the per-vertex deviation bound the docstring promises: every
+    /// source vertex lies within `deviation` of the decimated boundary,
+    /// measured point-to-segment. Shared by the decimation tests below.
+    fn assert_deviation_bound(decimated: &Ring, source: &Ring, deviation: f64) {
+        let max_dist = source
+            .iter()
+            .map(|&[x, y]| {
+                let p = Point::new(x, y);
+                ring_edges(decimated)
+                    .map(|(a, b)| dist::point_segment(p, a, b).0)
+                    .fold(f64::INFINITY, f64::min)
+            })
+            .fold(0.0_f64, f64::max);
+        assert!(
+            max_dist <= deviation,
+            "per-vertex deviation {max_dist} exceeds budget {deviation}",
+        );
+    }
+
+    /// A CW hole ring carrying an analogous forward extension past the next
+    /// kept vertex must also respect the per-vertex bound. The constructor's
+    /// `simplify_rings` would split a self-touching CW-hole extension, so this
+    /// calls `decimate_ring_inward` directly to test the helper on a CW ring.
+    /// Covers G7.
+    #[test]
+    fn inward_decimation_bounds_cw_hole_forward_spike() {
+        // CW hole ring: a square traversed clockwise, with a forward extension
+        // past the (0,0) corner along the bottom edge's travel direction. The
+        // spike tip (-2, 0.01) projects BEYOND the chord endpoint (0,0)
+        // (t = 1.2 > 1): perpendicular to the chord line is 0.01 mm, but its
+        // distance to the decimated segment is ~2.0 mm.
+        let ring: Ring = vec![
+            [0.0, 0.0],
+            [0.0, 10.0],
+            [10.0, 10.0],
+            [10.0, 0.0],
+            [-2.0, 0.01],
+        ];
+        assert!(ring_signed_area(&ring) < 0.0, "ring is CW (hole)");
+
+        let deviation = 0.05_f64;
+        let decimated = decimate_ring_inward(&ring, deviation);
+
+        assert!(
+            decimated.iter().any(|p| (p[0] - -2.0).abs() < 1e-6),
+            "hole spike tip must be preserved, got {decimated:?}",
+        );
+        assert_deviation_bound(&decimated, &ring, deviation);
+    }
+
+    /// Deterministic property test (inline LCG, no external rand dep): generate
+    /// random CCW outer rings seeded with forward-spike subchains that project
+    /// beyond the next kept vertex with a small perpendicular drop — exactly
+    /// the geometry the bug let pass — and assert the documented contract
+    /// holds for every sample: per-vertex deviation bound AND only-shrinks.
+    #[test]
+    fn inward_decimation_property_deviation_bound_and_only_shrinks() {
+        struct Lcg(u64);
+        impl Lcg {
+            fn new(seed: u64) -> Self {
+                Lcg(seed)
+            }
+            fn next_u64(&mut self) -> u64 {
+                // Numerical Recipes 64-bit LCG.
+                self.0 = self
+                    .0
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                self.0
+            }
+            fn range(&mut self, lo: f64, hi: f64) -> f64 {
+                let u = (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64;
+                lo + u * (hi - lo)
+            }
+        }
+
+        let deviation = 0.05_f64;
+        let mut rng = Lcg::new(0x1234_5678_9abc_def0);
+
+        // Build a square, then insert one random forward-spike subchain on each
+        // of its 4 edges (independently, at random). One spike per base edge
+        // keeps the ring simple (non-self-intersecting): a right-side tip that
+        // overshoots the corner by < 0.4·side cannot reach the neighbouring
+        // edge. Each spike vertex sits on the chord's right (cross<=0) with a
+        // small perpendicular drop within budget, but projects beyond the chord
+        // endpoint by up to ~40% of the edge — the bug's trigger.
+        fn spiked_ring(rng: &mut Lcg, deviation: f64) -> Ring {
+            let side = rng.range(20.0, 120.0);
+            let base: Ring = vec![[0.0, 0.0], [side, 0.0], [side, side], [0.0, side]];
+            let mut ring: Ring = vec![];
+            for edge in 0..4 {
+                let a = base[edge];
+                let b = base[(edge + 1) % 4];
+                let dx = b[0] - a[0];
+                let dy = b[1] - a[1];
+                let len = (dx * dx + dy * dy).sqrt();
+                ring.push(a);
+                // 70% chance to spike each edge, so samples include clean edges.
+                if rng.next_u64() % 10 < 7 {
+                    // Unit right-normal (rotate -90): the side where cross <= 0
+                    // (removable inward bulge for a CCW ring).
+                    let nx = dy / len;
+                    let ny = -dx / len;
+                    // Project the tip along the chord: s in [0.6, 1.4] so it
+                    // sometimes projects inside (s<1) and sometimes beyond (s>1).
+                    let s = rng.range(0.6, 1.4);
+                    // Perpendicular drop onto the right side, within the budget
+                    // so the buggy line check would accept it.
+                    let p = rng.range(0.0, deviation);
+                    ring.push([a[0] + s * dx + p * nx, a[1] + s * dy + p * ny]);
+                }
+            }
+            ring
+        }
+
+        for _ in 0..200 {
+            let ring = spiked_ring(&mut rng, deviation);
+            // The construction preserves CCW orientation; skip any sample that
+            // did not (defensive — should never happen for a simple spiked square).
+            if ring_signed_area(&ring) <= 0.0 {
+                continue;
+            }
+
+            // Verify the HELPER directly, grid-free, so the invariants are
+            // exact rather than blurred by ContourSet::new's 1 µm grid.
+            let source_area = ring_signed_area(&ring);
+            let decimated = decimate_ring_inward(&ring, deviation);
+
+            // Contract (1): every source vertex lies within `deviation` of the
+            // decimated boundary, measured point-to-segment (exact, no grid).
+            assert_deviation_bound(&decimated, &ring, deviation);
+
+            // Contract (2): the region only shrinks. The fix did not touch the
+            // `cross <= 0.0` gate that enforces this, and point-to-segment
+            // distance is >= perpendicular distance, so the fix only ever
+            // refuses absorptions the buggy check would accept — it removes
+            // less, never more. Signed-area non-increase is a grid-free witness
+            // for the monotonic shrink the gate guarantees.
+            let decimated_area = ring_signed_area(&decimated);
+            assert!(
+                decimated_area <= source_area + 1e-9,
+                "decimation grew the region: {decimated_area} > {source_area} for ring {ring:?}",
+            );
+        }
     }
 
     #[test]
