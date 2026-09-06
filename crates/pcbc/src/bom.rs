@@ -146,7 +146,7 @@ pub fn execute(args: BomArgs) -> Result<()> {
     spinner.finish();
 
     pcb_ui::write_stdout(|writer| match args.format {
-        BomFormat::Json => write!(writer, "{}", bom.ungrouped_json()),
+        BomFormat::Json => write!(writer, "{}", bom.grouped_json()),
         BomFormat::Table => bom.write_table(writer),
     })?;
 

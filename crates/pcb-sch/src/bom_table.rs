@@ -332,30 +332,21 @@ impl Bom {
         let mut extended_qty = 0;
         let mut unclassified_count = 0;
         let mut unclassified_qty = 0;
+        let mut total_us = 0.0;
+        let mut total_global = 0.0;
 
         let mut table = Table::new();
         table.load_style(comfy_table::presets::UTF8_FULL_CONDENSED);
         table.set_content_arrangement(comfy_table::ContentArrangement::DynamicFullWidth);
 
-        let mut entries = self.grouped_entries();
-        // Sort entries: non-DNP first (sorted by first designator), then DNP items (sorted by first designator)
-        entries.sort_by(|a, b| {
-            a.entry.dnp.cmp(&b.entry.dnp).then_with(|| {
-                a.designators
-                    .iter()
-                    .next()
-                    .cmp(&b.designators.iter().next())
-            })
-        });
-
-        for grouped in entries {
+        for grouped in self.grouped_entries() {
             let designators_vec: Vec<&str> =
                 grouped.designators.iter().map(AsRef::as_ref).collect();
 
             // Designators already naturally sorted by BTreeSet<NaturalString>
-            let qty = designators_vec.len();
+            let qty = grouped.quantity;
             let designators = designators_vec.join(",");
-            let entry = &grouped.entry;
+            let entry = &grouped.members[0].entry;
 
             let mpn = entry
                 .mpn
@@ -374,22 +365,8 @@ impl Bom {
                 .unwrap_or_default();
             let is_dnp = entry.dnp;
 
-            let mut paths: Vec<&String> = self
-                .designators
-                .iter()
-                .filter(|(_, d)| designators_vec.contains(&d.as_str()))
-                .map(|(p, _)| p)
-                .collect();
-            paths.sort_unstable();
-
-            // A grouped row is sourceable only when every represented line has match data.
-            let availabilities = paths
-                .iter()
-                .map(|path| self.availability.get(*path))
-                .collect::<Option<Vec<_>>>();
-            let avail = availabilities
-                .as_deref()
-                .and_then(|availabilities| availabilities.first().copied());
+            // Grouping guarantees that every member has the same sourcing data.
+            let avail = grouped.availability.as_ref();
             let no_match = avail.map(|availability| availability.no_match);
             let collection = avail.and_then(|availability| availability.selected_part_collection());
 
@@ -397,6 +374,11 @@ impl Bom {
                 RegionDisplayData::from_region_avail(avail.and_then(|a| a.us.as_ref()), qty);
             let global_data =
                 RegionDisplayData::from_region_avail(avail.and_then(|a| a.global.as_ref()), qty);
+
+            // Sum the displayed one-board row prices, including their rounding.
+            // Preserve the existing inclusion of DNP rows in estimated totals.
+            total_us += ceil_cents(us_data.price_single.unwrap_or_default());
+            total_global += ceil_cents(global_data.price_single.unwrap_or_default());
 
             let line_sourceability =
                 line_sourceability(us_data.sourceability, global_data.sourceability);
@@ -540,47 +522,12 @@ impl Bom {
 
         writeln!(writer, "{table}")?;
 
-        // Calculate and print total BOM cost per region if availability data is present
+        // Print the sum of the displayed grouped row prices.
         if has_availability {
-            let (total_us, total_global) =
-                self.entries
-                    .iter()
-                    .fold((0.0, 0.0), |(acc_us, acc_global), (path, _entry)| {
-                        let qty = self
-                            .designators
-                            .iter()
-                            .filter(|(p, _)| p.as_str() == path)
-                            .count() as i32;
-
-                        if let Some(avail) = self.availability.get(path) {
-                            let us_price = avail
-                                .us
-                                .as_ref()
-                                .and_then(|r| r.price_breaks.as_ref())
-                                .and_then(|breaks| unit_price_from_breaks(breaks, qty))
-                                .map(|unit_price| unit_price * qty as f64)
-                                .unwrap_or(0.0);
-
-                            let global_price = avail
-                                .global
-                                .as_ref()
-                                .and_then(|r| r.price_breaks.as_ref())
-                                .and_then(|breaks| unit_price_from_breaks(breaks, qty))
-                                .map(|unit_price| unit_price * qty as f64)
-                                .unwrap_or(0.0);
-
-                            (acc_us + us_price, acc_global + global_price)
-                        } else {
-                            (acc_us, acc_global)
-                        }
-                    });
-
-            let total_us_cents = (total_us * 100.0).ceil() / 100.0;
-            let total_global_cents = (total_global * 100.0).ceil() / 100.0;
             writeln!(
                 writer,
                 "Total: US ${:.2} | Global ${:.2}",
-                total_us_cents, total_global_cents
+                total_us, total_global
             )?;
         }
 
@@ -678,6 +625,81 @@ mod tests {
 
     use super::*;
     use crate::bom::{Availability, BomEntry};
+
+    #[test]
+    fn grouped_sourcing_and_totals_follow_displayed_rows() {
+        let mut bom = Bom::new(HashMap::new(), HashMap::new());
+        for (designator, description, dnp) in [
+            ("C1", "1uF 10V", false),
+            ("C2", "1uF", false),
+            ("C3", "DNP", true),
+        ] {
+            bom.entries.insert(
+                designator.to_string(),
+                serde_json::from_value(serde_json::json!({
+                    "mpn": "shared-part", "description": description, "dnp": dnp, "alternatives": []
+                }))
+                .unwrap(),
+            );
+            bom.designators
+                .insert(designator.to_string(), designator.to_string());
+            let summary = |breaks| {
+                Some(AvailabilitySummary {
+                    stock: 100,
+                    stock_class: SourcingStockClass::Plenty,
+                    price_breaks: Some(breaks),
+                    ..Default::default()
+                })
+            };
+            bom.availability.insert(
+                designator.to_string(),
+                Availability {
+                    selected_offer_id: Some("shared-offer".to_string()),
+                    us: summary(if dnp {
+                        vec![(1, 0.003)]
+                    } else {
+                        vec![(1, 1.0), (2, 0.25)]
+                    }),
+                    global: summary(if dnp {
+                        vec![(1, 0.003)]
+                    } else {
+                        vec![(1, 0.5), (2, 0.1)]
+                    }),
+                    ..Default::default()
+                },
+            );
+        }
+        let render = |bom: &Bom| {
+            let mut output = Vec::new();
+            bom.write_table(&mut output).unwrap();
+            String::from_utf8(output).unwrap()
+        };
+        let table = render(&bom);
+        assert!(table.contains("C1,C2"), "{table}");
+        assert!(table.contains("$0.50 ($2.50)"), "{table}");
+        assert!(table.contains("$0.20 ($1.00)"), "{table}");
+        assert!(table.contains("Total: US $0.51 | Global $0.21"), "{table}");
+        println!("{table}");
+
+        let original = bom.availability["C2"].clone();
+        let mut different_class = original.clone();
+        different_class.us.as_mut().unwrap().stock_class = SourcingStockClass::Insufficient;
+        let mut different_region = original.clone();
+        different_region.global.as_mut().unwrap().alt_stock = 900;
+        let mut different_offers = original;
+        different_offers.offers.push(serde_json::from_value(serde_json::json!({
+            "id": "line-only-alternative", "region": "Global", "distributor": "LCSC", "stock": 900
+        })).unwrap());
+        for availability in [different_class, different_region, different_offers] {
+            bom.availability.insert("C2".to_string(), availability);
+            assert_eq!(bom.grouped_entries().len(), 3);
+            let json: serde_json::Value = serde_json::from_str(&bom.grouped_json()).unwrap();
+            assert_eq!(json.as_array().unwrap().len(), 3);
+            let table = render(&bom);
+            assert!(!table.contains("C1,C2"), "{table}");
+            println!("{table}");
+        }
+    }
 
     #[test]
     fn no_match_status_is_magenta() {
