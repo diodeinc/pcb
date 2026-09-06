@@ -570,6 +570,7 @@ fn repeated_shared_sheet_unmanaged_symbol_does_not_bail_repair() {
         let anchor = Point::new(offset, 100.0);
         let sheet = Sheet {
             id: format!("sheet-shared-{}", offset as u32),
+            placed: true,
             at: Some(anchor),
             size: Some(Point::new(25.4, 25.4)),
             name: Some(SymbolField::new("Sheetname", "shared", anchor)),
