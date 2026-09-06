@@ -42,17 +42,7 @@ Exit Code: 0
           "unit": "Ohms"
         }
       }
-    ],
-    "package": "0603",
-    "value": "1k",
-    "description": "1k",
-    "component_type": "Resistor",
-    "resistance": {
-      "nominal": "1000",
-      "min": "1000",
-      "max": "1000",
-      "unit": "Ohms"
-    }
+    ]
   },
   {
     "designators": [
@@ -74,17 +64,7 @@ Exit Code: 0
           "unit": "Ohms"
         }
       }
-    ],
-    "package": "0402",
-    "value": "4.7k",
-    "description": "4.7k",
-    "component_type": "Resistor",
-    "resistance": {
-      "nominal": "4700.0",
-      "min": "4700.0",
-      "max": "4700.0",
-      "unit": "Ohms"
-    }
+    ]
   }
 ]
 --- STDERR ---

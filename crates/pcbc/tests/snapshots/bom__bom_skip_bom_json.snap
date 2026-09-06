@@ -19,9 +19,7 @@ Exit Code: 0
         "mpn": "RC0603FR-071KL",
         "manufacturer": "Yageo"
       }
-    ],
-    "mpn": "RC0603FR-071KL",
-    "manufacturer": "Yageo"
+    ]
   },
   {
     "designators": [
@@ -35,9 +33,7 @@ Exit Code: 0
         "mpn": "RC0603FR-0710KL",
         "manufacturer": "Yageo"
       }
-    ],
-    "mpn": "RC0603FR-0710KL",
-    "manufacturer": "Yageo"
+    ]
   }
 ]
 --- STDERR ---

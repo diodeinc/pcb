@@ -346,7 +346,7 @@ impl Bom {
             // Designators already naturally sorted by BTreeSet<NaturalString>
             let qty = grouped.quantity;
             let designators = designators_vec.join(",");
-            let entry = &grouped.entry;
+            let entry = &grouped.members[0].entry;
 
             let mpn = entry
                 .mpn
@@ -366,7 +366,7 @@ impl Bom {
             let is_dnp = entry.dnp;
 
             // Grouping guarantees that every member has the same sourcing data.
-            let avail = grouped.members[0].availability.as_ref();
+            let avail = grouped.availability.as_ref();
             let no_match = avail.map(|availability| availability.no_match);
             let collection = avail.and_then(|availability| availability.selected_part_collection());
 

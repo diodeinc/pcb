@@ -31,11 +31,20 @@ pub fn trim_description(s: Option<String>) -> Option<String> {
 pub struct GroupedBomEntry {
     pub designators: BTreeSet<NaturalString>,
     pub quantity: usize,
-    /// Original per-path lines, including their distinct requirements and match data.
-    pub members: Vec<UngroupedBomEntry>,
-    /// Representative design entry from the first naturally sorted member.
+    pub members: Vec<GroupedBomMember>,
+    /// Sourcing shared by every member; match status remains per-member.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub availability: Option<super::availability::Availability>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GroupedBomMember {
+    pub path: String,
+    pub designator: String,
     #[serde(flatten)]
     pub entry: BomEntry,
+    #[serde(rename = "match", skip_serializing_if = "Option::is_none")]
+    pub match_status: Option<super::availability::BomMatchStatus>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -365,7 +374,11 @@ impl Bom {
 
         let mut indices = HashMap::<Key, Vec<usize>>::new();
         let mut groups = Vec::<GroupedBomEntry>::new();
-        for member in self.ungrouped_entries() {
+        for mut member in self.ungrouped_entries() {
+            let match_status = member
+                .availability
+                .as_mut()
+                .and_then(|a| a.match_status.take());
             let entry = &member.entry;
             // Match Diode's display identity: the server-selected offer, not the
             // authored requirements or MPN alone. Never select or rerank locally.
@@ -387,24 +400,13 @@ impl Bom {
             let index = candidates
                 .iter()
                 .copied()
-                .find(|&index| {
-                    match (&groups[index].members[0].availability, &member.availability) {
-                        (Some(a), Some(b)) => {
-                            a.us == b.us
-                                && a.global == b.global
-                                && a.offers == b.offers
-                                && a.no_match == b.no_match
-                        }
-                        (None, None) => true,
-                        _ => false,
-                    }
-                })
+                .find(|&index| groups[index].availability == member.availability)
                 .unwrap_or_else(|| {
                     groups.push(GroupedBomEntry {
                         designators: BTreeSet::new(),
                         quantity: 0,
                         members: Vec::new(),
-                        entry: entry.clone(),
+                        availability: member.availability.clone(),
                     });
                     let index = groups.len() - 1;
                     candidates.push(index);
@@ -413,7 +415,12 @@ impl Bom {
             let group = &mut groups[index];
             group.designators.insert(member.designator.clone().into());
             group.quantity += 1;
-            group.members.push(member);
+            group.members.push(GroupedBomMember {
+                path: member.path,
+                designator: member.designator,
+                entry: member.entry,
+                match_status,
+            });
         }
         groups
     }
@@ -756,7 +763,7 @@ mod tests {
 
     #[test]
     fn presentation_groups_server_selections_without_losing_member_details() {
-        use crate::bom::availability::Availability;
+        use crate::bom::availability::{Availability, BomMatchStatus};
 
         let mut bom = Bom::new(HashMap::new(), HashMap::new());
         for (designator, description, selection, dnp, skip_bom) in [
@@ -779,15 +786,24 @@ mod tests {
             bom.availability.insert(
                 path,
                 Availability {
+                    match_status: Some(if designator == "C10" {
+                        BomMatchStatus::Exact
+                    } else {
+                        BomMatchStatus::Compatible
+                    }),
                     selected_offer_id: selection.map(str::to_string),
                     ..Default::default()
                 },
             );
         }
+        bom.availability.remove("root.C4");
         let groups = bom.grouped_entries();
         assert_eq!(groups.len(), 5);
         assert_eq!(groups[0].quantity, 2);
-        assert_eq!(groups[0].entry.description.as_deref(), Some("1 uF 10 V"));
+        assert_eq!(
+            groups[0].members[0].entry.description.as_deref(),
+            Some("1 uF 10 V")
+        );
         assert_eq!(groups[0].members[0].path, "root.C2");
         assert_eq!(groups[0].members[1].path, "root.C10");
         assert_eq!(
@@ -799,10 +815,32 @@ mod tests {
         assert_eq!(json[0]["designators"], serde_json::json!(["C2", "C10"]));
         assert_eq!(json[0]["members"][1]["path"], "root.C10");
         assert_eq!(json[0]["members"][1]["description"], "1 uF");
-        assert_eq!(
-            json[0]["members"][1]["availability"]["selected_offer_id"],
-            "shared"
-        );
+        assert_eq!(json[0]["availability"]["selected_offer_id"], "shared");
+        assert!(json[0].get("description").is_none());
+        assert!(json[0]["availability"].get("match").is_none());
+        assert!(json[0]["members"][0].get("availability").is_none());
+        assert_eq!(json[0]["members"][0]["match"], "MATCH_COMPATIBLE");
+        assert_eq!(json[0]["members"][1]["match"], "MATCH_EXACT");
+
+        // Factoring sourcing must preserve every original field, including absence.
+        for group in json.as_array().unwrap() {
+            for member in group["members"].as_array().unwrap() {
+                let mut restored = member.clone();
+                let fields = restored.as_object_mut().unwrap();
+                if let Some(mut availability) = group.get("availability").cloned() {
+                    if let Some(status) = fields.remove("match") {
+                        availability["match"] = status;
+                    }
+                    fields.insert("availability".to_string(), availability);
+                }
+                let original = bom
+                    .ungrouped_entries()
+                    .into_iter()
+                    .find(|line| line.path == restored["path"].as_str().unwrap())
+                    .unwrap();
+                assert_eq!(restored, serde_json::to_value(original).unwrap());
+            }
+        }
         assert_eq!(bom.ungrouped_entries().len(), 6);
 
         // HashMap insertion order must not choose a different representative.
