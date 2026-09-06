@@ -363,7 +363,7 @@ impl Bom {
             Design(Box<BomEntry>, Option<String>),
         }
 
-        let mut indices = HashMap::<Key, usize>::new();
+        let mut indices = HashMap::<Key, Vec<usize>>::new();
         let mut groups = Vec::<GroupedBomEntry>::new();
         for member in self.ungrouped_entries() {
             let entry = &member.entry;
@@ -380,15 +380,36 @@ impl Bom {
                     (!entry.has_stable_aggregation_identity()).then(|| member.path.clone()),
                 ),
             };
-            let index = *indices.entry(key).or_insert_with(|| {
-                groups.push(GroupedBomEntry {
-                    designators: BTreeSet::new(),
-                    quantity: 0,
-                    members: Vec::new(),
-                    entry: entry.clone(),
+            let candidates = indices.entry(key).or_default();
+            // Separate planner groups can select the same offer (for example,
+            // with insufficient stock). Share a row only if its sourcing data
+            // represents every member; match status itself remains per-member.
+            let index = candidates
+                .iter()
+                .copied()
+                .find(|&index| {
+                    match (&groups[index].members[0].availability, &member.availability) {
+                        (Some(a), Some(b)) => {
+                            a.us == b.us
+                                && a.global == b.global
+                                && a.offers == b.offers
+                                && a.no_match == b.no_match
+                        }
+                        (None, None) => true,
+                        _ => false,
+                    }
+                })
+                .unwrap_or_else(|| {
+                    groups.push(GroupedBomEntry {
+                        designators: BTreeSet::new(),
+                        quantity: 0,
+                        members: Vec::new(),
+                        entry: entry.clone(),
+                    });
+                    let index = groups.len() - 1;
+                    candidates.push(index);
+                    index
                 });
-                groups.len() - 1
-            });
             let group = &mut groups[index];
             group.designators.insert(member.designator.clone().into());
             group.quantity += 1;
