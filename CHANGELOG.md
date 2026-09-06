@@ -42,6 +42,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Support opaque service-account client IDs and proper OAuth Basic encoding.
 - Allow off-page schematic placement and avoid existing text and graphics.
+- Make `pcb rectify fix` and `pcb rectify audit` exit non-zero on evaluation errors in batch mode.
 
 ## [0.4.49] - 2026-09-04
 
