@@ -313,12 +313,14 @@ impl<'v> ContextValue<'v> {
         local_name: &str,
         assignment_inferable: bool,
         kind: &str,
+        prior_was_bound: bool,
     ) -> anyhow::Result<String> {
         self.module.borrow_mut().register_net(
             id,
             local_name.to_string(),
             assignment_inferable,
             kind.to_string(),
+            prior_was_bound,
         )
     }
 

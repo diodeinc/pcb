@@ -865,7 +865,13 @@ impl<'v, V: ValueLike<'v>> NetTypeGen<V> {
                     } else {
                         &self.type_name
                     };
-                    ctx.register_net(net_id, &net_name, assignment_inferable, kind)
+                    ctx.register_net(
+                        net_id,
+                        &net_name,
+                        assignment_inferable,
+                        kind,
+                        was_bound.get().is_some(),
+                    )
                 })
                 .transpose()
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?

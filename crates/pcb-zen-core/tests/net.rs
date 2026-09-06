@@ -572,3 +572,98 @@ fn net_constructor_positional_cast_preserves_behavior() {
     let schematic = sch_result.output.expect("expected schematic output");
     assert_eq!(schematic.nets["SIG"].kind, "Net");
 }
+
+#[test]
+fn bound_cast_rename_still_rejects_reuse_of_prior_name() {
+    // Regression guard for the scoped fix: the bound-base case is genuinely
+    // ambiguous under the spec's Net.name reading (sig.name == "SIG" survives
+    // over the reused id), so the fix MUST preserve today's rejection.
+    let src = r#"
+Power = builtin.net_type("Power")
+
+sig = Net("SIG")                       # bound -> sig.name == "SIG" survives
+pwr = Power(sig, name = "PWR")         # cast+rename of a BOUND base
+other = Net("SIG")                      # rejected today AND after the fix
+"#;
+    let result = eval_zen(vec![("test.zen".to_string(), src.to_string())]);
+    let msgs: Vec<String> = result.diagnostics.iter().map(|d| d.to_string()).collect();
+    assert!(
+        !result.is_success(),
+        "bound base: scoped fix must preserve the rejection, got: {msgs:?}"
+    );
+    assert!(
+        msgs.iter().any(|m| m.contains("Duplicate net name: SIG")),
+        "bound base: expected duplicate rejection, got: {msgs:?}"
+    );
+}
+
+#[test]
+fn interface_template_unbound_cast_rename_allows_reuse_of_prior_name() {
+    // Stricter manifestation: the cast result is template-owned, so it is
+    // unregistered during interface construction. The leaked prior-name entry
+    // must not dangle at the removed id and reject a later `Net("SIG")`.
+    let src = r#"
+Power = builtin.net_type("Power")
+Tpl = interface(p = Power(Net("SIG"), name = "PWR"))
+inst = Tpl()
+other = Net("SIG")
+
+check(inst.p.name == "inst_SIG", "interface net is prefixed from template name")
+check(other.name == "SIG", "freed prior name must be reusable")
+"#;
+    let result = eval_zen(vec![("test.zen".to_string(), src.to_string())]);
+    let msgs: Vec<String> = result.diagnostics.iter().map(|d| d.to_string()).collect();
+    assert!(
+        result.is_success(),
+        "expected interface-template cast+rename to free the prior name, got: {msgs:?}"
+    );
+}
+
+#[test]
+fn unbound_cast_rename_netlists_both_nets() {
+    let src = r#"
+Power = builtin.net_type("Power")
+pwr = Power(Net("SIG"), name = "PWR")
+other = Net("SIG")
+
+Component(
+    name = "U1",
+    footprint = File("@kicad-footprints/Resistor_SMD.pretty/R_0402_1005Metric.kicad_mod"),
+    pin_defs = {"P1": "1", "P2": "2"},
+    pins = {"P1": pwr, "P2": other},
+    skip_bom = True,
+)
+
+check(pwr.name == "PWR", "pwr must be named PWR")
+check(other.name == "SIG", "other must be named SIG")
+"#;
+    let result = eval_zen(vec![("test.zen".to_string(), src.to_string())]);
+    assert!(
+        result.is_success(),
+        "e2e: expected success, got: {:?}",
+        result.diagnostics
+    );
+    assert!(
+        !result.diagnostics.has_errors(),
+        "e2e: unexpected errors: {:?}",
+        result.diagnostics
+    );
+    let eval_output = result.output.expect("expected eval output");
+    let sch_result = eval_output.to_schematic_with_diagnostics();
+    assert!(
+        !sch_result.diagnostics.has_errors(),
+        "e2e: schematic conversion failed: {:?}",
+        sch_result.diagnostics
+    );
+    let schematic = sch_result.output.expect("expected schematic output");
+    assert!(
+        schematic.nets.contains_key("PWR"),
+        "expected PWR net, got: {:?}",
+        schematic.nets.keys().collect::<Vec<_>>()
+    );
+    assert!(
+        schematic.nets.contains_key("SIG"),
+        "expected SIG net, got: {:?}",
+        schematic.nets.keys().collect::<Vec<_>>()
+    );
+}

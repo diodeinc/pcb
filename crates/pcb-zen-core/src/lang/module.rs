@@ -794,12 +794,19 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
     }
 
     /// Record that this module introduced a net with `id` and `local_name`.
+    ///
+    /// `prior_was_bound` is the bound status of the net previously registered
+    /// under `id` (i.e. the base net that was cast to this one, reusing its
+    /// `NetId`). It is only consulted on the id-reuse branch, where it scopes
+    /// the eviction of a stale prior-name -> id reverse-map entry to the
+    /// unambiguous case of an unbound/template-owned base.
     pub fn register_net(
         &mut self,
         id: NetId,
         local_name: String,
         assignment_inferable: bool,
         kind: String,
+        prior_was_bound: bool,
     ) -> anyhow::Result<String> {
         let base_name = local_name;
 
@@ -807,6 +814,23 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
             let has_name_evidence = assignment_inferable || !base_name.trim().is_empty();
             if !has_name_evidence {
                 return Ok(existing.name.as_str().to_string());
+            }
+
+            // Evict the stale prior-name -> id reverse-map entry when an
+            // existing id is re-registered under a new name, but only when the
+            // prior net was unbound (template-owned). For a bound base the prior
+            // name may still name a live `Net.name` value under one reading of
+            // the uniqueness invariant, so today's rejection behaviour is left
+            // untouched. Without this, the reverse map `net_name_to_id` would
+            // retain a `name -> id` entry whose forward entry
+            // `introduced_nets[id]` now bears a different name, causing a later
+            // unrelated `Net("<prior name>")` to be spuriously rejected as a
+            // duplicate.
+            if !prior_was_bound
+                && let Some(old_name) = existing.name.named()
+                && old_name != base_name
+            {
+                self.net_name_to_id.shift_remove(old_name);
             }
 
             self.record_net_name(id, &base_name, assignment_inferable, &existing.kind)?;
@@ -908,17 +932,7 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
     /// `interface(...)`) and should not count as an introduced net for the
     /// enclosing module.
     pub fn unregister_net(&mut self, id: NetId) {
-        // Find the name associated with this id (if any)
-        let mut name_to_remove: Option<String> = None;
-        let mut found = false;
-        for (nid, info) in self.introduced_nets.iter() {
-            if *nid == id {
-                found = true;
-                name_to_remove = info.name.named().map(str::to_string);
-                break;
-            }
-        }
-
+        let found = self.introduced_nets.iter().any(|(nid, _)| *nid == id);
         if !found {
             return;
         }
@@ -932,16 +946,71 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
         }
         self.introduced_nets = rebuilt_nets;
 
-        if let Some(name) = name_to_remove {
-            // Rebuild net_name_to_id without the given name
-            let mut rebuilt_lookup = starlark::collections::SmallMap::new();
-            for (k, v) in self.net_name_to_id.iter() {
-                if k != &name {
-                    rebuilt_lookup.insert(k.clone(), *v);
-                }
+        // Rebuild net_name_to_id without ANY entry pointing at the removed id.
+        // Filtering by id (rather than by `introduced_nets[id].name`) also drops
+        // stale reverse-map entries left behind when this id was earlier renamed
+        // in `register_net`; without this, such an entry would dangle at an id
+        // that no longer exists and later spuriously reject an unrelated
+        // `Net("<prior name>")`.
+        let mut rebuilt_lookup = starlark::collections::SmallMap::new();
+        for (k, v) in self.net_name_to_id.iter() {
+            if *v != id {
+                rebuilt_lookup.insert(k.clone(), *v);
             }
-            self.net_name_to_id = rebuilt_lookup;
         }
+        self.net_name_to_id = rebuilt_lookup;
+    }
+}
+
+#[cfg(test)]
+mod register_net_invariant_tests {
+    use super::*;
+
+    fn fresh_module() -> ModuleValueGen<FrozenValue> {
+        ModuleValueGen::new(
+            ModulePath::root(),
+            std::path::Path::new(""),
+            SmallMap::new(),
+        )
+    }
+
+    /// Invariant: for every `(name, id)` in `net_name_to_id`, the forward entry
+    /// `introduced_nets[id].name.named() == Some(name)`.
+    fn assert_reverse_map_consistent(module: &ModuleValueGen<FrozenValue>) {
+        for (name, id) in module.net_name_to_id.iter() {
+            let fwd = module
+                .introduced_nets
+                .get(id)
+                .unwrap_or_else(|| panic!("reverse map {name:?} -> {id} has no forward entry"));
+            assert_eq!(
+                fwd.name.named(),
+                Some(name.as_str()),
+                "reverse map {name:?} -> {id} disagrees with forward entry name {:?}",
+                fwd.name.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn unregister_net_drops_all_reverse_entries_pointing_at_id() {
+        let mut m = fresh_module();
+        m.register_net(1, "SIG".to_string(), false, "Power".to_string(), false)
+            .unwrap();
+        // Simulate a leaked/stale reverse-map entry pointing at id 1 under a
+        // different name (the state `register_net`'s pre-fix rename branch
+        // created). `unregister_net` must drop ALL entries pointing at the
+        // removed id, not merely the one matching the current registered name,
+        // so no stale entry can dangle at a removed id.
+        m.net_name_to_id.insert("STALE".to_string(), 1);
+        m.unregister_net(1);
+        assert!(m.introduced_nets.get(&1).is_none());
+        assert_eq!(m.net_name_to_id.get("SIG"), None);
+        assert_eq!(
+            m.net_name_to_id.get("STALE"),
+            None,
+            "unregister must drop stale entries pointing at the removed id"
+        );
+        assert_reverse_map_consistent(&m);
     }
 }
 
