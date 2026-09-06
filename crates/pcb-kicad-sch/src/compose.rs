@@ -83,6 +83,10 @@ pub(crate) fn reconcile_document(
     let expected_slots = component_slots::component_symbol_slots(netlist)?
         .into_iter()
         .collect::<BTreeSet<_>>();
+    // Invalid cached definitions are repaired later; they cannot provide
+    // trustworthy pre-projection endpoint geometry.
+    let existing_placed =
+        existing.and_then(|document| placed_symbols_from_document(document, &expected_slots).ok());
     let RepairTargets {
         missing_sheets,
         project_slots,
@@ -304,7 +308,7 @@ pub(crate) fn reconcile_document(
     // Library cleanup is a whole-document concern; a scoped repair must not
     // touch pages outside its selection.
     if complete {
-        reconcile_not_connected_markers(&mut document, netlist, &placed)?;
+        reconcile_not_connected_markers(&mut document, netlist, existing_placed.as_ref(), &placed)?;
         prune_unused_symbol_definitions(&mut document);
     }
     Ok(document)
@@ -313,6 +317,7 @@ pub(crate) fn reconcile_document(
 fn reconcile_not_connected_markers(
     document: &mut SchDocument,
     netlist: &Schematic,
+    existing_placed: Option<&BTreeMap<SymbolSlotKey, PlacedSymbol>>,
     placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
 ) -> Result<()> {
     let connected_nets = named_connected_nets(netlist)
@@ -325,6 +330,8 @@ fn reconcile_not_connected_markers(
             });
         }
     }
+    let mut targets = Vec::new();
+    let mut old_targets = Vec::new();
     for terminal in not_connected_terminals(netlist) {
         let Terminal::ComponentPin {
             component: ComponentIdentity::ManagedPath(path),
@@ -334,29 +341,67 @@ fn reconcile_not_connected_markers(
         else {
             continue;
         };
-        for target in resolve_pin_targets(placed, &path, &pin_name, &pin_numbers)? {
-            if target.hidden {
-                continue;
-            }
-            // A marker belongs to an endpoint, not a pin identity. Preserve
-            // user markers and use one marker for stacked physical pins.
-            if document.pages[target.page_index].items.iter().any(|item| {
+        targets.extend(resolve_pin_targets(placed, &path, &pin_name, &pin_numbers)?);
+        if let Some(existing_placed) = existing_placed {
+            // New or renamed source pins need not exist in the old definition.
+            old_targets.extend(
+                resolve_pin_targets(existing_placed, &path, &pin_name, &pin_numbers)
+                    .unwrap_or_default(),
+            );
+        }
+    }
+    for old_target in old_targets {
+        if targets.iter().any(|target| {
+            target.page_index == old_target.page_index
+                && points_coincide(target.point, old_target.point)
+        }) {
+            continue;
+        }
+        // Use pre-projection geometry, not deterministic UUID ownership.
+        // Preserve an endpoint still used by any NC pin, including swapped pins.
+        document.pages[old_target.page_index].items.retain(|item| {
+            !matches!(item, SchItem::NoConnect(marker) if points_coincide(marker.at, old_target.point))
+        });
+    }
+    let observed = reduce_with_provenance(document, PinVisibility::VisibleOnly)?;
+    for target in targets {
+        if target.hidden {
+            continue;
+        }
+        let pin = target.physical_pin(&document.pages[target.page_index].id);
+        // Check each physical endpoint separately: a logical terminal may
+        // represent multiple pads, only some of which carry existing wiring.
+        let attached = observed.islands.values().any(|island| {
+            island.pins.contains(&pin)
+                && island
+                    .items
+                    .iter()
+                    .any(|item| !matches!(item, ConnectivityItemRef::NoConnect { .. }))
+        });
+        if attached {
+            document.pages[target.page_index].items.retain(|item| {
+                !matches!(item, SchItem::NoConnect(marker) if points_coincide(marker.at, target.point))
+            });
+            continue;
+        }
+        // A marker belongs to an endpoint, not a pin identity. Preserve
+        // user markers and use one marker for stacked physical pins.
+        if document.pages[target.page_index].items.iter().any(|item| {
                 matches!(item, SchItem::NoConnect(marker) if points_coincide(marker.at, target.point))
             }) {
                 continue;
             }
-            let id = available_deterministic_id(
-                document,
-                &format!("zener:no-connect:{}:{}", target.symbol_id, target.number),
-            );
-            document.pages[target.page_index]
-                .items
-                .push(SchItem::NoConnect(crate::NoConnect {
-                    id,
-                    at: target.point,
-                    unsupported: Vec::new(),
-                }));
-        }
+        let id = available_deterministic_id(
+            document,
+            &format!("zener:no-connect:{}:{}", target.symbol_id, target.number),
+        );
+        document.pages[target.page_index]
+            .items
+            .push(SchItem::NoConnect(crate::NoConnect {
+                id,
+                at: target.point,
+                unsupported: Vec::new(),
+            }));
     }
     Ok(())
 }

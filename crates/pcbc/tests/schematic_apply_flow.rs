@@ -235,6 +235,29 @@ fn hide_symbol_pin(node: &mut Sexpr, number: &str) -> bool {
         .is_some_and(|items| items.iter_mut().any(|child| hide_symbol_pin(child, number)))
 }
 
+fn move_symbol_pin(node: &mut Sexpr, number: &str, x: f64) -> bool {
+    let Some(items) = node.as_list_mut() else {
+        return false;
+    };
+    let is_target = items.first().and_then(Sexpr::as_sym) == Some("pin")
+        && items.iter().filter_map(Sexpr::as_list).any(|child| {
+            child.first().and_then(Sexpr::as_sym) == Some("number")
+                && child.get(1).and_then(Sexpr::as_atom) == Some(number)
+        });
+    if is_target {
+        let at = items
+            .iter_mut()
+            .filter_map(Sexpr::as_list_mut)
+            .find(|child| child.first().and_then(Sexpr::as_sym) == Some("at"))
+            .expect("pin position");
+        at[1] = Sexpr::float(x);
+        return true;
+    }
+    items
+        .iter_mut()
+        .any(|child| move_symbol_pin(child, number, x))
+}
+
 #[test]
 fn creates_a_verified_project_and_then_makes_no_changes() {
     let workspace = tempfile::tempdir().unwrap();
@@ -750,6 +773,131 @@ fn restores_nc_markers_at_transformed_pin_endpoints() {
         );
     }
     assert!(!apply_linked_schematic(&netlist).unwrap().unwrap().changed);
+}
+
+#[test]
+fn moves_nc_marker_when_source_pin_geometry_changes() {
+    let workspace = tempfile::tempdir().unwrap();
+    let project_dir = workspace.path().join("hardware");
+    let mut netlist = linked_fixture(&project_dir);
+    let mut not_connected = netlist.nets.remove("RIGHT").unwrap();
+    not_connected.kind = "NotConnected".to_string();
+    not_connected.name.clear();
+    netlist.nets.insert(String::new(), not_connected);
+    apply_linked_schematic(&netlist).unwrap().unwrap();
+
+    let mut project = KicadProject::load(&project_dir).unwrap();
+    let old_marker = project.document.pages[0]
+        .items
+        .iter()
+        .find_map(|item| match item {
+            SchItem::NoConnect(marker) => Some(marker.at),
+            _ => None,
+        })
+        .unwrap();
+    let user_marker = Point::new(old_marker.x + 25.4, old_marker.y + 25.4);
+    project.document.pages[0]
+        .items
+        .push(SchItem::NoConnect(pcb_kicad_sch::NoConnect {
+            id: "00000000-0000-4000-8000-000000000142".to_string(),
+            at: user_marker,
+            unsupported: Vec::new(),
+        }));
+    fs::write(
+        &project.root_schematics[0],
+        project.document.to_kicad_sch().unwrap(),
+    )
+    .unwrap();
+
+    for component in netlist
+        .instances
+        .values_mut()
+        .filter(|instance| instance.kind == pcb_sch::InstanceKind::Component)
+    {
+        let Some(AttributeValue::String(source)) = component.attributes.get_mut("__symbol_value")
+        else {
+            continue;
+        };
+        let mut symbol = pcb_sexpr::parse(source).unwrap();
+        if move_symbol_pin(&mut symbol, "2", 7.62) {
+            *source = symbol.to_string();
+        }
+    }
+
+    assert!(apply_linked_schematic(&netlist).unwrap().unwrap().changed);
+    let repaired = KicadProject::load(&project_dir).unwrap();
+    let markers = repaired.document.pages[0]
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            SchItem::NoConnect(marker) => Some(marker.at),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(markers.len(), 2, "stale NC marker must be removed");
+    assert!(!markers.contains(&old_marker));
+    assert!(
+        markers.contains(&user_marker),
+        "unrelated user marker must remain"
+    );
+    assert!(!apply_linked_schematic(&netlist).unwrap().unwrap().changed);
+}
+
+#[test]
+fn apply_does_not_mark_a_wire_attached_to_an_nc_pin() {
+    let workspace = tempfile::tempdir().unwrap();
+    let project_dir = workspace.path().join("hardware");
+    let mut netlist = linked_fixture(&project_dir);
+    let mut not_connected = netlist.nets.remove("RIGHT").unwrap();
+    not_connected.kind = "NotConnected".to_string();
+    not_connected.name.clear();
+    netlist.nets.insert(String::new(), not_connected);
+    apply_linked_schematic(&netlist).unwrap().unwrap();
+
+    let mut project = KicadProject::load(&project_dir).unwrap();
+    let endpoint = project.document.pages[0]
+        .items
+        .iter()
+        .find_map(|item| match item {
+            SchItem::NoConnect(marker) => Some(marker.at),
+            _ => None,
+        })
+        .unwrap();
+    project.document.pages[0]
+        .items
+        .retain(|item| !matches!(item, SchItem::NoConnect(_)));
+    project.document.pages[0].items.push(SchItem::Wire(Wire {
+        id: "wire-on-nc-pin".to_string(),
+        a: endpoint,
+        b: Point::new(endpoint.x + 2.54, endpoint.y),
+        unsupported: Vec::new(),
+    }));
+    fs::write(
+        &project.root_schematics[0],
+        project.document.to_kicad_sch().unwrap(),
+    )
+    .unwrap();
+
+    assert!(!apply_linked_schematic(&netlist).unwrap().unwrap().changed);
+    let repaired = KicadProject::load(&project_dir).unwrap();
+    assert!(
+        repaired.document.pages[0]
+            .items
+            .iter()
+            .any(|item| matches!(item, SchItem::Wire(wire) if wire.id == "wire-on-nc-pin"))
+    );
+    assert!(
+        !repaired.document.pages[0]
+            .items
+            .iter()
+            .any(|item| matches!(item, SchItem::NoConnect(_)))
+    );
+    assert!(
+        inspect_schematic(&repaired.document, &netlist)
+            .unwrap()
+            .analysis
+            .is_equivalent()
+    );
 }
 
 #[test]
