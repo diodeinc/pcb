@@ -447,6 +447,65 @@ fn stacked_pin_numbers_expand_to_exact_logical_numbers() {
 }
 
 #[test]
+fn zero_padded_stacked_pin_range_preserves_leading_zeros() {
+    let range = first_component_pin_numbers(|builder| {
+        builder
+            .define_symbol_raw(
+                r#"(symbol "Test:Stacked"
+                  (symbol "Stacked_1_1"
+                    (pin passive line (at 0 0 0) (length 0)
+                      (name "P") (number "[01-03]"))))"#,
+            )
+            .component("Test:Stacked", Some("U1"), (0.0, 0.0))
+            .local_label("NET", (0.0, 0.0));
+    });
+    assert_eq!(range, names(&["01", "02", "03"]));
+    assert!(!range.contains("[01-03]"));
+
+    let comma = first_component_pin_numbers(|builder| {
+        builder
+            .define_symbol_raw(
+                r#"(symbol "Test:Stacked"
+                  (symbol "Stacked_1_1"
+                    (pin passive line (at 0 0 0) (length 0)
+                      (name "P") (number "[01,02,03]"))))"#,
+            )
+            .component("Test:Stacked", Some("U1"), (0.0, 0.0))
+            .local_label("NET", (0.0, 0.0));
+    });
+    assert_eq!(range, comma);
+}
+
+#[test]
+fn zero_padded_stacked_pin_range_crossing_a_digit_boundary_preserves_width() {
+    let range = first_component_pin_numbers(|builder| {
+        builder
+            .define_symbol_raw(
+                r#"(symbol "Test:Stacked"
+                  (symbol "Stacked_1_1"
+                    (pin passive line (at 0 0 0) (length 0)
+                      (name "P") (number "[08-12]"))))"#,
+            )
+            .component("Test:Stacked", Some("U1"), (0.0, 0.0))
+            .local_label("NET", (0.0, 0.0));
+    });
+    assert_eq!(range, names(&["08", "09", "10", "11", "12"]));
+
+    let comma = first_component_pin_numbers(|builder| {
+        builder
+            .define_symbol_raw(
+                r#"(symbol "Test:Stacked"
+                  (symbol "Stacked_1_1"
+                    (pin passive line (at 0 0 0) (length 0)
+                      (name "P") (number "[08,09,10,11,12]"))))"#,
+            )
+            .component("Test:Stacked", Some("U1"), (0.0, 0.0))
+            .local_label("NET", (0.0, 0.0));
+    });
+    assert_eq!(range, comma);
+}
+
+#[test]
 fn oversized_stacked_pin_range_is_rejected() {
     let mut builder = KicadBuilder::new();
     builder
@@ -677,6 +736,17 @@ fn named_groups(document: pcb_kicad_sch::SchDocument) -> Vec<BTreeSet<String>> {
 
 fn names(values: &[&str]) -> BTreeSet<String> {
     values.iter().map(|value| (*value).to_string()).collect()
+}
+
+fn first_component_pin_numbers(configure: impl FnOnce(&mut KicadBuilder)) -> BTreeSet<String> {
+    let mut builder = KicadBuilder::new();
+    configure(&mut builder);
+    let graph = ConnectivityGraph::from_kicad(&builder.build()).unwrap();
+    let Terminal::ComponentPin { pin_numbers, .. } = graph.groups[0].terminals.first().unwrap()
+    else {
+        panic!("expected a component pin terminal");
+    };
+    pin_numbers.clone()
 }
 
 fn named_group_terminal_counts(graph: &ConnectivityGraph) -> Vec<(&str, usize)> {
