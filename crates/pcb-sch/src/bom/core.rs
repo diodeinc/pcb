@@ -30,6 +30,10 @@ pub fn trim_description(s: Option<String>) -> Option<String> {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GroupedBomEntry {
     pub designators: BTreeSet<NaturalString>,
+    pub quantity: usize,
+    /// Original per-path lines, including their distinct requirements and match data.
+    pub members: Vec<UngroupedBomEntry>,
+    /// Representative design entry from the first naturally sorted member.
     #[serde(flatten)]
     pub entry: BomEntry,
 }
@@ -339,7 +343,9 @@ impl Bom {
             .collect::<Vec<_>>();
         // Sort by DNP status first (non-DNP before DNP), then by designator naturally
         entries.sort_by(|a, b| match a.entry.dnp.cmp(&b.entry.dnp) {
-            std::cmp::Ordering::Equal => natord::compare(&a.designator, &b.designator),
+            std::cmp::Ordering::Equal => {
+                natord::compare(&a.designator, &b.designator).then_with(|| a.path.cmp(&b.path))
+            }
             other => other,
         });
         entries
@@ -349,40 +355,50 @@ impl Bom {
         serde_json::to_string_pretty(&self.ungrouped_entries()).unwrap()
     }
 
-    #[cfg(feature = "table")]
-    pub(crate) fn grouped_entries(&self) -> Vec<GroupedBomEntry> {
-        // Path-only entries do not identify a common component and must not be
-        // collapsed into one row.
-        let mut groups = HashMap::<(BomEntry, Option<String>), BTreeSet<NaturalString>>::new();
-
-        for (path, entry) in &self.entries {
-            let instance_path = (!entry.has_stable_aggregation_identity()).then(|| path.clone());
-            let group = groups.entry((entry.clone(), instance_path)).or_default();
-            group.insert(self.designators[path].clone().into());
+    /// Presentation grouping only: matching and release artifacts keep authored lines.
+    pub fn grouped_entries(&self) -> Vec<GroupedBomEntry> {
+        #[derive(PartialEq, Eq, Hash)]
+        enum Key {
+            Selection(String, bool, bool),
+            Design(Box<BomEntry>, Option<String>),
         }
 
-        // Convert to vec
-        let mut grouped_entries = groups
-            .into_iter()
-            .map(|((entry, _), designators)| GroupedBomEntry { entry, designators })
-            .collect::<Vec<_>>();
+        let mut indices = HashMap::<Key, usize>::new();
+        let mut groups = Vec::<GroupedBomEntry>::new();
+        for member in self.ungrouped_entries() {
+            let entry = &member.entry;
+            // Match Diode's display identity: the server-selected offer, not the
+            // authored requirements or MPN alone. Never select or rerank locally.
+            let key = match member
+                .availability
+                .as_ref()
+                .and_then(|a| a.selected_offer_id.as_ref())
+            {
+                Some(id) => Key::Selection(id.clone(), entry.dnp, entry.skip_bom),
+                None => Key::Design(
+                    Box::new(entry.clone()),
+                    (!entry.has_stable_aggregation_identity()).then(|| member.path.clone()),
+                ),
+            };
+            let index = *indices.entry(key).or_insert_with(|| {
+                groups.push(GroupedBomEntry {
+                    designators: BTreeSet::new(),
+                    quantity: 0,
+                    members: Vec::new(),
+                    entry: entry.clone(),
+                });
+                groups.len() - 1
+            });
+            let group = &mut groups[index];
+            group.designators.insert(member.designator.clone().into());
+            group.quantity += 1;
+            group.members.push(member);
+        }
+        groups
+    }
 
-        grouped_entries.sort_by(|a, b| {
-            // Sort by DNP status first (non-DNP before DNP)
-            match a.entry.dnp.cmp(&b.entry.dnp) {
-                std::cmp::Ordering::Equal => {
-                    // Within same DNP status, sort by first designator
-                    // BTreeSet<NaturalString> maintains natural order, so first() is correct
-                    a.designators
-                        .iter()
-                        .next()
-                        .cmp(&b.designators.iter().next())
-                }
-                other => other,
-            }
-        });
-
-        grouped_entries
+    pub fn grouped_json(&self) -> String {
+        serde_json::to_string_pretty(&self.grouped_entries()).unwrap()
     }
 
     /// Filter out components that have skip_bom=true
@@ -689,7 +705,6 @@ mod tests {
         assert_eq!(truncated.chars().count(), 100);
     }
 
-    #[cfg(feature = "table")]
     #[test]
     fn identityless_entries_remain_separate_table_rows() {
         let entry = BomEntry {
@@ -716,6 +731,77 @@ mod tests {
         );
 
         assert_eq!(bom.grouped_entries().len(), 2);
+    }
+
+    #[test]
+    fn presentation_groups_server_selections_without_losing_member_details() {
+        use crate::bom::availability::Availability;
+
+        let mut bom = Bom::new(HashMap::new(), HashMap::new());
+        for (designator, description, selection, dnp, skip_bom) in [
+            ("C10", "1 uF", Some("shared"), false, false),
+            ("C2", "1 uF 10 V", Some("shared"), false, false),
+            ("C3", "1 uF", Some("other-seller"), false, false),
+            ("C4", "1 uF", None, false, false),
+            ("C5", "1 uF", Some("shared"), true, false),
+            ("C6", "1 uF", Some("shared"), false, true),
+        ] {
+            let path = format!("root.{designator}");
+            let entry = serde_json::from_value(serde_json::json!({
+                "mpn": "same-part", "manufacturer": "same-maker",
+                "description": description, "alternatives": [],
+                "dnp": dnp, "skip_bom": skip_bom
+            }))
+            .unwrap();
+            bom.entries.insert(path.clone(), entry);
+            bom.designators.insert(path.clone(), designator.to_string());
+            bom.availability.insert(
+                path,
+                Availability {
+                    selected_offer_id: selection.map(str::to_string),
+                    ..Default::default()
+                },
+            );
+        }
+        let groups = bom.grouped_entries();
+        assert_eq!(groups.len(), 5);
+        assert_eq!(groups[0].quantity, 2);
+        assert_eq!(groups[0].entry.description.as_deref(), Some("1 uF 10 V"));
+        assert_eq!(groups[0].members[0].path, "root.C2");
+        assert_eq!(groups[0].members[1].path, "root.C10");
+        assert_eq!(
+            groups[0].members[1].entry.description.as_deref(),
+            Some("1 uF")
+        );
+        let json: serde_json::Value = serde_json::from_str(&bom.grouped_json()).unwrap();
+        assert_eq!(json[0]["quantity"], 2);
+        assert_eq!(json[0]["designators"], serde_json::json!(["C2", "C10"]));
+        assert_eq!(json[0]["members"][1]["path"], "root.C10");
+        assert_eq!(json[0]["members"][1]["description"], "1 uF");
+        assert_eq!(
+            json[0]["members"][1]["availability"]["selected_offer_id"],
+            "shared"
+        );
+        assert_eq!(bom.ungrouped_entries().len(), 6);
+
+        // HashMap insertion order must not choose a different representative.
+        let mut reordered = bom.clone();
+        reordered.entries = bom
+            .ungrouped_entries()
+            .into_iter()
+            .rev()
+            .map(|line| (line.path, line.entry))
+            .collect();
+        assert_eq!(reordered.grouped_json(), bom.grouped_json());
+
+        #[cfg(feature = "table")]
+        {
+            let mut output = Vec::new();
+            bom.write_table(&mut output).unwrap();
+            let table = String::from_utf8(output).unwrap();
+            assert!(table.contains("C2,C10"), "{table}");
+            println!("{table}");
+        }
     }
 
     #[test]

@@ -8,16 +8,41 @@ Exit Code: 0
 --- STDOUT ---
 [
   {
-    "path": "kicad::R1",
-    "designator": "R1",
+    "designators": [
+      "R1"
+    ],
+    "quantity": 1,
+    "members": [
+      {
+        "path": "kicad::R1",
+        "designator": "R1",
+        "mpn": "ERJ-2RKF1003X",
+        "package": "R_0402_1005Metric",
+        "value": "ERJ-2RKF1003X",
+        "description": "Resistor"
+      }
+    ],
     "mpn": "ERJ-2RKF1003X",
     "package": "R_0402_1005Metric",
     "value": "ERJ-2RKF1003X",
     "description": "Resistor"
   },
   {
-    "path": "kicad::R2",
-    "designator": "R2",
+    "designators": [
+      "R2"
+    ],
+    "quantity": 1,
+    "members": [
+      {
+        "path": "kicad::R2",
+        "designator": "R2",
+        "mpn": "ERJ-2RKF1003X",
+        "package": "R_0402_1005Metric",
+        "value": "ERJ-2RKF1003X",
+        "description": "Resistor",
+        "dnp": true
+      }
+    ],
     "mpn": "ERJ-2RKF1003X",
     "package": "R_0402_1005Metric",
     "value": "ERJ-2RKF1003X",

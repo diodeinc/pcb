@@ -8,14 +8,34 @@ Exit Code: 0
 --- STDOUT ---
 [
   {
-    "path": "normal",
-    "designator": "U1",
+    "designators": [
+      "U1"
+    ],
+    "quantity": 1,
+    "members": [
+      {
+        "path": "normal",
+        "designator": "U1",
+        "mpn": "RC0603FR-071KL",
+        "manufacturer": "Yageo"
+      }
+    ],
     "mpn": "RC0603FR-071KL",
     "manufacturer": "Yageo"
   },
   {
-    "path": "normal2",
-    "designator": "U2",
+    "designators": [
+      "U2"
+    ],
+    "quantity": 1,
+    "members": [
+      {
+        "path": "normal2",
+        "designator": "U2",
+        "mpn": "RC0603FR-0710KL",
+        "manufacturer": "Yageo"
+      }
+    ],
     "mpn": "RC0603FR-0710KL",
     "manufacturer": "Yageo"
   }

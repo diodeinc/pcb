@@ -337,23 +337,12 @@ impl Bom {
         table.load_style(comfy_table::presets::UTF8_FULL_CONDENSED);
         table.set_content_arrangement(comfy_table::ContentArrangement::DynamicFullWidth);
 
-        let mut entries = self.grouped_entries();
-        // Sort entries: non-DNP first (sorted by first designator), then DNP items (sorted by first designator)
-        entries.sort_by(|a, b| {
-            a.entry.dnp.cmp(&b.entry.dnp).then_with(|| {
-                a.designators
-                    .iter()
-                    .next()
-                    .cmp(&b.designators.iter().next())
-            })
-        });
-
-        for grouped in entries {
+        for grouped in self.grouped_entries() {
             let designators_vec: Vec<&str> =
                 grouped.designators.iter().map(AsRef::as_ref).collect();
 
             // Designators already naturally sorted by BTreeSet<NaturalString>
-            let qty = designators_vec.len();
+            let qty = grouped.quantity;
             let designators = designators_vec.join(",");
             let entry = &grouped.entry;
 
@@ -374,18 +363,11 @@ impl Bom {
                 .unwrap_or_default();
             let is_dnp = entry.dnp;
 
-            let mut paths: Vec<&String> = self
-                .designators
-                .iter()
-                .filter(|(_, d)| designators_vec.contains(&d.as_str()))
-                .map(|(p, _)| p)
-                .collect();
-            paths.sort_unstable();
-
             // A grouped row is sourceable only when every represented line has match data.
-            let availabilities = paths
+            let availabilities = grouped
+                .members
                 .iter()
-                .map(|path| self.availability.get(*path))
+                .map(|member| member.availability.as_ref())
                 .collect::<Option<Vec<_>>>();
             let avail = availabilities
                 .as_deref()

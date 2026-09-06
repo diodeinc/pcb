@@ -8,8 +8,26 @@ Exit Code: 0
 --- STDOUT ---
 [
   {
-    "path": "C1.C",
-    "designator": "C1",
+    "designators": [
+      "C1"
+    ],
+    "quantity": 1,
+    "members": [
+      {
+        "path": "C1.C",
+        "designator": "C1",
+        "package": "0402",
+        "value": "100nF",
+        "description": "100nF",
+        "component_type": "Capacitor",
+        "capacitance": {
+          "nominal": "0.000000100",
+          "min": "0.000000100",
+          "max": "0.000000100",
+          "unit": "Farads"
+        }
+      }
+    ],
     "package": "0402",
     "value": "100nF",
     "description": "100nF",
@@ -22,8 +40,26 @@ Exit Code: 0
     }
   },
   {
-    "path": "C2.C",
-    "designator": "C2",
+    "designators": [
+      "C2"
+    ],
+    "quantity": 1,
+    "members": [
+      {
+        "path": "C2.C",
+        "designator": "C2",
+        "package": "0805",
+        "value": "10uF",
+        "description": "10uF",
+        "component_type": "Capacitor",
+        "capacitance": {
+          "nominal": "0.000010",
+          "min": "0.000010",
+          "max": "0.000010",
+          "unit": "Farads"
+        }
+      }
+    ],
     "package": "0805",
     "value": "10uF",
     "description": "10uF",
@@ -36,8 +72,41 @@ Exit Code: 0
     }
   },
   {
-    "path": "C3.C",
-    "designator": "C3",
+    "designators": [
+      "C3",
+      "C4"
+    ],
+    "quantity": 2,
+    "members": [
+      {
+        "path": "C3.C",
+        "designator": "C3",
+        "package": "0402",
+        "value": "22pF",
+        "description": "22pF",
+        "component_type": "Capacitor",
+        "capacitance": {
+          "nominal": "0.000000000022",
+          "min": "0.000000000022",
+          "max": "0.000000000022",
+          "unit": "Farads"
+        }
+      },
+      {
+        "path": "C4.C",
+        "designator": "C4",
+        "package": "0402",
+        "value": "22pF",
+        "description": "22pF",
+        "component_type": "Capacitor",
+        "capacitance": {
+          "nominal": "0.000000000022",
+          "min": "0.000000000022",
+          "max": "0.000000000022",
+          "unit": "Farads"
+        }
+      }
+    ],
     "package": "0402",
     "value": "22pF",
     "description": "22pF",
@@ -50,22 +119,21 @@ Exit Code: 0
     }
   },
   {
-    "path": "C4.C",
-    "designator": "C4",
-    "package": "0402",
-    "value": "22pF",
-    "description": "22pF",
-    "component_type": "Capacitor",
-    "capacitance": {
-      "nominal": "0.000000000022",
-      "min": "0.000000000022",
-      "max": "0.000000000022",
-      "unit": "Farads"
-    }
-  },
-  {
-    "path": "LED1.D1.LED",
-    "designator": "D1",
+    "designators": [
+      "D1"
+    ],
+    "quantity": 1,
+    "members": [
+      {
+        "path": "LED1.D1.LED",
+        "designator": "D1",
+        "package": "0603",
+        "value": "LED GREEN",
+        "description": "LED GREEN",
+        "component_type": "Led",
+        "color": "green"
+      }
+    ],
     "package": "0603",
     "value": "LED GREEN",
     "description": "LED GREEN",
@@ -73,8 +141,21 @@ Exit Code: 0
     "color": "green"
   },
   {
-    "path": "LED2.D1.LED",
-    "designator": "D2",
+    "designators": [
+      "D2"
+    ],
+    "quantity": 1,
+    "members": [
+      {
+        "path": "LED2.D1.LED",
+        "designator": "D2",
+        "package": "0603",
+        "value": "LED RED",
+        "description": "LED RED",
+        "component_type": "Led",
+        "color": "red"
+      }
+    ],
     "package": "0603",
     "value": "LED RED",
     "description": "LED RED",
@@ -82,8 +163,41 @@ Exit Code: 0
     "color": "red"
   },
   {
-    "path": "LED1.R1.R",
-    "designator": "R1",
+    "designators": [
+      "R1",
+      "R2"
+    ],
+    "quantity": 2,
+    "members": [
+      {
+        "path": "LED1.R1.R",
+        "designator": "R1",
+        "package": "0603",
+        "value": "330",
+        "description": "330",
+        "component_type": "Resistor",
+        "resistance": {
+          "nominal": "330",
+          "min": "330",
+          "max": "330",
+          "unit": "Ohms"
+        }
+      },
+      {
+        "path": "LED2.R1.R",
+        "designator": "R2",
+        "package": "0603",
+        "value": "330",
+        "description": "330",
+        "component_type": "Resistor",
+        "resistance": {
+          "nominal": "330",
+          "min": "330",
+          "max": "330",
+          "unit": "Ohms"
+        }
+      }
+    ],
     "package": "0603",
     "value": "330",
     "description": "330",
@@ -96,22 +210,26 @@ Exit Code: 0
     }
   },
   {
-    "path": "LED2.R1.R",
-    "designator": "R2",
-    "package": "0603",
-    "value": "330",
-    "description": "330",
-    "component_type": "Resistor",
-    "resistance": {
-      "nominal": "330",
-      "min": "330",
-      "max": "330",
-      "unit": "Ohms"
-    }
-  },
-  {
-    "path": "R1.R",
-    "designator": "R3",
+    "designators": [
+      "R3"
+    ],
+    "quantity": 1,
+    "members": [
+      {
+        "path": "R1.R",
+        "designator": "R3",
+        "package": "0603",
+        "value": "10k",
+        "description": "10k",
+        "component_type": "Resistor",
+        "resistance": {
+          "nominal": "10000",
+          "min": "10000",
+          "max": "10000",
+          "unit": "Ohms"
+        }
+      }
+    ],
     "package": "0603",
     "value": "10k",
     "description": "10k",
@@ -124,8 +242,32 @@ Exit Code: 0
     }
   },
   {
-    "path": "X1.Y",
-    "designator": "Y1",
+    "designators": [
+      "Y1"
+    ],
+    "quantity": 1,
+    "members": [
+      {
+        "path": "X1.Y",
+        "designator": "Y1",
+        "package": "5032_2Pin",
+        "value": "16MHz 18pF",
+        "description": "16MHz 18pF",
+        "component_type": "Crystal",
+        "frequency": {
+          "nominal": "16000000",
+          "min": "16000000",
+          "max": "16000000",
+          "unit": "Hertz"
+        },
+        "load_capacitance": {
+          "nominal": "0.000000000018",
+          "min": "0.000000000018",
+          "max": "0.000000000018",
+          "unit": "Farads"
+        }
+      }
+    ],
     "package": "5032_2Pin",
     "value": "16MHz 18pF",
     "description": "16MHz 18pF",
