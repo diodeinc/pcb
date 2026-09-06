@@ -1663,6 +1663,144 @@ mod tests {
         Ok(())
     }
 
+    /// End-to-end LSP regression (test-plan §2.5): opening a prelude stdlib file
+    /// via a non-canonical (symlinked) `didOpen` path must NOT emit a spurious
+    /// `Failed to load prelude module` diagnostic on top of the real error.
+    ///
+    /// Mirrors the production `textDocument/didOpen` path:
+    /// `did_open` -> `parse_file_with_contents` -> `config_for` ->
+    /// `set_source_path(<raw editor path>)`. The workspace root is canonicalized
+    /// during discovery (`resolution_for` -> `workspace_root_for` canonicalizes
+    /// the workspace root), so `workspace_stdlib_dir()` is canonical, but the
+    /// `didOpen` path is the editor-supplied symlinked form. Before the fix,
+    /// `set_source_path` used a raw `Path::starts_with` against the canonical
+    /// stdlib dir, leaving `inject_prelude = true` for the stdlib file and
+    /// producing a spurious duplicate diagnostic.
+    #[test]
+    #[cfg(unix)]
+    fn lsp_didopen_stdlib_via_symlinked_path_no_spurious_prelude_diagnostic() -> anyhow::Result<()>
+    {
+        use std::os::unix::fs::symlink;
+
+        // Real workspace at a canonical root.
+        let dir = tempfile::tempdir()?;
+        let root = dir.path().canonicalize()?;
+        fs::write(
+            root.join("pcb.toml"),
+            "[workspace]\npcb-version = \"0.4\"\n",
+        )?;
+        let main_path = root.join("main.zen");
+        fs::write(&main_path, "x = 1\n")?;
+
+        // Trigger workspace discovery + stdlib materialization under
+        // `<root>/.pcb/stdlib` by parsing a user file (resolution is lazy and
+        // copies the bundled stdlib into the workspace on first resolution).
+        let ctx = LspEvalContext::default();
+        let main_url = LspUri::File(main_path.clone());
+        let _ = ctx.parse_file_with_contents(&main_url, "x = 1\n".to_string());
+
+        let stdlib_dir = root.join(".pcb").join("stdlib");
+        let stdlib_interfaces = stdlib_dir.join("interfaces.zen");
+        assert!(
+            stdlib_interfaces.is_file(),
+            "stdlib must be materialized under <root>/.pcb/stdlib"
+        );
+
+        // Symlinked workspace root in a separate tempdir so the didOpen path is
+        // NOT textually prefixed by the canonical stdlib dir (the bug's
+        // precondition).
+        let link_dir = tempfile::tempdir()?;
+        let symlinked_root = link_dir.path().join("linked");
+        symlink(&root, &symlinked_root)?;
+        let symlinked_stdlib_path = symlinked_root
+            .join(".pcb")
+            .join("stdlib")
+            .join("interfaces.zen");
+        assert!(
+            symlinked_stdlib_path.is_file(),
+            "symlinked stdlib path must resolve to the real file"
+        );
+        assert!(
+            !symlinked_stdlib_path.starts_with(&stdlib_dir),
+            "symlinked path must not be textually prefixed by the canonical stdlib dir"
+        );
+
+        // Inject a NameError into the on-disk prelude module. The prelude
+        // re-load (only attempted when inject_prelude is wrongly left enabled)
+        // reads this file, so its failure surfaces as the spurious diagnostic.
+        let broken = "Net = def_this_is_not_defined()\n";
+        fs::write(&stdlib_interfaces, broken)?;
+
+        // --- Non-canonical (symlinked) didOpen --------------------------------
+        let symlinked_url = LspUri::File(symlinked_stdlib_path.clone());
+        let result = ctx.parse_file_with_contents(&symlinked_url, broken.to_string());
+        let messages: Vec<&str> = result
+            .diagnostics
+            .iter()
+            .map(|d| d.message.as_str())
+            .collect();
+        assert!(
+            !messages
+                .iter()
+                .any(|m| m.contains("Failed to load prelude module")),
+            "non-canonical didOpen must NOT emit a spurious prelude-load diagnostic; got: {messages:?}"
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains("Variable `def_this_is_not_defined` not found")),
+            "non-canonical didOpen must report the real NameError; got: {messages:?}"
+        );
+        let noncanonical_error_count = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == Some(lsp_types::DiagnosticSeverity::ERROR))
+            .count();
+        assert_eq!(
+            noncanonical_error_count, 1,
+            "non-canonical didOpen must report exactly one error; got: {messages:?}"
+        );
+
+        // --- Canonical didOpen of the same broken file (parity) --------------
+        let canonical_url = LspUri::File(stdlib_interfaces.clone());
+        let result = ctx.parse_file_with_contents(&canonical_url, broken.to_string());
+        let messages: Vec<&str> = result
+            .diagnostics
+            .iter()
+            .map(|d| d.message.as_str())
+            .collect();
+        assert!(
+            !messages
+                .iter()
+                .any(|m| m.contains("Failed to load prelude module")),
+            "canonical didOpen must NOT emit a spurious prelude-load diagnostic; got: {messages:?}"
+        );
+        let canonical_error_count = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == Some(lsp_types::DiagnosticSeverity::ERROR))
+            .count();
+        assert_eq!(
+            canonical_error_count, noncanonical_error_count,
+            "canonical and non-canonical didOpen must produce the same error count (parity)"
+        );
+
+        // --- Go-to-Definition regression guard (resolve_load canonicalizes) ---
+        // This flow canonicalizes its result in resolve_load and was never
+        // affected by the bug; assert it still returns the canonical stdlib URI
+        // so subsequent didOpen lands on a canonical path.
+        let resolved = ctx
+            .resolve_load("@stdlib/interfaces.zen", &main_url, None)
+            .map_err(anyhow::Error::msg)?;
+        assert_eq!(
+            resolved,
+            LspUri::File(stdlib_interfaces.clone()),
+            "Go-to-Definition must resolve to the canonical stdlib URI"
+        );
+
+        Ok(())
+    }
+
     #[test]
     fn lsp_does_not_cache_failed_dependency_resolution() -> anyhow::Result<()> {
         let dir = tempfile::tempdir()?;

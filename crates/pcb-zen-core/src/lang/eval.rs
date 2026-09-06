@@ -541,8 +541,12 @@ impl EvalContextConfig {
 
     /// Set the source path of the module we are evaluating.
     pub fn set_source_path(mut self, path: PathBuf) -> Self {
-        let stdlib_dir = self.resolution.workspace_info.workspace_stdlib_dir();
-        self.inject_prelude = self.inject_prelude && !path.starts_with(&stdlib_dir);
+        self.inject_prelude = self.inject_prelude
+            && !path_starts_with_canonical(
+                &path,
+                &self.resolution.workspace_info.workspace_stdlib_dir(),
+                self.file_provider.as_ref(),
+            );
         if self.active_root_package.is_none() {
             let canonical_path = self
                 .file_provider
@@ -2251,9 +2255,15 @@ impl FileLoader for EvalContext {
 
 #[cfg(test)]
 mod tests {
-    use std::{path::Path, sync::Arc};
+    use std::collections::{BTreeMap, HashMap};
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
 
-    use crate::{InMemoryFileProvider, resolution::ResolutionResult};
+    use crate::resolution::{
+        FrozenPackage, FrozenPackageIdentity, FrozenResolutionMap, ResolutionResult,
+    };
+    use crate::workspace::WorkspaceInfo;
+    use crate::{FileProvider, InMemoryFileProvider, workspace_stdlib_root};
 
     use super::*;
 
@@ -2276,5 +2286,219 @@ mod tests {
         context.invalidate_file(invalidation_path);
 
         assert!(context.session.footprint_cache.get(&key).is_none());
+    }
+
+    /// Build a `ResolutionResult` whose `workspace_stdlib_dir()` returns
+    /// `<workspace_root>/.pcb/stdlib`, registering both a workspace package and
+    /// the stdlib package so stdlib files resolve to a package.
+    fn resolution_at(workspace_root: &Path) -> ResolutionResult {
+        let mut packages = BTreeMap::new();
+        packages.insert(
+            "test".to_string(),
+            FrozenResolutionMap {
+                selected_remote: BTreeMap::new(),
+                packages: BTreeMap::from([
+                    (
+                        workspace_root.to_path_buf(),
+                        FrozenPackage {
+                            identity: FrozenPackageIdentity::Workspace("test".to_string()),
+                            deps: BTreeMap::new(),
+                            parts: Vec::new(),
+                        },
+                    ),
+                    (
+                        workspace_stdlib_root(workspace_root),
+                        FrozenPackage {
+                            identity: FrozenPackageIdentity::Stdlib,
+                            deps: BTreeMap::new(),
+                            parts: Vec::new(),
+                        },
+                    ),
+                ]),
+            },
+        );
+        let workspace_info = WorkspaceInfo {
+            root: workspace_root.to_path_buf(),
+            cache_dir: PathBuf::new(),
+            config: None,
+            packages: BTreeMap::new(),
+            errors: Vec::new(),
+        };
+        ResolutionResult::frozen(workspace_info, packages, HashMap::new())
+    }
+
+    /// Materialize the repository stdlib `.zen` files plus the power-symbol
+    /// files referenced by `interfaces.zen` under `<workspace_root>/.pcb/stdlib`.
+    fn stdlib_files_at(workspace_root: &Path) -> HashMap<String, String> {
+        let stdlib_root = workspace_stdlib_root(workspace_root);
+        let mut files: HashMap<String, String> = crate::stdlib::files_for_tests()
+            .into_iter()
+            .map(|(rel, contents)| {
+                (
+                    stdlib_root.join(rel).to_string_lossy().into_owned(),
+                    contents,
+                )
+            })
+            .collect();
+        let power_dir = workspace_root.join(".pcb/stdlib/kicad-symbols/power.kicad_symdir");
+        for name in ["VCC", "GND"] {
+            files.insert(
+                power_dir
+                    .join(format!("{name}.kicad_sym"))
+                    .to_string_lossy()
+                    .into_owned(),
+                format!(
+                    r##"(kicad_symbol_lib (version 20211014) (generator kicad_symbol_editor)
+  (symbol "{name}" (pin_names (offset 1.016)) (in_bom yes) (on_board yes)
+    (property "Reference" "#PWR" (id 0) (at 0 0 0))
+    (symbol "{name}_1_1")
+  )
+)"##
+                ),
+            );
+        }
+        files
+    }
+
+    /// Regression test for the `set_source_path` canonicalization bug.
+    ///
+    /// `EvalContextConfig::set_source_path` used a raw `Path::starts_with`
+    /// against `workspace_stdlib_dir()` to decide whether to disable stdlib
+    /// prelude injection (circular-dep avoidance for stdlib modules). Without
+    /// canonicalizing the incoming path, a stdlib file opened via a
+    /// non-canonical path (e.g. a `..`-bearing path, or a path preserved from a
+    /// symlinked workspace root) was misclassified as a user module and kept
+    /// `inject_prelude = true`. For a *prelude* stdlib file (`interfaces.zen`)
+    /// containing an error, leaving prelude injection enabled caused it to be
+    /// loaded again as a prelude dependency and produced a spurious
+    /// `Failed to load prelude module `@stdlib/interfaces.zen`` diagnostic on
+    /// top of the real error.
+    ///
+    /// After the fix, `set_source_path` canonicalizes before the prefix test
+    /// (reusing `path_starts_with_canonical`), so a stdlib file opened via any
+    /// path that canonicalizes to a stdlib path disables the prelude — matching
+    /// the canonical-path behavior. Both opens below must report exactly one
+    /// diagnostic (the real NameError) and no spurious prelude-load failure.
+    #[test]
+    fn set_source_path_canonicalizes_stdlib_prefix_check() {
+        let workspace_root = Path::new("/workspace");
+        let stdlib_dir = workspace_stdlib_root(workspace_root);
+        let canonical = stdlib_dir.join("interfaces.zen");
+        // `..`-bearing path that `InMemoryFileProvider::canonicalize` resolves
+        // to `canonical` — a stand-in for any path not textually prefixed by
+        // `workspace_stdlib_dir()`, of which a symlinked-workspace `didOpen`
+        // path is the realistic production instance.
+        let noncanonical = PathBuf::from("/workspace/.pcb/../.pcb/stdlib/interfaces.zen");
+        let broken_interfaces = "Net = def_this_is_not_defined()\n".to_string();
+
+        // Sanity: the two paths must name the same physical file after
+        // canonicalization, otherwise the test is not exercising the bug.
+        let probe = InMemoryFileProvider::empty();
+        assert_eq!(
+            probe.canonicalize(&noncanonical).unwrap(),
+            probe.canonicalize(&canonical).unwrap(),
+            "test paths must canonicalize to the same file"
+        );
+
+        let mk = || {
+            let mut files = stdlib_files_at(workspace_root);
+            // Inject a deliberate NameError into interfaces.zen.
+            files.insert(
+                stdlib_dir
+                    .join("interfaces.zen")
+                    .to_string_lossy()
+                    .into_owned(),
+                broken_interfaces.clone(),
+            );
+            let fp: Arc<dyn FileProvider> = Arc::new(InMemoryFileProvider::new(files));
+            EvalContext::new(fp, resolution_at(workspace_root))
+        };
+
+        // Canonical stdlib path: prelude disabled, exactly one diagnostic (the
+        // real NameError), no spurious prelude-load failure.
+        let ctx = mk().set_source_path(canonical);
+        assert!(
+            !ctx.config().inject_prelude,
+            "canonical stdlib path disables prelude"
+        );
+        let result = ctx.eval();
+        assert!(result.output.is_none(), "broken interfaces.zen must fail");
+        assert_eq!(
+            result.diagnostics.len(),
+            1,
+            "canonical open must report only the real error"
+        );
+        assert!(
+            !result
+                .diagnostics
+                .iter()
+                .any(|d| d.body.contains("Failed to load prelude module")),
+            "canonical open must NOT emit a spurious prelude-load diagnostic"
+        );
+        assert!(
+            result.diagnostics.iter().any(|d| d
+                .body
+                .contains("Variable `def_this_is_not_defined` not found")),
+            "canonical diagnostic must be the NameError"
+        );
+
+        // Non-canonical stdlib path: BEFORE the fix this left prelude enabled
+        // and produced two diagnostics (spurious prelude-load failure + the
+        // real error). After the fix it must behave exactly like the canonical
+        // open: prelude disabled, one diagnostic, no spurious prelude-load
+        // failure.
+        let ctx = mk().set_source_path(noncanonical);
+        assert!(
+            !ctx.config().inject_prelude,
+            "non-canonical stdlib path must disable prelude like the canonical path"
+        );
+        let result = ctx.eval();
+        assert!(result.output.is_none());
+        assert_eq!(
+            result.diagnostics.len(),
+            1,
+            "non-canonical open must report only the real error after the fix"
+        );
+        assert!(
+            !result
+                .diagnostics
+                .iter()
+                .any(|d| d.body.contains("Failed to load prelude module")),
+            "non-canonical open must NOT emit a spurious prelude-load diagnostic"
+        );
+        assert!(
+            result.diagnostics.iter().any(|d| d
+                .body
+                .contains("Variable `def_this_is_not_defined` not found")),
+            "non-canonical diagnostic must be the real NameError"
+        );
+    }
+
+    /// Guard against over-suppression: a user (non-stdlib) file must keep
+    /// prelude injection enabled regardless of whether its path is canonical,
+    /// so the canonicalization fix must not accidentally disable the prelude
+    /// for files outside the stdlib.
+    #[test]
+    fn set_source_path_keeps_prelude_for_user_files() {
+        let workspace_root = Path::new("/workspace");
+        let user_canonical = workspace_root.join("board.zen");
+        let user_noncanonical = PathBuf::from("/workspace/sub/../board.zen");
+
+        let mk = || {
+            let files = stdlib_files_at(workspace_root);
+            let fp: Arc<dyn FileProvider> = Arc::new(InMemoryFileProvider::new(files));
+            EvalContext::new(fp, resolution_at(workspace_root))
+        };
+
+        let ctx = mk().set_source_path(user_canonical);
+        assert!(
+            ctx.config().inject_prelude,
+            "canonical user (non-stdlib) file keeps prelude enabled"
+        );
+        let ctx = mk().set_source_path(user_noncanonical);
+        assert!(
+            ctx.config().inject_prelude,
+            "non-canonical user file keeps prelude (fix must not over-suppress)"
+        );
     }
 }
