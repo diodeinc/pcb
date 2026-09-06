@@ -33,7 +33,7 @@ pub(super) fn migrate_registry_references(root: &Path) -> Result<RegistryMigrati
     }
 
     let mut manifest_paths = BTreeSet::from([workspace.root.join("pcb.toml")]);
-    let mut package_roots = BTreeSet::new();
+    let mut package_roots = BTreeSet::from([workspace.root.clone()]);
     for package in workspace.packages.values() {
         let package_root = package.dir(&workspace.root);
         manifest_paths.insert(package_root.join("pcb.toml"));
