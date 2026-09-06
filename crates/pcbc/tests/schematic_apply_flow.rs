@@ -640,16 +640,20 @@ fn preserves_user_symbol_and_equivalent_label_geometry() {
     assert_eq!(label.spin, expected_spin);
 }
 
-#[test]
-fn accepts_an_isolated_not_connected_pin() {
-    let workspace = tempfile::tempdir().unwrap();
-    let project_dir = workspace.path().join("hardware");
-    let mut netlist = linked_fixture(&project_dir);
+fn linked_nc_fixture(project_dir: &std::path::Path) -> pcb_sch::Schematic {
+    let mut netlist = linked_fixture(project_dir);
     let mut not_connected = netlist.nets.remove("RIGHT").unwrap();
     not_connected.kind = "NotConnected".to_string();
     not_connected.name.clear();
     netlist.nets.insert(String::new(), not_connected);
+    netlist
+}
 
+#[test]
+fn reconciles_nc_markers_and_preserves_user_markers() {
+    let workspace = tempfile::tempdir().unwrap();
+    let project_dir = workspace.path().join("hardware");
+    let mut netlist = linked_nc_fixture(&project_dir);
     apply_linked_schematic(&netlist).unwrap().unwrap();
 
     let project = KicadProject::load(project_dir).unwrap();
@@ -699,6 +703,28 @@ fn accepts_an_isolated_not_connected_pin() {
             .iter()
             .any(|item| matches!(item, SchItem::Label(label) if label.text == "RIGHT"))
     );
+
+    // The source may leave this pin unspecified rather than explicitly NC.
+    netlist.nets.remove("");
+    for instance in netlist.instances.values_mut() {
+        instance.attributes.remove("__signature");
+    }
+    assert!(
+        inspect_schematic(&user_document, &netlist)
+            .unwrap()
+            .analysis
+            .is_equivalent()
+    );
+    for _ in 0..2 {
+        assert!(
+            !apply_linked_schematic(&netlist).unwrap().unwrap().changed,
+            "an unchanged unspecified pin must retain its user marker"
+        );
+        assert_eq!(
+            KicadProject::load(&project.project_file).unwrap().document,
+            user_document
+        );
+    }
 
     // Changing the source back to a connected pin must not leave an NC cross
     // on the newly connected endpoint.
@@ -777,75 +803,36 @@ fn restores_nc_markers_at_transformed_pin_endpoints() {
 
 #[test]
 fn moves_nc_marker_when_source_pin_geometry_changes() {
-    check_stale_nc_marker("move");
-}
-
-#[test]
-fn preserves_user_nc_marker_on_unspecified_pin() {
-    let workspace = tempfile::tempdir().unwrap();
-    let project_dir = workspace.path().join("hardware");
-    let mut netlist = linked_fixture(&project_dir);
-    let mut not_connected = netlist.nets.remove("RIGHT").unwrap();
-    not_connected.kind = "NotConnected".to_string();
-    not_connected.name.clear();
-    netlist.nets.insert(String::new(), not_connected);
-    apply_linked_schematic(&netlist).unwrap().unwrap();
-
-    let mut project = KicadProject::load(&project_dir).unwrap();
-    for item in &mut project.document.pages[0].items {
-        if let SchItem::NoConnect(marker) = item {
-            marker.id = "00000000-0000-4000-8000-000000000143".to_string();
-        }
-    }
-    fs::write(
-        &project.root_schematics[0],
-        project.document.to_kicad_sch().unwrap(),
-    )
-    .unwrap();
-    netlist.nets.remove("");
-    for instance in netlist.instances.values_mut() {
-        instance.attributes.remove("__signature");
-    }
-    assert!(
-        inspect_schematic(&project.document, &netlist)
-            .unwrap()
-            .analysis
-            .is_equivalent()
-    );
-    assert!(
-        !apply_linked_schematic(&netlist).unwrap().unwrap().changed,
-        "an unchanged unspecified pin must retain its user marker"
-    );
-    assert_eq!(
-        KicadProject::load(&project_dir).unwrap().document,
-        project.document
-    );
-    assert!(!apply_linked_schematic(&netlist).unwrap().unwrap().changed);
+    check_stale_nc_marker(NcChange::Move);
 }
 
 #[test]
 fn removes_nc_marker_when_source_component_is_deleted() {
-    check_stale_nc_marker("delete");
+    check_stale_nc_marker(NcChange::Delete);
 }
 
 #[test]
 fn removes_nc_marker_when_source_pin_becomes_hidden() {
-    check_stale_nc_marker("hide");
+    check_stale_nc_marker(NcChange::Hide);
 }
 
 #[test]
 fn removes_nc_marker_when_source_pin_moves_and_reconnects() {
-    check_stale_nc_marker("reconnect");
+    check_stale_nc_marker(NcChange::Reconnect);
 }
 
-fn check_stale_nc_marker(change: &str) {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NcChange {
+    Move,
+    Delete,
+    Hide,
+    Reconnect,
+}
+
+fn check_stale_nc_marker(change: NcChange) {
     let workspace = tempfile::tempdir().unwrap();
     let project_dir = workspace.path().join("hardware");
-    let mut netlist = linked_fixture(&project_dir);
-    let mut not_connected = netlist.nets.remove("RIGHT").unwrap();
-    not_connected.kind = "NotConnected".to_string();
-    not_connected.name.clear();
-    netlist.nets.insert(String::new(), not_connected);
+    let mut netlist = linked_nc_fixture(&project_dir);
     apply_linked_schematic(&netlist).unwrap().unwrap();
 
     let mut project = KicadProject::load(&project_dir).unwrap();
@@ -871,10 +858,10 @@ fn check_stale_nc_marker(change: &str) {
     )
     .unwrap();
 
-    if change == "reconnect" {
+    if change == NcChange::Reconnect {
         netlist = linked_fixture(&project_dir);
     }
-    if change == "delete" {
+    if change == NcChange::Delete {
         netlist
             .instances
             .retain(|reference, _| !reference.instance_path.iter().any(|part| part == "R2"));
@@ -883,20 +870,18 @@ fn check_stale_nc_marker(change: &str) {
                 .retain(|reference| !reference.instance_path.iter().any(|part| part == "R2"));
         }
     }
-    for component in netlist
-        .instances
-        .values_mut()
-        .filter(|instance| change != "delete" && instance.kind == pcb_sch::InstanceKind::Component)
-    {
+    for component in netlist.instances.values_mut().filter(|instance| {
+        change != NcChange::Delete && instance.kind == pcb_sch::InstanceKind::Component
+    }) {
         let Some(AttributeValue::String(source)) = component.attributes.get_mut("__symbol_value")
         else {
             continue;
         };
         let mut symbol = pcb_sexpr::parse(source).unwrap();
-        let changed = if change == "hide" {
-            hide_symbol_pin(&mut symbol, "2")
-        } else {
-            move_symbol_pin(&mut symbol, "2", 7.62)
+        let changed = match change {
+            NcChange::Hide => hide_symbol_pin(&mut symbol, "2"),
+            NcChange::Move | NcChange::Reconnect => move_symbol_pin(&mut symbol, "2", 7.62),
+            NcChange::Delete => unreachable!(),
         };
         if changed {
             *source = symbol.to_string();
@@ -915,8 +900,8 @@ fn check_stale_nc_marker(change: &str) {
         .collect::<Vec<_>>();
     assert_eq!(
         markers.len(),
-        if change == "move" { 2 } else { 1 },
-        "stale NC marker must be removed ({change})"
+        if change == NcChange::Move { 2 } else { 1 },
+        "stale NC marker must be removed ({change:?})"
     );
     assert!(!markers.contains(&old_marker));
     assert!(
@@ -930,11 +915,7 @@ fn check_stale_nc_marker(change: &str) {
 fn apply_does_not_mark_a_wire_attached_to_an_nc_pin() {
     let workspace = tempfile::tempdir().unwrap();
     let project_dir = workspace.path().join("hardware");
-    let mut netlist = linked_fixture(&project_dir);
-    let mut not_connected = netlist.nets.remove("RIGHT").unwrap();
-    not_connected.kind = "NotConnected".to_string();
-    not_connected.name.clear();
-    netlist.nets.insert(String::new(), not_connected);
+    let netlist = linked_nc_fixture(&project_dir);
     apply_linked_schematic(&netlist).unwrap().unwrap();
 
     let mut project = KicadProject::load(&project_dir).unwrap();
