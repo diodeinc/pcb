@@ -777,6 +777,25 @@ fn restores_nc_markers_at_transformed_pin_endpoints() {
 
 #[test]
 fn moves_nc_marker_when_source_pin_geometry_changes() {
+    check_stale_nc_marker("move");
+}
+
+#[test]
+fn removes_nc_marker_when_source_component_is_deleted() {
+    check_stale_nc_marker("delete");
+}
+
+#[test]
+fn removes_nc_marker_when_source_pin_becomes_hidden() {
+    check_stale_nc_marker("hide");
+}
+
+#[test]
+fn removes_nc_marker_when_source_pin_moves_and_reconnects() {
+    check_stale_nc_marker("reconnect");
+}
+
+fn check_stale_nc_marker(change: &str) {
     let workspace = tempfile::tempdir().unwrap();
     let project_dir = workspace.path().join("hardware");
     let mut netlist = linked_fixture(&project_dir);
@@ -809,17 +828,34 @@ fn moves_nc_marker_when_source_pin_geometry_changes() {
     )
     .unwrap();
 
+    if change == "reconnect" {
+        netlist = linked_fixture(&project_dir);
+    }
+    if change == "delete" {
+        netlist
+            .instances
+            .retain(|reference, _| !reference.instance_path.iter().any(|part| part == "R2"));
+        for net in netlist.nets.values_mut() {
+            net.ports
+                .retain(|reference| !reference.instance_path.iter().any(|part| part == "R2"));
+        }
+    }
     for component in netlist
         .instances
         .values_mut()
-        .filter(|instance| instance.kind == pcb_sch::InstanceKind::Component)
+        .filter(|instance| change != "delete" && instance.kind == pcb_sch::InstanceKind::Component)
     {
         let Some(AttributeValue::String(source)) = component.attributes.get_mut("__symbol_value")
         else {
             continue;
         };
         let mut symbol = pcb_sexpr::parse(source).unwrap();
-        if move_symbol_pin(&mut symbol, "2", 7.62) {
+        let changed = if change == "hide" {
+            hide_symbol_pin(&mut symbol, "2")
+        } else {
+            move_symbol_pin(&mut symbol, "2", 7.62)
+        };
+        if changed {
             *source = symbol.to_string();
         }
     }
@@ -834,7 +870,11 @@ fn moves_nc_marker_when_source_pin_geometry_changes() {
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(markers.len(), 2, "stale NC marker must be removed");
+    assert_eq!(
+        markers.len(),
+        if change == "move" { 2 } else { 1 },
+        "stale NC marker must be removed ({change})"
+    );
     assert!(!markers.contains(&old_marker));
     assert!(
         markers.contains(&user_marker),
