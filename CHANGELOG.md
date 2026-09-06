@@ -57,6 +57,9 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Support opaque service-account client IDs and proper OAuth Basic encoding.
 - Allow off-page schematic placement and avoid existing text and graphics.
+- Fall back to the still-valid access token in `pb auth git` when a transient
+  OAuth refresh failure lands in the final minutes of a token's life, instead
+  of aborting Git operations with a misleading re-login prompt.
 
 ## [0.4.49] - 2026-09-04
 

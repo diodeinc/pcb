@@ -646,7 +646,7 @@ fn legacy_helper_defaults_to_the_commercial_diodehub_host() {
 
 #[test]
 fn store_and_erase_are_silent_without_exchanging_credentials() {
-    let context = TestContext::new("http://127.0.0.1:1".to_string());
+    let context = TestContext::new("http://127.0.0.1".to_string());
 
     for operation in ["store", "erase"] {
         let output = run_with_input(
@@ -661,4 +661,137 @@ fn store_and_erase_are_silent_without_exchanging_credentials() {
         assert!(output.stdout.is_empty());
         assert!(output.stderr.is_empty());
     }
+}
+
+fn write_device_flow_token(
+    context: &TestContext,
+    api_url: &str,
+    access_token: &str,
+    remaining_seconds: i64,
+) {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let slug = auth_scope_slug(api_url);
+    let auth_file = context.config_dir.join("auth").join(format!("{slug}.toml"));
+    fs::write(
+        &auth_file,
+        format!(
+            "access_token = \"{access_token}\"\n\
+             refresh_token = \"refresh-token\"\n\
+             expires_at = {}\n\
+             token_endpoint = \"{api_url}/oauth/token\"\n\
+             client_id = \"test-client-id\"\n",
+            now + remaining_seconds,
+        ),
+    )
+    .expect("write device-flow auth tokens");
+}
+
+fn git_get_helper(context: &TestContext) -> Command {
+    let mut command = context.pcbc();
+    command.args(["auth", "git", "--host", GIT_API_HOST, "get"]);
+    command
+}
+
+#[test]
+fn near_expiry_token_with_refresh_failure_uses_the_still_valid_token() {
+    // The shared auth layer refreshes any token with < 300s of remaining life
+    // and returns "Not authenticated" if that refresh fails, even though the
+    // on-disk access token is still server-valid for the 30s-timeout exchange.
+    // `exchange_credential` must fall back to that still-valid bearer instead
+    // of aborting the helper with `quit=true`.
+    let server = MockServer::start();
+    let api_url = server.base_url();
+    let refresh = server.mock(|when, then| {
+        when.method(POST).path("/oauth/token");
+        then.status(503);
+    });
+    let exchange = mock_exchange(&server, GIT_API_HOST, 200, Some("Bearer still-valid-token"));
+    let context = TestContext::new(api_url.clone());
+    write_device_flow_token(&context, &api_url, "still-valid-token", 200);
+
+    let fill = run_with_input(git_get_helper(&context), &credential_request());
+    assert_success(&fill);
+    assert!(fill.stderr.is_empty());
+
+    let stdout = String::from_utf8_lossy(&fill.stdout);
+    assert!(!stdout.contains("quit=true"));
+    assert!(stdout.contains("authtype=Bearer"));
+    assert!(stdout.contains(&format!("credential={REPOSITORY_TOKEN}")));
+    assert!(stdout.contains(&format!(
+        "password_expiry_utc={REPOSITORY_TOKEN_EXPIRES_AT}"
+    )));
+
+    refresh.assert_calls(1);
+    exchange.assert_calls(1);
+}
+
+#[test]
+fn almost_expired_token_with_refresh_failure_does_not_fall_back() {
+    // When the still-valid token has less than the 30s exchange client
+    // timeout of remaining life, the fallback must decline so the request
+    // cannot outlive the token. The original "Not authenticated" error then
+    // propagates with `quit=true` exactly as before the fix.
+    let server = MockServer::start();
+    let api_url = server.base_url();
+    let refresh = server.mock(|when, then| {
+        when.method(POST).path("/oauth/token");
+        then.status(503);
+    });
+    let exchange = mock_exchange(
+        &server,
+        GIT_API_HOST,
+        200,
+        Some("Bearer almost-expired-token"),
+    );
+    let context = TestContext::new(api_url.clone());
+    write_device_flow_token(&context, &api_url, "almost-expired-token", 10);
+
+    let fill = run_with_input(git_get_helper(&context), &credential_request());
+
+    // `pb auth git get` always exits 0; on failure it emits `quit=true` to
+    // stdout and the error to stderr (git translates `quit=true` into a
+    // non-zero exit when invoked via `git credential fill`).
+    let stdout = String::from_utf8_lossy(&fill.stdout);
+    let stderr = String::from_utf8_lossy(&fill.stderr);
+    assert!(stdout.contains("quit=true"));
+    assert!(stderr.contains("Not authenticated"));
+    assert!(!stderr.contains("Git credential exchange failed"));
+    assert!(!stdout.contains("credential="));
+
+    refresh.assert_calls(1);
+    exchange.assert_calls(0);
+}
+
+#[test]
+fn near_expiry_token_with_refresh_success_uses_refreshed_token() {
+    // When the proactive refresh succeeds, the refreshed bearer must be used
+    // for the exchange and the still-valid-token fallback must not fire with
+    // the stale on-disk bearer.
+    let server = MockServer::start();
+    let api_url = server.base_url();
+    let refresh = server.mock(|when, then| {
+        when.method(POST).path("/oauth/token");
+        then.status(200).json_body(json!({
+            "access_token": "refreshed-token",
+            "refresh_token": "new-refresh-token",
+            "expires_in": 3600,
+        }));
+    });
+    let exchange = mock_exchange(&server, GIT_API_HOST, 200, Some("Bearer refreshed-token"));
+    let context = TestContext::new(api_url.clone());
+    write_device_flow_token(&context, &api_url, "still-valid-token", 200);
+
+    let fill = run_with_input(git_get_helper(&context), &credential_request());
+    assert_success(&fill);
+    assert!(fill.stderr.is_empty());
+
+    let stdout = String::from_utf8_lossy(&fill.stdout);
+    assert!(!stdout.contains("quit=true"));
+    assert!(stdout.contains(&format!("credential={REPOSITORY_TOKEN}")));
+
+    refresh.assert_calls(1);
+    exchange.assert_calls(1);
 }

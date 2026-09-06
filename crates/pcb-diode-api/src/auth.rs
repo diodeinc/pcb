@@ -17,7 +17,8 @@ use crate::WorkspaceContext;
 
 mod service_account;
 
-const NOT_AUTHENTICATED_MESSAGE: &str = "Not authenticated. Run `pcb auth login` to authenticate.";
+pub(crate) const NOT_AUTHENTICATED_MESSAGE: &str =
+    "Not authenticated. Run `pcb auth login` to authenticate.";
 const DIODE_API_AUTH_NONE: &str = "none";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -118,7 +119,7 @@ fn load_auth(ctx: &WorkspaceContext) -> Result<Option<StoredAuth>> {
     Ok(Some(auth))
 }
 
-fn load_tokens_with_context(ctx: &WorkspaceContext) -> Result<Option<AuthTokens>> {
+pub(crate) fn load_tokens_with_context(ctx: &WorkspaceContext) -> Result<Option<AuthTokens>> {
     match load_auth(ctx)? {
         Some(StoredAuth::User(tokens)) => Ok(Some(tokens)),
         Some(StoredAuth::ServiceAccount(_)) => {
