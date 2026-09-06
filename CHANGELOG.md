@@ -50,6 +50,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Support opaque service-account client IDs and proper OAuth Basic encoding.
 - Allow off-page schematic placement and avoid existing text and graphics.
+- Deduplicate `component_placements` in `pcb ipc2581 info` when a RefDes repeats in the BOM.
 
 ## [0.4.49] - 2026-09-04
 
