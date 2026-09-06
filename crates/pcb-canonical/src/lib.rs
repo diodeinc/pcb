@@ -76,6 +76,17 @@ fn collect_canonical_entries(
     let mut entries = Vec::new();
     let package_root = path.to_path_buf();
     for result in WalkBuilder::new(path)
+        // Apply committed `.gitignore` regardless of whether a `.git`/`.jj`
+        // directory exists above the walked root. The publisher walks inside a
+        // real git repo (`.git` present) while the consumer walks a `git archive`
+        // extract (`.git` absent); with `ignore`'s default `require_git(true)` the
+        // two sides would see different file sets for any tracked-but-ignored
+        // path and diverge on the content hash. Disable the non-tree ignore
+        // sources (global gitignore, `.git/info/exclude`) to match `git archive`,
+        // which only emits the committed tree.
+        .require_git(false)
+        .git_global(false)
+        .git_exclude(false)
         .filter_entry(move |entry| {
             let entry_path = entry.path();
             if options.exclude_nested_packages
