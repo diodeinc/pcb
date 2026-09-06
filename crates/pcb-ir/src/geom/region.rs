@@ -40,19 +40,28 @@ use crate::geom::tol;
 use crate::geom::{AccuracyError, GeometryAccuracy, Resolution};
 
 /// A closed polygon boundary, flattened to line segments.
+/// Chords past which a single curve is being flattened to an absurd budget.
+const MAX_CHORDS_PER_SEGMENT: f64 = 1.0e6;
+
 pub type Ring = Vec<[f64; 2]>;
 
 /// One connected polygon: an outer ring plus hole rings.
 pub type Shape = Vec<Ring>;
 
 fn flatten_contours(contours: &[ContourBuf], accuracy: f64) -> (Vec<Ring>, f64) {
+    // Arc-to-cubic conversion is cheap in error and reported exactly, so it
+    // gets a small target and chord flattening spends the rest.
     let (bez_path, conversion_error) =
-        crate::geom::path::contours_to_kurbo(contours, accuracy / 2.0);
+        crate::geom::path::contours_to_kurbo(contours, accuracy / 8.0);
     let curved = bez_path
         .elements()
         .iter()
         .any(|el| matches!(el, kurbo::PathEl::CurveTo(..) | kurbo::PathEl::QuadTo(..)));
-    let flatten_error = if curved { accuracy / 2.0 } else { 0.0 };
+    let flatten_error = if curved {
+        (accuracy - conversion_error).max(accuracy / 2.0)
+    } else {
+        0.0
+    };
     let mut rings = Vec::new();
     let mut current = Vec::new();
     kurbo::flatten(
@@ -451,12 +460,22 @@ impl ContourSet {
 
     /// Construct from known regularized polygons, preserving their history.
     /// `uncertainty_mm = 0` asserts these polygons are the actual source.
-    pub fn from_regularized(rings: Vec<Ring>, resolution: Resolution, uncertainty_mm: f64) -> Self {
+    /// Rings below the resolution's significance are dropped; significance
+    /// is independent of the approximation budget and is not charged.
+    pub fn from_regularized(
+        mut rings: Vec<Ring>,
+        resolution: Resolution,
+        uncertainty_mm: f64,
+    ) -> Self {
         let uncertainty_mm = if uncertainty_mm >= 0.0 {
             uncertainty_mm
         } else {
             f64::INFINITY
         };
+        if resolution.tolerance_mm > 0.0 {
+            let min_area = resolution.tolerance_mm.powi(2);
+            rings.retain(|ring| ring_signed_area(ring).abs() > min_area);
+        }
         let ring_bounds = rings
             .iter()
             .map(|ring| rings_bbox(std::slice::from_ref(ring)))
@@ -510,19 +529,20 @@ impl ContourSet {
         let bbox = contours.iter().fold(BBox::empty(), |b, c| b.union(c.bbox));
         let numeric = numerical_error(bbox);
         let remaining = accuracy.allowance(prior + numeric)?;
+        // Guard against absurd budgets segment by segment, never against
+        // input size: a flattened panel legitimately needs millions of
+        // vertices, while one curve needing a million chords is a budget
+        // no target can use.
+        let absurd = |segment: Segment| {
+            let bounds = segment.bbox();
+            (bounds.width().max(bounds.height()) / remaining).sqrt() > MAX_CHORDS_PER_SEGMENT
+        };
         if remaining < f64::EPSILON
             || contours
                 .iter()
                 .flat_map(ContourBuf::segments)
-                .map(|segment| match segment {
-                    Segment::Line { .. } => 1.0,
-                    _ => {
-                        let bounds = segment.bbox();
-                        (bounds.width().max(bounds.height()) / remaining).sqrt()
-                    }
-                })
-                .sum::<f64>()
-                > 1_000_000.0
+                .filter(|segment| !matches!(segment, Segment::Line { .. }))
+                .any(absurd)
         {
             return Err(AccuracyError::SubdivisionLimit);
         }
@@ -3814,5 +3834,40 @@ mod tests {
         let grown = region.disk_dilate(0.5).unwrap();
 
         assert!(grown.area() > region.area());
+    }
+    #[test]
+    fn regularization_drops_rings_below_significance() {
+        let square = vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+        let sliver = vec![[2.0, 0.0], [12.0, 0.0], [12.0, 5e-6], [2.0, 5e-6]];
+        let rings = || vec![square.clone(), sliver.clone()];
+
+        let significant = ContourSet::from_rings(rings(), FillRule::NonZero, res(0.01));
+        assert_eq!(significant.rings.len(), 1);
+        assert!((significant.area() - 1.0).abs() < 1e-9);
+
+        let exact = ContourSet::from_rings(rings(), FillRule::NonZero, res(0.0));
+        assert_eq!(exact.rings.len(), 2);
+    }
+
+    #[test]
+    fn preparation_scales_to_panel_sized_curve_sets() {
+        // A flattened panel legitimately needs millions of chord vertices;
+        // the subdivision guard must only reject absurd budgets.
+        let circles = (0..125)
+            .flat_map(|row| (0..120).map(move |column| (row, column)))
+            .map(|(row, column)| {
+                crate::geom::shapes::circle(1.0)
+                    .unwrap()
+                    .transformed(Affine2::translation(Point::new(
+                        2.0 * column as f64,
+                        2.0 * row as f64,
+                    )))
+            })
+            .collect::<Vec<_>>();
+
+        let region =
+            ContourSet::from_contours(&circles, FillRule::NonZero, Resolution::default()).unwrap();
+
+        assert_eq!(region.rings.len(), circles.len());
     }
 }

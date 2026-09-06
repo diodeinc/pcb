@@ -1819,4 +1819,40 @@ mod tests {
         assert_eq!(whole.len(), 1);
         assert_eq!(whole[0].primitive_ref, Some(PrimitiveRef::User(7)));
     }
+    #[test]
+    fn layer_imaging_tolerates_arcs_a_native_writer_rejects() {
+        // A zero-radius arc is not exportable artwork, but imaging the
+        // layer (copper balance, warp, DFM) must not fail on it.
+        let mut doc = TestDoc::new();
+        doc.push_path(
+            Paint::Fill {
+                rule: FillRule::NonZero,
+            },
+            [ContourBuf::new(vec![
+                PathCmd::move_to(Point::new(0.0, 0.0)),
+                PathCmd::line_to(Point::new(1.0, 0.0)),
+                PathCmd::arc_to(Point::new(1.0, 0.0), Point::new(1.0, 0.0), false),
+                PathCmd::line_to(Point::new(1.0, 1.0)),
+                PathCmd::line_to(Point::new(0.0, 1.0)),
+                PathCmd::close(),
+            ])],
+        );
+        let mut feature = copper_trace_feature();
+        feature.kind = FeatureKind::Polygon;
+        feature.paths = Span::new(0, 1);
+        doc.features.push(feature);
+        doc.layers.push(test_layer(Span::new(0, 1)));
+        assert!(validate_artwork_ready(&doc).is_err());
+
+        let image = doc
+            .into_layer_image(
+                0,
+                crate::dialects::LayerRole::Copper,
+                crate::dialects::Side::Top,
+                Resolution::default(),
+            )
+            .unwrap();
+
+        assert!((image.area() - 1.0).abs() < 1e-6);
+    }
 }

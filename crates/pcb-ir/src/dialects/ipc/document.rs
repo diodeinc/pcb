@@ -108,6 +108,9 @@ impl<Symbol, LayerFunction> Document<Symbol, LayerFunction> {
 impl<Symbol: Copy + Eq + std::hash::Hash, LayerFunction: Clone> Document<Symbol, LayerFunction> {
     /// Consume a source layer into its final painted image through the
     /// artwork dialect, prepared at `resolution`.
+    ///
+    /// Imaging tolerates geometry a native writer would reject, such as
+    /// zero-radius arcs; callers exporting artwork validate separately.
     pub fn into_layer_image(
         mut self,
         layer_index: usize,
@@ -116,7 +119,6 @@ impl<Symbol: Copy + Eq + std::hash::Hash, LayerFunction: Clone> Document<Symbol,
         resolution: Resolution,
     ) -> anyhow::Result<crate::geom::ContourSet> {
         super::process::normalize_for_artwork(&mut self, resolution)?;
-        super::validate_artwork_ready(&self).map_err(anyhow::Error::msg)?;
         let artwork = super::lower_layer_to_artwork(&self, layer_index, role, side);
         let (mut layers, _) =
             crate::dialects::artwork::compose_owner_regions(&artwork, |_| Some(()), resolution)?;

@@ -12,7 +12,7 @@ use pcb_ir::dialects::ipc::{
     },
 };
 use pcb_ir::geom::Resolution;
-use pcb_ir::geom::{BBox, ContourSet, Point, Polarity};
+use pcb_ir::geom::{BBox, ContourBuf, ContourSet, Point, Polarity};
 use pcb_ir::import::ipc2581::{ImportedDesign, LayerId};
 
 pub use pcb_ir::import::ipc2581::{extract_layer, extract_layer_for_view, extract_layout};
@@ -102,24 +102,49 @@ fn board_array_relief_features(
     }
 
     let resolution = resolution.with_tolerance(DEFAULT_RELIEF_TOLERANCE_MM);
-    let (cutouts, envelopes) = collect_relief_feature_candidates(imported, resolution)?;
-    let mut score_blockers = ContourSet::empty(resolution);
-    for cutout in cutouts {
-        if !score_lines.iter().any(|line| {
-            !cutout
-                .region
-                .intersection(&score_line_strip(*line, resolution))
-                .is_empty()
-        }) {
-            continue;
+    let (cutouts, envelopes) = collect_relief_feature_candidates(imported)?;
+    let strips = score_lines
+        .iter()
+        .map(|line| score_line_strip(*line, resolution))
+        .collect::<Vec<_>>();
+    // Regions are prepared only for candidates near a score line: on a dense
+    // panel almost every hole is nowhere near one.
+    let near_score_line = |candidate: &ReliefFeatureCandidate| {
+        strips
+            .iter()
+            .any(|strip| candidate.bbox.intersects(strip.bbox))
+    };
+    let mut crossing = Vec::new();
+    for cutout in cutouts.into_iter().filter(near_score_line) {
+        let region = cutout.region(resolution)?;
+        if strips
+            .iter()
+            .any(|strip| !region.intersection(strip).is_empty())
+        {
+            crossing.push((cutout, region));
         }
+    }
+    let envelopes = envelopes
+        .into_iter()
+        .filter(|envelope| {
+            crossing
+                .iter()
+                .any(|(cutout, _)| envelope.bbox.intersects(cutout.bbox))
+        })
+        .map(|envelope| Ok((envelope.region(resolution)?, envelope)))
+        .collect::<Result<Vec<_>>>()?;
+    // Every blocker joins one batched union: unioning them one at a time is
+    // quadratic in the number of cutouts on dense panels.
+    let mut blockers = Vec::new();
+    for (cutout, region) in crossing {
         if plated_like(cutout.plating) {
-            let mut matches = Vec::new();
-            for envelope in &envelopes {
-                if envelope_matches_cutout(envelope, &cutout) {
-                    matches.push(envelope);
-                }
-            }
+            let matches = envelopes
+                .iter()
+                .filter(|(envelope_region, envelope)| {
+                    envelope_matches_cutout(envelope, envelope_region, &cutout, &region)
+                })
+                .map(|(envelope_region, _)| envelope_region.clone())
+                .collect::<Vec<_>>();
             if matches.is_empty() {
                 bail!(
                     "plated edge cutout at [{:.3}, {:.3}]..[{:.3}, {:.3}] has no matching pad envelope for V-score relief generation",
@@ -129,13 +154,12 @@ fn board_array_relief_features(
                     cutout.bbox.max.y
                 );
             }
-            for envelope in matches {
-                score_blockers = score_blockers.union(&envelope.region);
-            }
+            blockers.extend(matches);
         } else {
-            score_blockers = score_blockers.union(&cutout.region);
+            blockers.push(region);
         }
     }
+    let score_blockers = ContourSet::union_all(resolution, blockers)?;
 
     Ok(BoardArrayReliefFeatures {
         score_blockers: score_blockers.to_contours(),
@@ -144,7 +168,6 @@ fn board_array_relief_features(
 
 fn collect_relief_feature_candidates(
     imported: &ImportedDesign,
-    resolution: Resolution,
 ) -> Result<(Vec<ReliefFeatureCandidate>, Vec<ReliefFeatureCandidate>)> {
     let mut cutouts = Vec::new();
     let mut envelopes = Vec::new();
@@ -161,9 +184,9 @@ fn collect_relief_feature_candidates(
             .with_context(|| format!("failed to extract IPC-2581 layer '{layer_name}'"))?;
         for feature in &doc.features {
             if is_through_cutout(feature) {
-                cutouts.push(ReliefFeatureCandidate::new(&doc, feature, resolution)?);
+                cutouts.push(ReliefFeatureCandidate::new(&doc, feature));
             } else if is_pad_envelope(feature) {
-                envelopes.push(ReliefFeatureCandidate::new(&doc, feature, resolution)?);
+                envelopes.push(ReliefFeatureCandidate::new(&doc, feature));
             }
         }
     }
@@ -173,7 +196,7 @@ fn collect_relief_feature_candidates(
 
 #[derive(Debug, Clone)]
 struct ReliefFeatureCandidate {
-    region: ContourSet,
+    contours: Vec<ContourBuf>,
     bbox: BBox,
     plating: PlatingKind,
     padstack_ref: Option<Symbol>,
@@ -181,21 +204,21 @@ struct ReliefFeatureCandidate {
 }
 
 impl ReliefFeatureCandidate {
-    fn new(
-        doc: &GeometryDocument,
-        feature: &Feature<Symbol>,
-        resolution: Resolution,
-    ) -> anyhow::Result<Self> {
-        Ok(Self {
-            region: ContourSet::from_filled_contours(
-                &doc.placed_feature_contours(feature),
-                resolution,
-            )?,
+    fn new(doc: &GeometryDocument, feature: &Feature<Symbol>) -> Self {
+        Self {
+            contours: doc.placed_feature_contours(feature),
             bbox: feature.bbox,
             plating: feature.intent.plating,
             padstack_ref: feature.padstack_ref,
             net: feature.net,
-        })
+        }
+    }
+
+    fn region(&self, resolution: Resolution) -> Result<ContourSet> {
+        Ok(ContourSet::from_filled_contours(
+            &self.contours,
+            resolution,
+        )?)
     }
 }
 
@@ -246,7 +269,9 @@ fn score_line_strip(line: VScoreLine, resolution: Resolution) -> ContourSet {
 
 fn envelope_matches_cutout(
     envelope: &ReliefFeatureCandidate,
+    envelope_region: &ContourSet,
     cutout: &ReliefFeatureCandidate,
+    cutout_region: &ContourSet,
 ) -> bool {
     if !envelope.bbox.intersects(cutout.bbox) {
         return false;
@@ -262,5 +287,5 @@ fn envelope_matches_cutout(
     {
         return true;
     }
-    !envelope.region.intersection(&cutout.region).is_empty()
+    !envelope_region.intersection(cutout_region).is_empty()
 }

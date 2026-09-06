@@ -172,7 +172,9 @@ fn vscore_route_reliefs_inner(
 
     let protected_material = protected_board_material(input)?;
     let mut debug = VScoreReliefDebug::default();
-    let mut relief_region = ContourSet::empty(input.resolution);
+    // Every board's removal joins one batched union: unioning them one at a
+    // time is quadratic in the board count.
+    let mut removals = Vec::new();
     for boundary in &input.board_boundaries {
         let Some(boundary_relief) = boundary_pocket_relief(boundary, &protected_material, input)?
         else {
@@ -181,12 +183,9 @@ fn vscore_route_reliefs_inner(
         if include_debug {
             debug.entries.push(boundary_relief.debug_entry(boundary));
         }
-        relief_region = relief_region.union(&boundary_relief.geometry.material_removal);
+        removals.push(boundary_relief.geometry.material_removal);
     }
-    input
-        .resolution
-        .accuracy
-        .check(relief_region.uncertainty_mm)?;
+    let relief_region = ContourSet::union_all(input.resolution, removals)?;
     let relief_payloads = relief_region.to_contours();
     if include_debug {
         debug.merged_relief_contours = relief_payloads.clone();
