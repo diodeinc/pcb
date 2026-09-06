@@ -453,10 +453,7 @@ pub fn balance_features(result: &DenseCopperBalanceResult) -> Result<BalanceFeat
             Ok(BalanceFeatureSets {
                 plane: ipc_region_features(&result.usable)?,
                 // The plane covers the web exactly, so its decimation is free.
-                boundary_web: ipc_region_features(&{
-                    let web = result.boundary_web();
-                    web.decimate_inward(web.budget().max_error_mm())?
-                })?,
+                boundary_web: ipc_region_features(&result.boundary_web().decimate_inward()?)?,
                 templates,
                 void_sets,
                 edge_voids: ipc_region_features(&emission.clipped)?,

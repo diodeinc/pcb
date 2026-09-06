@@ -58,7 +58,7 @@ fn flatten_contours(contours: &[ContourBuf], accuracy: f64) -> (Vec<Ring>, f64) 
         .iter()
         .any(|el| matches!(el, kurbo::PathEl::CurveTo(..) | kurbo::PathEl::QuadTo(..)));
     let flatten_error = if curved {
-        (accuracy - conversion_error).max(accuracy / 2.0)
+        accuracy - conversion_error
     } else {
         0.0
     };
@@ -472,10 +472,8 @@ impl ContourSet {
         } else {
             f64::INFINITY
         };
-        if resolution.tolerance_mm > 0.0 {
-            let min_area = resolution.tolerance_mm.powi(2);
-            rings.retain(|ring| ring_signed_area(ring).abs() > min_area);
-        }
+        let min_area = resolution.tolerance_mm.powi(2);
+        rings.retain(|ring| ring_signed_area(ring).abs() > min_area);
         let ring_bounds = rings
             .iter()
             .map(|ring| rings_bbox(std::slice::from_ref(ring)))
@@ -537,12 +535,11 @@ impl ContourSet {
             let bounds = segment.bbox();
             (bounds.width().max(bounds.height()) / remaining).sqrt() > MAX_CHORDS_PER_SEGMENT
         };
-        if remaining < f64::EPSILON
-            || contours
-                .iter()
-                .flat_map(ContourBuf::segments)
-                .filter(|segment| !matches!(segment, Segment::Line { .. }))
-                .any(absurd)
+        if contours
+            .iter()
+            .flat_map(ContourBuf::segments)
+            .filter(|segment| !matches!(segment, Segment::Line { .. }))
+            .any(absurd)
         {
             return Err(AccuracyError::SubdivisionLimit);
         }
@@ -937,14 +934,9 @@ impl ContourSet {
 
     /// Decimate the region's boundary so it only shrinks; see
     /// [`decimate_rings_inward`].
-    pub fn decimate_inward(&self, deviation_mm: f64) -> Result<Self, AccuracyError> {
-        if !deviation_mm.is_finite() || deviation_mm < 0.0 {
-            return Err(AccuracyError::InvalidGeometry(
-                "invalid decimation deviation",
-            ));
-        }
+    pub fn decimate_inward(&self) -> Result<Self, AccuracyError> {
         let inherited = self.uncertainty_mm + numerical_error(self.bbox);
-        let deviation_mm = deviation_mm.min(self.budget().allowance(inherited)?);
+        let deviation_mm = self.budget().allowance(inherited)?;
         Ok(Self::from_regularized(
             simplify_rings(
                 decimate_rings_inward(&self.rings, deviation_mm),
@@ -3018,8 +3010,9 @@ mod tests {
             res(tol::REGION_MM),
         )
         .unwrap();
-        let deviation = 0.05;
-        let decimated = ring.decimate_inward(deviation).unwrap();
+        let decimated = ring.decimate_inward().unwrap();
+        let deviation = decimated.uncertainty_mm - ring.uncertainty_mm;
+        assert!(deviation > 0.0);
 
         assert!(decimated.difference(&ring).area() <= ring.tolerance().powi(2));
 

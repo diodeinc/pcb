@@ -32,7 +32,7 @@ pub struct Resolution {
 }
 
 impl Default for Resolution {
-    /// Sub-micrometre significance with the ten micrometre default budget.
+    /// Sub-micrometre significance with the default budget.
     fn default() -> Self {
         Self {
             tolerance_mm: super::tol::REGION_MM,

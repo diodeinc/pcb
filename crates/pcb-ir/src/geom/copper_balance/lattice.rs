@@ -289,7 +289,7 @@ pub(super) fn emission_partial_voids(
 ) -> Result<ContourSet, AccuracyError> {
     let clipped = clipped_partial_voids(voidable, candidates, profile)?
         .disk_open(profile.void_regularization_radius_mm())?;
-    clipped.decimate_inward(clipped.budget().max_error_mm())
+    clipped.decimate_inward()
 }
 
 /// Points proving where the minimum partial-void disk fits, with the

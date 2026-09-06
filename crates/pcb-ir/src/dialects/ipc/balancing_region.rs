@@ -390,14 +390,14 @@ pub fn board_array_balancing_region(
         .board_footprints
         .union(&input.material_removal)
         .union(&input.support_features);
-    // Construction reserves twice the budget the inputs were prepared at, so
+    // Construction reserves the budget the inputs were prepared at: the two
+    // offsets that build the region each spend at most a quarter of it, so
     // every checked quantity stays strictly separated from a constructed one.
-    let numerical_guard_mm = 2.0
-        * input
-            .panel_outer
-            .budget()
-            .min(raw_obstacles.budget())
-            .max_error_mm();
+    let numerical_guard_mm = input
+        .panel_outer
+        .budget()
+        .min(raw_obstacles.budget())
+        .max_error_mm();
     let construction_clearance_mm = options.clearance_mm + numerical_guard_mm;
     let panel_keep_in = input.panel_outer.disk_erode(construction_clearance_mm)?;
     let obstacle_keep_out = raw_obstacles.disk_dilate(construction_clearance_mm)?;
@@ -721,7 +721,8 @@ mod tests {
         SpecRef, StepProfile,
     };
     use crate::geom::{
-        Affine2, BBox, ContourBuf, LineCap, Paint, PathCmd, Point, Polarity, Span, StrokeStyle,
+        Affine2, BBox, ContourBuf, GeometryAccuracy, LineCap, Paint, PathCmd, Point, Polarity,
+        Span, StrokeStyle,
     };
 
     type TestDocument = Document<u32, ()>;
@@ -879,9 +880,11 @@ mod tests {
         components.sort_by(|left, right| left.bbox.min.x.total_cmp(&right.bbox.min.x));
         assert_eq!(components.len(), 2);
         let gap = components[1].bbox.min.x - components[0].bbox.max.x;
+        let guard = GeometryAccuracy::default().max_error_mm();
+        let expected = 0.1 + 2.0 * (0.5 + guard);
         assert!(
-            (gap - 1.15).abs() <= 0.01,
-            "expected physical stroke plus two 0.525 mm clearances, got {gap:.9} mm"
+            (gap - expected).abs() <= 0.01,
+            "expected physical stroke plus two guarded clearances ({expected} mm), got {gap:.9} mm"
         );
         assert_eq!(result.safe_region.connected_components().len(), 2);
         assert!(
