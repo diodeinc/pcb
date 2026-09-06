@@ -219,7 +219,7 @@ fn write_compact(sexpr: &Sexpr, out: &mut String) {
 }
 
 /// Quote a string value, escaping special characters.
-pub(crate) fn quote_string(value: &str) -> String {
+pub fn quote_string(value: &str) -> String {
     let escaped = escape_string(value);
     let mut quoted = String::with_capacity(escaped.len() + 2);
     quoted.push('"');
