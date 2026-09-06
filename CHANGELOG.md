@@ -50,6 +50,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Support opaque service-account client IDs and proper OAuth Basic encoding.
 - Allow off-page schematic placement and avoid existing text and graphics.
+- Deduplicate unmanaged symbol `ComponentNode`s on repeated KiCad sheets so full reconciliation no longer bails with a misleading empty missing-list.
 
 ## [0.4.49] - 2026-09-04
 

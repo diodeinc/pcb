@@ -4,10 +4,11 @@ use std::collections::BTreeSet;
 
 use common::kicad_builder::{KicadBuilder, TestPin};
 use pcb_kicad_sch::{
-    SchItem,
-    analysis::analyze_connectivity,
+    SchItem, SymbolSlotKey,
+    analysis::{SchematicIssue, analyze_connectivity},
     connectivity::{
-        ComponentIdentity, ConnectionGroup, ConnectionOrigin, ConnectivityGraph, Terminal,
+        ComponentIdentity, ComponentNode, ComponentOrigin, ConnectionGroup, ConnectionOrigin,
+        ConnectivityGraph, Terminal,
     },
 };
 
@@ -208,6 +209,82 @@ fn unmanaged_component_still_contributes_pin_connectivity() {
             }
         )
     }));
+}
+
+/// A repeated sheet shares one file-keyed `SymbolLocation` across every sheet
+/// instance, so each instance's `reduce_page` emits a byte-identical
+/// `ComponentNode` for the unmanaged symbol. The reducer must collapse those
+/// duplicates to one entry; without a `dedup()` a 2-channel design accumulates
+/// two identical nodes that downstream issue reporting turns into two
+/// indistinguishable `UnboundSymbol` contexts.
+#[test]
+fn unmanaged_symbol_on_a_repeated_sheet_collapses_to_one_component_node() {
+    let mut builder = KicadBuilder::new();
+    builder
+        .define_symbol("Test:OnePin", &[TestPin::passive("1", (0.0, 0.0))])
+        .sheet("child.kicad_sch", &[])
+        .sheet("child.kicad_sch", &[])
+        .add_page("child", "child.kicad_sch")
+        .component("Test:OnePin", None, (0.0, 0.0));
+
+    let graph = ConnectivityGraph::from_kicad(&builder.build()).unwrap();
+
+    assert_eq!(graph.components.len(), 1, "{:?}", graph.components);
+    assert!(graph.components[0].managed_slot.is_none());
+}
+
+/// `dedup()` only collapses byte-identical `ComponentNode`s. Two managed
+/// symbols carrying the same slot but placed at distinct (page_id, symbol_id)
+/// locations are not byte-identical, so they must survive the dedup and still
+/// report `DuplicateSymbol`. This guards the dedup-safety claim.
+#[test]
+fn distinct_managed_symbols_sharing_a_slot_still_report_duplicate() {
+    let mut builder = KicadBuilder::new();
+    builder
+        .define_symbol("Test:OnePin", &[TestPin::passive("1", (0.0, 0.0))])
+        .component("Test:OnePin", Some("/design/R"), (0.0, 0.0))
+        .component("Test:OnePin", Some("/design/R"), (10.0, 0.0));
+
+    let observed = ConnectivityGraph::from_kicad(&builder.build()).unwrap();
+    let managed: Vec<_> = observed
+        .components
+        .iter()
+        .filter(|component| component.managed_slot.is_some())
+        .collect();
+    assert_eq!(
+        managed.len(),
+        2,
+        "dedup must not collapse two distinct managed nodes: {:?}",
+        observed.components,
+    );
+    let locations: BTreeSet<_> = managed
+        .iter()
+        .filter_map(|component| match &component.origin {
+            ComponentOrigin::KiCad(location) => Some(location.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        locations.len(),
+        2,
+        "the two managed nodes have distinct locations"
+    );
+
+    let mut expected = ConnectivityGraph::default();
+    expected.components.push(ComponentNode {
+        managed_slot: SymbolSlotKey::new("/design/R", 1),
+        origin: ComponentOrigin::Zener,
+    });
+
+    let analysis = analyze_connectivity(&expected, &observed);
+    assert!(
+        analysis
+            .issues()
+            .iter()
+            .any(|issue| matches!(issue, SchematicIssue::DuplicateSymbol { .. })),
+        "two distinct managed symbols on the same slot must report DuplicateSymbol: {:?}",
+        analysis.issues(),
+    );
 }
 
 #[test]
