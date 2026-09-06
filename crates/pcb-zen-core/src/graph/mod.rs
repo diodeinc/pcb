@@ -236,7 +236,13 @@ impl CircuitGraph {
 
             // For each factor connected to the current port
             let [cur_f0, cur_f1] = g.port_factors[cur.0 as usize];
-            for &factor_id in &[cur_f0, cur_f1] {
+            // Deduplicate factors to avoid duplicate paths from external ports
+            let factors_to_explore = if cur_f0 == cur_f1 {
+                &[cur_f0][..]
+            } else {
+                &[cur_f0, cur_f1][..]
+            };
+            for &factor_id in factors_to_explore {
                 // Skip if this factor has already been traversed
                 if vis_f.contains(factor_id.0 as usize) {
                     continue;
@@ -1011,6 +1017,48 @@ mod tests {
             paths[0].len(),
             20,
             "Path should visit all 20 ports across 10 components"
+        );
+    }
+
+    #[test]
+    fn test_external_port_start_no_duplicate_paths() {
+        // 1 external port (VCC), 1 component port (R1.A) — same shape as
+        // test_external_nets_pathfinding. By inspection the sole simple path
+        // from <external>.VCC to R1.A is [external_vcc, r1_a], i.e. cardinality 1.
+        let mut net_to_ports = HashMap::new();
+        let mut component_pins = HashMap::new();
+        net_to_ports.insert("VCC".to_string(), vec![("R1", "A").into()]);
+        component_pins.insert("R1".into(), vec!["A".to_string()]);
+        let mut public_nets = HashSet::new();
+        public_nets.insert("VCC".to_string());
+        let graph = CircuitGraph::new(net_to_ports, component_pins, public_nets).unwrap();
+
+        let r1_a = graph.port_id(&("R1", "A").into()).unwrap();
+        let external_vcc = graph.port_id(&("<external>", "VCC").into()).unwrap();
+
+        const GROUND_TRUTH_LEN: usize = 1;
+
+        let mut paths = Vec::new();
+        graph.all_simple_paths(external_vcc, r1_a, 10, |p| paths.push(p.to_vec()));
+        let mut paths_dedup = Vec::new();
+        graph.all_simple_paths_with_factors(external_vcc, r1_a, Some(10), |p, _| {
+            paths_dedup.push(p.to_vec())
+        });
+
+        assert_eq!(
+            paths.len(),
+            GROUND_TRUTH_LEN,
+            "all_simple_paths must return the set of all simple paths (1), not a multiset (2)"
+        );
+        assert_eq!(
+            paths_dedup.len(),
+            GROUND_TRUTH_LEN,
+            "sibling already de-dupes; matches ground truth"
+        );
+        assert_eq!(
+            paths.len(),
+            paths_dedup.len(),
+            "the two pub methods must agree on the factor-dedup axis for bounded max_len"
         );
     }
 
