@@ -11,9 +11,9 @@ use crate::{
     analysis::{ConnectivityInspection, SchematicIssue, SchematicIssueKey},
     component_slots,
     connectivity::{
-        ConnectionOrigin, ConnectivityItemRef, IslandRef, PhysicalConnectivity, PhysicalIsland,
-        PhysicalPinRef, PinVisibility, SymbolLocation, named_connected_nets,
-        reduce_with_provenance,
+        ComponentIdentity, ConnectionOrigin, ConnectivityItemRef, IslandRef, PhysicalConnectivity,
+        PhysicalIsland, PhysicalPinRef, PinVisibility, SymbolLocation, Terminal,
+        named_connected_nets, not_connected_terminals, reduce_with_provenance,
     },
     deterministic_uuid, field_autoplace, hierarchy, net_symbols,
     placement::{GridPacker, GridPoint, GridRect, point_rect},
@@ -304,9 +304,61 @@ pub(crate) fn reconcile_document(
     // Library cleanup is a whole-document concern; a scoped repair must not
     // touch pages outside its selection.
     if complete {
+        reconcile_not_connected_markers(&mut document, netlist, &placed)?;
         prune_unused_symbol_definitions(&mut document);
     }
     Ok(document)
+}
+
+fn reconcile_not_connected_markers(
+    document: &mut SchDocument,
+    netlist: &Schematic,
+    placed: &BTreeMap<SymbolSlotKey, PlacedSymbol>,
+) -> Result<()> {
+    let connected_nets = named_connected_nets(netlist)
+        .map(|net| net.name.clone())
+        .collect();
+    for targets in connectivity_targets(netlist, placed, &connected_nets)?.values() {
+        for target in targets {
+            document.pages[target.page_index].items.retain(|item| {
+                !matches!(item, SchItem::NoConnect(marker) if points_coincide(marker.at, target.point))
+            });
+        }
+    }
+    for terminal in not_connected_terminals(netlist) {
+        let Terminal::ComponentPin {
+            component: ComponentIdentity::ManagedPath(path),
+            pin_name,
+            pin_numbers,
+        } = terminal
+        else {
+            continue;
+        };
+        for target in resolve_pin_targets(placed, &path, &pin_name, &pin_numbers)? {
+            if target.hidden {
+                continue;
+            }
+            // A marker belongs to an endpoint, not a pin identity. Preserve
+            // user markers and use one marker for stacked physical pins.
+            if document.pages[target.page_index].items.iter().any(|item| {
+                matches!(item, SchItem::NoConnect(marker) if points_coincide(marker.at, target.point))
+            }) {
+                continue;
+            }
+            let id = available_deterministic_id(
+                document,
+                &format!("zener:no-connect:{}:{}", target.symbol_id, target.number),
+            );
+            document.pages[target.page_index]
+                .items
+                .push(SchItem::NoConnect(crate::NoConnect {
+                    id,
+                    at: target.point,
+                    unsupported: Vec::new(),
+                }));
+        }
+    }
+    Ok(())
 }
 
 fn is_connectivity_issue(issue: &SchematicIssue) -> bool {

@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- Emit intentional no-connect markers when creating or reconciling schematics with `pcb apply`.
+
 ### Changed
 
 - Upgrade all remaining bundled standard-library and example symbols to KiCad 10 format.

@@ -634,12 +634,122 @@ fn accepts_an_isolated_not_connected_pin() {
         .unwrap()
         .analysis;
     assert!(analysis.is_equivalent(), "{:?}", analysis.issues());
+    let markers = project.document.pages[0]
+        .items
+        .iter()
+        .filter(|item| matches!(item, SchItem::NoConnect(_)))
+        .count();
+    assert_eq!(markers, 1, "intentional NC must have a persisted marker");
+    assert!(!apply_linked_schematic(&netlist).unwrap().unwrap().changed);
+
+    let mut damaged = project.document.clone();
+    damaged.pages[0]
+        .items
+        .retain(|item| !matches!(item, SchItem::NoConnect(_)));
+    fs::write(&project.root_schematics[0], damaged.to_kicad_sch().unwrap()).unwrap();
+    assert!(apply_linked_schematic(&netlist).unwrap().unwrap().changed);
+    let repaired = KicadProject::load(&project.project_file).unwrap();
+    assert_eq!(repaired.document, project.document);
+    assert!(!apply_linked_schematic(&netlist).unwrap().unwrap().changed);
+    let mut user_document = repaired.document;
+    let marker = user_document.pages[0]
+        .items
+        .iter_mut()
+        .find_map(|item| match item {
+            SchItem::NoConnect(marker) => Some(marker),
+            _ => None,
+        })
+        .unwrap();
+    marker.id = "00000000-0000-4000-8000-000000000141".to_string();
+    fs::write(
+        &project.root_schematics[0],
+        user_document.to_kicad_sch().unwrap(),
+    )
+    .unwrap();
+    assert!(
+        !apply_linked_schematic(&netlist).unwrap().unwrap().changed,
+        "preserve a user marker at the expected endpoint"
+    );
     assert!(
         !project.document.pages[0]
             .items
             .iter()
             .any(|item| matches!(item, SchItem::Label(label) if label.text == "RIGHT"))
     );
+
+    // Changing the source back to a connected pin must not leave an NC cross
+    // on the newly connected endpoint.
+    let connected = linked_fixture(&project.directory);
+    assert!(apply_linked_schematic(&connected).unwrap().unwrap().changed);
+    let reconnected = KicadProject::load(&project.project_file).unwrap();
+    assert!(
+        !reconnected.document.pages[0]
+            .items
+            .iter()
+            .any(|item| matches!(item, SchItem::NoConnect(_)))
+    );
+}
+
+#[test]
+fn restores_nc_markers_at_transformed_pin_endpoints() {
+    let workspace = tempfile::tempdir().unwrap();
+    let project_dir = workspace.path().join("hardware");
+    let mut netlist = linked_fixture(&project_dir);
+    for net in netlist.nets.values_mut() {
+        net.kind = "NotConnected".to_string();
+        net.name.clear();
+    }
+    apply_linked_schematic(&netlist).unwrap().unwrap();
+    let mut project = KicadProject::load(&project_dir).unwrap();
+    let page = &mut project.document.pages[0];
+    assert_eq!(
+        page.items
+            .iter()
+            .filter(|item| matches!(item, SchItem::NoConnect(_)))
+            .count(),
+        4
+    );
+    page.items
+        .retain(|item| !matches!(item, SchItem::NoConnect(_)));
+    let mut expected = Vec::new();
+    for item in &mut page.items {
+        if let SchItem::Symbol(symbol) = item {
+            symbol.rotation = pcb_kicad_sch::Rotation::Deg90;
+            symbol.mirror = Some(pcb_kicad_sch::MirrorAxis::X);
+            symbol.at.x += 12.7;
+            expected.extend(
+                page.library.definitions[&symbol.lib_id]
+                    .placed_pins(symbol)
+                    .unwrap()
+                    .into_iter()
+                    .map(|pin| pin.point),
+            );
+        }
+    }
+    assert_eq!(expected.len(), 4);
+    fs::write(
+        &project.root_schematics[0],
+        project.document.to_kicad_sch().unwrap(),
+    )
+    .unwrap();
+    assert!(apply_linked_schematic(&netlist).unwrap().unwrap().changed);
+    let repaired = KicadProject::load(&project_dir).unwrap();
+    let actual = repaired.document.pages[0]
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            SchItem::NoConnect(marker) => Some(marker.at),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(actual.len(), expected.len());
+    for point in expected {
+        assert!(
+            actual.contains(&point),
+            "missing marker at transformed endpoint {point:?}"
+        );
+    }
+    assert!(!apply_linked_schematic(&netlist).unwrap().unwrap().changed);
 }
 
 #[test]
