@@ -693,7 +693,7 @@ where
                     feature_filled_region(doc, &doc.features[feature_index], resolution.strict())?,
                 );
             }
-            let contours = composer.finish().to_contours();
+            let contours = composer.finish()?.to_contours();
             if contours.is_empty() {
                 continue;
             }
@@ -827,7 +827,7 @@ where
                     .iter()
                     .filter(|cutout| feature_bbox.intersects(cutout.bbox))
                     .cloned(),
-            );
+            )?;
             if cutters.is_empty() {
                 continue;
             }
@@ -1033,7 +1033,7 @@ fn feature_filled_region<S, L>(
             ContourSet::from_contours(&contours, fill_rule, resolution.strict())?,
         );
     }
-    Ok(composer.finish())
+    composer.finish()
 }
 
 /// Bounds of a set's own feature span, for sets with no linked features.

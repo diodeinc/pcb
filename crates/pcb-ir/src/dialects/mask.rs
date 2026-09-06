@@ -70,9 +70,7 @@ impl<LayerMeta> Document<LayerMeta> {
                 resolution.strict(),
             )
         });
-        let image = ContourSet::union_all(resolution, shapes.collect::<Result<Vec<_>, _>>()?);
-        resolution.accuracy.check(image.uncertainty_mm)?;
-        Ok(image)
+        ContourSet::union_all(resolution, shapes.collect::<Result<Vec<_>, _>>()?)
     }
 
     pub fn shapes(&self, layer: &Layer<LayerMeta>) -> &[Path] {

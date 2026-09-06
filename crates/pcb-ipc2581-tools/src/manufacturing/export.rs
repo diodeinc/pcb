@@ -4,12 +4,16 @@ use std::fs;
 #[cfg(feature = "cli")]
 use std::io::BufWriter;
 use std::io::{Cursor, Seek, Write};
-use std::path::{Path, PathBuf};
+#[cfg(feature = "cli")]
+use std::path::Path;
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use gerberx2::GerberLayer;
 use pcb_ir::dialects::ipc::ArtworkScope;
-use pcb_ir::import::ipc2581::{ImportedDesign, import_design};
+use pcb_ir::import::ipc2581::ImportedDesign;
+#[cfg(feature = "cli")]
+use pcb_ir::import::ipc2581::import_design;
 use zip::{ZipWriter, write::FileOptions};
 
 use crate::gerber;

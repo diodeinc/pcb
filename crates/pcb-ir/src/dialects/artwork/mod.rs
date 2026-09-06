@@ -584,8 +584,7 @@ pub(crate) fn compose_selected_attributed<
             let image = region::ContourSet::union_all(
                 resolution,
                 owners.iter().map(|(_, image)| image.clone()),
-            );
-            resolution.accuracy.check(image.uncertainty_mm)?;
+            )?;
             Ok(AttributedImage { image, owners })
         })
         .collect::<Result<_, AccuracyError>>()?;
@@ -680,8 +679,7 @@ pub fn compose_owner_regions<LayerMeta: Clone, ObjectMeta: Clone, Owner: Clone +
 
         let mut images = Vec::with_capacity(states.len());
         for (owner, state) in states {
-            let image = state.composer.finish();
-            resolution.accuracy.check(image.uncertainty_mm)?;
+            let image = state.composer.finish()?;
             if !image.is_empty() {
                 images.push((owner, image));
             }

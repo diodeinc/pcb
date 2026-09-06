@@ -348,7 +348,7 @@ fn main() -> Result<()> {
         resolution,
     )
     .context("failed to collect board-array balancing inputs")?;
-    let balancing_input = collection.input_for_layer(selected_copper.name);
+    let balancing_input = collection.input_for_layer(selected_copper.name)?;
     let options = BalancingRegionOptions {
         clearance_mm: args.clearance_mm,
         regularization_radius_mm: args.regularization_radius_mm,
@@ -368,7 +368,7 @@ fn main() -> Result<()> {
         .into_iter()
         .zip(support_geometry)
         .map(|(source, geometry)| support_layer(source, geometry, selected_copper.name))
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>>>()?;
     let BoardArrayBalancingResult {
         safe_region,
         intermediates,
@@ -605,8 +605,8 @@ fn support_layer(
     source: ArraySupportLayerSource,
     geometry: BoardArraySupportLayerGeometry<Symbol>,
     copper_layer: Symbol,
-) -> SupportLayer {
-    SupportLayer {
+) -> Result<SupportLayer> {
+    Ok(SupportLayer {
         name: source.name,
         function: layer_function_name(source.layer_function),
         source_feature_count: geometry.source_feature_count,
@@ -615,8 +615,8 @@ fn support_layer(
         path_count: geometry.path_count,
         excluded_documentation_path_count: geometry.excluded_documentation_path_count,
         unpainted_path_count: geometry.unpainted_path_count,
-        region: geometry.region_for_layer(copper_layer),
-    }
+        region: geometry.region_for_layer(copper_layer)?,
+    })
 }
 
 fn layer_function_name(function: LayerFunction) -> String {

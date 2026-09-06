@@ -20,7 +20,9 @@ use anyhow::{Result, bail};
 use ipc2581::Ipc2581;
 use pcb_ir::dialects::ipc::ArtworkScope;
 use pcb_ir::dialects::placement::PlacementSide;
-use pcb_ir::import::ipc2581::{ImportedDesign, import_design};
+use pcb_ir::import::ipc2581::ImportedDesign;
+#[cfg(feature = "cli")]
+use pcb_ir::import::ipc2581::import_design;
 use pcb_ir::import::physical::Association;
 
 use crate::accessors::IpcAccessor;

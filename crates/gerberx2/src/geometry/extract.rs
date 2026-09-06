@@ -446,7 +446,7 @@ fn push_flattened_paths(
             )?,
         );
     }
-    let contours = composer.finish().to_contours();
+    let contours = composer.finish()?.to_contours();
     if contours.is_empty() {
         return Ok(());
     }
@@ -543,7 +543,7 @@ fn swept_aperture(
             region::ContourSet::from_contours(&path.contours, FillRule::NonZero, resolution)?,
         );
     }
-    let aperture = composer.finish();
+    let aperture = composer.finish()?;
     let edge_count: usize = aperture.rings.iter().map(Vec::len).sum();
     if points.len().saturating_mul(edge_count) > 1_000_000 {
         return Err(AccuracyError::SubdivisionLimit);

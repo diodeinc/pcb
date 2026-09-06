@@ -536,7 +536,10 @@ impl ContourSet {
     }
 
     /// Regularized union of many regions.
-    pub fn union_all(resolution: Resolution, regions: impl IntoIterator<Item = Self>) -> Self {
+    pub fn union_all(
+        resolution: Resolution,
+        regions: impl IntoIterator<Item = Self>,
+    ) -> Result<Self, AccuracyError> {
         let mut composer = PaintComposer::new(resolution);
         for region in regions {
             composer.push(Polarity::Dark, region);
@@ -565,7 +568,7 @@ impl ContourSet {
                 )?,
             );
         }
-        composer.finish().checked()
+        composer.finish()
     }
 
     /// Build the union of the geometric images painted by a set of paths.
@@ -625,7 +628,7 @@ impl ContourSet {
                 Self::from_contours(&contours, fill_rule, resolution.strict())?,
             );
         }
-        composer.finish().checked()
+        composer.finish()
     }
 
     pub fn rectangle(bbox: BBox, resolution: Resolution) -> Self {
@@ -1498,9 +1501,10 @@ impl PaintComposer {
         self.run.append(&mut region.rings);
     }
 
-    pub fn finish(mut self) -> ContourSet {
+    /// The composed image, checked against its budget.
+    pub fn finish(mut self) -> Result<ContourSet, AccuracyError> {
         self.flush_run();
-        ContourSet::from_regularized(self.image, self.resolution, self.uncertainty_mm)
+        ContourSet::from_regularized(self.image, self.resolution, self.uncertainty_mm).checked()
     }
 
     fn flush_run(&mut self) {

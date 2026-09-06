@@ -201,7 +201,7 @@ fn generated_board_array_has_a_certified_safe_balancing_region() {
         resolution,
     )
     .unwrap();
-    let input = collection.input_for_layer(copper_layers[0].name);
+    let input = collection.input_for_layer(copper_layers[0].name).unwrap();
     let result = board_array_balancing_region(&input, BalancingRegionOptions::default()).unwrap();
 
     assert!(collection.board_instance_count > 0);
@@ -392,7 +392,7 @@ fn automatic_balancing_regions_scope_panel_fiducials_to_both_surface_copper_laye
             .iter()
             .find(|layer| provisional.resolve(layer.name) == name)
             .unwrap();
-        let input = collection.input_for_layer(layer.name);
+        let input = collection.input_for_layer(layer.name).unwrap();
         input.support_features.area()
     };
 

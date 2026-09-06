@@ -85,13 +85,15 @@ pub fn generate_automatic_board_array_copper_balance(
                     && collection.has_same_support_scope(candidate.layer, layer.name)
             })
             .map(|candidate| candidate.region);
-        let input_index = representative.unwrap_or_else(|| {
-            let index = inputs.len();
-            let mut input = collection.input_for_layer(layer.name);
-            input.support_features = input.support_features.union(&frame_copper);
-            inputs.push((layer_name.clone(), input));
-            index
-        });
+        let input_index = match representative {
+            Some(index) => index,
+            None => {
+                let mut input = collection.input_for_layer(layer.name)?;
+                input.support_features = input.support_features.union(&frame_copper);
+                inputs.push((layer_name.clone(), input));
+                inputs.len() - 1
+            }
+        };
         prepared.push(LayerCopper {
             layer: layer.name,
             name: layer_name,

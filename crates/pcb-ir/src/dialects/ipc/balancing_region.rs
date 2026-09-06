@@ -238,7 +238,7 @@ pub struct BoardArraySupportLayerGeometry<Symbol> {
 impl<Symbol: Copy + PartialEq> BoardArraySupportLayerGeometry<Symbol> {
     /// Derive this source layer's physical obstacle region for one copper
     /// layer. The scoped buckets remain the sole stored geometry.
-    pub fn region_for_layer(&self, layer: Symbol) -> ContourSet {
+    pub fn region_for_layer(&self, layer: Symbol) -> Result<ContourSet, AccuracyError> {
         let resolution = self
             .obstacles
             .first()
@@ -266,23 +266,27 @@ pub struct BoardArrayBalancingCollection<Symbol> {
 impl<Symbol: Copy + PartialEq> BoardArrayBalancingCollection<Symbol> {
     /// Derive the geometry-only input for one copper layer from the canonical
     /// scoped support geometry.
-    pub fn input_for_layer(&self, layer: Symbol) -> BoardArrayBalancingInput {
-        let support_features = self.support_features_for_layer(layer);
-        BoardArrayBalancingInput {
+    pub fn input_for_layer(
+        &self,
+        layer: Symbol,
+    ) -> Result<BoardArrayBalancingInput, AccuracyError> {
+        let support_features = self.support_features_for_layer(layer)?;
+        Ok(BoardArrayBalancingInput {
             panel_outer: self.panel_outer.clone(),
             board_footprints: self.board_footprints.clone(),
             material_removal: self.material_removal.clone(),
             support_features,
-        }
+        })
     }
 
     /// Union support geometry whose physical reach includes `layer`.
-    pub fn support_features_for_layer(&self, layer: Symbol) -> ContourSet {
+    pub fn support_features_for_layer(&self, layer: Symbol) -> Result<ContourSet, AccuracyError> {
         ContourSet::union_all(
             self.panel_outer.resolution,
             self.support_layers
                 .iter()
-                .map(|source| source.region_for_layer(layer)),
+                .map(|source| source.region_for_layer(layer))
+                .collect::<Result<Vec<_>, _>>()?,
         )
     }
 
@@ -1055,8 +1059,13 @@ mod tests {
         assert!((collection.panel_outer.area() - 200.0).abs() <= 1e-6);
         assert!((collection.board_footprints.area() - 12.0).abs() <= 1e-6);
         assert!((collection.material_removal.area() - 1.0).abs() <= 1e-6);
-        assert!((collection.support_features_for_layer(100).area() - 1.0).abs() <= 1e-6);
-        assert!(collection.support_features_for_layer(200).is_empty());
+        assert!((collection.support_features_for_layer(100).unwrap().area() - 1.0).abs() <= 1e-6);
+        assert!(
+            collection
+                .support_features_for_layer(200)
+                .unwrap()
+                .is_empty()
+        );
         assert!(!collection.has_same_support_scope(100, 200));
         assert!(collection.has_same_support_scope(200, 300));
     }
@@ -1095,7 +1104,7 @@ mod tests {
             Resolution::default(),
         )
         .unwrap();
-        let region = geometry.region_for_layer(100);
+        let region = geometry.region_for_layer(100).unwrap();
 
         assert_eq!(geometry.feature_count, 1);
         assert_eq!(geometry.path_count, 1);
@@ -1157,8 +1166,8 @@ mod tests {
             Resolution::default(),
         )
         .unwrap();
-        let top = geometry.region_for_layer(100);
-        let bottom = geometry.region_for_layer(200);
+        let top = geometry.region_for_layer(100).unwrap();
+        let bottom = geometry.region_for_layer(200).unwrap();
 
         assert!((top.area() - 2.0).abs() <= 1e-6);
         assert!((bottom.area() - 2.0).abs() <= 1e-6);
@@ -1248,7 +1257,7 @@ mod tests {
         assert_eq!(geometry.source_path_count, 2);
         assert_eq!(geometry.path_count, 1);
         assert_eq!(geometry.excluded_documentation_path_count, 1);
-        assert!(geometry.region_for_layer(100).bbox.max.y < 1.0);
+        assert!(geometry.region_for_layer(100).unwrap().bbox.max.y < 1.0);
     }
 
     #[test]

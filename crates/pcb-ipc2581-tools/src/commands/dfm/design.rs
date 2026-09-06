@@ -1125,7 +1125,7 @@ fn compose_attributed_copper(
     for (_, image) in &owners {
         composer.push(pcb_ir::geom::Polarity::Dark, image.clone());
     }
-    let image = composer.finish();
+    let image = composer.finish()?;
     let conductors = owners
         .into_iter()
         .map(|(id, rings)| CopperConductor { id, image: rings })
