@@ -1507,8 +1507,13 @@ fn occupy_page_items_except(
             }
             SchItem::Junction(junction) => packer.occupy(point_rect(junction.at)),
             SchItem::NoConnect(no_connect) => packer.occupy(point_rect(no_connect.at)),
+            SchItem::Graphic(graphic) => {
+                if let Some(bounds) = field_autoplace::graphic_bounds(graphic) {
+                    packer.occupy(GridRect::from_bounds(bounds));
+                }
+            }
             SchItem::Unsupported(item) => {
-                if let Some(bounds) = field_autoplace::page_graphic_bounds(item) {
+                if let Some(bounds) = field_autoplace::opaque_page_graphic_bounds(item) {
                     packer.occupy(GridRect::from_bounds(bounds));
                 }
             }
@@ -2795,7 +2800,7 @@ fn net_symbol_stub_collides(
                     );
                 }
             }
-            SchItem::Unsupported(_) => {}
+            SchItem::Graphic(_) | SchItem::Unsupported(_) => {}
         }
     }
     existing_points.retain(|point| !is_own_point(*point));
@@ -3843,10 +3848,13 @@ mod tests {
 
     #[test]
     fn shallow_page_arc_does_not_force_overflow() {
-        let mut page = SchPage::new("shallow-arc");
-        page.items.push(SchItem::Unsupported(
-            pcb_sexpr::parse("(arc (start 10 10) (mid 20 9.9) (end 30 10))").unwrap(),
-        ));
+        let page = crate::parse_kicad_sch_page(
+            None,
+            "(kicad_sch (version 20260306) (uuid shallow-arc)
+            (arc (start 10 10) (mid 20 9.9) (end 30 10) (uuid arc)))",
+        )
+        .unwrap();
+        assert!(matches!(page.items[0], SchItem::Graphic(_)));
         let block = test_placement_block(
             "new",
             GridRect {
@@ -3866,7 +3874,7 @@ mod tests {
     }
 
     #[test]
-    fn overflow_avoids_opaque_page_text_and_graphics() {
+    fn overflow_avoids_typed_page_graphics_and_opaque_beziers() {
         for (source, right_edge) in [
             (
                 r#"(text "off-page note\nsecond line" (at 500 10 90)
@@ -3884,9 +3892,19 @@ mod tests {
             // A major arc whose rightmost point is not a control point.
             ("(arc (start 470 40) (mid 540 30) (end 470 -40))", 550.0),
         ] {
-            let mut page = test_page_with_sheet("opaque");
-            let opaque = SchItem::Unsupported(pcb_sexpr::parse(source).unwrap());
-            page.items.push(opaque.clone());
+            let mut page = test_page_with_sheet("graphics");
+            let annotated = format!("{} (uuid graphic))", source.strip_suffix(')').unwrap());
+            let mut parsed = crate::parse_kicad_sch_page(
+                None,
+                &format!("(kicad_sch (version 20260306) (uuid root) {annotated})"),
+            )
+            .unwrap();
+            let graphic = parsed.items.remove(0);
+            assert_eq!(
+                matches!(graphic, SchItem::Graphic(_)),
+                !source.starts_with("(bezier")
+            );
+            page.items.push(graphic.clone());
             let block = test_placement_block(
                 "new",
                 GridRect {
@@ -3903,7 +3921,7 @@ mod tests {
                 f64::from(placed.min_x) * CONNECTION_GRID_MM > right_edge,
                 "{source}"
             );
-            assert_eq!(page.items.last(), Some(&opaque));
+            assert_eq!(page.items.last(), Some(&graphic));
         }
     }
 

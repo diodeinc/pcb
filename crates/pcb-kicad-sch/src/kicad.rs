@@ -8,10 +8,10 @@ use pcb_sexpr::{
 };
 
 use crate::model::{
-    FieldHorizontalJustify, FieldJustify, FieldVerticalJustify, Junction, Label, LabelKind,
-    LabelShape, LabelSpin, MirrorAxis, NoConnect, Paper, PinInstance, Point, Rotation, SchDocument,
-    SchItem, SchPage, Sheet, SheetPin, Symbol, SymbolDefinition, SymbolField, SymbolLibrary,
-    TextEffects, TextSize, Wire,
+    FieldHorizontalJustify, FieldJustify, FieldVerticalJustify, Graphic, GraphicKind, GraphicText,
+    Junction, Label, LabelKind, LabelShape, LabelSpin, MirrorAxis, NoConnect, Paper, PinInstance,
+    Point, Rotation, SchDocument, SchItem, SchPage, Sheet, SheetPin, Symbol, SymbolDefinition,
+    SymbolField, SymbolLibrary, TextEffects, TextSize, Wire,
 };
 
 pub const KICAD_SCH_VERSION: i64 = 20260306;
@@ -179,6 +179,9 @@ fn parse_kicad_sch_root(file_name: Option<&str>, root: &Sexpr) -> Result<SchPage
             }
             Some("sheet") => {
                 items.push(SchItem::Sheet(Box::new(parse_sheet(list)?)));
+            }
+            Some("rectangle" | "polyline" | "circle" | "arc" | "text" | "text_box") => {
+                items.push(SchItem::Graphic(parse_graphic(list)?));
             }
             Some("sheet_instances") => {
                 items.push(SchItem::Unsupported(child.clone()));
@@ -899,6 +902,162 @@ fn parse_pin(items: SexprList<'_>) -> Result<PinInstance> {
     })
 }
 
+fn parse_graphic(items: SexprList<'_>) -> Result<Graphic> {
+    let tag = items.tag().context("graphic missing type")?;
+    let child = |name: &str| {
+        items
+            .children_from(1)
+            .filter_map(SexprList::from_sexpr)
+            .find(|list| list.tag() == Some(name))
+            .with_context(|| format!("{tag} missing {name}"))
+    };
+    let point = |name| parse_xy(child(name)?);
+    let text = || -> Result<Box<GraphicText>> {
+        let at = child("at")?;
+        let parsed = items
+            .children_from(2)
+            .filter_map(SexprList::from_sexpr)
+            .find(|list| list.tag() == Some("effects"))
+            .map(parse_effects)
+            .transpose()?;
+        Ok(Box::new(GraphicText {
+            text: items.string(1).context("graphic missing text")?,
+            at: parse_xy(at)?,
+            angle: match at.get(3) {
+                Some(_) => at.f64(3).context("graphic text has invalid angle")?,
+                None => 0.0,
+            },
+            effects: parsed
+                .as_ref()
+                .map(|parsed| parsed.effects.clone())
+                .unwrap_or_default(),
+            justify: parsed.as_ref().and_then(|parsed| parsed.justify),
+            hidden: parsed.is_some_and(|parsed| parsed.hidden),
+        }))
+    };
+    let (kind, fields): (GraphicKind, &[&str]) = match tag {
+        "rectangle" => (
+            GraphicKind::Rectangle {
+                start: point("start")?,
+                end: point("end")?,
+            },
+            &["start", "end"],
+        ),
+        "polyline" => {
+            let points = child("pts")?
+                .children_from(1)
+                .map(|node| {
+                    let xy =
+                        SexprList::from_sexpr(node).context("polyline point must be an xy list")?;
+                    if xy.tag() != Some("xy") {
+                        bail!("polyline point must be an xy list");
+                    }
+                    parse_xy(xy)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            if points.len() < 2 {
+                bail!("polyline must contain at least two xy points");
+            }
+            (GraphicKind::Polyline { points }, &["pts"])
+        }
+        "circle" => (
+            GraphicKind::Circle {
+                center: point("center")?,
+                radius: child("radius")?
+                    .f64(1)
+                    .context("circle has invalid radius")?,
+            },
+            &["center", "radius"],
+        ),
+        "arc" => (
+            GraphicKind::Arc {
+                start: point("start")?,
+                mid: point("mid")?,
+                end: point("end")?,
+            },
+            &["start", "mid", "end"],
+        ),
+        "text" => (GraphicKind::Text(text()?), &["at", "effects"]),
+        "text_box" => (
+            GraphicKind::TextBox {
+                text: text()?,
+                size: point("size")?,
+            },
+            &["at", "size", "effects"],
+        ),
+        _ => bail!("unsupported graphic type {tag}"),
+    };
+    let first_child = if matches!(kind, GraphicKind::Text(_) | GraphicKind::TextBox { .. }) {
+        2
+    } else {
+        1
+    };
+    let unsupported = items
+        .children_from(first_child)
+        .filter(|node| {
+            let tag = SexprList::from_sexpr(node).and_then(|list| list.tag());
+            !tag.is_some_and(|tag| tag == "uuid" || fields.contains(&tag))
+        })
+        .cloned()
+        .collect();
+    Ok(Graphic {
+        id: child("uuid")?.string(1).context("graphic missing uuid")?,
+        kind,
+        unsupported,
+    })
+}
+
+fn graphic_to_sexpr(graphic: &Graphic) -> Sexpr {
+    let mut items = vec![Sexpr::symbol(graphic.kind.kicad_tag())];
+    let xy = |tag: &str, point: Point| {
+        Sexpr::list(vec![
+            Sexpr::symbol(tag),
+            Sexpr::float(point.x),
+            Sexpr::float(point.y),
+        ])
+    };
+    match &graphic.kind {
+        GraphicKind::Rectangle { start, end } => {
+            items.extend([xy("start", *start), xy("end", *end)])
+        }
+        GraphicKind::Polyline { points } => {
+            let mut pts = vec![Sexpr::symbol("pts")];
+            pts.extend(points.iter().copied().map(xy_to_sexpr));
+            items.push(Sexpr::list(pts));
+        }
+        GraphicKind::Circle { center, radius } => items.extend([
+            xy("center", *center),
+            Sexpr::list(vec![Sexpr::symbol("radius"), Sexpr::float(*radius)]),
+        ]),
+        GraphicKind::Arc { start, mid, end } => {
+            items.extend([xy("start", *start), xy("mid", *mid), xy("end", *end)])
+        }
+        GraphicKind::Text(text) | GraphicKind::TextBox { text, .. } => {
+            items.push(Sexpr::string(&text.text));
+            items.push(Sexpr::list(vec![
+                Sexpr::symbol("at"),
+                Sexpr::float(text.at.x),
+                Sexpr::float(text.at.y),
+                Sexpr::float(text.angle),
+            ]));
+            if let GraphicKind::TextBox { size, .. } = &graphic.kind {
+                items.push(xy("size", *size));
+            }
+            let mut effects = text_effects_to_sexpr(&text.effects, text.justify);
+            if text.hidden {
+                effects.as_list_mut().unwrap().push(Sexpr::symbol("hide"));
+            }
+            items.push(effects);
+        }
+    }
+    items.extend(graphic.unsupported.iter().cloned());
+    items.push(Sexpr::list(vec![
+        Sexpr::symbol("uuid"),
+        Sexpr::string(&graphic.id),
+    ]));
+    Sexpr::list(items)
+}
+
 fn item_to_sexpr(item: &SchItem, _page: &SchPage) -> Sexpr {
     match item {
         SchItem::Symbol(symbol) => symbol_to_sexpr(symbol),
@@ -907,6 +1066,7 @@ fn item_to_sexpr(item: &SchItem, _page: &SchPage) -> Sexpr {
         SchItem::NoConnect(no_connect) => no_connect_to_sexpr(no_connect),
         SchItem::Label(label) => label_to_sexpr(label),
         SchItem::Sheet(sheet) => sheet_to_sexpr(sheet),
+        SchItem::Graphic(graphic) => graphic_to_sexpr(graphic),
         SchItem::Unsupported(sexpr) => sexpr.clone(),
     }
 }
@@ -2179,7 +2339,14 @@ mod tests {
             })
         };
 
-        assert!(contains("text"));
+        assert!(!contains("text"));
+        assert!(document.pages[0].items.iter().any(|item| matches!(
+            item,
+            SchItem::Graphic(Graphic {
+                kind: GraphicKind::Text(_),
+                ..
+            })
+        )));
         assert_eq!(
             document.pages[0]
                 .items
