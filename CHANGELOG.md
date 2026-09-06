@@ -55,6 +55,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- Guarantee unique non-Default netclass priorities in the generated `.kicad_pro` during layout sync.
 - Support opaque service-account client IDs and proper OAuth Basic encoding.
 - Allow off-page schematic placement and avoid existing text and graphics.
 
