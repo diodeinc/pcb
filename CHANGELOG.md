@@ -50,6 +50,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Support opaque service-account client IDs and proper OAuth Basic encoding.
 - Allow off-page schematic placement and avoid existing text and graphics.
+- Classify metric-only `0402Metric`/`0603Metric` passives as `01005`/`0201` instead of the colliding imperial `0402`/`0603`.
 
 ## [0.4.49] - 2026-09-04
 
