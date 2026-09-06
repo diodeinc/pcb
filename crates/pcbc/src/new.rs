@@ -13,6 +13,7 @@ const GITIGNORE_TEMPLATE: &str = include_str!("templates/gitignore");
 const BOARD_PCB_TOML: &str = include_str!("templates/board_pcb_toml.jinja");
 const BOARD_ZEN: &str = include_str!("templates/board_zen.jinja");
 const BOARD_README: &str = include_str!("templates/board_readme.jinja");
+const BOARD_SPEC: &str = include_str!("templates/board_spec.jinja");
 const PACKAGE_ZEN: &str = include_str!("templates/package_zen.jinja");
 const PACKAGE_README: &str = include_str!("templates/package_readme.jinja");
 
@@ -21,6 +22,7 @@ fn create_template_env() -> Environment<'static> {
     env.add_template("board_pcb_toml", BOARD_PCB_TOML).unwrap();
     env.add_template("board_zen", BOARD_ZEN).unwrap();
     env.add_template("board_readme", BOARD_README).unwrap();
+    env.add_template("board_spec", BOARD_SPEC).unwrap();
     env.add_template("package_zen", PACKAGE_ZEN).unwrap();
     env.add_template("package_readme", PACKAGE_README).unwrap();
     env
@@ -346,6 +348,13 @@ pub(crate) fn init_board_repo(dir: &Path, board: &str, repository: &str) -> Resu
         .render(&ctx)
         .context("Failed to render README.md template")?;
     std::fs::write(dir.join("README.md"), readme_content).context("Failed to write README.md")?;
+
+    let spec_content = env
+        .get_template("board_spec")
+        .unwrap()
+        .render(&ctx)
+        .context("Failed to render spec.md template")?;
+    std::fs::write(dir.join("spec.md"), spec_content).context("Failed to write spec.md")?;
 
     std::fs::write(dir.join(".gitignore"), GITIGNORE_TEMPLATE)
         .context("Failed to write .gitignore")?;
