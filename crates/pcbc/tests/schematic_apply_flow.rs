@@ -781,6 +781,49 @@ fn moves_nc_marker_when_source_pin_geometry_changes() {
 }
 
 #[test]
+fn preserves_user_nc_marker_on_unspecified_pin() {
+    let workspace = tempfile::tempdir().unwrap();
+    let project_dir = workspace.path().join("hardware");
+    let mut netlist = linked_fixture(&project_dir);
+    let mut not_connected = netlist.nets.remove("RIGHT").unwrap();
+    not_connected.kind = "NotConnected".to_string();
+    not_connected.name.clear();
+    netlist.nets.insert(String::new(), not_connected);
+    apply_linked_schematic(&netlist).unwrap().unwrap();
+
+    let mut project = KicadProject::load(&project_dir).unwrap();
+    for item in &mut project.document.pages[0].items {
+        if let SchItem::NoConnect(marker) = item {
+            marker.id = "00000000-0000-4000-8000-000000000143".to_string();
+        }
+    }
+    fs::write(
+        &project.root_schematics[0],
+        project.document.to_kicad_sch().unwrap(),
+    )
+    .unwrap();
+    netlist.nets.remove("");
+    for instance in netlist.instances.values_mut() {
+        instance.attributes.remove("__signature");
+    }
+    assert!(
+        inspect_schematic(&project.document, &netlist)
+            .unwrap()
+            .analysis
+            .is_equivalent()
+    );
+    assert!(
+        !apply_linked_schematic(&netlist).unwrap().unwrap().changed,
+        "an unchanged unspecified pin must retain its user marker"
+    );
+    assert_eq!(
+        KicadProject::load(&project_dir).unwrap().document,
+        project.document
+    );
+    assert!(!apply_linked_schematic(&netlist).unwrap().unwrap().changed);
+}
+
+#[test]
 fn removes_nc_marker_when_source_component_is_deleted() {
     check_stale_nc_marker("delete");
 }

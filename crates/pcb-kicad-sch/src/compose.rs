@@ -339,6 +339,19 @@ fn reconcile_not_connected_markers(
         targets.extend(resolve_pin_targets(placed, &path, &pin_name, &pin_numbers)?);
     }
     targets.retain(|target| !target.hidden);
+    // Unspecified pins may carry user-authored NC markers too. Preserve those
+    // while the visible endpoint survives; connected endpoints were cleared above.
+    let mut visible_points = BTreeMap::<usize, Vec<Point>>::new();
+    for placed in placed.values() {
+        let parsed = symbol::ParsedSymbolDefinition::parse(&placed.definition)?;
+        visible_points.entry(placed.page_index).or_default().extend(
+            parsed
+                .placed_pins(&placed.symbol)?
+                .into_iter()
+                .filter(|pin| !pin.hidden)
+                .map(|pin| pin.point),
+        );
+    }
     // A marker previously attached to a managed pin must not become an orphan
     // when the component/pin disappears, becomes hidden, or reconnects elsewhere.
     // Use old geometry, not UUID ownership or only the new netlist's terminals.
@@ -373,9 +386,10 @@ fn reconcile_not_connected_markers(
                     !old_points
                         .iter()
                         .any(|point| points_coincide(*point, marker.at))
-                        || targets.iter().any(|target| {
-                            target.page_index == page_index
-                                && points_coincide(target.point, marker.at)
+                        || visible_points.get(&page_index).is_some_and(|points| {
+                            points
+                                .iter()
+                                .any(|point| points_coincide(*point, marker.at))
                         })
                 }
                 _ => true,
