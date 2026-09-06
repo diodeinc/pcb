@@ -1,8 +1,9 @@
 use anyhow::{Context, Result};
 use atomicwrites::{AtomicFile, OverwriteBehavior};
 use reqwest::blocking::Client;
+use sha2::{Digest, Sha256};
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 pub(crate) fn http_client() -> Result<Client> {
@@ -150,18 +151,196 @@ pub(crate) fn write_decoded_index<R: io::Read>(
     dest_path: &Path,
     reader: R,
     label: &str,
+    expected_sha256: &str,
 ) -> Result<()> {
+    let expected = expected_sha256.trim().to_ascii_lowercase();
     let mut decoder =
         zstd::stream::Decoder::new(reader).context("Failed to create zstd decoder")?;
     AtomicFile::new(dest_path, OverwriteBehavior::AllowOverwrite)
         .write(|file| {
-            io::copy(&mut decoder, file).map_err(|err| {
-                io::Error::new(
-                    err.kind(),
-                    format!("Failed to decompress and write {label}: {err}"),
-                )
-            })?;
-            file.flush()
+            let mut hasher = Sha256::new();
+            let mut buf = [0u8; 8192];
+            loop {
+                let n = decoder.read(&mut buf).map_err(|err| {
+                    io::Error::new(
+                        err.kind(),
+                        format!("Failed to decompress and write {label}: {err}"),
+                    )
+                })?;
+                if n == 0 {
+                    break;
+                }
+                hasher.update(&buf[..n]);
+                file.write_all(&buf[..n])?;
+            }
+            file.flush()?;
+            let actual = hex::encode(hasher.finalize());
+            if actual != expected {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("{label} hash mismatch: expected {expected}, got {actual}"),
+                ));
+            }
+            Ok(())
         })
-        .with_context(|| format!("Failed to move downloaded {label} into place"))
+        .map_err(|err| match err {
+            atomicwrites::Error::User(io_err) => anyhow::Error::new(io_err),
+            atomicwrites::Error::Internal(io_err) => anyhow::Error::new(io_err)
+                .context(format!("Failed to move downloaded {label} into place")),
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    fn compress(data: &[u8]) -> Vec<u8> {
+        zstd::encode_all(Cursor::new(data), 0).expect("zstd encode")
+    }
+
+    fn sha256_hex(data: &[u8]) -> String {
+        hex::encode(Sha256::digest(data))
+    }
+
+    #[test]
+    fn write_decoded_index_accepts_matching_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("packages.db");
+        let payload = b"authentic registry index bytes";
+        let expected = sha256_hex(payload);
+
+        write_decoded_index(
+            &dest,
+            Cursor::new(compress(payload)),
+            "registry index",
+            &expected,
+        )
+        .expect("matching hash should succeed");
+
+        assert_eq!(std::fs::read(&dest).unwrap(), payload);
+    }
+
+    #[test]
+    fn write_decoded_index_rejects_mismatched_hash_and_preserves_prior_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("packages.db");
+        let prior = b"previously cached good db";
+        std::fs::write(&dest, prior).unwrap();
+
+        let tampered = b"tampered registry index bytes";
+        let wrong = sha256_hex(b"some other content");
+
+        let err = write_decoded_index(
+            &dest,
+            Cursor::new(compress(tampered)),
+            "registry index",
+            &wrong,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("hash mismatch"), "got: {err}");
+        assert!(err.contains(&wrong), "got: {err}");
+
+        assert_eq!(std::fs::read(&dest).unwrap(), prior);
+    }
+
+    #[test]
+    fn write_decoded_index_rejects_mismatch_without_existing_dest() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("packages.db");
+        let payload = b"tampered registry index bytes";
+        let wrong = sha256_hex(b"some other content");
+
+        let err = write_decoded_index(
+            &dest,
+            Cursor::new(compress(payload)),
+            "registry index",
+            &wrong,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("hash mismatch"), "got: {err}");
+
+        assert!(!dest.exists(), "tampered index must not be written");
+    }
+
+    #[test]
+    fn write_decoded_index_rejects_non_zstd_input_and_preserves_prior_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("packages.db");
+        let prior = b"previously cached good db";
+        std::fs::write(&dest, prior).unwrap();
+
+        let err = write_decoded_index(
+            &dest,
+            Cursor::new(b"definitely not a zstd stream"),
+            "registry index",
+            &sha256_hex(b"whatever"),
+        )
+        .unwrap_err();
+        let chain = format!("{err:#}");
+
+        assert!(
+            chain.contains("decompress") || chain.contains("decode"),
+            "got: {chain}"
+        );
+        assert!(!chain.contains("hash mismatch"), "got: {chain}");
+
+        assert_eq!(std::fs::read(&dest).unwrap(), prior);
+    }
+
+    #[test]
+    fn write_decoded_index_accepts_uppercase_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("packages.db");
+        let payload = b"authentic registry index bytes";
+        let expected = sha256_hex(payload).to_uppercase();
+
+        write_decoded_index(
+            &dest,
+            Cursor::new(compress(payload)),
+            "registry index",
+            &expected,
+        )
+        .expect("uppercase hex should be accepted");
+
+        assert_eq!(std::fs::read(&dest).unwrap(), payload);
+    }
+
+    #[test]
+    fn write_decoded_index_accepts_hash_with_surrounding_whitespace() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("packages.db");
+        let payload = b"authentic registry index bytes";
+        let expected = format!("  {}\n", sha256_hex(payload));
+
+        write_decoded_index(
+            &dest,
+            Cursor::new(compress(payload)),
+            "registry index",
+            &expected,
+        )
+        .expect("hash with whitespace should be accepted");
+
+        assert_eq!(std::fs::read(&dest).unwrap(), payload);
+    }
+
+    #[test]
+    fn write_decoded_index_rejects_empty_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("packages.db");
+        let payload = b"authentic registry index bytes";
+
+        let err = write_decoded_index(
+            &dest,
+            Cursor::new(compress(payload)),
+            "registry index",
+            "   ",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("hash mismatch"), "got: {err}");
+        assert!(!dest.exists(), "no prior db, nothing should be written");
+    }
 }

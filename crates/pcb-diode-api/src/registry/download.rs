@@ -730,6 +730,8 @@ pub fn download_registry_index_with_progress(
 
     send_progress(None, false, None);
 
+    let version_token = index_metadata.version_token()?;
+
     let client = http_client()?;
 
     ensure_parent_dir(dest_path, "registry")?;
@@ -747,9 +749,8 @@ pub fn download_registry_index_with_progress(
 
     // Wrap response in a progress-tracking reader, then decompress with zstd
     let progress_reader = ProgressReader::new(response, total_size, &send_progress);
-    write_decoded_index(dest_path, progress_reader, "registry index")?;
+    write_decoded_index(dest_path, progress_reader, "registry index", &version_token)?;
 
-    let version_token = index_metadata.version_token()?;
     let _ = save_local_version(dest_path, &version_token);
 
     send_progress(Some(100), true, None);
@@ -919,5 +920,199 @@ repository = "code.diode.computer/wildwestsystems"
 
         assert!(err.contains("github.com/acme/parts"));
         assert!(err.contains(DEFAULT_REGISTRY_URL));
+    }
+
+    fn serve_index_db<'a>(
+        server: &'a httpmock::MockServer,
+        path: &str,
+        payload: &[u8],
+    ) -> httpmock::Mock<'a> {
+        let compressed = zstd::stream::encode_all(std::io::Cursor::new(payload.to_vec()), 0)
+            .expect("zstd encode");
+        server.mock(move |when, then| {
+            when.path(path);
+            then.status(200).body(compressed.clone());
+        })
+    }
+
+    fn index_metadata(
+        server: &httpmock::MockServer,
+        path: &str,
+        sha256: &str,
+    ) -> RegistryIndexMetadata {
+        RegistryIndexMetadata {
+            url: format!("{}{path}", server.base_url()),
+            sha256: sha256.to_string(),
+            last_modified: String::new(),
+            expires_at: String::new(),
+        }
+    }
+
+    fn drain(progress_rx: &std::sync::mpsc::Receiver<DownloadProgress>) {
+        while progress_rx.try_recv().is_ok() {}
+    }
+
+    #[test]
+    fn download_registry_index_persists_verified_content_and_sidecar() {
+        let server = httpmock::MockServer::start();
+        let payload = b"authentic registry index sqlite db bytes";
+        let expected = hex::encode(Sha256::digest(payload));
+        let mock = serve_index_db(&server, "/index.zst", payload);
+
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("packages.db");
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        download_registry_index_with_progress(
+            &dest,
+            &tx,
+            false,
+            &index_metadata(&server, "/index.zst", &expected),
+        )
+        .expect("verified download should succeed");
+        drain(&rx);
+
+        assert_eq!(std::fs::read(&dest).unwrap(), payload);
+        assert_eq!(
+            load_local_version(&dest).as_deref(),
+            Some(expected.as_str())
+        );
+        mock.assert_calls(1);
+    }
+
+    #[test]
+    fn download_registry_index_rejects_tampered_content_and_writes_nothing() {
+        let server = httpmock::MockServer::start();
+        let payload = b"tampered registry index sqlite db bytes";
+        let wrong = hex::encode(Sha256::digest(b"totally different content"));
+        let mock = serve_index_db(&server, "/index.zst", payload);
+
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("packages.db");
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        let err = download_registry_index_with_progress(
+            &dest,
+            &tx,
+            false,
+            &index_metadata(&server, "/index.zst", &wrong),
+        )
+        .unwrap_err()
+        .to_string();
+        drain(&rx);
+
+        assert!(err.contains("hash mismatch"), "got: {err}");
+        assert!(err.contains(&wrong), "got: {err}");
+        assert!(!dest.exists(), "tampered index must not be written to disk");
+        assert!(
+            load_local_version(&dest).is_none(),
+            "no sidecar on failed download"
+        );
+        mock.assert_calls(1);
+    }
+
+    #[test]
+    fn download_registry_index_preserves_prior_db_and_sidecar_on_mismatch() {
+        let server = httpmock::MockServer::start();
+        let prior = b"previously cached good db";
+        let tampered = b"tampered registry index sqlite db bytes";
+        let wrong = hex::encode(Sha256::digest(b"totally different content"));
+        let mock = serve_index_db(&server, "/index.zst", tampered);
+
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("packages.db");
+        std::fs::write(&dest, prior).unwrap();
+        let good = hex::encode(Sha256::digest(prior));
+        save_local_version(&dest, &good).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        let err = download_registry_index_with_progress(
+            &dest,
+            &tx,
+            false,
+            &index_metadata(&server, "/index.zst", &wrong),
+        )
+        .unwrap_err()
+        .to_string();
+        drain(&rx);
+
+        assert!(err.contains("hash mismatch"), "got: {err}");
+        assert_eq!(std::fs::read(&dest).unwrap(), prior);
+        assert_eq!(load_local_version(&dest).as_deref(), Some(good.as_str()));
+        mock.assert_calls(1);
+    }
+
+    struct EnvGuard {
+        key: &'static str,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let previous = std::env::var_os(key);
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            unsafe {
+                if let Some(previous) = &self.previous {
+                    std::env::set_var(self.key, previous);
+                } else {
+                    std::env::remove_var(self.key);
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn ensure_registry_index_skips_download_when_sidecar_matches_api_sha256() {
+        let server = httpmock::MockServer::start();
+        let payload = b"authentic registry index sqlite db bytes";
+        let expected = hex::encode(Sha256::digest(payload));
+
+        let download_mock = serve_index_db(&server, "/index.zst", payload);
+        let metadata_body = serde_json::json!({
+            "url": format!("{}/index.zst", server.base_url()),
+            "sha256": expected,
+            "lastModified": "",
+            "expiresAt": "",
+        });
+        let metadata_mock = server.mock(move |when, then| {
+            when.method(httpmock::Method::GET)
+                .path("/api/registries/reg_1/index");
+            then.status(200).json_body(metadata_body);
+        });
+
+        let home = tempfile::tempdir().unwrap();
+        let _home_guard = EnvGuard::set("HOME", home.path());
+        let _auth_guard = EnvGuard::set("DIODE_API_AUTH", "none");
+        let _api_guard = EnvGuard::set("DIODE_API_URL", server.base_url());
+
+        let reg = registry("reg_1", "diode", "registry", DEFAULT_REGISTRY_URL);
+        let dest = registry_db_path(&reg).unwrap();
+        std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+
+        let first = ensure_registry_index(&reg, false).expect("first download should succeed");
+        assert!(first.downloaded, "first call should download");
+        assert_eq!(std::fs::read(&dest).unwrap(), payload);
+        assert_eq!(
+            load_local_version(&dest).as_deref(),
+            Some(expected.as_str())
+        );
+        download_mock.assert_calls(1);
+        metadata_mock.assert_calls(1);
+
+        let second = ensure_registry_index(&reg, false).expect("second call should short-circuit");
+        assert!(!second.downloaded, "second call must not re-download");
+        assert_eq!(std::fs::read(&dest).unwrap(), payload);
+
+        download_mock.assert_calls(1);
+        metadata_mock.assert_calls(2);
     }
 }
