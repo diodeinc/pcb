@@ -18,6 +18,8 @@ pub struct KicadSymbol {
     pub(super) extends: Option<String>,
     pub(super) footprint: String,
     pub(super) in_bom: bool,
+    #[serde(skip)]
+    pub(super) in_bom_explicit: bool,
     pub(super) internal_connectivity: InternalConnectivity,
     pub(super) pins: Vec<KicadPin>,
     pub(super) mpn: Option<String>,
@@ -361,7 +363,10 @@ fn parse_pin_from_section(pin_data: &[Sexpr]) -> Option<KicadPin> {
 }
 
 fn parse_in_bom(symbol: &mut KicadSymbol, prop_list: &[Sexpr]) {
-    symbol.in_bom = prop_list.get(1).and_then(parse_bool_atom).unwrap_or(false);
+    if let Some(value) = prop_list.get(1).and_then(parse_bool_atom) {
+        symbol.in_bom = value;
+        symbol.in_bom_explicit = true;
+    }
 }
 
 fn parse_bool_atom(node: &Sexpr) -> Option<bool> {
@@ -541,5 +546,63 @@ mod tests {
 
         let symbol = KicadSymbol::from_str(content).expect("symbol should parse");
         assert_eq!(symbol.description.as_deref(), Some("Canonical description"));
+    }
+
+    #[test]
+    fn parse_in_bom_records_explicitness_and_keeps_default_when_absent() {
+        let explicit_no = r#"
+        (kicad_symbol_lib
+          (symbol "ExplicitNo" (in_bom no) (property "Reference" "U"))
+        )
+        "#;
+        let explicit_yes = r#"
+        (kicad_symbol_lib
+          (symbol "ExplicitYes" (in_bom yes) (property "Reference" "U"))
+        )
+        "#;
+        let omitted = r#"
+        (kicad_symbol_lib
+          (symbol "Omitted" (property "Reference" "U"))
+        )
+        "#;
+
+        let no = KicadSymbol::from_str(explicit_no).expect("(in_bom no) parses");
+        assert!(!no.in_bom);
+        assert!(
+            no.in_bom_explicit,
+            "explicit (in_bom no) must set in_bom_explicit"
+        );
+
+        let yes = KicadSymbol::from_str(explicit_yes).expect("(in_bom yes) parses");
+        assert!(yes.in_bom);
+        assert!(
+            yes.in_bom_explicit,
+            "explicit (in_bom yes) must set in_bom_explicit"
+        );
+
+        let om = KicadSymbol::from_str(omitted).expect("omitted in_bom parses");
+        assert!(om.in_bom, "absent in_bom keeps the KiCad default of true");
+        assert!(
+            !om.in_bom_explicit,
+            "absent in_bom must leave in_bom_explicit false so merges inherit the parent"
+        );
+    }
+
+    #[test]
+    fn in_bom_explicit_is_skipped_from_serialization() {
+        let symbol = KicadSymbol {
+            in_bom: false,
+            in_bom_explicit: true,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&symbol).expect("KicadSymbol serializes");
+        assert!(
+            !json.contains("in_bom_explicit"),
+            "in_bom_explicit must be #[serde(skip)] to preserve the KicadSymbol/kq schema: {json}"
+        );
+        assert!(
+            json.contains("\"in_bom\":false"),
+            "in_bom must still serialize: {json}"
+        );
     }
 }

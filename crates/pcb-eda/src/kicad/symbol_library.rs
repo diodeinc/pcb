@@ -718,8 +718,9 @@ fn merge_symbols(parent: &KicadSymbol, child: &KicadSymbol) -> KicadSymbol {
         }
     }
 
-    if child.in_bom {
+    if child.in_bom_explicit {
         merged.in_bom = child.in_bom;
+        merged.in_bom_explicit = true;
     }
 
     // Merge raw S-expressions if both have them
