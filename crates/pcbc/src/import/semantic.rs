@@ -594,6 +594,10 @@ fn extract_package(
 
 fn parse_package_from_text(text: &str) -> Option<ImportPassivePackage> {
     let s = text.to_ascii_lowercase();
+    // Strip the KiCad library namespace (everything up to and including the
+    // last ':') so that a library name such as `0402Metric` or `1005Metric`
+    // cannot shadow the actual footprint name that follows the colon.
+    let name = s.rsplit_once(':').map(|(_, n)| n).unwrap_or(&s);
 
     // Match the more-specific metric "####metric" encodings first. The metric
     // codes "0402" and "0603" numerically collide with the imperial "0402"/"0603"
@@ -603,48 +607,50 @@ fn parse_package_from_text(text: &str) -> Option<ImportPassivePackage> {
     // metric 0603 = imperial 0201). The metric tokens are anchored on the
     // literal `metric` suffix, so they cannot false-match a dual-code name
     // (e.g. `C_0402_1005Metric` does not contain `0402metric`).
-    if s.contains("0402metric") {
+    // `contains_code` is used rather than `contains` so that e.g. `1005metric`
+    // is not spuriously matched inside `01005metric` (digit-boundary guard).
+    if contains_code(name, "0402metric") {
         return Some(ImportPassivePackage::P01005);
     }
-    if s.contains("0603metric") {
+    if contains_code(name, "0603metric") {
         return Some(ImportPassivePackage::P0201);
     }
-    if s.contains("1005metric") {
+    if contains_code(name, "1005metric") {
         return Some(ImportPassivePackage::P0402);
     }
-    if s.contains("1608metric") {
+    if contains_code(name, "1608metric") {
         return Some(ImportPassivePackage::P0603);
     }
-    if s.contains("2012metric") {
+    if contains_code(name, "2012metric") {
         return Some(ImportPassivePackage::P0805);
     }
-    if s.contains("3216metric") {
+    if contains_code(name, "3216metric") {
         return Some(ImportPassivePackage::P1206);
     }
-    if s.contains("3225metric") {
+    if contains_code(name, "3225metric") {
         return Some(ImportPassivePackage::P1210);
     }
 
     // Fall back to explicit imperial codes.
-    if contains_code(&s, "01005") {
+    if contains_code(name, "01005") {
         return Some(ImportPassivePackage::P01005);
     }
-    if contains_code(&s, "0201") {
+    if contains_code(name, "0201") {
         return Some(ImportPassivePackage::P0201);
     }
-    if contains_code(&s, "0402") {
+    if contains_code(name, "0402") {
         return Some(ImportPassivePackage::P0402);
     }
-    if contains_code(&s, "0603") {
+    if contains_code(name, "0603") {
         return Some(ImportPassivePackage::P0603);
     }
-    if contains_code(&s, "0805") {
+    if contains_code(name, "0805") {
         return Some(ImportPassivePackage::P0805);
     }
-    if contains_code(&s, "1206") {
+    if contains_code(name, "1206") {
         return Some(ImportPassivePackage::P1206);
     }
-    if contains_code(&s, "1210") {
+    if contains_code(name, "1210") {
         return Some(ImportPassivePackage::P1210);
     }
 
@@ -1058,6 +1064,21 @@ mod tests {
                 "Resistor_SMD:R_0201_0603Metric",
                 ImportPassivePackage::P0201,
             ),
+            // Regression: `1005metric` must not match as a substring of a name
+            // containing `01005metric` — digit-boundary guard ensures the
+            // metric-1005 (=imperial 0402) branch does not fire on such a name.
+            // The imperial `01005` branch must still recognise the package.
+            (
+                "Resistor_SMD:R_01005_0402Metric",
+                ImportPassivePackage::P01005,
+            ),
+            // Regression: a library namespace that contains a metric token
+            // (e.g. `0402Metric`) must not shadow the footprint name that
+            // follows the colon — here the footprint `R_0402` is imperial 0402.
+            ("0402Metric:R_0402", ImportPassivePackage::P0402),
+            // Similarly, a library named after a metric size must not override
+            // the imperial size declared in the footprint name.
+            ("1005Metric:R_0402", ImportPassivePackage::P0402),
         ] {
             assert_eq!(
                 parse_package_from_text(raw),
