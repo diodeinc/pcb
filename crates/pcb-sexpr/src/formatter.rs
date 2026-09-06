@@ -65,6 +65,7 @@ pub fn prettify(source: &str, mode: FormatMode) -> String {
         let next = next_non_whitespace(bytes, i + 1);
 
         if is_whitespace(current) && !in_quote {
+            backslash_count = 0;
             if !has_inserted_space
                 && list_depth > 0
                 && last_non_whitespace != b'('
@@ -392,5 +393,16 @@ mod tests {
         assert!(out.contains("(dashed_line_dash_ratio 12.000000)"));
         assert!(out.contains("(dashed_line_gap_ratio 3.000000)"));
         assert!(out.contains("(hpglpendiameter 15.000000)"));
+    }
+
+    #[test]
+    fn prettify_sticky_backslash_across_whitespace() {
+        let input = r#"(root (uri C:\ "x") (other 1))"#;
+        let expected = "(root\n\t(uri C:\\ \"x\")\n\t(other 1)\n)\n";
+        assert_eq!(prettify(input, FormatMode::Normal), expected);
+
+        let control = r#"(root (uri C:\\ "x") (other 1))"#;
+        let expected_ctrl = "(root\n\t(uri C:\\\\ \"x\")\n\t(other 1)\n)\n";
+        assert_eq!(prettify(control, FormatMode::Normal), expected_ctrl);
     }
 }
