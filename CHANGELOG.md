@@ -57,6 +57,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Support opaque service-account client IDs and proper OAuth Basic encoding.
 - Allow off-page schematic placement and avoid existing text and graphics.
+- Surface a discovery error instead of silently dropping a package when a top-level `workspace/` package collides with the root's reserved URL and `[workspace].repository` is unset.
 
 ## [0.4.49] - 2026-09-04
 

@@ -53,6 +53,11 @@ exclude = ["scratch/**", "experiments/old-board"]
 cache directories such as
 `.git`, `.pcb`, `vendor`, `target`, `node_modules`, and `fork`.
 
+A top-level package directory named `workspace` collides with the root
+package's reserved URL when `[workspace].repository` is unset, so `pcb`
+surfaces a discovery error instead of silently dropping the descendant.
+Set `[workspace].repository` (or rename the directory) to disambiguate.
+
 ## Coexisting versions
 
 A build can contain incompatible families of one package, such as
