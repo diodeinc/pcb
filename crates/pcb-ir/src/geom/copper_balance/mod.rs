@@ -5,6 +5,7 @@
 //! per-layer areas; the solver chooses the closest manufacturable copper area
 //! and generates a deterministic perforated plane.
 
+use crate::geom::AccuracyError;
 use std::collections::HashMap;
 
 use crate::geom::{ContourSet, Point};
@@ -41,7 +42,7 @@ const SQRT_3: f64 = 1.732_050_807_568_877_2;
 /// Independent per-layer work, in source order. Browsers cannot spawn native
 /// threads; use the identical solve serially there, without requiring workers
 /// or shared WebAssembly memory. Native builds retain per-layer concurrency.
-fn map_layers<T: Send, R: Send>(
+pub fn map_layers<T: Send, R: Send>(
     items: impl IntoIterator<Item = T>,
     solve: impl Fn(T) -> R + Sync,
 ) -> Vec<R> {
@@ -424,23 +425,26 @@ pub struct EdgeVoidEmission {
 }
 
 impl EdgeVoidEmission {
-    fn new(
+    fn build_emission(
         lattice: DenseCopperLattice,
         voidable: &ContourSet,
         edge_voids: &[DenseCopperVoid],
         profile: DenseCopperBalanceProfile,
-    ) -> Self {
+    ) -> Result<Self, AccuracyError> {
         let (instanced, crossing): (Vec<DenseCopperVoid>, Vec<DenseCopperVoid>) = edge_voids
             .iter()
             .partition(|void| voidable.contains_disk(lattice.center(void.site), void.radius_mm));
-        let clipped =
-            lattice::emission_partial_voids(voidable, &lattice.void_candidates(&crossing), profile);
-        let region = lattice::void_set(&instanced, lattice, voidable.tolerance).union(&clipped);
-        Self {
+        let clipped = lattice::emission_partial_voids(
+            voidable,
+            &lattice.void_candidates(&crossing),
+            profile,
+        )?;
+        let region = lattice::void_set(&instanced, lattice, voidable.resolution)?.union(&clipped);
+        Ok(Self {
             instanced,
             clipped,
             region,
-        }
+        })
     }
 
     pub fn area_mm2(&self) -> f64 {
@@ -472,8 +476,9 @@ impl DenseCopperBalanceResult {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum DenseCopperBalanceError {
+    Accuracy(AccuracyError),
     InvalidProfile(String),
     InvalidInput(String),
 }
@@ -481,6 +486,7 @@ pub enum DenseCopperBalanceError {
 impl std::fmt::Display for DenseCopperBalanceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Accuracy(error) => error.fmt(f),
             Self::InvalidProfile(message) => write!(f, "invalid copper balance profile: {message}"),
             Self::InvalidInput(message) => write!(f, "invalid copper balance input: {message}"),
         }
@@ -504,11 +510,11 @@ pub(crate) fn generate_dense_copper_balance(
     validate_request(request)?;
 
     let usable = request.safe_region.clone();
-    let voidable = usable.disk_erode(profile.boundary_web_mm);
-    let lattice = LatticeCandidates::new(&voidable, request.lattice_origin, profile);
+    let voidable = usable.disk_erode(profile.boundary_web_mm)?;
+    let lattice = LatticeCandidates::build_lattice(&voidable, request.lattice_origin, profile)?;
     Ok(generate_dense_copper_balance_with_lattice(
         profile, request, usable, &voidable, &lattice,
-    ))
+    )?)
 }
 
 fn generate_dense_copper_balance_with_lattice(
@@ -517,7 +523,7 @@ fn generate_dense_copper_balance_with_lattice(
     usable: ContourSet,
     voidable: &ContourSet,
     lattice: &LatticeCandidates,
-) -> DenseCopperBalanceResult {
+) -> Result<DenseCopperBalanceResult, AccuracyError> {
     let usable_area_mm2 = usable.area();
     let desired_added_area_mm2 =
         request.target_density * request.density_domain_area_mm2 - request.existing_copper_area_mm2;
@@ -536,7 +542,7 @@ fn generate_dense_copper_balance_with_lattice(
             voidable,
             usable_area_mm2,
             desired_added_area_mm2,
-        ));
+        )?);
     }
 
     let (full_voids, edge_voids) = match best.mode {
@@ -555,7 +561,8 @@ fn generate_dense_copper_balance_with_lattice(
     };
     // Account generated copper from the emitted geometry, not the solve's
     // projection, so achieved density is truthful to the output.
-    let edge_void_emission = EdgeVoidEmission::new(lattice.lattice, voidable, &edge_voids, profile);
+    let edge_void_emission =
+        EdgeVoidEmission::build_emission(lattice.lattice, voidable, &edge_voids, profile)?;
     let generated_area_mm2 = match best.mode {
         DenseCopperBalanceMode::None => 0.0,
         DenseCopperBalanceMode::Solid => usable_area_mm2,
@@ -579,7 +586,7 @@ fn generate_dense_copper_balance_with_lattice(
         target_density: request.target_density,
         residual_error: (achieved_density - request.target_density).abs(),
     };
-    DenseCopperBalanceResult {
+    Ok(DenseCopperBalanceResult {
         solution,
         lattice: lattice.lattice,
         usable,
@@ -587,7 +594,7 @@ fn generate_dense_copper_balance_with_lattice(
         full_voids,
         edge_voids,
         edge_void_emission,
-    }
+    })
 }
 
 /// Jointly distribute each layer's already-selected copper area in space.
@@ -628,19 +635,19 @@ pub fn generate_spatial_dense_copper_balance(
                 .iter()
                 .position(|region| region.rings == layer.safe_region.rings)
             {
-                return index;
+                return Ok(index);
             }
-            let voidable = layer.safe_region.disk_erode(profile.boundary_web_mm);
-            region_lattices.push(LatticeCandidates::new(
+            let voidable = layer.safe_region.disk_erode(profile.boundary_web_mm)?;
+            region_lattices.push(LatticeCandidates::build_lattice(
                 &voidable,
                 request.lattice_origin,
                 profile,
-            ));
+            )?);
             region_voidable.push(voidable);
             region_sources.push(layer.safe_region);
-            region_sources.len() - 1
+            Ok::<_, AccuracyError>(region_sources.len() - 1)
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, _>>()?;
     let uniform = map_layers(
         request
             .layers
@@ -662,7 +669,9 @@ pub fn generate_spatial_dense_copper_balance(
                 &region_lattices[*region_index],
             )
         },
-    );
+    )
+    .into_iter()
+    .collect::<Result<Vec<_>, _>>()?;
 
     let mut panel_samples =
         hex_aligned_lattice_centers(request.panel_region.bbox, request.lattice_origin, profile)
@@ -1090,15 +1099,15 @@ fn project_perforated_geometry(
     voidable: &ContourSet,
     usable_area_mm2: f64,
     desired_added_area_mm2: f64,
-) -> ProjectedArea {
+) -> Result<ProjectedArea, AccuracyError> {
     // Each edge site has an activation radius aᵢ. At nominal radius r its
     // clipped hex uses max(r, aᵢ), making total void area monotone in r.
     // Project the requested area onto that one-dimensional feasible set.
     let target_void_area_mm2 = usable_area_mm2 - desired_added_area_mm2;
     let mut low_radius = profile.min_void_radius_mm;
     let mut high_radius = profile.max_void_radius_mm;
-    let low_void_area = lattice.void_area(voidable, low_radius, profile);
-    let high_void_area = lattice.void_area(voidable, high_radius, profile);
+    let low_void_area = lattice.void_area(voidable, low_radius, profile)?;
+    let high_void_area = lattice.void_area(voidable, high_radius, profile)?;
     let mut best = perforated_candidate(
         low_radius,
         low_void_area,
@@ -1113,7 +1122,7 @@ fn project_perforated_geometry(
     ));
 
     if target_void_area_mm2 <= low_void_area || target_void_area_mm2 >= high_void_area {
-        return best;
+        return Ok(best);
     }
 
     // Every candidate evaluation clips the boundary voids against the safe
@@ -1138,7 +1147,7 @@ fn project_perforated_geometry(
             (low_squared + high_squared) / 2.0
         };
         let radius = squared_radius.sqrt();
-        let void_area = lattice.void_area(voidable, radius, profile);
+        let void_area = lattice.void_area(voidable, radius, profile)?;
         best.consider(perforated_candidate(
             radius,
             void_area,
@@ -1153,7 +1162,7 @@ fn project_perforated_geometry(
             high_area = void_area;
         }
     }
-    best
+    Ok(best)
 }
 
 fn perforated_candidate(
@@ -1226,36 +1235,50 @@ fn validate_request(request: DenseCopperBalanceRequest<'_>) -> Result<(), DenseC
     Ok(())
 }
 
+impl From<AccuracyError> for DenseCopperBalanceError {
+    fn from(error: AccuracyError) -> Self {
+        Self::Accuracy(error)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::lattice::hexagon_set_with_radii;
     use super::*;
-    use crate::geom::{BBox, FillRule, Point, tol};
+    use crate::geom::{BBox, FillRule, Point, Resolution, tol};
+
+    fn res(tolerance_mm: f64) -> Resolution {
+        Resolution::default().with_tolerance(tolerance_mm)
+    }
 
     fn result_voids(result: &DenseCopperBalanceResult) -> ContourSet {
+        let resolution = result.usable.resolution;
         match result.solution.mode {
             DenseCopperBalanceMode::Perforated { .. } => {}
-            _ => return ContourSet::empty(result.usable.tolerance),
+            _ => return ContourSet::empty(resolution),
         }
         let candidates = result
             .full_voids
             .iter()
             .map(|void| (result.lattice.center(void.site), void.radius_mm))
             .collect::<Vec<_>>();
-        let mut rings = hexagon_set_with_radii(&candidates, result.usable.tolerance).rings;
+        let mut rings = hexagon_set_with_radii(&candidates, resolution)
+            .unwrap()
+            .rings;
         rings.extend(
-            lattice::void_set(&result.edge_voids, result.lattice, result.usable.tolerance)
+            lattice::void_set(&result.edge_voids, result.lattice, resolution)
+                .unwrap()
                 .intersection(&result.voidable)
                 .rings,
         );
-        ContourSet::new(rings, FillRule::NonZero, result.usable.tolerance)
+        ContourSet::from_rings(rings, FillRule::NonZero, resolution)
     }
 
     #[test]
     fn clipped_lattice_matches_target_and_preserves_both_webs() {
         let safe_region = ContourSet::rectangle(
             BBox::new(Point::new(0.0, 0.0), Point::new(20.0, 10.0)),
-            tol::REGION_MM,
+            res(tol::REGION_MM),
         );
         let result = generate_dense_copper_balance(
             DenseCopperBalanceProfile::V1,
@@ -1277,13 +1300,16 @@ mod tests {
         assert!((result.solution.achieved_density - 0.75).abs() <= 5e-3);
         assert!(result.solution.residual_error < (result.solution.initial_density - 0.75).abs());
         let voids = result_voids(&result);
-        let voidable = safe_region.disk_erode(DenseCopperBalanceProfile::V1.boundary_web_mm);
+        let voidable = safe_region
+            .disk_erode(DenseCopperBalanceProfile::V1.boundary_web_mm)
+            .unwrap();
         assert!(voids.difference(&voidable).is_empty());
         assert!(
             voids
                 .disk_inter_component_gap_violations(
                     DenseCopperBalanceProfile::V1.min_copper_web_mm / 2.0
                 )
+                .unwrap()
                 .is_empty()
         );
         let minimum_core_radius = DenseCopperBalanceProfile::V1.minimum_partial_void_inradius_mm();
@@ -1291,7 +1317,7 @@ mod tests {
             voids
                 .connected_components()
                 .into_iter()
-                .all(|void| !void.disk_erode(minimum_core_radius).is_empty())
+                .all(|void| { !void.disk_erode(minimum_core_radius).unwrap().is_empty() })
         );
     }
 
@@ -1312,7 +1338,7 @@ mod tests {
         profile.validate().unwrap();
         let safe_region = ContourSet::rectangle(
             BBox::new(Point::new(0.0, 0.0), Point::new(12.0, 8.0)),
-            tol::REGION_MM,
+            res(tol::REGION_MM),
         );
         let result = generate_dense_copper_balance(
             profile,
@@ -1331,7 +1357,7 @@ mod tests {
         };
         assert!(void_radius_mm > 0.6, "expected near-maximum voids");
         let voids = result_voids(&result);
-        let voidable = safe_region.disk_erode(profile.boundary_web_mm);
+        let voidable = safe_region.disk_erode(profile.boundary_web_mm).unwrap();
         assert!(voids.difference(&voidable).is_empty());
     }
 
@@ -1339,7 +1365,7 @@ mod tests {
     fn retains_useful_partial_voids_at_the_boundary() {
         let safe_region = ContourSet::rectangle(
             BBox::new(Point::new(0.0, 0.0), Point::new(4.0, 4.0)),
-            tol::REGION_MM,
+            res(tol::REGION_MM),
         );
         let result = generate_dense_copper_balance(
             DenseCopperBalanceProfile::V1,
@@ -1357,21 +1383,23 @@ mod tests {
             result.solution.mode,
             DenseCopperBalanceMode::Perforated { .. }
         ));
-        let voidable = safe_region.disk_erode(DenseCopperBalanceProfile::V1.boundary_web_mm);
+        let voidable = safe_region
+            .disk_erode(DenseCopperBalanceProfile::V1.boundary_web_mm)
+            .unwrap();
         let voids = result_voids(&result).connected_components();
         let touches_each_boundary = [
-            voids
-                .iter()
-                .any(|void| (void.bbox.min.x - voidable.bbox.min.x).abs() <= 2.0 * tol::FLATTEN_MM),
-            voids
-                .iter()
-                .any(|void| (void.bbox.min.y - voidable.bbox.min.y).abs() <= 2.0 * tol::FLATTEN_MM),
-            voids
-                .iter()
-                .any(|void| (void.bbox.max.x - voidable.bbox.max.x).abs() <= 2.0 * tol::FLATTEN_MM),
-            voids
-                .iter()
-                .any(|void| (void.bbox.max.y - voidable.bbox.max.y).abs() <= 2.0 * tol::FLATTEN_MM),
+            voids.iter().any(|void| {
+                (void.bbox.min.x - voidable.bbox.min.x).abs() <= voidable.budget().max_error_mm()
+            }),
+            voids.iter().any(|void| {
+                (void.bbox.min.y - voidable.bbox.min.y).abs() <= voidable.budget().max_error_mm()
+            }),
+            voids.iter().any(|void| {
+                (void.bbox.max.x - voidable.bbox.max.x).abs() <= voidable.budget().max_error_mm()
+            }),
+            voids.iter().any(|void| {
+                (void.bbox.max.y - voidable.bbox.max.y).abs() <= voidable.budget().max_error_mm()
+            }),
         ];
         assert!(touches_each_boundary.into_iter().all(|touches| touches));
     }
@@ -1380,15 +1408,15 @@ mod tests {
     fn spatial_solver_rejects_existing_copper_in_the_safe_region() {
         let panel = ContourSet::rectangle(
             BBox::new(Point::new(0.0, 0.0), Point::new(20.0, 12.0)),
-            tol::REGION_MM,
+            res(tol::REGION_MM),
         );
         let safe = ContourSet::rectangle(
             BBox::new(Point::new(10.0, 0.0), Point::new(20.0, 12.0)),
-            tol::REGION_MM,
+            res(tol::REGION_MM),
         );
         let existing = ContourSet::rectangle(
             BBox::new(Point::new(0.0, 0.0), Point::new(11.0, 12.0)),
-            tol::REGION_MM,
+            res(tol::REGION_MM),
         );
         let layers = [SpatialCopperBalanceLayerRequest {
             safe_region: &safe,
@@ -1420,17 +1448,17 @@ mod tests {
     fn spatial_solver_rejects_geometry_outside_its_containing_region() {
         let panel = ContourSet::rectangle(
             BBox::new(Point::new(0.0, 0.0), Point::new(20.0, 12.0)),
-            tol::REGION_MM,
+            res(tol::REGION_MM),
         );
         let inside = ContourSet::rectangle(
             BBox::new(Point::new(10.0, 0.0), Point::new(20.0, 12.0)),
-            tol::REGION_MM,
+            res(tol::REGION_MM),
         );
         let outside = ContourSet::rectangle(
             BBox::new(Point::new(-1.0, 0.0), Point::new(5.0, 12.0)),
-            tol::REGION_MM,
+            res(tol::REGION_MM),
         );
-        let empty = ContourSet::empty(tol::REGION_MM);
+        let empty = ContourSet::empty(res(tol::REGION_MM));
         let solve = |safe_region, existing_copper, density_domain| {
             let layers = [SpatialCopperBalanceLayerRequest {
                 safe_region,
@@ -1474,14 +1502,16 @@ mod tests {
         let profile = DenseCopperBalanceProfile::V1;
         let panel = ContourSet::rectangle(
             BBox::new(Point::new(0.0, 0.0), Point::new(24.0, 16.0)),
-            tol::REGION_MM,
+            res(tol::REGION_MM),
         );
-        let voidable = panel.disk_erode(profile.boundary_web_mm);
-        let lattice = LatticeCandidates::new(&voidable, Point::ZERO, profile);
+        let voidable = panel.disk_erode(profile.boundary_web_mm).unwrap();
+        let lattice = LatticeCandidates::build_lattice(&voidable, Point::ZERO, profile).unwrap();
         let target_density = (panel.area()
-            - lattice.void_area(&voidable, profile.min_void_radius_mm, profile))
+            - lattice
+                .void_area(&voidable, profile.min_void_radius_mm, profile)
+                .unwrap())
             / panel.area();
-        let existing = ContourSet::empty(tol::REGION_MM);
+        let existing = ContourSet::empty(res(tol::REGION_MM));
         let layer = SpatialCopperBalanceLayerRequest {
             safe_region: &panel,
             existing_copper: &existing,
@@ -1529,9 +1559,9 @@ mod tests {
     fn spatial_solver_preserves_area_and_radius_bounds_for_constant_inputs() {
         let panel = ContourSet::rectangle(
             BBox::new(Point::new(0.0, 0.0), Point::new(24.0, 16.0)),
-            tol::REGION_MM,
+            res(tol::REGION_MM),
         );
-        let existing = ContourSet::empty(tol::REGION_MM);
+        let existing = ContourSet::empty(res(tol::REGION_MM));
         let layers = [SpatialCopperBalanceLayerRequest {
             safe_region: &panel,
             existing_copper: &existing,
@@ -1568,21 +1598,21 @@ mod tests {
     fn unfillable_clearance_stays_out_of_the_density_denominator() {
         let panel = ContourSet::rectangle(
             BBox::new(Point::new(0.0, 0.0), Point::new(40.0, 20.0)),
-            tol::REGION_MM,
+            res(tol::REGION_MM),
         );
         // An immutable footprint poured to 80%, a gutter beside it, and a wide
         // clearance ring in between that no generated copper may enter.
         let footprint = ContourSet::rectangle(
             BBox::new(Point::new(0.0, 0.0), Point::new(20.0, 20.0)),
-            tol::REGION_MM,
+            res(tol::REGION_MM),
         );
         let existing = ContourSet::rectangle(
             BBox::new(Point::new(0.0, 0.0), Point::new(20.0, 16.0)),
-            tol::REGION_MM,
+            res(tol::REGION_MM),
         );
         let safe = ContourSet::rectangle(
             BBox::new(Point::new(25.0, 0.0), Point::new(40.0, 20.0)),
-            tol::REGION_MM,
+            res(tol::REGION_MM),
         );
         let target_density = existing.area() / footprint.area();
         let density_domain = footprint.union(&safe);
@@ -1632,17 +1662,17 @@ mod tests {
     fn spatial_solver_preserves_each_layers_safe_region() {
         let panel = ContourSet::rectangle(
             BBox::new(Point::new(0.0, 0.0), Point::new(40.0, 20.0)),
-            tol::REGION_MM,
+            res(tol::REGION_MM),
         );
         let left = ContourSet::rectangle(
             BBox::new(Point::new(0.0, 0.0), Point::new(20.0, 20.0)),
-            tol::REGION_MM,
+            res(tol::REGION_MM),
         );
         let right = ContourSet::rectangle(
             BBox::new(Point::new(20.0, 0.0), Point::new(40.0, 20.0)),
-            tol::REGION_MM,
+            res(tol::REGION_MM),
         );
-        let existing = ContourSet::empty(tol::REGION_MM);
+        let existing = ContourSet::empty(res(tol::REGION_MM));
         // Nothing outside each layer's own half can hold copper, so each
         // layer's density domain is exactly its safe region.
         let layers = [
@@ -1696,15 +1726,15 @@ mod tests {
     fn spatial_solver_opposes_a_fixed_copper_gradient_without_changing_total_area() {
         let panel = ContourSet::rectangle(
             BBox::new(Point::new(0.0, 0.0), Point::new(40.0, 20.0)),
-            tol::REGION_MM,
+            res(tol::REGION_MM),
         );
         let existing = ContourSet::rectangle(
             BBox::new(Point::new(0.0, 0.0), Point::new(20.0, 20.0)),
-            tol::REGION_MM,
+            res(tol::REGION_MM),
         );
         let safe = ContourSet::rectangle(
             BBox::new(Point::new(20.0, 0.0), Point::new(40.0, 20.0)),
-            tol::REGION_MM,
+            res(tol::REGION_MM),
         );
         // Fixed copper fills the left half and the right half is fillable, so
         // the density domain is the whole panel.
@@ -1769,9 +1799,9 @@ mod tests {
     fn a_solid_layer_leaves_the_counterweight_to_its_mirror() {
         let panel = ContourSet::rectangle(
             BBox::new(Point::new(0.0, 0.0), Point::new(30.0, 20.0)),
-            tol::REGION_MM,
+            res(tol::REGION_MM),
         );
-        let empty = ContourSet::empty(tol::REGION_MM);
+        let empty = ContourSet::empty(res(tol::REGION_MM));
         // A target its whole safe region cannot reach saturates this layer to
         // a solid pour, leaving it no radii while its sites still exist.
         let results = generate_spatial_dense_copper_balance(
@@ -1824,19 +1854,19 @@ mod tests {
     fn layers_hold_their_targets_when_the_stackup_weighs_nothing() {
         let panel = ContourSet::rectangle(
             BBox::new(Point::new(0.0, 0.0), Point::new(40.0, 20.0)),
-            tol::REGION_MM,
+            res(tol::REGION_MM),
         );
         // Fixed copper on one layer only, so the two layers see different
         // local fields and would trade if anything let them.
         let left_copper = ContourSet::rectangle(
             BBox::new(Point::new(0.0, 0.0), Point::new(20.0, 20.0)),
-            tol::REGION_MM,
+            res(tol::REGION_MM),
         );
         let safe = ContourSet::rectangle(
             BBox::new(Point::new(20.0, 0.0), Point::new(40.0, 20.0)),
-            tol::REGION_MM,
+            res(tol::REGION_MM),
         );
-        let empty = ContourSet::empty(tol::REGION_MM);
+        let empty = ContourSet::empty(res(tol::REGION_MM));
         let results = generate_spatial_dense_copper_balance(
             DenseCopperBalanceProfile::V1,
             SpatialCopperBalanceRequest {
@@ -1879,9 +1909,9 @@ mod tests {
     fn moment_field_records_the_flattening_it_achieved() {
         let panel = ContourSet::rectangle(
             BBox::new(Point::new(0.0, 0.0), Point::new(40.0, 20.0)),
-            tol::REGION_MM,
+            res(tol::REGION_MM),
         );
-        let empty = ContourSet::empty(tol::REGION_MM);
+        let empty = ContourSet::empty(res(tol::REGION_MM));
         let solve = |stack_weight_mm2: f64| {
             generate_spatial_dense_copper_balance(
                 DenseCopperBalanceProfile::V1,
@@ -1936,9 +1966,9 @@ mod tests {
     fn stack_moment_shrinks_when_the_boards_themselves_are_asymmetric() {
         let panel = ContourSet::rectangle(
             BBox::new(Point::new(0.0, 0.0), Point::new(40.0, 20.0)),
-            tol::REGION_MM,
+            res(tol::REGION_MM),
         );
-        let empty = ContourSet::empty(tol::REGION_MM);
+        let empty = ContourSet::empty(res(tol::REGION_MM));
         // Mirrored layers, no fixed copper, but one is asked for markedly more
         // copper than the other: the imbalance is in the targets themselves.
         let (heavy, light) = (0.70, 0.40);
@@ -2022,17 +2052,17 @@ mod tests {
     fn stack_flex_trades_density_between_mirrored_layers() {
         let panel = ContourSet::rectangle(
             BBox::new(Point::new(0.0, 0.0), Point::new(40.0, 20.0)),
-            tol::REGION_MM,
+            res(tol::REGION_MM),
         );
         let left_copper = ContourSet::rectangle(
             BBox::new(Point::new(0.0, 0.0), Point::new(20.0, 20.0)),
-            tol::REGION_MM,
+            res(tol::REGION_MM),
         );
         let safe = ContourSet::rectangle(
             BBox::new(Point::new(20.0, 0.0), Point::new(40.0, 20.0)),
-            tol::REGION_MM,
+            res(tol::REGION_MM),
         );
-        let empty = ContourSet::empty(tol::REGION_MM);
+        let empty = ContourSet::empty(res(tol::REGION_MM));
         let solve = |stack_flex_density: f64| {
             generate_spatial_dense_copper_balance(
                 DenseCopperBalanceProfile {
@@ -2105,7 +2135,7 @@ mod tests {
     fn area_bounds_tolerate_the_same_slivers_as_containment() {
         let safe_region = ContourSet::rectangle(
             BBox::new(Point::new(0.0, 0.0), Point::new(20.0, 10.0)),
-            tol::REGION_MM,
+            res(tol::REGION_MM),
         );
         let existing_copper_area_mm2 = 100.0;
         let exact_domain_area_mm2 = existing_copper_area_mm2 + safe_region.area();
@@ -2128,7 +2158,7 @@ mod tests {
     fn geometric_projection_never_worsens_target_sweep() {
         let safe_region = ContourSet::rectangle(
             BBox::new(Point::new(0.0, 0.0), Point::new(8.0, 5.0)),
-            tol::REGION_MM,
+            res(tol::REGION_MM),
         );
         for target_step in 0..=10 {
             let target_density = target_step as f64 / 10.0;

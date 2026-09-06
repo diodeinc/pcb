@@ -7,6 +7,7 @@
 //! position when the export carries per-pad nets and the component
 //! origin otherwise.
 
+use pcb_ir::geom::Resolution;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 #[cfg(feature = "cli")]
@@ -24,7 +25,7 @@ use pcb_ir::import::physical::Association;
 
 use crate::accessors::IpcAccessor;
 use crate::commands::cpl::CplSideFilter;
-use crate::placement::extract_single_board_placements_from_design;
+use crate::placement::extract_single_board_placements;
 
 #[derive(Debug, Clone)]
 pub struct IctOptions {
@@ -47,8 +48,10 @@ pub struct IctContact {
 
 #[cfg(feature = "cli")]
 pub fn execute(file: &Path, options: &IctOptions) -> Result<()> {
+    let resolution = Resolution::default();
+
     let ipc = Ipc2581::parse_file(file)?;
-    let contacts = extract_contacts(&ipc)?;
+    let contacts = extract_contacts(&ipc, &import_design(&ipc)?, resolution)?;
     let csv = emit_ict_csv(&contacts, options.side);
 
     if let Some(output) = &options.output {
@@ -60,15 +63,10 @@ pub fn execute(file: &Path, options: &IctOptions) -> Result<()> {
     Ok(())
 }
 
-pub fn extract_contacts(ipc: &Ipc2581) -> Result<Vec<IctContact>> {
-    let imported = import_design(ipc)?;
-    extract_contacts_from_design(ipc, &imported)
-}
-
-/// Extract contacts while reusing a previously imported design.
-pub fn extract_contacts_from_design(
+pub fn extract_contacts(
     ipc: &Ipc2581,
     imported: &ImportedDesign,
+    resolution: Resolution,
 ) -> Result<Vec<IctContact>> {
     let accessor = IpcAccessor::new(ipc);
 
@@ -159,7 +157,7 @@ pub fn extract_contacts_from_design(
             }
         }
     }
-    let lands = imported.physical_lands(ArtworkScope::Board)?;
+    let lands = imported.physical_lands(ArtworkScope::Board, resolution)?;
     for land in &lands {
         let component = match &land.component {
             Association::Resolved(component) => *component,
@@ -193,7 +191,7 @@ pub fn extract_contacts_from_design(
         info.at = Some((land.at.x, land.at.y));
     }
 
-    let placements = extract_single_board_placements_from_design(imported)?;
+    let placements = extract_single_board_placements(imported)?;
     let mut contacts = Vec::new();
     for component in &placements.components {
         let Some((ict, path)) = roles.get(&component.designator) else {
@@ -415,8 +413,11 @@ mod tests {
 
     #[test]
     fn lists_ict_contacts_with_nets() {
+        let resolution = Resolution::default();
+
         let ipc = Ipc2581::parse(FIXTURE).expect("fixture parses");
-        let contacts = extract_contacts(&ipc).expect("extracts");
+        let contacts =
+            extract_contacts(&ipc, &import_design(&ipc).unwrap(), resolution).expect("extracts");
 
         assert_eq!(contacts.len(), 1);
         let contact = &contacts[0];

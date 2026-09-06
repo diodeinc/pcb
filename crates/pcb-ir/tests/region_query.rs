@@ -1,5 +1,6 @@
 //! Public prepared-region API, including the headless placed-path consumer.
 
+use pcb_ir::geom::Resolution;
 use pcb_ir::geom::dist::{self, Distance};
 use pcb_ir::geom::region::{ring_edges, rings_to_contours};
 use pcb_ir::geom::{
@@ -28,8 +29,10 @@ fn query(prepared: &PreparedRegion, point: Point, expected: f64) -> Distance {
 
 #[test]
 fn boundary_and_near_boundary_points_keep_their_signed_distance() {
-    let region =
-        ContourSet::rectangle(BBox::new(Point::ZERO, Point::new(4.0, 4.0)), tol::REGION_MM);
+    let region = ContourSet::rectangle(
+        BBox::new(Point::ZERO, Point::new(4.0, 4.0)),
+        Resolution::default(),
+    );
     let prepared = region.prepare_query();
     for point in [
         Point::ZERO,
@@ -53,7 +56,7 @@ fn boundary_and_near_boundary_points_keep_their_signed_distance() {
 
 #[test]
 fn concave_corners_return_a_euclidean_boundary_witness() {
-    let region = ContourSet::new(
+    let region = ContourSet::from_rings(
         vec![vec![
             [0.0, 0.0],
             [6.0, 0.0],
@@ -63,7 +66,7 @@ fn concave_corners_return_a_euclidean_boundary_witness() {
             [0.0, 6.0],
         ]],
         FillRule::NonZero,
-        tol::REGION_MM,
+        Resolution::default(),
     );
     let prepared = region.prepare_query();
     for (point, expected, witness) in [
@@ -88,7 +91,7 @@ fn nested_rings() -> Vec<Ring> {
 
 #[test]
 fn holes_nested_islands_and_separate_islands_follow_the_fill_rule() {
-    let region = ContourSet::new(nested_rings(), FillRule::EvenOdd, tol::REGION_MM);
+    let region = ContourSet::from_rings(nested_rings(), FillRule::EvenOdd, Resolution::default());
     let prepared = region.prepare_query();
     for (point, expected) in [
         (Point::new(1.0, 5.0), -1.0),
@@ -100,7 +103,7 @@ fn holes_nested_islands_and_separate_islands_follow_the_fill_rule() {
     ] {
         query(&prepared, point, expected);
     }
-    let filled = ContourSet::new(nested_rings(), FillRule::NonZero, tol::REGION_MM);
+    let filled = ContourSet::from_rings(nested_rings(), FillRule::NonZero, Resolution::default());
     query(&filled.prepare_query(), Point::new(3.0, 5.0), -3.0);
 }
 
@@ -120,8 +123,9 @@ fn headless_placements_transform_holes_distances_and_witnesses() {
             let region = ContourSet::from_placed_painted_paths(
                 &arena,
                 [(arena.path(id), transform)],
-                tol::REGION_MM,
-            );
+                Resolution::default(),
+            )
+            .unwrap();
             let prepared = region.prepare_query();
             for (point, expected, witness) in [
                 (Point::new(3.0, 2.5), 0.5, Point::new(3.0, 2.0)),
@@ -150,8 +154,9 @@ fn curve_distance_bands_cover_the_source_circle() {
     let region = ContourSet::from_contours(
         &[shapes::circle(2.0 * radius).unwrap()],
         FillRule::NonZero,
-        tol::REGION_MM,
-    );
+        Resolution::default(),
+    )
+    .unwrap();
     let prepared = region.prepare_query();
     for index in 0..128 {
         let angle = (index as f64 + 0.37) * std::f64::consts::TAU / 128.0;
@@ -176,7 +181,7 @@ fn batches_match_exhaustive_measurements_and_repeated_queries() {
         let y = (index / 8) as f64 * 4.0;
         rings.push(vec![[x, y], [x + 2.0, y], [x + 1.0, y + 3.0]]);
     }
-    let region = ContourSet::new(rings, FillRule::EvenOdd, tol::REGION_MM);
+    let region = ContourSet::from_rings(rings, FillRule::EvenOdd, Resolution::default());
     let prepared = region.prepare_query();
     let points = (0..51)
         .flat_map(|x| {
@@ -242,23 +247,24 @@ fn batches_match_exhaustive_measurements_and_repeated_queries() {
 #[test]
 fn empty_degenerate_and_invalid_queries_have_no_witness() {
     for region in [
-        ContourSet::empty(0.0),
+        ContourSet::empty(Resolution::default().with_tolerance(0.0)),
         ContourSet::from_regularized(
             vec![
                 vec![],
                 vec![[1.0, 1.0]],
                 vec![[0.0, 0.0], [1.0, 1.0], [2.0, 2.0]],
             ],
+            Resolution::default().with_tolerance(0.0),
             0.0,
         ),
     ] {
         let prepared = region.prepare_query();
         assert_eq!(prepared.signed_distance(Point::ZERO), None);
     }
-    let prepared = ContourSet::new(
+    let prepared = ContourSet::from_rings(
         vec![rectangle(0.0, 0.0, 2.0, 2.0)],
         FillRule::NonZero,
-        tol::REGION_MM,
+        Resolution::default(),
     )
     .prepare_query();
     let points = [
@@ -274,8 +280,12 @@ fn empty_degenerate_and_invalid_queries_have_no_witness() {
 
 #[test]
 fn short_nonzero_edges_remain_segments() {
-    let prepared =
-        ContourSet::from_regularized(vec![rectangle(0.0, 0.0, 1e-8, 1e-8)], 0.0).prepare_query();
+    let prepared = ContourSet::from_regularized(
+        vec![rectangle(0.0, 0.0, 1e-8, 1e-8)],
+        Resolution::default().with_tolerance(0.0),
+        0.0,
+    )
+    .prepare_query();
     let distance = prepared.signed_distance(Point::new(1e-9, 5e-9)).unwrap();
     assert!((distance.mm + 1e-9).abs() < 1e-20, "{distance:?}");
     assert!(distance.second.distance_to(Point::new(0.0, 5e-9)) < 1e-20);
@@ -290,7 +300,11 @@ fn far_translated_rings_keep_area_holes_and_distances() {
         assert_eq!(pcb_ir::geom::region::ring_signed_area(&outer), 16.0);
         assert_eq!(pcb_ir::geom::region::ring_signed_area(&hole), -4.0);
         for tolerance in [0.0, tol::REGION_MM] {
-            let region = ContourSet::from_regularized(vec![outer.clone(), hole.clone()], tolerance);
+            let region = ContourSet::from_regularized(
+                vec![outer.clone(), hole.clone()],
+                Resolution::default().with_tolerance(tolerance),
+                0.0,
+            );
             assert_eq!(region.rings.len(), 2);
             let prepared = region.prepare_query();
             for (offset, expected) in [(0.5, -0.5), (2.0, 1.0), (5.0, 1.0)] {

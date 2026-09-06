@@ -1,11 +1,12 @@
+use crate::geom::pattern::{StrokePatternMark, stroke_pattern_marks};
+use crate::geom::{AccuracyError, GeometryAccuracy};
 use kurbo::{BezPath, Cap, Join, PathEl, Stroke, StrokeOpts};
 
-use crate::geom::arc::Arc;
+use crate::geom::affine::Affine2;
+use crate::geom::arc::{Arc, EllipticalArc};
 use crate::geom::bbox::BBox;
-use crate::geom::pattern::{StrokePatternMark, stroke_pattern_marks};
 use crate::geom::point::Point;
 use crate::geom::style::{LineCap, LineJoin, LinePattern};
-use crate::geom::tol;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum PathOp {
@@ -13,6 +14,7 @@ pub enum PathOp {
     MoveTo,
     LineTo,
     ArcTo,
+    EllipseTo,
     CubicTo,
     Close,
 }
@@ -21,6 +23,9 @@ pub enum PathOp {
 ///
 /// - `MoveTo`/`LineTo`: `p0` is the target point.
 /// - `ArcTo`: `p0` is the arc end, `p1` the center, `clockwise` the direction.
+/// - `EllipseTo`: `p0` is the arc end, `p1` the center, `p2` and `p3` the
+///   images of the unit x and y axes, `clockwise` the direction. This is the
+///   affine image of a circular arc; see [`EllipticalArc`].
 /// - `CubicTo`: `p0`/`p1` are control points, `p2` the end point.
 /// - `Close`: no points.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -29,6 +34,7 @@ pub struct PathCmd {
     pub p0: Point,
     pub p1: Point,
     pub p2: Point,
+    pub p3: Point,
     pub clockwise: bool,
 }
 
@@ -59,6 +65,24 @@ impl PathCmd {
         }
     }
 
+    /// An arc of the ellipse `center + x_axis·cos θ + y_axis·sin θ`.
+    pub fn ellipse_to(
+        end: Point,
+        center: Point,
+        x_axis: Point,
+        y_axis: Point,
+        clockwise: bool,
+    ) -> Self {
+        Self {
+            op: PathOp::EllipseTo,
+            p0: end,
+            p1: center,
+            p2: x_axis,
+            p3: y_axis,
+            clockwise,
+        }
+    }
+
     pub fn cubic_to(p1: Point, p2: Point, p3: Point) -> Self {
         Self {
             op: PathOp::CubicTo,
@@ -78,9 +102,66 @@ impl PathCmd {
 
     pub fn end_point(self) -> Option<Point> {
         match self.op {
-            PathOp::MoveTo | PathOp::LineTo | PathOp::ArcTo => Some(self.p0),
+            PathOp::MoveTo | PathOp::LineTo | PathOp::ArcTo | PathOp::EllipseTo => Some(self.p0),
             PathOp::CubicTo => Some(self.p2),
             PathOp::Close => None,
+        }
+    }
+
+    /// Whether this command is a curve rather than a line or a move.
+    pub fn is_curve(self) -> bool {
+        matches!(self.op, PathOp::ArcTo | PathOp::EllipseTo | PathOp::CubicTo)
+    }
+
+    /// The elliptical arc of an `EllipseTo` command starting at `start`.
+    fn elliptical_arc(self, start: Point) -> EllipticalArc {
+        EllipticalArc {
+            start,
+            end: self.p0,
+            center: self.p1,
+            x_axis: self.p2,
+            y_axis: self.p3,
+            clockwise: self.clockwise,
+        }
+    }
+
+    fn from_elliptical_arc(arc: EllipticalArc) -> Self {
+        Self::ellipse_to(arc.end, arc.center, arc.x_axis, arc.y_axis, arc.clockwise)
+    }
+
+    /// Exact image under an affine transform, given the current point.
+    fn transformed(self, transform: Affine2, start: Point) -> Self {
+        match self.op {
+            PathOp::MoveTo | PathOp::LineTo => Self {
+                p0: transform.transform_point(self.p0),
+                ..self
+            },
+            PathOp::CubicTo => Self {
+                p0: transform.transform_point(self.p0),
+                p1: transform.transform_point(self.p1),
+                p2: transform.transform_point(self.p2),
+                ..self
+            },
+            PathOp::ArcTo => {
+                if transform.preserves_circles(1e-12 * transform.max_scale().powi(2)) {
+                    Self {
+                        p0: transform.transform_point(self.p0),
+                        p1: transform.transform_point(self.p1),
+                        clockwise: self.clockwise != (transform.determinant() < 0.0),
+                        ..self
+                    }
+                } else {
+                    Self::from_elliptical_arc(
+                        Arc::new(start, self.p0, self.p1, self.clockwise)
+                            .to_elliptical()
+                            .transformed(transform),
+                    )
+                }
+            }
+            PathOp::EllipseTo => {
+                Self::from_elliptical_arc(self.elliptical_arc(start).transformed(transform))
+            }
+            PathOp::Close => self,
         }
     }
 }
@@ -93,6 +174,9 @@ impl PathCmd {
 pub struct ContourBuf {
     pub bbox: BBox,
     pub cmds: Vec<PathCmd>,
+    /// Approximation already present in these commands. Zero means the
+    /// commands themselves are the source geometry, not that they are lines.
+    pub uncertainty_mm: f64,
 }
 
 impl ContourBuf {
@@ -101,12 +185,45 @@ impl ContourBuf {
         Self {
             bbox: contour_bbox(&cmds),
             cmds,
+            uncertainty_mm: 0.0,
         }
     }
 
     /// Build from commands with a precomputed bounding box.
     pub fn from_parts(bbox: BBox, cmds: Vec<PathCmd>) -> Self {
-        Self { bbox, cmds }
+        Self {
+            bbox,
+            cmds,
+            uncertainty_mm: 0.0,
+        }
+    }
+
+    /// Record the approximation already present in these commands.
+    pub fn with_uncertainty(mut self, uncertainty_mm: f64) -> Self {
+        self.uncertainty_mm = uncertainty_mm;
+        self
+    }
+
+    /// Exact image under an affine transform. Circular arcs stay circular
+    /// under similarities and become elliptical arcs otherwise; nothing is
+    /// approximated. Prior uncertainty scales with the transform.
+    pub fn transformed(self, transform: Affine2) -> Self {
+        let scale = transform.max_scale();
+        let mut current = Point::default();
+        let cmds = self
+            .cmds
+            .into_iter()
+            .map(|cmd| {
+                let transformed = cmd.transformed(transform, current);
+                current = cmd.end_point().unwrap_or(current);
+                transformed
+            })
+            .collect::<Vec<_>>();
+        Self {
+            bbox: contour_bbox(&cmds),
+            cmds,
+            uncertainty_mm: self.uncertainty_mm * scale,
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -117,11 +234,43 @@ impl ContourBuf {
         segments(&self.cmds)
     }
 
-    /// Signed area enclosed by this contour, preserving line, circular-arc,
-    /// and cubic Bézier segments without flattening. Counter-clockwise
-    /// contours are positive and clockwise contours are negative.
+    /// Signed area enclosed by this contour, preserving arc and cubic
+    /// segments without flattening. Counter-clockwise contours are positive
+    /// and clockwise contours are negative.
     pub fn signed_area(&self) -> f64 {
         self.segments().map(segment_signed_double_area).sum::<f64>() / 2.0
+    }
+
+    /// The same contour with elliptical arcs and cubics replaced by chords
+    /// within `accuracy`, for writers that only carry lines and circular arcs.
+    pub fn flattened_curves(&self, accuracy: GeometryAccuracy) -> Result<Self, AccuracyError> {
+        let allowance = accuracy.allowance(self.uncertainty_mm)?;
+        let mut cmds = Vec::with_capacity(self.cmds.len());
+        let mut current = Point::default();
+        let mut added: f64 = 0.0;
+        for cmd in &self.cmds {
+            match cmd.op {
+                PathOp::EllipseTo | PathOp::CubicTo => {
+                    let start = current;
+                    let segment = if cmd.op == PathOp::EllipseTo {
+                        Segment::Ellipse(cmd.elliptical_arc(start))
+                    } else {
+                        Segment::Cubic {
+                            start,
+                            c1: cmd.p0,
+                            c2: cmd.p1,
+                            end: cmd.p2,
+                        }
+                    };
+                    let (points, error) = segment.chords(allowance)?;
+                    added = added.max(error);
+                    cmds.extend(points.into_iter().map(PathCmd::line_to));
+                }
+                _ => cmds.push(*cmd),
+            }
+            current = cmd.end_point().unwrap_or(current);
+        }
+        Ok(Self::new(cmds).with_uncertainty(self.uncertainty_mm + added))
     }
 }
 
@@ -133,6 +282,7 @@ pub enum Segment {
         end: Point,
     },
     Arc(Arc),
+    Ellipse(EllipticalArc),
     Cubic {
         start: Point,
         c1: Point,
@@ -146,6 +296,7 @@ impl Segment {
         match *self {
             Self::Line { start, .. } | Self::Cubic { start, .. } => start,
             Self::Arc(arc) => arc.start,
+            Self::Ellipse(arc) => arc.start,
         }
     }
 
@@ -153,6 +304,7 @@ impl Segment {
         match *self {
             Self::Line { end, .. } | Self::Cubic { end, .. } => end,
             Self::Arc(arc) => arc.end,
+            Self::Ellipse(arc) => arc.end,
         }
     }
 
@@ -164,6 +316,7 @@ impl Segment {
                 bbox
             }
             Self::Arc(arc) => arc.bbox(),
+            Self::Ellipse(arc) => arc.bbox(),
             Self::Cubic { start, c1, c2, end } => {
                 let mut bbox = BBox::from_point(start);
                 bbox.include_point(c1);
@@ -174,39 +327,84 @@ impl Segment {
         }
     }
 
+    /// The point at parameter `t` in `[0, 1]` along the segment.
+    pub fn point_at(&self, t: f64) -> Point {
+        match *self {
+            Self::Line { start, end } => start + (end - start) * t,
+            Self::Arc(arc) => {
+                let start_angle = arc.start.angle_from(arc.center);
+                let signed_sweep = if arc.clockwise {
+                    -arc.sweep_radians()
+                } else {
+                    arc.sweep_radians()
+                };
+                arc.point_at(start_angle + signed_sweep * t)
+            }
+            Self::Ellipse(arc) => arc.point_at(arc.start_angle() + arc.signed_sweep_radians() * t),
+            Self::Cubic { start, c1, c2, end } => {
+                let u = 1.0 - t;
+                start * (u * u * u)
+                    + c1 * (3.0 * u * u * t)
+                    + c2 * (3.0 * u * t * t)
+                    + end * (t * t * t)
+            }
+        }
+    }
+
     /// Sample the segment at `count` evenly spaced parameters, excluding the
-    /// start point and including the end point. Lines and arcs are exact;
-    /// cubics are evaluated on the Bezier polynomial.
+    /// start point and including the end point.
     pub fn sample_points(&self, count: usize, out: &mut Vec<Point>) {
         match *self {
             Self::Line { end, .. } => out.push(end),
-            Self::Arc(arc) => {
-                let sweep = arc.sweep_radians();
-                let signed = if arc.clockwise { -sweep } else { sweep };
-                let start_angle = arc.start.angle_from(arc.center);
+            _ => {
                 for step in 1..=count {
-                    let t = step as f64 / count as f64;
                     if step == count {
-                        out.push(arc.end);
+                        out.push(self.end());
                     } else {
-                        out.push(arc.point_at(start_angle + signed * t));
+                        out.push(self.point_at(step as f64 / count as f64));
                     }
                 }
             }
-            Self::Cubic { start, c1, c2, end } => {
-                for step in 1..=count {
-                    let t = step as f64 / count as f64;
-                    if step == count {
-                        out.push(end);
-                    } else {
-                        let u = 1.0 - t;
-                        let point = start * (u * u * u)
-                            + c1 * (3.0 * u * u * t)
-                            + c2 * (3.0 * u * t * t)
-                            + end * (t * t * t);
-                        out.push(point);
-                    }
+        }
+    }
+
+    /// Chord endpoints (excluding the start) approximating a curved segment
+    /// within `max_error_mm`, and the error actually incurred. Lines and
+    /// circular arcs are returned as their own end point with no error.
+    pub fn chords(&self, max_error_mm: f64) -> Result<(Vec<Point>, f64), AccuracyError> {
+        match *self {
+            Self::Line { end, .. } | Self::Arc(Arc { end, .. }) => Ok((vec![end], 0.0)),
+            Self::Ellipse(arc) => {
+                let scale = arc.max_scale();
+                let sweep = arc.sweep_radians();
+                // A chord of parametric angle δ on the unit circle has
+                // sagitta 2·sin²(δ/4); the basis scales it by at most `scale`.
+                let ratio = (max_error_mm / (2.0 * scale)).min(1.0);
+                let step = 4.0 * ratio.sqrt().asin();
+                let count = (sweep / step).ceil().max(1.0);
+                if !count.is_finite() || count > 1_000_000.0 {
+                    return Err(AccuracyError::SubdivisionLimit);
                 }
+                let count = count as usize;
+                let mut points = Vec::with_capacity(count);
+                self.sample_points(count, &mut points);
+                let error = 2.0 * scale * (sweep / count as f64 / 4.0).sin().powi(2);
+                Ok((points, error))
+            }
+            Self::Cubic { start, c1, c2, end } => {
+                let mut path = BezPath::new();
+                path.move_to(kurbo_point(start));
+                path.curve_to(kurbo_point(c1), kurbo_point(c2), kurbo_point(end));
+                let mut points = Vec::new();
+                kurbo::flatten(path, max_error_mm.max(f64::MIN_POSITIVE), |el| {
+                    if let PathEl::LineTo(point) = el {
+                        points.push(ir_point(point));
+                    }
+                });
+                if points.len() > 1_000_000 {
+                    return Err(AccuracyError::SubdivisionLimit);
+                }
+                Ok((points, max_error_mm))
             }
         }
     }
@@ -222,6 +420,10 @@ fn segment_signed_double_area(segment: Segment) -> f64 {
                 arc.sweep_radians()
             };
             cross(arc.center, arc.end - arc.start) + arc.radius().powi(2) * sweep
+        }
+        Segment::Ellipse(arc) => {
+            cross(arc.center, arc.end - arc.start)
+                + cross(arc.x_axis, arc.y_axis) * arc.signed_sweep_radians()
         }
         Segment::Cubic { start, c1, c2, end } => {
             // Integrate x·dy - y·dx over the cubic in power-basis form.
@@ -276,6 +478,11 @@ impl Iterator for Segments<'_> {
                     self.current = Some(cmd.p0);
                     return Some(Segment::Arc(Arc::new(start, cmd.p0, cmd.p1, cmd.clockwise)));
                 }
+                PathOp::EllipseTo => {
+                    let start = self.current.unwrap_or(cmd.p0);
+                    self.current = Some(cmd.p0);
+                    return Some(Segment::Ellipse(cmd.elliptical_arc(start)));
+                }
                 PathOp::CubicTo => {
                     let start = self.current.unwrap_or(cmd.p2);
                     self.current = Some(cmd.p2);
@@ -313,6 +520,10 @@ pub fn contour_bbox(cmds: &[PathCmd]) -> BBox {
                 bbox = bbox.union(Arc::new(current, cmd.p0, cmd.p1, cmd.clockwise).bbox());
                 current = cmd.p0;
             }
+            PathOp::EllipseTo => {
+                bbox = bbox.union(cmd.elliptical_arc(current).bbox());
+                current = cmd.p0;
+            }
             PathOp::CubicTo => {
                 bbox.include_point(cmd.p0);
                 bbox.include_point(cmd.p1);
@@ -325,60 +536,10 @@ pub fn contour_bbox(cmds: &[PathCmd]) -> BBox {
     bbox
 }
 
-pub fn transform_cmds(
-    cmds: impl IntoIterator<Item = PathCmd>,
-    transform: crate::geom::affine::Affine2,
-) -> ContourBuf {
-    let mut bbox = BBox::empty();
-    let mut current = Point::default();
-    let mut transformed_cmds = Vec::new();
-
-    for cmd in cmds {
-        let start = current;
-        let mut transformed = cmd;
-        transformed.p0 = transform.transform_point(cmd.p0);
-        transformed.p1 = transform.transform_point(cmd.p1);
-        if cmd.op != PathOp::ArcTo {
-            transformed.p2 = transform.transform_point(cmd.p2);
-        } else if transform.determinant() < 0.0 {
-            transformed.clockwise = !cmd.clockwise;
-        }
-
-        match cmd.op {
-            PathOp::MoveTo | PathOp::LineTo => {
-                current = cmd.p0;
-                bbox.include_point(transformed.p0);
-            }
-            PathOp::ArcTo => {
-                bbox = bbox.union(
-                    Arc::new(
-                        transform.transform_point(start),
-                        transformed.p0,
-                        transformed.p1,
-                        transformed.clockwise,
-                    )
-                    .bbox(),
-                );
-                current = cmd.p0;
-            }
-            PathOp::CubicTo => {
-                bbox.include_point(transformed.p0);
-                bbox.include_point(transformed.p1);
-                bbox.include_point(transformed.p2);
-                current = cmd.p2;
-            }
-            PathOp::Close => {}
-        }
-
-        transformed_cmds.push(transformed);
-    }
-
-    ContourBuf::from_parts(bbox, transformed_cmds)
-}
-
 pub(crate) fn validate_cmd_points(name: &str, cmds: &[PathCmd]) -> Result<(), String> {
     for (index, cmd) in cmds.iter().enumerate() {
-        if !cmd.p0.is_finite() || !cmd.p1.is_finite() || !cmd.p2.is_finite() {
+        if !cmd.p0.is_finite() || !cmd.p1.is_finite() || !cmd.p2.is_finite() || !cmd.p3.is_finite()
+        {
             return Err(format!(
                 "{name} path command {index} contains non-finite point"
             ));
@@ -423,74 +584,129 @@ impl From<crate::geom::style::StrokeStyle> for StrokeToFillStyle {
     }
 }
 
-/// Convert stroked centerlines/arcs into filled contours.
+/// Convert stroked centerlines/arcs into filled contours within `accuracy`.
 ///
-/// Use this for rendering, boolean composition, comparison, and fallback
-/// targets that cannot represent native strokes. Gerber export should prefer
-/// native draw/arc objects where possible.
+/// This is a preparation step: the outline is approximated once, here, and
+/// the returned contours record what it cost. Use it for boolean
+/// composition, comparison, and targets that cannot represent native
+/// strokes. Gerber export should prefer native draw/arc objects.
 pub fn stroke_to_fill(
     contours: &[ContourBuf],
     style: StrokeToFillStyle,
-) -> Option<Vec<ContourBuf>> {
+    accuracy: GeometryAccuracy,
+) -> Result<Option<Vec<ContourBuf>>, AccuracyError> {
+    if !style.width.is_finite()
+        || contours
+            .iter()
+            .any(|c| !c.bbox.is_valid() || !c.uncertainty_mm.is_finite() || c.uncertainty_mm < 0.0)
+    {
+        return Err(AccuracyError::InvalidGeometry("invalid stroke geometry"));
+    }
     if style.width <= 0.0 {
-        return None;
+        return Ok(None);
     }
-
-    if matches!(style.pattern, LinePattern::Solid | LinePattern::Erase) {
-        return solid_stroke_to_fill(contours, style);
-    }
-
-    let solid_style = StrokeToFillStyle {
-        pattern: LinePattern::Solid,
-        ..style
-    };
-    let mut out = Vec::new();
-    for contour in contours {
-        let segments = contour.segments().collect::<Vec<_>>();
-        for mark in stroke_pattern_marks(&segments, style.pattern, style.width) {
-            match mark {
-                StrokePatternMark::Dash(segments) => {
-                    let Some(contour) = contour_from_segments(&segments) else {
-                        continue;
-                    };
-                    if let Some(mut contours) = solid_stroke_to_fill(&[contour], solid_style) {
-                        out.append(&mut contours);
+    if !matches!(style.pattern, LinePattern::Solid | LinePattern::Erase) {
+        let solid_style = StrokeToFillStyle {
+            pattern: LinePattern::Solid,
+            ..style
+        };
+        let mut out = Vec::new();
+        for contour in contours {
+            accuracy.check(contour.uncertainty_mm)?;
+            if contour
+                .cmds
+                .iter()
+                .any(|cmd| matches!(cmd.op, PathOp::CubicTo | PathOp::EllipseTo))
+            {
+                return Err(AccuracyError::InvalidGeometry(
+                    "pattern placement requires lines or circular arcs",
+                ));
+            }
+            let segments = contour.segments().collect::<Vec<_>>();
+            for mark in stroke_pattern_marks(&segments, style.pattern, style.width) {
+                match mark {
+                    StrokePatternMark::Dash(segments) => {
+                        if let Some(dash) = contour_from_segments(&segments) {
+                            out.extend(
+                                stroke_to_fill(
+                                    &[dash.with_uncertainty(contour.uncertainty_mm)],
+                                    solid_style,
+                                    accuracy,
+                                )?
+                                .unwrap_or_default(),
+                            );
+                        }
                     }
-                }
-                StrokePatternMark::Dot(at) => {
-                    let Some(dot) = crate::geom::shapes::circle(style.width) else {
-                        continue;
-                    };
-                    out.push(transform_cmds(
-                        dot.cmds,
-                        crate::geom::Affine2::translation(at),
-                    ));
+                    StrokePatternMark::Dot(at) => {
+                        let dot = crate::geom::shapes::circle(style.width)
+                            .expect("positive finite stroke width");
+                        out.push(
+                            dot.with_uncertainty(contour.uncertainty_mm)
+                                .transformed(Affine2::translation(at)),
+                        );
+                    }
                 }
             }
         }
+        return Ok((!out.is_empty()).then_some(out));
     }
-    (!out.is_empty()).then_some(out)
+    let prior = contours
+        .iter()
+        .map(|c| c.uncertainty_mm)
+        .fold(0.0, f64::max);
+    let bbox = contours
+        .iter()
+        .fold(BBox::empty(), |bbox, c| bbox.union(c.bbox))
+        .expand(style.width.max(0.0));
+    let numeric = crate::geom::accuracy::numerical_error(bbox);
+    let remaining = accuracy.allowance(prior + stroke_rounding_error(style) + numeric)?;
+    if remaining < f64::EPSILON
+        || (bbox.width().max(bbox.height()) / remaining).sqrt() > 1_000_000.0
+    {
+        return Err(AccuracyError::SubdivisionLimit);
+    }
+    let mut out = solid_stroke_to_fill(contours, style, remaining / 2.0);
+    if let Some(out) = &mut out {
+        for contour in out {
+            contour.uncertainty_mm += numeric;
+            accuracy.check(contour.uncertainty_mm)?;
+        }
+    }
+    Ok(out)
+}
+
+// Kurbo's round caps/joins use a fixed unit-circle tolerance, independently
+// of the tolerance passed to stroke().
+fn stroke_rounding_error(style: StrokeToFillStyle) -> f64 {
+    if matches!(style.line_cap, LineCap::Round) || matches!(style.line_join, LineJoin::Round) {
+        0.0004 * style.width.max(0.0) / 2.0
+    } else {
+        0.0
+    }
 }
 
 fn solid_stroke_to_fill(
     contours: &[ContourBuf],
     style: StrokeToFillStyle,
+    accuracy: f64,
 ) -> Option<Vec<ContourBuf>> {
-    let source = contours_to_kurbo(contours);
+    let (source, conversion_error) = contours_to_kurbo(contours, accuracy);
     if source.elements().is_empty() {
         return None;
     }
     let stroke = Stroke::new(style.width)
         .with_join(kurbo_join(style.line_join))
         .with_caps(kurbo_cap(style.line_cap));
-    let outline = kurbo::stroke(
-        source,
-        &stroke,
-        &StrokeOpts::default(),
-        tol::STROKE_OUTLINE_MM,
-    );
+    let outline = kurbo::stroke(source, &stroke, &StrokeOpts::default(), accuracy);
     let mut out = kurbo_path_to_contours(&outline);
     for contour in &mut out {
+        contour.uncertainty_mm = contours
+            .iter()
+            .map(|c| c.uncertainty_mm)
+            .fold(0.0, f64::max)
+            + conversion_error
+            + stroke_rounding_error(style)
+            + accuracy;
         if contour
             .cmds
             .last()
@@ -517,6 +733,7 @@ fn contour_from_segments(segments: &[Segment]) -> Option<ContourBuf> {
             Segment::Arc(arc) => {
                 cmds.push(PathCmd::arc_to(arc.end, arc.center, arc.clockwise));
             }
+            Segment::Ellipse(arc) => cmds.push(PathCmd::from_elliptical_arc(arc)),
             Segment::Cubic { c1, c2, end, .. } => {
                 cmds.push(PathCmd::cubic_to(c1, c2, end));
             }
@@ -526,9 +743,13 @@ fn contour_from_segments(segments: &[Segment]) -> Option<ContourBuf> {
     Some(ContourBuf::new(cmds))
 }
 
-pub(crate) fn contours_to_kurbo(contours: &[ContourBuf]) -> BezPath {
+/// Convert contours to a kurbo path, approximating circular and elliptical
+/// arcs by cubics whose radial error stays within `accuracy`. Returns the
+/// largest conversion error incurred.
+pub(crate) fn contours_to_kurbo(contours: &[ContourBuf], accuracy: f64) -> (BezPath, f64) {
     let mut out = BezPath::new();
     let mut current = Point::default();
+    let mut conversion_error: f64 = 0.0;
     for contour in contours {
         for cmd in &contour.cmds {
             match cmd.op {
@@ -541,7 +762,20 @@ pub(crate) fn contours_to_kurbo(contours: &[ContourBuf]) -> BezPath {
                     out.line_to(kurbo_point(cmd.p0));
                 }
                 PathOp::ArcTo => {
-                    append_arc_to_kurbo(&mut out, current, cmd.p0, cmd.p1, cmd.clockwise);
+                    let arc = Arc::new(current, cmd.p0, cmd.p1, cmd.clockwise);
+                    let radius_mismatch = (arc.radius() - cmd.p0.distance_to(cmd.p1)).abs();
+                    conversion_error = conversion_error.max(
+                        append_arc_to_kurbo(&mut out, arc.to_elliptical(), accuracy)
+                            + radius_mismatch,
+                    );
+                    current = cmd.p0;
+                }
+                PathOp::EllipseTo => {
+                    conversion_error = conversion_error.max(append_arc_to_kurbo(
+                        &mut out,
+                        cmd.elliptical_arc(current),
+                        accuracy,
+                    ));
                     current = cmd.p0;
                 }
                 PathOp::CubicTo => {
@@ -556,47 +790,40 @@ pub(crate) fn contours_to_kurbo(contours: &[ContourBuf]) -> BezPath {
             }
         }
     }
-    out
+    (out, conversion_error)
 }
 
-fn append_arc_to_kurbo(
-    out: &mut BezPath,
-    start: Point,
-    end: Point,
-    center: Point,
-    clockwise: bool,
-) {
-    let arc = Arc::new(start, end, center, clockwise);
-    let radius = arc.radius();
-    if radius == 0.0 {
-        out.line_to(kurbo_point(end));
-        return;
+/// Append an elliptical arc as tangent-matched cubics and return the radial
+/// error bound. A cubic over a unit-circle angle `δ ≤ π/2` errs by at most
+/// `δ⁶ / 40000`, and the axis basis scales that by its largest singular
+/// value, so the sweep is subdivided until that bound meets `accuracy`.
+fn append_arc_to_kurbo(out: &mut BezPath, arc: EllipticalArc, accuracy: f64) -> f64 {
+    let scale = arc.max_scale();
+    if arc.is_degenerate() || scale == 0.0 {
+        out.line_to(kurbo_point(arc.end));
+        return 0.0;
     }
-
-    let sweep = arc.sweep_radians();
-    let signed_sweep = if clockwise { -sweep } else { sweep };
-    let segment_count = (signed_sweep.abs() / std::f64::consts::FRAC_PI_2)
-        .ceil()
-        .max(1.0) as usize;
+    let signed_sweep = arc.signed_sweep_radians();
+    let max_angle = (accuracy * 40_000.0 / scale)
+        .powf(1.0 / 6.0)
+        .min(std::f64::consts::FRAC_PI_2);
+    let segment_count = (signed_sweep.abs() / max_angle).ceil().max(1.0) as usize;
     let delta = signed_sweep / segment_count as f64;
-    let mut angle = start.angle_from(center);
+    let mut angle = arc.start_angle();
+    // Tangent at parameter θ is −x_axis·sin θ + y_axis·cos θ.
+    let tangent = |angle: f64| arc.y_axis * angle.cos() - arc.x_axis * angle.sin();
 
     for _ in 0..segment_count {
         let next_angle = angle + delta;
         let k = 4.0 / 3.0 * (delta / 4.0).tan();
         let p0 = arc.point_at(angle);
         let p3 = arc.point_at(next_angle);
-        let c1 = Point::new(
-            p0.x - radius * angle.sin() * k,
-            p0.y + radius * angle.cos() * k,
-        );
-        let c2 = Point::new(
-            p3.x + radius * next_angle.sin() * k,
-            p3.y - radius * next_angle.cos() * k,
-        );
+        let c1 = p0 + tangent(angle) * k;
+        let c2 = p3 - tangent(next_angle) * k;
         out.curve_to(kurbo_point(c1), kurbo_point(c2), kurbo_point(p3));
         angle = next_angle;
     }
+    scale * delta.abs().powi(6) / 40_000.0
 }
 
 fn kurbo_path_to_contours(path: &BezPath) -> Vec<ContourBuf> {
@@ -683,13 +910,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn signed_area_preserves_arcs_and_cubics() {
+    fn signed_area_preserves_arcs_ellipses_and_cubics() {
         let circle = ContourBuf::new(vec![
             PathCmd::move_to(Point::new(1.0, 0.0)),
             PathCmd::arc_to(Point::new(1.0, 0.0), Point::ZERO, false),
             PathCmd::close(),
         ]);
         assert!((circle.signed_area() - std::f64::consts::PI).abs() <= 1e-12);
+
+        let ellipse = circle.clone().transformed(Affine2 {
+            m00: 2.0,
+            m11: 0.5,
+            ..Affine2::IDENTITY
+        });
+        assert!(ellipse.cmds[1].op == PathOp::EllipseTo);
+        assert!((ellipse.signed_area() - std::f64::consts::PI).abs() <= 1e-12);
+        let mirrored = circle.transformed(Affine2 {
+            m00: -1.0,
+            m11: 2.0,
+            ..Affine2::IDENTITY
+        });
+        assert!((mirrored.signed_area() + 2.0 * std::f64::consts::PI).abs() <= 1e-12);
 
         let curved = ContourBuf::new(vec![
             PathCmd::move_to(Point::ZERO),
@@ -704,25 +945,73 @@ mod tests {
     }
 
     #[test]
+    fn similarity_transforms_keep_circular_arcs() {
+        let circle = crate::geom::shapes::circle(2.0).unwrap();
+        let placed = circle.transformed(Affine2::placement(
+            Point::new(5.0, 5.0),
+            30.0,
+            crate::geom::point::Mirror::NONE,
+            3.0,
+        ));
+        assert!(placed.cmds.iter().all(|cmd| cmd.op != PathOp::EllipseTo));
+        assert!((placed.bbox.min.x - 2.0).abs() <= 1e-9);
+        assert!((placed.bbox.max.y - 8.0).abs() <= 1e-9);
+    }
+
+    #[test]
+    fn flattening_curves_stays_within_the_requested_error() {
+        let ellipse = crate::geom::shapes::ellipse(4.0, 2.0).unwrap();
+        for budget in [0.01, 0.001, 0.0001] {
+            let flat = ellipse
+                .flattened_curves(GeometryAccuracy::new(budget).unwrap())
+                .unwrap();
+            assert!(flat.cmds.iter().all(|cmd| !cmd.is_curve()));
+            assert!(flat.uncertainty_mm <= budget);
+            let worst = flat
+                .segments()
+                .map(|segment| {
+                    let mid = segment.point_at(0.5);
+                    let radial = ((mid.x / 2.0).powi(2) + mid.y.powi(2)).sqrt();
+                    (1.0 - radial).abs()
+                })
+                .fold(0.0, f64::max);
+            // Radial parameter error bounds the geometric error on this ellipse.
+            assert!(
+                worst <= flat.uncertainty_mm,
+                "{worst} > {}",
+                flat.uncertainty_mm
+            );
+        }
+    }
+
+    #[test]
     fn stroke_to_fill_rejects_non_positive_width() {
+        let accuracy = GeometryAccuracy::default();
+
         let source = vec![line_contour(Point::new(0.0, 0.0), Point::new(1.0, 0.0))];
 
         assert!(
             stroke_to_fill(
                 &source,
-                StrokeToFillStyle::new(0.0, LineCap::Round, LineJoin::Round)
+                StrokeToFillStyle::new(0.0, LineCap::Round, LineJoin::Round),
+                accuracy
             )
+            .unwrap()
             .is_none()
         );
     }
 
     #[test]
     fn stroke_to_fill_expands_centerline_by_half_width() {
+        let accuracy = GeometryAccuracy::default();
+
         let source = vec![line_contour(Point::new(0.0, 0.0), Point::new(10.0, 0.0))];
         let fill = stroke_to_fill(
             &source,
             StrokeToFillStyle::new(2.0, LineCap::Butt, LineJoin::Round),
+            accuracy,
         )
+        .unwrap()
         .expect("stroke should expand to fill geometry");
         let bbox = fill
             .iter()
@@ -741,23 +1030,14 @@ mod tests {
     }
 
     #[test]
-    fn stroke_to_fill_expands_phantom_pattern_with_dot_flashes() {
-        let source = vec![line_contour(Point::new(0.0, 0.0), Point::new(20.0, 0.0))];
+    fn patterned_strokes_preserve_input_error() {
+        let source = line_contour(Point::ZERO, Point::new(20.0, 0.0)).with_uncertainty(0.001);
         let mut style = StrokeToFillStyle::new(1.0, LineCap::Round, LineJoin::Round);
         style.pattern = LinePattern::Phantom;
-
-        let fill = stroke_to_fill(&source, style).expect("pattern should expand to fill geometry");
-        let bboxes = fill.iter().map(|contour| contour.bbox).collect::<Vec<_>>();
-
-        assert_eq!(fill.len(), 4);
-        assert!(
-            bboxes.iter().any(|bbox| {
-                (bbox.min.x - 8.0).abs() <= 1e-9 && (bbox.max.x - 9.0).abs() <= 1e-9
-            })
-        );
-        assert!(bboxes.iter().any(|bbox| {
-            (bbox.min.x - 11.0).abs() <= 1e-9 && (bbox.max.x - 12.0).abs() <= 1e-9
-        }));
+        let fill = stroke_to_fill(&[source], style, GeometryAccuracy::default())
+            .unwrap()
+            .unwrap();
+        assert!(fill.iter().all(|contour| contour.uncertainty_mm >= 0.001));
     }
 
     #[test]

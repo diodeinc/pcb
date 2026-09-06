@@ -18,7 +18,7 @@ pub(super) fn evaluate(
     plating: SlotPlating,
     conditions: &Conditions,
     design: &Design,
-) -> Evaluation {
+) -> anyhow::Result<Evaluation> {
     let mut checked = 0;
     let mut measured = Vec::new();
     for (slot_index, slot) in design
@@ -97,13 +97,17 @@ pub(super) fn evaluate(
             )
             .into_iter()
             .map(|geometry| {
-                let mut site =
-                    linework_clearance::report_site(geometry, finding_layers.clone(), limit_mm);
+                let mut site = linework_clearance::report_site(
+                    geometry,
+                    finding_layers.clone(),
+                    limit_mm,
+                    design.resolution,
+                )?;
                 site.subjects = subjects.clone();
                 site.evidence.extend(evidence.clone());
-                site
+                Ok(site)
             })
-            .collect();
+            .collect::<anyhow::Result<Vec<_>>>()?;
             measured.push(Measured {
                 distance,
                 bbox: slot
@@ -116,7 +120,7 @@ pub(super) fn evaluate(
             });
         }
     }
-    Evaluation { checked, measured }
+    Ok(Evaluation { checked, measured })
 }
 
 #[cfg(test)]
@@ -124,6 +128,7 @@ mod tests {
     use crate::LayoutTarget;
     use crate::commands::dfm::{self, CheckRequest, PdkSource, TextSource, report};
     use crate::ipc2581::Ipc2581;
+    use pcb_ir::geom::Resolution;
 
     fn pdk(plating: &str) -> String {
         format!(
@@ -193,6 +198,7 @@ limit = {{ minimum = "0.20 mm" }}
                 layout_target: target,
                 generated_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
             },
+            Resolution::default(),
         )
     }
 

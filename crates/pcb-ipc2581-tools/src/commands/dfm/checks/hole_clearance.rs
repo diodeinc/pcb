@@ -27,7 +27,7 @@ pub(super) fn evaluate(
     class: HoleClass,
     conditions: &Conditions,
     design: &Design,
-) -> Evaluation {
+) -> anyhow::Result<Evaluation> {
     let mut checked = 0;
     let mut measured = Vec::new();
 
@@ -74,7 +74,7 @@ pub(super) fn evaluate(
                 Evidence::bounds("offending_copper", offender.image.bbox),
             ];
             let sites = if violates(&distance, limit_mm) {
-                let drill = circular_region(hole.center, radius_mm);
+                let drill = circular_region(hole.center, radius_mm, design.resolution)?;
                 let mut sites = region_clearance_sites(&drill, &offender.image, limit_mm)
                     .into_iter()
                     .map(|geometry| {
@@ -82,7 +82,8 @@ pub(super) fn evaluate(
                             geometry,
                             finding_layers.clone(),
                             limit_mm,
-                        );
+                            design.resolution,
+                        )?;
                         site.subjects = subjects.clone();
                         site.evidence.push(Evidence::circle(
                             "drilled_hole",
@@ -94,8 +95,10 @@ pub(super) fn evaluate(
                             hole.center,
                             hole.diameter_mm + 2.0 * limit_mm,
                         ));
-                        site
+                        Ok::<_, anyhow::Error>(site)
                     })
+                    .collect::<anyhow::Result<Vec<_>>>()?
+                    .into_iter()
                     .collect::<Vec<_>>();
                 if !sites.iter().any(|site| violates(&site.distance, limit_mm)) {
                     sites.push(fallback_site(
@@ -123,7 +126,7 @@ pub(super) fn evaluate(
         }
     }
 
-    Evaluation { checked, measured }
+    Ok(Evaluation { checked, measured })
 }
 
 fn disk_to_copper_clearance(
@@ -134,7 +137,12 @@ fn disk_to_copper_clearance(
     limit_mm: f64,
 ) -> Option<Distance> {
     if copper.contains_point(center) {
-        return Some(Distance::flattened(0.0, center, center, 1));
+        return Some(Distance::with_uncertainty(
+            0.0,
+            center,
+            center,
+            copper.uncertainty_mm,
+        ));
     }
     let nearest = boundary.nearest_within(center, radius_mm + limit_mm)?;
     let direction = nearest.second - center;
@@ -146,13 +154,18 @@ fn disk_to_copper_clearance(
     if nearest.mm <= radius_mm {
         // The copper boundary lies inside the drill disk, so this point is
         // shared by both closed regions even when neither center is contained.
-        return Some(Distance::flattened(0.0, nearest.second, nearest.second, 1));
+        return Some(Distance::with_uncertainty(
+            0.0,
+            nearest.second,
+            nearest.second,
+            nearest.uncertainty_mm,
+        ));
     }
-    Some(Distance::flattened(
+    Some(Distance::with_uncertainty(
         nearest.mm - radius_mm,
         center + direction * radius_mm,
         nearest.second,
-        1,
+        nearest.uncertainty_mm,
     ))
 }
 
@@ -230,6 +243,7 @@ fn fallback_site(
 mod tests {
     use chrono::NaiveDate;
     use pcb_ir::dialects::ipc::ArtworkScope;
+    use pcb_ir::geom::Resolution;
 
     use crate::commands::dfm::{checks, design::Design, pdk::Pdk, rules};
     use crate::ipc2581::Ipc2581;
@@ -350,13 +364,20 @@ limit = {{ minimum = "0.20 mm" }}
         let pdk = Pdk::parse(&pdk(hole)).unwrap();
         let rules = rules::lower(&pdk, None).unwrap();
         let imported = pcb_ir::import::ipc2581::import_design(&ipc).unwrap();
-        let design = Design::extract(&imported, ArtworkScope::Board, &rules).unwrap();
+        let design = Design::extract(
+            &imported,
+            ArtworkScope::Board,
+            &rules,
+            Resolution::default(),
+        )
+        .unwrap();
         checks::run(
             &rules,
             &design,
             None,
             NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
         )
+        .unwrap()
     }
 
     #[test]
@@ -390,6 +411,8 @@ limit = {{ minimum = "0.20 mm" }}
 
     #[test]
     fn hole_clearance_report_includes_spatial_view_and_native_context() {
+        let resolution = Resolution::default();
+
         use crate::LayoutTarget;
         use crate::commands::dfm::{CheckRequest, PdkSource, TextSource, report};
 
@@ -409,6 +432,7 @@ limit = {{ minimum = "0.20 mm" }}
                 layout_target: LayoutTarget::Board,
                 generated_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
             },
+            resolution,
         )
         .unwrap();
 
@@ -528,12 +552,14 @@ limit = {{ minimum = "0.20 mm" }}
 
     #[test]
     fn rejects_a_hole_without_a_resolvable_drill_span() {
+        let resolution = Resolution::default();
+
         let xml = board("VIA", None, &[copper(0, Some("N2"), 0.8)]);
         let ipc = Ipc2581::parse(&xml).unwrap();
         let pdk = Pdk::parse(&pdk("via")).unwrap();
         let rules = rules::lower(&pdk, None).unwrap();
         let imported = pcb_ir::import::ipc2581::import_design(&ipc).unwrap();
-        let error = Design::extract(&imported, ArtworkScope::Board, &rules)
+        let error = Design::extract(&imported, ArtworkScope::Board, &rules, resolution)
             .err()
             .expect("an unknown span must fail closed");
         assert!(error.to_string().contains("no resolvable drill span"));
@@ -563,7 +589,13 @@ limit = {{ minimum = "0.20 mm" }}
                 let pdk = Pdk::parse(&pdk("via")).unwrap();
                 let rules = rules::lower(&pdk, None).unwrap();
                 let imported = pcb_ir::import::ipc2581::import_design(&ipc).unwrap();
-                let design = Design::extract(&imported, ArtworkScope::Board, &rules).unwrap();
+                let design = Design::extract(
+                    &imported,
+                    ArtworkScope::Board,
+                    &rules,
+                    Resolution::default(),
+                )
+                .unwrap();
                 let mut included = design
                     .copper_layers
                     .iter()
@@ -578,7 +610,8 @@ limit = {{ minimum = "0.20 mm" }}
                     &design,
                     None,
                     NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
-                );
+                )
+                .unwrap();
                 assert_eq!(results.rules[0].checked, 2);
                 assert_eq!(
                     results.findings.len(),
@@ -591,6 +624,8 @@ limit = {{ minimum = "0.20 mm" }}
 
     #[test]
     fn does_not_require_a_span_for_a_nonapplicable_named_case() {
+        let resolution = Resolution::default();
+
         let xml = board("VIA", None, &[copper(0, Some("N2"), 0.55)]);
         let source = pdk("via").replace(
             "limit = { minimum = \"0.20 mm\" }",
@@ -600,13 +635,14 @@ limit = {{ minimum = "0.20 mm" }}
         let pdk = Pdk::parse(&source).unwrap();
         let rules = rules::lower(&pdk, None).unwrap();
         let imported = pcb_ir::import::ipc2581::import_design(&ipc).unwrap();
-        let design = Design::extract(&imported, ArtworkScope::Board, &rules).unwrap();
+        let design = Design::extract(&imported, ArtworkScope::Board, &rules, resolution).unwrap();
         let results = checks::run(
             &rules,
             &design,
             None,
             NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
-        );
+        )
+        .unwrap();
 
         assert!(matches!(
             results.rules[0].status,

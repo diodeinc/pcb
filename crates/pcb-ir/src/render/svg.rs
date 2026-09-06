@@ -1,3 +1,4 @@
+use crate::geom::{AccuracyError, EllipticalArc, GeometryAccuracy};
 use std::fmt::Write;
 
 use crate::dialects::LayerRole;
@@ -42,23 +43,47 @@ pub fn svg<LayerMeta>(doc: &mask::Document<LayerMeta>, options: &RenderOptions) 
 pub fn artwork_svg<LayerMeta: Clone, ObjectMeta: Clone>(
     doc: &artwork::Document<LayerMeta, ObjectMeta>,
     options: &RenderOptions,
-) -> String {
+) -> Result<String, AccuracyError> {
     if !doc.blocks.is_empty() {
         return artwork_svg(&artwork::expand_instances(doc), options);
     }
+    let accuracy = options.accuracy;
     let layers = crate::render::layer_indices(doc.layers.len(), options.layers.as_deref());
     let bbox = options.viewport_or(crate::render::artwork_bbox(doc, Some(&layers)));
     let mut defs = String::new();
     let mut body = String::new();
 
+    let mut aperture_accuracy = vec![None::<GeometryAccuracy>; doc.apertures.len()];
+    for &layer_index in &layers {
+        for object in doc.layers[layer_index].objects.slice(&doc.objects) {
+            if let Geometry::Flash {
+                aperture,
+                transform,
+            } = object.geometry
+            {
+                let local = accuracy
+                    .before_transform(doc.apertures[aperture as usize].bbox(), transform)?;
+                let budget = &mut aperture_accuracy[aperture as usize];
+                *budget = Some(GeometryAccuracy::new(
+                    budget.map_or(local.max_error_mm(), |budget| {
+                        budget.max_error_mm().min(local.max_error_mm())
+                    }),
+                )?);
+            }
+        }
+    }
+
     for (aperture_index, aperture) in doc.apertures.iter().enumerate() {
+        let Some(accuracy) = aperture_accuracy[aperture_index] else {
+            continue;
+        };
         // Colour is inherited from the referencing group so one aperture can
         // serve both a dark run and a clear run's mask; `stroke` is not, or
         // every filled shape would gain the default one-unit outline.
         writeln!(
             defs,
             "    <path id='a{aperture_index}' d='{}' fill-rule='{}' stroke='none'/>",
-            svg_path_data(&aperture.contours()),
+            accurate_path_data(aperture.contours(), accuracy)?,
             fill_rule_name(aperture.fill_rule())
         )
         .unwrap();
@@ -66,7 +91,7 @@ pub fn artwork_svg<LayerMeta: Clone, ObjectMeta: Clone>(
 
     for &layer_index in &layers {
         let layer = &doc.layers[layer_index];
-        write_artwork_layer(&mut body, &mut defs, doc, layer);
+        write_artwork_layer(&mut body, &mut defs, doc, layer, accuracy)?;
     }
 
     let title = layers
@@ -76,7 +101,7 @@ pub fn artwork_svg<LayerMeta: Clone, ObjectMeta: Clone>(
     let mut svg = open_svg(&bbox, pixel_size(options, bbox), title);
     writeln!(svg, "  <defs>\n{defs}  </defs>").unwrap();
     svg.push_str(&body);
-    close_svg(svg)
+    Ok(close_svg(svg))
 }
 
 fn write_artwork_layer<LayerMeta, ObjectMeta>(
@@ -84,7 +109,8 @@ fn write_artwork_layer<LayerMeta, ObjectMeta>(
     defs: &mut String,
     doc: &artwork::Document<LayerMeta, ObjectMeta>,
     layer: &artwork::Layer<LayerMeta>,
-) {
+    accuracy: GeometryAccuracy,
+) -> Result<(), AccuracyError> {
     let objects = artwork::paint_ordered(layer.objects.slice(&doc.objects));
     let has_material = objects
         .iter()
@@ -107,7 +133,7 @@ fn write_artwork_layer<LayerMeta, ObjectMeta>(
             flush_run(&mut painted, defs, &mut run, run_polarity, layer);
             run_polarity = polarity;
         }
-        write_artwork_object(&mut run, doc, layer.role, object);
+        write_artwork_object(&mut run, doc, layer.role, object, accuracy)?;
     }
     flush_run(&mut painted, defs, &mut run, run_polarity, layer);
 
@@ -120,6 +146,8 @@ fn write_artwork_layer<LayerMeta, ObjectMeta>(
         fmt_num(opacity)
     )
     .unwrap();
+
+    Ok(())
 }
 
 fn flush_run<LayerMeta>(
@@ -155,7 +183,8 @@ fn write_artwork_object<LayerMeta, ObjectMeta>(
     doc: &artwork::Document<LayerMeta, ObjectMeta>,
     role: LayerRole,
     object: &artwork::Object<ObjectMeta>,
-) {
+    accuracy: GeometryAccuracy,
+) -> Result<(), AccuracyError> {
     match object.geometry {
         Geometry::Flash {
             aperture,
@@ -173,7 +202,7 @@ fn write_artwork_object<LayerMeta, ObjectMeta>(
             writeln!(
                 out,
                 "      <path d='{}' fill-rule='{}' stroke='none'/>",
-                path_data(&doc.arena, path),
+                accurate_path_data(doc.arena.path_contours(path), accuracy)?,
                 fill_rule_name(
                     path.fill_rule()
                         .expect("region geometry carries a fill paint")
@@ -187,7 +216,8 @@ fn write_artwork_object<LayerMeta, ObjectMeta>(
             let contours = crate::geom::path::stroke_to_fill(
                 &doc.arena.path_contours(doc.arena.path(path)),
                 stroke_of(doc, path).into(),
-            )
+                accuracy,
+            )?
             .unwrap_or_default();
             writeln!(
                 out,
@@ -206,7 +236,7 @@ fn write_artwork_object<LayerMeta, ObjectMeta>(
             writeln!(
                 out,
                 "      <path d='{}' fill='none' stroke-width='{}' stroke-linecap='{}' stroke-linejoin='{}'{outline}/>",
-                path_data(&doc.arena, doc.arena.path(path)),
+                accurate_path_data(doc.arena.path_contours(doc.arena.path(path)), accuracy)?,
                 fmt_num(stroke.width),
                 line_cap_name(stroke.cap),
                 line_join_name(stroke.join),
@@ -216,7 +246,20 @@ fn write_artwork_object<LayerMeta, ObjectMeta>(
         Geometry::Instance { .. } | Geometry::GridInstance { .. } => {
             unreachable!("artwork instances are expanded before SVG rendering")
         }
+    };
+    Ok(())
+}
+
+/// Path data for contours the SVG draws natively; only approximation the
+/// contours already carry counts against the budget.
+fn accurate_path_data(
+    contours: Vec<crate::geom::path::ContourBuf>,
+    accuracy: GeometryAccuracy,
+) -> Result<String, AccuracyError> {
+    for contour in &contours {
+        accuracy.check(contour.uncertainty_mm)?;
     }
+    Ok(svg_path_data(&contours))
 }
 
 fn stroke_of<LayerMeta, ObjectMeta>(
@@ -361,6 +404,20 @@ fn write_contour(data: &mut String, cmds: impl IntoIterator<Item = PathCmd>) {
                 write_arc(data, current, cmd);
                 current = cmd.p0;
             }
+            PathOp::EllipseTo => {
+                write_elliptical_arc(
+                    data,
+                    EllipticalArc {
+                        start: current,
+                        end: cmd.p0,
+                        center: cmd.p1,
+                        x_axis: cmd.p2,
+                        y_axis: cmd.p3,
+                        clockwise: cmd.clockwise,
+                    },
+                );
+                current = cmd.p0;
+            }
             PathOp::CubicTo => {
                 current = cmd.p2;
                 write!(
@@ -413,6 +470,40 @@ fn write_svg_arc(data: &mut String, radius: f64, large_arc: u8, sweep_flag: u8, 
     .unwrap();
 }
 
+/// An elliptical arc as one or two SVG `A` commands: the principal axes and
+/// their rotation describe the ellipse, the flags pick the arc.
+fn write_elliptical_arc(data: &mut String, arc: EllipticalArc) {
+    let (major, minor, rotation) = arc.principal_axes();
+    if arc.is_degenerate() || minor <= POINT_EPSILON_MM {
+        write!(data, " L{} {}", fmt_num(arc.end.x), fmt_num(arc.end.y)).unwrap();
+        return;
+    }
+    let sweep_flag = if arc.clockwise { 0 } else { 1 };
+    let rotation_degrees = rotation.to_degrees();
+    let mut write_piece = |large_arc: u8, end: Point| {
+        write!(
+            data,
+            " A{} {} {} {large_arc} {sweep_flag} {} {}",
+            fmt_num(major),
+            fmt_num(minor),
+            fmt_num(rotation_degrees),
+            fmt_num(end.x),
+            fmt_num(end.y)
+        )
+        .unwrap();
+    };
+    if arc.is_full_ellipse() {
+        // A full ellipse cannot be one SVG arc; split at the antipode.
+        write_piece(0, arc.center * 2.0 - arc.start);
+        write_piece(0, arc.end);
+        return;
+    }
+    write_piece(
+        u8::from(arc.sweep_radians() > std::f64::consts::PI),
+        arc.end,
+    );
+}
+
 fn layer_style(role: LayerRole) -> (&'static str, f64) {
     match role {
         LayerRole::Copper => ("#d87822", 0.9),
@@ -449,7 +540,7 @@ mod tests {
     use super::*;
     use crate::dialects::{Side, mask::Layer};
     use crate::geom::path::ContourBuf;
-    use crate::geom::{BBox, Paint};
+    use crate::geom::{BBox, Paint, Resolution};
 
     fn square(size: f64) -> ContourBuf {
         ContourBuf::new(vec![
@@ -500,13 +591,13 @@ mod tests {
         annulus.extend(crate::geom::shapes::circle(2.0).unwrap().cmds);
         let contours = vec![
             ContourBuf::new(annulus),
-            crate::geom::path::transform_cmds(
-                crate::geom::shapes::circle(2.0).unwrap().cmds,
-                Affine2::translation(Point::new(2.5, 0.0)),
-            ),
+            crate::geom::shapes::circle(2.0)
+                .unwrap()
+                .transformed(Affine2::translation(Point::new(2.5, 0.0))),
         ];
         let measured =
-            crate::geom::ContourSet::from_filled_contours(&contours, crate::geom::tol::REGION_MM);
+            crate::geom::ContourSet::from_filled_contours(&contours, Resolution::default())
+                .unwrap();
         let mut doc = mask::Document::<()>::new();
         let layer = doc.push_layer(mask::Layer::new("Routes", LayerRole::Drill, Side::None));
         for contour in contours {
@@ -554,7 +645,11 @@ mod tests {
                     height_px: 800,
                 });
         let native = crate::render::artwork_png(doc, &options).unwrap();
-        let composed = crate::render::png(&artwork::compose_to_mask(doc), &options).unwrap();
+        let composed = crate::render::png(
+            &artwork::compose_to_mask(doc, Resolution::default()).unwrap(),
+            &options,
+        )
+        .unwrap();
         for (name, png) in [("native", native), ("composed", composed)] {
             let raster = resvg::tiny_skia::Pixmap::decode_png(&png).unwrap();
             for &(at, filled) in samples {
@@ -610,7 +705,7 @@ mod tests {
                 (Point::new(15.0, 10.0), true),
             ],
         );
-        let rendered = artwork_svg(&doc, &RenderOptions::default());
+        let rendered = artwork_svg(&doc, &RenderOptions::default()).unwrap();
         assert_eq!(rendered.matches("<mask ").count(), 2);
         assert_eq!(rendered.matches(" A").count(), 12);
     }
@@ -693,7 +788,7 @@ mod tests {
             BBox::new(Point::ZERO, Point::new(16.0, 16.0)),
             &samples,
         );
-        let rendered = artwork_svg(&doc, &RenderOptions::default());
+        let rendered = artwork_svg(&doc, &RenderOptions::default()).unwrap();
         assert!(rendered.contains("fill-rule='evenodd'"));
         assert!(rendered.contains("<use href='#a0' transform='matrix("));
         assert!(rendered.contains(" A"), "native rounded edges stay arcs");
@@ -718,10 +813,119 @@ mod tests {
         assert_eq!(u32::from_be_bytes(png[20..24].try_into().unwrap()), 20);
 
         let artwork = copper_artwork();
-        assert!(artwork_svg(&artwork, &options).contains("viewBox='-4 -9 10 2'"));
+        assert!(
+            artwork_svg(&artwork, &options)
+                .unwrap()
+                .contains("viewBox='-4 -9 10 2'")
+        );
         let png = crate::render::artwork_png(&artwork, &options).unwrap();
         assert_eq!(u32::from_be_bytes(png[16..20].try_into().unwrap()), 100);
         assert_eq!(u32::from_be_bytes(png[20..24].try_into().unwrap()), 20);
+    }
+
+    #[test]
+    fn direct_and_instanced_svg_enforce_the_same_contour_budget() {
+        let accuracy = GeometryAccuracy::new(0.001).unwrap();
+        for contour in [
+            square(1.0).with_uncertainty(0.02),
+            crate::geom::shapes::ellipse(4.0, 2.0).unwrap(),
+        ] {
+            let refinable = contour.uncertainty_mm == 0.0;
+            let mut source = copper_artwork();
+            let aperture =
+                source.push_aperture(artwork::Aperture::solid(artwork::ApertureShape::Contour {
+                    outline: contour.clone(),
+                    fill_rule: FillRule::NonZero,
+                }));
+            let region = source.push_path(
+                Paint::Fill {
+                    rule: FillRule::NonZero,
+                },
+                vec![contour.clone()],
+            );
+            let stroke = source.push_path(Paint::Stroke(StrokeStyle::round(0.1)), vec![contour]);
+            for geometry in [
+                Geometry::Flash {
+                    aperture,
+                    transform: Affine2::IDENTITY,
+                },
+                Geometry::Region { path: region },
+                Geometry::Stroke { path: stroke },
+            ] {
+                for instanced in [false, true] {
+                    let mut doc = source.clone();
+                    let object = artwork::Object::new(Polarity::Dark, geometry);
+                    if instanced {
+                        let block = doc.push_block();
+                        doc.push_block_object(block, object);
+                        doc.push_object(
+                            0,
+                            artwork::Object::new(
+                                Polarity::Dark,
+                                Geometry::Instance {
+                                    block,
+                                    transform: Affine2::translation(Point::new(2.0, 3.0)),
+                                },
+                            ),
+                        );
+                    } else {
+                        doc.push_object(0, object);
+                    }
+                    artwork::normalize_bounds(&mut doc);
+                    assert_eq!(
+                        artwork_svg(
+                            &doc,
+                            &RenderOptions {
+                                accuracy,
+                                ..RenderOptions::default()
+                            }
+                        )
+                        .is_ok(),
+                        refinable,
+                        "geometry={geometry:?}, instanced={instanced}, refinable={refinable}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn svg_flash_budget_accounts_for_placement_scale() {
+        let accuracy = GeometryAccuracy::new(0.01).unwrap();
+        for (scale, succeeds) in [(0.1, true), (2.0, false)] {
+            let mut doc = copper_artwork();
+            let aperture =
+                doc.push_aperture(artwork::Aperture::solid(artwork::ApertureShape::Contour {
+                    outline: square(1.0).with_uncertainty(0.02),
+                    fill_rule: FillRule::NonZero,
+                }));
+            doc.push_object(
+                0,
+                artwork::Object::new(
+                    Polarity::Dark,
+                    Geometry::Flash {
+                        aperture,
+                        transform: Affine2 {
+                            m00: scale,
+                            m11: scale,
+                            ..Affine2::IDENTITY
+                        },
+                    },
+                ),
+            );
+            artwork::normalize_bounds(&mut doc);
+            assert_eq!(
+                artwork_svg(
+                    &doc,
+                    &RenderOptions {
+                        accuracy,
+                        ..RenderOptions::default()
+                    }
+                )
+                .is_ok(),
+                succeeds
+            );
+        }
     }
 
     #[test]
@@ -742,7 +946,7 @@ mod tests {
         }
         artwork::normalize_bounds(&mut doc);
 
-        let svg = artwork_svg(&doc, &RenderOptions::default());
+        let svg = artwork_svg(&doc, &RenderOptions::default()).unwrap();
 
         assert_eq!(svg.matches("<path id='a0'").count(), 1);
         assert_eq!(svg.matches("<use href='#a0'").count(), 4);
@@ -766,7 +970,7 @@ mod tests {
         );
         artwork::normalize_bounds(&mut doc);
 
-        let svg = artwork_svg(&doc, &RenderOptions::default());
+        let svg = artwork_svg(&doc, &RenderOptions::default()).unwrap();
 
         assert!(svg.contains("stroke='none'"), "{svg}");
     }
@@ -790,7 +994,7 @@ mod tests {
         );
         artwork::normalize_bounds(&mut doc);
 
-        let svg = artwork_svg(&doc, &RenderOptions::default());
+        let svg = artwork_svg(&doc, &RenderOptions::default()).unwrap();
 
         // Expanded into separate filled dashes rather than one native stroke.
         assert!(!svg.contains("stroke-width"), "{svg}");
@@ -822,7 +1026,7 @@ mod tests {
         );
         artwork::normalize_bounds(&mut doc);
 
-        let svg = artwork_svg(&doc, &RenderOptions::default());
+        let svg = artwork_svg(&doc, &RenderOptions::default()).unwrap();
 
         assert_eq!(svg.matches("<mask id='m0'").count(), 1);
         assert_eq!(svg.matches("<g mask='url(#m0)'>").count(), 1);

@@ -88,6 +88,14 @@ impl Affine2 {
         self.m00 * self.m11 - self.m01 * self.m10
     }
 
+    /// Largest singular value: scales a positional error into this frame.
+    pub fn max_scale(&self) -> f64 {
+        let a = self.m00.hypot(self.m10);
+        let b = self.m01.hypot(self.m11);
+        let cross = self.m00 * self.m01 + self.m10 * self.m11;
+        ((a * a + b * b + (a * a - b * b).hypot(2.0 * cross)) / 2.0).sqrt()
+    }
+
     pub fn inverse(&self) -> Option<Self> {
         let det = self.determinant();
         if det == 0.0 || !det.is_finite() {

@@ -4,14 +4,16 @@
 //! supplies it with a stackup and the per-layer copper it needs.
 
 use anyhow::{Context, Result, bail};
+use pcb_ir::geom::Resolution;
 use pcb_ir::geom::warp::{
     LAMINATE_RELAXATION_DROP_K, Material, PanelField, StackLayer, ThermalStack, WarpEstimate,
     estimate_warp,
 };
 use pcb_ir::geom::{BBox, ContourSet, Point};
 
-use crate::copper_balance::composed_copper_image;
 use crate::ipc2581::Ipc2581;
+use pcb_ir::dialects::ipc::ArtworkScope;
+use pcb_ir::import::ipc2581::{ImportedDesign, import_design};
 
 /// Cells across the panel's longer side.
 ///
@@ -57,10 +59,11 @@ pub struct WarpAnalysis {
 ///
 /// Requires a stackup carrying a thickness for every layer: without it there is
 /// no neutral axis, no lever arms, and nothing to estimate.
-pub fn analyze(ipc: &Ipc2581) -> Result<WarpAnalysis> {
+pub fn analyze(ipc: &Ipc2581, resolution: Resolution) -> Result<WarpAnalysis> {
+    let imported = import_design(ipc)?;
     let (stack, copper_names) = physical_stack(ipc)?;
     let conductors = stack.conductor_weights();
-    let bounds = panel_bounds(ipc)?;
+    let bounds = panel_bounds(ipc, &imported, resolution)?;
     let sample_pitch_mm =
         (bounds.width().max(bounds.height()) / SAMPLES_ACROSS).max(MIN_SAMPLE_PITCH_MM);
     let columns = (bounds.width() / sample_pitch_mm).ceil().max(1.0) as usize;
@@ -70,7 +73,14 @@ pub fn analyze(ipc: &Ipc2581) -> Result<WarpAnalysis> {
     let layers = copper_names
         .iter()
         .map(|layer_name| {
-            let image: ContourSet = composed_copper_image(ipc, layer_name)
+            let image: ContourSet = imported
+                .composed_layer_image(
+                    imported
+                        .layer_id(layer_name)
+                        .context("missing copper layer")?,
+                    ArtworkScope::ArrayFlattened,
+                    resolution,
+                )
                 .with_context(|| format!("failed to extract copper on layer '{layer_name}'"))?;
             let coverage = image.grid_coverage(bounds, columns, rows);
             let mean = coverage.iter().sum::<f64>() / coverage.len() as f64;
@@ -180,11 +190,12 @@ pub(crate) fn physical_stack(ipc: &Ipc2581) -> Result<(ThermalStack, Vec<String>
     Ok((stack, copper_names))
 }
 
-fn panel_bounds(ipc: &Ipc2581) -> Result<BBox> {
+fn panel_bounds(ipc: &Ipc2581, imported: &ImportedDesign, resolution: Resolution) -> Result<BBox> {
     let layout =
         crate::geometry::extract_layout(ipc).context("failed to extract the panel outline")?;
-    let profile = crate::geometry::board_array_fabrication_profile(ipc, &layout, &[])
-        .context("failed to derive the panel profile")?;
+    let profile =
+        crate::geometry::board_array_fabrication_profile(imported, &layout, &[], resolution)
+            .context("failed to derive the panel profile")?;
     let outline = ContourSet::from_filled_contours(
         &profile
             .array_outlines
@@ -192,8 +203,8 @@ fn panel_bounds(ipc: &Ipc2581) -> Result<BBox> {
             .flatten()
             .cloned()
             .collect::<Vec<_>>(),
-        pcb_ir::geom::tol::REGION_MM,
-    );
+        resolution,
+    )?;
     if outline.is_empty() {
         bail!("panel has no outline to measure");
     }

@@ -36,6 +36,7 @@ fn terminal_options(options: &RenderOptions) -> RenderOptions {
         layers: options.layers.clone(),
         size: SizeConstraint::MaxDimension(terminal_max_dimension_px()),
         viewport: options.viewport,
+        accuracy: options.accuracy,
     }
 }
 

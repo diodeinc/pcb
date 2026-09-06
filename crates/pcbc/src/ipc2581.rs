@@ -1,4 +1,5 @@
 use clap::{Args, Subcommand, ValueEnum};
+use pcb_ir::geom::Resolution;
 use std::path::PathBuf;
 
 use pcb_ipc2581_tools::{
@@ -339,6 +340,8 @@ impl FabPanelSize {
 }
 
 pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
+    let resolution = Resolution::default();
+
     utils::color::init_color();
 
     match args.command {
@@ -350,7 +353,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
         Commands::Assembly { file, scope } => {
             let ipc = pcb_ipc2581_tools::ipc2581::Ipc2581::parse_file(&file)?;
             let imported = pcb_ir::import::ipc2581::import_design(&ipc)?;
-            let report = pcb_ipc2581_tools::assembly::build_report(&imported, scope)?;
+            let report = pcb_ipc2581_tools::assembly::build_report(&imported, scope, resolution)?;
             let output = serde_json::to_vec_pretty(&report)?;
             pcb_ui::write_stdout(|stdout| {
                 stdout.write_all(&output)?;
@@ -475,7 +478,13 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                             "--auto/--sheet cannot be combined with manual board array options"
                         );
                     }
-                    commands::board_array::execute_auto(&input, &output, sheet, copper_balance)
+                    commands::board_array::execute_auto(
+                        &input,
+                        &output,
+                        sheet,
+                        copper_balance,
+                        resolution,
+                    )
                 } else {
                     let board_margin_mm = if board_margin.is_empty() {
                         commands::board_array::BoardMarginMm::all(5.0)
@@ -581,6 +590,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                     output,
                     layout_target,
                 },
+                resolution,
             )? {
                 commands::dfm::CheckOutcome::Passed => Ok(()),
                 commands::dfm::CheckOutcome::Failed(error) => Err(error),
@@ -593,13 +603,14 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
             output,
             debug_reliefs,
         } => {
-            let package = manufacturing::execute_file_with_options(
+            let package = manufacturing::export_manufacturing_package(
                 &file,
+                &output,
                 &manufacturing::ManufacturingExportOptions {
-                    output: output.clone(),
                     view: layout_target.artwork_scope(),
                     relief_debug_dir: debug_reliefs,
                 },
+                resolution,
             )?;
             println!(
                 "✓ IPC-2581 exported {} manufacturing file(s) to {}",

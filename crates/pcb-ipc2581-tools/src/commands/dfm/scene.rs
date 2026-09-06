@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use anyhow::{Context, Result, ensure};
 use pcb_ir::dialects::ipc::{ArtworkScope, ProfileSet, profile_occurrences_for};
 use pcb_ir::dialects::{LayerRole, Side, mask};
-use pcb_ir::geom::path::{ContourBuf, PathCmd, transform_cmds};
+use pcb_ir::geom::path::{ContourBuf, PathCmd};
 use pcb_ir::geom::{Affine2, BBox, FillRule, Point, shapes};
 use pcb_ir::render::RenderOptions;
 
@@ -85,13 +85,15 @@ impl GeometryPass {
     }
 
     fn svg(&self, design: &Design<'_>, bounds: BBox) -> Result<String> {
-        let options = RenderOptions::default().with_viewport(bounds);
+        let options = RenderOptions::default()
+            .with_viewport(bounds)
+            .with_accuracy(design.resolution.accuracy);
         match &self.source {
             GeometrySource::Layer => {
                 let layer = self.layer.as_deref().context("artwork pass has no layer")?;
                 let artwork = native_artwork(design, layer)
                     .with_context(|| format!("failed to prepare DFM scene layer {layer}"))?;
-                Ok(pcb_ir::render::artwork_svg(&artwork, &options))
+                Ok(pcb_ir::render::artwork_svg(&artwork, &options)?)
             }
             GeometrySource::Shapes { shapes, fill_rule } => {
                 let mut doc = mask::Document::<()>::new();
@@ -113,12 +115,9 @@ fn native_artwork(
 ) -> Result<
     pcb_ir::dialects::artwork::Document<ipc2581::types::LayerFunction, Option<ipc2581::Symbol>>,
 > {
-    let geometry = geometry::render::prepare_layer(design.imported, layer, design.scope)?;
-    Ok(geometry::render::layer_artwork(
-        &geometry,
-        false,
-        design.scope.profile_set(),
-    ))
+    let geometry =
+        geometry::render::prepare_layer(design.imported, layer, design.scope, design.resolution)?;
+    geometry::render::layer_artwork(&geometry, false, design.scope.profile_set())
 }
 
 pub(super) fn export(
@@ -127,7 +126,7 @@ pub(super) fn export(
     rules: &[RuleResult],
     findings: &[Finding],
 ) -> Result<Scene> {
-    let sources = scene_passes(rules, design);
+    let sources = scene_passes(rules, design)?;
     let mut bounds = scene_bounds(layout.bounding_box, &sources);
     for finding in findings {
         let rule = rules
@@ -206,7 +205,7 @@ fn scene_bounds(layout: Option<ReportBBox>, sources: &[GeometryPass]) -> BBox {
     )
 }
 
-fn scene_passes(rules: &[RuleResult], design: &Design<'_>) -> Vec<GeometryPass> {
+fn scene_passes(rules: &[RuleResult], design: &Design<'_>) -> anyhow::Result<Vec<GeometryPass>> {
     let layout = &design.imported.geometry;
     let wanted = rules
         .iter()
@@ -244,10 +243,7 @@ fn scene_passes(rules: &[RuleResult], design: &Design<'_>) -> Vec<GeometryPass> 
                 layers
                     .entry(hole.layer.name.clone())
                     .or_default()
-                    .push(vec![transform_cmds(
-                        circle.cmds,
-                        Affine2::translation(hole.center),
-                    )]);
+                    .push(vec![circle.transformed(Affine2::translation(hole.center))]);
             }
         }
         for slot in &design.slots {
@@ -314,8 +310,10 @@ fn scene_passes(rules: &[RuleResult], design: &Design<'_>) -> Vec<GeometryPass> 
                 contours
                     .extend(layout.transformed_path_contours(cutout.path, occurrence.transform));
             }
-            contours
+            Ok::<_, anyhow::Error>(contours)
         })
+        .collect::<anyhow::Result<Vec<_>>>()?
+        .into_iter()
         .collect::<Vec<_>>();
     passes.push(GeometryPass::shapes(
         "Physical outlines".into(),
@@ -332,20 +330,25 @@ fn scene_passes(rules: &[RuleResult], design: &Design<'_>) -> Vec<GeometryPass> 
             .iter()
             .map(|array| array.instance_index)
             .collect::<BTreeSet<_>>();
-        let outlines = profile_occurrences_for(layout, ProfileSet::LayoutBoundaries)
-            .into_iter()
-            .filter(|occurrence| {
-                occurrence
-                    .instance
-                    .is_none_or(|index| arrays.contains(&index))
-            })
-            .map(|occurrence| {
-                // Retain native profile arcs instead of reconstructing the
-                // check's tessellated array region for display.
-                layout
-                    .transformed_path_contours(occurrence.profile.outer_path, occurrence.transform)
-            })
-            .collect();
+        let outlines =
+            profile_occurrences_for(layout, ProfileSet::LayoutBoundaries)
+                .into_iter()
+                .filter(|occurrence| {
+                    occurrence
+                        .instance
+                        .is_none_or(|index| arrays.contains(&index))
+                })
+                .map(|occurrence| {
+                    // Retain native profile arcs instead of reconstructing the
+                    // check's tessellated array region for display.
+                    Ok::<_, anyhow::Error>(layout.transformed_path_contours(
+                        occurrence.profile.outer_path,
+                        occurrence.transform,
+                    ))
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?
+                .into_iter()
+                .collect();
         passes.push(GeometryPass::shapes(
             "Array / panel outlines".into(),
             "array_outlines",
@@ -356,7 +359,7 @@ fn scene_passes(rules: &[RuleResult], design: &Design<'_>) -> Vec<GeometryPass> 
             outlines,
         ));
     }
-    passes
+    Ok(passes)
 }
 
 #[cfg(test)]
@@ -364,7 +367,7 @@ mod tests {
     use super::super::{pdk, rules};
     use super::*;
     use crate::ipc2581::Ipc2581;
-    use pcb_ir::geom::{ContourSet, tol};
+    use pcb_ir::geom::{ContourSet, Resolution};
 
     const MASK_BOARD: &str = r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
       <Content roleRef="owner"><FunctionMode mode="FABRICATION"/><StepRef name="board"/><LayerRef name="F.Mask"/></Content>
@@ -395,18 +398,20 @@ mod tests {
 
     #[test]
     fn native_mask_scene_preserves_openings_voids_and_world_coordinates() {
+        let resolution = Resolution::default();
+
         let ipc = Ipc2581::parse(MASK_BOARD).unwrap();
         let rules = rules::lower(&pdk::Pdk::parse(MASK_PDK).unwrap(), None).unwrap();
         let imported = pcb_ir::import::ipc2581::import_design(&ipc).unwrap();
-        let design = Design::extract(&imported, ArtworkScope::Board, &rules).unwrap();
+        let design = Design::extract(&imported, ArtworkScope::Board, &rules, resolution).unwrap();
         let artwork = native_artwork(&design, "F.Mask").unwrap();
-        let rendered = pcb_ir::dialects::artwork::compose_to_mask(&artwork);
+        let rendered = pcb_ir::dialects::artwork::compose_to_mask(&artwork, resolution).unwrap();
         let contours = rendered
             .shapes(&rendered.layers[0])
             .iter()
             .flat_map(|shape| rendered.arena.path_contours(shape))
             .collect::<Vec<_>>();
-        let image = ContourSet::from_contours(&contours, FillRule::NonZero, tol::REGION_MM);
+        let image = ContourSet::from_contours(&contours, FillRule::NonZero, resolution).unwrap();
         let samples = [Point::ZERO, Point::new(8.0, 0.0), Point::new(15.0, 0.0)];
         assert_eq!(image.contains_points_batch(&samples), [false, true, false]);
         assert_eq!(
@@ -434,13 +439,15 @@ mod tests {
 
     #[test]
     fn outlines_and_drills_remain_full_native_paths_outside_any_site() {
+        let resolution = Resolution::default();
+
         let ipc = Ipc2581::parse(MASK_BOARD).unwrap();
         let rules = rules::lower(&pdk::Pdk::parse(MASK_PDK).unwrap(), None).unwrap();
         let imported = pcb_ir::import::ipc2581::import_design(&ipc).unwrap();
-        let design = Design::extract(&imported, ArtworkScope::Board, &rules).unwrap();
+        let design = Design::extract(&imported, ArtworkScope::Board, &rules, resolution).unwrap();
         let outline = ContourSet::rectangle(
             BBox::new(Point::new(-50.0, -50.0), Point::new(50.0, 50.0)),
-            tol::REGION_MM,
+            resolution,
         );
         let pass = GeometryPass::shapes(
             "Physical outlines".into(),
@@ -460,10 +467,9 @@ mod tests {
         assert!(svg.contains("50"));
         assert!(svg.contains("fill='none'"));
 
-        let circle = transform_cmds(
-            shapes::circle(1.0).unwrap().cmds,
-            Affine2::translation(Point::new(40.0, -30.0)),
-        );
+        let circle = shapes::circle(1.0)
+            .unwrap()
+            .transformed(Affine2::translation(Point::new(40.0, -30.0)));
         let drill = GeometryPass::shapes(
             "Drills".into(),
             "drills",

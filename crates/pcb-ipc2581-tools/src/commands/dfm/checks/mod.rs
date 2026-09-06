@@ -147,14 +147,14 @@ pub(super) fn run(
     design: &Design,
     waiver_file: Option<&WaiverFile>,
     today: NaiveDate,
-) -> Results {
+) -> anyhow::Result<Results> {
     let mut results = Results::default();
     for rule in rules {
         let mut result = RuleResult::new(rule);
         match skip_reason(rule, design) {
             Some(reason) => result.skip(reason),
             None => {
-                let evaluation = evaluate(rule, design);
+                let evaluation = evaluate(rule, design)?;
                 match evaluation {
                     RuleEvaluation::Distance(evaluation) => {
                         debug_assert_eq!(rule.comparison, Comparison::Minimum);
@@ -262,7 +262,7 @@ pub(super) fn run(
             result.finish(total, waived);
         }
     }
-    results
+    Ok(results)
 }
 
 /// The one verdict: a distance violates a minimum when it is certainly
@@ -354,48 +354,48 @@ fn skip_reason(rule: &Rule, design: &Design) -> Option<String> {
         .map(|what| format!("no {what} in the selected layout target"))
 }
 
-fn evaluate(rule: &Rule, design: &Design) -> RuleEvaluation {
+fn evaluate(rule: &Rule, design: &Design) -> anyhow::Result<RuleEvaluation> {
     let limit = || rule.limit.length().millimeters();
-    match rule.kind {
+    Ok(match rule.kind {
         RuleKind::CopperLayerCount => RuleEvaluation::Count(layer_count::evaluate(design)),
         RuleKind::HoleDiameter(class) => hole_diameter::evaluate(limit(), class, design).into(),
         RuleKind::HoleAspectRatio(class) => {
             RuleEvaluation::Ratio(hole_aspect_ratio::evaluate(class, &rule.conditions, design))
         }
-        RuleKind::SlotWidth(plating) => slot_width::evaluate(limit(), plating, design).into(),
+        RuleKind::SlotWidth(plating) => slot_width::evaluate(limit(), plating, design)?.into(),
         RuleKind::HolePairClearance(first, second) => {
-            hole_pair_clearance::evaluate(limit(), first, second, design).into()
+            hole_pair_clearance::evaluate(limit(), first, second, design)?.into()
         }
         RuleKind::HoleToBoardEdgeClearance(class) => {
-            drilled_board_edge_clearance::evaluate_holes(limit(), class, design).into()
+            drilled_board_edge_clearance::evaluate_holes(limit(), class, design)?.into()
         }
         RuleKind::SlotToBoardEdgeClearance(plating) => {
-            drilled_board_edge_clearance::evaluate_slots(limit(), plating, design).into()
+            drilled_board_edge_clearance::evaluate_slots(limit(), plating, design)?.into()
         }
         RuleKind::AnnularRing(class) => {
-            annular_ring::evaluate(limit(), class, &rule.conditions, design).into()
+            annular_ring::evaluate(limit(), class, &rule.conditions, design)?.into()
         }
         RuleKind::PlatedSlotEnclosure => {
-            plated_slot_enclosure::evaluate(limit(), &rule.conditions, design).into()
+            plated_slot_enclosure::evaluate(limit(), &rule.conditions, design)?.into()
         }
         RuleKind::HoleToCopperClearance(class) => {
-            hole_clearance::evaluate(limit(), class, &rule.conditions, design).into()
+            hole_clearance::evaluate(limit(), class, &rule.conditions, design)?.into()
         }
         RuleKind::SlotToCopperClearance(plating) => {
-            slot_clearance::evaluate(limit(), plating, &rule.conditions, design).into()
+            slot_clearance::evaluate(limit(), plating, &rule.conditions, design)?.into()
         }
         RuleKind::LineworkToCopperClearance(linework) => {
-            linework_clearance::evaluate(limit(), linework, &rule.conditions, design).into()
+            linework_clearance::evaluate(limit(), linework, &rule.conditions, design)?.into()
         }
-        RuleKind::BoardArrayPairClearance => board_array_spacing::evaluate(limit(), design).into(),
+        RuleKind::BoardArrayPairClearance => board_array_spacing::evaluate(limit(), design)?.into(),
         RuleKind::CopperFeatureWidth => {
-            thin_regions::copper_feature_width(limit(), &rule.conditions, design).into()
+            thin_regions::copper_feature_width(limit(), &rule.conditions, design)?.into()
         }
         RuleKind::CopperClearance => {
-            copper_clearance::evaluate(limit(), &rule.conditions, design).into()
+            copper_clearance::evaluate(limit(), &rule.conditions, design)?.into()
         }
-        RuleKind::SoldermaskWeb => thin_regions::soldermask_web(limit(), design).into(),
-    }
+        RuleKind::SoldermaskWeb => thin_regions::soldermask_web(limit(), design)?.into(),
+    })
 }
 
 pub(super) fn slot_matches(

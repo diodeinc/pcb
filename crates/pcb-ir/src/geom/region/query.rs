@@ -12,7 +12,7 @@ pub struct PreparedRegion {
     pub(crate) segments: Vec<(Point, Point)>,
     order: Vec<usize>,
     nodes: Vec<Node>,
-    uncertainty_mm: f64,
+    pub(crate) uncertainty_mm: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -35,10 +35,11 @@ impl ContourSet {
     /// Requires finite, regularized rings. Zero-area rings are ignored.
     ///
     /// ```
-    /// use pcb_ir::geom::{BBox, ContourSet, Point};
+    /// use pcb_ir::geom::{BBox, ContourSet, Point, Resolution};
     ///
     /// let region = ContourSet::rectangle(
-    ///     BBox::new(Point::ZERO, Point::new(4.0, 2.0)), 0.001,
+    ///     BBox::new(Point::ZERO, Point::new(4.0, 2.0)),
+    ///     Resolution::default(),
     /// );
     /// let prepared = region.prepare_query();
     /// let inside = prepared.signed_distance(Point::new(2.0, 0.5)).unwrap();
@@ -52,17 +53,18 @@ impl ContourSet {
                 .filter(|ring| ring_signed_area(ring) != 0.0)
                 .flat_map(ring_edges)
                 .collect(),
+            self.uncertainty_mm,
         )
     }
 }
 
 impl PreparedRegion {
-    pub(super) fn from_segments(segments: Vec<(Point, Point)>) -> Self {
+    pub(super) fn from_segments(segments: Vec<(Point, Point)>, uncertainty_mm: f64) -> Self {
         let mut prepared = Self {
             order: (0..segments.len()).collect(),
             segments,
             nodes: Vec::new(),
-            uncertainty_mm: tol::FLATTEN_MM,
+            uncertainty_mm,
         };
         if !prepared.segments.is_empty() {
             prepared.build(0..prepared.segments.len());
@@ -78,8 +80,7 @@ impl PreparedRegion {
     /// `None` when the region has no filled boundary or the point is non-finite.
     ///
     /// Uses floating-point arithmetic without snapping to the region tolerance.
-    /// Like [`Distance::flattened`], uncertainty counts one flattened boundary;
-    /// it does not bound prior approximations, offsets, or discarded features.
+    /// Uncertainty is inherited from the source geometry.
     /// The source geometry's sign is uncertain when this band includes zero.
     pub fn signed_distance(&self, point: Point) -> Option<Distance> {
         self.point_distance(point, f64::INFINITY, true)

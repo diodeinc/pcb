@@ -206,7 +206,7 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
     }
 
     // Drill statistics (summary)
-    if let Some(drills) = accessor.board_drill_stats()
+    if let Some(drills) = accessor.board_drill_stats()?
         && drills.total_holes > 0
     {
         summary_table.add_row(vec![
@@ -480,17 +480,17 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
     }
 
     // Drill distribution
-    if let Some(drills) = accessor.board_drill_stats()
+    if let Some(drills) = accessor.board_drill_stats()?
         && !drills.distribution.is_empty()
     {
         print_drill_distribution("Drill Distribution", &drills);
     }
 
     if let Some(board_array) = layout.and_then(|layout| layout.board_array) {
-        print_board_array_summary(&board_array, accessor, unit_format);
+        print_board_array_summary(&board_array, accessor, unit_format)?;
     }
 
-    if let Some(drills) = accessor.board_array_drill_stats()
+    if let Some(drills) = accessor.board_array_drill_stats()?
         && !drills.distribution.is_empty()
     {
         print_drill_distribution("Array Drill Distribution", &drills);
@@ -536,7 +536,7 @@ fn print_board_array_summary(
     board_array: &BoardArrayInfo,
     accessor: &IpcAccessor,
     unit_format: UnitFormat,
-) {
+) -> anyhow::Result<()> {
     println!("{}", "Board Array Summary".bold());
 
     let mut table = Table::new();
@@ -574,7 +574,7 @@ fn print_board_array_summary(
         ]);
     }
 
-    if let Some(drills) = accessor.board_array_drill_stats()
+    if let Some(drills) = accessor.board_array_drill_stats()?
         && drills.total_holes > 0
     {
         table.add_row(vec![
@@ -588,6 +588,8 @@ fn print_board_array_summary(
 
     println!("{table}");
     println!();
+
+    Ok(())
 }
 
 #[cfg(feature = "cli")]
@@ -661,12 +663,12 @@ fn drill_stats_json(drills: &DrillStats) -> serde_json::Value {
 
 #[cfg(feature = "cli")]
 fn output_json(accessor: &IpcAccessor) -> Result<()> {
-    println!("{}", serde_json::to_string_pretty(&info_json(accessor))?);
+    println!("{}", serde_json::to_string_pretty(&info_json(accessor)?)?);
     Ok(())
 }
 
 /// Extract the same board, assembly, and fabrication summary emitted by `ipc info --format json`.
-pub fn info_json(accessor: &IpcAccessor) -> serde_json::Value {
+pub fn info_json(accessor: &IpcAccessor) -> anyhow::Result<serde_json::Value> {
     let ipc = accessor.ipc();
     let content = ipc.content();
     let layer_side_map: BTreeMap<_, _> = ipc
@@ -758,7 +760,7 @@ pub fn info_json(accessor: &IpcAccessor) -> serde_json::Value {
                 "height_inch": dimensions.height_inch(),
             });
         }
-        if let Some(drills) = accessor.board_array_drill_stats()
+        if let Some(drills) = accessor.board_array_drill_stats()?
             && drills.total_holes > 0
         {
             info["board_array"]["drills"] = drill_stats_json(&drills);
@@ -776,7 +778,7 @@ pub fn info_json(accessor: &IpcAccessor) -> serde_json::Value {
     }
 
     // Drill statistics with distribution
-    if let Some(drills) = accessor.board_drill_stats()
+    if let Some(drills) = accessor.board_drill_stats()?
         && drills.total_holes > 0
     {
         info["drills"] = drill_stats_json(&drills);
@@ -952,5 +954,5 @@ pub fn info_json(accessor: &IpcAccessor) -> serde_json::Value {
 
     info["component_placements"] = json!(component_placements);
 
-    info
+    Ok(info)
 }

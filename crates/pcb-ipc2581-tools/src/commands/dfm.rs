@@ -1,5 +1,6 @@
 //! PDK-driven manufacturability checks for IPC-2581 geometry.
 
+use pcb_ir::geom::Resolution;
 #[cfg(feature = "cli")]
 use std::{
     io::Write,
@@ -74,7 +75,11 @@ pub fn builtin_pdks() -> &'static [BuiltinPdk] {
 ///
 /// Manufacturing violations are successful results with a `fail` verdict;
 /// only invalid inputs or geometry that cannot be checked return an error.
-pub fn check(imported: &ImportedDesign, request: CheckRequest<'_>) -> Result<DfmReport> {
+pub fn check(
+    imported: &ImportedDesign,
+    request: CheckRequest<'_>,
+    resolution: Resolution,
+) -> Result<DfmReport> {
     let (pdk_path, pdk_source, selected_profile) = match request.pdk {
         PdkSource::Builtin(name) => {
             let pdk = builtin_pdks::find(name)
@@ -106,13 +111,18 @@ pub fn check(imported: &ImportedDesign, request: CheckRequest<'_>) -> Result<Dfm
         })
         .transpose()?;
 
-    let design = design::Design::extract(imported, request.layout_target.artwork_scope(), &rules)?;
+    let design = design::Design::extract(
+        imported,
+        request.layout_target.artwork_scope(),
+        &rules,
+        resolution,
+    )?;
     let checked = checks::run(
         &rules,
         &design,
         waivers.as_ref(),
         request.generated_at.date_naive(),
-    );
+    )?;
     let summary = summarize(&checked);
     let layout = design.report_layout();
     let scene = scene::export(&design, &layout, &checked.rules, &checked.findings)?;
@@ -226,9 +236,13 @@ pub fn validate_output(file: &Path, options: &CheckOptions) -> Result<()> {
 }
 
 #[cfg(feature = "cli")]
-pub fn execute_check(file: &Path, options: &CheckOptions) -> Result<CheckOutcome> {
+pub fn execute_check(
+    file: &Path,
+    options: &CheckOptions,
+    resolution: Resolution,
+) -> Result<CheckOutcome> {
     validate_output(file, options)?;
-    let report = match build_report(file, options) {
+    let report = match build_report(file, options, resolution) {
         Ok(checked) => checked,
         Err(error) => {
             write_error_report(file, options, &error)
@@ -283,7 +297,7 @@ pub fn write_error_report(
 }
 
 #[cfg(feature = "cli")]
-fn build_report(file: &Path, options: &CheckOptions) -> Result<DfmReport> {
+fn build_report(file: &Path, options: &CheckOptions, resolution: Resolution) -> Result<DfmReport> {
     let input_bytes = std::fs::read(file)
         .with_context(|| format!("failed to read IPC-2581 file {}", file.display()))?;
     let input = report::FileIdentity::new(file.display().to_string(), &input_bytes);
@@ -330,6 +344,7 @@ fn build_report(file: &Path, options: &CheckOptions) -> Result<DfmReport> {
             layout_target: options.layout_target,
             generated_at,
         },
+        resolution,
     )
 }
 
@@ -522,6 +537,8 @@ limit = { minimum = "300 mil" }
     }
 
     fn check_with_pdk(xml: &str, target: LayoutTarget, pdk_source: &str) -> DfmReport {
+        let resolution = Resolution::default();
+
         let ipc = Ipc2581::parse(xml).unwrap();
         let imported = import_design(&ipc).unwrap();
         super::check(
@@ -536,6 +553,7 @@ limit = { minimum = "300 mil" }
                 layout_target: target,
                 generated_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
             },
+            resolution,
         )
         .unwrap()
     }
@@ -796,6 +814,8 @@ limit = { minimum = "300 mil" }
 
     #[test]
     fn in_memory_report_keeps_source_identity_and_waiver_dates() {
+        let resolution = Resolution::default();
+
         let imported = import_design(&Ipc2581::parse(BOARD).unwrap()).unwrap();
         let pdk_source = PDK.replace("minimum = 2", "minimum = 3");
         let run = |waivers, day| {
@@ -815,6 +835,7 @@ limit = { minimum = "300 mil" }
                         .unwrap()
                         .and_utc(),
                 },
+                resolution,
             )
             .unwrap()
         };
@@ -869,6 +890,8 @@ reason = "old finding"
     #[cfg(feature = "cli")]
     #[test]
     fn cli_report_matches_in_memory_report_for_compressed_input() {
+        let resolution = Resolution::default();
+
         let directory = tempfile::tempdir().unwrap();
         let input = directory.path().join("board.xml.zst");
         let pdk = directory.path().join("custom.toml");
@@ -885,6 +908,7 @@ reason = "old finding"
                 output: Some(output.clone()),
                 layout_target: LayoutTarget::Board,
             },
+            resolution,
         )
         .unwrap();
         let CheckOutcome::Failed(error) = outcome else {
@@ -906,6 +930,8 @@ reason = "old finding"
 
     #[test]
     fn rejects_oversize_pdk_source() {
+        let resolution = Resolution::default();
+
         let imported = import_design(&Ipc2581::parse(BOARD).unwrap()).unwrap();
         let source = " ".repeat(MAX_PDK_BYTES + 1);
         let error = super::check(
@@ -920,6 +946,7 @@ reason = "old finding"
                 layout_target: LayoutTarget::Board,
                 generated_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
             },
+            resolution,
         )
         .unwrap_err();
 
@@ -1040,6 +1067,8 @@ reason = "old finding"
 
     #[test]
     fn profile_support_rejects_an_incomplete_physical_stackup() {
+        let resolution = Resolution::default();
+
         let ipc = Ipc2581::parse(&BOARD.replace(
             "layerOrGroupRef=\"BOTTOM\"",
             "layerOrGroupRef=\"DIELECTRIC\"",
@@ -1049,7 +1078,7 @@ reason = "old finding"
         let rules = rules::lower(&pdk, None).unwrap();
         let imported = import_design(&ipc).unwrap();
 
-        let error = design::Design::extract(&imported, ArtworkScope::Board, &rules)
+        let error = design::Design::extract(&imported, ArtworkScope::Board, &rules, resolution)
             .err()
             .unwrap();
 
@@ -1062,6 +1091,8 @@ reason = "old finding"
 
     #[test]
     fn one_evaluator_scales_through_board_array_and_fab_panel_lowering() {
+        let resolution = Resolution::default();
+
         let array = create_board_array(
             BOARD,
             &BoardArrayCreateOptions {
@@ -1071,6 +1102,7 @@ reason = "old finding"
                 edge_rail_mm: EdgeInsetsMm::all(5.0),
             },
             false,
+            resolution,
         )
         .unwrap()
         .xml;
@@ -1079,6 +1111,7 @@ reason = "old finding"
             &[0, 0],
             FabPanelSpec::default(),
             false,
+            resolution,
         )
         .unwrap()
         .xml;

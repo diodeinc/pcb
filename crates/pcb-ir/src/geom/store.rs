@@ -9,7 +9,7 @@ use std::ops::Range;
 
 use crate::geom::affine::Affine2;
 use crate::geom::bbox::BBox;
-use crate::geom::path::{ContourBuf, PathCmd, contour_bbox, transform_cmds, validate_cmd_points};
+use crate::geom::path::{ContourBuf, PathCmd, contour_bbox, validate_cmd_points};
 use crate::geom::style::{FillRule, Paint, StrokeStyle};
 
 /// A half-open range of `u32` indices into one of a document's flat arenas.
@@ -88,6 +88,7 @@ impl Span {
 pub struct Contour {
     pub cmds: Span,
     pub bbox: BBox,
+    pub uncertainty_mm: f64,
 }
 
 /// A styled path: how a contour span is painted.
@@ -191,6 +192,7 @@ impl PathArena {
         self.contours.push(Contour {
             cmds: Span::new(cmd_start, self.cmds.len() as u32 - cmd_start),
             bbox: contour.bbox,
+            uncertainty_mm: contour.uncertainty_mm,
         });
         id
     }
@@ -211,7 +213,11 @@ impl PathArena {
     pub fn contour_bufs(&self, span: Span) -> Vec<ContourBuf> {
         self.contours(span)
             .iter()
-            .map(|contour| ContourBuf::from_parts(contour.bbox, self.cmds(*contour).to_vec()))
+            .map(|contour| ContourBuf {
+                bbox: contour.bbox,
+                cmds: self.cmds(*contour).to_vec(),
+                uncertainty_mm: contour.uncertainty_mm,
+            })
             .collect()
     }
 
@@ -220,11 +226,11 @@ impl PathArena {
         self.contour_bufs(path.contours)
     }
 
-    /// Detach a contour span, transformed.
+    /// Detach a contour span, transformed exactly.
     pub fn transformed_contour_bufs(&self, span: Span, transform: Affine2) -> Vec<ContourBuf> {
-        self.contours(span)
-            .iter()
-            .map(|contour| transform_cmds(self.cmds(*contour).iter().copied(), transform))
+        self.contour_bufs(span)
+            .into_iter()
+            .map(|contour| contour.transformed(transform))
             .collect()
     }
 
@@ -237,9 +243,7 @@ impl PathArena {
 
     /// Union of contour bounds over a transformed contour span.
     pub fn transformed_contours_bbox(&self, span: Span, transform: Affine2) -> BBox {
-        self.transformed_contour_bufs(span, transform)
-            .iter()
-            .fold(BBox::empty(), |bbox, contour| bbox.union(contour.bbox))
+        self.contours_bbox(span).transformed(transform)
     }
 
     /// Union of path bounds over a path span.
@@ -253,11 +257,7 @@ impl PathArena {
     /// transformed. Returns the new path index.
     pub fn append_path_from(&mut self, other: &PathArena, path: u32, transform: Affine2) -> u32 {
         let source = other.paths[path as usize];
-        let contours = if transform.is_identity() {
-            other.path_contours(&source)
-        } else {
-            other.transformed_contour_bufs(source.contours, transform)
-        };
+        let contours = other.transformed_contour_bufs(source.contours, transform);
         self.push_path(source.paint, contours)
     }
 
@@ -297,6 +297,7 @@ impl PathArena {
                 contours.push(Contour {
                     cmds: Span::new(cmd_start, cmds.len() as u32 - cmd_start),
                     bbox: contour.bbox,
+                    uncertainty_mm: contour.uncertainty_mm,
                 });
             }
             mapping[index] = Some(paths.len() as u32);

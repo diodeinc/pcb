@@ -5,6 +5,7 @@ mod options;
 #[wasm_bindgen::prelude::wasm_bindgen(typescript_custom_section)]
 const TYPESCRIPT: &str = include_str!("api.d.ts");
 
+use pcb_ir::geom::Resolution;
 use std::cell::OnceCell;
 use std::io::{Cursor, Read};
 
@@ -69,7 +70,7 @@ impl IpcDocument {
     /// The native IPC info JSON summary.
     #[wasm_bindgen(unchecked_return_type = "IpcInfo")]
     pub fn info(&self) -> Result<JsValue, JsError> {
-        to_js(&commands::info::info_json(&self.accessor()))
+        to_js(&commands::info::info_json(&self.accessor()).map_err(js_error)?)
     }
 
     /// Source layer names accepted by SVG and PNG export.
@@ -102,6 +103,8 @@ impl IpcDocument {
         &self,
         #[wasm_bindgen(unchecked_optional_param_type = "DfmOptions")] options: Option<JsValue>,
     ) -> Result<JsValue, JsError> {
+        let resolution = Resolution::default();
+
         let options: DfmOptions = read_options(options)?;
         let generated_at = match options.generated_at {
             Some(ref value) => chrono::DateTime::parse_from_rfc3339(value)
@@ -130,6 +133,7 @@ impl IpcDocument {
                     layout_target: options.layout_target,
                     generated_at,
                 },
+                resolution,
             )
             .map_err(js_error)?,
         )
@@ -166,6 +170,8 @@ impl IpcDocument {
     }
 
     fn export_data(&self, options: ExportOptions) -> Result<Vec<ExportFile>> {
+        let resolution = Resolution::default();
+
         let file = match options {
             ExportOptions::Ipc2581 { mode } => ExportFile::new(
                 "board.xml",
@@ -176,9 +182,13 @@ impl IpcDocument {
                 },
             ),
             ExportOptions::Gerber { layout_target, zip } => {
-                let package = manufacturing::build_manufacturing_package_from_design(
+                let package = manufacturing::build_manufacturing_package(
                     self.design()?,
-                    layout_target.artwork_scope(),
+                    &manufacturing::ManufacturingExportOptions {
+                        view: layout_target.artwork_scope(),
+                        relief_debug_dir: None,
+                    },
+                    resolution,
                 )?;
                 if zip {
                     ExportFile::new("manufacturing.zip", "application/zip", package.to_zip()?)
@@ -195,11 +205,17 @@ impl IpcDocument {
                 layout_target,
             } => {
                 let scope = layout_target.artwork_scope();
-                let geometry = geometry::render::prepare_layer(self.design()?, &layer, scope)?;
+                let geometry =
+                    geometry::render::prepare_layer(self.design()?, &layer, scope, resolution)?;
                 ExportFile::new(
                     format!("{}.svg", safe_name(&layer)),
                     "image/svg+xml",
-                    geometry::render::render_layer_svg(&geometry, true, scope.profile_set()),
+                    geometry::render::render_layer_svg(
+                        &geometry,
+                        true,
+                        scope.profile_set(),
+                        resolution.accuracy,
+                    )?,
                 )
             }
             ExportOptions::Png {
@@ -207,12 +223,18 @@ impl IpcDocument {
                 layout_target,
             } => {
                 let scope = layout_target.artwork_scope();
-                let geometry = geometry::render::prepare_layer(self.design()?, &layer, scope)?;
+                let geometry =
+                    geometry::render::prepare_layer(self.design()?, &layer, scope, resolution)?;
                 ExportFile::new(
                     format!("{}.png", safe_name(&layer)),
                     "image/png",
-                    geometry::render::render_layer_png(&geometry, true, scope.profile_set())
-                        .map_err(anyhow::Error::msg)?,
+                    geometry::render::render_layer_png(
+                        &geometry,
+                        true,
+                        scope.profile_set(),
+                        resolution.accuracy,
+                    )
+                    .map_err(anyhow::Error::msg)?,
                 )
             }
             ExportOptions::Dxf { layout_target } => ExportFile::new(
@@ -226,8 +248,7 @@ impl IpcDocument {
                 serde_json::to_vec_pretty(&commands::bom::extract_bom_lines(&self.accessor()))?,
             ),
             ExportOptions::Cpl { side, exclude_dnp } => {
-                let placements =
-                    placement::extract_single_board_placements_from_design(self.design()?)?;
+                let placements = placement::extract_single_board_placements(self.design()?)?;
                 ExportFile::new(
                     "placements.csv",
                     "text/csv",
@@ -245,14 +266,14 @@ impl IpcDocument {
                 "ict.csv",
                 "text/csv",
                 commands::ict::emit_ict_csv(
-                    &commands::ict::extract_contacts_from_design(&self.ipc, self.design()?)?,
+                    &commands::ict::extract_contacts(&self.ipc, self.design()?, resolution)?,
                     side,
                 ),
             ),
             ExportOptions::Html {} => ExportFile::new(
                 "board.html",
                 "text/html",
-                commands::html_export::generate_html(&self.accessor(), UnitFormat::Mm)?,
+                commands::html_export::generate_html(&self.accessor(), UnitFormat::Mm, resolution)?,
             ),
         };
         Ok(vec![file])

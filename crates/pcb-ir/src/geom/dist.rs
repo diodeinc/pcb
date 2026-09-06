@@ -1,17 +1,12 @@
 //! Euclidean distance primitives with closest-point witnesses.
 
 use crate::geom::point::Point;
-use crate::geom::tol;
 
 /// A measured length between two witness points, in the IR's canonical
 /// millimeters, with the uncertainty its inputs carry.
 ///
-/// Flattening places each curved boundary up to [`tol::FLATTEN_MM`] from
-/// its source, so a length measured against `n` flattened boundaries is
-/// known only to within `n · FLATTEN_MM`. A consumer comparing against a
-/// minimum uses [`Distance::certainly_below`], so tessellation alone can
-/// never manufacture a violation. `mm` is signed where the quantity is: a
-/// negative enclosure is the depth of a breach.
+/// `uncertainty_mm` carries the preparation history of the measured inputs.
+/// `mm` is signed where the quantity is: a negative enclosure is a breach.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Distance {
     pub mm: f64,
@@ -32,21 +27,19 @@ impl Distance {
         }
     }
 
-    /// A length measured against `flattened_boundaries` tessellated curves.
-    pub fn flattened(mm: f64, first: Point, second: Point, flattened_boundaries: u32) -> Self {
+    /// A measurement using the accumulated positional errors of its inputs.
+    pub fn with_uncertainty(mm: f64, first: Point, second: Point, uncertainty_mm: f64) -> Self {
         Self {
             mm,
-            uncertainty_mm: f64::from(flattened_boundaries) * tol::FLATTEN_MM,
             first,
             second,
+            uncertainty_mm,
         }
     }
 
-    /// The same length, with `flattened_boundaries` more tessellated inputs
-    /// counted toward its uncertainty.
-    pub fn also_flattened(self, flattened_boundaries: u32) -> Self {
+    pub fn also_uncertain(self, uncertainty_mm: f64) -> Self {
         Self {
-            uncertainty_mm: self.uncertainty_mm + f64::from(flattened_boundaries) * tol::FLATTEN_MM,
+            uncertainty_mm: self.uncertainty_mm + uncertainty_mm,
             ..self
         }
     }
