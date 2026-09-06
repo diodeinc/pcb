@@ -50,3 +50,29 @@ R1 p n {RVAL}
         print(SpiceModel('r.lib', 'my_resistor', nets=[P1, P2], args={"FOO": "123", "RVAL": "1"}))
     "#
 });
+
+snapshot_eval!(model_parsing_empty_param_name, {
+    "r.lib" => r#"
+.SUBCKT my_resistor p n PARAMS: RVAL=1k =
+R1 p n {RVAL}
+.ENDS my_resistor
+    "#,
+    "test.zen" => r#"
+        P1 = io(Net)
+        P2 = io(Net)
+        SpiceModel('r.lib', 'my_resistor', nets=[P1, P2], args={"RVAL": "1k"})
+    "#
+});
+
+snapshot_eval!(model_parsing_double_eq_after_name_accepted, {
+    "r.lib" => r#"
+.SUBCKT my_resistor p n PARAMS: RVAL==1k
+R1 p n {RVAL}
+.ENDS my_resistor
+    "#,
+    "test.zen" => r#"
+        P1 = io(Net)
+        P2 = io(Net)
+        SpiceModel('r.lib', 'my_resistor', nets=[P1, P2], args={"RVAL": "1k"})
+    "#
+});

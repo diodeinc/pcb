@@ -46,6 +46,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Support opaque service-account client IDs and proper OAuth Basic encoding.
 - Allow off-page schematic placement and avoid existing text and graphics.
+- Return a diagnosed parse error instead of panicking on malformed SPICE `.SUBCKT` `PARAMS:` tokens with an empty parameter name (e.g. a stray trailing `=`).
 
 ## [0.4.49] - 2026-09-04
 
