@@ -43,11 +43,49 @@ pub fn compute_net_renames_patches(
         }
     });
 
-    // Apply exact-match renames
+    // Compute the set of net names that will be vacated by this same pass.
+    //
+    // A name is "freed" when its own rename is itself applied, so a rename whose
+    // target equals that name is safe even though the name is present in
+    // `existing`. This is what lets rename chains (A->B, B->C) resolve in a
+    // single pass: B is freed because B->C is applied, which admits A->B.
+    //
+    // Propagation is transitive so chains of arbitrary length resolve once the
+    // terminal link's target is absent from the board. Partial chains that
+    // would collide with an on-board net which is not itself being renamed stay
+    // blocked, preserving the original guard's merge protection.
+    let mut freed: HashSet<&str> = HashSet::new();
+    let mut worklist: Vec<&str> = Vec::new();
+    let mut predecessors: HashMap<&str, Vec<&str>> = HashMap::new();
+    for (src, tgt) in net_renames {
+        predecessors
+            .entry(tgt.as_str())
+            .or_default()
+            .push(src.as_str());
+    }
+    for (src, tgt) in net_renames {
+        if !existing.contains(tgt.as_str()) {
+            freed.insert(src.as_str());
+            worklist.push(src.as_str());
+        }
+    }
+    while let Some(name) = worklist.pop() {
+        if let Some(preds) = predecessors.get(name) {
+            for &pred in preds {
+                if freed.insert(pred) {
+                    worklist.push(pred);
+                }
+            }
+        }
+    }
+
+    // Apply exact-match renames. A rename is admitted when its target is not
+    // already on the board, or when the target is itself being vacated by
+    // another rename in this pass (a chain link).
     board.walk_strings(|value, span, ctx| {
         if is_net_patchable(&ctx)
             && let Some(new_value) = net_renames.get(value)
-            && !existing.contains(new_value)
+            && (!existing.contains(new_value) || freed.contains(new_value.as_str()))
         {
             patches.replace_string(span, new_value);
             renames.push((value.to_string(), new_value.clone()));
@@ -473,5 +511,173 @@ mod tests {
         assert!(result.contains("\"Power.R1\""));
         assert!(result.contains("(group \"Power\""));
         assert_eq!(applied.len(), 3);
+    }
+
+    #[test]
+    fn test_net_chain_rename_resolves_two_link() {
+        // Regression: a rename chain A->B, B->C where B is an on-board net that is
+        // itself renamed away in the same pass must fully resolve. Previously the
+        // collision guard dropped A->B because B was present in the pre-rename
+        // snapshot, leaving A on its unsanitized label.
+        let input = r#"(kicad_pcb
+            (net 1 "Signal.Name")
+            (net 2 "Signal_Name")
+        )"#;
+
+        let board = parse(input).unwrap();
+
+        let mut renames = HashMap::new();
+        renames.insert("Signal.Name".to_string(), "Signal_Name".to_string());
+        renames.insert("Signal_Name".to_string(), "Signal_Name_2".to_string());
+
+        let (patches, applied) = super::compute_net_renames_patches(&board, &renames);
+        let mut buf = Vec::new();
+        patches.write_to(input, &mut buf).unwrap();
+        let result = String::from_utf8(buf).unwrap();
+
+        assert!(
+            result.contains("(net 1 \"Signal_Name\")"),
+            "expected A->B rename applied; result was: {result:?}"
+        );
+        assert!(
+            result.contains("(net 2 \"Signal_Name_2\")"),
+            "expected B->C rename applied; result was: {result:?}"
+        );
+        assert!(
+            !result.contains("\"Signal.Name\""),
+            "original A should be gone; result was: {result:?}"
+        );
+        assert_eq!(
+            applied.len(),
+            2,
+            "both renames should be applied; applied = {applied:?}"
+        );
+    }
+
+    #[test]
+    fn test_net_chain_rename_resolves_three_link() {
+        // Chains of arbitrary length must resolve in one pass as long as the
+        // terminal target is absent from the board. This mirrors the rename map
+        // the import caller produces for KiCad nets {"Signal.Name",
+        // "Signal_Name", "Signal_Name_2"} via sanitize + alloc_unique_ident.
+        let input = r#"(kicad_pcb
+            (net 1 "Signal.Name")
+            (net 2 "Signal_Name")
+            (net 3 "Signal_Name_2")
+        )"#;
+
+        let board = parse(input).unwrap();
+
+        let mut renames = HashMap::new();
+        renames.insert("Signal.Name".to_string(), "Signal_Name".to_string());
+        renames.insert("Signal_Name".to_string(), "Signal_Name_2".to_string());
+        renames.insert("Signal_Name_2".to_string(), "Signal_Name_2_2".to_string());
+
+        let (patches, applied) = super::compute_net_renames_patches(&board, &renames);
+        let mut buf = Vec::new();
+        patches.write_to(input, &mut buf).unwrap();
+        let result = String::from_utf8(buf).unwrap();
+
+        assert!(
+            result.contains("(net 1 \"Signal_Name\")"),
+            "expected A->B; result was: {result:?}"
+        );
+        assert!(
+            result.contains("(net 2 \"Signal_Name_2\")"),
+            "expected B->C; result was: {result:?}"
+        );
+        assert!(
+            result.contains("(net 3 \"Signal_Name_2_2\")"),
+            "expected C->D; result was: {result:?}"
+        );
+        assert!(
+            !result.contains("\"Signal.Name\""),
+            "original A should be gone; result was: {result:?}"
+        );
+        assert!(
+            !result.contains("(net 2 \"Signal_Name\")"),
+            "B's old label should be gone; result was: {result:?}"
+        );
+        assert_eq!(
+            applied.len(),
+            3,
+            "all three renames should be applied; applied = {applied:?}"
+        );
+    }
+
+    #[test]
+    fn test_net_chain_blocked_when_terminal_collides_with_existing() {
+        // If a chain would land on an on-board net that is NOT itself being
+        // renamed, the whole prefix that depends on it must stay blocked so the
+        // renames do not merge two distinct nets onto one label.
+        let input = r#"(kicad_pcb
+            (net 1 "A")
+            (net 2 "B")
+            (net 3 "C")
+        )"#;
+
+        let board = parse(input).unwrap();
+
+        let mut renames = HashMap::new();
+        renames.insert("A".to_string(), "B".to_string());
+        renames.insert("B".to_string(), "C".to_string());
+        // "C" exists on the board and is NOT a rename source.
+
+        let (patches, applied) = super::compute_net_renames_patches(&board, &renames);
+        let mut buf = Vec::new();
+        patches.write_to(input, &mut buf).unwrap();
+        let result = String::from_utf8(buf).unwrap();
+
+        // Nothing should be applied: B->C collides with the existing "C", which
+        // blocks B->C, which in turn blocks A->B (B would not actually be vacated).
+        assert!(result.contains("(net 1 \"A\")"));
+        assert!(result.contains("(net 2 \"B\")"));
+        assert!(result.contains("(net 3 \"C\")"));
+        assert_eq!(
+            applied.len(),
+            0,
+            "no renames should be applied; applied = {applied:?}"
+        );
+    }
+
+    #[test]
+    fn test_net_chain_rename_identity_entries_are_noops() {
+        // Identity renames (KiCad name already equals the Zener name) are produced
+        // by the import caller for nets that need no sanitization. They must not
+        // be reported as applied nor generate patches, and must not interfere
+        // with a real chain that happens to use the same name.
+        let input = r#"(kicad_pcb
+            (net 1 "GND")
+            (net 2 "Sig.X")
+            (net 3 "Sig_X")
+        )"#;
+
+        let board = parse(input).unwrap();
+
+        let mut renames = HashMap::new();
+        renames.insert("GND".to_string(), "GND".to_string());
+        renames.insert("Sig.X".to_string(), "Sig_X".to_string());
+        renames.insert("Sig_X".to_string(), "Sig_X_2".to_string());
+
+        let (patches, applied) = super::compute_net_renames_patches(&board, &renames);
+        let mut buf = Vec::new();
+        patches.write_to(input, &mut buf).unwrap();
+        let result = String::from_utf8(buf).unwrap();
+
+        assert!(result.contains("(net 1 \"GND\")"));
+        assert!(result.contains("(net 2 \"Sig_X\")"));
+        assert!(result.contains("(net 3 \"Sig_X_2\")"));
+        assert!(!result.contains("\"Sig.X\""));
+        // GND->GND must NOT be counted as applied.
+        let applied_gnd = applied.iter().any(|(o, n)| o == "GND" && n == "GND");
+        assert!(
+            !applied_gnd,
+            "identity rename must not be applied: {applied:?}"
+        );
+        assert_eq!(
+            applied.len(),
+            2,
+            "only the two real chain renames should be applied; applied = {applied:?}"
+        );
     }
 }

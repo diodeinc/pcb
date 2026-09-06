@@ -50,6 +50,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Support opaque service-account client IDs and proper OAuth Basic encoding.
 - Allow off-page schematic placement and avoid existing text and graphics.
+- Apply chained net renames (e.g. `A->B, B->C`) in one pass during import pre-patching instead of silently dropping the first link and leaving an unsanitized net label.
 
 ## [0.4.49] - 2026-09-04
 
