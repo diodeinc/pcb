@@ -387,10 +387,10 @@ pub(crate) fn expand_stacked_pin_number(number: &str) -> Result<BTreeSet<String>
             continue;
         }
         if let Some((start, end)) = part.split_once('-') {
-            let Some((start_prefix, start_value)) = alpha_numeric_pin(start.trim()) else {
+            let Some((start_prefix, start_value, width)) = alpha_numeric_pin(start.trim()) else {
                 return literal();
             };
-            let Some((end_prefix, end_value)) = alpha_numeric_pin(end.trim()) else {
+            let Some((end_prefix, end_value, _)) = alpha_numeric_pin(end.trim()) else {
                 return literal();
             };
             if start_prefix != end_prefix || start_value > end_value {
@@ -408,7 +408,7 @@ pub(crate) fn expand_stacked_pin_number(number: &str) -> Result<BTreeSet<String>
                 );
             }
             for value in start_value..=end_value {
-                expanded.insert(format!("{start_prefix}{value}"));
+                expanded.insert(format!("{start_prefix}{value:0width$}"));
             }
         } else {
             expanded.insert(part.to_string());
@@ -426,7 +426,7 @@ pub(crate) fn expand_stacked_pin_number(number: &str) -> Result<BTreeSet<String>
     }
 }
 
-fn alpha_numeric_pin(value: &str) -> Option<(&str, i64)> {
+fn alpha_numeric_pin(value: &str) -> Option<(&str, i64, usize)> {
     let digit_start = value
         .char_indices()
         .rev()
@@ -436,7 +436,10 @@ fn alpha_numeric_pin(value: &str) -> Option<(&str, i64)> {
         .unwrap_or(0);
     (digit_start < value.len()).then(|| {
         let (prefix, digits) = value.split_at(digit_start);
-        digits.parse().ok().map(|number| (prefix, number))
+        digits
+            .parse()
+            .ok()
+            .map(|number| (prefix, number, digits.len()))
     })?
 }
 
