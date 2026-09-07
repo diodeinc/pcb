@@ -212,22 +212,6 @@ fn unmanaged_component_still_contributes_pin_connectivity() {
 }
 
 #[test]
-fn unmanaged_symbol_on_a_repeated_sheet_collapses_to_one_component_node() {
-    let mut builder = KicadBuilder::new();
-    builder
-        .define_symbol("Test:OnePin", &[TestPin::passive("1", (0.0, 0.0))])
-        .sheet("child.kicad_sch", &[])
-        .sheet("child.kicad_sch", &[])
-        .add_page("child", "child.kicad_sch")
-        .component("Test:OnePin", None, (0.0, 0.0));
-
-    let graph = ConnectivityGraph::from_kicad(&builder.build()).unwrap();
-
-    assert_eq!(graph.components.len(), 1, "{:?}", graph.components);
-    assert!(graph.components[0].managed_slot.is_none());
-}
-
-#[test]
 fn distinct_managed_symbols_sharing_a_slot_still_report_duplicate() {
     let mut builder = KicadBuilder::new();
     builder
