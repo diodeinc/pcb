@@ -1,7 +1,8 @@
 # pcb-elastic
 
 Small deterministic dense linear-elastic analysis, separate from PCB geometry,
-meshing, import, fixtures, materials, support selection and manufacturing limits.
+meshing, import, fixtures, materials and manufacturing limits. Pure support
+selection over caller-supplied stiffness contributions lives in `selection`.
 `pcb-sim` owns SPICE/process integration; `pcb-ir` owns geometry. This crate takes
 only numerical element coordinates and indexed contributions. It does not invent
 another outline, mesh, attachment-search or manufacturing representation.
@@ -45,6 +46,107 @@ Use consistent units, for example N/mm: vertex w in mm, slope dimensionless,
 beam EI in N·mm², plate bending tensor in N·mm, compliance in N·mm. Characteristic
 scales for w and slopes must be explicit and physically coherent. Numerical
 tolerances are not material properties or manufacturing acceptance thresholds.
+
+## Support selection (ENG-1435)
+
+`selection::select(model, candidates, conflicts, cases, fixed, max_subsets)`
+returns candidate IDs, not geometry. A candidate contains an ID and any number
+of stiffness contributions; selecting it counts as one support. Conflicts are
+unordered pairs of candidate IDs. IDs must be unique; input candidate ordering
+does not affect traversal. All inputs, including unreached candidates, are
+validated before searching. Validation errors return `Err`, never infeasibility.
+Each load case supplies its own finite positive compliance limit. `fixed` names
+homogeneous Dirichlet DOFs: moving fixtures are intentionally outside this
+objective, since their work changes the interpretation of fᵀu.
+
+The lexicographic objective is exactly:
+
+1. Minimize the number of selected candidates.
+2. At that count, minimize the worst normalized compliance
+   `max_l (f_lᵀ u_l / compliance_limit_l)`.
+3. For exactly equal computed objectives, choose lexicographically smaller IDs.
+
+The case limits therefore explicitly set both feasibility and relative response
+importance. There are no inferred loads, physical defaults, distribution rules,
+support margins, default 0.05 N·mm limit, or epsilon tie window. Feasibility uses
+`compliance <= limit` with no added acceptance tolerance. Tolerances on the
+`Model` control numerical rank/residuals, not compliance requirements.
+
+**Admissibility:** require stable, unique static equilibrium for every load case.
+Compatible singular systems are not admitted: their minimum-norm displacement
+is nonunique and is not a physical restraint. Conservatively, *all* nonstable
+statuses (compatible/incompatible singular and inaccurate), evaluation errors,
+and independent verification failures remain unresolved, not certified
+infeasible. Reports retain subset IDs, load-case indices and failure reasons.
+Even when another case exceeds its limit, a numerical failure is retained and
+withholds proof. Unsupported models may consequently have a verified feasible
+incumbent but no minimum-count certificate.
+
+Search enumerates combinations in increasing cardinality and sorted-ID order,
+rejects conflicts, and completes the first layer containing a verified feasible
+set. This considers arbitrary coupled replacements, not just single-site moves.
+`max_subsets` caps visited subsets, including conflict rejections; it is not a
+wall-clock limit and does not include input validation. No heuristic pruning or
+local-optimum claim is involved. A call restarts from the beginning; no resumable
+state is exposed. Budget exhaustion retains any incumbent and all diagnostics.
+
+**Certificate argument:** the combination iterator visits each subset of a
+cardinality once. Every smaller layer is exhausted before the first feasible
+layer, and every set in that layer is compared before declaring an optimum.
+Conflict rejection is exact. Without unresolved analyses this proves minimum
+count and minimum *computed* response at that count. `count_lower_bound` advances
+only over completely classified infeasible layers; `n+1` denotes exhaustive
+infeasibility. The incumbent count/objective provide achievable upper values.
+No response lower bound, numerical error interval, or exact-arithmetic/global
+physical optimality certificate is claimed. Near thresholds/ties or poorly
+conditioned models require separate numerical scrutiny. `Proof::Unresolved`
+means the relevant traversal completed but certification failed;
+`Proof::BudgetExhausted` means traversal is unfinished, with numerical failures
+reported independently. Absence of an incumbent alone never proves infeasibility.
+
+Every spectrally admissible case also takes an independent full Cholesky path
+before a set can become an incumbent. It assembles selected contributions anew
+onto the immutable base matrix, eliminates explicit fixed DOFs, factors the full
+scaled free system and checks residuals and the original compliance limit.
+Both displacement/compliance responses and residuals are returned. This checks
+assembly of optional supports and a different solve algorithm; it shares the
+already assembled base and input stiffness/scales, and cannot validate those
+physical inputs. It is not a second call to `Model::evaluate` or condensation.
+The objective uses spectral compliance; Cholesky is an independent admissibility
+check, not an averaged objective or a hidden margin. This is a backward residual
+check, not a forward-error bound. At PCB integration, reassemble the selected
+complete mechanical model independently of candidate generation and verify it;
+that integration acceptance remains ENG-1434/ENG-591 work.
+
+**Cost and evidence:** with m candidates, n DOFs and L cases, worst-case traversal
+is 2^m subsets and each full solve costs O(n³). Contribution validation also uses
+dense spectra. No large-model scalability is claimed. Live numerical storage is
+O(L n²) plus candidate data; failure diagnostics can grow as O(B L m) for budget
+B. Tests compare 32 independent 8-candidate/4-DOF problems against a separately
+assembled bitmask/Cholesky exhaustive oracle, with coupled off-diagonal stiffness,
+multiple contributions, two load cases, conflicts, nonunit scales and fixed
+DOFs. Tests also cover two-support replacement traps, count priority, ties,
+budget boundaries, infeasibility, singularity, overflow and inaccurate solves.
+
+Run the reproducible synthetic benchmark (seed 1435):
+
+```sh
+cargo test -p pcb-elastic --release --test selection benchmark_synthetic_stiffness -- --ignored --nocapture
+```
+
+Measured in an x86_64 Linux orb, optimized native Rust, two loads per case:
+
+| DOFs | Candidates | Subset budget | Visited / spectral solves | Seconds | Result |
+| ---: | ---: | ---: | ---: | ---: | --- |
+| 12 | 20 | 2000 | 211 / 422 | 0.012094 | Exhaustive optimum: IDs [23,26], count 2, objective 0.8932730213381614 |
+| 32 | 32 | 2000 | 529 / 1058 | 0.221149 | Exhaustive optimum: IDs [41,92], count 2, objective 0.9348780279410369 |
+| 64 | 48 | 500 | 500 / 1000 | 1.204119 | Budget exhausted, no incumbent; count lower bound 2 |
+
+All three runs report zero unresolved analyses. Times include selector input
+validation, assembled global PSD validation and independent checks, but exclude fixture/base construction and
+compilation; these are single-run measurements, not latency guarantees. The
+64-DOF run does not prove infeasibility or optimality. Benchmark limits and
+rank-one synthetic supports are test data, not manufacturing assumptions.
 
 ## Elements and mesh integration
 
