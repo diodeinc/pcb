@@ -142,9 +142,10 @@ not a certified error bound or proof of asymptotic convergence. The undrilled
 comparison gives 54.700868 (1276 DOFs), so perforation increases compliance
 3.264% for this particular geometry/fixture/load. Construct that reference
 directly from the undrilled footprint, not by refilling polygonal holes.
-All six checks take about 11 seconds in release in the development orb:
-`cargo test --release -p pcb-mechanical -- --nocapture`. Dense debug solves
-are substantially slower.
+All six checks take about 23 seconds in release in the development orb:
+`cargo test --release -p pcb-mechanical -- --nocapture`. The default test
+profile takes about 47 seconds with the elastic crate optimized, including
+global assembled-stiffness validation and all debug assertions.
 Native checks and clippy pass; `cargo check -p pcb-mechanical --target
 wasm32-unknown-unknown` also passes (compile only, not WASM runtime validation).
 
