@@ -16,6 +16,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- Reuse prepared contour apertures during Gerber export without changing geometry or emitted files.
 - Model KiCad sheet graphics and text as editable, UUID-addressed items, including source-preserving saves of moved annotations.
 - Consolidate `pcb bom` table and JSON rows by selected offer.
 - Upgrade all remaining bundled standard-library and example symbols to KiCad 10 format.
