@@ -999,7 +999,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let info = info_json(&IpcAccessor::new(&ipc));
+        let info = info_json(&IpcAccessor::new(&ipc)).unwrap();
         let placements = info["component_placements"].as_array().unwrap();
         assert_eq!(
             placements
