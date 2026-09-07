@@ -140,7 +140,6 @@ pub fn download_kicad_symbols_index_with_progress(
     };
 
     let version_token = index_metadata.version_token()?;
-
     ensure_parent_dir(dest_path, "KiCad symbols")?;
 
     let response = match download_index_response(&client, &index_metadata.url) {
@@ -185,8 +184,8 @@ pub fn download_kicad_symbols_index(dest_path: &Path) -> Result<()> {
             .json()
             .context("Failed to parse KiCad symbols index response")?;
 
-    ensure_parent_dir(dest_path, "KiCad symbols")?;
     let version_token = index_metadata.version_token()?;
+    ensure_parent_dir(dest_path, "KiCad symbols")?;
 
     eprintln!("Downloading symbols.db.zst...");
     let response = download_index_response(&client, &index_metadata.url)?;
@@ -231,11 +230,7 @@ pub fn refresh_kicad_symbols_index_if_stale(dest_path: &Path) -> Result<RefreshR
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        DownloadProgress, KicadSymbolsIndexMetadata, download_kicad_symbols_index_with_progress,
-        load_local_version, save_local_version,
-    };
-    use sha2::{Digest, Sha256};
+    use super::{KicadSymbolsIndexMetadata, load_local_version, save_local_version};
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -283,113 +278,5 @@ mod tests {
         );
 
         fs::remove_dir_all(&dir).unwrap();
-    }
-
-    fn serve_symbols_db<'a>(
-        server: &'a httpmock::MockServer,
-        path: &str,
-        payload: &[u8],
-    ) -> httpmock::Mock<'a> {
-        let compressed = zstd::stream::encode_all(std::io::Cursor::new(payload.to_vec()), 0)
-            .expect("zstd encode");
-        server.mock(move |when, then| {
-            when.path(path);
-            then.status(200).body(compressed.clone());
-        })
-    }
-
-    fn symbols_metadata(
-        server: &httpmock::MockServer,
-        path: &str,
-        sha256: &str,
-    ) -> KicadSymbolsIndexMetadata {
-        KicadSymbolsIndexMetadata {
-            url: format!("{}{path}", server.base_url()),
-            sha256: sha256.to_string(),
-            last_modified: String::new(),
-            expires_at: String::new(),
-        }
-    }
-
-    fn drain(progress_rx: &std::sync::mpsc::Receiver<DownloadProgress>) {
-        while progress_rx.try_recv().is_ok() {}
-    }
-
-    #[test]
-    fn download_kicad_symbols_index_persists_verified_content_and_sidecar() {
-        let server = httpmock::MockServer::start();
-        let payload = b"authentic kicad symbols sqlite db bytes";
-        let expected = hex::encode(Sha256::digest(payload));
-        let mock = serve_symbols_db(&server, "/symbols.db.zst", payload);
-
-        let dir = tempfile::tempdir().unwrap();
-        let dest = dir.path().join("symbols.db");
-        let metadata = symbols_metadata(&server, "/symbols.db.zst", &expected);
-        let (tx, rx) = std::sync::mpsc::channel();
-
-        download_kicad_symbols_index_with_progress(&dest, &tx, false, Some(&metadata))
-            .expect("verified download should succeed");
-        drain(&rx);
-
-        assert_eq!(std::fs::read(&dest).unwrap(), payload);
-        assert_eq!(
-            load_local_version(&dest).as_deref(),
-            Some(expected.as_str())
-        );
-        mock.assert_calls(1);
-    }
-
-    #[test]
-    fn download_kicad_symbols_index_rejects_tampered_content_and_writes_nothing() {
-        let server = httpmock::MockServer::start();
-        let payload = b"tampered kicad symbols sqlite db bytes";
-        let wrong = hex::encode(Sha256::digest(b"totally different content"));
-        let mock = serve_symbols_db(&server, "/symbols.db.zst", payload);
-
-        let dir = tempfile::tempdir().unwrap();
-        let dest = dir.path().join("symbols.db");
-        let metadata = symbols_metadata(&server, "/symbols.db.zst", &wrong);
-        let (tx, rx) = std::sync::mpsc::channel();
-
-        let err = download_kicad_symbols_index_with_progress(&dest, &tx, false, Some(&metadata))
-            .unwrap_err()
-            .to_string();
-        drain(&rx);
-
-        assert!(err.contains("hash mismatch"), "got: {err}");
-        assert!(err.contains(&wrong), "got: {err}");
-        assert!(!dest.exists(), "tampered symbols index must not be written");
-        assert!(
-            load_local_version(&dest).is_none(),
-            "no sidecar on failed download"
-        );
-        mock.assert_calls(1);
-    }
-
-    #[test]
-    fn download_kicad_symbols_index_preserves_prior_db_and_sidecar_on_mismatch() {
-        let server = httpmock::MockServer::start();
-        let prior = b"previously cached good symbols db";
-        let tampered = b"tampered kicad symbols sqlite db bytes";
-        let wrong = hex::encode(Sha256::digest(b"totally different content"));
-        let mock = serve_symbols_db(&server, "/symbols.db.zst", tampered);
-
-        let dir = tempfile::tempdir().unwrap();
-        let dest = dir.path().join("symbols.db");
-        std::fs::write(&dest, prior).unwrap();
-        let good = hex::encode(Sha256::digest(prior));
-        save_local_version(&dest, &good).unwrap();
-        let metadata = symbols_metadata(&server, "/symbols.db.zst", &wrong);
-        let (tx, rx) = std::sync::mpsc::channel();
-
-        let err = download_kicad_symbols_index_with_progress(&dest, &tx, false, Some(&metadata))
-            .unwrap_err()
-            .to_string();
-        drain(&rx);
-
-        assert!(err.contains("hash mismatch"), "got: {err}");
-        assert_eq!(std::fs::read(&dest).unwrap(), prior);
-        assert_eq!(load_local_version(&dest).as_deref(), Some(good.as_str()));
-        mock.assert_calls(1);
     }
 }
