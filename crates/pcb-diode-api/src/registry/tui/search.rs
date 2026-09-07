@@ -384,21 +384,19 @@ fn open_kicad_index_with_app_progress(
     download_tx: &Sender<DownloadProgress>,
     prefetched_metadata: Option<&KicadSymbolsIndexMetadata>,
 ) -> anyhow::Result<KicadSymbolsClient> {
-    let missing = !db_path.exists();
-    let result = (|| {
-        if missing {
-            download_kicad_symbols_index_with_progress(
-                db_path,
-                download_tx,
-                false,
-                prefetched_metadata,
-            )?;
-        }
-        KicadSymbolsClient::open_path(db_path)
-    })();
-    if missing || result.is_err() {
-        report_kicad_result(download_tx, false, &result);
+    // Cached opens do not start or finish a download, even when opening fails.
+    if db_path.exists() {
+        return KicadSymbolsClient::open_path(db_path);
     }
+
+    let result = download_kicad_symbols_index_with_progress(
+        db_path,
+        download_tx,
+        false,
+        prefetched_metadata,
+    )
+    .and_then(|()| KicadSymbolsClient::open_path(db_path));
+    report_kicad_result(download_tx, false, &result);
     result
 }
 
@@ -884,7 +882,7 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     #[test]
-    fn kicad_open_reports_one_terminal_result_and_cached_success_is_quiet() {
+    fn kicad_download_reports_once_and_cached_opens_do_not_change_download_state() {
         let fixture = tempfile::NamedTempFile::new().unwrap();
         rusqlite::Connection::open(fixture.path())
             .unwrap()
@@ -939,8 +937,6 @@ mod tests {
             if expected_error.is_empty() {
                 assert!(result.is_ok());
                 assert_eq!(terminal.pct, Some(100));
-                assert!(open_kicad_index_with_app_progress(&path, &tx, None).is_ok());
-                assert!(rx.try_recv().is_err());
             } else {
                 assert!(terminal.error.as_ref().unwrap().contains(expected_error));
                 assert_eq!(terminal.pct, None);
@@ -948,6 +944,12 @@ mod tests {
                     assert!(!path.exists());
                     assert!(load_local_kicad_symbols_version(&path).is_none());
                 }
+            }
+            // Reopening either a valid or corrupt cache must leave other searches alone.
+            if path.exists() {
+                let cached = open_kicad_index_with_app_progress(&path, &tx, None);
+                assert_eq!(cached.is_ok(), result.is_ok());
+                assert!(rx.try_recv().is_err());
             }
             mock.assert_calls(1);
         }
