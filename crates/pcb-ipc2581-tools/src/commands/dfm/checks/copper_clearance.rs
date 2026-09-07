@@ -342,7 +342,7 @@ limit = { minimum = "0.15 mm" }
         .unwrap()
     }
 
-    const ANTENNA: &str = include_str!("../fixtures/mockingbird-antenna.xml");
+    const ANTENNA: &str = include_str!("../fixtures/antenna.xml");
     const TIE: &str = r#"<NetShort><NetRef name="GND"/><NetRef name="WIFI.RF_ANT"/><Location x="168.9" y="-98.339392"/><LayerRef name="F.Cu"/></NetShort>"#;
 
     fn annotated_antenna() -> String {
@@ -358,7 +358,7 @@ limit = { minimum = "0.15 mm" }
             &imported,
             CheckRequest {
                 input: FileIdentity {
-                    path: "mockingbird-antenna.xml".to_owned(),
+                    path: "antenna.xml".to_owned(),
                     sha256: dfm::sha256(xml.as_bytes()),
                     size_bytes: xml.len() as u64,
                 },
