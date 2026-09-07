@@ -6,7 +6,6 @@ use crate::kicad_symbols::KicadSymbol;
 use crate::kicad_symbols::download::{
     KicadSymbolsIndexMetadata, download_kicad_symbols_index_with_progress,
     fetch_kicad_symbols_index_metadata, load_local_version as load_local_kicad_symbols_version,
-    save_local_version as save_local_kicad_symbols_version,
 };
 use crate::{
     KicadSymbolsClient, ModuleRelations, RegistryModule, RegistryModuleHit, RegistrySearchClient,
@@ -366,35 +365,41 @@ fn index_update_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
-fn download_kicad_symbols_index_with_app_progress(
-    dest_path: &std::path::Path,
+fn report_kicad_result<T>(
     download_tx: &Sender<DownloadProgress>,
     is_update: bool,
-    prefetched_metadata: Option<&KicadSymbolsIndexMetadata>,
-) -> anyhow::Result<()> {
-    download_kicad_symbols_index_with_progress(
-        dest_path,
-        download_tx,
+    result: &anyhow::Result<T>,
+) {
+    let _ = download_tx.send(DownloadProgress {
+        source: DownloadSource::KicadSymbols,
+        pct: result.is_ok().then_some(100),
+        done: true,
+        error: result.as_ref().err().map(|err| format!("{err:#}")),
         is_update,
-        prefetched_metadata,
-    )
+    });
 }
 
-fn ensure_local_index_present<Meta>(
+fn open_kicad_index_with_app_progress(
     db_path: &std::path::Path,
     download_tx: &Sender<DownloadProgress>,
-    prefetched_metadata: Option<&Meta>,
-    download_with_progress: impl FnOnce(
-        &std::path::Path,
-        &Sender<DownloadProgress>,
-        Option<&Meta>,
-    ) -> anyhow::Result<()>,
-) -> anyhow::Result<()> {
-    if !db_path.exists() {
-        return download_with_progress(db_path, download_tx, prefetched_metadata);
+    prefetched_metadata: Option<&KicadSymbolsIndexMetadata>,
+) -> anyhow::Result<KicadSymbolsClient> {
+    let missing = !db_path.exists();
+    let result = (|| {
+        if missing {
+            download_kicad_symbols_index_with_progress(
+                db_path,
+                download_tx,
+                false,
+                prefetched_metadata,
+            )?;
+        }
+        KicadSymbolsClient::open_path(db_path)
+    })();
+    if missing || result.is_err() {
+        report_kicad_result(download_tx, false, &result);
     }
-
-    Ok(())
+    result
 }
 
 fn spawn_registry_update_check(
@@ -435,23 +440,9 @@ fn spawn_kicad_update_check(db_path: std::path::PathBuf, download_tx: Sender<Dow
             return;
         }
 
-        if let Err(err) = download_kicad_symbols_index_with_app_progress(
-            &db_path,
-            &download_tx,
-            true,
-            Some(&meta),
-        ) {
-            let _ = download_tx.send(DownloadProgress {
-                source: DownloadSource::KicadSymbols,
-                pct: None,
-                done: true,
-                error: Some(format!("Update failed: {}", err)),
-                is_update: true,
-            });
-            return;
-        }
-
-        let _ = save_local_kicad_symbols_version(&db_path, &remote_version);
+        let result =
+            download_kicad_symbols_index_with_progress(&db_path, &download_tx, true, Some(&meta));
+        report_kicad_result(&download_tx, true, &result);
     });
 }
 
@@ -610,16 +601,11 @@ pub fn spawn_worker(
         }
 
         if kicad_enabled
-            && ensure_local_index_present(
+            && let Ok(client) = open_kicad_index_with_app_progress(
                 &kicad_db_path,
                 &download_tx,
                 prefetched_kicad_metadata.as_ref(),
-                |path, tx, metadata| {
-                    download_kicad_symbols_index_with_app_progress(path, tx, false, metadata)
-                },
             )
-            .is_ok()
-            && let Ok(client) = KicadSymbolsClient::open_path(&kicad_db_path)
         {
             kicad_client = Some(client);
             kicad_mtime = get_file_mtime(&kicad_db_path);
@@ -746,35 +732,13 @@ pub fn spawn_worker(
                 }
                 SearchMode::KicadSymbols => {
                     if !kicad_ready {
-                        if ensure_local_index_present(
+                        kicad_client = match open_kicad_index_with_app_progress(
                             &kicad_db_path,
                             &download_tx,
                             prefetched_kicad_metadata.as_ref(),
-                            |path, tx, metadata| {
-                                download_kicad_symbols_index_with_app_progress(
-                                    path, tx, false, metadata,
-                                )
-                            },
-                        )
-                        .is_err()
-                        {
-                            continue;
-                        }
-                        kicad_client = match KicadSymbolsClient::open_path(&kicad_db_path) {
+                        ) {
                             Ok(client) => Some(client),
-                            Err(err) => {
-                                let _ = download_tx.send(DownloadProgress {
-                                    source: DownloadSource::KicadSymbols,
-                                    pct: None,
-                                    done: true,
-                                    error: Some(format!(
-                                        "Failed to open KiCad symbols index: {}",
-                                        err
-                                    )),
-                                    is_update: false,
-                                });
-                                continue;
-                            }
+                            Err(_) => continue,
                         };
                         kicad_mtime = get_file_mtime(&kicad_db_path);
                         kicad_ready = true;
@@ -910,6 +874,82 @@ fn fetch_pricing_chunk(auth_token: Option<&str>, chunk: &[AvailabilityRequest]) 
                 .iter()
                 .map(|request| (request.key.clone(), PricingResult::Failed))
                 .collect()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sha2::{Digest, Sha256};
+
+    #[test]
+    fn kicad_open_reports_one_terminal_result_and_cached_success_is_quiet() {
+        let fixture = tempfile::NamedTempFile::new().unwrap();
+        rusqlite::Connection::open(fixture.path())
+            .unwrap()
+            .execute_batch("CREATE TABLE symbols (name TEXT);")
+            .unwrap();
+        let sqlite = std::fs::read(fixture.path()).unwrap();
+
+        for (status, payload, matching_hash, expected_error) in [
+            (503, sqlite.as_slice(), true, "downloading"),
+            (200, sqlite.as_slice(), false, "hash mismatch"),
+            (200, b"not a SQLite database".as_slice(), true, "pragmas"),
+            (200, sqlite.as_slice(), true, ""),
+        ] {
+            let server = httpmock::MockServer::start();
+            let compressed = zstd::encode_all(payload, 0).unwrap();
+            let metadata = KicadSymbolsIndexMetadata {
+                url: server.url("/index.zst"),
+                sha256: hex::encode(Sha256::digest(if matching_hash {
+                    compressed.as_slice()
+                } else {
+                    payload
+                })),
+                last_modified: String::new(),
+                expires_at: String::new(),
+            };
+            let mock = server.mock(|when, then| {
+                when.path("/index.zst");
+                then.status(status).body(compressed);
+            });
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("symbols.db");
+            let (tx, rx) = std::sync::mpsc::channel();
+            let result = open_kicad_index_with_app_progress(&path, &tx, Some(&metadata));
+            let events: Vec<_> = rx.try_iter().collect();
+            let (terminal, progress) = events.split_last().unwrap();
+            assert!(!progress.is_empty());
+            assert!(
+                progress
+                    .iter()
+                    .all(|event| !event.done && event.error.is_none())
+            );
+            assert!(
+                events
+                    .iter()
+                    .all(|event| !event.is_update && event.source == DownloadSource::KicadSymbols)
+            );
+            assert!(terminal.done);
+            assert_eq!(
+                terminal.error,
+                result.as_ref().err().map(|err| format!("{err:#}"))
+            );
+            if expected_error.is_empty() {
+                assert!(result.is_ok());
+                assert_eq!(terminal.pct, Some(100));
+                assert!(open_kicad_index_with_app_progress(&path, &tx, None).is_ok());
+                assert!(rx.try_recv().is_err());
+            } else {
+                assert!(terminal.error.as_ref().unwrap().contains(expected_error));
+                assert_eq!(terminal.pct, None);
+                if status != 200 || !matching_hash {
+                    assert!(!path.exists());
+                    assert!(load_local_kicad_symbols_version(&path).is_none());
+                }
+            }
+            mock.assert_calls(1);
         }
     }
 }
