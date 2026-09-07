@@ -2089,7 +2089,7 @@ mod tests {
             .replace("(number \"1\")", "(number \"~\")")
             .replace(
                 "(paper \"A4\")",
-                "(paper \"A4\") (text \"~\" (uuid \"text-1\"))",
+                "(paper \"A4\") (text \"~\" (at 10 10 0) (uuid \"text-1\"))",
             );
         let modern = SchDocument::from_kicad_sch(&source).unwrap();
         let legacy_source = source.replace("20260306", "20250114");
