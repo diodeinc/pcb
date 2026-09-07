@@ -228,7 +228,8 @@ impl ImportedDesign {
         let holes = if metadata.diagnostics.iter().any(|diagnostic| {
             matches!(
                 diagnostic,
-                BoardPhysicalDiagnostic::AmbiguousStackup
+                BoardPhysicalDiagnostic::MissingStackup
+                    | BoardPhysicalDiagnostic::AmbiguousStackup
                     | BoardPhysicalDiagnostic::InvalidStackupOrder(_)
             )
         }) {
