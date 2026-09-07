@@ -1589,6 +1589,9 @@ fn flatten_shapes(shapes: Vec<Shape>) -> Vec<Ring> {
 }
 
 fn push_ring(out: &mut Vec<Ring>, ring: &mut Ring) {
+    // Flattening emits an explicit corner point at every join; drop the
+    // zero-length edges that would otherwise reach the writers.
+    ring.dedup();
     if ring.first() == ring.last() {
         ring.pop();
     }
