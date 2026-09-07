@@ -205,11 +205,11 @@ this software check using its KiCad 10.0.6 IPC-C/mm/precision-6 extractions:
 
 | Canonical fixture | DOFs | Rigid modes | Substrate area (mm²) |
 | --- | ---: | ---: | ---: |
-| demo-bramble | 1111 | 3 | 3479.489536 |
+| demo-bramble | 1133 | 3 | 3479.489536 |
 | demo-demeter | 158 | 3 | 960.000000 |
-| demo-feign | 93 | 3 | 606.900000 |
+| demo-feign | 97 | 3 | 606.900000 |
 | demo-governor | 190 | 3 | 1281.062500 |
-| demo-marlow | 589 | 3 | 763.057173 |
+| demo-marlow | 592 | 3 | 763.057173 |
 | demo-renfield | 110 | 3 | 697.000000 |
 | demo-seward | 75 | 3 | 448.000000 |
 
