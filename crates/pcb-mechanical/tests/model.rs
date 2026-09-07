@@ -252,15 +252,10 @@ fn perforated_tab_response_and_refinement() {
     )
     .unwrap();
     let unperforated = panel(
-        &perforated
-            .substrate
-            .union(
-                &tab.perforations
-                    .intersection(&stock)
-                    .unwrap()
-                    .difference(&tab.routed_removal)
-                    .unwrap(),
-            )
+        &board
+            .union(&frame)
+            .unwrap()
+            .union(&tab.attachment_footprint)
             .unwrap(),
     );
     let mut results = Vec::new();

@@ -136,15 +136,15 @@ Two disconnected components retain six rigid modes. P2 displacement/gradient
 and physical moment virtual work reproduce a quadratic field to 1e-11.
 
 The actual experimental perforated-tab polygon gives unit-force compliance
-57.027823 (1193 DOFs, max area 0.99599 mm²) and 56.605078 (1464 DOFs, max area
-0.25 mm²), with minimum angles 20.2449°. This is 0.747% two-mesh agreement,
+56.864755 (1651 DOFs, max area 0.96843 mm²) and 56.486157 (1907 DOFs, max area
+0.25 mm²), with minimum angles 20.0044°. This is 0.670% two-mesh agreement,
 not a certified error bound or proof of asymptotic convergence. The undrilled
-comparison gives 54.771371 (1312 DOFs), so perforation increases compliance
-3.348% for this particular geometry/fixture/load. These three dense debug
-solves take about 557 seconds in the development orb. Run this expensive
-check separately with `cargo test -p pcb-mechanical perforated_tab -- --nocapture`;
-the remaining five checks use
-`cargo nextest run -p pcb-mechanical -E 'not test(perforated_tab)'`.
+comparison gives 54.700868 (1276 DOFs), so perforation increases compliance
+3.264% for this particular geometry/fixture/load. Construct that reference
+directly from the undrilled footprint, not by refilling polygonal holes.
+All six checks take about 11 seconds in release in the development orb:
+`cargo test --release -p pcb-mechanical -- --nocapture`. Dense debug solves
+are substantially slower.
 Native checks and clippy pass; `cargo check -p pcb-mechanical --target
 wasm32-unknown-unknown` also passes (compile only, not WASM runtime validation).
 
