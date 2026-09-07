@@ -28,7 +28,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Keep inward decimation within the boundary deviation limit for spikes beyond chord endpoints.
 - Honor explicit `in_bom` overrides and inherit omitted values in KiCad `extends` symbols.
 - Import metric-only `0402Metric`/`0603Metric` passives as imperial `01005`/`0201` packages, ignoring library namespaces in package detection.
-- Keep Git authentication working when token refresh fails but the access token remains valid for the credential exchange.
 
 ## [0.4.51] - 2026-09-05
 
