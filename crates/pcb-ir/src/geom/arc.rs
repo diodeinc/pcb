@@ -1,6 +1,7 @@
 use crate::geom::affine::Affine2;
 use crate::geom::bbox::BBox;
 use crate::geom::point::Point;
+use crate::geom::tol;
 
 /// A circular arc from `start` to `end` around `center`.
 ///
@@ -141,21 +142,22 @@ impl EllipticalArc {
         (self.basis_orientation() >= 0.0) != self.clockwise
     }
 
+    /// Whether the axes span no area at coincidence scale.
     pub fn is_degenerate(&self) -> bool {
-        self.basis_orientation().abs() <= 1e-18
+        self.basis_orientation().abs() <= tol::EPSILON_MM * tol::EPSILON_MM
     }
 
     pub fn is_full_ellipse(&self) -> bool {
-        self.start.distance_to(self.end) <= 1e-9 && !self.is_degenerate()
+        self.start.distance_to(self.end) <= tol::EPSILON_MM && !self.is_degenerate()
     }
 
     /// The parameter of a point on the ellipse.
     pub fn angle_of(&self, point: Point) -> f64 {
         let delta = point - self.center;
-        let det = self.basis_orientation();
-        if det.abs() <= 1e-18 {
+        if self.is_degenerate() {
             return 0.0;
         }
+        let det = self.basis_orientation();
         // Solve [x_axis y_axis]·(cos θ, sin θ) = delta.
         let cos = (delta.x * self.y_axis.y - delta.y * self.y_axis.x) / det;
         let sin = (self.x_axis.x * delta.y - self.x_axis.y * delta.x) / det;

@@ -108,6 +108,10 @@ impl PathCmd {
         }
     }
 
+    pub fn is_finite(self) -> bool {
+        self.p0.is_finite() && self.p1.is_finite() && self.p2.is_finite() && self.p3.is_finite()
+    }
+
     /// Whether this command is a curve rather than a line or a move.
     pub fn is_curve(self) -> bool {
         matches!(self.op, PathOp::ArcTo | PathOp::EllipseTo | PathOp::CubicTo)
@@ -612,16 +616,7 @@ pub fn stroke_to_fill(
         };
         let mut out = Vec::new();
         for contour in contours {
-            accuracy.check(contour.uncertainty_mm)?;
-            if contour
-                .cmds
-                .iter()
-                .any(|cmd| matches!(cmd.op, PathOp::CubicTo | PathOp::EllipseTo))
-            {
-                return Err(AccuracyError::InvalidGeometry(
-                    "pattern placement requires lines or circular arcs",
-                ));
-            }
+            let contour = contour.flattened_curves(accuracy)?;
             let segments = contour.segments().collect::<Vec<_>>();
             for mark in stroke_pattern_marks(&segments, style.pattern, style.width) {
                 match mark {
@@ -1038,6 +1033,33 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(fill.iter().all(|contour| contour.uncertainty_mm >= 0.001));
+    }
+
+    #[test]
+    fn patterned_strokes_flatten_curves_within_budget() {
+        let ellipse = crate::geom::shapes::circle(4.0)
+            .unwrap()
+            .transformed(Affine2 {
+                m00: 2.0,
+                m01: 0.0,
+                m02: 0.0,
+                m10: 0.0,
+                m11: 1.0,
+                m12: 0.0,
+            });
+        assert!(ellipse.cmds.iter().any(|cmd| cmd.op == PathOp::EllipseTo));
+        let mut style = StrokeToFillStyle::new(0.2, LineCap::Round, LineJoin::Round);
+        style.pattern = LinePattern::Dashed;
+        let accuracy = GeometryAccuracy::default();
+        let dashes = stroke_to_fill(&[ellipse], style, accuracy)
+            .unwrap()
+            .unwrap();
+        assert!(dashes.len() > 1);
+        assert!(
+            dashes
+                .iter()
+                .all(|dash| dash.uncertainty_mm <= accuracy.max_error_mm())
+        );
     }
 
     #[test]

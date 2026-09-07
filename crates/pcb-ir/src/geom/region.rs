@@ -511,9 +511,7 @@ impl ContourSet {
                 !c.bbox.is_valid()
                     || !c.uncertainty_mm.is_finite()
                     || c.uncertainty_mm < 0.0
-                    || c.cmds.iter().any(|cmd| {
-                        !cmd.p0.is_finite() || !cmd.p1.is_finite() || !cmd.p2.is_finite()
-                    })
+                    || !c.cmds.iter().all(|cmd| cmd.is_finite())
             })
         {
             return Err(AccuracyError::InvalidGeometry(
