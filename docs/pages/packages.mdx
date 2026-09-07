@@ -53,11 +53,6 @@ exclude = ["scratch/**", "experiments/old-board"]
 cache directories such as
 `.git`, `.pcb`, `vendor`, `target`, `node_modules`, and `fork`.
 
-If the root manifest has a `[board]`, non-empty `[dependencies]`, or non-empty
-`[parts]`, it also defines a package. Without `[workspace].repository`, a
-top-level `workspace/` package then collides with the root's reserved URL and
-causes a discovery error. Set `[workspace].repository` or rename the directory.
-
 ## Coexisting versions
 
 A build can contain incompatible families of one package, such as
