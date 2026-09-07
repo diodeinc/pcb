@@ -33,7 +33,6 @@
 //! boundaries cannot violate.
 
 use pcb_ir::geom::dfm::{BBoxIndex, Distance, circular_region};
-use pcb_ir::geom::region::difference_rings;
 use pcb_ir::geom::{BBox, ContourSet, FillRule, Point};
 #[cfg(not(target_family = "wasm"))]
 use rayon::prelude::*;
@@ -59,7 +58,7 @@ pub(super) fn evaluate(
     class: HoleClass,
     conditions: &Conditions,
     design: &Design,
-) -> Evaluation {
+) -> anyhow::Result<Evaluation> {
     let holes = holes_of_class(design, class);
     let copper_layers = &design.copper_layers;
     let hole_lands = &design.hole_lands;
@@ -141,10 +140,10 @@ pub(super) fn evaluate(
                     measured(design, hole, subject, enclosure, radius + limit_mm)
                 });
             if let Some(worst) = &mut worst {
-                worst.sites = enclosures.iter().filter_map(|(subject, enclosure)| {
-                    let enclosure = (*enclosure).filter(|distance| violates(distance, limit_mm))?;
+                worst.sites = enclosures.iter().map(|(subject, enclosure)| {
+                    let Some(enclosure) = (*enclosure).filter(|distance| violates(distance, limit_mm)) else { return Ok(None); };
                     let mut detail = measured(design, hole, subject, enclosure, radius + limit_mm);
-                    let required = circular_region(hole.center, radius + limit_mm);
+                    let required = circular_region(hole.center, radius + limit_mm, design.resolution)?;
                     detail.evidence.push(Evidence {
                         display: Some(EvidenceDisplay::CircleMinusLayer {
                             center: hole.center.into(),
@@ -153,7 +152,7 @@ pub(super) fn evaluate(
                         }),
                         ..Evidence::region("missing_copper", &missing_copper(
                             &required, &subject.copper.image, subject.ring_index,
-                        ))
+                        )?)
                     });
                     let mut site = MeasuredSite::new(
                         enclosure, detail.bbox, detail.layers, detail.evidence,
@@ -165,37 +164,40 @@ pub(super) fn evaluate(
                     } else if enclosure.mm < 0.0 {
                         site.note = Some("The drilled hole breaches the copper boundary; the annular enclosure is signed.".to_owned());
                     }
-                    Some(site)
-                }).collect();
+                    Ok::<_, anyhow::Error>(Some(site))
+                }).collect::<anyhow::Result<Vec<_>>>()?.into_iter().flatten().collect();
             }
-            (enclosures.len(), worst)
-        })
-        .collect::<Vec<_>>();
+            Ok::<_, anyhow::Error>((enclosures.len(), worst))
+        }).collect::<anyhow::Result<Vec<_>>>()?;
 
-    Evaluation {
+    Ok(Evaluation {
         checked: per_hole.iter().map(|(checked, _)| checked).sum(),
         measured: per_hole
             .into_iter()
             .filter_map(|(_, measured)| measured)
             .collect(),
-    }
+    })
 }
 
 /// A ring whose bounds miss the required disk cannot change material inside
 /// it. Retaining complete intersecting rings (including enclosing planes and
 /// their holes) preserves polarity while avoiding a full-panel boolean for
 /// each individual annular finding.
-fn missing_copper(required: &ContourSet, copper: &ContourSet, index: &BBoxIndex) -> ContourSet {
+fn missing_copper(
+    required: &ContourSet,
+    copper: &ContourSet,
+    index: &BBoxIndex,
+) -> anyhow::Result<ContourSet> {
     let rings = index
         .query(required.bbox)
         .into_iter()
         .map(|id| copper.rings[id].clone())
         .collect();
-    ContourSet::new(
-        difference_rings(required.rings.clone(), rings),
+    Ok(required.difference(&ContourSet::from_rings(
+        rings,
         FillRule::NonZero,
-        required.tolerance,
-    )
+        required.resolution,
+    )?)?)
 }
 
 fn measured(
@@ -258,6 +260,7 @@ fn measured(
 #[cfg(test)]
 mod tests {
     use pcb_ir::dialects::ipc::ArtworkScope;
+    use pcb_ir::geom::Resolution;
 
     use crate::commands::dfm::pdk::Pdk;
     use crate::commands::dfm::rules::{self, Rule};
@@ -354,15 +357,21 @@ limit = { minimum = "0.2 mm" }
 
     fn evaluate_pth(ipc: &Ipc2581) -> Evaluation {
         let rule = rule();
-        let imported = pcb_ir::import::ipc2581::import_design(ipc).unwrap();
-        let design =
-            Design::extract(&imported, ArtworkScope::Board, std::slice::from_ref(&rule)).unwrap();
+        let imported = pcb_ir::import::ipc2581::import_design(ipc, Resolution::default()).unwrap();
+        let design = Design::extract(
+            &imported,
+            ArtworkScope::Board,
+            std::slice::from_ref(&rule),
+            Resolution::default(),
+        )
+        .unwrap();
         evaluate(
             rule.limit.length().millimeters(),
             HoleClass::Pth,
             &rule.conditions,
             &design,
         )
+        .unwrap()
     }
 
     #[test]
@@ -415,11 +424,11 @@ limit = { minimum = "0.2 mm" }
 </IPC-2581>"#,
         )
         .unwrap();
-        let imported = pcb_ir::import::ipc2581::import_design(&ipc).unwrap();
+        let imported = pcb_ir::import::ipc2581::import_design(&ipc, Resolution::default()).unwrap();
         let middle = imported.layer_id("L1").unwrap();
         assert!(
             imported
-                .physical_lands(ArtworkScope::Board)
+                .physical_lands(ArtworkScope::Board, Resolution::default())
                 .unwrap()
                 .iter()
                 .all(|land| land.layer != middle),
@@ -537,21 +546,25 @@ limit = { minimum = "0.2 mm" }
 
     #[test]
     fn local_missing_copper_keeps_enclosing_planes_holes_and_repainted_islands() {
-        use pcb_ir::geom::tol;
+        let resolution = Resolution::default();
+
         let rectangle = |x0, y0, x1, y1| {
             ContourSet::rectangle(
                 BBox {
                     min: Point::new(x0, y0),
                     max: Point::new(x1, y1),
                 },
-                tol::REGION_MM,
+                resolution,
             )
         };
         let copper = rectangle(-100.0, -100.0, 100.0, 100.0)
             .difference(&rectangle(-0.4, -0.4, 0.4, 0.4))
+            .unwrap()
             .union(&rectangle(-0.1, -0.1, 0.1, 0.1))
-            .union(&rectangle(200.0, 200.0, 201.0, 201.0));
-        let required = circular_region(Point::ZERO, 0.6);
+            .unwrap()
+            .union(&rectangle(200.0, 200.0, 201.0, 201.0))
+            .unwrap();
+        let required = circular_region(Point::ZERO, 0.6, resolution).unwrap();
         let bounds = copper
             .rings
             .iter()
@@ -564,10 +577,10 @@ limit = { minimum = "0.2 mm" }
             .collect();
         let index = BBoxIndex::new(bounds);
         assert!(index.query(required.bbox).len() < copper.rings.len());
-        let local = missing_copper(&required, &copper, &index);
-        let complete = required.difference(&copper);
-        assert!(local.difference(&complete).is_empty());
-        assert!(complete.difference(&local).is_empty());
+        let local = missing_copper(&required, &copper, &index).unwrap();
+        let complete = required.difference(&copper).unwrap();
+        assert!(local.difference(&complete).unwrap().is_empty());
+        assert!(complete.difference(&local).unwrap().is_empty());
         assert!(
             !local.contains_point(Point::ZERO),
             "repainted island supplies copper"

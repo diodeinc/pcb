@@ -5,6 +5,7 @@
 //! it was measured against. Deciding whether a distance violates a limit is
 //! the caller's policy, via [`Distance::certainly_below`].
 
+use crate::geom::{AccuracyError, Resolution};
 use std::collections::BTreeMap;
 
 use crate::geom::bbox::BBox;
@@ -95,11 +96,11 @@ impl PreparedRegion {
         } else {
             direction / direction.length()
         };
-        Some(Distance::flattened(
+        Some(Distance::with_uncertainty(
             nearest.mm - cutout_radius_mm,
             center + direction * cutout_radius_mm,
             nearest.second,
-            1,
+            self.uncertainty_mm,
         ))
     }
 }
@@ -178,7 +179,12 @@ pub fn region_clearance_within(
             )
         })
     {
-        return Some(Distance::flattened(0.0, point, point, 2));
+        return Some(Distance::with_uncertainty(
+            0.0,
+            point,
+            point,
+            first.uncertainty_mm + second.uncertainty_mm,
+        ));
     }
 
     // Only the first boundary's edges within reach of the second region's
@@ -188,7 +194,7 @@ pub fn region_clearance_within(
         .filter_map(|(first_start, first_end)| {
             second_boundary
                 .segment_nearest_within(first_start, first_end, maximum_mm)
-                .map(|distance| distance.also_flattened(1))
+                .map(|distance| distance.also_uncertain(first.uncertainty_mm))
         })
         .min_by(|left, right| left.mm.total_cmp(&right.mm))
 }
@@ -231,10 +237,10 @@ pub fn linework_clearance_sites(
     material: &ContourSet,
     index: &PreparedRegion,
     minimum_mm: f64,
-    flattened_linework: u32,
+    linework_uncertainty_mm: f64,
 ) -> Vec<ClearanceSite> {
-    let flattened = flattened_linework + 1;
-    let reach = minimum_mm - f64::from(flattened) * tol::FLATTEN_MM - 1e-6;
+    let uncertainty_mm = linework_uncertainty_mm + material.uncertainty_mm;
+    let reach = minimum_mm - uncertainty_mm - 1e-6;
     if reach <= 0.0 || material.is_empty() {
         return Vec::new();
     }
@@ -295,13 +301,18 @@ pub fn linework_clearance_sites(
                 bbox.include_point(start);
                 bbox.include_point(end);
                 let distance = if endpoint_inside[2 * span_index] {
-                    Some(Distance::flattened(0.0, start, start, flattened))
+                    Some(Distance::with_uncertainty(
+                        0.0,
+                        start,
+                        start,
+                        uncertainty_mm,
+                    ))
                 } else if endpoint_inside[2 * span_index + 1] {
-                    Some(Distance::flattened(0.0, end, end, flattened))
+                    Some(Distance::with_uncertainty(0.0, end, end, uncertainty_mm))
                 } else {
                     index
                         .segment_nearest_within(start, end, minimum_mm)
-                        .map(|distance| distance.also_flattened(flattened_linework))
+                        .map(|distance| distance.also_uncertain(linework_uncertainty_mm))
                 };
                 if let Some(distance) = distance
                     && nearest.is_none_or(|best| distance.mm < best.mm)
@@ -340,7 +351,7 @@ pub fn linework_clearance_sites(
                 bbox,
                 first_paths,
                 second_paths,
-                overlap: ContourSet::empty(material.tolerance),
+                overlap: ContourSet::empty(material.resolution),
             })
         })
         .collect()
@@ -352,7 +363,7 @@ pub fn region_clearance_sites(
     first: &ContourSet,
     second: &ContourSet,
     minimum_mm: f64,
-) -> Vec<ClearanceSite> {
+) -> Result<Vec<ClearanceSite>, AccuracyError> {
     let index = second.prepare_query();
     region_clearance_sites_with_index(first, second, &index, minimum_mm)
 }
@@ -363,10 +374,16 @@ pub fn region_clearance_sites_with_index(
     second: &ContourSet,
     second_boundary: &PreparedRegion,
     minimum_mm: f64,
-) -> Vec<ClearanceSite> {
+) -> Result<Vec<ClearanceSite>, AccuracyError> {
     let lines = first.rings.iter().flat_map(ring_edges).collect::<Vec<_>>();
-    let mut sites = linework_clearance_sites(&lines, second, second_boundary, minimum_mm, 1);
-    for overlap in first.intersection(second).connected_components() {
+    let mut sites = linework_clearance_sites(
+        &lines,
+        second,
+        second_boundary,
+        minimum_mm,
+        first.uncertainty_mm,
+    );
+    for overlap in first.intersection(second)?.connected_components() {
         let Some(point) = overlap
             .rings
             .first()
@@ -376,7 +393,12 @@ pub fn region_clearance_sites_with_index(
             continue;
         };
         let mut joined = ClearanceSite {
-            distance: Distance::flattened(0.0, point, point, 2),
+            distance: Distance::with_uncertainty(
+                0.0,
+                point,
+                point,
+                first.uncertainty_mm + second.uncertainty_mm,
+            ),
             bbox: overlap.bbox,
             first_paths: Vec::new(),
             second_paths: Vec::new(),
@@ -408,15 +430,19 @@ pub fn region_clearance_sites_with_index(
             joined.bbox = joined.bbox.union(site.bbox);
             joined.first_paths.extend(site.first_paths);
             joined.second_paths.extend(site.second_paths);
-            joined.overlap = joined.overlap.union(&site.overlap);
+            joined.overlap = joined.overlap.union(&site.overlap)?;
         }
         sites.push(joined);
     }
-    sites
+    Ok(sites)
 }
 
 /// A local required-clearance band around the supplied reference paths.
-pub fn linework_envelope(paths: &[Vec<Point>], radius_mm: f64) -> ContourSet {
+pub fn linework_envelope(
+    paths: &[Vec<Point>],
+    radius_mm: f64,
+    resolution: Resolution,
+) -> Result<ContourSet, AccuracyError> {
     use crate::geom::path::{ContourBuf, PathCmd, stroke_to_fill};
     use crate::geom::{FillRule, StrokeStyle};
     let contours = paths
@@ -430,21 +456,28 @@ pub fn linework_envelope(paths: &[Vec<Point>], radius_mm: f64) -> ContourSet {
             )
         })
         .collect::<Vec<_>>();
-    let band =
-        stroke_to_fill(&contours, StrokeStyle::round(2.0 * radius_mm).into()).unwrap_or_default();
-    ContourSet::from_contours(&band, FillRule::NonZero, tol::REGION_MM)
+    let band = stroke_to_fill(
+        &contours,
+        StrokeStyle::round(2.0 * radius_mm).into(),
+        resolution.accuracy,
+    )?
+    .unwrap_or_default();
+    ContourSet::from_contours(&band, FillRule::NonZero, resolution)
 }
 
 /// Circular material in the same flattened representation as check images.
 /// Analytic diameter/radial measurements should continue to use the circle
 /// parameters; this region is for boolean evidence such as missing copper.
-pub fn circular_region(center: Point, radius_mm: f64) -> ContourSet {
+pub fn circular_region(
+    center: Point,
+    radius_mm: f64,
+    resolution: Resolution,
+) -> Result<ContourSet, AccuracyError> {
     let Some(circle) = crate::geom::shapes::circle(2.0 * radius_mm) else {
-        return ContourSet::empty(tol::REGION_MM);
+        return Ok(ContourSet::empty(resolution));
     };
-    let circle =
-        crate::geom::path::transform_cmds(circle.cmds, crate::geom::Affine2::translation(center));
-    ContourSet::from_filled_contours(&[circle], tol::REGION_MM)
+    let circle = circle.transformed(crate::geom::Affine2::translation(center));
+    ContourSet::from_filled_contours(&[circle], resolution)
 }
 
 fn linear_interval(value: f64, slope: f64, minimum: f64, maximum: f64) -> Option<(f64, f64)> {
@@ -645,59 +678,50 @@ pub struct ThinSite {
     pub walls: Vec<(Point, Point)>,
 }
 
-/// Opening and closing use tessellated round offsets. Widening the candidate
-/// threshold by the full two-offset plus source-flattening error makes the
-/// morphological stage conservative; exact source-boundary distance below
-/// then decides the verdict and discards the extra candidates.
-const MORPHOLOGY_CANDIDATE_GUARD_MM: f64 = 2.0 * tol::STROKE_OUTLINE_MM + tol::FLATTEN_MM;
-
 /// Filled material certainly narrower than `min_width_mm`. Only two-sided
 /// residue is reported, so the bite an isolated convex arc sheds under the
 /// opening is not a thin feature. Largest piece first.
-pub fn thin_features(region: &ContourSet, min_width_mm: f64) -> Vec<ThinPiece> {
-    pieces(
+pub fn thin_features(
+    region: &ContourSet,
+    min_width_mm: f64,
+) -> Result<Vec<ThinPiece>, AccuracyError> {
+    Ok(pieces(
         region.disk_feature_violation_components(
-            (min_width_mm + MORPHOLOGY_CANDIDATE_GUARD_MM) / 2.0,
-            reportable_width(min_width_mm),
-        ),
+            (min_width_mm + (2.0 * region.budget().max_error_mm() + region.uncertainty_mm)) / 2.0,
+            min_width_mm - 2.0 * region.uncertainty_mm,
+        )?,
         min_width_mm,
-    )
-}
-
-/// The widest measurement certainly below `min_mm` once both flattened
-/// walls' uncertainty is counted, as [`pieces`] requires.
-fn reportable_width(min_mm: f64) -> f64 {
-    min_mm - 2.0 * tol::FLATTEN_MM
+    ))
 }
 
 /// Gaps in the material certainly narrower than `min_gap_mm`, including
 /// boundary notches. Only two-sided residue is reported, so the bite an
 /// isolated concave corner sheds under the closing is not clearance.
 /// Largest piece first.
-pub fn thin_gaps(region: &ContourSet, min_gap_mm: f64) -> Vec<ThinPiece> {
-    pieces(
+pub fn thin_gaps(region: &ContourSet, min_gap_mm: f64) -> Result<Vec<ThinPiece>, AccuracyError> {
+    Ok(pieces(
         region.disk_gap_violation_components(
-            (min_gap_mm + MORPHOLOGY_CANDIDATE_GUARD_MM) / 2.0,
-            reportable_width(min_gap_mm),
-        ),
+            (min_gap_mm + (2.0 * region.budget().max_error_mm() + region.uncertainty_mm)) / 2.0,
+            min_gap_mm - 2.0 * region.uncertainty_mm,
+        )?,
         min_gap_mm,
-    )
+    ))
 }
 
 /// The narrowest local width of a filled region: the least separation of
 /// any two facing boundary branches. An opening wide enough to erase the
 /// whole region makes every piece of it a candidate. `None` when no two
 /// branches face each other (an empty region, or a single point).
-pub fn min_width(region: &ContourSet) -> Option<Distance> {
-    min_width_disk(region).map(|disk| disk.width)
+pub fn min_width(region: &ContourSet) -> Result<Option<Distance>, AccuracyError> {
+    Ok(min_width_disk(region)?.map(|disk| disk.width))
 }
 
-pub fn min_width_disk(region: &ContourSet) -> Option<WidthDisk> {
+pub fn min_width_disk(region: &ContourSet) -> Result<Option<WidthDisk>, AccuracyError> {
     let erase_all = 2.0 * region.bbox.width().max(region.bbox.height());
-    thin_features(region, erase_all)
+    Ok(thin_features(region, erase_all)?
         .into_iter()
         .map(|piece| piece.disk)
-        .min_by(|left, right| left.width.mm.total_cmp(&right.width.mm))
+        .min_by(|left, right| left.width.mm.total_cmp(&right.width.mm)))
 }
 
 /// Convert the conservative opening/closing candidates into authoritative
@@ -714,9 +738,11 @@ fn pieces(components: Vec<TwoSidedResidualComponent>, minimum_mm: f64) -> Vec<Th
                 .axis
                 .iter()
                 .flat_map(|axis| {
-                    let reach =
-                        (minimum_mm - 2.0 * tol::FLATTEN_MM - 2.0 * axis.uncertainty_mm - 1e-6)
-                            / 2.0;
+                    let reach = (minimum_mm
+                        - component.width.uncertainty_mm
+                        - 2.0 * axis.uncertainty_mm
+                        - 1e-6)
+                        / 2.0;
                     if reach <= 0.0 {
                         return Vec::new();
                     }
@@ -785,7 +811,12 @@ fn pieces(components: Vec<TwoSidedResidualComponent>, minimum_mm: f64) -> Vec<Th
                                     dist::point_segment(end, a, b).1,
                                 )
                             });
-                            let mut width = Distance::flattened(2.0 * radius_mm, first, second, 2);
+                            let mut width = Distance::with_uncertainty(
+                                2.0 * radius_mm,
+                                first,
+                                second,
+                                component.width.uncertainty_mm,
+                            );
                             width.uncertainty_mm += 2.0 * axis.uncertainty_mm;
                             (
                                 (start, end),
@@ -874,6 +905,10 @@ fn region_perimeter(region: &ContourSet) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn res(tolerance_mm: f64) -> Resolution {
+        Resolution::default().with_tolerance(tolerance_mm)
+    }
+
     use crate::geom::path::{ContourBuf, PathCmd};
     use crate::geom::{FillRule, shapes};
 
@@ -891,22 +926,25 @@ mod tests {
         ContourSet::from_contours(
             &[rect_at(min_x, min_y, max_x, max_y)],
             FillRule::NonZero,
-            tol::REGION_MM,
+            res(tol::REGION_MM),
         )
+        .unwrap()
     }
 
     #[test]
     fn clearance_sites_locate_every_disconnected_span_with_threshold_endpoints() {
-        let material = rect_region(2.0, 0.1, 3.0, 1.0).union(&rect_region(7.0, 0.1, 8.0, 1.0));
+        let material = rect_region(2.0, 0.1, 3.0, 1.0)
+            .union(&rect_region(7.0, 0.1, 8.0, 1.0))
+            .unwrap();
         let sites = linework_clearance_sites(
             &[(Point::new(0.0, 0.0), Point::new(10.0, 0.0))],
             &material,
             &material.prepare_query(),
             0.3,
-            0,
+            0.0,
         );
         assert_eq!(sites.len(), 2);
-        let reach = 0.3 - tol::FLATTEN_MM - 1e-6;
+        let reach = 0.3 - material.uncertainty_mm - 1e-6;
         let extension = (reach * reach - 0.1_f64.powi(2)).sqrt();
         for (site, left) in sites.iter().zip([2.0, 7.0]) {
             assert!((site.distance.mm - 0.1).abs() < 1e-9);
@@ -921,7 +959,8 @@ mod tests {
     fn clearance_sites_include_segments_deep_inside_material() {
         let material = rect_region(0.0, 0.0, 10.0, 10.0);
         let line = (Point::new(2.0, 5.0), Point::new(8.0, 5.0));
-        let sites = linework_clearance_sites(&[line], &material, &material.prepare_query(), 0.2, 0);
+        let sites =
+            linework_clearance_sites(&[line], &material, &material.prepare_query(), 0.2, 0.0);
         assert_eq!(sites.len(), 1);
         assert_eq!(sites[0].distance.mm, 0.0);
         assert_eq!(sites[0].first_paths, vec![vec![line.0, line.1]]);
@@ -930,7 +969,8 @@ mod tests {
     #[test]
     fn clearance_sites_merge_repeated_contacts_on_the_same_source_edge() {
         let material =
-            ContourSet::from_filled_contours(&[rect_at(0.0, 0.0, 1.0, 1.0)], tol::REGION_MM);
+            ContourSet::from_filled_contours(&[rect_at(0.0, 0.0, 1.0, 1.0)], res(tol::REGION_MM))
+                .unwrap();
         let index = material.prepare_query();
         let sites = linework_clearance_sites(
             &[
@@ -940,7 +980,7 @@ mod tests {
             &material,
             &index,
             0.2,
-            1,
+            0.005,
         );
         assert_eq!(sites.len(), 1);
         assert_eq!(sites[0].first_paths.len(), 2);
@@ -967,7 +1007,7 @@ mod tests {
             &material,
             &material.prepare_query(),
             0.2,
-            0,
+            0.0,
         );
         assert_eq!(sites.len(), 1);
         assert_eq!(sites[0].distance.mm, 0.0);
@@ -980,9 +1020,11 @@ mod tests {
         let first = rect_region(0.0, 0.0, 10.0, 1.0);
         let second = rect_region(2.0, 1.1, 3.0, 4.0)
             .union(&rect_region(7.0, 1.1, 8.0, 4.0))
-            .union(&rect_region(2.0, 3.0, 8.0, 4.0));
+            .unwrap()
+            .union(&rect_region(2.0, 3.0, 8.0, 4.0))
+            .unwrap();
         assert_eq!(second.connected_components().len(), 1);
-        let sites = region_clearance_sites(&first, &second, 0.2);
+        let sites = region_clearance_sites(&first, &second, 0.2).unwrap();
         assert_eq!(sites.len(), 2);
         let authoritative = region_clearance(&first, &second).unwrap().mm;
         assert!(
@@ -1001,7 +1043,7 @@ mod tests {
     fn region_sites_keep_contained_overlap_without_a_near_outer_boundary() {
         let first = rect_region(-5.0, -5.0, 5.0, 5.0);
         let second = rect_region(-0.5, -0.5, 0.5, 0.5);
-        let sites = region_clearance_sites(&first, &second, 0.2);
+        let sites = region_clearance_sites(&first, &second, 0.2).unwrap();
         assert_eq!(sites.len(), 1);
         assert_eq!(sites[0].distance.mm, 0.0);
         assert!((sites[0].overlap.area() - 1.0).abs() < 1e-9);
@@ -1012,7 +1054,7 @@ mod tests {
     fn region_sites_merge_boundary_spans_with_their_shared_overlap() {
         let first = rect_region(0.0, 0.0, 2.0, 2.0);
         let second = rect_region(1.0, 0.5, 3.0, 1.5);
-        let sites = region_clearance_sites(&first, &second, 0.2);
+        let sites = region_clearance_sites(&first, &second, 0.2).unwrap();
         assert_eq!(sites.len(), 1);
         assert_eq!(sites[0].distance.mm, 0.0);
         assert!((sites[0].overlap.area() - 1.0).abs() < 1e-9);
@@ -1105,8 +1147,9 @@ mod tests {
                 PathCmd::close(),
             ])],
             FillRule::NonZero,
-            tol::REGION_MM,
-        );
+            res(tol::REGION_MM),
+        )
+        .unwrap();
         let index = diagonal.prepare_query();
         let near_middle = index
             .nearest_within(Point::new(40.3, 40.0), 0.5)
@@ -1119,12 +1162,17 @@ mod tests {
         let copper = ContourSet::from_contours(
             &[shapes::circle(5.0).unwrap()],
             FillRule::NonZero,
-            tol::REGION_MM,
-        );
+            res(tol::REGION_MM),
+        )
+        .unwrap();
         let index = copper.prepare_query();
 
         assert_eq!(
-            index.circular_enclosure(Point::default(), 1.35, 0.125 - tol::FLATTEN_MM),
+            index.circular_enclosure(
+                Point::default(),
+                1.35,
+                0.125 - copper.budget().max_error_mm() / 2.0
+            ),
             None,
             "a satisfied enclosure exceeds the search bound"
         );
@@ -1132,10 +1180,10 @@ mod tests {
         let measurement = index
             .circular_enclosure(Point::new(1.3, 0.0), 1.35, 0.125)
             .expect("hole extending beyond copper must measure");
-        assert!((measurement.mm + 0.15).abs() < tol::FLATTEN_MM);
-        assert_eq!(measurement.uncertainty_mm, tol::FLATTEN_MM);
-        assert!((measurement.first.x - 2.65).abs() < tol::FLATTEN_MM);
-        assert!((measurement.second.x - 2.5).abs() < tol::FLATTEN_MM);
+        assert!((measurement.mm + 0.15).abs() < copper.budget().max_error_mm() / 2.0);
+        assert_eq!(measurement.uncertainty_mm, copper.uncertainty_mm);
+        assert!((measurement.first.x - 2.65).abs() < copper.budget().max_error_mm() / 2.0);
+        assert!((measurement.second.x - 2.5).abs() < copper.budget().max_error_mm() / 2.0);
     }
 
     #[test]
@@ -1164,14 +1212,15 @@ mod tests {
                 PathCmd::close(),
             ])],
             FillRule::NonZero,
-            tol::REGION_MM,
-        );
-        let raw_residue = bulge.difference(&bulge.disk_open(0.5));
+            res(tol::REGION_MM),
+        )
+        .unwrap();
+        let raw_residue = bulge.difference(&bulge.disk_open(0.5).unwrap()).unwrap();
         assert!(
             !raw_residue.is_empty(),
             "the opening must shed residue here"
         );
-        assert!(thin_features(&bulge, 1.0).is_empty());
+        assert!(thin_features(&bulge, 1.0).unwrap().is_empty());
     }
 
     #[test]
@@ -1220,17 +1269,20 @@ mod tests {
         let region = ContourSet::from_contours(
             &[rect_at(139.0, -101.0, 141.0, -98.0), hole],
             FillRule::NonZero,
-            tol::REGION_MM,
-        );
-        let candidate_radius = (0.127 + MORPHOLOGY_CANDIDATE_GUARD_MM) / 2.0;
+            res(tol::REGION_MM),
+        )
+        .unwrap();
+        let candidate_radius =
+            (0.127 + (2.0 * region.budget().max_error_mm() + region.uncertainty_mm)) / 2.0;
 
         assert!(
             !region
-                .difference(&region.disk_open(candidate_radius))
+                .difference(&region.disk_open(candidate_radius).unwrap())
+                .unwrap()
                 .is_empty(),
             "the opening must still localize the one-sided nib"
         );
-        assert!(thin_features(&region, 0.127).is_empty());
+        assert!(thin_features(&region, 0.127).unwrap().is_empty());
     }
 
     #[test]
@@ -1241,10 +1293,11 @@ mod tests {
                 rect_at(0.0, 0.0, 10.0, 10.0),
                 rect_at(10.0, 5.0, 12.0, 5.05),
             ],
-            tol::REGION_MM,
-        );
+            res(tol::REGION_MM),
+        )
+        .unwrap();
 
-        let findings = thin_features(&region, 0.1);
+        let findings = thin_features(&region, 0.1).unwrap();
 
         assert_eq!(findings.len(), 1);
         let piece = &findings[0];
@@ -1283,14 +1336,19 @@ mod tests {
                 PathCmd::close(),
             ])],
             FillRule::NonZero,
-            tol::REGION_MM,
-        );
-        let raw_residue = chevron.disk_close(0.5).difference(&chevron);
+            res(tol::REGION_MM),
+        )
+        .unwrap();
+        let raw_residue = chevron
+            .disk_close(0.5)
+            .unwrap()
+            .difference(&chevron)
+            .unwrap();
         assert!(
             !raw_residue.is_empty(),
             "the closing must shed residue here"
         );
-        assert!(thin_gaps(&chevron, 1.0).is_empty());
+        assert!(thin_gaps(&chevron, 1.0).unwrap().is_empty());
     }
 
     #[test]
@@ -1300,10 +1358,11 @@ mod tests {
                 rect_at(0.0, 0.0, 10.0, 10.0),
                 rect_at(10.06, 0.0, 20.0, 10.0),
             ],
-            tol::REGION_MM,
-        );
+            res(tol::REGION_MM),
+        )
+        .unwrap();
 
-        let gaps = thin_gaps(&region, 0.1);
+        let gaps = thin_gaps(&region, 0.1).unwrap();
 
         assert_eq!(gaps.len(), 1);
         assert!(
@@ -1311,14 +1370,14 @@ mod tests {
             "width {}",
             gaps[0].width.mm
         );
-        assert!(thin_features(&region, 0.1).is_empty());
+        assert!(thin_features(&region, 0.1).unwrap().is_empty());
     }
 
     #[test]
     fn small_islands_are_not_filtered_out_of_feature_width() {
         let island = rect_region(0.0, 0.0, 0.05, 0.05);
 
-        let findings = thin_features(&island, 0.1);
+        let findings = thin_features(&island, 0.1).unwrap();
 
         assert_eq!(findings.len(), 1);
         assert!(!findings[0].sites.is_empty());
@@ -1340,42 +1399,52 @@ mod tests {
         let feature = rect_region(0.0, 0.0, 1.0, 0.1);
         let disk = ContourSet::from_filled_contours(
             &[shapes::circle(0.1).expect("valid circle")],
-            tol::REGION_MM,
-        );
+            res(tol::REGION_MM),
+        )
+        .unwrap();
         let undersized_disk = ContourSet::from_filled_contours(
             &[shapes::circle(0.08).expect("valid circle")],
-            tol::REGION_MM,
-        );
+            res(tol::REGION_MM),
+        )
+        .unwrap();
         let left = rect_region(2.0, 0.0, 3.0, 1.0);
         let right = rect_region(3.1, 0.0, 4.1, 1.0);
 
-        assert!(thin_features(&feature, 0.1).is_empty());
-        let disk_findings = thin_features(&disk, 0.1);
+        assert!(thin_features(&feature, 0.1).unwrap().is_empty());
+        let disk_findings = thin_features(&disk, 0.1).unwrap();
         assert!(disk_findings.is_empty(), "findings: {disk_findings:?}");
-        assert_eq!(thin_features(&undersized_disk, 0.1).len(), 1);
-        assert!(thin_gaps(&left.union(&right), 0.1).is_empty());
+        assert_eq!(thin_features(&undersized_disk, 0.1).unwrap().len(), 1);
+        assert!(
+            thin_gaps(&left.union(&right).unwrap(), 0.1)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
     fn min_width_is_limit_free() {
         let stadium = ContourSet::from_contours(
-            &[shapes::obround(1.8, 0.6, true).expect("valid obround")],
+            &[shapes::obround(1.8, 0.6).expect("valid obround")],
             FillRule::NonZero,
-            tol::REGION_MM,
-        );
-        let width = min_width(&stadium).expect("a stadium has facing walls");
-        // The flattened arc's inscribed disk is its apothem, short of the
-        // true radius by at most one flattening tolerance per side.
+            res(tol::REGION_MM),
+        )
+        .unwrap();
+        let width = min_width(&stadium)
+            .unwrap()
+            .expect("a stadium has facing walls");
         assert!(
             (0.0..=width.uncertainty_mm).contains(&(0.6 - width.mm)),
             "width {}",
             width.mm
         );
-        assert_eq!(width.uncertainty_mm, 2.0 * tol::FLATTEN_MM);
 
         let plate = rect_region(0.0, 0.0, 10.0, 3.0);
-        assert!((min_width(&plate).unwrap().mm - 3.0).abs() < 1e-9);
-        assert!(min_width(&ContourSet::empty(tol::REGION_MM)).is_none());
+        assert!((min_width(&plate).unwrap().unwrap().mm - 3.0).abs() < 1e-9);
+        assert!(
+            min_width(&ContourSet::empty(res(tol::REGION_MM)))
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -1395,10 +1464,11 @@ mod tests {
                 PathCmd::close(),
             ])],
             FillRule::NonZero,
-            tol::REGION_MM,
-        );
+            res(tol::REGION_MM),
+        )
+        .unwrap();
 
-        let findings = thin_features(&region, 0.1);
+        let findings = thin_features(&region, 0.1).unwrap();
 
         assert_eq!(findings.len(), 1);
         let width = findings[0].width;
@@ -1426,19 +1496,20 @@ mod tests {
     fn widths_are_invariant_under_quarter_turns() {
         let left = rect_region(0.0, 0.0, 4.0, 2.0);
         let right = rect_region(4.06, 0.0, 8.0, 2.0);
-        let region = left.union(&right);
-        let rotated = ContourSet::new(
+        let region = left.union(&right).unwrap();
+        let rotated = ContourSet::from_rings(
             region
                 .rings
                 .iter()
                 .map(|ring| ring.iter().map(|[x, y]| [-y, *x]).collect())
                 .collect(),
             FillRule::NonZero,
-            tol::REGION_MM,
-        );
+            res(tol::REGION_MM),
+        )
+        .unwrap();
 
-        let original = thin_gaps(&region, 0.1);
-        let turned = thin_gaps(&rotated, 0.1);
+        let original = thin_gaps(&region, 0.1).unwrap();
+        let turned = thin_gaps(&rotated, 0.1).unwrap();
 
         assert_eq!(original.len(), 1);
         assert_eq!(turned.len(), 1);

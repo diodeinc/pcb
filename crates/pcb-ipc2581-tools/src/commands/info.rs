@@ -12,6 +12,7 @@ use colored::Colorize;
 use comfy_table::presets::UTF8_FULL_CONDENSED;
 #[cfg(feature = "cli")]
 use comfy_table::{Cell, Color, Table};
+use pcb_ir::geom::Resolution;
 use serde::Serialize;
 use serde_json::json;
 
@@ -29,14 +30,19 @@ fn format_diameter(mm: f64) -> String {
 }
 
 #[cfg(feature = "cli")]
-pub fn execute(file: &Path, format: OutputFormat, units: UnitFormat) -> Result<()> {
+pub fn execute(
+    file: &Path,
+    format: OutputFormat,
+    units: UnitFormat,
+    resolution: Resolution,
+) -> Result<()> {
     let content = file_utils::load_ipc_file(file)?;
     let ipc = ipc2581::Ipc2581::parse(&content)?;
     let accessor = IpcAccessor::new(&ipc);
 
     match format {
-        OutputFormat::Text => output_text(&accessor, units),
-        OutputFormat::Json => output_json(&accessor),
+        OutputFormat::Text => output_text(&accessor, units, resolution),
+        OutputFormat::Json => output_json(&accessor, resolution),
     }
 }
 
@@ -153,7 +159,11 @@ fn canonical_soldermask_kind(color: Option<&ColorInfo>) -> SoldermaskKind {
 }
 
 #[cfg(feature = "cli")]
-fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
+fn output_text(
+    accessor: &IpcAccessor,
+    unit_format: UnitFormat,
+    resolution: Resolution,
+) -> Result<()> {
     // Board Summary header
     println!("{}", "Board Summary".bold());
 
@@ -206,7 +216,7 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
     }
 
     // Drill statistics (summary)
-    if let Some(drills) = accessor.board_drill_stats()
+    if let Some(drills) = accessor.board_drill_stats(resolution)?
         && drills.total_holes > 0
     {
         summary_table.add_row(vec![
@@ -480,17 +490,17 @@ fn output_text(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<()> {
     }
 
     // Drill distribution
-    if let Some(drills) = accessor.board_drill_stats()
+    if let Some(drills) = accessor.board_drill_stats(resolution)?
         && !drills.distribution.is_empty()
     {
         print_drill_distribution("Drill Distribution", &drills);
     }
 
     if let Some(board_array) = layout.and_then(|layout| layout.board_array) {
-        print_board_array_summary(&board_array, accessor, unit_format);
+        print_board_array_summary(&board_array, accessor, unit_format, resolution)?;
     }
 
-    if let Some(drills) = accessor.board_array_drill_stats()
+    if let Some(drills) = accessor.board_array_drill_stats(resolution)?
         && !drills.distribution.is_empty()
     {
         print_drill_distribution("Array Drill Distribution", &drills);
@@ -536,7 +546,8 @@ fn print_board_array_summary(
     board_array: &BoardArrayInfo,
     accessor: &IpcAccessor,
     unit_format: UnitFormat,
-) {
+    resolution: Resolution,
+) -> anyhow::Result<()> {
     println!("{}", "Board Array Summary".bold());
 
     let mut table = Table::new();
@@ -574,7 +585,7 @@ fn print_board_array_summary(
         ]);
     }
 
-    if let Some(drills) = accessor.board_array_drill_stats()
+    if let Some(drills) = accessor.board_array_drill_stats(resolution)?
         && drills.total_holes > 0
     {
         table.add_row(vec![
@@ -588,6 +599,8 @@ fn print_board_array_summary(
 
     println!("{table}");
     println!();
+
+    Ok(())
 }
 
 #[cfg(feature = "cli")]
@@ -660,13 +673,19 @@ fn drill_stats_json(drills: &DrillStats) -> serde_json::Value {
 }
 
 #[cfg(feature = "cli")]
-fn output_json(accessor: &IpcAccessor) -> Result<()> {
-    println!("{}", serde_json::to_string_pretty(&info_json(accessor))?);
+fn output_json(accessor: &IpcAccessor, resolution: Resolution) -> Result<()> {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&info_json(accessor, resolution)?)?
+    );
     Ok(())
 }
 
 /// Extract the same board, assembly, and fabrication summary emitted by `ipc info --format json`.
-pub fn info_json(accessor: &IpcAccessor) -> serde_json::Value {
+pub fn info_json(
+    accessor: &IpcAccessor,
+    resolution: Resolution,
+) -> anyhow::Result<serde_json::Value> {
     let ipc = accessor.ipc();
     let content = ipc.content();
     let layer_side_map: BTreeMap<_, _> = ipc
@@ -758,7 +777,7 @@ pub fn info_json(accessor: &IpcAccessor) -> serde_json::Value {
                 "height_inch": dimensions.height_inch(),
             });
         }
-        if let Some(drills) = accessor.board_array_drill_stats()
+        if let Some(drills) = accessor.board_array_drill_stats(resolution)?
             && drills.total_holes > 0
         {
             info["board_array"]["drills"] = drill_stats_json(&drills);
@@ -776,7 +795,7 @@ pub fn info_json(accessor: &IpcAccessor) -> serde_json::Value {
     }
 
     // Drill statistics with distribution
-    if let Some(drills) = accessor.board_drill_stats()
+    if let Some(drills) = accessor.board_drill_stats(resolution)?
         && drills.total_holes > 0
     {
         info["drills"] = drill_stats_json(&drills);
@@ -883,7 +902,7 @@ pub fn info_json(accessor: &IpcAccessor) -> serde_json::Value {
 
             for ref_des in item.reference_designators() {
                 let designator = ipc.resolve(ref_des.name).to_string();
-                if designator.is_empty() {
+                if designator.is_empty() || !seen_designators.insert(designator.clone()) {
                     continue;
                 }
 
@@ -925,7 +944,6 @@ pub fn info_json(accessor: &IpcAccessor) -> serde_json::Value {
                     "side": side,
                     "pin_count": item.pin_count,
                 }));
-                seen_designators.insert(ipc.resolve(ref_des.name).to_string());
             }
         }
     }
@@ -952,5 +970,67 @@ pub fn info_json(accessor: &IpcAccessor) -> serde_json::Value {
 
     info["component_placements"] = json!(component_placements);
 
-    info
+    Ok(info)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::info_json;
+    use crate::accessors::IpcAccessor;
+    use pcb_ir::geom::Resolution;
+
+    #[test]
+    fn component_placements_deduplicate_bom_refdes() {
+        // Parse without validation: duplicate RefDes names are schema-invalid.
+        let ipc = ipc2581::Ipc2581::parse(
+            r#"
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="ASSEMBLY"/>
+    <BomRef name="bom"/>
+  </Content>
+  <Bom name="bom">
+    <BomHeader assembly="board" revision="1"/>
+    <BomItem OEMDesignNumberRef="part-A" quantity="2" pinCount="2" category="ELECTRICAL">
+      <RefDes name="R1" packageRef="R0402" populate="true" layerRef="TOP"/>
+      <RefDes name="R1" packageRef="R0603" populate="false" layerRef="BOTTOM"/>
+    </BomItem>
+    <BomItem OEMDesignNumberRef="part-B" quantity="1" pinCount="3" category="ELECTRICAL">
+      <RefDes name="R1" packageRef="R0805" populate="false" layerRef="BOTTOM"/>
+      <RefDes name="R2" packageRef="R0805" populate="true" layerRef="TOP"/>
+    </BomItem>
+  </Bom>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Step name="board" type="BOARD">
+        <Datum x="0" y="0"/>
+        <Component refDes="R1" packageRef="R1206" layerRef="BOTTOM" mountType="SMT" part="part-A">
+          <Location x="1" y="1"/>
+        </Component>
+        <Component refDes="C1" packageRef="C0402" layerRef="TOP" mountType="SMT" part="part-C">
+          <Location x="2" y="2"/>
+        </Component>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+        let info = info_json(&IpcAccessor::new(&ipc), Resolution::default()).unwrap();
+        let placements = info["component_placements"].as_array().unwrap();
+        assert_eq!(
+            placements
+                .iter()
+                .map(|p| p["designator"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["R1", "R2", "C1"]
+        );
+        assert_eq!(placements[0]["package"], "R0402");
+        assert_eq!(placements[0]["layer_ref"], "TOP");
+        assert_eq!(placements[0]["pin_count"], 2);
+        assert_eq!(placements[0]["dnp"], false);
+        assert_eq!(placements[0]["mount_type"], "SMT");
+        assert_eq!(placements[2]["package"], "C0402");
+    }
 }

@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use clap::ValueEnum;
 use log::{debug, warn};
+use pcb_ir::geom::Resolution;
 use pcb_kicad::{KiCadCliBuilder, ensure_board_compatible_with_installed_kicad};
 use pcb_layout::utils as layout_utils;
 use pcb_ui::{Colorize, Spinner, Style, StyledText};
@@ -64,6 +65,7 @@ struct ReleaseInfo {
     output_name: String,
     suppress: Vec<String>,
     resolution: ResolutionResult,
+    geometry_resolution: Resolution,
     root_package_url: Option<String>,
 }
 
@@ -239,6 +241,7 @@ pub fn build_board_release(
     suppress: Vec<String>,
     version: Option<String>,
     exclude: Vec<ArtifactType>,
+    geometry_resolution: Resolution,
 ) -> Result<PathBuf> {
     let start_time = Instant::now();
 
@@ -332,6 +335,7 @@ pub fn build_board_release(
             output_name,
             suppress,
             resolution,
+            geometry_resolution,
             root_package_url: package_url,
         };
 
@@ -1352,6 +1356,7 @@ fn generate_ipc2581(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let html = pcb_ipc2581_tools::commands::html_export::generate_html(
         &accessor,
         pcb_ipc2581_tools::UnitFormat::Mm,
+        info.geometry_resolution,
     )
     .context("Failed to generate HTML from IPC-2581")?;
     fs::write(&ipc2581_html_path, html).context("Failed to write IPC-2581 HTML export")?;

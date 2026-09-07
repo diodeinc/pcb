@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use anyhow::{Result, bail};
 use pcb_ir::dialects::ipc::{ProfileSet, profile_occurrences_for};
+use pcb_ir::geom::Resolution;
 
 use crate::LayoutTarget;
 use crate::geometry;
@@ -25,10 +26,15 @@ pub struct OutlineOptions {
 
 /// Export Step/Profile outlines as a DXF file.
 #[cfg(feature = "cli")]
-pub fn execute(input_file: &Path, options: &OutlineOptions) -> Result<()> {
+pub fn execute(input_file: &Path, options: &OutlineOptions, resolution: Resolution) -> Result<()> {
     let content = file_utils::load_ipc_file(input_file)?;
     let ipc = Ipc2581::parse(&content)?;
-    let dxf = export_dxf(&ipc, options.layout_target, options.nested_outlines)?;
+    let dxf = export_dxf(
+        &ipc,
+        options.layout_target,
+        options.nested_outlines,
+        resolution,
+    )?;
     std::fs::write(&options.output, dxf)
         .with_context(|| format!("Failed to write DXF to {}", options.output.display()))?;
     println!(
@@ -43,6 +49,7 @@ pub fn export_dxf(
     ipc: &Ipc2581,
     layout_target: LayoutTarget,
     nested_outlines: bool,
+    resolution: Resolution,
 ) -> Result<String> {
     let layout = geometry::extract_layout(ipc)?;
     let profile_set = if nested_outlines {
@@ -54,7 +61,7 @@ pub fn export_dxf(
         bail!("IPC-2581 primary step and repeated child steps have no board Profile outline");
     }
 
-    Ok(geometry::dxf::render_profile_set_dxf(&layout, profile_set))
+    geometry::dxf::render_profile_set_dxf(&layout, profile_set, resolution.accuracy)
 }
 
 #[cfg(test)]

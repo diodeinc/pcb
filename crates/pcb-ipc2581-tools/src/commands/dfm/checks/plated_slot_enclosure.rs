@@ -16,7 +16,11 @@ use crate::commands::dfm::rules::Conditions;
 use super::drilled_board_edge_clearance::slot_evidence;
 use super::{Evaluation, Measured, MeasuredSite, layers, slot_matches, slot_subject, violates};
 
-pub(super) fn evaluate(limit_mm: f64, conditions: &Conditions, design: &Design) -> Evaluation {
+pub(super) fn evaluate(
+    limit_mm: f64,
+    conditions: &Conditions,
+    design: &Design,
+) -> anyhow::Result<Evaluation> {
     let mut checked = 0;
     let mut measured = Vec::new();
     for (slot_index, slot) in design
@@ -48,7 +52,7 @@ pub(super) fn evaluate(limit_mm: f64, conditions: &Conditions, design: &Design) 
                         .segment_nearest_within(start, end, tol::REGION_MM)
                         .is_some_and(|distance| distance.mm <= tol::REGION_MM)
                 });
-            if !required && !touching && slot.outline.intersection(&copper.image).is_empty() {
+            if !required && !touching && slot.outline.intersection(&copper.image)?.is_empty() {
                 continue;
             }
             checked += 1;
@@ -57,7 +61,7 @@ pub(super) fn evaluate(limit_mm: f64, conditions: &Conditions, design: &Design) 
             // within the existing flattening uncertainty, not a fab tolerance.
             let filled = copper
                 .image
-                .union(&slot.outline.disk_dilate(tol::REGION_MM));
+                .union(&slot.outline.disk_dilate(tol::REGION_MM)?)?;
             let boundary = filled.prepare_query();
             let distance = slot
                 .outline
@@ -67,7 +71,7 @@ pub(super) fn evaluate(limit_mm: f64, conditions: &Conditions, design: &Design) 
                 .filter_map(|(start, end)| boundary.segment_nearest_within(start, end, limit_mm))
                 .min_by(|a, b| a.mm.total_cmp(&b.mm))
                 .map(|distance| {
-                    let mut distance = distance.also_flattened(1);
+                    let mut distance = distance.also_uncertain(slot.outline.uncertainty_mm);
                     if distance.mm <= tol::REGION_MM {
                         distance.mm = 0.0;
                         distance.second = distance.first;
@@ -77,7 +81,7 @@ pub(super) fn evaluate(limit_mm: f64, conditions: &Conditions, design: &Design) 
             let Some(distance) = distance.filter(|distance| violates(distance, limit_mm)) else {
                 continue;
             };
-            let envelope = slot.outline.disk_dilate(limit_mm);
+            let envelope = slot.outline.disk_dilate(limit_mm)?;
             let mut site = MeasuredSite::new(
                 distance,
                 envelope.bbox,
@@ -86,9 +90,9 @@ pub(super) fn evaluate(limit_mm: f64, conditions: &Conditions, design: &Design) 
                     slot_evidence(slot),
                     Evidence::region(
                         "required_copper_envelope",
-                        &envelope.difference(&slot.outline),
+                        &envelope.difference(&slot.outline)?,
                     ),
-                    Evidence::region("missing_copper", &envelope.difference(&filled)),
+                    Evidence::region("missing_copper", &envelope.difference(&filled)?),
                 ],
                 if distance.mm <= f64::EPSILON {
                     MeasurementKind::MissingCopper
@@ -116,7 +120,7 @@ pub(super) fn evaluate(limit_mm: f64, conditions: &Conditions, design: &Design) 
             });
         }
     }
-    Evaluation { checked, measured }
+    Ok(Evaluation { checked, measured })
 }
 
 #[cfg(test)]
@@ -126,6 +130,7 @@ mod tests {
     use crate::commands::dfm::report::{FileIdentity, RuleStatus, Verdict};
     use crate::commands::dfm::{self, CheckRequest, PdkSource, TextSource};
     use crate::ipc2581::Ipc2581;
+    use pcb_ir::geom::Resolution;
     use pcb_ir::import::ipc2581::import_design;
 
     const PDK: &str = r#"schema_version = 2
@@ -184,7 +189,7 @@ limit = { minimum = "0.2 mm", preferred = "0.3 mm" }
     }
 
     fn check(xml: &str) -> dfm::DfmReport {
-        let imported = import_design(&Ipc2581::parse(xml).unwrap()).unwrap();
+        let imported = import_design(&Ipc2581::parse(xml).unwrap(), Resolution::default()).unwrap();
         dfm::check(
             &imported,
             CheckRequest {
@@ -197,6 +202,7 @@ limit = { minimum = "0.2 mm", preferred = "0.3 mm" }
                 layout_target: LayoutTarget::Board,
                 generated_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
             },
+            Resolution::default(),
         )
         .unwrap()
     }
@@ -323,13 +329,19 @@ limit = { minimum = "0.2 mm", preferred = "0.3 mm" }
         let rules = rules::lower(&Pdk::parse(PDK).unwrap(), None).unwrap();
         for span in ["", r#"<Span fromLayer="L0"/>"#, THROUGH] {
             let xml = board(OVAL, [&copper, "", &copper], span);
-            let mut imported = import_design(&Ipc2581::parse(&xml).unwrap()).unwrap();
+            let mut imported =
+                import_design(&Ipc2581::parse(&xml).unwrap(), Resolution::default()).unwrap();
             if span == THROUGH {
                 imported.stackups.clear();
             }
-            let error = Design::extract(&imported, ArtworkScope::Board, &rules)
-                .err()
-                .unwrap();
+            let error = Design::extract(
+                &imported,
+                ArtworkScope::Board,
+                &rules,
+                Resolution::default(),
+            )
+            .err()
+            .unwrap();
             assert!(error.to_string().contains(if span == THROUGH {
                 "physical stackup"
             } else {

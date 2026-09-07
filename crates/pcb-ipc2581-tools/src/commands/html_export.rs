@@ -1,3 +1,4 @@
+use pcb_ir::geom::Resolution;
 use std::collections::{HashMap, HashSet};
 #[cfg(feature = "cli")]
 use std::path::Path;
@@ -22,6 +23,7 @@ pub fn execute(
     input_file: &Path,
     output_file: Option<&Path>,
     unit_format: UnitFormat,
+    resolution: Resolution,
 ) -> Result<()> {
     // Load and parse IPC-2581 file
     let content = file_utils::load_ipc_file(input_file)?;
@@ -29,7 +31,7 @@ pub fn execute(
     let accessor = IpcAccessor::new(&ipc);
 
     // Generate HTML
-    let html = generate_html(&accessor, unit_format)?;
+    let html = generate_html(&accessor, unit_format, resolution)?;
 
     // Determine output path
     let output_path = match output_file {
@@ -50,7 +52,11 @@ pub fn execute(
     Ok(())
 }
 
-pub fn generate_html(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<String> {
+pub fn generate_html(
+    accessor: &IpcAccessor,
+    unit_format: UnitFormat,
+    resolution: Resolution,
+) -> Result<String> {
     let mut env = Environment::new();
     env.add_template("html", HTML_TEMPLATE)
         .context("Failed to add HTML template")?;
@@ -58,9 +64,9 @@ pub fn generate_html(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<
     let template = env.get_template("html")?;
 
     // Extract data
-    let board_summary = extract_board_summary(accessor, unit_format)?;
+    let board_summary = extract_board_summary(accessor, unit_format, resolution)?;
     let stackup = extract_stackup_data(accessor, unit_format);
-    let rendered_layers = extract_rendered_layers(accessor)?;
+    let rendered_layers = extract_rendered_layers(accessor, resolution)?;
     let version = env!("CARGO_PKG_VERSION");
 
     // Extract file metadata
@@ -189,10 +195,15 @@ struct Color {
     hex: String,
 }
 
-fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> Result<BoardSummary> {
+fn extract_board_summary(
+    accessor: &IpcAccessor,
+    unit_format: UnitFormat,
+    resolution: Resolution,
+) -> Result<BoardSummary> {
     let layout = accessor.board_layout_info();
     let design_name = layout.as_ref().and_then(|layout| layout.board_name.clone());
-    let array_overview_svg = crate::board_array::render_board_array_overview_svg(accessor)?;
+    let array_overview_svg =
+        crate::board_array::render_board_array_overview_svg(accessor, resolution)?;
 
     let (width, height) = if let Some(dims) = layout
         .as_ref()
@@ -212,7 +223,7 @@ fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> Res
                 .as_ref()
                 .map(|dims| formatted_dimensions(dims.width_mm(), dims.height_mm(), unit_format))
                 .unwrap_or((None, None));
-            BoardArraySummary {
+            Ok::<_, anyhow::Error>(BoardArraySummary {
                 width,
                 height,
                 grid: board_array.grid.as_ref().map(|grid| BoardArrayGridSummary {
@@ -227,11 +238,12 @@ fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> Res
                     ),
                 }),
                 drill_holes: accessor
-                    .board_array_drill_stats()
+                    .board_array_drill_stats(resolution)?
                     .and_then(format_drill_count),
                 overview_svg: array_overview_svg,
-            }
-        });
+            })
+        })
+        .transpose()?;
 
     let thickness = if let Some(stackup) = accessor.stackup_details() {
         stackup.overall_thickness_mm.map(|t| match unit_format {
@@ -252,7 +264,9 @@ fn extract_board_summary(accessor: &IpcAccessor, unit_format: UnitFormat) -> Res
 
     let components = accessor.component_stats().map(|stats| stats.total);
     let nets = accessor.net_stats().map(|stats| stats.count);
-    let drill_holes = accessor.board_drill_stats().and_then(format_drill_count);
+    let drill_holes = accessor
+        .board_drill_stats(resolution)?
+        .and_then(format_drill_count);
 
     Ok(BoardSummary {
         design_name,
@@ -305,7 +319,10 @@ fn formatted_dimensions(
     }
 }
 
-fn extract_rendered_layers(accessor: &IpcAccessor) -> Result<RenderedLayers> {
+fn extract_rendered_layers(
+    accessor: &IpcAccessor,
+    resolution: Resolution,
+) -> Result<RenderedLayers> {
     let ipc = accessor.ipc();
     let Some(ecad) = ipc.ecad() else {
         return Ok(RenderedLayers::default());
@@ -334,7 +351,8 @@ fn extract_rendered_layers(accessor: &IpcAccessor) -> Result<RenderedLayers> {
                 ipc,
                 layer,
                 stackup_layer.layer_number.map(|number| number.to_string()),
-            );
+                resolution,
+            )?;
             if layer.layer_function.is_coating() && !rendered.has_native_content {
                 continue;
             }
@@ -349,7 +367,7 @@ fn extract_rendered_layers(accessor: &IpcAccessor) -> Result<RenderedLayers> {
                 continue;
             }
             stackup_layer_refs.insert(layer.name);
-            stackup_layers.push(rendered_source_layer(ipc, layer, None));
+            stackup_layers.push(rendered_source_layer(ipc, layer, None, resolution)?);
         }
     }
 
@@ -360,7 +378,7 @@ fn extract_rendered_layers(accessor: &IpcAccessor) -> Result<RenderedLayers> {
             continue;
         }
 
-        let rendered = rendered_source_layer(ipc, layer, None);
+        let rendered = rendered_source_layer(ipc, layer, None, resolution)?;
         if rendered.has_native_content {
             non_stackup_layers.push(rendered);
         }
@@ -376,7 +394,8 @@ fn rendered_source_layer(
     ipc: &ipc2581::Ipc2581,
     layer: &Layer,
     sequence: Option<String>,
-) -> RenderedLayer {
+    resolution: Resolution,
+) -> anyhow::Result<RenderedLayer> {
     let name = ipc.resolve(layer.name).to_string();
     let mut rendered = RenderedLayer {
         name: name.clone(),
@@ -392,33 +411,40 @@ fn rendered_source_layer(
         has_native_content: false,
     };
 
-    match geometry::extract_layer_for_view(ipc, &name, ArtworkScope::Board) {
-        Ok(geometry) => {
-            render_extracted_layer(&mut rendered, geometry, ArtworkScope::Board.profile_set())
-        }
+    match geometry::extract_layer_for_view(ipc, &name, ArtworkScope::Board, resolution) {
+        Ok(geometry) => render_extracted_layer(
+            &mut rendered,
+            geometry,
+            ArtworkScope::Board.profile_set(),
+            resolution,
+        )?,
         Err(error) => {
             rendered.warning = Some(format!("Render unavailable: {error}"));
         }
     }
 
-    rendered
+    Ok(rendered)
 }
 
 fn render_extracted_layer(
     rendered: &mut RenderedLayer,
     mut geometry: GeometryDocument,
     profile_set: ProfileSet,
-) {
-    rendered.has_native_content = geometry::render::layer_has_native_content(&geometry);
-    pcb_ir::dialects::ipc::process::normalize_for_artwork(&mut geometry);
+    resolution: Resolution,
+) -> anyhow::Result<()> {
+    rendered.has_native_content =
+        geometry::render::layer_has_native_content(&geometry, resolution)?;
+    pcb_ir::dialects::ipc::process::normalize_for_artwork(&mut geometry, resolution)?;
     rendered.svg = Some(geometry::render::render_layer_svg(
         &geometry,
         true,
         profile_set,
-    ));
+        resolution.accuracy,
+    )?);
     if !geometry.diagnostics.is_empty() {
         rendered.warning = Some(format!("{} warning(s)", geometry.diagnostics.len()));
-    }
+    };
+    Ok(())
 }
 
 /// Format a decimal number with engineering precision:
@@ -546,10 +572,12 @@ mod tests {
 
     #[test]
     fn html_keeps_board_summary_separate_from_board_array_summary() {
+        let resolution = Resolution::default();
+
         let ipc = ipc2581::Ipc2581::parse(board_array_design_name_fixture()).unwrap();
         let accessor = IpcAccessor::new(&ipc);
 
-        let html = generate_html(&accessor, UnitFormat::Mm).unwrap();
+        let html = generate_html(&accessor, UnitFormat::Mm, resolution).unwrap();
         let design_start = html.find("Design Name:").unwrap();
         let dimensions_start = html.find("Board Dimensions:").unwrap();
         let design_row = &html[design_start..dimensions_start];
@@ -571,10 +599,12 @@ mod tests {
 
     #[test]
     fn html_renders_stackup_layers_then_separate_drills_and_outline() {
+        let resolution = Resolution::default();
+
         let ipc = ipc2581::Ipc2581::parse(layer_render_fixture()).unwrap();
         let accessor = IpcAccessor::new(&ipc);
 
-        let html = generate_html(&accessor, UnitFormat::Mm).unwrap();
+        let html = generate_html(&accessor, UnitFormat::Mm, resolution).unwrap();
 
         assert!(html.contains("<h2>Layers</h2>"));
         assert!(html.contains("<h3>Stackup Layers</h3>"));
@@ -601,10 +631,12 @@ mod tests {
 
     #[test]
     fn html_renders_array_support_layers_in_board_array_summary_only() {
+        let resolution = Resolution::default();
+
         let ipc = ipc2581::Ipc2581::parse(array_layer_render_fixture()).unwrap();
         let accessor = IpcAccessor::new(&ipc);
 
-        let html = generate_html(&accessor, UnitFormat::Mm).unwrap();
+        let html = generate_html(&accessor, UnitFormat::Mm, resolution).unwrap();
 
         let array_summary = html.find("<h2>Board Array Summary</h2>").unwrap();
         let file_info = html.find(r#"<div class="file-info">"#).unwrap();

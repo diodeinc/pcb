@@ -1,4 +1,5 @@
 use clap::{Args, Subcommand, ValueEnum};
+use pcb_ir::geom::Resolution;
 use std::path::PathBuf;
 
 use pcb_ipc2581_tools::{
@@ -338,7 +339,7 @@ impl FabPanelSize {
     }
 }
 
-pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
+pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> {
     utils::color::init_color();
 
     match args.command {
@@ -346,11 +347,11 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
             file,
             format,
             units,
-        } => commands::info::execute(&file, format, units),
+        } => commands::info::execute(&file, format, units, resolution),
         Commands::Assembly { file, scope } => {
             let ipc = pcb_ipc2581_tools::ipc2581::Ipc2581::parse_file(&file)?;
-            let imported = pcb_ir::import::ipc2581::import_design(&ipc)?;
-            let report = pcb_ipc2581_tools::assembly::build_report(&imported, scope)?;
+            let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution)?;
+            let report = pcb_ipc2581_tools::assembly::build_report(&imported, scope, resolution)?;
             let output = serde_json::to_vec_pretty(&report)?;
             pcb_ui::write_stdout(|stdout| {
                 stdout.write_all(&output)?;
@@ -429,9 +430,11 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
             }
             Ok(())
         }
-        Commands::Ict { file, output, side } => {
-            commands::ict::execute(&file, &commands::ict::IctOptions { output, side })
-        }
+        Commands::Ict { file, output, side } => commands::ict::execute(
+            &file,
+            &commands::ict::IctOptions { output, side },
+            resolution,
+        ),
         Commands::Cpl {
             file,
             output,
@@ -444,6 +447,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                 side,
                 exclude_dnp,
             },
+            resolution,
         ),
         Commands::Edit { command } => match command {
             EditCommands::Bom {
@@ -475,7 +479,13 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                             "--auto/--sheet cannot be combined with manual board array options"
                         );
                     }
-                    commands::board_array::execute_auto(&input, &output, sheet, copper_balance)
+                    commands::board_array::execute_auto(
+                        &input,
+                        &output,
+                        sheet,
+                        copper_balance,
+                        resolution,
+                    )
                 } else {
                     let board_margin_mm = if board_margin.is_empty() {
                         commands::board_array::BoardMarginMm::all(5.0)
@@ -500,6 +510,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                             edge_rail_mm,
                         },
                         copper_balance,
+                        resolution,
                     )
                 }
             }
@@ -525,7 +536,13 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                     spec.panel_gap_mm = panel_gap;
                 }
                 spec.emit_usable_area = emit_usable_area;
-                commands::fab_panel::execute(&inputs, &output, spec, copper_balance.resolve(false))
+                commands::fab_panel::execute(
+                    &inputs,
+                    &output,
+                    spec,
+                    copper_balance.resolve(false),
+                    resolution,
+                )
             }
         },
         Commands::View {
@@ -537,7 +554,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
             file,
             output,
             units,
-        } => commands::html_export::execute(&file, output.as_deref(), units),
+        } => commands::html_export::execute(&file, output.as_deref(), units, resolution),
         Commands::Outline {
             file,
             layout_target,
@@ -550,6 +567,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                 layout_target,
                 nested_outlines,
             },
+            resolution,
         ),
         Commands::Render {
             file,
@@ -565,6 +583,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                 format,
                 layout_target,
             },
+            resolution,
         ),
         Commands::Dfm { command } => match command {
             DfmCommands::Check {
@@ -581,25 +600,29 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                     output,
                     layout_target,
                 },
+                crate::dfm::DFM_RESOLUTION,
             )? {
                 commands::dfm::CheckOutcome::Passed => Ok(()),
                 commands::dfm::CheckOutcome::Failed(error) => Err(error),
             },
         },
-        Commands::Warp { file, report } => commands::warp::execute(&file, report.as_deref()),
+        Commands::Warp { file, report } => {
+            commands::warp::execute(&file, report.as_deref(), resolution)
+        }
         Commands::Gerber {
             file,
             layout_target,
             output,
             debug_reliefs,
         } => {
-            let package = manufacturing::execute_file_with_options(
+            let package = manufacturing::export_manufacturing_package(
                 &file,
+                &output,
                 &manufacturing::ManufacturingExportOptions {
-                    output: output.clone(),
                     view: layout_target.artwork_scope(),
                     relief_debug_dir: debug_reliefs,
                 },
+                resolution,
             )?;
             println!(
                 "✓ IPC-2581 exported {} manufacturing file(s) to {}",

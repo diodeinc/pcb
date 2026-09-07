@@ -70,7 +70,14 @@ fn dfm_resolves_zen_exports_temporary_ipc_and_checks_standard_pdk() {
 
     let file_output = run_pcbc(
         &mut sandbox,
-        ["dfm", "MyBoard.zen", "--output", "report.dfm.json"],
+        [
+            "dfm",
+            "MyBoard.zen",
+            "--accuracy-um",
+            "30",
+            "--output",
+            "report.dfm.json",
+        ],
     );
     assert!(file_output.stdout.is_empty());
     assert_eq!(file_output.status.code(), output.status.code());
@@ -203,6 +210,8 @@ fn ipc_dfm_json_matches_stdout_and_preserves_full_scene_with_waivers() {
             "board.xml",
             "--pdk",
             "pdk.toml",
+            "--accuracy-um",
+            "30",
             "--output",
             "report.dfm.json",
         ],
@@ -583,11 +592,18 @@ fn ipc_dfm_geometry_distinguishes_canonical_board_arrays_and_mixed_fab_scope() {
         board_margin_mm: EdgeInsetsMm::all(5.0),
         edge_rail_mm: EdgeInsetsMm::all(5.0),
     };
-    let first = create_board_array(IPC_BOARD, &array_options, false).unwrap();
+    let first = create_board_array(
+        IPC_BOARD,
+        &array_options,
+        false,
+        pcb_ir::geom::Resolution::default(),
+    )
+    .unwrap();
     let second = create_board_array(
         &IPC_BOARD.replace("name=\"board\"", "name=\"other\""),
         &array_options,
         false,
+        pcb_ir::geom::Resolution::default(),
     )
     .unwrap();
     let mut sandbox = Sandbox::new();
@@ -610,6 +626,7 @@ fn ipc_dfm_geometry_distinguishes_canonical_board_arrays_and_mixed_fab_scope() {
         &sandbox.default_cwd().join("fab.xml"),
         spec,
         false,
+        pcb_ir::geom::Resolution::default(),
     )
     .unwrap();
 

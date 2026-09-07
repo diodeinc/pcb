@@ -584,18 +584,42 @@ fn extract_package(
     lib_id: Option<&str>,
     value: Option<&str>,
 ) -> Option<ImportPassivePackage> {
-    for s in [footprint, lib_id, value].into_iter().flatten() {
-        if let Some(pkg) = parse_package_from_text(s) {
-            return Some(pkg);
-        }
-    }
-    None
+    // Ignore library namespaces in identifiers, but leave values as free-form text.
+    [footprint, lib_id]
+        .into_iter()
+        .flatten()
+        .map(|id| id.rsplit_once(':').map_or(id, |(_, name)| name))
+        .chain(value)
+        .find_map(parse_package_from_text)
 }
 
 fn parse_package_from_text(text: &str) -> Option<ImportPassivePackage> {
     let s = text.to_ascii_lowercase();
 
-    // Prefer explicit imperial codes when present.
+    // Match metric suffixes before the colliding imperial 0402/0603 codes.
+    if contains_code(&s, "0402metric") {
+        return Some(ImportPassivePackage::P01005);
+    }
+    if contains_code(&s, "0603metric") {
+        return Some(ImportPassivePackage::P0201);
+    }
+    if contains_code(&s, "1005metric") {
+        return Some(ImportPassivePackage::P0402);
+    }
+    if contains_code(&s, "1608metric") {
+        return Some(ImportPassivePackage::P0603);
+    }
+    if contains_code(&s, "2012metric") {
+        return Some(ImportPassivePackage::P0805);
+    }
+    if contains_code(&s, "3216metric") {
+        return Some(ImportPassivePackage::P1206);
+    }
+    if contains_code(&s, "3225metric") {
+        return Some(ImportPassivePackage::P1210);
+    }
+
+    // Fall back to explicit imperial codes.
     if contains_code(&s, "01005") {
         return Some(ImportPassivePackage::P01005);
     }
@@ -615,29 +639,6 @@ fn parse_package_from_text(text: &str) -> Option<ImportPassivePackage> {
         return Some(ImportPassivePackage::P1206);
     }
     if contains_code(&s, "1210") {
-        return Some(ImportPassivePackage::P1210);
-    }
-
-    // Fall back to common metric "####metric" encodings.
-    if s.contains("0402metric") {
-        return Some(ImportPassivePackage::P01005);
-    }
-    if s.contains("0603metric") {
-        return Some(ImportPassivePackage::P0201);
-    }
-    if s.contains("1005metric") {
-        return Some(ImportPassivePackage::P0402);
-    }
-    if s.contains("1608metric") {
-        return Some(ImportPassivePackage::P0603);
-    }
-    if s.contains("2012metric") {
-        return Some(ImportPassivePackage::P0805);
-    }
-    if s.contains("3216metric") {
-        return Some(ImportPassivePackage::P1206);
-    }
-    if s.contains("3225metric") {
         return Some(ImportPassivePackage::P1210);
     }
 
@@ -1033,6 +1034,13 @@ mod tests {
             ("C_10uF_1210", ImportPassivePackage::P1210),
             ("C_1206_3216Metric", ImportPassivePackage::P1206),
             ("C_1210_3225Metric", ImportPassivePackage::P1210),
+            ("Foo:Bar_0402Metric", ImportPassivePackage::P01005),
+            ("Foo:Bar_0603Metric", ImportPassivePackage::P0201),
+            ("C_01005_0402Metric", ImportPassivePackage::P01005),
+            ("R_0201_0603Metric", ImportPassivePackage::P0201),
+            ("C_0402_1005Metric", ImportPassivePackage::P0402),
+            ("R_0603_1608Metric", ImportPassivePackage::P0603),
+            ("R_01005Metric", ImportPassivePackage::P01005),
         ] {
             assert_eq!(
                 parse_package_from_text(raw),
@@ -1041,6 +1049,27 @@ mod tests {
             );
         }
         assert_eq!(parse_package_from_text("SOT-23-5"), None);
+    }
+
+    #[test]
+    fn test_extract_package_ignores_namespaces_not_values() {
+        for (inputs, want) in [
+            (
+                ["0402Metric:R_0603_1608Metric", "Device:R_0805", "1206"],
+                ImportPassivePackage::P0603,
+            ),
+            (
+                ["0402Metric:R", "0603Metric:R_0402", "1206"],
+                ImportPassivePackage::P0402,
+            ),
+            (
+                ["0402Metric:R", "0603Metric:R", "0402Metric:R_0402"],
+                ImportPassivePackage::P01005,
+            ),
+        ] {
+            let [footprint, lib_id, value] = inputs.map(Some);
+            assert_eq!(extract_package(footprint, lib_id, value), Some(want));
+        }
     }
 
     #[test]

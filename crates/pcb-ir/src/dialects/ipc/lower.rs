@@ -1,6 +1,7 @@
 //! Lowerings out of the IPC dialect: per-layer artwork, NC drill/rout
 //! documents, and fabrication profiles.
 
+use crate::geom::Resolution;
 use std::collections::HashMap;
 use std::hash::Hash;
 
@@ -15,7 +16,7 @@ use crate::dialects::ipc::layout::{LayoutPurpose, StepProfile};
 use crate::dialects::ipc::{Document, relief};
 use crate::dialects::{LayerRole, Side};
 use crate::dialects::{artwork, nc};
-use crate::geom::path::{ContourBuf, transform_cmds};
+use crate::geom::path::ContourBuf;
 use crate::geom::{
     Affine2, BBox, ContourSet, FillRule, Paint, Point, Polarity, Span, StrokeStyle, tol,
 };
@@ -358,8 +359,8 @@ pub fn contour_flash_aperture<Symbol, LayerFunction>(
     let local = doc
         .arena
         .path_contours(path)
-        .iter()
-        .map(|contour| transform_cmds(contour.cmds.iter().copied(), inverse))
+        .into_iter()
+        .map(|contour| contour.transformed(inverse))
         .collect::<Vec<_>>();
     let [outline] = local.try_into().ok()?;
     Some(artwork::ApertureShape::Contour {
@@ -573,6 +574,7 @@ pub fn board_array_fabrication_profile<Symbol, LayerFunction>(
     doc: &Document<Symbol, LayerFunction>,
     score_lines: &[relief::VScoreLine],
     options: FabricationProfileOptions,
+    resolution: Resolution,
 ) -> Result<(BoardArrayFabricationProfile, relief::VScoreReliefDebug), relief::VScoreReliefError> {
     let Some((_, root_panel)) = root_panel_step(doc) else {
         return Ok((
@@ -582,7 +584,7 @@ pub fn board_array_fabrication_profile<Symbol, LayerFunction>(
     };
 
     let input = collect_board_array_fabrication_profile_input(doc, root_panel.purpose);
-    compose_board_array_fabrication_profile(input, score_lines, options)
+    compose_board_array_fabrication_profile(input, score_lines, options, resolution)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -659,17 +661,16 @@ fn compose_board_array_fabrication_profile(
     input: BoardArrayFabricationProfileInput,
     score_lines: &[relief::VScoreLine],
     options: FabricationProfileOptions,
+    resolution: Resolution,
 ) -> Result<(BoardArrayFabricationProfile, relief::VScoreReliefDebug), relief::VScoreReliefError> {
     // M = source cutouts ∪ board cutouts ∪ V-score relief material.
     // Store M as a `ContourSet` until the end so every contribution is merged
     // with the same regularized Boolean union.
-    let mut material_removal = ContourSet::empty(relief::DEFAULT_RELIEF_TOLERANCE_MM);
+    let resolution = resolution.with_tolerance(relief::DEFAULT_RELIEF_TOLERANCE_MM);
+    let mut material_removal = ContourSet::empty(resolution);
 
     for contours in &input.source_material_removal {
-        material_removal.union_assign(&ContourSet::from_filled_contours(
-            contours,
-            relief::DEFAULT_RELIEF_TOLERANCE_MM,
-        ));
+        material_removal.union_assign(&ContourSet::from_filled_contours(contours, resolution)?)?;
     }
 
     let mut relief_debug = relief::VScoreReliefDebug::default();
@@ -680,7 +681,7 @@ fn compose_board_array_fabrication_profile(
             score_blockers: options.relief_features.score_blockers,
             score_lines: score_lines.to_vec(),
             tool_diameter_mm: relief::DEFAULT_ROUTE_TOOL_DIAMETER_MM,
-            tolerance_mm: relief::DEFAULT_RELIEF_TOLERANCE_MM,
+            resolution,
         };
         let reliefs = if options.debug {
             let output = relief::vscore_route_reliefs_with_debug(&relief_input)?;
@@ -689,10 +690,7 @@ fn compose_board_array_fabrication_profile(
         } else {
             relief::vscore_route_reliefs(&relief_input)?
         };
-        material_removal.union_assign(&ContourSet::from_filled_contours(
-            &reliefs,
-            relief::DEFAULT_RELIEF_TOLERANCE_MM,
-        ));
+        material_removal.union_assign(&ContourSet::from_filled_contours(&reliefs, resolution)?)?;
     }
 
     Ok((
@@ -847,16 +845,27 @@ mod tests {
 
     #[test]
     fn material_removal_union_is_winding_insensitive() {
-        let mut region = ContourSet::empty(0.001);
+        let resolution = Resolution::default().with_tolerance(0.001);
+        let mut region = ContourSet::empty(resolution);
 
-        region.union_assign(&ContourSet::from_filled_contours(
-            &[reversed_rectangle_contour(0.0, 0.0, 2.0, 2.0)],
-            0.001,
-        ));
-        region.union_assign(&ContourSet::from_filled_contours(
-            &[rectangle_contour(1.0, 0.0, 4.0, 2.0)],
-            0.001,
-        ));
+        region
+            .union_assign(
+                &ContourSet::from_filled_contours(
+                    &[reversed_rectangle_contour(0.0, 0.0, 2.0, 2.0)],
+                    resolution,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        region
+            .union_assign(
+                &ContourSet::from_filled_contours(
+                    &[rectangle_contour(1.0, 0.0, 4.0, 2.0)],
+                    resolution,
+                )
+                .unwrap(),
+            )
+            .unwrap();
 
         let bbox = region
             .to_contours()
@@ -874,8 +883,13 @@ mod tests {
             assembly_panel_outlines: vec![vec![finished]],
             ..BoardArrayFabricationProfileInput::default()
         };
-        let (profile, _) =
-            compose_board_array_fabrication_profile(input, &[], Default::default()).unwrap();
+        let (profile, _) = compose_board_array_fabrication_profile(
+            input,
+            &[],
+            Default::default(),
+            Resolution::default(),
+        )
+        .unwrap();
 
         assert_eq!(profile.purpose, LayoutPurpose::FabricationPanel);
         assert!(profile.material_removal.is_empty());

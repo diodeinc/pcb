@@ -4,10 +4,11 @@ use std::collections::BTreeSet;
 
 use common::kicad_builder::{KicadBuilder, TestPin};
 use pcb_kicad_sch::{
-    SchItem,
-    analysis::analyze_connectivity,
+    SchItem, SymbolSlotKey,
+    analysis::{SchematicIssue, analyze_connectivity},
     connectivity::{
-        ComponentIdentity, ConnectionGroup, ConnectionOrigin, ConnectivityGraph, Terminal,
+        ComponentIdentity, ComponentNode, ComponentOrigin, ConnectionGroup, ConnectionOrigin,
+        ConnectivityGraph, Terminal,
     },
 };
 
@@ -208,6 +209,35 @@ fn unmanaged_component_still_contributes_pin_connectivity() {
             }
         )
     }));
+}
+
+#[test]
+fn distinct_managed_symbols_sharing_a_slot_still_report_duplicate() {
+    let mut builder = KicadBuilder::new();
+    builder
+        .define_symbol("Test:OnePin", &[TestPin::passive("1", (0.0, 0.0))])
+        .component("Test:OnePin", Some("/design/R"), (0.0, 0.0))
+        .component("Test:OnePin", Some("/design/R"), (10.0, 0.0));
+
+    let observed = ConnectivityGraph::from_kicad(&builder.build()).unwrap();
+    assert_eq!(observed.components.len(), 2);
+    assert_ne!(observed.components[0].origin, observed.components[1].origin);
+
+    let mut expected = ConnectivityGraph::default();
+    expected.components.push(ComponentNode {
+        managed_slot: SymbolSlotKey::new("/design/R", 1),
+        origin: ComponentOrigin::Zener,
+    });
+
+    let analysis = analyze_connectivity(&expected, &observed);
+    assert!(
+        analysis
+            .issues()
+            .iter()
+            .any(|issue| matches!(issue, SchematicIssue::DuplicateSymbol { .. })),
+        "{:?}",
+        analysis.issues(),
+    );
 }
 
 #[test]
@@ -426,24 +456,31 @@ fn placed_alternate_with_duplicate_pin_number_is_ambiguous() {
 
 #[test]
 fn stacked_pin_numbers_expand_to_exact_logical_numbers() {
-    let mut builder = KicadBuilder::new();
-    builder
-        .define_symbol_raw(
-            r#"(symbol "Test:Stacked"
+    for (number, expected) in [
+        ("[1-3]", vec!["1", "2", "3"]),
+        ("[01-03]", vec!["01", "02", "03"]),
+        ("[08-12]", vec!["08", "09", "10", "11", "12"]),
+        ("[A01-A03,7]", vec!["A01", "A02", "A03", "7"]),
+        ("[9-11]", vec!["9", "10", "11"]),
+    ] {
+        let mut builder = KicadBuilder::new();
+        builder
+            .define_symbol_raw(&format!(
+                r#"(symbol "Test:Stacked"
               (symbol "Stacked_1_1"
                 (pin passive line (at 0 0 0) (length 0)
-                  (name "P") (number "[1-3]"))))"#,
-        )
-        .component("Test:Stacked", Some("U1"), (0.0, 0.0))
-        .local_label("NET", (0.0, 0.0));
+                  (name "P") (number "{number}"))))"#
+            ))
+            .component("Test:Stacked", Some("U1"), (0.0, 0.0))
+            .local_label("NET", (0.0, 0.0));
 
-    let graph = ConnectivityGraph::from_kicad(&builder.build()).unwrap();
-    let Terminal::ComponentPin { pin_numbers, .. } = graph.groups[0].terminals.first().unwrap()
-    else {
-        panic!("expected component pin");
-    };
-    assert_eq!(pin_numbers, &names(&["1", "2", "3"]));
-    assert!(!pin_numbers.contains("[1-3]"));
+        let graph = ConnectivityGraph::from_kicad(&builder.build()).unwrap();
+        let Terminal::ComponentPin { pin_numbers, .. } = graph.groups[0].terminals.first().unwrap()
+        else {
+            panic!("expected component pin");
+        };
+        assert_eq!(pin_numbers, &names(&expected), "{number}");
+    }
 }
 
 #[test]

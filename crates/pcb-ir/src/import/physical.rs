@@ -4,6 +4,7 @@
 //! geometry remains owned once by the canonical IPC document and final images
 //! are composed on demand for the requested layout scope.
 
+use crate::geom::Resolution;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use anyhow::{Context, Result, bail, ensure};
@@ -183,9 +184,11 @@ pub struct LayerLandAssociation {
 /// coordinate frame for a selected layout scope.
 #[derive(Debug, Clone, Default)]
 pub struct PhysicalView {
-    /// Surviving final copper lands. Hole links can also name fully removed
-    /// source lands by their canonical feature occurrence IDs.
+    /// Lands before routing and clears. Hole-linked IDs resolve here.
+    pub source_lands: Vec<PhysicalLand>,
+    /// Surviving copper, with the same IDs as `source_lands`.
     pub lands: Vec<PhysicalLand>,
+    /// Electrical contacts derived from surviving lands.
     pub terminations: Vec<PhysicalTermination>,
     pub paste_islands: Vec<PasteIsland>,
     pub mask_openings: Vec<MaskOpening>,
@@ -225,40 +228,66 @@ fn exact_coordinate(value: f64) -> u64 {
 }
 
 impl ImportedDesign {
-    /// Derive surviving final copper lands without materializing unrelated
-    /// physical layers.
-    pub fn physical_lands(&self, scope: ArtworkScope) -> Result<Vec<PhysicalLand>> {
+    /// Derive source lands before routing and clears; IDs match hole links.
+    pub fn source_lands(
+        &self,
+        scope: ArtworkScope,
+        resolution: Resolution,
+    ) -> Result<Vec<PhysicalLand>> {
         let components = self.component_occurrences(scope)?;
-        self.derive_physical_lands(scope, &components, false)
+        self.derive_physical_lands(scope, &components, true, resolution)
     }
 
-    /// Derive electrical package contacts using only exact IPC identities.
-    pub fn physical_terminations(&self, scope: ArtworkScope) -> Result<Vec<PhysicalTermination>> {
-        let lands = self.physical_lands(scope)?;
+    /// Derive surviving final copper lands without materializing unrelated physical
+    /// layers.
+    pub fn physical_lands(
+        &self,
+        scope: ArtworkScope,
+        resolution: Resolution,
+    ) -> Result<Vec<PhysicalLand>> {
+        let components = self.component_occurrences(scope)?;
+        self.derive_physical_lands(scope, &components, false, resolution)
+    }
+
+    /// Derive electrical contacts from surviving lands using exact IPC identities.
+    pub fn physical_terminations(
+        &self,
+        scope: ArtworkScope,
+        resolution: Resolution,
+    ) -> Result<Vec<PhysicalTermination>> {
+        let lands = self.physical_lands(scope, resolution)?;
         Ok(self.derive_physical_terminations(&lands))
     }
 
     /// Derive drilled openings and their source-land relationships without
     /// composing final copper or materializing assembly, paste, or mask layers.
-    pub fn physical_holes(&self, scope: ArtworkScope) -> Result<Vec<PhysicalHole>> {
-        let components = self.component_occurrences(scope)?;
-        let lands = self.derive_physical_lands(scope, &components, true)?;
-        self.derive_physical_holes(scope, &lands)
+    pub fn physical_holes(
+        &self,
+        scope: ArtworkScope,
+        resolution: Resolution,
+    ) -> Result<Vec<PhysicalHole>> {
+        let lands = self.source_lands(scope, resolution)?;
+        self.derive_physical_holes(scope, &lands, resolution)
     }
 
     /// Derive physical lands, exact electrical terminations, independent paste
     /// islands, mask openings, and drilled openings without reinterpreting
     /// source XML or duplicating geometry.
-    pub fn physical_view(&self, scope: ArtworkScope) -> Result<PhysicalView> {
+    pub fn physical_view(
+        &self,
+        scope: ArtworkScope,
+        resolution: Resolution,
+    ) -> Result<PhysicalView> {
         let components = self.component_occurrences(scope)?;
-        let lands = self.derive_physical_lands(scope, &components, false)?;
+        let lands = self.derive_physical_lands(scope, &components, false, resolution)?;
         let terminations = self.derive_physical_terminations(&lands);
-        let paste_islands = self.paste_islands(scope, &components, &terminations)?;
-        let mask_openings = self.mask_openings(scope, &lands)?;
-        let source_lands = self.derive_physical_lands(scope, &components, true)?;
-        let mut holes = self.derive_physical_holes(scope, &source_lands)?;
-        self.attach_hole_assembly_evidence(scope, &lands, &terminations, &mut holes)?;
+        let paste_islands = self.paste_islands(scope, &components, &terminations, resolution)?;
+        let mask_openings = self.mask_openings(scope, &lands, resolution)?;
+        let source_lands = self.derive_physical_lands(scope, &components, true, resolution)?;
+        let mut holes = self.derive_physical_holes(scope, &source_lands, resolution)?;
+        self.attach_hole_assembly_evidence(scope, &lands, &terminations, &mut holes, resolution)?;
         Ok(PhysicalView {
+            source_lands,
             lands,
             terminations,
             paste_islands,
@@ -272,6 +301,7 @@ impl ImportedDesign {
         scope: ArtworkScope,
         components: &[ComponentOccurrence],
         source_geometry: bool,
+        resolution: Resolution,
     ) -> Result<Vec<PhysicalLand>> {
         let mut lands = Vec::new();
         for (layer_index, layer) in self.layer_definitions.iter().enumerate() {
@@ -288,7 +318,7 @@ impl ImportedDesign {
                     .map(|occurrence| (occurrence, None))
                     .collect::<Vec<_>>()
             } else {
-                self.attributed_land_images(layer_id, scope)?
+                self.attributed_land_images(layer_id, scope, resolution)?
                     .into_iter()
                     .map(|(occurrence, image)| (occurrence, Some(image)))
                     .collect()
@@ -311,7 +341,7 @@ impl ImportedDesign {
                     layer: layer_id,
                     side,
                     at,
-                    image: image.unwrap_or_else(|| self.feature_region(occurrence)),
+                    image: image.map_or_else(|| self.feature_region(occurrence, resolution), Ok)?,
                     board: occurrence.board,
                     component: self.component_association(source, &evidence, components),
                     component_refs: evidence.component_refs.clone(),
@@ -422,6 +452,7 @@ impl ImportedDesign {
         scope: ArtworkScope,
         components: &[ComponentOccurrence],
         terminations: &[PhysicalTermination],
+        resolution: Resolution,
     ) -> Result<Vec<PasteIsland>> {
         let mut islands = Vec::new();
         for (layer_index, layer) in self.layer_definitions.iter().enumerate() {
@@ -433,7 +464,9 @@ impl ImportedDesign {
             }
             let layer_id = LayerId(layer_index as u32);
             let side = physical_side(layer.side);
-            for (occurrence, image) in self.attributed_feature_images(layer_id, scope)? {
+            for (occurrence, image) in
+                self.attributed_feature_images(layer_id, scope, resolution)?
+            {
                 let source = occurrence.id;
                 let feature = self
                     .feature_definition(source.feature)
@@ -482,6 +515,7 @@ impl ImportedDesign {
         &self,
         scope: ArtworkScope,
         lands: &[PhysicalLand],
+        resolution: Resolution,
     ) -> Result<Vec<MaskOpening>> {
         let mut lands_by_context = HashMap::<_, Vec<_>>::new();
         for land in lands {
@@ -503,7 +537,9 @@ impl ImportedDesign {
             }
             let layer_id = LayerId(layer_index as u32);
             let side = physical_side(layer.side);
-            for (occurrence, image) in self.attributed_feature_images(layer_id, scope)? {
+            for (occurrence, image) in
+                self.attributed_feature_images(layer_id, scope, resolution)?
+            {
                 let source = occurrence.id;
                 let evidence = self.feature_evidence(source);
                 let board = occurrence.board;
@@ -527,7 +563,7 @@ impl ImportedDesign {
                             &evidence,
                             &Association::Unresolved,
                             candidates,
-                        ),
+                        )?,
                     });
                 }
             }
@@ -540,6 +576,7 @@ impl ImportedDesign {
         &self,
         scope: ArtworkScope,
         lands: &[PhysicalLand],
+        resolution: Resolution,
     ) -> Result<Vec<PhysicalHole>> {
         let layer_order = physical_stackup_layers(&self.stackups, &self.layer_definitions)?
             .unwrap_or_else(|| {
@@ -568,7 +605,7 @@ impl ImportedDesign {
                 if !matches!(feature.kind, FeatureKind::Hole | FeatureKind::Slot) {
                     continue;
                 }
-                let image = self.feature_region(occurrence);
+                let image = self.feature_region(occurrence, resolution)?;
                 let evidence = self.feature_evidence(occurrence.id);
                 let mut layer_lands = Vec::new();
                 for (&copper_layer, candidates) in &lands_by_layer {
@@ -586,7 +623,7 @@ impl ImportedDesign {
                         &evidence,
                         &Association::Unresolved,
                         candidates,
-                    );
+                    )?;
                     layer_lands.push(LayerLandAssociation {
                         layer: copper_layer,
                         land,
@@ -632,6 +669,7 @@ impl ImportedDesign {
         lands: &[PhysicalLand],
         terminations: &[PhysicalTermination],
         holes: &mut [PhysicalHole],
+        resolution: Resolution,
     ) -> Result<()> {
         let stackup = physical_stackup_layers(&self.stackups, &self.layer_definitions)?;
         let land_by_id = lands
@@ -646,14 +684,14 @@ impl ImportedDesign {
                 terminations,
                 &land_by_id,
                 stackup.as_deref(),
-            );
+            )?;
             if let Some(side) = association_side(&termination, terminations) {
                 hole.assembly_side = side;
             }
             hole.termination = termination;
             hole.termination_basis = basis;
         }
-        self.attach_hole_protection(scope, holes, stackup.as_deref())
+        self.attach_hole_protection(scope, holes, stackup.as_deref(), resolution)
     }
 
     fn hole_termination_association(
@@ -663,7 +701,7 @@ impl ImportedDesign {
         terminations: &[PhysicalTermination],
         land_by_id: &HashMap<LandId, &PhysicalLand>,
         stackup: Option<&[Symbol]>,
-    ) -> (Association<PhysicalTerminationId>, Option<AssociationBasis>) {
+    ) -> Result<(Association<PhysicalTerminationId>, Option<AssociationBasis>)> {
         if !evidence.component_refs.is_empty() || evidence.pin.is_some() {
             let candidates = terminations
                 .iter()
@@ -680,32 +718,32 @@ impl ImportedDesign {
                 })
                 .map(|termination| termination.id)
                 .collect::<BTreeSet<_>>();
-            return (
+            return Ok((
                 association_from_candidates(candidates, true),
                 Some(AssociationBasis::SourceIdentity),
-            );
+            ));
         }
 
-        let candidate_lands = terminations
-            .iter()
-            .flat_map(|termination| {
-                termination.lands.iter().filter_map(|land| {
-                    let land = land_by_id[land];
-                    (termination.side != Side::None
-                        && land.board == hole.board
-                        && land.side == termination.side
-                        && feature_definitely_spans_layer(
-                            hole.span,
-                            self.layer_definitions[land.layer.0 as usize].name,
-                            stackup,
-                        )
-                        && land.image.bbox().intersects(hole.image.bbox())
-                        && land.image.intersection(&hole.image).area() > tol::REGION_MM.powi(2))
-                    .then_some((land.id, termination.id))
-                })
-            })
-            .collect::<Vec<_>>();
-        match candidate_lands.as_slice() {
+        let mut candidate_lands = Vec::new();
+        for termination in terminations {
+            for land in &termination.lands {
+                let land = land_by_id[land];
+                if termination.side != Side::None
+                    && land.board == hole.board
+                    && land.side == termination.side
+                    && feature_definitely_spans_layer(
+                        hole.span,
+                        self.layer_definitions[land.layer.0 as usize].name,
+                        stackup,
+                    )
+                    && land.image.bbox().intersects(hole.image.bbox())
+                    && land.image.intersection(&hole.image)?.area() > tol::REGION_MM.powi(2)
+                {
+                    candidate_lands.push((land.id, termination.id));
+                }
+            }
+        }
+        Ok(match candidate_lands.as_slice() {
             [] => (Association::Unresolved, None),
             [(_, termination)] => (
                 Association::Resolved(*termination),
@@ -722,7 +760,7 @@ impl ImportedDesign {
                 ),
                 Some(AssociationBasis::ExactGeometry),
             ),
-        }
+        })
     }
 
     fn attach_hole_protection(
@@ -730,6 +768,7 @@ impl ImportedDesign {
         scope: ArtworkScope,
         holes: &mut [PhysicalHole],
         stackup: Option<&[Symbol]>,
+        resolution: Resolution,
     ) -> Result<()> {
         for (layer_index, layer) in self.layer_definitions.iter().enumerate() {
             if !matches!(
@@ -741,7 +780,9 @@ impl ImportedDesign {
                 continue;
             }
             let layer_id = LayerId(layer_index as u32);
-            for (occurrence, image) in self.attributed_feature_images(layer_id, scope)? {
+            for (occurrence, image) in
+                self.attributed_feature_images(layer_id, scope, resolution)?
+            {
                 let feature = self
                     .feature_definition(occurrence.id.feature)
                     .context("hole protection references a missing feature definition")?;
@@ -760,7 +801,7 @@ impl ImportedDesign {
                     if protection_side_compatible(hole.assembly_side, evidence.side)
                         && feature_spans_overlap(hole.span, evidence.span, stackup)
                         && hole.image.bbox().intersects(image.bbox())
-                        && hole.image.intersection(&image).area() > tol::REGION_MM.powi(2)
+                        && hole.image.intersection(&image)?.area() > tol::REGION_MM.powi(2)
                     {
                         hole.protection.push(evidence.clone());
                     }
@@ -807,20 +848,27 @@ impl ImportedDesign {
         &self,
         layer: LayerId,
         scope: ArtworkScope,
+        resolution: Resolution,
     ) -> Result<Vec<(crate::import::ipc2581::FeatureOccurrence, ContourSet)>> {
-        self.attributed_feature_images_where(layer, scope, |_| true)
+        self.attributed_feature_images_where(layer, scope, |_| true, resolution)
     }
 
     fn attributed_land_images(
         &self,
         layer: LayerId,
         scope: ArtworkScope,
+        resolution: Resolution,
     ) -> Result<Vec<(crate::import::ipc2581::FeatureOccurrence, ContourSet)>> {
-        self.attributed_feature_images_where(layer, scope, |feature| {
-            feature.kind == FeatureKind::Padstack
-                && feature.polarity == Polarity::Dark
-                && feature.intent.domain == FeatureDomain::Copper
-        })
+        self.attributed_feature_images_where(
+            layer,
+            scope,
+            |feature| {
+                feature.kind == FeatureKind::Padstack
+                    && feature.polarity == Polarity::Dark
+                    && feature.intent.domain == FeatureDomain::Copper
+            },
+            resolution,
+        )
     }
 
     fn attributed_feature_images_where(
@@ -828,6 +876,7 @@ impl ImportedDesign {
         layer: LayerId,
         scope: ArtworkScope,
         include: impl Fn(&Feature<Symbol>) -> bool,
+        resolution: Resolution,
     ) -> Result<Vec<(crate::import::ipc2581::FeatureOccurrence, ContourSet)>> {
         let definition = self
             .layer_definition(layer)
@@ -839,7 +888,7 @@ impl ImportedDesign {
             .collect::<std::collections::HashMap<_, _>>();
         let mut document = self.materialize_layer(layer, scope)?;
         crate::dialects::ipc::process::expand_feature_placement_groups(&mut document);
-        crate::dialects::ipc::process::normalize_for_artwork(&mut document);
+        crate::dialects::ipc::process::normalize_for_artwork(&mut document, resolution)?;
         crate::dialects::ipc::validate_artwork_ready(&document).map_err(anyhow::Error::msg)?;
         let header = artwork::Layer {
             name: document.layers[0].name.clone(),
@@ -850,23 +899,27 @@ impl ImportedDesign {
             meta: definition.layer_function,
         };
         let artwork = lower_layer_to_artwork_with(&document, 0, header, &mut OccurrenceAttribution);
-        let (mut layers, _) = artwork::compose_selected_owners(&artwork, |owner| {
-            let owner = (*owner)?;
-            self.feature_definition(owner.feature)
-                .filter(|feature| include(feature))
-                .map(|_| owner)
-        });
+        let (mut layers, _) = artwork::compose_owner_regions(
+            &artwork,
+            |owner| {
+                let owner = (*owner)?;
+                self.feature_definition(owner.feature)
+                    .filter(|feature| include(feature))
+                    .map(|_| owner)
+            },
+            resolution,
+        )?;
         let owners = layers
             .pop()
             .context("attributed physical composition produced no layer")?;
         owners
             .into_iter()
-            .map(|(owner, rings)| {
+            .map(|(owner, image)| {
                 Ok((
                     *occurrences
                         .get(&owner)
                         .context("composed feature has no canonical occurrence")?,
-                    ContourSet::from_regularized(rings, tol::REGION_MM),
+                    image,
                 ))
             })
             .collect()
@@ -1015,7 +1068,7 @@ fn associate_land_candidates(
     evidence: &FeatureEvidence,
     component: &Association<ComponentOccurrenceId>,
     lands: &[&PhysicalLand],
-) -> Association<LandId> {
+) -> Result<Association<LandId>> {
     let same_context = lands
         .iter()
         .copied()
@@ -1042,25 +1095,26 @@ fn associate_land_candidates(
     } else {
         same_context.as_slice()
     };
-    let overlapping = pool
-        .iter()
-        .copied()
-        .filter(|land| land.image.bbox().intersects(image.bbox()))
-        .filter(|land| land.image.intersection(image).area() > tol::REGION_MM.powi(2))
-        .map(|land| land.id)
-        .collect::<Vec<_>>();
+    let mut overlapping = Vec::new();
+    for land in pool {
+        if land.image.bbox().intersects(image.bbox())
+            && land.image.intersection(image)?.area() > tol::REGION_MM.powi(2)
+        {
+            overlapping.push(land.id);
+        }
+    }
 
     if matches!(component, Association::Conflicting(_)) {
-        return Association::Conflicting(overlapping);
+        return Ok(Association::Conflicting(overlapping));
     }
-    match overlapping.as_slice() {
+    Ok(match overlapping.as_slice() {
         [land] => Association::Resolved(*land),
         [_, _, ..] => Association::Ambiguous(overlapping),
         [] if has_explicit_evidence && !explicit.is_empty() => {
             Association::Conflicting(explicit.iter().map(|land| land.id).collect())
         }
         [] => Association::Unresolved,
-    }
+    })
 }
 
 fn land_component_refs(land: &PhysicalLand) -> Vec<Symbol> {
@@ -1236,22 +1290,59 @@ mod tests {
     use crate::import::ipc2581::import_design;
 
     #[test]
+    fn physical_associations_propagate_geometry_budget_errors() {
+        let ipc = Ipc2581::parse(physical_fixture()).unwrap();
+        let imported = import_design(&ipc, Resolution::default()).unwrap();
+        let scope = ArtworkScope::Board;
+        let coarse = Resolution::default();
+        let fine = coarse.with_accuracy(crate::geom::GeometryAccuracy::new(0.0001).unwrap());
+        let lands = imported.physical_lands(scope, coarse).unwrap();
+
+        // Individually valid images can exceed the tighter budget when combined.
+        let hole_error = imported
+            .derive_physical_holes(scope, &lands, fine)
+            .unwrap_err();
+        let mask_error = imported.mask_openings(scope, &lands, fine).unwrap_err();
+        let terminations = imported.derive_physical_terminations(&lands);
+        let mut holes = imported.physical_holes(scope, fine).unwrap();
+        holes[0].span = FeatureSpan::ThroughBoard;
+        let assembly_error = imported
+            .attach_hole_assembly_evidence(scope, &lands, &terminations, &mut holes, fine)
+            .unwrap_err();
+        for error in [hole_error, mask_error, assembly_error] {
+            assert!(
+                matches!(
+                    error.downcast_ref::<crate::geom::AccuracyError>(),
+                    Some(crate::geom::AccuracyError::BudgetExceeded { .. })
+                ),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
     fn domain_queries_do_not_materialize_unrelated_layers() {
         let ipc = Ipc2581::parse(physical_fixture()).unwrap();
-        let mut imported = import_design(&ipc).unwrap();
+        let mut imported = import_design(&ipc, Resolution::default()).unwrap();
         make_paste_artwork_invalid(&mut imported);
 
         assert_eq!(
-            imported.physical_lands(ArtworkScope::Board).unwrap().len(),
+            imported
+                .physical_lands(ArtworkScope::Board, Resolution::default())
+                .unwrap()
+                .len(),
             7
         );
         assert_eq!(
-            imported.physical_holes(ArtworkScope::Board).unwrap().len(),
+            imported
+                .physical_holes(ArtworkScope::Board, Resolution::default())
+                .unwrap()
+                .len(),
             1
         );
         assert!(
             imported
-                .physical_view(ArtworkScope::Board)
+                .physical_view(ArtworkScope::Board, Resolution::default())
                 .unwrap_err()
                 .to_string()
                 .contains("mixes Fill and Stroke paths")
@@ -1265,16 +1356,18 @@ mod tests {
             "<Layer name=\"PASTE\" layerFunction=\"HOLEFILL\" side=\"TOP\" polarity=\"POSITIVE\"/>",
         );
         let ipc = Ipc2581::parse(&xml).unwrap();
-        let mut imported = import_design(&ipc).unwrap();
+        let mut imported = import_design(&ipc, Resolution::default()).unwrap();
         make_paste_artwork_invalid(&mut imported);
 
-        let holes = imported.physical_holes(ArtworkScope::Board).unwrap();
+        let holes = imported
+            .physical_holes(ArtworkScope::Board, Resolution::default())
+            .unwrap();
         assert_eq!(holes.len(), 1);
         assert_eq!(holes[0].termination, Association::Unresolved);
         assert!(holes[0].protection.is_empty());
         assert!(
             imported
-                .physical_view(ArtworkScope::Board)
+                .physical_view(ArtworkScope::Board, Resolution::default())
                 .unwrap_err()
                 .to_string()
                 .contains("mixes Fill and Stroke paths")
@@ -1289,8 +1382,10 @@ mod tests {
         );
         Ipc2581::validate(&xml).expect("one-ended drill span conforms to IPC-2581C");
         let ipc = Ipc2581::parse(&xml).unwrap();
-        let imported = import_design(&ipc).unwrap();
-        let holes = imported.physical_holes(ArtworkScope::Board).unwrap();
+        let imported = import_design(&ipc, Resolution::default()).unwrap();
+        let holes = imported
+            .physical_holes(ArtworkScope::Board, Resolution::default())
+            .unwrap();
 
         assert_eq!(holes.len(), 1);
         assert_eq!(holes[0].lands.len(), 2);
@@ -1302,7 +1397,11 @@ mod tests {
         );
         assert_eq!(holes[0].termination, Association::Unresolved);
         assert_eq!(
-            imported.physical_view(ArtworkScope::Board).unwrap().holes[0].termination,
+            imported
+                .physical_view(ArtworkScope::Board, Resolution::default())
+                .unwrap()
+                .holes[0]
+                .termination,
             Association::Unresolved
         );
     }
@@ -1318,8 +1417,11 @@ mod tests {
                 &format!("<SlotCavity name=\"S1\" platingStatus=\"PLATED\" plusTol=\"0\" minusTol=\"0\"><Location x=\"5\" y=\"5\"/><Oval width=\"2\" height=\"{height}\"/></SlotCavity>"),
             );
             Ipc2581::validate(&xml).unwrap();
-            let imported = import_design(&Ipc2581::parse(&xml).unwrap()).unwrap();
-            let holes = imported.physical_holes(ArtworkScope::Board).unwrap();
+            let imported =
+                import_design(&Ipc2581::parse(&xml).unwrap(), Resolution::default()).unwrap();
+            let holes = imported
+                .physical_holes(ArtworkScope::Board, Resolution::default())
+                .unwrap();
             assert_eq!(holes.len(), 1);
             let hole = &holes[0];
             assert_eq!(hole.kind, PhysicalHoleKind::Slot);
@@ -1331,16 +1433,20 @@ mod tests {
                 .expect("routing must not erase source identity");
             let source = imported.feature_definition(land.0.feature).unwrap();
             assert_eq!(source.center, Point::new(5.0, 5.0));
-            let final_lands = imported.physical_lands(ArtworkScope::Board).unwrap();
+            let final_lands = imported
+                .physical_lands(ArtworkScope::Board, Resolution::default())
+                .unwrap();
             let residue = final_lands.iter().find(|candidate| candidate.id == land);
             if height < 1.0 {
                 let residue = residue.expect("narrow slot leaves copper on both sides");
                 assert_eq!(residue.image.connected_components().len(), 2);
-                assert!(residue.image.intersection(&hole.image).is_empty());
+                assert!(residue.image.intersection(&hole.image).unwrap().is_empty());
             } else {
                 assert!(residue.is_none(), "wide slot removes all land copper");
             }
-            let view = imported.physical_view(ArtworkScope::Board).unwrap();
+            let view = imported
+                .physical_view(ArtworkScope::Board, Resolution::default())
+                .unwrap();
             assert_eq!(view.lands.len(), final_lands.len());
             assert_eq!(
                 view.holes[0]
@@ -1351,6 +1457,74 @@ mod tests {
                     .land,
                 Association::Resolved(land)
             );
+        }
+    }
+
+    #[test]
+    fn source_contacts_survive_complete_routing_and_clearing_in_a_panel() {
+        for clear in [false, true] {
+            let mut pads = String::new();
+            let mut slots = String::new();
+            for (x, y) in [(10, 20), (10, 22), (8, 20), (8, 22)] {
+                pads.push_str(&format!(r#"<Set><Pad padstackDefRef="P"><Location x="{x}" y="{y}"/><StandardPrimitiveRef id="land"/><PinRef componentRef="J1" pin="S1"/></Pad></Set>"#));
+                let height = if clear { 0.4 } else { 1.2 };
+                slots.push_str(&format!(r#"<Set geometry="P"><SlotCavity name="slot-{x}-{y}" platingStatus="PLATED" plusTol="0" minusTol="0"><Location x="{x}" y="{y}"/><Oval width="1.8" height="{height}"/></SlotCavity></Set>"#));
+                if clear {
+                    pads.push_str(&format!(r#"<Set polarity="NEGATIVE"><Features><Location x="{x}" y="{y}"/><StandardPrimitiveRef id="clear"/></Features></Set>"#));
+                }
+            }
+            let xml = format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner"><FunctionMode mode="ASSEMBLY"/><StepRef name="panel"/>
+    <DictionaryStandard units="MILLIMETER">
+      <EntryStandard id="land"><Circle diameter="1"/></EntryStandard>
+      <EntryStandard id="clear"><Circle diameter="1.5"/></EntryStandard>
+    </DictionaryStandard>
+  </Content>
+  <Ecad><CadHeader units="MILLIMETER"/><CadData>
+    <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+    <Layer name="ROUT" layerFunction="ROUT" side="ALL" polarity="POSITIVE"><Span fromLayer="TOP" toLayer="TOP"/></Layer>
+    <Step name="board" type="BOARD">
+      <PadStackDef name="P"/>
+      <Component refDes="J1" packageRef="pkg" part="part" layerRef="TOP" mountType="THMT"><Xform rotation="90"/><Location x="10" y="20"/></Component>
+      <LayerFeature layerRef="TOP">{pads}</LayerFeature>
+      <LayerFeature layerRef="ROUT">{slots}</LayerFeature>
+    </Step>
+    <Step name="panel" type="PALLET"><StepRepeat stepRef="board" x="100" y="50" nx="2" ny="1" dx="30" dy="0" mirror="true"/></Step>
+  </CadData></Ecad>
+</IPC-2581>"#
+            );
+            let accuracy = crate::geom::GeometryAccuracy::new(0.001).unwrap();
+            let resolution = Resolution::default().with_accuracy(accuracy);
+            let imported = import_design(&Ipc2581::parse(&xml).unwrap(), resolution).unwrap();
+            for (scope, count) in [(ArtworkScope::Board, 4), (ArtworkScope::ArrayFlattened, 8)] {
+                let view = imported.physical_view(scope, resolution).unwrap();
+                assert!(view.lands.is_empty(), "all final copper must stay removed");
+                assert_eq!(view.source_lands.len(), count);
+                assert_eq!(view.holes.len(), count);
+                let by_id = view
+                    .source_lands
+                    .iter()
+                    .map(|land| (land.id, land))
+                    .collect::<HashMap<_, _>>();
+                let mut linked = BTreeSet::new();
+                for hole in &view.holes {
+                    assert_eq!(hole.lands.len(), 1);
+                    let id = *hole.lands[0].land.resolved().unwrap();
+                    let land = by_id[&id];
+                    assert_eq!(imported.resolve(land.pin.unwrap()), "S1");
+                    assert_eq!(land.component.resolved().unwrap().layout, id.0.layout);
+                    assert!(!land.image.is_empty());
+                    assert_eq!(hole.at, land.at);
+                    assert_eq!(hole.board, land.board);
+                    assert!(
+                        linked.insert(id),
+                        "each slot must link a distinct source land"
+                    );
+                }
+                assert_eq!(linked.len(), count);
+            }
         }
     }
 
@@ -1405,13 +1579,16 @@ mod tests {
     fn hole_land_links_follow_physical_order_under_declaration_permutations() {
         for order in [["L0", "L1", "L2"], ["L2", "L0", "L1"], ["L1", "L2", "L0"]] {
             let xml = spanned_slot_fixture(order, true);
-            let imported = import_design(&Ipc2581::parse(&xml).unwrap()).unwrap();
-            let holes = imported.physical_holes(ArtworkScope::Board).unwrap();
+            let imported =
+                import_design(&Ipc2581::parse(&xml).unwrap(), Resolution::default()).unwrap();
+            let holes = imported
+                .physical_holes(ArtworkScope::Board, Resolution::default())
+                .unwrap();
             assert_eq!(holes.len(), 1);
             let inner = imported.layer_id("L1").unwrap();
             assert!(
                 imported
-                    .composed_layer_image(inner, ArtworkScope::Board)
+                    .composed_layer_image(inner, ArtworkScope::Board, Resolution::default())
                     .unwrap()
                     .is_empty()
             );
@@ -1436,21 +1613,32 @@ mod tests {
         let mut reference = None;
         for order in [["L0", "L1", "L2"], ["L2", "L0", "L1"], ["L1", "L2", "L0"]] {
             let xml = spanned_slot_fixture(order, false);
-            let imported = import_design(&Ipc2581::parse(&xml).unwrap()).unwrap();
-            let holes = imported.physical_holes(ArtworkScope::Board).unwrap();
+            let imported =
+                import_design(&Ipc2581::parse(&xml).unwrap(), Resolution::default()).unwrap();
+            let holes = imported
+                .physical_holes(ArtworkScope::Board, Resolution::default())
+                .unwrap();
             for name in ["L0", "L1", "L2"] {
                 let layer = imported.layer_id(name).unwrap();
                 let image = imported
-                    .composed_layer_image(layer, ArtworkScope::Board)
+                    .composed_layer_image(layer, ArtworkScope::Board, Resolution::default())
                     .unwrap();
                 assert!(!image.is_empty());
                 assert!(
-                    image.intersection(&holes[0].image).is_empty(),
+                    image
+                        .intersection(
+                            &holes[0]
+                                .image
+                                .disk_erode(image.uncertainty_mm + holes[0].image.uncertainty_mm)
+                                .unwrap()
+                        )
+                        .unwrap()
+                        .is_empty(),
                     "{name}, declarations {order:?}"
                 );
                 let expected = reference.get_or_insert_with(|| image.clone());
-                assert!(image.difference(expected).is_empty());
-                assert!(expected.difference(&image).is_empty());
+                assert!(image.difference(expected).unwrap().is_empty());
+                assert!(expected.difference(&image).unwrap().is_empty());
             }
         }
     }
@@ -1482,14 +1670,17 @@ mod tests {
             ),
         ] {
             let invalid = Ipc2581::parse(&xml.replace(from, to)).unwrap();
-            let error = import_design(&invalid).unwrap_err();
+            let error = import_design(&invalid, Resolution::default()).unwrap_err();
             assert!(error.to_string().contains(message), "{error}");
 
             // The association query must also reject unusable ordering, even when
             // no slot extraction is needed to construct the canonical design.
-            let mut imported = import_design(&Ipc2581::parse(&xml).unwrap()).unwrap();
+            let mut imported =
+                import_design(&Ipc2581::parse(&xml).unwrap(), Resolution::default()).unwrap();
             imported.stackups = invalid.ecad().unwrap().cad_data.stackups.clone();
-            let error = imported.physical_holes(ArtworkScope::Board).unwrap_err();
+            let error = imported
+                .physical_holes(ArtworkScope::Board, Resolution::default())
+                .unwrap_err();
             assert!(error.to_string().contains(message), "{error}");
         }
     }
@@ -1522,6 +1713,7 @@ mod tests {
                     &cad.layers,
                     layer,
                     name,
+                    Resolution::default(),
                 );
                 if name == "L1" && !z_axis {
                     assert!(
@@ -1561,15 +1753,28 @@ mod tests {
         ] {
             let mut xml = xml.clone();
             xml.replace_range(start..end, stackup);
-            let imported = import_design(&Ipc2581::parse(&xml).unwrap()).unwrap();
-            let holes = imported.physical_holes(ArtworkScope::Board).unwrap();
+            let imported =
+                import_design(&Ipc2581::parse(&xml).unwrap(), Resolution::default()).unwrap();
+            let holes = imported
+                .physical_holes(ArtworkScope::Board, Resolution::default())
+                .unwrap();
             assert_eq!(holes[0].lands.len(), 3);
             let inner = imported.layer_id("L1").unwrap();
             let image = imported
-                .composed_layer_image(inner, ArtworkScope::Board)
+                .composed_layer_image(inner, ArtworkScope::Board, Resolution::default())
                 .unwrap();
             assert!(!image.is_empty());
-            assert!(image.intersection(&holes[0].image).is_empty());
+            assert!(
+                image
+                    .intersection(
+                        &holes[0]
+                            .image
+                            .disk_erode(image.uncertainty_mm + holes[0].image.uncertainty_mm)
+                            .unwrap()
+                    )
+                    .unwrap()
+                    .is_empty()
+            );
         }
     }
 
@@ -1577,8 +1782,10 @@ mod tests {
     fn derives_exact_physical_terminations_separately_from_paste() {
         Ipc2581::validate(physical_fixture()).expect("fixture conforms to IPC-2581C");
         let ipc = Ipc2581::parse(physical_fixture()).unwrap();
-        let imported = import_design(&ipc).unwrap();
-        let physical = imported.physical_view(ArtworkScope::Board).unwrap();
+        let imported = import_design(&ipc, Resolution::default()).unwrap();
+        let physical = imported
+            .physical_view(ArtworkScope::Board, Resolution::default())
+            .unwrap();
 
         assert_eq!(physical.lands.len(), 7);
         let u1_pin = imported
@@ -1734,6 +1941,66 @@ mod tests {
             ])],
         );
         imported.geometry.features[feature].paths = Span::new(start, 2);
+    }
+
+    #[test]
+    fn physical_preparation_can_refine_retained_source_geometry() {
+        let ipc = Ipc2581::parse(physical_fixture()).unwrap();
+        let imported = crate::import::ipc2581::import_design(&ipc, Resolution::default()).unwrap();
+        let coarse = imported
+            .physical_view(ArtworkScope::Board, Resolution::default())
+            .unwrap();
+        let accuracy = crate::geom::GeometryAccuracy::new(0.0001).unwrap();
+        let fine_resolution = Resolution::default().with_accuracy(accuracy);
+        let fine = imported
+            .physical_view(ArtworkScope::Board, fine_resolution)
+            .unwrap();
+        assert_eq!(fine.lands.len(), coarse.lands.len());
+        assert_eq!(fine.paste_islands.len(), coarse.paste_islands.len());
+        for (coarse, fine) in coarse.lands.iter().zip(&fine.lands) {
+            assert!(fine.image.uncertainty_mm < coarse.image.uncertainty_mm);
+            accuracy.check(fine.image.uncertainty_mm).unwrap();
+        }
+        for region in fine
+            .paste_islands
+            .iter()
+            .map(|p| &p.image)
+            .chain(fine.mask_openings.iter().map(|p| &p.image))
+            .chain(fine.holes.iter().map(|p| &p.image))
+        {
+            accuracy.check(region.uncertainty_mm).unwrap();
+        }
+        let layer = imported.layer_id("TOP").unwrap();
+        let image = imported
+            .composed_layer_image(layer, ArtworkScope::Board, fine_resolution)
+            .unwrap();
+        accuracy.check(image.uncertainty_mm).unwrap();
+    }
+
+    #[test]
+    fn headless_preparation_rejects_already_coarse_feature_commands() {
+        let ipc = Ipc2581::parse(physical_fixture()).unwrap();
+        let mut imported =
+            crate::import::ipc2581::import_design(&ipc, Resolution::default()).unwrap();
+        let layer = imported.layer_id("TOP").unwrap();
+        let occurrence = imported
+            .feature_occurrences(layer, ArtworkScope::Board)
+            .unwrap()[0];
+        let coarse = imported
+            .feature_region(occurrence, Resolution::default())
+            .unwrap();
+        let start = imported.geometry.arena.paths.len() as u32;
+        imported.geometry.arena.push_path(
+            crate::geom::Paint::Fill {
+                rule: crate::geom::FillRule::NonZero,
+            },
+            coarse.to_contours(),
+        );
+        imported.geometry.features[occurrence.id.feature.0 as usize].paths = Span::single(start);
+        let fine = Resolution::default()
+            .with_accuracy(crate::geom::GeometryAccuracy::new(0.0001).unwrap());
+        assert!(imported.feature_region(occurrence, fine).is_err());
+        assert!(imported.physical_view(ArtworkScope::Board, fine).is_err());
     }
 
     fn physical_fixture() -> &'static str {

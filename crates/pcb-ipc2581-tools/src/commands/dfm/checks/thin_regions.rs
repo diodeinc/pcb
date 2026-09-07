@@ -30,7 +30,7 @@
 //! reinterpret a same-net notch as spacing between conductors.
 
 use pcb_ir::geom::dfm::{ThinPiece, circular_region, thin_features, thin_gaps};
-use pcb_ir::geom::{BBox, ContourSet, Point, PreparedRegion, tol};
+use pcb_ir::geom::{BBox, ContourSet, Point, PreparedRegion};
 #[cfg(not(target_family = "wasm"))]
 use rayon::prelude::*;
 
@@ -43,84 +43,85 @@ pub(super) fn copper_feature_width(
     limit_mm: f64,
     conditions: &Conditions,
     design: &Design,
-) -> Evaluation {
+) -> anyhow::Result<Evaluation> {
     let measure = |layer: &CopperLayer| {
-        thin_features(&layer.image, limit_mm)
+        thin_features(&layer.image, limit_mm)?
             .into_iter()
             .map(move |piece| {
-                let mut measured = measured_piece(&piece, limit_mm, &layer.layer, "copper_image");
+                let mut measured = measured_piece(&piece, limit_mm, &layer.layer, "copper_image")?;
                 // Prove ownership against final composed material. A bounding box
                 // is only a broad phase; overlapping owners remain ambiguous.
-                let construction =
-                    piece
-                        .sites
-                        .iter()
-                        .fold(piece.candidate.clone(), |region, site| {
-                            region.union(&circular_region(site.disk.center, site.disk.radius_mm))
-                        });
-                let owner = unique_copper_owner(&construction, &layer.conductors);
+                let mut construction = piece.candidate.clone();
+                for site in &piece.sites {
+                    construction.union_assign(&circular_region(
+                        site.disk.center,
+                        site.disk.radius_mm,
+                        design.resolution,
+                    )?)?;
+                }
+                let owner = unique_copper_owner(&construction, &layer.conductors)?;
                 if let Some(owner) = owner {
                     measured.subjects[0].provenance =
                         copper_subject(design, owner, &layer.layer).provenance;
                 }
                 for (geometry, site) in piece.sites.iter().zip(&mut measured.sites) {
-                    let local_owner = owner.or_else(|| {
+                    let local_owner = if owner.is_some() {
+                        owner
+                    } else {
                         let local = piece
                             .candidate
                             .intersection(&ContourSet::rectangle(
                                 geometry.bbox.expand(limit_mm / 2.0),
-                                tol::REGION_MM,
-                            ))
+                                piece.candidate.resolution,
+                            ))?
                             .union(&circular_region(
                                 geometry.disk.center,
                                 geometry.disk.radius_mm,
-                            ));
-                        unique_copper_owner(&local, &layer.conductors)
-                    });
+                                design.resolution,
+                            )?)?;
+                        unique_copper_owner(&local, &layer.conductors)?
+                    };
                     if let Some(owner) = local_owner {
                         site.subjects = vec![copper_subject(design, owner, &layer.layer)];
                     }
                 }
-                measured
+                Ok::<_, anyhow::Error>(measured)
             })
-            .collect::<Vec<_>>()
+            .collect::<anyhow::Result<Vec<_>>>()
     };
     #[cfg(not(target_family = "wasm"))]
-    let measured = design
-        .copper_layers
-        .par_iter()
-        .filter(|layer| conditions.applies_to_layer(layer))
-        .flat_map_iter(measure)
-        .collect();
+    let layers = design.copper_layers.par_iter();
     #[cfg(target_family = "wasm")]
-    let measured = design
-        .copper_layers
-        .iter()
+    let layers = design.copper_layers.iter();
+    let measured = layers
         .filter(|layer| conditions.applies_to_layer(layer))
-        .flat_map(measure)
+        .map(measure)
+        .collect::<anyhow::Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
         .collect();
-    Evaluation {
+    Ok(Evaluation {
         checked: design
             .copper_layers
             .iter()
             .filter(|layer| conditions.applies_to_layer(layer))
             .count(),
         measured,
-    }
+    })
 }
 
-pub(super) fn soldermask_web(limit_mm: f64, design: &Design) -> Evaluation {
+pub(super) fn soldermask_web(limit_mm: f64, design: &Design) -> anyhow::Result<Evaluation> {
     let measure = |layer: &MaskLayer| {
         let boundaries = layer
             .owners
             .iter()
             .map(|owner| (owner.image.bbox, owner.image.prepare_query()))
             .collect::<Vec<_>>();
-        thin_gaps(&layer.image, limit_mm)
+        thin_gaps(&layer.image, limit_mm)?
             .into_iter()
             .map(move |piece| {
                 let mut measured =
-                    measured_piece(&piece, limit_mm, &layer.layer, "soldermask_image");
+                    measured_piece(&piece, limit_mm, &layer.layer, "soldermask_image")?;
                 let mut aggregate_owner = None;
                 let mut one_owner = true;
                 for (geometry, site) in piece.sites.iter().zip(&mut measured.sites) {
@@ -142,22 +143,24 @@ pub(super) fn soldermask_web(limit_mm: f64, design: &Design) -> Evaluation {
                     measured.subjects[0].provenance =
                         mask_subject(design, &layer.owners[index], &layer.layer).provenance;
                 }
-                measured
+                Ok::<_, anyhow::Error>(measured)
             })
-            .collect::<Vec<_>>()
+            .collect::<anyhow::Result<Vec<_>>>()
     };
     #[cfg(not(target_family = "wasm"))]
-    let measured = design
-        .mask_layers
-        .par_iter()
-        .flat_map_iter(measure)
-        .collect();
+    let layers = design.mask_layers.par_iter();
     #[cfg(target_family = "wasm")]
-    let measured = design.mask_layers.iter().flat_map(measure).collect();
-    Evaluation {
+    let layers = design.mask_layers.iter();
+    let measured = layers
+        .map(measure)
+        .collect::<anyhow::Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect();
+    Ok(Evaluation {
         checked: design.mask_layers.len(),
         measured,
-    }
+    })
 }
 
 fn measured_piece(
@@ -165,8 +168,8 @@ fn measured_piece(
     limit_mm: f64,
     layer: &LayerRef,
     offender_kind: &'static str,
-) -> Measured {
-    Measured {
+) -> anyhow::Result<Measured> {
+    Ok(Measured {
         distance: piece.width,
         bbox: piece.bbox,
         layers: vec![layer.clone()],
@@ -177,22 +180,32 @@ fn measured_piece(
             ..Subject::default()
         }],
         evidence: vec![Evidence::bounds("thin_piece", piece.bbox)],
-        sites: piece_sites(piece, limit_mm, layer),
-    }
+        sites: piece_sites(piece, limit_mm, layer)?,
+    })
 }
 
 fn unique_copper_owner<'a>(
     region: &ContourSet,
     owners: &'a [CopperConductor],
-) -> Option<&'a CopperConductor> {
+) -> anyhow::Result<Option<&'a CopperConductor>> {
     if region.is_empty() {
-        return None;
+        return Ok(None);
     }
-    let mut intersections = owners.iter().filter(|owner| {
-        region.bbox.intersects(owner.image.bbox) && !region.intersection(&owner.image).is_empty()
-    });
-    let owner = intersections.next()?;
-    (intersections.next().is_none() && region.difference(&owner.image).is_empty()).then_some(owner)
+    let mut intersecting = Vec::new();
+    for owner in owners {
+        if region.bbox.intersects(owner.image.bbox)
+            && !region.intersection(&owner.image)?.is_empty()
+        {
+            intersecting.push(owner);
+        }
+    }
+    let [owner] = intersecting.as_slice() else {
+        return Ok(None);
+    };
+    Ok(region
+        .difference(&owner.image)?
+        .is_empty()
+        .then_some(*owner))
 }
 
 fn copper_subject(design: &Design, owner: &CopperConductor, layer: &LayerRef) -> Subject {
@@ -292,11 +305,15 @@ fn wall_owners(
 /// Shared width construction for composed copper, mask webs and routed slots.
 /// The conservative residue is explicitly context. Only the independently
 /// verified medial-axis paths and their real inscribed disks are offenders.
-pub(super) fn piece_sites(piece: &ThinPiece, limit_mm: f64, layer: &LayerRef) -> Vec<MeasuredSite> {
+pub(super) fn piece_sites(
+    piece: &ThinPiece,
+    limit_mm: f64,
+    layer: &LayerRef,
+) -> anyhow::Result<Vec<MeasuredSite>> {
     piece.sites.iter().map(|geometry| {
         let disk = geometry.disk;
         let bbox = geometry.bbox.union(BBox::from_point(disk.center).expand(limit_mm / 2.0));
-        let local_candidate = piece.candidate.intersection(&ContourSet::rectangle(bbox, tol::REGION_MM));
+        let local_candidate = piece.candidate.intersection(&ContourSet::rectangle(bbox, piece.candidate.resolution))?;
         let mut evidence = vec![
             Evidence::region("candidate_region", &local_candidate),
             Evidence::circle("inscribed_width_disk", disk.center, disk.radius_mm * 2.0),
@@ -320,7 +337,7 @@ pub(super) fn piece_sites(piece: &ThinPiece, limit_mm: f64, layer: &LayerRef) ->
         }
         let mut site = MeasuredSite::new(disk.width, bbox, vec![layer.clone()], evidence, MeasurementKind::InscribedWidth);
         site.note = Some("Width is the inscribed disk diameter. Candidate contours are context; highlighted axis portions are verified below the limit, including geometric uncertainty.".to_owned());
-        site
+        Ok(site)
     }).collect()
 }
 
@@ -328,6 +345,7 @@ pub(super) fn piece_sites(piece: &ThinPiece, limit_mm: f64, layer: &LayerRef) ->
 mod tests {
     use super::*;
     use crate::commands::dfm::design::ConductorId;
+    use pcb_ir::geom::Resolution;
 
     fn rectangle(x0: f64, y0: f64, x1: f64, y1: f64) -> ContourSet {
         ContourSet::rectangle(
@@ -335,7 +353,7 @@ mod tests {
                 min: Point::new(x0, y0),
                 max: Point::new(x1, y1),
             },
-            tol::REGION_MM,
+            Resolution::default(),
         )
     }
 
@@ -360,10 +378,13 @@ mod tests {
     #[test]
     fn copper_ownership_requires_unique_complete_material_coverage() {
         let candidate = rectangle(0.0, 0.0, 0.08, 2.0);
-        let decoy = rectangle(-1.0, -1.0, 1.0, 3.0).difference(&rectangle(-0.1, -0.1, 0.2, 2.1));
+        let decoy = rectangle(-1.0, -1.0, 1.0, 3.0)
+            .difference(&rectangle(-0.1, -0.1, 0.2, 2.1))
+            .unwrap();
         let owners = [conductor(decoy, 8), conductor(candidate.clone(), 3)];
         assert_eq!(
             unique_copper_owner(&candidate, &owners)
+                .unwrap()
                 .unwrap()
                 .id
                 .instance(),
@@ -375,11 +396,13 @@ mod tests {
             conductor(rectangle(0.04, 0.0, 0.08, 2.0), 4),
         ];
         assert!(
-            unique_copper_owner(&candidate, &split).is_none(),
+            unique_copper_owner(&candidate, &split).unwrap().is_none(),
             "a connected image can span occurrences"
         );
         assert!(
-            unique_copper_owner(&candidate, &split[..1]).is_none(),
+            unique_copper_owner(&candidate, &split[..1])
+                .unwrap()
+                .is_none(),
             "one intersecting owner does not prove complete coverage"
         );
         let overlapping = [
@@ -387,7 +410,9 @@ mod tests {
             conductor(candidate.clone(), 4),
         ];
         assert!(
-            unique_copper_owner(&candidate, &overlapping).is_none(),
+            unique_copper_owner(&candidate, &overlapping)
+                .unwrap()
+                .is_none(),
             "coincident material remains ambiguous"
         );
     }
@@ -401,7 +426,7 @@ mod tests {
             (Point::new(1.1, 0.2), Point::new(1.1, 0.8)),
         ];
         assert_eq!(
-            wall_owners(&walls, &boundaries(&[left.union(&right)])),
+            wall_owners(&walls, &boundaries(&[left.union(&right).unwrap()])),
             Some(vec![0])
         );
         assert_eq!(
@@ -417,7 +442,9 @@ mod tests {
 
     #[test]
     fn wall_endpoints_do_not_prove_the_interior_span() {
-        let incomplete = rectangle(0.0, 0.0, 1.0, 0.4).union(&rectangle(0.0, 0.6, 1.0, 1.0));
+        let incomplete = rectangle(0.0, 0.0, 1.0, 0.4)
+            .union(&rectangle(0.0, 0.6, 1.0, 1.0))
+            .unwrap();
         let walls = [(Point::new(1.0, 0.1), Point::new(1.0, 0.9))];
         assert!(wall_owners(&walls, &boundaries(&[incomplete])).is_none());
         let contiguous = [rectangle(0.0, 0.0, 1.0, 0.5), rectangle(0.0, 0.5, 1.0, 1.0)];

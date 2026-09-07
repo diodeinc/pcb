@@ -21,7 +21,11 @@ struct Piece {
     region: pcb_ir::geom::ContourSet,
 }
 
-pub(super) fn evaluate(limit_mm: f64, conditions: &Conditions, design: &Design) -> Evaluation {
+pub(super) fn evaluate(
+    limit_mm: f64,
+    conditions: &Conditions,
+    design: &Design,
+) -> anyhow::Result<Evaluation> {
     let mut checked = 0;
     let mut measured = Vec::new();
 
@@ -117,11 +121,18 @@ pub(super) fn evaluate(limit_mm: f64, conditions: &Conditions, design: &Design) 
                         &right.region,
                         right_boundary,
                         limit_mm,
-                    )
+                    )?
                     .into_iter()
                     .map(|site| {
-                        linework_clearance::report_site(site, vec![layer.layer.clone()], limit_mm)
+                        linework_clearance::report_site(
+                            site,
+                            vec![layer.layer.clone()],
+                            limit_mm,
+                            design.resolution,
+                        )
                     })
+                    .collect::<anyhow::Result<Vec<_>>>()?
+                    .into_iter()
                     .collect()
                 } else {
                     Vec::new()
@@ -130,7 +141,7 @@ pub(super) fn evaluate(limit_mm: f64, conditions: &Conditions, design: &Design) 
         }
     }
 
-    Evaluation { checked, measured }
+    Ok(Evaluation { checked, measured })
 }
 
 pub(super) fn conductor_subject(
@@ -198,6 +209,7 @@ pub(super) fn conductor_subject(
 
 #[cfg(test)]
 mod tests {
+    use pcb_ir::geom::Resolution;
     use std::collections::BTreeSet;
 
     use chrono::NaiveDate;
@@ -282,14 +294,21 @@ limit = { minimum = "0.15 mm" }
         let ipc = Ipc2581::parse(xml).unwrap();
         let pdk = Pdk::parse(PDK).unwrap();
         let rules = rules::lower(&pdk, None).unwrap();
-        let imported = pcb_ir::import::ipc2581::import_design(&ipc).unwrap();
-        let design = Design::extract(&imported, ArtworkScope::Board, &rules).unwrap();
+        let imported = pcb_ir::import::ipc2581::import_design(&ipc, Resolution::default()).unwrap();
+        let design = Design::extract(
+            &imported,
+            ArtworkScope::Board,
+            &rules,
+            Resolution::default(),
+        )
+        .unwrap();
         checks::run(
             &rules,
             &design,
             None,
             NaiveDate::from_ymd_opt(2026, 8, 25).unwrap(),
         )
+        .unwrap()
     }
 
     #[test]
@@ -334,13 +353,15 @@ limit = { minimum = "0.15 mm" }
 
     #[test]
     fn rejects_surviving_functional_copper_without_net_ownership() {
+        let resolution = Resolution::default();
+
         let xml = BOARD.replace("<Set net=\"N2\">", "<Set>");
         let ipc = Ipc2581::parse(&xml).unwrap();
         let pdk = Pdk::parse(PDK).unwrap();
         let rules = rules::lower(&pdk, None).unwrap();
-        let imported = pcb_ir::import::ipc2581::import_design(&ipc).unwrap();
+        let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap();
 
-        let error = Design::extract(&imported, ArtworkScope::Board, &rules)
+        let error = Design::extract(&imported, ArtworkScope::Board, &rules, resolution)
             .err()
             .expect("unattributed copper must fail closed");
         assert!(

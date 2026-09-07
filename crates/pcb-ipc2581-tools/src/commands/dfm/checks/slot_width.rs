@@ -14,7 +14,11 @@ use pcb_ir::geom::dfm::thin_features;
 
 use super::{Evaluation, Measured, MeasuredSite, slot_subject, thin_regions, violates};
 
-pub(super) fn evaluate(limit_mm: f64, plating: SlotPlating, design: &Design) -> Evaluation {
+pub(super) fn evaluate(
+    limit_mm: f64,
+    plating: SlotPlating,
+    design: &Design,
+) -> anyhow::Result<Evaluation> {
     let slots = design
         .slots
         .iter()
@@ -55,22 +59,27 @@ pub(super) fn evaluate(limit_mm: f64, plating: SlotPlating, design: &Design) -> 
                 site.note = Some("The slot primitive declares this width; its materialized outline was checked for agreement.".to_owned());
                 vec![site]
             } else {
-                thin_features(&slot.outline, limit_mm).iter()
-                    .flat_map(|piece| thin_regions::piece_sites(piece, limit_mm, &slot.layer)).collect()
+                thin_features(&slot.outline, limit_mm)?
+                    .iter()
+                    .map(|piece| thin_regions::piece_sites(piece, limit_mm, &slot.layer))
+                    .collect::<anyhow::Result<Vec<_>>>()?
+                    .into_iter()
+                    .flatten()
+                    .collect()
             };
-            Measured {
+            Ok::<_, anyhow::Error>(Measured {
             distance: slot.width,
             bbox: slot.bbox,
             layers: vec![slot.layer.clone()],
             subjects: vec![subject],
             evidence: vec![Evidence::bounds("routed_slot", slot.bbox)],
             sites,
-        }})
+        })}).collect::<anyhow::Result<Vec<_>>>()?.into_iter()
         .collect();
-    Evaluation {
+    Ok(Evaluation {
         checked: slots.len(),
         measured,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -79,9 +88,12 @@ mod tests {
     use crate::commands::dfm::{pdk::Pdk, rules};
     use crate::ipc2581::Ipc2581;
     use pcb_ir::dialects::ipc::ArtworkScope;
+    use pcb_ir::geom::Resolution;
 
     #[test]
     fn nominal_slot_display_retains_native_curves_and_the_checked_outline() {
+        let resolution = Resolution::default();
+
         let ipc = Ipc2581::parse(r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
           <Content roleRef="owner"><FunctionMode mode="FABRICATION"/><StepRef name="board"/><LayerRef name="ROUT"/></Content>
           <Ecad><CadHeader units="MILLIMETER"/><CadData>
@@ -110,12 +122,14 @@ mod tests {
         )
         .unwrap();
         let rules = rules::lower(&pdk, None).unwrap();
-        let imported = pcb_ir::import::ipc2581::import_design(&ipc).unwrap();
-        let design = Design::extract(&imported, ArtworkScope::Board, &rules).unwrap();
-        let evaluation = evaluate(0.8, SlotPlating::Plated, &design);
+        let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap();
+        let design = Design::extract(&imported, ArtworkScope::Board, &rules, resolution).unwrap();
+        let evaluation = evaluate(0.8, SlotPlating::Plated, &design).unwrap();
         assert_eq!(evaluation.measured.len(), 1);
         assert_eq!(
-            evaluate(0.8, SlotPlating::Nonplated, &design).checked,
+            evaluate(0.8, SlotPlating::Nonplated, &design)
+                .unwrap()
+                .checked,
             0,
             "slot plating is part of rule selection"
         );

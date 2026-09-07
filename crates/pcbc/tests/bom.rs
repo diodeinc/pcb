@@ -457,7 +457,7 @@ Component(
 
     let bom: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("BOM output should be valid JSON");
-    let entry = &bom[0];
+    let entry = &bom[0]["members"][0];
     assert_eq!(entry["value"], "32MHz");
     assert_eq!(
         entry["description"],

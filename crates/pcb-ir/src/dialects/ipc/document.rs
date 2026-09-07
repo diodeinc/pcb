@@ -2,7 +2,7 @@ use crate::dialects::ipc::feature::{Feature, FeaturePlacementGroup, FeatureSet, 
 use crate::dialects::ipc::layout::{LayoutGraph, StepProfile, StepProfileCutout};
 use crate::dialects::ipc::spec::{Spec, SpecItem, SpecProperty, SpecRef};
 use crate::geom::path::ContourBuf;
-use crate::geom::{Affine2, BBox, Diagnostic, Paint, PathArena};
+use crate::geom::{Affine2, BBox, Diagnostic, Paint, PathArena, Resolution};
 
 const IDENTITY_PLACEMENT: [Affine2; 1] = [Affine2::IDENTITY];
 
@@ -44,7 +44,7 @@ impl<Symbol, LayerFunction> Document<Symbol, LayerFunction> {
         self.arena.push_path(paint, contours)
     }
 
-    /// Detach the contours of a path, transformed into another frame.
+    /// Detach the contours of a path, transformed exactly into another frame.
     pub fn transformed_path_contours(&self, path: u32, transform: Affine2) -> Vec<ContourBuf> {
         let path = self.arena.path(path);
         if transform.is_identity() {
@@ -102,6 +102,33 @@ impl<Symbol, LayerFunction> Document<Symbol, LayerFunction> {
 
     pub fn warn(&mut self, message: impl Into<String>) {
         self.diagnostics.push(Diagnostic::warning(message));
+    }
+}
+
+impl<Symbol: Copy + Eq + std::hash::Hash, LayerFunction: Clone> Document<Symbol, LayerFunction> {
+    /// Consume a source layer into its final painted image through the
+    /// artwork dialect, prepared at `resolution`.
+    ///
+    /// Imaging tolerates geometry a native writer would reject, such as
+    /// zero-radius arcs; callers exporting artwork validate separately.
+    pub fn into_layer_image(
+        mut self,
+        layer_index: usize,
+        role: crate::dialects::LayerRole,
+        side: crate::dialects::Side,
+        resolution: Resolution,
+    ) -> anyhow::Result<crate::geom::ContourSet> {
+        super::process::normalize_for_artwork(&mut self, resolution)?;
+        let artwork = super::lower_layer_to_artwork(&self, layer_index, role, side);
+        let (mut layers, _) =
+            crate::dialects::artwork::compose_owner_regions(&artwork, |_| Some(()), resolution)?;
+        Ok(layers
+            .pop()
+            .and_then(|mut owners| owners.pop())
+            .map_or_else(
+                || crate::geom::ContourSet::empty(resolution),
+                |(_, region)| region,
+            ))
     }
 }
 

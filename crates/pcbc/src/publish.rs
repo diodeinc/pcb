@@ -8,6 +8,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, ValueEnum};
 use colored::Colorize;
 use inquire::{Confirm, Select};
+use pcb_ir::geom::Resolution;
 use pcb_zen::workspace::{WorkspaceInfo, WorkspaceInfoExt, WorkspacePackage, get_workspace_info};
 use pcb_zen::{git, tags};
 use pcb_zen_core::config::{DependencySpec, PcbToml, find_workspace_root};
@@ -454,7 +455,7 @@ fn format_cycle_node(workspace: &WorkspaceInfo, url: &str) -> String {
         .unwrap_or_else(|| url.to_string())
 }
 
-pub fn execute(args: PublishArgs) -> Result<()> {
+pub fn execute(args: PublishArgs, resolution: Resolution) -> Result<()> {
     // Determine if we're publishing a board or packages based on path
     let path = args
         .path
@@ -464,7 +465,7 @@ pub fn execute(args: PublishArgs) -> Result<()> {
 
     // If path ends in .zen, route to board publish
     if path.extension().is_some_and(|ext| ext == "zen") {
-        return publish_board(&path, &args);
+        return publish_board(&path, &args, resolution);
     }
 
     // Otherwise, publish packages
@@ -476,7 +477,7 @@ pub fn execute(args: PublishArgs) -> Result<()> {
 /// Two modes:
 /// - Local hash release (no --bump, non-interactive): just build the release archive
 /// - Versioned release (--bump provided): preflight checks, fetch tags, build, upload, tag, push
-fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
+fn publish_board(zen_path: &Path, args: &PublishArgs, resolution: Resolution) -> Result<()> {
     require_zen_file(zen_path)?;
     let file_provider = DefaultFileProvider::new();
     let start_path = zen_path
@@ -526,6 +527,7 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
             args.suppress.clone(),
             None, // version = None means use git hash
             args.exclude.clone(),
+            resolution,
         )?;
         return Ok(());
     }
@@ -573,6 +575,7 @@ fn publish_board(zen_path: &Path, args: &PublishArgs) -> Result<()> {
         args.suppress.clone(),
         Some(format!("v{}", next_version)),
         args.exclude.clone(),
+        resolution,
     )?;
 
     // Upload to API (must succeed before creating tag)

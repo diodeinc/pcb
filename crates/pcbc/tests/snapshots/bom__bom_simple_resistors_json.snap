@@ -1,6 +1,5 @@
 ---
 source: crates/pcbc/tests/bom.rs
-assertion_line: 257
 expression: output
 ---
 Command: pcbc bom boards/SimpleResistors.zen -f json
@@ -9,46 +8,63 @@ Exit Code: 0
 --- STDOUT ---
 [
   {
-    "path": "R1.R",
-    "designator": "R1",
-    "package": "0603",
-    "value": "1k",
-    "description": "1k",
-    "component_type": "Resistor",
-    "resistance": {
-      "nominal": "1000",
-      "min": "1000",
-      "max": "1000",
-      "unit": "Ohms"
-    }
+    "designators": [
+      "R1",
+      "R2"
+    ],
+    "quantity": 2,
+    "members": [
+      {
+        "path": "R1.R",
+        "designator": "R1",
+        "package": "0603",
+        "value": "1k",
+        "description": "1k",
+        "component_type": "Resistor",
+        "resistance": {
+          "nominal": "1000",
+          "min": "1000",
+          "max": "1000",
+          "unit": "Ohms"
+        }
+      },
+      {
+        "path": "R2.R",
+        "designator": "R2",
+        "package": "0603",
+        "value": "1k",
+        "description": "1k",
+        "component_type": "Resistor",
+        "resistance": {
+          "nominal": "1000",
+          "min": "1000",
+          "max": "1000",
+          "unit": "Ohms"
+        }
+      }
+    ]
   },
   {
-    "path": "R2.R",
-    "designator": "R2",
-    "package": "0603",
-    "value": "1k",
-    "description": "1k",
-    "component_type": "Resistor",
-    "resistance": {
-      "nominal": "1000",
-      "min": "1000",
-      "max": "1000",
-      "unit": "Ohms"
-    }
-  },
-  {
-    "path": "R3.R",
-    "designator": "R3",
-    "package": "0402",
-    "value": "4.7k",
-    "description": "4.7k",
-    "component_type": "Resistor",
-    "resistance": {
-      "nominal": "4700.0",
-      "min": "4700.0",
-      "max": "4700.0",
-      "unit": "Ohms"
-    }
+    "designators": [
+      "R3"
+    ],
+    "quantity": 1,
+    "members": [
+      {
+        "path": "R3.R",
+        "designator": "R3",
+        "package": "0402",
+        "value": "4.7k",
+        "description": "4.7k",
+        "component_type": "Resistor",
+        "resistance": {
+          "nominal": "4700.0",
+          "min": "4700.0",
+          "max": "4700.0",
+          "unit": "Ohms"
+        }
+      }
+    ]
   }
 ]
 --- STDERR ---

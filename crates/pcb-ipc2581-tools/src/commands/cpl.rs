@@ -13,11 +13,13 @@ use pcb_ir::dialects::assembly::BomCategory;
 use pcb_ir::dialects::placement::{
     Document as PlacementDocument, Placement, PlacementSide, Population,
 };
+#[cfg(feature = "cli")]
+use pcb_ir::geom::Resolution;
 
 #[cfg(feature = "cli")]
-use crate::accessors::IpcAccessor;
-#[cfg(feature = "cli")]
 use crate::placement::extract_single_board_placements;
+#[cfg(feature = "cli")]
+use pcb_ir::import::ipc2581::import_design;
 
 #[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
@@ -37,10 +39,9 @@ pub struct CplOptions {
 }
 
 #[cfg(feature = "cli")]
-pub fn execute(file: &Path, options: &CplOptions) -> Result<()> {
+pub fn execute(file: &Path, options: &CplOptions, resolution: Resolution) -> Result<()> {
     let ipc = Ipc2581::parse_file(file)?;
-    let accessor = IpcAccessor::new(&ipc);
-    let placements = extract_single_board_placements(&accessor)?;
+    let placements = extract_single_board_placements(&import_design(&ipc, resolution)?)?;
     let cpl = emit_cpl_csv(&placements, options);
 
     if let Some(output) = &options.output {

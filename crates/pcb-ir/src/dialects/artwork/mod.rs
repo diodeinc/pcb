@@ -9,13 +9,14 @@
 pub mod compare;
 pub mod legalize;
 
+use crate::geom::{AccuracyError, GeometryAccuracy, Resolution};
 use std::collections::HashMap;
 use std::hash::Hash;
 
 use crate::dialects::mask;
 use crate::dialects::{LayerRole, Side};
 use crate::geom::path::ContourBuf;
-use crate::geom::region::{self, Ring};
+use crate::geom::region::{self};
 use crate::geom::{
     Affine2, BBox, Diagnostic, FillRule, Paint, PathArena, Point, Polarity, Span, StrokeStyle,
     shapes,
@@ -398,7 +399,7 @@ impl Aperture {
         let outer = match &self.shape {
             ApertureShape::Circle { diameter } => shapes::circle(*diameter),
             ApertureShape::Rectangle { width, height } => shapes::rect(*width, *height),
-            ApertureShape::Obround { width, height } => shapes::obround(*width, *height, true),
+            ApertureShape::Obround { width, height } => shapes::obround(*width, *height),
             ApertureShape::Polygon {
                 diameter,
                 vertices,
@@ -408,7 +409,7 @@ impl Aperture {
                 width,
                 height,
                 radius,
-            } => shapes::rounded_rect(*width, *height, *radius, shapes::ALL_CORNERS, true),
+            } => shapes::rounded_rect(*width, *height, *radius, shapes::ALL_CORNERS),
             ApertureShape::RoundedHex {
                 radius,
                 corner_radius,
@@ -486,22 +487,22 @@ pub fn normalize_bounds<LayerMeta, ObjectMeta>(doc: &mut Document<LayerMeta, Obj
 }
 
 /// Rewrite flashes and strokes into filled region objects.
-pub fn expand_native_geometry_to_regions<LayerMeta, ObjectMeta>(
+///
+/// Flashes and instances are exact; stroke outlines are the one
+/// approximation, prepared within `accuracy`.
+pub fn expand_native_geometry_to_regions<LayerMeta: Clone, ObjectMeta: Clone>(
     doc: Document<LayerMeta, ObjectMeta>,
-) -> Document<LayerMeta, ObjectMeta>
-where
-    LayerMeta: Clone,
-    ObjectMeta: Clone,
-{
+    accuracy: GeometryAccuracy,
+) -> Result<Document<LayerMeta, ObjectMeta>, AccuracyError> {
     let mut doc = if doc.blocks.is_empty() {
         doc
     } else {
         expand_instances(&doc)
     };
-    expand_strokes_to_regions(&mut doc);
+    expand_strokes_to_regions(&mut doc, accuracy)?;
     expand_flashes_to_regions(&mut doc);
     normalize_bounds(&mut doc);
-    doc
+    Ok(doc)
 }
 
 /// Compose ordered dark/clear objects into final positive per-layer images.
@@ -542,8 +543,8 @@ pub fn paint_ordered<ObjectMeta>(objects: &[Object<ObjectMeta>]) -> Vec<&Object<
 /// always exactly `image`.
 #[derive(Debug)]
 pub struct AttributedImage<Owner> {
-    pub image: Vec<Ring>,
-    pub owners: Vec<(Owner, Vec<Ring>)>,
+    pub image: region::ContourSet,
+    pub owners: Vec<(Owner, region::ContourSet)>,
 }
 
 /// Ordered artwork composition with caller-defined ownership.
@@ -555,8 +556,9 @@ pub struct AttributedImage<Owner> {
 pub fn compose_attributed<LayerMeta: Clone, ObjectMeta: Clone, Owner: Clone + Eq + Hash>(
     doc: &Document<LayerMeta, ObjectMeta>,
     owner: impl Fn(&ObjectMeta) -> Owner,
-) -> (Vec<AttributedImage<Owner>>, Vec<Diagnostic>) {
-    compose_selected_attributed(doc, |meta| Some(owner(meta)))
+    resolution: Resolution,
+) -> Result<(Vec<AttributedImage<Owner>>, Vec<Diagnostic>), AccuracyError> {
+    compose_selected_attributed(doc, |meta| Some(owner(meta)), resolution)
 }
 
 /// Ordered artwork composition for only the owners selected by the caller,
@@ -572,35 +574,39 @@ pub(crate) fn compose_selected_attributed<
 >(
     doc: &Document<LayerMeta, ObjectMeta>,
     owner: impl Fn(&ObjectMeta) -> Option<Owner>,
-) -> (Vec<AttributedImage<Owner>>, Vec<Diagnostic>) {
-    let (layers, diagnostics) = compose_selected_owners(doc, owner);
+    resolution: Resolution,
+) -> Result<(Vec<AttributedImage<Owner>>, Vec<Diagnostic>), AccuracyError> {
+    let resolution = resolution.strict();
+    let (layers, diagnostics) = compose_owner_regions(doc, owner, resolution)?;
     let layers = layers
         .into_iter()
-        .map(|owners| AttributedImage {
-            image: region::union_rings(
-                owners
-                    .iter()
-                    .flat_map(|(_, image)| image.iter().cloned())
-                    .collect(),
-                FillRule::NonZero,
-            ),
-            owners,
+        .map(|owners| {
+            let image = region::ContourSet::union_all(
+                resolution,
+                owners.iter().map(|(_, image)| image.clone()),
+            )?;
+            Ok(AttributedImage { image, owners })
         })
-        .collect();
-    (layers, diagnostics)
+        .collect::<Result<_, AccuracyError>>()?;
+    Ok((layers, diagnostics))
 }
 
 /// One layer's owner images in first-paint order; every image is a
 /// regularized ring set.
-pub type OwnerImages<Owner> = Vec<(Owner, Vec<Ring>)>;
+pub type OwnerImages<Owner> = Vec<(Owner, region::ContourSet)>;
 
-/// Each layer's owner images from the ordered paint fold, for only the
-/// owners selected by the caller.
-pub fn compose_selected_owners<LayerMeta: Clone, ObjectMeta: Clone, Owner: Clone + Eq + Hash>(
+pub type OwnerRegionLayers<Owner> = Vec<Vec<(Owner, region::ContourSet)>>;
+
+/// Compose owner regions from retained source curves at one resolution.
+/// This is where artwork is prepared: the returned regions carry the cost
+/// of strokes, flattening and paint folds, and every region derived from
+/// them inherits the budget.
+pub fn compose_owner_regions<LayerMeta: Clone, ObjectMeta: Clone, Owner: Clone + Eq + Hash>(
     doc: &Document<LayerMeta, ObjectMeta>,
     owner: impl Fn(&ObjectMeta) -> Option<Owner>,
-) -> (Vec<OwnerImages<Owner>>, Vec<Diagnostic>) {
-    let doc = expand_native_geometry_to_regions(doc.clone());
+    resolution: Resolution,
+) -> Result<(OwnerRegionLayers<Owner>, Vec<Diagnostic>), AccuracyError> {
+    let doc = expand_native_geometry_to_regions(doc.clone(), resolution.accuracy)?;
     struct OwnerState {
         composer: region::PaintComposer,
         bbox: BBox,
@@ -633,7 +639,7 @@ pub fn compose_selected_owners<LayerMeta: Clone, ObjectMeta: Clone, Owner: Clone
                 }
                 Polarity::Clear => None,
             };
-            let image = object_image_rings(&doc, object);
+            let image = object_image_region(&doc, object, resolution.strict())?;
             if image.is_empty() {
                 continue;
             }
@@ -648,7 +654,7 @@ pub fn compose_selected_owners<LayerMeta: Clone, ObjectMeta: Clone, Owner: Clone
                             states.push((
                                 owner,
                                 OwnerState {
-                                    composer: region::PaintComposer::default(),
+                                    composer: region::PaintComposer::new(resolution),
                                     bbox: BBox::empty(),
                                 },
                             ));
@@ -671,23 +677,23 @@ pub fn compose_selected_owners<LayerMeta: Clone, ObjectMeta: Clone, Owner: Clone
             }
         }
 
-        layers.push(
-            states
-                .into_iter()
-                .filter_map(|(owner, state)| {
-                    let image = state.composer.finish();
-                    (!image.is_empty()).then_some((owner, image))
-                })
-                .collect::<Vec<_>>(),
-        );
+        let mut images = Vec::with_capacity(states.len());
+        for (owner, state) in states {
+            let image = state.composer.finish()?;
+            if !image.is_empty() {
+                images.push((owner, image));
+            }
+        }
+        layers.push(images);
     }
-    (layers, doc.diagnostics)
+    Ok((layers, doc.diagnostics))
 }
 
 pub fn compose_to_mask<LayerMeta: Clone, ObjectMeta: Clone>(
     doc: &Document<LayerMeta, ObjectMeta>,
-) -> mask::Document<LayerMeta> {
-    let (images, diagnostics) = compose_attributed(doc, |_| ());
+    resolution: Resolution,
+) -> Result<mask::Document<LayerMeta>, AccuracyError> {
+    let (images, diagnostics) = compose_attributed(doc, |_| (), resolution)?;
     let mut mask = mask::Document::new();
 
     for layer in &doc.layers {
@@ -702,17 +708,20 @@ pub fn compose_to_mask<LayerMeta: Clone, ObjectMeta: Clone>(
     }
 
     for (layer_index, image) in images.into_iter().enumerate() {
-        let contours = region::rings_to_contours(image.image);
+        let contours = image.image.to_contours();
         if !contours.is_empty() {
             mask.push_shape(layer_index as u32, FillRule::NonZero, contours);
         }
     }
 
     mask.diagnostics.extend(diagnostics);
-    mask
+    Ok(mask)
 }
 
-fn expand_strokes_to_regions<LayerMeta, ObjectMeta>(doc: &mut Document<LayerMeta, ObjectMeta>) {
+fn expand_strokes_to_regions<LayerMeta, ObjectMeta>(
+    doc: &mut Document<LayerMeta, ObjectMeta>,
+    accuracy: GeometryAccuracy,
+) -> Result<(), AccuracyError> {
     for object_index in 0..doc.objects.len() {
         let Geometry::Stroke { path: path_index } = doc.objects[object_index].geometry else {
             continue;
@@ -725,9 +734,9 @@ fn expand_strokes_to_regions<LayerMeta, ObjectMeta>(doc: &mut Document<LayerMeta
             doc.warn("Skipping artwork stroke with fill paint");
             continue;
         };
-        let Some(contours) =
-            crate::geom::path::stroke_to_fill(&doc.arena.path_contours(&path), stroke.into())
-        else {
+        let source = doc.arena.path_contours(&path);
+        let contours = crate::geom::path::stroke_to_fill(&source, stroke.into(), accuracy)?;
+        let Some(contours) = contours else {
             continue;
         };
         let path_id = doc.push_path(
@@ -739,6 +748,7 @@ fn expand_strokes_to_regions<LayerMeta, ObjectMeta>(doc: &mut Document<LayerMeta
         doc.objects[object_index].geometry = Geometry::Region { path: path_id };
         doc.objects[object_index].bbox = doc.path_bbox(path_id);
     }
+    Ok(())
 }
 
 fn expand_flashes_to_regions<LayerMeta, ObjectMeta>(doc: &mut Document<LayerMeta, ObjectMeta>) {
@@ -757,7 +767,7 @@ fn expand_flashes_to_regions<LayerMeta, ObjectMeta>(doc: &mut Document<LayerMeta
         let contours = aperture
             .contours()
             .into_iter()
-            .map(|contour| crate::geom::path::transform_cmds(contour.cmds, transform))
+            .map(|contour| contour.transformed(transform))
             .collect::<Vec<_>>();
         let path_id = doc.push_path(
             Paint::Fill {
@@ -770,27 +780,20 @@ fn expand_flashes_to_regions<LayerMeta, ObjectMeta>(doc: &mut Document<LayerMeta
     }
 }
 
-fn object_image_rings<LayerMeta, ObjectMeta>(
+fn object_image_region<LayerMeta, ObjectMeta>(
     doc: &Document<LayerMeta, ObjectMeta>,
     object: &Object<ObjectMeta>,
-) -> Vec<Ring> {
-    match object.geometry {
-        Geometry::Region { path } => doc
-            .arena
-            .paths
-            .get(path as usize)
-            .map(|path| {
-                region::simplify_rings(
-                    region::rings_from_contours(&doc.arena.path_contours(path)),
-                    path.fill_rule().unwrap_or(FillRule::NonZero),
-                )
-            })
-            .unwrap_or_default(),
-        Geometry::Flash { .. }
-        | Geometry::Stroke { .. }
-        | Geometry::Instance { .. }
-        | Geometry::GridInstance { .. } => Vec::new(),
-    }
+    resolution: Resolution,
+) -> Result<region::ContourSet, AccuracyError> {
+    let Geometry::Region { path } = object.geometry else {
+        return Ok(region::ContourSet::empty(resolution));
+    };
+    let Some(path) = doc.arena.paths.get(path as usize) else {
+        return Ok(region::ContourSet::empty(resolution));
+    };
+    let contours = doc.arena.path_contours(path);
+    let rule = path.fill_rule().unwrap_or(FillRule::NonZero);
+    region::ContourSet::from_contours(&contours, rule, resolution)
 }
 
 fn geometry_bbox<LayerMeta, ObjectMeta>(
@@ -814,8 +817,8 @@ fn geometry_bbox<LayerMeta, ObjectMeta>(
                 aperture
                     .contours()
                     .into_iter()
-                    .map(|contour| crate::geom::path::transform_cmds(contour.cmds, transform))
-                    .fold(BBox::empty(), |bbox, contour| bbox.union(contour.bbox))
+                    .map(|contour| contour.bbox.transformed(transform))
+                    .fold(BBox::empty(), |bbox, bound| bbox.union(bound))
             })
             .unwrap_or_else(BBox::empty),
         Geometry::Instance { block, transform } => doc
@@ -1300,7 +1303,7 @@ mod tests {
             Object::new(Polarity::Dark, Geometry::Stroke { path }),
         );
 
-        let mask = compose_to_mask(&doc);
+        let mask = compose_to_mask(&doc, Resolution::default()).unwrap();
 
         assert_eq!(mask.layers.len(), 1);
         assert_eq!(mask.layers[0].shapes.len(), 1);
@@ -1354,13 +1357,14 @@ mod tests {
             stage_object(Polarity::Dark, cutout, PaintStage::FinalCutout),
         );
 
-        let mask = compose_to_mask(&doc);
+        let mask = compose_to_mask(&doc, Resolution::default()).unwrap();
         let shape = mask.layers[0].shapes.slice(&mask.arena.paths)[0];
         let image = region::ContourSet::from_contours(
             &mask.arena.path_contours(&shape),
             FillRule::NonZero,
-            crate::geom::tol::REGION_MM,
-        );
+            Resolution::default(),
+        )
+        .unwrap();
 
         // The overlay trace follows the clear in paint order and survives.
         assert!(image.contains_point(Point::new(5.0, 5.0)));
@@ -1414,14 +1418,11 @@ mod tests {
             object(Polarity::Dark, overlap, PaintStage::Overlay, "C"),
         );
 
-        let (mut layers, diagnostics) = compose_attributed(&doc, |meta| *meta);
+        let (mut layers, diagnostics) =
+            compose_attributed(&doc, |meta| *meta, Resolution::default()).unwrap();
         assert!(diagnostics.is_empty());
         let composed = layers.remove(0);
-        let physical = region::ContourSet::new(
-            composed.image,
-            FillRule::NonZero,
-            crate::geom::tol::REGION_MM,
-        );
+        let physical = composed.image;
         assert_eq!(
             composed
                 .owners
@@ -1430,16 +1431,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["A", "B", "C"]
         );
-        let owners = composed
-            .owners
-            .into_iter()
-            .map(|(owner, rings)| {
-                (
-                    owner,
-                    region::ContourSet::new(rings, FillRule::NonZero, crate::geom::tol::REGION_MM),
-                )
-            })
-            .collect::<HashMap<_, _>>();
+        let owners = composed.owners.into_iter().collect::<HashMap<_, _>>();
 
         assert!(owners["A"].contains_point(Point::new(2.0, 2.0)));
         assert!(!owners["A"].contains_point(Point::new(5.0, 5.0)));
@@ -1449,8 +1441,12 @@ mod tests {
         assert!(physical.contains_point(Point::new(5.0, 5.0)));
         assert!(physical.contains_point(Point::new(8.5, 8.5)));
 
-        let (mut selected, diagnostics) =
-            compose_selected_attributed(&doc, |meta| (*meta != "C").then_some(*meta));
+        let (mut selected, diagnostics) = compose_selected_attributed(
+            &doc,
+            |meta| (*meta != "C").then_some(*meta),
+            Resolution::default(),
+        )
+        .unwrap();
         assert!(diagnostics.is_empty());
         let selected = selected.remove(0);
         assert_eq!(
@@ -1461,16 +1457,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["A", "B"]
         );
-        let selected = selected
-            .owners
-            .into_iter()
-            .map(|(owner, rings)| {
-                (
-                    owner,
-                    region::ContourSet::new(rings, FillRule::NonZero, crate::geom::tol::REGION_MM),
-                )
-            })
-            .collect::<HashMap<_, _>>();
+        let selected = selected.owners.into_iter().collect::<HashMap<_, _>>();
         assert!(!selected["A"].contains_point(Point::new(5.0, 5.0)));
         assert!(selected["B"].contains_point(Point::new(5.0, 5.0)));
     }
@@ -1494,14 +1481,15 @@ mod tests {
             ),
         );
 
-        let mask = compose_to_mask(&doc);
+        let mask = compose_to_mask(&doc, Resolution::default()).unwrap();
         let expected = std::f64::consts::PI * (1.0 - 0.25);
         let shape = mask.layers[0].shapes.slice(&mask.arena.paths)[0];
         let area = region::ContourSet::from_contours(
             &mask.arena.path_contours(&shape),
             FillRule::NonZero,
-            crate::geom::tol::REGION_MM,
+            Resolution::default(),
         )
+        .unwrap()
         .area();
 
         assert!(

@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use pcb_component_gen as component_gen;
 use pcb_sexpr::Sexpr;
 use pcb_sexpr::find_child_list;
-use pcb_sexpr::formatter::{FormatMode, format_tree};
+use pcb_sexpr::formatter::{FormatMode, format_tree, quote_string};
 use pcb_sexpr::kicad::symbol::{
     kicad_symbol_lib_items_mut, rewrite_symbol_properties, symbol_names, symbol_properties,
 };
@@ -311,11 +311,30 @@ fn prepatch_imported_layout_kicad_pcb(args: LayoutPrepatchArgs<'_>) -> Result<()
     } = args;
     let board = pcb_sexpr::parse(pcb_text).map_err(|e| anyhow::anyhow!(e))?;
 
-    let net_renames: std::collections::HashMap<String, String> = net_ident_by_kicad_name
-        .iter()
-        .map(|(k, v)| (k.as_str().to_string(), v.clone()))
-        .collect();
-    let (net_patches, _applied) = pcb_layout::compute_net_renames_patches(&board, &net_renames);
+    let mut patches = PatchSet::default();
+    let mut untouched_net_names = BTreeSet::new();
+    // build_net_decls allocates unique final names. Apply that authoritative map
+    // simultaneously, without layout repair's guard against existing target names.
+    board.walk_strings(|value, span, ctx| {
+        if sexpr_board::is_net_name(&ctx) || sexpr_board::is_zone_net_name(&ctx) {
+            if let Some(name) = net_ident_by_kicad_name.get(&KiCadNetName::from(value.to_string()))
+            {
+                if name != value {
+                    patches.replace_string(span, name);
+                }
+            } else {
+                untouched_net_names.insert(value.to_string());
+            }
+        }
+    });
+    // PCB-only nets are absent from the allocator and must not be merged with
+    // generated nets. Reject collisions before writing any layout patches.
+    for name in net_ident_by_kicad_name.values() {
+        anyhow::ensure!(
+            !untouched_net_names.contains(name),
+            "Generated net name {name:?} conflicts with an untouched PCB net"
+        );
+    }
 
     let path_patches = compute_import_footprint_path_property_patches(
         &board,
@@ -326,8 +345,6 @@ fn prepatch_imported_layout_kicad_pcb(args: LayoutPrepatchArgs<'_>) -> Result<()
         sheet_modules,
     )?;
 
-    let mut patches = PatchSet::default();
-    patches.extend(net_patches);
     patches.extend(path_patches);
 
     if patches.is_empty() {
@@ -463,8 +480,8 @@ fn compute_set_footprint_sync_hook_patches_by_refdes(
             // Insert a new (property "Path" "...") block before the footprint's closing paren.
             let insert_at = footprint_closing_line_start(pcb_text, node.span);
             let property_text = format!(
-                "\t\t(property \"Path\" \"{}\"\n\t\t\t(at 0 0 0)\n\t\t\t(layer \"F.SilkS\")\n\t\t\t(hide yes)\n\t\t)\n",
-                desired
+                "\t\t(property \"Path\" {}\n\t\t\t(at 0 0 0)\n\t\t\t(layer \"F.SilkS\")\n\t\t\t(hide yes)\n\t\t)\n",
+                quote_string(desired)
             );
             patches.replace_raw(
                 Span {
@@ -2841,6 +2858,69 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
+    #[test]
+    fn imported_layout_uses_allocated_net_names() {
+        let names = ["Signal.Name", "Signal_Name", "Signal_Name_2", "GND"];
+        let nets = names
+            .map(|name| {
+                (
+                    KiCadNetName::from(name.to_string()),
+                    ImportNetData {
+                        ports: BTreeSet::new(),
+                    },
+                )
+            })
+            .into_iter()
+            .collect();
+        let decls = build_net_decls(&nets, &BTreeSet::new(), &BTreeMap::new());
+        let input = r#"(kicad_pcb
+            (net 1 "Signal.Name") (net 2 "Signal_Name") (net 3 "Signal_Name_2")
+            (net 4 "GND") (net 0 "") (net 6 "PCB_ONLY")
+            (footprint "Signal.Name" (property "Path" "Signal.Name")
+                (pad "1" smd rect (net 1 "Signal.Name")))
+            (segment (net "Signal_Name"))
+            (zone (net "Signal_Name_2") (net_name "Signal.Name"))
+            (group "Signal.Name"))"#;
+        let expected = r#"(kicad_pcb
+            (net 1 "Signal_Name") (net 2 "Signal_Name_2") (net 3 "Signal_Name_2_2")
+            (net 4 "GND") (net 0 "") (net 6 "PCB_ONLY")
+            (footprint "Signal.Name" (property "Path" "Signal.Name")
+                (pad "1" smd rect (net 1 "Signal_Name")))
+            (segment (net "Signal_Name_2"))
+            (zone (net "Signal_Name_2_2") (net_name "Signal_Name"))
+            (group "Signal.Name"))"#;
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("layout.kicad_pcb");
+        for extra in [
+            "",
+            r#"(net 5 "Signal_Name_2_2")"#,
+            r#"(zone (net "Signal_Name_2_2"))"#,
+            r#"(zone (net_name "Signal_Name_2_2"))"#,
+        ] {
+            let input = input.replacen("(kicad_pcb", &format!("(kicad_pcb{extra}"), 1);
+            fs::write(&path, &input).unwrap();
+            let result = prepatch_imported_layout_kicad_pcb(LayoutPrepatchArgs {
+                layout_kicad_pcb: &path,
+                pcb_text: &input,
+                components: &BTreeMap::new(),
+                refdes_instance_names: &BTreeMap::new(),
+                net_ident_by_kicad_name: &decls.zener_name_by_kicad_name,
+                generated_components: &make_generated_components(BTreeMap::new()),
+                sheet_modules: &GeneratedSheetModules::default(),
+            });
+            if extra.is_empty() {
+                result.unwrap();
+                assert_eq!(fs::read_to_string(&path).unwrap(), expected);
+            } else {
+                assert_eq!(
+                    result.unwrap_err().to_string(),
+                    "Generated net name \"Signal_Name_2_2\" conflicts with an untouched PCB net"
+                );
+                assert_eq!(fs::read_to_string(&path).unwrap(), input);
+            }
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn generated_file_replaces_symlink_without_writing_target() {
@@ -2934,6 +3014,39 @@ mod tests {
             module_skip_defaults: BTreeMap::new(),
             expected_pins_by_anchor: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn inserted_path_property_round_trips_special_characters() {
+        let pcb_text = "(kicad_pcb\n\t(footprint \"lib:FP\"\n\t\t(property \"Reference\" \"R1\")\n\t\t(path \"/old-uuid\")\n\t)\n)";
+        let desired = "R\"1\\2\n\r\t.R";
+        let board = pcb_sexpr::parse(pcb_text).unwrap();
+        let patches = compute_set_footprint_sync_hook_patches_by_refdes(
+            &board,
+            pcb_text,
+            &BTreeMap::from([(KiCadRefDes::from("R1".to_string()), desired.to_string())]),
+        )
+        .unwrap();
+        let mut out = Vec::new();
+        patches.write_to(pcb_text, &mut out).unwrap();
+        let patched = String::from_utf8(out).unwrap();
+        let board = pcb_sexpr::parse(&patched).unwrap();
+        let footprint = find_child_list(board.as_list().unwrap(), "footprint").unwrap();
+        let path = footprint
+            .iter()
+            .filter_map(Sexpr::as_list)
+            .find(|list| {
+                list.first().and_then(Sexpr::as_sym) == Some("property")
+                    && list.get(1).and_then(Sexpr::as_str) == Some("Path")
+            })
+            .unwrap()[2]
+            .as_str()
+            .unwrap();
+        assert_eq!(path, desired);
+        assert_eq!(
+            find_child_list(footprint, "path").unwrap()[1].as_str(),
+            Some(pcb_sch::kicad_identity::footprint_kiid_path(path).as_str())
+        );
     }
 
     #[test]

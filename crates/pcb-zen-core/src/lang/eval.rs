@@ -541,8 +541,12 @@ impl EvalContextConfig {
 
     /// Set the source path of the module we are evaluating.
     pub fn set_source_path(mut self, path: PathBuf) -> Self {
-        let stdlib_dir = self.resolution.workspace_info.workspace_stdlib_dir();
-        self.inject_prelude = self.inject_prelude && !path.starts_with(&stdlib_dir);
+        self.inject_prelude = self.inject_prelude
+            && !path_starts_with_canonical(
+                &path,
+                &self.resolution.workspace_info.workspace_stdlib_dir(),
+                self.file_provider.as_ref(),
+            );
         if self.active_root_package.is_none() {
             let canonical_path = self
                 .file_provider
@@ -2276,5 +2280,50 @@ mod tests {
         context.invalidate_file(invalidation_path);
 
         assert!(context.session.footprint_cache.get(&key).is_none());
+    }
+
+    #[test]
+    #[cfg(all(unix, feature = "native"))]
+    fn set_source_path_handles_symlinked_stdlib() -> anyhow::Result<()> {
+        use std::{fs, os::unix::fs::symlink};
+
+        let dir = tempfile::tempdir()?;
+        let root = dir.path().canonicalize()?;
+        let mut resolution = ResolutionResult::empty();
+        resolution.workspace_info.root = root.clone();
+        let stdlib_dir = resolution.workspace_info.workspace_stdlib_dir();
+        fs::create_dir_all(&stdlib_dir)?;
+        fs::write(stdlib_dir.join("interfaces.zen"), "")?;
+        fs::write(root.join("board.zen"), "")?;
+        let linked = root.join("linked");
+        symlink(&root, &linked)?;
+        let config = EvalContextConfig::new(
+            Arc::new(crate::DefaultFileProvider::new()),
+            Arc::new(resolution),
+        );
+
+        for path in [&root, &linked] {
+            let stdlib_path = path.join(".pcb/stdlib/interfaces.zen");
+            assert_eq!(
+                stdlib_path.canonicalize()?,
+                stdlib_dir.join("interfaces.zen")
+            );
+            assert!(!config.clone().set_source_path(stdlib_path).inject_prelude);
+            let user_path = path.join("board.zen");
+            assert!(
+                config
+                    .clone()
+                    .set_source_path(user_path.clone())
+                    .inject_prelude
+            );
+            assert!(
+                !config
+                    .clone()
+                    .set_inject_prelude(false)
+                    .set_source_path(user_path)
+                    .inject_prelude
+            );
+        }
+        Ok(())
     }
 }

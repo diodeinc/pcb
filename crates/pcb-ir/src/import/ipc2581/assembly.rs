@@ -59,7 +59,8 @@ impl ImportedDesign {
                         .map(|profile| ir::Profile {
                             outer: self
                                 .geometry
-                                .transformed_path_contours(profile.outer_path, Affine2::IDENTITY)
+                                .arena
+                                .path_contours(self.geometry.arena.path(profile.outer_path))
                                 .into_iter()
                                 .next()
                                 .expect("IPC step profile has one outer contour"),
@@ -69,7 +70,8 @@ impl ImportedDesign {
                                 .iter()
                                 .map(|cutout| {
                                     self.geometry
-                                        .transformed_path_contours(cutout.path, Affine2::IDENTITY)
+                                        .arena
+                                        .path_contours(self.geometry.arena.path(cutout.path))
                                         .into_iter()
                                         .next()
                                         .expect("IPC step profile cutout has one contour")
@@ -269,6 +271,7 @@ fn map_package_pin(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn map_package_view(
     design: &ImportedDesign,
     context: &super::ExtractContext<'_>,
@@ -352,7 +355,7 @@ fn map_package_outline(
             polarity: Polarity::Dark,
             paths: vec![ir::PackagePath {
                 paint,
-                contours: vec![super::polygon_contour(&outline.polygon, Affine2::IDENTITY)],
+                contours: vec![super::polygon_contour(&outline.polygon)],
             }],
         },
     }

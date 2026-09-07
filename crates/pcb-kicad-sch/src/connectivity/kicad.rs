@@ -138,6 +138,7 @@ pub(crate) fn reduce_with_provenance(
         groups.extend(reduced.groups);
     }
     components.sort();
+    components.dedup();
     Ok(PhysicalConnectivity {
         graph: ConnectivityGraph {
             components,

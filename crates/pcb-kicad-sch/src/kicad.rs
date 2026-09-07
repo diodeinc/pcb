@@ -122,8 +122,82 @@ impl SymbolDefinition {
 }
 
 pub fn parse_kicad_sch_page(file_name: Option<&str>, content: &str) -> Result<SchPage> {
-    let root = parse(content).map_err(|err| anyhow!("failed to parse KiCad schematic: {err}"))?;
+    let mut root =
+        parse(content).map_err(|err| anyhow!("failed to parse KiCad schematic: {err}"))?;
+    let items = SexprList::from_sexpr(&root).context("expected kicad_sch root list")?;
+    if items.tag() != Some("kicad_sch") {
+        bail!("expected kicad_sch root");
+    }
+    let version = items
+        .children_from(1)
+        .find_map(|child| {
+            let list = SexprList::from_sexpr(child)?;
+            (list.tag() == Some("version"))
+                .then(|| list.i64(1))
+                .flatten()
+        })
+        .context("kicad_sch missing version")?;
+    match version {
+        20250114 => normalize_kicad_9(&mut root, ""),
+        KICAD_SCH_VERSION => {}
+        _ => bail!(
+            "unsupported KiCad schematic version {version}; expected KiCad 9 version 20250114 or KiCad 10 version {KICAD_SCH_VERSION}"
+        ),
+    }
     parse_kicad_sch_root(file_name, &root)
+}
+
+/// KiCad changed exact `~` field values and library pin names/numbers from
+/// empty to literal text in format 20250318. Normalize only those legacy
+/// contexts, not schematic text or labels. KiCad 10 also requires an explicit
+/// body-style declaration to retain legacy De Morgan drawings on reload.
+fn normalize_kicad_9(node: &mut Sexpr, parent: &str) {
+    let SexprKind::List(items) = &mut node.kind else {
+        return;
+    };
+    let tag = list_tag(items).unwrap_or("").to_owned();
+    if tag == "symbol"
+        && parent == "lib_symbols"
+        && !items
+            .iter()
+            .any(|child| child.as_list().and_then(list_tag) == Some("body_styles"))
+        && items.iter().any(|child| {
+            let Some(section) = child.as_list() else {
+                return false;
+            };
+            list_tag(section) == Some("symbol")
+                && section.len() > 2
+                && section
+                    .get(1)
+                    .and_then(Sexpr::as_atom)
+                    .is_some_and(|name| name.ends_with("_2"))
+        })
+    {
+        items.push(Sexpr::list(vec![
+            Sexpr::symbol("body_styles"),
+            Sexpr::symbol("demorgan"),
+        ]));
+    }
+    let value_index = match tag.as_str() {
+        "property" => Some(
+            if items.get(1).and_then(Sexpr::as_atom) == Some("private") {
+                3
+            } else {
+                2
+            },
+        ),
+        "name" | "number" if parent == "pin" => Some(1),
+        "value" | "footprint" if matches!(parent, "default_instance" | "path") => Some(1),
+        _ => None,
+    };
+    if let Some(value) = value_index.and_then(|index| items.get_mut(index))
+        && value.as_atom() == Some("~")
+    {
+        value.kind = SexprKind::String(String::new());
+    }
+    for child in items {
+        normalize_kicad_9(child, &tag);
+    }
 }
 
 fn parse_kicad_sch_root(file_name: Option<&str>, root: &Sexpr) -> Result<SchPage> {
@@ -135,7 +209,6 @@ fn parse_kicad_sch_root(file_name: Option<&str>, root: &Sexpr) -> Result<SchPage
     }
 
     let mut page_id = None;
-    let mut version = None;
     let mut paper = Paper::default();
     let mut items = Vec::new();
     let mut library = SymbolLibrary::default();
@@ -147,8 +220,7 @@ fn parse_kicad_sch_root(file_name: Option<&str>, root: &Sexpr) -> Result<SchPage
         };
 
         match list.tag() {
-            Some("version") => version = list.i64(1),
-            Some("generator") | Some("generator_version") => {}
+            Some("version") | Some("generator") | Some("generator_version") => {}
             Some("uuid") => {
                 page_id = list.string(1);
             }
@@ -190,12 +262,6 @@ fn parse_kicad_sch_root(file_name: Option<&str>, root: &Sexpr) -> Result<SchPage
         }
     }
 
-    let version = version.ok_or_else(|| anyhow!("kicad_sch missing version"))?;
-    if version != KICAD_SCH_VERSION {
-        bail!(
-            "unsupported KiCad schematic version {version}; expected KiCad 10 version {KICAD_SCH_VERSION}"
-        );
-    }
     let page_id = page_id.ok_or_else(|| anyhow!("kicad_sch missing uuid"))?;
     Ok(SchPage {
         id: page_id,
@@ -331,7 +397,7 @@ fn parse_symbol(items: SexprList<'_>) -> Result<Symbol> {
                     list.i64(1).context("symbol unit is not an integer")?,
                 )?);
             }
-            Some("body_style") => {
+            Some("body_style") | Some("convert") => {
                 body_style = positive_u32(
                     "symbol body_style",
                     list.i64(1).context("symbol body_style is not an integer")?,
@@ -1987,11 +2053,93 @@ mod tests {
     }
 
     #[test]
-    fn rejects_pre_kicad_10_schematics() {
-        let error =
-            SchDocument::from_kicad_sch(&SAMPLE.replace("20260306", "20231120")).unwrap_err();
+    fn rejects_unsupported_schematic_versions() {
+        for version in ["20231120", "20270101"] {
+            let error =
+                SchDocument::from_kicad_sch(&SAMPLE.replace("20260306", version)).unwrap_err();
+            assert!(error.to_string().contains("expected KiCad 9"));
+        }
+    }
 
-        assert!(error.to_string().contains("expected KiCad 10"));
+    #[test]
+    fn kicad_9_fixture_roundtrips_and_preserves_source_on_noop() {
+        let source = include_str!("../../pcb-sch/test/kicad-bom/layout.kicad_sch");
+        let document = SchDocument::from_kicad_sch(source).unwrap();
+        assert!(!document.pages[0].library.definitions.is_empty());
+        assert!(
+            document.pages[0]
+                .items
+                .iter()
+                .any(|item| matches!(item, SchItem::Symbol(_)))
+        );
+        assert_eq!(
+            crate::patch_page_source(source, &document.pages[0]).unwrap(),
+            None
+        );
+        let exported = document.to_kicad_sch().unwrap();
+        assert!(exported.contains("(version 20260306)"));
+        assert_eq!(SchDocument::from_kicad_sch(&exported).unwrap(), document);
+    }
+
+    #[test]
+    fn kicad_9_normalizes_empty_values_but_preserves_literal_text() {
+        let source = SAMPLE
+            .replace("\"10k\"", "\"~\"")
+            .replace("(name \"1\")", "(name \"~\")")
+            .replace("(number \"1\")", "(number \"~\")")
+            .replace(
+                "(paper \"A4\")",
+                "(paper \"A4\") (text \"~\" (uuid \"text-1\"))",
+            );
+        let modern = SchDocument::from_kicad_sch(&source).unwrap();
+        let legacy_source = source.replace("20260306", "20250114");
+        let legacy = SchDocument::from_kicad_sch(&legacy_source).unwrap();
+        let symbol = |doc: &SchDocument| {
+            doc.pages[0]
+                .items
+                .iter()
+                .find_map(|item| {
+                    if let SchItem::Symbol(symbol) = item {
+                        Some(symbol.field_value("Value").unwrap().to_owned())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap()
+        };
+        assert_eq!(symbol(&modern), "~");
+        assert_eq!(symbol(&legacy), "");
+        let exported = legacy.to_kicad_sch().unwrap();
+        assert!(exported.contains("(name \"\")"));
+        assert!(exported.contains("(number \"\")"));
+        assert!(exported.contains("(text \"~\""));
+        assert_eq!(SchDocument::from_kicad_sch(&exported).unwrap(), legacy);
+        assert_eq!(
+            crate::patch_page_source(&legacy_source, &legacy.pages[0]).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn kicad_9_alternate_body_style_survives_migration() {
+        let source = SAMPLE
+            .replace("20260306", "20250114")
+            .replace("(body_style 1)", "(convert 2)")
+            .replace("R_1_1", "R_1_2");
+        let document = SchDocument::from_kicad_sch(&source).unwrap();
+        let SchItem::Symbol(symbol) = &document.pages[0].items[2] else {
+            panic!("expected symbol");
+        };
+        assert_eq!(symbol.body_style, 2);
+        let exported = document.to_kicad_sch().unwrap();
+        assert!(exported.contains("(body_styles demorgan)"));
+        assert!(exported.contains("(body_style 2)"));
+        assert!(!exported.contains("(convert"));
+        assert_eq!(SchDocument::from_kicad_sch(&exported).unwrap(), document);
+        assert_eq!(
+            crate::patch_page_source(&source, &document.pages[0]).unwrap(),
+            None
+        );
     }
 
     #[test]

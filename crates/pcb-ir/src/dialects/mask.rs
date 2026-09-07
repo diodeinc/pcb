@@ -7,7 +7,9 @@
 
 use crate::dialects::{LayerRole, Side};
 use crate::geom::path::ContourBuf;
-use crate::geom::{BBox, Diagnostic, FillRule, Paint, Path, PathArena, Span};
+use crate::geom::{
+    AccuracyError, BBox, ContourSet, Diagnostic, FillRule, Paint, Path, PathArena, Resolution, Span,
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct Document<LayerMeta = ()> {
@@ -53,6 +55,22 @@ impl<LayerMeta> Document<LayerMeta> {
         layer.shapes.count += 1;
         layer.bbox = layer.bbox.union(bbox);
         path
+    }
+
+    /// Prepare one layer's painted shapes as a single region.
+    pub fn layer_region(
+        &self,
+        layer: &Layer<LayerMeta>,
+        resolution: Resolution,
+    ) -> Result<ContourSet, AccuracyError> {
+        let shapes = self.shapes(layer).iter().map(|shape| {
+            ContourSet::from_contours(
+                &self.arena.path_contours(shape),
+                shape.fill_rule().unwrap_or(FillRule::NonZero),
+                resolution.strict(),
+            )
+        });
+        ContourSet::union_all(resolution, shapes.collect::<Result<Vec<_>, _>>()?)
     }
 
     pub fn shapes(&self, layer: &Layer<LayerMeta>) -> &[Path] {

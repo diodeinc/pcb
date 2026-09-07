@@ -1,10 +1,9 @@
 use std::fmt::Write;
 
 use pcb_ir::dialects::ipc::{Document, ProfileSet, profile_occurrences_for};
-use pcb_ir::geom::Point;
+use pcb_ir::geom::{ContourBuf, GeometryAccuracy, Point, Segment};
 
 use crate::utils::format::fmt_num;
-use pcb_ir::geom::path::{PathCmd, PathOp};
 
 const OUTLINE_LAYER: &str = "BOARD_OUTLINE";
 const EPSILON: f64 = 1e-9;
@@ -19,7 +18,8 @@ struct DxfVertex {
 pub fn render_profile_set_dxf<Symbol, LayerFunction>(
     doc: &Document<Symbol, LayerFunction>,
     profile_set: ProfileSet,
-) -> String {
+    accuracy: GeometryAccuracy,
+) -> anyhow::Result<String> {
     let mut dxf = String::new();
     write_header(&mut dxf);
     write_tables(&mut dxf);
@@ -30,13 +30,14 @@ pub fn render_profile_set_dxf<Symbol, LayerFunction>(
             doc,
             occurrence.profile.outer_path,
             occurrence.transform,
-        );
+            accuracy,
+        )?;
         for cutout in occurrence.profile.cutouts.slice(&doc.profile_cutouts) {
-            write_path(&mut dxf, doc, cutout.path, occurrence.transform);
+            write_path(&mut dxf, doc, cutout.path, occurrence.transform, accuracy)?;
         }
     }
     write_footer(&mut dxf);
-    dxf
+    Ok(dxf)
 }
 
 fn write_header(dxf: &mut String) {
@@ -66,10 +67,13 @@ fn write_path<Symbol, LayerFunction>(
     doc: &Document<Symbol, LayerFunction>,
     path_index: u32,
     transform: pcb_ir::geom::Affine2,
-) {
+    accuracy: GeometryAccuracy,
+) -> anyhow::Result<()> {
     for contour in doc.transformed_path_contours(path_index, transform) {
-        write_polyline(dxf, &contour_vertices(&contour.cmds));
+        let contour = contour.flattened_curves(accuracy)?;
+        write_polyline(dxf, &contour_vertices(&contour));
     }
+    Ok(())
 }
 
 fn write_polyline(dxf: &mut String, vertices: &[DxfVertex]) {
@@ -90,62 +94,42 @@ fn write_polyline(dxf: &mut String, vertices: &[DxfVertex]) {
     }
 }
 
-fn contour_vertices(cmds: &[PathCmd]) -> Vec<DxfVertex> {
-    let mut first = None;
-    let mut current = Point::default();
-    let mut vertices = Vec::new();
-
-    for cmd in cmds {
-        match cmd.op {
-            PathOp::MoveTo => {
-                first = Some(cmd.p0);
-                current = cmd.p0;
-                vertices.push(DxfVertex {
-                    x: cmd.p0.x,
-                    y: cmd.p0.y,
-                    bulge: 0.0,
-                });
+/// Polyline vertices of a contour whose curves were flattened to lines and
+/// circular arcs; arcs keep their bulge.
+fn contour_vertices(contour: &ContourBuf) -> Vec<DxfVertex> {
+    let Some(first) = contour.cmds.first().map(|cmd| cmd.p0) else {
+        return Vec::new();
+    };
+    let mut vertices = vec![DxfVertex {
+        x: first.x,
+        y: first.y,
+        bulge: 0.0,
+    }];
+    for segment in contour.segments() {
+        match segment {
+            Segment::Line { end, .. } => {
+                vertices.last_mut().unwrap().bulge = 0.0;
+                push_endpoint(&mut vertices, end, first);
             }
-            PathOp::LineTo => {
-                current = cmd.p0;
-                if let Some(first) = first {
-                    vertices.last_mut().unwrap().bulge = 0.0;
-                    push_endpoint(&mut vertices, current, first);
+            Segment::Arc(arc) => {
+                if same_point(arc.start, arc.end) && arc.start.distance_to(arc.center) > EPSILON {
+                    let opposite = opposite_arc_point(arc.start, arc.center, arc.clockwise);
+                    vertices.last_mut().unwrap().bulge = half_circle_bulge(arc.clockwise);
+                    vertices.push(DxfVertex {
+                        x: opposite.x,
+                        y: opposite.y,
+                        bulge: half_circle_bulge(arc.clockwise),
+                    });
+                    push_endpoint(&mut vertices, arc.end, first);
+                } else {
+                    vertices.last_mut().unwrap().bulge =
+                        arc_bulge(arc.start, arc.end, arc.center, arc.clockwise);
+                    push_endpoint(&mut vertices, arc.end, first);
                 }
             }
-            PathOp::ArcTo => {
-                let end = cmd.p0;
-                let center = cmd.p1;
-                if let Some(first) = first {
-                    if same_point(current, end) && current.distance_to(center) > EPSILON {
-                        let opposite = opposite_arc_point(current, center, cmd.clockwise);
-                        vertices.last_mut().unwrap().bulge = half_circle_bulge(cmd.clockwise);
-                        vertices.push(DxfVertex {
-                            x: opposite.x,
-                            y: opposite.y,
-                            bulge: half_circle_bulge(cmd.clockwise),
-                        });
-                        push_endpoint(&mut vertices, end, first);
-                    } else {
-                        vertices.last_mut().unwrap().bulge =
-                            arc_bulge(current, end, center, cmd.clockwise);
-                        push_endpoint(&mut vertices, end, first);
-                    }
-                }
-                current = end;
+            Segment::Cubic { .. } | Segment::Ellipse(_) => {
+                unreachable!("curves are flattened before polyline conversion")
             }
-            PathOp::CubicTo => {
-                let start = current;
-                for step in 1..=16 {
-                    let end = cubic_point(start, cmd.p0, cmd.p1, cmd.p2, step as f64 / 16.0);
-                    if let Some(first) = first {
-                        vertices.last_mut().unwrap().bulge = 0.0;
-                        push_endpoint(&mut vertices, end, first);
-                    }
-                    current = end;
-                }
-            }
-            PathOp::Close => {}
         }
     }
 
@@ -194,20 +178,6 @@ fn half_circle_bulge(clockwise: bool) -> f64 {
     if clockwise { -1.0 } else { 1.0 }
 }
 
-fn cubic_point(start: Point, c1: Point, c2: Point, end: Point, t: f64) -> Point {
-    let mt = 1.0 - t;
-    Point::new(
-        mt.powi(3) * start.x
-            + 3.0 * mt.powi(2) * t * c1.x
-            + 3.0 * mt * t.powi(2) * c2.x
-            + t.powi(3) * end.x,
-        mt.powi(3) * start.y
-            + 3.0 * mt.powi(2) * t * c1.y
-            + 3.0 * mt * t.powi(2) * c2.y
-            + t.powi(3) * end.y,
-    )
-}
-
 fn same_point(a: Point, b: Point) -> bool {
     (a.x - b.x).abs() <= EPSILON && (a.y - b.y).abs() <= EPSILON
 }
@@ -217,13 +187,19 @@ mod tests {
     use super::*;
     use pcb_ir::dialects::ipc::{StepProfile, StepProfileCutout};
     use pcb_ir::geom::BBox;
+    use pcb_ir::geom::path::PathCmd;
     use pcb_ir::geom::{ContourBuf, Paint, Span};
 
     #[test]
     fn renders_profile_ir_as_mm_dxf_with_closed_outline_layer() {
         let doc = rect_profile_doc();
 
-        let dxf = render_profile_set_dxf(&doc, ProfileSet::FabricationOutlines);
+        let dxf = render_profile_set_dxf(
+            &doc,
+            ProfileSet::FabricationOutlines,
+            GeometryAccuracy::default(),
+        )
+        .unwrap();
 
         assert!(dxf.contains("9\n$INSUNITS\n70\n4\n"));
         assert!(dxf.contains("2\nBOARD_OUTLINE\n"));
@@ -250,7 +226,12 @@ mod tests {
             bbox: BBox::empty(),
         });
 
-        let dxf = render_profile_set_dxf(&doc, ProfileSet::FabricationOutlines);
+        let dxf = render_profile_set_dxf(
+            &doc,
+            ProfileSet::FabricationOutlines,
+            GeometryAccuracy::default(),
+        )
+        .unwrap();
 
         assert!(dxf.contains("42\n1\n"));
     }

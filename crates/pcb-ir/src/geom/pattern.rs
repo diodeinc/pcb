@@ -5,7 +5,7 @@
 //! dot centers so format writers do not need to guess at source-specific
 //! rendering conventions.
 
-use crate::geom::{Arc, LinePattern, Point, Segment};
+use crate::geom::{Arc, EllipticalArc, LinePattern, Point, Segment};
 
 const EPSILON: f64 = 1e-9;
 
@@ -86,7 +86,9 @@ fn measured_segments(segments: &[Segment]) -> Vec<MeasuredSegment> {
     let mut measured = Vec::with_capacity(segments.len());
     let mut cursor = 0.0;
     for &segment in segments {
-        if let Segment::Cubic { start, .. } = segment {
+        if let Segment::Cubic { start, .. } | Segment::Ellipse(EllipticalArc { start, .. }) =
+            segment
+        {
             const STEPS: usize = 32;
             let mut points = Vec::with_capacity(STEPS);
             segment.sample_points(STEPS, &mut points);
@@ -126,7 +128,9 @@ fn segment_length(segment: Segment) -> f64 {
     match segment {
         Segment::Line { start, end } => start.distance_to(end),
         Segment::Arc(arc) => arc.radius() * arc.sweep_radians(),
-        Segment::Cubic { .. } => unreachable!("cubic segments are flattened before measurement"),
+        Segment::Cubic { .. } | Segment::Ellipse(_) => {
+            unreachable!("curved segments are flattened before measurement")
+        }
     }
 }
 
@@ -173,7 +177,7 @@ fn segment_slice(segment: Segment, start_t: f64, end_t: f64) -> Segment {
             arc.center,
             arc.clockwise,
         )),
-        Segment::Cubic { .. } => Segment::Line {
+        Segment::Cubic { .. } | Segment::Ellipse(_) => Segment::Line {
             start: segment_point(segment, start_t),
             end: segment_point(segment, end_t),
         },
@@ -181,25 +185,7 @@ fn segment_slice(segment: Segment, start_t: f64, end_t: f64) -> Segment {
 }
 
 fn segment_point(segment: Segment, t: f64) -> Point {
-    match segment {
-        Segment::Line { start, end } => start + (end - start) * t,
-        Segment::Arc(arc) => {
-            let start_angle = arc.start.angle_from(arc.center);
-            let signed_sweep = if arc.clockwise {
-                -arc.sweep_radians()
-            } else {
-                arc.sweep_radians()
-            };
-            arc.point_at(start_angle + signed_sweep * t)
-        }
-        Segment::Cubic { start, c1, c2, end } => {
-            let u = 1.0 - t;
-            start * (u * u * u)
-                + c1 * (3.0 * u * u * t)
-                + c2 * (3.0 * u * t * t)
-                + end * (t * t * t)
-        }
-    }
+    segment.point_at(t)
 }
 
 #[derive(Debug, Clone, Copy)]

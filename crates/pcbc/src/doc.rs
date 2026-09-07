@@ -294,15 +294,15 @@ fn get_local_package_url(dir: &std::path::Path) -> Option<String> {
     let canonical = dir.canonicalize().ok()?;
     let file_provider = pcb_zen_core::DefaultFileProvider::new();
     let workspace_info = pcb_zen::get_workspace_info(&file_provider, &canonical).ok()?;
-    let repo = workspace_info.repository()?;
+    let base = workspace_info.workspace_base_url()?;
 
     let relative = canonical.strip_prefix(&workspace_info.root).ok()?;
     let relative_str = relative.to_string_lossy().replace('\\', "/");
 
     if relative_str.is_empty() {
-        Some(repo.to_string())
+        Some(base)
     } else {
-        Some(format!("{}/{}", repo, relative_str))
+        Some(format!("{}/{}", base, relative_str))
     }
 }
 

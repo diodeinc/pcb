@@ -151,15 +151,15 @@ pub fn prettify(source: &str, mode: FormatMode) -> String {
                     in_quote = !in_quote;
                 }
 
-                if current != b'\\' {
-                    backslash_count = 0;
-                }
-
                 out.push(current);
                 column += 1;
             }
 
             last_non_whitespace = current;
+        }
+
+        if current != b'\\' {
+            backslash_count = 0;
         }
     }
 
@@ -219,7 +219,7 @@ fn write_compact(sexpr: &Sexpr, out: &mut String) {
 }
 
 /// Quote a string value, escaping special characters.
-pub(crate) fn quote_string(value: &str) -> String {
+pub fn quote_string(value: &str) -> String {
     let escaped = escape_string(value);
     let mut quoted = String::with_capacity(escaped.len() + 2);
     quoted.push('"');
@@ -392,5 +392,28 @@ mod tests {
         assert!(out.contains("(dashed_line_dash_ratio 12.000000)"));
         assert!(out.contains("(dashed_line_gap_ratio 3.000000)"));
         assert!(out.contains("(hpglpendiameter 15.000000)"));
+    }
+
+    #[test]
+    fn prettify_backslash_runs() {
+        for (input, expected) in [
+            (
+                r#"(root (uri C:\ "x") (other 1))"#,
+                "(root\n\t(uri C:\\ \"x\")\n\t(other 1)\n)\n",
+            ),
+            (r#"(root C:\("x"))"#, "(root C:\\\n\t(\"x\")\n)\n"),
+            (r#"(root (uri C:\)"x")"#, "(root\n\t(uri C:\\)\"x\")\n"),
+            (
+                r#"(root foo\"bar (other 1))"#,
+                "(root foo\\\"bar\n\t(other 1)\n)\n",
+            ),
+            (
+                r#"(root "a\"(b)\\" (other 1))"#,
+                "(root \"a\\\"(b)\\\\\"\n\t(other 1)\n)\n",
+            ),
+        ] {
+            assert_eq!(prettify(input, FormatMode::Normal), expected, "{input}");
+            assert_eq!(prettify(expected, FormatMode::Normal), expected, "{input}");
+        }
     }
 }

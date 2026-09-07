@@ -1,3 +1,4 @@
+use pcb_ir::geom::{GeometryAccuracy, Resolution};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -62,7 +63,7 @@ enum RenderTarget {
     Terminal,
 }
 
-pub fn execute(args: GerberArgs) -> Result<()> {
+pub fn execute(args: GerberArgs, resolution: Resolution) -> Result<()> {
     match args.command {
         Commands::Compare {
             reference,
@@ -74,20 +75,23 @@ pub fn execute(args: GerberArgs) -> Result<()> {
             &candidate,
             bbox_tolerance_mm,
             area_tolerance_mm2,
+            resolution,
         ),
-        Commands::Normalize { file, output } => normalize(&file, output.as_deref()),
+        Commands::Normalize { file, output } => {
+            normalize(&file, output.as_deref(), resolution.accuracy)
+        }
         Commands::Render {
             file,
             output,
             format,
-        } => render(&file, output.as_deref(), format),
+        } => render(&file, output.as_deref(), format, resolution),
     }
 }
 
-fn normalize(file: &Path, output: Option<&Path>) -> Result<()> {
+fn normalize(file: &Path, output: Option<&Path>, accuracy: GeometryAccuracy) -> Result<()> {
     let gerber = gerberx2::GerberX2::parse_file(file)
         .with_context(|| format!("failed to parse Gerber file {}", file.display()))?;
-    let normalized = gerberx2::from_artwork::normalize_layer(&gerber)
+    let normalized = gerberx2::from_artwork::normalize_layer(&gerber, accuracy)
         .with_context(|| format!("failed to normalize Gerber file {}", file.display()))?;
     match output {
         Some(path) => std::fs::write(path, normalized)
@@ -102,9 +106,10 @@ fn compare(
     candidate: &Path,
     bbox_tolerance_mm: f64,
     area_tolerance_mm2: f64,
+    resolution: Resolution,
 ) -> Result<()> {
-    let reference_geometry = load_geometry(reference)?;
-    let candidate_geometry = load_geometry(candidate)?;
+    let reference_geometry = load_geometry(reference, resolution.accuracy)?;
+    let candidate_geometry = load_geometry(candidate, resolution.accuracy)?;
     let report = pcb_ir::dialects::artwork::compare::compare_documents(
         &reference_geometry,
         &candidate_geometry,
@@ -112,7 +117,8 @@ fn compare(
             bbox_mm: bbox_tolerance_mm,
             area_mm2: area_tolerance_mm2,
         },
-    );
+        resolution,
+    )?;
 
     println!(
         "reference area {:.6} mm², candidate area {:.6} mm², delta {:.6} mm²",
@@ -175,9 +181,14 @@ fn print_difference_components(
     }
 }
 
-fn render(file: &Path, output: Option<&Path>, format: RenderFormat) -> Result<()> {
+fn render(
+    file: &Path,
+    output: Option<&Path>,
+    format: RenderFormat,
+    resolution: Resolution,
+) -> Result<()> {
     let target = resolve_target(output, format)?;
-    let geometry = load_geometry(file)?;
+    let geometry = load_geometry(file, resolution.accuracy)?;
 
     for diagnostic in &geometry.diagnostics {
         eprintln!("warning: {}", diagnostic.message);
@@ -185,7 +196,7 @@ fn render(file: &Path, output: Option<&Path>, format: RenderFormat) -> Result<()
 
     match target {
         RenderTarget::Svg => {
-            let mask = pcb_ir::dialects::artwork::compose_to_mask(&geometry);
+            let mask = pcb_ir::dialects::artwork::compose_to_mask(&geometry, resolution)?;
             let svg = pcb_ir::render::svg(&mask, &pcb_ir::render::RenderOptions::default());
             if let Some(output) = output {
                 std::fs::write(output, svg)
@@ -196,7 +207,7 @@ fn render(file: &Path, output: Option<&Path>, format: RenderFormat) -> Result<()
             }
         }
         RenderTarget::Png => {
-            let mask = pcb_ir::dialects::artwork::compose_to_mask(&geometry);
+            let mask = pcb_ir::dialects::artwork::compose_to_mask(&geometry, resolution)?;
             let png = pcb_ir::render::png(&mask, &pcb_ir::render::RenderOptions::default())
                 .map_err(gerberx2::GerberError::Render)?;
             if let Some(output) = output {
@@ -209,7 +220,7 @@ fn render(file: &Path, output: Option<&Path>, format: RenderFormat) -> Result<()
             }
         }
         RenderTarget::Terminal => {
-            let mask = pcb_ir::dialects::artwork::compose_to_mask(&geometry);
+            let mask = pcb_ir::dialects::artwork::compose_to_mask(&geometry, resolution)?;
             pcb_ir::render::to_terminal(&mask, &pcb_ir::render::RenderOptions::default())
                 .map_err(gerberx2::GerberError::Render)?;
         }
@@ -218,10 +229,13 @@ fn render(file: &Path, output: Option<&Path>, format: RenderFormat) -> Result<()
     Ok(())
 }
 
-fn load_geometry(file: &Path) -> Result<gerberx2::geometry::GerberArtworkDocument> {
+fn load_geometry(
+    file: &Path,
+    accuracy: GeometryAccuracy,
+) -> Result<gerberx2::geometry::GerberArtworkDocument> {
     let gerber = gerberx2::GerberX2::parse_file(file)
         .with_context(|| format!("Failed to parse Gerber file {}", file.display()))?;
-    Ok(gerberx2::geometry::extract_document(&gerber))
+    Ok(gerberx2::geometry::extract_document(&gerber, accuracy)?)
 }
 
 fn resolve_target(output: Option<&Path>, format: RenderFormat) -> Result<RenderTarget> {

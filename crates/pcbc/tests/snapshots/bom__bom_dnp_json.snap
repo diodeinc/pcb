@@ -8,24 +8,48 @@ Exit Code: 0
 --- STDOUT ---
 [
   {
-    "path": "normal",
-    "designator": "U4",
-    "mpn": "RC0603FR-071KL",
-    "manufacturer": "Yageo"
+    "designators": [
+      "U4"
+    ],
+    "quantity": 1,
+    "members": [
+      {
+        "path": "normal",
+        "designator": "U4",
+        "mpn": "RC0603FR-071KL",
+        "manufacturer": "Yageo"
+      }
+    ]
   },
   {
-    "path": "dnp_kwarg_1",
-    "designator": "U2",
-    "mpn": "RC0603FR-0710KL",
-    "manufacturer": "Yageo",
-    "dnp": true
+    "designators": [
+      "U2"
+    ],
+    "quantity": 1,
+    "members": [
+      {
+        "path": "dnp_kwarg_1",
+        "designator": "U2",
+        "mpn": "RC0603FR-0710KL",
+        "manufacturer": "Yageo",
+        "dnp": true
+      }
+    ]
   },
   {
-    "path": "dnp_kwarg_2",
-    "designator": "U3",
-    "mpn": "RC0603FR-074K7L",
-    "manufacturer": "Yageo",
-    "dnp": true
+    "designators": [
+      "U3"
+    ],
+    "quantity": 1,
+    "members": [
+      {
+        "path": "dnp_kwarg_2",
+        "designator": "U3",
+        "mpn": "RC0603FR-074K7L",
+        "manufacturer": "Yageo",
+        "dnp": true
+      }
+    ]
   }
 ]
 --- STDERR ---
