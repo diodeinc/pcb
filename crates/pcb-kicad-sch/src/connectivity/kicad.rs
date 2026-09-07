@@ -420,6 +420,7 @@ fn collect_page_connectables(
                     });
                 }
             }
+            SchItem::Graphic(_) => {}
             SchItem::Unsupported(sexpr) => {
                 let tag = sexpr
                     .as_list()

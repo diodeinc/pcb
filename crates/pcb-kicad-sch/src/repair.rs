@@ -592,7 +592,7 @@ fn orphaned_junctions(
                 SchItem::Sheet(sheet) => {
                     remaining_points.extend(sheet.pins.iter().map(|pin| pin.at));
                 }
-                SchItem::Junction(_) | SchItem::Unsupported(_) => {}
+                SchItem::Junction(_) | SchItem::Graphic(_) | SchItem::Unsupported(_) => {}
             }
         }
         for junction in page.items.iter().filter_map(|item| match item {

@@ -76,6 +76,7 @@ pub enum SchItem {
     NoConnect(NoConnect),
     Label(Label),
     Sheet(Box<Sheet>),
+    Graphic(Graphic),
     /// A KiCad top-level item that this crate does not interpret.
     Unsupported(Sexpr),
 }
@@ -92,7 +93,105 @@ impl SchItem {
             Self::NoConnect(item) => Some(&item.id),
             Self::Label(item) => Some(&item.id),
             Self::Sheet(item) => Some(&item.id),
+            Self::Graphic(item) => Some(&item.id),
             Self::Unsupported(_) => None,
+        }
+    }
+}
+
+/// A non-electrical sheet annotation with a stable KiCad identity.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Graphic {
+    pub id: Id,
+    pub kind: GraphicKind,
+    /// Children not modeled here, including stroke, fill, margins, and simulation flags.
+    /// As with wires and sheets, these survive geometry edits unchanged.
+    pub unsupported: Vec<Sexpr>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum GraphicKind {
+    Rectangle {
+        start: Point,
+        end: Point,
+    },
+    Polyline {
+        points: Vec<Point>,
+    },
+    Circle {
+        center: Point,
+        radius: f64,
+    },
+    Arc {
+        start: Point,
+        mid: Point,
+        end: Point,
+    },
+    Text(Box<GraphicText>),
+    /// KiCad stores the border in world coordinates. Text rotation does not
+    /// rotate the border; its opposite corner is `text.at + size`.
+    TextBox {
+        text: Box<GraphicText>,
+        size: Point,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GraphicText {
+    pub text: String,
+    pub at: Point,
+    /// KiCad text angle in degrees (not restricted to symbol quarter-turns).
+    pub angle: f64,
+    pub effects: TextEffects,
+    pub justify: Option<FieldJustify>,
+    pub hidden: bool,
+}
+
+impl GraphicKind {
+    pub fn kicad_tag(&self) -> &'static str {
+        match self {
+            Self::Rectangle { .. } => "rectangle",
+            Self::Polyline { .. } => "polyline",
+            Self::Circle { .. } => "circle",
+            Self::Arc { .. } => "arc",
+            Self::Text(_) => "text",
+            Self::TextBox { .. } => "text_box",
+        }
+    }
+}
+
+impl Graphic {
+    /// Reference point used by editor move operations. Empty programmatically
+    /// constructed polylines have no anchor; parsed polylines have at least two points.
+    pub fn anchor(&self) -> Option<Point> {
+        match &self.kind {
+            GraphicKind::Rectangle { start, .. } | GraphicKind::Arc { start, .. } => Some(*start),
+            GraphicKind::Polyline { points } => points.first().copied(),
+            GraphicKind::Circle { center, .. } => Some(*center),
+            GraphicKind::Text(text) | GraphicKind::TextBox { text, .. } => Some(text.at),
+        }
+    }
+
+    /// Translate all world-space geometry without changing dimensions, text
+    /// angles, styling, UUIDs, or extension fields. Graphics have no terminals.
+    pub fn translate(&mut self, delta: Point) {
+        let shift = |point: &mut Point| {
+            point.x += delta.x;
+            point.y += delta.y;
+        };
+        match &mut self.kind {
+            GraphicKind::Rectangle { start, end } => {
+                shift(start);
+                shift(end);
+            }
+            GraphicKind::Polyline { points } => points.iter_mut().for_each(shift),
+            GraphicKind::Circle { center, .. } => shift(center),
+            GraphicKind::Arc { start, mid, end } => {
+                shift(start);
+                shift(mid);
+                shift(end);
+            }
+            GraphicKind::Text(text) | GraphicKind::TextBox { text, .. } => shift(&mut text.at),
         }
     }
 }

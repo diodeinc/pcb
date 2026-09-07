@@ -36,10 +36,10 @@ pub use identity::{
 };
 pub use kicad::{KicadSchFile, KicadSchSource, parse_kicad_sch_page};
 pub use model::{
-    FieldHorizontalJustify, FieldJustify, FieldVerticalJustify, Junction, Label, LabelKind,
-    LabelShape, LabelSpin, MirrorAxis, NoConnect, Paper, PinInstance, Point, Rotation, SchDocument,
-    SchItem, SchPage, Sheet, SheetPin, Symbol, SymbolDefinition, SymbolField, SymbolLibrary,
-    TextEffects, TextSize, Wire,
+    FieldHorizontalJustify, FieldJustify, FieldVerticalJustify, Graphic, GraphicKind, GraphicText,
+    Junction, Label, LabelKind, LabelShape, LabelSpin, MirrorAxis, NoConnect, Paper, PinInstance,
+    Point, Rotation, SchDocument, SchItem, SchPage, Sheet, SheetPin, Symbol, SymbolDefinition,
+    SymbolField, SymbolLibrary, TextEffects, TextSize, Wire,
 };
 pub use net_symbols::NetSymbolSpec;
 pub use repair::{

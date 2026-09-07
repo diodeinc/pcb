@@ -213,6 +213,7 @@ fn item_id(item: &SchItem) -> Option<&str> {
         SchItem::NoConnect(item) => Some(&item.id),
         SchItem::Label(item) => Some(&item.id),
         SchItem::Sheet(item) => Some(&item.id),
+        SchItem::Graphic(item) => Some(&item.id),
         SchItem::Unsupported(_) => None,
     }
 }

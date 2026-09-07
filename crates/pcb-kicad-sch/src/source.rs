@@ -112,6 +112,7 @@ fn managed_values(page: &SchPage) -> BTreeMap<String, ManagedValue<'_>> {
             SchItem::NoConnect(_) => "no_connect",
             SchItem::Label(label) => crate::kicad::label_kind_token(label.kind),
             SchItem::Sheet(_) => "sheet",
+            SchItem::Graphic(graphic) => graphic.kind.kicad_tag(),
             SchItem::Unsupported(_) => continue,
         };
         values.insert(format!("{tag}:{id}"), ManagedValue::Item(item));
@@ -165,6 +166,12 @@ fn managed_node_key(node: &Sexpr) -> Option<String> {
             | "netclass_flag"
             | "directive_label"
             | "sheet"
+            | "rectangle"
+            | "polyline"
+            | "circle"
+            | "arc"
+            | "text"
+            | "text_box"
     ) {
         return None;
     }
