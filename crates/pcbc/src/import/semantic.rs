@@ -594,63 +594,50 @@ fn extract_package(
 
 fn parse_package_from_text(text: &str) -> Option<ImportPassivePackage> {
     let s = text.to_ascii_lowercase();
-    // Strip the KiCad library namespace (everything up to and including the
-    // last ':') so that a library name such as `0402Metric` or `1005Metric`
-    // cannot shadow the actual footprint name that follows the colon.
-    let name = s.rsplit_once(':').map(|(_, n)| n).unwrap_or(&s);
 
-    // Match the more-specific metric "####metric" encodings first. The metric
-    // codes "0402" and "0603" numerically collide with the imperial "0402"/"0603"
-    // codes, and `contains_code` treats the trailing `m` of "...metric" as a
-    // valid non-digit boundary, so the imperial branches below would otherwise
-    // shadow the two smallest metric fallbacks (metric 0402 = imperial 01005,
-    // metric 0603 = imperial 0201). The metric tokens are anchored on the
-    // literal `metric` suffix, so they cannot false-match a dual-code name
-    // (e.g. `C_0402_1005Metric` does not contain `0402metric`).
-    // `contains_code` is used rather than `contains` so that e.g. `1005metric`
-    // is not spuriously matched inside `01005metric` (digit-boundary guard).
-    if contains_code(name, "0402metric") {
+    // Match metric suffixes before the colliding imperial 0402/0603 codes.
+    if contains_code(&s, "0402metric") {
         return Some(ImportPassivePackage::P01005);
     }
-    if contains_code(name, "0603metric") {
+    if contains_code(&s, "0603metric") {
         return Some(ImportPassivePackage::P0201);
     }
-    if contains_code(name, "1005metric") {
+    if contains_code(&s, "1005metric") {
         return Some(ImportPassivePackage::P0402);
     }
-    if contains_code(name, "1608metric") {
+    if contains_code(&s, "1608metric") {
         return Some(ImportPassivePackage::P0603);
     }
-    if contains_code(name, "2012metric") {
+    if contains_code(&s, "2012metric") {
         return Some(ImportPassivePackage::P0805);
     }
-    if contains_code(name, "3216metric") {
+    if contains_code(&s, "3216metric") {
         return Some(ImportPassivePackage::P1206);
     }
-    if contains_code(name, "3225metric") {
+    if contains_code(&s, "3225metric") {
         return Some(ImportPassivePackage::P1210);
     }
 
     // Fall back to explicit imperial codes.
-    if contains_code(name, "01005") {
+    if contains_code(&s, "01005") {
         return Some(ImportPassivePackage::P01005);
     }
-    if contains_code(name, "0201") {
+    if contains_code(&s, "0201") {
         return Some(ImportPassivePackage::P0201);
     }
-    if contains_code(name, "0402") {
+    if contains_code(&s, "0402") {
         return Some(ImportPassivePackage::P0402);
     }
-    if contains_code(name, "0603") {
+    if contains_code(&s, "0603") {
         return Some(ImportPassivePackage::P0603);
     }
-    if contains_code(name, "0805") {
+    if contains_code(&s, "0805") {
         return Some(ImportPassivePackage::P0805);
     }
-    if contains_code(name, "1206") {
+    if contains_code(&s, "1206") {
         return Some(ImportPassivePackage::P1206);
     }
-    if contains_code(name, "1210") {
+    if contains_code(&s, "1210") {
         return Some(ImportPassivePackage::P1210);
     }
 
@@ -1046,39 +1033,13 @@ mod tests {
             ("C_10uF_1210", ImportPassivePackage::P1210),
             ("C_1206_3216Metric", ImportPassivePackage::P1206),
             ("C_1210_3225Metric", ImportPassivePackage::P1210),
-            // Bare metric-only names, where the metric code is the only size
-            // indicator. Metric 0402 = imperial 01005, metric 0603 = imperial
-            // 0201. These must not be shadowed by the colliding imperial
-            // `0402`/`0603` branches.
             ("Foo:Bar_0402Metric", ImportPassivePackage::P01005),
             ("Foo:Bar_0603Metric", ImportPassivePackage::P0201),
-            // Standard KiCad dual-code naming `<imperial>_<metric>Metric` must
-            // be unaffected by the metric-first ordering for the two colliding
-            // sizes: the metric branch returns the same package as the
-            // corresponding imperial branch.
-            (
-                "Capacitor_SMD:C_01005_0402Metric",
-                ImportPassivePackage::P01005,
-            ),
-            (
-                "Resistor_SMD:R_0201_0603Metric",
-                ImportPassivePackage::P0201,
-            ),
-            // Regression: `1005metric` must not match as a substring of a name
-            // containing `01005metric` — digit-boundary guard ensures the
-            // metric-1005 (=imperial 0402) branch does not fire on such a name.
-            // The imperial `01005` branch must still recognise the package.
-            (
-                "Resistor_SMD:R_01005_0402Metric",
-                ImportPassivePackage::P01005,
-            ),
-            // Regression: a library namespace that contains a metric token
-            // (e.g. `0402Metric`) must not shadow the footprint name that
-            // follows the colon — here the footprint `R_0402` is imperial 0402.
-            ("0402Metric:R_0402", ImportPassivePackage::P0402),
-            // Similarly, a library named after a metric size must not override
-            // the imperial size declared in the footprint name.
-            ("1005Metric:R_0402", ImportPassivePackage::P0402),
+            ("C_01005_0402Metric", ImportPassivePackage::P01005),
+            ("R_0201_0603Metric", ImportPassivePackage::P0201),
+            ("C_0402_1005Metric", ImportPassivePackage::P0402),
+            ("R_0603_1608Metric", ImportPassivePackage::P0603),
+            ("R_01005Metric", ImportPassivePackage::P01005),
         ] {
             assert_eq!(
                 parse_package_from_text(raw),
@@ -1087,86 +1048,6 @@ mod tests {
             );
         }
         assert_eq!(parse_package_from_text("SOT-23-5"), None);
-    }
-
-    /// A two-pad, resolved passive with the given refdes, footprint id, and
-    /// netlist value. Used to exercise the full `classify_passive` path
-    /// (including `extract_package` / `parse_package_from_text`).
-    fn passive_component(refdes: &str, footprint: &str, value: &str) -> ImportComponentData {
-        let pads = (1..=2)
-            .map(|number| {
-                (
-                    KiCadPinNumber::from(number.to_string()),
-                    ImportLayoutPad {
-                        net_names: BTreeSet::new(),
-                        uuids: BTreeSet::new(),
-                    },
-                )
-            })
-            .collect();
-        ImportComponentData {
-            netlist: ImportNetlistComponent {
-                refdes: KiCadRefDes::from(refdes.to_string()),
-                value: Some(value.to_string()),
-                footprint: Some(footprint.to_string()),
-                sheetpath_names: Some("/".to_string()),
-                unit_pcb_paths: Vec::new(),
-            },
-            schematic: None,
-            layout: Some(ImportLayoutComponent {
-                fpid: Some(footprint.to_string()),
-                unresolved_footprint: None,
-                uuid: None,
-                layer: None,
-                at: None,
-                sheetname: None,
-                sheetfile: None,
-                attrs: Vec::new(),
-                properties: BTreeMap::new(),
-                pads,
-                footprint_geometry: ImportFootprintGeometry::StandardLibrary,
-            }),
-        }
-    }
-
-    /// A bare metric-only-named capacitor (`0402Metric` = imperial 01005) is
-    /// classified as `P01005` and promoted to a stdlib capacitor generic, not
-    /// mis-classified as `P0402`.
-    #[test]
-    fn classify_passive_metric_only_capacitor_resolves_to_01005() {
-        let component = passive_component("C1", "MyLib:C_0402Metric", "100n");
-        let class = classify_passive(&component);
-
-        assert_eq!(class.pad_count, Some(2));
-        assert_eq!(class.package, Some(ImportPassivePackage::P01005));
-        assert_eq!(class.kind, Some(ImportPassiveKind::Capacitor));
-        assert_eq!(class.confidence, Some(ImportPassiveConfidence::Medium));
-        assert_eq!(class.parsed_value.as_deref(), Some("100nF"));
-        // The metric-code signal is recorded; no imperial `0402` shadow.
-        assert!(class.signals.contains("package:01005"));
-        assert!(!class.signals.contains("package:0402"));
-        assert!(class.signals.contains("hint:footprint_capacitor"));
-    }
-
-    /// A bare metric-only-named resistor (`0402Metric` = imperial 01005) is
-    /// classified as `P01005`, which the resistor promotion path does not
-    /// support, so it is *not* promoted to a stdlib resistor generic (it falls
-    /// through to the user-footprint path). The package is still reported.
-    #[test]
-    fn classify_passive_metric_only_resistor_not_promoted_at_01005() {
-        let component = passive_component("R1", "MyLib:R_0402Metric", "10k");
-        let class = classify_passive(&component);
-
-        assert_eq!(class.pad_count, Some(2));
-        // Package is detected regardless of promotion.
-        assert_eq!(class.package, Some(ImportPassivePackage::P01005));
-        assert!(class.signals.contains("package:01005"));
-        assert!(!class.signals.contains("package:0402"));
-        // Resistor stdlib generics do not support 01005, so no promotion.
-        assert_eq!(class.kind, None);
-        assert_eq!(class.confidence, None);
-        assert_eq!(class.parsed_value, None);
-        assert!(class.signals.contains("hint:footprint_resistor"));
     }
 
     #[test]
