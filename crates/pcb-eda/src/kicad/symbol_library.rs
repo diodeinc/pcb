@@ -718,9 +718,13 @@ fn merge_symbols(parent: &KicadSymbol, child: &KicadSymbol) -> KicadSymbol {
         }
     }
 
-    if child.in_bom_explicit {
+    // Presence, not the defaulted boolean value, decides whether to override.
+    if child
+        .raw_sexp
+        .as_ref()
+        .is_some_and(|sexp| sexp.find_list("in_bom").is_some())
+    {
         merged.in_bom = child.in_bom;
-        merged.in_bom_explicit = true;
     }
 
     // Merge raw S-expressions if both have them

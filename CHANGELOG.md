@@ -20,6 +20,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Report malformed SPICE `PARAMS:` tokens instead of panicking.
 - Escape inserted KiCad `Path` properties during import so special characters do not break layout sync.
 - Keep inward decimation within the boundary deviation limit for spikes beyond chord endpoints.
+- Honor explicit `in_bom` overrides and inherit omitted values in KiCad `extends` symbols.
 
 ## [0.4.51] - 2026-09-05
 
@@ -49,7 +50,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Support opaque service-account client IDs and proper OAuth Basic encoding.
 - Allow off-page schematic placement and avoid existing text and graphics.
-- Respect `in_bom` on `extends`-derived KiCad symbols so a child's explicit `(in_bom no)` is honored and a child that omits `in_bom` inherits the parent's value instead of clobbering it with the default.
 
 ## [0.4.49] - 2026-09-04
 
