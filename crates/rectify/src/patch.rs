@@ -140,7 +140,7 @@ pub fn patch_model_transform(
     rotate: EulerPose,
     offset: [f64; 3],
 ) -> Result<String> {
-    let model_open = Regex::new(r"(?m)^\s*\(model\b").unwrap();
+    let model_open = Regex::new(r"(?m)^[ \t]*\(model\b").unwrap();
     let model_path_capture = Regex::new(r#"\(model\s+"([^"]+)""#).unwrap();
 
     let (start, end) =
@@ -349,15 +349,26 @@ mod tests {
 
     #[test]
     fn patch_single_line_model_block_is_valid_sexp() {
-        let src = "(footprint \"x\"\n  (pad \"1\" smd rect (at 0 0) (size 1 1) (layers \"F.Cu\"))\n  (model \"m.step\"))";
-        let patched =
-            patch_model_transform(src, "m.step", EulerPose::new(90, 0, 0), [1.0, 2.0, 3.0])
+        for gap in ["", "\n", " \t\n\n"] {
+            let prefix = format!(
+                "(footprint \"x\"\n  (pad \"1\" smd rect (at 0 0) (size 1 1) (layers \"F.Cu\"))\n{gap}"
+            );
+            let src = format!("{prefix}  (model \"m.step\"))");
+            let patched =
+                patch_model_transform(&src, "m.step", EulerPose::new(90, 0, 0), [1.0, 2.0, 3.0])
+                    .unwrap();
+            let fp = footprint::parse_content(&patched, std::path::Path::new("inline.kicad_mod"))
                 .unwrap();
-        let fp =
-            footprint::parse_content(&patched, std::path::Path::new("inline.kicad_mod")).unwrap();
-        let model = fp.require_model().unwrap();
-        assert_eq!(model.path, "m.step");
-        assert_eq!(model.rotate, EulerPose::new(90, 0, 0));
-        assert_eq!(model.offset, [1.0, 2.0, 3.0]);
+            let model = fp.require_model().unwrap();
+            assert_eq!(model.path, "m.step");
+            assert_eq!(model.rotate, EulerPose::new(90, 0, 0));
+            assert_eq!(model.offset, [1.0, 2.0, 3.0]);
+            assert_eq!(
+                patched,
+                format!(
+                    "{prefix}  (model \"m.step\"\n    (offset (xyz 1 2 3))\n    (rotate (xyz 90 0 0))\n  ))"
+                )
+            );
+        }
     }
 }
