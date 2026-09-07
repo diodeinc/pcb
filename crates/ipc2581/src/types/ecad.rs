@@ -103,6 +103,8 @@ pub struct StackupGroup {
     pub name: Symbol,
     pub mat_des: Option<Symbol>,
     pub spec_refs: Vec<Symbol>,
+    /// Ordered CADDataLayerRef membership evidence, separate from stackup order.
+    pub cad_data_layer_refs: Vec<Symbol>,
     /// Range into Stackup::layers in source order, not physical sequence order.
     pub source_layers: std::ops::Range<usize>,
 }
