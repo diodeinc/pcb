@@ -199,98 +199,6 @@ impl CircuitGraph {
         );
     }
 
-    /// Find all simple paths from start to goal up to max_len ports
-    /// Ensures that no factor (net or component) is visited more than once in any path
-    pub fn all_simple_paths<F: FnMut(&[PortId])>(
-        &self,
-        start: PortId,
-        goal: PortId,
-        max_len: usize,
-        mut on_path: F,
-    ) {
-        let p_count = self.port_factors.len();
-        let f_count = self.factor_count();
-
-        let mut vis_p = FixedBitSet::with_capacity(p_count);
-        let mut vis_f = FixedBitSet::with_capacity(f_count);
-        let mut path: SmallVec<[PortId; 64]> = SmallVec::new();
-
-        #[allow(clippy::too_many_arguments)]
-        fn dfs<F: FnMut(&[PortId])>(
-            g: &CircuitGraph,
-            cur: PortId,
-            goal: PortId,
-            max_len: usize,
-            vis_p: &mut FixedBitSet,
-            vis_f: &mut FixedBitSet,
-            path: &mut SmallVec<[PortId; 64]>,
-            on_path: &mut F,
-        ) {
-            if path.len() > max_len {
-                return;
-            }
-            if cur == goal {
-                on_path(path.as_slice());
-                return;
-            }
-
-            // For each factor connected to the current port
-            let [cur_f0, cur_f1] = g.port_factors[cur.0 as usize];
-            // Deduplicate factors to avoid duplicate paths from external ports
-            let factors_to_explore = if cur_f0 == cur_f1 {
-                &[cur_f0][..]
-            } else {
-                &[cur_f0, cur_f1][..]
-            };
-            for &factor_id in factors_to_explore {
-                // Skip if this factor has already been traversed
-                if vis_f.contains(factor_id.0 as usize) {
-                    continue;
-                }
-
-                // Find all other ports connected to this factor
-                for &q in g.factor_ports.row_unchecked(factor_id.0 as usize) {
-                    if q == cur {
-                        continue; // Skip current port
-                    }
-
-                    let qi = q.0 as usize;
-                    if vis_p.contains(qi) {
-                        continue; // Skip already visited ports
-                    }
-
-                    // Mark the traversed factor and destination port as visited
-                    vis_f.insert(factor_id.0 as usize);
-                    vis_p.insert(qi);
-                    path.push(q);
-
-                    dfs(g, q, goal, max_len, vis_p, vis_f, path, on_path);
-
-                    // Unmark during backtracking
-                    path.pop();
-                    vis_p.set(qi, false);
-                    vis_f.set(factor_id.0 as usize, false);
-                }
-            }
-        }
-
-        // Mark starting port as visited, but NOT its factors
-        // Factors should only be marked as visited when we traverse through them
-        vis_p.insert(start.0 as usize);
-        path.push(start);
-
-        dfs(
-            self,
-            start,
-            goal,
-            max_len,
-            &mut vis_p,
-            &mut vis_f,
-            &mut path,
-            &mut on_path,
-        );
-    }
-
     pub fn port_count(&self) -> usize {
         self.port_factors.len()
     }
@@ -567,7 +475,7 @@ mod tests {
         let goal_id = graph.port_id(&("C1", "+").into()).unwrap();
 
         let mut paths = Vec::new();
-        graph.all_simple_paths(start_id, goal_id, 10, |path| {
+        graph.all_simple_paths_with_factors(start_id, goal_id, Some(10), |path, _| {
             paths.push(path.to_vec());
         });
         assert!(!paths.is_empty());
@@ -652,7 +560,7 @@ mod tests {
         assert_eq!(graph.factor_count(), 11); // 5 nets + 6 components
 
         let mut paths = Vec::new();
-        graph.all_simple_paths(mcu_sda, bmi_sda, 10, |path| {
+        graph.all_simple_paths_with_factors(mcu_sda, bmi_sda, Some(10), |path, _| {
             paths.push(path.to_vec());
         });
 
@@ -813,7 +721,7 @@ mod tests {
         let goal_id = graph.port_id(&("R3", "B").into()).unwrap();
 
         let mut paths = Vec::new();
-        graph.all_simple_paths(start_id, goal_id, 20, |path| {
+        graph.all_simple_paths_with_factors(start_id, goal_id, Some(20), |path, _| {
             paths.push(path.to_vec());
         });
 
@@ -860,7 +768,7 @@ mod tests {
         let goal_id = graph.port_id(&("R3", "A").into()).unwrap();
 
         let mut paths = Vec::new();
-        graph.all_simple_paths(start_id, goal_id, 20, |path| {
+        graph.all_simple_paths_with_factors(start_id, goal_id, Some(20), |path, _| {
             paths.push(path.to_vec());
         });
 
@@ -942,12 +850,13 @@ mod tests {
             let goal_id = graph.port_id(&end_port.into()).unwrap();
 
             let mut paths = Vec::new();
-            graph.all_simple_paths(start_id, goal_id, 20, |path| {
+            graph.all_simple_paths_with_factors(start_id, goal_id, Some(20), |path, factors| {
+                assert_eq!(factors.len(), path.len() - 1);
+                assert_eq!(factors.iter().collect::<HashSet<_>>().len(), factors.len());
                 paths.push(path.to_vec());
             });
 
-            // With factor tracking, we should find valid paths with no factor reuse
-            // Just ensure we find reasonable paths for this complex circuit
+            assert!(!paths.is_empty());
         }
     }
 
@@ -992,7 +901,7 @@ mod tests {
         let mut paths = Vec::new();
         let start_time = std::time::Instant::now();
 
-        graph.all_simple_paths(start_id, goal_id, 30, |path| {
+        graph.all_simple_paths_with_factors(start_id, goal_id, Some(30), |path, _| {
             paths.push(path.to_vec());
         });
 
@@ -1017,48 +926,6 @@ mod tests {
             paths[0].len(),
             20,
             "Path should visit all 20 ports across 10 components"
-        );
-    }
-
-    #[test]
-    fn test_external_port_start_no_duplicate_paths() {
-        // 1 external port (VCC), 1 component port (R1.A) — same shape as
-        // test_external_nets_pathfinding. By inspection the sole simple path
-        // from <external>.VCC to R1.A is [external_vcc, r1_a], i.e. cardinality 1.
-        let mut net_to_ports = HashMap::new();
-        let mut component_pins = HashMap::new();
-        net_to_ports.insert("VCC".to_string(), vec![("R1", "A").into()]);
-        component_pins.insert("R1".into(), vec!["A".to_string()]);
-        let mut public_nets = HashSet::new();
-        public_nets.insert("VCC".to_string());
-        let graph = CircuitGraph::new(net_to_ports, component_pins, public_nets).unwrap();
-
-        let r1_a = graph.port_id(&("R1", "A").into()).unwrap();
-        let external_vcc = graph.port_id(&("<external>", "VCC").into()).unwrap();
-
-        const GROUND_TRUTH_LEN: usize = 1;
-
-        let mut paths = Vec::new();
-        graph.all_simple_paths(external_vcc, r1_a, 10, |p| paths.push(p.to_vec()));
-        let mut paths_dedup = Vec::new();
-        graph.all_simple_paths_with_factors(external_vcc, r1_a, Some(10), |p, _| {
-            paths_dedup.push(p.to_vec())
-        });
-
-        assert_eq!(
-            paths.len(),
-            GROUND_TRUTH_LEN,
-            "all_simple_paths must return the set of all simple paths (1), not a multiset (2)"
-        );
-        assert_eq!(
-            paths_dedup.len(),
-            GROUND_TRUTH_LEN,
-            "sibling already de-dupes; matches ground truth"
-        );
-        assert_eq!(
-            paths.len(),
-            paths_dedup.len(),
-            "the two pub methods must agree on the factor-dedup axis for bounded max_len"
         );
     }
 
@@ -1089,24 +956,20 @@ mod tests {
 
         // Test pathfinding from internal port to external port
         let mut paths = Vec::new();
-        graph.all_simple_paths(r1_a, external_vcc, 10, |path| {
+        graph.all_simple_paths_with_factors(r1_a, external_vcc, Some(10), |path, _| {
             paths.push(path.to_vec());
         });
 
-        // Should find at least one path from R1.A to external VCC
-        assert!(!paths.is_empty(), "Should find path to external net");
+        assert_eq!(paths, vec![vec![r1_a, external_vcc]]);
 
         // Test pathfinding from external port to internal port
         let mut reverse_paths = Vec::new();
-        graph.all_simple_paths(external_vcc, r1_a, 10, |path| {
+        graph.all_simple_paths_with_factors(external_vcc, r1_a, Some(10), |path, factors| {
+            assert_eq!(factors, &[graph.factor_id("VCC").unwrap()]);
             reverse_paths.push(path.to_vec());
         });
 
-        // Should find at least one path from external VCC to R1.A
-        assert!(
-            !reverse_paths.is_empty(),
-            "Should find path from external net"
-        );
+        assert_eq!(reverse_paths, vec![vec![external_vcc, r1_a]]);
 
         // Verify external port has the expected port factors (should be duplicated)
         let [f0, f1] = graph.port_factors(external_vcc);
@@ -1145,7 +1008,7 @@ mod tests {
         let external_gnd = graph.port_id(&("<external>", "GND").into()).unwrap();
 
         let mut paths = Vec::new();
-        graph.all_simple_paths(external_vcc, external_gnd, 10, |path| {
+        graph.all_simple_paths_with_factors(external_vcc, external_gnd, Some(10), |path, _| {
             paths.push(path.to_vec());
         });
 
