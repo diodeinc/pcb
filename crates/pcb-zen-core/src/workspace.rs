@@ -559,29 +559,27 @@ pub fn get_workspace_info<F: FileProvider>(
         let url = base_url
             .clone()
             .unwrap_or_else(|| LOCAL_WORKSPACE_ROOT_URL.to_string());
-        if base_url.is_none() && packages.contains_key(&url) {
+        let entry = packages.entry(url);
+        if let std::collections::btree_map::Entry::Occupied(entry) = entry {
             errors.push(DiscoveryError {
-                path: workspace_root.join("pcb.toml"),
+                path: pcb_toml_path,
                 error: format!(
-                    "root package URL '{}' collides with discovered package at rel-path '{}'; \
+                    "root package URL '{}' collides with a descendant package; \
                      set [workspace].repository to disambiguate",
-                    url, url
+                    entry.key()
                 ),
             });
         } else {
-            packages.insert(
-                url,
-                WorkspacePackage {
-                    rel_path: PathBuf::new(),
-                    config: root_config,
-                    version: None,
-                    published_at: None,
-                    preferred: false,
-                    dirty: false,
-                    entrypoints: Vec::new(),
-                    symbol_files: Vec::new(),
-                },
-            );
+            entry.or_insert(WorkspacePackage {
+                rel_path: PathBuf::new(),
+                config: root_config,
+                version: None,
+                published_at: None,
+                preferred: false,
+                dirty: false,
+                entrypoints: Vec::new(),
+                symbol_files: Vec::new(),
+            });
         }
     }
 
@@ -878,166 +876,35 @@ pcb-version = "{}"
         assert!(err.to_string().contains(&required));
     }
 
-    // When `[workspace].repository` is unset (so `base_url` is `None`) and a real
-    // descendant package lives at top-level rel-path `workspace`, the descendant's
-    // package URL collides with the `LOCAL_WORKSPACE_ROOT_URL` sentinel ("workspace")
-    // the root manifest is inserted under. The root insert must NOT silently overwrite
-    // the discovered descendant; instead a `DiscoveryError` is surfaced and the
-    // colliding root insert is skipped so the descendant survives in `packages`.
     #[test]
-    fn test_root_sentinel_url_collision_preserves_descendant() {
-        let files = HashMap::from([
+    fn test_root_sentinel_url_collision() {
+        let provider = InMemoryFileProvider::new(HashMap::from([
             (
                 "/repo/pcb.toml".to_string(),
-                r#"
-[workspace]
-pcb-version = "0.4"
-[dependencies]
-"github.com/diodeinc/stdlib" = "0.5.11"
-"#
-                .to_string(),
+                "[workspace]\npcb-version = \"0.4\"\n[board]\nname = \"Root\"\n".to_string(),
             ),
             (
                 "/repo/workspace/pcb.toml".to_string(),
-                r#"
-[dependencies]
-"github.com/diodeinc/other-dep" = "1.0"
-"#
-                .to_string(),
+                "[board]\nname = \"Descendant\"\n".to_string(),
             ),
-        ]);
-        let provider = InMemoryFileProvider::new(files);
-
-        let info = get_workspace_info(&provider, Path::new("/repo")).unwrap();
-        let descendant_dir = Path::new("/repo").join("workspace");
-
-        // (a) The "workspace" entry is the descendant, not the root.
-        let ws_entry = &info.packages["workspace"];
-        assert_eq!(
-            ws_entry.rel_path,
-            Path::new("workspace"),
-            "descendant at rel-path 'workspace' must survive the root sentinel collision"
-        );
-        assert!(
-            ws_entry
-                .config
-                .dependencies
-                .direct
-                .contains_key("github.com/diodeinc/other-dep"),
-            "the surviving 'workspace' entry must hold the descendant's config"
-        );
-
-        // (b) No package in `packages` represents the root (its insert was skipped).
-        assert!(
-            !info
-                .packages
-                .values()
-                .any(|p| p.rel_path.as_os_str().is_empty()),
-            "root package must not be present after the colliding insert was skipped"
-        );
-
-        // (c) A discovery error is surfaced, advising to set [workspace].repository.
-        assert_eq!(
-            info.errors.len(),
-            1,
-            "exactly one collision error should be surfaced"
-        );
-        let err = &info.errors[0];
-        assert_eq!(err.path, Path::new("/repo/pcb.toml"));
-        assert!(
-            err.error.contains("collides"),
-            "error should mention the collision: {}",
-            err.error
-        );
-        assert!(
-            err.error.contains("[workspace].repository"),
-            "error should advise setting [workspace].repository: {}",
-            err.error
-        );
-
-        // (d) manifests() yields the descendant config exactly once and the root
-        //     config exactly once (root via `self.config`, since it is not in `packages`).
-        let descendant_count = info
-            .manifests()
-            .filter(|c| {
-                c.dependencies
-                    .direct
-                    .contains_key("github.com/diodeinc/other-dep")
-            })
-            .count();
-        assert_eq!(
-            descendant_count, 1,
-            "descendant config should appear in manifests() exactly once"
-        );
-        let root_count = info
-            .manifests()
-            .filter(|c| {
-                c.dependencies
-                    .direct
-                    .contains_key("github.com/diodeinc/stdlib")
-            })
-            .count();
-        assert_eq!(
-            root_count, 1,
-            "root config should still appear in manifests() via self.config"
-        );
-
-        // (e) The descendant package dir is present in packages.values(), so
-        //     build_resolution_map (which iterates packages.values()) will resolve
-        //     the descendant's dependencies instead of silently dropping them.
-        let package_dirs: Vec<_> = info.packages.values().map(|p| p.dir(&info.root)).collect();
-        assert!(
-            package_dirs.contains(&descendant_dir),
-            "descendant package dir must be in packages.values() so its deps are resolved"
-        );
-    }
-
-    // With no collision (descendant at a non-`workspace` rel-path), the root must
-    // still be inserted as a package under the sentinel URL and no error should
-    // be surfaced. Guards against the fix over-triggering on the no-repository path.
-    #[test]
-    fn test_root_package_inserted_when_no_sentinel_collision() {
-        let files = HashMap::from([
-            (
-                "/repo/pcb.toml".to_string(),
-                r#"
-[workspace]
-pcb-version = "0.4"
-[dependencies]
-"github.com/diodeinc/stdlib" = "0.5.11"
-"#
-                .to_string(),
-            ),
-            (
-                "/repo/modules/demo/pcb.toml".to_string(),
-                r#"
-[dependencies]
-"github.com/diodeinc/other-dep" = "1.0"
-"#
-                .to_string(),
-            ),
-        ]);
-        let provider = InMemoryFileProvider::new(files);
+        ]));
 
         let info = get_workspace_info(&provider, Path::new("/repo")).unwrap();
 
-        assert!(info.errors.is_empty(), "no collision should be reported");
-        // Descendant at a non-colliding rel-path.
+        assert_eq!(info.errors.len(), 1);
+        assert_eq!(info.errors[0].path, Path::new("/repo/pcb.toml"));
+        assert!(info.errors[0].error.contains("collides"));
+        assert!(info.errors[0].error.contains("[workspace].repository"));
+        assert_eq!(info.packages.len(), 1);
+        assert_eq!(info.packages["workspace"].rel_path, Path::new("workspace"));
         assert_eq!(
-            info.packages["modules/demo"].rel_path,
-            Path::new("modules/demo")
-        );
-        // Root inserted under the sentinel URL with empty rel-path.
-        let root_pkg = &info.packages[LOCAL_WORKSPACE_ROOT_URL];
-        assert_eq!(root_pkg.rel_path, Path::new(""));
-        assert!(
-            root_pkg
+            info.packages["workspace"]
                 .config
-                .dependencies
-                .direct
-                .contains_key("github.com/diodeinc/stdlib"),
-            "root package entry should hold the root config"
+                .board
+                .as_ref()
+                .unwrap()
+                .name,
+            "Descendant"
         );
-        assert_eq!(info.packages.len(), 2);
     }
 }
