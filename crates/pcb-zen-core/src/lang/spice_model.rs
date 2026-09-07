@@ -306,14 +306,17 @@ pub(crate) fn validate_spice_model(
     Ok(())
 }
 
-fn parse_params(s: &str, circuit: &mut SubCircuit) {
+fn parse_params(s: &str, circuit: &mut SubCircuit) -> anyhow::Result<()> {
     let params = s.split_whitespace();
     for p in params {
         let mut split = p.splitn(2, '=');
         let param_name = split.next().unwrap_or("");
-        assert!(!param_name.is_empty());
+        if param_name.is_empty() {
+            return Err(anyhow!("Invalid PARAMS syntax: '{}'", p));
+        }
         circuit.params.insert(param_name.to_string());
     }
+    Ok(())
 }
 
 fn get_sub_circuit(s: &str, name: &str) -> anyhow::Result<SubCircuit> {
@@ -341,7 +344,7 @@ fn get_sub_circuit(s: &str, name: &str) -> anyhow::Result<SubCircuit> {
                 .split_whitespace()
                 .map(|x| x.to_string())
                 .collect();
-            parse_params(caps.get(2).map(|m| m.as_str()).unwrap_or(""), &mut circuit);
+            parse_params(caps.get(2).map(|m| m.as_str()).unwrap_or(""), &mut circuit)?;
             found = true;
             break;
         }
@@ -354,7 +357,7 @@ fn get_sub_circuit(s: &str, name: &str) -> anyhow::Result<SubCircuit> {
     // Scan for out-of-line definition
     for line in lines {
         if let Some(caps) = params_re.captures(line) {
-            parse_params(caps.get(1).map(|m| m.as_str()).unwrap_or(""), &mut circuit);
+            parse_params(caps.get(1).map(|m| m.as_str()).unwrap_or(""), &mut circuit)?;
         } else {
             break;
         }

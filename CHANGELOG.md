@@ -17,6 +17,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Make `pcb rectify fix` and `pcb rectify audit` exit non-zero on batch evaluation errors.
+- Report malformed SPICE `PARAMS:` tokens instead of panicking.
 
 ## [0.4.51] - 2026-09-05
 

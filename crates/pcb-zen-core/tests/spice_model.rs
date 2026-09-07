@@ -50,3 +50,25 @@ R1 p n {RVAL}
         print(SpiceModel('r.lib', 'my_resistor', nets=[P1, P2], args={"FOO": "123", "RVAL": "1"}))
     "#
 });
+
+#[test]
+fn model_parsing_empty_param_name() {
+    for params in ["PARAMS: RVAL=1k =", "\n+PARAMS: RVAL=1k ="] {
+        let result = crate::common::eval_zen(vec![
+            (
+                "r.lib".into(),
+                format!(".SUBCKT my_resistor p n {params}\nR1 p n {{RVAL}}\n.ENDS"),
+            ),
+            (
+                "test.zen".into(),
+                "SpiceModel('r.lib', 'my_resistor', nets=[Net('P'), Net('N')], args={'RVAL': '1k'})".into(),
+            ),
+        ]);
+        assert!(!result.is_success());
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic
+                .to_string()
+                .contains("Invalid PARAMS syntax: '='")
+        }));
+    }
+}
