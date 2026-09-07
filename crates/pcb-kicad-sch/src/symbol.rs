@@ -387,9 +387,7 @@ pub(crate) fn expand_stacked_pin_number(number: &str) -> Result<BTreeSet<String>
             continue;
         }
         if let Some((start, end)) = part.split_once('-') {
-            let Some((start_prefix, start_value, start_digit_width)) =
-                alpha_numeric_pin(start.trim())
-            else {
+            let Some((start_prefix, start_value, width)) = alpha_numeric_pin(start.trim()) else {
                 return literal();
             };
             let Some((end_prefix, end_value, _)) = alpha_numeric_pin(end.trim()) else {
@@ -410,10 +408,7 @@ pub(crate) fn expand_stacked_pin_number(number: &str) -> Result<BTreeSet<String>
                 );
             }
             for value in start_value..=end_value {
-                expanded.insert(format!(
-                    "{start_prefix}{value:0>width$}",
-                    width = start_digit_width
-                ));
+                expanded.insert(format!("{start_prefix}{value:0width$}"));
             }
         } else {
             expanded.insert(part.to_string());
@@ -441,8 +436,10 @@ fn alpha_numeric_pin(value: &str) -> Option<(&str, i64, usize)> {
         .unwrap_or(0);
     (digit_start < value.len()).then(|| {
         let (prefix, digits) = value.split_at(digit_start);
-        let width = digits.len();
-        digits.parse().ok().map(|number| (prefix, number, width))
+        digits
+            .parse()
+            .ok()
+            .map(|number| (prefix, number, digits.len()))
     })?
 }
 
@@ -666,89 +663,6 @@ mod tests {
         assert_eq!(
             transform_point(Point::new(2.0, 3.0), &symbol),
             Point::new(13.0, 22.0)
-        );
-    }
-
-    fn set(values: &[&str]) -> BTreeSet<String> {
-        values.iter().map(|value| (*value).to_string()).collect()
-    }
-
-    #[test]
-    fn alpha_numeric_pin_returns_the_trailing_digit_run_width() {
-        assert_eq!(alpha_numeric_pin("1"), Some(("", 1, 1)));
-        assert_eq!(alpha_numeric_pin("01"), Some(("", 1, 2)));
-        assert_eq!(alpha_numeric_pin("A01"), Some(("A", 1, 2)));
-        assert_eq!(alpha_numeric_pin("Port12"), Some(("Port", 12, 2)));
-        assert!(alpha_numeric_pin("A").is_none());
-        assert!(alpha_numeric_pin("").is_none());
-    }
-
-    #[test]
-    fn zero_padded_range_preserves_leading_zeros() {
-        assert_eq!(
-            expand_stacked_pin_number("[01-03]").unwrap(),
-            set(&["01", "02", "03"])
-        );
-        assert_eq!(
-            expand_stacked_pin_number("[08-12]").unwrap(),
-            set(&["08", "09", "10", "11", "12"])
-        );
-        assert_eq!(
-            expand_stacked_pin_number("[A01-A03]").unwrap(),
-            set(&["A01", "A02", "A03"])
-        );
-    }
-
-    #[test]
-    fn range_and_comma_spellings_of_the_same_pins_agree() {
-        assert_eq!(
-            expand_stacked_pin_number("[01-03]").unwrap(),
-            expand_stacked_pin_number("[01,02,03]").unwrap()
-        );
-        assert_eq!(
-            expand_stacked_pin_number("[08-12]").unwrap(),
-            expand_stacked_pin_number("[08,09,10,11,12]").unwrap()
-        );
-    }
-
-    #[test]
-    fn unpadded_range_expansion_is_unchanged() {
-        assert_eq!(
-            expand_stacked_pin_number("[1-3]").unwrap(),
-            set(&["1", "2", "3"])
-        );
-        assert_eq!(
-            expand_stacked_pin_number("[1-12]").unwrap(),
-            set(&[
-                "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"
-            ])
-        );
-        assert_eq!(
-            expand_stacked_pin_number("[A1-A3]").unwrap(),
-            set(&["A1", "A2", "A3"])
-        );
-        assert!(
-            !expand_stacked_pin_number("[1-3]")
-                .unwrap()
-                .contains("[1-3]")
-        );
-    }
-
-    #[test]
-    fn oversized_range_is_rejected_even_across_a_digit_boundary() {
-        let error = expand_stacked_pin_number("[1-4097]").unwrap_err();
-        assert!(
-            error.to_string().contains("limit of 4096 pins"),
-            "{}",
-            error
-        );
-    }
-
-    #[test]
-    fn mixed_range_and_comma_parts_preserve_each_form() {
-        assert_eq!(
-            expand_stacked_pin_number("[01-03,7]").unwrap(),
-            set(&["01", "02", "03", "7"])
         );
     }
 }

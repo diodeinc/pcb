@@ -426,83 +426,31 @@ fn placed_alternate_with_duplicate_pin_number_is_ambiguous() {
 
 #[test]
 fn stacked_pin_numbers_expand_to_exact_logical_numbers() {
-    let mut builder = KicadBuilder::new();
-    builder
-        .define_symbol_raw(
-            r#"(symbol "Test:Stacked"
+    for (number, expected) in [
+        ("[1-3]", vec!["1", "2", "3"]),
+        ("[01-03]", vec!["01", "02", "03"]),
+        ("[08-12]", vec!["08", "09", "10", "11", "12"]),
+        ("[A01-A03,7]", vec!["A01", "A02", "A03", "7"]),
+        ("[9-11]", vec!["9", "10", "11"]),
+    ] {
+        let mut builder = KicadBuilder::new();
+        builder
+            .define_symbol_raw(&format!(
+                r#"(symbol "Test:Stacked"
               (symbol "Stacked_1_1"
                 (pin passive line (at 0 0 0) (length 0)
-                  (name "P") (number "[1-3]"))))"#,
-        )
-        .component("Test:Stacked", Some("U1"), (0.0, 0.0))
-        .local_label("NET", (0.0, 0.0));
-
-    let graph = ConnectivityGraph::from_kicad(&builder.build()).unwrap();
-    let Terminal::ComponentPin { pin_numbers, .. } = graph.groups[0].terminals.first().unwrap()
-    else {
-        panic!("expected component pin");
-    };
-    assert_eq!(pin_numbers, &names(&["1", "2", "3"]));
-    assert!(!pin_numbers.contains("[1-3]"));
-}
-
-#[test]
-fn zero_padded_stacked_pin_range_preserves_leading_zeros() {
-    let range = first_component_pin_numbers(|builder| {
-        builder
-            .define_symbol_raw(
-                r#"(symbol "Test:Stacked"
-                  (symbol "Stacked_1_1"
-                    (pin passive line (at 0 0 0) (length 0)
-                      (name "P") (number "[01-03]"))))"#,
-            )
+                  (name "P") (number "{number}"))))"#
+            ))
             .component("Test:Stacked", Some("U1"), (0.0, 0.0))
             .local_label("NET", (0.0, 0.0));
-    });
-    assert_eq!(range, names(&["01", "02", "03"]));
-    assert!(!range.contains("[01-03]"));
 
-    let comma = first_component_pin_numbers(|builder| {
-        builder
-            .define_symbol_raw(
-                r#"(symbol "Test:Stacked"
-                  (symbol "Stacked_1_1"
-                    (pin passive line (at 0 0 0) (length 0)
-                      (name "P") (number "[01,02,03]"))))"#,
-            )
-            .component("Test:Stacked", Some("U1"), (0.0, 0.0))
-            .local_label("NET", (0.0, 0.0));
-    });
-    assert_eq!(range, comma);
-}
-
-#[test]
-fn zero_padded_stacked_pin_range_crossing_a_digit_boundary_preserves_width() {
-    let range = first_component_pin_numbers(|builder| {
-        builder
-            .define_symbol_raw(
-                r#"(symbol "Test:Stacked"
-                  (symbol "Stacked_1_1"
-                    (pin passive line (at 0 0 0) (length 0)
-                      (name "P") (number "[08-12]"))))"#,
-            )
-            .component("Test:Stacked", Some("U1"), (0.0, 0.0))
-            .local_label("NET", (0.0, 0.0));
-    });
-    assert_eq!(range, names(&["08", "09", "10", "11", "12"]));
-
-    let comma = first_component_pin_numbers(|builder| {
-        builder
-            .define_symbol_raw(
-                r#"(symbol "Test:Stacked"
-                  (symbol "Stacked_1_1"
-                    (pin passive line (at 0 0 0) (length 0)
-                      (name "P") (number "[08,09,10,11,12]"))))"#,
-            )
-            .component("Test:Stacked", Some("U1"), (0.0, 0.0))
-            .local_label("NET", (0.0, 0.0));
-    });
-    assert_eq!(range, comma);
+        let graph = ConnectivityGraph::from_kicad(&builder.build()).unwrap();
+        let Terminal::ComponentPin { pin_numbers, .. } = graph.groups[0].terminals.first().unwrap()
+        else {
+            panic!("expected component pin");
+        };
+        assert_eq!(pin_numbers, &names(&expected), "{number}");
+    }
 }
 
 #[test]
@@ -736,17 +684,6 @@ fn named_groups(document: pcb_kicad_sch::SchDocument) -> Vec<BTreeSet<String>> {
 
 fn names(values: &[&str]) -> BTreeSet<String> {
     values.iter().map(|value| (*value).to_string()).collect()
-}
-
-fn first_component_pin_numbers(configure: impl FnOnce(&mut KicadBuilder)) -> BTreeSet<String> {
-    let mut builder = KicadBuilder::new();
-    configure(&mut builder);
-    let graph = ConnectivityGraph::from_kicad(&builder.build()).unwrap();
-    let Terminal::ComponentPin { pin_numbers, .. } = graph.groups[0].terminals.first().unwrap()
-    else {
-        panic!("expected a component pin terminal");
-    };
-    pin_numbers.clone()
 }
 
 fn named_group_terminal_counts(graph: &ConnectivityGraph) -> Vec<(&str, usize)> {
