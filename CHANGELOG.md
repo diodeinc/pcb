@@ -14,6 +14,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Upgrade all remaining bundled standard-library and example symbols to KiCad 10 format.
 - Create a starter `spec.md` when scaffolding a new board repository.
 
+### Fixed
+
+- Make `pcb rectify fix` and `pcb rectify audit` exit non-zero on batch evaluation errors.
+
 ## [0.4.51] - 2026-09-05
 
 ### Added
@@ -42,7 +46,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Support opaque service-account client IDs and proper OAuth Basic encoding.
 - Allow off-page schematic placement and avoid existing text and graphics.
-- Make `pcb rectify fix` and `pcb rectify audit` exit non-zero on evaluation errors in batch mode.
 
 ## [0.4.49] - 2026-09-04
 

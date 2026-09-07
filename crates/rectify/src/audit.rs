@@ -380,11 +380,8 @@ pub fn run(args: Args) -> Result<()> {
     if apply_errors > 0 {
         bail!("failed to apply {apply_errors} audit correction(s)");
     }
-    if errors > 0 {
-        bail!("rectify encountered {errors} evaluation error(s)");
-    }
-    if args.fail_on_flagged && flagged > 0 {
-        bail!("rectify check found {flagged} flagged footprint(s)");
+    if errors > 0 || (args.fail_on_flagged && flagged > 0) {
+        bail!("rectify found {flagged} flagged footprint(s) and {errors} error(s)");
     }
     Ok(())
 }
@@ -730,124 +727,42 @@ mod tests {
         assert_eq!(strict.verdict, "rotation_mismatch");
     }
 
-    fn make_error_batch_dir(tag: &str) -> std::path::PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("audit_err_batch_test_{tag}_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+    #[test]
+    fn batch_evaluation_errors_fail_in_all_modes() {
+        let dir = std::env::temp_dir().join(format!("audit_batch_test_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        for name in ["a.kicad_mod", "b.kicad_mod"] {
-            std::fs::write(dir.join(name), "this is not a valid footprint").unwrap();
+        for (contents, should_fail) in [
+            ("this is not a valid footprint", true),
+            (
+                "(footprint Test (pad 1 smd rect (at 0 0) (size 1 1) (layers F.Cu)))",
+                false,
+            ),
+        ] {
+            // Two files exercise batch output rather than the single-file exit path.
+            for name in ["a.kicad_mod", "b.kicad_mod"] {
+                std::fs::write(dir.join(name), contents).unwrap();
+            }
+            for (apply, fail_on_flagged) in [(true, false), (false, false), (false, true)] {
+                let result = run(Args {
+                    paths: vec![dir.clone()],
+                    kind: AuditKindFilter::All,
+                    limit: None,
+                    jobs: None,
+                    jsonl: false,
+                    top: 0,
+                    apply,
+                    fail_on_flagged,
+                    mode: BenchMode::Loose,
+                    randomize_initial_transform: false,
+                    initial_transform_seed: 1,
+                });
+                assert_eq!(
+                    result.is_err(),
+                    should_fail,
+                    "apply={apply}, check={fail_on_flagged}: {result:?}"
+                );
+            }
         }
-        dir
-    }
-
-    fn make_skip_batch_dir(tag: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "audit_skip_batch_test_{tag}_{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        for (i, name) in ["a.kicad_mod", "b.kicad_mod"].into_iter().enumerate() {
-            std::fs::write(
-                dir.join(name),
-                format!(
-                    "(footprint \"Test{i}\" \
-                     (attr smd) \
-                     (pad 1 smd roundrect (at 0 0) (size 1 1) (layers F.Cu F.Mask)))"
-                ),
-            )
-            .unwrap();
-        }
-        dir
-    }
-
-    #[test]
-    fn check_batch_fails_on_evaluation_errors() {
-        let dir = make_error_batch_dir("check");
-        let result = run(Args {
-            paths: vec![dir.clone()],
-            kind: AuditKindFilter::All,
-            limit: None,
-            jobs: None,
-            jsonl: false,
-            top: 0,
-            apply: false,
-            fail_on_flagged: true,
-            mode: BenchMode::Loose,
-            randomize_initial_transform: false,
-            initial_transform_seed: 1,
-        });
-        let _ = std::fs::remove_dir_all(&dir);
-        assert!(result.is_err(), "check should bail on evaluation errors");
-    }
-
-    #[test]
-    fn fix_batch_should_fail_on_evaluation_errors_like_check() {
-        let dir = make_error_batch_dir("fix");
-        let result = run(Args {
-            paths: vec![dir.clone()],
-            kind: AuditKindFilter::All,
-            limit: None,
-            jobs: None,
-            jsonl: false,
-            top: 0,
-            apply: true,
-            fail_on_flagged: false,
-            mode: BenchMode::Loose,
-            randomize_initial_transform: false,
-            initial_transform_seed: 1,
-        });
-        let _ = std::fs::remove_dir_all(&dir);
-        assert!(
-            result.is_err(),
-            "fix batch silently swallowed evaluation errors"
-        );
-    }
-
-    #[test]
-    fn audit_batch_fails_on_evaluation_errors() {
-        let dir = make_error_batch_dir("audit");
-        let result = run(Args {
-            paths: vec![dir.clone()],
-            kind: AuditKindFilter::All,
-            limit: None,
-            jobs: None,
-            jsonl: false,
-            top: 0,
-            apply: false,
-            fail_on_flagged: false,
-            mode: BenchMode::Loose,
-            randomize_initial_transform: false,
-            initial_transform_seed: 1,
-        });
-        let _ = std::fs::remove_dir_all(&dir);
-        assert!(
-            result.is_err(),
-            "audit batch should bail on evaluation errors like its single-file path"
-        );
-    }
-
-    #[test]
-    fn batch_succeeds_when_no_evaluation_errors() {
-        let dir = make_skip_batch_dir("ok");
-        let result = run(Args {
-            paths: vec![dir.clone()],
-            kind: AuditKindFilter::All,
-            limit: None,
-            jobs: None,
-            jsonl: false,
-            top: 0,
-            apply: true,
-            fail_on_flagged: false,
-            mode: BenchMode::Loose,
-            randomize_initial_transform: false,
-            initial_transform_seed: 1,
-        });
-        let _ = std::fs::remove_dir_all(&dir);
-        assert!(
-            result.is_ok(),
-            "batch fix should still succeed when there are no evaluation errors"
-        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
