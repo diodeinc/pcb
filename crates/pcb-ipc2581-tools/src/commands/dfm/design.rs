@@ -490,7 +490,7 @@ fn collect_physical_stackup(imported: &ImportedDesign) -> Result<PhysicalStackup
         .iter()
         .all(|layer| layer.layer_number.is_some())
     {
-        stackup_layers.sort_by_key(|layer| layer.layer_number);
+        stackup_layers.sort_by(|a, b| a.layer_number.unwrap().total_cmp(&b.layer_number.unwrap()));
         if stackup_layers
             .windows(2)
             .any(|pair| pair[0].layer_number == pair[1].layer_number)

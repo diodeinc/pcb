@@ -515,7 +515,7 @@ fn extract_stackup_data(accessor: &IpcAccessor, unit_format: UnitFormat) -> Opti
             };
 
             StackupLayer {
-                number: layer.layer_number.unwrap_or(0).to_string(),
+                number: layer.layer_number.unwrap_or(0.0).to_string(),
                 name: layer.name.clone(),
                 layer_type: layer.layer_type.as_str().to_string(),
                 thickness_mm,

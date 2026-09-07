@@ -1257,7 +1257,13 @@ pub(super) fn physical_stackup_layers(
     let mut layers = stackup.layers.iter().collect::<Vec<_>>();
     ensure!(!layers.is_empty(), "physical stackup contains no layers");
     if layers.iter().all(|layer| layer.layer_number.is_some()) {
-        layers.sort_by_key(|layer| layer.layer_number);
+        ensure!(
+            layers.iter().all(|layer| layer
+                .layer_number
+                .is_some_and(|number| number.is_finite() && number >= 0.0)),
+            "physical stackup has invalid layer sequence numbers"
+        );
+        layers.sort_by(|a, b| a.layer_number.unwrap().total_cmp(&b.layer_number.unwrap()));
         ensure!(
             !layers
                 .windows(2)

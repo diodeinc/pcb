@@ -38,6 +38,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Mark standard-library fiducial pads as global fiducials in KiCad layouts.
 - Preserve curves that continue after a closed subpath during polygon preparation.
 - Require experimental tab anchors and witnesses to be resolved interior points of the original regions.
+- Preserve fractional IPC-2581 stackup sequences when ordering physical layers.
 - Reject experimental tab perforations that overlap support or lack resolved clearance from it.
 - Preserve exact arc endpoints during curve preparation to avoid numerical zero-length edges in release builds.
 - Report malformed SPICE `PARAMS:` tokens instead of crashing.
