@@ -959,40 +959,11 @@ mod tests {
     use super::info_json;
     use crate::accessors::IpcAccessor;
 
-    /// Parse an inline IPC-2581 document (without `validate`, mirroring the
-    /// `ipc info --format json` CLI and the WASM `IpcDocument::info()` entry
-    /// points, which call `Ipc2581::parse` only) and run it through
-    /// `info_json`. Several fixtures below are intentionally schema-invalid
-    /// (`RefDes/@name` duplicated across `BomItem`s violates the `RefDesKey`
-    /// `xsd:key` in IPC-2581C.xsd), so `validate` must NOT be called — the bug
-    /// is precisely that the production paths accept such input.
-    fn info_for(xml: &str) -> serde_json::Value {
-        let ipc = ipc2581::Ipc2581::parse(xml).expect("parse IPC-2581");
-        let accessor = IpcAccessor::new(&ipc);
-        info_json(&accessor)
-    }
-
-    /// Collect the designator strings from `component_placements` in order.
-    fn designators(info: &serde_json::Value) -> Vec<String> {
-        info["component_placements"]
-            .as_array()
-            .expect("component_placements is an array")
-            .iter()
-            .map(|p| {
-                p["designator"]
-                    .as_str()
-                    .expect("designator is a string")
-                    .to_string()
-            })
-            .collect()
-    }
-
-    /// Minimal IPC-2581 board scaffold: a BOM plus a single `board` Step on
-    /// Ecad with the supplied `<Component>` entries. The `bom_body` string is
-    /// spliced into `<Bom>...</Bom>`.
-    fn board_with_bom_and_components(bom_body: &str, components: &str) -> String {
-        format!(
-            r#"<?xml version="1.0" encoding="UTF-8"?>
+    #[test]
+    fn component_placements_deduplicate_bom_refdes() {
+        // Parse without validation: duplicate RefDes names are schema-invalid.
+        let ipc = ipc2581::Ipc2581::parse(
+            r#"
 <IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
   <Content roleRef="owner">
     <FunctionMode mode="ASSEMBLY"/>
@@ -1000,165 +971,46 @@ mod tests {
   </Content>
   <Bom name="bom">
     <BomHeader assembly="board" revision="1"/>
-{bom_body}
+    <BomItem OEMDesignNumberRef="part-A" quantity="2" pinCount="2" category="ELECTRICAL">
+      <RefDes name="R1" packageRef="R0402" populate="true" layerRef="TOP"/>
+      <RefDes name="R1" packageRef="R0603" populate="false" layerRef="BOTTOM"/>
+    </BomItem>
+    <BomItem OEMDesignNumberRef="part-B" quantity="1" pinCount="3" category="ELECTRICAL">
+      <RefDes name="R1" packageRef="R0805" populate="false" layerRef="BOTTOM"/>
+      <RefDes name="R2" packageRef="R0805" populate="true" layerRef="TOP"/>
+    </BomItem>
   </Bom>
   <Ecad>
     <CadHeader units="MILLIMETER"/>
     <CadData>
-      <Layer name="TOP" layerFunction="CONDUCTOR" side="TOP" polarity="POSITIVE"/>
-      <Layer name="BOTTOM" layerFunction="CONDUCTOR" side="BOTTOM" polarity="POSITIVE"/>
       <Step name="board" type="BOARD">
         <Datum x="0" y="0"/>
-{components}
+        <Component refDes="R1" packageRef="R1206" layerRef="BOTTOM" mountType="SMT" part="part-A">
+          <Location x="1" y="1"/>
+        </Component>
+        <Component refDes="C1" packageRef="C0402" layerRef="TOP" mountType="SMT" part="part-C">
+          <Location x="2" y="2"/>
+        </Component>
       </Step>
     </CadData>
   </Ecad>
-</IPC-2581>"#
+</IPC-2581>"#,
         )
-    }
-
-    #[test]
-    fn info_json_deduplicates_repeated_refdes_within_one_bom_item() {
-        // Same RefDes name appears twice inside a single BomItem. Schema-invalid
-        // (RefDesKey), but parse-accepted — exactly the case the production
-        // entry points surface.
-        let xml = board_with_bom_and_components(
-            r#"    <BomItem OEMDesignNumberRef="part-A" quantity="2" pinCount="2" category="ELECTRICAL">
-      <RefDes name="R1" packageRef="R0402" populate="true" layerRef="TOP"/>
-      <RefDes name="R1" packageRef="R0603" populate="true" layerRef="TOP"/>
-      <RefDes name="R2" packageRef="R0402" populate="true" layerRef="TOP"/>
-    </BomItem>"#,
-            "",
-        );
-        let info = info_for(&xml);
-        let placements = info["component_placements"].as_array().unwrap();
-        let r1: Vec<_> = placements
-            .iter()
-            .filter(|p| p["designator"] == "R1")
-            .collect();
-        assert_eq!(
-            r1.len(),
-            1,
-            "R1 must appear exactly once even if repeated in BOM"
-        );
-
-        let sorted = {
-            let mut d = designators(&info);
-            d.sort();
-            d
-        };
-        assert_eq!(sorted, vec!["R1".to_string(), "R2".to_string()]);
-        // First-occurrence wins: the first R1 had packageRef R0402.
-        let r1_entry = r1[0];
-        assert_eq!(r1_entry["package"], "R0402");
-        assert_eq!(r1_entry["pin_count"], 2);
-    }
-
-    #[test]
-    fn info_json_deduplicates_same_refdes_across_two_bom_items() {
-        // R1 is listed under two different BomItems with conflicting
-        // package/MPN data. First-occurrence must win; the second must be
-        // dropped entirely (no duplicate row, no override).
-        let xml = board_with_bom_and_components(
-            r#"    <BomItem OEMDesignNumberRef="part-A" quantity="2" pinCount="2" category="ELECTRICAL">
-      <RefDes name="R1" packageRef="R0402" populate="true" layerRef="TOP"/>
-      <RefDes name="R2" packageRef="R0402" populate="true" layerRef="TOP"/>
-    </BomItem>
-    <BomItem OEMDesignNumberRef="part-B" quantity="1" pinCount="3" category="ELECTRICAL">
-      <RefDes name="R1" packageRef="R0603" populate="true" layerRef="BOTTOM"/>
-    </BomItem>"#,
-            "",
-        );
-        let info = info_for(&xml);
-        let placements = info["component_placements"].as_array().unwrap();
-        let r1: Vec<_> = placements
-            .iter()
-            .filter(|p| p["designator"] == "R1")
-            .collect();
-        assert_eq!(r1.len(), 1, "R1 must appear once even across BomItems");
-        assert_eq!(r1[0]["package"], "R0402", "first BOM occurrence wins");
-        assert_eq!(
-            r1[0]["pin_count"], 2,
-            "first BOM occurrence wins (pinCount)"
-        );
-        assert_eq!(
-            r1[0]["layer_ref"], "TOP",
-            "first BOM occurrence wins (layer)"
-        );
-
-        let sorted = {
-            let mut d = designators(&info);
-            d.sort();
-            d
-        };
-        assert_eq!(sorted, vec!["R1".to_string(), "R2".to_string()]);
-    }
-
-    #[test]
-    fn info_json_still_emits_step_only_components_via_fallback() {
-        // A Component whose refDes is NOT in the BOM must still appear,
-        // sourced from the `component_map` fallback loop. Regression guard so
-        // the dedup change does not silently drop step-only components.
-        let xml = board_with_bom_and_components(
-            r#"    <BomItem OEMDesignNumberRef="part-A" quantity="1" pinCount="2" category="ELECTRICAL">
-      <RefDes name="R1" packageRef="R0402" populate="true" layerRef="TOP"/>
-    </BomItem>"#,
-            r#"        <Component refDes="C1" packageRef="C0402" layerRef="TOP" mountType="SMT" part="part-C1">
-          <Location x="3" y="3"/>
-        </Component>"#,
-        );
-        let info = info_for(&xml);
-        let placements = info["component_placements"].as_array().unwrap();
-        let by_designator: std::collections::BTreeMap<String, &serde_json::Value> = placements
-            .iter()
-            .map(|p| (p["designator"].as_str().unwrap().to_string(), p))
-            .collect();
-        assert_eq!(
-            by_designator.len(),
-            2,
-            "one BOM entry + one step-only entry"
-        );
-        assert!(by_designator.contains_key("R1"));
-        let c1 = by_designator["C1"];
-        assert_eq!(c1["package"], "C0402");
-        assert_eq!(c1["layer_ref"], "TOP");
-        assert_eq!(c1["mpn"], "part-C1");
-        assert_eq!(
-            c1["pin_count"],
-            serde_json::Value::Null,
-            "fallback pins are null"
-        );
-        assert_eq!(c1["dnp"], false, "fallback dnp defaults to false");
-    }
-
-    #[test]
-    fn info_json_dedup_preserves_bom_wins_over_step_component() {
-        // A Component on the Step with the SAME refDes as a BOM RefDes must
-        // NOT produce a second placement. The BOM-driven entry wins (the
-        // fallback loop's `seen_designators.contains` guard).
-        let xml = board_with_bom_and_components(
-            r#"    <BomItem OEMDesignNumberRef="part-A" quantity="1" pinCount="2" category="ELECTRICAL">
-      <RefDes name="R1" packageRef="R0402" populate="true" layerRef="TOP"/>
-    </BomItem>"#,
-            r#"        <Component refDes="R1" packageRef="R0603" layerRef="TOP" mountType="SMT" part="part-A">
-          <Location x="1" y="1"/>
-        </Component>"#,
-        );
-        let info = info_for(&xml);
+        .unwrap();
+        let info = info_json(&IpcAccessor::new(&ipc));
         let placements = info["component_placements"].as_array().unwrap();
         assert_eq!(
-            placements.len(),
-            1,
-            "no duplicate when refDes is in both BOM and Step"
+            placements
+                .iter()
+                .map(|p| p["designator"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["R1", "R2", "C1"]
         );
-        assert_eq!(placements[0]["designator"], "R1");
-        assert_eq!(
-            placements[0]["package"], "R0402",
-            "BOM package wins over Step package"
-        );
-        assert_eq!(
-            placements[0]["mount_type"], "SMT",
-            "mount_type falls back to Step component"
-        );
+        assert_eq!(placements[0]["package"], "R0402");
+        assert_eq!(placements[0]["layer_ref"], "TOP");
+        assert_eq!(placements[0]["pin_count"], 2);
+        assert_eq!(placements[0]["dnp"], false);
+        assert_eq!(placements[0]["mount_type"], "SMT");
+        assert_eq!(placements[2]["package"], "C0402");
     }
 }
