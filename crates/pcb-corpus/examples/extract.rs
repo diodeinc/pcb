@@ -82,7 +82,8 @@ fn main() -> Result<()> {
             "mat_des":l.mat_des.map(|s|ipc.resolve(s)),
             "material":l.material.resolved().map(|s|ipc.resolve(*s)),
             "association":format!("{:?}",l.material),
-            "spec":l.spec_ref.map(|s|ipc.resolve(s))
+            "spec":l.spec_ref.map(|s|ipc.resolve(s)),
+            "spec_refs":l.spec_refs.iter().map(|s|ipc.resolve(*s)).collect::<Vec<_>>()
         })).collect::<Vec<_>>(),
         "diagnostics":board.diagnostics.iter().map(|d|format!("{d:?}")).collect::<Vec<_>>(),
         "source_diagnostics":board.source_diagnostics.iter().map(|d|format!("{d:?}")).collect::<Vec<_>>(),
