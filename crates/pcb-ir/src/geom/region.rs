@@ -50,15 +50,19 @@ pub type Shape = Vec<Ring>;
 
 fn flatten_contours(contours: &[ContourBuf], accuracy: f64) -> (Vec<Ring>, f64) {
     // Arc-to-cubic conversion is cheap in error and reported exactly, so it
-    // gets a small target and chord flattening spends the rest.
+    // gets a small target and chord flattening takes the rest. Source error
+    // the conversion reports, such as a mismatched arc radius, is charged on
+    // top rather than squeezed out of the chord tolerance, so an inconsistent
+    // arc fails its budget instead of being flattened without bound.
+    let conversion_target = accuracy / 8.0;
     let (bez_path, conversion_error) =
-        crate::geom::path::contours_to_kurbo(contours, accuracy / 8.0);
+        crate::geom::path::contours_to_kurbo(contours, conversion_target);
     let curved = bez_path
         .elements()
         .iter()
         .any(|el| matches!(el, kurbo::PathEl::CurveTo(..) | kurbo::PathEl::QuadTo(..)));
     let flatten_error = if curved {
-        accuracy - conversion_error
+        accuracy - conversion_target
     } else {
         0.0
     };
@@ -3826,6 +3830,19 @@ mod tests {
 
         assert!(grown.area() > region.area());
     }
+    #[test]
+    fn mismatched_arc_radii_fail_the_budget_instead_of_flattening_without_bound() {
+        // Start radius 1, end radius 1.5: the source arc is inconsistent by
+        // far more than the budget allows.
+        let contour = ContourBuf::new(vec![
+            PathCmd::move_to(Point::new(1.0, 0.0)),
+            PathCmd::arc_to(Point::new(0.0, 1.5), Point::ZERO, false),
+            PathCmd::close(),
+        ]);
+        let error = ContourSet::from_contours(&[contour], FillRule::NonZero, res(0.0)).unwrap_err();
+        assert!(matches!(error, AccuracyError::BudgetExceeded { .. }));
+    }
+
     #[test]
     fn regularization_drops_rings_below_significance() {
         let square = vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
