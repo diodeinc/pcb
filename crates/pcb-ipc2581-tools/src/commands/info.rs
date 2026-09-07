@@ -883,7 +883,7 @@ pub fn info_json(accessor: &IpcAccessor) -> serde_json::Value {
 
             for ref_des in item.reference_designators() {
                 let designator = ipc.resolve(ref_des.name).to_string();
-                if designator.is_empty() {
+                if designator.is_empty() || !seen_designators.insert(designator.clone()) {
                     continue;
                 }
 
@@ -925,7 +925,6 @@ pub fn info_json(accessor: &IpcAccessor) -> serde_json::Value {
                     "side": side,
                     "pin_count": item.pin_count,
                 }));
-                seen_designators.insert(ipc.resolve(ref_des.name).to_string());
             }
         }
     }
@@ -953,4 +952,65 @@ pub fn info_json(accessor: &IpcAccessor) -> serde_json::Value {
     info["component_placements"] = json!(component_placements);
 
     info
+}
+
+#[cfg(test)]
+mod tests {
+    use super::info_json;
+    use crate::accessors::IpcAccessor;
+
+    #[test]
+    fn component_placements_deduplicate_bom_refdes() {
+        // Parse without validation: duplicate RefDes names are schema-invalid.
+        let ipc = ipc2581::Ipc2581::parse(
+            r#"
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner">
+    <FunctionMode mode="ASSEMBLY"/>
+    <BomRef name="bom"/>
+  </Content>
+  <Bom name="bom">
+    <BomHeader assembly="board" revision="1"/>
+    <BomItem OEMDesignNumberRef="part-A" quantity="2" pinCount="2" category="ELECTRICAL">
+      <RefDes name="R1" packageRef="R0402" populate="true" layerRef="TOP"/>
+      <RefDes name="R1" packageRef="R0603" populate="false" layerRef="BOTTOM"/>
+    </BomItem>
+    <BomItem OEMDesignNumberRef="part-B" quantity="1" pinCount="3" category="ELECTRICAL">
+      <RefDes name="R1" packageRef="R0805" populate="false" layerRef="BOTTOM"/>
+      <RefDes name="R2" packageRef="R0805" populate="true" layerRef="TOP"/>
+    </BomItem>
+  </Bom>
+  <Ecad>
+    <CadHeader units="MILLIMETER"/>
+    <CadData>
+      <Step name="board" type="BOARD">
+        <Datum x="0" y="0"/>
+        <Component refDes="R1" packageRef="R1206" layerRef="BOTTOM" mountType="SMT" part="part-A">
+          <Location x="1" y="1"/>
+        </Component>
+        <Component refDes="C1" packageRef="C0402" layerRef="TOP" mountType="SMT" part="part-C">
+          <Location x="2" y="2"/>
+        </Component>
+      </Step>
+    </CadData>
+  </Ecad>
+</IPC-2581>"#,
+        )
+        .unwrap();
+        let info = info_json(&IpcAccessor::new(&ipc));
+        let placements = info["component_placements"].as_array().unwrap();
+        assert_eq!(
+            placements
+                .iter()
+                .map(|p| p["designator"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["R1", "R2", "C1"]
+        );
+        assert_eq!(placements[0]["package"], "R0402");
+        assert_eq!(placements[0]["layer_ref"], "TOP");
+        assert_eq!(placements[0]["pin_count"], 2);
+        assert_eq!(placements[0]["dnp"], false);
+        assert_eq!(placements[0]["mount_type"], "SMT");
+        assert_eq!(placements[2]["package"], "C0402");
+    }
 }
