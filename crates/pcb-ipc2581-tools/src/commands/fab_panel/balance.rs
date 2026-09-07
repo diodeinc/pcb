@@ -11,7 +11,7 @@ use pcb_ir::dialects::ipc::{
     BalancingRegionOptions, board_array_balancing_region, collect_fab_panel_balancing_input,
 };
 use pcb_ir::geom::Resolution;
-use pcb_ir::geom::copper_balance::map_layers;
+use pcb_ir::geom::copper_balance::{DenseCopperBalanceProfile, map_layers};
 use pcb_ir::geom::{BBox, ContourSet};
 use pcb_ir::import::ipc2581::import_design;
 
@@ -30,11 +30,14 @@ use crate::ipc2581::Ipc2581;
 /// between them. `ipc` must describe the completed, not-yet-balanced
 /// fabrication panel, and `usable` the stock region between the reserved
 /// process margins; the margins never enter the density domain and stay bare.
+/// Balance geometry is prepared to the profile's own accuracy; `tolerance_mm`
+/// only sets which features are significant.
 pub(super) fn generate_automatic_fab_panel_copper_balance(
     ipc: &Ipc2581,
     usable: BBox,
-    resolution: Resolution,
+    tolerance_mm: f64,
 ) -> Result<CopperBalancePlan> {
+    let resolution = Resolution::new(tolerance_mm, DenseCopperBalanceProfile::V1.accuracy);
     let imported = import_design(ipc)?;
     let layout = &imported.geometry;
     // V-scores and profile cutouts all lie inside the placed assembly panels,

@@ -10,7 +10,7 @@ use pcb_ir::dialects::ipc::{
     ArtworkScope, BalancingRegionOptions, BoardArraySupportDocument, BoardArraySupportLayerPolicy,
     board_array_balancing_region, collect_board_array_balancing_input,
 };
-use pcb_ir::geom::copper_balance::map_layers;
+use pcb_ir::geom::copper_balance::{DenseCopperBalanceProfile, map_layers};
 use pcb_ir::geom::{ContourSet, Resolution};
 use pcb_ir::import::ipc2581::{ImportedDesign, LayerId, import_design};
 
@@ -29,11 +29,14 @@ use crate::ipc2581::{Ipc2581, Symbol};
 ///
 /// `ipc` must describe the completed, not-yet-balanced array so that generated
 /// rails, V-scores, tooling holes, and fiducials participate in safe-region
-/// discovery while balance copper itself does not.
+/// discovery while balance copper itself does not. Balance geometry is
+/// prepared to the profile's own accuracy; `tolerance_mm` only sets which
+/// features are significant.
 pub fn generate_automatic_board_array_copper_balance(
     ipc: &Ipc2581,
-    resolution: Resolution,
+    tolerance_mm: f64,
 ) -> Result<CopperBalancePlan> {
+    let resolution = Resolution::new(tolerance_mm, DenseCopperBalanceProfile::V1.accuracy);
     let imported = import_design(ipc)?;
     let layout = &imported.geometry;
     let score_lines = geometry::board_array_vscore_lines(&imported)

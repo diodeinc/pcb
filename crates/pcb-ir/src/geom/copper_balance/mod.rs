@@ -8,7 +8,7 @@
 use crate::geom::AccuracyError;
 use std::collections::HashMap;
 
-use crate::geom::{ContourSet, Point};
+use crate::geom::{ContourSet, GeometryAccuracy, Point};
 
 mod lattice;
 mod spatial;
@@ -96,6 +96,10 @@ pub struct DenseCopperBalanceProfile {
     ///
     /// Zero pins every layer to its own board density.
     pub stack_flex_density: f64,
+    /// Boundary accuracy the balance geometry is prepared to. Fill geometry
+    /// is bounded by the process rather than measured, so it takes a coarser
+    /// budget than checks do; the construction clearance guard grows with it.
+    pub accuracy: GeometryAccuracy,
 }
 
 impl DenseCopperBalanceProfile {
@@ -109,6 +113,7 @@ impl DenseCopperBalanceProfile {
         density_sigma_mm: 5.0,
         void_area_levels: 20,
         stack_flex_density: 0.05,
+        accuracy: GeometryAccuracy::micrometres(50),
     };
 
     pub fn lattice_column_pitch_mm(self) -> f64 {
@@ -1336,6 +1341,7 @@ mod tests {
             density_sigma_mm: 5.0,
             void_area_levels: 20,
             stack_flex_density: 0.0,
+            accuracy: GeometryAccuracy::micrometres(50),
         };
         profile.validate().unwrap();
         let safe_region = ContourSet::rectangle(

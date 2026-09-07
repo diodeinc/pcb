@@ -239,7 +239,9 @@ fn board_array_balancing_solves_every_copper_layer() {
     let spec = build_board_array_spec(&ipc, &options, validation_mode, panelization).unwrap();
     let provisional_xml = write_board_array_xml(&input, &spec).unwrap();
     let provisional = Ipc2581::parse(&provisional_xml).unwrap();
-    let balance = generate_automatic_board_array_copper_balance(&provisional, resolution).unwrap();
+    let balance =
+        generate_automatic_board_array_copper_balance(&provisional, resolution.tolerance_mm)
+            .unwrap();
 
     assert!(balance.panel_area_mm2 > 0.0);
     assert_eq!(balance.layers.len(), 2);

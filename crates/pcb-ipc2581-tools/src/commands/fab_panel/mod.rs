@@ -392,7 +392,7 @@ pub fn create_fab_panel(
         let balance = balance::generate_automatic_fab_panel_copper_balance(
             &parsed,
             spec.output_usable_bbox()?,
-            resolution,
+            resolution.tolerance_mm,
         )?;
         let report = balance.report();
         let features = balance

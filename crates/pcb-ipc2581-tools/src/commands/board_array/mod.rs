@@ -665,7 +665,10 @@ fn write_board_array_creation(
     let provisional_xml = board_array_edited_xml(xml, &spec)?;
     let provisional = Ipc2581::parse(&provisional_xml)
         .context("Failed to parse provisional IPC-2581 board array")?;
-    let balance = balance::generate_automatic_board_array_copper_balance(&provisional, resolution)?;
+    let balance = balance::generate_automatic_board_array_copper_balance(
+        &provisional,
+        resolution.tolerance_mm,
+    )?;
     let copper_balance = balance.report();
 
     for layer in balance.layers {

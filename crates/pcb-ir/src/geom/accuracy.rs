@@ -123,7 +123,7 @@ pub struct GeometryAccuracy(f64);
 
 impl Default for GeometryAccuracy {
     fn default() -> Self {
-        Self(0.01)
+        Self::micrometres(10)
     }
 }
 
@@ -133,6 +133,12 @@ impl GeometryAccuracy {
             return Err(AccuracyError::InvalidBudget(max_error_mm));
         }
         Ok(Self(max_error_mm))
+    }
+
+    /// A whole-micrometre budget, usable in constants.
+    pub const fn micrometres(max_error_um: u32) -> Self {
+        assert!(max_error_um > 0, "an accuracy budget must be positive");
+        Self(max_error_um as f64 / 1000.0)
     }
 
     pub fn max_error_mm(self) -> f64 {

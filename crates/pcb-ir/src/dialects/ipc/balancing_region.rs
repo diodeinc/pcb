@@ -233,18 +233,17 @@ pub struct BoardArraySupportLayerGeometry<Symbol> {
     /// Canonical physical geometry, partitioned by copper reach. Each included
     /// support path contributes to exactly one bucket.
     pub obstacles: Vec<BoardArrayScopedObstacle<Symbol>>,
+    /// The resolution every bucket was prepared at, kept for layers whose
+    /// buckets are all empty.
+    pub resolution: Resolution,
 }
 
 impl<Symbol: Copy + PartialEq> BoardArraySupportLayerGeometry<Symbol> {
     /// Derive this source layer's physical obstacle region for one copper
     /// layer. The scoped buckets remain the sole stored geometry.
     pub fn region_for_layer(&self, layer: Symbol) -> Result<ContourSet, AccuracyError> {
-        let resolution = self
-            .obstacles
-            .first()
-            .map_or_else(Resolution::default, |obstacle| obstacle.region.resolution);
         ContourSet::union_all(
-            resolution,
+            self.resolution,
             self.obstacles
                 .iter()
                 .filter(|obstacle| obstacle.reach.includes(&layer))
@@ -390,14 +389,16 @@ pub fn board_array_balancing_region(
         .board_footprints
         .union(&input.material_removal)?
         .union(&input.support_features)?;
-    // Construction reserves the budget the inputs were prepared at: the two
-    // offsets that build the region each spend at most a quarter of it, so
-    // every checked quantity stays strictly separated from a constructed one.
+    // Construction reserves half the budget the inputs were prepared at: the
+    // two offsets that build the region each spend at most a quarter of it,
+    // so every checked quantity stays strictly separated from a constructed
+    // one.
     let numerical_guard_mm = input
         .panel_outer
         .budget()
         .min(raw_obstacles.budget())
-        .max_error_mm();
+        .max_error_mm()
+        / 2.0;
     let construction_clearance_mm = options.clearance_mm + numerical_guard_mm;
     let panel_keep_in = input.panel_outer.disk_erode(construction_clearance_mm)?;
     let obstacle_keep_out = raw_obstacles.disk_dilate(construction_clearance_mm)?;
@@ -659,6 +660,7 @@ fn collect_support_layer_geometry<Symbol: Copy + PartialEq, LayerFunction>(
         excluded_documentation_path_count: source_path_count.saturating_sub(paths.len()),
         unpainted_path_count,
         obstacles,
+        resolution,
     })
 }
 
@@ -886,7 +888,7 @@ mod tests {
         components.sort_by(|left, right| left.bbox.min.x.total_cmp(&right.bbox.min.x));
         assert_eq!(components.len(), 2);
         let gap = components[1].bbox.min.x - components[0].bbox.max.x;
-        let guard = GeometryAccuracy::default().max_error_mm();
+        let guard = GeometryAccuracy::default().max_error_mm() / 2.0;
         let expected = 0.1 + 2.0 * (0.5 + guard);
         assert!(
             (gap - expected).abs() <= 0.01,
