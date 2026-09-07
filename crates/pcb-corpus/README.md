@@ -53,19 +53,23 @@ components and physical coupon validation.
   tests; that does **not** establish a separate diode-designed-board example.
 * `workspace-dm0002`: genuine existing pcb workspace IPC test board. Its export
   path/revision is known, its upstream design revision is not claimed.
+* `demo-{bramble,demeter,feign,governor,marlow,renfield,seward}`: exports of seven
+  explicitly supplied repositories' checked-in layouts. See [source smoke](sources/demo-smoke.md)
+  for exact revisions, reproduction commands, outcomes and limitations.
 
 Real-source fixtures retain all extracted regions without sampling or decimation;
-zstd keeps their combined checked-in size below 1 MB. Their SHA-256 fields identify
+zstd keeps each checked-in fixture below 1 MB. Their SHA-256 fields identify
 the uncompressed source XML, not an expected geometry output. Source metadata,
 diagnostics, per-layer copper, holes, and separately labelled component envelopes
 are retained. Debug identity strings are snapshot-local; resolved material names
 and thickness evidence are also present, but no mechanical model is supplied.
 
-**Coverage gap:** no distinct diode-designed IPC export or third unrelated
-workspace design was available. No exploratory output was accepted as a golden
-snapshot. Add genuine exports with provenance when supplied, not fabricated board
-geometry or renamed copies. The current two real boards are not evidence of
-representativeness across manufacturing processes.
+**Coverage limits:** the additional repositories broaden software input coverage,
+not physical qualification or representativeness across manufacturing processes.
+The current Bramble/Marlow layouts and the older DM0003/DM0002 exports are distinct
+revision evidence, not four independent board families. No exploratory output is
+an approved golden snapshot. No measured fracture or manufacturing evidence is
+supplied by these fixtures.
 
 ## Extraction (separate from replay)
 
