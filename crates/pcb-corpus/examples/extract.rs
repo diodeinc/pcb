@@ -29,9 +29,10 @@ fn main() -> Result<()> {
     provenance.extraction = "pcb-ir import_design -> physical_board; board-local mm; even-odd flattened regions; corpus-v1".into();
     let ipc = ipc2581::Ipc2581::parse(std::str::from_utf8(&source)?)
         .context("malformed_source: IPC parsing")?;
-    let design = import_design(&ipc).context("malformed_source: canonical import")?;
+    let resolution = Resolution::default();
+    let design = import_design(&ipc, resolution).context("malformed_source: canonical import")?;
     let board = design
-        .physical_board(Resolution::default())
+        .physical_board(resolution)
         .context("geometry_rejected: physical board extraction")?;
     let mut overlays = vec![Overlay {
         name: "profile-cutouts".into(),
