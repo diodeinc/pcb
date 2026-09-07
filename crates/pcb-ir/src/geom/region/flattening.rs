@@ -25,7 +25,7 @@ pub(super) fn flatten_contours(contours: &[ContourBuf], accuracy: f64) -> (Vec<R
     };
     let mut rings = Vec::new();
     let mut current = Vec::new();
-    kurbo::flatten(
+    crate::geom::path::flatten_path(
         bez_path,
         flatten_error.max(f64::MIN_POSITIVE),
         |element| match element {

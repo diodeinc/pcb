@@ -400,7 +400,7 @@ impl Segment {
                 path.move_to(kurbo_point(start));
                 path.curve_to(kurbo_point(c1), kurbo_point(c2), kurbo_point(end));
                 let mut points = Vec::new();
-                kurbo::flatten(path, max_error_mm.max(f64::MIN_POSITIVE), |el| {
+                flatten_path(path, max_error_mm.max(f64::MIN_POSITIVE), |el| {
                     if let PathEl::LineTo(point) = el {
                         points.push(ir_point(point));
                     }
@@ -808,11 +808,22 @@ fn append_arc_to_kurbo(out: &mut BezPath, arc: EllipticalArc, accuracy: f64) -> 
     // Tangent at parameter θ is −x_axis·sin θ + y_axis·cos θ.
     let tangent = |angle: f64| arc.y_axis * angle.cos() - arc.x_axis * angle.sin();
 
-    for _ in 0..segment_count {
+    for index in 0..segment_count {
         let next_angle = angle + delta;
         let k = 4.0 / 3.0 * (delta / 4.0).tan();
-        let p0 = arc.point_at(angle);
-        let p3 = arc.point_at(next_angle);
+        // Interpolate the supplied endpoints exactly. Re-evaluating them with
+        // trigonometry can leave a last-bit gap at adjoining arcs; flattening
+        // can turn that gap into an effectively zero-length polygon edge.
+        let p0 = if index == 0 {
+            arc.start
+        } else {
+            arc.point_at(angle)
+        };
+        let p3 = if index + 1 == segment_count {
+            arc.end
+        } else {
+            arc.point_at(next_angle)
+        };
         let c1 = p0 + tangent(angle) * k;
         let c2 = p3 - tangent(next_angle) * k;
         out.curve_to(kurbo_point(c1), kurbo_point(c2), kurbo_point(p3));
@@ -896,6 +907,43 @@ pub(crate) fn kurbo_point(point: Point) -> kurbo::Point {
     kurbo::Point::new(point.x, point.y)
 }
 
+// Kurbo 0.13's cubic flattener can emit sample n as well as the stored
+// endpoint when n * (sum / n) rounds below sum. Convert to quadratics first:
+// their flattener enumerates only integer interior samples, then the endpoint.
+// The two approximation budgets add to the requested tolerance.
+pub(crate) fn flatten_path(
+    path: impl IntoIterator<Item = PathEl>,
+    tolerance: f64,
+    callback: impl FnMut(PathEl),
+) {
+    let mut previous = None;
+    let quadratics = path.into_iter().flat_map(|element| {
+        let mut elements = Vec::new();
+        match element {
+            PathEl::CurveTo(p1, p2, p3) => {
+                if let Some(p0) = previous {
+                    let cubic = kurbo::CubicBez::new(p0, p1, p2, p3);
+                    let mut pieces = cubic.to_quads(tolerance * 0.1).peekable();
+                    while let Some((_, _, quad)) = pieces.next() {
+                        let end = if pieces.peek().is_none() { p3 } else { quad.p2 };
+                        elements.push(PathEl::QuadTo(quad.p1, end));
+                    }
+                }
+                previous = Some(p3);
+            }
+            _ => {
+                previous = match element {
+                    PathEl::MoveTo(p) | PathEl::LineTo(p) | PathEl::QuadTo(_, p) => Some(p),
+                    _ => None,
+                };
+                elements.push(element);
+            }
+        }
+        elements
+    });
+    kurbo::flatten(quadratics, tolerance * 0.9, callback);
+}
+
 pub(crate) fn ir_point(point: kurbo::Point) -> Point {
     Point::new(point.x, point.y)
 }
@@ -903,6 +951,63 @@ pub(crate) fn ir_point(point: kurbo::Point) -> Point {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn arc_cubics_interpolate_source_endpoints_exactly() {
+        let circle = crate::geom::shapes::circle(0.381).unwrap();
+        for contour in [
+            circle.clone(),
+            circle.transformed(Affine2 {
+                m00: 1.5,
+                m01: 0.3,
+                m10: -0.2,
+                m11: 0.8,
+                m02: 10.0,
+                m12: -3.0,
+            }),
+        ] {
+            for segment in contour.segments() {
+                let arc = match segment {
+                    Segment::Arc(arc) => arc.to_elliptical(),
+                    Segment::Ellipse(arc) => arc,
+                    _ => continue,
+                };
+                for accuracy in [0.001, 0.000001] {
+                    let mut path = BezPath::new();
+                    path.move_to(kurbo_point(arc.start));
+                    append_arc_to_kurbo(&mut path, arc, accuracy);
+                    let Some(kurbo::PathEl::CurveTo(_, _, end)) = path.elements().last() else {
+                        panic!("nondegenerate arc must produce cubics");
+                    };
+                    assert_eq!(*end, kurbo_point(arc.end));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn prepared_small_circles_have_no_numerical_join_edges() {
+        use crate::geom::{ContourSet, Resolution};
+        for (diameter, prior) in [0.381, 20.0]
+            .into_iter()
+            .flat_map(|diameter| [0.0, 0.0005, 0.0008, 0.001, 0.002].map(|prior| (diameter, prior)))
+        {
+            let source = crate::geom::shapes::circle(diameter)
+                .unwrap()
+                .with_uncertainty(prior);
+            let region =
+                ContourSet::from_filled_contours(&[source], Resolution::default().strict())
+                    .unwrap();
+            for ring in &region.rings {
+                for (a, b) in crate::geom::region::ring_edges(ring) {
+                    assert!(
+                        a.distance_to(b) > crate::geom::tol::EPSILON_MM,
+                        "prior={prior}: numerical join {a:?} -> {b:?}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn signed_area_preserves_arcs_ellipses_and_cubics() {

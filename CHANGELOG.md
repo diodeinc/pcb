@@ -28,6 +28,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- Preserve exact arc endpoints during curve preparation to avoid numerical zero-length edges in release builds.
 - Report malformed SPICE `PARAMS:` tokens instead of crashing.
 - Migrate root-level `.zen` files in container workspaces.
 - Exit non-zero from `pcb rectify fix` and `pcb rectify audit` when batch evaluation fails.
