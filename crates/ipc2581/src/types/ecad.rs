@@ -92,6 +92,17 @@ pub struct Stackup {
     pub tol_plus: Option<f64>,
     pub tol_minus: Option<f64>,
     pub layers: Vec<StackupLayer>,
+    /// Source groups over the flattened layers; group material is not inherited.
+    pub groups: Vec<StackupGroup>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StackupGroup {
+    pub name: Symbol,
+    pub mat_des: Option<Symbol>,
+    pub spec_refs: Vec<Symbol>,
+    /// Range into Stackup::layers in source order, not physical sequence order.
+    pub source_layers: std::ops::Range<usize>,
 }
 
 /// StackupLayer defines a single layer in the stackup
