@@ -10,6 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- Expose IPC-2581 source lands even after copper removal.
 - Keep circles and ellipses exact through placement, export, and rendering, preparing curved geometry to a stated accuracy.
 
 ### Changed
