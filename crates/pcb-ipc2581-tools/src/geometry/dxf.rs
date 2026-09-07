@@ -1,13 +1,12 @@
 use std::fmt::Write;
 
 use pcb_ir::dialects::ipc::{Document, ProfileSet, profile_occurrences_for};
-use pcb_ir::geom::{ContourBuf, Point, Segment};
+use pcb_ir::geom::{ContourBuf, GeometryAccuracy, Point, Segment};
 
 use crate::utils::format::fmt_num;
 
 const OUTLINE_LAYER: &str = "BOARD_OUTLINE";
 const EPSILON: f64 = 1e-9;
-const CURVE_FLATTEN_STEPS: usize = 16;
 
 #[derive(Debug, Clone, Copy)]
 struct DxfVertex {
@@ -68,6 +67,7 @@ fn write_path<Symbol, LayerFunction>(
     transform: pcb_ir::geom::Affine2,
 ) -> anyhow::Result<()> {
     for contour in doc.transformed_path_contours(path_index, transform) {
+        let contour = contour.flattened_curves(GeometryAccuracy::default())?;
         write_polyline(dxf, &contour_vertices(&contour));
     }
     Ok(())
@@ -91,8 +91,8 @@ fn write_polyline(dxf: &mut String, vertices: &[DxfVertex]) {
     }
 }
 
-/// Flatten a contour to polyline vertices: circular arcs keep their bulge,
-/// cubic and elliptical curves are sampled.
+/// Polyline vertices of a contour whose curves were flattened to lines and
+/// circular arcs; arcs keep their bulge.
 fn contour_vertices(contour: &ContourBuf) -> Vec<DxfVertex> {
     let Some(first) = contour.cmds.first().map(|cmd| cmd.p0) else {
         return Vec::new();
@@ -125,12 +125,7 @@ fn contour_vertices(contour: &ContourBuf) -> Vec<DxfVertex> {
                 }
             }
             Segment::Cubic { .. } | Segment::Ellipse(_) => {
-                let mut points = Vec::with_capacity(CURVE_FLATTEN_STEPS);
-                segment.sample_points(CURVE_FLATTEN_STEPS, &mut points);
-                for end in points {
-                    vertices.last_mut().unwrap().bulge = 0.0;
-                    push_endpoint(&mut vertices, end, first);
-                }
+                unreachable!("curves are flattened before polyline conversion")
             }
         }
     }
