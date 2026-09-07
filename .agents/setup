@@ -39,6 +39,12 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 export PATH="$HOME/.local/bin:$PATH"
 
+# --- pcb (latest released shim; compiler downloads on first use) ------------
+log 'Installing latest released pcb shim'
+bash "$(dirname "${BASH_SOURCE[0]}")/../install.sh"
+pcb auth git configure https://code.diode.computer
+log 'Installed pcb shim'
+
 # --- prek (pre-commit runner) ------------------------------------------------
 if ! command -v prek >/dev/null 2>&1; then
   log 'Installing prek'
