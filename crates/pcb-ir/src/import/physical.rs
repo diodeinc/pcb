@@ -184,9 +184,11 @@ pub struct LayerLandAssociation {
 /// coordinate frame for a selected layout scope.
 #[derive(Debug, Clone, Default)]
 pub struct PhysicalView {
-    /// Surviving final copper lands. Hole links can also name fully removed
-    /// source lands by their canonical feature occurrence IDs.
+    /// Lands before routing and clears. Hole-linked IDs resolve here.
+    pub source_lands: Vec<PhysicalLand>,
+    /// Surviving copper, with the same IDs as `source_lands`.
     pub lands: Vec<PhysicalLand>,
+    /// Electrical contacts derived from surviving lands.
     pub terminations: Vec<PhysicalTermination>,
     pub paste_islands: Vec<PasteIsland>,
     pub mask_openings: Vec<MaskOpening>,
@@ -226,6 +228,16 @@ fn exact_coordinate(value: f64) -> u64 {
 }
 
 impl ImportedDesign {
+    /// Derive source lands before routing and clears; IDs match hole links.
+    pub fn source_lands(
+        &self,
+        scope: ArtworkScope,
+        resolution: Resolution,
+    ) -> Result<Vec<PhysicalLand>> {
+        let components = self.component_occurrences(scope)?;
+        self.derive_physical_lands(scope, &components, true, resolution)
+    }
+
     /// Derive surviving final copper lands without materializing unrelated physical
     /// layers.
     pub fn physical_lands(
@@ -237,7 +249,7 @@ impl ImportedDesign {
         self.derive_physical_lands(scope, &components, false, resolution)
     }
 
-    /// Derive electrical package contacts using only exact IPC identities.
+    /// Derive electrical contacts from surviving lands using exact IPC identities.
     pub fn physical_terminations(
         &self,
         scope: ArtworkScope,
@@ -254,8 +266,7 @@ impl ImportedDesign {
         scope: ArtworkScope,
         resolution: Resolution,
     ) -> Result<Vec<PhysicalHole>> {
-        let components = self.component_occurrences(scope)?;
-        let lands = self.derive_physical_lands(scope, &components, true, resolution)?;
+        let lands = self.source_lands(scope, resolution)?;
         self.derive_physical_holes(scope, &lands, resolution)
     }
 
@@ -276,6 +287,7 @@ impl ImportedDesign {
         let mut holes = self.derive_physical_holes(scope, &source_lands, resolution)?;
         self.attach_hole_assembly_evidence(scope, &lands, &terminations, &mut holes, resolution)?;
         Ok(PhysicalView {
+            source_lands,
             lands,
             terminations,
             paste_islands,
@@ -1423,6 +1435,74 @@ mod tests {
                     .land,
                 Association::Resolved(land)
             );
+        }
+    }
+
+    #[test]
+    fn source_contacts_survive_complete_routing_and_clearing_in_a_panel() {
+        for clear in [false, true] {
+            let mut pads = String::new();
+            let mut slots = String::new();
+            for (x, y) in [(10, 20), (10, 22), (8, 20), (8, 22)] {
+                pads.push_str(&format!(r#"<Set><Pad padstackDefRef="P"><Location x="{x}" y="{y}"/><StandardPrimitiveRef id="land"/><PinRef componentRef="J1" pin="S1"/></Pad></Set>"#));
+                let height = if clear { 0.4 } else { 1.2 };
+                slots.push_str(&format!(r#"<Set geometry="P"><SlotCavity name="slot-{x}-{y}" platingStatus="PLATED" plusTol="0" minusTol="0"><Location x="{x}" y="{y}"/><Oval width="1.8" height="{height}"/></SlotCavity></Set>"#));
+                if clear {
+                    pads.push_str(&format!(r#"<Set polarity="NEGATIVE"><Features><Location x="{x}" y="{y}"/><StandardPrimitiveRef id="clear"/></Features></Set>"#));
+                }
+            }
+            let xml = format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="owner"><FunctionMode mode="ASSEMBLY"/><StepRef name="panel"/>
+    <DictionaryStandard units="MILLIMETER">
+      <EntryStandard id="land"><Circle diameter="1"/></EntryStandard>
+      <EntryStandard id="clear"><Circle diameter="1.5"/></EntryStandard>
+    </DictionaryStandard>
+  </Content>
+  <Ecad><CadHeader units="MILLIMETER"/><CadData>
+    <Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>
+    <Layer name="ROUT" layerFunction="ROUT" side="ALL" polarity="POSITIVE"><Span fromLayer="TOP" toLayer="TOP"/></Layer>
+    <Step name="board" type="BOARD">
+      <PadStackDef name="P"/>
+      <Component refDes="J1" packageRef="pkg" part="part" layerRef="TOP" mountType="THMT"><Xform rotation="90"/><Location x="10" y="20"/></Component>
+      <LayerFeature layerRef="TOP">{pads}</LayerFeature>
+      <LayerFeature layerRef="ROUT">{slots}</LayerFeature>
+    </Step>
+    <Step name="panel" type="PALLET"><StepRepeat stepRef="board" x="100" y="50" nx="2" ny="1" dx="30" dy="0" mirror="true"/></Step>
+  </CadData></Ecad>
+</IPC-2581>"#
+            );
+            let imported = import_design(&Ipc2581::parse(&xml).unwrap()).unwrap();
+            let accuracy = crate::geom::GeometryAccuracy::new(0.001).unwrap();
+            let resolution = Resolution::default().with_accuracy(accuracy);
+            for (scope, count) in [(ArtworkScope::Board, 4), (ArtworkScope::ArrayFlattened, 8)] {
+                let view = imported.physical_view(scope, resolution).unwrap();
+                assert!(view.lands.is_empty(), "all final copper must stay removed");
+                assert_eq!(view.source_lands.len(), count);
+                assert_eq!(view.holes.len(), count);
+                let by_id = view
+                    .source_lands
+                    .iter()
+                    .map(|land| (land.id, land))
+                    .collect::<HashMap<_, _>>();
+                let mut linked = BTreeSet::new();
+                for hole in &view.holes {
+                    assert_eq!(hole.lands.len(), 1);
+                    let id = *hole.lands[0].land.resolved().unwrap();
+                    let land = by_id[&id];
+                    assert_eq!(imported.resolve(land.pin.unwrap()), "S1");
+                    assert_eq!(land.component.resolved().unwrap().layout, id.0.layout);
+                    assert!(!land.image.is_empty());
+                    assert_eq!(hole.at, land.at);
+                    assert_eq!(hole.board, land.board);
+                    assert!(
+                        linked.insert(id),
+                        "each slot must link a distinct source land"
+                    );
+                }
+                assert_eq!(linked.len(), count);
+            }
         }
     }
 
