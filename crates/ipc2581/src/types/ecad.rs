@@ -101,6 +101,8 @@ pub struct StackupLayer {
     pub thickness: Option<f64>,
     pub tol_plus: Option<f64>,
     pub tol_minus: Option<f64>,
+    /// Source `matDes`: reference to a BOM MatDes name, not material text.
+    pub mat_des: Option<Symbol>,
     pub material: Option<Symbol>,
     pub spec_ref: Option<Symbol>, // Reference to Spec for looking up properties
     pub dielectric_constant: Option<f64>,
