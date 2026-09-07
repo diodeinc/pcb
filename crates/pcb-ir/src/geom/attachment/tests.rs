@@ -421,6 +421,51 @@ fn boundary_witnesses_are_unresolved_not_access_or_separation() {
 }
 
 #[test]
+fn uncertain_cutter_entries_affect_only_adjacent_components() {
+    let workspace = rect(0.0, 0.0, 4.0, 4.0)
+        .union(&rect(4.2, 0.0, 4.0, 4.0))
+        .unwrap()
+        .union(&rect(20.0, 0.0, 4.0, 4.0))
+        .unwrap();
+    let empty = ContourSet::empty(RESOLUTION);
+    let targets = [
+        Point::new(2.0, 2.0),
+        Point::new(6.0, 2.0),
+        Point::new(22.0, 2.0),
+    ];
+    // The first entry borders only the left component; the second borders
+    // both nearby components. Neither can reach the distant third component.
+    for (entry, second_uncertain) in [(Point::new(0.1, 2.0), false), (Point::new(4.1, 2.0), true)] {
+        let reach = cutter_reachability(
+            &workspace,
+            &empty,
+            0.1,
+            &[entry],
+            &targets,
+            QueryTolerance {
+                boundary_mm: 0.15,
+                ..TOL
+            },
+        )
+        .unwrap();
+        assert_eq!(reach.entries, vec![RegionMembership::BoundaryBand]);
+        assert!(matches!(reach.targets[0], Decision::Unresolved(_)));
+        if second_uncertain {
+            assert!(matches!(reach.targets[1], Decision::Unresolved(_)));
+        } else {
+            assert_eq!(
+                reach.targets[1],
+                Decision::Rejected(GeometricRejection::Unreachable { target: 1 })
+            );
+        }
+        assert_eq!(
+            reach.targets[2],
+            Decision::Rejected(GeometricRejection::Unreachable { target: 2 })
+        );
+    }
+}
+
+#[test]
 fn preparation_uncertainty_and_budget_survive_queries_and_transforms() {
     let original = rect(0.0, 0.0, 1.0, 1.0);
     let prepared = ContourSet::from_regularized(original.rings, RESOLUTION, 0.002);

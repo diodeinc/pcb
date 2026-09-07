@@ -551,6 +551,21 @@ pub fn cutter_reachability(
         .iter()
         .map(|&p| membership(&components, p, tolerance.pair_band()))
         .collect::<Result<Vec<_>, _>>()?;
+    // An uncertain entry may border several components, but cannot provide
+    // possible access to remote ones. Retain all adjacent candidates rather
+    // than only the first boundary found by the aggregate membership query.
+    let mut uncertain_access = vec![false; components.len()];
+    for (&entry, classification) in entries.iter().zip(&entry_components) {
+        if *classification == RegionMembership::BoundaryBand {
+            for (index, component) in components.iter().enumerate() {
+                uncertain_access[index] |= membership(
+                    std::slice::from_ref(component),
+                    entry,
+                    tolerance.pair_band(),
+                )? == RegionMembership::BoundaryBand;
+            }
+        }
+    }
     let targets = targets
         .iter()
         .enumerate()
@@ -561,9 +576,7 @@ pub fn cutter_reachability(
                 {
                     Decision::Admissible
                 }
-                RegionMembership::Component(_)
-                    if entry_components.contains(&RegionMembership::BoundaryBand) =>
-                {
+                RegionMembership::Component(component) if uncertain_access[component] => {
                     Decision::Unresolved("entry is within the cutter-space uncertainty band")
                 }
                 RegionMembership::Component(_) => {
