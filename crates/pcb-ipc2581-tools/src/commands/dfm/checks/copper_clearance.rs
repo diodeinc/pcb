@@ -353,7 +353,7 @@ limit = { minimum = "0.15 mm" }
     fn antenna_check(xml: &str, pdk_name: &str) -> anyhow::Result<crate::commands::dfm::DfmReport> {
         use crate::commands::dfm::{self, CheckRequest, PdkSource, report::FileIdentity};
         let ipc = Ipc2581::parse(xml)?;
-        let imported = pcb_ir::import::ipc2581::import_design(&ipc)?;
+        let imported = pcb_ir::import::ipc2581::import_design(&ipc, Resolution::default())?;
         dfm::check(
             &imported,
             CheckRequest {
@@ -367,6 +367,7 @@ limit = { minimum = "0.15 mm" }
                 layout_target: crate::LayoutTarget::Board,
                 generated_at: "2026-09-06T00:00:00Z".parse().unwrap(),
             },
+            Resolution::default(),
         )
     }
 
@@ -572,9 +573,15 @@ limit = { minimum = "0.15 mm" }
             </Step></CadData>"#,
             );
         let ipc = Ipc2581::parse(&xml).unwrap();
-        let imported = pcb_ir::import::ipc2581::import_design(&ipc).unwrap();
+        let imported = pcb_ir::import::ipc2581::import_design(&ipc, Resolution::default()).unwrap();
         let rules = rules::lower(&Pdk::parse(PDK).unwrap(), None).unwrap();
-        let design = Design::extract(&imported, ArtworkScope::ArrayFlattened, &rules).unwrap();
+        let design = Design::extract(
+            &imported,
+            ArtworkScope::ArrayFlattened,
+            &rules,
+            Resolution::default(),
+        )
+        .unwrap();
         let conductors = &design
             .copper_layers
             .iter()
