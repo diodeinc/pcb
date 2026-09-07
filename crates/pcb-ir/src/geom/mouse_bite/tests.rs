@@ -63,25 +63,26 @@ fn straight_and_curved_retention_release_intrusion_and_cutter_access() -> Result
         assert_eq!(tab.npth.len(), 5);
         assert!(tab.minimum_ligament_mm > 0.25);
         assert!(tab.minimum_ligament_mm <= SparkFunShallow::NOMINAL_LIGAMENT_MM + 1e-6);
-        assert!(
-            tab.retained_substrate
-                .intersection(&tab.routed_removal)?
-                .is_empty()
-        );
-        assert!(
-            tab.retained_substrate
-                .intersection(&tab.perforations)?
-                .is_empty()
-        );
         // Repeated overlays on curved polygons can leave sub-micron slivers.
-        // Check both area and penetration, not exact empty-set equality.
-        let overlap = tab.routed_removal.intersection(&board.union(&support)?)?;
-        assert!(overlap.area() < 1e-6);
-        assert!(
-            overlap
-                .intersection(&board.union(&support)?.disk_erode(1e-6)?)?
-                .is_empty()
-        );
+        // Check both area and penetration for every material/removal pair,
+        // including drill boundaries whose last-bit rounding varies by platform.
+        let protected = board.union(&support)?;
+        for (label, material, removal) in [
+            ("route", &tab.retained_substrate, &tab.routed_removal),
+            ("drill", &tab.retained_substrate, &tab.perforations),
+            ("protected", &protected, &tab.routed_removal),
+        ] {
+            let overlap = material.intersection(removal)?;
+            assert!(
+                overlap.area() < 1e-6,
+                "{label} curved={curved}: overlap area {}",
+                overlap.area()
+            );
+            assert!(
+                overlap.intersection(&removal.disk_erode(1e-6)?)?.is_empty(),
+                "{label} curved={curved}: overlap exceeds 1nm penetration"
+            );
+        }
         assert!(
             stock
                 .difference(
