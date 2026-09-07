@@ -220,6 +220,18 @@ impl ImportedDesign {
                 ));
             }
         }
+        let metadata = self.physical_board_metadata();
+        let holes = if metadata.diagnostics.iter().any(|diagnostic| {
+            matches!(
+                diagnostic,
+                BoardPhysicalDiagnostic::AmbiguousStackup
+                    | BoardPhysicalDiagnostic::InvalidStackupOrder(_)
+            )
+        }) {
+            self.derive_hole_apertures(ArtworkScope::Board, &[], &[], resolution)?
+        } else {
+            self.physical_holes(ArtworkScope::Board, resolution)?
+        };
         Ok(BoardPhysicalView {
             step: step_index as u32,
             substrate,
@@ -227,9 +239,9 @@ impl ImportedDesign {
             profiles,
             copper,
             removal_layers,
-            holes: self.physical_holes(ArtworkScope::Board, resolution)?,
+            holes,
             components,
-            metadata: self.physical_board_metadata(),
+            metadata,
             diagnostics,
             source_diagnostics: self.geometry.diagnostics.clone(),
         })
