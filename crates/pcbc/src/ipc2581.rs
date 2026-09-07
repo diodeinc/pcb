@@ -339,9 +339,7 @@ impl FabPanelSize {
     }
 }
 
-pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
-    let resolution = Resolution::default();
-
+pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> {
     utils::color::init_color();
 
     match args.command {
@@ -602,7 +600,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                     output,
                     layout_target,
                 },
-                resolution,
+                crate::dfm::DFM_RESOLUTION,
             )? {
                 commands::dfm::CheckOutcome::Passed => Ok(()),
                 commands::dfm::CheckOutcome::Failed(error) => Err(error),

@@ -9,6 +9,7 @@ extern crate anstream;
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use env_logger::Env;
+use pcb_ir::geom::{GeometryAccuracy, Resolution};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -70,6 +71,13 @@ struct Cli {
     /// View with chrome://tracing or https://ui.perfetto.dev/
     #[arg(long = "profile", global = true, value_name = "PATH", hide = true)]
     profile: Option<std::path::PathBuf>,
+
+    /// Geometry approximation budget in whole micrometres (1–100).
+    /// Applies to IPC-2581 geometry, Gerber operations, and release HTML.
+    /// DFM stays at 10 µm; copper balancing stays at 50 µm.
+    /// Does not control KiCad exports, interposer generation, or external commands.
+    #[arg(long, global = true, default_value_t = 10, value_parser = clap::value_parser!(u32).range(1..=100))]
+    accuracy_um: u32,
 
     #[command(subcommand)]
     command: Commands,
@@ -223,6 +231,9 @@ fn run() -> anyhow::Result<()> {
     // Initialize profiling if --profile is passed (guard must be held until end of run)
     let _profile_guard = profiling::init(cli.profile);
 
+    let resolution =
+        Resolution::default().with_accuracy(GeometryAccuracy::micrometres(cli.accuracy_um));
+
     match cli.command {
         Commands::Auth(args) => {
             let ctx = pcb_diode_api::WorkspaceContext::from_cwd()?;
@@ -248,7 +259,7 @@ fn run() -> anyhow::Result<()> {
         Commands::Fmt(args) => fmt::execute(args),
         Commands::Lsp(args) => lsp::execute(args),
         Commands::Open(args) => open::execute(args),
-        Commands::Publish(args) => publish::execute(args),
+        Commands::Publish(args) => publish::execute(args, resolution),
         Commands::Vendor(args) => vendor::execute(args),
         Commands::Fork => {
             println!("`pcb fork` is a reserved subcommand for future use.");
@@ -260,8 +271,8 @@ fn run() -> anyhow::Result<()> {
         Commands::EmbedStep(args) => embed_step::execute(args),
         Commands::Route(args) => route::execute(args),
         Commands::Simulate(args) => sim::execute(args),
-        Commands::Ipc2581(args) => ipc2581::execute(args),
-        Commands::Gerber(args) => gerber::execute(args),
+        Commands::Ipc2581(args) => ipc2581::execute(args, resolution),
+        Commands::Gerber(args) => gerber::execute(args, resolution),
         Commands::Kq(args) => kq::execute(args),
         Commands::External(args) => execute_external(args),
     }
@@ -371,6 +382,39 @@ fn sibling_external_command(command: &str) -> Option<std::path::PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn accuracy_is_global_and_accepts_only_whole_micrometres_in_range() {
+        assert_eq!(
+            Cli::try_parse_from(["pcb", "gerber", "normalize", "top.gbr"])
+                .unwrap()
+                .accuracy_um,
+            10
+        );
+        for value in ["1", "10", "30", "100"] {
+            for args in [
+                vec!["pcb", "--accuracy-um", value, "ipc", "info", "board.xml"],
+                vec![
+                    "pcb",
+                    "gerber",
+                    "normalize",
+                    "top.gbr",
+                    "--accuracy-um",
+                    value,
+                ],
+            ] {
+                assert_eq!(
+                    Cli::try_parse_from(args).unwrap().accuracy_um,
+                    value.parse::<u32>().unwrap()
+                );
+            }
+        }
+        for value in ["0", "101", "-1", "0.5", "10.0", "NaN", "inf", "4294967296"] {
+            let result =
+                Cli::try_parse_from(["pcb", "--accuracy-um", value, "ipc", "info", "board.xml"]);
+            assert!(result.is_err(), "accepted {value}");
+        }
+    }
 
     #[test]
     fn external_command_order_preserves_bundle_and_extension_precedence() {

@@ -7,6 +7,7 @@ mod build;
 mod dfm;
 mod doc;
 mod electrical_checks;
+mod gerber;
 mod import;
 mod info;
 mod ipc2581;
