@@ -256,14 +256,24 @@ fn metadata_reports_missing_ambiguous_invalid_and_conflicting_evidence() {
         "{meta:?}"
     );
 
-    let ambiguous = design(&xml.replace(
+    let descriptive = design(&xml.replace(
         "<Property text=\"FR4\"/>",
-        "<Property text=\"FR4\"/><Property text=\"PTFE\"/>",
+        "<Property text=\"FR4\"/><Property text=\"Color : GREEN\"/>",
     ));
-    assert!(matches!(
-        ambiguous.physical_board_metadata().layers[0].material,
-        Association::Ambiguous(_)
-    ));
+    let metadata = descriptive.physical_board_metadata();
+    assert_eq!(
+        descriptive.resolve(*metadata.layers[0].material.resolved().unwrap()),
+        "FR4"
+    );
+    assert!(metadata.diagnostics.is_empty());
+    let spec = &descriptive.specs[&metadata.layers[0].spec_ref.unwrap()];
+    assert_eq!(
+        spec.properties
+            .iter()
+            .map(|text| descriptive.resolve(*text))
+            .collect::<Vec<_>>(),
+        ["FR4", "Color : GREEN"]
+    );
     let unresolved = design(&fixture().replace(
         "sequence=\"0\"/>",
         "sequence=\"0\"><SpecRef id=\"external\"/></StackupLayer>",
@@ -364,6 +374,17 @@ fn material_designators_preserve_identity_and_reconcile_bom_spec_evidence() {
     let metadata = imported.physical_board_metadata();
     assert_eq!(
         imported.resolve(*metadata.layers[0].material.resolved().unwrap()),
+        "FR4"
+    );
+    assert!(metadata.diagnostics.is_empty());
+
+    let described_bom = design(&xml.replace(
+        "<Property text=\"FR4\"/>",
+        "<Property text=\"FR4\"/><Property text=\"Color : GREEN\"/>",
+    ));
+    let metadata = described_bom.physical_board_metadata();
+    assert_eq!(
+        described_bom.resolve(*metadata.layers[0].material.resolved().unwrap()),
         "FR4"
     );
     assert!(metadata.diagnostics.is_empty());
