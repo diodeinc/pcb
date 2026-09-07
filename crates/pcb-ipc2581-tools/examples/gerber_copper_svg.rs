@@ -50,7 +50,7 @@ fn main() -> Result<()> {
         rings,
         FillRule::NonZero,
         Resolution::new(1e-4, resolution.accuracy),
-    );
+    )?;
 
     // A containing ring always has the larger unsigned area, so painting in
     // descending area order layers islands over holes over boundaries.

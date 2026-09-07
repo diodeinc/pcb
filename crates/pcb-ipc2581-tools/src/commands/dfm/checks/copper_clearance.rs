@@ -121,7 +121,7 @@ pub(super) fn evaluate(
                         &right.region,
                         right_boundary,
                         limit_mm,
-                    )
+                    )?
                     .into_iter()
                     .map(|site| {
                         linework_clearance::report_site(

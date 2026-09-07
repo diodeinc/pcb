@@ -453,7 +453,7 @@ pub fn balance_features(result: &DenseCopperBalanceResult) -> Result<BalanceFeat
             Ok(BalanceFeatureSets {
                 plane: ipc_region_features(&result.usable)?,
                 // The plane covers the web exactly, so its decimation is free.
-                boundary_web: ipc_region_features(&result.boundary_web().decimate_inward()?)?,
+                boundary_web: ipc_region_features(&result.boundary_web()?.decimate_inward()?)?,
                 templates,
                 void_sets,
                 edge_voids: ipc_region_features(&emission.clipped)?,
@@ -699,7 +699,14 @@ mod tests {
             result.full_voids.len() + emission.instanced.len()
         );
         assert_eq!(features.edge_voids.is_empty(), emission.clipped.is_empty());
-        assert!(emission.clipped.difference(&result.voidable).area() < 1e-6);
+        assert!(
+            emission
+                .clipped
+                .difference(&result.voidable)
+                .unwrap()
+                .area()
+                < 1e-6
+        );
         assert!(features.void_sets.iter().all(|set| {
             features
                 .templates

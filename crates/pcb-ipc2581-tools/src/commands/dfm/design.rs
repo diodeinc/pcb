@@ -1552,7 +1552,7 @@ fn collect_board_outlines(
                 ContourSet::from_filled_contours(&native_outline[..outer_count], resolution)?;
             let cutouts =
                 ContourSet::from_filled_contours(&native_outline[outer_count..], resolution)?;
-            let region = outer.difference(&cutouts);
+            let region = outer.difference(&cutouts).unwrap();
             if region.is_empty() {
                 return Ok(None);
             }
@@ -1800,8 +1800,19 @@ mod tests {
             slots[0].bbox
         );
         let reconstructed = ContourSet::from_filled_contours(native, resolution).unwrap();
-        assert!(reconstructed.difference(&slots[0].outline).is_empty());
-        assert!(slots[0].outline.difference(&reconstructed).is_empty());
+        assert!(
+            reconstructed
+                .difference(&slots[0].outline)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            slots[0]
+                .outline
+                .difference(&reconstructed)
+                .unwrap()
+                .is_empty()
+        );
 
         let outline = slot_fixture(
             r#"<Outline>

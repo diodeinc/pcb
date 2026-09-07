@@ -52,7 +52,7 @@ pub(super) fn evaluate(
                         .segment_nearest_within(start, end, tol::REGION_MM)
                         .is_some_and(|distance| distance.mm <= tol::REGION_MM)
                 });
-            if !required && !touching && slot.outline.intersection(&copper.image).is_empty() {
+            if !required && !touching && slot.outline.intersection(&copper.image)?.is_empty() {
                 continue;
             }
             checked += 1;
@@ -61,7 +61,7 @@ pub(super) fn evaluate(
             // within the existing flattening uncertainty, not a fab tolerance.
             let filled = copper
                 .image
-                .union(&slot.outline.disk_dilate(tol::REGION_MM)?);
+                .union(&slot.outline.disk_dilate(tol::REGION_MM)?)?;
             let boundary = filled.prepare_query();
             let distance = slot
                 .outline
@@ -90,9 +90,9 @@ pub(super) fn evaluate(
                     slot_evidence(slot),
                     Evidence::region(
                         "required_copper_envelope",
-                        &envelope.difference(&slot.outline),
+                        &envelope.difference(&slot.outline)?,
                     ),
-                    Evidence::region("missing_copper", &envelope.difference(&filled)),
+                    Evidence::region("missing_copper", &envelope.difference(&filled)?),
                 ],
                 if distance.mm <= f64::EPSILON {
                     MeasurementKind::MissingCopper

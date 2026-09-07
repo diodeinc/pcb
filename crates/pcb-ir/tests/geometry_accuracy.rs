@@ -379,7 +379,7 @@ fn tiny_rings_do_not_suppress_clearance_findings() {
         BBox::new(Point::new(1.05, 0.0), Point::new(2.0, 1.0)),
         resolution,
     );
-    let clipped = first.difference(&second);
+    let clipped = first.difference(&second).unwrap();
     let clearance = region_clearance(&clipped, &second).unwrap();
     assert!(clearance.certainly_below(0.1));
 }
@@ -427,7 +427,9 @@ fn fine_geometry_reports_widths_inside_the_legacy_blind_band() {
     };
     let feature = rect(0.0, 0.0, 1.0, 0.095);
     assert!(!thin_features(&feature, 0.1).unwrap().is_empty());
-    let gap = rect(0.0, 0.0, 1.0, 1.0).union(&rect(1.095, 0.0, 2.0, 1.0));
+    let gap = rect(0.0, 0.0, 1.0, 1.0)
+        .union(&rect(1.095, 0.0, 2.0, 1.0))
+        .unwrap();
     assert!(!thin_gaps(&gap, 0.1).unwrap().is_empty());
 }
 
@@ -442,7 +444,8 @@ fn polygon_rounding_and_filled_union_respect_total_budget() {
         ]],
         FillRule::NonZero,
         Resolution::new(0.0, accuracy(0.01)),
-    );
+    )
+    .unwrap();
     assert!(polygon.uncertainty_mm > 0.0);
     assert!(
         polygon

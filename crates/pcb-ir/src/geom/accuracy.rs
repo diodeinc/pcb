@@ -16,6 +16,27 @@
 //! and inherited by everything derived from that preparation. Polygon round
 //! trips cannot recover lost precision, so a coarse preparation is rejected
 //! by a finer request instead of being silently reused.
+//!
+//! # What `uncertainty_mm` certifies
+//!
+//! Every point of a prepared region's boundary lies within `uncertainty_mm`
+//! of the boundary of the source geometry that produced it. Flattening and
+//! offsets record the chord or join error they introduce; a boolean's
+//! boundary consists of pieces of its operands' boundaries and their
+//! crossings, so it inherits the larger operand uncertainty plus coordinate
+//! rounding. Every operation checks the accumulated total against the
+//! region's budget and fails rather than return a region it cannot certify;
+//! combining regions prepared at different budgets takes the tighter one.
+//!
+//! The band is about the *source* boundary, not the boundary of the exactly
+//! composed set. Two source features that adjoin or overlap along a curve
+//! within their uncertainty can leave a seam or a sliver in the prepared
+//! result that the exact composition would not have. Such artefacts only add
+//! boundary: distances measured to a prepared region are never larger than
+//! the distance to the exact composition, so clearance and width findings
+//! derived from them remain conservative. Consumers that need the exact
+//! composed topology, rather than distances to source boundaries, must
+//! prepare their inputs exactly (zero uncertainty).
 
 use std::fmt;
 

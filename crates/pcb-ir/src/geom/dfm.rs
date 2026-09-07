@@ -363,7 +363,7 @@ pub fn region_clearance_sites(
     first: &ContourSet,
     second: &ContourSet,
     minimum_mm: f64,
-) -> Vec<ClearanceSite> {
+) -> Result<Vec<ClearanceSite>, AccuracyError> {
     let index = second.prepare_query();
     region_clearance_sites_with_index(first, second, &index, minimum_mm)
 }
@@ -374,7 +374,7 @@ pub fn region_clearance_sites_with_index(
     second: &ContourSet,
     second_boundary: &PreparedRegion,
     minimum_mm: f64,
-) -> Vec<ClearanceSite> {
+) -> Result<Vec<ClearanceSite>, AccuracyError> {
     let lines = first.rings.iter().flat_map(ring_edges).collect::<Vec<_>>();
     let mut sites = linework_clearance_sites(
         &lines,
@@ -383,7 +383,7 @@ pub fn region_clearance_sites_with_index(
         minimum_mm,
         first.uncertainty_mm,
     );
-    for overlap in first.intersection(second).connected_components() {
+    for overlap in first.intersection(second)?.connected_components() {
         let Some(point) = overlap
             .rings
             .first()
@@ -430,11 +430,11 @@ pub fn region_clearance_sites_with_index(
             joined.bbox = joined.bbox.union(site.bbox);
             joined.first_paths.extend(site.first_paths);
             joined.second_paths.extend(site.second_paths);
-            joined.overlap = joined.overlap.union(&site.overlap);
+            joined.overlap = joined.overlap.union(&site.overlap)?;
         }
         sites.push(joined);
     }
-    sites
+    Ok(sites)
 }
 
 /// A local required-clearance band around the supplied reference paths.
@@ -933,7 +933,9 @@ mod tests {
 
     #[test]
     fn clearance_sites_locate_every_disconnected_span_with_threshold_endpoints() {
-        let material = rect_region(2.0, 0.1, 3.0, 1.0).union(&rect_region(7.0, 0.1, 8.0, 1.0));
+        let material = rect_region(2.0, 0.1, 3.0, 1.0)
+            .union(&rect_region(7.0, 0.1, 8.0, 1.0))
+            .unwrap();
         let sites = linework_clearance_sites(
             &[(Point::new(0.0, 0.0), Point::new(10.0, 0.0))],
             &material,
@@ -1018,9 +1020,11 @@ mod tests {
         let first = rect_region(0.0, 0.0, 10.0, 1.0);
         let second = rect_region(2.0, 1.1, 3.0, 4.0)
             .union(&rect_region(7.0, 1.1, 8.0, 4.0))
-            .union(&rect_region(2.0, 3.0, 8.0, 4.0));
+            .unwrap()
+            .union(&rect_region(2.0, 3.0, 8.0, 4.0))
+            .unwrap();
         assert_eq!(second.connected_components().len(), 1);
-        let sites = region_clearance_sites(&first, &second, 0.2);
+        let sites = region_clearance_sites(&first, &second, 0.2).unwrap();
         assert_eq!(sites.len(), 2);
         let authoritative = region_clearance(&first, &second).unwrap().mm;
         assert!(
@@ -1039,7 +1043,7 @@ mod tests {
     fn region_sites_keep_contained_overlap_without_a_near_outer_boundary() {
         let first = rect_region(-5.0, -5.0, 5.0, 5.0);
         let second = rect_region(-0.5, -0.5, 0.5, 0.5);
-        let sites = region_clearance_sites(&first, &second, 0.2);
+        let sites = region_clearance_sites(&first, &second, 0.2).unwrap();
         assert_eq!(sites.len(), 1);
         assert_eq!(sites[0].distance.mm, 0.0);
         assert!((sites[0].overlap.area() - 1.0).abs() < 1e-9);
@@ -1050,7 +1054,7 @@ mod tests {
     fn region_sites_merge_boundary_spans_with_their_shared_overlap() {
         let first = rect_region(0.0, 0.0, 2.0, 2.0);
         let second = rect_region(1.0, 0.5, 3.0, 1.5);
-        let sites = region_clearance_sites(&first, &second, 0.2);
+        let sites = region_clearance_sites(&first, &second, 0.2).unwrap();
         assert_eq!(sites.len(), 1);
         assert_eq!(sites[0].distance.mm, 0.0);
         assert!((sites[0].overlap.area() - 1.0).abs() < 1e-9);
@@ -1211,7 +1215,7 @@ mod tests {
             res(tol::REGION_MM),
         )
         .unwrap();
-        let raw_residue = bulge.difference(&bulge.disk_open(0.5).unwrap());
+        let raw_residue = bulge.difference(&bulge.disk_open(0.5).unwrap()).unwrap();
         assert!(
             !raw_residue.is_empty(),
             "the opening must shed residue here"
@@ -1274,6 +1278,7 @@ mod tests {
         assert!(
             !region
                 .difference(&region.disk_open(candidate_radius).unwrap())
+                .unwrap()
                 .is_empty(),
             "the opening must still localize the one-sided nib"
         );
@@ -1334,7 +1339,11 @@ mod tests {
             res(tol::REGION_MM),
         )
         .unwrap();
-        let raw_residue = chevron.disk_close(0.5).unwrap().difference(&chevron);
+        let raw_residue = chevron
+            .disk_close(0.5)
+            .unwrap()
+            .difference(&chevron)
+            .unwrap();
         assert!(
             !raw_residue.is_empty(),
             "the closing must shed residue here"
@@ -1405,7 +1414,11 @@ mod tests {
         let disk_findings = thin_features(&disk, 0.1).unwrap();
         assert!(disk_findings.is_empty(), "findings: {disk_findings:?}");
         assert_eq!(thin_features(&undersized_disk, 0.1).unwrap().len(), 1);
-        assert!(thin_gaps(&left.union(&right), 0.1).unwrap().is_empty());
+        assert!(
+            thin_gaps(&left.union(&right).unwrap(), 0.1)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1483,7 +1496,7 @@ mod tests {
     fn widths_are_invariant_under_quarter_turns() {
         let left = rect_region(0.0, 0.0, 4.0, 2.0);
         let right = rect_region(4.06, 0.0, 8.0, 2.0);
-        let region = left.union(&right);
+        let region = left.union(&right).unwrap();
         let rotated = ContourSet::from_rings(
             region
                 .rings
@@ -1492,7 +1505,8 @@ mod tests {
                 .collect(),
             FillRule::NonZero,
             res(tol::REGION_MM),
-        );
+        )
+        .unwrap();
 
         let original = thin_gaps(&region, 0.1).unwrap();
         let turned = thin_gaps(&rotated, 0.1).unwrap();

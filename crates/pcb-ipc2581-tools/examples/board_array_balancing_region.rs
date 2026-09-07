@@ -375,22 +375,21 @@ fn main() -> Result<()> {
         certificate,
     } = result;
     let final_components = safe_region.connected_components();
-    let undersized_final_components = final_components
-        .iter()
-        .filter(|component| {
-            component
-                .disk_erode(args.regularization_radius_mm)
-                .unwrap()
-                .is_empty()
-        })
-        .cloned()
-        .fold(
-            ContourSet::empty(safe_region.resolution),
-            |undersized, component| undersized.union(&component),
-        );
+    let undersized_final_components = ContourSet::union_all(
+        safe_region.resolution,
+        final_components
+            .iter()
+            .filter(|component| {
+                component
+                    .disk_erode(args.regularization_radius_mm)
+                    .unwrap()
+                    .is_empty()
+            })
+            .cloned(),
+    )?;
     let removed_by_regularization = intermediates
         .removed_by_opening
-        .union(&intermediates.removed_by_gap_regularization);
+        .union(&intermediates.removed_by_gap_regularization)?;
     let narrow_voids = intermediates
         .opened_candidates
         .disk_gap_violations(args.gap_radius_mm)

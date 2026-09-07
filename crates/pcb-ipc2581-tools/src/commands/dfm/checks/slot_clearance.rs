@@ -94,7 +94,7 @@ pub(super) fn evaluate(
                 &offender.image,
                 copper_boundary,
                 limit_mm,
-            )
+            )?
             .into_iter()
             .map(|geometry| {
                 let mut site = linework_clearance::report_site(

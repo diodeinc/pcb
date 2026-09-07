@@ -80,8 +80,12 @@ impl PreparedRegion {
     /// `None` when the region has no filled boundary or the point is non-finite.
     ///
     /// Uses floating-point arithmetic without snapping to the region tolerance.
-    /// Uncertainty is inherited from the source geometry.
-    /// The source geometry's sign is uncertain when this band includes zero.
+    /// The distance is to the prepared boundary, every point of which lies
+    /// within `uncertainty_mm` of a source boundary (see
+    /// [`crate::geom::accuracy`]); the source geometry's sign is uncertain when
+    /// the band includes zero. A prepared boundary may carry seams the exact
+    /// composition would not, so the distance is a lower bound on the distance
+    /// to the exact composed set, never an upper bound.
     pub fn signed_distance(&self, point: Point) -> Option<Distance> {
         self.point_distance(point, f64::INFINITY, true)
     }

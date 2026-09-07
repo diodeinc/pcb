@@ -670,7 +670,7 @@ fn compose_board_array_fabrication_profile(
     let mut material_removal = ContourSet::empty(resolution);
 
     for contours in &input.source_material_removal {
-        material_removal.union_assign(&ContourSet::from_filled_contours(contours, resolution)?);
+        material_removal.union_assign(&ContourSet::from_filled_contours(contours, resolution)?)?;
     }
 
     let mut relief_debug = relief::VScoreReliefDebug::default();
@@ -690,7 +690,7 @@ fn compose_board_array_fabrication_profile(
         } else {
             relief::vscore_route_reliefs(&relief_input)?
         };
-        material_removal.union_assign(&ContourSet::from_filled_contours(&reliefs, resolution)?);
+        material_removal.union_assign(&ContourSet::from_filled_contours(&reliefs, resolution)?)?;
     }
 
     Ok((
@@ -848,17 +848,24 @@ mod tests {
         let resolution = Resolution::default().with_tolerance(0.001);
         let mut region = ContourSet::empty(resolution);
 
-        region.union_assign(
-            &ContourSet::from_filled_contours(
-                &[reversed_rectangle_contour(0.0, 0.0, 2.0, 2.0)],
-                resolution,
-            )
-            .unwrap(),
-        );
-        region.union_assign(
-            &ContourSet::from_filled_contours(&[rectangle_contour(1.0, 0.0, 4.0, 2.0)], resolution)
+        region
+            .union_assign(
+                &ContourSet::from_filled_contours(
+                    &[reversed_rectangle_contour(0.0, 0.0, 2.0, 2.0)],
+                    resolution,
+                )
                 .unwrap(),
-        );
+            )
+            .unwrap();
+        region
+            .union_assign(
+                &ContourSet::from_filled_contours(
+                    &[rectangle_contour(1.0, 0.0, 4.0, 2.0)],
+                    resolution,
+                )
+                .unwrap(),
+            )
+            .unwrap();
 
         let bbox = region
             .to_contours()

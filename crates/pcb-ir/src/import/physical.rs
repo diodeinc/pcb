@@ -726,7 +726,12 @@ impl ImportedDesign {
                             stackup,
                         )
                         && land.image.bbox().intersects(hole.image.bbox())
-                        && land.image.intersection(&hole.image).area() > tol::REGION_MM.powi(2))
+                        && land
+                            .image
+                            .intersection(&hole.image)
+                            .expect("lands and holes share one resolution")
+                            .area()
+                            > tol::REGION_MM.powi(2))
                     .then_some((land.id, termination.id))
                 })
             })
@@ -789,7 +794,7 @@ impl ImportedDesign {
                     if protection_side_compatible(hole.assembly_side, evidence.side)
                         && feature_spans_overlap(hole.span, evidence.span, stackup)
                         && hole.image.bbox().intersects(image.bbox())
-                        && hole.image.intersection(&image).area() > tol::REGION_MM.powi(2)
+                        && hole.image.intersection(&image)?.area() > tol::REGION_MM.powi(2)
                     {
                         hole.protection.push(evidence.clone());
                     }
@@ -1087,7 +1092,13 @@ fn associate_land_candidates(
         .iter()
         .copied()
         .filter(|land| land.image.bbox().intersects(image.bbox()))
-        .filter(|land| land.image.intersection(image).area() > tol::REGION_MM.powi(2))
+        .filter(|land| {
+            land.image
+                .intersection(image)
+                .expect("lands share one resolution")
+                .area()
+                > tol::REGION_MM.powi(2)
+        })
         .map(|land| land.id)
         .collect::<Vec<_>>();
 
@@ -1395,7 +1406,7 @@ mod tests {
             if height < 1.0 {
                 let residue = residue.expect("narrow slot leaves copper on both sides");
                 assert_eq!(residue.image.connected_components().len(), 2);
-                assert!(residue.image.intersection(&hole.image).is_empty());
+                assert!(residue.image.intersection(&hole.image).unwrap().is_empty());
             } else {
                 assert!(residue.is_none(), "wide slot removes all land copper");
             }
@@ -1517,12 +1528,13 @@ mod tests {
                                 .disk_erode(image.uncertainty_mm + holes[0].image.uncertainty_mm)
                                 .unwrap()
                         )
+                        .unwrap()
                         .is_empty(),
                     "{name}, declarations {order:?}"
                 );
                 let expected = reference.get_or_insert_with(|| image.clone());
-                assert!(image.difference(expected).is_empty());
-                assert!(expected.difference(&image).is_empty());
+                assert!(image.difference(expected).unwrap().is_empty());
+                assert!(expected.difference(&image).unwrap().is_empty());
             }
         }
     }
@@ -1653,6 +1665,7 @@ mod tests {
                             .disk_erode(image.uncertainty_mm + holes[0].image.uncertainty_mm)
                             .unwrap()
                     )
+                    .unwrap()
                     .is_empty()
             );
         }

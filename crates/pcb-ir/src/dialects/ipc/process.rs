@@ -974,7 +974,7 @@ fn subtract_region_from_feature<S, L>(
     }
 
     let near = ContourSet::from_regularized(near, cutters.resolution, cutters.uncertainty_mm);
-    let contours = subject.difference(&near).to_contours();
+    let contours = subject.difference(&near)?.to_contours();
     if contours.is_empty() {
         clear_feature_paths(doc, feature_index);
         return Ok(());

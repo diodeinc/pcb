@@ -109,18 +109,18 @@ fn board_array_relief_features(
         .collect::<Vec<_>>();
     // Regions are prepared only near a score line: on a dense panel almost
     // every hole is nowhere near one.
-    let crossing = prepare_candidates(cutouts, resolution, |cutout| {
+    let mut crossing = Vec::new();
+    for cutout in prepare_candidates(cutouts, resolution, |cutout| {
         strips
             .iter()
             .any(|strip| cutout.bbox.intersects(strip.bbox))
-    })?
-    .into_iter()
-    .filter(|cutout| {
-        strips
-            .iter()
-            .any(|strip| !cutout.region.intersection(strip).is_empty())
-    })
-    .collect::<Vec<_>>();
+    })? {
+        if strips.iter().try_fold(false, |hit, strip| {
+            Ok::<_, anyhow::Error>(hit || overlaps(&cutout.region, strip)?)
+        })? {
+            crossing.push(cutout);
+        }
+    }
     let envelopes = prepare_candidates(envelopes, resolution, |envelope| {
         crossing
             .iter()
@@ -131,11 +131,12 @@ fn board_array_relief_features(
     let mut blockers = Vec::new();
     for cutout in crossing {
         if plated_like(cutout.plating) {
-            let matches = envelopes
-                .iter()
-                .filter(|envelope| envelope.matches_cutout(&cutout))
-                .map(|envelope| envelope.region.clone())
-                .collect::<Vec<_>>();
+            let mut matches = Vec::new();
+            for envelope in &envelopes {
+                if envelope.matches_cutout(&cutout)? {
+                    matches.push(envelope.region.clone());
+                }
+            }
             if matches.is_empty() {
                 bail!(
                     "plated edge cutout at [{:.3}, {:.3}]..[{:.3}, {:.3}] has no matching pad envelope for V-score relief generation",
@@ -243,23 +244,27 @@ impl ReliefFeatureCandidate {
 impl ReliefRegion {
     /// Whether this pad envelope belongs to `cutout`: same net when both are
     /// known, the same padstack, or overlapping copper.
-    fn matches_cutout(&self, cutout: &ReliefRegion) -> bool {
+    fn matches_cutout(&self, cutout: &ReliefRegion) -> Result<bool> {
         if !self.bbox.intersects(cutout.bbox) {
-            return false;
+            return Ok(false);
         }
         if let (Some(envelope_net), Some(cutout_net)) = (self.net, cutout.net)
             && envelope_net != cutout_net
         {
-            return false;
+            return Ok(false);
         }
         if let (Some(envelope_padstack), Some(cutout_padstack)) =
             (self.padstack_ref, cutout.padstack_ref)
             && envelope_padstack == cutout_padstack
         {
-            return true;
+            return Ok(true);
         }
-        !self.region.intersection(&cutout.region).is_empty()
+        overlaps(&self.region, &cutout.region)
     }
+}
+
+fn overlaps(region: &ContourSet, other: &ContourSet) -> Result<bool> {
+    Ok(!region.intersection(other)?.is_empty())
 }
 
 fn relief_feature_layer(layer_function: LayerFunction) -> bool {

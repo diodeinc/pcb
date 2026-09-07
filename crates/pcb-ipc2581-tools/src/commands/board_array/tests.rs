@@ -270,6 +270,7 @@ fn board_array_balancing_solves_every_copper_layer() {
                 .result
                 .usable
                 .intersection(&layer.existing_copper)
+                .unwrap()
                 .is_empty()
         );
         assert_eq!(layer.result.solution.target_density, layer.target_density);
@@ -1064,12 +1065,15 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
         .difference(&balance_paths(
             pcb_ir::dialects::ipc::CopperBalanceKind::FullVoid,
         ))
+        .unwrap()
         .difference(&balance_paths(
             pcb_ir::dialects::ipc::CopperBalanceKind::EdgeVoid,
         ))
+        .unwrap()
         .union(&balance_paths(
             pcb_ir::dialects::ipc::CopperBalanceKind::BoundaryWeb,
-        ));
+        ))
+        .unwrap();
 
     assert!(!round_trip.is_empty());
     assert!(
@@ -1129,7 +1133,8 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
             );
         }
     }
-    let gerber_copper = ContourSet::from_rings(rings, pcb_ir::geom::FillRule::NonZero, resolution);
+    let gerber_copper =
+        ContourSet::from_rings(rings, pcb_ir::geom::FillRule::NonZero, resolution).unwrap();
     assert!(
         (gerber_copper.area() - ipc_copper.area()).abs() <= ipc_copper.area() * 1e-3,
         "Gerber area {}, IPC area {}",

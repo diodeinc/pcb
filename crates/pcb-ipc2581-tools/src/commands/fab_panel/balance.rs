@@ -62,7 +62,7 @@ pub(super) fn generate_automatic_fab_panel_copper_balance(
                 ArtworkScope::ArrayFlattened,
                 resolution,
             )
-            .map(|image| (layer_name.clone(), image.intersection(&usable_region)))
+            .and_then(|image| Ok((layer_name.clone(), image.intersection(&usable_region)?)))
     };
     let copper_images = map_layers(&layer_names, extract)
         .into_iter()
@@ -75,9 +75,9 @@ pub(super) fn generate_automatic_fab_panel_copper_balance(
     let stray_copper = copper_images
         .iter()
         .map(|(_, image)| image.difference(&footprints))
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, _>>()?;
     for stray in &stray_copper {
-        input.support_features = input.support_features.union(stray);
+        input.support_features = input.support_features.union(stray)?;
     }
 
     let balancing_region = board_array_balancing_region(&input, BalancingRegionOptions::default())
@@ -94,7 +94,7 @@ pub(super) fn generate_automatic_fab_panel_copper_balance(
     // target. Everything else inside the usable region — clearance around each
     // placed panel, material removal, gaps too narrow for a void — can never
     // hold generated copper and so stays out of the density denominator.
-    let panel_domain = footprints.union(&safe_region);
+    let panel_domain = footprints.union(&safe_region)?;
 
     let stack_weights = physical_copper_stack_weights(ipc);
     let stack_weights_available = stack_weights.is_some();
@@ -102,23 +102,23 @@ pub(super) fn generate_automatic_fab_panel_copper_balance(
         .into_iter()
         .zip(stray_copper)
         .map(|((layer_name, existing_copper), stray)| {
-            let target_density = (existing_copper.intersection(&footprints).area()
+            let target_density = (existing_copper.intersection(&footprints)?.area()
                 / footprint_area_mm2)
                 .clamp(0.0, 1.0);
             let stack_weight_mm2 = stack_weights
                 .as_ref()
                 .and_then(|weights| weights.get(&layer_name).copied())
                 .unwrap_or(0.0);
-            PreparedCopperLayer {
+            Ok(PreparedCopperLayer {
                 layer_name,
                 target_density,
                 stack_weight_mm2,
                 existing_copper,
                 safe_region: safe_region.clone(),
-                density_domain: panel_domain.union(&stray),
-            }
+                density_domain: panel_domain.union(&stray)?,
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
 
     solve_copper_balance(
         &usable_region,

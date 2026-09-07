@@ -152,7 +152,7 @@ pub(super) fn evaluate(
                         }),
                         ..Evidence::region("missing_copper", &missing_copper(
                             &required, &subject.copper.image, subject.ring_index,
-                        ))
+                        )?)
                     });
                     let mut site = MeasuredSite::new(
                         enclosure, detail.bbox, detail.layers, detail.evidence,
@@ -183,17 +183,21 @@ pub(super) fn evaluate(
 /// it. Retaining complete intersecting rings (including enclosing planes and
 /// their holes) preserves polarity while avoiding a full-panel boolean for
 /// each individual annular finding.
-fn missing_copper(required: &ContourSet, copper: &ContourSet, index: &BBoxIndex) -> ContourSet {
+fn missing_copper(
+    required: &ContourSet,
+    copper: &ContourSet,
+    index: &BBoxIndex,
+) -> anyhow::Result<ContourSet> {
     let rings = index
         .query(required.bbox)
         .into_iter()
         .map(|id| copper.rings[id].clone())
         .collect();
-    required.difference(&ContourSet::from_rings(
+    Ok(required.difference(&ContourSet::from_rings(
         rings,
         FillRule::NonZero,
         required.resolution,
-    ))
+    )?)?)
 }
 
 fn measured(
@@ -555,8 +559,11 @@ limit = { minimum = "0.2 mm" }
         };
         let copper = rectangle(-100.0, -100.0, 100.0, 100.0)
             .difference(&rectangle(-0.4, -0.4, 0.4, 0.4))
+            .unwrap()
             .union(&rectangle(-0.1, -0.1, 0.1, 0.1))
-            .union(&rectangle(200.0, 200.0, 201.0, 201.0));
+            .unwrap()
+            .union(&rectangle(200.0, 200.0, 201.0, 201.0))
+            .unwrap();
         let required = circular_region(Point::ZERO, 0.6, resolution).unwrap();
         let bounds = copper
             .rings
@@ -570,10 +577,10 @@ limit = { minimum = "0.2 mm" }
             .collect();
         let index = BBoxIndex::new(bounds);
         assert!(index.query(required.bbox).len() < copper.rings.len());
-        let local = missing_copper(&required, &copper, &index);
-        let complete = required.difference(&copper);
-        assert!(local.difference(&complete).is_empty());
-        assert!(complete.difference(&local).is_empty());
+        let local = missing_copper(&required, &copper, &index).unwrap();
+        let complete = required.difference(&copper).unwrap();
+        assert!(local.difference(&complete).unwrap().is_empty());
+        assert!(complete.difference(&local).unwrap().is_empty());
         assert!(
             !local.contains_point(Point::ZERO),
             "repainted island supplies copper"

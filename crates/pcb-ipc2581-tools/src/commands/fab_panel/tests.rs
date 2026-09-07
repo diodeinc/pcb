@@ -908,10 +908,10 @@ fn balances_gutters_at_the_assembly_panel_density_and_leaves_margins_bare() {
         )
     }
     .unwrap();
-    let gutter_copper = copper.difference(&footprints);
+    let gutter_copper = copper.difference(&footprints).unwrap();
 
     assert!(
-        copper.difference(&usable).area() <= 1e-6,
+        copper.difference(&usable).unwrap().area() <= 1e-6,
         "process margins must stay bare"
     );
     assert!(
@@ -922,6 +922,7 @@ fn balances_gutters_at_the_assembly_panel_density_and_leaves_margins_bare() {
     assert!(
         gutter_copper
             .intersection(&footprints.disk_dilate(0.4).unwrap())
+            .unwrap()
             .area()
             <= 1e-6,
         "generated copper must keep clearance from the placed panels"
@@ -929,6 +930,7 @@ fn balances_gutters_at_the_assembly_panel_density_and_leaves_margins_bare() {
     assert!(
         gutter_copper
             .difference(&usable.disk_erode(0.4).unwrap())
+            .unwrap()
             .area()
             <= 1e-6,
         "generated copper must keep clearance from the usable-area boundary"

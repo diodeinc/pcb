@@ -1699,6 +1699,7 @@ mod tests {
             pcb_ir::geom::FillRule::NonZero,
             resolution,
         )
+        .unwrap()
         .area();
         // The 6x6 fill paints after the clear and survives whole.
         let expected = 36.0;
@@ -1810,6 +1811,7 @@ mod tests {
             pcb_ir::geom::FillRule::NonZero,
             resolution,
         )
+        .unwrap()
         .area();
         let corner_deficit = 0.25 * 0.25 * (4.0 - std::f64::consts::PI);
         let expected = 3.0 * (2.0 - corner_deficit);
@@ -1898,6 +1900,7 @@ mod tests {
             pcb_ir::geom::FillRule::NonZero,
             resolution,
         )
+        .unwrap()
         .area();
         // The radius clamps to height / 2, so the pad images as a 2x1 obround.
         let clamped = 0.5;
@@ -2012,6 +2015,7 @@ mod tests {
             pcb_ir::geom::FillRule::NonZero,
             resolution,
         )
+        .unwrap()
         .area();
         let expected = std::f64::consts::PI * (1.0 - 0.25);
         assert!(

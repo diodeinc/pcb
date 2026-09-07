@@ -59,8 +59,13 @@ pub(super) fn evaluate(
                 site.note = Some("The slot primitive declares this width; its materialized outline was checked for agreement.".to_owned());
                 vec![site]
             } else {
-                thin_features(&slot.outline, limit_mm)?.iter()
-                    .flat_map(|piece| thin_regions::piece_sites(piece, limit_mm, &slot.layer)).collect()
+                thin_features(&slot.outline, limit_mm)?
+                    .iter()
+                    .map(|piece| thin_regions::piece_sites(piece, limit_mm, &slot.layer))
+                    .collect::<anyhow::Result<Vec<_>>>()?
+                    .into_iter()
+                    .flatten()
+                    .collect()
             };
             Ok::<_, anyhow::Error>(Measured {
             distance: slot.width,

@@ -1577,8 +1577,8 @@ mod tests {
         let actual = image(
             &pcb_ir::dialects::artwork::compose_to_mask(&geometry, Resolution::default()).unwrap(),
         );
-        let symmetric_difference =
-            expected.difference(&actual).area() + actual.difference(&expected).area();
+        let symmetric_difference = expected.difference(&actual).unwrap().area()
+            + actual.difference(&expected).unwrap().area();
         assert!(symmetric_difference < 0.01, "{symmetric_difference}");
     }
 

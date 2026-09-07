@@ -224,7 +224,7 @@ fn fully_contained_hexagons(
     profile: DenseCopperBalanceProfile,
 ) -> Result<Vec<bool>, AccuracyError> {
     let candidates = uniform_candidates(centers, profile.max_void_radius_mm);
-    let outside = hexagon_set_with_radii(&candidates, voidable.resolution)?.difference(voidable);
+    let outside = hexagon_set_with_radii(&candidates, voidable.resolution)?.difference(voidable)?;
     let outside_points = representative_points(&outside);
     Ok(candidate_point_mask(
         &candidates,
@@ -246,7 +246,7 @@ fn accepted_candidate_mask(
     candidates: &[(Point, f64)],
     profile: DenseCopperBalanceProfile,
 ) -> Result<Vec<bool>, AccuracyError> {
-    let raw = hexagon_set_with_radii(candidates, voidable.resolution)?.intersection(voidable);
+    let raw = hexagon_set_with_radii(candidates, voidable.resolution)?.intersection(voidable)?;
     let (core_points, slack_mm) = minimum_disk_core_points(&raw, voidable, candidates, profile)?;
     Ok(candidate_point_mask(
         candidates,
@@ -263,7 +263,7 @@ pub(super) fn clipped_partial_voids(
     candidates: &[(Point, f64)],
     profile: DenseCopperBalanceProfile,
 ) -> Result<ContourSet, AccuracyError> {
-    let raw = hexagon_set_with_radii(candidates, voidable.resolution)?.intersection(voidable);
+    let raw = hexagon_set_with_radii(candidates, voidable.resolution)?.intersection(voidable)?;
     let (mut core_points, _) = minimum_disk_core_points(&raw, voidable, candidates, profile)?;
     core_points.sort_by(|left, right| left.x.total_cmp(&right.x));
     let rings = raw

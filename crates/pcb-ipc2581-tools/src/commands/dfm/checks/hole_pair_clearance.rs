@@ -87,7 +87,7 @@ pub(super) fn evaluate(
                                 second.center,
                                 second.diameter_mm / 2.0,
                                 design.resolution,
-                            )?);
+                            )?)?;
                             site_evidence.push(Evidence {
                                 display: Some(EvidenceDisplay::CircleIntersection {
                                     first: DisplayCircle {

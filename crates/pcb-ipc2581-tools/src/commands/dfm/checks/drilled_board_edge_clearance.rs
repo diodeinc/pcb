@@ -74,7 +74,7 @@ pub(super) fn evaluate_slots(
                 slot.provenance.instance_index,
                 slot.bbox.center(),
             );
-            let Some((distance, outside)) = slot_clearance(slot, outline, limit_mm) else {
+            let Some((distance, outside)) = slot_clearance(slot, outline, limit_mm)? else {
                 return Ok(None);
             };
             Ok::<_, anyhow::Error>(Some(measured_slot(
@@ -171,12 +171,12 @@ fn slot_clearance(
     slot: &Slot,
     outline: Option<&BoardOutline>,
     limit_mm: f64,
-) -> Option<(Distance, bool)> {
+) -> anyhow::Result<Option<(Distance, bool)>> {
     let Some(outline) = outline else {
         let point = slot.bbox.center();
-        return Some((Distance::exact(0.0, point, point), true));
+        return Ok(Some((Distance::exact(0.0, point, point), true)));
     };
-    let outside = !slot.outline.difference(&outline.region).is_empty();
+    let outside = !slot.outline.difference(&outline.region)?.is_empty();
     let search_mm = if outside {
         broad_search(slot.bbox, outline.bbox)
     } else {
@@ -192,19 +192,22 @@ fn slot_clearance(
                 .boundary
                 .segment_nearest_within(start, end, search_mm)
         })
-        .min_by(|left, right| left.mm.total_cmp(&right.mm))?
-        .also_uncertain(slot.outline.uncertainty_mm);
-    if outside {
-        Some((
+        .min_by(|left, right| left.mm.total_cmp(&right.mm))
+        .map(|distance| distance.also_uncertain(slot.outline.uncertainty_mm));
+    let Some(distance) = distance else {
+        return Ok(None);
+    };
+    Ok(Some(if outside {
+        (
             Distance {
                 mm: 0.0,
                 ..distance
             },
             true,
-        ))
+        )
     } else {
-        Some((distance, false))
-    }
+        (distance, false)
+    }))
 }
 
 fn broad_search(feature: BBox, outline: BBox) -> f64 {
@@ -238,7 +241,7 @@ fn measured_hole(
         if outside {
             let outside_region =
                 circular_region(hole.center, hole.diameter_mm / 2.0, design.resolution)?
-                    .difference(&outline.region);
+                    .difference(&outline.region)?;
             if !outside_region.is_empty() {
                 site_evidence.push(Evidence::region("outside_board_material", &outside_region));
             }
@@ -290,7 +293,7 @@ fn measured_slot(
         evidence.push(Evidence::bounds("board_profile", outline.bbox));
         site_evidence.push(profile_evidence(outline));
         if outside {
-            let outside_region = slot.outline.difference(&outline.region);
+            let outside_region = slot.outline.difference(&outline.region)?;
             if !outside_region.is_empty() {
                 site_evidence.push(Evidence::region("outside_board_material", &outside_region));
             }

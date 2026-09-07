@@ -439,7 +439,8 @@ impl EdgeVoidEmission {
             &lattice.void_candidates(&crossing),
             profile,
         )?;
-        let region = lattice::void_set(&instanced, lattice, voidable.resolution)?.union(&clipped);
+        let region =
+            lattice::void_set(&instanced, lattice, voidable.resolution)?.union(&clipped)?;
         Ok(Self {
             instanced,
             clipped,
@@ -471,7 +472,7 @@ impl DenseCopperBalanceResult {
         Some((min, max))
     }
 
-    pub fn boundary_web(&self) -> ContourSet {
+    pub fn boundary_web(&self) -> Result<ContourSet, AccuracyError> {
         self.usable.difference(&self.voidable)
     }
 }
@@ -995,9 +996,9 @@ pub fn generate_spatial_dense_copper_balance(
 /// test here. A genuine containment error — a domain that omits real copper or
 /// real fillable material — is orders of magnitude above this bound, which is
 /// itself far below the smallest void the profile can place.
-fn contains(outer: &ContourSet, inner: &ContourSet) -> bool {
-    let leftover = inner.difference(outer);
-    leftover.is_empty() || leftover.area() <= CONTAINMENT_AREA_TOLERANCE_MM2
+fn contains(outer: &ContourSet, inner: &ContourSet) -> Result<bool, AccuracyError> {
+    let leftover = inner.difference(outer)?;
+    Ok(leftover.is_empty() || leftover.area() <= CONTAINMENT_AREA_TOLERANCE_MM2)
 }
 
 fn validate_spatial_request(
@@ -1028,19 +1029,19 @@ fn validate_spatial_request(
             domain.rings == layer.density_domain.rings
                 && safe_region.rings == layer.safe_region.rings
         }) {
-            if !contains(request.panel_region, layer.density_domain) {
+            if !contains(request.panel_region, layer.density_domain)? {
                 return Err(DenseCopperBalanceError::InvalidInput(
                     "density domain must be contained by the panel region".to_string(),
                 ));
             }
-            if !contains(layer.density_domain, layer.safe_region) {
+            if !contains(layer.density_domain, layer.safe_region)? {
                 return Err(DenseCopperBalanceError::InvalidInput(
                     "safe region must be contained by the density domain".to_string(),
                 ));
             }
             certified.push((layer.density_domain, layer.safe_region));
         }
-        if !contains(layer.density_domain, layer.existing_copper) {
+        if !contains(layer.density_domain, layer.existing_copper)? {
             return Err(DenseCopperBalanceError::InvalidInput(
                 "existing copper must be contained by the density domain".to_string(),
             ));
@@ -1049,7 +1050,7 @@ fn validate_spatial_request(
         // rather than by a shared edge, so their overlap needs no tolerance.
         if !layer
             .safe_region
-            .intersection(layer.existing_copper)
+            .intersection(layer.existing_copper)?
             .is_empty()
         {
             return Err(DenseCopperBalanceError::InvalidInput(
@@ -1269,9 +1270,10 @@ mod tests {
             lattice::void_set(&result.edge_voids, result.lattice, resolution)
                 .unwrap()
                 .intersection(&result.voidable)
+                .unwrap()
                 .rings,
         );
-        ContourSet::from_rings(rings, FillRule::NonZero, resolution)
+        ContourSet::from_rings(rings, FillRule::NonZero, resolution).unwrap()
     }
 
     #[test]
@@ -1303,7 +1305,7 @@ mod tests {
         let voidable = safe_region
             .disk_erode(DenseCopperBalanceProfile::V1.boundary_web_mm)
             .unwrap();
-        assert!(voids.difference(&voidable).is_empty());
+        assert!(voids.difference(&voidable).unwrap().is_empty());
         assert!(
             voids
                 .disk_inter_component_gap_violations(
@@ -1358,7 +1360,7 @@ mod tests {
         assert!(void_radius_mm > 0.6, "expected near-maximum voids");
         let voids = result_voids(&result);
         let voidable = safe_region.disk_erode(profile.boundary_web_mm).unwrap();
-        assert!(voids.difference(&voidable).is_empty());
+        assert!(voids.difference(&voidable).unwrap().is_empty());
     }
 
     #[test]
@@ -1615,7 +1617,7 @@ mod tests {
             res(tol::REGION_MM),
         );
         let target_density = existing.area() / footprint.area();
-        let density_domain = footprint.union(&safe);
+        let density_domain = footprint.union(&safe).unwrap();
         let layers = [SpatialCopperBalanceLayerRequest {
             safe_region: &safe,
             existing_copper: &existing,
@@ -1704,10 +1706,10 @@ mod tests {
         .layers;
 
         assert_eq!(results.len(), 2);
-        assert!(results[0].usable.difference(&left).is_empty());
-        assert!(left.difference(&results[0].usable).is_empty());
-        assert!(results[1].usable.difference(&right).is_empty());
-        assert!(right.difference(&results[1].usable).is_empty());
+        assert!(results[0].usable.difference(&left).unwrap().is_empty());
+        assert!(left.difference(&results[0].usable).unwrap().is_empty());
+        assert!(results[1].usable.difference(&right).unwrap().is_empty());
+        assert!(right.difference(&results[1].usable).unwrap().is_empty());
         assert!(
             results[0]
                 .full_voids

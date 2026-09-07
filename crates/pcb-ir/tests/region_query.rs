@@ -67,7 +67,8 @@ fn concave_corners_return_a_euclidean_boundary_witness() {
         ]],
         FillRule::NonZero,
         Resolution::default(),
-    );
+    )
+    .unwrap();
     let prepared = region.prepare_query();
     for (point, expected, witness) in [
         (Point::new(3.0, 3.5), 1.0, Point::new(2.0, 3.5)),
@@ -91,7 +92,8 @@ fn nested_rings() -> Vec<Ring> {
 
 #[test]
 fn holes_nested_islands_and_separate_islands_follow_the_fill_rule() {
-    let region = ContourSet::from_rings(nested_rings(), FillRule::EvenOdd, Resolution::default());
+    let region =
+        ContourSet::from_rings(nested_rings(), FillRule::EvenOdd, Resolution::default()).unwrap();
     let prepared = region.prepare_query();
     for (point, expected) in [
         (Point::new(1.0, 5.0), -1.0),
@@ -103,7 +105,8 @@ fn holes_nested_islands_and_separate_islands_follow_the_fill_rule() {
     ] {
         query(&prepared, point, expected);
     }
-    let filled = ContourSet::from_rings(nested_rings(), FillRule::NonZero, Resolution::default());
+    let filled =
+        ContourSet::from_rings(nested_rings(), FillRule::NonZero, Resolution::default()).unwrap();
     query(&filled.prepare_query(), Point::new(3.0, 5.0), -3.0);
 }
 
@@ -181,7 +184,7 @@ fn batches_match_exhaustive_measurements_and_repeated_queries() {
         let y = (index / 8) as f64 * 4.0;
         rings.push(vec![[x, y], [x + 2.0, y], [x + 1.0, y + 3.0]]);
     }
-    let region = ContourSet::from_rings(rings, FillRule::EvenOdd, Resolution::default());
+    let region = ContourSet::from_rings(rings, FillRule::EvenOdd, Resolution::default()).unwrap();
     let prepared = region.prepare_query();
     let points = (0..51)
         .flat_map(|x| {
@@ -266,6 +269,7 @@ fn empty_degenerate_and_invalid_queries_have_no_witness() {
         FillRule::NonZero,
         Resolution::default(),
     )
+    .unwrap()
     .prepare_query();
     let points = [
         Point::new(f64::NAN, 1.0),

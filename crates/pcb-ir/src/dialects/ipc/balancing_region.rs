@@ -388,8 +388,8 @@ pub fn board_array_balancing_region(
 
     let raw_obstacles = input
         .board_footprints
-        .union(&input.material_removal)
-        .union(&input.support_features);
+        .union(&input.material_removal)?
+        .union(&input.support_features)?;
     // Construction reserves the budget the inputs were prepared at: the two
     // offsets that build the region each spend at most a quarter of it, so
     // every checked quantity stays strictly separated from a constructed one.
@@ -401,9 +401,9 @@ pub fn board_array_balancing_region(
     let construction_clearance_mm = options.clearance_mm + numerical_guard_mm;
     let panel_keep_in = input.panel_outer.disk_erode(construction_clearance_mm)?;
     let obstacle_keep_out = raw_obstacles.disk_dilate(construction_clearance_mm)?;
-    let clearance_safe_region = panel_keep_in.difference(&obstacle_keep_out);
+    let clearance_safe_region = panel_keep_in.difference(&obstacle_keep_out)?;
     let opened_candidates = clearance_safe_region.disk_open(options.regularization_radius_mm)?;
-    let removed_by_opening = clearance_safe_region.difference(&opened_candidates);
+    let removed_by_opening = clearance_safe_region.difference(&opened_candidates)?;
     let gap_regularization = opened_candidates
         .disk_regularize_gaps(
             options.gap_radius_mm,
@@ -418,15 +418,15 @@ pub fn board_array_balancing_region(
     // construction guard used above.
     let swept_safe_region = safe_region.disk_dilate(options.clearance_mm)?;
     let regularization_violations = safe_region
-        .difference(&safe_region.disk_open(options.regularization_radius_mm)?)
+        .difference(&safe_region.disk_open(options.regularization_radius_mm)?)?
         .disk_open(numerical_guard_mm)?;
     let gap_violations = safe_region.disk_gap_violations(options.gap_radius_mm)?;
     let certificate = ClearanceCertificate {
-        safe_outside_clearance_region: safe_region.difference(&clearance_safe_region),
+        safe_outside_clearance_region: safe_region.difference(&clearance_safe_region)?,
         regularization_violations,
         gap_violations,
-        outside_panel: swept_safe_region.difference(&input.panel_outer),
-        obstacle_overlap: swept_safe_region.intersection(&raw_obstacles),
+        outside_panel: swept_safe_region.difference(&input.panel_outer)?,
+        obstacle_overlap: swept_safe_region.intersection(&raw_obstacles)?,
         swept_safe_region,
     };
 
@@ -748,6 +748,7 @@ mod tests {
             result
                 .safe_region
                 .difference(&result.intermediates.clearance_safe_region)
+                .unwrap()
                 .area()
                 <= result.safe_region.tolerance().powi(2)
         );
@@ -756,6 +757,7 @@ mod tests {
                 .intermediates
                 .clearance_safe_region
                 .difference(&result.safe_region)
+                .unwrap()
                 .area()
                 > 0.0
         );
@@ -763,6 +765,7 @@ mod tests {
             result
                 .safe_region
                 .difference(&result.intermediates.panel_keep_in)
+                .unwrap()
                 .area()
                 <= result.safe_region.tolerance().powi(2)
         );
@@ -770,6 +773,7 @@ mod tests {
             result
                 .safe_region
                 .intersection(&result.intermediates.obstacle_keep_out)
+                .unwrap()
                 .area()
                 <= result.safe_region.tolerance().powi(2)
         );
@@ -800,7 +804,8 @@ mod tests {
         let larger_outside_smaller = larger
             .intermediates
             .clearance_safe_region
-            .difference(&smaller.intermediates.clearance_safe_region);
+            .difference(&smaller.intermediates.clearance_safe_region)
+            .unwrap();
         assert!(
             larger_outside_smaller.area() <= larger_outside_smaller.tolerance().powi(2),
             "larger clearance added {:.9} mm² to the maximal region",
@@ -837,7 +842,8 @@ mod tests {
         let larger_outside_smaller = larger
             .intermediates
             .opened_candidates
-            .difference(&smaller.intermediates.opened_candidates);
+            .difference(&smaller.intermediates.opened_candidates)
+            .unwrap();
         assert!(
             larger_outside_smaller.area() <= larger_outside_smaller.tolerance().powi(2),
             "larger feature disk added {:.9} mm² to the opened region",
@@ -911,6 +917,7 @@ mod tests {
                 .intermediates
                 .clearance_safe_region
                 .difference(&baseline.intermediates.clearance_safe_region)
+                .unwrap()
                 .is_empty()
         );
         assert!(
@@ -1179,6 +1186,7 @@ mod tests {
                 bbox(7.0, 1.0, 8.0, 2.0),
                 Resolution::default()
             ))
+            .unwrap()
             .is_empty()
         );
         assert!(
@@ -1187,10 +1195,11 @@ mod tests {
                     bbox(1.0, 1.0, 2.0, 2.0),
                     Resolution::default()
                 ))
+                .unwrap()
                 .is_empty()
         );
         assert!(
-            (top.intersection(&bottom).area() - 1.0).abs() <= 1e-6,
+            (top.intersection(&bottom).unwrap().area() - 1.0).abs() <= 1e-6,
             "only through-stack geometry should be shared"
         );
     }
@@ -1292,9 +1301,16 @@ mod tests {
             result
                 .safe_region
                 .intersection(&input.board_footprints)
+                .unwrap()
                 .is_empty()
         );
-        assert!(result.safe_region.difference(&usable_region).is_empty());
+        assert!(
+            result
+                .safe_region
+                .difference(&usable_region)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

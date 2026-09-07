@@ -578,7 +578,7 @@ fn swept_aperture(
             }
         }
     }
-    let mut swept = region::ContourSet::from_rings(rings, FillRule::NonZero, resolution);
+    let mut swept = region::ContourSet::from_rings(rings, FillRule::NonZero, resolution)?;
     swept.uncertainty_mm += aperture.uncertainty_mm + path_error;
     accuracy.check(swept.uncertainty_mm)?;
     Ok(vec![ExtractedPath {

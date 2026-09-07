@@ -71,11 +71,11 @@ pub fn generate_automatic_board_array_copper_balance(
                 ArtworkScope::ArrayFlattened,
                 resolution,
             )?
-            .intersection(panel_outer);
+            .intersection(panel_outer)?;
         // Existing copper outside the board footprints participates as an
         // obstacle, so copper the array-support geometry does not capture
         // shrinks the certified safe region instead of failing the solve.
-        let frame_copper = existing_copper.difference(board_footprints);
+        let frame_copper = existing_copper.difference(board_footprints)?;
         let frame_copper_empty = frame_copper.is_empty();
         let representative = prepared
             .iter()
@@ -89,7 +89,7 @@ pub fn generate_automatic_board_array_copper_balance(
             Some(index) => index,
             None => {
                 let mut input = collection.input_for_layer(layer.name)?;
-                input.support_features = input.support_features.union(&frame_copper);
+                input.support_features = input.support_features.union(&frame_copper)?;
                 inputs.push((layer_name.clone(), input));
                 inputs.len() - 1
             }
@@ -114,21 +114,21 @@ pub fn generate_automatic_board_array_copper_balance(
         .into_iter()
         .map(|layer| {
             let safe_region = regions[layer.region].clone();
-            PreparedCopperLayer {
-                target_density: (layer.existing.intersection(board_footprints).area()
+            Ok(PreparedCopperLayer {
+                target_density: (layer.existing.intersection(board_footprints)?.area()
                     / board_area_mm2)
                     .clamp(0.0, 1.0),
                 stack_weight_mm2: stack_weights
                     .as_ref()
                     .and_then(|weights| weights.get(&layer.name).copied())
                     .unwrap_or(0.0),
-                density_domain: board_footprints.union(&layer.frame).union(&safe_region),
+                density_domain: board_footprints.union(&layer.frame)?.union(&safe_region)?,
                 layer_name: layer.name,
                 existing_copper: layer.existing,
                 safe_region,
-            }
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
 
     solve_copper_balance(
         panel_outer,

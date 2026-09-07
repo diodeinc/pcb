@@ -366,7 +366,7 @@ fn boundary_pocket_relief(
     let protected_material = if score_blockers.is_empty() {
         base_protected_material.clone()
     } else {
-        base_protected_material.difference(&score_blockers)
+        base_protected_material.difference(&score_blockers)?
     };
 
     let geometry = compute_relief_geometry(
@@ -441,9 +441,9 @@ fn compute_relief_geometry(
     // B'_i: absorb tolerance-scale slivers along score-cell edges so tiny
     // source/score mismatches do not become false relief pockets.
     let aligned_board = score_aligned_board_region(current_board, score_cell, score_tolerance)?
-        .difference(score_blockers);
+        .difference(score_blockers)?;
     // P_i = C_i \ B'_i.
-    let dead_space = score_cell_region.difference(&aligned_board);
+    let dead_space = score_cell_region.difference(&aligned_board)?;
     let (legal_tool_centers, material_removal) =
         tool_aware_material_removal(&dead_space, protected_material, tool_radius)?;
 
@@ -468,15 +468,15 @@ fn tool_aware_material_removal(
     // T_i = (P_i ⊕ D_r) \ (B ⊕ D_r).
     let sacrificial_center_window = dead_space.disk_dilate(tool_radius)?;
     let protected_clearance = protected_material.disk_dilate(tool_radius)?;
-    let legal_tool_centers = sacrificial_center_window.difference(&protected_clearance);
+    let legal_tool_centers = sacrificial_center_window.difference(&protected_clearance)?;
 
     // W_i = (T_i ⊕ D_r) \ B.
     let tool_sweep = legal_tool_centers
         .disk_dilate(tool_radius)?
-        .difference(protected_material);
+        .difference(protected_material)?;
 
     // R_i = P_i ∪ W_i.
-    let material_removal = dead_space.union(&tool_sweep);
+    let material_removal = dead_space.union(&tool_sweep)?;
     Ok((legal_tool_centers, material_removal))
 }
 
@@ -486,7 +486,7 @@ fn protected_board_material(input: &VScoreReliefInput) -> Result<ContourSet, VSc
     if !input.board_cutouts.is_empty() {
         let cutout_region =
             ContourSet::from_filled_contours(&input.board_cutouts, input.resolution)?;
-        board_region = board_region.difference(&cutout_region);
+        board_region = board_region.difference(&cutout_region)?;
     }
     Ok(board_region)
 }
@@ -500,14 +500,14 @@ fn score_blockers_for_cell(
     if score_blockers.is_empty() {
         return Ok(ContourSet::empty(resolution));
     }
-    let score_strip = score_cell_strip_region(score_cell, score_tolerance, resolution);
+    let score_strip = score_cell_strip_region(score_cell, score_tolerance, resolution)?;
     let mut selected = Vec::new();
     for payload in score_blockers
         .iter()
         .filter(|p| p.bbox.intersects(score_strip.bbox))
     {
         if !ContourSet::from_filled_contours(std::slice::from_ref(payload), resolution)?
-            .intersection(&score_strip)
+            .intersection(&score_strip)?
             .is_empty()
         {
             selected.push(payload.clone());
@@ -526,19 +526,23 @@ fn score_aligned_board_region(
     score_cell: BBox,
     score_tolerance: f64,
 ) -> Result<ContourSet, AccuracyError> {
-    let cell_strip = score_cell_strip_region(score_cell, score_tolerance, board.resolution);
+    let cell_strip = score_cell_strip_region(score_cell, score_tolerance, board.resolution)?;
     if cell_strip.is_empty() {
         return Ok(board);
     }
     let dilated_board = board.disk_dilate(score_tolerance)?;
-    let score_slivers = cell_strip.intersection(&dilated_board);
-    Ok(board.union(&score_slivers))
+    let score_slivers = cell_strip.intersection(&dilated_board)?;
+    board.union(&score_slivers)
 }
 
-fn score_cell_strip_region(score_cell: BBox, width: f64, resolution: Resolution) -> ContourSet {
+fn score_cell_strip_region(
+    score_cell: BBox,
+    width: f64,
+    resolution: Resolution,
+) -> Result<ContourSet, AccuracyError> {
     let cell = ContourSet::rectangle(score_cell, resolution);
     if score_cell.width() <= 2.0 * width || score_cell.height() <= 2.0 * width {
-        return cell;
+        return Ok(cell);
     }
     let inner = BBox {
         min: Point::new(score_cell.min.x + width, score_cell.min.y + width),

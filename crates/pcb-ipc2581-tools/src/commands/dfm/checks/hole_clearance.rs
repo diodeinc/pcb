@@ -75,7 +75,7 @@ pub(super) fn evaluate(
             ];
             let sites = if violates(&distance, limit_mm) {
                 let drill = circular_region(hole.center, radius_mm, design.resolution)?;
-                let mut sites = region_clearance_sites(&drill, &offender.image, limit_mm)
+                let mut sites = region_clearance_sites(&drill, &offender.image, limit_mm)?
                     .into_iter()
                     .map(|geometry| {
                         let mut site = linework_clearance::report_site(

@@ -1887,7 +1887,7 @@ fn validate_copper_balance_void_shape(
     let resolution = Resolution::default().with_tolerance(1e-5);
     let actual = ContourSet::from_contours(&[outline], fill_rule, resolution)?;
     let expected = ContourSet::from_contours(&[expected], FillRule::NonZero, resolution)?;
-    let mismatch = actual.difference(&expected).area() + expected.difference(&actual).area();
+    let mismatch = actual.difference(&expected)?.area() + expected.difference(&actual)?.area();
     if mismatch > 1e-5 {
         bail!(
             "copper-balance void contour disagrees with its rounded-hex metadata by {mismatch} mm^2"

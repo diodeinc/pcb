@@ -64,7 +64,7 @@ pub(super) fn evaluate(limit_mm: f64, design: &Design) -> anyhow::Result<Evaluat
                     Evidence::bounds("second_board_array", second.region.bbox),
                 ],
                 sites: if violates(&distance, limit_mm) {
-                    region_clearance_sites(&first.region, &second.region, limit_mm)
+                    region_clearance_sites(&first.region, &second.region, limit_mm)?
                         .into_iter()
                         .map(|site| {
                             linework_clearance::report_site(
