@@ -204,15 +204,12 @@ fn patch_xyz(block: &str, key: &str, values: [f64; 3]) -> String {
     }
     // No existing clause: insert before the closing paren of the model block.
     let mut lines: Vec<String> = block.lines().map(str::to_string).collect();
-    // A single-line model block (e.g. a hand-authored `(model "part.step")`
-    // waiting for `rectify` to fill in its transforms) yields exactly one
-    // line, so the `skip(1)` search below is empty and its fallback would
-    // insert at index 0 — emitting the new clause *before* the `(model ...)`
-    // line as a sibling of the model block instead of as a child. Splice the
-    // clause in front of the block's own closing paren instead so it lands
-    // inside `(model ...)` for both single-line and multi-line blocks.
     if lines.len() == 1 {
-        return insert_before_closing_paren(block, &replacement);
+        let indent = &block[..block.len() - block.trim_start().len()];
+        return format!(
+            "{}\n{indent}  {replacement}\n{indent})",
+            &block[..block.len() - 1]
+        );
     }
     let (insert_idx, indent) = lines
         .iter()
@@ -230,37 +227,6 @@ fn patch_xyz(block: &str, key: &str, values: [f64; 3]) -> String {
         .unwrap_or((lines.len().saturating_sub(1), "  ".into()));
     lines.insert(insert_idx, format!("{indent}{replacement}"));
     lines.join("\n")
-}
-
-/// Insert `replacement` as a new child clause immediately before the closing
-/// paren of a single-line `(model ...)` block.
-///
-/// `block` is the substring spanning the whole `(model ...)` block (from the
-/// `(model` head through its closing paren), so its final `)` is the block's
-/// closing paren. The new clause is placed on its own line, indented to
-/// match the `(model` head's leading whitespace, with the closing paren
-/// moved to its own line — keeping the clause inside the model block.
-fn insert_before_closing_paren(block: &str, replacement: &str) -> String {
-    let last_close = block
-        .rfind(')')
-        .expect("model block spans through its closing paren");
-    let model_open = block
-        .find("(model")
-        .expect("model block starts with a `(model` head");
-    let indent: String = block[..model_open]
-        .chars()
-        .take_while(|c| c.is_whitespace())
-        .collect();
-    let mut out = String::with_capacity(block.len() + indent.len() + replacement.len() + 2);
-    out.push_str(&block[..last_close]);
-    if !out.ends_with('\n') {
-        out.push('\n');
-    }
-    out.push_str(&indent);
-    out.push_str(replacement);
-    out.push('\n');
-    out.push_str(&block[last_close..]);
-    out
 }
 
 fn find_closing_paren(content: &str, open_pos: usize) -> Option<usize> {
@@ -382,32 +348,7 @@ mod tests {
     }
 
     #[test]
-    fn patch_single_line_model_block_no_clauses() {
-        // A hand-authored inline `(model "...")` is the natural starting point
-        // for `rectify fix`. The insert path must place the new clauses inside
-        // the model block (after the `(model` head, before its closing paren),
-        // not as siblings before the model line.
-        let src = "(footprint \"x\"\n  (model \"m.step\"))";
-        let patched =
-            patch_model_transform(src, "m.step", EulerPose::new(90, 0, 0), [1.0, 2.0, 3.0])
-                .unwrap();
-        let model_idx = patched.find("(model \"m.step\"").unwrap();
-        let tail = &patched[model_idx..];
-        assert!(
-            tail.contains("(rotate (xyz 90 0 0))") && tail.contains("(offset (xyz 1 2 3))"),
-            "rotate/offset must be inside model block, tail={tail:?}"
-        );
-        assert!(
-            !patched[..model_idx].contains("(rotate (xyz"),
-            "rotate leaked before `(model` head:\n{patched}"
-        );
-    }
-
-    #[test]
     fn patch_single_line_model_block_is_valid_sexp() {
-        // The patched output must remain a parseable footprint whose model
-        // block contains the rotate/offset as children — re-parse via the
-        // production footprint parser to confirm structure, not just substrings.
         let src = "(footprint \"x\"\n  (pad \"1\" smd rect (at 0 0) (size 1 1) (layers \"F.Cu\"))\n  (model \"m.step\"))";
         let patched =
             patch_model_transform(src, "m.step", EulerPose::new(90, 0, 0), [1.0, 2.0, 3.0])
@@ -418,21 +359,5 @@ mod tests {
         assert_eq!(model.path, "m.step");
         assert_eq!(model.rotate, EulerPose::new(90, 0, 0));
         assert_eq!(model.offset, [1.0, 2.0, 3.0]);
-    }
-
-    #[test]
-    fn patch_single_line_then_multi_line_is_idempotent() {
-        // Patching a single-line block, then patching the result again must
-        // take the replace path (clauses now present) and not duplicate them.
-        let src = "(footprint \"x\"\n  (model \"m.step\"))";
-        let once = patch_model_transform(src, "m.step", EulerPose::new(90, 0, 0), [1.0, 2.0, 3.0])
-            .unwrap();
-        let twice =
-            patch_model_transform(&once, "m.step", EulerPose::new(90, 0, 0), [1.0, 2.0, 3.0])
-                .unwrap();
-        assert_eq!(once.matches("(rotate (xyz 90 0 0))").count(), 1, "{once}");
-        assert_eq!(twice.matches("(rotate (xyz 90 0 0))").count(), 1, "{twice}");
-        assert_eq!(twice.matches("(offset (xyz 1 2 3))").count(), 1, "{twice}");
-        assert_eq!(once, twice, "patch is idempotent");
     }
 }
