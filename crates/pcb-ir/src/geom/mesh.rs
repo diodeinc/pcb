@@ -155,6 +155,7 @@ impl AnalysisMesh {
             refinement: RefinementStatus::TargetsMet,
         };
         let mut budget = options.max_additional_vertices;
+        let mut budget_exhausted = false;
         for component in 0..outers.len() {
             let mut cdt = ConstrainedDelaunayTriangulation::<Point2<f64>>::new();
             let mut segments = Vec::new();
@@ -192,9 +193,7 @@ impl AnalysisMesh {
                     .with_max_additional_vertices(budget),
             );
             budget = budget.saturating_sub(cdt.num_vertices() - initial);
-            if !result.refinement_complete {
-                mesh.refinement = RefinementStatus::VertexBudgetExhausted;
-            }
+            budget_exhausted |= !result.refinement_complete;
             let excluded: BTreeSet<_> = result
                 .excluded_faces
                 .into_iter()
@@ -282,12 +281,18 @@ impl AnalysisMesh {
                 }
             }
         }
-        if mesh.refinement == RefinementStatus::TargetsMet
-            && (mesh.quality.max_area_mm2 > options.max_area_mm2 * (1.0 + 32.0 * f64::EPSILON)
-                || mesh.quality.min_angle_degrees + 1e-10 < options.min_angle_degrees)
+        // Spade can hit its cap before checking an already satisfactory mesh.
+        // Actual quality takes precedence over how the refinement loop stopped.
+        mesh.refinement = if mesh.quality.max_area_mm2
+            <= options.max_area_mm2 * (1.0 + 32.0 * f64::EPSILON)
+            && mesh.quality.min_angle_degrees + 1e-10 >= options.min_angle_degrees
         {
-            mesh.refinement = RefinementStatus::QualityLimited;
-        }
+            RefinementStatus::TargetsMet
+        } else if budget_exhausted {
+            RefinementStatus::VertexBudgetExhausted
+        } else {
+            RefinementStatus::QualityLimited
+        };
         Ok(mesh)
     }
 

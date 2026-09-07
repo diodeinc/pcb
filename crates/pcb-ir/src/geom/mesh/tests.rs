@@ -207,6 +207,26 @@ fn refinement_converges_for_quadratic_interpolation_on_square_and_annulus() {
 }
 
 #[test]
+fn zero_budget_classifies_measured_quality_across_components() {
+    let region = rect(0.0, 0.0, 2.0, 2.0)
+        .union(&rect(3.0, 0.0, 1.0, 1.0))
+        .unwrap();
+    let mut initial_only = options(2.0);
+    initial_only.max_additional_vertices = 0;
+    let mesh = AnalysisMesh::new(&region, initial_only).unwrap();
+    verify(&region, &mesh);
+    assert!(mesh.quality.max_area_mm2 <= initial_only.max_area_mm2);
+    assert!(mesh.quality.min_angle_degrees >= initial_only.min_angle_degrees);
+    assert_eq!(mesh.refinement, RefinementStatus::TargetsMet);
+
+    initial_only.max_area_mm2 = 0.25;
+    let mesh = AnalysisMesh::new(&region, initial_only).unwrap();
+    verify(&region, &mesh);
+    assert!(mesh.quality.max_area_mm2 > initial_only.max_area_mm2);
+    assert_eq!(mesh.refinement, RefinementStatus::VertexBudgetExhausted);
+}
+
+#[test]
 fn exhaustion_is_a_valid_partial_mesh_and_quality_limits_are_explicit() {
     let region = rect(0.0, 0.0, 4.0, 4.0)
         .difference(&rect(1.0, 1.0, 2.0, 2.0))
@@ -224,7 +244,7 @@ fn exhaustion_is_a_valid_partial_mesh_and_quality_limits_are_explicit() {
     .unwrap();
     let mesh = AnalysisMesh::new(&acute, options(1.0)).unwrap();
     verify(&acute, &mesh);
-    assert_ne!(mesh.refinement, RefinementStatus::TargetsMet);
+    assert_eq!(mesh.refinement, RefinementStatus::QualityLimited);
     assert!(mesh.quality.min_angle_degrees < 1.0);
 }
 
