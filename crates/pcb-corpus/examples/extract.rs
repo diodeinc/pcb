@@ -81,6 +81,7 @@ fn main() -> Result<()> {
             "name":ipc.resolve(g.name),
             "mat_des":g.mat_des.map(|s|ipc.resolve(s)),
             "spec_refs":g.spec_refs.iter().map(|s|ipc.resolve(*s)).collect::<Vec<_>>(),
+            "cad_data_layer_refs":g.cad_data_layer_refs.iter().map(|s|ipc.resolve(*s)).collect::<Vec<_>>(),
             "source_layers":{"start":g.source_layers.start,"end":g.source_layers.end},
             "source_layers_index":"Half-open range into selected ImportedDesign raw stackup.layers in source order, not material_layers physical order; group material evidence is not inherited by layers."
         })).collect::<Vec<_>>(),
