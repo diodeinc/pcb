@@ -438,6 +438,77 @@ fn material_designators_preserve_identity_and_reconcile_bom_spec_evidence() {
 }
 
 #[test]
+fn multiple_stackup_specs_preserve_provenance_and_reconcile_without_last_ref_wins() {
+    let xml = fixture().replace("<CadHeader units=\"MILLIMETER\"/>", r#"<CadHeader units="MILLIMETER"><Spec name="a"><General type="MATERIAL"><Property text="FR4"/></General></Spec><Spec name="b"><General type="MATERIAL"><Property text="PTFE"/></General></Spec></CadHeader>"#);
+    for refs in [["a", "missing"], ["missing", "a"], ["a", "b"], ["a", "a"]] {
+        let children = refs
+            .iter()
+            .map(|reference| format!(r#"<SpecRef id="{reference}"/>"#))
+            .collect::<String>();
+        let imported = design(&xml.replace(
+            "sequence=\"0\"/>",
+            &format!("sequence=\"0\">{children}</StackupLayer>"),
+        ));
+        let source = &imported.stackups[0].layers[0];
+        assert_eq!(
+            source
+                .spec_refs
+                .iter()
+                .map(|reference| imported.resolve(*reference))
+                .collect::<Vec<_>>(),
+            refs
+        );
+        assert!(source.spec_ref.is_none());
+        assert!(source.material.is_none());
+        assert!(source.dielectric_constant.is_none());
+        assert!(source.loss_tangent.is_none());
+        let metadata = imported.physical_board_metadata();
+        let layer = &metadata.layers[0];
+        assert_eq!(layer.spec_refs, source.spec_refs);
+        assert!(layer.spec_ref.is_none());
+        if refs.contains(&"b") {
+            let Association::Conflicting(values) = &layer.material else {
+                panic!("different resolved specs must conflict");
+            };
+            assert_eq!(
+                values
+                    .iter()
+                    .map(|value| imported.resolve(*value))
+                    .collect::<Vec<_>>(),
+                ["FR4", "PTFE"]
+            );
+            assert!(
+                metadata
+                    .diagnostics
+                    .contains(&BoardPhysicalDiagnostic::ConflictingMaterial {
+                        layer: layer.layer_ref
+                    })
+            );
+        } else {
+            assert_eq!(imported.resolve(*layer.material.resolved().unwrap()), "FR4");
+            let missing = metadata
+                .diagnostics
+                .iter()
+                .filter_map(|diagnostic| match diagnostic {
+                    BoardPhysicalDiagnostic::UnresolvedSpec { spec, .. } => {
+                        Some(imported.resolve(*spec))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                missing,
+                if refs.contains(&"missing") {
+                    vec!["missing"]
+                } else {
+                    vec![]
+                }
+            );
+        }
+    }
+}
+
+#[test]
 fn missing_stackup_does_not_infer_hole_land_links_from_layer_declarations() {
     let xml = fixture().replace("</Content>", r#"<DictionaryStandard units="MILLIMETER"><EntryStandard id="pad"><Circle diameter="3"/></EntryStandard></DictionaryStandard></Content>"#)
         .replace("<LayerFeature layerRef=\"TOP\">", r#"<LayerFeature layerRef="TOP"><Set><Pad padstackDefRef="P"><Location x="8" y="2"/><StandardPrimitiveRef id="pad"/></Pad></Set>"#);

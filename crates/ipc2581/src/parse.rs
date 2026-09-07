@@ -1955,29 +1955,25 @@ impl<'a> Parser<'a> {
         let layer_number = self.attr(node, "sequence").and_then(|s| s.parse().ok());
         let mat_des = self.optional_attr(node, "matDes");
 
-        // Look up material and dielectric properties from Spec via SpecRef
-        let mut material = None;
-        let mut spec_ref = None;
-        let mut dielectric_constant = None;
-        let mut loss_tangent = None;
-
-        // Parse SpecRef child element
+        // Preserve every SpecRef, including external/unresolved evidence.
+        let mut spec_refs = Vec::new();
         for child in self.element_children(node) {
             if self.name(&child) == "SpecRef"
                 && let Some(spec_id) = self.attr(&child, "id")
             {
-                // Exact match - pure IPC-2581 spec
-                let spec_symbol = self.interner.intern(spec_id);
-                // Keep unresolved evidence for headless physical consumers.
-                spec_ref = Some(spec_symbol);
-                if let Some(spec) = self.specs.get(&spec_symbol) {
-                    material = spec.material;
-                    dielectric_constant = spec.dielectric_constant;
-                    loss_tangent = spec.loss_tangent;
-                }
-                // SpecRef may reference a specification outside this document.
+                spec_refs.push(self.interner.intern(spec_id));
             }
         }
+        // Legacy convenience fields must not attribute one spec's properties
+        // to another reference. Multi-source reconciliation belongs downstream.
+        let spec_ref = match spec_refs.as_slice() {
+            [reference] => Some(*reference),
+            _ => None,
+        };
+        let spec = spec_ref.and_then(|reference| self.specs.get(&reference));
+        let material = spec.and_then(|spec| spec.material);
+        let dielectric_constant = spec.and_then(|spec| spec.dielectric_constant);
+        let loss_tangent = spec.and_then(|spec| spec.loss_tangent);
 
         Ok(StackupLayer {
             layer_ref,
@@ -1987,6 +1983,7 @@ impl<'a> Parser<'a> {
             mat_des,
             material,
             spec_ref,
+            spec_refs,
             dielectric_constant,
             loss_tangent,
             layer_number,
