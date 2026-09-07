@@ -28,6 +28,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- Reject experimental tab perforations that overlap support or lack resolved clearance from it.
 - Preserve exact arc endpoints during curve preparation to avoid numerical zero-length edges in release builds.
 - Report malformed SPICE `PARAMS:` tokens instead of crashing.
 - Migrate root-level `.zen` files in container workspaces.

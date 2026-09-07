@@ -162,6 +162,41 @@ fn missing_ligament_and_bad_stock_are_not_successful_tabs() {
 }
 
 #[test]
+fn perforations_require_resolved_clearance_from_support() {
+    let (board, _, stock) = fixture(false);
+    let drill_top = SparkFunShallow::OUTWARD_OFFSET_MM + SparkFunShallow::HOLE_DIAMETER_MM / 2.0;
+    // Overlap, tangency, and a positive gap smaller than stored uncertainty
+    // must all fail before drilling support. A resolved gap remains supported.
+    for bottom in [0.2, drill_top, drill_top + 0.001] {
+        let support = rect(-10.0, bottom, 20.0, 10.0);
+        assert!(
+            matches!(
+                tab(&board, &support, &stock),
+                Err(QueryError::InvalidInput(
+                    "perforations overlap support or clearance is unresolved"
+                ))
+            ),
+            "support bottom={bottom}"
+        );
+    }
+    let support = rect(-10.0, 3.0, 20.0, 10.0);
+    let result = tab(&board, &support, &stock).unwrap();
+    assert!(
+        result
+            .perforations
+            .intersection(&support)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        support
+            .difference(&result.retained_substrate)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
 fn input_accuracy_is_preserved_and_failures_propagate() {
     let (board, support, stock) = fixture(true);
     let result = tab(&board, &support, &stock).unwrap();

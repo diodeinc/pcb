@@ -5,8 +5,8 @@
 //! source-curve topology, manufacturing yield, or physical release is certified.
 
 use super::attachment::{
-    BoundaryId, BoundaryQuery, PolygonTopology, QueryError, QueryTolerance, material_after_break,
-    transform_region,
+    BoundaryId, BoundaryQuery, Decision, Obstacle, PolygonTopology, QueryError, QueryTolerance,
+    check_footprints, material_after_break, transform_region,
 };
 use super::{
     Affine2, ContourBuf, ContourSet, LineCap, LineJoin, PathCmd, Point, Resolution,
@@ -260,6 +260,25 @@ pub fn build(input: Attachment<'_>) -> Result<TabGeometry, QueryError> {
     for &center in &centers {
         perforations =
             perforations.union(&transform_region(&circle, Affine2::translation(center))?)?;
+    }
+    // Only the board interface is perforated. Require the complete drill mask
+    // to clear support, including both stored and caller-supplied uncertainty.
+    if check_footprints(
+        &perforations,
+        &ContourSet::empty(resolution),
+        &[Obstacle {
+            id: "support",
+            region: input.support,
+        }],
+        0.0,
+        input.tolerance,
+    )?
+    .iter()
+    .any(|check| check.decision != Decision::Admissible)
+    {
+        return Err(QueryError::InvalidInput(
+            "perforations overlap support or clearance is unresolved",
+        ));
     }
     let result = TabGeometry {
         retained_substrate: undrilled.difference(&perforations)?,
