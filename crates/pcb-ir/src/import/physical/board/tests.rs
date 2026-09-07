@@ -3,7 +3,7 @@ use crate::import::ipc2581::import_design;
 use ipc2581::Ipc2581;
 
 fn design(xml: &str) -> ImportedDesign {
-    import_design(&Ipc2581::parse(xml).unwrap()).unwrap()
+    import_design(&Ipc2581::parse(xml).unwrap(), Resolution::default()).unwrap()
 }
 
 // Deliberately asymmetric geometry: mirroring/rotation mistakes cannot hide
@@ -302,4 +302,43 @@ fn missing_profile_and_multiple_board_definitions_are_not_silent() {
             .to_string()
             .contains("exactly one board definition")
     );
+}
+
+#[test]
+fn unresolved_stackup_keeps_board_and_hole_evidence_without_land_associations() {
+    let baseline = design(fixture())
+        .physical_board(Resolution::default())
+        .unwrap();
+    for ambiguous in [true, false] {
+        let mut imported = design(fixture());
+        if ambiguous {
+            imported.stackups.push(imported.stackups[0].clone());
+        } else {
+            let layer = imported.stackups[0].layers[0].clone();
+            imported.stackups[0].layers.push(layer);
+        }
+        let view = imported.physical_board(Resolution::default()).unwrap();
+        assert!(view.metadata.diagnostics.iter().any(|diagnostic| matches!(
+            diagnostic,
+            BoardPhysicalDiagnostic::AmbiguousStackup
+                | BoardPhysicalDiagnostic::InvalidStackupOrder(_)
+        )));
+        assert_eq!(view.substrate.area(), baseline.substrate.area());
+        assert_eq!(view.holes.len(), baseline.holes.len());
+        let hole = &view.holes[0];
+        let original = &baseline.holes[0];
+        assert_eq!(hole.id, original.id);
+        assert_eq!(hole.source_name, original.source_name);
+        assert_eq!(hole.span, original.span);
+        assert_eq!(hole.plating, original.plating);
+        assert_eq!(hole.image.area(), original.image.area());
+        assert!(hole.lands.is_empty());
+        assert!(matches!(hole.termination, Association::Unresolved));
+        // The strict association API keeps its existing rejection contract.
+        assert!(
+            imported
+                .physical_holes(ArtworkScope::Board, Resolution::default())
+                .is_err()
+        );
+    }
 }

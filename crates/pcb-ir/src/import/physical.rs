@@ -588,6 +588,19 @@ impl ImportedDesign {
                     .map(|layer| layer.name)
                     .collect()
             });
+        self.derive_hole_apertures(scope, lands, &layer_order, resolution)
+    }
+
+    // Geometry and declared source spans do not require a resolved stackup.
+    // Passing no lands deliberately leaves stackup-dependent associations
+    // unresolved, without guessing a layer order or discarding apertures.
+    fn derive_hole_apertures(
+        &self,
+        scope: ArtworkScope,
+        lands: &[PhysicalLand],
+        layer_order: &[Symbol],
+        resolution: Resolution,
+    ) -> Result<Vec<PhysicalHole>> {
         let mut lands_by_layer = BTreeMap::<_, Vec<_>>::new();
         for land in lands {
             lands_by_layer.entry(land.layer).or_default().push(land);
@@ -615,7 +628,7 @@ impl ImportedDesign {
                     if !feature_spans_layer(
                         feature.intent.span,
                         self.layer_definitions[copper_layer.0 as usize].name,
-                        &layer_order,
+                        layer_order,
                     ) {
                         continue;
                     }
