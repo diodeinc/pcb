@@ -21,7 +21,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Escape inserted KiCad `Path` properties during import so special characters do not break layout sync.
 - Keep inward decimation within the boundary deviation limit for spikes beyond chord endpoints.
 - Honor explicit `in_bom` overrides and inherit omitted values in KiCad `extends` symbols.
-- Keep imported layout net names consistent with generated nets when sanitization creates rename chains.
 
 ## [0.4.51] - 2026-09-05
 
