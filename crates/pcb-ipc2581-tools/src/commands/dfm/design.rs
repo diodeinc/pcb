@@ -1362,6 +1362,7 @@ fn copper_weight_oz(imported: &ImportedDesign, layer: Symbol) -> Option<f64> {
     let mut weights = stackup_layer
         .spec_refs
         .iter()
+        .chain(stackup_layer.spec_ref.iter())
         .filter_map(|reference| imported.specs.get(reference))
         .filter_map(|spec| spec.copper_weight_oz);
     if let Some(weight) = weights.next() {
@@ -1680,6 +1681,18 @@ mod tests {
                 let imported = import_design(&ipc, Resolution::default()).unwrap();
                 let layer = imported.layer_definitions[0].name;
                 assert_eq!(copper_weight_oz(&imported, layer), expected);
+                let mut compatibility = imported.clone();
+                let layer = &mut compatibility.stackups[0].layers[0];
+                layer.spec_ref = Some(layer.spec_refs[0]);
+                layer.spec_refs.clear();
+                assert_eq!(
+                    copper_weight_oz(&compatibility, compatibility.layer_definitions[0].name),
+                    Some(if refs.starts_with(r#"<SpecRef id="a""#) {
+                        2.0
+                    } else {
+                        other
+                    })
+                );
                 let ipc = Ipc2581::parse(&xml.replace(refs, "")).unwrap();
                 let imported = import_design(&ipc, Resolution::default()).unwrap();
                 assert_eq!(
