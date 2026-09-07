@@ -519,96 +519,45 @@ fn unbound_symbol_on_a_child_sheet_repairs_by_selection() {
     );
 }
 
-/// Regression for the linked-KiCad reconcile bail. A user-authored 2-channel
-/// project that shares one `.kicad_sch` under two `<sheet>` items and leaves an
-/// unmanaged symbol on it previously produced N byte-identical `ComponentNode`s
-/// in `observed.components` (one per sheet instance). `collect_component_issues`
-/// turned those into N indistinguishable `UnboundSymbol` contexts with the same
-/// key, and `plan_connectivity_repair_core`'s `Vec`-vs-`BTreeSet` length guard
-/// bailed the entire repair with the misleading `schematic issues are not
-/// present: []`. After dedup the single key matches the single context, so the
-/// repair plans instead of bailing.
 #[test]
 fn repeated_shared_sheet_unmanaged_symbol_does_not_bail_repair() {
+    use common::kicad_builder::{KicadBuilder, TestPin};
+
     let netlist = common::compile_fixture("hierarchy", "root.zen");
     let mut document = plan_reconciliation(None, &netlist, "root.kicad_sch")
         .unwrap()
         .apply(None)
         .unwrap();
-
-    let root_index = document
+    let root = document
         .pages
-        .iter()
-        .position(|page| page.file_name.as_deref() == Some("root.kicad_sch"))
+        .iter_mut()
+        .find(|page| page.file_name.as_deref() == Some("root.kicad_sch"))
         .expect("hierarchy fixture has a root page");
 
-    let mut unbound = managed_symbols(&document)
-        .next()
-        .expect("baseline has managed symbols")
-        .clone();
-    unbound.id = "unbound-shared".to_string();
-    unbound.fields.remove("Path");
-    let moved_at = Point::new(unbound.at.x + 50.8, unbound.at.y);
-    move_symbol(&mut unbound, moved_at);
-
-    let unbound_lib_id = unbound.lib_id.clone();
-    let definition = document
-        .pages
-        .iter()
-        .find_map(|page| page.library.definitions.get(&unbound_lib_id).cloned())
-        .expect("managed symbol has a definition");
-
-    let mut shared = SchPage::new("shared");
-    shared.file_name = Some("shared.kicad_sch".to_string());
-    shared
-        .library
-        .definitions
-        .insert(unbound_lib_id, definition);
-    shared.items.push(SchItem::Symbol(unbound));
-
-    for offset in [0.0_f64, 50.8] {
-        let anchor = Point::new(offset, 100.0);
-        let sheet = Sheet {
-            id: format!("sheet-shared-{}", offset as u32),
-            placed: true,
-            at: Some(anchor),
-            size: Some(Point::new(25.4, 25.4)),
-            name: Some(SymbolField::new("Sheetname", "shared", anchor)),
-            file: SymbolField::new("Sheetfile", "shared.kicad_sch", anchor),
-            pins: Vec::new(),
-            unsupported: Vec::new(),
-        };
-        document.pages[root_index]
-            .items
-            .push(SchItem::Sheet(Box::new(sheet)));
-    }
-    document.pages.push(shared);
+    let mut builder = KicadBuilder::new();
+    builder
+        .sheet("shared.kicad_sch", &[])
+        .sheet("shared.kicad_sch", &[])
+        .add_page("shared", "shared.kicad_sch")
+        .define_symbol("Test:OnePin", &[TestPin::passive("1", (0.0, 0.0))])
+        .component("Test:OnePin", None, (0.0, 0.0));
+    let mut shared = builder.build().pages.into_iter();
+    root.items.extend(shared.next().unwrap().items);
+    document.pages.extend(shared);
 
     let inspection = inspect_schematic(&document, &netlist).unwrap();
-    let unbound_count = inspection
+    let unbound: Vec<_> = inspection
         .issues
         .iter()
         .filter(|context| matches!(&context.issue, SchematicIssue::UnboundSymbol { .. }))
-        .count();
-    assert_eq!(
-        unbound_count, 1,
-        "the unmanaged symbol on the repeated sheet must produce one issue context: {:#?}",
-        inspection.issues,
-    );
-
-    let key = inspection
-        .issues
-        .iter()
-        .find(|context| matches!(&context.issue, SchematicIssue::UnboundSymbol { .. }))
-        .expect("unbound symbol issue reported")
-        .key
-        .clone();
+        .collect();
+    assert_eq!(unbound.len(), 1, "{:?}", inspection.issues);
 
     plan_connectivity_repair(
         &document,
         &netlist,
         &inspection,
-        &BTreeSet::from([key]),
+        &BTreeSet::from([unbound[0].key.clone()]),
         &BTreeSet::new(),
     )
     .expect("repeated-sheet unbound repair must plan, not bail");
