@@ -18,6 +18,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - Preserve sheet graphics and text annotations when updating KiCad schematics.
+- Add constrained region analysis meshes with boundary provenance, refinement diagnostics, and element-sided barycentric attachments to `pcb-ir`.
 - Group `pcb bom` rows by selected offer.
 - Upgrade bundled symbols to KiCad 10 format.
 - Create a starter `spec.md` when scaffolding a new board repository.
