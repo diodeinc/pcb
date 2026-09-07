@@ -323,6 +323,9 @@ A package requires publication when:
 - Its content hash differs from the published tag.
 - Its `pcb.toml` hash differs from the published tag.
 
+Content hashes respect `.gitignore` in both the publisher's repository and the
+consumer's archive extract, but ignore global Git exclusions and `.git/info/exclude`.
+
 Versions are computed automatically:
 
 - **Unpublished:** Start at `0.1.0`.

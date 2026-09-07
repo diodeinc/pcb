@@ -371,142 +371,60 @@ fn single_file_hashing() {
     });
 }
 
-/// Guard helper: run `git` with an isolated HOME/git-config so the test never
-/// touches the developer's global git config, system config, or credential
-/// helpers (mirrors the isolation approach in `pcbc/tests/auth_git.rs`).
-struct IsolatedGitRepo {
-    root: PathBuf,
-    _home: tempfile::TempDir,
-    _repo: tempfile::TempDir,
-    git_config: PathBuf,
-}
-
-impl IsolatedGitRepo {
-    fn new() -> Self {
-        let home = tempfile::tempdir().expect("temp home");
-        let git_config = home.path().join("gitconfig");
-        let repo = tempfile::tempdir().expect("repo tempdir");
-        Self {
-            root: repo.path().to_path_buf(),
-            _home: home,
-            _repo: repo,
-            git_config,
-        }
-    }
-
-    fn git(&self, args: &[&str]) -> std::process::Command {
-        let mut cmd = std::process::Command::new("git");
-        cmd.current_dir(&self.root)
-            .env("HOME", self._home.path())
-            .env("XDG_CONFIG_HOME", self._home.path().join("xdg"))
-            .env("GIT_CONFIG_GLOBAL", &self.git_config)
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_TERMINAL_PROMPT", "0");
-        for arg in args {
-            cmd.arg(arg);
-        }
-        cmd
-    }
-
-    fn run(&self, args: &[&str]) {
-        let out = self.git(args).output().expect("run git");
-        assert!(
-            out.status.success(),
-            "git {:?} failed: {}",
-            args,
-            String::from_utf8_lossy(&out.stderr)
-        );
-    }
-
-    fn write(&self, rel: &str, contents: &str) {
-        let path = self.root.join(rel);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).expect("create parent dirs");
-        }
-        fs::write(&path, contents).expect("write file");
-    }
-}
-
-/// Regression test for the publisher/consumer content-hash divergence.
-///
-/// `pcbc publish` computes the content hash inside the workspace git repo
-/// (`.git` present) and records it in an annotated tag (`publish.rs:972`).
-/// `pcb-zen`'s resolver recomputes the hash over a `git archive` extract
-/// (`.git` absent) and bails if it differs from the tag (`resolve.rs:364`).
-///
-/// For a tracked file that matches a committed `.gitignore` rule (here a
-/// force-added `debug.log` against `*.log`), the two walks must agree on the
-/// file set so their hashes match. `git archive` emits tracked files
-/// regardless of `.gitignore`, so `debug.log` is present in the extract; the
-/// walker must therefore honor `.gitignore` on *both* sides (independent of a
-/// `.git` directory) to drop it consistently. Before the fix, `ignore`'s
-/// default `require_git(true)` applied `.gitignore` only on the publisher side,
-/// so the hashes diverged and every consumer's `verify_tag_hashes` failed.
 #[test]
 fn publisher_and_consumer_hashes_agree_for_tracked_but_ignored_file() {
-    use std::process::{Command, Stdio};
+    let repo = CanonicalTestDir::new();
+    let home = tempfile::tempdir().unwrap();
+    let git = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .current_dir(repo.root())
+            .env("HOME", home.path())
+            .env("XDG_CONFIG_HOME", home.path())
+            .env("GIT_CONFIG_GLOBAL", home.path().join("gitconfig"))
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .args(args)
+            .output()
+            .expect("run git");
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output.stdout
+    };
+    git(&["init", "-b", "main"]);
+    repo.add_file(".gitignore", "*.log\n");
+    repo.add_file("main.zen", "# main\n");
+    repo.add_file("debug.log", "tracked but ignored\n");
+    git(&["add", "-f", ".gitignore", "main.zen", "debug.log"]);
+    git(&[
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "-m",
+        "initial",
+    ]);
+    // Local exclusions must not remove committed package content.
+    repo.add_file(".git/info/exclude", "main.zen\n");
 
-    if !pcb_zen::git::is_available() {
-        eprintln!("skipping: git not on PATH");
-        return;
-    }
-
-    let repo = IsolatedGitRepo::new();
-    repo.run(&["init", "-b", "main"]);
-    repo.run(&["config", "user.name", "Test"]);
-    repo.run(&["config", "user.email", "test@example.com"]);
-
-    // Committed `.gitignore` plus a force-added file that matches it.
-    repo.write(".gitignore", "*.log\n");
-    repo.write(
-        "pcb.toml",
-        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n",
-    );
-    repo.write("main.zen", "# main\n");
-    repo.write("debug.log", "force-added, matches *.log\n");
-    repo.run(&["add", ".gitignore", "pcb.toml", "main.zen"]);
-    repo.run(&["add", "-f", "debug.log"]);
-    repo.run(&["commit", "-m", "initial"]);
-
-    // Publisher side: walk the package directory inside the real git repo
-    // (`.git` present), as `pcbc publish` does.
-    let publisher_entries = list_canonical_tar_entries(&repo.root, None).unwrap();
-    let publisher_hash = compute_content_hash_from_dir(&repo.root).unwrap();
-
-    // Consumer side: extract `git archive HEAD` into a `.git`-less tempdir,
-    // replicating `pcb_zen::git::archive_to_dir` (`crates/pcb-zen/src/git.rs`).
+    // Unlike the publisher's repository, the consumer's archive has no .git.
     let extract = tempfile::tempdir().expect("extract tempdir");
-    let extract_root = extract.path().to_path_buf();
-    let mut archive = Command::new("git");
-    archive
-        .current_dir(&repo.root)
-        .env("HOME", repo._home.path())
-        .env("GIT_CONFIG_GLOBAL", &repo.git_config)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .args(["archive", "--format=tar", "HEAD"])
-        .stdout(Stdio::piped());
-    let mut child = archive.spawn().expect("spawn git archive");
-    let stdout = child.stdout.take().expect("piped stdout");
-    tar::Archive::new(stdout)
-        .unpack(&extract_root)
-        .expect("unpack git archive");
-    let status = child.wait().expect("wait git archive");
-    assert!(status.success(), "git archive failed");
-
-    // The consumer extract has no `.git`, but `git archive` emits tracked
-    // files even when they match `.gitignore` — so `debug.log` is present.
-    assert!(!extract_root.join(".git").exists());
-    assert!(extract_root.join("debug.log").exists());
-
-    let consumer_entries = list_canonical_tar_entries(&extract_root, None).unwrap();
-    let consumer_hash = compute_content_hash_from_dir(&extract_root).unwrap();
-
-    // Both sides honor the committed `.gitignore`, so the file set and hash
-    // agree regardless of whether a `.git` directory exists above the walk.
-    assert_eq!(publisher_entries, vec!["main.zen", "pcb.toml"]);
-    assert_eq!(consumer_entries, vec!["main.zen", "pcb.toml"]);
+    let archive = git(&["archive", "--format=tar", "HEAD"]);
+    tar::Archive::new(archive.as_slice())
+        .unpack(extract.path())
+        .unwrap();
+    assert!(!extract.path().join(".git").exists());
+    assert!(extract.path().join("debug.log").exists());
+    for root in [repo.root(), extract.path()] {
+        assert_eq!(
+            list_canonical_tar_entries(root, None).unwrap(),
+            ["main.zen"]
+        );
+    }
     assert_eq!(
-        publisher_hash, consumer_hash,
-        "publisher (in-repo) and consumer (git-archive extract) content hashes must agree"
+        compute_content_hash_from_dir(repo.root()).unwrap(),
+        compute_content_hash_from_dir(extract.path()).unwrap(),
     );
 }
