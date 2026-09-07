@@ -91,6 +91,8 @@ pub struct ComponentEnvelopes {
 #[derive(Debug, Clone)]
 pub struct BoardPhysicalMetadata {
     pub stackup: Association<Symbol>,
+    /// Direct stackup-scoped raw references; not interpreted as layer material.
+    pub spec_refs: Vec<Symbol>,
     pub overall_thickness_mm: Option<f64>,
     /// Physical order when valid; source order with InvalidStackupOrder otherwise.
     /// Invalid ordering does not discard individual layer evidence.
@@ -271,6 +273,7 @@ impl ImportedDesign {
     pub fn physical_board_metadata(&self) -> BoardPhysicalMetadata {
         let mut result = BoardPhysicalMetadata {
             stackup: Association::Unresolved,
+            spec_refs: Vec::new(),
             overall_thickness_mm: None,
             layers: Vec::new(),
             groups: Vec::new(),
@@ -294,6 +297,7 @@ impl ImportedDesign {
             }
         };
         result.stackup = Association::Resolved(stackup.name);
+        result.spec_refs = stackup.spec_refs.clone();
         result.groups = stackup.groups.clone();
         for group in &result.groups {
             if group.mat_des.is_some() || !group.spec_refs.is_empty() {

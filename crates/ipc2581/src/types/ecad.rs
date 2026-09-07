@@ -89,6 +89,8 @@ pub struct CadData {
 #[derive(Debug, Clone)]
 pub struct Stackup {
     pub name: Symbol,
+    /// Direct stackup-scoped references, not inherited by groups or layers.
+    pub spec_refs: Vec<Symbol>,
     pub overall_thickness: Option<f64>,
     pub where_measured: Option<WhereMeasured>,
     pub tol_plus: Option<f64>,

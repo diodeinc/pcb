@@ -149,8 +149,25 @@ struct SourcePanel {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PhysicalStackup {
     attributes: Vec<(String, String)>,
+    specs: Vec<SpecEvidence>,
     groups: Vec<PhysicalStackupGroup>,
     layers: Vec<PhysicalStackupLayer>,
+    membership_layers: Vec<MembershipLayer>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MembershipLayer {
+    name: String,
+    definition: ElementSignature,
+    specs: Vec<SpecEvidence>,
+    profile_units: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ElementSignature {
+    name: String,
+    attributes: Vec<(String, String)>,
+    children: Vec<ElementSignature>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -177,6 +194,7 @@ struct PhysicalStackupLayer {
     thickness: Option<u64>,
     tol_plus: Option<u64>,
     tol_minus: Option<u64>,
+    mat_des: Option<String>,
     material: Option<String>,
     dielectric_constant: Option<u64>,
     loss_tangent: Option<u64>,
@@ -309,6 +327,13 @@ pub fn create_fab_panel(
     if occurrences.is_empty() {
         bail!("at least one assembly panel is required");
     }
+    // Compare source evidence before manufacturing reduction removes BOM
+    // associations such as matDes from the emitted document.
+    let stackups = source_xml
+        .iter()
+        .enumerate()
+        .map(|(source_index, xml)| physical_stackup(xml, source_index))
+        .collect::<Result<Vec<_>>>()?;
     // Reduce every source to manufacturing content once, up front: assembling
     // already-stripped sources keeps the fabrication panel a pure composition
     // and avoids stripping the much larger composed document.
@@ -339,11 +364,6 @@ pub fn create_fab_panel(
         .map(strip)
         .collect::<Result<Vec<_>>>()?;
 
-    let stackups = source_xml
-        .iter()
-        .enumerate()
-        .map(|(source_index, xml)| physical_stackup(xml, source_index))
-        .collect::<Result<Vec<_>>>()?;
     let first_stackup = stackups
         .first()
         .context("at least one assembly panel source is required")?;
@@ -354,6 +374,12 @@ pub fn create_fab_panel(
         .layers
         .iter()
         .map(|layer| layer.name.clone())
+        .chain(
+            first_stackup
+                .membership_layers
+                .iter()
+                .map(|layer| layer.name.clone()),
+        )
         .collect::<HashSet<_>>();
 
     let sources = source_xml
@@ -536,6 +562,46 @@ fn physical_stackup(xml: &str, source_index: usize) -> Result<PhysicalStackup> {
         })
         .collect::<Vec<_>>();
 
+    let mut membership_layers = Vec::new();
+    for reference in stackup
+        .groups
+        .iter()
+        .flat_map(|group| &group.cad_data_layer_refs)
+    {
+        let name = ipc.resolve(*reference);
+        if membership_layers
+            .iter()
+            .any(|layer: &MembershipLayer| layer.name == name)
+        {
+            continue;
+        }
+        let layer = ecad
+            .cad_data
+            .layers
+            .iter()
+            .find(|layer| layer.name == *reference)
+            .with_context(|| {
+                format!(
+                    "assembly panel input {input_number} group references missing layer '{name}'"
+                )
+            })?;
+        let node = doc
+            .find_all("Layer")
+            .into_iter()
+            .find(|node| doc.attr(*node, "name") == Some(name))
+            .context("parsed group layer must have a source definition")?;
+        membership_layers.push(MembershipLayer {
+            name: name.to_string(),
+            definition: element_signature(&doc, node),
+            specs: layer.spec_refs.iter().map(spec_evidence).collect(),
+            profile_units: doc
+                .children(node)
+                .iter()
+                .any(|child| doc.name(*child) == "Profile")
+                .then(|| format!("{:?}", ecad.cad_header.units)),
+        });
+    }
+
     let layers = stackup
         .layers
         .iter()
@@ -575,6 +641,7 @@ fn physical_stackup(xml: &str, source_index: usize) -> Result<PhysicalStackup> {
                 thickness: float_bits(stackup_layer.thickness),
                 tol_plus: float_bits(stackup_layer.tol_plus),
                 tol_minus: float_bits(stackup_layer.tol_minus),
+                mat_des: stackup_layer.mat_des.map(|value| ipc.resolve(value).to_string()),
                 material: stackup_layer
                     .material
                     .map(|material| ipc.resolve(material).to_string()),
@@ -588,9 +655,24 @@ fn physical_stackup(xml: &str, source_index: usize) -> Result<PhysicalStackup> {
 
     Ok(PhysicalStackup {
         attributes,
+        specs: stackup.spec_refs.iter().map(spec_evidence).collect(),
         groups,
         layers,
+        membership_layers,
     })
+}
+
+fn element_signature(doc: &Doc<'_>, node: Node) -> ElementSignature {
+    ElementSignature {
+        name: doc.name(node).to_string(),
+        attributes: sorted_attributes(doc, node, &[]),
+        children: doc
+            .children(node)
+            .into_iter()
+            .filter(|child| doc.name(*child) != "SpecRef")
+            .map(|child| element_signature(doc, child))
+            .collect(),
+    }
 }
 
 fn require_identical_stackup(
@@ -599,7 +681,11 @@ fn require_identical_stackup(
     source_index: usize,
 ) -> Result<()> {
     let input_number = source_index + 1;
-    if candidate.attributes != first.attributes || candidate.groups != first.groups {
+    if candidate.attributes != first.attributes
+        || candidate.specs != first.specs
+        || candidate.groups != first.groups
+        || candidate.membership_layers != first.membership_layers
+    {
         bail!(
             "assembly panel input {input_number} has stackup attributes that differ from assembly panel input 1"
         );
