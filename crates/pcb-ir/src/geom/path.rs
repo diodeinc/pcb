@@ -917,8 +917,19 @@ pub(crate) fn flatten_path(
     callback: impl FnMut(PathEl),
 ) {
     let mut previous = None;
+    let mut subpath_start = None;
+    let mut closed = false;
     let quadratics = path.into_iter().flat_map(|element| {
         let mut elements = Vec::new();
+        // Kurbo resets its current point on close. Restore it explicitly only
+        // when drawing continues without a new MoveTo.
+        if closed
+            && !matches!(element, PathEl::MoveTo(_) | PathEl::ClosePath)
+            && let Some(start) = subpath_start
+        {
+            elements.push(PathEl::MoveTo(start));
+        }
+        closed = matches!(element, PathEl::ClosePath);
         match element {
             PathEl::CurveTo(p1, p2, p3) => {
                 if let Some(p0) = previous {
@@ -933,7 +944,12 @@ pub(crate) fn flatten_path(
             }
             _ => {
                 previous = match element {
-                    PathEl::MoveTo(p) | PathEl::LineTo(p) | PathEl::QuadTo(_, p) => Some(p),
+                    PathEl::MoveTo(p) => {
+                        subpath_start = Some(p);
+                        Some(p)
+                    }
+                    PathEl::LineTo(p) | PathEl::QuadTo(_, p) => Some(p),
+                    PathEl::ClosePath => subpath_start,
                     _ => None,
                 };
                 elements.push(element);
@@ -951,6 +967,31 @@ pub(crate) fn ir_point(point: kurbo::Point) -> Point {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cubic_after_close_starts_at_the_closed_subpath_start() {
+        let start = kurbo::Point::new(2.0, 3.0);
+        let first = PathEl::CurveTo((3.0, 4.0).into(), (4.0, 4.0).into(), (4.0, 3.0).into());
+        let second = PathEl::CurveTo((1.0, 4.0).into(), (0.0, 4.0).into(), (0.0, 3.0).into());
+        let flatten = |path: Vec<PathEl>| {
+            let mut result = Vec::new();
+            flatten_path(path, 0.001, |el| result.push(el));
+            result
+        };
+        let actual = flatten(vec![
+            PathEl::MoveTo(start),
+            first,
+            PathEl::ClosePath,
+            second,
+        ]);
+        let close = actual
+            .iter()
+            .position(|el| *el == PathEl::ClosePath)
+            .unwrap();
+        let expected = flatten(vec![PathEl::MoveTo(start), second]);
+        assert!(expected.len() > 2);
+        assert_eq!(&actual[close + 1..], expected);
+    }
 
     #[test]
     fn arc_cubics_interpolate_source_endpoints_exactly() {

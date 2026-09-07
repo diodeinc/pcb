@@ -162,6 +162,40 @@ fn missing_ligament_and_bad_stock_are_not_successful_tabs() {
 }
 
 #[test]
+fn witnesses_must_be_interior_to_the_original_regions() {
+    let (board, support, stock) = fixture(false);
+    let query = BoundaryQuery::new(&board, TOL).unwrap();
+    let boundary = query.boundaries().next().unwrap();
+    let station_mm = query
+        .project(boundary, Point::ZERO)
+        .unwrap()
+        .site
+        .station_mm;
+    for (support_anchor, board_witness) in [
+        (Point::new(0.0, 3.0), Point::new(0.0, -5.0)),
+        (Point::new(0.0, 3.0 - 1e-7), Point::new(0.0, -5.0)),
+        (Point::new(0.0, 5.0), Point::ZERO),
+        (Point::new(0.0, 5.0), Point::new(0.0, 1e-7)),
+    ] {
+        assert!(matches!(
+            build(Attachment {
+                board: &board,
+                support: &support,
+                stock: &stock,
+                boundary,
+                station_mm,
+                support_anchor,
+                board_witness,
+                tolerance: TOL,
+            }),
+            Err(QueryError::InvalidInput(
+                "expected disjoint connected board/support inside stock with interior witnesses"
+            ))
+        ));
+    }
+}
+
+#[test]
 fn perforations_require_resolved_clearance_from_support() {
     let (board, _, stock) = fixture(false);
     let drill_top = SparkFunShallow::OUTWARD_OFFSET_MM + SparkFunShallow::HOLE_DIAMETER_MM / 2.0;

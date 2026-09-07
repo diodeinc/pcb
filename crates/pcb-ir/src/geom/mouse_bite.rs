@@ -169,8 +169,21 @@ pub fn build(input: Attachment<'_>) -> Result<TabGeometry, QueryError> {
             .union(input.support)?
             .difference(input.stock)?
             .is_empty()
-        || !input.support.contains_point(input.support_anchor)
-        || !input.board.contains_point(input.board_witness)
+        || ![
+            (input.support, input.support_anchor),
+            (input.board, input.board_witness),
+        ]
+        .into_iter()
+        .all(|(region, point)| {
+            point.is_finite()
+                && region
+                    .prepare_query()
+                    .signed_distance(point)
+                    .is_some_and(|d| {
+                        d.mm < -input.tolerance.boundary_mm.max(d.uncertainty_mm)
+                            - input.tolerance.numerical_mm
+                    })
+        })
     {
         return Err(QueryError::InvalidInput(
             "expected disjoint connected board/support inside stock with interior witnesses",
