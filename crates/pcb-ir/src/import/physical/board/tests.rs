@@ -368,7 +368,7 @@ fn material_designators_preserve_identity_and_reconcile_bom_spec_evidence() {
     );
     assert!(metadata.diagnostics.is_empty());
 
-    let conflict = design(&xml.replace(
+    let mut conflict = design(&xml.replace(
         "matDes=\"laminate-42\"/>",
         "matDes=\"laminate-42\"><SpecRef id=\"layer-material\"/></StackupLayer>",
     ));
@@ -381,6 +381,20 @@ fn material_designators_preserve_identity_and_reconcile_bom_spec_evidence() {
         conflict.resolve(metadata.layers[0].mat_des.unwrap()),
         "laminate-42"
     );
+    // Public imported evidence can carry a third declared material, even
+    // though XML parsing normally derives this field from the layer SpecRef.
+    conflict.stackups[0].layers[0].material = conflict.stackups[0].layers[0].mat_des;
+    let metadata = conflict.physical_board_metadata();
+    let Association::Conflicting(values) = &metadata.layers[0].material else {
+        panic!("all three source values must remain conflicting");
+    };
+    assert_eq!(
+        values
+            .iter()
+            .map(|value| conflict.resolve(*value))
+            .collect::<Vec<_>>(),
+        ["FR4", "PTFE", "laminate-42"]
+    );
     // A designator name differing from material text is not itself a conflict.
     let consistent = design(&xml.replace(
         "matDes=\"laminate-42\"/>",
@@ -390,6 +404,37 @@ fn material_designators_preserve_identity_and_reconcile_bom_spec_evidence() {
         consistent.physical_board_metadata().layers[0].material,
         Association::Resolved(_)
     ));
+
+    // Identically named designators on another board or layer must neither
+    // override this material nor create ambiguity. Unscoped BOMs still apply.
+    for (header, layer) in [
+        (
+            r#"<BomHeader assembly="other" revision="1"><StepRef name="other-board"/></BomHeader>"#,
+            "",
+        ),
+        ("", r#" layerRef="BOTTOM""#),
+    ] {
+        let foreign = format!(
+            r#"<Bom name="foreign">{header}<BomItem OEMDesignNumberRef="other" quantity="1" category="MATERIAL"><MatDes name="laminate-42"{layer}/><SpecRef id="layer-material"/></BomItem></Bom>"#
+        );
+        let scoped = design(&xml.replace(
+            "<Ecad name=\"test\">",
+            &format!("{foreign}<Ecad name=\"test\">"),
+        ));
+        let metadata = scoped.physical_board_metadata();
+        assert_eq!(
+            scoped.resolve(*metadata.layers[0].material.resolved().unwrap()),
+            "FR4"
+        );
+        assert!(metadata.diagnostics.is_empty());
+    }
+    let scoped = design(&xml.replace("<Bom name=\"materials\">", r#"<Bom name="materials"><BomHeader assembly="board" revision="1"><StepRef name="board"/></BomHeader>"#).replace("<MatDes name=\"laminate-42\"/>", "<MatDes name=\"laminate-42\" layerRef=\"TOP\"/>"));
+    let metadata = scoped.physical_board_metadata();
+    assert_eq!(
+        scoped.resolve(*metadata.layers[0].material.resolved().unwrap()),
+        "FR4"
+    );
+    assert!(metadata.diagnostics.is_empty());
 }
 
 #[test]

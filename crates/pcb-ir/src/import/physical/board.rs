@@ -33,6 +33,8 @@ pub struct BoardPhysicalView {
     pub removal_layers: Vec<BoardRemovalLayer>,
     /// Source-identified hole/slot apertures, retaining plating and Z-span.
     /// Unlike removal_layers these are source images, before polarity clears.
+    /// Without a valid stackup, this evidence view leaves all derived land and
+    /// termination associations unresolved, including order-independent spans.
     pub holes: Vec<PhysicalHole>,
     pub components: Vec<ComponentEnvelopes>,
     pub metadata: BoardPhysicalMetadata,
@@ -322,14 +324,31 @@ impl ImportedDesign {
             materials.dedup();
             let mut bom_materials = Vec::new();
             if let Some(designator) = layer.mat_des {
+                let mut boards = self
+                    .geometry
+                    .layout
+                    .steps
+                    .iter()
+                    .filter(|step| step.kind == LayoutStepKind::Board);
+                let board = boards.next().filter(|_| boards.next().is_none());
                 let items = self
                     .boms
                     .iter()
+                    .filter(|bom| {
+                        bom.header.as_ref().is_none_or(|header| {
+                            header.step_refs.is_empty()
+                                || board.is_some_and(|board| {
+                                    header.step_refs.contains(&board.source_step_ref)
+                                })
+                        })
+                    })
                     .flat_map(|bom| &bom.items)
                     .filter(|item| {
                         item.designators.iter().any(|candidate| {
                             matches!(candidate,
-                        ipc2581::types::BomDesignator::Material(named) if named.name == designator)
+                        ipc2581::types::BomDesignator::Material(named)
+                            if named.name == designator
+                                && named.layer_ref.is_none_or(|reference| reference == layer_ref))
                         })
                     })
                     .collect::<Vec<_>>();
@@ -378,6 +397,12 @@ impl ImportedDesign {
             let declared = layer
                 .material
                 .filter(|material| !self.resolve(*material).trim().is_empty());
+            let conflicting_sources = conflicting_sources
+                || declared
+                    .is_some_and(|value| !materials.is_empty() && !materials.contains(&value));
+            materials.extend(declared);
+            materials.sort_by_key(|material| self.resolve(*material));
+            materials.dedup();
             let material = match (declared, materials.as_slice()) {
                 (_, _) if conflicting_sources => {
                     result
@@ -385,15 +410,6 @@ impl ImportedDesign {
                         .push(BoardPhysicalDiagnostic::ConflictingMaterial { layer: layer_ref });
                     Association::Conflicting(materials)
                 }
-                (Some(a), values) if !values.is_empty() && !values.contains(&a) => {
-                    result
-                        .diagnostics
-                        .push(BoardPhysicalDiagnostic::ConflictingMaterial { layer: layer_ref });
-                    Association::Conflicting(
-                        std::iter::once(a).chain(values.iter().copied()).collect(),
-                    )
-                }
-                (Some(material), []) => Association::Resolved(material),
                 (_, [material]) => Association::Resolved(*material),
                 (None, []) => {
                     result
