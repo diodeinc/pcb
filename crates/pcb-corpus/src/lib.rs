@@ -1,8 +1,12 @@
 //! Versioned, source-independent geometry replay. No import occurs during replay.
-use pcb_ir::geom::{ContourSet, FillRule, region::Ring};
+use pcb_ir::geom::{
+    AccuracyError, ContourSet, FillRule, GeometryAccuracy, Resolution, region::Ring,
+};
 use serde::{Deserialize, Serialize};
 
 pub const VERSION: u32 = 1;
+/// Numerical budget relative to the stored polygon inputs, not their source curves.
+pub const REPLAY_ACCURACY: GeometryAccuracy = GeometryAccuracy::micrometres(10);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -83,8 +87,12 @@ impl Report {
     }
 }
 
-pub fn region(rings: &[Ring], tolerance: f64) -> ContourSet {
-    ContourSet::new(rings.to_vec(), FillRule::EvenOdd, tolerance)
+pub fn region(rings: &[Ring], tolerance: f64) -> Result<ContourSet, AccuracyError> {
+    ContourSet::from_rings(
+        rings.to_vec(),
+        FillRule::EvenOdd,
+        Resolution::new(tolerance, REPLAY_ACCURACY),
+    )
 }
 
 pub fn validate(f: &Fixture) -> Result<(), String> {
@@ -125,24 +133,36 @@ impl Component for Geometry {
         "geometry"
     }
     fn evaluate(&self, f: &Fixture) -> Report {
-        let before = region(&f.substrate, f.tolerance_mm);
-        let after = before.difference(&region(&f.removal, f.tolerance_mm));
-        let status = if before.is_empty() || after.is_empty() {
-            Status::GeometryRejected
-        } else {
-            Status::Completed
-        };
-        let mut report = Report::outcome(
-            &f.id,
-            self.name(),
-            status,
-            "Even-odd polygon regularization and explicit removal only; not attachment, topology, source-curve accuracy, or physical fracture validation.",
-        );
-        report.before_area_mm2 = Some(before.area());
-        report.after_area_mm2 = Some(after.area());
-        report.after = pcb_ir::geom::region::rings_from_contours(&after.to_contours());
-        report
+        match evaluate_geometry(f) {
+            Ok(report) => report,
+            Err(error) => Report::outcome(
+                &f.id,
+                self.name(),
+                Status::NumericalFailure,
+                error.to_string(),
+            ),
+        }
     }
+}
+
+fn evaluate_geometry(f: &Fixture) -> Result<Report, AccuracyError> {
+    let before = region(&f.substrate, f.tolerance_mm)?;
+    let after = before.difference(&region(&f.removal, f.tolerance_mm)?)?;
+    let status = if before.is_empty() || after.is_empty() {
+        Status::GeometryRejected
+    } else {
+        Status::Completed
+    };
+    let mut report = Report::outcome(
+        &f.id,
+        "geometry",
+        status,
+        "Even-odd polygon regularization and explicit removal only; not attachment, topology, source-curve accuracy, or physical fracture validation.",
+    );
+    report.before_area_mm2 = Some(before.area());
+    report.after_area_mm2 = Some(after.area());
+    report.after = after.rings;
+    Ok(report)
 }
 
 pub fn replay(f: &Fixture, component: &dyn Component) -> Report {
@@ -198,7 +218,7 @@ fn escape(s: &str) -> String {
 
 fn svg(f: &Fixture, after: Option<&[Ring]>) -> String {
     use pcb_ir::{
-        geom::region::{rings_bbox, rings_to_contours},
+        geom::{BBox, Point, region::rings_to_contours},
         render::svg_path_data,
     };
     let all = f
@@ -206,9 +226,11 @@ fn svg(f: &Fixture, after: Option<&[Ring]>) -> String {
         .iter()
         .chain(&f.removal)
         .chain(f.overlays.iter().flat_map(|o| &o.rings))
-        .cloned()
-        .collect::<Vec<_>>();
-    let bbox = rings_bbox(&all);
+        .flatten();
+    let bbox = all.fold(BBox::empty(), |mut bbox, point| {
+        bbox.include_point(Point::new(point[0], point[1]));
+        bbox
+    });
     if bbox.is_empty() {
         return "<p>No geometry available</p>".into();
     }
