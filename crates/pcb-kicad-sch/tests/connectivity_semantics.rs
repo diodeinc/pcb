@@ -4,10 +4,11 @@ use std::collections::BTreeSet;
 
 use common::kicad_builder::{KicadBuilder, TestPin};
 use pcb_kicad_sch::{
-    SchItem,
-    analysis::analyze_connectivity,
+    SchItem, SymbolSlotKey,
+    analysis::{SchematicIssue, analyze_connectivity},
     connectivity::{
-        ComponentIdentity, ConnectionGroup, ConnectionOrigin, ConnectivityGraph, Terminal,
+        ComponentIdentity, ComponentNode, ComponentOrigin, ConnectionGroup, ConnectionOrigin,
+        ConnectivityGraph, Terminal,
     },
 };
 
@@ -208,6 +209,35 @@ fn unmanaged_component_still_contributes_pin_connectivity() {
             }
         )
     }));
+}
+
+#[test]
+fn distinct_managed_symbols_sharing_a_slot_still_report_duplicate() {
+    let mut builder = KicadBuilder::new();
+    builder
+        .define_symbol("Test:OnePin", &[TestPin::passive("1", (0.0, 0.0))])
+        .component("Test:OnePin", Some("/design/R"), (0.0, 0.0))
+        .component("Test:OnePin", Some("/design/R"), (10.0, 0.0));
+
+    let observed = ConnectivityGraph::from_kicad(&builder.build()).unwrap();
+    assert_eq!(observed.components.len(), 2);
+    assert_ne!(observed.components[0].origin, observed.components[1].origin);
+
+    let mut expected = ConnectivityGraph::default();
+    expected.components.push(ComponentNode {
+        managed_slot: SymbolSlotKey::new("/design/R", 1),
+        origin: ComponentOrigin::Zener,
+    });
+
+    let analysis = analyze_connectivity(&expected, &observed);
+    assert!(
+        analysis
+            .issues()
+            .iter()
+            .any(|issue| matches!(issue, SchematicIssue::DuplicateSymbol { .. })),
+        "{:?}",
+        analysis.issues(),
+    );
 }
 
 #[test]

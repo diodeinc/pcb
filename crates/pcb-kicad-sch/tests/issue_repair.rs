@@ -519,6 +519,50 @@ fn unbound_symbol_on_a_child_sheet_repairs_by_selection() {
     );
 }
 
+#[test]
+fn repeated_shared_sheet_unmanaged_symbol_does_not_bail_repair() {
+    use common::kicad_builder::{KicadBuilder, TestPin};
+
+    let netlist = common::compile_fixture("hierarchy", "root.zen");
+    let mut document = plan_reconciliation(None, &netlist, "root.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    let root = document
+        .pages
+        .iter_mut()
+        .find(|page| page.file_name.as_deref() == Some("root.kicad_sch"))
+        .expect("hierarchy fixture has a root page");
+
+    let mut builder = KicadBuilder::new();
+    builder
+        .sheet("shared.kicad_sch", &[])
+        .sheet("shared.kicad_sch", &[])
+        .add_page("shared", "shared.kicad_sch")
+        .define_symbol("Test:OnePin", &[TestPin::passive("1", (0.0, 0.0))])
+        .component("Test:OnePin", None, (0.0, 0.0));
+    let mut shared = builder.build().pages.into_iter();
+    root.items.extend(shared.next().unwrap().items);
+    document.pages.extend(shared);
+
+    let inspection = inspect_schematic(&document, &netlist).unwrap();
+    let unbound: Vec<_> = inspection
+        .issues
+        .iter()
+        .filter(|context| matches!(&context.issue, SchematicIssue::UnboundSymbol { .. }))
+        .collect();
+    assert_eq!(unbound.len(), 1, "{:?}", inspection.issues);
+
+    plan_connectivity_repair(
+        &document,
+        &netlist,
+        &inspection,
+        &BTreeSet::from([unbound[0].key.clone()]),
+        &BTreeSet::new(),
+    )
+    .expect("repeated-sheet unbound repair must plan, not bail");
+}
+
 /// A KiCad wire joining two pins the netlist marks NotConnected is a real
 /// electrical divergence: it is reported, unwired NotConnected pins stay
 /// silent, and the repair cuts one segment per path next to the pin instead
