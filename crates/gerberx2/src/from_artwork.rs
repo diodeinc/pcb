@@ -422,6 +422,14 @@ fn lower_artwork_object(
                             "artwork flash references missing aperture {aperture}"
                         ))
                     })?;
+            let aperture_function = object.meta.aperture_function.as_deref().unwrap_or_default();
+            let source_key = (transform.is_translation()
+                && !object.meta.lower_flashes_to_regions
+                && matches!(artwork_aperture.shape, ApertureShape::Contour { .. }))
+            .then(|| ApertureKey {
+                template: ApertureTemplateKey::SourceContour(aperture),
+                function: aperture_function.to_vec(),
+            });
             if !transform.is_translation() {
                 let basis = Affine2 {
                     m02: 0.0,
@@ -434,7 +442,6 @@ fn lower_artwork_object(
                 );
                 transform = Affine2::translation(Point::new(transform.m02, transform.m12));
             }
-            let aperture_function = object.meta.aperture_function.as_deref().unwrap_or_default();
             let region_aperture_attributes = lower_aperture_function(aperture_function);
             if object.meta.lower_flashes_to_regions {
                 return lower_aperture_as_regions(
@@ -446,8 +453,19 @@ fn lower_artwork_object(
                     accuracy,
                 );
             }
-            let aperture =
-                apertures.artwork_aperture(artwork_aperture, aperture_function, accuracy)?;
+            let aperture = if let Some(code) = source_key
+                .as_ref()
+                .and_then(|key| apertures.by_key.get(key))
+            {
+                *code
+            } else {
+                let code =
+                    apertures.artwork_aperture(artwork_aperture, aperture_function, accuracy)?;
+                if let Some(key) = source_key {
+                    apertures.by_key.insert(key, code);
+                }
+                code
+            };
             objects.push(WriterObject {
                 kind: ObjectKind::Flash {
                     at: lower_point(Point::new(transform.m02, transform.m12)),
@@ -578,6 +596,9 @@ struct ApertureKey {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum ApertureTemplateKey {
+    // The legalized layer is immutable and its accuracy is fixed for this table.
+    // Translation affects only flash placement, not local aperture preparation.
+    SourceContour(u32),
     Circle {
         diameter_nm: i64,
         hole_nm: i64,
@@ -1248,6 +1269,111 @@ mod tests {
                 &[contour],
                 FillRule::NonZero,
                 GeometryAccuracy::new(0.0001).unwrap()
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn source_contour_reuse_preserves_placement_function_basis_and_errors() {
+        let accuracy = GeometryAccuracy::default();
+        let mut artwork = ArtworkDocument::new();
+        let outline = rect_payload(1.0, 0.0, 2.0, 0.5);
+        let source = artwork.push_aperture(Aperture::solid(ApertureShape::Contour {
+            outline: outline.clone(),
+            fill_rule: FillRule::EvenOdd,
+        }));
+        let mut uncertain = outline;
+        uncertain.uncertainty_mm = 1.0;
+        let invalid = artwork.push_aperture(Aperture::solid(ApertureShape::Contour {
+            outline: uncertain,
+            fill_rule: FillRule::EvenOdd,
+        }));
+        let mut table = ApertureTable::default();
+        let mut flash = ArtworkObject {
+            geometry: ArtworkGeometry::Flash {
+                aperture: source,
+                transform: Affine2::IDENTITY,
+            },
+            polarity: Polarity::Dark,
+            order: Default::default(),
+            bbox: BBox::empty(),
+            meta: ObjectAttributes::default(),
+        };
+        let lower = |object: &ArtworkObject<ObjectAttributes>, basis, table: &mut ApertureTable| {
+            lower_artwork_object(&artwork, object, basis, Polarity::Dark, table, accuracy)
+        };
+        let first = lower(&flash, Affine2::IDENTITY, &mut table).unwrap();
+        let ObjectKind::Flash { aperture: code, .. } = first[0].kind else {
+            panic!("expected a flash");
+        };
+        let definitions = (table.apertures.len(), table.aperture_macros.len());
+        let translated = lower(
+            &flash,
+            Affine2::translation(Point::new(100_000.000_3, -10_000.000_2)),
+            &mut table,
+        )
+        .unwrap();
+        assert!(
+            matches!(translated[0].kind, ObjectKind::Flash { aperture, at }
+            if aperture == code && at.x == 100_000.000_3 && at.y == -10_000.000_2)
+        );
+        assert_eq!(
+            (table.apertures.len(), table.aperture_macros.len()),
+            definitions
+        );
+
+        // Functions remain separate even for the same source geometry.
+        flash.meta.aperture_function = Some(vec!["SMDPad".into()]);
+        let attributed = lower(&flash, Affine2::IDENTITY, &mut table).unwrap();
+        assert!(
+            matches!(attributed[0].kind, ObjectKind::Flash { aperture, .. } if aperture != code)
+        );
+        flash.meta.aperture_function = None;
+        // A parent instance's basis must not reuse the translation-only alias.
+        let scaled = lower(
+            &flash,
+            Affine2 {
+                m00: 2.0,
+                ..Affine2::IDENTITY
+            },
+            &mut table,
+        )
+        .unwrap();
+        assert!(matches!(scaled[0].kind, ObjectKind::Flash { aperture, .. } if aperture != code));
+        flash.meta.lower_flashes_to_regions = true;
+        let regions = lower(&flash, Affine2::IDENTITY, &mut table).unwrap();
+        assert!(
+            regions
+                .iter()
+                .all(|object| matches!(object.kind, ObjectKind::Region { .. }))
+        );
+
+        // A different source ID with the same coordinates must still validate
+        // its inherited uncertainty; failures must not register an alias.
+        flash.meta.lower_flashes_to_regions = false;
+        flash.geometry = ArtworkGeometry::Flash {
+            aperture: invalid,
+            transform: Affine2::IDENTITY,
+        };
+        assert!(lower(&flash, Affine2::IDENTITY, &mut table).is_err());
+        assert!(!table.by_key.contains_key(&ApertureKey {
+            template: ApertureTemplateKey::SourceContour(invalid),
+            function: Vec::new(),
+        }));
+        // A new export/table must check its own, finer accuracy budget.
+        flash.geometry = ArtworkGeometry::Flash {
+            aperture: source,
+            transform: Affine2::IDENTITY,
+        };
+        assert!(
+            lower_artwork_object(
+                &artwork,
+                &flash,
+                Affine2::IDENTITY,
+                Polarity::Dark,
+                &mut ApertureTable::default(),
+                GeometryAccuracy::new(0.0001).unwrap(),
             )
             .is_err()
         );
