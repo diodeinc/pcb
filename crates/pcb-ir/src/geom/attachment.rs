@@ -319,19 +319,24 @@ impl<'a> BoundaryQuery<'a> {
 /// do not preserve stations, angles, or circular cutters.
 pub fn transform_region(region: &ContourSet, transform: Affine2) -> Result<ContourSet, QueryError> {
     validate_region(region)?;
-    if transform.inverse().is_none() {
-        return Err(QueryError::InvalidInput("singular affine transform"));
+    if transform.inverse().is_none() || !transform.m02.is_finite() || !transform.m12.is_finite() {
+        return Err(QueryError::InvalidInput(
+            "singular or non-finite affine transform",
+        ));
     }
     let contours = region
         .to_contours()
         .into_iter()
         .map(|contour| contour.transformed(transform))
         .collect::<Vec<_>>();
-    Ok(ContourSet::from_contours(
-        &contours,
-        FillRule::NonZero,
-        region.resolution.strict(),
-    )?)
+    let mut transformed =
+        ContourSet::from_contours(&contours, FillRule::NonZero, region.resolution.strict())?;
+    // Empty results have no contour on which to carry preparation history.
+    transformed.uncertainty_mm = transformed
+        .uncertainty_mm
+        .max(region.uncertainty_mm * transform.max_scale());
+    transformed.budget().check(transformed.uncertainty_mm)?;
+    Ok(transformed)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -481,7 +486,7 @@ pub enum RegionMembership {
 fn membership(
     components: &[PreparedRegion],
     point: Point,
-    guard: f64,
+    tolerance: QueryTolerance,
 ) -> Result<RegionMembership, QueryError> {
     if !point.is_finite() {
         return Err(QueryError::InvalidInput("non-finite membership witness"));
@@ -493,7 +498,8 @@ fn membership(
         if !d.mm.is_finite() {
             return Err(QueryError::Numerical("membership distance overflow"));
         }
-        if d.mm.abs() <= guard.max(d.uncertainty_mm) {
+        let guard = (2.0 * tolerance.boundary_mm).max(d.uncertainty_mm) + tolerance.numerical_mm;
+        if d.mm.abs() <= guard {
             return Ok(RegionMembership::BoundaryBand);
         }
         if d.mm < 0.0 {
@@ -549,7 +555,7 @@ pub fn cutter_reachability(
         .collect::<Vec<_>>();
     let entry_components = entries
         .iter()
-        .map(|&p| membership(&components, p, tolerance.pair_band()))
+        .map(|&p| membership(&components, p, tolerance))
         .collect::<Result<Vec<_>, _>>()?;
     // An uncertain entry may border several components, but cannot provide
     // possible access to remote ones. Retain all adjacent candidates rather
@@ -558,11 +564,9 @@ pub fn cutter_reachability(
     for (&entry, classification) in entries.iter().zip(&entry_components) {
         if *classification == RegionMembership::BoundaryBand {
             for (index, component) in components.iter().enumerate() {
-                uncertain_access[index] |= membership(
-                    std::slice::from_ref(component),
-                    entry,
-                    tolerance.pair_band(),
-                )? == RegionMembership::BoundaryBand;
+                uncertain_access[index] |=
+                    membership(std::slice::from_ref(component), entry, tolerance)?
+                        == RegionMembership::BoundaryBand;
             }
         }
     }
@@ -570,7 +574,7 @@ pub fn cutter_reachability(
         .iter()
         .enumerate()
         .map(|(target, &p)| {
-            Ok(match membership(&components, p, tolerance.pair_band())? {
+            Ok(match membership(&components, p, tolerance)? {
                 RegionMembership::Component(component)
                     if entry_components.contains(&RegionMembership::Component(component)) =>
                 {
@@ -653,7 +657,7 @@ pub fn material_after_break(
         .collect::<Vec<_>>();
     let witnesses = witnesses
         .iter()
-        .map(|&p| membership(&prepared, p, tolerance.pair_band()))
+        .map(|&p| membership(&prepared, p, tolerance))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(PolygonTopology {
         retained,

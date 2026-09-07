@@ -500,6 +500,59 @@ fn preparation_uncertainty_and_budget_survive_queries_and_transforms() {
 }
 
 #[test]
+fn empty_transform_keeps_scaled_uncertainty_and_budget() {
+    let empty = ContourSet::from_regularized(vec![], RESOLUTION, 0.002);
+    let transform = Affine2::placement(Point::new(1.0, 2.0), 30.0, Mirror::X, 2.0);
+    let result = transform_region(&empty, transform).unwrap();
+    assert!(result.is_empty());
+    close(result.uncertainty_mm, 0.004, 1e-12);
+    assert_eq!(result.resolution, RESOLUTION);
+    assert!(matches!(
+        transform_region(
+            &empty,
+            Affine2::placement(Point::ZERO, 0.0, Mirror::NONE, 10.0)
+        ),
+        Err(QueryError::Accuracy(AccuracyError::BudgetExceeded { .. }))
+    ));
+}
+
+#[test]
+fn stored_membership_uncertainty_keeps_additive_numerical_guard() {
+    let material = ContourSet::from_regularized(rect(0.0, 0.0, 4.0, 4.0).rings, RESOLUTION, 0.002);
+    let empty = ContourSet::empty(RESOLUTION);
+    let tolerance = QueryTolerance {
+        boundary_mm: 0.0,
+        numerical_mm: 0.001,
+    };
+    let topology =
+        material_after_break(&material, &empty, &[Point::new(0.0025, 2.0)], tolerance).unwrap();
+    assert_eq!(topology.witnesses, vec![RegionMembership::BoundaryBand]);
+    let baseline = cutter_reachability(
+        &material,
+        &empty,
+        0.5,
+        &[Point::new(2.0, 2.0)],
+        &[],
+        tolerance,
+    )
+    .unwrap();
+    let band_point = Point::new(
+        baseline.center_space.bbox.min.x + baseline.center_space.uncertainty_mm + 0.0005,
+        2.0,
+    );
+    let result = cutter_reachability(
+        &material,
+        &empty,
+        0.5,
+        &[Point::new(2.0, 2.0)],
+        &[band_point],
+        tolerance,
+    )
+    .unwrap();
+    assert!(matches!(result.targets[0], Decision::Unresolved(_)));
+}
+
+#[test]
 fn invalid_queries_are_errors_not_geometric_rejections() {
     let region = rect(0.0, 0.0, 1.0, 1.0);
     assert!(
