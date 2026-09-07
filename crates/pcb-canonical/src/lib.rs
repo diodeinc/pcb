@@ -76,8 +76,9 @@ fn collect_canonical_entries(
     let mut entries = Vec::new();
     let package_root = path.to_path_buf();
     for result in WalkBuilder::new(path)
-        // Apply .gitignore in both repositories and archive extracts, but ignore
-        // machine-local rules that are not part of the published tree.
+        // Apply package-local ignore rules in repositories and archive extracts,
+        // without ancestor rules or machine-local Git exclusions.
+        .parents(false)
         .require_git(false)
         .git_global(false)
         .git_exclude(false)
