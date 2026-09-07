@@ -1952,7 +1952,20 @@ impl<'a> Parser<'a> {
             .and_then(|s| s.parse::<f64>().ok())
             .map(|v| crate::units::to_mm(v, units));
 
-        let layer_number = self.attr(node, "sequence").and_then(|s| s.parse().ok());
+        let layer_number = self
+            .attr(node, "sequence")
+            .map(|value| {
+                value
+                    .parse::<f64>()
+                    .ok()
+                    .filter(|number| number.is_finite() && *number >= 0.0)
+                    .ok_or_else(|| {
+                        Ipc2581Error::InvalidAttribute(format!(
+                            "StackupLayer sequence must be a finite nonnegative number: {value}"
+                        ))
+                    })
+            })
+            .transpose()?;
         let mat_des = self.optional_attr(node, "matDes");
 
         // Preserve every SpecRef, including external/unresolved evidence.

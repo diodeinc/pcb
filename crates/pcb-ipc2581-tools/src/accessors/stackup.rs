@@ -249,7 +249,7 @@ pub struct StackupLayerInfo {
     /// Loss tangent
     pub loss_tangent: Option<f64>,
     /// Layer number in stackup
-    pub layer_number: Option<u32>,
+    pub layer_number: Option<f64>,
 }
 
 impl<'a> IpcAccessor<'a> {
@@ -381,7 +381,7 @@ impl<'a> IpcAccessor<'a> {
                 material: final_material,
                 dielectric_constant: final_dk,
                 loss_tangent: final_loss_tan,
-                layer_number: stackup_layer.layer_number.or(Some((idx + 1) as u32)),
+                layer_number: stackup_layer.layer_number.or(Some((idx + 1) as f64)),
             });
         }
 

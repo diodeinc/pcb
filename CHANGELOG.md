@@ -36,6 +36,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Require experimental tab anchors and witnesses to be resolved interior points of the original regions.
 - Reject experimental tab perforations that overlap support or lack resolved clearance from it.
 - Preserve exact arc endpoints during curve preparation to avoid numerical zero-length edges in release builds.
+- Preserve fractional IPC-2581 stackup sequences when ordering physical layers.
 - Report malformed SPICE `PARAMS:` tokens instead of crashing.
 - Migrate root-level `.zen` files in container workspaces.
 - Exit non-zero from `pcb rectify fix` and `pcb rectify audit` when batch evaluation fails.

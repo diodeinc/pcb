@@ -111,7 +111,8 @@ pub struct StackupLayer {
     pub spec_refs: Vec<Symbol>,
     pub dielectric_constant: Option<f64>,
     pub loss_tangent: Option<f64>,
-    pub layer_number: Option<u32>,
+    /// IPC sequence is a nonnegative double, not an integer layer ordinal.
+    pub layer_number: Option<f64>,
 }
 
 /// Step represents a design (board, panel, etc.)

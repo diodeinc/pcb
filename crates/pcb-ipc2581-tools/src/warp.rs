@@ -139,7 +139,7 @@ pub(crate) fn physical_stack(ipc: &Ipc2581) -> Result<(ThermalStack, Vec<String>
         .context("IPC-2581 file carries no physical stackup")?;
     let mut ordered = stackup.layers.iter().collect::<Vec<_>>();
     if ordered.iter().all(|layer| layer.layer_number.is_some()) {
-        ordered.sort_by_key(|layer| layer.layer_number);
+        ordered.sort_by(|a, b| a.layer_number.unwrap().total_cmp(&b.layer_number.unwrap()));
     }
 
     // Silkscreen and coating are carried in the stackup at zero thickness. They

@@ -357,7 +357,7 @@ fn output_text(
             .iter()
             .filter(|l| l.layer_type != StackupLayerType::Other)
         {
-            let layer_num = layer.layer_number.unwrap_or(0);
+            let layer_num = layer.layer_number.unwrap_or(0.0);
             let material = layer.material.as_deref().unwrap_or("");
             let dk = layer
                 .dielectric_constant

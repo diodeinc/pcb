@@ -166,7 +166,7 @@ struct PhysicalStackupLayer {
     material: Option<String>,
     dielectric_constant: Option<u64>,
     loss_tangent: Option<u64>,
-    layer_number: Option<u32>,
+    layer_number: Option<u64>,
     specs: Vec<SpecSignature>,
 }
 
@@ -558,7 +558,7 @@ fn physical_stackup(xml: &str, source_index: usize) -> Result<PhysicalStackup> {
                     .map(|material| ipc.resolve(material).to_string()),
                 dielectric_constant: float_bits(stackup_layer.dielectric_constant),
                 loss_tangent: float_bits(stackup_layer.loss_tangent),
-                layer_number: stackup_layer.layer_number,
+                layer_number: float_bits(stackup_layer.layer_number),
                 specs,
             })
         })

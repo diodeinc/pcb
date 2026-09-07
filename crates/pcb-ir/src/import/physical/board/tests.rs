@@ -509,6 +509,41 @@ fn multiple_stackup_specs_preserve_provenance_and_reconcile_without_last_ref_win
 }
 
 #[test]
+fn fractional_stackup_sequences_order_layers_and_reject_invalid_order_evidence() {
+    let xml = fixture().replace("sequence=\"0\"", "sequence=\"2.5\"")
+        .replace("</StackupGroup>", r#"<StackupLayer layerOrGroupRef="BOTTOM" thickness="0.035" sequence="0.25"/></StackupGroup>"#)
+        .replace("<Layer name=\"TOP\"", r#"<Layer name="BOTTOM" layerFunction="SIGNAL" side="BOTTOM" polarity="POSITIVE"/><Layer name="TOP""#);
+    let imported = design(&xml);
+    assert_eq!(imported.stackups[0].layers[0].layer_number, Some(2.5));
+    let view = imported.physical_board(Resolution::default()).unwrap();
+    assert_eq!(
+        view.metadata
+            .layers
+            .iter()
+            .map(|layer| imported.resolve(layer.layer_ref))
+            .collect::<Vec<_>>(),
+        ["BOTTOM", "TOP"]
+    );
+    for sequence in ["2.5", "2.50", "25e-1"] {
+        let duplicate =
+            Ipc2581::parse(&xml.replace("sequence=\"0.25\"", &format!("sequence=\"{sequence}\"")))
+                .unwrap();
+        assert!(
+            import_design(&duplicate, Resolution::default())
+                .unwrap_err()
+                .to_string()
+                .contains("duplicate layer sequence")
+        );
+    }
+    for invalid in ["NaN", "inf", "-0.25", "invalid"] {
+        assert!(
+            Ipc2581::parse(&xml.replace("sequence=\"0.25\"", &format!("sequence=\"{invalid}\"")))
+                .is_err()
+        );
+    }
+}
+
+#[test]
 fn missing_stackup_does_not_infer_hole_land_links_from_layer_declarations() {
     let xml = fixture().replace("</Content>", r#"<DictionaryStandard units="MILLIMETER"><EntryStandard id="pad"><Circle diameter="3"/></EntryStandard></DictionaryStandard></Content>"#)
         .replace("<LayerFeature layerRef=\"TOP\">", r#"<LayerFeature layerRef="TOP"><Set><Pad padstackDefRef="P"><Location x="8" y="2"/><StandardPrimitiveRef id="pad"/></Pad></Set>"#);
