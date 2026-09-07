@@ -91,6 +91,8 @@ pub struct AnalysisMesh {
 pub enum MeshError {
     InvalidOptions,
     InvalidRegion,
+    /// Invalid or over-budget inherited boundary approximation, not physical infeasibility.
+    Accuracy(String),
     Triangulation(String),
     /// Constraint topology could not be traced back to the input boundaries.
     BoundaryTopology,
@@ -118,6 +120,8 @@ pub struct MeshAttachment {
 impl AnalysisMesh {
     /// Mesh each canonical material component independently, so even touching
     /// components do not share DOFs. Identical inputs/options reproduce ordering.
+    /// The region must have a valid resolution and approximation history within
+    /// its own budget. Meshing cannot repair exhausted source geometry accuracy.
     pub fn new(region: &ContourSet, options: MeshOptions) -> Result<Self, MeshError> {
         if !options.max_area_mm2.is_finite()
             || options.max_area_mm2 <= 0.0
@@ -126,13 +130,18 @@ impl AnalysisMesh {
         {
             return Err(MeshError::InvalidOptions);
         }
-        if region
-            .rings
-            .iter()
-            .any(|r| r.len() < 3 || r.iter().any(|p| !p[0].is_finite() || !p[1].is_finite()))
+        if !region.resolution.is_valid()
+            || region
+                .rings
+                .iter()
+                .any(|r| r.len() < 3 || r.iter().any(|p| !p[0].is_finite() || !p[1].is_finite()))
         {
             return Err(MeshError::InvalidRegion);
         }
+        region
+            .budget()
+            .check(region.uncertainty_mm)
+            .map_err(|error| MeshError::Accuracy(error.to_string()))?;
         let (components, outers) = region.ring_components();
         if components.contains(&usize::MAX) {
             return Err(MeshError::InvalidRegion);

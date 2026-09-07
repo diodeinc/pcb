@@ -354,3 +354,37 @@ fn exact_oblique_boundary_attachment_survives_cancellation() {
         assert!(mesh.attach_to_element(outside, 0, 1e-12).is_some());
     }
 }
+
+#[test]
+fn restored_regions_must_have_valid_resolution_and_accuracy_history() {
+    let resolution = Resolution::default();
+    let budget = resolution.accuracy.max_error_mm();
+    for rings in [vec![], rect(0.0, 0.0, 1.0, 1.0).rings] {
+        for uncertainty in [budget.next_up(), f64::INFINITY, f64::NAN, -1.0] {
+            let region = ContourSet::from_regularized(rings.clone(), resolution, uncertainty);
+            let error = AnalysisMesh::new(&region, options(1.0)).unwrap_err();
+            assert!(matches!(error, MeshError::Accuracy(_)));
+            assert!(error.to_string().contains("accuracy budget"));
+        }
+        for tolerance in [-0.001, f64::NAN, f64::INFINITY] {
+            let region = ContourSet::from_regularized(
+                rings.clone(),
+                resolution.with_tolerance(tolerance),
+                0.0,
+            );
+            assert_eq!(
+                AnalysisMesh::new(&region, options(1.0)),
+                Err(MeshError::InvalidRegion)
+            );
+        }
+        // Triangulating the already-prepared polygon spends no new boundary budget.
+        for uncertainty in [0.0, budget] {
+            let region = ContourSet::from_regularized(rings.clone(), resolution, uncertainty);
+            let mesh = AnalysisMesh::new(&region, options(1.0)).unwrap();
+            assert_eq!(
+                mesh.approximation.region_boundary_uncertainty_mm,
+                uncertainty
+            );
+        }
+    }
+}
