@@ -4330,6 +4330,7 @@ dependencies = [
  "libm",
  "pcb-sexpr",
  "resvg",
+ "robust",
  "spade",
  "terminal_size",
 ]

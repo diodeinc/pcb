@@ -300,7 +300,8 @@ impl AnalysisMesh {
     /// hits take precedence. For shared edges/vertices the lowest element index
     /// wins. Otherwise project to the nearest triangle within `tolerance_mm`;
     /// the returned distance exposes snapping, including across a polygon's
-    /// approximation band. Zero tolerance never intentionally snaps. Invalid
+    /// approximation band. Zero tolerance uses robust orientation of the supplied
+    /// floating-point coordinates, not a numerical snapping band. Invalid
     /// queries and points outside that band return None.
     pub fn attach(
         &self,
@@ -345,18 +346,24 @@ impl AnalysisMesh {
         let triangle = self.elements.get(element)?;
         let mut nearest: Option<MeshAttachment> = None;
         let [a, b, c] = triangle.vertices.map(|v| self.vertices[v]);
-        let denominator = cross(b - a, c - a);
-        let weights = [
-            cross(b - point, c - point) / denominator,
-            cross(c - point, a - point) / denominator,
-            cross(a - point, b - point) / denominator,
+        let coord = |p: Point| robust::Coord { x: p.x, y: p.y };
+        // Use the triangulator's adaptive orientation predicate for exact signs
+        // of represented inputs. An epsilon band would also accept exterior points.
+        let areas = [
+            robust::orient2d(coord(b), coord(c), coord(point)),
+            robust::orient2d(coord(c), coord(a), coord(point)),
+            robust::orient2d(coord(a), coord(b), coord(point)),
         ];
-        if weights.iter().all(|w| w.is_finite() && *w >= 0.0) {
+        let sum = areas.iter().sum::<f64>();
+        if areas.iter().all(|w| w.is_finite() && *w >= 0.0) && sum.is_finite() && sum > 0.0 {
             return Some(MeshAttachment {
                 element,
-                weights,
+                weights: areas.map(|w| w / sum),
                 distance_mm: 0.0,
             });
+        }
+        if tolerance_mm == 0.0 {
+            return None;
         }
         for (i, j) in [(0, 1), (1, 2), (2, 0)] {
             let vertices = [a, b, c];

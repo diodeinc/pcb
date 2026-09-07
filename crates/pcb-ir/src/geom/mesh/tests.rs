@@ -300,3 +300,57 @@ fn empty_and_invalid_queries_and_options() {
         Err(MeshError::InvalidOptions)
     );
 }
+
+#[test]
+fn exact_oblique_boundary_attachment_survives_cancellation() {
+    // Exactly collinear binary inputs; ordinary cross products round negative.
+    // Power-of-two scaling preserves that relation at different physical sizes.
+    for scale in [2.0_f64.powi(-42), 2.0_f64.powi(-40), 2.0_f64.powi(-38)] {
+        let a = Point::new(3109757648896.0, 20809216.0) * scale;
+        let b = Point::new(-29.376953125, -825439027200.0) * scale;
+        let p = Point::new(388719706086.29517, -722256547648.0) * scale;
+        assert!(cross(a - p, b - p) < 0.0);
+        let mut mesh = AnalysisMesh::new(&rect(0.0, 0.0, 1.0, 1.0), options(1.0)).unwrap();
+        mesh.vertices = vec![
+            a,
+            b,
+            Point::new(4398046511104.0, 0.0) * scale,
+            Point::new(-1099511627776.0, 0.0) * scale,
+        ];
+        mesh.elements = vec![
+            MeshElement {
+                vertices: [0, 1, 2],
+                component: 0,
+            },
+            MeshElement {
+                vertices: [1, 0, 3],
+                component: 0,
+            },
+        ];
+        let hits: Vec<_> = mesh.attachments(p, None, 0.0).collect();
+        assert_eq!(hits.len(), 2, "both physical sides must be available");
+        for hit in &hits {
+            assert_eq!(hit.distance_mm, 0.0);
+            let expected = if hit.element == 0 {
+                [0.125, 0.875]
+            } else {
+                [0.875, 0.125]
+            };
+            for (actual, expected) in hit.weights.iter().zip(expected) {
+                assert!((actual - expected).abs() <= 2.0 * f64::EPSILON);
+            }
+            assert_eq!(hit.weights[2], 0.0);
+            assert!(
+                hit.weights
+                    .iter()
+                    .all(|w| w.is_finite() && (0.0..=1.0).contains(w))
+            );
+            assert!((hit.weights.iter().sum::<f64>() - 1.0).abs() <= 16.0 * f64::EPSILON);
+        }
+        assert_eq!(mesh.attach(p, None, 0.0).unwrap().element, 0);
+        // One representable step outside must not become implicit snapping.
+        let outside = Point::new(p.x, p.y.next_up());
+        assert!(mesh.attach_to_element(outside, 0, 0.0).is_none());
+        assert!(mesh.attach_to_element(outside, 0, 1e-12).is_some());
+    }
+}
