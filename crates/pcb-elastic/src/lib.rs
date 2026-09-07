@@ -154,7 +154,7 @@ impl Model {
         let mut q = DVector::zeros(free.len());
         if !free.is_empty() {
             let eigen = spectrum(a.clone())?;
-            let cutoff = cutoff(&eigen.eigenvalues, self.tolerances);
+            let cutoff = cutoff(eigen.eigenvalues.amax(), self.tolerances)?;
             for j in 0..free.len() {
                 let value = eigen.eigenvalues[j];
                 let v = eigen.eigenvectors.column(j);
@@ -191,13 +191,21 @@ impl Model {
             scaled_residual_norm / denominator
         };
         let accurate = scaled_residual_norm
-            <= self.tolerances.residual_absolute + self.tolerances.residual_relative * denominator;
+            <= tolerance_limit(
+                self.tolerances.residual_absolute,
+                self.tolerances.residual_relative,
+                denominator,
+            )?;
         // Compatibility uses load scale, not ||A||||q||: a soft supported
         // direction must not hide a finite load on an unsupported direction.
         let unsupported_load =
             DVector::from_iterator(modes.len(), modes.iter().map(|m| m.load_projection)).norm();
         let compatible = unsupported_load
-            <= self.tolerances.residual_absolute + self.tolerances.residual_relative * b.norm();
+            <= tolerance_limit(
+                self.tolerances.residual_absolute,
+                self.tolerances.residual_relative,
+                b.norm(),
+            )?;
         let status = match (modes.is_empty(), compatible, accurate) {
             (false, false, _) => Status::SingularIncompatible,
             (_, _, false) => Status::Inaccurate,
@@ -261,8 +269,27 @@ fn spectrum(
         .ok_or(Error::NumericalFailure)
 }
 
-fn cutoff(values: &DVector<f64>, t: Tolerances) -> f64 {
-    t.rank_absolute + t.rank_relative * values.amax()
+fn tolerance_limit(absolute: f64, relative: f64, scale: f64) -> Result<f64, Error> {
+    let limit = absolute + relative * scale;
+    if limit.is_finite() {
+        Ok(limit)
+    } else {
+        Err(Error::NumericalFailure)
+    }
+}
+
+fn cutoff(scale: f64, t: Tolerances) -> Result<f64, Error> {
+    tolerance_limit(t.rank_absolute, t.rank_relative, scale)
+}
+
+fn validate_psd(matrix: DMatrix<f64>, t: Tolerances) -> Result<(), Error> {
+    let eigen = spectrum(matrix)?;
+    let min = eigen.eigenvalues.min();
+    if min < -cutoff(eigen.eigenvalues.amax(), t)? {
+        Err(Error::Indefinite(min))
+    } else {
+        Ok(())
+    }
 }
 
 fn assemble(
@@ -287,15 +314,10 @@ fn assemble(
         let scaled = DMatrix::from_fn(m, m, |i, j| {
             block.stiffness[(i, j)] * scales[block.dofs[i]] * scales[block.dofs[j]]
         });
-        if (&scaled - scaled.transpose()).amax() > t.rank_absolute + t.rank_relative * scaled.amax()
-        {
+        if (&scaled - scaled.transpose()).amax() > cutoff(scaled.amax(), t)? {
             return Err(Error::InvalidInput);
         }
-        let eigen = spectrum((&scaled + scaled.transpose()) * 0.5)?;
-        let min = eigen.eigenvalues.min();
-        if min < -cutoff(&eigen.eigenvalues, t) {
-            return Err(Error::Indefinite(min));
-        }
+        validate_psd((&scaled + scaled.transpose()) * 0.5, t)?;
         for (i, &di) in block.dofs.iter().enumerate() {
             for (j, &dj) in block.dofs.iter().enumerate() {
                 k[(di, dj)] += (block.stiffness[(i, j)] + block.stiffness[(j, i)]) * 0.5;
@@ -304,6 +326,17 @@ fn assemble(
     }
     if k.iter().any(|x| !x.is_finite()) {
         return Err(Error::NumericalFailure);
+    }
+    // Block-local roundoff allowances can accumulate beyond the global
+    // tolerance. Validate before imposing any physical constraints, including
+    // all-fixed evaluations. An unchanged, already validated base needs no work.
+    if !blocks.is_empty() {
+        validate_psd(
+            DMatrix::from_fn(k.nrows(), k.ncols(), |i, j| {
+                k[(i, j)] * scales[i] * scales[j]
+            }),
+            t,
+        )?;
     }
     Ok(())
 }

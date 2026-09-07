@@ -454,3 +454,53 @@ fn rank_cutoff_reports_soft_modes_and_never_masks_unsupported_load() {
     assert_eq!(r.displacement.norm(), 0.0);
     close(r.scaled_residual_norm, 1.0, 1e-15);
 }
+
+#[test]
+fn accumulated_negative_stiffness_is_rejected_before_constraints() {
+    let first = block(DMatrix::from_diagonal(&DVector::from_vec(vec![
+        1.0, -6e-12, 0.0,
+    ])));
+    let second = block(DMatrix::from_diagonal(&DVector::from_vec(vec![
+        0.0, -6e-12, 1.0,
+    ])));
+    // Each negative direction is within the explicit 1e-11 relative cutoff,
+    // but their sum exceeds the cutoff of the complete assembled matrix.
+    let model = Model::new(vec![1.0; 3], std::slice::from_ref(&first), tolerances()).unwrap();
+    Model::new(vec![1.0; 3], std::slice::from_ref(&second), tolerances()).unwrap();
+    assert!(matches!(
+        Model::new(vec![1.0; 3], &[first, second.clone()], tolerances()),
+        Err(Error::Indefinite(_))
+    ));
+    for prescribed in [vec![], vec![(0, 0.0), (1, 0.0), (2, 0.0)]] {
+        assert!(matches!(
+            model.evaluate(std::slice::from_ref(&second), &[0.0; 3], &prescribed),
+            Err(Error::Indefinite(_))
+        ));
+    }
+}
+
+#[test]
+fn finite_tolerance_overflow_is_a_numerical_failure() {
+    let mut t = tolerances();
+    t.rank_absolute = f64::MAX;
+    t.rank_relative = 0.75;
+    let k = block(DMatrix::from_element(1, 1, 1e307));
+    assert!(matches!(
+        Model::new(vec![1.0], std::slice::from_ref(&k), t),
+        Err(Error::NumericalFailure)
+    ));
+    let model = Model::new(vec![1.0], &[], t).unwrap();
+    assert!(matches!(
+        model.evaluate(&[k], &[0.0], &[(0, 0.0)]),
+        Err(Error::NumericalFailure)
+    ));
+
+    let mut t = tolerances();
+    t.residual_absolute = f64::MAX;
+    t.residual_relative = f64::MAX;
+    let model = Model::new(vec![1.0], &[block(DMatrix::identity(1, 1))], t).unwrap();
+    assert!(matches!(
+        model.evaluate(&[], &[1.0], &[]),
+        Err(Error::NumericalFailure)
+    ));
+}

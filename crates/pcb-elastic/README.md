@@ -15,8 +15,12 @@ free residuals and unsupported eigenmodes with effective-load projections.
 Repeated calls do not accumulate supports. The solver always assembles and solves
 the full system; there is no condensed approximation to validate or hidden pin.
 Contributions must be symmetric positive semidefinite within the caller's explicit
-numerical tolerance. Negative stiffness, invalid input and arithmetic failure are
-errors. Small eigenvalues are reported as unsupported, not replaced by stiffness.
+numerical tolerance. The assembled base and each support-updated matrix are also
+checked before applying constraints: local negative roundoff allowances cannot
+accumulate beyond the global cutoff, even in an all-fixed evaluation. An unchanged
+base is not checked again. Negative stiffness, invalid input and arithmetic failure
+(including overflow of tolerance limits) are errors. Small eigenvalues are reported
+as unsupported, not replaced by stiffness.
 
 Let S contain the supplied characteristic DOF displacements. On free DOFs solve
 `A q = b`, with `A = S K_ff S`, `b = S (f_f - K_fc u_c)`, `u_f = S q`.
@@ -105,5 +109,8 @@ Coarse meshes can be substantially too compliant. Shape-regular refinement and
 independent physical validation are necessary. Dense O(n²) memory/O(n³) solves
 are intended for small foundation models, not a scalable general FEM platform.
 Pure-Rust nalgebra requires no BLAS, native process, GPU or platform solver.
+PSD validation uses its bounded spectral routine; the public eigenvalues-only
+routine has no iteration bound. The workspace optimizes this crate in dev/test
+builds, retaining debug assertions and all validation on refinement fixtures.
 Native tests and WASM compilation establish numerical/software behavior only,
 not manufacturing physics or mouse-bite breaking safety.
