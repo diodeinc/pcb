@@ -89,6 +89,10 @@ pub struct CadData {
 #[derive(Debug, Clone)]
 pub struct Stackup {
     pub name: Symbol,
+    /// Verbatim source attributes (including percentage tolerances and status),
+    /// not normalized or interpreted as layer material properties.
+    pub source_attributes: Vec<(Symbol, Symbol)>,
+    pub source_units: Units,
     /// Direct stackup-scoped references, not inherited by groups or layers.
     pub spec_refs: Vec<Symbol>,
     pub overall_thickness: Option<f64>,
@@ -103,6 +107,9 @@ pub struct Stackup {
 #[derive(Debug, Clone)]
 pub struct StackupGroup {
     pub name: Symbol,
+    /// Verbatim group construction attributes, not inherited by member layers.
+    pub source_attributes: Vec<(Symbol, Symbol)>,
+    pub source_units: Units,
     pub mat_des: Option<Symbol>,
     pub spec_refs: Vec<Symbol>,
     /// Ordered CADDataLayerRef membership evidence, separate from stackup order.

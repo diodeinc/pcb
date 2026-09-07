@@ -647,6 +647,60 @@ fn fractional_stackup_sequences_order_layers_and_reject_invalid_order_evidence()
 }
 
 #[test]
+fn construction_attributes_retain_source_units_and_percentage_evidence() {
+    let xml = fixture()
+        .replace("MILLIMETER", "INCH")
+        .replace(r#"<Stackup name="stack" overallThickness="1.6">"#, r#"<Stackup name="stack" overallThickness="0.062" tolPlus="10" tolMinus="5" tolPercent="true" whereMeasured="METAL" matDes="root-material" stackupStatus="PROPOSED" comment="root construction">"#)
+        .replace(r#"<StackupGroup name="g">"#, r#"<StackupGroup name="g" thickness="0.031" tolPlus="0.002" tolMinus="0.001" tolPercent="false" matDes="group-material" comment="group construction">"#);
+    let imported = design(&xml);
+    let metadata = imported.physical_board_metadata();
+    assert_eq!(metadata.source_units, Some(ipc2581::types::Units::Inch));
+    assert_eq!(metadata.groups[0].source_units, ipc2581::types::Units::Inch);
+    for (attributes, expected) in [
+        (
+            &metadata.source_attributes,
+            vec![
+                ("overallThickness", "0.062"),
+                ("tolPlus", "10"),
+                ("tolMinus", "5"),
+                ("tolPercent", "true"),
+                ("whereMeasured", "METAL"),
+                ("matDes", "root-material"),
+                ("stackupStatus", "PROPOSED"),
+                ("comment", "root construction"),
+            ],
+        ),
+        (
+            &metadata.groups[0].source_attributes,
+            vec![
+                ("thickness", "0.031"),
+                ("tolPlus", "0.002"),
+                ("tolMinus", "0.001"),
+                ("tolPercent", "false"),
+                ("matDes", "group-material"),
+                ("comment", "group construction"),
+            ],
+        ),
+    ] {
+        let actual = attributes
+            .iter()
+            .map(|(name, value)| (imported.resolve(*name), imported.resolve(*value)))
+            .collect::<Vec<_>>();
+        for attribute in expected {
+            assert!(
+                actual.contains(&attribute),
+                "missing source evidence {attribute:?}"
+            );
+        }
+    }
+    assert!((metadata.overall_thickness_mm.unwrap() - 0.062 * 25.4).abs() < 1e-12);
+    assert!(
+        metadata.layers[0].mat_des.is_none(),
+        "construction evidence is not inherited by layers"
+    );
+}
+
+#[test]
 fn invalid_order_preserves_each_layer_and_group_material_provenance() {
     let xml = fixture().replace("<StackupGroup name=\"g\">", "<StackupGroup name=\"g\" matDes=\"group-material\">")
         .replace("<StackupGroup name=", "<SpecRef id=\"root-external\"/><SpecRef id=\"mat\"/><StackupGroup name=")
