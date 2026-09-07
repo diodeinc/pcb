@@ -53,10 +53,10 @@ exclude = ["scratch/**", "experiments/old-board"]
 cache directories such as
 `.git`, `.pcb`, `vendor`, `target`, `node_modules`, and `fork`.
 
-A top-level package directory named `workspace` collides with the root
-package's reserved URL when `[workspace].repository` is unset, so `pcb`
-surfaces a discovery error instead of silently dropping the descendant.
-Set `[workspace].repository` (or rename the directory) to disambiguate.
+If the root manifest has a `[board]`, non-empty `[dependencies]`, or non-empty
+`[parts]`, it also defines a package. Without `[workspace].repository`, a
+top-level `workspace/` package then collides with the root's reserved URL and
+causes a discovery error. Set `[workspace].repository` or rename the directory.
 
 ## Coexisting versions
 
