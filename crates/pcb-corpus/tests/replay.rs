@@ -104,7 +104,17 @@ fn source_text_is_escaped_and_failed_geometry_not_rendered() {
 
 #[test]
 fn compressed_real_sources_replay_without_source_files() {
-    for name in ["demo-dm0003", "workspace-dm0002"] {
+    for name in [
+        "demo-dm0003",
+        "workspace-dm0002",
+        "demo-bramble",
+        "demo-demeter",
+        "demo-feign",
+        "demo-governor",
+        "demo-marlow",
+        "demo-renfield",
+        "demo-seward",
+    ] {
         let f = load(
             &Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("fixtures/v1/{name}.json.zst")),
             "geometry",
