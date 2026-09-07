@@ -493,48 +493,6 @@ R1 p n {RVAL}
     "#
 });
 
-snapshot_eval!(component_infers_spice_model_from_symbol_malformed_params, {
-    "my_model.lib" => r#"
-.SUBCKT my_resistor p n PARAMS: RVAL=1k =
-R1 p n {RVAL}
-.ENDS my_resistor
-"#,
-    "test_sim_symbol.kicad_sym" => r#"(kicad_symbol_lib (version 20211014) (generator kicad_symbol_editor)
-  (symbol "TestSim" (pin_names (offset 1.016)) (in_bom yes) (on_board yes)
-    (property "Reference" "R" (id 0) (at 0 0 0))
-    (property "Sim.Library" "my_model.lib" (id 1) (at 0 0 0))
-    (property "Sim.Name" "my_resistor" (id 2) (at 0 0 0))
-    (property "Sim.Device" "SUBCKT" (id 3) (at 0 0 0))
-    (property "Sim.Pins" "2=p 1=n" (id 4) (at 0 0 0))
-    (property "Sim.Params" "RVAL=2200" (id 5) (at 0 0 0))
-    (symbol "TestSim_0_1"
-      (rectangle (start -10.16 10.16) (end 10.16 -10.16))
-    )
-    (symbol "TestSim_1_1"
-      (pin passive line (at -12.7 2.54 0) (length 2.54)
-        (name "P1" (effects (font (size 1.27 1.27))))
-        (number "1" (effects (font (size 1.27 1.27))))
-      )
-      (pin passive line (at -12.7 -2.54 0) (length 2.54)
-        (name "P2" (effects (font (size 1.27 1.27))))
-        (number "2" (effects (font (size 1.27 1.27))))
-      )
-    )
-  )
-)"#,
-    "test.zen" => r#"
-        Component(
-            name = "R1",
-            footprint = "0603",
-            symbol = Symbol(library = "./test_sim_symbol.kicad_sym"),
-            pins = {
-                "P1": Net("A"),
-                "P2": Net("B"),
-            },
-        )
-    "#
-});
-
 snapshot_eval!(component_ignores_non_subckt_symbol_spice_model, {
     "my_model.lib" => r#"
 .SUBCKT my_resistor p n

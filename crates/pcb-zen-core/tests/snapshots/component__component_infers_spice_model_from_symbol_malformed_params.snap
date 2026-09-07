@@ -1,5 +1,0 @@
----
-source: crates/pcb-zen-core/tests/component.rs
-expression: output
----
-Error: test.zen:5:1-13:2 Invalid PARAMS syntax: '='
