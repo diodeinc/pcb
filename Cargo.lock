@@ -4145,6 +4145,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "pcb-corpus"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ipc2581",
+ "pcb-ir",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "zstd",
+]
+
+[[package]]
 name = "pcb-diode-api"
 version = "0.4.51"
 dependencies = [

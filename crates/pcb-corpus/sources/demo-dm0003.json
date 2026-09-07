@@ -1,0 +1,13 @@
+{
+  "repository": "https://github.com/dioderobot/demo",
+  "revision": "f6025b5e2a7e17ba0e7426a5ebb8f7793aa9ae56",
+  "path": "boards/DM0003/layout/DM0003",
+  "sha256": null,
+  "extraction": "filled by extractor",
+  "limitations": [
+    "Export v2.0.1, 2026-01-20, KiCad 9.0.7; release metadata in diodeinc/diode projects/api/test/fixtures/release/happy/artifact.zip at 3e237a981ab93700da53b3ca2288b2df6a4cb2db",
+    "Source bytes are manufacturing/ipc2581.xml inside that archive; sha256 records uncompressed XML",
+    "Demo source hosted as a diode test fixture, not a distinct diode-designed board",
+    "No accepted expected outputs, measured mechanical properties, or fracture evidence"
+  ]
+}
