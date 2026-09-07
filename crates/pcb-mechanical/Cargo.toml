@@ -1,0 +1,11 @@
+[package]
+name = "pcb-mechanical"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+description = "Experimental whole-panel PCB bending model translation"
+
+[dependencies]
+pcb-ir.workspace = true
+pcb-elastic = { path = "../pcb-elastic" }
+thiserror.workspace = true
