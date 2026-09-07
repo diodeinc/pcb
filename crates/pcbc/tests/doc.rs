@@ -159,3 +159,42 @@ fn test_pcb_doc_shows_allowed_values_for_config() {
     let stdout = sb.sanitize_output(&String::from_utf8_lossy(&output.stdout));
     assert_snapshot!("doc_allowed_values", stdout);
 }
+
+#[test]
+fn test_pcb_doc_local_path_matches_url_form_with_workspace_path() {
+    for (local, url) in [
+        (".", "github.com/acme/monorepo/hardware/boards"),
+        (
+            "./components",
+            "github.com/acme/monorepo/hardware/boards/components",
+        ),
+    ] {
+        let mut sb = Sandbox::new();
+        sb.write(
+            "pcb.toml",
+            r#"[workspace]
+repository = "github.com/acme/monorepo"
+path = "hardware/boards"
+pcb-version = "0.4"
+
+[dependencies]
+"#,
+        );
+        if local != "." {
+            sb.write("components/pcb.toml", "[dependencies]\n");
+        }
+        sb.write(format!("{local}/Widget.zen"), SIMPLE_RESISTOR_V1);
+        let local_output = run_doc(&mut sb, local);
+        let url_output = run_doc(&mut sb, url);
+        for output in [&local_output, &url_output] {
+            assert!(
+                output.status.success(),
+                "doc failed for {url}: {}",
+                String::from_utf8_lossy(&output.stderr),
+            );
+        }
+        let stdout = String::from_utf8_lossy(&local_output.stdout);
+        assert!(stdout.lines().any(|line| line == format!("# {url}")));
+        assert_eq!(local_output.stdout, url_output.stdout);
+    }
+}
