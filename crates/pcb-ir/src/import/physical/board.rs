@@ -91,6 +91,9 @@ pub struct ComponentEnvelopes {
 #[derive(Debug, Clone)]
 pub struct BoardPhysicalMetadata {
     pub stackup: Association<Symbol>,
+    /// Verbatim selected-stackup construction evidence; values retain source units.
+    pub source_attributes: Vec<(Symbol, Symbol)>,
+    pub source_units: Option<ipc2581::types::Units>,
     /// Direct stackup-scoped raw references; not interpreted as layer material.
     pub spec_refs: Vec<Symbol>,
     pub overall_thickness_mm: Option<f64>,
@@ -273,6 +276,8 @@ impl ImportedDesign {
     pub fn physical_board_metadata(&self) -> BoardPhysicalMetadata {
         let mut result = BoardPhysicalMetadata {
             stackup: Association::Unresolved,
+            source_attributes: Vec::new(),
+            source_units: None,
             spec_refs: Vec::new(),
             overall_thickness_mm: None,
             layers: Vec::new(),
@@ -297,6 +302,8 @@ impl ImportedDesign {
             }
         };
         result.stackup = Association::Resolved(stackup.name);
+        result.source_attributes = stackup.source_attributes.clone();
+        result.source_units = Some(stackup.source_units);
         result.spec_refs = stackup.spec_refs.clone();
         result.groups = stackup.groups.clone();
         for group in &result.groups {

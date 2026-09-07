@@ -1363,6 +1363,21 @@ impl<'a> Parser<'a> {
         self.attr(node, attr).map(|s| self.interner.intern(s))
     }
 
+    fn source_attributes(&mut self, node: &Node) -> Vec<(Symbol, Symbol)> {
+        self.doc()
+            .element(*node)
+            .expect("expected XML element")
+            .attributes
+            .iter()
+            .map(|attr| {
+                (
+                    self.interner.intern(attr.name.local_name.as_ref()),
+                    self.interner.intern(attr.value.as_ref()),
+                )
+            })
+            .collect()
+    }
+
     fn parse_ipc_integer(&self, value: Symbol, attr: &str, positive: bool) -> Result<u32> {
         let source = self.interner.resolve(value).trim();
         let parsed = source.parse::<u32>().map_err(|_| {
@@ -1917,6 +1932,8 @@ impl<'a> Parser<'a> {
             } else if self.name(&child) == "StackupGroup" {
                 let mut group = StackupGroup {
                     name: self.required_attr(&child, "name", "StackupGroup")?,
+                    source_attributes: self.source_attributes(&child),
+                    source_units: units,
                     mat_des: self.optional_attr(&child, "matDes"),
                     spec_refs: Vec::new(),
                     cad_data_layer_refs: Vec::new(),
@@ -1944,6 +1961,8 @@ impl<'a> Parser<'a> {
 
         Ok(Stackup {
             name,
+            source_attributes: self.source_attributes(node),
+            source_units: units,
             spec_refs,
             overall_thickness,
             where_measured,
