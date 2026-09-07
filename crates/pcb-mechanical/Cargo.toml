@@ -9,3 +9,7 @@ description = "Experimental whole-panel PCB bending model translation"
 pcb-ir.workspace = true
 pcb-elastic = { path = "../pcb-elastic" }
 thiserror.workspace = true
+
+[dev-dependencies]
+pcb-corpus = { path = "../pcb-corpus" }
+anstream.workspace = true

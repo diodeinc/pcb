@@ -15,6 +15,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Keep circles and ellipses exact in exports and rendering.
 - Add reusable polygon-boundary, attachment clearance, cutter reachability, and break-removal connectivity queries to `pcb-ir`, with explicit uncertainty and model limitations.
 - Add deterministic elastic support selection with explicit compliance limits, conflict constraints, exhaustive proof status, work budgets, and independent full-system response checks.
+- Add a source-independent mechanical corpus smoke example that checks free-body diagnostics without assuming manufacturing fixtures or loads.
 - Add experimental whole-panel PCB mechanical translation with explicit laminate, fixtures, loads, and unvalidated diagnostics; physical manufacturing qualification remains outstanding.
 - Add standalone elastic support analysis with beam and triangular plate elements, explicit stiffness and constraints, and singular-mode diagnostics.
 - Add experimental single mouse-bite tab geometry and reproducible straight/curved break coupons to `pcb-ir`; physical fracture validation remains outstanding.

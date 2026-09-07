@@ -4435,6 +4435,8 @@ dependencies = [
 name = "pcb-mechanical"
 version = "0.4.51"
 dependencies = [
+ "anstream",
+ "pcb-corpus",
  "pcb-elastic",
  "pcb-ir",
  "thiserror 2.0.20",

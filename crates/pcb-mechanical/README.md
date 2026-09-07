@@ -180,3 +180,43 @@ No stress or break-strength prediction is qualified. Dense solve cost is
 O(n³), storage O(n²), with several simultaneous matrices; DOF budgets are
 explicit but not an allocation guarantee. Resource exhaustion must not be
 replaced by clamped-cell or ad hoc tab-stiffness heuristics.
+
+## Canonical source smoke (native development example)
+
+The corpus owner supplies canonical fixtures; this runner does not clone repos,
+inventory sources, export KiCad/IPC, reinterpret overlays, or infer panel tabs.
+Run `cargo run --release -p pcb-mechanical --example corpus_smoke -- PATH.json.zst ...`.
+It uses `pcb_corpus::load` and the fixture's substrate region, without treating
+unknown-span drill/rout or component-envelope overlays as substrate removal.
+
+This is deliberately an **unrestrained free-body diagnostic**, not a fabricated
+rail fixture. Synthetic thickness 1 mm, Q=diag(12,12,6) N/mm² and pressure
+1e-6 N/mm² exercise the software only. A completed smoke must report
+`SingularIncompatible`: the unrestrained substrate cannot equilibrate its net
+transverse load. No computed compliance is presented as a supported response;
+physical metrics remain unavailable. Mesh targets are 25 mm² / 20°, with 3000
+additional vertices and 1500 DOFs as explicit smoke resource budgets. Missing
+files, geometry/refinement/resource/numerical failures return nonzero, not a
+manufacturing failure or a silently simplified model.
+
+All seven genuine checked-in demo layouts supplied by the corpus owner complete
+this software check using its KiCad 10.0.6 IPC-C/mm/precision-6 extractions:
+
+| Canonical fixture | DOFs | Rigid modes | Substrate area (mm²) |
+| --- | ---: | ---: | ---: |
+| demo-bramble | 1111 | 3 | 3479.489536 |
+| demo-demeter | 158 | 3 | 960.000000 |
+| demo-feign | 93 | 3 | 606.900000 |
+| demo-governor | 190 | 3 | 1281.062500 |
+| demo-marlow | 589 | 3 | 763.057173 |
+| demo-renfield | 110 | 3 | 697.000000 |
+| demo-seward | 75 | 3 | 448.000000 |
+
+Each has the expected incompatible free-body response and meets mesh targets.
+Source thickness/material/envelope evidence and exact revisions/layout/XML
+hashes remain in the canonical fixtures. The reported source thickness is not
+silently substituted into the synthetic model. No actual equivalent laminate,
+panel frame/tab layout, fixtures, process loads, or allowable response is
+qualified. Seward's source README explicitly warns that the latest hardware
+changes still need layout synchronization and bench validation. None of these
+results establishes source/layout synchronization, DRC or manufacturing readiness.
