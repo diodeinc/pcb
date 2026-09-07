@@ -2,14 +2,14 @@
 use anyhow::{Context, Result};
 use pcb_corpus::{Fixture, Overlay, Provenance, VERSION};
 use pcb_ir::{
-    geom::{ContourSet, region::rings_from_contours, tol},
+    geom::{ContourSet, Resolution},
     import::ipc2581::import_design,
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
 fn rings(region: &ContourSet) -> Vec<pcb_ir::geom::region::Ring> {
-    rings_from_contours(&region.to_contours())
+    region.rings.clone()
 }
 
 fn main() -> Result<()> {
@@ -31,7 +31,7 @@ fn main() -> Result<()> {
         .context("malformed_source: IPC parsing")?;
     let design = import_design(&ipc).context("malformed_source: canonical import")?;
     let board = design
-        .physical_board()
+        .physical_board(Resolution::default())
         .context("geometry_rejected: physical board extraction")?;
     let mut overlays = vec![Overlay {
         name: "profile-cutouts".into(),
@@ -72,6 +72,8 @@ fn main() -> Result<()> {
     }
     let evidence = json!({
         "board_step":board.step, "source_profiles":board.profiles,
+        "substrate_uncertainty_mm":board.substrate.uncertainty_mm,
+        "preparation_budget_mm":board.substrate.budget().max_error_mm(),
         "metadata":format!("{:?}",board.metadata),
         "overall_thickness_mm":board.metadata.overall_thickness_mm,
         "material_layers":board.metadata.layers.iter().map(|l| json!({
@@ -90,8 +92,8 @@ fn main() -> Result<()> {
         version: VERSION,
         id: args[2].clone(),
         provenance,
-        tolerance_mm: tol::REGION_MM,
-        flatten_mm: tol::FLATTEN_MM,
+        tolerance_mm: board.substrate.tolerance(),
+        flatten_mm: board.substrate.budget().max_error_mm(),
         substrate: rings(&board.substrate),
         removal: vec![],
         overlays,

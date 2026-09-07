@@ -33,6 +33,14 @@ their names and semantic uncertainty independently. Package and assembly outline
 are not unioned, not treated as body/courtyard, and not promoted to collision
 constraints. Drill spans are retained; unknown-span holes are not subtracted.
 
+`region` returns `Result<ContourSet, AccuracyError>` under the current pcb-ir
+`Resolution` API. Replay applies a 0.01 mm numerical budget to the **stored polygon
+inputs**, not their original source curves; failure is reported as numerical,
+not silently accepted. Historical fixture bytes and flattening provenance remain
+unchanged. New extraction uses the physical view's preparation budget for the v1
+`flatten_mm` field and records substrate uncertainty in `evidence`; it does not
+retroactively certify old fixtures or approve regenerated snapshots.
+
 The HTML compares the same viewport before/after, with supplied removal and
 toggleable overlays. Input/output ring counts expose polygon topology changes,
 not a connectivity proof. Source identities/evidence are expandable. Only net

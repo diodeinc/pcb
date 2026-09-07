@@ -22,7 +22,11 @@ fn analytical_area_and_hole_survive_replay() {
             < 2.0 * std::f64::consts::PI * 10.0 * f.flatten_mm
     );
     assert!((area - r.after_area_mm2.unwrap() - 16.0).abs() < 1e-8);
-    assert!(!region(&r.after, f.tolerance_mm).contains_point(pcb_ir::geom::Point::new(0.0, 0.0)));
+    assert!(
+        !region(&r.after, f.tolerance_mm)
+            .unwrap()
+            .contains_point(pcb_ir::geom::Point::new(0.0, 0.0))
+    );
     assert_eq!(
         serde_json::to_vec(&r).unwrap(),
         serde_json::to_vec(&replay(&f, &Geometry)).unwrap()
@@ -36,7 +40,11 @@ fn narrow_clearance_is_not_removed_as_noise() {
     assert_eq!(r.status, Status::Completed);
     assert!((r.before_area_mm2.unwrap() - 244.0).abs() < 1e-8);
     assert!((r.after_area_mm2.unwrap() - 232.6).abs() < 1e-6);
-    assert!(region(&r.after, f.tolerance_mm).contains_point(pcb_ir::geom::Point::new(10.0, 1.95)));
+    assert!(
+        region(&r.after, f.tolerance_mm)
+            .unwrap()
+            .contains_point(pcb_ir::geom::Point::new(10.0, 1.95))
+    );
     assert!(r.physical_metrics.is_none());
 }
 
@@ -55,6 +63,18 @@ fn bad_input_and_rejection_are_distinct() {
     f.version = VERSION;
     f.substrate[0][0][0] = f64::NAN;
     assert_eq!(replay(&f, &Geometry).status, Status::MalformedSource);
+}
+
+#[test]
+fn unmet_polygon_accuracy_is_a_numerical_failure() {
+    let mut f = fixture("complete-removal");
+    for point in f.substrate.iter_mut().flatten() {
+        point[0] += 1e15;
+    }
+    let report = replay(&f, &Geometry);
+    assert_eq!(report.status, Status::NumericalFailure);
+    assert!(report.message.contains("accuracy budget"));
+    assert!(report.after_area_mm2.is_none());
 }
 
 #[test]
