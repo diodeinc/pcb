@@ -277,7 +277,8 @@ fn decimate_ring_inward(ring: &Ring, deviation_mm: f64) -> Ring {
         (anchor + 1..end).all(|index| {
             let offset = point(index) - start;
             let cross = chord.x * offset.y - chord.y * offset.x;
-            cross <= 0.0 && -cross / length <= deviation_mm
+            // Bound distance to the segment, including points beyond its endpoints.
+            cross <= 0.0 && dist::point_segment(point(index), start, point(end)).0 <= deviation_mm
         })
     };
 
@@ -2774,6 +2775,34 @@ mod tests {
             .map(|(start, end)| start.distance_to(end))
             .sum();
         assert!(ring.area() - decimated.area() <= deviation * perimeter);
+    }
+
+    #[test]
+    fn inward_decimation_bounds_distance_to_segment_not_line() {
+        // The spike is 0.01 mm from the chord's line, but 2 mm past its end.
+        let ring = vec![
+            [0.0, 0.0],
+            [12.0, -0.01],
+            [10.0, 0.0],
+            [10.0, 10.0],
+            [0.0, 10.0],
+        ];
+        let source = ContourSet::new(vec![ring.clone()], FillRule::NonZero, tol::REGION_MM);
+        let deviation = 0.05;
+        let decimated = source.decimate_inward(deviation);
+
+        for [x, y] in ring {
+            let distance = decimated
+                .rings
+                .iter()
+                .flat_map(ring_edges)
+                .map(|(a, b)| dist::point_segment(Point::new(x, y), a, b).0)
+                .fold(f64::INFINITY, f64::min);
+            assert!(
+                distance <= deviation,
+                "vertex ({x}, {y}) is {distance} mm away"
+            );
+        }
     }
 
     #[test]
