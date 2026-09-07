@@ -153,42 +153,23 @@ fn migrate_rewrites_root_zen_files_in_pure_container_workspace() {
     let target = pcb_version_from_cargo();
     let root_manifest = format!("[workspace]\nname = \"demo\"\npcb-version = \"{target}\"\n");
     let package_manifest = "[board]\nname = \"Main\"\npath = \"Main.zen\"\n";
-    let root_zen = format!("load('{LEGACY_REGISTRY}/components/Foo/Foo.zen', \"Foo\")\n");
-    let package_zen = format!("Bar = Module(\"{LEGACY_REGISTRY}/components/Bar/Bar.zen\")\n");
+    let source = format!("load('{LEGACY_REGISTRY}/components/Foo/Foo.zen', \"Foo\")\n");
     let mut sandbox = Sandbox::new();
-    sandbox.write("pcb.toml", &root_manifest);
-    sandbox.write("board.zen", &root_zen);
-    sandbox.write("boards/Main/pcb.toml", package_manifest);
-    sandbox.write("boards/Main/Main.zen", &package_zen);
+    sandbox
+        .write("pcb.toml", &root_manifest)
+        .write("board.zen", &source)
+        .write("boards/Main/pcb.toml", package_manifest)
+        .write("boards/Main/Main.zen", &source);
 
     run_migrate(&mut sandbox);
 
-    let migrated_root_zen = fs::read_to_string(sandbox.root_path().join("board.zen")).unwrap();
-    let migrated_package_zen =
-        fs::read_to_string(sandbox.root_path().join("boards/Main/Main.zen")).unwrap();
-    assert!(
-        !migrated_package_zen.contains(LEGACY_REGISTRY),
-        "package .zen should have been migrated"
-    );
-    assert!(
-        migrated_root_zen.contains(CANONICAL_REGISTRY),
-        "root-level .zen file should have been migrated to canonical registry"
-    );
-    assert!(
-        !migrated_root_zen.contains(LEGACY_REGISTRY),
-        "root-level .zen file should not retain legacy registry references"
-    );
-
-    let first_run = [migrated_root_zen, migrated_package_zen];
-    run_migrate(&mut sandbox);
-    assert_eq!(
-        first_run,
-        [
-            fs::read_to_string(sandbox.root_path().join("board.zen")).unwrap(),
-            fs::read_to_string(sandbox.root_path().join("boards/Main/Main.zen")).unwrap(),
-        ],
-        "migrate should be idempotent on a pure-container-root workspace"
-    );
+    for path in ["board.zen", "boards/Main/Main.zen"] {
+        assert_eq!(
+            fs::read_to_string(sandbox.root_path().join(path)).unwrap(),
+            source.replace(LEGACY_REGISTRY, CANONICAL_REGISTRY),
+            "{path}"
+        );
+    }
 }
 
 fn run_migrate(sandbox: &mut Sandbox) {

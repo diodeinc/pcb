@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Fixed
+
+- Migrate registry references in root-level `.zen` files in container workspaces.
+
 ### Changed
 
 - Consolidate `pcb bom` table and JSON rows by selected offer.
@@ -50,7 +54,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Support opaque service-account client IDs and proper OAuth Basic encoding.
 - Allow off-page schematic placement and avoid existing text and graphics.
-- `pcb migrate` now rewrites legacy registry references in root-level `.zen` files of pure `[workspace]`-container roots, matching the package-root behavior.
 
 ## [0.4.49] - 2026-09-04
 
