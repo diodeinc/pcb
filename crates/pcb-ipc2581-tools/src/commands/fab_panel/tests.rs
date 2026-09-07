@@ -104,6 +104,10 @@ fn multiple_stackup_specs_reach_fab_comparison_and_property_accessors() {
 fn external_specs_remain_comparable_and_keep_their_output_identity() {
     let xml = assembly_panel_xml(20.0, 20.0)
         .replace(
+            "<StackupGroup name=",
+            "<SpecRef id=\"external-root\"/><StackupGroup name=",
+        )
+        .replace(
             "sequence=\"0\"/>",
             "sequence=\"0\"><SpecRef id=\"external-stack\"/></StackupLayer>",
         )
@@ -116,7 +120,12 @@ fn external_specs_remain_comparable_and_keep_their_output_identity() {
             "side=\"TOP\" polarity=\"POSITIVE\"><SpecRef id=\"external-layer\"/></Layer>",
         );
     let generated = create_fab_panel_xml(&[xml.clone(), xml.clone()], &[0, 1]).unwrap();
-    for reference in ["external-layer", "external-stack", "external-group"] {
+    for reference in [
+        "external-layer",
+        "external-stack",
+        "external-group",
+        "external-root",
+    ] {
         assert!(generated.contains(&format!(r#"<SpecRef id="{reference}""#)));
         assert!(!generated.contains(&format!("fab_0_{reference}")));
         let changed = xml.replace(reference, &format!("different-{reference}"));
@@ -133,6 +142,40 @@ fn group_spec_payloads_participate_in_panel_compatibility() {
     assert!(generated.contains(r#"<SpecRef id="fab_0_group-spec""#));
     let changed = xml.replace("FR4", "PTFE");
     assert!(create_fab_panel_xml(&[xml, changed], &[0, 1]).is_err());
+}
+
+#[test]
+fn direct_stackup_spec_payloads_participate_in_panel_compatibility() {
+    let xml = assembly_panel_xml(20.0, 20.0)
+        .replace("<CadHeader units=\"MILLIMETER\"/>", r#"<CadHeader units="MILLIMETER"><Spec name="root-spec"><General type="MATERIAL"><Property text="FR4"/></General></Spec></CadHeader>"#)
+        .replace("<StackupGroup name=", "<SpecRef id=\"root-spec\"/><StackupGroup name=");
+    assert!(create_fab_panel_xml(&[xml.clone(), xml.clone()], &[0, 1]).is_ok());
+    let changed = xml.replace("FR4", "PTFE");
+    assert!(create_fab_panel_xml(&[xml, changed], &[0, 1]).is_err());
+}
+
+#[test]
+fn partial_color_records_retain_only_common_evidence() {
+    let xml = assembly_panel_xml(20.0, 20.0)
+        .replace("CONDUCTOR", "SOLDERMASK")
+        .replace("<CadHeader units=\"MILLIMETER\"/>", r#"<CadHeader units="MILLIMETER"><Spec name="a"><General type="MATERIAL"><ColorTerm name="RED"/></General></Spec><Spec name="b"><General type="MATERIAL"><ColorTerm name="RED"/><Color r="255" g="0" b="0"/></General></Spec></CadHeader>"#);
+    for refs in [
+        r#"<SpecRef id="a"/><SpecRef id="b"/>"#,
+        r#"<SpecRef id="b"/><SpecRef id="a"/>"#,
+    ] {
+        let ipc = Ipc2581::parse(&xml.replace(
+            "sequence=\"0\"/>",
+            &format!("sequence=\"0\">{refs}</StackupLayer>"),
+        ))
+        .unwrap();
+        let color = crate::accessors::IpcAccessor::new(&ipc)
+            .stackup_details()
+            .unwrap()
+            .soldermask_color
+            .unwrap();
+        assert_eq!(color.name.as_deref(), Some("RED"));
+        assert_eq!(color.rgb, None, "RGB is not common to both source records");
+    }
 }
 
 #[test]
@@ -155,7 +198,26 @@ fn cad_data_group_membership_is_preserved_and_compared() {
     );
     let generated = create_fab_panel_xml(&[xml.clone(), xml.clone()], &[0, 1]).unwrap();
     assert!(generated.contains(r#"<CADDataLayerRef layerId="TOP""#));
+    assert!(generated.contains(r#"<CADDataLayerRef layerId="BOTTOM""#));
+    assert_eq!(generated.matches(r#"<Layer name="BOTTOM""#).count(), 1);
+    assert!(!generated.contains("fab_0_BOTTOM"));
+    assert!(!generated.contains("fab_1_BOTTOM"));
+    let missing = xml.replace(
+        r#"<Layer name="BOTTOM" layerFunction="CONDUCTOR" side="BOTTOM" polarity="POSITIVE"/>"#,
+        "",
+    );
+    assert!(create_fab_panel_xml(&[missing], &[0]).is_err());
+    let changed = xml.replace(r#"side="BOTTOM""#, r#"side="TOP""#);
+    assert!(create_fab_panel_xml(&[xml.clone(), changed], &[0, 1]).is_err());
     let changed = xml.replace(r#"layerId="TOP""#, r#"layerId="BOTTOM""#);
+    assert!(create_fab_panel_xml(&[xml, changed], &[0, 1]).is_err());
+}
+
+#[test]
+fn different_stackup_layer_material_designators_reject_panel_merge() {
+    let xml = assembly_panel_xml(20.0, 20.0)
+        .replace(r#"sequence="0""#, r#"sequence="0" matDes="material-a""#);
+    let changed = xml.replace("material-a", "material-b");
     assert!(create_fab_panel_xml(&[xml, changed], &[0, 1]).is_err());
 }
 

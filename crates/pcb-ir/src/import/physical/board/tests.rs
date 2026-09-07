@@ -622,6 +622,7 @@ fn fractional_stackup_sequences_order_layers_and_reject_invalid_order_evidence()
 #[test]
 fn invalid_order_preserves_each_layer_and_group_material_provenance() {
     let xml = fixture().replace("<StackupGroup name=\"g\">", "<StackupGroup name=\"g\" matDes=\"group-material\">")
+        .replace("<StackupGroup name=", "<SpecRef id=\"root-external\"/><SpecRef id=\"mat\"/><StackupGroup name=")
         .replace("</StackupGroup>", "<CADDataLayerRef layerId=\"top\"/><SpecRef id=\"group-spec\"/></StackupGroup>")
         .replace("<CadHeader units=\"MILLIMETER\"/>", r#"<CadHeader units="MILLIMETER"><Spec name="mat"><General type="MATERIAL"><Property text="FR4"/></General></Spec></CadHeader>"#)
         .replace("sequence=\"0\"/>", "sequence=\"0\"><SpecRef id=\"mat\"/></StackupLayer>");
@@ -630,6 +631,14 @@ fn invalid_order_preserves_each_layer_and_group_material_provenance() {
     duplicate.thickness = Some(0.07);
     imported.stackups[0].layers.push(duplicate);
     let metadata = imported.physical_board_metadata();
+    assert_eq!(
+        metadata
+            .spec_refs
+            .iter()
+            .map(|reference| imported.resolve(*reference))
+            .collect::<Vec<_>>(),
+        ["root-external", "mat"]
+    );
     assert!(
         metadata.diagnostics.iter().any(|diagnostic| matches!(
             diagnostic,

@@ -1910,8 +1910,11 @@ impl<'a> Parser<'a> {
 
         let mut layers = Vec::new();
         let mut groups = Vec::new();
+        let mut spec_refs = Vec::new();
         for child in self.element_children(node) {
-            if self.name(&child) == "StackupGroup" {
+            if self.name(&child) == "SpecRef" {
+                spec_refs.push(self.required_attr(&child, "id", "SpecRef")?);
+            } else if self.name(&child) == "StackupGroup" {
                 let mut group = StackupGroup {
                     name: self.required_attr(&child, "name", "StackupGroup")?,
                     mat_des: self.optional_attr(&child, "matDes"),
@@ -1941,6 +1944,7 @@ impl<'a> Parser<'a> {
 
         Ok(Stackup {
             name,
+            spec_refs,
             overall_thickness,
             where_measured,
             tol_plus,
