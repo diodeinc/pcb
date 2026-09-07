@@ -1,3 +1,4 @@
+use crate::geom::Resolution;
 use std::collections::{BTreeSet, HashMap};
 
 use anyhow::{Context, Result, bail};
@@ -11,7 +12,6 @@ use ipc2581::{Interner, Ipc2581, Symbol};
 
 use crate::dialects::ipc::*;
 use crate::geom::Polarity as GeometryPolarity;
-use crate::geom::path::transform_cmds;
 use crate::geom::*;
 use crate::import::physical::{feature_definitely_spans_layer, physical_stackup_layers};
 
@@ -1153,17 +1153,27 @@ impl ImportedDesign {
         }
     }
 
-    pub fn feature_region(&self, occurrence: FeatureOccurrence) -> ContourSet {
-        let feature = &self.geometry.features[occurrence.id.feature.0 as usize];
-        ContourSet::from_placed_painted_paths(
+    /// Prepare this occurrence from the retained source curves. Any earlier
+    /// approximation in those curves remains part of the total budget.
+    pub fn feature_region(
+        &self,
+        occurrence: FeatureOccurrence,
+        resolution: Resolution,
+    ) -> Result<ContourSet> {
+        let feature = self
+            .geometry
+            .features
+            .get(occurrence.id.feature.0 as usize)
+            .context("feature occurrence is outside the imported design")?;
+        Ok(ContourSet::from_placed_painted_paths(
             &self.geometry.arena,
             feature
                 .paths
                 .slice(&self.geometry.arena.paths)
                 .iter()
                 .map(|path| (path, occurrence.root_from_local)),
-            tol::REGION_MM,
-        )
+            resolution,
+        )?)
     }
 
     pub fn component_occurrences(&self, scope: ArtworkScope) -> Result<Vec<ComponentOccurrence>> {
@@ -1261,11 +1271,9 @@ impl ImportedDesign {
         let mut copied_paths = HashMap::new();
         let mut copy_path = |source: u32, target: &mut GeometryDocument| {
             *copied_paths.entry(source).or_insert_with(|| {
-                let copied = target.arena.paths.len() as u32;
                 target
                     .arena
-                    .append_path_from(&self.geometry.arena, source, Affine2::IDENTITY);
-                copied
+                    .append_path_from(&self.geometry.arena, source, Affine2::IDENTITY)
             })
         };
 
@@ -1322,25 +1330,23 @@ impl ImportedDesign {
         target.layout.root_step = Some(0);
     }
 
-    pub fn composed_layer_image(&self, layer: LayerId, scope: ArtworkScope) -> Result<ContourSet> {
+    /// The final painted image of one layer, prepared at `resolution`.
+    pub fn composed_layer_image(
+        &self,
+        layer: LayerId,
+        scope: ArtworkScope,
+        resolution: Resolution,
+    ) -> Result<ContourSet> {
         let definition = self
             .layer_definitions
             .get(layer.0 as usize)
             .context("layer id is outside the imported design")?;
-        let mut document = self.materialize_layer(layer, scope)?;
-        crate::dialects::ipc::process::normalize_for_artwork(&mut document);
-        crate::dialects::ipc::validate_artwork_ready(&document).map_err(anyhow::Error::msg)?;
-        let artwork = crate::dialects::ipc::lower_layer_to_artwork(
-            &document,
+        self.materialize_layer(layer, scope)?.into_layer_image(
             0,
             layer_role(definition.layer_function),
             side_for_layer(definition.side),
-        );
-        let (mut images, _) = crate::dialects::artwork::compose_attributed(&artwork, |_| ());
-        Ok(images.pop().map_or_else(
-            || ContourSet::empty(tol::REGION_MM),
-            |image| ContourSet::new(image.image, FillRule::NonZero, tol::REGION_MM),
-        ))
+            resolution,
+        )
     }
 
     fn step_occurrences(&self, scope: ArtworkScope) -> Result<Vec<StepOccurrence>> {
@@ -1704,6 +1710,7 @@ pub fn extract_step_layer_local(
     Ok(doc)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn extract_set_feature(
     context: &ExtractContext<'_>,
     layer_ref: Symbol,
@@ -1765,6 +1772,7 @@ fn extract_set_feature(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn extract_feature_placement_group(
     context: &ExtractContext<'_>,
     layer_ref: Symbol,
@@ -1876,9 +1884,10 @@ fn validate_copper_balance_void_shape(
     let expected =
         crate::geom::shapes::rounded_hexagon(metadata.radius_mm, metadata.corner_radius_mm, 0.0)
             .context("copper-balance rounded-hex dimensions are invalid")?;
-    let actual = ContourSet::from_contours(&[outline], fill_rule, 1e-5);
-    let expected = ContourSet::from_contours(&[expected], FillRule::NonZero, 1e-5);
-    let mismatch = actual.difference(&expected).area() + expected.difference(&actual).area();
+    let resolution = Resolution::default().with_tolerance(1e-5);
+    let actual = ContourSet::from_contours(&[outline], fill_rule, resolution)?;
+    let expected = ContourSet::from_contours(&[expected], FillRule::NonZero, resolution)?;
+    let mismatch = actual.difference(&expected)?.area() + expected.difference(&actual)?.area();
     if mismatch > 1e-5 {
         bail!(
             "copper-balance void contour disagrees with its rounded-hex metadata by {mismatch} mm^2"
@@ -1918,6 +1927,7 @@ fn append_span<T: Clone>(target: &mut Vec<T>, source: &[T], span: Span) -> Span 
     Span::new(start, span.count)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn append_transformed_layer(
     target: &mut GeometryDocument,
     source: &GeometryDocument,
@@ -2326,6 +2336,7 @@ fn slot_applies_to_layer<'a>(
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn extract_pad(
     context: &ExtractContext<'_>,
     layer_ref: Symbol,
@@ -2469,6 +2480,7 @@ enum FeaturePrimitiveKind {
     User,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn extract_feature_primitive(
     context: &ExtractContext<'_>,
     net: Option<Symbol>,
@@ -2843,7 +2855,12 @@ fn extract_polygon(
     doc: &mut GeometryDocument,
 ) -> GeometryFeature {
     let path_start = doc.arena.paths.len() as u32;
-    push_polygon_path(doc, polygon, Affine2::identity(), FillRule::NonZero);
+    doc.push_path(
+        Paint::Fill {
+            rule: FillRule::NonZero,
+        },
+        [polygon_contour(polygon)],
+    );
     let paths = Span::new(path_start, doc.arena.paths.len() as u32 - path_start);
 
     let mut feature = GeometryFeature::new(FeatureKind::Polygon, polarity);
@@ -2889,7 +2906,7 @@ fn append_step_profile(doc: &mut GeometryDocument, step: &Step) -> ProfileRange 
 }
 
 fn push_profile_polygon(doc: &mut GeometryDocument, polygon: &ipc2581::types::Polygon) -> u32 {
-    let contour = polygon_contour(polygon, Affine2::identity());
+    let contour = polygon_contour(polygon);
     doc.push_path(Paint::None, [contour])
 }
 
@@ -2986,29 +3003,10 @@ fn push_stroked_steps(
     begin: Point,
     steps: &[PolyStep],
 ) -> GeometryFeature {
-    let mut current = begin;
-    let mut bbox = BBox::from_point(current);
-    let mut cmds = vec![PathCmd::move_to(current)];
-    for step in steps {
-        match step {
-            PolyStep::Segment(segment) => {
-                current = Point::new(segment.point.x, segment.point.y);
-                bbox.include_point(current);
-                cmds.push(PathCmd::line_to(current));
-            }
-            PolyStep::Curve(curve) => {
-                let end = Point::new(curve.point.x, curve.point.y);
-                let center = Point::new(curve.center.x, curve.center.y);
-                bbox = bbox.union(Arc::new(current, end, center, curve.clockwise).bbox());
-                cmds.push(PathCmd::arc_to(end, center, curve.clockwise));
-                current = end;
-            }
-        }
-    }
-
+    let contour = ContourBuf::new(poly_step_commands(begin, steps));
+    let bbox = contour.bbox.expand(style.width / 2.0);
     let path_start = doc.arena.paths.len() as u32;
-    doc.push_path(stroked_paint(style), [ContourBuf::from_parts(bbox, cmds)]);
-    bbox = bbox.expand(style.width / 2.0);
+    doc.push_path(stroked_paint(style), [contour]);
 
     let mut feature = GeometryFeature::new(FeatureKind::Trace, style.polarity);
     feature.net = style.net;
@@ -3036,12 +3034,16 @@ fn extract_hole(
     let placement = ipc_placement(Point::new(hole.x, hole.y), hole.xform);
     let path_start = doc.arena.paths.len() as u32;
     match hole.shape {
-        IpcHoleShape::Circle => {
-            push_ellipse_path(doc, placement.transform, hole.diameter, hole.diameter)
-        }
-        IpcHoleShape::Square => {
-            push_rect_path(doc, placement.transform, hole.diameter, hole.diameter)
-        }
+        IpcHoleShape::Circle => push_filled_shape(
+            doc,
+            placement.transform,
+            shapes::ellipse(hole.diameter, hole.diameter),
+        ),
+        IpcHoleShape::Square => push_filled_shape(
+            doc,
+            placement.transform,
+            shapes::rect(hole.diameter, hole.diameter),
+        ),
     }
     let paths = Span::new(path_start, doc.arena.paths.len() as u32 - path_start);
 
@@ -3119,30 +3121,31 @@ fn lower_standard_primitive(
     let path_start = doc.arena.paths.len() as u32;
     match primitive {
         StandardPrimitive::Circle(circle) => {
-            push_ellipse_path(doc, transform, circle.shape.diameter, circle.shape.diameter);
-        }
-        StandardPrimitive::Ellipse(ellipse) => {
-            push_ellipse_path(
+            push_filled_shape(
                 doc,
                 transform,
-                ellipse.shape.size.width,
-                ellipse.shape.size.height,
+                shapes::ellipse(circle.shape.diameter, circle.shape.diameter),
+            );
+        }
+        StandardPrimitive::Ellipse(ellipse) => {
+            push_filled_shape(
+                doc,
+                transform,
+                shapes::ellipse(ellipse.shape.size.width, ellipse.shape.size.height),
             );
         }
         StandardPrimitive::Oval(oval) => {
-            push_oval_path(
+            push_filled_shape(
                 doc,
                 transform,
-                oval.shape.size.width,
-                oval.shape.size.height,
+                shapes::obround(oval.shape.size.width, oval.shape.size.height),
             );
         }
         StandardPrimitive::RectCenter(rect) => {
-            push_rect_path(
+            push_filled_shape(
                 doc,
                 transform,
-                rect.shape.size.width,
-                rect.shape.size.height,
+                shapes::rect(rect.shape.size.width, rect.shape.size.height),
             );
         }
         StandardPrimitive::RectCorner(rect) => {
@@ -3152,41 +3155,47 @@ fn lower_standard_primitive(
                 Point::new(rect.shape.upper_right.x, rect.shape.upper_right.y),
                 Point::new(rect.shape.lower_left.x, rect.shape.upper_right.y),
             ];
-            push_closed_points_path(doc, transform, points, FillRule::NonZero);
+            push_filled_shape(doc, transform, shapes::closed_polygon(points));
         }
         StandardPrimitive::Diamond(diamond) => {
             let hw = diamond.shape.size.width / 2.0;
             let hh = diamond.shape.size.height / 2.0;
-            push_closed_points_path(
+            push_filled_shape(
                 doc,
                 transform,
-                vec![
+                shapes::closed_polygon(vec![
                     Point::new(0.0, -hh),
                     Point::new(hw, 0.0),
                     Point::new(0.0, hh),
                     Point::new(-hw, 0.0),
-                ],
-                FillRule::NonZero,
+                ]),
             );
         }
         StandardPrimitive::Hexagon(hexagon) => {
-            push_regular_polygon_path(doc, transform, 6, hexagon.shape.point_to_point / 2.0);
+            push_filled_shape(
+                doc,
+                transform,
+                shapes::regular_polygon(2.0 * (hexagon.shape.point_to_point / 2.0), 6, -90.0),
+            );
         }
         StandardPrimitive::Octagon(octagon) => {
-            push_regular_polygon_path(doc, transform, 8, octagon.shape.point_to_point / 2.0);
+            push_filled_shape(
+                doc,
+                transform,
+                shapes::regular_polygon(2.0 * (octagon.shape.point_to_point / 2.0), 8, -90.0),
+            );
         }
         StandardPrimitive::Triangle(triangle) => {
             let hw = triangle.shape.base / 2.0;
             let hh = triangle.shape.height / 2.0;
-            push_closed_points_path(
+            push_filled_shape(
                 doc,
                 transform,
-                vec![
+                shapes::closed_polygon(vec![
                     Point::new(0.0, -hh),
                     Point::new(hw, hh),
                     Point::new(-hw, hh),
-                ],
-                FillRule::NonZero,
+                ]),
             );
         }
         StandardPrimitive::Donut(donut) => {
@@ -3217,33 +3226,37 @@ fn lower_standard_primitive(
             push_contour_path(doc, contour, transform);
         }
         StandardPrimitive::RectRound(rect) => {
-            push_rounded_rect_path(
+            push_filled_shape(
                 doc,
                 transform,
-                rect.shape.size.width,
-                rect.shape.size.height,
-                rect.shape.radius,
-                [
-                    rect.shape.upper_right,
-                    rect.shape.lower_right,
-                    rect.shape.lower_left,
-                    rect.shape.upper_left,
-                ],
+                shapes::rounded_rect(
+                    rect.shape.size.width,
+                    rect.shape.size.height,
+                    rect.shape.radius,
+                    [
+                        rect.shape.upper_right,
+                        rect.shape.lower_right,
+                        rect.shape.lower_left,
+                        rect.shape.upper_left,
+                    ],
+                ),
             );
         }
         StandardPrimitive::RectCham(rect) => {
-            push_chamfered_rect_path(
+            push_filled_shape(
                 doc,
                 transform,
-                rect.shape.size.width,
-                rect.shape.size.height,
-                rect.shape.chamfer,
-                [
-                    rect.shape.upper_right,
-                    rect.shape.lower_right,
-                    rect.shape.lower_left,
-                    rect.shape.upper_left,
-                ],
+                shapes::chamfered_rect(
+                    rect.shape.size.width,
+                    rect.shape.size.height,
+                    rect.shape.chamfer,
+                    [
+                        rect.shape.upper_right,
+                        rect.shape.lower_right,
+                        rect.shape.lower_left,
+                        rect.shape.upper_left,
+                    ],
+                ),
             );
         }
         StandardPrimitive::Butterfly(butterfly) => {
@@ -3343,27 +3356,41 @@ fn lower_user_primitive(
                 let mut nested_paint = None;
                 match &shape.shape {
                     UserShapeType::Circle(circle) => {
-                        push_ellipse_path(doc, transform, circle.diameter, circle.diameter);
-                    }
-                    UserShapeType::RectCenter(rect) => {
-                        push_rect_path(doc, transform, rect.size.width, rect.size.height);
-                    }
-                    UserShapeType::Oval(oval) => {
-                        push_oval_path(doc, transform, oval.size.width, oval.size.height);
-                    }
-                    UserShapeType::RectRound(rect) => {
-                        push_rounded_rect_path(
+                        push_filled_shape(
                             doc,
                             transform,
-                            rect.size.width,
-                            rect.size.height,
-                            rect.radius,
-                            [
-                                rect.upper_right,
-                                rect.lower_right,
-                                rect.lower_left,
-                                rect.upper_left,
-                            ],
+                            shapes::ellipse(circle.diameter, circle.diameter),
+                        );
+                    }
+                    UserShapeType::RectCenter(rect) => {
+                        push_filled_shape(
+                            doc,
+                            transform,
+                            shapes::rect(rect.size.width, rect.size.height),
+                        );
+                    }
+                    UserShapeType::Oval(oval) => {
+                        push_filled_shape(
+                            doc,
+                            transform,
+                            shapes::obround(oval.size.width, oval.size.height),
+                        );
+                    }
+                    UserShapeType::RectRound(rect) => {
+                        push_filled_shape(
+                            doc,
+                            transform,
+                            shapes::rounded_rect(
+                                rect.size.width,
+                                rect.size.height,
+                                rect.radius,
+                                [
+                                    rect.upper_right,
+                                    rect.lower_right,
+                                    rect.lower_left,
+                                    rect.upper_left,
+                                ],
+                            ),
                         );
                     }
                     UserShapeType::Polygon(polygon) => {
@@ -3374,15 +3401,43 @@ fn lower_user_primitive(
                     }
                     UserShapeType::Line(line) => {
                         let line_desc = user_shape_line_desc(context, shape);
-                        push_user_line_path(doc, line, transform, line_desc);
+                        push_user_stroke(
+                            doc,
+                            ContourBuf::new(vec![
+                                PathCmd::move_to(Point::new(line.start.x, line.start.y)),
+                                PathCmd::line_to(Point::new(line.end.x, line.end.y)),
+                            ]),
+                            transform,
+                            line_desc,
+                        );
                     }
                     UserShapeType::Arc(arc) => {
                         let line_desc = user_shape_line_desc(context, shape);
-                        push_user_arc_path(doc, arc, transform, line_desc);
+                        push_user_stroke(
+                            doc,
+                            ContourBuf::new(vec![
+                                PathCmd::move_to(Point::new(arc.start.x, arc.start.y)),
+                                PathCmd::arc_to(
+                                    Point::new(arc.end.x, arc.end.y),
+                                    Point::new(arc.center.x, arc.center.y),
+                                    arc.clockwise,
+                                ),
+                            ]),
+                            transform,
+                            line_desc,
+                        );
                     }
                     UserShapeType::Polyline(polyline) => {
                         let line_desc = user_shape_line_desc(context, shape);
-                        push_user_polyline_path(doc, polyline, transform, line_desc);
+                        push_user_stroke(
+                            doc,
+                            ContourBuf::new(poly_step_commands(
+                                Point::new(polyline.begin.x, polyline.begin.y),
+                                &polyline.steps,
+                            )),
+                            transform,
+                            line_desc,
+                        );
                     }
                     UserShapeType::UserPrimitiveRef(primitive_ref) => {
                         if let Some(primitive) = context.user_primitives.get(primitive_ref).copied()
@@ -3451,7 +3506,9 @@ fn user_shape_is_filled_contour(shape: &ipc2581::types::UserShape) -> bool {
 
 fn push_user_shape_contours(out: &mut Vec<ContourBuf>, shape: &UserShapeType, transform: Affine2) {
     match shape {
-        UserShapeType::Polygon(polygon) => out.push(polygon_contour(polygon, transform)),
+        UserShapeType::Polygon(polygon) => {
+            out.push(polygon_contour(polygon).transformed(transform))
+        }
         UserShapeType::Contour(contour) => push_contour_payloads(out, contour, transform),
         _ => {}
     }
@@ -3480,110 +3537,18 @@ fn user_shape_line_desc(
     })
 }
 
-fn push_user_line_path(
+fn push_user_stroke(
     doc: &mut GeometryDocument,
-    line: &ipc2581::types::primitives::Line,
+    contour: ContourBuf,
     transform: Affine2,
     line_desc: Option<ipc2581::types::LineDesc>,
 ) {
-    let start = transform.transform_point(Point::new(line.start.x, line.start.y));
-    let end = transform.transform_point(Point::new(line.end.x, line.end.y));
-    let width = line_desc.map(|desc| desc.line_width).unwrap_or(0.25);
-    let line_cap = line_desc
-        .map(|desc| map_line_cap(desc.line_end))
-        .unwrap_or(LineCap::Round);
-    let line_pattern = map_line_pattern(line_desc.and_then(|desc| desc.line_property));
-    let bbox = BBox::from_point(start).union(BBox::from_point(end));
-    let mut stroke = StrokeStyle::new(width, line_cap);
-    stroke.pattern = line_pattern;
-    doc.push_path(
-        Paint::Stroke(stroke),
-        [ContourBuf::from_parts(
-            bbox,
-            vec![PathCmd::move_to(start), PathCmd::line_to(end)],
-        )],
+    let mut stroke = StrokeStyle::new(
+        line_desc.map_or(0.25, |desc| desc.line_width),
+        line_desc.map_or(LineCap::Round, |desc| map_line_cap(desc.line_end)),
     );
-}
-
-fn push_user_arc_path(
-    doc: &mut GeometryDocument,
-    arc: &ipc2581::types::Arc,
-    transform: Affine2,
-    line_desc: Option<ipc2581::types::LineDesc>,
-) {
-    let start = transform.transform_point(Point::new(arc.start.x, arc.start.y));
-    let end = transform.transform_point(Point::new(arc.end.x, arc.end.y));
-    let center = transform.transform_point(Point::new(arc.center.x, arc.center.y));
-    let clockwise = if transform.determinant() < 0.0 {
-        !arc.clockwise
-    } else {
-        arc.clockwise
-    };
-    let width = line_desc.map(|desc| desc.line_width).unwrap_or(0.25);
-    let line_cap = line_desc
-        .map(|desc| map_line_cap(desc.line_end))
-        .unwrap_or(LineCap::Round);
-    let line_pattern = map_line_pattern(line_desc.and_then(|desc| desc.line_property));
-    let bbox = Arc::new(start, end, center, clockwise).bbox();
-    let mut stroke = StrokeStyle::new(width, line_cap);
-    stroke.pattern = line_pattern;
-    doc.push_path(
-        Paint::Stroke(stroke),
-        [ContourBuf::from_parts(
-            bbox,
-            vec![
-                PathCmd::move_to(start),
-                PathCmd::arc_to(end, center, clockwise),
-            ],
-        )],
-    );
-}
-
-fn push_user_polyline_path(
-    doc: &mut GeometryDocument,
-    polyline: &ipc2581::types::Polyline,
-    transform: Affine2,
-    line_desc: Option<ipc2581::types::LineDesc>,
-) {
-    let width = line_desc.map(|desc| desc.line_width).unwrap_or(0.25);
-    let line_cap = line_desc
-        .map(|desc| map_line_cap(desc.line_end))
-        .unwrap_or(LineCap::Round);
-    let line_pattern = map_line_pattern(line_desc.and_then(|desc| desc.line_property));
-    let mut current = Point::new(polyline.begin.x, polyline.begin.y);
-    let start = transform.transform_point(current);
-    let mut bbox = BBox::from_point(start);
-    let mut cmds = vec![PathCmd::move_to(start)];
-
-    for step in &polyline.steps {
-        match step {
-            PolyStep::Segment(segment) => {
-                current = Point::new(segment.point.x, segment.point.y);
-                let point = transform.transform_point(current);
-                bbox.include_point(point);
-                cmds.push(PathCmd::line_to(point));
-            }
-            PolyStep::Curve(curve) => {
-                let end = Point::new(curve.point.x, curve.point.y);
-                let center = Point::new(curve.center.x, curve.center.y);
-                let start = transform.transform_point(current);
-                let end = transform.transform_point(end);
-                let center = transform.transform_point(center);
-                let clockwise = if transform.determinant() < 0.0 {
-                    !curve.clockwise
-                } else {
-                    curve.clockwise
-                };
-                bbox = bbox.union(Arc::new(start, end, center, clockwise).bbox());
-                cmds.push(PathCmd::arc_to(end, center, clockwise));
-                current = Point::new(curve.point.x, curve.point.y);
-            }
-        }
-    }
-
-    let mut stroke = StrokeStyle::new(width, line_cap);
-    stroke.pattern = line_pattern;
-    doc.push_path(Paint::Stroke(stroke), [ContourBuf::from_parts(bbox, cmds)]);
+    stroke.pattern = map_line_pattern(line_desc.and_then(|desc| desc.line_property));
+    doc.push_path(Paint::Stroke(stroke), [contour.transformed(transform)]);
 }
 
 fn push_polygon_path(
@@ -3592,7 +3557,7 @@ fn push_polygon_path(
     transform: Affine2,
     fill_rule: FillRule,
 ) {
-    let contour = polygon_contour(polygon, transform);
+    let contour = polygon_contour(polygon).transformed(transform);
     doc.push_path(Paint::Fill { rule: fill_rule }, [contour]);
 }
 
@@ -3691,40 +3656,25 @@ fn make_paths_unpainted(doc: &mut GeometryDocument, path_start: u32) {
     }
 }
 
-fn polygon_contour(polygon: &ipc2581::types::Polygon, transform: Affine2) -> ContourBuf {
-    let mut cmds = Vec::new();
-    let mut current = Point::new(polygon.begin.x, polygon.begin.y);
-    let start = transform.transform_point(current);
-    let mut bbox = BBox::from_point(start);
-    cmds.push(PathCmd::move_to(start));
-
-    for step in &polygon.steps {
-        match step {
+fn poly_step_commands(begin: Point, steps: &[PolyStep]) -> Vec<PathCmd> {
+    std::iter::once(PathCmd::move_to(begin))
+        .chain(steps.iter().map(|step| match step {
             PolyStep::Segment(segment) => {
-                current = Point::new(segment.point.x, segment.point.y);
-                let p = transform.transform_point(current);
-                bbox.include_point(p);
-                cmds.push(PathCmd::line_to(p));
+                PathCmd::line_to(Point::new(segment.point.x, segment.point.y))
             }
-            PolyStep::Curve(curve) => {
-                let end = Point::new(curve.point.x, curve.point.y);
-                let center = Point::new(curve.center.x, curve.center.y);
-                let start = transform.transform_point(current);
-                let end = transform.transform_point(end);
-                let center = transform.transform_point(center);
-                let clockwise = if transform.determinant() < 0.0 {
-                    !curve.clockwise
-                } else {
-                    curve.clockwise
-                };
-                bbox = bbox.union(Arc::new(start, end, center, clockwise).bbox());
-                cmds.push(PathCmd::arc_to(end, center, clockwise));
-                current = Point::new(curve.point.x, curve.point.y);
-            }
-        }
-    }
+            PolyStep::Curve(curve) => PathCmd::arc_to(
+                Point::new(curve.point.x, curve.point.y),
+                Point::new(curve.center.x, curve.center.y),
+                curve.clockwise,
+            ),
+        }))
+        .collect()
+}
+
+fn polygon_contour(polygon: &ipc2581::types::Polygon) -> ContourBuf {
+    let mut cmds = poly_step_commands(Point::new(polygon.begin.x, polygon.begin.y), &polygon.steps);
     cmds.push(PathCmd::close());
-    ContourBuf::from_parts(bbox, cmds)
+    ContourBuf::new(cmds)
 }
 
 fn push_contour_path(
@@ -3748,402 +3698,28 @@ fn push_contour_payloads(
     transform: Affine2,
 ) {
     out.reserve(1 + contour.cutouts.len());
-    out.push(polygon_contour(&contour.polygon, transform));
+    out.push(polygon_contour(&contour.polygon).transformed(transform));
     for cutout in &contour.cutouts {
-        out.push(polygon_contour(cutout, transform));
+        out.push(polygon_contour(cutout).transformed(transform));
     }
 }
 
-fn push_closed_points_path(
-    doc: &mut GeometryDocument,
-    transform: Affine2,
-    points: Vec<Point>,
-    fill_rule: FillRule,
-) {
-    if points.is_empty() {
-        return;
+fn push_filled_shape(doc: &mut GeometryDocument, transform: Affine2, contour: Option<ContourBuf>) {
+    if let Some(contour) = contour {
+        doc.push_path(
+            Paint::Fill {
+                rule: FillRule::NonZero,
+            },
+            [contour.transformed(transform)],
+        );
     }
-    let mut bbox = BBox::empty();
-    let mut cmds = Vec::with_capacity(points.len() + 1);
-    for (index, point) in points.into_iter().enumerate() {
-        let p = transform.transform_point(point);
-        bbox.include_point(p);
-        cmds.push(if index == 0 {
-            PathCmd::move_to(p)
-        } else {
-            PathCmd::line_to(p)
-        });
-    }
-    cmds.push(PathCmd::close());
-    doc.push_path(
-        Paint::Fill { rule: fill_rule },
-        [ContourBuf::from_parts(bbox, cmds)],
-    );
-}
-
-fn push_rect_path(doc: &mut GeometryDocument, transform: Affine2, width: f64, height: f64) {
-    let hw = width / 2.0;
-    let hh = height / 2.0;
-    push_closed_points_path(
-        doc,
-        transform,
-        vec![
-            Point::new(-hw, -hh),
-            Point::new(hw, -hh),
-            Point::new(hw, hh),
-            Point::new(-hw, hh),
-        ],
-        FillRule::NonZero,
-    );
-}
-
-fn push_rounded_rect_path(
-    doc: &mut GeometryDocument,
-    transform: Affine2,
-    width: f64,
-    height: f64,
-    radius: f64,
-    corners: [bool; 4],
-) {
-    let hw = width / 2.0;
-    let hh = height / 2.0;
-    let r = radius.min(hw).min(hh).max(0.0);
-    if r == 0.0 || !corners.iter().any(|corner| *corner) {
-        push_rect_path(doc, transform, width, height);
-        return;
-    }
-
-    let k = 0.552_284_749_830_793_6;
-    let use_arcs = affine_preserves_circles(transform);
-    let [upper_right, lower_right, lower_left, upper_left] = corners;
-    let mut cmds = Vec::new();
-
-    cmds.push(PathCmd::move_to(Point::new(
-        -hw + if lower_left { r } else { 0.0 },
-        -hh,
-    )));
-
-    cmds.push(PathCmd::line_to(Point::new(
-        hw - if lower_right { r } else { 0.0 },
-        -hh,
-    )));
-    if lower_right {
-        if use_arcs {
-            cmds.push(PathCmd::arc_to(
-                Point::new(hw, -hh + r),
-                Point::new(hw - r, -hh + r),
-                false,
-            ));
-        } else {
-            cmds.push(PathCmd::cubic_to(
-                Point::new(hw - r + k * r, -hh),
-                Point::new(hw, -hh + r - k * r),
-                Point::new(hw, -hh + r),
-            ));
-        }
-    }
-
-    cmds.push(PathCmd::line_to(Point::new(
-        hw,
-        hh - if upper_right { r } else { 0.0 },
-    )));
-    if upper_right {
-        if use_arcs {
-            cmds.push(PathCmd::arc_to(
-                Point::new(hw - r, hh),
-                Point::new(hw - r, hh - r),
-                false,
-            ));
-        } else {
-            cmds.push(PathCmd::cubic_to(
-                Point::new(hw, hh - r + k * r),
-                Point::new(hw - r + k * r, hh),
-                Point::new(hw - r, hh),
-            ));
-        }
-    }
-
-    cmds.push(PathCmd::line_to(Point::new(
-        -hw + if upper_left { r } else { 0.0 },
-        hh,
-    )));
-    if upper_left {
-        if use_arcs {
-            cmds.push(PathCmd::arc_to(
-                Point::new(-hw, hh - r),
-                Point::new(-hw + r, hh - r),
-                false,
-            ));
-        } else {
-            cmds.push(PathCmd::cubic_to(
-                Point::new(-hw + r - k * r, hh),
-                Point::new(-hw, hh - r + k * r),
-                Point::new(-hw, hh - r),
-            ));
-        }
-    }
-
-    cmds.push(PathCmd::line_to(Point::new(
-        -hw,
-        -hh + if lower_left { r } else { 0.0 },
-    )));
-    if lower_left {
-        if use_arcs {
-            cmds.push(PathCmd::arc_to(
-                Point::new(-hw + r, -hh),
-                Point::new(-hw + r, -hh + r),
-                false,
-            ));
-        } else {
-            cmds.push(PathCmd::cubic_to(
-                Point::new(-hw, -hh + r - k * r),
-                Point::new(-hw + r - k * r, -hh),
-                Point::new(-hw + r, -hh),
-            ));
-        }
-    }
-    cmds.push(PathCmd::close());
-
-    let contour = transform_cmds(cmds, transform);
-    doc.push_path(
-        Paint::Fill {
-            rule: FillRule::NonZero,
-        },
-        [contour],
-    );
-}
-
-fn push_chamfered_rect_path(
-    doc: &mut GeometryDocument,
-    transform: Affine2,
-    width: f64,
-    height: f64,
-    chamfer: f64,
-    corners: [bool; 4],
-) {
-    let hw = width / 2.0;
-    let hh = height / 2.0;
-    let c = chamfer.min(hw).min(hh).max(0.0);
-    if c == 0.0 || !corners.iter().any(|corner| *corner) {
-        push_rect_path(doc, transform, width, height);
-        return;
-    }
-
-    let [upper_right, lower_right, lower_left, upper_left] = corners;
-    let mut points = Vec::with_capacity(8);
-
-    points.push(Point::new(-hw + if lower_left { c } else { 0.0 }, -hh));
-
-    points.push(Point::new(hw - if lower_right { c } else { 0.0 }, -hh));
-    if lower_right {
-        points.push(Point::new(hw, -hh + c));
-    }
-
-    points.push(Point::new(hw, hh - if upper_right { c } else { 0.0 }));
-    if upper_right {
-        points.push(Point::new(hw - c, hh));
-    }
-
-    points.push(Point::new(-hw + if upper_left { c } else { 0.0 }, hh));
-    if upper_left {
-        points.push(Point::new(-hw, hh - c));
-    }
-
-    points.push(Point::new(-hw, -hh + if lower_left { c } else { 0.0 }));
-
-    push_closed_points_path(doc, transform, points, FillRule::NonZero);
-}
-
-fn push_regular_polygon_path(
-    doc: &mut GeometryDocument,
-    transform: Affine2,
-    sides: usize,
-    radius: f64,
-) {
-    let points = (0..sides)
-        .map(|index| {
-            let angle = -std::f64::consts::FRAC_PI_2
-                + (index as f64 * std::f64::consts::TAU / sides as f64);
-            Point::new(radius * angle.cos(), radius * angle.sin())
-        })
-        .collect();
-    push_closed_points_path(doc, transform, points, FillRule::NonZero);
-}
-
-fn push_ellipse_path(doc: &mut GeometryDocument, transform: Affine2, width: f64, height: f64) {
-    let contour = if nearly_equal(width, height) && affine_preserves_circles(transform) {
-        circle_contour(transform, width)
-    } else {
-        ellipse_contour(transform, width, height)
-    };
-    doc.push_path(
-        Paint::Fill {
-            rule: FillRule::NonZero,
-        },
-        [contour],
-    );
-}
-
-fn circle_contour(transform: Affine2, diameter: f64) -> ContourBuf {
-    let radius = diameter / 2.0;
-    let center = transform.transform_point(Point::default());
-    let points = [
-        transform.transform_point(Point::new(radius, 0.0)),
-        transform.transform_point(Point::new(0.0, radius)),
-        transform.transform_point(Point::new(-radius, 0.0)),
-        transform.transform_point(Point::new(0.0, -radius)),
-        transform.transform_point(Point::new(radius, 0.0)),
-    ];
-    let clockwise = transform.determinant() < 0.0;
-    let mut bbox = BBox::empty();
-    for pair in points.windows(2) {
-        bbox = bbox.union(Arc::new(pair[0], pair[1], center, clockwise).bbox());
-    }
-    let cmds = vec![
-        PathCmd::move_to(points[0]),
-        PathCmd::arc_to(points[1], center, clockwise),
-        PathCmd::arc_to(points[2], center, clockwise),
-        PathCmd::arc_to(points[3], center, clockwise),
-        PathCmd::arc_to(points[4], center, clockwise),
-        PathCmd::close(),
-    ];
-    ContourBuf::from_parts(bbox, cmds)
 }
 
 fn ellipse_contour(transform: Affine2, width: f64, height: f64) -> ContourBuf {
-    let rx = width / 2.0;
-    let ry = height / 2.0;
-    let k = 0.552_284_749_830_793_6;
-    let local = [
-        (
-            Point::new(rx, 0.0),
-            Point::new(rx, k * ry),
-            Point::new(k * rx, ry),
-            Point::new(0.0, ry),
-        ),
-        (
-            Point::new(0.0, ry),
-            Point::new(-k * rx, ry),
-            Point::new(-rx, k * ry),
-            Point::new(-rx, 0.0),
-        ),
-        (
-            Point::new(-rx, 0.0),
-            Point::new(-rx, -k * ry),
-            Point::new(-k * rx, -ry),
-            Point::new(0.0, -ry),
-        ),
-        (
-            Point::new(0.0, -ry),
-            Point::new(k * rx, -ry),
-            Point::new(rx, -k * ry),
-            Point::new(rx, 0.0),
-        ),
-    ];
-
-    let start = transform.transform_point(local[0].0);
-    let mut bbox = BBox::from_point(start);
-    let mut cmds = vec![PathCmd::move_to(start)];
-    for (_, c1, c2, end) in local {
-        let c1 = transform.transform_point(c1);
-        let c2 = transform.transform_point(c2);
-        let end = transform.transform_point(end);
-        bbox.include_point(c1);
-        bbox.include_point(c2);
-        bbox.include_point(end);
-        cmds.push(PathCmd::cubic_to(c1, c2, end));
-    }
-    cmds.push(PathCmd::close());
-    ContourBuf::from_parts(bbox, cmds)
+    shapes::ellipse(width, height)
+        .unwrap_or_default()
+        .transformed(transform)
 }
-
-fn push_oval_path(doc: &mut GeometryDocument, transform: Affine2, width: f64, height: f64) {
-    if (width - height).abs() < 1e-9 {
-        push_ellipse_path(doc, transform, width, height);
-        return;
-    }
-
-    let k = 0.552_284_749_830_793_6;
-    let mut local_cmds = Vec::new();
-    if width > height {
-        let r = height / 2.0;
-        let a = (width - height) / 2.0;
-        local_cmds.push(PathCmd::move_to(Point::new(a, -r)));
-        local_cmds.push(PathCmd::line_to(Point::new(-a, -r)));
-        local_cmds.push(PathCmd::cubic_to(
-            Point::new(-a - k * r, -r),
-            Point::new(-a - r, -k * r),
-            Point::new(-a - r, 0.0),
-        ));
-        local_cmds.push(PathCmd::cubic_to(
-            Point::new(-a - r, k * r),
-            Point::new(-a - k * r, r),
-            Point::new(-a, r),
-        ));
-        local_cmds.push(PathCmd::line_to(Point::new(a, r)));
-        local_cmds.push(PathCmd::cubic_to(
-            Point::new(a + k * r, r),
-            Point::new(a + r, k * r),
-            Point::new(a + r, 0.0),
-        ));
-        local_cmds.push(PathCmd::cubic_to(
-            Point::new(a + r, -k * r),
-            Point::new(a + k * r, -r),
-            Point::new(a, -r),
-        ));
-    } else {
-        let r = width / 2.0;
-        let a = (height - width) / 2.0;
-        local_cmds.push(PathCmd::move_to(Point::new(r, -a)));
-        local_cmds.push(PathCmd::line_to(Point::new(r, a)));
-        local_cmds.push(PathCmd::cubic_to(
-            Point::new(r, a + k * r),
-            Point::new(k * r, a + r),
-            Point::new(0.0, a + r),
-        ));
-        local_cmds.push(PathCmd::cubic_to(
-            Point::new(-k * r, a + r),
-            Point::new(-r, a + k * r),
-            Point::new(-r, a),
-        ));
-        local_cmds.push(PathCmd::line_to(Point::new(-r, -a)));
-        local_cmds.push(PathCmd::cubic_to(
-            Point::new(-r, -a - k * r),
-            Point::new(-k * r, -a - r),
-            Point::new(0.0, -a - r),
-        ));
-        local_cmds.push(PathCmd::cubic_to(
-            Point::new(k * r, -a - r),
-            Point::new(r, -a - k * r),
-            Point::new(r, -a),
-        ));
-    }
-    local_cmds.push(PathCmd::close());
-
-    let contour = transform_cmds(local_cmds, transform);
-    doc.push_path(
-        Paint::Fill {
-            rule: FillRule::NonZero,
-        },
-        [contour],
-    );
-}
-
-fn affine_preserves_circles(transform: Affine2) -> bool {
-    let sx = transform.m00.hypot(transform.m10);
-    let sy = transform.m01.hypot(transform.m11);
-    let dot = transform.m00 * transform.m01 + transform.m10 * transform.m11;
-    sx > GEOMETRY_EPSILON
-        && sy > GEOMETRY_EPSILON
-        && nearly_equal(sx, sy)
-        && dot.abs() <= GEOMETRY_EPSILON * sx.max(sy).max(1.0)
-}
-
-fn nearly_equal(left: f64, right: f64) -> bool {
-    (left - right).abs() <= GEOMETRY_EPSILON * left.abs().max(right.abs()).max(1.0)
-}
-
-const GEOMETRY_EPSILON: f64 = 1e-9;
 
 fn push_donut_path(
     doc: &mut GeometryDocument,
@@ -4203,34 +3779,28 @@ fn push_moire_path(doc: &mut GeometryDocument, transform: Affine2, moire: &ipc25
         if inner_diameter > 0.0 {
             push_donut_path(doc, transform, outer_diameter, inner_diameter);
         } else {
-            push_ellipse_path(doc, transform, outer_diameter, outer_diameter);
+            push_filled_shape(
+                doc,
+                transform,
+                shapes::ellipse(outer_diameter, outer_diameter),
+            );
         }
     }
 
     if let (Some(width), Some(length)) = (moire.line_width, moire.line_length) {
         let angle = moire.line_angle.unwrap_or(0.0);
-        push_rect_path(
-            doc,
-            transform.concat(Affine2::placement(
-                Point::default(),
-                angle,
-                Mirror::NONE,
-                1.0,
-            )),
-            length,
-            width,
-        );
-        push_rect_path(
-            doc,
-            transform.concat(Affine2::placement(
-                Point::default(),
-                angle + 90.0,
-                Mirror::NONE,
-                1.0,
-            )),
-            length,
-            width,
-        );
+        for line_angle in [angle, angle + 90.0] {
+            push_filled_shape(
+                doc,
+                transform.concat(Affine2::placement(
+                    Point::default(),
+                    line_angle,
+                    Mirror::NONE,
+                    1.0,
+                )),
+                shapes::rect(length, width),
+            );
+        }
     }
 }
 
@@ -4262,7 +3832,7 @@ fn push_thermal_path(
             Mirror::NONE,
             1.0,
         ));
-        push_rect_path(doc, spoke_transform, length, spoke_width);
+        push_filled_shape(doc, spoke_transform, shapes::rect(length, spoke_width));
     }
 }
 
@@ -4276,28 +3846,24 @@ fn circular_sector_contour(
     let end_angle = end_degrees.to_radians();
     let start = Point::new(radius * start_angle.cos(), radius * start_angle.sin());
     let end = Point::new(radius * end_angle.cos(), radius * end_angle.sin());
-    transform_cmds(
-        [
-            PathCmd::move_to(Point::default()),
-            PathCmd::line_to(start),
-            PathCmd::arc_to(end, Point::default(), false),
-            PathCmd::close(),
-        ],
-        transform,
-    )
+    ContourBuf::new(vec![
+        PathCmd::move_to(Point::default()),
+        PathCmd::line_to(start),
+        PathCmd::arc_to(end, Point::default(), false),
+        PathCmd::close(),
+    ])
+    .transformed(transform)
 }
 
 fn rect_contour(transform: Affine2, x0: f64, y0: f64, x1: f64, y1: f64) -> ContourBuf {
-    transform_cmds(
-        [
-            PathCmd::move_to(Point::new(x0, y0)),
-            PathCmd::line_to(Point::new(x1, y0)),
-            PathCmd::line_to(Point::new(x1, y1)),
-            PathCmd::line_to(Point::new(x0, y1)),
-            PathCmd::close(),
-        ],
-        transform,
-    )
+    ContourBuf::new(vec![
+        PathCmd::move_to(Point::new(x0, y0)),
+        PathCmd::line_to(Point::new(x1, y0)),
+        PathCmd::line_to(Point::new(x1, y1)),
+        PathCmd::line_to(Point::new(x0, y1)),
+        PathCmd::close(),
+    ])
+    .transformed(transform)
 }
 
 fn map_polarity(polarity: Polarity) -> GeometryPolarity {
@@ -5406,7 +4972,7 @@ mod tests {
             ]
         );
         let image = imported
-            .composed_layer_image(top, ArtworkScope::ArrayFlattened)
+            .composed_layer_image(top, ArtworkScope::ArrayFlattened, Resolution::default())
             .unwrap();
         assert!(image.contains_point(Point::new(10.0, 0.0)));
     }
@@ -5632,7 +5198,8 @@ mod tests {
             .expect("synthetic nested panel fixture should parse");
         let mut doc = extract_layer_for_view(&ipc, "TOP", ArtworkScope::ArrayFlattened)
             .expect("nested panel layer should extract");
-        crate::dialects::ipc::process::normalize_for_artwork(&mut doc);
+        crate::dialects::ipc::process::normalize_for_artwork(&mut doc, Resolution::default())
+            .unwrap();
 
         let artwork = crate::dialects::ipc::lower_layer_to_artwork(
             &doc,
@@ -5640,7 +5207,8 @@ mod tests {
             crate::dialects::LayerRole::Copper,
             crate::dialects::Side::None,
         );
-        let svg = crate::render::artwork_svg(&artwork, &crate::render::RenderOptions::default());
+        let svg =
+            crate::render::artwork_svg(&artwork, &crate::render::RenderOptions::default()).unwrap();
 
         // One drawn pad per board across both nested repeat levels.
         assert_eq!(svg.matches("<path d=").count(), 4, "{svg}");
@@ -5671,7 +5239,8 @@ mod tests {
                 ArtworkScope::ArrayFlattened,
             )
             .expect("panel layer should extract");
-        crate::dialects::ipc::process::compose_for_rendering(&mut doc);
+        crate::dialects::ipc::process::compose_for_rendering(&mut doc, Resolution::default())
+            .unwrap();
 
         let layer = &doc.layers[0];
         let traces = layer
@@ -5724,13 +5293,10 @@ mod tests {
     fn chamfered_rect_respects_corner_flags() {
         let mut doc = GeometryDocument::new();
 
-        push_chamfered_rect_path(
+        push_filled_shape(
             &mut doc,
             Affine2::identity(),
-            10.0,
-            6.0,
-            1.0,
-            [true, false, false, false],
+            shapes::chamfered_rect(10.0, 6.0, 1.0, [true, false, false, false]),
         );
 
         let path = &doc.arena.paths[0];
@@ -5751,7 +5317,11 @@ mod tests {
     fn rounded_rect_preserves_arcs_when_transform_preserves_circles() {
         let mut doc = GeometryDocument::new();
 
-        push_rounded_rect_path(&mut doc, Affine2::identity(), 10.0, 6.0, 1.0, [true; 4]);
+        push_filled_shape(
+            &mut doc,
+            Affine2::identity(),
+            shapes::rounded_rect(10.0, 6.0, 1.0, [true; 4]),
+        );
 
         let path = &doc.arena.paths[0];
         let contour = &doc.arena.contours[path.contours.start as usize];
@@ -5762,10 +5332,10 @@ mod tests {
     }
 
     #[test]
-    fn rounded_rect_uses_cubics_when_transform_distorts_circles() {
+    fn rounded_rect_uses_elliptical_arcs_when_transform_distorts_circles() {
         let mut doc = GeometryDocument::new();
 
-        push_rounded_rect_path(
+        push_filled_shape(
             &mut doc,
             Affine2 {
                 m00: 2.0,
@@ -5775,10 +5345,7 @@ mod tests {
                 m11: 1.0,
                 m12: 0.0,
             },
-            10.0,
-            6.0,
-            1.0,
-            [true; 4],
+            shapes::rounded_rect(10.0, 6.0, 1.0, [true; 4]),
         );
 
         let path = &doc.arena.paths[0];
@@ -5786,10 +5353,16 @@ mod tests {
         let cmds = contour.cmds.slice(&doc.arena.cmds);
 
         assert_eq!(
-            cmds.iter().filter(|cmd| cmd.op == PathOp::CubicTo).count(),
+            cmds.iter()
+                .filter(|cmd| cmd.op == PathOp::EllipseTo)
+                .count(),
             4
         );
-        assert!(!cmds.iter().any(|cmd| cmd.op == PathOp::ArcTo));
+        assert!(
+            !cmds
+                .iter()
+                .any(|cmd| matches!(cmd.op, PathOp::ArcTo | PathOp::CubicTo))
+        );
     }
 
     #[test]

@@ -299,7 +299,11 @@ pub(super) fn spatial_result_from_squared_radii(
 mod tests {
     use super::super::lattice::hex_aligned_lattice_centers;
     use super::*;
-    use crate::geom::{BBox, ContourSet, Point, tol};
+    use crate::geom::{BBox, ContourSet, Point, Resolution, tol};
+
+    fn res(tolerance_mm: f64) -> Resolution {
+        Resolution::default().with_tolerance(tolerance_mm)
+    }
 
     /// The projection lands the sum on the target when the box can reach it,
     /// and saturates at the nearer bound when it cannot.
@@ -329,7 +333,7 @@ mod tests {
         let profile = DenseCopperBalanceProfile::V1;
         let panel = ContourSet::rectangle(
             BBox::new(Point::new(0.0, 0.0), Point::new(20.0, 12.0)),
-            tol::REGION_MM,
+            res(tol::REGION_MM),
         );
         let samples = hex_aligned_lattice_centers(panel.bbox, Point::ZERO, profile)
             .into_iter()

@@ -1,5 +1,6 @@
 //! Deterministic PCBA assembly reports over the canonical imported design.
 
+use pcb_ir::geom::Resolution;
 use std::collections::{BTreeSet, HashMap};
 
 use anyhow::{Result, bail};
@@ -30,13 +31,17 @@ pub use report::AssemblyReport;
 /// The report uses source-backed assembly IR and conservative physical
 /// relationships. Geometry can establish only a unique exact overlap; the
 /// report applies no quote or shop policy.
-pub fn build_report(imported: &ImportedDesign, target: LayoutTarget) -> Result<AssemblyReport> {
+pub fn build_report(
+    imported: &ImportedDesign,
+    target: LayoutTarget,
+    resolution: Resolution,
+) -> Result<AssemblyReport> {
     let scope = match target {
         LayoutTarget::Board => ir::Scope::Board,
         LayoutTarget::BoardArray => ir::Scope::BoardArray,
     };
     let assembly = imported.assembly_document(scope)?;
-    let physical = imported.physical_view(target.artwork_scope())?;
+    let physical = imported.physical_view(target.artwork_scope(), resolution)?;
     let mut ids = IdAllocator::default();
     let (profiles, profile_ids) = physical_profiles(&assembly, &mut ids);
     let (scope_bounds, scope_area) = assembly
@@ -1553,6 +1558,17 @@ fn path_command(value: PathCmd) -> report::PathCommand {
             control_2_y: canonical_number(value.p1.y),
             x: canonical_number(value.p2.x),
             y: canonical_number(value.p2.y),
+        },
+        PathOp::EllipseTo => report::PathCommand::EllipseTo {
+            x: canonical_number(value.p0.x),
+            y: canonical_number(value.p0.y),
+            center_x: canonical_number(value.p1.x),
+            center_y: canonical_number(value.p1.y),
+            x_axis_x: canonical_number(value.p2.x),
+            x_axis_y: canonical_number(value.p2.y),
+            y_axis_x: canonical_number(value.p3.x),
+            y_axis_y: canonical_number(value.p3.y),
+            clockwise: value.clockwise,
         },
         PathOp::Close => report::PathCommand::Close,
     }

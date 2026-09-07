@@ -9,6 +9,7 @@
 //! drilled feature whose plating, diameter, or outline the file does not
 //! state is an error, never a quietly dropped subject.
 
+use pcb_ir::geom::Resolution;
 use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result, bail};
@@ -22,8 +23,8 @@ use pcb_ir::dialects::ipc::{
 use pcb_ir::dialects::{LayerRole, Side, artwork};
 use pcb_ir::geom::dfm::{Distance, WidthDisk, min_width_disk};
 use pcb_ir::geom::path::ContourBuf;
-use pcb_ir::geom::region::{Ring, union_rings};
-use pcb_ir::geom::{BBox, ContourSet, FillRule, Point, Polarity, PreparedRegion, Span, tol};
+use pcb_ir::geom::region::Ring;
+use pcb_ir::geom::{BBox, ContourSet, Point, Polarity, PreparedRegion, Span};
 #[cfg(not(target_family = "wasm"))]
 use rayon::prelude::*;
 
@@ -42,6 +43,9 @@ use super::rules::{self, Rule};
 pub(super) struct Design<'a> {
     pub imported: &'a ImportedDesign,
     pub scope: ArtworkScope,
+    /// The resolution every pool was prepared at; checks derive their own
+    /// constructions from it.
+    pub resolution: Resolution,
     pub stackup: Option<PhysicalStackup>,
     pub holes: Vec<Hole>,
     pub slots: Vec<Slot>,
@@ -71,6 +75,7 @@ impl<'a> Design<'a> {
         imported: &'a ImportedDesign,
         scope: ArtworkScope,
         rules: &[Rule],
+        resolution: Resolution,
     ) -> Result<Self> {
         let pools = rules::pools(rules);
         // Circular drill checks must use the declared physical order even
@@ -89,14 +94,20 @@ impl<'a> Design<'a> {
             || collect_physical_stackup(imported).map(Some),
         )?;
         let (holes, slots) = when(pools.drilled, || {
-            collect_drilled(imported, scope, stackup.as_ref())
+            collect_drilled(imported, scope, stackup.as_ref(), resolution)
         })?;
         let copper_layers = when(pools.copper, || {
-            collect_copper_layers(imported, scope, pools.conductor_ownership, stackup.as_ref())
+            collect_copper_layers(
+                imported,
+                scope,
+                pools.conductor_ownership,
+                stackup.as_ref(),
+                resolution,
+            )
         })?;
         let (physical_holes, land_indices) = when(pools.hole_lands || pools.slot_lands, || {
             let physical_holes = imported
-                .physical_holes(scope)?
+                .physical_holes(scope, resolution)?
                 .into_iter()
                 .map(|hole| (hole.id.0, hole))
                 .collect();
@@ -127,6 +138,7 @@ impl<'a> Design<'a> {
         let design = Self {
             imported,
             scope,
+            resolution,
             stackup,
             copper_boundaries: when(pools.copper_boundaries, || {
                 #[cfg(not(target_family = "wasm"))]
@@ -164,17 +176,21 @@ impl<'a> Design<'a> {
                     &physical_holes,
                 )
             })?,
-            mask_layers: when(pools.masks, || collect_mask_layers(imported, scope))?,
+            mask_layers: when(pools.masks, || {
+                collect_mask_layers(imported, scope, resolution)
+            })?,
             scores: when(pools.scores, || collect_scores(imported, scope))?,
             board_outlines: layout
                 .as_ref()
                 .filter(|_| pools.board_outlines)
-                .map(|layout| collect_board_outlines(imported, layout, scope))
+                .map(|layout| collect_board_outlines(imported, layout, scope, resolution))
+                .transpose()?
                 .unwrap_or_default(),
             board_arrays: layout
                 .as_ref()
                 .filter(|_| pools.board_arrays)
-                .map(|layout| collect_board_arrays(imported, layout))
+                .map(|layout| collect_board_arrays(imported, layout, resolution))
+                .transpose()?
                 .unwrap_or_default(),
             holes,
             slots,
@@ -775,6 +791,7 @@ fn collect_drilled(
     imported: &ImportedDesign,
     scope: ArtworkScope,
     stackup: Option<&PhysicalStackup>,
+    resolution: Resolution,
 ) -> Result<(Vec<Hole>, Vec<Slot>)> {
     let copper_count = imported
         .layer_definitions
@@ -854,8 +871,8 @@ fn collect_drilled(
                         bail!("{at} has unknown plating; DFM rules cannot certify it");
                     }
                     let contours = document.placed_feature_contours(feature);
-                    let outline = ContourSet::from_filled_contours(&contours, tol::REGION_MM);
-                    let Some(width_disk) = min_width_disk(&outline) else {
+                    let outline = ContourSet::from_filled_contours(&contours, resolution)?;
+                    let Some(width_disk) = min_width_disk(&outline)? else {
                         bail!("{at} has no measurable outline");
                     };
                     slots.push(Slot {
@@ -920,9 +937,7 @@ fn slot_width(stated_mm: f64, measured: Distance) -> Result<Distance> {
     if !(stated_mm > 0.0 && stated_mm.is_finite()) {
         return Ok(measured);
     }
-    // The outline's width is short by up to its uncertainty, plus the
-    // flattening slack the medial-axis pruning allows.
-    if (measured.mm - stated_mm).abs() > measured.uncertainty_mm + tol::FLATTEN_MM {
+    if (measured.mm - stated_mm).abs() > measured.uncertainty_mm {
         bail!(
             "states width {stated_mm:.6} mm but its outline measures {:.6} mm",
             measured.mm
@@ -1098,25 +1113,22 @@ impl ArtworkLowering<Symbol, Option<ConductorId>> for CopperAttributionLowering 
 
 fn compose_attributed_copper(
     document: &mut GeometryDocument,
+    resolution: Resolution,
 ) -> Result<(ContourSet, Vec<CopperConductor>)> {
-    let owners =
-        compose_attributed_owners(document, LayerRole::Copper, &mut CopperAttributionLowering)?;
-    let image = ContourSet::from_regularized(
-        union_rings(
-            owners
-                .iter()
-                .flat_map(|(_, rings)| rings.iter().cloned())
-                .collect(),
-            FillRule::NonZero,
-        ),
-        tol::REGION_MM,
-    );
+    let owners = compose_attributed_owners(
+        document,
+        LayerRole::Copper,
+        &mut CopperAttributionLowering,
+        resolution,
+    )?;
+    let mut composer = pcb_ir::geom::region::PaintComposer::new(resolution);
+    for (_, image) in &owners {
+        composer.push(pcb_ir::geom::Polarity::Dark, image.clone());
+    }
+    let image = composer.finish()?;
     let conductors = owners
         .into_iter()
-        .map(|(id, rings)| CopperConductor {
-            id,
-            image: ContourSet::from_regularized(rings, tol::REGION_MM),
-        })
+        .map(|(id, rings)| CopperConductor { id, image: rings })
         .collect();
     Ok((image, conductors))
 }
@@ -1128,8 +1140,9 @@ fn compose_attributed_owners<Owner: Clone + Eq + std::hash::Hash>(
     document: &mut GeometryDocument,
     role: LayerRole,
     lowering: &mut impl ArtworkLowering<Symbol, Option<Owner>>,
+    resolution: Resolution,
 ) -> Result<artwork::OwnerImages<Owner>> {
-    pcb_ir::dialects::ipc::process::normalize_for_artwork(document);
+    pcb_ir::dialects::ipc::process::normalize_for_artwork(document, resolution)?;
     pcb_ir::dialects::ipc::validate_artwork_ready(document)
         .map_err(|error| anyhow::anyhow!("layer is not artwork-ready: {error}"))?;
     let layer = document
@@ -1145,8 +1158,11 @@ fn compose_attributed_owners<Owner: Clone + Eq + std::hash::Hash>(
         meta: layer.layer_function,
     };
     let attributed_artwork = lower_layer_to_artwork_with(document, 0, header, lowering);
-    let (mut layers, _) =
-        artwork::compose_selected_owners(&attributed_artwork, |owner| Some(owner.clone()));
+    let (mut layers, _) = artwork::compose_owner_regions(
+        &attributed_artwork,
+        |owner| Some(owner.clone()),
+        resolution,
+    )?;
     let owners = layers
         .pop()
         .context("attributed artwork composition produced no layer")?;
@@ -1243,6 +1259,7 @@ fn collect_copper_layers(
     scope: ArtworkScope,
     require_conductor_ownership: bool,
     stackup: Option<&PhysicalStackup>,
+    resolution: Resolution,
 ) -> Result<Vec<CopperLayer>> {
     let mut copper_layers = imported
         .layer_definitions
@@ -1269,8 +1286,7 @@ fn collect_copper_layers(
         .map(|(ordinal, (layer_index, layer))| {
             let name = imported.resolve(layer.name);
             let mut document = imported
-                .materialize_layer(LayerId(layer_index as u32), scope)
-                .with_context(|| format!("failed to extract IPC-2581 copper layer '{name}'"))?;
+                .materialize_layer(LayerId(layer_index as u32), scope).with_context(|| format!("failed to extract IPC-2581 copper layer '{name}'"))?;
             pcb_ir::dialects::ipc::process::expand_feature_placement_groups(&mut document);
             let mut lands = Vec::new();
             for feature in document.features.iter().filter(|feature| {
@@ -1299,7 +1315,7 @@ fn collect_copper_layers(
                     provenance: feature_provenance(imported, name, feature),
                 });
             }
-            let (image, mut conductors) = compose_attributed_copper(&mut document)?;
+            let (image, mut conductors) = compose_attributed_copper(&mut document, resolution)?;
             conductors.sort_by_key(|conductor| conductor_order(imported, conductor.id));
             if require_conductor_ownership
                 && let Some(conductor) = conductors
@@ -1385,7 +1401,11 @@ impl ArtworkLowering<Symbol, Option<(Option<Symbol>, Option<u32>)>> for MaskAttr
     }
 }
 
-fn collect_mask_layers(imported: &ImportedDesign, scope: ArtworkScope) -> Result<Vec<MaskLayer>> {
+fn collect_mask_layers(
+    imported: &ImportedDesign,
+    scope: ArtworkScope,
+    resolution: Resolution,
+) -> Result<Vec<MaskLayer>> {
     let layers = imported
         .layer_definitions
         .iter()
@@ -1402,17 +1422,18 @@ fn collect_mask_layers(imported: &ImportedDesign, scope: ArtworkScope) -> Result
             let mut document = imported
                 .materialize_layer(LayerId(layer_index as u32), scope)
                 .with_context(|| format!("failed to extract soldermask layer '{name}'"))?;
-            // Keep the historical all-material fold bit-for-bit for measurements
-            // and waiver IDs. Grouping boolean operations by source occurrence
-            // can shift snapped vertices by nanometers. The separate attributed
-            // fold supplies source labels only; it never replaces this image.
-            let image =
-                crate::copper_balance::composed_copper_image_from_document(document.clone());
+            let image = document.clone().into_layer_image(
+                0,
+                LayerRole::Soldermask,
+                pcb_ir::dialects::Side::None,
+                resolution,
+            )?;
             pcb_ir::dialects::ipc::process::expand_feature_placement_groups(&mut document);
             let owners = compose_attributed_owners(
                 &mut document,
                 LayerRole::Soldermask,
                 &mut MaskAttributionLowering,
+                resolution,
             )?;
             Ok(MaskLayer {
                 layer: layer_ref(
@@ -1426,7 +1447,7 @@ fn collect_mask_layers(imported: &ImportedDesign, scope: ArtworkScope) -> Result
                     .map(|((step, instance_index), rings)| MaskOwner {
                         step,
                         instance_index,
-                        image: ContourSet::from_regularized(rings, tol::REGION_MM),
+                        image: rings,
                     })
                     .collect(),
             })
@@ -1507,8 +1528,9 @@ fn collect_board_outlines(
     imported: &ImportedDesign,
     layout: &GeometryDocument,
     scope: ArtworkScope,
-) -> Vec<BoardOutline> {
-    profile_occurrences_for(layout, scope.profile_set())
+    resolution: Resolution,
+) -> anyhow::Result<Vec<BoardOutline>> {
+    Ok(profile_occurrences_for(layout, scope.profile_set())
         .into_iter()
         .filter(|occurrence| {
             matches!(
@@ -1518,7 +1540,7 @@ fn collect_board_outlines(
                     | ProfileOccurrenceRole::BoardInstance
             )
         })
-        .filter_map(|occurrence| {
+        .map(|occurrence| {
             let mut native_outline = layout
                 .transformed_path_contours(occurrence.profile.outer_path, occurrence.transform);
             let outer_count = native_outline.len();
@@ -1527,12 +1549,12 @@ fn collect_board_outlines(
                     .extend(layout.transformed_path_contours(cutout.path, occurrence.transform));
             }
             let outer =
-                ContourSet::from_filled_contours(&native_outline[..outer_count], tol::REGION_MM);
+                ContourSet::from_filled_contours(&native_outline[..outer_count], resolution)?;
             let cutouts =
-                ContourSet::from_filled_contours(&native_outline[outer_count..], tol::REGION_MM);
-            let region = outer.difference(&cutouts);
+                ContourSet::from_filled_contours(&native_outline[outer_count..], resolution)?;
+            let region = outer.difference(&cutouts).unwrap();
             if region.is_empty() {
-                return None;
+                return Ok(None);
             }
             let bbox = region.bbox;
             let name = occurrence
@@ -1541,7 +1563,7 @@ fn collect_board_outlines(
                 .map(|step| imported.resolve(step.source_step_ref).to_owned())
                 .unwrap_or_else(|| "board".to_owned());
             let boundary = region.prepare_query();
-            Some(BoardOutline {
+            Ok::<_, anyhow::Error>(Some(BoardOutline {
                 name,
                 instance_index: occurrence.instance,
                 contours: region.rings.clone(),
@@ -1549,14 +1571,21 @@ fn collect_board_outlines(
                 boundary,
                 native_outline,
                 bbox,
-            })
+            }))
         })
-        .collect()
+        .collect::<anyhow::Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect())
 }
 
-fn collect_board_arrays(imported: &ImportedDesign, layout: &GeometryDocument) -> Vec<BoardArray> {
+fn collect_board_arrays(
+    imported: &ImportedDesign,
+    layout: &GeometryDocument,
+    resolution: Resolution,
+) -> anyhow::Result<Vec<BoardArray>> {
     let Some(root_step) = layout.layout.root_step else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     // A panel-kind child that wraps exactly one board is per-board packaging
     // (a cell in a larger grid), not a sibling array to keep spacing from; a
@@ -1574,7 +1603,7 @@ fn collect_board_arrays(imported: &ImportedDesign, layout: &GeometryDocument) ->
             _ => false,
         }
     };
-    layout
+    Ok(layout
         .layout
         .instances
         .iter()
@@ -1585,24 +1614,32 @@ fn collect_board_arrays(imported: &ImportedDesign, layout: &GeometryDocument) ->
                 && layout.layout.steps[instance.child_step as usize].kind == LayoutStepKind::Panel
                 && !wraps_single_board(*instance_index)
         })
-        .filter_map(|(instance_index, instance)| {
+        .map(|(instance_index, instance)| {
             let step = &layout.layout.steps[instance.child_step as usize];
             let contours = step
                 .profiles
                 .slice(&layout.profiles)
                 .iter()
-                .flat_map(|profile| {
-                    layout.transformed_path_contours(profile.outer_path, instance.transform)
+                .map(|profile| {
+                    Ok::<_, anyhow::Error>(
+                        layout.transformed_path_contours(profile.outer_path, instance.transform),
+                    )
                 })
+                .collect::<anyhow::Result<Vec<_>>>()?
+                .into_iter()
+                .flatten()
                 .collect::<Vec<_>>();
-            let region = ContourSet::from_filled_contours(&contours, tol::REGION_MM);
-            (!region.is_empty()).then(|| BoardArray {
+            let region = ContourSet::from_filled_contours(&contours, resolution)?;
+            Ok::<_, anyhow::Error>((!region.is_empty()).then(|| BoardArray {
                 name: imported.resolve(step.source_step_ref).to_owned(),
                 instance_index: instance_index as u32,
                 region,
-            })
+            }))
         })
-        .collect()
+        .collect::<anyhow::Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect())
 }
 
 fn layer_ref(name: &str, function: LayerFunction, side: Option<&'static str>) -> LayerRef {
@@ -1620,6 +1657,8 @@ mod tests {
 
     #[test]
     fn mask_owners_preserve_composed_openings_and_repeat_identity() {
+        let resolution = Resolution::default();
+
         let rectangle = |polarity, min, max| {
             format!(
                 r#"<Set polarity="{polarity}"><Features><UserSpecial><Contour><Polygon>
@@ -1659,8 +1698,15 @@ mod tests {
                 ArtworkScope::ArrayFlattened,
             )
             .unwrap();
-        let previous = crate::copper_balance::composed_copper_image_from_document(document);
-        let layer = collect_mask_layers(&imported, ArtworkScope::ArrayFlattened)
+        let previous = document
+            .into_layer_image(
+                0,
+                LayerRole::Soldermask,
+                pcb_ir::dialects::Side::None,
+                resolution,
+            )
+            .unwrap();
+        let layer = collect_mask_layers(&imported, ArtworkScope::ArrayFlattened, resolution)
             .unwrap()
             .remove(0);
         assert_eq!(
@@ -1719,12 +1765,14 @@ mod tests {
 
     #[test]
     fn slot_width_is_stated_when_given_and_measured_otherwise() {
+        let resolution = Resolution::default();
+
         let oval = slot_fixture(
             r#"<Location x="10" y="20"/>
               <Oval width="1.8" height="0.6"/>"#,
         );
         let oval = import_design(&oval).unwrap();
-        let (_, slots) = collect_drilled(&oval, ArtworkScope::Board, None).unwrap();
+        let (_, slots) = collect_drilled(&oval, ArtworkScope::Board, None, resolution).unwrap();
         assert_eq!(slots.len(), 1);
         assert!((slots[0].width.mm - 0.6).abs() < 1e-9);
         assert_eq!(
@@ -1751,9 +1799,20 @@ mod tests {
                 .fold(BBox::empty(), BBox::union),
             slots[0].bbox
         );
-        let reconstructed = ContourSet::from_filled_contours(native, tol::REGION_MM);
-        assert!(reconstructed.difference(&slots[0].outline).is_empty());
-        assert!(slots[0].outline.difference(&reconstructed).is_empty());
+        let reconstructed = ContourSet::from_filled_contours(native, resolution).unwrap();
+        assert!(
+            reconstructed
+                .difference(&slots[0].outline)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            slots[0]
+                .outline
+                .difference(&reconstructed)
+                .unwrap()
+                .is_empty()
+        );
 
         let outline = slot_fixture(
             r#"<Outline>
@@ -1768,7 +1827,7 @@ mod tests {
               </Outline>"#,
         );
         let outline = import_design(&outline).unwrap();
-        let (_, slots) = collect_drilled(&outline, ArtworkScope::Board, None).unwrap();
+        let (_, slots) = collect_drilled(&outline, ArtworkScope::Board, None, resolution).unwrap();
         assert_eq!(slots.len(), 1);
         let width = slots[0].width;
         assert!(
@@ -1797,12 +1856,14 @@ mod tests {
 
     #[test]
     fn stated_width_must_match_the_outline() {
+        let resolution = Resolution::default();
+
         let ipc = slot_fixture(
             r#"<Location x="10" y="20"/>
               <Oval width="1.8" height="0.6"/>"#,
         );
         let imported = import_design(&ipc).unwrap();
-        let oval = collect_drilled(&imported, ArtworkScope::Board, None)
+        let oval = collect_drilled(&imported, ArtworkScope::Board, None, resolution)
             .unwrap()
             .1
             .remove(0);

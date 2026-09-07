@@ -7,8 +7,9 @@
 
 use crate::dialects::artwork::{self, Document};
 use crate::dialects::mask;
+use crate::geom::BBox;
 use crate::geom::region::{self, Ring, Shape};
-use crate::geom::{BBox, FillRule};
+use crate::geom::{AccuracyError, Resolution};
 
 /// Tolerances for comparing two layer images.
 ///
@@ -77,13 +78,14 @@ pub fn compare_documents<A, B>(
     reference: &Document<Vec<String>, A>,
     candidate: &Document<Vec<String>, B>,
     tolerance: CompareTolerance,
-) -> CompareReport
+    resolution: Resolution,
+) -> Result<CompareReport, AccuracyError>
 where
     A: Clone,
     B: Clone,
 {
-    let reference_summary = summarize(reference);
-    let candidate_summary = summarize(candidate);
+    let reference_summary = summarize(reference, resolution)?;
+    let candidate_summary = summarize(candidate, resolution)?;
     let mut mismatches = Vec::new();
 
     if reference_summary.file_function != candidate_summary.file_function {
@@ -109,7 +111,7 @@ where
         ));
     }
 
-    let difference = difference_summary(reference, candidate);
+    let difference = difference_summary(reference, candidate, resolution)?;
     if difference.symmetric_area_mm2 > tolerance.area_mm2 {
         mismatches.push(format!(
             "symmetric difference area is {:.6} mm², tolerance={:.6}",
@@ -117,17 +119,20 @@ where
         ));
     }
 
-    CompareReport {
+    Ok(CompareReport {
         reference: reference_summary,
         candidate: candidate_summary,
         difference,
         mismatches,
-    }
+    })
 }
 
-pub fn summarize<A: Clone>(doc: &Document<Vec<String>, A>) -> Summary {
-    let mask = artwork::compose_to_mask(doc);
-    Summary {
+pub fn summarize<A: Clone>(
+    doc: &Document<Vec<String>, A>,
+    resolution: Resolution,
+) -> Result<Summary, AccuracyError> {
+    let mask = artwork::compose_to_mask(doc, resolution)?;
+    Ok(Summary {
         file_function: doc
             .layers
             .first()
@@ -138,10 +143,10 @@ pub fn summarize<A: Clone>(doc: &Document<Vec<String>, A>) -> Summary {
             .first()
             .map(|layer| layer.bbox)
             .unwrap_or_else(BBox::empty),
-        area_mm2: region::rings_area(&document_image_rings(&mask)),
+        area_mm2: region::rings_area(&document_image_rings(&mask, resolution)?),
         object_count: doc.objects.len(),
         path_count: doc.arena.paths.len(),
-    }
+    })
 }
 
 fn compare_bbox(
@@ -180,21 +185,28 @@ fn compare_bbox(
 fn difference_summary<A, B>(
     reference: &Document<Vec<String>, A>,
     candidate: &Document<Vec<String>, B>,
-) -> DifferenceSummary
+    resolution: Resolution,
+) -> Result<DifferenceSummary, AccuracyError>
 where
     A: Clone,
     B: Clone,
 {
-    let reference = document_image_rings(&artwork::compose_to_mask(reference));
-    let candidate = document_image_rings(&artwork::compose_to_mask(candidate));
+    let reference = document_image_rings(
+        &artwork::compose_to_mask(reference, resolution)?,
+        resolution,
+    )?;
+    let candidate = document_image_rings(
+        &artwork::compose_to_mask(candidate, resolution)?,
+        resolution,
+    )?;
     let reference_only = directional_difference_summary(reference.clone(), candidate.clone());
     let candidate_only = directional_difference_summary(candidate, reference);
     let symmetric_area_mm2 = reference_only.area_mm2 + candidate_only.area_mm2;
-    DifferenceSummary {
+    Ok(DifferenceSummary {
         reference_only,
         candidate_only,
         symmetric_area_mm2,
-    }
+    })
 }
 
 fn directional_difference_summary(
@@ -230,17 +242,14 @@ fn difference_component_summary(shape: Shape) -> Option<DifferenceComponentSumma
     })
 }
 
-fn document_image_rings<LayerMeta>(mask: &mask::Document<LayerMeta>) -> Vec<Ring> {
-    let mut rings = Vec::new();
+fn document_image_rings<LayerMeta>(
+    mask: &mask::Document<LayerMeta>,
+    resolution: Resolution,
+) -> Result<Vec<Ring>, AccuracyError> {
     let Some(layer) = mask.layers.first() else {
-        return rings;
+        return Ok(Vec::new());
     };
-    for shape in mask.shapes(layer) {
-        rings.extend(region::rings_from_contours(
-            &mask.arena.path_contours(shape),
-        ));
-    }
-    region::union_rings(rings, FillRule::NonZero)
+    Ok(mask.layer_region(layer, resolution.strict())?.rings)
 }
 
 #[cfg(test)]
@@ -248,6 +257,7 @@ mod tests {
     use super::*;
     use crate::dialects::artwork::{Geometry, Layer, Object};
     use crate::dialects::{LayerRole, Side};
+    use crate::geom::FillRule;
     use crate::geom::path::{ContourBuf, PathCmd};
     use crate::geom::{Affine2, Mirror, Paint, Point, Polarity, Span};
 
@@ -264,13 +274,21 @@ mod tests {
                 bbox_mm: 0.01,
                 area_mm2: 0.001,
             },
-        );
+            Resolution::default(),
+        )
+        .unwrap();
         assert!(report.is_match(), "{:#?}", report.mismatches);
 
         let mut reference = reference;
         reference.layers[0].meta = vec!["Copper".to_string(), "L1".to_string(), "Top".to_string()];
         candidate.layers[0].meta = vec!["Copper".to_string(), "L2".to_string(), "Inr".to_string()];
-        let report = compare_documents(&reference, &candidate, CompareTolerance::default());
+        let report = compare_documents(
+            &reference,
+            &candidate,
+            CompareTolerance::default(),
+            Resolution::default(),
+        )
+        .unwrap();
         assert!(!report.is_match());
         assert!(report.mismatches[0].contains("file function differs"));
     }
@@ -292,7 +310,9 @@ mod tests {
                 bbox_mm: 1.0,
                 area_mm2: 0.001,
             },
-        );
+            Resolution::default(),
+        )
+        .unwrap();
 
         assert!(!report.is_match());
         assert!(
@@ -317,7 +337,9 @@ mod tests {
                 bbox_mm: 1.0,
                 area_mm2: 0.001,
             },
-        );
+            Resolution::default(),
+        )
+        .unwrap();
 
         assert!(!report.is_match());
         assert!(
@@ -336,8 +358,12 @@ mod tests {
         let reference = self_cut_even_odd_doc(false);
         let candidate = self_cut_even_odd_doc(true);
 
-        let reference_area = summarize(&reference).area_mm2;
-        let candidate_area = summarize(&candidate).area_mm2;
+        let reference_area = summarize(&reference, Resolution::default())
+            .unwrap()
+            .area_mm2;
+        let candidate_area = summarize(&candidate, Resolution::default())
+            .unwrap()
+            .area_mm2;
 
         assert!(
             candidate_area >= reference_area,

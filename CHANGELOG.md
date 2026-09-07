@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Added
+
+- Keep circles and ellipses exact through placement, export, and rendering, preparing curved geometry to a stated accuracy.
+
 ### Changed
 
 - Consolidate `pcb bom` table and JSON rows by selected offer.

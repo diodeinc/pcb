@@ -117,6 +117,8 @@ fn incomplete(
 
 #[cfg(test)]
 mod tests {
+    use pcb_ir::geom::Resolution;
+
     use crate::LayoutTarget;
     use crate::commands::dfm::{
         CheckRequest, PdkSource, TextSource, check,
@@ -206,6 +208,8 @@ cases = [
 "#;
 
     fn run(xml: &str, pdk: &str) -> DfmReport {
+        let resolution = Resolution::default();
+
         let ipc = Ipc2581::parse(xml).unwrap();
         let imported = import_design(&ipc).unwrap();
         check(
@@ -220,6 +224,7 @@ cases = [
                 layout_target: LayoutTarget::Board,
                 generated_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
             },
+            resolution,
         )
         .unwrap()
     }

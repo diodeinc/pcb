@@ -1,24 +1,15 @@
 use anyhow::Result;
 use pcb_ir::dialects::assembly::Scope;
 use pcb_ir::dialects::placement::{Document as PlacementDocument, lower_single_board};
-use pcb_ir::import::ipc2581::{ImportedDesign, import_design};
+use pcb_ir::import::ipc2581::ImportedDesign;
 
-use crate::accessors::IpcAccessor;
-
-pub fn extract_single_board_placements(accessor: &IpcAccessor<'_>) -> Result<PlacementDocument> {
-    let ipc = accessor.ipc();
-    let imported = import_design(ipc)?;
-    extract_single_board_placements_from_design(&imported)
-}
-
-pub fn extract_single_board_placements_from_design(
-    imported: &ImportedDesign,
-) -> Result<PlacementDocument> {
+pub fn extract_single_board_placements(imported: &ImportedDesign) -> Result<PlacementDocument> {
     lower_single_board(&imported.assembly_document(Scope::BoardArray)?)
 }
 
 #[cfg(test)]
 mod tests {
+    use pcb_ir::import::ipc2581::import_design;
     use std::io::Cursor;
 
     use ipc2581::Ipc2581;
@@ -55,7 +46,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let placements = extract_single_board_placements(&IpcAccessor::new(&ipc)).unwrap();
+        let placements = extract_single_board_placements(&import_design(&ipc).unwrap()).unwrap();
 
         assert_eq!(placements.components.len(), 1);
         let component = &placements.components[0];
@@ -72,7 +63,7 @@ mod tests {
         let xml = std::str::from_utf8(&xml).unwrap();
         let imported = import_design(&Ipc2581::parse(xml).unwrap()).unwrap();
 
-        let placements = extract_single_board_placements_from_design(&imported).unwrap();
+        let placements = extract_single_board_placements(&imported).unwrap();
         assert_eq!(placements.components.len(), 59);
         assert_eq!(
             placements
@@ -124,7 +115,7 @@ mod tests {
         )
         .unwrap();
 
-        let error = extract_single_board_placements(&IpcAccessor::new(&ipc)).unwrap_err();
+        let error = extract_single_board_placements(&import_design(&ipc).unwrap()).unwrap_err();
 
         assert!(
             error

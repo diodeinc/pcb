@@ -14,7 +14,6 @@ use ipc2581::types::{
         Polygon, UserPrimitive, UserShape, UserShapeType, UserSpecial,
     },
 };
-use pcb_ir::dialects::ipc::ArtworkScope;
 use pcb_ir::geom::copper_balance::{
     DenseCopperBalanceMode, DenseCopperBalanceProfile, DenseCopperBalanceResult,
     DenseCopperLattice, DenseCopperLatticeSite, DenseCopperVoid,
@@ -24,10 +23,9 @@ use pcb_ir::geom::copper_balance::{
 };
 use pcb_ir::geom::path::ContourBuf;
 use pcb_ir::geom::region::{rings_to_contours, simplify_shapes};
-use pcb_ir::geom::{ContourSet, FillRule, PathOp, tol};
+use pcb_ir::geom::{ContourSet, FillRule, PathOp};
 use serde::Serialize;
 
-use crate::geometry;
 use crate::ipc2581::Ipc2581;
 use pcb_ir::dialects::ipc::CopperBalanceKind;
 
@@ -455,9 +453,7 @@ pub fn balance_features(result: &DenseCopperBalanceResult) -> Result<BalanceFeat
             Ok(BalanceFeatureSets {
                 plane: ipc_region_features(&result.usable)?,
                 // The plane covers the web exactly, so its decimation is free.
-                boundary_web: ipc_region_features(
-                    &result.boundary_web().decimate_inward(tol::FLATTEN_MM),
-                )?,
+                boundary_web: ipc_region_features(&result.boundary_web()?.decimate_inward()?)?,
                 templates,
                 void_sets,
                 edge_voids: ipc_region_features(&emission.clipped)?,
@@ -505,42 +501,6 @@ fn void_sets(
         })
         .collect::<Result<Vec<_>>>()
         .map(|pairs| pairs.into_iter().unzip())
-}
-
-/// Extract one layer's flattened, composed copper image.
-///
-/// Composition goes through the artwork mask fold so clear-polarity
-/// features subtract in paint order instead of being unioned as copper.
-pub fn composed_copper_image(ipc: &Ipc2581, layer_name: &str) -> Result<ContourSet> {
-    let document = geometry::extract_layer_for_view(ipc, layer_name, ArtworkScope::ArrayFlattened)
-        .with_context(|| format!("failed to extract IPC-2581 copper layer '{layer_name}'"))?;
-    Ok(composed_copper_image_from_document(document))
-}
-
-/// Compose an already extracted copper document into its final painted image.
-///
-/// Callers that also need source-feature identity can inspect or clone the
-/// structure-preserving document before handing it to this destructive fold.
-pub(crate) fn composed_copper_image_from_document(
-    mut document: geometry::GeometryDocument,
-) -> ContourSet {
-    pcb_ir::dialects::ipc::process::compose_for_rendering(&mut document);
-    let artwork = pcb_ir::dialects::ipc::lower_layer_to_artwork(
-        &document,
-        0,
-        pcb_ir::dialects::LayerRole::Copper,
-        pcb_ir::dialects::Side::None,
-    );
-    let mask = pcb_ir::dialects::artwork::compose_to_mask(&artwork);
-    let mut rings = Vec::new();
-    for layer in &mask.layers {
-        for shape in mask.shapes(layer) {
-            rings.extend(pcb_ir::geom::region::rings_from_contours(
-                &mask.arena.path_contours(shape),
-            ));
-        }
-    }
-    ContourSet::new(rings, FillRule::NonZero, tol::REGION_MM)
 }
 
 /// Signed first-moment weight `t * z` per copper layer, arms measured from
@@ -656,15 +616,18 @@ fn ipc_polygon_from_contour(contour: &ContourBuf) -> Result<Polygon> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pcb_ir::geom::{BBox, ContourSet, Point, tol};
+    use pcb_ir::geom::Resolution;
+    use pcb_ir::geom::{BBox, ContourSet, Point};
 
     #[test]
     fn converts_perforated_region_to_positive_ipc_contours() {
+        let resolution = Resolution::default();
+
         let safe_region = ContourSet::rectangle(
             BBox::new(Point::new(0.0, 0.0), Point::new(20.0, 10.0)),
-            tol::REGION_MM,
+            resolution,
         );
-        let existing = ContourSet::empty(tol::REGION_MM);
+        let existing = ContourSet::empty(Resolution::default());
         let layers = [SpatialCopperBalanceLayerRequest {
             safe_region: &safe_region,
             existing_copper: &existing,
@@ -736,7 +699,14 @@ mod tests {
             result.full_voids.len() + emission.instanced.len()
         );
         assert_eq!(features.edge_voids.is_empty(), emission.clipped.is_empty());
-        assert!(emission.clipped.difference(&result.voidable).area() < 1e-6);
+        assert!(
+            emission
+                .clipped
+                .difference(&result.voidable)
+                .unwrap()
+                .area()
+                < 1e-6
+        );
         assert!(features.void_sets.iter().all(|set| {
             features
                 .templates

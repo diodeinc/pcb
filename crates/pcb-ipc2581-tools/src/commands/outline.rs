@@ -54,7 +54,7 @@ pub fn export_dxf(
         bail!("IPC-2581 primary step and repeated child steps have no board Profile outline");
     }
 
-    Ok(geometry::dxf::render_profile_set_dxf(&layout, profile_set))
+    geometry::dxf::render_profile_set_dxf(&layout, profile_set)
 }
 
 #[cfg(test)]

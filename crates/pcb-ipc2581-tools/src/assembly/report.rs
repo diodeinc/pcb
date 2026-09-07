@@ -718,6 +718,19 @@ pub enum PathCommand {
         x: f64,
         y: f64,
     },
+    /// An elliptical arc: `center` plus the images of the unit x and y axes
+    /// describe the ellipse, `clockwise` its geometric winding.
+    EllipseTo {
+        x: f64,
+        y: f64,
+        center_x: f64,
+        center_y: f64,
+        x_axis_x: f64,
+        x_axis_y: f64,
+        y_axis_x: f64,
+        y_axis_y: f64,
+        clockwise: bool,
+    },
     Close,
 }
 

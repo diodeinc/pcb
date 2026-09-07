@@ -1,3 +1,4 @@
+use pcb_ir::geom::Resolution;
 #[cfg(feature = "cli")]
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -223,6 +224,8 @@ pub fn execute(
     spec: FabPanelSpec,
     balance_copper: bool,
 ) -> Result<()> {
+    let resolution = Resolution::default();
+
     if inputs.is_empty() {
         bail!("at least one assembly panel IPC-2581 file is required");
     }
@@ -250,7 +253,7 @@ pub fn execute(
         occurrences.push(source_index);
     }
 
-    let creation = create_fab_panel(&source_xml, &occurrences, spec, balance_copper)?;
+    let creation = create_fab_panel(&source_xml, &occurrences, spec, balance_copper, resolution)?;
     if let Some(report) = &creation.copper_balance {
         for line in report.summary_lines() {
             eprintln!("  {line}");
@@ -271,8 +274,16 @@ pub fn execute(
 
 #[cfg(test)]
 fn create_fab_panel_xml(source_xml: &[String], occurrences: &[usize]) -> Result<String> {
-    create_fab_panel(source_xml, occurrences, FabPanelSpec::default(), false)
-        .map(|creation| creation.xml)
+    let resolution = Resolution::default();
+
+    create_fab_panel(
+        source_xml,
+        occurrences,
+        FabPanelSpec::default(),
+        false,
+        resolution,
+    )
+    .map(|creation| creation.xml)
 }
 
 pub fn create_fab_panel(
@@ -280,6 +291,7 @@ pub fn create_fab_panel(
     occurrences: &[usize],
     spec: FabPanelSpec,
     balance_copper: bool,
+    resolution: Resolution,
 ) -> Result<FabPanelCreation> {
     if occurrences.is_empty() {
         bail!("at least one assembly panel is required");
@@ -380,6 +392,7 @@ pub fn create_fab_panel(
         let balance = balance::generate_automatic_fab_panel_copper_balance(
             &parsed,
             spec.output_usable_bbox()?,
+            resolution.tolerance_mm,
         )?;
         let report = balance.report();
         let features = balance

@@ -123,6 +123,7 @@ fn validate_path_arcs<Symbol, LayerFunction>(
                     validate_arc_command(feature_index, path_index, cmd_index, current, cmd)?;
                     current = cmd.p0;
                 }
+                PathOp::EllipseTo => current = cmd.p0,
                 PathOp::CubicTo => current = cmd.p2,
                 PathOp::Close => {}
             }

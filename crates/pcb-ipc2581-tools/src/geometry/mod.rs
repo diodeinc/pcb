@@ -2,7 +2,7 @@ pub mod dxf;
 pub mod render;
 
 use anyhow::{Context, Result, bail};
-use ipc2581::{Ipc2581, Symbol, types::LayerFunction};
+use ipc2581::{Symbol, types::LayerFunction};
 use pcb_ir::dialects::ipc::{
     ArtworkScope, BoardArrayFabricationProfile, BoardArrayReliefFeatures, Feature, FeatureBucket,
     FeatureDomain, FeatureKind, PlatingKind,
@@ -11,8 +11,9 @@ use pcb_ir::dialects::ipc::{
         vscore_lines_for,
     },
 };
+use pcb_ir::geom::Resolution;
 use pcb_ir::geom::{BBox, ContourBuf, ContourSet, Point, Polarity};
-use pcb_ir::import::ipc2581::{ImportedDesign, LayerId, import_design};
+use pcb_ir::import::ipc2581::{ImportedDesign, LayerId};
 
 pub use pcb_ir::import::ipc2581::{extract_layer, extract_layer_for_view, extract_layout};
 pub(crate) use pcb_ir::import::ipc2581::{is_panel_step, step_repeat_transform};
@@ -23,14 +24,6 @@ pub(crate) type GeometryDocument =
 /// V-score centerlines per scoring layer (`VCut` and `Score` functions) for
 /// the given artwork scope.
 pub fn vscore_lines(
-    ipc: &Ipc2581,
-    scope: ArtworkScope,
-) -> Result<Vec<(ipc2581::Symbol, LayerFunction, VScoreLine)>> {
-    let imported = import_design(ipc)?;
-    vscore_lines_from_design(&imported, scope)
-}
-
-pub fn vscore_lines_from_design(
     imported: &ImportedDesign,
     scope: ArtworkScope,
 ) -> Result<Vec<(ipc2581::Symbol, LayerFunction, VScoreLine)>> {
@@ -60,62 +53,34 @@ pub fn vscore_lines_from_design(
     Ok(lines)
 }
 
-pub fn board_array_vscore_lines(ipc: &Ipc2581) -> Result<Vec<VScoreLine>> {
-    Ok(vscore_lines(ipc, ArtworkScope::ArrayFlattened)?
+pub fn board_array_vscore_lines(imported: &ImportedDesign) -> Result<Vec<VScoreLine>> {
+    Ok(vscore_lines(imported, ArtworkScope::ArrayFlattened)?
         .into_iter()
         .map(|(_, _, line)| line)
         .collect())
 }
 
-pub fn board_array_vscore_lines_from_design(imported: &ImportedDesign) -> Result<Vec<VScoreLine>> {
-    Ok(
-        vscore_lines_from_design(imported, ArtworkScope::ArrayFlattened)?
-            .into_iter()
-            .map(|(_, _, line)| line)
-            .collect(),
-    )
-}
-
 pub fn board_array_fabrication_profile(
-    ipc: &Ipc2581,
+    imported: &ImportedDesign,
     layout: &GeometryDocument,
     score_lines: &[VScoreLine],
+    resolution: Resolution,
 ) -> Result<BoardArrayFabricationProfile> {
-    let (profile, _) = board_array_fabrication_profile_with_debug(ipc, layout, score_lines)?;
+    let (profile, _) =
+        board_array_fabrication_profile_with_debug(imported, layout, score_lines, resolution)?;
     Ok(profile)
 }
 
 pub fn board_array_fabrication_profile_with_debug(
-    ipc: &Ipc2581,
+    imported: &ImportedDesign,
     layout: &GeometryDocument,
     score_lines: &[VScoreLine],
+    resolution: Resolution,
 ) -> Result<(
     BoardArrayFabricationProfile,
     pcb_ir::dialects::ipc::relief::VScoreReliefDebug,
 )> {
-    let imported = import_design(ipc)?;
-    board_array_fabrication_profile_from_design_with_debug(&imported, layout, score_lines)
-}
-
-pub fn board_array_fabrication_profile_from_design(
-    imported: &ImportedDesign,
-    layout: &GeometryDocument,
-    score_lines: &[VScoreLine],
-) -> Result<BoardArrayFabricationProfile> {
-    let (profile, _) =
-        board_array_fabrication_profile_from_design_with_debug(imported, layout, score_lines)?;
-    Ok(profile)
-}
-
-pub fn board_array_fabrication_profile_from_design_with_debug(
-    imported: &ImportedDesign,
-    layout: &GeometryDocument,
-    score_lines: &[VScoreLine],
-) -> Result<(
-    BoardArrayFabricationProfile,
-    pcb_ir::dialects::ipc::relief::VScoreReliefDebug,
-)> {
-    let relief_features = board_array_relief_features(imported, score_lines)?;
+    let relief_features = board_array_relief_features(imported, score_lines, resolution)?;
     Ok(pcb_ir::dialects::ipc::board_array_fabrication_profile(
         layout,
         score_lines,
@@ -123,28 +88,55 @@ pub fn board_array_fabrication_profile_from_design_with_debug(
             relief_features,
             debug: true,
         },
+        resolution,
     )?)
 }
 
 fn board_array_relief_features(
     imported: &ImportedDesign,
     score_lines: &[VScoreLine],
+    resolution: Resolution,
 ) -> Result<BoardArrayReliefFeatures> {
     if score_lines.is_empty() {
         return Ok(BoardArrayReliefFeatures::default());
     }
 
+    let resolution = resolution.with_tolerance(DEFAULT_RELIEF_TOLERANCE_MM);
     let (cutouts, envelopes) = collect_relief_feature_candidates(imported)?;
-    let mut score_blockers = Vec::new();
-    for cutout in cutouts
-        .into_iter()
-        .filter(|cutout| payloads_touch_score_lines(&cutout.payloads, score_lines))
-    {
+    let strips = score_lines
+        .iter()
+        .map(|line| score_line_strip(*line, resolution))
+        .collect::<Vec<_>>();
+    // Regions are prepared only near a score line: on a dense panel almost
+    // every hole is nowhere near one.
+    let mut crossing = Vec::new();
+    for cutout in prepare_candidates(cutouts, resolution, |cutout| {
+        strips
+            .iter()
+            .any(|strip| cutout.bbox.intersects(strip.bbox))
+    })? {
+        if strips.iter().try_fold(false, |hit, strip| {
+            Ok::<_, anyhow::Error>(hit || overlaps(&cutout.region, strip)?)
+        })? {
+            crossing.push(cutout);
+        }
+    }
+    let envelopes = prepare_candidates(envelopes, resolution, |envelope| {
+        crossing
+            .iter()
+            .any(|cutout| envelope.bbox.intersects(cutout.bbox))
+    })?;
+    // Every blocker joins one batched union: unioning them one at a time is
+    // quadratic in the number of cutouts on dense panels.
+    let mut blockers = Vec::new();
+    for cutout in crossing {
         if plated_like(cutout.plating) {
-            let matches = envelopes
-                .iter()
-                .filter(|envelope| envelope_matches_cutout(envelope, &cutout))
-                .collect::<Vec<_>>();
+            let mut matches = Vec::new();
+            for envelope in &envelopes {
+                if envelope.matches_cutout(&cutout)? {
+                    matches.push(envelope.region.clone());
+                }
+            }
             if matches.is_empty() {
                 bail!(
                     "plated edge cutout at [{:.3}, {:.3}]..[{:.3}, {:.3}] has no matching pad envelope for V-score relief generation",
@@ -154,17 +146,15 @@ fn board_array_relief_features(
                     cutout.bbox.max.y
                 );
             }
-            for envelope in matches {
-                score_blockers.extend(envelope.payloads.clone());
-            }
+            blockers.extend(matches);
         } else {
-            score_blockers.extend(cutout.payloads);
+            blockers.push(cutout.region);
         }
     }
+    let score_blockers = ContourSet::union_all(resolution, blockers)?;
 
-    let blockers = ContourSet::from_filled_contours(&score_blockers, DEFAULT_RELIEF_TOLERANCE_MM);
     Ok(BoardArrayReliefFeatures {
-        score_blockers: blockers.to_contours(),
+        score_blockers: score_blockers.to_contours(),
     })
 }
 
@@ -196,9 +186,33 @@ fn collect_relief_feature_candidates(
     Ok((cutouts, envelopes))
 }
 
+/// Prepare the region of every candidate `keep` selects.
+fn prepare_candidates(
+    candidates: Vec<ReliefFeatureCandidate>,
+    resolution: Resolution,
+    keep: impl Fn(&ReliefFeatureCandidate) -> bool,
+) -> Result<Vec<ReliefRegion>> {
+    candidates
+        .into_iter()
+        .filter(keep)
+        .map(|candidate| candidate.prepare(resolution))
+        .collect()
+}
+
+/// A through cutout or pad envelope as its source contours.
 #[derive(Debug, Clone)]
 struct ReliefFeatureCandidate {
-    payloads: Vec<ContourBuf>,
+    contours: Vec<ContourBuf>,
+    bbox: BBox,
+    plating: PlatingKind,
+    padstack_ref: Option<Symbol>,
+    net: Option<Symbol>,
+}
+
+/// A candidate with its region prepared.
+#[derive(Debug, Clone)]
+struct ReliefRegion {
+    region: ContourSet,
     bbox: BBox,
     plating: PlatingKind,
     padstack_ref: Option<Symbol>,
@@ -208,17 +222,49 @@ struct ReliefFeatureCandidate {
 impl ReliefFeatureCandidate {
     fn new(doc: &GeometryDocument, feature: &Feature<Symbol>) -> Self {
         Self {
-            payloads: feature_contours(doc, feature),
+            contours: doc.placed_feature_contours(feature),
             bbox: feature.bbox,
             plating: feature.intent.plating,
             padstack_ref: feature.padstack_ref,
             net: feature.net,
         }
     }
+
+    fn prepare(self, resolution: Resolution) -> Result<ReliefRegion> {
+        Ok(ReliefRegion {
+            region: ContourSet::from_filled_contours(&self.contours, resolution)?,
+            bbox: self.bbox,
+            plating: self.plating,
+            padstack_ref: self.padstack_ref,
+            net: self.net,
+        })
+    }
 }
 
-fn feature_contours(doc: &GeometryDocument, feature: &Feature<Symbol>) -> Vec<ContourBuf> {
-    doc.placed_feature_contours(feature)
+impl ReliefRegion {
+    /// Whether this pad envelope belongs to `cutout`: same net when both are
+    /// known, the same padstack, or overlapping copper.
+    fn matches_cutout(&self, cutout: &ReliefRegion) -> Result<bool> {
+        if !self.bbox.intersects(cutout.bbox) {
+            return Ok(false);
+        }
+        if let (Some(envelope_net), Some(cutout_net)) = (self.net, cutout.net)
+            && envelope_net != cutout_net
+        {
+            return Ok(false);
+        }
+        if let (Some(envelope_padstack), Some(cutout_padstack)) =
+            (self.padstack_ref, cutout.padstack_ref)
+            && envelope_padstack == cutout_padstack
+        {
+            return Ok(true);
+        }
+        overlaps(&self.region, &cutout.region)
+    }
+}
+
+fn overlaps(region: &ContourSet, other: &ContourSet) -> Result<bool> {
+    Ok(!region.intersection(other)?.is_empty())
 }
 
 fn relief_feature_layer(layer_function: LayerFunction) -> bool {
@@ -251,21 +297,7 @@ fn plated_like(plating: PlatingKind) -> bool {
     )
 }
 
-fn payloads_touch_score_lines(payloads: &[ContourBuf], score_lines: &[VScoreLine]) -> bool {
-    if payloads.is_empty() {
-        return false;
-    }
-    let bbox = payloads
-        .iter()
-        .fold(BBox::empty(), |bbox, payload| bbox.union(payload.bbox));
-    let region = ContourSet::from_filled_contours(payloads, DEFAULT_RELIEF_TOLERANCE_MM);
-    score_lines.iter().any(|line| {
-        let strip = score_line_strip(*line);
-        bbox.intersects(strip.bbox) && !region.intersection(&strip).is_empty()
-    })
-}
-
-fn score_line_strip(line: VScoreLine) -> ContourSet {
+fn score_line_strip(line: VScoreLine, resolution: Resolution) -> ContourSet {
     let width = DEFAULT_SCORE_ALIGNMENT_TOLERANCE_MM.max(line.width / 2.0);
     let bbox = BBox {
         min: Point::new(
@@ -277,32 +309,5 @@ fn score_line_strip(line: VScoreLine) -> ContourSet {
             line.start.y.max(line.end.y) + width,
         ),
     };
-    ContourSet::rectangle(bbox, DEFAULT_RELIEF_TOLERANCE_MM)
-}
-
-fn envelope_matches_cutout(
-    envelope: &ReliefFeatureCandidate,
-    cutout: &ReliefFeatureCandidate,
-) -> bool {
-    if !envelope.bbox.intersects(cutout.bbox) {
-        return false;
-    }
-    if let (Some(envelope_net), Some(cutout_net)) = (envelope.net, cutout.net)
-        && envelope_net != cutout_net
-    {
-        return false;
-    }
-    if let (Some(envelope_padstack), Some(cutout_padstack)) =
-        (envelope.padstack_ref, cutout.padstack_ref)
-        && envelope_padstack == cutout_padstack
-    {
-        return true;
-    }
-    payloads_intersect(&envelope.payloads, &cutout.payloads)
-}
-
-fn payloads_intersect(left: &[ContourBuf], right: &[ContourBuf]) -> bool {
-    let left_region = ContourSet::from_filled_contours(left, DEFAULT_RELIEF_TOLERANCE_MM);
-    let right_region = ContourSet::from_filled_contours(right, DEFAULT_RELIEF_TOLERANCE_MM);
-    !left_region.intersection(&right_region).is_empty()
+    ContourSet::rectangle(bbox, resolution)
 }

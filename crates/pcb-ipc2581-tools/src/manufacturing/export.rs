@@ -1,15 +1,19 @@
+use pcb_ir::geom::Resolution;
 #[cfg(feature = "cli")]
 use std::fs;
 #[cfg(feature = "cli")]
 use std::io::BufWriter;
 use std::io::{Cursor, Seek, Write};
-use std::path::{Path, PathBuf};
+#[cfg(feature = "cli")]
+use std::path::Path;
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use gerberx2::GerberLayer;
-use ipc2581::Ipc2581;
 use pcb_ir::dialects::ipc::ArtworkScope;
-use pcb_ir::import::ipc2581::{ImportedDesign, import_design};
+use pcb_ir::import::ipc2581::ImportedDesign;
+#[cfg(feature = "cli")]
+use pcb_ir::import::ipc2581::import_design;
 use zip::{ZipWriter, write::FileOptions};
 
 use crate::gerber;
@@ -18,8 +22,9 @@ use crate::ipc2581 as ipc;
 
 #[derive(Debug, Clone)]
 pub struct ManufacturingExportOptions {
-    pub output: PathBuf,
     pub view: ArtworkScope,
+    /// Write the V-score relief construction as debug SVGs into this
+    /// directory.
     pub relief_debug_dir: Option<PathBuf>,
 }
 
@@ -48,51 +53,19 @@ pub enum ManufacturingFileKind {
     Xnc,
 }
 
-#[cfg(feature = "cli")]
-pub fn export_manufacturing_package(
-    ipc: &Ipc2581,
-    options: &ManufacturingExportOptions,
-) -> Result<ManufacturingPackage> {
-    let package = build_manufacturing_package_with_options(ipc, options)?;
-    write_manufacturing_package(&package, &options.output)?;
-    Ok(package)
-}
-
+/// Every Gerber X2 layer plus the XNC drill files for one artwork scope.
 pub fn build_manufacturing_package(
-    ipc: &Ipc2581,
-    view: ArtworkScope,
-) -> Result<ManufacturingPackage> {
-    let imported = import_design(ipc)?;
-    build_manufacturing_package_from_design(&imported, view)
-}
-
-/// Export an already-imported design without repeating IPC ingestion.
-pub fn build_manufacturing_package_from_design(
     imported: &ImportedDesign,
-    view: ArtworkScope,
-) -> Result<ManufacturingPackage> {
-    build_manufacturing_package_inner(imported, view, None)
-}
-
-pub fn build_manufacturing_package_with_options(
-    ipc: &Ipc2581,
     options: &ManufacturingExportOptions,
+    resolution: Resolution,
 ) -> Result<ManufacturingPackage> {
-    let imported = import_design(ipc)?;
-    build_manufacturing_package_inner(&imported, options.view, options.relief_debug_dir.as_deref())
-}
-
-fn build_manufacturing_package_inner(
-    imported: &ImportedDesign,
-    view: ArtworkScope,
-    relief_debug_dir: Option<&Path>,
-) -> Result<ManufacturingPackage> {
-    let mut files = gerber::build_gerber_x2_files_from_design_with_options(
+    let mut files = gerber::build_gerber_x2_files(
         imported,
-        view,
+        options.view,
         &gerber::GerberExportOptions {
-            relief_debug_dir: relief_debug_dir.map(Path::to_path_buf),
+            relief_debug_dir: options.relief_debug_dir.clone(),
         },
+        resolution,
     )?
     .into_iter()
     .map(|file| ManufacturingFile {
@@ -102,10 +75,27 @@ fn build_manufacturing_package_inner(
     })
     .collect::<Vec<_>>();
     files.extend(super::drill::build_xnc_drill_files_from_design(
-        imported, view,
+        imported,
+        options.view,
     )?);
 
     Ok(ManufacturingPackage { files })
+}
+
+/// Parse, import, build, and write a manufacturing package to `output`: a
+/// zip when the path has a `.zip` extension, otherwise a directory.
+#[cfg(feature = "cli")]
+pub fn export_manufacturing_package(
+    input_file: &Path,
+    output: &Path,
+    options: &ManufacturingExportOptions,
+    resolution: Resolution,
+) -> Result<ManufacturingPackage> {
+    let content = crate::utils::file::load_ipc_file(input_file)?;
+    let ipc = ipc::Ipc2581::parse(&content)?;
+    let package = build_manufacturing_package(&import_design(&ipc)?, options, resolution)?;
+    write_manufacturing_package(&package, output)?;
+    Ok(package)
 }
 
 #[cfg(feature = "cli")]
@@ -171,16 +161,6 @@ fn write_zip<W: Write + Seek>(package: &ManufacturingPackage, writer: W) -> Resu
             .with_context(|| format!("failed to write {} to manufacturing zip", file.filename))?;
     }
     zip.finish().context("failed to finalize manufacturing zip")
-}
-
-#[cfg(feature = "cli")]
-pub fn execute_file_with_options(
-    input_file: &Path,
-    options: &ManufacturingExportOptions,
-) -> Result<ManufacturingPackage> {
-    let content = crate::utils::file::load_ipc_file(input_file)?;
-    let ipc = ipc::Ipc2581::parse(&content)?;
-    export_manufacturing_package(&ipc, options)
 }
 
 #[cfg(test)]

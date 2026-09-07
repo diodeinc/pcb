@@ -1,10 +1,13 @@
 use crate::copper_balance::balance_features;
+use pcb_ir::geom::Resolution;
 
 use super::balance::{extract_array_support_layers, generate_automatic_board_array_copper_balance};
 use super::*;
 use crate::accessors::IpcAccessor;
 use crate::ipc2581::types::LayerFunction;
-use crate::manufacturing::{ManufacturingPackage, build_manufacturing_package};
+use crate::manufacturing::{
+    ManufacturingExportOptions, ManufacturingPackage, build_manufacturing_package,
+};
 use pcb_ir::dialects::ipc::{
     ArtworkScope, BalancingRegionOptions, BoardArraySupportDocument, FeatureBucket, FeatureDomain,
     FeatureIntent, FeatureKind, FeatureOperation, FeatureRole, FeatureSpan, FiducialKind,
@@ -14,7 +17,26 @@ use pcb_ir::geom::copper_balance::{
     DenseCopperBalanceMode, DenseCopperBalanceProfile, SpatialCopperBalanceLayerRequest,
     SpatialCopperBalanceRequest, generate_spatial_dense_copper_balance,
 };
-use pcb_ir::geom::{BBox, ContourSet, Point, tol};
+use pcb_ir::geom::{BBox, ContourSet, Point};
+use pcb_ir::import::ipc2581::ImportedDesign;
+
+fn design(ipc: &Ipc2581) -> ImportedDesign {
+    pcb_ir::import::ipc2581::import_design(ipc).unwrap()
+}
+
+fn manufacturing_package(
+    ipc: &Ipc2581,
+    view: ArtworkScope,
+) -> anyhow::Result<ManufacturingPackage> {
+    build_manufacturing_package(
+        &design(ipc),
+        &ManufacturingExportOptions {
+            view,
+            relief_debug_dir: None,
+        },
+        Resolution::default(),
+    )
+}
 
 #[test]
 fn parses_board_margin_css_shorthand() {
@@ -138,11 +160,18 @@ fn creates_rounded_panel_step_from_board_bbox() {
             .iter()
             .all(|feature| feature.intent.domain == FeatureDomain::VCut)
     );
-    assert_eq!(geometry::board_array_vscore_lines(&ipc).unwrap().len(), 24);
+    assert_eq!(
+        geometry::board_array_vscore_lines(&design(&ipc))
+            .unwrap()
+            .len(),
+        24
+    );
 }
 
 #[test]
 fn generated_board_array_has_a_certified_safe_balancing_region() {
+    let resolution = Resolution::default();
+
     let input = board_fixture_with_mask_bbox_mm(12.0, 10.0);
     let source = Ipc2581::parse(&input).unwrap();
     let (options, validation_mode, panelization) = auto_board_array_options(&source, None).unwrap();
@@ -152,11 +181,14 @@ fn generated_board_array_has_a_certified_safe_balancing_region() {
     let xml = write_board_array_xml(&input, &spec).unwrap();
     let ipc = Ipc2581::parse(&xml).unwrap();
     let layout = geometry::extract_layout(&ipc).unwrap();
-    let score_lines = geometry::board_array_vscore_lines(&ipc).unwrap();
+    let score_lines = geometry::board_array_vscore_lines(&design(&ipc)).unwrap();
     let fabrication_profile =
-        geometry::board_array_fabrication_profile(&ipc, &layout, &score_lines).unwrap();
+        geometry::board_array_fabrication_profile(&design(&ipc), &layout, &score_lines, resolution)
+            .unwrap();
     let ecad = ipc.ecad().unwrap();
-    let support_layers = extract_array_support_layers(&ipc).unwrap();
+    let support_layers =
+        extract_array_support_layers(&pcb_ir::import::ipc2581::import_design(&ipc).unwrap())
+            .unwrap();
     let copper_layers = crate::layers::copper_layers(ecad);
 
     let collection = collect_board_array_balancing_input(
@@ -166,9 +198,10 @@ fn generated_board_array_has_a_certified_safe_balancing_region() {
         support_layers
             .iter()
             .map(|source| BoardArraySupportDocument::new(&source.document, source.policy)),
+        resolution,
     )
     .unwrap();
-    let input = collection.input_for_layer(copper_layers[0].name);
+    let input = collection.input_for_layer(copper_layers[0].name).unwrap();
     let result = board_array_balancing_region(&input, BalancingRegionOptions::default()).unwrap();
 
     assert!(collection.board_instance_count > 0);
@@ -197,6 +230,8 @@ fn two_layer_board_xml() -> String {
 
 #[test]
 fn board_array_balancing_solves_every_copper_layer() {
+    let resolution = Resolution::default();
+
     let input = two_layer_board_xml();
     let ipc = Ipc2581::parse(&input).unwrap();
     let sheet = Some(AutoSheetSize::A7);
@@ -204,7 +239,9 @@ fn board_array_balancing_solves_every_copper_layer() {
     let spec = build_board_array_spec(&ipc, &options, validation_mode, panelization).unwrap();
     let provisional_xml = write_board_array_xml(&input, &spec).unwrap();
     let provisional = Ipc2581::parse(&provisional_xml).unwrap();
-    let balance = generate_automatic_board_array_copper_balance(&provisional).unwrap();
+    let balance =
+        generate_automatic_board_array_copper_balance(&provisional, resolution.tolerance_mm)
+            .unwrap();
 
     assert!(balance.panel_area_mm2 > 0.0);
     assert_eq!(balance.layers.len(), 2);
@@ -235,6 +272,7 @@ fn board_array_balancing_solves_every_copper_layer() {
                 .result
                 .usable
                 .intersection(&layer.existing_copper)
+                .unwrap()
                 .is_empty()
         );
         assert_eq!(layer.result.solution.target_density, layer.target_density);
@@ -249,8 +287,11 @@ fn board_array_balancing_solves_every_copper_layer() {
 /// generated geometry in the emitted document.
 #[test]
 fn board_array_creation_reports_and_emits_the_balance() {
+    let resolution = Resolution::default();
+
     let input = two_layer_board_xml();
-    let creation = create_auto_board_array(&input, Some(AutoSheetSize::A7), true).unwrap();
+    let creation =
+        create_auto_board_array(&input, Some(AutoSheetSize::A7), true, resolution).unwrap();
     let copper_balance = creation.copper_balance.as_ref().unwrap();
     assert_eq!(copper_balance.layers.len(), 2);
     for report in &copper_balance.layers {
@@ -278,6 +319,8 @@ fn board_array_creation_reports_and_emits_the_balance() {
 
 #[test]
 fn board_array_creation_accepts_no_source_copper_layers() {
+    let resolution = Resolution::default();
+
     let input = board_fixture_mm().replace(
         r#"<Layer name="TOP" layerFunction="SIGNAL" side="TOP" polarity="POSITIVE"/>"#,
         r#"<Layer name="TOP" layerFunction="SOLDERMASK" side="TOP" polarity="POSITIVE"/>"#,
@@ -291,6 +334,7 @@ fn board_array_creation_accepts_no_source_copper_layers() {
             edge_rail_mm: BoardMarginMm::all(20.0),
         },
         true,
+        resolution,
     )
     .unwrap();
 
@@ -299,17 +343,19 @@ fn board_array_creation_accepts_no_source_copper_layers() {
 
 #[test]
 fn board_array_creation_can_skip_copper_balancing() {
-    let creation = create_auto_board_array(board_fixture_with_top_line_mm(), None, false).unwrap();
+    let resolution = Resolution::default();
+
+    let creation =
+        create_auto_board_array(board_fixture_with_top_line_mm(), None, false, resolution).unwrap();
 
     assert!(creation.copper_balance.is_none());
     Ipc2581::parse(&creation.xml).unwrap();
 }
 
-/// Two-sided fiducials and their mask openings must reserve area on both
-/// surface copper layers alike. That is a property of the balancing regions,
-/// so it is read off them directly rather than through a full solve.
 #[test]
 fn automatic_balancing_regions_scope_panel_fiducials_to_both_surface_copper_layers() {
+    let resolution = Resolution::default();
+
     let input = large_board_fixture_mm();
     let ipc = Ipc2581::parse(input).unwrap();
     // The smallest sheet the board fits: fiducial scoping does not depend on
@@ -320,10 +366,18 @@ fn automatic_balancing_regions_scope_panel_fiducials_to_both_surface_copper_laye
     let provisional_xml = write_board_array_xml(input, &spec).unwrap();
     let provisional = Ipc2581::parse(&provisional_xml).unwrap();
     let layout = geometry::extract_layout(&provisional).unwrap();
-    let score_lines = geometry::board_array_vscore_lines(&provisional).unwrap();
-    let fabrication_profile =
-        geometry::board_array_fabrication_profile(&provisional, &layout, &score_lines).unwrap();
-    let support_layers = extract_array_support_layers(&provisional).unwrap();
+    let score_lines = geometry::board_array_vscore_lines(&design(&provisional)).unwrap();
+    let fabrication_profile = geometry::board_array_fabrication_profile(
+        &design(&provisional),
+        &layout,
+        &score_lines,
+        resolution,
+    )
+    .unwrap();
+    let support_layers = extract_array_support_layers(
+        &pcb_ir::import::ipc2581::import_design(&provisional).unwrap(),
+    )
+    .unwrap();
     let copper_layers = crate::layers::copper_layers(provisional.ecad().unwrap());
     let collection = collect_board_array_balancing_input(
         &layout,
@@ -332,26 +386,25 @@ fn automatic_balancing_regions_scope_panel_fiducials_to_both_surface_copper_laye
         support_layers
             .iter()
             .map(|source| BoardArraySupportDocument::new(&source.document, source.policy)),
+        resolution,
     )
     .unwrap();
 
-    let safe_area = |name: &str| {
+    let support_area = |name: &str| {
         let layer = copper_layers
             .iter()
             .find(|layer| provisional.resolve(layer.name) == name)
             .unwrap();
-        let input = collection.input_for_layer(layer.name);
-        board_array_balancing_region(&input, BalancingRegionOptions::default())
-            .unwrap()
-            .safe_region
-            .area()
+        let input = collection.input_for_layer(layer.name).unwrap();
+        input.support_features.area()
     };
 
-    let top = safe_area("TOP");
-    let bottom = safe_area("BOTTOM");
+    let top = support_area("TOP");
+    let bottom = support_area("BOTTOM");
+    assert!(top > 0.0);
     assert!(
-        (bottom - top).abs() <= 1e-6,
-        "two-sided fiducials and mask openings should reserve equal surface-copper area: top {top:.6} mm², bottom {bottom:.6} mm²",
+        (bottom - top).abs() <= resolution.accuracy.max_error_mm().powi(2),
+        "two-sided fiducials and mask openings should provide equal surface-copper obstacle area: top {top:.6} mm², bottom {bottom:.6} mm²",
     );
 }
 
@@ -593,6 +646,8 @@ fn creates_board_array_with_asymmetric_edge_rails() {
 
 #[test]
 fn created_board_array_vcuts_flow_to_svg_and_gerber() {
+    let resolution = Resolution::default();
+
     let xml = create_board_array_xml(
         board_fixture_mm(),
         &BoardArrayCreateOptions {
@@ -606,7 +661,7 @@ fn created_board_array_vcuts_flow_to_svg_and_gerber() {
     let ipc = Ipc2581::parse(&xml).unwrap();
     let accessor = IpcAccessor::new(&ipc);
 
-    let svg = crate::board_array::render_board_array_overview_svg(&accessor)
+    let svg = crate::board_array::render_board_array_overview_svg(&accessor, resolution)
         .unwrap()
         .unwrap();
     assert!(svg.matches("vcut-guide").count() > 24);
@@ -618,9 +673,14 @@ fn created_board_array_vcuts_flow_to_svg_and_gerber() {
     let viewbox = svg_viewbox(&svg);
     assert!(viewbox.0 + viewbox.2 > 100.0);
     assert!(viewbox.1 + viewbox.3 > 100.0);
-    assert_eq!(geometry::board_array_vscore_lines(&ipc).unwrap().len(), 24);
+    assert_eq!(
+        geometry::board_array_vscore_lines(&design(&ipc))
+            .unwrap()
+            .len(),
+        24
+    );
 
-    let package = build_manufacturing_package(&ipc, ArtworkScope::ArrayFlattened).unwrap();
+    let package = manufacturing_package(&ipc, ArtworkScope::ArrayFlattened).unwrap();
 
     let vcut = package
         .files
@@ -633,7 +693,7 @@ fn created_board_array_vcuts_flow_to_svg_and_gerber() {
     assert!(!vcut.contents.contains("G36*"));
     assert!(vcut.contents.matches("D01*").count() > 24);
 
-    let board_package = build_manufacturing_package(&ipc, ArtworkScope::Board).unwrap();
+    let board_package = manufacturing_package(&ipc, ArtworkScope::Board).unwrap();
     assert!(
         board_package
             .files
@@ -644,6 +704,8 @@ fn created_board_array_vcuts_flow_to_svg_and_gerber() {
 
 #[test]
 fn created_board_array_profile_gerber_derives_vscore_reliefs() {
+    let resolution = Resolution::default();
+
     let xml = create_board_array_xml(
         rounded_corner_board_fixture_mm(),
         &BoardArrayCreateOptions {
@@ -660,9 +722,10 @@ fn created_board_array_profile_gerber_derives_vscore_reliefs() {
     let ipc = Ipc2581::parse(&xml).unwrap();
     let layout = geometry::extract_layout(&ipc).unwrap();
     let fabrication_profile = geometry::board_array_fabrication_profile(
-        &ipc,
+        &design(&ipc),
         &layout,
-        &geometry::board_array_vscore_lines(&ipc).unwrap(),
+        &geometry::board_array_vscore_lines(&design(&ipc)).unwrap(),
+        resolution,
     )
     .unwrap();
     assert_eq!(
@@ -671,7 +734,7 @@ fn created_board_array_profile_gerber_derives_vscore_reliefs() {
     );
     assert!(fabrication_profile.assembly_panel_outlines.is_empty());
 
-    let package = build_manufacturing_package(&ipc, ArtworkScope::ArrayFlattened).unwrap();
+    let package = manufacturing_package(&ipc, ArtworkScope::ArrayFlattened).unwrap();
     let vcut = package
         .files
         .iter()
@@ -697,7 +760,9 @@ fn created_board_array_profile_gerber_derives_vscore_reliefs() {
     assert!(!profile.contents.contains("G36*"));
     assert!(
         profile.contents.matches("D01*").count()
-            > geometry::board_array_vscore_lines(&ipc).unwrap().len(),
+            > geometry::board_array_vscore_lines(&design(&ipc))
+                .unwrap()
+                .len(),
         "routed reliefs should emit closed contour strokes, not only the V-cut guide lines"
     );
     gerberx2::GerberX2::parse(&profile.contents).unwrap();
@@ -722,7 +787,7 @@ fn board_array_creation_drops_source_board_outline_layer_features() {
     assert!(!xml.contains(r#"<LayerFeature layerRef="Edge.Cuts">"#));
 
     let ipc = Ipc2581::parse(&xml).unwrap();
-    let package = build_manufacturing_package(&ipc, ArtworkScope::ArrayFlattened).unwrap();
+    let package = manufacturing_package(&ipc, ArtworkScope::ArrayFlattened).unwrap();
     assert!(
         package
             .files
@@ -861,7 +926,7 @@ fn generated_array_geometry_writes_fiducials_and_nonplated_holes() {
     assert_eq!(drill.features[0].intent.operation, FeatureOperation::Drill);
     assert_eq!(drill.features[0].intent.plating, PlatingKind::NonPlated);
 
-    let package = build_manufacturing_package(&parsed, ArtworkScope::ArrayFlattened).unwrap();
+    let package = manufacturing_package(&parsed, ArtworkScope::ArrayFlattened).unwrap();
     let top = package
         .files
         .iter()
@@ -897,6 +962,8 @@ fn generated_array_geometry_writes_fiducials_and_nonplated_holes() {
 
 #[test]
 fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
+    let resolution = Resolution::default();
+
     let input = board_fixture_with_top_line_mm();
     let ipc = Ipc2581::parse(input).unwrap();
     let options = BoardArrayCreateOptions {
@@ -918,10 +985,10 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
     .unwrap();
     let safe_region = ContourSet::rectangle(
         BBox::new(Point::new(0.0, 10.0), Point::new(5.0, 90.0)),
-        tol::REGION_MM,
+        resolution,
     );
 
-    let existing = ContourSet::empty(tol::REGION_MM);
+    let existing = ContourSet::empty(Resolution::default());
     let layers = [SpatialCopperBalanceLayerRequest {
         safe_region: &safe_region,
         existing_copper: &existing,
@@ -994,18 +1061,21 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
             })
             .flat_map(|feature| feature.paths.slice(&top.arena.paths))
             .collect::<Vec<_>>();
-        ContourSet::from_painted_paths(&top.arena, paths, tol::REGION_MM)
+        ContourSet::from_painted_paths(&top.arena, paths, resolution).unwrap()
     };
     let round_trip = balance_paths(pcb_ir::dialects::ipc::CopperBalanceKind::Plane)
         .difference(&balance_paths(
             pcb_ir::dialects::ipc::CopperBalanceKind::FullVoid,
         ))
+        .unwrap()
         .difference(&balance_paths(
             pcb_ir::dialects::ipc::CopperBalanceKind::EdgeVoid,
         ))
+        .unwrap()
         .union(&balance_paths(
             pcb_ir::dialects::ipc::CopperBalanceKind::BoundaryWeb,
-        ));
+        ))
+        .unwrap();
 
     assert!(!round_trip.is_empty());
     assert!(
@@ -1016,7 +1086,7 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
         balance.solution.generated_area_mm2
     );
 
-    let package = build_manufacturing_package(&parsed, ArtworkScope::ArrayFlattened).unwrap();
+    let package = manufacturing_package(&parsed, ArtworkScope::ArrayFlattened).unwrap();
     let top_gerber = package
         .files
         .iter()
@@ -1036,19 +1106,37 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
     assert!(top_gerber.contents.contains("%LPC*%"));
 
     // The composed Gerber image must match the composed IPC image.
-    let ipc_copper = crate::copper_balance::composed_copper_image(&parsed, "TOP").unwrap();
+    let ipc_copper = {
+        let imported = pcb_ir::import::ipc2581::import_design(&parsed).unwrap();
+        imported.composed_layer_image(
+            imported.layer_id("TOP").unwrap(),
+            pcb_ir::dialects::ipc::ArtworkScope::ArrayFlattened,
+            resolution,
+        )
+    }
+    .unwrap();
     let gerber = gerberx2::GerberX2::parse(&top_gerber.contents).unwrap();
-    let mask =
-        pcb_ir::dialects::artwork::compose_to_mask(&gerberx2::geometry::extract_document(&gerber));
+    let mask = pcb_ir::dialects::artwork::compose_to_mask(
+        &gerberx2::geometry::extract_document(&gerber, resolution.accuracy).unwrap(),
+        resolution,
+    )
+    .unwrap();
     let mut rings = Vec::new();
     for layer in &mask.layers {
         for shape in mask.shapes(layer) {
-            rings.extend(pcb_ir::geom::region::rings_from_contours(
-                &mask.arena.path_contours(shape),
-            ));
+            rings.extend(
+                pcb_ir::geom::ContourSet::from_contours(
+                    &mask.arena.path_contours(shape),
+                    pcb_ir::geom::FillRule::NonZero,
+                    resolution.strict(),
+                )
+                .unwrap()
+                .rings,
+            );
         }
     }
-    let gerber_copper = ContourSet::new(rings, pcb_ir::geom::FillRule::NonZero, tol::REGION_MM);
+    let gerber_copper =
+        ContourSet::from_rings(rings, pcb_ir::geom::FillRule::NonZero, resolution).unwrap();
     assert!(
         (gerber_copper.area() - ipc_copper.area()).abs() <= ipc_copper.area() * 1e-3,
         "Gerber area {}, IPC area {}",
@@ -1097,7 +1185,7 @@ fn board_array_creation_adds_default_tooling_at_single_column_min_width() {
         vec![(23.5, 67.5), (46.5, 67.5), (27.5, 2.5), (42.5, 2.5)],
     );
 
-    let package = build_manufacturing_package(&ipc, ArtworkScope::ArrayFlattened).unwrap();
+    let package = manufacturing_package(&ipc, ArtworkScope::ArrayFlattened).unwrap();
     assert_fiducial_gerbers(&package, "Global");
 }
 
@@ -1339,7 +1427,7 @@ fn board_array_creation_adds_board_cell_fiducials_on_top_bottom_margins() {
         8
     );
 
-    let package = build_manufacturing_package(&ipc, ArtworkScope::ArrayFlattened).unwrap();
+    let package = manufacturing_package(&ipc, ArtworkScope::ArrayFlattened).unwrap();
     assert_fiducial_gerbers(&package, "Local");
 }
 

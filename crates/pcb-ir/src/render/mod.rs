@@ -29,6 +29,9 @@ pub struct RenderOptions {
     /// `None` fits the selected layers with the default padding. This changes
     /// the camera only; callers should cull large documents before rendering.
     pub viewport: Option<BBox>,
+    /// Budget for geometry the target cannot draw natively (patterned
+    /// strokes, contours already carrying approximation).
+    pub accuracy: crate::geom::GeometryAccuracy,
 }
 
 impl RenderOptions {
@@ -53,6 +56,11 @@ impl RenderOptions {
 
     pub fn with_viewport(mut self, viewport: BBox) -> Self {
         self.viewport = Some(viewport);
+        self
+    }
+
+    pub fn with_accuracy(mut self, accuracy: crate::geom::GeometryAccuracy) -> Self {
+        self.accuracy = accuracy;
         self
     }
 

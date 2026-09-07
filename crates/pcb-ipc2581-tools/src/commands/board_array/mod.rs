@@ -1,3 +1,4 @@
+use pcb_ir::geom::Resolution;
 use std::collections::HashSet;
 #[cfg(feature = "cli")]
 use std::path::Path;
@@ -411,8 +412,10 @@ pub fn execute(
     options: &BoardArrayCreateOptions,
     balance_copper: bool,
 ) -> Result<()> {
+    let resolution = Resolution::default();
+
     let content = file_utils::load_ipc_file(input)?;
-    let creation = create_board_array(&content, options, balance_copper)?;
+    let creation = create_board_array(&content, options, balance_copper, resolution)?;
     print_copper_balance_summary(creation.copper_balance.as_ref());
     write_board_array_output(output, &creation.xml)?;
     Ok(())
@@ -424,9 +427,10 @@ pub fn execute_auto(
     output: &Path,
     sheet: Option<AutoSheetSize>,
     balance_copper: bool,
+    resolution: Resolution,
 ) -> Result<()> {
     let content = file_utils::load_ipc_file(input)?;
-    let creation = create_auto_board_array(&content, sheet, balance_copper)?;
+    let creation = create_auto_board_array(&content, sheet, balance_copper, resolution)?;
     print_copper_balance_summary(creation.copper_balance.as_ref());
     write_board_array_output(output, &creation.xml)?;
     Ok(())
@@ -459,6 +463,7 @@ pub fn create_board_array(
     xml: &str,
     options: &BoardArrayCreateOptions,
     balance_copper: bool,
+    resolution: Resolution,
 ) -> Result<BoardArrayCreation> {
     let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
     let spec = build_board_array_spec(
@@ -471,7 +476,7 @@ pub fn create_board_array(
             sheet_target_mm: None,
         },
     )?;
-    write_board_array_creation(xml, spec, balance_copper)
+    write_board_array_creation(xml, spec, balance_copper, resolution)
 }
 
 #[cfg(test)]
@@ -480,7 +485,9 @@ pub fn create_board_array(
 /// it ask for it.
 #[cfg(test)]
 fn create_board_array_xml(xml: &str, options: &BoardArrayCreateOptions) -> Result<String> {
-    Ok(create_board_array(xml, options, false)?.xml)
+    let resolution = Resolution::default();
+
+    Ok(create_board_array(xml, options, false, resolution)?.xml)
 }
 
 #[cfg(test)]
@@ -493,11 +500,12 @@ pub fn create_auto_board_array(
     xml: &str,
     sheet: Option<AutoSheetSize>,
     balance_copper: bool,
+    resolution: Resolution,
 ) -> Result<BoardArrayCreation> {
     let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
     let (options, validation_mode, panelization) = auto_board_array_options(&ipc, sheet)?;
     let spec = build_board_array_spec(&ipc, &options, validation_mode, panelization)?;
-    write_board_array_creation(xml, spec, balance_copper)
+    write_board_array_creation(xml, spec, balance_copper, resolution)
 }
 
 #[cfg(test)]
@@ -505,7 +513,9 @@ fn create_auto_board_array_xml_with_sheet(
     xml: &str,
     sheet: Option<AutoSheetSize>,
 ) -> Result<String> {
-    Ok(create_auto_board_array(xml, sheet, false)?.xml)
+    let resolution = Resolution::default();
+
+    Ok(create_auto_board_array(xml, sheet, false, resolution)?.xml)
 }
 
 fn auto_board_array_options(
@@ -641,6 +651,7 @@ fn write_board_array_creation(
     xml: &str,
     mut spec: BoardArraySpec,
     balance_copper: bool,
+    resolution: Resolution,
 ) -> Result<BoardArrayCreation> {
     if !balance_copper {
         return Ok(BoardArrayCreation {
@@ -654,7 +665,10 @@ fn write_board_array_creation(
     let provisional_xml = board_array_edited_xml(xml, &spec)?;
     let provisional = Ipc2581::parse(&provisional_xml)
         .context("Failed to parse provisional IPC-2581 board array")?;
-    let balance = balance::generate_automatic_board_array_copper_balance(&provisional)?;
+    let balance = balance::generate_automatic_board_array_copper_balance(
+        &provisional,
+        resolution.tolerance_mm,
+    )?;
     let copper_balance = balance.report();
 
     for layer in balance.layers {

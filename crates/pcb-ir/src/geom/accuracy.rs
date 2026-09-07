@@ -1,0 +1,247 @@
+//! How geometry is prepared: the feature size worth keeping and the total
+//! boundary approximation allowed.
+//!
+//! Three thresholds govern prepared geometry and they are independent:
+//!
+//! - [`tol::EPSILON_MM`](crate::geom::tol::EPSILON_MM) is numerical
+//!   coincidence.
+//! - [`Resolution::tolerance_mm`] is feature significance and containment
+//!   slack.
+//! - [`GeometryAccuracy`] bounds accumulated approximation. Contours and
+//!   regions carry `uncertainty_mm`, the approximation already present;
+//!   every operation that approximates spends from the region's budget and
+//!   fails when the total would exceed it.
+//!
+//! A budget is chosen once, where source curves are prepared into polygons,
+//! and inherited by everything derived from that preparation. Polygon round
+//! trips cannot recover lost precision, so a coarse preparation is rejected
+//! by a finer request instead of being silently reused.
+//!
+//! # What `uncertainty_mm` certifies
+//!
+//! Every point of a prepared region's boundary lies within `uncertainty_mm`
+//! of the boundary of the source geometry that produced it. Flattening and
+//! offsets record the chord or join error they introduce; a boolean's
+//! boundary consists of pieces of its operands' boundaries and their
+//! crossings, so it inherits the larger operand uncertainty plus coordinate
+//! rounding. Every operation checks the accumulated total against the
+//! region's budget and fails rather than return a region it cannot certify;
+//! combining regions prepared at different budgets takes the tighter one.
+//!
+//! The band is about the *source* boundary, not the boundary of the exactly
+//! composed set. Two source features that adjoin or overlap along a curve
+//! within their uncertainty can leave a seam or a sliver in the prepared
+//! result that the exact composition would not have. Such artefacts only add
+//! boundary: distances measured to a prepared region are never larger than
+//! the distance to the exact composition, so clearance and width findings
+//! derived from them remain conservative. Consumers that need the exact
+//! composed topology, rather than distances to source boundaries, must
+//! prepare their inputs exactly (zero uncertainty).
+
+use std::fmt;
+
+/// The preparation resolution of a region: significance and accuracy
+/// together, chosen once at a preparation entry point and carried by every
+/// region derived from it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Resolution {
+    /// Minimum significant feature size and containment slack, in
+    /// millimetres. Zero keeps every ring and tests containment exactly.
+    pub tolerance_mm: f64,
+    /// Total accumulated approximation budget.
+    pub accuracy: GeometryAccuracy,
+}
+
+impl Default for Resolution {
+    /// Sub-micrometre significance with the default budget.
+    fn default() -> Self {
+        Self {
+            tolerance_mm: super::tol::REGION_MM,
+            accuracy: GeometryAccuracy::default(),
+        }
+    }
+}
+
+impl Resolution {
+    pub fn new(tolerance_mm: f64, accuracy: GeometryAccuracy) -> Self {
+        Self {
+            tolerance_mm,
+            accuracy,
+        }
+    }
+
+    /// The same budget with a different significance tolerance.
+    pub fn with_tolerance(self, tolerance_mm: f64) -> Self {
+        Self {
+            tolerance_mm,
+            ..self
+        }
+    }
+
+    /// The same significance with a different budget.
+    pub fn with_accuracy(self, accuracy: GeometryAccuracy) -> Self {
+        Self { accuracy, ..self }
+    }
+
+    /// Zero significance: every ring survives and containment is exact.
+    /// Intermediate compositions use this so significance is applied once,
+    /// to the final image.
+    pub fn strict(self) -> Self {
+        self.with_tolerance(0.0)
+    }
+
+    /// The resolution two regions share: this tolerance, the tighter budget.
+    pub(crate) fn meet(self, other: Self) -> Self {
+        Self {
+            tolerance_mm: self.tolerance_mm,
+            accuracy: self.accuracy.min(other.accuracy),
+        }
+    }
+
+    pub(crate) fn is_valid(self) -> bool {
+        self.tolerance_mm.is_finite() && self.tolerance_mm >= 0.0
+    }
+}
+
+/// Budget for accumulated numerical approximation error, in millimetres.
+///
+/// This accounting does not certify topology or final Hausdorff distance.
+/// Independent of feature significance and coincidence. Unmet budgets return
+/// an error, including when earlier approximation cannot be refined.
+///
+/// ```
+/// use pcb_ir::geom::{ContourSet, FillRule, GeometryAccuracy, Resolution, shapes};
+/// let source = shapes::circle(0.2).unwrap();
+/// let resolution = Resolution::new(0.000001, GeometryAccuracy::new(0.0001)?);
+/// let region = ContourSet::from_contours(&[source], FillRule::NonZero, resolution)?;
+/// let inset = region.disk_erode(0.025)?;
+/// assert!(inset.uncertainty_mm <= 0.0005);
+/// # Ok::<(), pcb_ir::geom::AccuracyError>(())
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GeometryAccuracy(f64);
+
+impl Default for GeometryAccuracy {
+    fn default() -> Self {
+        Self::micrometres(10)
+    }
+}
+
+impl GeometryAccuracy {
+    pub fn new(max_error_mm: f64) -> Result<Self, AccuracyError> {
+        if !max_error_mm.is_finite() || max_error_mm <= 0.0 {
+            return Err(AccuracyError::InvalidBudget(max_error_mm));
+        }
+        Ok(Self(max_error_mm))
+    }
+
+    /// A whole-micrometre budget, usable in constants.
+    pub const fn micrometres(max_error_um: u32) -> Self {
+        assert!(max_error_um > 0, "an accuracy budget must be positive");
+        Self(max_error_um as f64 / 1000.0)
+    }
+
+    pub fn max_error_mm(self) -> f64 {
+        self.0
+    }
+
+    /// The tighter of two budgets.
+    pub fn min(self, other: Self) -> Self {
+        Self(self.0.min(other.0))
+    }
+
+    pub(crate) fn remaining(self, uncertainty_mm: f64) -> Result<f64, AccuracyError> {
+        let remaining = self.0 - uncertainty_mm;
+        if remaining > 0.0 && uncertainty_mm >= 0.0 {
+            Ok(remaining)
+        } else {
+            Err(AccuracyError::BudgetExceeded {
+                requested_mm: self.0,
+                uncertainty_mm,
+            })
+        }
+    }
+
+    pub(crate) fn allowance(self, uncertainty_mm: f64) -> Result<f64, AccuracyError> {
+        Ok(self.remaining(uncertainty_mm)? / 4.0)
+    }
+
+    pub(crate) fn before_transform(
+        self,
+        bbox: super::BBox,
+        transform: super::Affine2,
+    ) -> Result<Self, AccuracyError> {
+        let scale = transform.max_scale();
+        if !scale.is_finite()
+            || scale <= 0.0
+            || transform.determinant() == 0.0
+            || !transform.m02.is_finite()
+            || !transform.m12.is_finite()
+        {
+            return Err(AccuracyError::InvalidGeometry(
+                "singular or non-finite transform",
+            ));
+        }
+        Self::new(self.remaining(numerical_error(bbox.transformed(transform)))? / scale)
+    }
+
+    pub fn check(self, uncertainty_mm: f64) -> Result<(), AccuracyError> {
+        if uncertainty_mm >= 0.0 && uncertainty_mm <= self.0 {
+            Ok(())
+        } else {
+            Err(AccuracyError::BudgetExceeded {
+                requested_mm: self.0,
+                uncertainty_mm,
+            })
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum AccuracyError {
+    InvalidBudget(f64),
+    BudgetExceeded {
+        requested_mm: f64,
+        uncertainty_mm: f64,
+    },
+    InvalidGeometry(&'static str),
+    SubdivisionLimit,
+}
+
+impl fmt::Display for AccuracyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidBudget(mm) => write!(
+                f,
+                "geometry accuracy must be finite and positive, got {mm} mm"
+            ),
+            Self::BudgetExceeded {
+                requested_mm,
+                uncertainty_mm,
+            } => write!(
+                f,
+                "accuracy budget {requested_mm} mm cannot be met (uncertainty: {uncertainty_mm} mm)"
+            ),
+            Self::InvalidGeometry(reason) => write!(f, "cannot prepare geometry: {reason}"),
+            Self::SubdivisionLimit => {
+                f.write_str("requested geometry accuracy exceeds the subdivision limit")
+            }
+        }
+    }
+}
+
+impl std::error::Error for AccuracyError {}
+
+/// Floating arithmetic allowance. Overlay uses an automatic integer grid;
+/// the i64 adapter retains the floating point coordinate precision.
+pub(crate) fn numerical_error(bbox: super::BBox) -> f64 {
+    if bbox.is_empty() {
+        return 0.0;
+    }
+    let extent = (bbox.max.x - bbox.min.x).max(bbox.max.y - bbox.min.y);
+    let magnitude = [bbox.min.x, bbox.min.y, bbox.max.x, bbox.max.y]
+        .into_iter()
+        .map(f64::abs)
+        .fold(1.0, f64::max);
+    16.0 * extent / (1_u64 << 52) as f64 + 64.0 * f64::EPSILON * magnitude
+}

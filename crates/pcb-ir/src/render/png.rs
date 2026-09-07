@@ -21,10 +21,10 @@ pub fn artwork_png<LayerMeta: Clone, ObjectMeta: Clone>(
     options: &RenderOptions,
 ) -> Result<Vec<u8>, String> {
     let bbox = options.viewport_or(crate::render::artwork_bbox(doc, options.layers.as_deref()));
-    svg_to_png(&crate::render::artwork_svg(
-        doc,
-        &raster_options(options, bbox),
-    ))
+    svg_to_png(
+        &crate::render::artwork_svg(doc, &raster_options(options, bbox))
+            .map_err(|error| error.to_string())?,
+    )
 }
 
 /// Resolve a size constraint into the fixed pixel size a raster needs.
@@ -42,6 +42,7 @@ fn raster_options(options: &RenderOptions, bbox: BBox) -> RenderOptions {
     RenderOptions {
         layers: options.layers.clone(),
         viewport: options.viewport,
+        accuracy: options.accuracy,
         size: SizeConstraint::Fixed {
             width_px,
             height_px,
