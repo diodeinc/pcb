@@ -622,7 +622,7 @@ fn fractional_stackup_sequences_order_layers_and_reject_invalid_order_evidence()
 #[test]
 fn invalid_order_preserves_each_layer_and_group_material_provenance() {
     let xml = fixture().replace("<StackupGroup name=\"g\">", "<StackupGroup name=\"g\" matDes=\"group-material\">")
-        .replace("</StackupGroup>", "<SpecRef id=\"group-spec\"/></StackupGroup>")
+        .replace("</StackupGroup>", "<CADDataLayerRef layerId=\"top\"/><SpecRef id=\"group-spec\"/></StackupGroup>")
         .replace("<CadHeader units=\"MILLIMETER\"/>", r#"<CadHeader units="MILLIMETER"><Spec name="mat"><General type="MATERIAL"><Property text="FR4"/></General></Spec></CadHeader>"#)
         .replace("sequence=\"0\"/>", "sequence=\"0\"><SpecRef id=\"mat\"/></StackupLayer>");
     let mut imported = design(&xml);
@@ -654,6 +654,7 @@ fn invalid_order_preserves_each_layer_and_group_material_provenance() {
     }
     let group = &metadata.groups[0];
     assert_eq!(group.source_layers, 0..1);
+    assert_eq!(imported.resolve(group.cad_data_layer_refs[0]), "top");
     assert_eq!(imported.resolve(group.mat_des.unwrap()), "group-material");
     assert_eq!(imported.resolve(group.spec_refs[0]), "group-spec");
     assert!(

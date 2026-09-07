@@ -157,6 +157,7 @@ struct PhysicalStackup {
 struct PhysicalStackupGroup {
     attributes: Vec<(String, String)>,
     source_layers: std::ops::Range<usize>,
+    cad_data_layer_refs: Vec<String>,
     specs: Vec<SpecEvidence>,
 }
 
@@ -526,6 +527,11 @@ fn physical_stackup(xml: &str, source_index: usize) -> Result<PhysicalStackup> {
         .map(|(node, group)| PhysicalStackupGroup {
             attributes: sorted_attributes(&doc, node, &["name"]),
             source_layers: group.source_layers.clone(),
+            cad_data_layer_refs: group
+                .cad_data_layer_refs
+                .iter()
+                .map(|reference| ipc.resolve(*reference).to_string())
+                .collect(),
             specs: group.spec_refs.iter().map(spec_evidence).collect(),
         })
         .collect::<Vec<_>>();

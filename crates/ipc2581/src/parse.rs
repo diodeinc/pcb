@@ -1916,11 +1916,18 @@ impl<'a> Parser<'a> {
                     name: self.required_attr(&child, "name", "StackupGroup")?,
                     mat_des: self.optional_attr(&child, "matDes"),
                     spec_refs: Vec::new(),
+                    cad_data_layer_refs: Vec::new(),
                     source_layers: layers.len()..layers.len(),
                 };
                 for layer_node in self.element_children(&child) {
                     if self.name(&layer_node) == "StackupLayer" {
                         layers.push(self.parse_stackup_layer(&layer_node)?);
+                    } else if self.name(&layer_node) == "CADDataLayerRef" {
+                        group.cad_data_layer_refs.push(self.required_attr(
+                            &layer_node,
+                            "layerId",
+                            "CADDataLayerRef",
+                        )?);
                     } else if self.name(&layer_node) == "SpecRef" {
                         group
                             .spec_refs

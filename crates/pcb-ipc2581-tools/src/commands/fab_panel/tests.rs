@@ -136,9 +136,37 @@ fn group_spec_payloads_participate_in_panel_compatibility() {
 }
 
 #[test]
+fn cad_data_group_membership_is_preserved_and_compared() {
+    let xml = assembly_panel_xml(20.0, 20.0).replace(
+        "</StackupGroup>",
+        r#"<CADDataLayerRef layerId="TOP"/></StackupGroup><StackupGroup name="membership-only" thickness="0" tolPlus="0" tolMinus="0"><CADDataLayerRef layerId="TOP"/><CADDataLayerRef layerId="BOTTOM"/></StackupGroup>"#,
+    ).replace("<Stackup name=", r#"<Layer name="BOTTOM" layerFunction="CONDUCTOR" side="BOTTOM" polarity="POSITIVE"/><Stackup name="#);
+    let ipc = Ipc2581::parse(&xml).unwrap();
+    let groups = &ipc.ecad().unwrap().cad_data.stackups[0].groups;
+    assert_eq!(groups[0].source_layers, 0..1);
+    assert_eq!(groups[1].source_layers, 1..1);
+    assert_eq!(
+        groups[1]
+            .cad_data_layer_refs
+            .iter()
+            .map(|reference| ipc.resolve(*reference))
+            .collect::<Vec<_>>(),
+        ["TOP", "BOTTOM"]
+    );
+    let generated = create_fab_panel_xml(&[xml.clone(), xml.clone()], &[0, 1]).unwrap();
+    assert!(generated.contains(r#"<CADDataLayerRef layerId="TOP""#));
+    let changed = xml.replace(r#"layerId="TOP""#, r#"layerId="BOTTOM""#);
+    assert!(create_fab_panel_xml(&[xml, changed], &[0, 1]).is_err());
+}
+
+#[test]
 fn conflicting_color_and_finish_evidence_is_order_independent() {
     for (first, second) in [
         (r#"<ColorTerm name="RED"/>"#, r#"<ColorTerm name="GREEN"/>"#),
+        (
+            r#"<ColorTerm name="RED"/>"#,
+            r#"<Color r="0" g="255" b="0"/>"#,
+        ),
         (
             r#"<Color r="1" g="2" b="3"/>"#,
             r#"<Color r="4" g="5" b="6"/>"#,

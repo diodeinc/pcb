@@ -452,14 +452,14 @@ fn unique_value<T: PartialEq>(mut values: impl Iterator<Item = T>) -> Option<T> 
 }
 
 fn agreed_color(colors: &[ColorInfo]) -> Option<ColorInfo> {
-    let name = unique_value(colors.iter().filter_map(|color| color.name.clone()));
-    let rgb = unique_value(colors.iter().filter_map(|color| color.rgb));
-    if (name.is_none() && colors.iter().any(|color| color.name.is_some()))
-        || (rgb.is_none() && colors.iter().any(|color| color.rgb.is_some()))
-    {
-        return None;
-    }
-    (name.is_some() || rgb.is_some()).then_some(ColorInfo { name, rgb })
+    // A name and RGB from separate specifications are not an asserted pair.
+    // Preserve only agreement on a complete source record, without synthesizing
+    // a color or guessing equivalence between names and RGB values.
+    let first = colors.first()?;
+    colors
+        .iter()
+        .all(|color| color.name == first.name && color.rgb == first.rgb)
+        .then(|| first.clone())
 }
 
 fn classify_finish_type(finish_type: ipc2581::types::FinishType) -> SurfaceFinishCategory {
