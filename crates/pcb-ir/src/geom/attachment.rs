@@ -18,11 +18,13 @@
 
 use super::dist::{self, Distance};
 use super::region::{ring_edges, segment_inside_intervals};
-use super::{Affine2, ContourSet, FillRule, Point, PreparedRegion};
+use super::{AccuracyError, Affine2, ContourSet, FillRule, Point, PreparedRegion};
 
 /// Caller-supplied position uncertainty for each input boundary, and numerical
-/// guard for comparisons. Include prior transforms, flattening, and offsets in
-/// `boundary_mm`. Neither value is an arc-length, angular, or topology bound.
+/// guard for comparisons. Stored region uncertainty is always a floor;
+/// `boundary_mm` may supply a larger external uncertainty. Neither value is an
+/// arc-length, angular, or topology bound. Operations preserve the region's
+/// preparation budget and propagate AccuracyError rather than widening it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct QueryTolerance {
     pub boundary_mm: f64,
@@ -52,6 +54,7 @@ impl QueryTolerance {
 pub enum QueryError {
     InvalidInput(&'static str),
     Numerical(&'static str),
+    Accuracy(AccuracyError),
 }
 
 impl std::fmt::Display for QueryError {
@@ -59,15 +62,23 @@ impl std::fmt::Display for QueryError {
         match self {
             Self::InvalidInput(message) => write!(f, "invalid geometry query: {message}"),
             Self::Numerical(message) => write!(f, "numerical geometry failure: {message}"),
+            Self::Accuracy(error) => error.fmt(f),
         }
     }
 }
 
 impl std::error::Error for QueryError {}
 
+impl From<AccuracyError> for QueryError {
+    fn from(error: AccuracyError) -> Self {
+        Self::Accuracy(error)
+    }
+}
+
 fn validate_region(region: &ContourSet) -> Result<(), QueryError> {
-    if !region.tolerance.is_finite()
-        || region.tolerance < 0.0
+    region.budget().check(region.uncertainty_mm)?;
+    if !region.tolerance().is_finite()
+        || region.tolerance() < 0.0
         || region.rings.iter().any(|ring| {
             ring.len() < 3 || ring.iter().any(|p| !p[0].is_finite() || !p[1].is_finite())
         })
@@ -82,7 +93,11 @@ fn validate_region(region: &ContourSet) -> Result<(), QueryError> {
 // Do not discard newly created narrow pieces according to an input region's
 // significance threshold. This cannot restore pieces lost before the query.
 fn unfiltered(region: &ContourSet) -> ContourSet {
-    ContourSet::from_regularized(region.rings.clone(), 0.0)
+    ContourSet::from_regularized(
+        region.rings.clone(),
+        region.resolution.strict(),
+        region.uncertainty_mm,
+    )
 }
 
 /// Stable only within a BoundaryQuery's immutable source snapshot. `ring` is
@@ -233,7 +248,8 @@ impl<'a> BoundaryQuery<'a> {
             site,
             distance: Distance {
                 mm,
-                uncertainty_mm: self.tolerance.boundary_mm + self.tolerance.numerical_mm,
+                uncertainty_mm: self.tolerance.boundary_mm.max(self.region.uncertainty_mm)
+                    + self.tolerance.numerical_mm,
                 first: point,
                 second: closest,
             },
@@ -297,29 +313,25 @@ impl<'a> BoundaryQuery<'a> {
 }
 
 /// Transform the polygon model with the existing IR affine convention. Rebuild
-/// winding after reflections. The caller must scale its uncertainty budget by
-/// the transform's largest singular value; arbitrary affine transforms do not
-/// preserve stations, angles, or circular cutters.
+/// winding after reflections and scale stored uncertainty without widening the
+/// preparation budget. Callers must separately scale any larger external
+/// QueryTolerance by the largest singular value. Arbitrary affine transforms
+/// do not preserve stations, angles, or circular cutters.
 pub fn transform_region(region: &ContourSet, transform: Affine2) -> Result<ContourSet, QueryError> {
     validate_region(region)?;
     if transform.inverse().is_none() {
         return Err(QueryError::InvalidInput("singular affine transform"));
     }
-    let rings = region
-        .rings
-        .iter()
-        .map(|ring| {
-            ring.iter()
-                .map(|p| {
-                    let p = transform.transform_point(Point::new(p[0], p[1]));
-                    [p.x, p.y]
-                })
-                .collect()
-        })
-        .collect();
-    let raw = ContourSet::from_regularized(rings, 0.0);
-    validate_region(&raw)?;
-    Ok(ContourSet::new(raw.rings, FillRule::NonZero, 0.0))
+    let contours = region
+        .to_contours()
+        .into_iter()
+        .map(|contour| contour.transformed(transform))
+        .collect::<Vec<_>>();
+    Ok(ContourSet::from_contours(
+        &contours,
+        FillRule::NonZero,
+        region.resolution.strict(),
+    )?)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -392,7 +404,7 @@ pub fn check_footprints<'a>(
             (FootprintPart::Attachment, attachment),
             (FootprintPart::RouterShoulder, router_shoulder),
         ] {
-            let overlap = unfiltered(footprint).intersection(&unfiltered(obstacle.region));
+            let overlap = unfiltered(footprint).intersection(&unfiltered(obstacle.region))?;
             let bounds = footprint.bbox().union(obstacle.region.bbox());
             let reach = bounds.width().hypot(bounds.height());
             if !reach.is_finite() && !footprint.is_empty() && !obstacle.region.is_empty() {
@@ -405,11 +417,16 @@ pub fn check_footprints<'a>(
                 .filter_map(|(a, b)| prepared.segment_nearest_within(a, b, reach))
                 .min_by(|a, b| a.mm.total_cmp(&b.mm))
                 .map(|d| Distance {
-                    uncertainty_mm: tolerance.pair_band(),
+                    uncertainty_mm: tolerance.boundary_mm.max(footprint.uncertainty_mm)
+                        + tolerance.boundary_mm.max(obstacle.region.uncertainty_mm)
+                        + tolerance.numerical_mm,
                     ..d
                 });
             let decision = if !overlap.is_empty() {
-                if tolerance.boundary_mm > 0.0 {
+                if tolerance.boundary_mm > 0.0
+                    || footprint.uncertainty_mm > 0.0
+                    || obstacle.region.uncertainty_mm > 0.0
+                {
                     Decision::Unresolved(
                         "polygon footprints overlap; source-boundary uncertainty requires refinement",
                     )
@@ -476,7 +493,7 @@ fn membership(
         if !d.mm.is_finite() {
             return Err(QueryError::Numerical("membership distance overflow"));
         }
-        if d.mm.abs() <= guard {
+        if d.mm.abs() <= guard.max(d.uncertainty_mm) {
             return Ok(RegionMembership::BoundaryBand);
         }
         if d.mm < 0.0 {
@@ -523,8 +540,8 @@ pub fn cutter_reachability(
         ));
     }
     let center_space = unfiltered(workspace)
-        .difference(&unfiltered(obstacles))
-        .disk_erode(radius_mm);
+        .difference(&unfiltered(obstacles))?
+        .disk_erode(radius_mm)?;
     let components = center_space
         .connected_components()
         .iter()
@@ -615,7 +632,7 @@ pub fn material_after_break(
     tolerance.validate()?;
     validate_region(material)?;
     validate_region(removal)?;
-    let retained = unfiltered(material).difference(&unfiltered(removal));
+    let retained = unfiltered(material).difference(&unfiltered(removal))?;
     let components = retained.connected_components();
     let prepared = components
         .iter()

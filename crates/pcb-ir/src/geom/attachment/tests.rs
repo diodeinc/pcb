@@ -1,5 +1,13 @@
 use super::*;
-use crate::geom::{BBox, ContourBuf, LineCap, LineJoin, Mirror, PathCmd, StrokeToFillStyle};
+use crate::geom::{
+    BBox, ContourBuf, GeometryAccuracy, LineCap, LineJoin, Mirror, PathCmd, Resolution,
+    StrokeToFillStyle,
+};
+
+const RESOLUTION: Resolution = Resolution {
+    tolerance_mm: 0.0,
+    accuracy: GeometryAccuracy::micrometres(10),
+};
 
 const TOL: QueryTolerance = QueryTolerance {
     boundary_mm: 0.0,
@@ -7,7 +15,10 @@ const TOL: QueryTolerance = QueryTolerance {
 };
 
 fn rect(x: f64, y: f64, w: f64, h: f64) -> ContourSet {
-    ContourSet::rectangle(BBox::new(Point::new(x, y), Point::new(x + w, y + h)), 0.0)
+    ContourSet::rectangle(
+        BBox::new(Point::new(x, y), Point::new(x + w, y + h)),
+        RESOLUTION,
+    )
 }
 
 fn close(a: f64, b: f64, tolerance: f64) {
@@ -18,7 +29,9 @@ fn close(a: f64, b: f64, tolerance: f64) {
 fn cyclic_projection_and_material_normals_preserve_hole_identity() {
     let material = rect(0.0, 0.0, 10.0, 10.0)
         .difference(&rect(3.0, 3.0, 4.0, 4.0))
-        .union(&rect(20.0, 0.0, 2.0, 2.0));
+        .unwrap()
+        .union(&rect(20.0, 0.0, 2.0, 2.0))
+        .unwrap();
     let query = BoundaryQuery::new(&material, TOL).unwrap();
     let ids = query.boundaries().collect::<Vec<_>>();
     assert_eq!(ids.len(), 3);
@@ -50,10 +63,13 @@ fn intervals_retain_every_narrow_window_and_hole_split() {
     let id = query.boundaries().next().unwrap();
     // More windows than a typical candidate cap, each much smaller than a
     // plausible sampling step. The hole removes a central part of one window.
-    let windows = (0..80).fold(ContourSet::empty(0.0), |r, i| {
+    let windows = (0..80).fold(ContourSet::empty(RESOLUTION), |r, i| {
         r.union(&rect(0.1 + i as f64 * 0.1, -0.1, 0.0001, 0.2))
+            .unwrap()
     });
-    let windows = windows.difference(&rect(0.10004, -0.05, 0.00002, 0.1));
+    let windows = windows
+        .difference(&rect(0.10004, -0.05, 0.00002, 0.1))
+        .unwrap();
     let intervals = query.usable_intervals(id, &windows).unwrap();
     assert_eq!(intervals.len(), 81);
     close(
@@ -74,9 +90,9 @@ fn curved_contours_use_explicit_polygon_model() {
         PathCmd::arc_to(Point::new(5.0, 0.0), Point::ZERO, false),
         PathCmd::close(),
     ]);
-    let region = ContourSet::from_contours(&[circle], FillRule::NonZero, 0.0);
+    let region = ContourSet::from_contours(&[circle], FillRule::NonZero, RESOLUTION).unwrap();
     let tolerance = QueryTolerance {
-        boundary_mm: crate::geom::tol::FLATTEN_MM,
+        boundary_mm: 0.0,
         ..TOL
     };
     let query = BoundaryQuery::new(&region, tolerance).unwrap();
@@ -93,7 +109,7 @@ fn curved_contours_use_explicit_polygon_model() {
         0.0,
         1e-10,
     );
-    assert!(p.distance.uncertainty_mm > crate::geom::tol::FLATTEN_MM);
+    assert!(p.distance.uncertainty_mm > region.uncertainty_mm);
     let intervals = query
         .usable_intervals(id, &rect(4.0, -1.0, 2.0, 2.0))
         .unwrap();
@@ -110,7 +126,7 @@ fn curved_contours_use_explicit_polygon_model() {
         ),
         PathCmd::close(),
     ]);
-    let region = ContourSet::from_contours(&[cubic], FillRule::EvenOdd, 0.0);
+    let region = ContourSet::from_contours(&[cubic], FillRule::EvenOdd, RESOLUTION).unwrap();
     let query = BoundaryQuery::new(&region, tolerance).unwrap();
     let id = query.boundaries().next().unwrap();
     close(
@@ -122,7 +138,9 @@ fn curved_contours_use_explicit_polygon_model() {
 
 #[test]
 fn concavity_and_affine_reflection_keep_outward_normals_and_clearance() {
-    let material = rect(0.0, 0.0, 6.0, 2.0).union(&rect(0.0, 0.0, 2.0, 6.0));
+    let material = rect(0.0, 0.0, 6.0, 2.0)
+        .union(&rect(0.0, 0.0, 2.0, 6.0))
+        .unwrap();
     let transform = Affine2::placement(Point::new(30.0, -12.0), 37.0, Mirror::X, 2.0);
     let moved = transform_region(&material, transform).unwrap();
     let query = BoundaryQuery::new(&moved, TOL).unwrap();
@@ -137,7 +155,7 @@ fn concavity_and_affine_reflection_keep_outward_normals_and_clearance() {
     let attachment = transform_region(&rect(3.0, 3.0, 1.0, 1.0), transform).unwrap();
     let checks = check_footprints(
         &attachment,
-        &ContourSet::empty(0.0),
+        &ContourSet::empty(RESOLUTION),
         &[Obstacle {
             id: "concave board",
             region: &moved,
@@ -205,7 +223,7 @@ fn complete_footprints_detect_crossings_containment_shoulders_and_holes() {
             .decision,
         Decision::Rejected(GeometricRejection::FootprintOverlap)
     );
-    let annulus = enclosing.difference(&rect(-5.0, -5.0, 10.0, 10.0));
+    let annulus = enclosing.difference(&rect(-5.0, -5.0, 10.0, 10.0)).unwrap();
     assert_eq!(
         check_footprints(
             &attachment,
@@ -234,7 +252,7 @@ fn tolerance_ambiguity_is_not_geometric_rejection() {
     let check = |clearance| {
         check_footprints(
             &attachment,
-            &ContourSet::empty(0.0),
+            &ContourSet::empty(RESOLUTION),
             &[Obstacle {
                 id: "near",
                 region: &obstacle,
@@ -272,7 +290,9 @@ fn tolerance_ambiguity_is_not_geometric_rejection() {
 #[test]
 fn cutter_reachability_detects_closed_holes_and_radius_limited_necks() {
     let workspace = rect(-5.0, -5.0, 10.0, 10.0);
-    let ring = rect(-3.0, -3.0, 6.0, 6.0).difference(&rect(-1.0, -1.0, 2.0, 2.0));
+    let ring = rect(-3.0, -3.0, 6.0, 6.0)
+        .difference(&rect(-1.0, -1.0, 2.0, 2.0))
+        .unwrap();
     let reach = cutter_reachability(
         &workspace,
         &ring,
@@ -289,8 +309,10 @@ fn cutter_reachability_detects_closed_holes_and_radius_limited_necks() {
     );
     let free = rect(0.0, 0.0, 3.0, 4.0)
         .union(&rect(3.0, 1.7, 4.0, 0.6))
-        .union(&rect(7.0, 0.0, 3.0, 4.0));
-    let empty = ContourSet::empty(0.0);
+        .unwrap()
+        .union(&rect(7.0, 0.0, 3.0, 4.0))
+        .unwrap();
+    let empty = ContourSet::empty(RESOLUTION);
     for (radius, reachable) in [(0.2, true), (0.4, false)] {
         let result = cutter_reachability(
             &free,
@@ -307,13 +329,16 @@ fn cutter_reachability_detects_closed_holes_and_radius_limited_necks() {
 
 #[test]
 fn supplied_break_sweep_separates_only_when_last_ligament_is_removed() {
-    let material = rect(0.0, 0.0, 10.0, 4.0).difference(&rect(4.5, 1.0, 1.0, 2.0));
+    let material = rect(0.0, 0.0, 10.0, 4.0)
+        .difference(&rect(4.5, 1.0, 1.0, 2.0))
+        .unwrap();
     let points = [
         Point::new(1.0, 2.0),
         Point::new(9.0, 2.0),
         Point::new(5.0, 2.0),
     ];
-    let before = material_after_break(&material, &ContourSet::empty(0.0), &points, TOL).unwrap();
+    let before =
+        material_after_break(&material, &ContourSet::empty(RESOLUTION), &points, TOL).unwrap();
     assert_eq!(before.connected(0, 1).unwrap(), Some(true));
     assert_eq!(before.connected(0, 2).unwrap(), None);
     let partial =
@@ -326,9 +351,11 @@ fn supplied_break_sweep_separates_only_when_last_ligament_is_removed() {
     let sweep = crate::geom::path::stroke_to_fill(
         &[path],
         StrokeToFillStyle::new(0.4, LineCap::Round, LineJoin::Round),
+        RESOLUTION.accuracy,
     )
+    .unwrap()
     .unwrap();
-    let removal = ContourSet::from_contours(&sweep, FillRule::NonZero, 0.0);
+    let removal = ContourSet::from_contours(&sweep, FillRule::NonZero, RESOLUTION).unwrap();
     let after = material_after_break(&material, &removal, &points, TOL).unwrap();
     assert_eq!(after.components.len(), 2);
     assert_eq!(after.connected(0, 1).unwrap(), Some(false));
@@ -347,7 +374,7 @@ fn supplied_break_sweep_separates_only_when_last_ligament_is_removed() {
 #[test]
 fn boundary_witnesses_are_unresolved_not_access_or_separation() {
     let region = rect(0.0, 0.0, 4.0, 4.0);
-    let empty = ContourSet::empty(0.0);
+    let empty = ContourSet::empty(RESOLUTION);
     let points = [
         Point::new(2.0, 2.0),
         Point::new(-1.0, 2.0),
@@ -391,6 +418,40 @@ fn boundary_witnesses_are_unresolved_not_access_or_separation() {
     )
     .unwrap();
     assert_eq!(multiple_entries.targets[0], Decision::Admissible);
+}
+
+#[test]
+fn preparation_uncertainty_and_budget_survive_queries_and_transforms() {
+    let original = rect(0.0, 0.0, 1.0, 1.0);
+    let prepared = ContourSet::from_regularized(original.rings, RESOLUTION, 0.002);
+    let transformed = transform_region(
+        &prepared,
+        Affine2::placement(Point::ZERO, 17.0, Mirror::X, 2.0),
+    )
+    .unwrap();
+    assert!(transformed.uncertainty_mm >= 0.004);
+    assert_eq!(transformed.resolution, RESOLUTION);
+    let obstacle = rect(1.003, 0.0, 1.0, 1.0);
+    let checks = check_footprints(
+        &prepared,
+        &ContourSet::empty(RESOLUTION),
+        &[Obstacle {
+            id: "near",
+            region: &obstacle,
+        }],
+        0.002,
+        TOL,
+    )
+    .unwrap();
+    assert!(matches!(checks[0].decision, Decision::Unresolved(_)));
+    assert!(checks[0].boundary_distance.unwrap().uncertainty_mm >= 0.002);
+    assert!(matches!(
+        transform_region(
+            &prepared,
+            Affine2::placement(Point::ZERO, 0.0, Mirror::NONE, 10.0)
+        ),
+        Err(QueryError::Accuracy(AccuracyError::BudgetExceeded { .. }))
+    ));
 }
 
 #[test]
