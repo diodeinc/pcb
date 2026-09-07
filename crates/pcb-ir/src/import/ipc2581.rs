@@ -1342,7 +1342,21 @@ impl ImportedDesign {
             .layer_definitions
             .get(layer.0 as usize)
             .context("layer id is outside the imported design")?;
-        self.materialize_layer(layer, scope)?.into_layer_image(
+        let mut document = self.materialize_layer(layer, scope)?;
+        // A drill/rout layer images removal itself. Its holes and slots add
+        // apertures even beside generic route artwork; they are not final
+        // cutters of that artwork as they are on a copper layer.
+        if matches!(
+            definition.layer_function,
+            LayerFunction::Drill | LayerFunction::Rout
+        ) {
+            for feature in &mut document.features {
+                if feature.bucket == FeatureBucket::Cutout {
+                    feature.bucket = FeatureBucket::Fill;
+                }
+            }
+        }
+        document.into_layer_image(
             0,
             layer_role(definition.layer_function),
             side_for_layer(definition.side),

@@ -18,6 +18,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Add standalone elastic support analysis with beam and triangular plate elements, explicit stiffness and constraints, and singular-mode diagnostics.
 - Add experimental single mouse-bite tab geometry and reproducible straight/curved break coupons to `pcb-ir`; physical fracture validation remains outstanding.
 - Add boundary-following clearance intervals with inward landing checks, preserving substrate geometry and reporting missing obstacle evidence.
+- Expose headless board-local physical geometry, component outline semantics, and material/thickness diagnostics in `pcb-ir`.
 
 ### Changed
 
