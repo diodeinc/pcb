@@ -250,14 +250,19 @@ fn write_artwork_object<LayerMeta, ObjectMeta>(
     Ok(())
 }
 
-/// Path data for contours the SVG draws natively; only approximation the
-/// contours already carry counts against the budget.
+/// Coordinates are written to six decimals, so every emitted point may sit
+/// this far from its source along each axis.
+const SVG_COORDINATE_GRID_MM: f64 = 1e-6;
+
+/// Path data for contours the SVG draws natively; the approximation the
+/// contours already carry plus coordinate rounding counts against the budget.
 fn accurate_path_data(
     contours: Vec<crate::geom::path::ContourBuf>,
     accuracy: GeometryAccuracy,
 ) -> Result<String, AccuracyError> {
     for contour in &contours {
-        accuracy.check(contour.uncertainty_mm)?;
+        accuracy
+            .check(contour.uncertainty_mm + SVG_COORDINATE_GRID_MM / std::f64::consts::SQRT_2)?;
     }
     Ok(svg_path_data(&contours))
 }
@@ -821,6 +826,16 @@ mod tests {
         let png = crate::render::artwork_png(&artwork, &options).unwrap();
         assert_eq!(u32::from_be_bytes(png[16..20].try_into().unwrap()), 100);
         assert_eq!(u32::from_be_bytes(png[20..24].try_into().unwrap()), 20);
+    }
+
+    #[test]
+    fn svg_charges_coordinate_rounding_against_the_budget() {
+        let contours = vec![square(1.0)];
+        assert!(accurate_path_data(contours.clone(), GeometryAccuracy::new(1e-6).unwrap()).is_ok());
+        assert!(matches!(
+            accurate_path_data(contours, GeometryAccuracy::new(1e-7).unwrap()),
+            Err(AccuracyError::BudgetExceeded { .. })
+        ));
     }
 
     #[test]
