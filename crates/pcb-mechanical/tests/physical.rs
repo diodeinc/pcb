@@ -22,6 +22,8 @@ fn physical_view_placement_preserves_missing_evidence_and_requires_explicit_mate
         metadata: BoardPhysicalMetadata {
             stackup: Association::Unresolved,
             spec_refs: vec![],
+            source_attributes: vec![],
+            source_units: None,
             overall_thickness_mm: None,
             layers: vec![],
             groups: vec![],
