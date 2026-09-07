@@ -411,9 +411,8 @@ pub fn execute(
     output: &Path,
     options: &BoardArrayCreateOptions,
     balance_copper: bool,
+    resolution: Resolution,
 ) -> Result<()> {
-    let resolution = Resolution::default();
-
     let content = file_utils::load_ipc_file(input)?;
     let creation = create_board_array(&content, options, balance_copper, resolution)?;
     print_copper_balance_summary(creation.copper_balance.as_ref());
@@ -503,7 +502,8 @@ pub fn create_auto_board_array(
     resolution: Resolution,
 ) -> Result<BoardArrayCreation> {
     let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
-    let (options, validation_mode, panelization) = auto_board_array_options(&ipc, sheet)?;
+    let (options, validation_mode, panelization) =
+        auto_board_array_options(&ipc, sheet, resolution)?;
     let spec = build_board_array_spec(&ipc, &options, validation_mode, panelization)?;
     write_board_array_creation(xml, spec, balance_copper, resolution)
 }
@@ -521,13 +521,14 @@ fn create_auto_board_array_xml_with_sheet(
 fn auto_board_array_options(
     ipc: &Ipc2581,
     sheet: Option<AutoSheetSize>,
+    resolution: Resolution,
 ) -> Result<(
     BoardArrayCreateOptions,
     BoardArrayValidationMode,
     BoardArrayPanelizationMetadata,
 )> {
     let board = primary_board_layout(ipc)?;
-    let board_margin = auto_board_margin(ipc, board.bbox)?;
+    let board_margin = auto_board_margin(ipc, board.bbox, resolution)?;
     let board_width = board.bbox.width();
     let board_height = board.bbox.height();
 
@@ -578,8 +579,12 @@ fn minimum_single_board_auto_options(board_margin: BoardMarginMm) -> BoardArrayC
     }
 }
 
-fn auto_board_margin(ipc: &Ipc2581, board_bbox: BBox) -> Result<BoardMarginMm> {
-    let safe_bbox = board_bbox.union(board_courtyard_bbox(ipc)?);
+fn auto_board_margin(
+    ipc: &Ipc2581,
+    board_bbox: BBox,
+    resolution: Resolution,
+) -> Result<BoardMarginMm> {
+    let safe_bbox = board_bbox.union(board_courtyard_bbox(ipc, resolution)?);
     Ok(BoardMarginMm {
         top: (safe_bbox.max.y - board_bbox.max.y).max(0.0) + MIN_BOARD_CELL_FIDUCIAL_MARGIN_MM,
         right: (safe_bbox.max.x - board_bbox.max.x).max(0.0) + MIN_BOARD_CELL_FIDUCIAL_MARGIN_MM,
@@ -588,7 +593,7 @@ fn auto_board_margin(ipc: &Ipc2581, board_bbox: BBox) -> Result<BoardMarginMm> {
     })
 }
 
-fn board_courtyard_bbox(ipc: &Ipc2581) -> Result<BBox> {
+fn board_courtyard_bbox(ipc: &Ipc2581, resolution: Resolution) -> Result<BBox> {
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
     let mut bbox = BBox::empty();
 
@@ -603,6 +608,7 @@ fn board_courtyard_bbox(ipc: &Ipc2581) -> Result<BBox> {
             ipc,
             layer_name,
             pcb_ir::dialects::ipc::ArtworkScope::Board,
+            resolution,
         )
         .with_context(|| format!("failed to extract IPC-2581 courtyard layer '{layer_name}'"))?;
         for feature in doc

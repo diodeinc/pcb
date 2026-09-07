@@ -223,9 +223,8 @@ pub fn execute(
     output: &Path,
     spec: FabPanelSpec,
     balance_copper: bool,
+    resolution: Resolution,
 ) -> Result<()> {
-    let resolution = Resolution::default();
-
     if inputs.is_empty() {
         bail!("at least one assembly panel IPC-2581 file is required");
     }

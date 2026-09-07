@@ -1302,7 +1302,7 @@ mod tests {
     #[test]
     fn domain_queries_do_not_materialize_unrelated_layers() {
         let ipc = Ipc2581::parse(physical_fixture()).unwrap();
-        let mut imported = import_design(&ipc).unwrap();
+        let mut imported = import_design(&ipc, Resolution::default()).unwrap();
         make_paste_artwork_invalid(&mut imported);
 
         assert_eq!(
@@ -1335,7 +1335,7 @@ mod tests {
             "<Layer name=\"PASTE\" layerFunction=\"HOLEFILL\" side=\"TOP\" polarity=\"POSITIVE\"/>",
         );
         let ipc = Ipc2581::parse(&xml).unwrap();
-        let mut imported = import_design(&ipc).unwrap();
+        let mut imported = import_design(&ipc, Resolution::default()).unwrap();
         make_paste_artwork_invalid(&mut imported);
 
         let holes = imported
@@ -1361,7 +1361,7 @@ mod tests {
         );
         Ipc2581::validate(&xml).expect("one-ended drill span conforms to IPC-2581C");
         let ipc = Ipc2581::parse(&xml).unwrap();
-        let imported = import_design(&ipc).unwrap();
+        let imported = import_design(&ipc, Resolution::default()).unwrap();
         let holes = imported
             .physical_holes(ArtworkScope::Board, Resolution::default())
             .unwrap();
@@ -1396,7 +1396,8 @@ mod tests {
                 &format!("<SlotCavity name=\"S1\" platingStatus=\"PLATED\" plusTol=\"0\" minusTol=\"0\"><Location x=\"5\" y=\"5\"/><Oval width=\"2\" height=\"{height}\"/></SlotCavity>"),
             );
             Ipc2581::validate(&xml).unwrap();
-            let imported = import_design(&Ipc2581::parse(&xml).unwrap()).unwrap();
+            let imported =
+                import_design(&Ipc2581::parse(&xml).unwrap(), Resolution::default()).unwrap();
             let holes = imported
                 .physical_holes(ArtworkScope::Board, Resolution::default())
                 .unwrap();
@@ -1473,9 +1474,9 @@ mod tests {
   </CadData></Ecad>
 </IPC-2581>"#
             );
-            let imported = import_design(&Ipc2581::parse(&xml).unwrap()).unwrap();
             let accuracy = crate::geom::GeometryAccuracy::new(0.001).unwrap();
             let resolution = Resolution::default().with_accuracy(accuracy);
+            let imported = import_design(&Ipc2581::parse(&xml).unwrap(), resolution).unwrap();
             for (scope, count) in [(ArtworkScope::Board, 4), (ArtworkScope::ArrayFlattened, 8)] {
                 let view = imported.physical_view(scope, resolution).unwrap();
                 assert!(view.lands.is_empty(), "all final copper must stay removed");
@@ -1557,7 +1558,8 @@ mod tests {
     fn hole_land_links_follow_physical_order_under_declaration_permutations() {
         for order in [["L0", "L1", "L2"], ["L2", "L0", "L1"], ["L1", "L2", "L0"]] {
             let xml = spanned_slot_fixture(order, true);
-            let imported = import_design(&Ipc2581::parse(&xml).unwrap()).unwrap();
+            let imported =
+                import_design(&Ipc2581::parse(&xml).unwrap(), Resolution::default()).unwrap();
             let holes = imported
                 .physical_holes(ArtworkScope::Board, Resolution::default())
                 .unwrap();
@@ -1590,7 +1592,8 @@ mod tests {
         let mut reference = None;
         for order in [["L0", "L1", "L2"], ["L2", "L0", "L1"], ["L1", "L2", "L0"]] {
             let xml = spanned_slot_fixture(order, false);
-            let imported = import_design(&Ipc2581::parse(&xml).unwrap()).unwrap();
+            let imported =
+                import_design(&Ipc2581::parse(&xml).unwrap(), Resolution::default()).unwrap();
             let holes = imported
                 .physical_holes(ArtworkScope::Board, Resolution::default())
                 .unwrap();
@@ -1646,12 +1649,13 @@ mod tests {
             ),
         ] {
             let invalid = Ipc2581::parse(&xml.replace(from, to)).unwrap();
-            let error = import_design(&invalid).unwrap_err();
+            let error = import_design(&invalid, Resolution::default()).unwrap_err();
             assert!(error.to_string().contains(message), "{error}");
 
             // The association query must also reject unusable ordering, even when
             // no slot extraction is needed to construct the canonical design.
-            let mut imported = import_design(&Ipc2581::parse(&xml).unwrap()).unwrap();
+            let mut imported =
+                import_design(&Ipc2581::parse(&xml).unwrap(), Resolution::default()).unwrap();
             imported.stackups = invalid.ecad().unwrap().cad_data.stackups.clone();
             let error = imported
                 .physical_holes(ArtworkScope::Board, Resolution::default())
@@ -1688,6 +1692,7 @@ mod tests {
                     &cad.layers,
                     layer,
                     name,
+                    Resolution::default(),
                 );
                 if name == "L1" && !z_axis {
                     assert!(
@@ -1727,7 +1732,8 @@ mod tests {
         ] {
             let mut xml = xml.clone();
             xml.replace_range(start..end, stackup);
-            let imported = import_design(&Ipc2581::parse(&xml).unwrap()).unwrap();
+            let imported =
+                import_design(&Ipc2581::parse(&xml).unwrap(), Resolution::default()).unwrap();
             let holes = imported
                 .physical_holes(ArtworkScope::Board, Resolution::default())
                 .unwrap();
@@ -1755,7 +1761,7 @@ mod tests {
     fn derives_exact_physical_terminations_separately_from_paste() {
         Ipc2581::validate(physical_fixture()).expect("fixture conforms to IPC-2581C");
         let ipc = Ipc2581::parse(physical_fixture()).unwrap();
-        let imported = import_design(&ipc).unwrap();
+        let imported = import_design(&ipc, Resolution::default()).unwrap();
         let physical = imported
             .physical_view(ArtworkScope::Board, Resolution::default())
             .unwrap();
@@ -1919,7 +1925,7 @@ mod tests {
     #[test]
     fn physical_preparation_can_refine_retained_source_geometry() {
         let ipc = Ipc2581::parse(physical_fixture()).unwrap();
-        let imported = crate::import::ipc2581::import_design(&ipc).unwrap();
+        let imported = crate::import::ipc2581::import_design(&ipc, Resolution::default()).unwrap();
         let coarse = imported
             .physical_view(ArtworkScope::Board, Resolution::default())
             .unwrap();
@@ -1953,7 +1959,8 @@ mod tests {
     #[test]
     fn headless_preparation_rejects_already_coarse_feature_commands() {
         let ipc = Ipc2581::parse(physical_fixture()).unwrap();
-        let mut imported = crate::import::ipc2581::import_design(&ipc).unwrap();
+        let mut imported =
+            crate::import::ipc2581::import_design(&ipc, Resolution::default()).unwrap();
         let layer = imported.layer_id("TOP").unwrap();
         let occurrence = imported
             .feature_occurrences(layer, ArtworkScope::Board)

@@ -18,6 +18,7 @@ struct DxfVertex {
 pub fn render_profile_set_dxf<Symbol, LayerFunction>(
     doc: &Document<Symbol, LayerFunction>,
     profile_set: ProfileSet,
+    accuracy: GeometryAccuracy,
 ) -> anyhow::Result<String> {
     let mut dxf = String::new();
     write_header(&mut dxf);
@@ -29,9 +30,10 @@ pub fn render_profile_set_dxf<Symbol, LayerFunction>(
             doc,
             occurrence.profile.outer_path,
             occurrence.transform,
+            accuracy,
         )?;
         for cutout in occurrence.profile.cutouts.slice(&doc.profile_cutouts) {
-            write_path(&mut dxf, doc, cutout.path, occurrence.transform)?;
+            write_path(&mut dxf, doc, cutout.path, occurrence.transform, accuracy)?;
         }
     }
     write_footer(&mut dxf);
@@ -65,9 +67,10 @@ fn write_path<Symbol, LayerFunction>(
     doc: &Document<Symbol, LayerFunction>,
     path_index: u32,
     transform: pcb_ir::geom::Affine2,
+    accuracy: GeometryAccuracy,
 ) -> anyhow::Result<()> {
     for contour in doc.transformed_path_contours(path_index, transform) {
-        let contour = contour.flattened_curves(GeometryAccuracy::default())?;
+        let contour = contour.flattened_curves(accuracy)?;
         write_polyline(dxf, &contour_vertices(&contour));
     }
     Ok(())
@@ -191,7 +194,12 @@ mod tests {
     fn renders_profile_ir_as_mm_dxf_with_closed_outline_layer() {
         let doc = rect_profile_doc();
 
-        let dxf = render_profile_set_dxf(&doc, ProfileSet::FabricationOutlines).unwrap();
+        let dxf = render_profile_set_dxf(
+            &doc,
+            ProfileSet::FabricationOutlines,
+            GeometryAccuracy::default(),
+        )
+        .unwrap();
 
         assert!(dxf.contains("9\n$INSUNITS\n70\n4\n"));
         assert!(dxf.contains("2\nBOARD_OUTLINE\n"));
@@ -218,7 +226,12 @@ mod tests {
             bbox: BBox::empty(),
         });
 
-        let dxf = render_profile_set_dxf(&doc, ProfileSet::FabricationOutlines).unwrap();
+        let dxf = render_profile_set_dxf(
+            &doc,
+            ProfileSet::FabricationOutlines,
+            GeometryAccuracy::default(),
+        )
+        .unwrap();
 
         assert!(dxf.contains("42\n1\n"));
     }

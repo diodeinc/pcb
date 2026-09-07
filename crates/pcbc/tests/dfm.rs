@@ -617,6 +617,7 @@ fn ipc_dfm_geometry_distinguishes_canonical_board_arrays_and_mixed_fab_scope() {
         &sandbox.default_cwd().join("fab.xml"),
         spec,
         false,
+        pcb_ir::geom::Resolution::default(),
     )
     .unwrap();
 

@@ -33,7 +33,7 @@ pub fn render_board_array_overview_svg(
         return Ok(None);
     };
     let array_height = dimensions.height_mm();
-    let imported = import_design(accessor.ipc())?;
+    let imported = import_design(accessor.ipc(), resolution)?;
     let layer_overlays = board_array_layer_overlays(&imported, array_height, resolution)?;
     render_board_array_svg(&imported, board_array, &doc, &layer_overlays, resolution)
 }

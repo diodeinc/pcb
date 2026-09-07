@@ -349,10 +349,10 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
             file,
             format,
             units,
-        } => commands::info::execute(&file, format, units),
+        } => commands::info::execute(&file, format, units, resolution),
         Commands::Assembly { file, scope } => {
             let ipc = pcb_ipc2581_tools::ipc2581::Ipc2581::parse_file(&file)?;
-            let imported = pcb_ir::import::ipc2581::import_design(&ipc)?;
+            let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution)?;
             let report = pcb_ipc2581_tools::assembly::build_report(&imported, scope, resolution)?;
             let output = serde_json::to_vec_pretty(&report)?;
             pcb_ui::write_stdout(|stdout| {
@@ -432,9 +432,11 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
             }
             Ok(())
         }
-        Commands::Ict { file, output, side } => {
-            commands::ict::execute(&file, &commands::ict::IctOptions { output, side })
-        }
+        Commands::Ict { file, output, side } => commands::ict::execute(
+            &file,
+            &commands::ict::IctOptions { output, side },
+            resolution,
+        ),
         Commands::Cpl {
             file,
             output,
@@ -447,6 +449,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                 side,
                 exclude_dnp,
             },
+            resolution,
         ),
         Commands::Edit { command } => match command {
             EditCommands::Bom {
@@ -509,6 +512,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                             edge_rail_mm,
                         },
                         copper_balance,
+                        resolution,
                     )
                 }
             }
@@ -534,7 +538,13 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                     spec.panel_gap_mm = panel_gap;
                 }
                 spec.emit_usable_area = emit_usable_area;
-                commands::fab_panel::execute(&inputs, &output, spec, copper_balance.resolve(false))
+                commands::fab_panel::execute(
+                    &inputs,
+                    &output,
+                    spec,
+                    copper_balance.resolve(false),
+                    resolution,
+                )
             }
         },
         Commands::View {
@@ -546,7 +556,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
             file,
             output,
             units,
-        } => commands::html_export::execute(&file, output.as_deref(), units),
+        } => commands::html_export::execute(&file, output.as_deref(), units, resolution),
         Commands::Outline {
             file,
             layout_target,
@@ -559,6 +569,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                 layout_target,
                 nested_outlines,
             },
+            resolution,
         ),
         Commands::Render {
             file,
@@ -574,6 +585,7 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                 format,
                 layout_target,
             },
+            resolution,
         ),
         Commands::Dfm { command } => match command {
             DfmCommands::Check {
@@ -596,7 +608,9 @@ pub fn execute(args: Ipc2581Args) -> anyhow::Result<()> {
                 commands::dfm::CheckOutcome::Failed(error) => Err(error),
             },
         },
-        Commands::Warp { file, report } => commands::warp::execute(&file, report.as_deref()),
+        Commands::Warp { file, report } => {
+            commands::warp::execute(&file, report.as_deref(), resolution)
+        }
         Commands::Gerber {
             file,
             layout_target,

@@ -211,7 +211,7 @@ cases = [
         let resolution = Resolution::default();
 
         let ipc = Ipc2581::parse(xml).unwrap();
-        let imported = import_design(&ipc).unwrap();
+        let imported = import_design(&ipc, resolution).unwrap();
         check(
             &imported,
             CheckRequest {

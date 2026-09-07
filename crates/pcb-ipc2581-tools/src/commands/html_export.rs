@@ -23,9 +23,8 @@ pub fn execute(
     input_file: &Path,
     output_file: Option<&Path>,
     unit_format: UnitFormat,
+    resolution: Resolution,
 ) -> Result<()> {
-    let resolution = Resolution::default();
-
     // Load and parse IPC-2581 file
     let content = file_utils::load_ipc_file(input_file)?;
     let ipc = ipc2581::Ipc2581::parse(&content)?;
@@ -239,7 +238,7 @@ fn extract_board_summary(
                     ),
                 }),
                 drill_holes: accessor
-                    .board_array_drill_stats()?
+                    .board_array_drill_stats(resolution)?
                     .and_then(format_drill_count),
                 overview_svg: array_overview_svg,
             })
@@ -265,7 +264,9 @@ fn extract_board_summary(
 
     let components = accessor.component_stats().map(|stats| stats.total);
     let nets = accessor.net_stats().map(|stats| stats.count);
-    let drill_holes = accessor.board_drill_stats()?.and_then(format_drill_count);
+    let drill_holes = accessor
+        .board_drill_stats(resolution)?
+        .and_then(format_drill_count);
 
     Ok(BoardSummary {
         design_name,
@@ -410,7 +411,7 @@ fn rendered_source_layer(
         has_native_content: false,
     };
 
-    match geometry::extract_layer_for_view(ipc, &name, ArtworkScope::Board) {
+    match geometry::extract_layer_for_view(ipc, &name, ArtworkScope::Board, resolution) {
         Ok(geometry) => render_extracted_layer(
             &mut rendered,
             geometry,

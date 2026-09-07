@@ -189,7 +189,7 @@ limit = { minimum = "0.2 mm", preferred = "0.3 mm" }
     }
 
     fn check(xml: &str) -> dfm::DfmReport {
-        let imported = import_design(&Ipc2581::parse(xml).unwrap()).unwrap();
+        let imported = import_design(&Ipc2581::parse(xml).unwrap(), Resolution::default()).unwrap();
         dfm::check(
             &imported,
             CheckRequest {
@@ -329,7 +329,8 @@ limit = { minimum = "0.2 mm", preferred = "0.3 mm" }
         let rules = rules::lower(&Pdk::parse(PDK).unwrap(), None).unwrap();
         for span in ["", r#"<Span fromLayer="L0"/>"#, THROUGH] {
             let xml = board(OVAL, [&copper, "", &copper], span);
-            let mut imported = import_design(&Ipc2581::parse(&xml).unwrap()).unwrap();
+            let mut imported =
+                import_design(&Ipc2581::parse(&xml).unwrap(), Resolution::default()).unwrap();
             if span == THROUGH {
                 imported.stackups.clear();
             }

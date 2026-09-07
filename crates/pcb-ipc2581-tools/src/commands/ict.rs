@@ -49,11 +49,9 @@ pub struct IctContact {
 }
 
 #[cfg(feature = "cli")]
-pub fn execute(file: &Path, options: &IctOptions) -> Result<()> {
-    let resolution = Resolution::default();
-
+pub fn execute(file: &Path, options: &IctOptions, resolution: Resolution) -> Result<()> {
     let ipc = Ipc2581::parse_file(file)?;
-    let contacts = extract_contacts(&ipc, &import_design(&ipc)?, resolution)?;
+    let contacts = extract_contacts(&ipc, &import_design(&ipc, resolution)?, resolution)?;
     let csv = emit_ict_csv(&contacts, options.side);
 
     if let Some(output) = &options.output {
@@ -419,7 +417,8 @@ mod tests {
 
         let ipc = Ipc2581::parse(FIXTURE).expect("fixture parses");
         let contacts =
-            extract_contacts(&ipc, &import_design(&ipc).unwrap(), resolution).expect("extracts");
+            extract_contacts(&ipc, &import_design(&ipc, resolution).unwrap(), resolution)
+                .expect("extracts");
 
         assert_eq!(contacts.len(), 1);
         let contact = &contacts[0];

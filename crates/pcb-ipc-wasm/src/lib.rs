@@ -70,7 +70,10 @@ impl IpcDocument {
     /// The native IPC info JSON summary.
     #[wasm_bindgen(unchecked_return_type = "IpcInfo")]
     pub fn info(&self) -> Result<JsValue, JsError> {
-        to_js(&commands::info::info_json(&self.accessor()).map_err(js_error)?)
+        to_js(
+            &commands::info::info_json(&self.accessor(), Resolution::default())
+                .map_err(js_error)?,
+        )
     }
 
     /// Source layer names accepted by SVG and PNG export.
@@ -122,7 +125,7 @@ impl IpcDocument {
         };
         to_js(
             &dfm::check(
-                self.design().map_err(js_error)?,
+                self.design(resolution).map_err(js_error)?,
                 dfm::CheckRequest {
                     input: self.input.clone(),
                     pdk,
@@ -160,10 +163,10 @@ impl IpcDocument {
         IpcAccessor::new(&self.ipc)
     }
 
-    fn design(&self) -> Result<&ImportedDesign> {
+    fn design(&self, resolution: Resolution) -> Result<&ImportedDesign> {
         if self.imported.get().is_none() {
-            let imported =
-                import_design(&self.ipc).context("failed to import physical PCB design")?;
+            let imported = import_design(&self.ipc, resolution)
+                .context("failed to import physical PCB design")?;
             let _ = self.imported.set(imported);
         }
         Ok(self.imported.get().expect("design was initialized"))
@@ -183,7 +186,7 @@ impl IpcDocument {
             ),
             ExportOptions::Gerber { layout_target, zip } => {
                 let package = manufacturing::build_manufacturing_package(
-                    self.design()?,
+                    self.design(resolution)?,
                     &manufacturing::ManufacturingExportOptions {
                         view: layout_target.artwork_scope(),
                         relief_debug_dir: None,
@@ -205,8 +208,12 @@ impl IpcDocument {
                 layout_target,
             } => {
                 let scope = layout_target.artwork_scope();
-                let geometry =
-                    geometry::render::prepare_layer(self.design()?, &layer, scope, resolution)?;
+                let geometry = geometry::render::prepare_layer(
+                    self.design(resolution)?,
+                    &layer,
+                    scope,
+                    resolution,
+                )?;
                 ExportFile::new(
                     format!("{}.svg", safe_name(&layer)),
                     "image/svg+xml",
@@ -223,8 +230,12 @@ impl IpcDocument {
                 layout_target,
             } => {
                 let scope = layout_target.artwork_scope();
-                let geometry =
-                    geometry::render::prepare_layer(self.design()?, &layer, scope, resolution)?;
+                let geometry = geometry::render::prepare_layer(
+                    self.design(resolution)?,
+                    &layer,
+                    scope,
+                    resolution,
+                )?;
                 ExportFile::new(
                     format!("{}.png", safe_name(&layer)),
                     "image/png",
@@ -240,7 +251,7 @@ impl IpcDocument {
             ExportOptions::Dxf { layout_target } => ExportFile::new(
                 "outline.dxf",
                 "image/vnd.dxf",
-                commands::outline::export_dxf(&self.ipc, layout_target, false)?,
+                commands::outline::export_dxf(&self.ipc, layout_target, false, resolution)?,
             ),
             ExportOptions::Bom {} => ExportFile::new(
                 "bom.json",
@@ -248,7 +259,8 @@ impl IpcDocument {
                 serde_json::to_vec_pretty(&commands::bom::extract_bom_lines(&self.accessor()))?,
             ),
             ExportOptions::Cpl { side, exclude_dnp } => {
-                let placements = placement::extract_single_board_placements(self.design()?)?;
+                let placements =
+                    placement::extract_single_board_placements(self.design(resolution)?)?;
                 ExportFile::new(
                     "placements.csv",
                     "text/csv",
@@ -266,7 +278,11 @@ impl IpcDocument {
                 "ict.csv",
                 "text/csv",
                 commands::ict::emit_ict_csv(
-                    &commands::ict::extract_contacts(&self.ipc, self.design()?, resolution)?,
+                    &commands::ict::extract_contacts(
+                        &self.ipc,
+                        self.design(resolution)?,
+                        resolution,
+                    )?,
                     side,
                 ),
             ),

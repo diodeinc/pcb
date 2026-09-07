@@ -185,7 +185,8 @@ limit = {{ minimum = "0.20 mm" }}
     }
 
     fn check(xml: &str, source: &str, target: LayoutTarget) -> anyhow::Result<report::DfmReport> {
-        let imported = pcb_ir::import::ipc2581::import_design(&Ipc2581::parse(xml)?)?;
+        let imported =
+            pcb_ir::import::ipc2581::import_design(&Ipc2581::parse(xml)?, Resolution::default())?;
         dfm::check(
             &imported,
             CheckRequest {

@@ -363,7 +363,7 @@ limit = {{ minimum = "0.20 mm" }}
         let ipc = Ipc2581::parse(xml).unwrap();
         let pdk = Pdk::parse(&pdk(hole)).unwrap();
         let rules = rules::lower(&pdk, None).unwrap();
-        let imported = pcb_ir::import::ipc2581::import_design(&ipc).unwrap();
+        let imported = pcb_ir::import::ipc2581::import_design(&ipc, Resolution::default()).unwrap();
         let design = Design::extract(
             &imported,
             ArtworkScope::Board,
@@ -419,7 +419,7 @@ limit = {{ minimum = "0.20 mm" }}
         let xml = board("VIA", Some((0, 2)), &[copper(0, Some("N2"), 0.65)]);
         let source = pdk("via");
         let ipc = Ipc2581::parse(&xml).unwrap();
-        let imported = pcb_ir::import::ipc2581::import_design(&ipc).unwrap();
+        let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap();
         let checked = crate::commands::dfm::check(
             &imported,
             CheckRequest {
@@ -558,7 +558,7 @@ limit = {{ minimum = "0.20 mm" }}
         let ipc = Ipc2581::parse(&xml).unwrap();
         let pdk = Pdk::parse(&pdk("via")).unwrap();
         let rules = rules::lower(&pdk, None).unwrap();
-        let imported = pcb_ir::import::ipc2581::import_design(&ipc).unwrap();
+        let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap();
         let error = Design::extract(&imported, ArtworkScope::Board, &rules, resolution)
             .err()
             .expect("an unknown span must fail closed");
@@ -588,7 +588,8 @@ limit = {{ minimum = "0.20 mm" }}
                 let ipc = Ipc2581::parse(&xml).unwrap();
                 let pdk = Pdk::parse(&pdk("via")).unwrap();
                 let rules = rules::lower(&pdk, None).unwrap();
-                let imported = pcb_ir::import::ipc2581::import_design(&ipc).unwrap();
+                let imported =
+                    pcb_ir::import::ipc2581::import_design(&ipc, Resolution::default()).unwrap();
                 let design = Design::extract(
                     &imported,
                     ArtworkScope::Board,
@@ -634,7 +635,7 @@ limit = {{ minimum = "0.20 mm" }}
         let ipc = Ipc2581::parse(&xml).unwrap();
         let pdk = Pdk::parse(&source).unwrap();
         let rules = rules::lower(&pdk, None).unwrap();
-        let imported = pcb_ir::import::ipc2581::import_design(&ipc).unwrap();
+        let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap();
         let design = Design::extract(&imported, ArtworkScope::Board, &rules, resolution).unwrap();
         let results = checks::run(
             &rules,

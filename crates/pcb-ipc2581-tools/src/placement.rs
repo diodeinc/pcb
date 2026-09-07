@@ -46,7 +46,10 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let placements = extract_single_board_placements(&import_design(&ipc).unwrap()).unwrap();
+        let placements = extract_single_board_placements(
+            &import_design(&ipc, pcb_ir::geom::Resolution::default()).unwrap(),
+        )
+        .unwrap();
 
         assert_eq!(placements.components.len(), 1);
         let component = &placements.components[0];
@@ -61,7 +64,11 @@ mod tests {
         let compressed = include_bytes!("../../ipc2581/tests/data/DM0002-IPC-2518.xml.zst");
         let xml = zstd::decode_all(Cursor::new(compressed)).unwrap();
         let xml = std::str::from_utf8(&xml).unwrap();
-        let imported = import_design(&Ipc2581::parse(xml).unwrap()).unwrap();
+        let imported = import_design(
+            &Ipc2581::parse(xml).unwrap(),
+            pcb_ir::geom::Resolution::default(),
+        )
+        .unwrap();
 
         let placements = extract_single_board_placements(&imported).unwrap();
         assert_eq!(placements.components.len(), 59);
@@ -115,7 +122,10 @@ mod tests {
         )
         .unwrap();
 
-        let error = extract_single_board_placements(&import_design(&ipc).unwrap()).unwrap_err();
+        let error = extract_single_board_placements(
+            &import_design(&ipc, pcb_ir::geom::Resolution::default()).unwrap(),
+        )
+        .unwrap_err();
 
         assert!(
             error

@@ -20,14 +20,12 @@ pub struct RenderOptions {
 ///
 /// The layer runs through the same normalization Gerber export uses, so a
 /// render and a fabrication file describe the same image.
-pub fn execute(input_file: &Path, options: &RenderOptions) -> Result<()> {
-    let resolution = Resolution::default();
-
+pub fn execute(input_file: &Path, options: &RenderOptions, resolution: Resolution) -> Result<()> {
     let target = resolve_target(options)?;
     let content = file_utils::load_ipc_file(input_file)?;
     let ipc = ipc2581::Ipc2581::parse(&content)?;
     let view = options.layout_target.artwork_scope();
-    let imported = pcb_ir::import::ipc2581::import_design(&ipc)?;
+    let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution)?;
     let geometry = geometry::render::prepare_layer(&imported, &options.layer, view, resolution)?;
 
     match target {

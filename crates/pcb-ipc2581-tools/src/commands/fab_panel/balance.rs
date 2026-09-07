@@ -38,7 +38,7 @@ pub(super) fn generate_automatic_fab_panel_copper_balance(
     tolerance_mm: f64,
 ) -> Result<CopperBalancePlan> {
     let resolution = Resolution::new(tolerance_mm, DenseCopperBalanceProfile::V1.accuracy);
-    let imported = import_design(ipc)?;
+    let imported = import_design(ipc, resolution)?;
     let layout = &imported.geometry;
     // V-scores and profile cutouts all lie inside the placed assembly panels,
     // so the fabrication profile needs no relief geometry here.

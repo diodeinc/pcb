@@ -21,6 +21,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- Preserve caller geometry accuracy through IPC import, relief generation, and export helpers.
 - Migrate registry references in root-level `.zen` files in container workspaces.
 - Make `pcb rectify fix` and `pcb rectify audit` exit non-zero on batch evaluation errors.
 - Report malformed SPICE `PARAMS:` tokens instead of panicking.
