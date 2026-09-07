@@ -23,6 +23,7 @@ fn physical_view_placement_preserves_missing_evidence_and_requires_explicit_mate
             stackup: Association::Unresolved,
             overall_thickness_mm: None,
             layers: vec![],
+            groups: vec![],
             diagnostics: vec![BoardPhysicalDiagnostic::MissingStackup],
         },
         diagnostics: vec![BoardPhysicalDiagnostic::MissingThickness { layer: None }],
