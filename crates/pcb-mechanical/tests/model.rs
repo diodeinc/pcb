@@ -75,6 +75,57 @@ fn close(a: f64, b: f64, tol: f64) {
 }
 
 #[test]
+fn oblique_boundary_weights_are_valid_morley_attachments() {
+    use pcb_ir::geom::mesh::{AnalysisMesh, MeshElement};
+
+    // Exact binary shared-edge fixture from the mesh cancellation regression.
+    // Exercise the cross-crate contract without snapping or relaxing Morley validation.
+    let scale = 2.0_f64.powi(-40);
+    let point = Point::new(388719706086.29517, -722256547648.0) * scale;
+    let mut mesh = AnalysisMesh::new(&rect(0., 0., 1., 1.), options(1.)).unwrap();
+    mesh.vertices = vec![
+        Point::new(3109757648896.0, 20809216.0) * scale,
+        Point::new(-29.376953125, -825439027200.0) * scale,
+        Point::new(4., 0.),
+        Point::new(-1., 0.),
+    ];
+    mesh.elements = vec![
+        MeshElement {
+            vertices: [0, 1, 2],
+            component: 0,
+        },
+        MeshElement {
+            vertices: [1, 0, 3],
+            component: 0,
+        },
+    ];
+    for element in 0..2 {
+        let hit = mesh.attach_to_element(point, element, 0.).unwrap();
+        let vertices = mesh.elements[element].vertices;
+        let triangle = elements::MorleyTriangle::new(
+            vertices.map(|i| [mesh.vertices[i].x, mesh.vertices[i].y]),
+            [0, 1, 2].map(|j| {
+                if vertices[j] < vertices[(j + 1) % 3] {
+                    1.
+                } else {
+                    -1.
+                }
+            }),
+        )
+        .unwrap();
+        let attachment = triangle.attachment(hit.weights).unwrap();
+        let response = attachment.rows * DVector::from_vec(vec![1., 1., 1., 0., 0., 0.]);
+        close(response[0], 1., 1e-12);
+        close(response[1], 0., 1e-12);
+        close(response[2], 0., 1e-12);
+    }
+    assert!(
+        mesh.attach_to_element(Point::new(point.x, point.y.next_up()), 0, 0.)
+            .is_none()
+    );
+}
+
+#[test]
 fn cdt_cantilever_refines_to_beam_and_scales_with_thickness() {
     // Cylindrical bending is exact at nu=0: compliance p² b L⁵/(20D).
     let domain = panel(&rect(0., 0., 4., 1.));
