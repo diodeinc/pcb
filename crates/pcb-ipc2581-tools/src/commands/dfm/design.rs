@@ -1359,15 +1359,21 @@ fn copper_weight_oz(imported: &ImportedDesign, layer: Symbol) -> Option<f64> {
         .iter()
         .flat_map(|stackup| &stackup.layers)
         .find(|candidate| candidate.layer_ref == layer)?;
+    let mut weights = stackup_layer
+        .spec_refs
+        .iter()
+        .filter_map(|reference| imported.specs.get(reference))
+        .filter_map(|spec| spec.copper_weight_oz);
+    if let Some(weight) = weights.next() {
+        // Conflicting explicit evidence is unavailable, not a reason to hide
+        // the conflict behind an inferred thickness-based value.
+        return weights
+            .all(|candidate| candidate == weight)
+            .then_some(weight);
+    }
     stackup_layer
-        .spec_ref
-        .and_then(|spec| imported.specs.get(&spec))
-        .and_then(|spec| spec.copper_weight_oz)
-        .or_else(|| {
-            stackup_layer
-                .thickness
-                .map(|millimeters| millimeters / 0.0348)
-        })
+        .thickness
+        .map(|millimeters| millimeters / 0.0348)
 }
 
 fn side_label(side: Side) -> Option<&'static str> {
@@ -1654,6 +1660,35 @@ fn layer_ref(name: &str, function: LayerFunction, side: Option<&'static str>) ->
 mod tests {
     use super::*;
     use crate::ipc2581::Ipc2581;
+
+    #[test]
+    fn copper_weights_reconcile_all_explicit_references_before_thickness() {
+        for (other, expected) in [(2.0, Some(2.0)), (3.0, None)] {
+            for refs in [
+                r#"<SpecRef id="a"/><SpecRef id="b"/>"#,
+                r#"<SpecRef id="b"/><SpecRef id="a"/>"#,
+            ] {
+                let xml = format!(
+                    r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+<Content roleRef="owner"><FunctionMode mode="FABRICATION"/><StepRef name="board"/></Content>
+<Ecad><CadHeader units="MILLIMETER"><Spec name="a"><Conductor type="WEIGHT"><Property value="2" unit="OZ"/></Conductor></Spec><Spec name="b"><Conductor type="WEIGHT"><Property value="{other}" unit="OZ"/></Conductor></Spec></CadHeader><CadData>
+<Layer name="TOP" layerFunction="CONDUCTOR" side="TOP" polarity="POSITIVE"/>
+<Stackup name="stack"><StackupGroup name="group"><StackupLayer layerOrGroupRef="TOP" thickness="0.0348" sequence="0">{refs}</StackupLayer></StackupGroup></Stackup><Step name="board" type="BOARD"/>
+</CadData></Ecad></IPC-2581>"#
+                );
+                let ipc = Ipc2581::parse(&xml).unwrap();
+                let imported = import_design(&ipc, Resolution::default()).unwrap();
+                let layer = imported.layer_definitions[0].name;
+                assert_eq!(copper_weight_oz(&imported, layer), expected);
+                let ipc = Ipc2581::parse(&xml.replace(refs, "")).unwrap();
+                let imported = import_design(&ipc, Resolution::default()).unwrap();
+                assert_eq!(
+                    copper_weight_oz(&imported, imported.layer_definitions[0].name),
+                    Some(1.0)
+                );
+            }
+        }
+    }
 
     #[test]
     fn mask_owners_preserve_composed_openings_and_repeat_identity() {

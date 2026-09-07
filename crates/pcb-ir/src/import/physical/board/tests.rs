@@ -182,6 +182,33 @@ fn generic_rout_artwork_and_clears_are_not_lost_to_hole_classification() {
 }
 
 #[test]
+fn route_apertures_survive_later_generic_clears() {
+    let clear = r#"<Set polarity="NEGATIVE"><Features><Location x="0" y="0"/><Contour><Polygon><PolyBegin x="6" y="0"/><PolyStepSegment x="10" y="0"/><PolyStepSegment x="10" y="4"/><PolyStepSegment x="6" y="4"/></Polygon></Contour></Features></Set>"#;
+    let xml = fixture().replace(
+        "</SlotCavity></Set>",
+        &format!("</SlotCavity></Set>{clear}"),
+    );
+    let view = design(&xml).physical_board(Resolution::default()).unwrap();
+    assert!(
+        view.removal_layers[0]
+            .image
+            .contains_point(Point::new(8.0, 2.0))
+    );
+    assert!(
+        !view.removal_layers[0]
+            .image
+            .contains_point(Point::new(6.5, 0.5))
+    );
+    let original = design(fixture())
+        .physical_board(Resolution::default())
+        .unwrap();
+    assert!(
+        (view.removal_layers[0].image.area() - original.removal_layers[0].image.area()).abs()
+            < 1e-6
+    );
+}
+
+#[test]
 fn inch_input_normalizes_every_physical_length_at_the_boundary() {
     let mm = design(fixture())
         .physical_board(Resolution::default())

@@ -1350,11 +1350,32 @@ impl ImportedDesign {
             definition.layer_function,
             LayerFunction::Drill | LayerFunction::Rout
         ) {
-            for feature in &mut document.features {
-                if feature.bucket == FeatureBucket::Cutout {
-                    feature.bucket = FeatureBucket::Fill;
+            use crate::dialects::artwork;
+            crate::dialects::ipc::process::normalize_for_artwork(&mut document, resolution)?;
+            let artwork = crate::dialects::ipc::lower_layer_to_artwork(
+                &document,
+                0,
+                layer_role(definition.layer_function),
+                side_for_layer(definition.side),
+            );
+            let mut artwork = artwork::expand_instances(&artwork);
+            // Apertures are terminal positive removals from the board, not
+            // clears of the removal image. Stable ordering preserves ordinary
+            // route paint/clear order before appending all aperture positives.
+            artwork
+                .objects
+                .sort_by_key(|object| object.order.stage == artwork::PaintStage::FinalCutout);
+            for object in &mut artwork.objects {
+                if object.order.stage == artwork::PaintStage::FinalCutout {
+                    object.order.stage = artwork::PaintStage::Overlay;
                 }
             }
+            let (mut layers, _) =
+                artwork::compose_owner_regions(&artwork, |_| Some(()), resolution)?;
+            return Ok(layers
+                .pop()
+                .and_then(|mut owners| owners.pop())
+                .map_or_else(|| ContourSet::empty(resolution), |(_, region)| region));
         }
         document.into_layer_image(
             0,
