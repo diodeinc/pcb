@@ -375,6 +375,8 @@ mod tests {
                 source_set_index: 0,
             },
             branch: Some(instance),
+            guaranteed_image: image.clone(),
+            approximation_bounds: Vec::new(),
             image,
         }
     }

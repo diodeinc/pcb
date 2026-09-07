@@ -431,9 +431,16 @@ impl<'a> Design<'a> {
         let drilled = (holes.iter().map(|hole| (hole.bbox, hole.branch)))
             .chain(slots.iter().map(|slot| (slot.bbox, slot.branch)))
             .collect::<Vec<_>>();
-        let copper_layers = pool(wanted, Pools::COPPER, Pools::NONE, &mut blockers, || {
+        let mut copper_layers = pool(wanted, Pools::COPPER, Pools::NONE, &mut blockers, || {
             collect_copper_layers(source, stackup.as_ref(), &drilled)
         });
+        pool(
+            wanted,
+            Pools::CONDUCTOR_OWNERSHIP,
+            Pools::COPPER,
+            &mut blockers,
+            || prepare_net_shorts(source, step, &mut copper_layers),
+        );
         if wanted.intersects(Pools::CONDUCTOR_OWNERSHIP) {
             blockers.extend(unattributed_copper(imported, &copper_layers));
         }
@@ -1056,6 +1063,9 @@ pub(super) struct CopperLayer {
     /// The final copper of the Step's own conductors, and of those it places
     /// that come within a rule's reach of anything outside their placement.
     pub conductors: Vec<CopperConductor>,
+    /// Unfiltered copper and contact proofs, only when this Step declares ties.
+    pub contact_conductors: Option<Vec<CopperConductor>>,
+    pub net_shorts: Vec<NetShort>,
     /// How many pairs of connected conductor pieces the design decides: all
     /// it places and its own, but for the pairs inside one placement.
     pub piece_pairs: usize,
@@ -1088,6 +1098,7 @@ pub(super) enum ConductorId {
     Unattributed {
         step: Option<Symbol>,
         instance: Option<u32>,
+        occurrence: FeatureOccurrenceId,
         source_set_index: u32,
         source_feature_index: u32,
     },
@@ -1124,12 +1135,22 @@ impl ConductorId {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct CopperConductor {
     pub id: ConductorId,
     /// As for [`Hole::branch`].
     pub branch: Option<u32>,
     pub image: ContourSet,
+    pub guaranteed_image: ContourSet,
+    pub approximation_bounds: Vec<BBox>,
+}
+
+pub(super) const NET_SHORT_LOCATION_TOLERANCE_MM: f64 = 0.000002;
+
+#[derive(Debug)]
+pub(super) struct NetShort {
+    pub nets: [ConductorId; 2],
+    pub location: Point,
 }
 
 #[derive(Debug)]
@@ -1573,6 +1594,8 @@ fn copper_conductor(
     ConductorId::Unattributed {
         step,
         instance,
+        occurrence: feature_occurrence_id(feature)
+            .expect("materialized copper must retain its occurrence identity"),
         source_set_index: feature.source.set_index,
         source_feature_index: feature.source.feature_index,
     }
@@ -1683,6 +1706,8 @@ fn compose_attributed_copper(
             id,
             branch: source.branch(id.instance()),
             image: rings,
+            guaranteed_image: ContourSet::empty(source.resolution),
+            approximation_bounds: Vec::new(),
         })
         .collect();
     Ok((image, conductors))
@@ -1873,11 +1898,107 @@ fn collect_copper_layers(
                 copper_weight_oz: copper_weight_oz(imported, layer.name),
                 image,
                 conductors,
+                contact_conductors: None,
+                net_shorts: Vec::new(),
                 piece_pairs: 0,
                 lands,
             })
         })
         .collect()
+}
+
+/// Declarations are evaluated once in their own Step frame. Parent frames
+/// already exclude comparisons internal to one placed branch, so a tie
+/// never grants permission to another occurrence's same-named nets.
+fn prepare_net_shorts(source: Source<'_>, step: u32, layers: &mut [CopperLayer]) -> Result<()> {
+    let name = source.imported.geometry.layout.steps[step as usize].source_step_ref;
+    let definition = source
+        .imported
+        .steps
+        .iter()
+        .find(|step| step.name == name)
+        .context("missing NetShort Step definition")?;
+    for (containing_layer, short) in &definition.net_shorts {
+        let [first, second] = short.nets.as_slice() else {
+            bail!("unsupported NetShort: expected two NetRefs");
+        };
+        if first == second || short.layers.as_slice() != [*containing_layer] {
+            bail!(
+                "invalid or unsupported NetShort: expected distinct nets and the containing copper layer only"
+            );
+        }
+        let layer = layers
+            .iter_mut()
+            .find(|layer| layer.layer.name == source.imported.resolve(*containing_layer))
+            .context("NetShort references a missing or non-copper layer")?;
+        layer.net_shorts.push(NetShort {
+            nets: [first, second].map(|net| ConductorId::Net {
+                step: Some(name),
+                instance: None,
+                net: *net,
+            }),
+            location: Point::new(short.location.x, short.location.y),
+        });
+    }
+    for layer in layers
+        .iter_mut()
+        .filter(|layer| !layer.net_shorts.is_empty())
+    {
+        let layer_index = source
+            .imported
+            .layer_definitions
+            .iter()
+            .position(|definition| source.imported.resolve(definition.name) == layer.layer.name)
+            .context("missing contact layer")?;
+        let mut document = source.own_layer(layer_index)?;
+        pcb_ir::dialects::ipc::process::normalize_for_artwork(
+            &mut document,
+            source.resolution.strict(),
+        )?;
+        let definition = &document.layers[0];
+        let artwork = lower_layer_to_artwork_with(
+            &document,
+            0,
+            artwork::Layer {
+                name: definition.name.clone(),
+                role: LayerRole::Copper,
+                side: Side::None,
+                objects: Span::EMPTY,
+                bbox: definition.bbox,
+                meta: definition.layer_function,
+            },
+            &ArtworkTarget::default(),
+            &|document, feature| Some(copper_conductor(source, document, feature)),
+        );
+        let (mut images, diagnostics) =
+            artwork::compose_contact_regions(&artwork, |owner| *owner, source.resolution)?;
+        anyhow::ensure!(
+            diagnostics.is_empty(),
+            "NetShort contact artwork has unresolved geometry: {diagnostics:?}"
+        );
+        let mut conductors = images
+            .pop()
+            .context("missing contact image")?
+            .into_iter()
+            .map(|owner| CopperConductor {
+                id: owner.owner,
+                branch: None,
+                image: owner.image,
+                guaranteed_image: owner.guaranteed_image,
+                approximation_bounds: owner.approximation_bounds,
+            })
+            .collect::<Vec<_>>();
+        conductors.extend(
+            layer
+                .conductors
+                .iter()
+                .filter(|conductor| conductor.branch.is_some())
+                .cloned(),
+        );
+        conductors.sort_by_key(|conductor| conductor_order(source.imported, conductor.id));
+        layer.contact_conductors = Some(conductors);
+    }
+    Ok(())
 }
 
 /// Count the pairs of connected conductor pieces each design decides on each
@@ -1897,13 +2018,17 @@ fn count_piece_pairs(designs: &mut [Design<'_>], placed: &[Vec<usize>]) {
         .map(|design| {
             (design.copper_layers.iter())
                 .map(|layer| {
-                    (layer.conductors.iter())
-                        .filter(|conductor| conductor.branch.is_none())
-                        .map(|conductor| {
-                            let rings = conductor.image.rings.iter();
-                            rings.filter(|ring| ring_signed_area(ring) > 0.0).count() as u64
-                        })
-                        .fold((0, 0), |pieces, count| add(pieces, (count, count * count)))
+                    (layer
+                        .contact_conductors
+                        .as_ref()
+                        .unwrap_or(&layer.conductors)
+                        .iter())
+                    .filter(|conductor| conductor.branch.is_none())
+                    .map(|conductor| {
+                        let rings = conductor.image.rings.iter();
+                        rings.filter(|ring| ring_signed_area(ring) > 0.0).count() as u64
+                    })
+                    .fold((0, 0), |pieces, count| add(pieces, (count, count * count)))
                 })
                 .collect::<Vec<Pieces>>()
         })
@@ -1942,14 +2067,22 @@ fn unattributed_copper(imported: &ImportedDesign, layers: &[CopperLayer]) -> Vec
         .iter()
         .filter_map(|layer| {
             let id = layer
-                .conductors
+                .contact_conductors.as_ref().unwrap_or(&layer.conductors)
                 .iter()
                 .map(|conductor| conductor.id)
                 .find(|id| id.is_unattributed() && id.instance().is_none())?;
+            let ConductorId::Unattributed { occurrence, source_set_index, source_feature_index, .. } = id else {
+                unreachable!()
+            };
+            let component = imported.feature_definition(occurrence.feature)
+                .and_then(|feature| imported.geometry.feature_set(feature))
+                .and_then(|set| set.component_ref)
+                .map(|name| format!(", component '{}'", imported.resolve(name)))
+                .unwrap_or_default();
             Some(Blocker {
                 pools: Pools::CONDUCTOR_OWNERSHIP,
                 reason: format!(
-                    "copper layer '{}' has final functional copper without net attribution in Step '{}'",
+                    "copper layer '{}' has final functional copper without net attribution in Step '{}', Set {source_set_index}, feature {source_feature_index}{component}; NetShort declares contact, not ownership of netless copper",
                     layer.layer.name,
                     id.step()
                         .map(|step| imported.resolve(step))

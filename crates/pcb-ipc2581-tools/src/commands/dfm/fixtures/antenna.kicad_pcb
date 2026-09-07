@@ -1,0 +1,296 @@
+(kicad_pcb (version 20260101) (generator pcbnew)
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (2 "B.Cu" signal)
+    (9 "F.SilkS" user "f.silkscreen") (13 "F.Mask" user)
+    (17 "Dwgs.User" user "user.drawings") (25 "Edge.Cuts" user)
+    (31 "F.CrtYd" user "f.courtyard") (35 "F.Fab" user))
+  (setup (pad_to_mask_clearance 0))
+
+	(footprint "diode_registry_components_Texas_Instruments_SWRA117D-2.4GHz-IFA@0.2.0:SWRA117D_2.4GHz_IFA_Right"
+		(layer "F.Cu")
+		(uuid "248046d5-3d42-4c04-8e26-c274be25e602")
+		(at 168.9 100.439392 -90)
+		(descr "http://www.ti.com/lit/an/swra117d/swra117d.pdf")
+		(tags "PCB antenna")
+		(property "Reference" "E1"
+			(at 4.55 -6.41 270)
+			(layer "F.SilkS")
+			(hide yes)
+			(uuid "cb897145-e551-4a95-b8d8-2d328594541e")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Value" "?"
+			(at 4.55 1.21 270)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "f1d15179-810c-4209-8f64-d74e4f61b6c8")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Datasheet" "https://www.ti.com/lit/an/swra117d/swra117d.pdf"
+			(at 0 0 270)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "20ad8a05-529e-41c0-b96b-9bcd1b36544f")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" "2.4 GHz meandered inverted-F PCB antenna, right-hand copper variant, 15.2 x 5.7 mm keepout"
+			(at 0 0 270)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "06d5694b-b109-4a92-b4a7-70ff1a4fdaa6")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Path" "WIFI.E_ANT.E"
+			(at 0 0 270)
+			(layer "F.SilkS")
+			(hide yes)
+			(uuid "58d25074-46e1-467a-a466-e44cdae05101")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Prefix" "E"
+			(at 0 0 270)
+			(layer "F.SilkS")
+			(hide yes)
+			(uuid "b2821846-122c-48ba-bbc4-dfaa766c3366")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Variant" "RIGHT"
+			(at 0 0 270)
+			(layer "F.SilkS")
+			(hide yes)
+			(uuid "ea1e50a4-409a-48b9-a631-a73019944377")
+			(effects
+				(font
+					(size 1.27 1.27)
+					(thickness 0.15)
+				)
+			)
+		)
+		(path "/a57588c7-6c5c-5e60-b03a-9e2e7f405707/a57588c7-6c5c-5e60-b03a-9e2e7f405707")
+		(attr exclude_from_pos_files exclude_from_bom)
+		(duplicate_pad_numbers_are_jumpers no)
+		(fp_poly
+			(pts
+				(xy 2.45 -2.51) (xy 4.45 -2.51) (xy 4.45 -5.15) (xy 7.15 -5.15) (xy 7.15 -2.51) (xy 9.15 -2.51)
+				(xy 9.15 -5.15) (xy 11.85 -5.15) (xy 11.85 -0.71) (xy 11.35 -0.71) (xy 11.35 -4.65) (xy 9.65 -4.65)
+				(xy 9.65 -2.01) (xy 6.65 -2.01) (xy 6.65 -4.65) (xy 4.95 -4.65) (xy 4.95 -2.01) (xy 1.95 -2.01)
+				(xy 1.95 -4.65) (xy 0.25 -4.65) (xy 0.25 0.25) (xy -0.25 0.25) (xy -0.25 -4.65) (xy -1.65 -4.65)
+				(xy -1.65 0.25) (xy -2.55 0.25) (xy -2.55 0.006785) (xy -2.247583 0.006785) (xy -2.237742 0.054395)
+				(xy -2.213674 0.096797) (xy -2.175731 0.129581) (xy -2.167819 0.133935) (xy -2.125156 0.146043)
+				(xy -2.076637 0.1453) (xy -2.031122 0.1324) (xy -2.012511 0.121787) (xy -1.978868 0.086553) (xy -1.958309 0.041368)
+				(xy -1.951778 -0.008158) (xy -1.960218 -0.056417) (xy -1.977112 -0.088643) (xy -2.012372 -0.121313)
+				(xy -2.057682 -0.141408) (xy -2.107267 -0.147982) (xy -2.155353 -0.140092) (xy -2.188245 -0.123186)
+				(xy -2.223185 -0.086416) (xy -2.242847 -0.041622) (xy -2.247583 0.006785) (xy -2.55 0.006785) (xy -2.55 -5.15)
+				(xy 2.45 -5.15)
+			)
+			(stroke
+				(width 0)
+				(type solid)
+			)
+			(fill yes)
+			(layer "F.Cu")
+			(uuid "ea4d107e-dd4c-4793-a871-00b885cb4c3d")
+		)
+		(fp_line
+			(start -3.05 -0.25)
+			(end 12.15 -0.25)
+			(stroke
+				(width 0.15)
+				(type solid)
+			)
+			(layer "Dwgs.User")
+			(uuid "25c062a6-5b0d-4704-8b05-e1753df0aa7c")
+		)
+		(fp_line
+			(start -3.05 -0.25)
+			(end -3.05 -5.45)
+			(stroke
+				(width 0.15)
+				(type solid)
+			)
+			(layer "Dwgs.User")
+			(uuid "1b6506fb-2cd7-4817-bdd8-25ff6e8dc5d0")
+		)
+		(fp_line
+			(start -3.05 -0.25)
+			(end 12.15 -5.45)
+			(stroke
+				(width 0.15)
+				(type solid)
+			)
+			(layer "Dwgs.User")
+			(uuid "92f72067-80fe-4d28-931d-89c5be76141e")
+		)
+		(fp_line
+			(start 12.15 -0.25)
+			(end 12.15 -5.45)
+			(stroke
+				(width 0.15)
+				(type solid)
+			)
+			(layer "Dwgs.User")
+			(uuid "e185d9fb-5a93-4499-9420-7f5484a7b304")
+		)
+		(fp_line
+			(start -3.05 -5.45)
+			(end 12.15 -0.25)
+			(stroke
+				(width 0.15)
+				(type solid)
+			)
+			(layer "Dwgs.User")
+			(uuid "1e87d066-a7b7-4e46-8e31-8ab5ac365a08")
+		)
+		(fp_line
+			(start -3.05 -5.45)
+			(end 12.15 -5.45)
+			(stroke
+				(width 0.15)
+				(type solid)
+			)
+			(layer "Dwgs.User")
+			(uuid "44db9c4f-217c-42fe-ad68-a2d254d5f514")
+		)
+		(fp_line
+			(start -3.2 0.35)
+			(end -3.2 -5.6)
+			(stroke
+				(width 0.05)
+				(type solid)
+			)
+			(layer "F.CrtYd")
+			(uuid "73305503-998d-4f9d-9a5d-bc22f9266f14")
+		)
+		(fp_line
+			(start 12.3 0.35)
+			(end -3.2 0.35)
+			(stroke
+				(width 0.05)
+				(type solid)
+			)
+			(layer "F.CrtYd")
+			(uuid "ec000e77-c2d1-4cee-8a34-d54b40629050")
+		)
+		(fp_line
+			(start -3.2 -5.6)
+			(end 12.3 -5.6)
+			(stroke
+				(width 0.05)
+				(type solid)
+			)
+			(layer "F.CrtYd")
+			(uuid "0ded18d7-2063-4fa1-953c-666e889293a6")
+		)
+		(fp_line
+			(start 12.3 -5.6)
+			(end 12.3 0.35)
+			(stroke
+				(width 0.05)
+				(type solid)
+			)
+			(layer "F.CrtYd")
+			(uuid "d41694c1-42c9-4684-a519-6259b55c5328")
+		)
+		(fp_line
+			(start -3.2 0.35)
+			(end -3.2 -5.6)
+			(stroke
+				(width 0.15)
+				(type solid)
+			)
+			(layer "F.Fab")
+			(uuid "d76e2207-9e0f-4ad5-bc02-39158882810b")
+		)
+		(fp_line
+			(start 12.3 0.35)
+			(end -3.2 0.35)
+			(stroke
+				(width 0.15)
+				(type solid)
+			)
+			(layer "F.Fab")
+			(uuid "ed45aeda-b512-43c0-bb76-ea666894f189")
+		)
+		(fp_line
+			(start -3.2 -5.6)
+			(end 12.3 -5.6)
+			(stroke
+				(width 0.15)
+				(type solid)
+			)
+			(layer "F.Fab")
+			(uuid "8c2052d1-c0e9-47b4-ae9a-ac45d7d4e68e")
+		)
+		(fp_line
+			(start 12.3 -5.6)
+			(end 12.3 0.35)
+			(stroke
+				(width 0.15)
+				(type solid)
+			)
+			(layer "F.Fab")
+			(uuid "66d77527-23ab-44d6-8b10-b251fcb7e0b6")
+		)
+		(fp_text user "${REFERENCE}"
+			(at 4.55 -6.4 270)
+			(layer "F.Fab")
+			(uuid "54ecaf44-30f8-44b9-ad73-2823b46c56f5")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(pad "1" connect rect
+			(at 0 0 270)
+			(size 0.5 0.5)
+			(layers "F.Cu")
+			(net "WIFI.RF_ANT")
+			(uuid "1f919e27-7a38-4e20-a11a-89c0d33ee183")
+		)
+		(pad "2" thru_hole rect
+			(at -2.1 0 270)
+			(size 0.9 0.5)
+			(drill 0.3)
+			(layers "*.Cu")
+			(remove_unused_layers no)
+			(net "GND")
+			(zone_connect 2)
+			(uuid "12f20de0-3503-424c-b28e-77497261496e")
+		)
+		(embedded_fonts no)
+	)
+
+  (gr_rect (start 160 95) (end 180 115)
+    (stroke (width 0.05) (type default)) (fill none) (layer "Edge.Cuts"))
+)

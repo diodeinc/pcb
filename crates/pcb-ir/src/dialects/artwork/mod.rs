@@ -526,6 +526,17 @@ pub type OwnerImages<Owner> = Vec<(Owner, region::ContourSet)>;
 
 pub type OwnerRegionLayers<Owner> = Vec<OwnerImages<Owner>>;
 
+/// Unfiltered owner copper and the evidence needed to certify local contacts.
+#[derive(Debug)]
+pub struct ContactRegion<Owner> {
+    pub owner: Owner,
+    pub image: region::ContourSet,
+    pub guaranteed_image: region::ContourSet,
+    pub approximation_bounds: Vec<BBox>,
+}
+
+type ContactRegionLayers<Owner> = Vec<Vec<ContactRegion<Owner>>>;
+
 /// A flash or path as one placement images it.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Primitive {
@@ -732,6 +743,43 @@ pub fn compose_owner_regions<LayerMeta, ObjectMeta, Owner: Clone + Eq + Hash>(
     owner: impl Fn(&ObjectMeta) -> Option<Owner>,
     resolution: Resolution,
 ) -> Result<(OwnerRegionLayers<Owner>, Vec<Diagnostic>), AccuracyError> {
+    let (layers, diagnostics) = compose_regions(doc, owner, resolution, false)?;
+    Ok((
+        layers
+            .into_iter()
+            .map(|owners| {
+                owners
+                    .into_iter()
+                    .map(|owner| (owner.owner, owner.image))
+                    .collect()
+            })
+            .collect(),
+        diagnostics,
+    ))
+}
+
+/// Opt-in contact evidence. Ordinary imaging does not compose the guaranteed
+/// material or track uncertain operands. Clear paint retains source order.
+pub fn compose_contact_regions<LayerMeta, ObjectMeta, Owner: Clone + Eq + Hash>(
+    doc: &Document<LayerMeta, ObjectMeta>,
+    owner: impl Fn(&ObjectMeta) -> Option<Owner>,
+    resolution: Resolution,
+) -> Result<(ContactRegionLayers<Owner>, Vec<Diagnostic>), AccuracyError> {
+    compose_regions(doc, owner, resolution.strict(), true)
+}
+
+fn compose_regions<LayerMeta, ObjectMeta, Owner: Clone + Eq + Hash>(
+    doc: &Document<LayerMeta, ObjectMeta>,
+    owner: impl Fn(&ObjectMeta) -> Option<Owner>,
+    resolution: Resolution,
+    contacts: bool,
+) -> Result<(ContactRegionLayers<Owner>, Vec<Diagnostic>), AccuracyError> {
+    struct State {
+        composer: region::PaintComposer,
+        guaranteed: Option<region::PaintComposer>,
+        bbox: BBox,
+        approximation_bounds: Vec<BBox>,
+    }
     let mut diagnostics = doc.diagnostics.clone();
     let mut images = PrimitiveImages {
         resolution: resolution.strict(),
@@ -745,7 +793,7 @@ pub fn compose_owner_regions<LayerMeta, ObjectMeta, Owner: Clone + Eq + Hash>(
         // Preserve first-paint order for deterministic attributed output and
         // retain constant-time lookup for later objects of the same owner.
         let mut owner_indices: HashMap<Owner, usize> = HashMap::new();
-        let mut states: Vec<(Owner, region::PaintComposer, BBox)> = Vec::new();
+        let mut states: Vec<(Owner, State)> = Vec::new();
         for placed in &placed {
             let selected = match placed.polarity {
                 Polarity::Dark => match owner(placed.meta) {
@@ -755,35 +803,80 @@ pub fn compose_owner_regions<LayerMeta, ObjectMeta, Owner: Clone + Eq + Hash>(
                 Polarity::Clear => None,
             };
             let image = images.image(doc, placed)?;
-            if image.is_empty() {
+            let approximation = (contacts && image.uncertainty_mm > crate::geom::tol::EPSILON_MM)
+                .then(|| {
+                    let source = match placed.primitive {
+                        Primitive::Flash(aperture) => doc.apertures[aperture as usize].bbox(),
+                        Primitive::Path(path) => doc.arena.path(path).bbox,
+                    };
+                    source
+                        .transformed(placed.transform)
+                        .union(image.bbox)
+                        .expand(image.uncertainty_mm)
+                });
+            if image.is_empty() && approximation.is_none() {
                 continue;
             }
+            let bounds = approximation.unwrap_or(image.bbox);
             match selected {
                 Some(owner) => {
                     let index = *owner_indices.entry(owner.clone()).or_insert_with(|| {
-                        states.push((owner, region::PaintComposer::new(resolution), BBox::empty()));
+                        states.push((
+                            owner,
+                            State {
+                                composer: region::PaintComposer::new(resolution),
+                                guaranteed: contacts
+                                    .then(|| region::PaintComposer::new(resolution)),
+                                bbox: BBox::empty(),
+                                approximation_bounds: Vec::new(),
+                            },
+                        ));
                         states.len() - 1
                     });
-                    let (_, composer, bbox) = &mut states[index];
-                    *bbox = bbox.union(image.bbox);
-                    composer.push(Polarity::Dark, image);
+                    let (_, state) = &mut states[index];
+                    state.bbox = state.bbox.union(bounds);
+                    state.approximation_bounds.extend(approximation);
+                    if approximation.is_none()
+                        && let Some(guaranteed) = &mut state.guaranteed
+                    {
+                        guaranteed.push(Polarity::Dark, image.clone());
+                    }
+                    state.composer.push(Polarity::Dark, image);
                 }
                 None => {
-                    for (_, composer, _) in states
+                    for (_, state) in states
                         .iter_mut()
-                        .filter(|(_, _, bbox)| bbox.intersects(image.bbox))
+                        .filter(|(_, state)| state.bbox.intersects(bounds))
                     {
-                        composer.push(Polarity::Clear, image.clone());
+                        state.approximation_bounds.extend(approximation);
+                        if let Some(guaranteed) = &mut state.guaranteed {
+                            guaranteed.push(
+                                Polarity::Clear,
+                                approximation.map_or_else(
+                                    || image.clone(),
+                                    |bbox| region::ContourSet::rectangle(bbox, resolution),
+                                ),
+                            );
+                        }
+                        state.composer.push(Polarity::Clear, image.clone());
                     }
                 }
             }
         }
 
         let mut owners = Vec::with_capacity(states.len());
-        for (owner, composer, _) in states {
-            let image = composer.finish()?;
+        for (owner, state) in states {
+            let image = state.composer.finish()?;
             if !image.is_empty() {
-                owners.push((owner, image));
+                owners.push(ContactRegion {
+                    owner,
+                    image,
+                    guaranteed_image: match state.guaranteed {
+                        Some(composer) => composer.finish()?,
+                        None => region::ContourSet::empty(resolution),
+                    },
+                    approximation_bounds: state.approximation_bounds,
+                });
             }
         }
         layers.push(owners);
@@ -1355,6 +1448,80 @@ mod tests {
         // The dark-drawn final cutout removes material.
         assert!(!image.contains_point(Point::new(0.5, 0.5)));
         assert!(image.contains_point(Point::new(9.0, 9.0)));
+    }
+
+    #[test]
+    fn guaranteed_material_respects_approximate_clears_repaint_and_ownership() {
+        let mut doc = Document::<(), &str>::new();
+        let layer = doc.push_layer(Layer::new("F.Cu", LayerRole::Copper, Side::Top));
+        let mut paint = |contour, polarity, stage, owner| {
+            let path = doc.push_path(
+                Paint::Fill {
+                    rule: FillRule::NonZero,
+                },
+                [contour],
+            );
+            let mut object = Object::new(polarity, Geometry::Region { path });
+            object.order = PaintOrder { stage };
+            object.meta = owner;
+            doc.push_object(layer, object);
+        };
+        for owner in ["A", "B"] {
+            paint(
+                shapes::rect(4.0, 2.0).unwrap(),
+                Polarity::Dark,
+                PaintStage::Base,
+                owner,
+            );
+        }
+        paint(
+            shapes::circle(1.0)
+                .unwrap()
+                .transformed(Affine2::translation(Point::new(3.0, 0.0))),
+            Polarity::Dark,
+            PaintStage::Base,
+            "A",
+        );
+        paint(
+            shapes::circle(1.0).unwrap(),
+            Polarity::Clear,
+            PaintStage::Base,
+            "ignored",
+        );
+        paint(
+            shapes::rect(0.2, 0.2).unwrap(),
+            Polarity::Dark,
+            PaintStage::Overlay,
+            "A",
+        );
+        paint(
+            shapes::circle(0.04)
+                .unwrap()
+                .transformed(Affine2::translation(Point::new(0.06, 0.0))),
+            Polarity::Dark,
+            PaintStage::FinalCutout,
+            "ignored",
+        );
+        let (layers, _) =
+            compose_contact_regions(&doc, |owner| Some(*owner), Resolution::default()).unwrap();
+        for owner in &layers[0] {
+            let certain = &owner.guaranteed_image;
+            assert!(certain.contains_point(Point::new(1.5, 0.5)));
+            assert!(!certain.contains_point(Point::new(3.0, 0.0)));
+            // A clear circle's entire bounding box is excluded from the
+            // guarantee, even where the prepared image still has material.
+            assert!(owner.image.contains_point(Point::new(0.45, 0.45)));
+            assert!(!certain.contains_point(Point::new(0.45, 0.45)));
+            // Only A repaints the cleared center. The final drill then cuts
+            // its overlay despite being represented as a dark object.
+            assert_eq!(
+                certain.contains_point(Point::new(0.0, 0.0)),
+                owner.owner == "A"
+            );
+            assert!(!certain.contains_point(Point::new(0.06, 0.0)));
+            assert!(!owner.image.contains_point(Point::new(0.06, 0.0)));
+        }
+        assert!(layers[0][0].image.contains_point(Point::new(3.0, 0.0)));
     }
 
     #[test]

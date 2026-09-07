@@ -41,6 +41,9 @@ pub struct StepDefinition {
     pub step_type: Option<StepType>,
     pub datum: Option<Datum>,
     pub step_repeats: Vec<StepRepeat>,
+    /// Intent in Step coordinates, retained even on otherwise empty layers.
+    /// Each declaration is paired with its containing LayerFeature's layer.
+    pub net_shorts: Vec<(Symbol, ipc2581::types::NetShort)>,
 }
 
 impl StepDefinition {
@@ -265,6 +268,17 @@ pub fn import_design(ipc: &Ipc2581, resolution: Resolution) -> Result<ImportedDe
                 step_type: step.step_type,
                 datum: step.datum,
                 step_repeats: step.step_repeats.clone(),
+                net_shorts: step
+                    .layer_features
+                    .iter()
+                    .flat_map(|layer| {
+                        layer
+                            .net_shorts
+                            .iter()
+                            .cloned()
+                            .map(|short| (layer.layer_ref, short))
+                    })
+                    .collect(),
             })
             .collect(),
         step_layers,
