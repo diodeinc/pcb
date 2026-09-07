@@ -21,8 +21,20 @@ pub(super) fn namespace_source(
 ) -> Result<String> {
     let doc = Doc::parse(xml)?;
     let root = doc.root()?;
+    let local_specs = doc
+        .find_all("Spec")
+        .into_iter()
+        .filter_map(|node| doc.attr(node, "name").map(str::to_string))
+        .collect();
     let mut edits = Vec::new();
-    collect_namespace_edits(&doc, root, prefix, shared_stackup_layers, &mut edits);
+    collect_namespace_edits(
+        &doc,
+        root,
+        prefix,
+        shared_stackup_layers,
+        &local_specs,
+        &mut edits,
+    );
     Ok(edit::apply(xml, edits)?)
 }
 
@@ -31,6 +43,7 @@ fn collect_namespace_edits(
     node: Node,
     prefix: &str,
     shared_stackup_layers: &HashSet<String>,
+    local_specs: &HashSet<String>,
     edits: &mut Vec<Edit>,
 ) {
     let element = doc.name(node);
@@ -38,7 +51,13 @@ fn collect_namespace_edits(
     let attrs = doc
         .attrs(node)
         .map(|(name, value)| {
-            let value = if should_namespace_attr(element, name, value, shared_stackup_layers) {
+            // Only local definitions move into the source namespace. External
+            // specification identities must remain usable by downstream tools.
+            let external_spec =
+                element == "SpecRef" && name == "id" && !local_specs.contains(value);
+            let value = if !external_spec
+                && should_namespace_attr(element, name, value, shared_stackup_layers)
+            {
                 changed = true;
                 format!("{prefix}{value}")
             } else {
@@ -59,7 +78,14 @@ fn collect_namespace_edits(
     }
 
     for child in doc.children(node) {
-        collect_namespace_edits(doc, child, prefix, shared_stackup_layers, edits);
+        collect_namespace_edits(
+            doc,
+            child,
+            prefix,
+            shared_stackup_layers,
+            local_specs,
+            edits,
+        );
     }
 }
 

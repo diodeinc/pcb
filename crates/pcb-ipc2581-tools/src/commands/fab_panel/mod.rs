@@ -149,8 +149,21 @@ struct SourcePanel {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PhysicalStackup {
     attributes: Vec<(String, String)>,
-    group_attributes: Vec<Vec<(String, String)>>,
+    groups: Vec<PhysicalStackupGroup>,
     layers: Vec<PhysicalStackupLayer>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PhysicalStackupGroup {
+    attributes: Vec<(String, String)>,
+    source_layers: std::ops::Range<usize>,
+    specs: Vec<SpecEvidence>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SpecEvidence {
+    Resolved(Box<SpecSignature>),
+    External(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -167,7 +180,7 @@ struct PhysicalStackupLayer {
     dielectric_constant: Option<u64>,
     loss_tangent: Option<u64>,
     layer_number: Option<u64>,
-    specs: Vec<SpecSignature>,
+    specs: Vec<SpecEvidence>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -501,11 +514,20 @@ fn physical_stackup(xml: &str, source_index: usize) -> Result<PhysicalStackup> {
     }
     let stackup_node = stackup_nodes[0];
     let attributes = sorted_attributes(&doc, stackup_node, &["name"]);
-    let group_attributes = doc
+    let spec_evidence = |reference: &ipc2581::Symbol| match ecad.cad_header.specs.get(reference) {
+        Some(spec) => SpecEvidence::Resolved(Box::new(spec_signature(&ipc, spec))),
+        None => SpecEvidence::External(ipc.resolve(*reference).to_string()),
+    };
+    let groups = doc
         .children(stackup_node)
         .into_iter()
         .filter(|child| doc.name(*child) == "StackupGroup")
-        .map(|group| sorted_attributes(&doc, group, &["name"]))
+        .zip(&stackup.groups)
+        .map(|(node, group)| PhysicalStackupGroup {
+            attributes: sorted_attributes(&doc, node, &["name"]),
+            source_layers: group.source_layers.clone(),
+            specs: group.spec_refs.iter().map(spec_evidence).collect(),
+        })
         .collect::<Vec<_>>();
 
     let layers = stackup
@@ -529,13 +551,8 @@ fn physical_stackup(xml: &str, source_index: usize) -> Result<PhysicalStackup> {
                 .spec_refs
                 .iter()
                 .chain(stackup_layer.spec_refs.iter().filter(|reference| !layer.spec_refs.contains(reference)))
-                .map(|reference| {
-                    let spec = ecad.cad_header.specs.get(reference).with_context(|| format!(
-                        "assembly panel input {input_number} stackup references unresolved specification '{}'", ipc.resolve(*reference)
-                    ))?;
-                    Ok(spec_signature(&ipc, spec))
-                })
-                .collect::<Result<Vec<_>>>()?;
+                .map(spec_evidence)
+                .collect();
 
             Ok(PhysicalStackupLayer {
                 name,
@@ -565,7 +582,7 @@ fn physical_stackup(xml: &str, source_index: usize) -> Result<PhysicalStackup> {
 
     Ok(PhysicalStackup {
         attributes,
-        group_attributes,
+        groups,
         layers,
     })
 }
@@ -576,9 +593,7 @@ fn require_identical_stackup(
     source_index: usize,
 ) -> Result<()> {
     let input_number = source_index + 1;
-    if candidate.attributes != first.attributes
-        || candidate.group_attributes != first.group_attributes
-    {
+    if candidate.attributes != first.attributes || candidate.groups != first.groups {
         bail!(
             "assembly panel input {input_number} has stackup attributes that differ from assembly panel input 1"
         );
