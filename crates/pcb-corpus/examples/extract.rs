@@ -78,9 +78,13 @@ fn main() -> Result<()> {
         "metadata":format!("{:?}",board.metadata),
         "overall_thickness_mm":board.metadata.overall_thickness_mm,
         "spec_refs":board.metadata.spec_refs.iter().map(|s|ipc.resolve(*s)).collect::<Vec<_>>(),
+        "source_attributes":board.metadata.source_attributes.iter().map(|(name,value)|[ipc.resolve(*name),ipc.resolve(*value)]).collect::<Vec<_>>(),
+        "source_units":board.metadata.source_units.map(|units|format!("{units:?}")),
         "stackup_groups":board.metadata.groups.iter().map(|g| json!({
             "name":ipc.resolve(g.name),
             "mat_des":g.mat_des.map(|s|ipc.resolve(s)),
+            "source_attributes":g.source_attributes.iter().map(|(name,value)|[ipc.resolve(*name),ipc.resolve(*value)]).collect::<Vec<_>>(),
+            "source_units":format!("{:?}",g.source_units),
             "spec_refs":g.spec_refs.iter().map(|s|ipc.resolve(*s)).collect::<Vec<_>>(),
             "cad_data_layer_refs":g.cad_data_layer_refs.iter().map(|s|ipc.resolve(*s)).collect::<Vec<_>>(),
             "source_layers":{"start":g.source_layers.start,"end":g.source_layers.end},
