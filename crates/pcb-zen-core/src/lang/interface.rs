@@ -160,9 +160,6 @@ fn clone_net_template<'v>(
                     &net_name,
                     prefix.assignment_inferable,
                     cloned_net.net_kind_name(),
-                    // `cloned_net.id()` is a fresh id from `with_new_id`, never
-                    // present in `introduced_nets`, so `register_net`'s id-reuse
-                    // branch is not taken here and `prior_was_bound` is moot.
                     false,
                 )
             })

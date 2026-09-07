@@ -794,12 +794,6 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
     }
 
     /// Record that this module introduced a net with `id` and `local_name`.
-    ///
-    /// `prior_was_bound` is the bound status of the net previously registered
-    /// under `id` (i.e. the base net that was cast to this one, reusing its
-    /// `NetId`). It is only consulted on the id-reuse branch, where it scopes
-    /// the eviction of a stale prior-name -> id reverse-map entry to the
-    /// unambiguous case of an unbound/template-owned base.
     pub fn register_net(
         &mut self,
         id: NetId,
@@ -816,16 +810,9 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
                 return Ok(existing.name.as_str().to_string());
             }
 
-            // Evict the stale prior-name -> id reverse-map entry when an
-            // existing id is re-registered under a new name, but only when the
-            // prior net was unbound (template-owned). For a bound base the prior
-            // name may still name a live `Net.name` value under one reading of
-            // the uniqueness invariant, so today's rejection behaviour is left
-            // untouched. Without this, the reverse map `net_name_to_id` would
-            // retain a `name -> id` entry whose forward entry
-            // `introduced_nets[id]` now bears a different name, causing a later
-            // unrelated `Net("<prior name>")` to be spuriously rejected as a
-            // duplicate.
+            self.record_net_name(id, &base_name, assignment_inferable, &existing.kind)?;
+
+            // A bound base still exposes its old name; only release unbound names.
             if !prior_was_bound
                 && let Some(old_name) = existing.name.named()
                 && old_name != base_name
@@ -833,7 +820,6 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
                 self.net_name_to_id.shift_remove(old_name);
             }
 
-            self.record_net_name(id, &base_name, assignment_inferable, &existing.kind)?;
             let name = Self::registration_name(&base_name, assignment_inferable);
 
             self.introduced_nets.insert(
@@ -932,26 +918,11 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
     /// `interface(...)`) and should not count as an introduced net for the
     /// enclosing module.
     pub fn unregister_net(&mut self, id: NetId) {
-        let found = self.introduced_nets.iter().any(|(nid, _)| *nid == id);
-        if !found {
+        if self.introduced_nets.shift_remove(&id).is_none() {
             return;
         }
 
-        // Rebuild introduced_nets without the given id
-        let mut rebuilt_nets = starlark::collections::SmallMap::new();
-        for (nid, info) in self.introduced_nets.iter() {
-            if *nid != id {
-                rebuilt_nets.insert(*nid, info.clone());
-            }
-        }
-        self.introduced_nets = rebuilt_nets;
-
-        // Rebuild net_name_to_id without ANY entry pointing at the removed id.
-        // Filtering by id (rather than by `introduced_nets[id].name`) also drops
-        // stale reverse-map entries left behind when this id was earlier renamed
-        // in `register_net`; without this, such an entry would dangle at an id
-        // that no longer exists and later spuriously reject an unrelated
-        // `Net("<prior name>")`.
+        // Casts can reserve multiple names for the same id.
         let mut rebuilt_lookup = starlark::collections::SmallMap::new();
         for (k, v) in self.net_name_to_id.iter() {
             if *v != id {
@@ -963,54 +934,52 @@ impl<'v, V: ValueLike<'v>> ModuleValueGen<V> {
 }
 
 #[cfg(test)]
-mod register_net_invariant_tests {
+mod register_net_tests {
     use super::*;
 
-    fn fresh_module() -> ModuleValueGen<FrozenValue> {
-        ModuleValueGen::new(
+    #[test]
+    fn duplicate_rename_preserves_registration() {
+        let mut module = ModuleValueGen::<FrozenValue>::new(
             ModulePath::root(),
             std::path::Path::new(""),
             SmallMap::new(),
-        )
-    }
-
-    /// Invariant: for every `(name, id)` in `net_name_to_id`, the forward entry
-    /// `introduced_nets[id].name.named() == Some(name)`.
-    fn assert_reverse_map_consistent(module: &ModuleValueGen<FrozenValue>) {
-        for (name, id) in module.net_name_to_id.iter() {
-            let fwd = module
-                .introduced_nets
-                .get(id)
-                .unwrap_or_else(|| panic!("reverse map {name:?} -> {id} has no forward entry"));
-            assert_eq!(
-                fwd.name.named(),
-                Some(name.as_str()),
-                "reverse map {name:?} -> {id} disagrees with forward entry name {:?}",
-                fwd.name.as_str()
-            );
+        );
+        for (id, name) in [(1, "SIG"), (2, "PWR")] {
+            module
+                .register_net(id, name.into(), false, "Net".into(), false)
+                .unwrap();
         }
+        assert_eq!(
+            module
+                .register_net(1, "PWR".into(), false, "Power".into(), false)
+                .unwrap_err()
+                .to_string(),
+            "Duplicate net name: PWR"
+        );
+        let net = module.introduced_nets.get(&1).unwrap();
+        assert_eq!(net.name.named(), Some("SIG"));
+        assert_eq!(net.kind, "Net");
+        assert_eq!(module.net_name_to_id.get("SIG"), Some(&1));
+        assert_eq!(module.net_name_to_id.get("PWR"), Some(&2));
     }
 
     #[test]
-    fn unregister_net_drops_all_reverse_entries_pointing_at_id() {
-        let mut m = fresh_module();
-        m.register_net(1, "SIG".to_string(), false, "Power".to_string(), false)
-            .unwrap();
-        // Simulate a leaked/stale reverse-map entry pointing at id 1 under a
-        // different name (the state `register_net`'s pre-fix rename branch
-        // created). `unregister_net` must drop ALL entries pointing at the
-        // removed id, not merely the one matching the current registered name,
-        // so no stale entry can dangle at a removed id.
-        m.net_name_to_id.insert("STALE".to_string(), 1);
-        m.unregister_net(1);
-        assert!(m.introduced_nets.get(&1).is_none());
-        assert_eq!(m.net_name_to_id.get("SIG"), None);
-        assert_eq!(
-            m.net_name_to_id.get("STALE"),
-            None,
-            "unregister must drop stale entries pointing at the removed id"
+    fn unregister_removes_all_cast_names() {
+        let mut module = ModuleValueGen::<FrozenValue>::new(
+            ModulePath::root(),
+            std::path::Path::new(""),
+            SmallMap::new(),
         );
-        assert_reverse_map_consistent(&m);
+        for (id, name) in [(1, "SIG"), (1, "PWR"), (2, "OTHER")] {
+            module
+                .register_net(id, name.into(), false, "Net".into(), true)
+                .unwrap();
+        }
+        module.unregister_net(1);
+        assert!(module.introduced_nets.get(&1).is_none());
+        assert_eq!(module.net_name_to_id.get("SIG"), None);
+        assert_eq!(module.net_name_to_id.get("PWR"), None);
+        assert_eq!(module.net_name_to_id.get("OTHER"), Some(&2));
     }
 }
 
