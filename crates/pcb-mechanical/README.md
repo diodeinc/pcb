@@ -43,9 +43,10 @@ verification, not a user-facing manufacturing preset.
 ## Material counting and kinematics
 
 Let B be the union of nominal board instances and retained frame. For tabs i,
-let T_i be full retained stock and H_i the perforation masks. The material is
+let A_i be the undrilled attachment footprint and H_i the perforation masks.
+The material is
 
-`S = (B union union_i(T_i minus B)) minus union_i(H_i)`.
+`S = (B union union_i(A_i)) minus union_i(H_i)`.
 
 Thus tab shoulders/necks are continuum material exactly once. A tab's local
 router removal must **not** be subtracted globally: that would erase other

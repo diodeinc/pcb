@@ -1,6 +1,6 @@
 use pcb_elastic::{DMatrix, DVector};
 use pcb_ir::geom::mesh::MeshOptions;
-use pcb_ir::geom::{Affine2, BBox, ContourSet, Point};
+use pcb_ir::geom::{Affine2, BBox, ContourSet, Point, Resolution};
 use pcb_ir::import::physical::{
     Association, BoardPhysicalDiagnostic, BoardPhysicalMetadata, BoardPhysicalView,
 };
@@ -8,10 +8,11 @@ use pcb_mechanical::{BoardInstance, Error, Laminate, Panel};
 
 #[test]
 fn physical_view_placement_preserves_missing_evidence_and_requires_explicit_material() {
-    let empty = ContourSet::empty(0.0);
+    let resolution = Resolution::default().strict();
+    let empty = ContourSet::empty(resolution);
     let board = BoardPhysicalView {
         step: 0,
-        substrate: ContourSet::rectangle(BBox::new(Point::ZERO, Point::new(2., 1.)), 0.),
+        substrate: ContourSet::rectangle(BBox::new(Point::ZERO, Point::new(2., 1.)), resolution),
         profile_cutouts: empty.clone(),
         profiles: vec![],
         copper: vec![],

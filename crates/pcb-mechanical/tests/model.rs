@@ -2,11 +2,14 @@ use pcb_elastic::{Analysis, DMatrix, DVector, Model, Status, Tolerances, element
 use pcb_ir::geom::attachment::{BoundaryQuery, QueryTolerance};
 use pcb_ir::geom::mesh::MeshOptions;
 use pcb_ir::geom::mouse_bite::{self, TabGeometry};
-use pcb_ir::geom::{BBox, ContourSet, Point};
+use pcb_ir::geom::{BBox, ContourSet, Point, Resolution};
 use pcb_mechanical::*;
 
 fn rect(x: f64, y: f64, w: f64, h: f64) -> ContourSet {
-    ContourSet::rectangle(BBox::new(Point::new(x, y), Point::new(x + w, y + h)), 0.0)
+    ContourSet::rectangle(
+        BBox::new(Point::new(x, y), Point::new(x + w, y + h)),
+        Resolution::default().strict(),
+    )
 }
 fn material(t: f64) -> Laminate {
     // Synthetic nu=0, E=12, not an FR4 recommendation. D=1 at t=1.
@@ -126,7 +129,7 @@ fn cdt_cantilever_refines_to_beam_and_scales_with_thickness() {
 
 #[test]
 fn canonical_normals_p2_virtual_work_and_component_isolation() {
-    let domain = rect(0., 0., 2., 1.).union(&rect(3., 0., 1., 1.));
+    let domain = rect(0., 0., 2., 1.).union(&rect(3., 0., 1., 1.)).unwrap();
     let d = panel(&domain)
         .discretize(&material(1.), options(0.5), 1000)
         .unwrap();
@@ -221,11 +224,13 @@ fn full_stock_tab_decomposition_keeps_both_necks_and_all_holes() {
     let expected = tabs[0]
         .retained_substrate
         .union(&tabs[1].retained_substrate)
-        .difference(&tabs[0].perforations.union(&tabs[1].perforations));
+        .unwrap()
+        .difference(&tabs[0].perforations.union(&tabs[1].perforations).unwrap())
+        .unwrap();
     close(p.substrate.area(), expected.area(), 1e-6);
     assert_eq!(p.substrate.connected_components().len(), 1);
     for t in &tabs {
-        assert!(p.substrate.intersection(&t.perforations).area() < 1e-8);
+        assert!(p.substrate.intersection(&t.perforations).unwrap().area() < 1e-8);
     }
     assert!(
         p.substrate.contains_point(Point::new(-3., 1.5))
@@ -247,11 +252,16 @@ fn perforated_tab_response_and_refinement() {
     )
     .unwrap();
     let unperforated = panel(
-        &perforated.substrate.union(
-            &tab.perforations
-                .intersection(&stock)
-                .difference(&tab.routed_removal),
-        ),
+        &perforated
+            .substrate
+            .union(
+                &tab.perforations
+                    .intersection(&stock)
+                    .unwrap()
+                    .difference(&tab.routed_removal)
+                    .unwrap(),
+            )
+            .unwrap(),
     );
     let mut results = Vec::new();
     for (name, domain, area) in [
@@ -317,11 +327,14 @@ fn whole_panel_rail_flexibility_and_tooling_not_independent_cell_clamps() {
     // Two wide board pads on a shared flexible retained rail, narrow continuum
     // bridges. Synthetic unperforated tabs isolate global coupling from fracture.
     let rail_region = rect(0., 0., 12., 1.);
-    let cells = rect(2., -4., 3., 3.).union(&rect(7., -4., 3., 3.));
+    let cells = rect(2., -4., 3., 3.).union(&rect(7., -4., 3., 3.)).unwrap();
     let region = rail_region
         .union(&cells)
+        .unwrap()
         .union(&rect(3., -1., 1., 1.))
-        .union(&rect(8., -1., 1., 1.));
+        .unwrap()
+        .union(&rect(8., -1., 1., 1.))
+        .unwrap();
     let d = panel(&region)
         .discretize(&material(1.), options(0.4), 2000)
         .unwrap();

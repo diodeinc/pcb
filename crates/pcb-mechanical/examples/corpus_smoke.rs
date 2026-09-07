@@ -15,13 +15,10 @@ fn smoke(f: &Fixture) -> Report {
         pcb_corpus::validate(f)?;
         // Substrate already excludes source profile voids. Do not reinterpret
         // removal overlays with unknown spans as through-board holes.
-        let substrate = pcb_corpus::region(&f.substrate, f.tolerance_mm);
-        let panel = Panel::from_regions(
-            &[substrate],
-            &pcb_ir::geom::ContourSet::empty(f.tolerance_mm),
-            &[],
-        )
-        .map_err(|e| e.to_string())?;
+        let substrate =
+            pcb_corpus::region(&f.substrate, f.tolerance_mm).map_err(|e| e.to_string())?;
+        let frame = pcb_ir::geom::ContourSet::empty(substrate.resolution);
+        let panel = Panel::from_regions(&[substrate], &frame, &[]).map_err(|e| e.to_string())?;
         // Synthetic D=1, nu=0 only exercises the operator, not an FR4 preset.
         let laminate = Laminate {
             thickness_mm: 1.,

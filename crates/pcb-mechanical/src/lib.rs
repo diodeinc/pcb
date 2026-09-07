@@ -5,9 +5,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use pcb_elastic::{Contribution, DMatrix, elements::MorleyTriangle};
+use pcb_ir::geom::attachment::{QueryError, transform_region};
 use pcb_ir::geom::mesh::{AnalysisMesh, MeshError, MeshOptions, RefinementStatus};
 use pcb_ir::geom::mouse_bite::TabGeometry;
-use pcb_ir::geom::{Affine2, ContourSet, Point, attachment::transform_region};
+use pcb_ir::geom::{AccuracyError, Affine2, ContourSet, Point};
 use pcb_ir::import::physical::BoardPhysicalView;
 use thiserror::Error;
 
@@ -15,6 +16,10 @@ use thiserror::Error;
 pub enum Error {
     #[error("unsupported or invalid mechanical input: {0}")]
     Input(&'static str),
+    #[error(transparent)]
+    Geometry(#[from] AccuracyError),
+    #[error(transparent)]
+    Query(#[from] QueryError),
     #[error(transparent)]
     Mesh(#[from] MeshError),
     #[error(transparent)]
@@ -84,10 +89,7 @@ impl Panel {
                     "board placement must be rigid, not scaled or sheared",
                 ));
             }
-            regions.push(
-                transform_region(&instance.board.substrate, t)
-                    .map_err(|_| Error::Input("invalid board placement"))?,
-            );
+            regions.push(transform_region(&instance.board.substrate, t)?);
             diagnostics.push(format!(
                 "board {i}: source thickness {:?}; physical {:?}; metadata {:?}; geometry {:?}",
                 instance.board.metadata.overall_thickness_mm,
@@ -102,9 +104,9 @@ impl Panel {
     }
 
     /// Canonical region entry point for synthetic models. Boards and retained
-    /// frame must not overlap. Each tab retains full local stock: only its
-    /// material outside nominal board/frame is added. All perforations are
-    /// subtracted LAST, including their intrusion into nominal board material.
+    /// frame must not overlap. Add each tab's undrilled attachment footprint
+    /// outside its nominal board/support. Subtract all perforations ONCE,
+    /// last, including their intrusion into nominal board material.
     /// Router voids from one single-tab construction must not cut another tab.
     pub fn from_regions(
         boards: &[ContourSet],
@@ -113,18 +115,18 @@ impl Panel {
     ) -> Result<Self, Error> {
         let mut nominal = frame.clone();
         for board in boards {
-            if board.is_empty() || !nominal.intersection(board).is_empty() {
+            if board.is_empty() || !nominal.intersection(board)?.is_empty() {
                 return Err(Error::Input("empty or overlapping nominal board/frame"));
             }
-            nominal.union_assign(board);
+            nominal.union_assign(board)?;
         }
         let mut substrate = nominal.clone();
-        let mut holes = ContourSet::empty(nominal.tolerance);
+        let mut holes = ContourSet::empty(nominal.resolution);
         for tab in tabs {
-            substrate.union_assign(&tab.retained_substrate.difference(&nominal));
-            holes.union_assign(&tab.perforations);
+            substrate.union_assign(&tab.attachment_footprint)?;
+            holes.union_assign(&tab.perforations)?;
         }
-        substrate = substrate.difference(&holes);
+        substrate = substrate.difference(&holes)?;
         if substrate.is_empty() {
             return Err(Error::Input("empty panel"));
         }
