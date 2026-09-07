@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use ipc2581::types::LayerFunction;
 use pcb_ir::dialects::ipc::{ArtworkScope, FeatureKind, PlatingKind};
+use pcb_ir::geom::Resolution;
 use serde::{Deserialize, Serialize};
 
 use super::IpcAccessor;
@@ -55,22 +56,32 @@ pub struct DrillSize {
 
 impl<'a> IpcAccessor<'a> {
     /// Get board-local drill hole statistics with per-type distribution.
-    pub fn board_drill_stats(&self) -> anyhow::Result<Option<DrillStats>> {
-        self.drill_stats_for_view(ArtworkScope::Board)
+    pub fn board_drill_stats(&self, resolution: Resolution) -> anyhow::Result<Option<DrillStats>> {
+        self.drill_stats_for_view(ArtworkScope::Board, resolution)
     }
 
     /// Get array-local drill hole statistics, excluding repeated board drills.
-    pub fn board_array_drill_stats(&self) -> anyhow::Result<Option<DrillStats>> {
-        self.drill_stats_for_view(ArtworkScope::ArrayLocal)
+    pub fn board_array_drill_stats(
+        &self,
+        resolution: Resolution,
+    ) -> anyhow::Result<Option<DrillStats>> {
+        self.drill_stats_for_view(ArtworkScope::ArrayLocal, resolution)
     }
 
     /// Get flattened board-array drill statistics, including repeated board drills
     /// and array-local drill features.
-    pub fn board_array_flattened_drill_stats(&self) -> anyhow::Result<Option<DrillStats>> {
-        self.drill_stats_for_view(ArtworkScope::ArrayFlattened)
+    pub fn board_array_flattened_drill_stats(
+        &self,
+        resolution: Resolution,
+    ) -> anyhow::Result<Option<DrillStats>> {
+        self.drill_stats_for_view(ArtworkScope::ArrayFlattened, resolution)
     }
 
-    fn drill_stats_for_view(&self, view: ArtworkScope) -> anyhow::Result<Option<DrillStats>> {
+    fn drill_stats_for_view(
+        &self,
+        view: ArtworkScope,
+        resolution: Resolution,
+    ) -> anyhow::Result<Option<DrillStats>> {
         let Some(ecad) = self.ecad() else {
             return Ok(None);
         };
@@ -83,7 +94,7 @@ impl<'a> IpcAccessor<'a> {
             }
             has_drill_layer = true;
             let layer_name = self.ipc.resolve(layer.name);
-            let doc = geometry::extract_layer_for_view(self.ipc, layer_name, view)?;
+            let doc = geometry::extract_layer_for_view(self.ipc, layer_name, view, resolution)?;
             collect_drill_info(&doc, &mut collector);
         }
 
@@ -236,16 +247,22 @@ mod tests {
         .unwrap();
         let accessor = IpcAccessor::new(&ipc);
 
-        let board = accessor.board_drill_stats().unwrap().unwrap();
+        let board = accessor
+            .board_drill_stats(Resolution::default())
+            .unwrap()
+            .unwrap();
         assert_eq!(board.total_holes, 1);
         assert_eq!(board.distribution[0].hole_type, DrillHoleType::Via);
 
-        let array = accessor.board_array_drill_stats().unwrap().unwrap();
+        let array = accessor
+            .board_array_drill_stats(Resolution::default())
+            .unwrap()
+            .unwrap();
         assert_eq!(array.total_holes, 1);
         assert_eq!(array.distribution[0].hole_type, DrillHoleType::NonPlated);
 
         let flattened = accessor
-            .board_array_flattened_drill_stats()
+            .board_array_flattened_drill_stats(Resolution::default())
             .unwrap()
             .unwrap();
         assert_eq!(flattened.total_holes, 3);

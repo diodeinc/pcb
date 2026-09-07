@@ -60,7 +60,7 @@ pub struct WarpAnalysis {
 /// Requires a stackup carrying a thickness for every layer: without it there is
 /// no neutral axis, no lever arms, and nothing to estimate.
 pub fn analyze(ipc: &Ipc2581, resolution: Resolution) -> Result<WarpAnalysis> {
-    let imported = import_design(ipc)?;
+    let imported = import_design(ipc, resolution)?;
     let (stack, copper_names) = physical_stack(ipc)?;
     let conductors = stack.conductor_weights();
     let bounds = panel_bounds(ipc, &imported, resolution)?;

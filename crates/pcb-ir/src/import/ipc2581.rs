@@ -739,7 +739,7 @@ fn plating_kind(status: PlatingStatus) -> PlatingKind {
 }
 
 /// Import the complete source design once, retaining step-local geometry.
-pub fn import_design(ipc: &Ipc2581) -> Result<ImportedDesign> {
+pub fn import_design(ipc: &Ipc2581, resolution: Resolution) -> Result<ImportedDesign> {
     let ecad = ipc.ecad().context("IPC-2581 file has no ECAD section")?;
     let mut geometry = extract_layout(ipc)?;
 
@@ -766,6 +766,7 @@ pub fn import_design(ipc: &Ipc2581) -> Result<ImportedDesign> {
                 &ecad.cad_data.layers,
                 source_layer,
                 layer_name,
+                resolution,
             )?;
             if local.features.is_empty() {
                 continue;
@@ -1459,16 +1460,21 @@ impl ImportedDesign {
     }
 }
 
-pub fn extract_layer(ipc: &Ipc2581, layer_name: &str) -> Result<GeometryDocument> {
-    extract_layer_for_view(ipc, layer_name, ArtworkScope::ArrayFlattened)
+pub fn extract_layer(
+    ipc: &Ipc2581,
+    layer_name: &str,
+    resolution: Resolution,
+) -> Result<GeometryDocument> {
+    extract_layer_for_view(ipc, layer_name, ArtworkScope::ArrayFlattened, resolution)
 }
 
 pub fn extract_layer_for_view(
     ipc: &Ipc2581,
     layer_name: &str,
     view: ArtworkScope,
+    resolution: Resolution,
 ) -> Result<GeometryDocument> {
-    let design = import_design(ipc)?;
+    let design = import_design(ipc, resolution)?;
     let layer = design
         .layer_id(layer_name)
         .with_context(|| format!("IPC-2581 layer '{layer_name}' was not found"))?;
@@ -1497,6 +1503,7 @@ pub fn extract_step_layer_local(
     layers: &[Layer],
     layer: &Layer,
     layer_name: &str,
+    resolution: Resolution,
 ) -> Result<GeometryDocument> {
     let content = ipc.content();
     let context = ExtractContext {
@@ -1582,7 +1589,13 @@ pub fn extract_step_layer_local(
                     set_feature,
                     &mut doc,
                 )?;
-                validate_copper_balance_structure(copper_balance, set_feature, &features, &doc)?;
+                validate_copper_balance_structure(
+                    copper_balance,
+                    set_feature,
+                    &features,
+                    &doc,
+                    resolution,
+                )?;
 
                 for mut feature in features {
                     feature.source_step_ref = Some(step.name);
@@ -1825,6 +1838,7 @@ fn validate_copper_balance_structure(
     set_feature: &SetFeature,
     features: &[GeometryFeature],
     doc: &GeometryDocument,
+    resolution: Resolution,
 ) -> Result<()> {
     let Some(void) = metadata.and_then(|metadata| metadata.void) else {
         return Ok(());
@@ -1845,7 +1859,7 @@ fn validate_copper_balance_structure(
     if group.placements.len() != source_group.locations.len() {
         bail!("copper-balance lattice locations did not produce matching placements");
     }
-    validate_copper_balance_void_shape(doc, feature, void)?;
+    validate_copper_balance_void_shape(doc, feature, void, resolution)?;
 
     let lattice = crate::geom::copper_balance::DenseCopperLattice {
         origin: void.lattice_origin,
@@ -1875,6 +1889,7 @@ fn validate_copper_balance_void_shape(
     doc: &GeometryDocument,
     feature: &GeometryFeature,
     metadata: CopperBalanceVoidMetadata,
+    resolution: Resolution,
 ) -> Result<()> {
     let actual = crate::dialects::ipc::contour_flash_aperture(doc, feature)
         .context("copper-balance void is not one filled rigid contour")?;
@@ -1884,7 +1899,7 @@ fn validate_copper_balance_void_shape(
     let expected =
         crate::geom::shapes::rounded_hexagon(metadata.radius_mm, metadata.corner_radius_mm, 0.0)
             .context("copper-balance rounded-hex dimensions are invalid")?;
-    let resolution = Resolution::default().with_tolerance(1e-5);
+    let resolution = resolution.with_tolerance(1e-5);
     let actual = ContourSet::from_contours(&[outline], fill_rule, resolution)?;
     let expected = ContourSet::from_contours(&[expected], FillRule::NonZero, resolution)?;
     let mismatch = actual.difference(&expected)?.area() + expected.difference(&actual)?.area();
@@ -3897,6 +3912,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn void_verification_inherits_accuracy_but_keeps_its_significance() {
+        let metadata = CopperBalanceVoidMetadata {
+            lattice_origin: Point::new(0.0, 0.0),
+            lattice_pitch_mm: 3.0,
+            radius_mm: 1.0,
+            corner_radius_mm: 0.0001,
+        };
+        let outline = shapes::rounded_hexagon(metadata.radius_mm, metadata.corner_radius_mm, 0.0)
+            .unwrap()
+            .with_uncertainty(0.02);
+        let mut doc = GeometryDocument::new();
+        let path = doc.push_path(
+            Paint::Fill {
+                rule: FillRule::NonZero,
+            },
+            [outline],
+        );
+        let mut feature = GeometryFeature::new(FeatureKind::Primitive, GeometryPolarity::Dark);
+        feature.paths = Span::single(path);
+
+        let coarse = Resolution::new(10.0, crate::geom::GeometryAccuracy::micrometres(30));
+        validate_copper_balance_void_shape(&doc, &feature, metadata, coarse).unwrap();
+        let fine = coarse.with_accuracy(crate::geom::GeometryAccuracy::micrometres(10));
+        let error = validate_copper_balance_void_shape(&doc, &feature, metadata, fine).unwrap_err();
+        assert!(error.downcast_ref::<crate::geom::AccuracyError>().is_some());
+    }
+
+    #[test]
     fn maps_all_ipc_line_properties_to_ir_patterns() {
         assert_eq!(map_line_pattern(None), LinePattern::Solid);
         assert_eq!(
@@ -3956,7 +3999,8 @@ mod tests {
         )
         .unwrap();
 
-        let layer = extract_layer_for_view(&ipc, "TOP", ArtworkScope::Board).unwrap();
+        let layer = extract_layer_for_view(&ipc, "TOP", ArtworkScope::Board, Resolution::default())
+            .unwrap();
         let path = &layer.arena.paths[layer.features[0].paths.start as usize];
 
         assert_eq!(path.stroke().unwrap().pattern, LinePattern::Phantom);
@@ -4016,7 +4060,13 @@ mod tests {
         )
         .unwrap();
 
-        let top = extract_layer_for_view(&ipc, "TOP", ArtworkScope::ArrayFlattened).unwrap();
+        let top = extract_layer_for_view(
+            &ipc,
+            "TOP",
+            ArtworkScope::ArrayFlattened,
+            Resolution::default(),
+        )
+        .unwrap();
         assert_eq!(top.specs.len(), 1);
         assert_eq!(top.layers[0].spec_refs.count, 1);
         assert_eq!(top.feature_sets.len(), 1);
@@ -4035,7 +4085,13 @@ mod tests {
         assert_eq!(top.features[0].pin_refs.count, 1);
         assert_eq!(ipc.resolve(top.pin_refs[0].pin), "1");
 
-        let vcut = extract_layer_for_view(&ipc, "VCUT", ArtworkScope::ArrayFlattened).unwrap();
+        let vcut = extract_layer_for_view(
+            &ipc,
+            "VCUT",
+            ArtworkScope::ArrayFlattened,
+            Resolution::default(),
+        )
+        .unwrap();
         assert_eq!(vcut.layers[0].spec_refs.count, 1);
         assert_eq!(vcut.feature_sets[0].spec_refs.count, 1);
         assert_eq!(vcut.features[0].intent.domain, FeatureDomain::VCut);
@@ -4602,7 +4658,8 @@ mod tests {
     fn extracts_panel_and_repeated_layer_instances() {
         let ipc = ipc2581::Ipc2581::parse(panel_layer_fixture())
             .expect("synthetic panel fixture should parse");
-        let doc = extract_layer(&ipc, "TOP").expect("panel layer should extract");
+        let doc =
+            extract_layer(&ipc, "TOP", Resolution::default()).expect("panel layer should extract");
         let layer = &doc.layers[0];
         let features = layer.features.slice(&doc.features);
 
@@ -4652,7 +4709,7 @@ mod tests {
         let imported = {
             let ipc = ipc2581::Ipc2581::parse(panel_layer_fixture())
                 .expect("synthetic panel fixture should parse");
-            import_design(&ipc).expect("complete design should import")
+            import_design(&ipc, Resolution::default()).expect("complete design should import")
         };
 
         let top = imported.layer_id("TOP").unwrap();
@@ -4771,7 +4828,7 @@ mod tests {
         ipc2581::validate(xml).expect("association fixture conforms to IPC-2581C");
         let ipc = Ipc2581::parse(xml).unwrap();
 
-        let imported = import_design(&ipc).unwrap();
+        let imported = import_design(&ipc, Resolution::default()).unwrap();
         assert_eq!(imported.boms.len(), 3);
         assert!(imported.logistic_header.is_some());
         assert!(imported.avl.is_some());
@@ -4903,7 +4960,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let imported = import_design(&ipc).unwrap();
+        let imported = import_design(&ipc, Resolution::default()).unwrap();
         let top = imported.layer_id("TOP").unwrap();
 
         let error = imported
@@ -4952,7 +5009,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let imported = import_design(&ipc).unwrap();
+        let imported = import_design(&ipc, Resolution::default()).unwrap();
         let top = imported.layer_id("TOP").unwrap();
         let document = imported
             .materialize_layer(top, ArtworkScope::ArrayFlattened)
@@ -5000,7 +5057,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let imported = import_design(&ipc).unwrap();
+        let imported = import_design(&ipc, Resolution::default()).unwrap();
 
         let occurrences = imported
             .component_occurrences(ArtworkScope::ArrayFlattened)
@@ -5022,7 +5079,7 @@ mod tests {
         let ipc = ipc2581::Ipc2581::parse(panel_layer_fixture())
             .expect("synthetic panel fixture should parse");
 
-        let board = extract_layer_for_view(&ipc, "TOP", ArtworkScope::Board)
+        let board = extract_layer_for_view(&ipc, "TOP", ArtworkScope::Board, Resolution::default())
             .expect("board layer should extract");
         let board_layer = &board.layers[0];
         let board_features = board_layer.features.slice(&board.features);
@@ -5038,8 +5095,13 @@ mod tests {
             1
         );
 
-        let panel = extract_layer_for_view(&ipc, "TOP", ArtworkScope::ArrayFlattened)
-            .expect("panel layer should extract");
+        let panel = extract_layer_for_view(
+            &ipc,
+            "TOP",
+            ArtworkScope::ArrayFlattened,
+            Resolution::default(),
+        )
+        .expect("panel layer should extract");
         let panel_layer = &panel.layers[0];
         let panel_features = panel_layer.features.slice(&panel.features);
 
@@ -5059,8 +5121,9 @@ mod tests {
     fn step_only_panel_extraction_omits_repeat_graph_expansion() {
         let ipc = ipc2581::Ipc2581::parse(panel_layer_fixture())
             .expect("synthetic panel fixture should parse");
-        let doc = extract_layer_for_view(&ipc, "TOP", ArtworkScope::ArrayLocal)
-            .expect("panel layer should extract");
+        let doc =
+            extract_layer_for_view(&ipc, "TOP", ArtworkScope::ArrayLocal, Resolution::default())
+                .expect("panel layer should extract");
         let layer = &doc.layers[0];
         let features = layer.features.slice(&doc.features);
 
@@ -5168,8 +5231,13 @@ mod tests {
     fn nested_panel_layer_extraction_materializes_descendant_board_features() {
         let ipc = ipc2581::Ipc2581::parse(nested_panel_fixture())
             .expect("synthetic nested panel fixture should parse");
-        let doc = extract_layer_for_view(&ipc, "TOP", ArtworkScope::ArrayFlattened)
-            .expect("nested panel layer should extract");
+        let doc = extract_layer_for_view(
+            &ipc,
+            "TOP",
+            ArtworkScope::ArrayFlattened,
+            Resolution::default(),
+        )
+        .expect("nested panel layer should extract");
         let layer = &doc.layers[0];
         let features = layer.features.slice(&doc.features);
         let centers = features
@@ -5196,8 +5264,13 @@ mod tests {
     fn nested_panel_render_draws_every_descendant_board_instance() {
         let ipc = ipc2581::Ipc2581::parse(nested_panel_fixture())
             .expect("synthetic nested panel fixture should parse");
-        let mut doc = extract_layer_for_view(&ipc, "TOP", ArtworkScope::ArrayFlattened)
-            .expect("nested panel layer should extract");
+        let mut doc = extract_layer_for_view(
+            &ipc,
+            "TOP",
+            ArtworkScope::ArrayFlattened,
+            Resolution::default(),
+        )
+        .expect("nested panel layer should extract");
         crate::dialects::ipc::process::normalize_for_artwork(&mut doc, Resolution::default())
             .unwrap();
 
@@ -5232,7 +5305,7 @@ mod tests {
     fn repeated_panel_traces_keep_distinct_source_sets_after_processing() {
         let ipc = ipc2581::Ipc2581::parse(panel_trace_fixture())
             .expect("synthetic panel fixture should parse");
-        let imported = import_design(&ipc).expect("panel should import");
+        let imported = import_design(&ipc, Resolution::default()).expect("panel should import");
         let mut doc = imported
             .materialize_layer(
                 imported.layer_id("TOP").unwrap(),
@@ -5271,7 +5344,8 @@ mod tests {
     fn extracts_step_profile_and_cutouts_as_physical_board_profiles() {
         let ipc = ipc2581::Ipc2581::parse(profile_fixture())
             .expect("synthetic profile fixture should parse");
-        let doc = extract_layer(&ipc, "TOP").expect("profile outline should extract");
+        let doc = extract_layer(&ipc, "TOP", Resolution::default())
+            .expect("profile outline should extract");
 
         assert_eq!(doc.profiles.len(), 1);
         assert_eq!(doc.profile_cutouts.len(), 1);
@@ -5447,7 +5521,7 @@ mod tests {
         )
         .unwrap();
 
-        let doc = extract_layer(&ipc, "F.Cu_B.Cu_1").unwrap();
+        let doc = extract_layer(&ipc, "F.Cu_B.Cu_1", Resolution::default()).unwrap();
         assert_eq!(doc.features.len(), 1);
 
         let slot = &doc.features[0];
@@ -5511,7 +5585,7 @@ mod tests {
         )
         .unwrap();
 
-        let doc = extract_layer(&ipc, "TOP").unwrap();
+        let doc = extract_layer(&ipc, "TOP", Resolution::default()).unwrap();
         assert_eq!(doc.features.len(), 2);
 
         let unrotated = doc.features[0].bbox;
@@ -5564,7 +5638,7 @@ mod tests {
         )
         .unwrap();
 
-        let doc = extract_layer(&ipc, "F.Mask").unwrap();
+        let doc = extract_layer(&ipc, "F.Mask", Resolution::default()).unwrap();
 
         assert_eq!(doc.features.len(), 1);
         let feature = &doc.features[0];

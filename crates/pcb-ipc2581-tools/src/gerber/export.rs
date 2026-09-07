@@ -1583,7 +1583,7 @@ mod tests {
 
     fn gerber_files(ipc: &Ipc2581, view: ArtworkScope) -> Result<Vec<GerberX2File>> {
         build_gerber_x2_files(
-            &import_design(ipc)?,
+            &import_design(ipc, Resolution::default())?,
             view,
             &GerberExportOptions::default(),
             Resolution::default(),
@@ -1592,7 +1592,7 @@ mod tests {
 
     fn manufacturing_package(ipc: &Ipc2581, view: ArtworkScope) -> Result<ManufacturingPackage> {
         build_manufacturing_package(
-            &import_design(ipc)?,
+            &import_design(ipc, Resolution::default())?,
             &ManufacturingExportOptions {
                 view,
                 relief_debug_dir: None,
@@ -2106,7 +2106,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let imported = import_design(&ipc).unwrap();
+        let imported = import_design(&ipc, Resolution::default()).unwrap();
 
         let filenames = export_layer_plans(&imported, &imported.layer_definitions)
             .into_iter()
@@ -2136,7 +2136,7 @@ mod tests {
         )
         .unwrap();
 
-        let imported = import_design(&ipc).unwrap();
+        let imported = import_design(&ipc, Resolution::default()).unwrap();
         let plans = export_layer_plans(&imported, &imported.layer_definitions);
         let outputs = plans
             .iter()
@@ -2267,7 +2267,7 @@ mod tests {
 </IPC-2581>"#,
         )
         .unwrap();
-        let imported = import_design(&ipc).unwrap();
+        let imported = import_design(&ipc, Resolution::default()).unwrap();
 
         let filenames = export_layer_plans(&imported, &imported.layer_definitions)
             .into_iter()
@@ -3246,7 +3246,7 @@ mod tests {
             assert!(svg.contains("<svg"), "{} did not render SVG", file.filename);
         }
 
-        let mut layer = geometry::extract_layer(&ipc, "F.Cu").unwrap();
+        let mut layer = geometry::extract_layer(&ipc, "F.Cu", resolution).unwrap();
         pcb_ir::dialects::ipc::process::compose_for_rendering(&mut layer, resolution).unwrap();
         let artwork = pcb_ir::dialects::ipc::lower_layer_to_artwork(
             &layer,

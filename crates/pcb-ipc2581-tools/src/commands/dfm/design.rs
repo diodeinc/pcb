@@ -1691,7 +1691,7 @@ mod tests {
             rectangle("POSITIVE", 1.8, 2.2),
         );
         let ipc = Ipc2581::parse(&source).unwrap();
-        let imported = import_design(&ipc).unwrap();
+        let imported = import_design(&ipc, resolution).unwrap();
         let document = imported
             .materialize_layer(
                 imported.layer_id("F.Mask").unwrap(),
@@ -1771,7 +1771,7 @@ mod tests {
             r#"<Location x="10" y="20"/>
               <Oval width="1.8" height="0.6"/>"#,
         );
-        let oval = import_design(&oval).unwrap();
+        let oval = import_design(&oval, resolution).unwrap();
         let (_, slots) = collect_drilled(&oval, ArtworkScope::Board, None, resolution).unwrap();
         assert_eq!(slots.len(), 1);
         assert!((slots[0].width.mm - 0.6).abs() < 1e-9);
@@ -1826,7 +1826,7 @@ mod tests {
                 <LineDesc lineWidth="0" lineEnd="ROUND"/>
               </Outline>"#,
         );
-        let outline = import_design(&outline).unwrap();
+        let outline = import_design(&outline, resolution).unwrap();
         let (_, slots) = collect_drilled(&outline, ArtworkScope::Board, None, resolution).unwrap();
         assert_eq!(slots.len(), 1);
         let width = slots[0].width;
@@ -1862,7 +1862,7 @@ mod tests {
             r#"<Location x="10" y="20"/>
               <Oval width="1.8" height="0.6"/>"#,
         );
-        let imported = import_design(&ipc).unwrap();
+        let imported = import_design(&ipc, resolution).unwrap();
         let oval = collect_drilled(&imported, ArtworkScope::Board, None, resolution)
             .unwrap()
             .1

@@ -357,7 +357,7 @@ limit = { minimum = "0.2 mm" }
 
     fn evaluate_pth(ipc: &Ipc2581) -> Evaluation {
         let rule = rule();
-        let imported = pcb_ir::import::ipc2581::import_design(ipc).unwrap();
+        let imported = pcb_ir::import::ipc2581::import_design(ipc, Resolution::default()).unwrap();
         let design = Design::extract(
             &imported,
             ArtworkScope::Board,
@@ -424,7 +424,7 @@ limit = { minimum = "0.2 mm" }
 </IPC-2581>"#,
         )
         .unwrap();
-        let imported = pcb_ir::import::ipc2581::import_design(&ipc).unwrap();
+        let imported = pcb_ir::import::ipc2581::import_design(&ipc, Resolution::default()).unwrap();
         let middle = imported.layer_id("L1").unwrap();
         assert!(
             imported

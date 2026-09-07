@@ -326,7 +326,8 @@ fn build_report(file: &Path, options: &CheckOptions, resolution: Resolution) -> 
     let ipc = Ipc2581::parse(&content).context("failed to parse IPC-2581 file")?;
     drop(content);
     drop(input_bytes);
-    let imported = import_design(&ipc).context("failed to import IPC-2581 physical design")?;
+    let imported =
+        import_design(&ipc, resolution).context("failed to import IPC-2581 physical design")?;
     check(
         &imported,
         CheckRequest {
@@ -540,7 +541,7 @@ limit = { minimum = "300 mil" }
         let resolution = Resolution::default();
 
         let ipc = Ipc2581::parse(xml).unwrap();
-        let imported = import_design(&ipc).unwrap();
+        let imported = import_design(&ipc, resolution).unwrap();
         super::check(
             &imported,
             CheckRequest {
@@ -816,7 +817,7 @@ limit = { minimum = "300 mil" }
     fn in_memory_report_keeps_source_identity_and_waiver_dates() {
         let resolution = Resolution::default();
 
-        let imported = import_design(&Ipc2581::parse(BOARD).unwrap()).unwrap();
+        let imported = import_design(&Ipc2581::parse(BOARD).unwrap(), resolution).unwrap();
         let pdk_source = PDK.replace("minimum = 2", "minimum = 3");
         let run = |waivers, day| {
             super::check(
@@ -932,7 +933,7 @@ reason = "old finding"
     fn rejects_oversize_pdk_source() {
         let resolution = Resolution::default();
 
-        let imported = import_design(&Ipc2581::parse(BOARD).unwrap()).unwrap();
+        let imported = import_design(&Ipc2581::parse(BOARD).unwrap(), resolution).unwrap();
         let source = " ".repeat(MAX_PDK_BYTES + 1);
         let error = super::check(
             &imported,
@@ -1076,7 +1077,7 @@ reason = "old finding"
         .unwrap();
         let pdk = pdk::Pdk::parse(PDK).unwrap();
         let rules = rules::lower(&pdk, None).unwrap();
-        let imported = import_design(&ipc).unwrap();
+        let imported = import_design(&ipc, resolution).unwrap();
 
         let error = design::Design::extract(&imported, ArtworkScope::Board, &rules, resolution)
             .err()

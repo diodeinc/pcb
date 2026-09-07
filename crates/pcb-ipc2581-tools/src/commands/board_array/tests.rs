@@ -21,7 +21,7 @@ use pcb_ir::geom::{BBox, ContourSet, Point};
 use pcb_ir::import::ipc2581::ImportedDesign;
 
 fn design(ipc: &Ipc2581) -> ImportedDesign {
-    pcb_ir::import::ipc2581::import_design(ipc).unwrap()
+    pcb_ir::import::ipc2581::import_design(ipc, Resolution::default()).unwrap()
 }
 
 fn manufacturing_package(
@@ -152,8 +152,13 @@ fn creates_rounded_panel_step_from_board_bbox() {
     assert_point_close(first_instance.bbox.min, Point::new(7.5, 7.5));
     assert_point_close(first_instance.bbox.max, Point::new(17.5, 17.5));
 
-    let vcut =
-        geometry::extract_layer_for_view(&ipc, "V-Score", ArtworkScope::ArrayFlattened).unwrap();
+    let vcut = geometry::extract_layer_for_view(
+        &ipc,
+        "V-Score",
+        ArtworkScope::ArrayFlattened,
+        Resolution::default(),
+    )
+    .unwrap();
     assert!(vcut.features.len() > 24);
     assert!(
         vcut.features
@@ -174,7 +179,8 @@ fn generated_board_array_has_a_certified_safe_balancing_region() {
 
     let input = board_fixture_with_mask_bbox_mm(12.0, 10.0);
     let source = Ipc2581::parse(&input).unwrap();
-    let (options, validation_mode, panelization) = auto_board_array_options(&source, None).unwrap();
+    let (options, validation_mode, panelization) =
+        auto_board_array_options(&source, None, resolution).unwrap();
     let spec = build_board_array_spec(&source, &options, validation_mode, panelization).unwrap();
     // Safe-region discovery runs on the completed but not-yet-balanced array;
     // otherwise the generated balance copper becomes its own obstacle.
@@ -186,9 +192,10 @@ fn generated_board_array_has_a_certified_safe_balancing_region() {
         geometry::board_array_fabrication_profile(&design(&ipc), &layout, &score_lines, resolution)
             .unwrap();
     let ecad = ipc.ecad().unwrap();
-    let support_layers =
-        extract_array_support_layers(&pcb_ir::import::ipc2581::import_design(&ipc).unwrap())
-            .unwrap();
+    let support_layers = extract_array_support_layers(
+        &pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap(),
+    )
+    .unwrap();
     let copper_layers = crate::layers::copper_layers(ecad);
 
     let collection = collect_board_array_balancing_input(
@@ -235,7 +242,8 @@ fn board_array_balancing_solves_every_copper_layer() {
     let input = two_layer_board_xml();
     let ipc = Ipc2581::parse(&input).unwrap();
     let sheet = Some(AutoSheetSize::A7);
-    let (options, validation_mode, panelization) = auto_board_array_options(&ipc, sheet).unwrap();
+    let (options, validation_mode, panelization) =
+        auto_board_array_options(&ipc, sheet, resolution).unwrap();
     let spec = build_board_array_spec(&ipc, &options, validation_mode, panelization).unwrap();
     let provisional_xml = write_board_array_xml(&input, &spec).unwrap();
     let provisional = Ipc2581::parse(&provisional_xml).unwrap();
@@ -267,6 +275,10 @@ fn board_array_balancing_solves_every_copper_layer() {
     assert!(bottom.features.is_empty());
 
     for layer in &balance.layers {
+        assert_eq!(
+            layer.result.usable.resolution.accuracy,
+            pcb_ir::geom::GeometryAccuracy::micrometres(50)
+        );
         assert!(
             layer
                 .result
@@ -293,6 +305,17 @@ fn board_array_creation_reports_and_emits_the_balance() {
     let creation =
         create_auto_board_array(&input, Some(AutoSheetSize::A7), true, resolution).unwrap();
     let copper_balance = creation.copper_balance.as_ref().unwrap();
+    let coarser = create_auto_board_array(
+        &input,
+        Some(AutoSheetSize::A7),
+        true,
+        resolution.with_accuracy(pcb_ir::geom::GeometryAccuracy::micrometres(30)),
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(&coarser.copper_balance).unwrap(),
+        serde_json::to_value(&creation.copper_balance).unwrap()
+    );
     assert_eq!(copper_balance.layers.len(), 2);
     for report in &copper_balance.layers {
         // Fixed copper, fillable region, and permanently bare area partition
@@ -361,7 +384,8 @@ fn automatic_balancing_regions_scope_panel_fiducials_to_both_surface_copper_laye
     // The smallest sheet the board fits: fiducial scoping does not depend on
     // how much panel surrounds it.
     let sheet = Some(AutoSheetSize::A6);
-    let (options, validation_mode, panelization) = auto_board_array_options(&ipc, sheet).unwrap();
+    let (options, validation_mode, panelization) =
+        auto_board_array_options(&ipc, sheet, resolution).unwrap();
     let spec = build_board_array_spec(&ipc, &options, validation_mode, panelization).unwrap();
     let provisional_xml = write_board_array_xml(input, &spec).unwrap();
     let provisional = Ipc2581::parse(&provisional_xml).unwrap();
@@ -375,7 +399,7 @@ fn automatic_balancing_regions_scope_panel_fiducials_to_both_surface_copper_laye
     )
     .unwrap();
     let support_layers = extract_array_support_layers(
-        &pcb_ir::import::ipc2581::import_design(&provisional).unwrap(),
+        &pcb_ir::import::ipc2581::import_design(&provisional, resolution).unwrap(),
     )
     .unwrap();
     let copper_layers = crate::layers::copper_layers(provisional.ecad().unwrap());
@@ -523,7 +547,7 @@ fn auto_create_derives_board_margin_from_courtyard_overhang() {
     let input = board_fixture_with_courtyard_overhang_mm();
     let ipc = Ipc2581::parse(input).unwrap();
     let board = primary_board_layout(&ipc).unwrap();
-    let margin = auto_board_margin(&ipc, board.bbox).unwrap();
+    let margin = auto_board_margin(&ipc, board.bbox, Resolution::default()).unwrap();
 
     assert_eq!(
         margin,
@@ -549,7 +573,7 @@ fn auto_create_allows_large_computed_board_margins() {
     let input = board_fixture_with_large_courtyard_overhang_mm();
     let ipc = Ipc2581::parse(input).unwrap();
     let board = primary_board_layout(&ipc).unwrap();
-    let margin = auto_board_margin(&ipc, board.bbox).unwrap();
+    let margin = auto_board_margin(&ipc, board.bbox, Resolution::default()).unwrap();
 
     assert_eq!(
         margin,
@@ -806,7 +830,13 @@ fn board_array_creation_drops_source_board_outline_layer_features() {
 fn board_array_creation_preserves_board_target_geometry() {
     let input = board_fixture_with_top_line_mm();
     let before_ipc = Ipc2581::parse(input).unwrap();
-    let before = geometry::extract_layer_for_view(&before_ipc, "TOP", ArtworkScope::Board).unwrap();
+    let before = geometry::extract_layer_for_view(
+        &before_ipc,
+        "TOP",
+        ArtworkScope::Board,
+        Resolution::default(),
+    )
+    .unwrap();
 
     let xml = create_board_array_xml(
         input,
@@ -819,7 +849,13 @@ fn board_array_creation_preserves_board_target_geometry() {
     )
     .unwrap();
     let after_ipc = Ipc2581::parse(&xml).unwrap();
-    let after = geometry::extract_layer_for_view(&after_ipc, "TOP", ArtworkScope::Board).unwrap();
+    let after = geometry::extract_layer_for_view(
+        &after_ipc,
+        "TOP",
+        ArtworkScope::Board,
+        Resolution::default(),
+    )
+    .unwrap();
 
     assert_eq!(before.features.len(), after.features.len());
     assert_eq!(before.arena.paths.len(), after.arena.paths.len());
@@ -908,16 +944,25 @@ fn generated_array_geometry_writes_fiducials_and_nonplated_holes() {
     assert!(xml.contains(r#"x="20" y="20""#));
 
     let parsed = Ipc2581::parse(&xml).unwrap();
-    let top =
-        geometry::extract_layer_for_view(&parsed, "TOP", ArtworkScope::ArrayFlattened).unwrap();
+    let top = geometry::extract_layer_for_view(
+        &parsed,
+        "TOP",
+        ArtworkScope::ArrayFlattened,
+        Resolution::default(),
+    )
+    .unwrap();
     assert!(top.features.iter().any(|feature| {
         feature.intent.role == FeatureRole::Fiducial
             && feature.fiducial_kind == FiducialKind::Global
     }));
 
-    let drill =
-        geometry::extract_layer_for_view(&parsed, "Array_Drill", ArtworkScope::ArrayFlattened)
-            .unwrap();
+    let drill = geometry::extract_layer_for_view(
+        &parsed,
+        "Array_Drill",
+        ArtworkScope::ArrayFlattened,
+        Resolution::default(),
+    )
+    .unwrap();
     assert_eq!(drill.features.len(), 1);
     assert_eq!(drill.features[0].kind, FeatureKind::Hole);
     assert_eq!(drill.features[0].bucket, FeatureBucket::Cutout);
@@ -1036,8 +1081,13 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
     assert!(xml.matches("<Location ").count() >= void_count);
     assert!(xml.matches("<UserPrimitiveRef").count() < void_count);
 
-    let mut top =
-        geometry::extract_layer_for_view(&parsed, "TOP", ArtworkScope::ArrayFlattened).unwrap();
+    let mut top = geometry::extract_layer_for_view(
+        &parsed,
+        "TOP",
+        ArtworkScope::ArrayFlattened,
+        Resolution::default(),
+    )
+    .unwrap();
     assert!(
         !top.feature_placement_groups.is_empty(),
         "shared IPC Locations should remain a placement group"
@@ -1107,7 +1157,8 @@ fn explicit_copper_balance_region_round_trips_as_panel_geometry() {
 
     // The composed Gerber image must match the composed IPC image.
     let ipc_copper = {
-        let imported = pcb_ir::import::ipc2581::import_design(&parsed).unwrap();
+        let imported =
+            pcb_ir::import::ipc2581::import_design(&parsed, Resolution::default()).unwrap();
         imported.composed_layer_image(
             imported.layer_id("TOP").unwrap(),
             pcb_ir::dialects::ipc::ArtworkScope::ArrayFlattened,
@@ -1418,7 +1469,13 @@ fn board_array_creation_adds_board_cell_fiducials_on_top_bottom_margins() {
         &[(3.0, 38.0), (37.0, 38.0), (7.0, 2.0), (33.0, 2.0)],
     );
 
-    let top = geometry::extract_layer_for_view(&ipc, "TOP", ArtworkScope::ArrayFlattened).unwrap();
+    let top = geometry::extract_layer_for_view(
+        &ipc,
+        "TOP",
+        ArtworkScope::ArrayFlattened,
+        Resolution::default(),
+    )
+    .unwrap();
     assert_eq!(
         top.features
             .iter()

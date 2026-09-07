@@ -330,7 +330,7 @@ fn main() -> Result<()> {
         bail!("input is not a board array: the IPC root step is not a panel");
     }
 
-    let imported = pcb_ir::import::ipc2581::import_design(&ipc)?;
+    let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution)?;
     let score_lines = board_array_vscore_lines(&imported)
         .context("failed to extract board-array V-score lines")?;
     let (fabrication_profile, relief_debug) =

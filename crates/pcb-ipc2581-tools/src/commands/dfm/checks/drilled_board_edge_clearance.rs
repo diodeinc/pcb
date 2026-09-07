@@ -414,7 +414,7 @@ name = "Test"
     fn check(xml: &str, pdk_source: &str, target: LayoutTarget) -> super::super::super::DfmReport {
         let resolution = Resolution::default();
 
-        let imported = import_design(&Ipc2581::parse(xml).unwrap()).unwrap();
+        let imported = import_design(&Ipc2581::parse(xml).unwrap(), resolution).unwrap();
         super::super::super::check(
             &imported,
             CheckRequest {

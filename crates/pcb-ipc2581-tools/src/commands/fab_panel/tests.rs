@@ -12,7 +12,7 @@ use pcb_ir::import::ipc2581::ImportedDesign;
 use super::*;
 
 fn design(ipc: &Ipc2581) -> ImportedDesign {
-    pcb_ir::import::ipc2581::import_design(ipc).unwrap()
+    pcb_ir::import::ipc2581::import_design(ipc, Resolution::default()).unwrap()
 }
 
 fn manufacturing_package(
@@ -900,7 +900,7 @@ fn balances_gutters_at_the_assembly_panel_density_and_leaves_margins_bare() {
     let footprints = ContourSet::from_filled_contours(&panel_contours, resolution).unwrap();
     let usable = ContourSet::rectangle(BALANCE_SPEC.usable_bbox().unwrap(), resolution);
     let copper = {
-        let imported = pcb_ir::import::ipc2581::import_design(&parsed).unwrap();
+        let imported = pcb_ir::import::ipc2581::import_design(&parsed, resolution).unwrap();
         imported.composed_layer_image(
             imported.layer_id("TOP").unwrap(),
             pcb_ir::dialects::ipc::ArtworkScope::ArrayFlattened,

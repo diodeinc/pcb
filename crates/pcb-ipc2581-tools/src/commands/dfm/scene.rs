@@ -402,7 +402,7 @@ mod tests {
 
         let ipc = Ipc2581::parse(MASK_BOARD).unwrap();
         let rules = rules::lower(&pdk::Pdk::parse(MASK_PDK).unwrap(), None).unwrap();
-        let imported = pcb_ir::import::ipc2581::import_design(&ipc).unwrap();
+        let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap();
         let design = Design::extract(&imported, ArtworkScope::Board, &rules, resolution).unwrap();
         let artwork = native_artwork(&design, "F.Mask").unwrap();
         let rendered = pcb_ir::dialects::artwork::compose_to_mask(&artwork, resolution).unwrap();
@@ -443,7 +443,7 @@ mod tests {
 
         let ipc = Ipc2581::parse(MASK_BOARD).unwrap();
         let rules = rules::lower(&pdk::Pdk::parse(MASK_PDK).unwrap(), None).unwrap();
-        let imported = pcb_ir::import::ipc2581::import_design(&ipc).unwrap();
+        let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap();
         let design = Design::extract(&imported, ArtworkScope::Board, &rules, resolution).unwrap();
         let outline = ContourSet::rectangle(
             BBox::new(Point::new(-50.0, -50.0), Point::new(50.0, 50.0)),

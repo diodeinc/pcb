@@ -49,11 +49,15 @@ pub struct VScoreReliefInput {
 }
 
 impl VScoreReliefInput {
-    pub fn new(board_boundaries: Vec<ContourBuf>, score_lines: Vec<VScoreLine>) -> Self {
+    pub fn new(
+        board_boundaries: Vec<ContourBuf>,
+        score_lines: Vec<VScoreLine>,
+        resolution: Resolution,
+    ) -> Self {
         Self::with_resolution(
             board_boundaries,
             score_lines,
-            Resolution::default().with_tolerance(DEFAULT_RELIEF_TOLERANCE_MM),
+            resolution.with_tolerance(DEFAULT_RELIEF_TOLERANCE_MM),
         )
     }
 
@@ -730,6 +734,7 @@ mod tests {
                 PathCmd::close(),
             ]),
             rectangle_score_lines(10.0, 5.0),
+            Resolution::default(),
         );
 
         let output = vscore_route_reliefs_with_debug(&input).unwrap();
@@ -812,6 +817,7 @@ mod tests {
                 PathCmd::close(),
             ]),
             rectangle_score_lines(10.0, 5.0),
+            Resolution::default(),
         );
         input.score_blockers = vec![rectangle_payload(BBox {
             min: Point::new(0.0, 2.0),
@@ -835,6 +841,7 @@ mod tests {
                 PathCmd::close(),
             ]),
             rectangle_score_lines(10.0, 5.0),
+            Resolution::default(),
         );
         input.score_blockers = vec![rectangle_payload(BBox {
             min: Point::new(4.0, 2.0),
@@ -861,6 +868,7 @@ mod tests {
                 PathCmd::close(),
             ]),
             rectangle_score_lines(10.0, 5.0),
+            Resolution::default(),
         );
 
         let output = vscore_route_reliefs_with_debug(&input).unwrap();
@@ -899,7 +907,11 @@ mod tests {
         ]);
         let mut board_boundary = boundary.clone();
         board_boundary.extend(boundary);
-        let input = VScoreReliefInput::new(board_boundary, rectangle_score_lines(10.0, 5.0));
+        let input = VScoreReliefInput::new(
+            board_boundary,
+            rectangle_score_lines(10.0, 5.0),
+            Resolution::default(),
+        );
 
         let output = vscore_route_reliefs_with_debug(&input).unwrap();
 
@@ -925,6 +937,7 @@ mod tests {
                 PathCmd::close(),
             ]),
             score_lines,
+            Resolution::default(),
         );
 
         assert!(vscore_route_reliefs(&input).unwrap().is_empty());
@@ -932,6 +945,7 @@ mod tests {
 
     #[test]
     fn curved_boundary_creates_closed_dead_space_pocket() {
+        let resolution = Resolution::new(1.0, crate::geom::GeometryAccuracy::micrometres(1));
         let input = VScoreReliefInput::new(
             path(vec![
                 PathCmd::move_to(Point::new(0.0, 0.0)),
@@ -943,12 +957,19 @@ mod tests {
                 PathCmd::close(),
             ]),
             rectangle_score_lines(10.0, 10.0),
+            resolution,
         );
 
+        assert_eq!(input.resolution.tolerance_mm, DEFAULT_RELIEF_TOLERANCE_MM);
         let output = vscore_route_reliefs_with_debug(&input).unwrap();
         let relief_contours = &output.relief_contours;
 
         assert!(!relief_contours.is_empty());
+        assert!(
+            relief_contours
+                .iter()
+                .all(|contour| contour.uncertainty_mm <= resolution.accuracy.max_error_mm())
+        );
         assert!(
             relief_contours
                 .iter()
@@ -976,6 +997,7 @@ mod tests {
                 PathCmd::close(),
             ]),
             rectangle_score_lines(10.0, 10.0),
+            Resolution::default(),
         );
 
         let output = vscore_route_reliefs_with_debug(&input).unwrap();
@@ -1015,6 +1037,7 @@ mod tests {
                 PathCmd::close(),
             ]),
             rectangle_score_lines(10.0, 5.0),
+            Resolution::default(),
         );
 
         let output = vscore_route_reliefs_with_debug(&input).unwrap();
@@ -1036,6 +1059,7 @@ mod tests {
                 PathCmd::close(),
             ]),
             rectangle_score_lines(10.0, 10.0),
+            Resolution::default(),
         );
 
         let output = vscore_route_reliefs_with_debug(&input).unwrap();
@@ -1057,6 +1081,7 @@ mod tests {
                 PathCmd::close(),
             ]),
             rectangle_score_lines(10.0, 10.0),
+            Resolution::default(),
         );
 
         let output = vscore_route_reliefs_with_debug(&input).unwrap();
@@ -1084,6 +1109,7 @@ mod tests {
                 PathCmd::close(),
             ]),
             rectangle_score_lines(10.0, 10.0),
+            Resolution::default(),
         );
 
         let output = vscore_route_reliefs_with_debug(&input).unwrap();
@@ -1108,6 +1134,7 @@ mod tests {
                 PathCmd::line_to(Point::new(10.0, 5.0)),
             ]),
             Vec::new(),
+            Resolution::default(),
         );
 
         assert_eq!(

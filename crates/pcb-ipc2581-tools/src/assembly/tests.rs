@@ -19,7 +19,7 @@ fn report_xml(xml: &str, target: LayoutTarget) -> report::AssemblyReport {
 
     ipc2581::validate(xml).expect("assembly report fixture conforms to IPC-2581C");
     let ipc = Ipc2581::parse(xml).unwrap();
-    let imported = import_design(&ipc).unwrap();
+    let imported = import_design(&ipc, resolution).unwrap();
     build_report(&imported, target, resolution).unwrap()
 }
 
@@ -781,7 +781,7 @@ fn reports_missing_style_references_without_guessing() {
     let resolution = Resolution::default();
 
     let ipc = Ipc2581::parse(FIXTURE).unwrap();
-    let mut imported = import_design(&ipc).unwrap();
+    let mut imported = import_design(&ipc, resolution).unwrap();
     let void = imported
         .content
         .dictionary_fill_desc
@@ -826,7 +826,7 @@ fn panel_without_root_profile_does_not_invent_an_envelope() {
     xml.replace_range(profile_start..profile_end, "");
     ipc2581::validate(&xml).expect("panel without a Profile conforms to IPC-2581C");
     let ipc = Ipc2581::parse(&xml).unwrap();
-    let imported = import_design(&ipc).unwrap();
+    let imported = import_design(&ipc, resolution).unwrap();
 
     let report = build_report(&imported, LayoutTarget::BoardArray, resolution).unwrap();
 
@@ -895,7 +895,7 @@ fn rejects_non_finite_report_numbers() {
     let resolution = Resolution::default();
 
     let ipc = Ipc2581::parse(FIXTURE).unwrap();
-    let mut imported = import_design(&ipc).unwrap();
+    let mut imported = import_design(&ipc, resolution).unwrap();
     imported.packages[0].source.height = Some(f64::NAN);
 
     let error = build_report(&imported, LayoutTarget::BoardArray, resolution).unwrap_err();
@@ -913,7 +913,7 @@ fn dm0002_excludes_document_objects_from_assembly_work() {
     let compressed = include_bytes!("../../../ipc2581/tests/data/DM0002-IPC-2518.xml.zst");
     let xml = zstd::decode_all(Cursor::new(compressed)).unwrap();
     let ipc = Ipc2581::parse(std::str::from_utf8(&xml).unwrap()).unwrap();
-    let imported = import_design(&ipc).unwrap();
+    let imported = import_design(&ipc, resolution).unwrap();
 
     let report = build_report(&imported, LayoutTarget::BoardArray, resolution).unwrap();
 

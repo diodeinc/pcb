@@ -93,7 +93,8 @@ pub fn export_manufacturing_package(
 ) -> Result<ManufacturingPackage> {
     let content = crate::utils::file::load_ipc_file(input_file)?;
     let ipc = ipc::Ipc2581::parse(&content)?;
-    let package = build_manufacturing_package(&import_design(&ipc)?, options, resolution)?;
+    let package =
+        build_manufacturing_package(&import_design(&ipc, resolution)?, options, resolution)?;
     write_manufacturing_package(&package, output)?;
     Ok(package)
 }

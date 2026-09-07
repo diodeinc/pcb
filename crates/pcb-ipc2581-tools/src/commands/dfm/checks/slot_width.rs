@@ -122,7 +122,7 @@ mod tests {
         )
         .unwrap();
         let rules = rules::lower(&pdk, None).unwrap();
-        let imported = pcb_ir::import::ipc2581::import_design(&ipc).unwrap();
+        let imported = pcb_ir::import::ipc2581::import_design(&ipc, resolution).unwrap();
         let design = Design::extract(&imported, ArtworkScope::Board, &rules, resolution).unwrap();
         let evaluation = evaluate(0.8, SlotPlating::Plated, &design).unwrap();
         assert_eq!(evaluation.measured.len(), 1);
