@@ -100,6 +100,73 @@ fn multiple_stackup_specs_reach_fab_comparison_and_property_accessors() {
     );
 }
 
+#[test]
+fn external_specs_remain_comparable_and_keep_their_output_identity() {
+    let xml = assembly_panel_xml(20.0, 20.0)
+        .replace(
+            "sequence=\"0\"/>",
+            "sequence=\"0\"><SpecRef id=\"external-stack\"/></StackupLayer>",
+        )
+        .replace(
+            "</StackupGroup>",
+            "<SpecRef id=\"external-group\"/></StackupGroup>",
+        )
+        .replace(
+            "side=\"TOP\" polarity=\"POSITIVE\"/>",
+            "side=\"TOP\" polarity=\"POSITIVE\"><SpecRef id=\"external-layer\"/></Layer>",
+        );
+    let generated = create_fab_panel_xml(&[xml.clone(), xml.clone()], &[0, 1]).unwrap();
+    for reference in ["external-layer", "external-stack", "external-group"] {
+        assert!(generated.contains(&format!(r#"<SpecRef id="{reference}""#)));
+        assert!(!generated.contains(&format!("fab_0_{reference}")));
+        let changed = xml.replace(reference, &format!("different-{reference}"));
+        assert!(create_fab_panel_xml(&[xml.clone(), changed], &[0, 1]).is_err());
+    }
+}
+
+#[test]
+fn group_spec_payloads_participate_in_panel_compatibility() {
+    let xml = assembly_panel_xml(20.0, 20.0)
+        .replace("<CadHeader units=\"MILLIMETER\"/>", r#"<CadHeader units="MILLIMETER"><Spec name="group-spec"><General type="MATERIAL"><Property text="FR4"/></General></Spec></CadHeader>"#)
+        .replace("</StackupGroup>", "<SpecRef id=\"group-spec\"/></StackupGroup>");
+    let generated = create_fab_panel_xml(&[xml.clone(), xml.clone()], &[0, 1]).unwrap();
+    assert!(generated.contains(r#"<SpecRef id="fab_0_group-spec""#));
+    let changed = xml.replace("FR4", "PTFE");
+    assert!(create_fab_panel_xml(&[xml, changed], &[0, 1]).is_err());
+}
+
+#[test]
+fn conflicting_color_and_finish_evidence_is_order_independent() {
+    for (first, second) in [
+        (r#"<ColorTerm name="RED"/>"#, r#"<ColorTerm name="GREEN"/>"#),
+        (
+            r#"<Color r="1" g="2" b="3"/>"#,
+            r#"<Color r="4" g="5" b="6"/>"#,
+        ),
+    ] {
+        let xml = assembly_panel_xml(20.0, 20.0)
+            .replace("<CadHeader units=\"MILLIMETER\"/>", &format!(r#"<CadHeader units="MILLIMETER"><Spec name="a"><General type="MATERIAL">{first}</General><SurfaceFinish type="OSP"/></Spec><Spec name="b"><General type="MATERIAL">{second}</General><SurfaceFinish type="S"/></Spec></CadHeader>"#));
+        for refs in [
+            r#"<SpecRef id="a"/><SpecRef id="b"/>"#,
+            r#"<SpecRef id="b"/><SpecRef id="a"/>"#,
+        ] {
+            let xml = xml.replace(
+                "sequence=\"0\"/>",
+                &format!("sequence=\"0\">{refs}</StackupLayer>"),
+            );
+            for role in ["SOLDERMASK", "LEGEND", "COATINGNONCOND"] {
+                let ipc = Ipc2581::parse(&xml.replace("CONDUCTOR", role)).unwrap();
+                let details = crate::accessors::IpcAccessor::new(&ipc)
+                    .stackup_details()
+                    .unwrap();
+                assert!(details.soldermask_color.is_none());
+                assert!(details.silkscreen_color.is_none());
+                assert!(details.surface_finish.is_none());
+            }
+        }
+    }
+}
+
 fn assembly_panel_xml(width_mm: f64, height_mm: f64) -> String {
     assembly_panel_xml_at(0.0, 0.0, width_mm, height_mm)
 }

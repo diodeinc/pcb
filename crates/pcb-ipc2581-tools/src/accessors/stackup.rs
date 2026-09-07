@@ -280,8 +280,8 @@ impl<'a> IpcAccessor<'a> {
             .collect();
 
         // Extract soldermask and silkscreen colors
-        let mut soldermask_color = None;
-        let mut silkscreen_color = None;
+        let mut soldermask_colors = Vec::new();
+        let mut silkscreen_colors = Vec::new();
 
         for stackup_layer in &stackup.layers {
             let layer_name = self.ipc.resolve(stackup_layer.layer_ref).to_string();
@@ -315,13 +315,11 @@ impl<'a> IpcAccessor<'a> {
                     }
 
                     match layer_function {
-                        Some(LayerFunction::Soldermask) if soldermask_color.is_none() => {
-                            soldermask_color = Some(color_info);
+                        Some(LayerFunction::Soldermask) => {
+                            soldermask_colors.push(color_info);
                         }
-                        Some(LayerFunction::Silkscreen) | Some(LayerFunction::Legend)
-                            if silkscreen_color.is_none() =>
-                        {
-                            silkscreen_color = Some(color_info);
+                        Some(LayerFunction::Silkscreen) | Some(LayerFunction::Legend) => {
+                            silkscreen_colors.push(color_info);
                         }
                         _ => {}
                     }
@@ -399,8 +397,8 @@ impl<'a> IpcAccessor<'a> {
             overall_thickness_mm: stackup.overall_thickness,
             layer_count: layers.len(),
             layers,
-            soldermask_color,
-            silkscreen_color,
+            soldermask_color: agreed_color(&soldermask_colors),
+            silkscreen_color: agreed_color(&silkscreen_colors),
             surface_finish,
         })
     }
@@ -415,6 +413,7 @@ impl<'a> IpcAccessor<'a> {
         // Per IPC-2581C spec section 8.1.1.16: SurfaceFinish is referenced by
         // StackupLayer elements that reference a Layer with layerFunction
         // COATINGCOND or COATINGNONCOND
+        let mut finishes = Vec::new();
         for stackup_layer in stackup_layers {
             let layer_name = self.ipc.resolve(stackup_layer.layer_ref).to_string();
             let layer_function = layer_map.get(&layer_name).copied();
@@ -433,17 +432,16 @@ impl<'a> IpcAccessor<'a> {
                 if let Some(spec) = spec_map.get(&spec_name)
                     && let Some(surface_finish) = &spec.surface_finish
                 {
-                    let category = classify_finish_type(surface_finish.finish_type);
-                    return Some(SurfaceFinishInfo {
-                        name: format_finish_type(surface_finish.finish_type),
-                        category,
-                        is_standard: true,
-                    });
+                    finishes.push(surface_finish.finish_type);
                 }
             }
         }
 
-        None
+        unique_value(finishes.into_iter()).map(|finish| SurfaceFinishInfo {
+            name: format_finish_type(finish),
+            category: classify_finish_type(finish),
+            is_standard: true,
+        })
     }
 }
 
@@ -451,6 +449,17 @@ fn unique_value<T: PartialEq>(mut values: impl Iterator<Item = T>) -> Option<T> 
     values
         .next()
         .filter(|first| values.all(|value| value == *first))
+}
+
+fn agreed_color(colors: &[ColorInfo]) -> Option<ColorInfo> {
+    let name = unique_value(colors.iter().filter_map(|color| color.name.clone()));
+    let rgb = unique_value(colors.iter().filter_map(|color| color.rgb));
+    if (name.is_none() && colors.iter().any(|color| color.name.is_some()))
+        || (rgb.is_none() && colors.iter().any(|color| color.rgb.is_some()))
+    {
+        return None;
+    }
+    (name.is_some() || rgb.is_some()).then_some(ColorInfo { name, rgb })
 }
 
 fn classify_finish_type(finish_type: ipc2581::types::FinishType) -> SurfaceFinishCategory {
