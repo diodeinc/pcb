@@ -17,6 +17,35 @@
 //! trips cannot recover lost precision, so a coarse preparation is rejected
 //! by a finer request instead of being silently reused.
 //!
+//! # Why significance is not a fraction of accuracy
+//!
+//! The default significance is 1 µm and the default approximation budget is
+//! 10 µm, but their ratio is not a geometric invariant. Significance drops
+//! rings whose absolute area is at most `tolerance_mm²`, even for exact
+//! polygons with zero uncertainty; that deliberate removal is not charged
+//! to the approximation budget. For example, an exact 2 µm square survives
+//! a 1 µm tolerance but disappears at 3 µm. Deriving significance as one
+//! tenth of accuracy would therefore delete it merely by loosening the
+//! budget from 10 µm to 30 µm, with no approximation involved. Dropping a
+//! hole ring likewise fills a hole. Containment slack also changes query
+//! answers independently of how accurately the boundary was prepared.
+//!
+//! Existing callers need different policies even with the same budget:
+//! Gerber composition uses zero significance to avoid filtering rings;
+//! V-score relief uses `DEFAULT_RELIEF_TOLERANCE_MM` (0.01 mm) for relief
+//! significance and boundary validation; copper-balance void verification
+//! uses 1e-5 mm. The latter is distinct from its 1e-5 mm² mismatch-area
+//! limit. Relief lowering and void verification retain these significance
+//! tolerances while preserving the caller's accuracy budget.
+//! Export's zero significance does not imply zero approximation uncertainty.
+//!
+//! Neither the allowed budget nor the accumulated uncertainty identifies
+//! which small rings are intentional features and which are approximation
+//! artefacts. An area cutoff cannot certify topology within an uncertainty
+//! band. Keep [`Resolution`] as the pair of caller policy and error budget:
+//! deriving one from the other would change semantics, not just simplify
+//! error accounting.
+//!
 //! # What `uncertainty_mm` certifies
 //!
 //! Every point of a prepared region's boundary lies within `uncertainty_mm`
