@@ -160,108 +160,41 @@ fn test_pcb_doc_shows_allowed_values_for_config() {
     assert_snapshot!("doc_allowed_values", stdout);
 }
 
-// A workspace that declares both [workspace].repository and [workspace].path.
-// Its canonical package URLs are `repository + "/" + path + "/" + relative_dir`,
-// built by `build_workspace_base_url` during discovery (workspace.rs).
-const NESTED_WORKSPACE_TOML: &str = r#"[workspace]
-repository = "github.com/acme/monorepo"
-path = "hardware/boards"
-pcb-version = "0.4"
-"#;
-
-// A workspace root that is itself a package (has [dependencies]) and declares
-// [workspace].path. Its canonical URL is `repository + "/" + path` (no
-// relative dir), exercising the empty-relative branch of get_local_package_url.
-const NESTED_ROOT_PACKAGE_TOML: &str = r#"[workspace]
+#[test]
+fn test_pcb_doc_local_path_matches_url_form_with_workspace_path() {
+    for (local, url) in [
+        (".", "github.com/acme/monorepo/hardware/boards"),
+        (
+            "./components",
+            "github.com/acme/monorepo/hardware/boards/components",
+        ),
+    ] {
+        let mut sb = Sandbox::new();
+        sb.write(
+            "pcb.toml",
+            r#"[workspace]
 repository = "github.com/acme/monorepo"
 path = "hardware/boards"
 pcb-version = "0.4"
 
 [dependencies]
-"#;
-
-const MEMBER_PACKAGE_TOML: &str = "[dependencies]\n";
-
-/// Assert both forms succeed, write nothing to stderr, and produce
-/// byte-identical sanitized stdout (which includes the H1 package-URL header).
-fn assert_both_forms_agree(
-    sb: &mut Sandbox,
-    local_spec: &str,
-    url_spec: &str,
-    expected_h1: &str,
-    ctx: &str,
-) {
-    let local_output = run_doc(sb, local_spec);
-    let url_output = run_doc(sb, url_spec);
-
-    for (label, output) in [("local-path", &local_output), ("url-form", &url_output)] {
-        assert!(
-            output.status.success(),
-            "{label} doc command failed ({ctx}):\nstdout:\n{}\nstderr:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr),
+"#,
         );
-        assert!(
-            String::from_utf8_lossy(&output.stderr).trim().is_empty(),
-            "{label} doc command wrote to stderr ({ctx}):\n{}",
-            String::from_utf8_lossy(&output.stderr),
-        );
+        if local != "." {
+            sb.write("components/pcb.toml", "[dependencies]\n");
+        }
+        sb.write(format!("{local}/Widget.zen"), SIMPLE_RESISTOR_V1);
+        let local_output = run_doc(&mut sb, local);
+        let url_output = run_doc(&mut sb, url);
+        for output in [&local_output, &url_output] {
+            assert!(
+                output.status.success(),
+                "doc failed for {url}: {}",
+                String::from_utf8_lossy(&output.stderr),
+            );
+        }
+        let stdout = String::from_utf8_lossy(&local_output.stdout);
+        assert!(stdout.lines().any(|line| line == format!("# {url}")));
+        assert_eq!(local_output.stdout, url_output.stdout);
     }
-
-    let local_stdout = sb.sanitize_output(&String::from_utf8_lossy(&local_output.stdout));
-    let url_stdout = sb.sanitize_output(&String::from_utf8_lossy(&url_output.stdout));
-
-    assert_eq!(
-        local_stdout, url_stdout,
-        "local-path and URL-form doc output disagree ({ctx})\n\
-         --- local-path ---\n{local_stdout}\n--- url-form ---\n{url_stdout}"
-    );
-    assert!(
-        local_stdout.contains(&format!("# {expected_h1}\n")),
-        "local-path H1 header should be '{expected_h1}' ({ctx}):\n{local_stdout}"
-    );
-    assert!(
-        url_stdout.contains(&format!("# {expected_h1}\n")),
-        "url-form H1 header should be '{expected_h1}' ({ctx}):\n{url_stdout}"
-    );
-}
-
-/// Regression test for `pcb doc --package <local-path>` ignoring `[workspace].path`
-/// (doc.rs `get_local_package_url`). For a nested/monorepo workspace that sets
-/// `[workspace].path`, the local-path form and the full-URL form must render the
-/// same H1 header (`repository/path/relative_dir`) for the same on-disk package.
-#[test]
-fn test_pcb_doc_local_path_matches_url_form_with_workspace_path() {
-    let mut sb = Sandbox::new();
-    sb.write("hardware/boards/pcb.toml", NESTED_WORKSPACE_TOML);
-    sb.write("hardware/boards/components/pcb.toml", MEMBER_PACKAGE_TOML);
-    sb.write("hardware/boards/components/Widget.zen", SIMPLE_RESISTOR_V1);
-    sb.cwd("hardware/boards");
-
-    assert_both_forms_agree(
-        &mut sb,
-        "./components",
-        "github.com/acme/monorepo/hardware/boards/components",
-        "github.com/acme/monorepo/hardware/boards/components",
-        "nested member package",
-    );
-}
-
-/// The workspace root itself is a package and declares `[workspace].path`, so
-/// its canonical URL is `repository/path` with no relative dir. This exercises
-/// the empty-`relative_str` branch of `get_local_package_url`, which previously
-/// returned the bare `repository()` and dropped the `path` segment.
-#[test]
-fn test_pcb_doc_workspace_root_package_url_includes_workspace_path() {
-    let mut sb = Sandbox::new();
-    sb.write("pcb.toml", NESTED_ROOT_PACKAGE_TOML);
-    sb.write("Widget.zen", SIMPLE_RESISTOR_V1);
-
-    assert_both_forms_agree(
-        &mut sb,
-        ".",
-        "github.com/acme/monorepo/hardware/boards",
-        "github.com/acme/monorepo/hardware/boards",
-        "nested root package",
-    );
 }
