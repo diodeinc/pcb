@@ -584,12 +584,13 @@ fn extract_package(
     lib_id: Option<&str>,
     value: Option<&str>,
 ) -> Option<ImportPassivePackage> {
-    for s in [footprint, lib_id, value].into_iter().flatten() {
-        if let Some(pkg) = parse_package_from_text(s) {
-            return Some(pkg);
-        }
-    }
-    None
+    // Ignore library namespaces in identifiers, but leave values as free-form text.
+    [footprint, lib_id]
+        .into_iter()
+        .flatten()
+        .map(|id| id.rsplit_once(':').map_or(id, |(_, name)| name))
+        .chain(value)
+        .find_map(parse_package_from_text)
 }
 
 fn parse_package_from_text(text: &str) -> Option<ImportPassivePackage> {
@@ -1048,6 +1049,27 @@ mod tests {
             );
         }
         assert_eq!(parse_package_from_text("SOT-23-5"), None);
+    }
+
+    #[test]
+    fn test_extract_package_ignores_namespaces_not_values() {
+        for (inputs, want) in [
+            (
+                ["0402Metric:R_0603_1608Metric", "Device:R_0805", "1206"],
+                ImportPassivePackage::P0603,
+            ),
+            (
+                ["0402Metric:R", "0603Metric:R_0402", "1206"],
+                ImportPassivePackage::P0402,
+            ),
+            (
+                ["0402Metric:R", "0603Metric:R", "0402Metric:R_0402"],
+                ImportPassivePackage::P01005,
+            ),
+        ] {
+            let [footprint, lib_id, value] = inputs.map(Some);
+            assert_eq!(extract_package(footprint, lib_id, value), Some(want));
+        }
     }
 
     #[test]
