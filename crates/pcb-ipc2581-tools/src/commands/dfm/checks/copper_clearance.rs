@@ -43,20 +43,6 @@ pub(super) fn evaluate(
             checked += earlier_components * conductor_components.len();
             earlier_components += conductor_components.len();
         }
-        // Only ties add exemptions. Preserve the linear count for ordinary
-        // designs rather than enumerating every pair of nets.
-        for (index, conductor) in layer.conductors.iter().enumerate() {
-            if !matches!(conductor.id, ConductorId::NetTie { .. }) {
-                continue;
-            }
-            for (other, net) in layer.conductors.iter().enumerate() {
-                if matches!(net.id, ConductorId::Net { .. }) && conductor.id.permits_contact(net.id)
-                {
-                    checked -= components[index].len() * components[other].len();
-                }
-            }
-        }
-
         let mut pieces = components
             .into_iter()
             .enumerate()
@@ -80,6 +66,77 @@ pub(super) fn evaluate(
             .iter()
             .map(|piece| piece.region.prepare_query())
             .collect::<Vec<_>>();
+        let mut authorized = std::collections::HashSet::new();
+        for short in &layer.net_shorts {
+            let mut contacts = Vec::new();
+            for (first, left) in pieces
+                .iter()
+                .enumerate()
+                .filter(|(_, piece)| layer.conductors[piece.conductor_index].id == short.nets[0])
+            {
+                for (second, right) in pieces.iter().enumerate().filter(|(_, piece)| {
+                    layer.conductors[piece.conductor_index].id == short.nets[1]
+                }) {
+                    let contains = |index: usize| {
+                        boundaries[index]
+                            .signed_distance(short.location)
+                            .is_some_and(|distance| distance.mm <= pcb_ir::geom::tol::EPSILON_MM)
+                    };
+                    if !contains(first) || !contains(second) {
+                        continue;
+                    }
+                    // Resolve contact topology only at the geometry engine's
+                    // coincidence precision, never from a curve approximation
+                    // or significance-filtered boolean result.
+                    if left.region.uncertainty_mm + right.region.uncertainty_mm
+                        > pcb_ir::geom::tol::EPSILON_MM
+                        || left.region.resolution.tolerance_mm != 0.0
+                        || right.region.resolution.tolerance_mm != 0.0
+                    {
+                        anyhow::bail!(
+                            "NetShort at ({}, {}) on '{}' has uncertain contact topology; local clearance cannot be certified",
+                            short.location.x,
+                            short.location.y,
+                            layer.layer.name
+                        );
+                    }
+                    let overlap = left.region.intersection(&right.region)?;
+                    if overlap.is_empty() {
+                        anyhow::bail!(
+                            "NetShort at ({}, {}) on '{}' has only an edge/point contact; local clearance cannot be certified",
+                            short.location.x,
+                            short.location.y,
+                            layer.layer.name
+                        );
+                    }
+                    // A contained connected region has one contact and no exposed
+                    // clearance gap against its enclosing region. Do not grow or
+                    // subtract an exemption area: that could hide another gap.
+                    if !left.region.difference(&right.region)?.is_empty()
+                        && !right.region.difference(&left.region)?.is_empty()
+                    {
+                        anyhow::bail!(
+                            "NetShort at ({}, {}) on '{}' is a partial contact; local clearance cannot be certified",
+                            short.location.x,
+                            short.location.y,
+                            layer.layer.name
+                        );
+                    }
+                    contacts.push((first.min(second), first.max(second)));
+                }
+            }
+            if contacts.len() != 1 {
+                anyhow::bail!(
+                    "NetShort at ({}, {}) on '{}' must identify exactly one actual contact between its NetRefs (found {})",
+                    short.location.x,
+                    short.location.y,
+                    layer.layer.name,
+                    contacts.len()
+                );
+            }
+            authorized.insert(contacts[0]);
+        }
+        checked -= authorized.len();
         // The pairs the bounds cannot separate, in sweep order along x.
         let pairs = pieces
             .iter()
@@ -92,9 +149,7 @@ pub(super) fn evaluate(
                         right.region.bbox.min.x - left.region.bbox.max.x < limit_mm
                     })
                     .filter(move |(_, right)| {
-                        !layer.conductors[left.conductor_index]
-                            .id
-                            .permits_contact(layer.conductors[right.conductor_index].id)
+                        left.conductor_index != right.conductor_index
                             && left.region.bbox.distance_to(right.region.bbox) < limit_mm
                     })
                     .map(move |(offset, _)| (left_index, left_index + 1 + offset))
@@ -102,6 +157,9 @@ pub(super) fn evaluate(
             .collect::<Vec<_>>();
 
         for (left_index, right_index) in pairs {
+            if authorized.contains(&(left_index, right_index)) {
+                continue;
+            }
             let (left, right) = (&pieces[left_index], &pieces[right_index]);
             let right_boundary = &boundaries[right_index];
             let Some(distance) = region_clearance_within(
@@ -167,22 +225,6 @@ pub(super) fn conductor_subject(
 ) -> Subject {
     let (kind, name, set_index, feature_index) = match id {
         ConductorId::Net { .. } => ("electrical_net", None, None, None),
-        ConductorId::NetTie {
-            component,
-            first_net,
-            second_net,
-            ..
-        } => (
-            "net_tie",
-            Some(format!(
-                "{} ({} ↔ {})",
-                design.imported.resolve(component),
-                design.imported.resolve(first_net),
-                design.imported.resolve(second_net)
-            )),
-            None,
-            None,
-        ),
         ConductorId::Isolated { occurrence, .. } => {
             let source = design
                 .imported
@@ -343,11 +385,15 @@ limit = { minimum = "0.15 mm" }
     }
 
     const ANTENNA: &str = include_str!("../fixtures/antenna.xml");
-    const TIE: &str = r#"<NetShort><NetRef name="GND"/><NetRef name="WIFI.RF_ANT"/><Location x="168.9" y="-98.339392"/><LayerRef name="F.Cu"/></NetShort>"#;
+    const TIE: &str = r#"<NetShort><NetRef name="GND"/><NetRef name="WIFI.RF_ANT"/><Location x="168.9" y="-100.439392"/><LayerRef name="F.Cu"/></NetShort>"#;
 
     fn annotated_antenna() -> String {
         let set = r#"<Set geometryUsage="GRAPHIC" componentRef="E1">"#;
-        ANTENNA.replacen(set, &format!("{set}{TIE}"), 1)
+        ANTENNA.replacen(
+            set,
+            &format!(r#"<Set net="GND" geometryUsage="GRAPHIC" componentRef="E1">{TIE}"#),
+            1,
+        )
     }
 
     fn antenna_check(xml: &str, pdk_name: &str) -> anyhow::Result<crate::commands::dfm::DfmReport> {
@@ -387,10 +433,10 @@ limit = { minimum = "0.15 mm" }
             }
             let results = antenna_check(&annotated_antenna(), pdk).unwrap();
             assert!(
-                results.findings.iter().all(|finding| !finding
-                    .subjects
+                results
+                    .findings
                     .iter()
-                    .any(|subject| subject.kind == "net_tie")),
+                    .all(|finding| !finding.subjects.iter().any(|s| s.role == "first_conductor")),
                 "{pdk}: {:?}",
                 results.findings
             );
@@ -439,7 +485,7 @@ limit = { minimum = "0.15 mm" }
                 results.findings.iter().any(|finding| finding
                     .subjects
                     .iter()
-                    .any(|s| s.kind == "net_tie")
+                    .any(|s| s.net.as_deref() == Some("GND"))
                     && finding
                         .subjects
                         .iter()
@@ -451,36 +497,34 @@ limit = { minimum = "0.15 mm" }
     }
 
     #[test]
-    fn antenna_declaration_is_strict_and_component_scoped() {
+    fn antenna_declaration_requires_an_actual_contact_not_component_metadata() {
         let annotated = annotated_antenna();
         for xml in [
             annotated.replace(r#"<NetRef name="GND"/>"#, r#"<NetRef name="UNKNOWN"/>"#),
             annotated.replace(r#"<NetRef name="GND"/>"#, r#"<NetRef name="WIFI.RF_ANT"/>"#),
             annotated.replace("</NetShort>", r#"<NetRef name="THIRD"/></NetShort>"#),
-            annotated.replace(r#"<Location x="168.9" y="-98.339392"/>"#, ""),
+            annotated.replace(r#"<Location x="168.9" y="-100.439392"/>"#, ""),
+            annotated.replace(TIE, &TIE.replace("168.9", "150")),
             annotated.replace(
                 r#"<LayerRef name="F.Cu"/></NetShort>"#,
                 r#"<LayerRef name="B.Cu"/></NetShort>"#,
             ),
-            annotated.replace(TIE, &format!("{TIE}{TIE}")),
             annotated.replace("net=\"GND\"", "net=\"WIFI.RF_ANT\""),
             annotated.replace("net=\"GND\"", ""),
         ] {
             let error = antenna_check(&xml, "standard").err().unwrap().to_string();
             assert!(error.contains("NetShort"), "{error}");
         }
-        for graphic in [
-            r#"<Set geometryUsage="GRAPHIC">"#,
-            r#"<Set geometryUsage="GRAPHIC" componentRef="E2">"#,
-            r#"<Set geometryUsage="TEXT" componentRef="E1">"#,
+        for xml in [
+            annotated.replace(TIE, &format!("{TIE}{TIE}")),
+            annotated.replace(r#" componentRef="E1""#, ""),
+            annotated.replace(TIE, "").replace(
+                "</Step>",
+                &format!(r#"<LayerFeature layerRef="F.Cu"><Set>{TIE}</Set></LayerFeature></Step>"#),
+            ),
         ] {
-            let xml = annotated.replacen(
-                r#"<Set geometryUsage="GRAPHIC" componentRef="E1">"#,
-                graphic,
-                1,
-            );
-            let error = antenna_check(&xml, "standard").err().unwrap().to_string();
-            assert!(error.contains("NetShort"), "{error}");
+            // Metadata need not live on the graphic or name a component.
+            antenna_check(&xml, "standard").unwrap();
         }
         // Source-local Set indices repeat across LayerFeature blocks. A NetShort
         // on one Set must not authorize unrelated copper with the same refdes.
@@ -512,7 +556,7 @@ limit = { minimum = "0.15 mm" }
           <LayerFeature layerRef="F.Cu"><Set net="UNRELATED">
             <Pad padstackDefRef="PADSTACK_1"><Location x="169.31" y="-112.039392"/><StandardPrimitiveRef id="RECT_1"/></Pad>
           </Set></LayerFeature>
-          <LayerFeature layerRef="F.Cu_B.Cu"><Set net="GND">
+          <LayerFeature layerRef="F.Cu_B.Cu"><Set net="WIFI.RF_ANT">
             <Hole name="UNRELATED_DRILL" diameter="0.30" platingStatus="PLATED" plusTol="0" minusTol="0" x="173.8" y="-100.439392"/>
           </Set></LayerFeature>
         </Step>"#);
@@ -522,7 +566,7 @@ limit = { minimum = "0.15 mm" }
                 report.findings.iter().any(|finding| finding
                     .subjects
                     .iter()
-                    .any(|s| s.kind == "net_tie")
+                    .any(|s| s.net.as_deref() == Some("GND"))
                     && finding
                         .subjects
                         .iter()
@@ -541,25 +585,28 @@ limit = { minimum = "0.15 mm" }
             report
                 .findings
                 .iter()
-                .filter(
-                    |finding| finding.subjects.iter().any(|s| s.kind == "net_tie")
-                        && finding.subjects.iter().any(|s| s.kind == "plated_hole")
-                )
+                .filter(|finding| finding.rule_id.contains("pth_hole_clearance")
+                    && finding
+                        .subjects
+                        .iter()
+                        .any(|s| s.net.as_deref() == Some("GND"))
+                    && finding.subjects.iter().any(|s| s.kind == "plated_hole"))
                 .count(),
-            1
+            1,
+            "{:?}",
+            report.findings
         );
         let clean = antenna_check(&annotated_antenna(), "ipc").unwrap();
         assert!(
             clean
                 .findings
                 .iter()
-                .all(|finding| !finding.subjects.iter().any(|s| s.kind == "net_tie"))
+                .all(|finding| !finding.rule_id.contains("pth_hole_clearance"))
         );
     }
 
     #[test]
     fn antenna_net_tie_permissions_do_not_leak_between_layout_occurrences() {
-        use crate::commands::dfm::design::ConductorId;
         let xml = annotated_antenna()
             .replacen(
                 r#"<StepRef name="antenna"/>"#,
@@ -582,29 +629,94 @@ limit = { minimum = "0.15 mm" }
             Resolution::default(),
         )
         .unwrap();
-        let conductors = &design
+        let layer = &design
             .copper_layers
             .iter()
             .find(|layer| layer.layer.name == "F.Cu")
-            .unwrap()
-            .conductors;
-        let ties = conductors
-            .iter()
-            .filter(|c| matches!(c.id, ConductorId::NetTie { .. }))
-            .collect::<Vec<_>>();
+            .unwrap();
+        let ties = &layer.net_shorts;
         assert_eq!(ties.len(), 2);
-        assert!(!ties[0].id.permits_contact(ties[1].id));
-        for tie in ties {
-            for net in conductors
-                .iter()
-                .filter(|c| matches!(c.id, ConductorId::Net { .. }))
-            {
-                assert_eq!(
-                    tie.id.permits_contact(net.id),
-                    tie.id.instance() == net.id.instance()
-                );
-            }
+        assert_ne!(ties[0].nets[0].instance(), ties[1].nets[0].instance());
+        assert!((ties[0].location.x - ties[1].location.x).abs() > 39.9);
+        assert!(
+            super::evaluate(0.15, &super::Conditions::default(), &design)
+                .unwrap()
+                .measured
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn each_contact_needs_a_declaration_and_nearby_gaps_are_not_exempt() {
+        let xml = annotated_antenna().replace("</Step>", r#"
+          <LayerFeature layerRef="F.Cu"><Set net="WIFI.RF_ANT">
+            <Pad padstackDefRef="PADSTACK_1"><Location x="173.8" y="-100.439392"/><StandardPrimitiveRef id="RECT_1"/></Pad>
+          </Set></LayerFeature></Step>"#);
+        for pdk in ["standard", "jlcpcb-1oz"] {
+            let report = antenna_check(&xml, pdk).unwrap();
+            assert!(
+                report.findings.iter().any(|f| f
+                    .subjects
+                    .iter()
+                    .any(|s| s.role == "first_conductor")
+                    && f.measurement.actual_mm() == Some(0.0))
+            );
+
+            let both = xml.replace(TIE, &format!("{TIE}{}", TIE.replace("168.9", "173.8")));
+            let report = antenna_check(&both, pdk).unwrap();
+            assert!(
+                report
+                    .findings
+                    .iter()
+                    .all(|f| !f.subjects.iter().any(|s| s.role == "first_conductor"))
+            );
+
+            let gap = both.replace("</Step>", r#"
+              <LayerFeature layerRef="F.Cu"><Set net="WIFI.RF_ANT">
+                <Pad padstackDefRef="PADSTACK_1"><Location x="169.31" y="-112.039392"/><StandardPrimitiveRef id="RECT_1"/></Pad>
+              </Set></LayerFeature></Step>"#);
+            let report = antenna_check(&gap, pdk).unwrap();
+            assert!(report.findings.iter().any(|f| {
+                f.subjects.iter().any(|s| s.role == "first_conductor")
+                    && f.measurement
+                        .actual_mm()
+                        .is_some_and(|mm| (mm - 0.05).abs() < 1e-6)
+            }));
         }
+    }
+
+    #[test]
+    fn net_short_does_not_certify_partial_or_uncertain_contact() {
+        for (primitive, expected) in [
+            // A ten-nanometre sliver must not disappear under the default
+            // one-micrometre feature-significance filter.
+            (
+                r#"<RectCenter width="0.50001" height="0.50"/>"#,
+                "partial contact",
+            ),
+            (
+                r#"<RectCenter width="0.60" height="0.50"/>"#,
+                "partial contact",
+            ),
+            (r#"<Circle diameter="0.50"/>"#, "uncertain contact topology"),
+        ] {
+            let xml = annotated_antenna().replacen(
+                r#"<RectCenter width="0.50" height="0.50"/>"#,
+                primitive,
+                1,
+            );
+            let error = antenna_check(&xml, "standard").err().unwrap().to_string();
+            assert!(error.contains(expected), "{error}");
+        }
+        let xml = annotated_antenna().replace(TIE, "");
+        let report = antenna_check(&xml, "standard").unwrap();
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.subjects.iter().any(|s| s.role == "first_conductor")
+                    && f.measurement.actual_mm() == Some(0.0))
+        );
     }
 
     #[test]

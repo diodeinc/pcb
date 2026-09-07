@@ -424,6 +424,8 @@ pub struct FeatureSet<Symbol> {
 #[derive(Debug, Clone)]
 pub struct NetShort<Symbol> {
     pub id: Option<Symbol>,
+    pub source_step_ref: Symbol,
+    pub source_instance: Option<u32>,
     pub nets: Vec<Symbol>,
     pub location: Point,
     pub layers: Vec<Symbol>,

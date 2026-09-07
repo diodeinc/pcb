@@ -671,6 +671,7 @@ pub(super) struct CopperLayer {
     pub copper_weight_oz: Option<f64>,
     pub image: ContourSet,
     pub conductors: Vec<CopperConductor>,
+    pub net_shorts: Vec<NetShort>,
     /// Source lands, including those fully removed from the final copper image.
     /// Hole links still require these for annular-ring subjects and provenance.
     pub lands: Vec<Land>,
@@ -696,14 +697,6 @@ pub(super) enum ConductorId {
         instance: Option<u32>,
         source_set_index: u32,
     },
-    /// Explicitly declared component-local bridge, never a union of two nets.
-    NetTie {
-        step: Option<Symbol>,
-        instance: Option<u32>,
-        component: Symbol,
-        first_net: Symbol,
-        second_net: Symbol,
-    },
     Unattributed {
         step: Option<Symbol>,
         instance: Option<u32>,
@@ -719,7 +712,6 @@ impl ConductorId {
             Self::Net { step, .. }
             | Self::Isolated { step, .. }
             | Self::Auxiliary { step, .. }
-            | Self::NetTie { step, .. }
             | Self::Unattributed { step, .. } => step,
         }
     }
@@ -729,7 +721,6 @@ impl ConductorId {
             Self::Net { instance, .. }
             | Self::Isolated { instance, .. }
             | Self::Auxiliary { instance, .. }
-            | Self::NetTie { instance, .. }
             | Self::Unattributed { instance, .. } => instance,
         }
     }
@@ -737,33 +728,8 @@ impl ConductorId {
     pub fn net(self) -> Option<Symbol> {
         match self {
             Self::Net { net, .. } => Some(net),
-            Self::Isolated { .. }
-            | Self::Auxiliary { .. }
-            | Self::NetTie { .. }
-            | Self::Unattributed { .. } => None,
+            Self::Isolated { .. } | Self::Auxiliary { .. } | Self::Unattributed { .. } => None,
         }
-    }
-
-    pub fn permits_contact(self, other: Self) -> bool {
-        if self == other {
-            return true;
-        }
-        let (tie, net) = match (self, other) {
-            (Self::NetTie { .. }, Self::Net { .. }) => (self, other),
-            (Self::Net { .. }, Self::NetTie { .. }) => (other, self),
-            _ => return false,
-        };
-        let Self::NetTie {
-            first_net,
-            second_net,
-            ..
-        } = tie
-        else {
-            unreachable!()
-        };
-        tie.step() == net.step()
-            && tie.instance() == net.instance()
-            && (net.net() == Some(first_net) || net.net() == Some(second_net))
     }
 
     fn is_unattributed(self) -> bool {
@@ -775,6 +741,12 @@ impl ConductorId {
 pub(super) struct CopperConductor {
     pub id: ConductorId,
     pub image: ContourSet,
+}
+
+#[derive(Debug)]
+pub(super) struct NetShort {
+    pub nets: [ConductorId; 2],
+    pub location: Point,
 }
 
 #[derive(Debug)]
@@ -1108,91 +1080,26 @@ fn hole_class(plating: PlatingKind) -> Option<HoleClass> {
     }
 }
 
-/// Standard IPC-2581C NetShort declarations authorize only their containing
-/// graphic Set. Neither a component name nor contact alone establishes intent.
-fn declared_net_ties(
-    document: &GeometryDocument,
-    imported: &ImportedDesign,
-) -> Result<CopperAttributionLowering> {
-    let mut ties = HashMap::new();
-    for feature in &document.features {
-        let Some(set) = feature
-            .set
-            .and_then(|set| document.feature_sets.get(set as usize))
-        else {
-            continue;
+fn collect_net_shorts(document: &GeometryDocument, layer: Symbol) -> Result<Vec<NetShort>> {
+    document.feature_sets.iter().flat_map(|set| &set.net_shorts).map(|short| {
+        let [first, second] = short.nets.as_slice() else {
+            bail!("unsupported NetShort: expected two NetRefs");
         };
-        if feature.net.is_some()
-            || set.geometry_usage != Some(pcb_ir::dialects::ipc::GeometryUsage::Graphic)
-            || set.net_shorts.is_empty()
-        {
-            continue;
+        if first == second || short.layers.as_slice() != [layer] {
+            bail!("invalid or unsupported NetShort: expected distinct nets and the containing copper layer only");
         }
-        let Some(reference) = set.component_ref else {
-            continue;
-        };
-        let key =
-            feature_occurrence_id(feature).context("net-tie graphic has no occurrence identity")?;
-        if ties.contains_key(&key) {
-            continue;
-        }
-        let context = format!(
-            "invalid or unsupported NetShort for component '{}' in Step '{}'",
-            imported.resolve(reference),
-            feature
-                .source_step_ref
-                .map(|step| imported.resolve(step))
-                .unwrap_or("<root>")
-        );
-        if set.net_shorts.len() != 1 {
-            bail!("{context}: expected exactly one declaration");
-        }
-        let short = &set.net_shorts[0];
-        let nets = &short.nets;
-        if nets.len() != 2 || nets[0] == nets[1] {
-            bail!("{context}: expected two distinct NetRefs");
-        }
-        if !feature
-            .source_layer_ref
-            .is_some_and(|layer| short.layers.contains(&layer))
-        {
-            bail!("{context}: LayerRef does not include the graphic's copper layer");
-        }
-        for net in nets {
-            if !imported.geometry.features.iter().any(|pad| {
-                pad.kind == FeatureKind::Padstack
-                    && pad.intent.domain == FeatureDomain::Copper
-                    && pad.source_step_ref == feature.source_step_ref
-                    && pad.net == Some(*net)
-                    && pad
-                        .pin_refs
-                        .slice(&imported.geometry.pin_refs)
-                        .iter()
-                        .any(|pin| pin.component_ref == Some(reference))
-            }) {
-                bail!(
-                    "{context}: NetRef '{}' has no component pad",
-                    imported.resolve(*net)
-                );
-            }
-        }
-        ties.insert(
-            key,
-            ConductorId::NetTie {
-                step: feature.source_step_ref,
-                instance: feature.source_instance,
-                component: reference,
-                first_net: nets[0],
-                second_net: nets[1],
-            },
-        );
-    }
-    Ok(CopperAttributionLowering { ties })
+        Ok(NetShort {
+            nets: [first, second].map(|net| ConductorId::Net {
+                step: Some(short.source_step_ref),
+                instance: short.source_instance,
+                net: *net,
+            }),
+            location: short.location,
+        })
+    }).collect()
 }
 
-struct CopperAttributionLowering {
-    ties: HashMap<FeatureOccurrenceId, ConductorId>,
-}
+struct CopperAttributionLowering;
 
 impl ArtworkLowering<Symbol, Option<ConductorId>> for CopperAttributionLowering {
     fn object_meta(
@@ -1222,9 +1129,6 @@ impl ArtworkLowering<Symbol, Option<ConductorId>> for CopperAttributionLowering 
                 source_set_index: feature.source.set_index,
             });
         }
-        if let Some(tie) = feature_occurrence_id(feature).and_then(|id| self.ties.get(&id)) {
-            return Some(*tie);
-        }
         Some(ConductorId::Unattributed {
             step: feature.source_step_ref,
             instance: feature.source_instance,
@@ -1238,11 +1142,14 @@ impl ArtworkLowering<Symbol, Option<ConductorId>> for CopperAttributionLowering 
 
 fn compose_attributed_copper(
     document: &mut GeometryDocument,
-    imported: &ImportedDesign,
     resolution: Resolution,
 ) -> Result<(ContourSet, Vec<CopperConductor>)> {
-    let mut lowering = declared_net_ties(document, imported)?;
-    let owners = compose_attributed_owners(document, LayerRole::Copper, &mut lowering, resolution)?;
+    let owners = compose_attributed_owners(
+        document,
+        LayerRole::Copper,
+        &mut CopperAttributionLowering,
+        resolution,
+    )?;
     let mut composer = pcb_ir::geom::region::PaintComposer::new(resolution);
     for (_, image) in &owners {
         composer.push(pcb_ir::geom::Polarity::Dark, image.clone());
@@ -1374,20 +1281,6 @@ fn conductor_order(
             source_feature_index,
             Some(occurrence),
         ),
-        ConductorId::NetTie {
-            step,
-            instance,
-            component,
-            ..
-        } => (
-            4,
-            step.map(|step| imported.resolve(step)).unwrap_or(""),
-            instance,
-            imported.resolve(component),
-            0,
-            0,
-            None,
-        ),
     }
 }
 
@@ -1452,7 +1345,15 @@ fn collect_copper_layers(
                     provenance: feature_provenance(imported, name, feature),
                 });
             }
-            let (image, mut conductors) = compose_attributed_copper(&mut document, imported, resolution)?;
+            let net_shorts = collect_net_shorts(&document, layer.name)?;
+            // Contact topology must not depend on the feature-significance
+            // filter: even a tiny remaining island may be another short.
+            let copper_resolution = if net_shorts.is_empty() {
+                resolution
+            } else {
+                resolution.strict()
+            };
+            let (image, mut conductors) = compose_attributed_copper(&mut document, copper_resolution)?;
             conductors.sort_by_key(|conductor| conductor_order(imported, conductor.id));
             if require_conductor_ownership
                 && let Some(conductor) = conductors
@@ -1470,7 +1371,7 @@ fn collect_copper_layers(
                     .and_then(|set| document.feature_sets.get(set as usize))
                     .and_then(|set| set.component_ref);
                 bail!(
-                    "IPC-2581 copper layer '{name}' has final functional copper without net attribution in Step '{}'{}, Set {source_set_index}, feature {source_feature_index}{}; copper clearance cannot be certified. Intentional bridges require IPC-2581C NetShort declarations exported from native net-tie metadata; componentRef or geometric contact alone does not establish electrical intent",
+                    "IPC-2581 copper layer '{name}' has final functional copper without net attribution in Step '{}'{}, Set {source_set_index}, feature {source_feature_index}{}; copper clearance cannot be certified. NetShort declares a local contact, not ownership of netless copper; the exporter must provide explicit net attribution",
                     id.step()
                         .map(|step| imported.resolve(step))
                         .unwrap_or("<root>"),
@@ -1494,6 +1395,7 @@ fn collect_copper_layers(
                 copper_weight_oz: copper_weight_oz(imported, layer.name),
                 image,
                 conductors,
+                net_shorts,
                 lands,
             })
         })
