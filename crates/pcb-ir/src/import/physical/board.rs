@@ -345,11 +345,11 @@ impl ImportedDesign {
                         });
                     continue;
                 };
+                // Use the importer's selected material field. Other property
+                // text is descriptive evidence, not additional identities.
                 let values = spec
-                    .properties
-                    .iter()
-                    .copied()
-                    .chain(spec.material)
+                    .material
+                    .into_iter()
                     .filter(|material| !self.resolve(*material).trim().is_empty())
                     .collect::<Vec<_>>();
                 conflicting_layer_specs |= !materials.is_empty()
@@ -395,9 +395,9 @@ impl ImportedDesign {
                         for reference in &item.spec_refs {
                             if let Some(spec) = self.specs.get(reference) {
                                 bom_materials.extend(
-                                    spec.properties.iter().copied().chain(spec.material).filter(
-                                        |material| !self.resolve(*material).trim().is_empty(),
-                                    ),
+                                    spec.material.into_iter().filter(|material| {
+                                        !self.resolve(*material).trim().is_empty()
+                                    }),
                                 );
                             } else {
                                 result
