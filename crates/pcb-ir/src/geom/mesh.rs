@@ -47,11 +47,13 @@ pub struct MeshQuality {
     pub area_mm2: f64,
 }
 
-/// Approximation inherited from a region, not an error bound on source curves.
+/// Approximation inherited from a region, not a topology or Hausdorff certificate.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MeshApproximation {
     pub region_significance_mm: f64,
-    /// Always unknown: ContourSet does not retain flattening/boolean history.
+    /// Prepared boundary uncertainty, with the semantics of `ContourSet::uncertainty_mm`.
+    pub region_boundary_uncertainty_mm: f64,
+    /// Unknown: preparation accounting does not certify final Hausdorff error.
     pub source_curve_error_bound_mm: Option<f64>,
 }
 
@@ -146,7 +148,8 @@ impl AnalysisMesh {
                 area_mm2: 0.0,
             },
             approximation: MeshApproximation {
-                region_significance_mm: region.tolerance,
+                region_significance_mm: region.tolerance(),
+                region_boundary_uncertainty_mm: region.uncertainty_mm,
                 source_curve_error_bound_mm: None,
             },
             refinement: RefinementStatus::TargetsMet,

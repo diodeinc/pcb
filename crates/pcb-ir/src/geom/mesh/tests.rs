@@ -1,5 +1,5 @@
 use super::*;
-use crate::geom::{Affine2, BBox, FillRule, Mirror, path::transform_cmds, shapes, tol};
+use crate::geom::{Affine2, BBox, FillRule, Mirror, Resolution, shapes};
 
 fn options(area: f64) -> MeshOptions {
     MeshOptions {
@@ -12,7 +12,7 @@ fn options(area: f64) -> MeshOptions {
 fn rect(x: f64, y: f64, w: f64, h: f64) -> ContourSet {
     ContourSet::rectangle(
         BBox::new(Point::new(x, y), Point::new(x + w, y + h)),
-        tol::REGION_MM,
+        Resolution::default(),
     )
 }
 
@@ -80,8 +80,11 @@ fn verify(region: &ContourSet, mesh: &AnalysisMesh) {
 fn holes_nested_islands_and_thin_features_preserve_topology() {
     let region = rect(0.0, 0.0, 4.0, 3.0)
         .difference(&rect(1.0, 0.1, 2.0, 2.8))
+        .unwrap()
         .union(&rect(1.5, 1.0, 1.0, 1.0))
-        .union(&rect(5.0, 0.0, 2.0, 0.01));
+        .unwrap()
+        .union(&rect(5.0, 0.0, 2.0, 0.01))
+        .unwrap();
     let mesh = AnalysisMesh::new(&region, options(0.05)).unwrap();
     verify(&region, &mesh);
     assert_eq!(mesh.refinement, RefinementStatus::TargetsMet);
@@ -142,15 +145,21 @@ fn curves_and_transforms_preserve_the_canonical_polygon_not_an_invented_curve() 
         let transform = Affine2::placement(Point::new(20.0, -7.0), 37.0, mirror, 1.7);
         let region = ContourSet::from_contours(
             &[
-                transform_cmds(circle.cmds.clone(), transform),
-                transform_cmds(hole.cmds.clone(), transform),
+                circle.clone().transformed(transform),
+                hole.clone().transformed(transform),
             ],
             FillRule::EvenOdd,
-            tol::REGION_MM,
-        );
+            Resolution::default(),
+        )
+        .unwrap();
         let mesh = AnalysisMesh::new(&region, options(0.1)).unwrap();
         verify(&region, &mesh);
         assert_eq!(mesh.approximation.source_curve_error_bound_mm, None);
+        assert!(region.uncertainty_mm > 0.0);
+        assert_eq!(
+            mesh.approximation.region_boundary_uncertainty_mm,
+            region.uncertainty_mm
+        );
         assert!(
             mesh.attach(transform.transform_point(Point::ZERO), None, 0.0)
                 .is_none()
@@ -171,8 +180,9 @@ fn refinement_converges_for_quadratic_interpolation_on_square_and_annulus() {
     let annulus = ContourSet::from_contours(
         &[shapes::circle(4.0).unwrap(), shapes::circle(2.0).unwrap()],
         FillRule::EvenOdd,
-        tol::REGION_MM,
-    );
+        Resolution::default(),
+    )
+    .unwrap();
     for region in [rect(-2.0, -2.0, 4.0, 4.0), annulus] {
         let mut errors = Vec::new();
         // Begin below the area scale already imposed by the curved boundary.
@@ -198,17 +208,20 @@ fn refinement_converges_for_quadratic_interpolation_on_square_and_annulus() {
 
 #[test]
 fn exhaustion_is_a_valid_partial_mesh_and_quality_limits_are_explicit() {
-    let region = rect(0.0, 0.0, 4.0, 4.0).difference(&rect(1.0, 1.0, 2.0, 2.0));
+    let region = rect(0.0, 0.0, 4.0, 4.0)
+        .difference(&rect(1.0, 1.0, 2.0, 2.0))
+        .unwrap();
     let mut limited = options(0.001);
     limited.max_additional_vertices = 0;
     let mesh = AnalysisMesh::new(&region, limited).unwrap();
     assert_eq!(mesh.refinement, RefinementStatus::VertexBudgetExhausted);
     verify(&region, &mesh);
-    let acute = ContourSet::new(
+    let acute = ContourSet::from_rings(
         vec![vec![[0.0, 0.0], [10.0, 0.0], [0.0, 0.1]]],
         FillRule::NonZero,
-        tol::REGION_MM,
-    );
+        Resolution::default(),
+    )
+    .unwrap();
     let mesh = AnalysisMesh::new(&acute, options(1.0)).unwrap();
     verify(&acute, &mesh);
     assert_ne!(mesh.refinement, RefinementStatus::TargetsMet);
@@ -217,7 +230,9 @@ fn exhaustion_is_a_valid_partial_mesh_and_quality_limits_are_explicit() {
 
 #[test]
 fn concave_neck_and_touching_components_keep_separate_nodes() {
-    let concave = rect(0.0, 0.0, 4.0, 3.0).difference(&rect(1.0, 0.1, 2.0, 3.0));
+    let concave = rect(0.0, 0.0, 4.0, 3.0)
+        .difference(&rect(1.0, 0.1, 2.0, 3.0))
+        .unwrap();
     let mesh = AnalysisMesh::new(&concave, options(0.03)).unwrap();
     verify(&concave, &mesh);
     assert!(mesh.attach(Point::new(2.0, 2.0), None, 0.0).is_none());
@@ -229,7 +244,8 @@ fn concave_neck_and_touching_components_keep_separate_nodes() {
             .into_iter()
             .chain(rect(1.0, 1.0, 1.0, 1.0).rings)
             .collect(),
-        tol::REGION_MM,
+        Resolution::default(),
+        0.0,
     );
     let mesh = AnalysisMesh::new(&region, options(0.03)).unwrap();
     verify(&region, &mesh);
@@ -245,7 +261,7 @@ fn concave_neck_and_touching_components_keep_separate_nodes() {
 
 #[test]
 fn empty_and_invalid_queries_and_options() {
-    let empty = AnalysisMesh::new(&ContourSet::empty(tol::REGION_MM), options(1.0)).unwrap();
+    let empty = AnalysisMesh::new(&ContourSet::empty(Resolution::default()), options(1.0)).unwrap();
     assert!(empty.elements.is_empty());
     assert!(empty.attach(Point::ZERO, None, 0.0).is_none());
     for area in [0.0, -1.0, f64::NAN, f64::INFINITY] {
