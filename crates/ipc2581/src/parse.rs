@@ -1967,14 +1967,14 @@ impl<'a> Parser<'a> {
             {
                 // Exact match - pure IPC-2581 spec
                 let spec_symbol = self.interner.intern(spec_id);
+                // Keep unresolved evidence for headless physical consumers.
+                spec_ref = Some(spec_symbol);
                 if let Some(spec) = self.specs.get(&spec_symbol) {
-                    spec_ref = Some(spec_symbol);
                     material = spec.material;
                     dielectric_constant = spec.dielectric_constant;
                     loss_tangent = spec.loss_tangent;
                 }
-                // If spec not found, silently continue - this is valid per spec
-                // (SpecRef may reference specs not in this document)
+                // SpecRef may reference a specification outside this document.
             }
         }
 

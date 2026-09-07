@@ -4,6 +4,9 @@
 //! geometry remains owned once by the canonical IPC document and final images
 //! are composed on demand for the requested layout scope.
 
+mod board;
+pub use board::*;
+
 use crate::geom::Resolution;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
