@@ -96,6 +96,8 @@ pub struct BoardPhysicalMetadata {
 pub struct BoardMaterialLayer {
     pub layer_ref: Symbol,
     pub thickness_mm: Option<f64>,
+    /// Source BOM material designator; never interpreted as a material name.
+    pub mat_des: Option<Symbol>,
     pub material: Association<Symbol>,
     pub spec_ref: Option<Symbol>,
 }
@@ -111,6 +113,8 @@ pub enum BoardPhysicalDiagnostic {
     MissingMaterial { layer: Symbol },
     AmbiguousMaterial { layer: Symbol },
     ConflictingMaterial { layer: Symbol },
+    UnresolvedMaterialDesignator { layer: Symbol, designator: Symbol },
+    AmbiguousMaterialDesignator { layer: Symbol, designator: Symbol },
     UnresolvedSpec { layer: Symbol, spec: Symbol },
     MissingComponentEnvelope(ComponentOccurrenceId),
     UnspecifiedPackageOutline(ComponentOccurrenceId),
@@ -315,10 +319,71 @@ impl ImportedDesign {
                 .collect::<Vec<_>>();
             materials.sort_by_key(|material| self.resolve(*material));
             materials.dedup();
+            let mut bom_materials = Vec::new();
+            if let Some(designator) = layer.mat_des {
+                let items = self
+                    .boms
+                    .iter()
+                    .flat_map(|bom| &bom.items)
+                    .filter(|item| {
+                        item.designators.iter().any(|candidate| {
+                            matches!(candidate,
+                        ipc2581::types::BomDesignator::Material(named) if named.name == designator)
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                match items.as_slice() {
+                    [item] => {
+                        for reference in &item.spec_refs {
+                            if let Some(spec) = self.specs.get(reference) {
+                                bom_materials.extend(
+                                    spec.properties.iter().copied().chain(spec.material).filter(
+                                        |material| !self.resolve(*material).trim().is_empty(),
+                                    ),
+                                );
+                            } else {
+                                result
+                                    .diagnostics
+                                    .push(BoardPhysicalDiagnostic::UnresolvedSpec {
+                                        layer: layer_ref,
+                                        spec: *reference,
+                                    });
+                            }
+                        }
+                    }
+                    [] => result.diagnostics.push(
+                        BoardPhysicalDiagnostic::UnresolvedMaterialDesignator {
+                            layer: layer_ref,
+                            designator,
+                        },
+                    ),
+                    _ => result.diagnostics.push(
+                        BoardPhysicalDiagnostic::AmbiguousMaterialDesignator {
+                            layer: layer_ref,
+                            designator,
+                        },
+                    ),
+                }
+            }
+            // Reconcile actual material values, not a BOM identity against a
+            // specification's text. Differing nonempty sources conflict.
+            let conflicting_sources = !materials.is_empty()
+                && !bom_materials.is_empty()
+                && (materials.iter().any(|value| !bom_materials.contains(value))
+                    || bom_materials.iter().any(|value| !materials.contains(value)));
+            materials.extend(bom_materials);
+            materials.sort_by_key(|material| self.resolve(*material));
+            materials.dedup();
             let declared = layer
                 .material
                 .filter(|material| !self.resolve(*material).trim().is_empty());
             let material = match (declared, materials.as_slice()) {
+                (_, _) if conflicting_sources => {
+                    result
+                        .diagnostics
+                        .push(BoardPhysicalDiagnostic::ConflictingMaterial { layer: layer_ref });
+                    Association::Conflicting(materials)
+                }
                 (Some(a), values) if !values.is_empty() && !values.contains(&a) => {
                     result
                         .diagnostics
@@ -345,6 +410,7 @@ impl ImportedDesign {
             result.layers.push(BoardMaterialLayer {
                 layer_ref,
                 thickness_mm: thickness(layer.thickness, Some(layer_ref), &mut result.diagnostics),
+                mat_des: layer.mat_des,
                 material,
                 spec_ref: layer.spec_ref,
             });

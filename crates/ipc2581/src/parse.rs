@@ -1953,6 +1953,7 @@ impl<'a> Parser<'a> {
             .map(|v| crate::units::to_mm(v, units));
 
         let layer_number = self.attr(node, "sequence").and_then(|s| s.parse().ok());
+        let mat_des = self.optional_attr(node, "matDes");
 
         // Look up material and dielectric properties from Spec via SpecRef
         let mut material = None;
@@ -1983,6 +1984,7 @@ impl<'a> Parser<'a> {
             thickness,
             tol_plus,
             tol_minus,
+            mat_des,
             material,
             spec_ref,
             dielectric_constant,

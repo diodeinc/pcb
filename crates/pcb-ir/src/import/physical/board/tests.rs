@@ -342,3 +342,52 @@ fn unresolved_stackup_keeps_board_and_hole_evidence_without_land_associations() 
         );
     }
 }
+
+#[test]
+fn material_designators_preserve_identity_and_reconcile_bom_spec_evidence() {
+    let xml = fixture().replace("sequence=\"0\"", "sequence=\"0\" matDes=\"laminate-42\"");
+    let imported = design(&xml);
+    let metadata = imported.physical_board_metadata();
+    let layer = &metadata.layers[0];
+    assert_eq!(imported.resolve(layer.mat_des.unwrap()), "laminate-42");
+    assert_eq!(imported.stackups[0].layers[0].mat_des, layer.mat_des);
+    assert!(matches!(layer.material, Association::Unresolved));
+    assert!(metadata.diagnostics.iter().any(|diagnostic| matches!(
+        diagnostic,
+        BoardPhysicalDiagnostic::UnresolvedMaterialDesignator { .. }
+    )));
+
+    let bom = r#"<Bom name="materials"><BomItem OEMDesignNumberRef="laminate" quantity="1" category="MATERIAL"><MatDes name="laminate-42"/><SpecRef id="bom-material"/></BomItem></Bom>"#;
+    let xml = xml.replace("<Ecad name=\"test\">", &format!("{bom}<Ecad name=\"test\">"))
+        .replace("<CadHeader units=\"MILLIMETER\"/>", r#"<CadHeader units="MILLIMETER"><Spec name="bom-material"><General type="MATERIAL"><Property text="FR4"/></General></Spec><Spec name="layer-material"><General type="MATERIAL"><Property text="PTFE"/></General></Spec></CadHeader>"#);
+    let imported = design(&xml);
+    let metadata = imported.physical_board_metadata();
+    assert_eq!(
+        imported.resolve(*metadata.layers[0].material.resolved().unwrap()),
+        "FR4"
+    );
+    assert!(metadata.diagnostics.is_empty());
+
+    let conflict = design(&xml.replace(
+        "matDes=\"laminate-42\"/>",
+        "matDes=\"laminate-42\"><SpecRef id=\"layer-material\"/></StackupLayer>",
+    ));
+    let metadata = conflict.physical_board_metadata();
+    assert!(matches!(
+        metadata.layers[0].material,
+        Association::Conflicting(_)
+    ));
+    assert_eq!(
+        conflict.resolve(metadata.layers[0].mat_des.unwrap()),
+        "laminate-42"
+    );
+    // A designator name differing from material text is not itself a conflict.
+    let consistent = design(&xml.replace(
+        "matDes=\"laminate-42\"/>",
+        "matDes=\"laminate-42\"><SpecRef id=\"bom-material\"/></StackupLayer>",
+    ));
+    assert!(matches!(
+        consistent.physical_board_metadata().layers[0].material,
+        Association::Resolved(_)
+    ));
+}
