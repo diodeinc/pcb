@@ -1,0 +1,126 @@
+{
+  "version": 1,
+  "id": "concave-narrow-overhang",
+  "provenance": {
+    "repository": "https://github.com/diodeinc/pcb",
+    "revision": "corpus-v1",
+    "path": "crates/pcb-corpus/examples/synthetic.rs",
+    "sha256": null,
+    "extraction": "Analytical synthetic construction; pcb-ir PathCmd arcs flattened with canonical tolerance",
+    "limitations": [
+      "Synthetic input, not experimental validation or an accepted snapshot"
+    ]
+  },
+  "tolerance_mm": 0.001,
+  "flatten_mm": 0.005,
+  "substrate": [
+    [
+      [
+        0.0,
+        0.0
+      ],
+      [
+        20.0,
+        0.0
+      ],
+      [
+        20.0,
+        15.0
+      ],
+      [
+        12.0,
+        15.0
+      ],
+      [
+        12.0,
+        2.0
+      ],
+      [
+        8.0,
+        2.0
+      ],
+      [
+        8.0,
+        15.0
+      ],
+      [
+        0.0,
+        15.0
+      ]
+    ],
+    [
+      [
+        2.0,
+        2.0
+      ],
+      [
+        4.0,
+        2.0
+      ],
+      [
+        4.0,
+        4.0
+      ],
+      [
+        2.0,
+        4.0
+      ]
+    ]
+  ],
+  "removal": [
+    [
+      [
+        7.0,
+        0.0
+      ],
+      [
+        13.0,
+        0.0
+      ],
+      [
+        13.0,
+        1.9
+      ],
+      [
+        7.0,
+        1.9
+      ]
+    ]
+  ],
+  "overlays": [
+    {
+      "name": "J1 synthetic body",
+      "meaning": "Explicit synthetic body envelope, 2 mm overhang; not inferred from package outline",
+      "rings": [
+        [
+          [
+            18.0,
+            5.0
+          ],
+          [
+            22.0,
+            5.0
+          ],
+          [
+            22.0,
+            9.0
+          ],
+          [
+            18.0,
+            9.0
+          ]
+        ]
+      ]
+    }
+  ],
+  "evidence": {
+    "clearance_definition": "y=1.9 removal edge to y=2 concavity edge",
+    "clearance_mm": 0.1,
+    "hole_mm": [
+      2,
+      2,
+      2,
+      2
+    ]
+  }
+}

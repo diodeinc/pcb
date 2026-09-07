@@ -1,0 +1,12 @@
+{
+  "repository": "https://github.com/diodeinc/pcb",
+  "revision": "c24843e2562836d1fed459c2913e9e4f54933d1a",
+  "path": "crates/ipc2581/tests/data/DM0002-IPC-2518.xml.zst",
+  "sha256": null,
+  "extraction": "filled by extractor",
+  "limitations": [
+    "Existing workspace IPC test board DM0002; upstream design revision is not supplied by the fixture path",
+    "sha256 records decompressed XML; provenance is the checked-in export, not a claim of distinct design authorship",
+    "No accepted expected outputs or measured mechanical properties"
+  ]
+}
