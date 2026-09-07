@@ -75,6 +75,35 @@ fn close(a: f64, b: f64, tol: f64) {
 }
 
 #[test]
+fn supplied_substrate_accuracy_is_checked_before_mechanical_assembly() {
+    let resolution = Resolution::default().strict();
+    let budget = resolution.accuracy.max_error_mm();
+    for uncertainty in [budget, budget.next_up()] {
+        let frame =
+            ContourSet::from_regularized(rect(0., 0., 1., 1.).rings, resolution, uncertainty);
+        // from_regions already checks its final boolean operation. The public
+        // substrate can also be supplied directly, without that operation.
+        let domain = Panel {
+            substrate: frame,
+            diagnostics: vec![],
+        };
+        assert_eq!(domain.substrate.uncertainty_mm, uncertainty);
+        let result = domain.discretize(&material(1.), options(1.), 1000);
+        if uncertainty == budget {
+            assert!(
+                result.is_ok(),
+                "meshing an existing polygon spends no boundary accuracy"
+            );
+        } else {
+            assert!(
+                matches!(result, Err(Error::Mesh(_))),
+                "exhausted geometry must not reach assembly"
+            );
+        }
+    }
+}
+
+#[test]
 fn oblique_boundary_weights_are_valid_morley_attachments() {
     use pcb_ir::geom::mesh::{AnalysisMesh, MeshElement};
 
