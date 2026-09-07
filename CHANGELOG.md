@@ -18,6 +18,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Make `pcb rectify fix` and `pcb rectify audit` exit non-zero on batch evaluation errors.
 - Report malformed SPICE `PARAMS:` tokens instead of panicking.
+- Escape inserted KiCad `Path` properties during import so special characters do not break layout sync.
 
 ## [0.4.51] - 2026-09-05
 
@@ -47,7 +48,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Support opaque service-account client IDs and proper OAuth Basic encoding.
 - Allow off-page schematic placement and avoid existing text and graphics.
-- Escape the Zener sync `Path` property when inserting it into an imported KiCad PCB, so a component `Reference` containing a `"` or `\` no longer corrupts the on-disk value and silently drops the footprint from sync.
 
 ## [0.4.49] - 2026-09-04
 

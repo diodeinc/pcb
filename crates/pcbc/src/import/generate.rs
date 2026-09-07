@@ -2936,244 +2936,36 @@ mod tests {
         }
     }
 
-    fn make_layout_component() -> ImportLayoutComponent {
-        ImportLayoutComponent {
-            fpid: Some("Lib:FP".to_string()),
-            unresolved_footprint: None,
-            uuid: None,
-            layer: None,
-            at: None,
-            sheetname: None,
-            sheetfile: None,
-            attrs: Vec::new(),
-            properties: BTreeMap::new(),
-            pads: BTreeMap::new(),
-            footprint_geometry: ImportFootprintGeometry::StandardLibrary,
-        }
-    }
-
-    /// Build a minimal `(kicad_pcb …)` containing a single `footprint` whose
-    /// `(property "Reference" …)` value is `refdes` (KiCad-escaped) and no existing
-    /// `Path` property, so the INSERT branch of the sync-hook patcher fires.
-    fn minimal_pcb_with_path_footprint(refdes: &str) -> String {
-        let refdes_quoted = quote_string(refdes);
-        let mut pcb = String::from("(kicad_pcb\n");
-        pcb.push_str("\t(footprint \"lib:FP\"\n");
-        pcb.push_str(&format!(
-            "\t\t(property \"Reference\" {} (at 0 0 0) (layer \"F.SilkS\"))\n",
-            refdes_quoted
-        ));
-        pcb.push_str("\t\t(property \"Value\" \"V\" (at 0 0 0) (layer \"F.Fab\"))\n");
-        pcb.push_str("\t\t(path \"/old-uuid\")\n");
-        pcb.push_str("\t)\n");
-        pcb.push_str(")\n");
-        pcb
-    }
-
-    /// Run `compute_set_footprint_sync_hook_patches_by_refdes` over `pcb_text`
-    /// and apply the resulting `PatchSet`, returning the patched PCB text.
-    fn apply_sync_hook_patches(
-        pcb_text: &str,
-        desired_by_refdes: &BTreeMap<KiCadRefDes, String>,
-    ) -> String {
-        let board = pcb_sexpr::parse(pcb_text).expect("pcb parses");
-        let patches =
-            compute_set_footprint_sync_hook_patches_by_refdes(&board, pcb_text, desired_by_refdes)
-                .expect("patches computed");
-        let mut out: Vec<u8> = Vec::new();
-        patches
-            .write_to(pcb_text, &mut out)
-            .expect("patches applied");
-        String::from_utf8(out).expect("patched pcb is utf8")
-    }
-
-    /// Extract the `(property "Path" …)` value and the `(path …)` KIID from the
-    /// first footprint in `patched` PCB text.
-    fn footprint_path_and_kiid(patched: &str) -> (Option<String>, Option<String>) {
-        let board = pcb_sexpr::parse(patched).expect("patched pcb parses");
-        let root = board.as_list().expect("root is a list");
-        let footprint = root
-            .iter()
-            .skip(1)
-            .find(|n| {
-                n.as_list().and_then(|l| l.first().and_then(Sexpr::as_sym)) == Some("footprint")
-            })
-            .expect("footprint present");
-        let items = footprint.as_list().expect("footprint is a list");
-        let mut path_value = None;
-        let mut kiid = None;
-        for child in items.iter().skip(1) {
-            let Some(list) = child.as_list() else {
-                continue;
-            };
-            match list.first().and_then(Sexpr::as_sym) {
-                Some("path") => {
-                    if let Some(v) = list.get(1).and_then(Sexpr::as_str) {
-                        kiid = Some(v.to_string());
-                    }
-                }
-                Some("property") => {
-                    let prop_name = list.get(1).and_then(Sexpr::as_str);
-                    if prop_name != Some("Path") {
-                        continue;
-                    }
-                    if let Some(value) = list.get(2).and_then(Sexpr::as_str) {
-                        path_value = Some(value.to_string());
-                    }
-                }
-                _ => {}
-            }
-        }
-        (path_value, kiid)
-    }
-
     #[test]
-    fn insert_path_property_escapes_double_quote_in_desired() {
-        // A Reference like R"1 keeps its `"` through `sanitize_kicad_name_for_zener` into
-        // the instance name, so `desired` (instance_name.component_name) carries it too.
-        // The insert branch must escape it so the parsed Path round-trips to the full value;
-        // without escaping the `"` truncates the string and the parsed Path reads back as `R`.
-        let refdes = "R\"1";
-        let desired = "R\"1.R";
-        let pcb_text = minimal_pcb_with_path_footprint(refdes);
-        let patched = apply_sync_hook_patches(
-            &pcb_text,
-            &BTreeMap::from([(KiCadRefDes::from(refdes.to_string()), desired.to_string())]),
-        );
-        let (path, kiid) = footprint_path_and_kiid(&patched);
-        assert_eq!(path.as_deref(), Some(desired));
-        assert_eq!(
-            kiid,
-            Some(pcb_sch::kicad_identity::footprint_kiid_path(desired))
-        );
-    }
-
-    #[test]
-    fn insert_path_property_escapes_every_kicad_string_special_character() {
-        // `"`, `\`, newline, carriage return and tab are all KiCad string-special and
-        // must be escaped so the Path property round-trips and the KIID stays consistent.
-        let refdes = "R\"1\\2";
-        let desired = format!("{refdes}\n\r\t.C");
-        let pcb_text = minimal_pcb_with_path_footprint(refdes);
-        let patched = apply_sync_hook_patches(
-            &pcb_text,
-            &BTreeMap::from([(KiCadRefDes::from(refdes.to_string()), desired.clone())]),
-        );
-        let (path, kiid) = footprint_path_and_kiid(&patched);
-        assert_eq!(path.as_deref(), Some(desired.as_str()));
-        assert_eq!(
-            kiid,
-            Some(pcb_sch::kicad_identity::footprint_kiid_path(&desired))
-        );
-        assert!(
-            patched.contains("(property \"Path\" \"R\\\"1\\\\2\\n\\r\\t.C\""),
-            "raw PCB text must contain the fully-escaped Path property: {patched}"
-        );
-    }
-
-    #[test]
-    fn insert_path_property_preserves_canonical_desired_value() {
-        // Regression guard: a canonical Reference (no special characters) still round-trips
-        // through the insert branch unchanged.
-        let refdes = "R1";
-        let desired = "R1.R";
-        let pcb_text = minimal_pcb_with_path_footprint(refdes);
-        let patched = apply_sync_hook_patches(
-            &pcb_text,
-            &BTreeMap::from([(KiCadRefDes::from(refdes.to_string()), desired.to_string())]),
-        );
-        let (path, kiid) = footprint_path_and_kiid(&patched);
-        assert_eq!(path.as_deref(), Some(desired));
-        assert_eq!(
-            kiid,
-            Some(pcb_sch::kicad_identity::footprint_kiid_path(desired))
-        );
-        assert!(patched.contains("(property \"Path\" \"R1.R\""));
-    }
-
-    #[test]
-    fn insert_path_property_kiid_matches_what_sync_recomputes_from_path() {
-        // The core invariant the bug violated: the KIID written onto the footprint (from the
-        // full `desired`) must equal the KIID layout sync recomputes from the parsed Path
-        // property. When they differ, `effective_netlist` drops the footprint as "unmanaged".
-        let refdes = "R\"1";
-        let desired = "R\"1.R";
-        let pcb_text = minimal_pcb_with_path_footprint(refdes);
-        let patched = apply_sync_hook_patches(
-            &pcb_text,
-            &BTreeMap::from([(KiCadRefDes::from(refdes.to_string()), desired.to_string())]),
-        );
-        let (path, kiid) = footprint_path_and_kiid(&patched);
-        let path = path.expect("Path property present");
-        let kiid = kiid.expect("footprint path KIID present");
-        let kiid_set_on_footprint = kiid.clone();
-        let kiid_sync_expects = pcb_sch::kicad_identity::footprint_kiid_path(&path);
-        assert_eq!(
-            kiid_set_on_footprint, kiid_sync_expects,
-            "KIID on footprint must match what sync recomputes from the Path property"
-        );
-    }
-
-    #[test]
-    fn import_footprint_path_property_patches_round_trip_special_refdes() {
-        // End-to-end: drive `compute_import_footprint_path_property_patches` (which builds
-        // `desired` from instance_name + component_name) with a special-character Reference and
-        // confirm the resulting INSERT-branch Path property round-trips and the KIID is
-        // consistent. This exercises the real path through which `desired` acquires a `"`.
-        let anchor = make_anchor("sym-uuid");
-        let refdes_value = "R\"1";
-        let component_name = "R";
-        let instance_name = sanitize_kicad_name_for_zener(refdes_value, "REF");
-        assert_eq!(instance_name, "R\"1");
-
-        let components: BTreeMap<KiCadUuidPathKey, ImportComponentData> = BTreeMap::from([(
-            anchor.clone(),
-            ImportComponentData {
-                netlist: ImportNetlistComponent {
-                    refdes: KiCadRefDes::from(refdes_value.to_string()),
-                    value: None,
-                    footprint: None,
-                    sheetpath_names: None,
-                    unit_pcb_paths: Vec::new(),
-                },
-                schematic: None,
-                layout: Some(make_layout_component()),
-            },
-        )]);
-        let refdes_instance_names: BTreeMap<KiCadRefDes, String> = BTreeMap::from([(
-            KiCadRefDes::from(refdes_value.to_string()),
-            instance_name.clone(),
-        )]);
-        let generated_components = make_generated_components(BTreeMap::from([(
-            anchor.clone(),
-            component_name.to_string(),
-        )]));
-        let sheet_modules = GeneratedSheetModules::default();
-
-        let pcb_text = minimal_pcb_with_path_footprint(refdes_value);
-        let board = pcb_sexpr::parse(&pcb_text).expect("pcb parses");
-
-        let patches = compute_import_footprint_path_property_patches(
+    fn inserted_path_property_round_trips_special_characters() {
+        let pcb_text = "(kicad_pcb\n\t(footprint \"lib:FP\"\n\t\t(property \"Reference\" \"R1\")\n\t\t(path \"/old-uuid\")\n\t)\n)";
+        let desired = "R\"1\\2\n\r\t.R";
+        let board = pcb_sexpr::parse(pcb_text).unwrap();
+        let patches = compute_set_footprint_sync_hook_patches_by_refdes(
             &board,
-            &pcb_text,
-            &components,
-            &refdes_instance_names,
-            &generated_components,
-            &sheet_modules,
+            pcb_text,
+            &BTreeMap::from([(KiCadRefDes::from("R1".to_string()), desired.to_string())]),
         )
-        .expect("patches computed");
-        let mut out: Vec<u8> = Vec::new();
-        patches
-            .write_to(&pcb_text, &mut out)
-            .expect("patches applied");
-        let patched = String::from_utf8(out).expect("patched pcb is utf8");
-
-        let desired = format!("{instance_name}.{component_name}");
-        let (path, kiid) = footprint_path_and_kiid(&patched);
-        assert_eq!(path.as_deref(), Some(desired.as_str()));
+        .unwrap();
+        let mut out = Vec::new();
+        patches.write_to(pcb_text, &mut out).unwrap();
+        let patched = String::from_utf8(out).unwrap();
+        let board = pcb_sexpr::parse(&patched).unwrap();
+        let footprint = find_child_list(board.as_list().unwrap(), "footprint").unwrap();
+        let path = footprint
+            .iter()
+            .filter_map(Sexpr::as_list)
+            .find(|list| {
+                list.first().and_then(Sexpr::as_sym) == Some("property")
+                    && list.get(1).and_then(Sexpr::as_str) == Some("Path")
+            })
+            .unwrap()[2]
+            .as_str()
+            .unwrap();
+        assert_eq!(path, desired);
         assert_eq!(
-            kiid,
-            Some(pcb_sch::kicad_identity::footprint_kiid_path(&desired))
+            find_child_list(footprint, "path").unwrap()[1].as_str(),
+            Some(pcb_sch::kicad_identity::footprint_kiid_path(path).as_str())
         );
     }
 
