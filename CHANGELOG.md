@@ -11,6 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - Expose IPC-2581 source lands even after copper removal.
+- Add global `--accuracy-um` (1–100 whole micrometres, default 10) for IPC-2581 geometry, Gerber operations, and release HTML; DFM stays at 10 µm and copper balancing at 50 µm.
 - Keep circles and ellipses exact through placement, export, and rendering, preparing curved geometry to a stated accuracy.
 
 ### Changed

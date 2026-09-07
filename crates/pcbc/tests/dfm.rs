@@ -70,7 +70,14 @@ fn dfm_resolves_zen_exports_temporary_ipc_and_checks_standard_pdk() {
 
     let file_output = run_pcbc(
         &mut sandbox,
-        ["dfm", "MyBoard.zen", "--output", "report.dfm.json"],
+        [
+            "dfm",
+            "MyBoard.zen",
+            "--accuracy-um",
+            "30",
+            "--output",
+            "report.dfm.json",
+        ],
     );
     assert!(file_output.stdout.is_empty());
     assert_eq!(file_output.status.code(), output.status.code());
@@ -203,6 +210,8 @@ fn ipc_dfm_json_matches_stdout_and_preserves_full_scene_with_waivers() {
             "board.xml",
             "--pdk",
             "pdk.toml",
+            "--accuracy-um",
+            "30",
             "--output",
             "report.dfm.json",
         ],

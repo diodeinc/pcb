@@ -1,4 +1,4 @@
-use pcb_ir::geom::Resolution;
+use pcb_ir::geom::{GeometryAccuracy, Resolution};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -6,6 +6,12 @@ use clap::Args;
 use pcb_ipc2581_tools::{LayoutTarget, commands};
 
 use crate::layout::LayoutArgs;
+
+// Findings are calibrated at 10 µm, independently of the CLI export budget.
+pub(crate) const DFM_RESOLUTION: Resolution = Resolution {
+    tolerance_mm: pcb_ir::geom::tol::REGION_MM,
+    accuracy: GeometryAccuracy::micrometres(10),
+};
 
 #[derive(Args, Debug)]
 #[command(about = "Run DFM checks for a .zen board")]
@@ -32,8 +38,6 @@ pub struct DfmArgs {
 }
 
 pub fn execute(args: DfmArgs) -> Result<()> {
-    let resolution = Resolution::default();
-
     let temporary_output = if args.open && args.output.is_none() {
         Some(tempfile::tempdir().context("failed to create temporary DFM report directory")?)
     } else {
@@ -59,7 +63,7 @@ pub fn execute(args: DfmArgs) -> Result<()> {
     commands::dfm::validate_output(&args.file, &options)?;
     let dfm_result = match export_layout(&args) {
         Ok((_temporary_dir, ipc_path)) => {
-            match commands::dfm::execute_check(&ipc_path, &options, resolution)? {
+            match commands::dfm::execute_check(&ipc_path, &options, DFM_RESOLUTION)? {
                 commands::dfm::CheckOutcome::Passed => Ok(()),
                 commands::dfm::CheckOutcome::Failed(error) => Err(error),
             }

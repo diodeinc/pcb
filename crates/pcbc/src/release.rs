@@ -65,6 +65,7 @@ struct ReleaseInfo {
     output_name: String,
     suppress: Vec<String>,
     resolution: ResolutionResult,
+    geometry_resolution: Resolution,
     root_package_url: Option<String>,
 }
 
@@ -240,6 +241,7 @@ pub fn build_board_release(
     suppress: Vec<String>,
     version: Option<String>,
     exclude: Vec<ArtifactType>,
+    geometry_resolution: Resolution,
 ) -> Result<PathBuf> {
     let start_time = Instant::now();
 
@@ -333,6 +335,7 @@ pub fn build_board_release(
             output_name,
             suppress,
             resolution,
+            geometry_resolution,
             root_package_url: package_url,
         };
 
@@ -1333,8 +1336,6 @@ fn generate_odb(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
 
 /// Generate IPC-2581 file
 fn generate_ipc2581(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
-    let resolution = Resolution::default();
-
     let manufacturing_dir = info.staging_dir.join("manufacturing");
     fs::create_dir_all(&manufacturing_dir)?;
 
@@ -1355,7 +1356,7 @@ fn generate_ipc2581(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
     let html = pcb_ipc2581_tools::commands::html_export::generate_html(
         &accessor,
         pcb_ipc2581_tools::UnitFormat::Mm,
-        resolution,
+        info.geometry_resolution,
     )
     .context("Failed to generate HTML from IPC-2581")?;
     fs::write(&ipc2581_html_path, html).context("Failed to write IPC-2581 HTML export")?;
