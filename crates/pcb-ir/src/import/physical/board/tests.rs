@@ -256,24 +256,50 @@ fn metadata_reports_missing_ambiguous_invalid_and_conflicting_evidence() {
         "{meta:?}"
     );
 
-    let descriptive = design(&xml.replace(
+    for texts in [
+        ["FR4", "Color : GREEN"],
+        ["Color : GREEN", "FR4"],
+        ["FR4", "PTFE"],
+    ] {
+        let properties = texts
+            .iter()
+            .map(|text| format!(r#"<Property text="{text}"/>"#))
+            .collect::<String>();
+        let descriptive = design(&xml.replace("<Property text=\"FR4\"/>", &properties));
+        let metadata = descriptive.physical_board_metadata();
+        assert!(matches!(
+            metadata.layers[0].material,
+            Association::Unresolved
+        ));
+        assert!(metadata.diagnostics.iter().any(|diagnostic| matches!(
+            diagnostic,
+            BoardPhysicalDiagnostic::UninterpretedMaterialProperties { .. }
+        )));
+        let spec = &descriptive.specs[&metadata.layers[0].spec_ref.unwrap()];
+        assert_eq!(
+            spec.properties
+                .iter()
+                .map(|text| descriptive.resolve(*text))
+                .collect::<Vec<_>>(),
+            texts
+        );
+    }
+    let blank = design(&xml.replace(
         "<Property text=\"FR4\"/>",
-        "<Property text=\"FR4\"/><Property text=\"Color : GREEN\"/>",
+        "<Property text=\"   \"/><Property text=\"FR4\"/>",
     ));
-    let metadata = descriptive.physical_board_metadata();
+    let metadata = blank.physical_board_metadata();
     assert_eq!(
-        descriptive.resolve(*metadata.layers[0].material.resolved().unwrap()),
+        blank.resolve(*metadata.layers[0].material.resolved().unwrap()),
         "FR4"
     );
     assert!(metadata.diagnostics.is_empty());
-    let spec = &descriptive.specs[&metadata.layers[0].spec_ref.unwrap()];
+    let zero = design(&xml.replace("thickness=\"0.035\"", "thickness=\"0\""));
     assert_eq!(
-        spec.properties
-            .iter()
-            .map(|text| descriptive.resolve(*text))
-            .collect::<Vec<_>>(),
-        ["FR4", "Color : GREEN"]
+        zero.physical_board_metadata().layers[0].thickness_mm,
+        Some(0.0)
     );
+    assert!(zero.physical_board_metadata().diagnostics.is_empty());
     let unresolved = design(&fixture().replace(
         "sequence=\"0\"/>",
         "sequence=\"0\"><SpecRef id=\"external\"/></StackupLayer>",
@@ -383,8 +409,21 @@ fn material_designators_preserve_identity_and_reconcile_bom_spec_evidence() {
         "<Property text=\"FR4\"/><Property text=\"Color : GREEN\"/>",
     ));
     let metadata = described_bom.physical_board_metadata();
+    assert!(matches!(
+        metadata.layers[0].material,
+        Association::Unresolved
+    ));
+    assert!(metadata.diagnostics.iter().any(|diagnostic| matches!(
+        diagnostic,
+        BoardPhysicalDiagnostic::UninterpretedMaterialProperties { .. }
+    )));
+    let blank = design(&xml.replace(
+        "<Property text=\"FR4\"/>",
+        "<Property text=\"   \"/><Property text=\"FR4\"/>",
+    ));
+    let metadata = blank.physical_board_metadata();
     assert_eq!(
-        described_bom.resolve(*metadata.layers[0].material.resolved().unwrap()),
+        blank.resolve(*metadata.layers[0].material.resolved().unwrap()),
         "FR4"
     );
     assert!(metadata.diagnostics.is_empty());

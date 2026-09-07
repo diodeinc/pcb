@@ -42,6 +42,64 @@ fn stackup_signatures_treat_signed_zero_sequences_as_the_same_number() {
     );
 }
 
+#[test]
+fn multiple_stackup_specs_reach_fab_comparison_and_property_accessors() {
+    let xml = assembly_panel_xml(20.0, 20.0)
+        .replace("<CadHeader units=\"MILLIMETER\"/>", r#"<CadHeader units="MILLIMETER"><Spec name="a"><General type="MATERIAL"><Property text="FR4"/></General></Spec><Spec name="b"><General type="MATERIAL"><Property text="FR4"/><ColorTerm name="GREEN"/></General><Dielectric type="DIELECTRIC_CONSTANT"><Property value="4.2"/></Dielectric><SurfaceFinish type="OSP"/></Spec></CadHeader>"#)
+        .replace("sequence=\"0\"/>", "sequence=\"0\"><SpecRef id=\"a\"/><SpecRef id=\"b\"/></StackupLayer>");
+    let changed = xml.replace(
+        "name=\"b\"><General type=\"MATERIAL\"><Property text=\"FR4\"",
+        "name=\"b\"><General type=\"MATERIAL\"><Property text=\"PTFE\"",
+    );
+    assert_ne!(
+        physical_stackup(&xml, 0).unwrap(),
+        physical_stackup(&changed, 1).unwrap()
+    );
+    assert!(create_fab_panel_xml(&[xml.clone(), changed.clone()], &[0, 1]).is_err());
+    let ipc = Ipc2581::parse(&xml).unwrap();
+    let details = crate::accessors::IpcAccessor::new(&ipc)
+        .stackup_details()
+        .unwrap();
+    assert_eq!(details.layers[0].material.as_deref(), Some("FR4"));
+    assert_eq!(details.layers[0].dielectric_constant, Some(4.2));
+    let ipc = Ipc2581::parse(&changed).unwrap();
+    assert!(
+        crate::accessors::IpcAccessor::new(&ipc)
+            .stackup_details()
+            .unwrap()
+            .layers[0]
+            .material
+            .is_none()
+    );
+    let mask = Ipc2581::parse(&xml.replace(
+        "layerFunction=\"CONDUCTOR\"",
+        "layerFunction=\"SOLDERMASK\"",
+    ))
+    .unwrap();
+    assert_eq!(
+        crate::accessors::IpcAccessor::new(&mask)
+            .stackup_details()
+            .unwrap()
+            .soldermask_color
+            .unwrap()
+            .name
+            .as_deref(),
+        Some("GREEN")
+    );
+    let coating = Ipc2581::parse(&xml.replace(
+        "layerFunction=\"CONDUCTOR\"",
+        "layerFunction=\"COATINGNONCOND\"",
+    ))
+    .unwrap();
+    assert!(
+        crate::accessors::IpcAccessor::new(&coating)
+            .stackup_details()
+            .unwrap()
+            .surface_finish
+            .is_some()
+    );
+}
+
 fn assembly_panel_xml(width_mm: f64, height_mm: f64) -> String {
     assembly_panel_xml_at(0.0, 0.0, width_mm, height_mm)
 }

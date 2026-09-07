@@ -23,6 +23,8 @@ pub struct Spec {
     pub name: Symbol,
     /// Typed child elements exactly as carried by the IPC Spec payload.
     pub items: Vec<SpecItem>,
+    /// Unique nonblank MATERIAL property text only. Multiple distinct texts
+    /// remain uninterpreted in properties; no first-value or string heuristic.
     pub material: Option<Symbol>,
     pub dielectric_constant: Option<f64>,
     pub loss_tangent: Option<f64>,

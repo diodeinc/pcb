@@ -288,7 +288,7 @@ impl<'a> IpcAccessor<'a> {
             let layer_function = layer_map.get(&layer_name).copied();
 
             // Check if this is a soldermask or silkscreen layer
-            if let Some(spec_ref) = &stackup_layer.spec_ref {
+            for spec_ref in &stackup_layer.spec_refs {
                 let spec_name = self.ipc.resolve(*spec_ref).to_string();
                 if let Some(spec) = spec_map.get(&spec_name) {
                     // Extract color from Spec (try multiple sources)
@@ -310,6 +310,9 @@ impl<'a> IpcAccessor<'a> {
                         name: color_name,
                         rgb: color_rgb,
                     };
+                    if color_info.name.is_none() && color_info.rgb.is_none() {
+                        continue;
+                    }
 
                     match layer_function {
                         Some(LayerFunction::Soldermask) if soldermask_color.is_none() => {
@@ -350,29 +353,32 @@ impl<'a> IpcAccessor<'a> {
                 _ => StackupLayerType::Other,
             };
 
-            // Get material properties from spec if available
-            let (material, spec_dk, spec_loss_tan) = if let Some(spec_ref) = &stackup_layer.spec_ref
-            {
-                let spec_name = self.ipc.resolve(*spec_ref).to_string();
-                if let Some(spec) = spec_map.get(&spec_name) {
-                    let material = spec.material.map(|m| self.ipc.resolve(m).to_string());
-                    (material, spec.dielectric_constant, spec.loss_tangent)
-                } else {
-                    (None, None, None)
-                }
-            } else {
-                (None, None, None)
-            };
-
-            // Prefer stackup_layer material over spec material
-            let final_material = stackup_layer
-                .material
-                .map(|m| self.ipc.resolve(m).to_string())
-                .or(material);
-
-            // Prefer stackup_layer properties over spec properties
-            let final_dk = stackup_layer.dielectric_constant.or(spec_dk);
-            let final_loss_tan = stackup_layer.loss_tangent.or(spec_loss_tan);
+            // A single display value is available only when referenced
+            // evidence agrees; never select the last or first conflicting spec.
+            let specs = stackup_layer
+                .spec_refs
+                .iter()
+                .filter_map(|reference| ecad.cad_header.specs.get(reference))
+                .collect::<Vec<_>>();
+            let final_material = unique_value(
+                specs
+                    .iter()
+                    .filter_map(|spec| spec.material)
+                    .chain(stackup_layer.material),
+            )
+            .map(|material| self.ipc.resolve(material).to_string());
+            let final_dk = unique_value(
+                specs
+                    .iter()
+                    .filter_map(|spec| spec.dielectric_constant)
+                    .chain(stackup_layer.dielectric_constant),
+            );
+            let final_loss_tan = unique_value(
+                specs
+                    .iter()
+                    .filter_map(|spec| spec.loss_tangent)
+                    .chain(stackup_layer.loss_tangent),
+            );
 
             layers.push(StackupLayerInfo {
                 name: layer_name,
@@ -422,7 +428,7 @@ impl<'a> IpcAccessor<'a> {
             }
 
             // Check if spec has surface finish
-            if let Some(spec_ref) = &stackup_layer.spec_ref {
+            for spec_ref in &stackup_layer.spec_refs {
                 let spec_name = self.ipc.resolve(*spec_ref).to_string();
                 if let Some(spec) = spec_map.get(&spec_name)
                     && let Some(surface_finish) = &spec.surface_finish
@@ -439,6 +445,12 @@ impl<'a> IpcAccessor<'a> {
 
         None
     }
+}
+
+fn unique_value<T: PartialEq>(mut values: impl Iterator<Item = T>) -> Option<T> {
+    values
+        .next()
+        .filter(|first| values.all(|value| value == *first))
 }
 
 fn classify_finish_type(finish_type: ipc2581::types::FinishType) -> SurfaceFinishCategory {
