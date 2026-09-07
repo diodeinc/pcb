@@ -400,9 +400,6 @@ mod tests {
         let input = r#"(root (uri C:\ "x") (other 1))"#;
         let expected = "(root\n\t(uri C:\\ \"x\")\n\t(other 1)\n)\n";
         assert_eq!(prettify(input, FormatMode::Normal), expected);
-
-        let control = r#"(root (uri C:\\ "x") (other 1))"#;
-        let expected_ctrl = "(root\n\t(uri C:\\\\ \"x\")\n\t(other 1)\n)\n";
-        assert_eq!(prettify(control, FormatMode::Normal), expected_ctrl);
+        assert_eq!(prettify(expected, FormatMode::Normal), expected);
     }
 }
