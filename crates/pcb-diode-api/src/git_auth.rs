@@ -167,59 +167,21 @@ fn exchange_credential(
     path: &str,
 ) -> Result<MintedGitCredential> {
     let url = format!("{}/api/git/credentials", ctx.api_base_url());
+    let timeout = Duration::from_secs(30);
     let client = Client::builder()
         .user_agent(format!("diode-pcb/{}", env!("CARGO_PKG_VERSION")))
-        .timeout(Duration::from_secs(30))
+        .timeout(timeout)
         .build()
         .context("Failed to create Git credential HTTP client")?;
 
-    let build_request = || {
-        client
-            .post(&url)
-            .json(&GitCredentialExchangeRequest { host, path })
-    };
-
-    // The exchange is a single POST bounded by the 30s client timeout above, but
-    // `apply_api_auth_with_context` proactively refreshes any token with less
-    // than 300s of life remaining (so longer-running callers keep a >=300s
-    // margin) and returns `NOT_AUTHENTICATED_MESSAGE` if that refresh fails --
-    // even when the on-disk access token is still server-valid for this short
-    // request. Capture the stored token before the auth call (a concurrent
-    // write cannot then interpose) so that, only when the shared layer's
-    // refresh fails, we can retry the exchange with the still-valid bearer.
-    // The 30s predicate is load-bearing: it matches the exchange client's
-    // timeout, so the fallback never hands out a token the request could
-    // outlive. The shared auth layer is left unchanged for everyone else.
-    let fallback_tokens = crate::auth::load_tokens_with_context(ctx).ok().flatten();
-
-    let response = match crate::auth::apply_api_auth_with_context(ctx, build_request()) {
-        Ok(request) => request
-            .send()
-            .context("Failed to exchange Diode authentication for a Git credential")?,
-        Err(error) => {
-            if error.to_string() != crate::auth::NOT_AUTHENTICATED_MESSAGE {
-                return Err(error);
-            }
-            let Some(tokens) = fallback_tokens else {
-                return Err(error);
-            };
-            // Re-evaluate the remaining lifetime *after* the refresh attempt so
-            // the predicate accounts for any time the refresh consumed (e.g. a
-            // 30s read timeout); a token that entered the 300s skew with little
-            // margin may now have less than the exchange needs.
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .context("System clock is before the Unix epoch")?
-                .as_secs() as i64;
-            if tokens.expires_at - now <= 30 {
-                return Err(error);
-            }
-            build_request()
-                .bearer_auth(tokens.access_token)
-                .send()
-                .context("Failed to exchange Diode authentication for a Git credential")?
-        }
-    };
+    // Only this short exchange may reuse a token after refresh failure.
+    let token = crate::auth::get_api_token_with_refresh_fallback(ctx, timeout)?;
+    let request = client
+        .post(url)
+        .json(&GitCredentialExchangeRequest { host, path });
+    let response = crate::auth::apply_bearer_auth(request, token.as_deref())
+        .send()
+        .context("Failed to exchange Diode authentication for a Git credential")?;
 
     if !response.status().is_success() {
         bail!("Git credential exchange failed: {}", response.status());

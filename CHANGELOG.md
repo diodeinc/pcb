@@ -28,6 +28,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Keep inward decimation within the boundary deviation limit for spikes beyond chord endpoints.
 - Honor explicit `in_bom` overrides and inherit omitted values in KiCad `extends` symbols.
 - Import metric-only `0402Metric`/`0603Metric` passives as imperial `01005`/`0201` packages, ignoring library namespaces in package detection.
+- Keep Git authentication working when token refresh fails but the access token remains valid for the credential exchange.
 
 ## [0.4.51] - 2026-09-05
 
@@ -57,9 +58,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Support opaque service-account client IDs and proper OAuth Basic encoding.
 - Allow off-page schematic placement and avoid existing text and graphics.
-- Fall back to the still-valid access token in `pb auth git` when a transient
-  OAuth refresh failure lands in the final minutes of a token's life, instead
-  of aborting Git operations with a misleading re-login prompt.
 
 ## [0.4.49] - 2026-09-04
 
