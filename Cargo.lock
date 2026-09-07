@@ -4236,6 +4236,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "pcb-elastic"
+version = "0.4.51"
+dependencies = [
+ "nalgebra",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "pcb-fmt"
 version = "0.4.51"
 dependencies = [
