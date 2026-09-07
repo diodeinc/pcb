@@ -1587,7 +1587,6 @@ impl<'a> Parser<'a> {
     fn parse_spec(&mut self, node: &Node) -> Result<ecad::Spec> {
         let name = self.required_attr(node, "name", "Spec")?;
 
-        let mut material = None;
         let mut dielectric_constant = None;
         let mut loss_tangent = None;
         let mut properties = Vec::new();
@@ -1612,10 +1611,6 @@ impl<'a> Parser<'a> {
                                     let text_sym = self.interner.intern(text);
                                     // Store all property texts
                                     properties.push(text_sym);
-                                    // Take the first non-empty material text we find
-                                    if material.is_none() {
-                                        material = Some(text_sym);
-                                    }
                                 }
                             }
                             "ColorTerm" => {
@@ -1679,6 +1674,15 @@ impl<'a> Parser<'a> {
             }
         }
 
+        // Property text has no identity/description discriminator. Only a
+        // unique nonblank value can populate the convenience material field.
+        let mut texts = properties
+            .iter()
+            .copied()
+            .filter(|text| !self.interner.resolve(*text).trim().is_empty());
+        let material = texts
+            .next()
+            .filter(|first| texts.all(|text| text == *first));
         Ok(ecad::Spec {
             name,
             items,

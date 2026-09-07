@@ -525,18 +525,17 @@ fn physical_stackup(xml: &str, source_index: usize) -> Result<PhysicalStackup> {
                         layer_index + 1
                     )
                 })?;
-            let mut specs = layer
+            let specs = layer
                 .spec_refs
                 .iter()
-                .filter_map(|spec_ref| ecad.cad_header.specs.get(spec_ref))
-                .map(|spec| spec_signature(&ipc, spec))
-                .collect::<Vec<_>>();
-            if let Some(spec_ref) = stackup_layer.spec_ref
-                && !layer.spec_refs.contains(&spec_ref)
-                && let Some(spec) = ecad.cad_header.specs.get(&spec_ref)
-            {
-                specs.push(spec_signature(&ipc, spec));
-            }
+                .chain(stackup_layer.spec_refs.iter().filter(|reference| !layer.spec_refs.contains(reference)))
+                .map(|reference| {
+                    let spec = ecad.cad_header.specs.get(reference).with_context(|| format!(
+                        "assembly panel input {input_number} stackup references unresolved specification '{}'", ipc.resolve(*reference)
+                    ))?;
+                    Ok(spec_signature(&ipc, spec))
+                })
+                .collect::<Result<Vec<_>>>()?;
 
             Ok(PhysicalStackupLayer {
                 name,

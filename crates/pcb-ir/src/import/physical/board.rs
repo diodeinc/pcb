@@ -33,6 +33,8 @@ pub struct BoardPhysicalView {
     pub removal_layers: Vec<BoardRemovalLayer>,
     /// Source-identified hole/slot apertures, retaining plating and Z-span.
     /// Unlike removal_layers these are source images, before polarity clears.
+    /// Assembly termination/protection enrichment belongs to physical_view;
+    /// this view deliberately does not materialize paste/mask/protection layers.
     /// Without a valid stackup, this evidence view leaves all derived land and
     /// termination associations unresolved, including order-independent spans.
     pub holes: Vec<PhysicalHole>,
@@ -125,6 +127,7 @@ pub enum BoardPhysicalDiagnostic {
     UnresolvedMaterialDesignator { layer: Symbol, designator: Symbol },
     AmbiguousMaterialDesignator { layer: Symbol, designator: Symbol },
     UnresolvedSpec { layer: Symbol, spec: Symbol },
+    UninterpretedMaterialProperties { layer: Symbol, spec: Symbol },
     UninterpretedGroupMaterial { group: Symbol },
     MissingComponentEnvelope(ComponentOccurrenceId),
     UnspecifiedPackageOutline(ComponentOccurrenceId),
@@ -345,6 +348,14 @@ impl ImportedDesign {
                         });
                     continue;
                 };
+                if spec.material.is_none() && !spec.properties.is_empty() {
+                    result.diagnostics.push(
+                        BoardPhysicalDiagnostic::UninterpretedMaterialProperties {
+                            layer: layer_ref,
+                            spec: *reference,
+                        },
+                    );
+                }
                 // Use the importer's selected material field. Other property
                 // text is descriptive evidence, not additional identities.
                 let values = spec
@@ -394,6 +405,14 @@ impl ImportedDesign {
                     [item] => {
                         for reference in &item.spec_refs {
                             if let Some(spec) = self.specs.get(reference) {
+                                if spec.material.is_none() && !spec.properties.is_empty() {
+                                    result.diagnostics.push(
+                                        BoardPhysicalDiagnostic::UninterpretedMaterialProperties {
+                                            layer: layer_ref,
+                                            spec: *reference,
+                                        },
+                                    );
+                                }
                                 bom_materials.extend(
                                     spec.material.into_iter().filter(|material| {
                                         !self.resolve(*material).trim().is_empty()
@@ -485,7 +504,9 @@ fn thickness(
     diagnostics: &mut Vec<BoardPhysicalDiagnostic>,
 ) -> Option<f64> {
     match value {
-        Some(value) if value.is_finite() && value > 0.0 => Some(value),
+        Some(value) if value.is_finite() && (value > 0.0 || (value == 0.0 && layer.is_some())) => {
+            Some(value)
+        }
         Some(value) => {
             diagnostics.push(BoardPhysicalDiagnostic::InvalidThickness { layer, value });
             None
