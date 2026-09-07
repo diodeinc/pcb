@@ -51,7 +51,7 @@ pub(super) fn migrate_registry_references(root: &Path) -> Result<RegistryMigrati
         }
     }
 
-    for path in zen_files(package_roots)? {
+    for path in zen_files(&workspace.root, package_roots)? {
         let source = fs::read_to_string(&path)
             .with_context(|| format!("Failed to read {}", path.display()))?;
         if let Some(content) = migrate_zen_source(&source, &path)? {
@@ -152,10 +152,17 @@ fn rewrite_value(value: &mut Value) {
     *value.decor_mut() = decor;
 }
 
-fn zen_files(package_roots: BTreeSet<PathBuf>) -> Result<BTreeSet<PathBuf>> {
+fn zen_files(
+    workspace_root: &Path,
+    mut package_roots: BTreeSet<PathBuf>,
+) -> Result<BTreeSet<PathBuf>> {
+    let root_is_container = package_roots.insert(workspace_root.to_path_buf());
     let mut paths = BTreeSet::new();
     for package_root in package_roots {
-        let mut builder = WalkBuilder::new(package_root);
+        let mut builder = WalkBuilder::new(&package_root);
+        if root_is_container && package_root == workspace_root {
+            builder.max_depth(Some(1));
+        }
         builder
             .hidden(true)
             .git_ignore(true)
