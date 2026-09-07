@@ -77,6 +77,7 @@ fn main() -> Result<()> {
         "preparation_budget_mm":board.substrate.budget().max_error_mm(),
         "metadata":format!("{:?}",board.metadata),
         "overall_thickness_mm":board.metadata.overall_thickness_mm,
+        "spec_refs":board.metadata.spec_refs.iter().map(|s|ipc.resolve(*s)).collect::<Vec<_>>(),
         "stackup_groups":board.metadata.groups.iter().map(|g| json!({
             "name":ipc.resolve(g.name),
             "mat_des":g.mat_des.map(|s|ipc.resolve(s)),
