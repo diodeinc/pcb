@@ -8,10 +8,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
-### Fixed
-
-- Migrate registry references in root-level `.zen` files in container workspaces.
-
 ### Changed
 
 - Consolidate `pcb bom` table and JSON rows by selected offer.
@@ -20,6 +16,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- Migrate registry references in root-level `.zen` files in container workspaces.
 - Make `pcb rectify fix` and `pcb rectify audit` exit non-zero on batch evaluation errors.
 - Report malformed SPICE `PARAMS:` tokens instead of panicking.
 - Escape inserted KiCad `Path` properties during import so special characters do not break layout sync.

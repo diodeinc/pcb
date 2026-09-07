@@ -151,22 +151,46 @@ Bar = Module("{LEGACY_REGISTRY}/components/Bar/Bar.zen")
 #[test]
 fn migrate_rewrites_root_zen_files_in_pure_container_workspace() {
     let target = pcb_version_from_cargo();
-    let root_manifest = format!("[workspace]\nname = \"demo\"\npcb-version = \"{target}\"\n");
-    let package_manifest = "[board]\nname = \"Main\"\npath = \"Main.zen\"\n";
+    let root_manifest =
+        format!("[workspace]\npcb-version = \"{target}\"\nexclude = [\"scratch/**\"]\n");
+    let package_manifest = "[board]\nname = \"Main\"\npath = \"nested/Main.zen\"\n";
     let source = format!("load('{LEGACY_REGISTRY}/components/Foo/Foo.zen', \"Foo\")\n");
+    let migrated = [
+        "board.zen",
+        "boards/Main/nested/Main.zen",
+        ".hidden/helper.zen",
+    ];
+    let untouched = [
+        ("scratch/old.zen", source.as_str()),
+        ("scratch/bad.zen", "not valid !!!\n"),
+        ("unowned/helper.zen", source.as_str()),
+        (".hidden.zen", source.as_str()),
+    ];
     let mut sandbox = Sandbox::new();
     sandbox
         .write("pcb.toml", &root_manifest)
-        .write("board.zen", &source)
         .write("boards/Main/pcb.toml", package_manifest)
-        .write("boards/Main/Main.zen", &source);
+        .write(".hidden/pcb.toml", "[dependencies]\n");
+    for path in migrated {
+        sandbox.write(path, &source);
+    }
+    for (path, content) in untouched {
+        sandbox.write(path, content);
+    }
 
     run_migrate(&mut sandbox);
 
-    for path in ["board.zen", "boards/Main/Main.zen"] {
+    for path in migrated {
         assert_eq!(
             fs::read_to_string(sandbox.root_path().join(path)).unwrap(),
             source.replace(LEGACY_REGISTRY, CANONICAL_REGISTRY),
+            "{path}"
+        );
+    }
+    for (path, content) in untouched {
+        assert_eq!(
+            fs::read_to_string(sandbox.root_path().join(path)).unwrap(),
+            content,
             "{path}"
         );
     }
