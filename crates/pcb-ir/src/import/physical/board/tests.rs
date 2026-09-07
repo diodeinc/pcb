@@ -3,7 +3,7 @@ use crate::import::ipc2581::import_design;
 use ipc2581::Ipc2581;
 
 fn design(xml: &str) -> ImportedDesign {
-    import_design(&Ipc2581::parse(xml).unwrap()).unwrap()
+    import_design(&Ipc2581::parse(xml).unwrap(), Resolution::default()).unwrap()
 }
 
 // Deliberately asymmetric geometry: mirroring/rotation mistakes cannot hide
