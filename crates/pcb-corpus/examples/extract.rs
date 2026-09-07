@@ -79,6 +79,7 @@ fn main() -> Result<()> {
         "overall_thickness_mm":board.metadata.overall_thickness_mm,
         "material_layers":board.metadata.layers.iter().map(|l| json!({
             "layer":ipc.resolve(l.layer_ref), "thickness_mm":l.thickness_mm,
+            "mat_des":l.mat_des.map(|s|ipc.resolve(s)),
             "material":l.material.resolved().map(|s|ipc.resolve(*s)),
             "association":format!("{:?}",l.material),
             "spec":l.spec_ref.map(|s|ipc.resolve(s))
