@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use pcb_component_gen as component_gen;
 use pcb_sexpr::Sexpr;
 use pcb_sexpr::find_child_list;
-use pcb_sexpr::formatter::{FormatMode, format_tree};
+use pcb_sexpr::formatter::{FormatMode, format_tree, quote_string};
 use pcb_sexpr::kicad::symbol::{
     kicad_symbol_lib_items_mut, rewrite_symbol_properties, symbol_names, symbol_properties,
 };
@@ -463,8 +463,8 @@ fn compute_set_footprint_sync_hook_patches_by_refdes(
             // Insert a new (property "Path" "...") block before the footprint's closing paren.
             let insert_at = footprint_closing_line_start(pcb_text, node.span);
             let property_text = format!(
-                "\t\t(property \"Path\" \"{}\"\n\t\t\t(at 0 0 0)\n\t\t\t(layer \"F.SilkS\")\n\t\t\t(hide yes)\n\t\t)\n",
-                desired
+                "\t\t(property \"Path\" {}\n\t\t\t(at 0 0 0)\n\t\t\t(layer \"F.SilkS\")\n\t\t\t(hide yes)\n\t\t)\n",
+                quote_string(desired)
             );
             patches.replace_raw(
                 Span {
@@ -2934,6 +2934,39 @@ mod tests {
             module_skip_defaults: BTreeMap::new(),
             expected_pins_by_anchor: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn inserted_path_property_round_trips_special_characters() {
+        let pcb_text = "(kicad_pcb\n\t(footprint \"lib:FP\"\n\t\t(property \"Reference\" \"R1\")\n\t\t(path \"/old-uuid\")\n\t)\n)";
+        let desired = "R\"1\\2\n\r\t.R";
+        let board = pcb_sexpr::parse(pcb_text).unwrap();
+        let patches = compute_set_footprint_sync_hook_patches_by_refdes(
+            &board,
+            pcb_text,
+            &BTreeMap::from([(KiCadRefDes::from("R1".to_string()), desired.to_string())]),
+        )
+        .unwrap();
+        let mut out = Vec::new();
+        patches.write_to(pcb_text, &mut out).unwrap();
+        let patched = String::from_utf8(out).unwrap();
+        let board = pcb_sexpr::parse(&patched).unwrap();
+        let footprint = find_child_list(board.as_list().unwrap(), "footprint").unwrap();
+        let path = footprint
+            .iter()
+            .filter_map(Sexpr::as_list)
+            .find(|list| {
+                list.first().and_then(Sexpr::as_sym) == Some("property")
+                    && list.get(1).and_then(Sexpr::as_str) == Some("Path")
+            })
+            .unwrap()[2]
+            .as_str()
+            .unwrap();
+        assert_eq!(path, desired);
+        assert_eq!(
+            find_child_list(footprint, "path").unwrap()[1].as_str(),
+            Some(pcb_sch::kicad_identity::footprint_kiid_path(path).as_str())
+        );
     }
 
     #[test]
