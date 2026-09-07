@@ -259,7 +259,7 @@ pub fn html(rows: &[(Option<Fixture>, Report)]) -> String {
             escape(&report.message)
         ));
         if let Some(f) = fixture.as_ref().filter(|f| validate(f).is_ok()) {
-            out.push_str(&format!("<input class=\"show-overlays\" id=\"overlays-{index}\" type=\"checkbox\" checked><label for=\"overlays-{index}\">Show source overlays</label>"));
+            out.push_str(&format!("<input class=\"show-overlays\" id=\"overlays-{index}\" type=\"checkbox\"><label for=\"overlays-{index}\">Show source overlays</label>"));
             out.push_str(&format!("<p>Region significance tolerance: {} mm; extraction flatten tolerance: {} mm. Input rings: {}; after rings: {} (includes holes).</p><div class=\"pair\"><figure><figcaption>Before</figcaption>{}</figure><figure><figcaption>After</figcaption>{}</figure></div>", f.tolerance_mm, f.flatten_mm, f.substrate.len(), report.after.len(), svg(f, None), if report.after_area_mm2.is_some() { svg(f, Some(&report.after)) } else { "<p>After geometry unavailable</p>".into() }));
             out.push_str("<details><summary>Overlay identities and semantics</summary><ul>");
             for o in &f.overlays {
