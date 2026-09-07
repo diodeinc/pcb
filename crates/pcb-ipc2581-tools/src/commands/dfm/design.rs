@@ -671,6 +671,7 @@ pub(super) struct CopperLayer {
     pub copper_weight_oz: Option<f64>,
     pub image: ContourSet,
     pub conductors: Vec<CopperConductor>,
+    pub net_shorts: Vec<NetShort>,
     /// Source lands, including those fully removed from the final copper image.
     /// Hole links still require these for annular-ring subjects and provenance.
     pub lands: Vec<Land>,
@@ -699,6 +700,7 @@ pub(super) enum ConductorId {
     Unattributed {
         step: Option<Symbol>,
         instance: Option<u32>,
+        occurrence: FeatureOccurrenceId,
         source_set_index: u32,
         source_feature_index: u32,
     },
@@ -739,6 +741,12 @@ impl ConductorId {
 pub(super) struct CopperConductor {
     pub id: ConductorId,
     pub image: ContourSet,
+}
+
+#[derive(Debug)]
+pub(super) struct NetShort {
+    pub nets: [ConductorId; 2],
+    pub location: Point,
 }
 
 #[derive(Debug)]
@@ -1072,6 +1080,25 @@ fn hole_class(plating: PlatingKind) -> Option<HoleClass> {
     }
 }
 
+fn collect_net_shorts(document: &GeometryDocument, layer: Symbol) -> Result<Vec<NetShort>> {
+    document.feature_sets.iter().flat_map(|set| &set.net_shorts).map(|short| {
+        let [first, second] = short.nets.as_slice() else {
+            bail!("unsupported NetShort: expected two NetRefs");
+        };
+        if first == second || short.layers.as_slice() != [layer] {
+            bail!("invalid or unsupported NetShort: expected distinct nets and the containing copper layer only");
+        }
+        Ok(NetShort {
+            nets: [first, second].map(|net| ConductorId::Net {
+                step: Some(short.source_step_ref),
+                instance: short.source_instance,
+                net: *net,
+            }),
+            location: short.location,
+        })
+    }).collect()
+}
+
 struct CopperAttributionLowering;
 
 impl ArtworkLowering<Symbol, Option<ConductorId>> for CopperAttributionLowering {
@@ -1105,6 +1132,8 @@ impl ArtworkLowering<Symbol, Option<ConductorId>> for CopperAttributionLowering 
         Some(ConductorId::Unattributed {
             step: feature.source_step_ref,
             instance: feature.source_instance,
+            occurrence: feature_occurrence_id(feature)
+                .expect("materialized copper must retain its occurrence identity"),
             source_set_index: feature.source.set_index,
             source_feature_index: feature.source.feature_index,
         })
@@ -1240,6 +1269,7 @@ fn conductor_order(
         ConductorId::Unattributed {
             step,
             instance,
+            occurrence,
             source_set_index,
             source_feature_index,
         } => (
@@ -1249,7 +1279,7 @@ fn conductor_order(
             "",
             source_set_index,
             source_feature_index,
-            None,
+            Some(occurrence),
         ),
     }
 }
@@ -1315,7 +1345,15 @@ fn collect_copper_layers(
                     provenance: feature_provenance(imported, name, feature),
                 });
             }
-            let (image, mut conductors) = compose_attributed_copper(&mut document, resolution)?;
+            let net_shorts = collect_net_shorts(&document, layer.name)?;
+            // Contact topology must not depend on the feature-significance
+            // filter: even a tiny remaining island may be another short.
+            let copper_resolution = if net_shorts.is_empty() {
+                resolution
+            } else {
+                resolution.strict()
+            };
+            let (image, mut conductors) = compose_attributed_copper(&mut document, copper_resolution)?;
             conductors.sort_by_key(|conductor| conductor_order(imported, conductor.id));
             if require_conductor_ownership
                 && let Some(conductor) = conductors
@@ -1323,14 +1361,24 @@ fn collect_copper_layers(
                     .find(|conductor| conductor.id.is_unattributed())
             {
                 let id = conductor.id;
+                let ConductorId::Unattributed { occurrence, source_set_index, source_feature_index, .. } = id else {
+                    unreachable!()
+                };
+                let feature = document.features.iter().find(|feature| {
+                    feature_occurrence_id(feature) == Some(occurrence)
+                });
+                let component = feature.and_then(|feature| feature.set)
+                    .and_then(|set| document.feature_sets.get(set as usize))
+                    .and_then(|set| set.component_ref);
                 bail!(
-                    "IPC-2581 copper layer '{name}' has final functional copper without net attribution in Step '{}'{}; copper clearance cannot be certified",
+                    "IPC-2581 copper layer '{name}' has final functional copper without net attribution in Step '{}'{}, Set {source_set_index}, feature {source_feature_index}{}; copper clearance cannot be certified. NetShort declares a local contact, not ownership of netless copper; the exporter must provide explicit net attribution",
                     id.step()
                         .map(|step| imported.resolve(step))
                         .unwrap_or("<root>"),
                     id.instance()
                         .map(|instance| format!(", layout instance {instance}"))
-                        .unwrap_or_default()
+                        .unwrap_or_default(),
+                    component.map(|component| format!(", component '{}'", imported.resolve(component))).unwrap_or_default(),
                 );
             }
             // The file's side attribute is authoritative; the stackup
@@ -1347,6 +1395,7 @@ fn collect_copper_layers(
                 copper_weight_oz: copper_weight_oz(imported, layer.name),
                 image,
                 conductors,
+                net_shorts,
                 lands,
             })
         })

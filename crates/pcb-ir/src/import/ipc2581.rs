@@ -520,6 +520,7 @@ fn push_feature_set_record(
     source_set_index: u32,
     set: &ipc2581::types::FeatureSet,
     polarity: GeometryPolarity,
+    step: Symbol,
 ) -> u32 {
     let spec_refs = push_spec_refs(doc, &set.spec_refs);
     let set_id = doc.feature_sets.len() as u32;
@@ -529,6 +530,18 @@ fn push_feature_set_record(
         source_geometry_ref: set.geometry,
         component_ref: set.component_ref,
         geometry_usage: set.geometry_usage.map(map_geometry_usage),
+        net_shorts: set
+            .net_shorts
+            .iter()
+            .map(|short| crate::dialects::ipc::feature::NetShort {
+                id: short.id,
+                source_step_ref: step,
+                source_instance: None,
+                nets: short.nets.clone(),
+                location: Point::new(short.location.x, short.location.y),
+                layers: short.layers.clone(),
+            })
+            .collect(),
         net: set.net,
         polarity,
         spec_refs,
@@ -1571,8 +1584,14 @@ pub fn extract_step_layer_local(
             {
                 bail!("copper-balance full_void set must contain exactly one feature group");
             }
-            let set_id =
-                push_feature_set_record(&mut doc, layer_index, set_index as u32, set, polarity);
+            let set_id = push_feature_set_record(
+                &mut doc,
+                layer_index,
+                set_index as u32,
+                set,
+                polarity,
+                step.name,
+            );
 
             for (feature_index, set_feature) in set.features.iter().enumerate() {
                 let source = SourceRef {
@@ -1696,8 +1715,14 @@ pub fn extract_step_layer_local(
             }
 
             if !emitted.is_empty() {
-                let set_id =
-                    push_feature_set_record(&mut doc, layer_index, set_index as u32, set, polarity);
+                let set_id = push_feature_set_record(
+                    &mut doc,
+                    layer_index,
+                    set_index as u32,
+                    set,
+                    polarity,
+                    step.name,
+                );
                 for mut feature in emitted {
                     feature.source_step_ref = Some(step.name);
                     feature.source_step_kind = source_step_kind;
@@ -1973,6 +1998,16 @@ fn append_transformed_layer(
             source_geometry_ref: source_set.source_geometry_ref,
             component_ref: source_set.component_ref,
             geometry_usage: source_set.geometry_usage,
+            net_shorts: source_set
+                .net_shorts
+                .iter()
+                .map(|short| {
+                    let mut short = short.clone();
+                    short.location = transform.transform_point(short.location);
+                    short.source_instance = source_instance.or(short.source_instance);
+                    short
+                })
+                .collect(),
             net: source_set.net,
             polarity: source_set.polarity,
             spec_refs,

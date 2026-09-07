@@ -773,6 +773,7 @@ mod tests {
             source_geometry_ref: None,
             component_ref: None,
             geometry_usage: None,
+            net_shorts: Vec::new(),
             net: None,
             polarity: Polarity::Dark,
             spec_refs: Span::single(0),
