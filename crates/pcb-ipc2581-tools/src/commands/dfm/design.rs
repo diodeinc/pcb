@@ -1552,7 +1552,7 @@ fn collect_board_outlines(
                 ContourSet::from_filled_contours(&native_outline[..outer_count], resolution)?;
             let cutouts =
                 ContourSet::from_filled_contours(&native_outline[outer_count..], resolution)?;
-            let region = outer.difference(&cutouts).unwrap();
+            let region = outer.difference(&cutouts)?;
             if region.is_empty() {
                 return Ok(None);
             }

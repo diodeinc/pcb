@@ -563,7 +563,7 @@ impl ImportedDesign {
                             &evidence,
                             &Association::Unresolved,
                             candidates,
-                        ),
+                        )?,
                     });
                 }
             }
@@ -623,7 +623,7 @@ impl ImportedDesign {
                         &evidence,
                         &Association::Unresolved,
                         candidates,
-                    );
+                    )?;
                     layer_lands.push(LayerLandAssociation {
                         layer: copper_layer,
                         land,
@@ -684,7 +684,7 @@ impl ImportedDesign {
                 terminations,
                 &land_by_id,
                 stackup.as_deref(),
-            );
+            )?;
             if let Some(side) = association_side(&termination, terminations) {
                 hole.assembly_side = side;
             }
@@ -701,7 +701,7 @@ impl ImportedDesign {
         terminations: &[PhysicalTermination],
         land_by_id: &HashMap<LandId, &PhysicalLand>,
         stackup: Option<&[Symbol]>,
-    ) -> (Association<PhysicalTerminationId>, Option<AssociationBasis>) {
+    ) -> Result<(Association<PhysicalTerminationId>, Option<AssociationBasis>)> {
         if !evidence.component_refs.is_empty() || evidence.pin.is_some() {
             let candidates = terminations
                 .iter()
@@ -718,37 +718,32 @@ impl ImportedDesign {
                 })
                 .map(|termination| termination.id)
                 .collect::<BTreeSet<_>>();
-            return (
+            return Ok((
                 association_from_candidates(candidates, true),
                 Some(AssociationBasis::SourceIdentity),
-            );
+            ));
         }
 
-        let candidate_lands = terminations
-            .iter()
-            .flat_map(|termination| {
-                termination.lands.iter().filter_map(|land| {
-                    let land = land_by_id[land];
-                    (termination.side != Side::None
-                        && land.board == hole.board
-                        && land.side == termination.side
-                        && feature_definitely_spans_layer(
-                            hole.span,
-                            self.layer_definitions[land.layer.0 as usize].name,
-                            stackup,
-                        )
-                        && land.image.bbox().intersects(hole.image.bbox())
-                        && land
-                            .image
-                            .intersection(&hole.image)
-                            .expect("lands and holes share one resolution")
-                            .area()
-                            > tol::REGION_MM.powi(2))
-                    .then_some((land.id, termination.id))
-                })
-            })
-            .collect::<Vec<_>>();
-        match candidate_lands.as_slice() {
+        let mut candidate_lands = Vec::new();
+        for termination in terminations {
+            for land in &termination.lands {
+                let land = land_by_id[land];
+                if termination.side != Side::None
+                    && land.board == hole.board
+                    && land.side == termination.side
+                    && feature_definitely_spans_layer(
+                        hole.span,
+                        self.layer_definitions[land.layer.0 as usize].name,
+                        stackup,
+                    )
+                    && land.image.bbox().intersects(hole.image.bbox())
+                    && land.image.intersection(&hole.image)?.area() > tol::REGION_MM.powi(2)
+                {
+                    candidate_lands.push((land.id, termination.id));
+                }
+            }
+        }
+        Ok(match candidate_lands.as_slice() {
             [] => (Association::Unresolved, None),
             [(_, termination)] => (
                 Association::Resolved(*termination),
@@ -765,7 +760,7 @@ impl ImportedDesign {
                 ),
                 Some(AssociationBasis::ExactGeometry),
             ),
-        }
+        })
     }
 
     fn attach_hole_protection(
@@ -1073,7 +1068,7 @@ fn associate_land_candidates(
     evidence: &FeatureEvidence,
     component: &Association<ComponentOccurrenceId>,
     lands: &[&PhysicalLand],
-) -> Association<LandId> {
+) -> Result<Association<LandId>> {
     let same_context = lands
         .iter()
         .copied()
@@ -1100,31 +1095,26 @@ fn associate_land_candidates(
     } else {
         same_context.as_slice()
     };
-    let overlapping = pool
-        .iter()
-        .copied()
-        .filter(|land| land.image.bbox().intersects(image.bbox()))
-        .filter(|land| {
-            land.image
-                .intersection(image)
-                .expect("lands share one resolution")
-                .area()
-                > tol::REGION_MM.powi(2)
-        })
-        .map(|land| land.id)
-        .collect::<Vec<_>>();
+    let mut overlapping = Vec::new();
+    for land in pool {
+        if land.image.bbox().intersects(image.bbox())
+            && land.image.intersection(image)?.area() > tol::REGION_MM.powi(2)
+        {
+            overlapping.push(land.id);
+        }
+    }
 
     if matches!(component, Association::Conflicting(_)) {
-        return Association::Conflicting(overlapping);
+        return Ok(Association::Conflicting(overlapping));
     }
-    match overlapping.as_slice() {
+    Ok(match overlapping.as_slice() {
         [land] => Association::Resolved(*land),
         [_, _, ..] => Association::Ambiguous(overlapping),
         [] if has_explicit_evidence && !explicit.is_empty() => {
             Association::Conflicting(explicit.iter().map(|land| land.id).collect())
         }
         [] => Association::Unresolved,
-    }
+    })
 }
 
 fn land_component_refs(land: &PhysicalLand) -> Vec<Symbol> {
@@ -1298,6 +1288,37 @@ mod tests {
     use crate::geom::path::{ContourBuf, PathCmd};
     use crate::geom::{LineCap, Paint, StrokeStyle};
     use crate::import::ipc2581::import_design;
+
+    #[test]
+    fn physical_associations_propagate_geometry_budget_errors() {
+        let ipc = Ipc2581::parse(physical_fixture()).unwrap();
+        let imported = import_design(&ipc, Resolution::default()).unwrap();
+        let scope = ArtworkScope::Board;
+        let coarse = Resolution::default();
+        let fine = coarse.with_accuracy(crate::geom::GeometryAccuracy::new(0.0001).unwrap());
+        let lands = imported.physical_lands(scope, coarse).unwrap();
+
+        // Individually valid images can exceed the tighter budget when combined.
+        let hole_error = imported
+            .derive_physical_holes(scope, &lands, fine)
+            .unwrap_err();
+        let mask_error = imported.mask_openings(scope, &lands, fine).unwrap_err();
+        let terminations = imported.derive_physical_terminations(&lands);
+        let mut holes = imported.physical_holes(scope, fine).unwrap();
+        holes[0].span = FeatureSpan::ThroughBoard;
+        let assembly_error = imported
+            .attach_hole_assembly_evidence(scope, &lands, &terminations, &mut holes, fine)
+            .unwrap_err();
+        for error in [hole_error, mask_error, assembly_error] {
+            assert!(
+                matches!(
+                    error.downcast_ref::<crate::geom::AccuracyError>(),
+                    Some(crate::geom::AccuracyError::BudgetExceeded { .. })
+                ),
+                "{error}"
+            );
+        }
+    }
 
     #[test]
     fn domain_queries_do_not_materialize_unrelated_layers() {
