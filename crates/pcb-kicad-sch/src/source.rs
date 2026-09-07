@@ -9,7 +9,9 @@ use crate::{SchDocument, SchItem, SchPage, SymbolLibrary, parse_kicad_sch_page};
 ///
 /// Unchanged semantic items and unsupported source sections retain their
 /// original text. The function performs no I/O and returns `None` when the
-/// desired page is semantically unchanged.
+/// desired page is semantically unchanged. An actual edit to a KiCad 9 page
+/// rewrites it as KiCad 10, rather than mixing modern nodes with legacy
+/// version-dependent string and body-style semantics.
 pub fn patch_page_source(source: &str, desired_page: &SchPage) -> Result<Option<String>> {
     let desired_source = SchDocument {
         pages: vec![desired_page.clone()],
@@ -69,6 +71,14 @@ pub fn patch_page_source(source: &str, desired_page: &SchPage) -> Result<Option<
 
     if patches.is_empty() {
         return Ok(None);
+    }
+    let source_version = source_root
+        .as_list()
+        .and_then(|items| pcb_sexpr::find_child_list(items, "version"))
+        .and_then(|items| items.get(1))
+        .and_then(Sexpr::as_int);
+    if source_version == Some(20250114) {
+        return Ok(Some(desired_source));
     }
     let mut patched = Vec::new();
     patches.write_to(source, &mut patched)?;
@@ -171,6 +181,29 @@ fn managed_node_key(node: &Sexpr) -> Option<String> {
 mod tests {
     use super::*;
     use crate::{Label, LabelKind, LabelShape, Point, SchItem, parse_kicad_sch_page};
+
+    #[test]
+    fn editing_kicad_9_upgrades_the_page_without_reinterpreting_new_literal_tildes() {
+        let source = include_str!("../../pcb-sch/test/kicad-bom/layout.kicad_sch");
+        let mut page = parse_kicad_sch_page(None, source).unwrap();
+        assert_eq!(patch_page_source(source, &page).unwrap(), None);
+        let symbol = page
+            .items
+            .iter_mut()
+            .find_map(|item| {
+                if let SchItem::Symbol(symbol) = item {
+                    Some(symbol)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        symbol.fields.get_mut("Value").unwrap().value = "~".to_owned();
+        let saved = patch_page_source(source, &page).unwrap().unwrap();
+        assert!(saved.contains("(version 20260306)"));
+        assert_eq!(parse_kicad_sch_page(None, &saved).unwrap(), page);
+        assert_eq!(patch_page_source(&saved, &page).unwrap(), None);
+    }
 
     #[test]
     fn patches_managed_items_without_replacing_unsupported_sections() {
