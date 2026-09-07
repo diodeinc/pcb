@@ -38,6 +38,7 @@ use crate::dialects::ipc::{
     BoardArrayFabricationProfile, Document, Feature, FeatureSpan, LayoutPurpose,
     ProfileOccurrenceRole, ProfileSet, profile_occurrences_for, relief::is_vcut_operation_feature,
 };
+use crate::geom::accuracy::{ErrorAllocation, allocate_error};
 use crate::geom::{ContourSet, FillRule, Paint};
 
 /// Default Euclidean clearance from every protected feature.
@@ -389,16 +390,14 @@ pub fn board_array_balancing_region(
         .board_footprints
         .union(&input.material_removal)?
         .union(&input.support_features)?;
-    // Construction reserves half the budget the inputs were prepared at: the
-    // two offsets that build the region each spend at most a quarter of it,
-    // so every checked quantity stays strictly separated from a constructed
-    // one.
-    let numerical_guard_mm = input
-        .panel_outer
-        .budget()
-        .min(raw_obstacles.budget())
-        .max_error_mm()
-        / 2.0;
+    let numerical_guard_mm = allocate_error(
+        input
+            .panel_outer
+            .budget()
+            .min(raw_obstacles.budget())
+            .max_error_mm(),
+        ErrorAllocation::ConstructionGuard,
+    );
     let construction_clearance_mm = options.clearance_mm + numerical_guard_mm;
     let panel_keep_in = input.panel_outer.disk_erode(construction_clearance_mm)?;
     let obstacle_keep_out = raw_obstacles.disk_dilate(construction_clearance_mm)?;

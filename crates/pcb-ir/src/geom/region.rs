@@ -28,7 +28,7 @@ use i_overlay::i_float::int::point::IntPoint;
 use i_overlay::mesh::outline::offset::OutlineOffset;
 use i_overlay::mesh::style::{LineJoin as OutlineLineJoin, OutlineStyle};
 
-use crate::geom::accuracy::numerical_error;
+use crate::geom::accuracy::{ErrorAllocation, allocate_error, numerical_error};
 use crate::geom::affine::Affine2;
 use crate::geom::bbox::BBox;
 use crate::geom::dist::{self, Distance};
@@ -54,7 +54,7 @@ fn flatten_contours(contours: &[ContourBuf], accuracy: f64) -> (Vec<Ring>, f64) 
     // the conversion reports, such as a mismatched arc radius, is charged on
     // top rather than squeezed out of the chord tolerance, so an inconsistent
     // arc fails its budget instead of being flattened without bound.
-    let conversion_target = accuracy / 8.0;
+    let conversion_target = allocate_error(accuracy, ErrorAllocation::CurveConversion);
     let (bez_path, conversion_error) =
         crate::geom::path::contours_to_kurbo(contours, conversion_target);
     let curved = bez_path
