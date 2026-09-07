@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use pcb_zen_core::lang::stackup::{BoardConfig, DesignRules, NetClass};
 use serde_json::{Map, Value, json};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
@@ -378,14 +378,23 @@ fn patch_netclasses(project: &mut Value, board_config: &BoardConfig) {
         .filter(|nc| nc.name == "Default")
         .chain(ordered);
 
-    let mut used_priorities: HashSet<i64> = classes
+    // Reserve requested priorities before assigning automatic ones, regardless of
+    // name order. Explicit ties are valid in KiCad and must remain unchanged.
+    let mut next_non_default_priority = classes
         .iter()
         .filter(|class| class.get("name").and_then(Value::as_str) != Some("Default"))
         .filter_map(|class| class.get("priority").and_then(value_as_i64))
-        .collect();
-    let mut next_non_default_priority = used_priorities
-        .iter()
-        .copied()
+        .chain(
+            netclasses
+                .iter()
+                .filter(|nc| nc.name != "Default")
+                .filter(|nc| {
+                    class_index
+                        .get(&nc.name)
+                        .is_none_or(|&idx| classes[idx].get("priority").is_none())
+                })
+                .filter_map(|nc| nc.priority.map(i64::from)),
+        )
         .max()
         .map(|max| max + 1)
         .unwrap_or(0);
@@ -402,24 +411,13 @@ fn patch_netclasses(project: &mut Value, board_config: &BoardConfig) {
         if netclass.name == "Default" {
             obj.insert("priority".to_string(), Value::from(i64::from(i32::MAX)));
         } else if existing_idx.is_none() || !obj.contains_key("priority") {
-            let priority = if let Some(requested) = netclass.priority {
-                let requested = i64::from(requested);
-                if used_priorities.contains(&requested) {
-                    let rebased = next_non_default_priority;
-                    next_non_default_priority += 1;
-                    rebased
-                } else {
-                    if next_non_default_priority <= requested {
-                        next_non_default_priority = requested + 1;
-                    }
-                    requested
-                }
+            let priority = if let Some(priority) = netclass.priority {
+                i64::from(priority)
             } else {
                 let priority = next_non_default_priority;
                 next_non_default_priority += 1;
                 priority
             };
-            used_priorities.insert(priority);
             obj.insert("priority".to_string(), Value::from(priority));
         }
 
@@ -656,7 +654,7 @@ fn upsert_object_by_string_field<'a>(
 mod tests {
     use super::{extract_design_rules_from_project_value, patch_project_value};
     use pcb_zen_core::lang::stackup::BoardConfig;
-    use serde_json::{Value, json};
+    use serde_json::json;
     use std::collections::HashMap;
 
     #[test]
@@ -1079,218 +1077,52 @@ mod tests {
         assert!(extract_design_rules_from_project_value(&project).is_none());
     }
 
-    fn non_default_priorities(project: &Value) -> Vec<i64> {
-        let mut priorities: Vec<i64> = project["net_settings"]["classes"]
-            .as_array()
-            .expect("classes must be an array")
-            .iter()
-            .filter(|c| c.get("name").and_then(Value::as_str) != Some("Default"))
-            .filter_map(|c| c.get("priority").and_then(Value::as_i64))
-            .collect();
-        priorities.sort();
-        priorities
-    }
-
-    fn assert_unique_non_default_priorities(project: &Value) {
-        let priorities = non_default_priorities(project);
-        let mut deduped = priorities.clone();
-        deduped.dedup();
-        assert_eq!(
-            priorities.len(),
-            deduped.len(),
-            "duplicate non-Default priorities: {priorities:?}"
-        );
-    }
-
     #[test]
-    fn repro_explicit_priority_collision_with_auto() {
+    fn automatic_priorities_follow_requested_values_without_rewriting_ties() {
         let mut project = json!({
-            "net_settings": {
-                "classes": [
-                    { "name": "Default", "priority": 2147483647 },
-                    { "name": "Existing", "priority": 0 }
-                ]
-            }
+            "net_settings": { "classes": [
+                { "name": "Existing1", "priority": -1 },
+                { "name": "Existing2", "priority": -1 }
+            ] }
         });
-
         let config: BoardConfig = serde_json::from_value(json!({
-            "design_rules": {
-                "netclasses": [
-                    { "name": "Aaa", "priority": 1 },
-                    { "name": "Bbb" }
-                ]
-            }
+            "design_rules": { "netclasses": [
+                { "name": "Default" },
+                { "name": "AutoBefore" },
+                { "name": "Explicit1", "priority": 0 },
+                { "name": "Explicit2", "priority": 0 },
+                { "name": "ExplicitExisting", "priority": -1 },
+                { "name": "Existing1", "priority": 100 },
+                { "name": "Existing2" },
+                { "name": "ZAutoAfter" }
+            ] }
         }))
         .unwrap();
 
         patch_project_value(&mut project, &config, &HashMap::new());
 
-        assert_unique_non_default_priorities(&project);
-        let priorities = non_default_priorities(&project);
-        assert_eq!(priorities, vec![0, 1, 2]);
-    }
-
-    #[test]
-    fn repro_explicit_priority_collides_with_existing() {
-        let mut project = json!({
-            "net_settings": {
-                "classes": [
-                    { "name": "Default", "priority": 2147483647 },
-                    { "name": "Existing", "priority": 0 }
-                ]
-            }
-        });
-
-        let config: BoardConfig = serde_json::from_value(json!({
-            "design_rules": {
-                "netclasses": [
-                    { "name": "Aaa", "priority": 0 }
-                ]
-            }
-        }))
-        .unwrap();
-
-        patch_project_value(&mut project, &config, &HashMap::new());
-
-        assert_unique_non_default_priorities(&project);
-        let priorities = non_default_priorities(&project);
-        assert_eq!(priorities, vec![0, 1]);
-    }
-
-    #[test]
-    fn distinct_new_classes_sharing_an_explicit_priority_are_rebased() {
-        let mut project = json!({
-            "net_settings": {
-                "classes": [
-                    { "name": "Default", "priority": 2147483647 }
-                ]
-            }
-        });
-
-        let config: BoardConfig = serde_json::from_value(json!({
-            "design_rules": {
-                "netclasses": [
-                    { "name": "Aaa", "priority": 1 },
-                    { "name": "Bbb", "priority": 1 }
-                ]
-            }
-        }))
-        .unwrap();
-
-        patch_project_value(&mut project, &config, &HashMap::new());
-
-        assert_unique_non_default_priorities(&project);
-        let priorities = non_default_priorities(&project);
-        assert_eq!(priorities, vec![1, 2]);
-    }
-
-    #[test]
-    fn honors_non_colliding_explicit_priority_below_counter() {
-        let mut project = json!({
-            "net_settings": {
-                "classes": [
-                    { "name": "Default", "priority": 2147483647 },
-                    { "name": "Existing", "priority": 0 },
-                    { "name": "Other", "priority": 5 }
-                ]
-            }
-        });
-
-        let config: BoardConfig = serde_json::from_value(json!({
-            "design_rules": {
-                "netclasses": [
-                    { "name": "Aaa", "priority": 2 }
-                ]
-            }
-        }))
-        .unwrap();
-
-        patch_project_value(&mut project, &config, &HashMap::new());
-
-        let aaa = project["net_settings"]["classes"]
+        let priorities: HashMap<_, _> = project["net_settings"]["classes"]
             .as_array()
             .unwrap()
             .iter()
-            .find(|c| c.get("name").and_then(Value::as_str) == Some("Aaa"))
-            .unwrap();
-        assert_eq!(aaa["priority"], json!(2));
-        assert_unique_non_default_priorities(&project);
-    }
+            .map(|class| {
+                (
+                    class["name"].as_str().unwrap(),
+                    class["priority"].as_i64().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(priorities["Default"], i64::from(i32::MAX));
+        assert_eq!(priorities["Existing1"], -1);
+        assert_eq!(priorities["Existing2"], -1);
+        assert_eq!(priorities["ExplicitExisting"], -1);
+        assert_eq!(priorities["Explicit1"], 0);
+        assert_eq!(priorities["Explicit2"], 0);
+        assert_eq!(priorities["AutoBefore"], 1);
+        assert_eq!(priorities["ZAutoAfter"], 2);
 
-    #[test]
-    fn priority_assignment_is_idempotent() {
-        let mut project = json!({
-            "net_settings": {
-                "classes": [
-                    { "name": "Default", "priority": 2147483647 },
-                    { "name": "Existing", "priority": 0 }
-                ]
-            }
-        });
-
-        let config: BoardConfig = serde_json::from_value(json!({
-            "design_rules": {
-                "netclasses": [
-                    { "name": "Aaa", "priority": 1 },
-                    { "name": "Bbb" },
-                    { "name": "Ccc", "priority": 0 }
-                ]
-            }
-        }))
-        .unwrap();
-
+        let patched = project.clone();
         patch_project_value(&mut project, &config, &HashMap::new());
-        let snapshot = project.clone();
-        patch_project_value(&mut project, &config, &HashMap::new());
-
-        assert_eq!(project, snapshot);
-        assert_unique_non_default_priorities(&project);
-    }
-
-    #[test]
-    fn all_non_default_priorities_unique_under_mixed_inputs() {
-        let mut project = json!({
-            "net_settings": {
-                "classes": [
-                    { "name": "Default", "priority": 2147483647 },
-                    { "name": "Pre1", "priority": 2 },
-                    { "name": "Pre2", "priority": 7 }
-                ]
-            }
-        });
-
-        let config: BoardConfig = serde_json::from_value(json!({
-            "design_rules": {
-                "netclasses": [
-                    { "name": "Default" },
-                    { "name": "Explicit1", "priority": 2 },
-                    { "name": "Explicit2", "priority": 7 },
-                    { "name": "Explicit3", "priority": 100 },
-                    { "name": "Auto1" },
-                    { "name": "Auto2" },
-                    { "name": "Pre1" }
-                ]
-            }
-        }))
-        .unwrap();
-
-        patch_project_value(&mut project, &config, &HashMap::new());
-
-        assert_unique_non_default_priorities(&project);
-
-        let priority_of = |name: &str| -> i64 {
-            project["net_settings"]["classes"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|c| c.get("name").and_then(Value::as_str) == Some(name))
-                .and_then(|c| c.get("priority"))
-                .and_then(Value::as_i64)
-                .unwrap()
-        };
-        assert_eq!(priority_of("Pre1"), 2);
-        assert_eq!(priority_of("Pre2"), 7);
-        assert_eq!(priority_of("Explicit3"), 100);
-        assert_eq!(priority_of("Default"), 2147483647);
+        assert_eq!(project, patched);
     }
 }
