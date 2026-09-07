@@ -380,8 +380,8 @@ pub fn run(args: Args) -> Result<()> {
     if apply_errors > 0 {
         bail!("failed to apply {apply_errors} audit correction(s)");
     }
-    if args.fail_on_flagged && (flagged > 0 || errors > 0) {
-        bail!("rectify check found {flagged} flagged footprint(s) and {errors} error(s)");
+    if errors > 0 || (args.fail_on_flagged && flagged > 0) {
+        bail!("rectify found {flagged} flagged footprint(s) and {errors} error(s)");
     }
     Ok(())
 }
@@ -725,5 +725,44 @@ mod tests {
             BenchMode::Strict,
         );
         assert_eq!(strict.verdict, "rotation_mismatch");
+    }
+
+    #[test]
+    fn batch_evaluation_errors_fail_in_all_modes() {
+        let dir = std::env::temp_dir().join(format!("audit_batch_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for (contents, should_fail) in [
+            ("this is not a valid footprint", true),
+            (
+                "(footprint Test (pad 1 smd rect (at 0 0) (size 1 1) (layers F.Cu)))",
+                false,
+            ),
+        ] {
+            // Two files exercise batch output rather than the single-file exit path.
+            for name in ["a.kicad_mod", "b.kicad_mod"] {
+                std::fs::write(dir.join(name), contents).unwrap();
+            }
+            for (apply, fail_on_flagged) in [(true, false), (false, false), (false, true)] {
+                let result = run(Args {
+                    paths: vec![dir.clone()],
+                    kind: AuditKindFilter::All,
+                    limit: None,
+                    jobs: None,
+                    jsonl: false,
+                    top: 0,
+                    apply,
+                    fail_on_flagged,
+                    mode: BenchMode::Loose,
+                    randomize_initial_transform: false,
+                    initial_transform_seed: 1,
+                });
+                assert_eq!(
+                    result.is_err(),
+                    should_fail,
+                    "apply={apply}, check={fail_on_flagged}: {result:?}"
+                );
+            }
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
