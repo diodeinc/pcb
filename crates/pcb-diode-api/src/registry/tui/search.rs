@@ -81,6 +81,7 @@ pub struct RegistrySymbolSearchResults {
 #[derive(Debug, Clone)]
 pub struct KicadSearchResults {
     pub query_id: u64,
+    pub error: Option<String>,
     pub trigram: Vec<SearchHit>,
     pub word: Vec<SearchHit>,
     pub docs_full_text: Vec<SearchHit>,
@@ -187,6 +188,7 @@ impl Default for KicadSearchResults {
     fn default() -> Self {
         Self {
             query_id: 0,
+            error: None,
             trigram: Vec::new(),
             word: Vec::new(),
             docs_full_text: Vec::new(),
@@ -736,7 +738,16 @@ pub fn spawn_worker(
                             prefetched_kicad_metadata.as_ref(),
                         ) {
                             Ok(client) => Some(client),
-                            Err(_) => continue,
+                            Err(err) => {
+                                let _ = result_tx.send(SearchResults::KicadSymbols(
+                                    KicadSearchResults {
+                                        query_id: query.id,
+                                        error: Some(format!("Failed to open KiCad index: {err:#}")),
+                                        ..Default::default()
+                                    },
+                                ));
+                                continue;
+                            }
                         };
                         kicad_mtime = get_file_mtime(&kicad_db_path);
                         kicad_ready = true;
@@ -768,6 +779,7 @@ pub fn spawn_worker(
 
                     let _ = result_tx.send(SearchResults::KicadSymbols(KicadSearchResults {
                         query_id: query.id,
+                        error: None,
                         trigram: rrf.trigram,
                         word: rrf.word,
                         docs_full_text: rrf.docs_full_text,
