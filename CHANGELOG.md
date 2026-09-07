@@ -22,6 +22,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- Support KiCad 9 schematics, upgrading edited pages to KiCad 10.
 - Preserve caller geometry accuracy through IPC import, relief generation, and export helpers.
 - Return geometry errors instead of panicking during physical feature association and DFM board outline preparation.
 - Migrate registry references in root-level `.zen` files in container workspaces.
