@@ -192,7 +192,10 @@ impl GeometryAccuracy {
     }
 
     pub(crate) fn allowance(self, uncertainty_mm: f64) -> Result<f64, AccuracyError> {
-        Ok(self.remaining(uncertainty_mm)? / 4.0)
+        Ok(allocate_error(
+            self.remaining(uncertainty_mm)?,
+            ErrorAllocation::Operation,
+        ))
     }
 
     pub(crate) fn before_transform(
@@ -260,6 +263,35 @@ impl fmt::Display for AccuracyError {
 }
 
 impl std::error::Error for AccuracyError {}
+
+pub(crate) enum ErrorAllocation {
+    Operation,
+    CurveConversion,
+    ConstructionGuard,
+}
+
+/// Allocate approximation targets and construction separation together.
+///
+/// An operation receives a quarter of the remaining budget, leaving room for
+/// later composition and certification. Curve conversion receives an eighth
+/// of that operation allowance; chord flattening gets the rest. The balancing
+/// construction guard is half the total budget: its two construction offsets
+/// each target at most a quarter, separating construction from nominal checks.
+/// These fractions interact; increasing the operation share alone can break
+/// balancing certification.
+///
+/// These are targets, not recorded uncertainty. Callers still charge actual
+/// conversion/join error and coordinate rounding and check the accumulated
+/// total. Spending the full remainder is only appropriate for an explicitly
+/// terminal operation after reserving all of its numerical error; it must not
+/// replace the allowance used by intermediate or certification operations.
+pub(crate) fn allocate_error(budget_mm: f64, allocation: ErrorAllocation) -> f64 {
+    match allocation {
+        ErrorAllocation::Operation => budget_mm / 4.0,
+        ErrorAllocation::CurveConversion => budget_mm / 8.0,
+        ErrorAllocation::ConstructionGuard => budget_mm / 2.0,
+    }
+}
 
 /// Floating arithmetic allowance. Overlay uses an automatic integer grid;
 /// the i64 adapter retains the floating point coordinate precision.
