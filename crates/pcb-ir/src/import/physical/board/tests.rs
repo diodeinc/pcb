@@ -535,12 +535,73 @@ fn fractional_stackup_sequences_order_layers_and_reject_invalid_order_evidence()
                 .contains("duplicate layer sequence")
         );
     }
-    for invalid in ["NaN", "inf", "-0.25", "invalid"] {
+    let infinite = design(&xml.replace("sequence=\"2.5\"", "sequence=\" INF \""));
+    assert_eq!(
+        infinite.stackups[0].layers[0].layer_number,
+        Some(f64::INFINITY)
+    );
+    assert_eq!(
+        infinite
+            .physical_board(Resolution::default())
+            .unwrap()
+            .metadata
+            .layers
+            .iter()
+            .map(|layer| infinite.resolve(layer.layer_ref))
+            .collect::<Vec<_>>(),
+        ["BOTTOM", "TOP"]
+    );
+    for invalid in ["NaN", "-INF", "-0.25", "invalid"] {
         assert!(
             Ipc2581::parse(&xml.replace("sequence=\"0.25\"", &format!("sequence=\"{invalid}\"")))
                 .is_err()
         );
     }
+}
+
+#[test]
+fn invalid_order_preserves_each_layer_and_group_material_provenance() {
+    let xml = fixture().replace("<StackupGroup name=\"g\">", "<StackupGroup name=\"g\" matDes=\"group-material\">")
+        .replace("</StackupGroup>", "<SpecRef id=\"group-spec\"/></StackupGroup>")
+        .replace("<CadHeader units=\"MILLIMETER\"/>", r#"<CadHeader units="MILLIMETER"><Spec name="mat"><General type="MATERIAL"><Property text="FR4"/></General></Spec></CadHeader>"#)
+        .replace("sequence=\"0\"/>", "sequence=\"0\"><SpecRef id=\"mat\"/></StackupLayer>");
+    let mut imported = design(&xml);
+    let mut duplicate = imported.stackups[0].layers[0].clone();
+    duplicate.thickness = Some(0.07);
+    imported.stackups[0].layers.push(duplicate);
+    let metadata = imported.physical_board_metadata();
+    assert!(
+        metadata.diagnostics.iter().any(|diagnostic| matches!(
+            diagnostic,
+            BoardPhysicalDiagnostic::InvalidStackupOrder(_)
+        ))
+    );
+    assert_eq!(
+        metadata
+            .layers
+            .iter()
+            .map(|layer| layer.thickness_mm)
+            .collect::<Vec<_>>(),
+        [Some(0.035), Some(0.07)]
+    );
+    for layer in &metadata.layers {
+        assert_eq!(imported.resolve(*layer.material.resolved().unwrap()), "FR4");
+        assert_eq!(imported.resolve(layer.spec_refs[0]), "mat");
+        assert!(
+            layer.mat_des.is_none(),
+            "group identity is not inherited as layer material"
+        );
+    }
+    let group = &metadata.groups[0];
+    assert_eq!(group.source_layers, 0..1);
+    assert_eq!(imported.resolve(group.mat_des.unwrap()), "group-material");
+    assert_eq!(imported.resolve(group.spec_refs[0]), "group-spec");
+    assert!(
+        metadata
+            .diagnostics
+            .contains(&BoardPhysicalDiagnostic::UninterpretedGroupMaterial { group: group.name })
+    );
+    assert_eq!(imported.stackups[0].groups[0].mat_des, group.mat_des);
 }
 
 #[test]

@@ -32,6 +32,16 @@ fn manufacturing_package(
 const FAB_PANEL_WIDTH_MM: f64 = FabPanelSpec::INCHES_18_X_24.width_mm();
 const FAB_PANEL_HEIGHT_MM: f64 = FabPanelSpec::INCHES_18_X_24.height_mm();
 
+#[test]
+fn stackup_signatures_treat_signed_zero_sequences_as_the_same_number() {
+    let xml = assembly_panel_xml(20.0, 20.0);
+    let negative_zero = xml.replace("sequence=\"0\"", "sequence=\"-0.0\"");
+    assert_eq!(
+        physical_stackup(&xml, 0).unwrap(),
+        physical_stackup(&negative_zero, 1).unwrap()
+    );
+}
+
 fn assembly_panel_xml(width_mm: f64, height_mm: f64) -> String {
     assembly_panel_xml_at(0.0, 0.0, width_mm, height_mm)
 }

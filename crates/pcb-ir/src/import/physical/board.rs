@@ -90,7 +90,12 @@ pub struct ComponentEnvelopes {
 pub struct BoardPhysicalMetadata {
     pub stackup: Association<Symbol>,
     pub overall_thickness_mm: Option<f64>,
+    /// Physical order when valid; source order with InvalidStackupOrder otherwise.
+    /// Invalid ordering does not discard individual layer evidence.
     pub layers: Vec<BoardMaterialLayer>,
+    /// Group-scoped source evidence, not inherited layer material. Ranges index
+    /// the selected ImportedDesign stackup's source layers, not this sorted view.
+    pub groups: Vec<ipc2581::types::StackupGroup>,
     pub diagnostics: Vec<BoardPhysicalDiagnostic>,
 }
 
@@ -120,6 +125,7 @@ pub enum BoardPhysicalDiagnostic {
     UnresolvedMaterialDesignator { layer: Symbol, designator: Symbol },
     AmbiguousMaterialDesignator { layer: Symbol, designator: Symbol },
     UnresolvedSpec { layer: Symbol, spec: Symbol },
+    UninterpretedGroupMaterial { group: Symbol },
     MissingComponentEnvelope(ComponentOccurrenceId),
     UnspecifiedPackageOutline(ComponentOccurrenceId),
     IncompleteComponentEnvelope(ComponentOccurrenceId),
@@ -257,13 +263,14 @@ impl ImportedDesign {
     }
 
     /// Inspect material/thickness evidence even when ambiguity prevents
-    /// geometry composition. Layer order is validated by the existing physical
-    /// span contract; no declaration-order fallback for an invalid stackup.
+    /// geometry composition. Invalid physical order remains diagnostic while
+    /// individual layer evidence remains available in source order.
     pub fn physical_board_metadata(&self) -> BoardPhysicalMetadata {
         let mut result = BoardPhysicalMetadata {
             stackup: Association::Unresolved,
             overall_thickness_mm: None,
             layers: Vec::new(),
+            groups: Vec::new(),
             diagnostics: Vec::new(),
         };
         let stackup = match self.stackups.as_slice() {
@@ -284,26 +291,41 @@ impl ImportedDesign {
             }
         };
         result.stackup = Association::Resolved(stackup.name);
+        result.groups = stackup.groups.clone();
+        for group in &result.groups {
+            if group.mat_des.is_some() || !group.spec_refs.is_empty() {
+                result
+                    .diagnostics
+                    .push(BoardPhysicalDiagnostic::UninterpretedGroupMaterial {
+                        group: group.name,
+                    });
+            }
+        }
         result.overall_thickness_mm =
             thickness(stackup.overall_thickness, None, &mut result.diagnostics);
-        let order = match physical_stackup_layers(&self.stackups, &self.layer_definitions) {
-            Ok(Some(order)) => order,
+        let layers = match physical_stackup_layers(&self.stackups, &self.layer_definitions) {
+            Ok(Some(order)) => order
+                .into_iter()
+                .map(|layer_ref| {
+                    stackup
+                        .layers
+                        .iter()
+                        .find(|layer| layer.layer_ref == layer_ref)
+                        .unwrap()
+                })
+                .collect::<Vec<_>>(),
             Err(error) => {
                 result
                     .diagnostics
                     .push(BoardPhysicalDiagnostic::InvalidStackupOrder(
                         error.to_string(),
                     ));
-                return result;
+                stackup.layers.iter().collect()
             }
             Ok(None) => unreachable!("one stackup was selected"),
         };
-        for layer_ref in order {
-            let layer = stackup
-                .layers
-                .iter()
-                .find(|layer| layer.layer_ref == layer_ref)
-                .unwrap();
+        for layer in layers {
+            let layer_ref = layer.layer_ref;
             let mut spec_refs = layer.spec_refs.clone();
             // Retain legacy callers' explicitly supplied singular evidence too.
             if let Some(reference) = layer.spec_ref

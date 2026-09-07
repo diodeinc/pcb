@@ -1905,14 +1905,26 @@ impl<'a> Parser<'a> {
             .map(|v| crate::units::to_mm(v, units));
 
         let mut layers = Vec::new();
+        let mut groups = Vec::new();
         for child in self.element_children(node) {
             if self.name(&child) == "StackupGroup" {
-                // StackupGroup contains StackupLayer elements
+                let mut group = StackupGroup {
+                    name: self.required_attr(&child, "name", "StackupGroup")?,
+                    mat_des: self.optional_attr(&child, "matDes"),
+                    spec_refs: Vec::new(),
+                    source_layers: layers.len()..layers.len(),
+                };
                 for layer_node in self.element_children(&child) {
                     if self.name(&layer_node) == "StackupLayer" {
                         layers.push(self.parse_stackup_layer(&layer_node)?);
+                    } else if self.name(&layer_node) == "SpecRef" {
+                        group
+                            .spec_refs
+                            .push(self.required_attr(&layer_node, "id", "SpecRef")?);
                     }
                 }
+                group.source_layers.end = layers.len();
+                groups.push(group);
             }
         }
 
@@ -1923,6 +1935,7 @@ impl<'a> Parser<'a> {
             tol_plus,
             tol_minus,
             layers,
+            groups,
         })
     }
 
@@ -1956,12 +1969,15 @@ impl<'a> Parser<'a> {
             .attr(node, "sequence")
             .map(|value| {
                 value
+                    .trim()
                     .parse::<f64>()
                     .ok()
-                    .filter(|number| number.is_finite() && *number >= 0.0)
+                    .filter(|number| *number >= 0.0)
+                    // Numeric sequence identity treats both signed zeros alike.
+                    .map(|number| if number == 0.0 { 0.0 } else { number })
                     .ok_or_else(|| {
                         Ipc2581Error::InvalidAttribute(format!(
-                            "StackupLayer sequence must be a finite nonnegative number: {value}"
+                            "StackupLayer sequence must be a nonnegative number: {value}"
                         ))
                     })
             })
