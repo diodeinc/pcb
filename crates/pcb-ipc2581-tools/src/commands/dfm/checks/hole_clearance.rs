@@ -201,6 +201,18 @@ pub(super) fn land_owns_conductor(land: &Land, conductor: ConductorId) -> bool {
         } => {
             land.net == Some(net) && step == land.step && instance == land.provenance.instance_index
         }
+        ConductorId::NetTie { component, .. } => {
+            // Only this component's associated plated lands own its bridge.
+            // A via elsewhere on either tied net must still clear the bridge.
+            land.reference_designator == Some(component)
+                && land.net.is_some_and(|net| {
+                    conductor.permits_contact(ConductorId::Net {
+                        step: land.step,
+                        instance: land.provenance.instance_index,
+                        net,
+                    })
+                })
+        }
         ConductorId::Auxiliary { .. } | ConductorId::Unattributed { .. } => false,
         ConductorId::Isolated { occurrence, .. } => land.id.0 == occurrence,
     }

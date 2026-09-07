@@ -4,6 +4,49 @@
 TOML fabrication PDK. It writes one self-contained JSON report with diagnostics,
 native vector geometry, and the exact PDK source for external viewers.
 
+## Intentional two-pin copper bridges
+
+An inverted-F antenna or a net-tie footprint can intentionally connect two
+distinct pad nets through netless footprint copper. Geometry and `componentRef`
+alone cannot distinguish that connection from an accidental short. DFM therefore
+requires an explicit declaration; unannotated functional copper remains an error.
+
+Use KiCad's native `net_tie_pad_groups` (for example `"1,2"`) and an IPC-2581C
+exporter that emits standard `NetShort` declarations. No custom footprint
+property or BOM metadata is required. Older exporters omit this information;
+their netless copper remains ambiguous even when the source board has net ties.
+KiCad exporter support is proposed in
+[diode-inc/kicad !35](https://gitlab.com/diode-inc/kicad/-/merge_requests/35).
+
+```xml
+<Set geometryUsage="GRAPHIC" componentRef="E1">
+  <Features><!-- unchanged radiator geometry --></Features>
+  <NetShort>
+    <NetRef name="GND"/>
+    <NetRef name="WIFI.RF_ANT"/>
+    <Location x="168.9" y="-98.339392"/>
+    <LayerRef name="F.Cu"/>
+  </NetShort>
+</Set>
+```
+
+DFM currently supports one two-net declaration per netless component graphic Set.
+Both NetRefs must identify component pad nets, and the LayerRefs must include the
+graphic's layer. Malformed or unsupported declarations fail closed.
+
+The declaration authorizes **only its containing Set's netless graphic copper** to
+contact either declared net. It does not assign the radiator to a single net,
+remove its copper, or merge the two nets globally. Clearance between the two
+ordinary nets elsewhere, clearance to third nets and other bridges, copper width,
+and board-edge checks remain active. Only the component's associated plated lands
+own the bridge for drill-clearance purposes; unrelated drills and NPTHs still
+need clearance. Nets and bridges are scoped to individual layout occurrences.
+
+Independent groups must use separate Sets; DFM never combines their permissions.
+This is not an RF performance or antenna-keepout check. An existing unannotated
+export must be regenerated from a correctly declared native footprint before
+its clearance can be certified.
+
 ## PDK
 
 The PDK is strict and versioned. Unknown fields, bare numeric lengths, and

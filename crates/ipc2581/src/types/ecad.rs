@@ -448,7 +448,17 @@ pub struct FeatureSet {
     pub polarity: Option<Polarity>,
     pub spec_refs: Vec<Symbol>,
     pub features: Vec<SetFeature>,
+    pub net_shorts: Vec<NetShort>,
     pub nonstandard_attributes: Vec<NonstandardAttribute>,
+}
+
+/// Revision-C intentional short, scoped to the containing Set and layers.
+#[derive(Debug, Clone)]
+pub struct NetShort {
+    pub id: Option<Symbol>,
+    pub nets: Vec<Symbol>,
+    pub location: super::Location,
+    pub layers: Vec<Symbol>,
 }
 
 /// Intended use of geometry in a feature set.

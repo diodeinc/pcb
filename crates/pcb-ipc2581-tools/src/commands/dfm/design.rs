@@ -696,9 +696,18 @@ pub(super) enum ConductorId {
         instance: Option<u32>,
         source_set_index: u32,
     },
+    /// Explicitly declared component-local bridge, never a union of two nets.
+    NetTie {
+        step: Option<Symbol>,
+        instance: Option<u32>,
+        component: Symbol,
+        first_net: Symbol,
+        second_net: Symbol,
+    },
     Unattributed {
         step: Option<Symbol>,
         instance: Option<u32>,
+        occurrence: FeatureOccurrenceId,
         source_set_index: u32,
         source_feature_index: u32,
     },
@@ -710,6 +719,7 @@ impl ConductorId {
             Self::Net { step, .. }
             | Self::Isolated { step, .. }
             | Self::Auxiliary { step, .. }
+            | Self::NetTie { step, .. }
             | Self::Unattributed { step, .. } => step,
         }
     }
@@ -719,6 +729,7 @@ impl ConductorId {
             Self::Net { instance, .. }
             | Self::Isolated { instance, .. }
             | Self::Auxiliary { instance, .. }
+            | Self::NetTie { instance, .. }
             | Self::Unattributed { instance, .. } => instance,
         }
     }
@@ -726,8 +737,33 @@ impl ConductorId {
     pub fn net(self) -> Option<Symbol> {
         match self {
             Self::Net { net, .. } => Some(net),
-            Self::Isolated { .. } | Self::Auxiliary { .. } | Self::Unattributed { .. } => None,
+            Self::Isolated { .. }
+            | Self::Auxiliary { .. }
+            | Self::NetTie { .. }
+            | Self::Unattributed { .. } => None,
         }
+    }
+
+    pub fn permits_contact(self, other: Self) -> bool {
+        if self == other {
+            return true;
+        }
+        let (tie, net) = match (self, other) {
+            (Self::NetTie { .. }, Self::Net { .. }) => (self, other),
+            (Self::Net { .. }, Self::NetTie { .. }) => (other, self),
+            _ => return false,
+        };
+        let Self::NetTie {
+            first_net,
+            second_net,
+            ..
+        } = tie
+        else {
+            unreachable!()
+        };
+        tie.step() == net.step()
+            && tie.instance() == net.instance()
+            && (net.net() == Some(first_net) || net.net() == Some(second_net))
     }
 
     fn is_unattributed(self) -> bool {
@@ -1072,7 +1108,91 @@ fn hole_class(plating: PlatingKind) -> Option<HoleClass> {
     }
 }
 
-struct CopperAttributionLowering;
+/// Standard IPC-2581C NetShort declarations authorize only their containing
+/// graphic Set. Neither a component name nor contact alone establishes intent.
+fn declared_net_ties(
+    document: &GeometryDocument,
+    imported: &ImportedDesign,
+) -> Result<CopperAttributionLowering> {
+    let mut ties = HashMap::new();
+    for feature in &document.features {
+        let Some(set) = feature
+            .set
+            .and_then(|set| document.feature_sets.get(set as usize))
+        else {
+            continue;
+        };
+        if feature.net.is_some()
+            || set.geometry_usage != Some(pcb_ir::dialects::ipc::GeometryUsage::Graphic)
+            || set.net_shorts.is_empty()
+        {
+            continue;
+        }
+        let Some(reference) = set.component_ref else {
+            continue;
+        };
+        let key =
+            feature_occurrence_id(feature).context("net-tie graphic has no occurrence identity")?;
+        if ties.contains_key(&key) {
+            continue;
+        }
+        let context = format!(
+            "invalid or unsupported NetShort for component '{}' in Step '{}'",
+            imported.resolve(reference),
+            feature
+                .source_step_ref
+                .map(|step| imported.resolve(step))
+                .unwrap_or("<root>")
+        );
+        if set.net_shorts.len() != 1 {
+            bail!("{context}: expected exactly one declaration");
+        }
+        let short = &set.net_shorts[0];
+        let nets = &short.nets;
+        if nets.len() != 2 || nets[0] == nets[1] {
+            bail!("{context}: expected two distinct NetRefs");
+        }
+        if !feature
+            .source_layer_ref
+            .is_some_and(|layer| short.layers.contains(&layer))
+        {
+            bail!("{context}: LayerRef does not include the graphic's copper layer");
+        }
+        for net in nets {
+            if !imported.geometry.features.iter().any(|pad| {
+                pad.kind == FeatureKind::Padstack
+                    && pad.intent.domain == FeatureDomain::Copper
+                    && pad.source_step_ref == feature.source_step_ref
+                    && pad.net == Some(*net)
+                    && pad
+                        .pin_refs
+                        .slice(&imported.geometry.pin_refs)
+                        .iter()
+                        .any(|pin| pin.component_ref == Some(reference))
+            }) {
+                bail!(
+                    "{context}: NetRef '{}' has no component pad",
+                    imported.resolve(*net)
+                );
+            }
+        }
+        ties.insert(
+            key,
+            ConductorId::NetTie {
+                step: feature.source_step_ref,
+                instance: feature.source_instance,
+                component: reference,
+                first_net: nets[0],
+                second_net: nets[1],
+            },
+        );
+    }
+    Ok(CopperAttributionLowering { ties })
+}
+
+struct CopperAttributionLowering {
+    ties: HashMap<FeatureOccurrenceId, ConductorId>,
+}
 
 impl ArtworkLowering<Symbol, Option<ConductorId>> for CopperAttributionLowering {
     fn object_meta(
@@ -1102,9 +1222,14 @@ impl ArtworkLowering<Symbol, Option<ConductorId>> for CopperAttributionLowering 
                 source_set_index: feature.source.set_index,
             });
         }
+        if let Some(tie) = feature_occurrence_id(feature).and_then(|id| self.ties.get(&id)) {
+            return Some(*tie);
+        }
         Some(ConductorId::Unattributed {
             step: feature.source_step_ref,
             instance: feature.source_instance,
+            occurrence: feature_occurrence_id(feature)
+                .expect("materialized copper must retain its occurrence identity"),
             source_set_index: feature.source.set_index,
             source_feature_index: feature.source.feature_index,
         })
@@ -1113,14 +1238,11 @@ impl ArtworkLowering<Symbol, Option<ConductorId>> for CopperAttributionLowering 
 
 fn compose_attributed_copper(
     document: &mut GeometryDocument,
+    imported: &ImportedDesign,
     resolution: Resolution,
 ) -> Result<(ContourSet, Vec<CopperConductor>)> {
-    let owners = compose_attributed_owners(
-        document,
-        LayerRole::Copper,
-        &mut CopperAttributionLowering,
-        resolution,
-    )?;
+    let mut lowering = declared_net_ties(document, imported)?;
+    let owners = compose_attributed_owners(document, LayerRole::Copper, &mut lowering, resolution)?;
     let mut composer = pcb_ir::geom::region::PaintComposer::new(resolution);
     for (_, image) in &owners {
         composer.push(pcb_ir::geom::Polarity::Dark, image.clone());
@@ -1240,6 +1362,7 @@ fn conductor_order(
         ConductorId::Unattributed {
             step,
             instance,
+            occurrence,
             source_set_index,
             source_feature_index,
         } => (
@@ -1249,6 +1372,20 @@ fn conductor_order(
             "",
             source_set_index,
             source_feature_index,
+            Some(occurrence),
+        ),
+        ConductorId::NetTie {
+            step,
+            instance,
+            component,
+            ..
+        } => (
+            4,
+            step.map(|step| imported.resolve(step)).unwrap_or(""),
+            instance,
+            imported.resolve(component),
+            0,
+            0,
             None,
         ),
     }
@@ -1315,7 +1452,7 @@ fn collect_copper_layers(
                     provenance: feature_provenance(imported, name, feature),
                 });
             }
-            let (image, mut conductors) = compose_attributed_copper(&mut document, resolution)?;
+            let (image, mut conductors) = compose_attributed_copper(&mut document, imported, resolution)?;
             conductors.sort_by_key(|conductor| conductor_order(imported, conductor.id));
             if require_conductor_ownership
                 && let Some(conductor) = conductors
@@ -1323,14 +1460,24 @@ fn collect_copper_layers(
                     .find(|conductor| conductor.id.is_unattributed())
             {
                 let id = conductor.id;
+                let ConductorId::Unattributed { occurrence, source_set_index, source_feature_index, .. } = id else {
+                    unreachable!()
+                };
+                let feature = document.features.iter().find(|feature| {
+                    feature_occurrence_id(feature) == Some(occurrence)
+                });
+                let component = feature.and_then(|feature| feature.set)
+                    .and_then(|set| document.feature_sets.get(set as usize))
+                    .and_then(|set| set.component_ref);
                 bail!(
-                    "IPC-2581 copper layer '{name}' has final functional copper without net attribution in Step '{}'{}; copper clearance cannot be certified",
+                    "IPC-2581 copper layer '{name}' has final functional copper without net attribution in Step '{}'{}, Set {source_set_index}, feature {source_feature_index}{}; copper clearance cannot be certified. Intentional bridges require IPC-2581C NetShort declarations exported from native net-tie metadata; componentRef or geometric contact alone does not establish electrical intent",
                     id.step()
                         .map(|step| imported.resolve(step))
                         .unwrap_or("<root>"),
                     id.instance()
                         .map(|instance| format!(", layout instance {instance}"))
-                        .unwrap_or_default()
+                        .unwrap_or_default(),
+                    component.map(|component| format!(", component '{}'", imported.resolve(component))).unwrap_or_default(),
                 );
             }
             // The file's side attribute is authoritative; the stackup

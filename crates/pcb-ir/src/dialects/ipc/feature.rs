@@ -410,6 +410,7 @@ pub struct FeatureSet<Symbol> {
     pub source_geometry_ref: Option<Symbol>,
     pub component_ref: Option<Symbol>,
     pub geometry_usage: Option<GeometryUsage>,
+    pub net_shorts: Vec<NetShort<Symbol>>,
     pub net: Option<Symbol>,
     pub polarity: Polarity,
     /// Spans `doc.spec_refs`.
@@ -417,6 +418,15 @@ pub struct FeatureSet<Symbol> {
     /// Spans `doc.features`.
     pub features: Span,
     pub bbox: BBox,
+}
+
+/// Explicit IPC-2581 short declaration; location is in the layer's coordinates.
+#[derive(Debug, Clone)]
+pub struct NetShort<Symbol> {
+    pub id: Option<Symbol>,
+    pub nets: Vec<Symbol>,
+    pub location: Point,
+    pub layers: Vec<Symbol>,
 }
 
 /// Intended use declared by IPC `Set/geometryUsage`.

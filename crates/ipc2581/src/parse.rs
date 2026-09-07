@@ -2712,10 +2712,12 @@ impl<'a> Parser<'a> {
 
         let mut features = Vec::new();
         let mut spec_refs = Vec::new();
+        let mut net_shorts = Vec::new();
         let mut nonstandard_attributes = Vec::new();
 
         for child in self.element_children(node) {
             match self.name(&child) {
+                "NetShort" => net_shorts.push(self.parse_net_short(&child)?),
                 "SpecRef" => {
                     if let Some(id) = self.attr(&child, "id") {
                         spec_refs.push(self.interner.intern(id));
@@ -2763,7 +2765,43 @@ impl<'a> Parser<'a> {
             polarity,
             spec_refs,
             features,
+            net_shorts,
             nonstandard_attributes,
+        })
+    }
+
+    fn parse_net_short(&mut self, node: &Node) -> Result<ecad::NetShort> {
+        let id = self.optional_attr(node, "id");
+        let mut nets = Vec::new();
+        let mut layers = Vec::new();
+        let mut location = None;
+        for child in self.element_children(node) {
+            match self.name(&child) {
+                "NetRef" => nets.push(self.required_attr(&child, "name", "NetRef")?),
+                "LayerRef" => layers.push(self.required_attr(&child, "name", "LayerRef")?),
+                "Location" => {
+                    if location.is_some() {
+                        return Err(Ipc2581Error::InvalidStructure(
+                            "NetShort has multiple Locations".into(),
+                        ));
+                    }
+                    location = Some(
+                        self.parse_location(&child, self.ecad_units.unwrap_or(Units::Millimeter))?,
+                    );
+                }
+                _ => {}
+            }
+        }
+        if nets.len() < 2 || layers.is_empty() {
+            return Err(Ipc2581Error::InvalidStructure(
+                "NetShort requires at least two NetRefs and one LayerRef".into(),
+            ));
+        }
+        Ok(ecad::NetShort {
+            id,
+            nets,
+            layers,
+            location: location.ok_or(Ipc2581Error::MissingElement("NetShort/Location"))?,
         })
     }
 

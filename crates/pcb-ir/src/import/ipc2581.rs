@@ -529,6 +529,16 @@ fn push_feature_set_record(
         source_geometry_ref: set.geometry,
         component_ref: set.component_ref,
         geometry_usage: set.geometry_usage.map(map_geometry_usage),
+        net_shorts: set
+            .net_shorts
+            .iter()
+            .map(|short| crate::dialects::ipc::feature::NetShort {
+                id: short.id,
+                nets: short.nets.clone(),
+                location: Point::new(short.location.x, short.location.y),
+                layers: short.layers.clone(),
+            })
+            .collect(),
         net: set.net,
         polarity,
         spec_refs,
@@ -1973,6 +1983,15 @@ fn append_transformed_layer(
             source_geometry_ref: source_set.source_geometry_ref,
             component_ref: source_set.component_ref,
             geometry_usage: source_set.geometry_usage,
+            net_shorts: source_set
+                .net_shorts
+                .iter()
+                .map(|short| {
+                    let mut short = short.clone();
+                    short.location = transform.transform_point(short.location);
+                    short
+                })
+                .collect(),
             net: source_set.net,
             polarity: source_set.polarity,
             spec_refs,

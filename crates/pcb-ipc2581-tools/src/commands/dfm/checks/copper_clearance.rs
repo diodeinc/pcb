@@ -43,6 +43,19 @@ pub(super) fn evaluate(
             checked += earlier_components * conductor_components.len();
             earlier_components += conductor_components.len();
         }
+        // Only ties add exemptions. Preserve the linear count for ordinary
+        // designs rather than enumerating every pair of nets.
+        for (index, conductor) in layer.conductors.iter().enumerate() {
+            if !matches!(conductor.id, ConductorId::NetTie { .. }) {
+                continue;
+            }
+            for (other, net) in layer.conductors.iter().enumerate() {
+                if matches!(net.id, ConductorId::Net { .. }) && conductor.id.permits_contact(net.id)
+                {
+                    checked -= components[index].len() * components[other].len();
+                }
+            }
+        }
 
         let mut pieces = components
             .into_iter()
@@ -79,7 +92,9 @@ pub(super) fn evaluate(
                         right.region.bbox.min.x - left.region.bbox.max.x < limit_mm
                     })
                     .filter(move |(_, right)| {
-                        left.conductor_index != right.conductor_index
+                        !layer.conductors[left.conductor_index]
+                            .id
+                            .permits_contact(layer.conductors[right.conductor_index].id)
                             && left.region.bbox.distance_to(right.region.bbox) < limit_mm
                     })
                     .map(move |(offset, _)| (left_index, left_index + 1 + offset))
@@ -152,6 +167,22 @@ pub(super) fn conductor_subject(
 ) -> Subject {
     let (kind, name, set_index, feature_index) = match id {
         ConductorId::Net { .. } => ("electrical_net", None, None, None),
+        ConductorId::NetTie {
+            component,
+            first_net,
+            second_net,
+            ..
+        } => (
+            "net_tie",
+            Some(format!(
+                "{} ({} ↔ {})",
+                design.imported.resolve(component),
+                design.imported.resolve(first_net),
+                design.imported.resolve(second_net)
+            )),
+            None,
+            None,
+        ),
         ConductorId::Isolated { occurrence, .. } => {
             let source = design
                 .imported
@@ -309,6 +340,264 @@ limit = { minimum = "0.15 mm" }
             NaiveDate::from_ymd_opt(2026, 8, 25).unwrap(),
         )
         .unwrap()
+    }
+
+    const ANTENNA: &str = include_str!("../fixtures/mockingbird-antenna.xml");
+    const TIE: &str = r#"<NetShort><NetRef name="GND"/><NetRef name="WIFI.RF_ANT"/><Location x="168.9" y="-98.339392"/><LayerRef name="F.Cu"/></NetShort>"#;
+
+    fn annotated_antenna() -> String {
+        let set = r#"<Set geometryUsage="GRAPHIC" componentRef="E1">"#;
+        ANTENNA.replacen(set, &format!("{set}{TIE}"), 1)
+    }
+
+    fn antenna_check(xml: &str, pdk_name: &str) -> anyhow::Result<crate::commands::dfm::DfmReport> {
+        use crate::commands::dfm::{self, CheckRequest, PdkSource, report::FileIdentity};
+        let ipc = Ipc2581::parse(xml)?;
+        let imported = pcb_ir::import::ipc2581::import_design(&ipc)?;
+        dfm::check(
+            &imported,
+            CheckRequest {
+                input: FileIdentity {
+                    path: "mockingbird-antenna.xml".to_owned(),
+                    sha256: dfm::sha256(xml.as_bytes()),
+                    size_bytes: xml.len() as u64,
+                },
+                pdk: PdkSource::Builtin(pdk_name),
+                waivers: None,
+                layout_target: crate::LayoutTarget::Board,
+                generated_at: "2026-09-06T00:00:00Z".parse().unwrap(),
+            },
+        )
+    }
+
+    #[test]
+    fn antenna_requires_explicit_intent_for_both_pdks() {
+        for pdk in ["standard", "jlcpcb-1oz"] {
+            let error = antenna_check(ANTENNA, pdk).err().unwrap().to_string();
+            for detail in [
+                "F.Cu",
+                "antenna",
+                "component 'E1'",
+                "Set 0",
+                "feature 0",
+                "NetShort",
+            ] {
+                assert!(error.contains(detail), "missing {detail}: {error}");
+            }
+            let results = antenna_check(&annotated_antenna(), pdk).unwrap();
+            assert!(
+                results.findings.iter().all(|finding| !finding
+                    .subjects
+                    .iter()
+                    .any(|subject| subject.kind == "net_tie")),
+                "{pdk}: {:?}",
+                results.findings
+            );
+            // Complete is not synonymous with passing: the faithful 0.5 mm
+            // ground pad around a 0.3 mm drill still has a 0.1 mm annular ring.
+            assert!(
+                results
+                    .findings
+                    .iter()
+                    .any(|finding| finding.rule_id.contains("pth_annular_ring")
+                        && finding
+                            .measurement
+                            .actual_mm()
+                            .is_some_and(|mm| (mm - 0.1).abs() < 1e-6)),
+                "{pdk}: missing real annular-ring violation"
+            );
+        }
+    }
+
+    #[test]
+    fn antenna_tie_does_not_merge_nets_or_hide_third_net_clearance() {
+        // The same two nets short elsewhere; a third-net pad overlaps the
+        // radiator, far from either antenna pad. Both must still be reported.
+        let xml = annotated_antenna().replace("</Step>", r#"
+          <LayerFeature layerRef="F.Cu">
+            <Set net="WIFI.RF_ANT"><Pad padstackDefRef="PADSTACK_1"><Location x="162" y="-110"/><StandardPrimitiveRef id="RECT_1"/></Pad></Set>
+            <Set net="GND"><Pad padstackDefRef="PADSTACK_1"><Location x="162" y="-110"/><StandardPrimitiveRef id="RECT_1"/></Pad></Set>
+            <Set net="UNRELATED"><Pad padstackDefRef="PADSTACK_1"><Location x="173.8" y="-100.439392"/><StandardPrimitiveRef id="RECT_1"/></Pad></Set>
+          </LayerFeature>
+        </Step>"#);
+        for pdk in ["standard", "jlcpcb-1oz"] {
+            let results = antenna_check(&xml, pdk).unwrap();
+            assert!(
+                results.findings.iter().any(|finding| finding
+                    .subjects
+                    .iter()
+                    .any(|s| s.net.as_deref() == Some("WIFI.RF_ANT"))
+                    && finding
+                        .subjects
+                        .iter()
+                        .any(|s| s.net.as_deref() == Some("GND"))
+                    && finding.measurement.actual_mm() == Some(0.0)),
+                "{pdk}: missing remote short"
+            );
+            assert!(
+                results.findings.iter().any(|finding| finding
+                    .subjects
+                    .iter()
+                    .any(|s| s.kind == "net_tie")
+                    && finding
+                        .subjects
+                        .iter()
+                        .any(|s| s.net.as_deref() == Some("UNRELATED"))
+                    && finding.measurement.actual_mm() == Some(0.0)),
+                "{pdk}: missing third-net short"
+            );
+        }
+    }
+
+    #[test]
+    fn antenna_declaration_is_strict_and_component_scoped() {
+        let annotated = annotated_antenna();
+        for xml in [
+            annotated.replace(r#"<NetRef name="GND"/>"#, r#"<NetRef name="UNKNOWN"/>"#),
+            annotated.replace(r#"<NetRef name="GND"/>"#, r#"<NetRef name="WIFI.RF_ANT"/>"#),
+            annotated.replace("</NetShort>", r#"<NetRef name="THIRD"/></NetShort>"#),
+            annotated.replace(r#"<Location x="168.9" y="-98.339392"/>"#, ""),
+            annotated.replace(
+                r#"<LayerRef name="F.Cu"/></NetShort>"#,
+                r#"<LayerRef name="B.Cu"/></NetShort>"#,
+            ),
+            annotated.replace(TIE, &format!("{TIE}{TIE}")),
+            annotated.replace("net=\"GND\"", "net=\"WIFI.RF_ANT\""),
+            annotated.replace("net=\"GND\"", ""),
+        ] {
+            let error = antenna_check(&xml, "standard").err().unwrap().to_string();
+            assert!(error.contains("NetShort"), "{error}");
+        }
+        for graphic in [
+            r#"<Set geometryUsage="GRAPHIC">"#,
+            r#"<Set geometryUsage="GRAPHIC" componentRef="E2">"#,
+            r#"<Set geometryUsage="TEXT" componentRef="E1">"#,
+        ] {
+            let xml = annotated.replacen(
+                r#"<Set geometryUsage="GRAPHIC" componentRef="E1">"#,
+                graphic,
+                1,
+            );
+            let error = antenna_check(&xml, "standard").err().unwrap().to_string();
+            assert!(error.contains("NetShort"), "{error}");
+        }
+        // Source-local Set indices repeat across LayerFeature blocks. A NetShort
+        // on one Set must not authorize unrelated copper with the same refdes.
+        let xml = annotated.replace(
+            "</Step>",
+            r#"<LayerFeature layerRef="F.Cu">
+          <Set geometryUsage="GRAPHIC" componentRef="E1"><Features><Location x="150" y="-100"/>
+            <UserPrimitiveRef id="UPOLY_1"/></Features></Set></LayerFeature></Step>"#,
+        );
+        assert!(
+            antenna_check(&xml, "standard")
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("final functional copper without net attribution")
+        );
+        let xml = xml.replace(
+            r#"componentRef="E1"><Features><Location x="150""#,
+            r#"componentRef="E2"><Features><Location x="150""#,
+        );
+        let error = antenna_check(&xml, "standard").err().unwrap().to_string();
+        assert!(error.contains("component 'E2'"), "{error}");
+    }
+
+    #[test]
+    fn antenna_bridge_still_requires_third_net_spacing_and_drill_clearance() {
+        // A 0.5 mm pad is 0.05 mm from the end of a 0.5 mm radiator arm.
+        let xml = annotated_antenna().replace("</Step>", r#"
+          <LayerFeature layerRef="F.Cu"><Set net="UNRELATED">
+            <Pad padstackDefRef="PADSTACK_1"><Location x="169.31" y="-112.039392"/><StandardPrimitiveRef id="RECT_1"/></Pad>
+          </Set></LayerFeature>
+          <LayerFeature layerRef="F.Cu_B.Cu"><Set net="GND">
+            <Hole name="UNRELATED_DRILL" diameter="0.30" platingStatus="PLATED" plusTol="0" minusTol="0" x="173.8" y="-100.439392"/>
+          </Set></LayerFeature>
+        </Step>"#);
+        for pdk in ["standard", "jlcpcb-1oz"] {
+            let report = antenna_check(&xml, pdk).unwrap();
+            assert!(
+                report.findings.iter().any(|finding| finding
+                    .subjects
+                    .iter()
+                    .any(|s| s.kind == "net_tie")
+                    && finding
+                        .subjects
+                        .iter()
+                        .any(|s| s.net.as_deref() == Some("UNRELATED"))
+                    && finding
+                        .measurement
+                        .actual_mm()
+                        .is_some_and(|mm| (mm - 0.05).abs() < 1e-6)),
+                "{pdk}: missing 0.05 mm gap"
+            );
+        }
+        // The IPC profile, unlike standard/JLC, also enables hole-to-copper
+        // clearance. Only the added drill, not E1's ground pad, may hit the tie.
+        let report = antenna_check(&xml, "ipc").unwrap();
+        assert_eq!(
+            report
+                .findings
+                .iter()
+                .filter(
+                    |finding| finding.subjects.iter().any(|s| s.kind == "net_tie")
+                        && finding.subjects.iter().any(|s| s.kind == "plated_hole")
+                )
+                .count(),
+            1
+        );
+        let clean = antenna_check(&annotated_antenna(), "ipc").unwrap();
+        assert!(
+            clean
+                .findings
+                .iter()
+                .all(|finding| !finding.subjects.iter().any(|s| s.kind == "net_tie"))
+        );
+    }
+
+    #[test]
+    fn antenna_net_tie_permissions_do_not_leak_between_layout_occurrences() {
+        use crate::commands::dfm::design::ConductorId;
+        let xml = annotated_antenna()
+            .replacen(
+                r#"<StepRef name="antenna"/>"#,
+                r#"<StepRef name="panel"/>"#,
+                1,
+            )
+            .replace(
+                "</CadData>",
+                r#"<Step name="panel" type="PALLET">
+              <StepRepeat stepRef="antenna" x="0" y="0" nx="2" ny="1" dx="40" dy="0"/>
+            </Step></CadData>"#,
+            );
+        let ipc = Ipc2581::parse(&xml).unwrap();
+        let imported = pcb_ir::import::ipc2581::import_design(&ipc).unwrap();
+        let rules = rules::lower(&Pdk::parse(PDK).unwrap(), None).unwrap();
+        let design = Design::extract(&imported, ArtworkScope::ArrayFlattened, &rules).unwrap();
+        let conductors = &design
+            .copper_layers
+            .iter()
+            .find(|layer| layer.layer.name == "F.Cu")
+            .unwrap()
+            .conductors;
+        let ties = conductors
+            .iter()
+            .filter(|c| matches!(c.id, ConductorId::NetTie { .. }))
+            .collect::<Vec<_>>();
+        assert_eq!(ties.len(), 2);
+        assert!(!ties[0].id.permits_contact(ties[1].id));
+        for tie in ties {
+            for net in conductors
+                .iter()
+                .filter(|c| matches!(c.id, ConductorId::Net { .. }))
+            {
+                assert_eq!(
+                    tie.id.permits_contact(net.id),
+                    tie.id.instance() == net.id.instance()
+                );
+            }
+        }
     }
 
     #[test]

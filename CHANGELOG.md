@@ -17,6 +17,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Changed
 
 - Model KiCad sheet graphics and text as editable, UUID-addressed items, including source-preserving saves of moved annotations.
+- Support standard IPC-2581C `NetShort` declarations for two-net copper bridges in DFM, retaining unrelated clearance checks and identifying ambiguous copper by component and source object.
 - Consolidate `pcb bom` table and JSON rows by selected offer.
 - Upgrade all remaining bundled standard-library and example symbols to KiCad 10 format.
 - Create a starter `spec.md` when scaffolding a new board repository.

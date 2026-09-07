@@ -1226,4 +1226,44 @@ mod tests {
         assert_eq!(component.mount_type, MountType::Thmt);
         assert!(Ipc2581::parse(&xml.replace("THMT", "THT")).is_err());
     }
+
+    #[test]
+    fn parse_net_short_preserves_scope_and_normalizes_location() {
+        let xml = r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+          <Content roleRef="Owner"><FunctionMode mode="FABRICATION"/></Content>
+          <Ecad><CadHeader units="INCH"/><CadData><Step name="board">
+            <LayerFeature layerRef="F.Cu"><Set componentRef="E1" geometryUsage="GRAPHIC">
+              <NetShort id="short1"><NetRef name="FEED"/><NetRef name="GND"/>
+                <Location x="1" y="-2"/><LayerRef name="F.Cu"/>
+              </NetShort>
+            </Set></LayerFeature>
+          </Step></CadData></Ecad></IPC-2581>"#;
+        let doc = Ipc2581::parse(xml).unwrap();
+        let set = &doc.ecad().unwrap().cad_data.steps[0].layer_features[0].sets[0];
+        assert!(
+            set.features.is_empty(),
+            "NetShort is intent, not painted geometry"
+        );
+        let short = &set.net_shorts[0];
+        assert_eq!(short.id.map(|id| doc.resolve(id)), Some("short1"));
+        assert_eq!(
+            short
+                .nets
+                .iter()
+                .map(|net| doc.resolve(*net))
+                .collect::<Vec<_>>(),
+            ["FEED", "GND"]
+        );
+        assert_eq!(doc.resolve(short.layers[0]), "F.Cu");
+        assert_eq!(short.location.x, 25.4);
+        assert_eq!(short.location.y, -50.8);
+        for malformed in [
+            xml.replace(r#"<NetRef name="FEED"/>"#, ""),
+            xml.replace(r#"<LayerRef name="F.Cu"/>"#, ""),
+            xml.replace(r#"<Location x="1" y="-2"/>"#, ""),
+            xml.replace("</NetShort>", r#"<Location x="0" y="0"/></NetShort>"#),
+        ] {
+            assert!(Ipc2581::parse(&malformed).is_err());
+        }
+    }
 }
