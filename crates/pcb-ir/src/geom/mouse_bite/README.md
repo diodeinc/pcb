@@ -65,11 +65,14 @@ not manufacturing-qualified. The builder's checks do not replace full-panel
 Disk opening establishes a local swept-disk shape, not a globally reachable
 toolpath. Check actual fixture and tool Z access separately.
 
-Canonical curve flattening is 0.005 mm; offsets and stroke expansion have their
-own approximation error. Caller `QueryTolerance` must budget source, transform,
-offset and numeric uncertainty; it is not a certified bound. The coupon example
-uses 0.015 mm boundary and 0.000001 mm numerical budgets. Model tests also use a
-zero source budget to test polygon topology only. Repeated overlay on curved
+Canonical preparation, offsets and stroke expansion inherit each input region's
+`Resolution` and fallible `GeometryAccuracy` budget. Generated geometry uses the
+tightest input budget without widening it; contours retain their accumulated
+uncertainty. Budget failures propagate through `QueryError::Accuracy`. The coupon
+example uses the default 0.01 mm approximation budget with zero significance,
+plus query allowances of 0.015 mm boundary and 0.000001 mm numerical uncertainty.
+Stored geometry uncertainty is a floor even when a query supplies zero additional
+boundary allowance; neither allowance certifies source-curve topology. Repeated overlay on curved
 polygons can leave sub-micron slivers: tests bound both overlap area (<0.000001
 mm²) and penetration (<0.000001 mm), rather than claiming exact predicates.
 No topology guarantee extends to the pre-flattened source curves.

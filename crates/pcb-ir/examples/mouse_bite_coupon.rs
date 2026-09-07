@@ -2,12 +2,15 @@
 //! Run: cargo run -p pcb-ir --example mouse_bite_coupon -- /tmp/coupons
 use pcb_ir::geom::attachment::{BoundaryQuery, QueryTolerance, transform_region};
 use pcb_ir::geom::mouse_bite::{Attachment, build};
-use pcb_ir::geom::{Affine2, BBox, ContourSet, Point, shapes};
+use pcb_ir::geom::{Affine2, BBox, ContourSet, Point, Resolution, shapes};
 use pcb_ir::render::svg_path_data;
 use std::fmt::Write;
 
 fn rect(x: f64, y: f64, w: f64, h: f64) -> ContourSet {
-    ContourSet::rectangle(BBox::new(Point::new(x, y), Point::new(x + w, y + h)), 0.0)
+    ContourSet::rectangle(
+        BBox::new(Point::new(x, y), Point::new(x + w, y + h)),
+        Resolution::default().strict(),
+    )
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -25,7 +28,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let name = if curved { "curved" } else { "straight" };
         let board = if curved {
             transform_region(
-                &ContourSet::from_filled_contours(&[shapes::circle(20.0).unwrap()], 0.0),
+                &ContourSet::from_filled_contours(
+                    &[shapes::circle(20.0).unwrap()],
+                    Resolution::default().strict(),
+                )?,
                 Affine2::translation(Point::new(0.0, -10.0)),
             )?
         } else {

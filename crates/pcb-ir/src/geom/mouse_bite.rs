@@ -9,7 +9,8 @@ use super::attachment::{
     transform_region,
 };
 use super::{
-    Affine2, ContourBuf, ContourSet, LineCap, LineJoin, PathCmd, Point, StrokeToFillStyle,
+    Affine2, ContourBuf, ContourSet, LineCap, LineJoin, PathCmd, Point, Resolution,
+    StrokeToFillStyle,
 };
 
 /// Opinionated, experimental shallow-intrusion adaptation of SparkFun's pattern.
@@ -86,20 +87,25 @@ impl TabGeometry {
         }
         material_after_break(
             &self.retained_substrate,
-            &stroke(&self.break_path, probe_width_mm),
+            &stroke(
+                &self.break_path,
+                probe_width_mm,
+                self.retained_substrate.resolution.strict(),
+            )?,
             witnesses,
             tolerance,
         )
     }
 }
 
-fn stroke(path: &ContourBuf, width: f64) -> ContourSet {
+fn stroke(path: &ContourBuf, width: f64, resolution: Resolution) -> Result<ContourSet, QueryError> {
     let contours = super::path::stroke_to_fill(
         std::slice::from_ref(path),
         StrokeToFillStyle::new(width, LineCap::Round, LineJoin::Round),
-    )
-    .expect("positive finite stroke width");
-    ContourSet::from_filled_contours(&contours, 0.0)
+        resolution.accuracy,
+    )?
+    .ok_or(QueryError::InvalidInput("expected positive stroke width"))?;
+    Ok(ContourSet::from_filled_contours(&contours, resolution)?)
 }
 
 /// Extract an exact portion of the supplied polygon boundary, including its
@@ -141,7 +147,10 @@ fn row(
         .into_iter()
         .map(|s| query.site(boundary, start + s).map(|site| site.point))
         .collect::<Result<Vec<_>, _>>()?;
-    Ok((ContourBuf::new(cmds), centers))
+    Ok((
+        ContourBuf::new(cmds).with_uncertainty(region.uncertainty_mm),
+        centers,
+    ))
 }
 
 /// Build one tab. Unsupported geometry is an error, never a fallback pattern.
@@ -154,11 +163,11 @@ pub fn build(input: Attachment<'_>) -> Result<TabGeometry, QueryError> {
     let site = query.site(input.boundary, input.station_mm)?;
     if input.board.connected_components().len() != 1
         || input.support.connected_components().len() != 1
-        || !input.board.intersection(input.support).is_empty()
+        || !input.board.intersection(input.support)?.is_empty()
         || !input
             .board
-            .union(input.support)
-            .difference(input.stock)
+            .union(input.support)?
+            .difference(input.stock)?
             .is_empty()
         || !input.support.contains_point(input.support_anchor)
         || !input.board.contains_point(input.board_witness)
@@ -168,30 +177,41 @@ pub fn build(input: Attachment<'_>) -> Result<TabGeometry, QueryError> {
         ));
     }
     let radius = SparkFunShallow::CUTTER_RADIUS_MM;
+    let resolution = input.stock.resolution.strict().with_accuracy(
+        input
+            .stock
+            .budget()
+            .min(input.board.budget())
+            .min(input.support.budget()),
+    );
     let neck = stroke(
         &ContourBuf::new(vec![
             PathCmd::move_to(site.point - site.outward_normal * radius),
             PathCmd::line_to(input.support_anchor),
-        ]),
+        ])
+        .with_uncertainty(input.board.uncertainty_mm),
         SparkFunShallow::NECK_WIDTH_MM,
-    );
-    let protected = input.board.union(input.support).union(&neck);
+        resolution,
+    )?;
+    let protected = input.board.union(input.support)?.union(&neck)?;
     // Open the void with the actual cutter disk: its circular sweeps leave
     // rounded concave shoulders instead of demanding a square inside corner.
     // Extend beyond stock so stock-edge corners do not create retained islands.
     let routed_removal = input
         .stock
-        .disk_dilate(2.0 * radius)
-        .difference(&protected)
-        .disk_open(radius)
-        .intersection(input.stock);
-    let undrilled = input.stock.difference(&routed_removal);
-    let shoulders = undrilled.difference(&protected);
-    let attachment_footprint = undrilled.difference(&input.board.union(input.support));
+        .disk_dilate(2.0 * radius)?
+        .difference(&protected)?
+        .disk_open(radius)?
+        .intersection(input.stock)?;
+    let undrilled = input.stock.difference(&routed_removal)?;
+    let shoulders = undrilled.difference(&protected)?;
+    let attachment_footprint = undrilled.difference(&input.board.union(input.support)?)?;
 
     // Offset the whole region first, rather than guessing normals on a curved
     // row or assigning straight-line pitch to the source curve's arc length.
-    let offset = input.board.disk_dilate(SparkFunShallow::OUTWARD_OFFSET_MM);
+    let offset = input
+        .board
+        .disk_dilate(SparkFunShallow::OUTWARD_OFFSET_MM)?;
     let offset_query = BoundaryQuery::new(&offset, input.tolerance)?;
     let target = site.point + site.outward_normal * SparkFunShallow::OUTWARD_OFFSET_MM;
     let projection = offset_query
@@ -217,13 +237,19 @@ pub fn build(input: Attachment<'_>) -> Result<TabGeometry, QueryError> {
                 .map(move |b| a.distance_to(*b) - diameter)
         })
         .fold(f64::INFINITY, f64::min);
-    if minimum_ligament_mm <= 2.0 * input.tolerance.boundary_mm + input.tolerance.numerical_mm {
+    let boundary_band = input.tolerance.boundary_mm.max(offset.uncertainty_mm);
+    if minimum_ligament_mm <= 2.0 * boundary_band + input.tolerance.numerical_mm {
         return Err(QueryError::InvalidInput(
             "drill ligaments unresolved or overlapping",
         ));
     }
-    let circle = ContourSet::from_filled_contours(&[super::shapes::circle(diameter).unwrap()], 0.0);
-    let mut perforations = ContourSet::empty(0.0);
+    let circle = ContourSet::from_filled_contours(
+        &[super::shapes::circle(diameter)
+            .unwrap()
+            .with_uncertainty(offset.uncertainty_mm)],
+        resolution,
+    )?;
+    let mut perforations = ContourSet::empty(resolution);
     let npth = centers
         .iter()
         .map(|&center| Npth {
@@ -233,10 +259,10 @@ pub fn build(input: Attachment<'_>) -> Result<TabGeometry, QueryError> {
         .collect();
     for &center in &centers {
         perforations =
-            perforations.union(&transform_region(&circle, Affine2::translation(center))?);
+            perforations.union(&transform_region(&circle, Affine2::translation(center))?)?;
     }
     let result = TabGeometry {
-        retained_substrate: undrilled.difference(&perforations),
+        retained_substrate: undrilled.difference(&perforations)?,
         routed_removal,
         npth,
         perforations,
@@ -250,7 +276,7 @@ pub fn build(input: Attachment<'_>) -> Result<TabGeometry, QueryError> {
     witnesses.extend(centers.windows(2).map(|p| (p[0] + p[1]) / 2.0));
     let before = material_after_break(
         &result.retained_substrate,
-        &ContourSet::empty(0.0),
+        &ContourSet::empty(resolution),
         &witnesses,
         input.tolerance,
     )?;
