@@ -391,3 +391,29 @@ fn material_designators_preserve_identity_and_reconcile_bom_spec_evidence() {
         Association::Resolved(_)
     ));
 }
+
+#[test]
+fn missing_stackup_does_not_infer_hole_land_links_from_layer_declarations() {
+    let xml = fixture().replace("</Content>", r#"<DictionaryStandard units="MILLIMETER"><EntryStandard id="pad"><Circle diameter="3"/></EntryStandard></DictionaryStandard></Content>"#)
+        .replace("<LayerFeature layerRef=\"TOP\">", r#"<LayerFeature layerRef="TOP"><Set><Pad padstackDefRef="P"><Location x="8" y="2"/><StandardPrimitiveRef id="pad"/></Pad></Set>"#);
+    let mut imported = design(&xml);
+    imported.stackups.clear();
+    // Demonstrate the legacy API really has a declaration-order association
+    // to suppress, rather than testing a board with no source lands.
+    let strict = imported
+        .physical_holes(ArtworkScope::Board, Resolution::default())
+        .unwrap();
+    assert!(!strict[0].lands.is_empty());
+    let view = imported.physical_board(Resolution::default()).unwrap();
+    assert!(
+        view.metadata
+            .diagnostics
+            .contains(&BoardPhysicalDiagnostic::MissingStackup)
+    );
+    assert_eq!(view.holes[0].id, strict[0].id);
+    assert_eq!(view.holes[0].span, strict[0].span);
+    assert_eq!(view.holes[0].plating, strict[0].plating);
+    assert_eq!(view.holes[0].image.area(), strict[0].image.area());
+    assert!(view.holes[0].lands.is_empty());
+    assert!(matches!(view.holes[0].termination, Association::Unresolved));
+}
