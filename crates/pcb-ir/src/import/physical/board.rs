@@ -101,7 +101,9 @@ pub struct BoardMaterialLayer {
     /// Source BOM material designator; never interpreted as a material name.
     pub mat_des: Option<Symbol>,
     pub material: Association<Symbol>,
+    /// Single-reference compatibility view; use spec_refs for full provenance.
     pub spec_ref: Option<Symbol>,
+    pub spec_refs: Vec<Symbol>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -302,24 +304,38 @@ impl ImportedDesign {
                 .iter()
                 .find(|layer| layer.layer_ref == layer_ref)
                 .unwrap();
-            let spec = layer
-                .spec_ref
-                .and_then(|reference| self.specs.get(&reference));
+            let mut spec_refs = layer.spec_refs.clone();
+            // Retain legacy callers' explicitly supplied singular evidence too.
             if let Some(reference) = layer.spec_ref
-                && spec.is_none()
+                && !spec_refs.contains(&reference)
             {
-                result
-                    .diagnostics
-                    .push(BoardPhysicalDiagnostic::UnresolvedSpec {
-                        layer: layer_ref,
-                        spec: reference,
-                    });
+                spec_refs.push(reference);
             }
-            let mut materials = spec
-                .into_iter()
-                .flat_map(|spec| spec.properties.iter().copied().chain(spec.material))
-                .filter(|material| !self.resolve(*material).trim().is_empty())
-                .collect::<Vec<_>>();
+            let mut materials = Vec::new();
+            let mut conflicting_layer_specs = false;
+            for reference in &spec_refs {
+                let Some(spec) = self.specs.get(reference) else {
+                    result
+                        .diagnostics
+                        .push(BoardPhysicalDiagnostic::UnresolvedSpec {
+                            layer: layer_ref,
+                            spec: *reference,
+                        });
+                    continue;
+                };
+                let values = spec
+                    .properties
+                    .iter()
+                    .copied()
+                    .chain(spec.material)
+                    .filter(|material| !self.resolve(*material).trim().is_empty())
+                    .collect::<Vec<_>>();
+                conflicting_layer_specs |= !materials.is_empty()
+                    && !values.is_empty()
+                    && (materials.iter().any(|value| !values.contains(value))
+                        || values.iter().any(|value| !materials.contains(value)));
+                materials.extend(values);
+            }
             materials.sort_by_key(|material| self.resolve(*material));
             materials.dedup();
             let mut bom_materials = Vec::new();
@@ -387,10 +403,11 @@ impl ImportedDesign {
             }
             // Reconcile actual material values, not a BOM identity against a
             // specification's text. Differing nonempty sources conflict.
-            let conflicting_sources = !materials.is_empty()
-                && !bom_materials.is_empty()
-                && (materials.iter().any(|value| !bom_materials.contains(value))
-                    || bom_materials.iter().any(|value| !materials.contains(value)));
+            let conflicting_sources = conflicting_layer_specs
+                || (!materials.is_empty()
+                    && !bom_materials.is_empty()
+                    && (materials.iter().any(|value| !bom_materials.contains(value))
+                        || bom_materials.iter().any(|value| !materials.contains(value))));
             materials.extend(bom_materials);
             materials.sort_by_key(|material| self.resolve(*material));
             materials.dedup();
@@ -429,7 +446,11 @@ impl ImportedDesign {
                 thickness_mm: thickness(layer.thickness, Some(layer_ref), &mut result.diagnostics),
                 mat_des: layer.mat_des,
                 material,
-                spec_ref: layer.spec_ref,
+                spec_ref: match spec_refs.as_slice() {
+                    [reference] => Some(*reference),
+                    _ => None,
+                },
+                spec_refs,
             });
         }
         result

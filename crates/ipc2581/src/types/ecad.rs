@@ -103,8 +103,12 @@ pub struct StackupLayer {
     pub tol_minus: Option<f64>,
     /// Source `matDes`: reference to a BOM MatDes name, not material text.
     pub mat_des: Option<Symbol>,
+    /// Convenience properties from a single referenced specification only.
     pub material: Option<Symbol>,
-    pub spec_ref: Option<Symbol>, // Reference to Spec for looking up properties
+    /// Single-reference compatibility view; None when multiple refs exist.
+    pub spec_ref: Option<Symbol>,
+    /// All declared specification references in source order, including unresolved refs.
+    pub spec_refs: Vec<Symbol>,
     pub dielectric_constant: Option<f64>,
     pub loss_tangent: Option<f64>,
     pub layer_number: Option<u32>,
