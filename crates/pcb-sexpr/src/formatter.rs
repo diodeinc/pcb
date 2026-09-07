@@ -65,7 +65,6 @@ pub fn prettify(source: &str, mode: FormatMode) -> String {
         let next = next_non_whitespace(bytes, i + 1);
 
         if is_whitespace(current) && !in_quote {
-            backslash_count = 0;
             if !has_inserted_space
                 && list_depth > 0
                 && last_non_whitespace != b'('
@@ -152,15 +151,15 @@ pub fn prettify(source: &str, mode: FormatMode) -> String {
                     in_quote = !in_quote;
                 }
 
-                if current != b'\\' {
-                    backslash_count = 0;
-                }
-
                 out.push(current);
                 column += 1;
             }
 
             last_non_whitespace = current;
+        }
+
+        if current != b'\\' {
+            backslash_count = 0;
         }
     }
 
@@ -396,10 +395,25 @@ mod tests {
     }
 
     #[test]
-    fn prettify_sticky_backslash_across_whitespace() {
-        let input = r#"(root (uri C:\ "x") (other 1))"#;
-        let expected = "(root\n\t(uri C:\\ \"x\")\n\t(other 1)\n)\n";
-        assert_eq!(prettify(input, FormatMode::Normal), expected);
-        assert_eq!(prettify(expected, FormatMode::Normal), expected);
+    fn prettify_backslash_runs() {
+        for (input, expected) in [
+            (
+                r#"(root (uri C:\ "x") (other 1))"#,
+                "(root\n\t(uri C:\\ \"x\")\n\t(other 1)\n)\n",
+            ),
+            (r#"(root C:\("x"))"#, "(root C:\\\n\t(\"x\")\n)\n"),
+            (r#"(root (uri C:\)"x")"#, "(root\n\t(uri C:\\)\"x\")\n"),
+            (
+                r#"(root foo\"bar (other 1))"#,
+                "(root foo\\\"bar\n\t(other 1)\n)\n",
+            ),
+            (
+                r#"(root "a\"(b)\\" (other 1))"#,
+                "(root \"a\\\"(b)\\\\\"\n\t(other 1)\n)\n",
+            ),
+        ] {
+            assert_eq!(prettify(input, FormatMode::Normal), expected, "{input}");
+            assert_eq!(prettify(expected, FormatMode::Normal), expected, "{input}");
+        }
     }
 }
