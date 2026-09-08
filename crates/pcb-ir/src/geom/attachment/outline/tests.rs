@@ -1,5 +1,6 @@
 use super::*;
-use crate::geom::{FillRule, GeometryAccuracy, Mirror, Resolution};
+use crate::geom::attachment::transform_region;
+use crate::geom::{Affine2, FillRule, GeometryAccuracy, Mirror, Resolution};
 
 fn resolution() -> Resolution {
     Resolution::new(0.0, GeometryAccuracy::new(1e-5).unwrap())
@@ -150,7 +151,7 @@ fn missing_empty_invalid_and_complete_blockage_are_distinct() {
         assert!(
             result
                 .iter()
-                .all(|i| i.state == OutlineState::Unknown && i.obstacles == [0])
+                .all(|i| i.state != OutlineState::Eligible && i.obstacles == [0])
         );
     }
     assert!(eligible_outline(&empty, &[], footprint(), tolerance()).is_err());
@@ -266,11 +267,26 @@ fn rigid_transforms_preserve_eligible_lengths_and_full_footprint_checks() {
             OutlineState::Blocked,
             OutlineState::Unknown,
         ] {
-            assert!((sum(&moved, state) - sum(&original, state)).abs() < 1e-5);
+            assert!(
+                (sum(&moved, state) - sum(&original, state)).abs() < 1e-5,
+                "{state:?} moved={} original={}; landing failures={:?}",
+                sum(&moved, state),
+                sum(&original, state),
+                moved
+                    .iter()
+                    .filter(|i| i.landing != OutlineState::Eligible)
+                    .collect::<Vec<_>>()
+            );
         }
     }
-    // Independent filled-region query on interior stations of each output.
-    for interval in original.iter().filter(|i| i.state != OutlineState::Unknown) {
+    // On spans wholly inside a straight edge, the band equals a rectangle.
+    for interval in original.iter().filter(|i| {
+        i.state != OutlineState::Unknown
+            && i.start.y == 0.0
+            && i.end.y == 0.0
+            && i.start.x > 1.0
+            && i.end.x < 19.0
+    }) {
         let site = BoundaryQuery::new(&board, tolerance())
             .unwrap()
             .site(
@@ -293,6 +309,170 @@ fn rigid_transforms_preserve_eligible_lengths_and_full_footprint_checks() {
         )
         .unwrap();
         let overlap = tab.intersection(&obstacle).unwrap();
-        assert_eq!(overlap.is_empty(), interval.state == OutlineState::Eligible);
+        let landing = ContourSet::from_rings(
+            vec![vec![
+                [corners[0].x, corners[0].y],
+                [corners[1].x, corners[1].y],
+                [(site.point + t).x, (site.point + t).y],
+                [(site.point - t).x, (site.point - t).y],
+            ]],
+            FillRule::EvenOdd,
+            resolution(),
+        )
+        .unwrap();
+        let unsupported = landing.difference(&board).unwrap();
+        assert_eq!(
+            overlap.is_empty() && unsupported.is_empty(),
+            interval.state == OutlineState::Eligible
+        );
     }
+}
+
+#[test]
+fn inward_landing_requires_material_across_its_entire_width() {
+    let board = rectangle(0.0, 0.0, 20.0, 10.0)
+        .difference(&rectangle(8.0, 0.15, 11.0, 3.0))
+        .unwrap();
+    let original = board.rings.clone();
+    let tab = OutlineFootprint {
+        inward_mm: 0.2,
+        ..footprint()
+    };
+    let result = eligible_outline(&board, &[], tab, tolerance()).unwrap();
+    // A right-angle join touches the adjacent edge: unresolved, not rejected.
+    assert_eq!(bottom_state(&result, 0.5), OutlineState::Unknown);
+    assert_eq!(bottom_state(&result, 1.0), OutlineState::Unknown);
+    assert_eq!(bottom_state(&result, 5.0), OutlineState::Eligible);
+    // The centre itself has material beneath it, but the shoulder reaches the hole.
+    assert_eq!(bottom_state(&result, 7.5), OutlineState::Blocked);
+    assert_eq!(bottom_state(&result, 9.0), OutlineState::Blocked);
+    assert!(
+        result
+            .iter()
+            .all(|i| i.state == i.landing && i.obstacles.is_empty())
+    );
+    let shallow = eligible_outline(
+        &board,
+        &[],
+        OutlineFootprint {
+            inward_mm: 0.1,
+            ..tab
+        },
+        tolerance(),
+    )
+    .unwrap();
+    assert_eq!(bottom_state(&shallow, 9.0), OutlineState::Eligible);
+    let touching = eligible_outline(
+        &board,
+        &[],
+        OutlineFootprint {
+            inward_mm: 0.15,
+            ..tab
+        },
+        tolerance(),
+    )
+    .unwrap();
+    assert_eq!(bottom_state(&touching, 9.0), OutlineState::Unknown);
+    assert_eq!(board.rings, original);
+}
+
+#[test]
+fn rounded_bands_cross_vertices_and_folded_offsets_are_unknown() {
+    let polygon = |radius: f64| {
+        ContourSet::from_rings(
+            vec![
+                (0..64)
+                    .map(|i| {
+                        let a = i as f64 * std::f64::consts::TAU / 64.0;
+                        [radius * a.cos(), radius * a.sin()]
+                    })
+                    .collect(),
+            ],
+            FillRule::NonZero,
+            resolution(),
+        )
+        .unwrap()
+    };
+    let tab = OutlineFootprint {
+        width_mm: 3.0,
+        inward_mm: 0.2,
+        outward_mm: 0.4,
+    };
+    let board = polygon(5.0);
+    let result = eligible_outline(&board, &[], tab, tolerance()).unwrap();
+    assert!(
+        result.iter().all(|i| i.state == OutlineState::Eligible),
+        "{result:?}"
+    );
+    let tight = polygon(0.15);
+    let result = eligible_outline(
+        &tight,
+        &[],
+        OutlineFootprint {
+            width_mm: 0.1,
+            ..tab
+        },
+        tolerance(),
+    )
+    .unwrap();
+    assert!(result.iter().all(|i| i.state == OutlineState::Unknown));
+}
+
+#[test]
+fn blockers_propagate_across_vertices_and_the_cyclic_seam() {
+    let board = rectangle(0.0, 0.0, 20.0, 10.0);
+    let obstacle = rectangle(0.1, -0.3, 0.2, -0.1);
+    let result = classify(&board, &obstacle, footprint());
+    let left = result
+        .iter()
+        .find(|i| i.start.x == 0.0 && i.end.x == 0.0 && i.start.y > 0.5 && i.end.y < 0.5)
+        .unwrap();
+    assert_eq!(left.state, OutlineState::Blocked);
+    assert_eq!(left.obstacles, [0]);
+    assert_eq!(bottom_state(&result, 1.5), OutlineState::Eligible);
+}
+
+#[test]
+fn closed_expanded_strip_contact_is_not_lost_to_regularization() {
+    let mut board = rectangle(0.0, 0.0, 20.0, 10.0);
+    board.uncertainty_mm = 0.0;
+    let obstacle = rectangle(8.0, -3.0, 11.0, -2.125);
+    let r = Resolution::new(0.0, GeometryAccuracy::new(0.0625).unwrap());
+    board.resolution = r;
+    let mut obstacle = obstacle;
+    obstacle.resolution = r;
+    let result = eligible_outline(
+        &board,
+        &[OutlineObstacle {
+            id: "contact",
+            region: Some(&obstacle),
+        }],
+        footprint(),
+        QueryTolerance {
+            boundary_mm: 0.0,
+            numerical_mm: 0.0625,
+        },
+    )
+    .unwrap();
+    assert_eq!(bottom_state(&result, 9.0), OutlineState::Unknown);
+    assert_eq!(bottom_state(&result, 6.5), OutlineState::Eligible);
+}
+
+#[test]
+fn strip_contacts_include_all_closed_faces_and_corner_points() {
+    for (obstacle, expected) in [
+        (rectangle(8.0, -3.0, 11.0, -2.0), (8.0, 11.0)),
+        (rectangle(8.0, 0.5, 11.0, 3.0), (8.0, 11.0)),
+        (rectangle(-3.0, -1.0, 0.0, 0.2), (0.0, 0.0)),
+        (rectangle(20.0, -1.0, 22.0, 0.2), (20.0, 20.0)),
+        (rectangle(-1.0, -3.0, 0.0, -2.0), (0.0, 0.0)),
+    ] {
+        let spans = strip_contacts(&obstacle, 20.0, -2.0, 0.5).unwrap();
+        assert!(spans.contains(&expected), "{spans:?}");
+    }
+    assert!(
+        strip_contacts(&rectangle(8.0, -3.0, 11.0, -2.001), 20.0, -2.0, 0.5)
+            .unwrap()
+            .is_empty()
+    );
 }

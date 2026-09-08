@@ -1,5 +1,5 @@
-//! Reproducible courtyard-only review over genuine corpus source exports.
-//! See outline_review/README.md. No dependency on the unmerged physical view.
+//! Boundary-following clearance review over genuine corpus source exports.
+//! See outline_review/README.md for evidence and geometry contracts.
 
 use std::{fs, path::Path};
 
@@ -39,6 +39,7 @@ struct Circle {
 struct Component {
     id: String,
     dnp: bool,
+    physical_role: String,
     envelopes: Vec<Envelope>,
     issues: Vec<String>,
 }
@@ -63,7 +64,7 @@ fn review(
 ) -> Result<Value> {
     let courtyards: Courtyards = serde_json::from_value(source.clone())?;
     ensure!(
-        courtyards.version == 1,
+        courtyards.version == 2,
         "unsupported courtyard extraction version"
     );
     let xml = fs::read(xml_path)?;
@@ -101,7 +102,7 @@ fn review(
     let mut overlays = Vec::new();
     let mut missing = Vec::new();
     for component in &courtyards.components {
-        if component.dnp {
+        if component.dnp || component.physical_role == "board-feature" {
             continue;
         }
         for envelope in &component.envelopes {
@@ -132,7 +133,10 @@ fn review(
             identities.push(id);
             regions.push(region);
         }
-        if !component.issues.is_empty() || component.envelopes.is_empty() {
+        if component.physical_role != "component"
+            || !component.issues.is_empty()
+            || component.envelopes.is_empty()
+        {
             missing.push(format!("{}: {}", component.id, component.issues.join("; ")));
         }
     }
@@ -180,6 +184,7 @@ fn review(
                 "start_mm":interval.start_mm,"end_mm":interval.end_mm,
                 "start":[interval.start.x,interval.start.y],"end":[interval.end.x,interval.end.y],
                 "state":format!("{:?}",interval.state),"strict_state":format!("{:?}",strict.state),
+                "landing":format!("{:?}",interval.landing),
                 "sources":interval.obstacles.iter().map(|&i|known[i].id).collect::<Vec<_>>(),
                 "uncertainty_mm":interval.uncertainty_mm,
             })

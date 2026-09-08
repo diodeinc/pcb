@@ -404,7 +404,7 @@
           </div>
           <div class="controls">
             <label for="width"
-              >Tab width
+              >Boundary span
               <select id="width"></select></label
             ><label><input type="checkbox" id="strict" />Strict evidence</label>
           </div>
@@ -440,7 +440,7 @@
             <g id="geometry" transform="scale(1,-1)"></g>
           </svg>
           <div class="hint">
-            Hover an outline interval to inspect its full tab footprint. Click
+            Hover an outline interval to inspect its full clearance band. Click
             to pin; Esc to release. Scroll to zoom.
           </div>
         </div>
@@ -450,7 +450,7 @@
             centre interval</span
           ><span
             ><i class="swatch" style="background: var(--blocked)"></i>Blocked by
-            courtyard</span
+            courtyard or unsupported landing</span
           ><span
             ><i class="swatch" style="background: var(--unknown)"></i>Unknown /
             uncertainty band (dots enlarged)</span
@@ -469,10 +469,9 @@
         <p class="footer">
           The thin charcoal line is the unchanged board outline. Thick colors
           classify tab <strong>centres</strong>, not material to remove. All
-          results use the full rectangular footprint, not a centre-only
-          intersection. Corners and internal rings do not establish
-          inward-facing edge eligibility, frame connectivity, router access or
-          strength.
+          results use an outline-following band, not a centre-only intersection.
+          Corners and internal rings do not establish inward-facing edge
+          eligibility, frame connectivity, router access or strength.
         </p>
         <details class="section">
           <summary>Source provenance &amp; exact review inputs</summary>
@@ -490,12 +489,12 @@
         <div id="metrics"></div>
         <ul class="sources" id="sources"></ul>
         <div class="section">
-          <h3>Footprint used in this review</h3>
+          <h3>Band used in this review</h3>
           <div id="footprintMetrics"></div>
           <p class="subtle">
-            Blue rectangle = full proposed footprint at the selected centre.
-            Dimensions are review inputs, not manufacturing recommendations. No
-            implicit extra clearance.
+            Blue band follows the selected boundary span, including its
+            vertices. Dimensions are review inputs, not manufacturing
+            recommendations. No implicit extra clearance.
           </p>
         </div>
         <div class="section">
@@ -581,7 +580,7 @@
         });
         $("boardTitle").textContent = board.name;
         $("boardSubtitle").textContent =
-          `${board.obstacles.length} source courtyards · ${board.source.components.filter((c) => c.dnp).length} DNP footprints excluded`;
+          `${board.obstacles.length} source courtyards · ${board.source.components.filter((c) => c.dnp).length} DNP · ${board.source.components.filter((c) => !c.dnp && c.physical_role === "board-feature").length} declared board features excluded`;
         render(true);
       }
       function render(reset = false) {
@@ -605,10 +604,10 @@
           );
         }
         $("notice").textContent = strict
-          ? `Strict evidence: ${board.missing.length} footprints have missing or unsupported courtyards. Unproved intervals remain unknown.`
-          : `Best-effort preview: ${board.missing.length} footprints with missing or unsupported courtyards are omitted. Green is conditional on that missing evidence; enable Strict evidence to see the difference.`;
+          ? `Strict evidence: ${board.missing.length} footprints have unresolved PhysicalRole or courtyard evidence. Unproved intervals remain unknown.`
+          : `Best-effort preview: ${board.missing.length} footprints have unresolved PhysicalRole or courtyard evidence. Available courtyards still constrain this preview; green assumes omitted evidence is clear. Enable Strict evidence to see the difference.`;
         $("footprintMetrics").replaceChildren();
-        metric($("footprintMetrics"), "Width", fmt(scenario.width_mm));
+        metric($("footprintMetrics"), "Boundary span", fmt(scenario.width_mm));
         metric(
           $("footprintMetrics"),
           "Inward landing",
@@ -622,9 +621,18 @@
         $("missing").replaceChildren();
         board.missing.forEach((m) => text("div", m, $("missing")));
         if (!board.missing.length)
-          text("div", "No missing courtyards", $("missing"));
+          text("div", "No unresolved roles or courtyards", $("missing"));
+        board.source.components
+          .filter((c) => !c.dnp && c.physical_role === "board-feature")
+          .forEach((c) =>
+            text(
+              "div",
+              `${c.id}: PhysicalRole=board-feature; body exclusion omitted`,
+              $("missing"),
+            ),
+          );
         $("coverage").textContent =
-          `${board.source.rule_area_count} source rule areas found. This run filters courtyards only: rule areas, copper, drills and routing are not exclusion constraints. No material or Z-height assumptions.`;
+          `${board.source.rule_area_count} source rule areas found. This run checks courtyards and inward landing containment on the original polygon substrate. Rule areas, copper, drills and routing are not exclusion constraints. No material or Z-height assumptions.`;
         $("provenance").textContent = JSON.stringify(
           {
             source: board.source.provenance,
@@ -790,11 +798,9 @@
         const i = scenario.intervals[index],
           dx = i.end[0] - i.start[0],
           dy = i.end[1] - i.start[1],
-          length = Math.hypot(dx, dy),
-          t = [dx / length, dy / length],
-          n = [t[1], -t[0]];
+          length = Math.hypot(dx, dy);
         let f = 0.5;
-        if (event) {
+        if (event && length > 0) {
           const point = new DOMPoint(
             event.clientX,
             event.clientY,
@@ -809,22 +815,61 @@
           );
         }
         const p = [i.start[0] + dx * f, i.start[1] + dy * f];
-        const corners = [
-          [-1, -scenario.inward_mm],
-          [1, -scenario.inward_mm],
-          [1, scenario.outward_mm],
-          [-1, scenario.outward_mm],
-        ].map(([sign, d]) => [
-          p[0] + (sign * t[0] * scenario.width_mm) / 2 + n[0] * d,
-          p[1] + (sign * t[1] * scenario.width_mm) / 2 + n[1] * d,
-        ]);
         const group = $("selection");
         group.replaceChildren();
-        svg(
-          "polygon",
-          { points: corners.map((p) => p.join(",")).join(" "), class: "tab" },
-          group,
-        );
+        // Same polygon band as the query: edge strips plus bevel joins,
+        // clipped by cyclic arclength, never a tangent rectangle.
+        const ring = board.substrate_rings[i.ring];
+        const edges = ring.map((a, j) => {
+          const b = ring[(j + 1) % ring.length];
+          const length = Math.hypot(b[0] - a[0], b[1] - a[1]);
+          return {
+            a,
+            b,
+            length,
+            n: [(b[1] - a[1]) / length, -(b[0] - a[0]) / length],
+          };
+        });
+        const perimeter = edges.reduce((sum, e) => sum + e.length, 0);
+        const centre = i.start_mm + f * (i.end_mm - i.start_mm);
+        const half = Math.min(scenario.width_mm, perimeter) / 2;
+        const polygon = (points) =>
+          svg(
+            "polygon",
+            { points: points.map((p) => p.join(",")).join(" "), class: "tab" },
+            group,
+          );
+        const offset = (p, n, d) => [p[0] + n[0] * d, p[1] + n[1] * d];
+        let station = 0;
+        edges.forEach((e, j) => {
+          for (const shift of [-perimeter, 0, perimeter]) {
+            const start = station + shift;
+            const lo = Math.max(start, centre - half),
+              hi = Math.min(start + e.length, centre + half);
+            if (hi > lo) {
+              const at = (s) =>
+                e.a.map((v, k) => v + ((e.b[k] - v) * (s - start)) / e.length);
+              const a = at(lo),
+                b = at(hi);
+              polygon([
+                offset(a, e.n, -scenario.inward_mm),
+                offset(b, e.n, -scenario.inward_mm),
+                offset(b, e.n, scenario.outward_mm),
+                offset(a, e.n, scenario.outward_mm),
+              ]);
+            }
+            if (start > centre - half && start < centre + half) {
+              const prev = edges[(j + edges.length - 1) % edges.length].n;
+              for (const depth of [-scenario.inward_mm, scenario.outward_mm])
+                polygon([
+                  e.a,
+                  offset(e.a, prev, depth),
+                  offset(e.a, e.n, depth),
+                ]);
+            }
+          }
+          station += e.length;
+        });
         svg(
           "circle",
           { cx: p[0], cy: p[1], r: 0.17, fill: "#225fba", class: "endpoint" },
@@ -848,7 +893,7 @@
         $("selectionState").className = state(i);
         $("selectionHint").textContent = pinned
           ? "Pinned · click outline or press Esc to release"
-          : "Hover to move the complete footprint";
+          : "Hover to move the outline-following band";
         $("metrics").replaceChildren();
         metric($("metrics"), "Ring / polygon edge", `${i.ring} / ${i.edge}`);
         metric(
@@ -860,18 +905,21 @@
         metric($("metrics"), "Comparison band", fmt(i.uncertainty_mm));
         $("sources").replaceChildren();
         i.sources.forEach((s) => text("li", s, $("sources")));
+        text(
+          "li",
+          i.landing === "Blocked"
+            ? "Inward band extends outside board material"
+            : i.landing === "Unknown"
+              ? "Band geometry is unresolved (uncertainty or folded offset)"
+              : "Inward landing lies on board material",
+          $("sources"),
+        );
         if (!i.sources.length)
-          text(
-            "li",
-            state(i) === "Unknown"
-              ? "Missing courtyard evidence"
-              : "Clears all included courtyards",
-            $("sources"),
-          );
+          text("li", "Clears all included courtyards", $("sources"));
         if ($("strict").checked && board.missing.length)
           text(
             "li",
-            `${board.missing.length} missing courtyard sources also remain unresolved`,
+            `${board.missing.length} role/courtyard sources also remain unresolved`,
             $("sources"),
           );
         for (const el of document.querySelectorAll("[data-obstacle]")) {

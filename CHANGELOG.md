@@ -17,7 +17,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Add deterministic elastic support selection with explicit compliance limits, conflict constraints, exhaustive proof status, work budgets, and independent full-system response checks.
 - Add standalone elastic support analysis with beam and triangular plate elements, explicit stiffness and constraints, and singular-mode diagnostics.
 - Add experimental single mouse-bite tab geometry and reproducible straight/curved break coupons to `pcb-ir`; physical fracture validation remains outstanding.
-- Add full-footprint eligible outline intervals and a source-courtyard corpus review, preserving the board substrate and reporting missing evidence.
+- Add boundary-following clearance bands with inward landing checks and a source-courtyard corpus review, preserving substrate geometry and reporting missing evidence.
+- Classify outline-review footprints with explicit `PhysicalRole` fields, excluding declared bare-board features without guessing from names or BOM flags.
 
 ### Changed
 

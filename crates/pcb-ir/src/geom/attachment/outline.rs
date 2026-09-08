@@ -1,53 +1,29 @@
-//! Local rectangular-footprint eligibility along an immutable polygon boundary.
+//! Clearance of a boundary-following band on an immutable polygon substrate.
 //!
-//! Obstacles are declared filled exclusions, not inferred component bodies. A
-//! courtyard is a useful exclusion contract; validating its source semantics
-//! belongs to the caller. Front/back, population, copper and process policy are
-//! likewise caller decisions. No substrate is removed by this operation.
+//! Width is arclength, not a tangent rectangle's width. Each included edge
+//! contributes its normal strip; triangular bevel joins connect strips at
+//! vertices. Pointwise failures expand cyclically by half the requested width.
+//! Thus a band crosses polygon vertices without requiring an arbitrary radius
+//! threshold or changing the board. Collapsed offsets remain unknown.
 //!
-//! On each edge, intersect an obstacle with the footprint's normal strip. Each
-//! connected intersection projects to a tangent interval, expanded by half the
-//! footprint width. This is the configuration-space collision interval for a
-//! translating rectangle, including concave obstacles and holes, without a
-//! placement sampling grid. Contracted/expanded rectangles bracket a positional
-//! uncertainty band. As with BoundaryQuery, these are polygon-model results:
-//! neither source topology nor source-curve tangent/arclength error is certified.
-//! Frame connection, inward-facing edge policy, router access and strength are
-//! deliberately not evaluated. Interval endpoints are excluded from guarantees.
+//! Results apply to the prepared polygon model. They do not certify source
+//! curve topology, frame connectivity, router access, perforations or strength.
 
-use super::{BoundaryId, BoundaryQuery, QueryError, QueryTolerance, transform_region};
+use super::{BoundaryId, BoundaryQuery, QueryError, QueryTolerance};
 use crate::geom::region::ring_edges;
-use crate::geom::{Affine2, BBox, ContourSet, Point};
+use crate::geom::{BBox, ContourSet, FillRule, Point};
 
-/// Millimeters, in the local outgoing-tangent / out-of-material-normal frame.
-/// Include any desired rectangular process allowance in these dimensions;
-/// there is no implicit clearance, cutter radius, or tab recipe.
+/// Explicit millimeters; no manufacturing allowances are inferred.
 #[derive(Debug, Clone, Copy)]
 pub struct OutlineFootprint {
+    /// Total cyclic boundary span, including both sides of the centre.
     pub width_mm: f64,
     pub inward_mm: f64,
     pub outward_mm: f64,
 }
 
-impl OutlineFootprint {
-    fn validate(self) -> Result<(), QueryError> {
-        if !self.width_mm.is_finite()
-            || self.width_mm <= 0.0
-            || !self.inward_mm.is_finite()
-            || self.inward_mm < 0.0
-            || !self.outward_mm.is_finite()
-            || self.outward_mm < 0.0
-            || !(self.inward_mm + self.outward_mm).is_finite()
-            || self.inward_mm + self.outward_mm <= 0.0
-        {
-            return Err(QueryError::InvalidInput("invalid outline footprint"));
-        }
-        Ok(())
-    }
-}
-
-/// Missing or empty evidence cannot establish clearance anywhere. Omit an
-/// obstacle only when the caller has explicitly decided it is not applicable.
+/// Missing or empty evidence cannot establish clearance. Omit an obstacle only
+/// when the caller explicitly decides it is not applicable (e.g. a board feature).
 pub struct OutlineObstacle<'a> {
     pub id: &'a str,
     pub region: Option<&'a ContourSet>,
@@ -60,8 +36,7 @@ pub enum OutlineState {
     Unknown,
 }
 
-/// An open interval on one original polygon edge. No merging across corners
-/// or cyclic seams: the rectangle orientation changes at an edge boundary.
+/// Open interval on one original polygon edge. Endpoints carry no guarantee.
 #[derive(Debug, Clone)]
 pub struct OutlineInterval {
     pub boundary: BoundaryId,
@@ -71,116 +46,238 @@ pub struct OutlineInterval {
     pub start: Point,
     pub end: Point,
     pub state: OutlineState,
-    /// Indices into the supplied obstacles, preserving all relevant sources.
+    /// Inward containment, or Unknown if offset geometry folds/collapses.
+    pub landing: OutlineState,
+    /// Indices into the caller's obstacles, preserving all contributing sources.
     pub obstacles: Vec<usize>,
-    /// Positional comparison band, not a bound on polygon arclength.
     pub uncertainty_mm: f64,
 }
 
-/// Partition every boundary edge into full-footprint eligibility intervals.
+struct Span {
+    lo: f64,
+    hi: f64,
+    obstacle: Option<usize>,
+    certain: bool,
+}
+
+/// Partition all rings without changing their geometry or provenance.
 ///
-/// Eligible means every centre in the interval clears all declared exclusions.
-/// Blocked means one exclusion intersects even the contracted footprint.
-/// Unknown means only the expanded footprint intersects, or evidence is absent.
-/// A known blocker takes precedence over missing evidence. Errors are errors,
-/// not empty geometry or geometric rejection. Input regions must be canonical;
-/// prepare with zero significance when narrow rings must survive.
+/// Expanded/contracted depths and arclength spans bracket positional uncertainty.
+/// The band is anchored to the polygon boundary; it is not a full 3D collision
+/// test. Missing evidence is unknown; a resolved blocker takes precedence.
 pub fn eligible_outline(
     substrate: &ContourSet,
     obstacles: &[OutlineObstacle<'_>],
     footprint: OutlineFootprint,
     tolerance: QueryTolerance,
 ) -> Result<Vec<OutlineInterval>, QueryError> {
-    footprint.validate()?;
+    if !footprint.width_mm.is_finite()
+        || footprint.width_mm <= 0.0
+        || !footprint.inward_mm.is_finite()
+        || footprint.inward_mm < 0.0
+        || !footprint.outward_mm.is_finite()
+        || footprint.outward_mm < 0.0
+        || !(footprint.inward_mm + footprint.outward_mm).is_finite()
+        || footprint.inward_mm + footprint.outward_mm <= 0.0
+    {
+        return Err(QueryError::InvalidInput("invalid outline footprint"));
+    }
     let boundary = BoundaryQuery::new(substrate, tolerance)?;
     if substrate.is_empty() {
         return Err(QueryError::InvalidInput("missing board substrate"));
     }
-    for obstacle in obstacles {
-        if let Some(region) = obstacle.region {
+    let mut missing = Vec::new();
+    for (i, obstacle) in obstacles.iter().enumerate() {
+        if let Some(region) = obstacle.region.filter(|r| !r.is_empty()) {
             super::validate_region(region)?;
+        } else {
+            missing.push(i);
         }
     }
-    let mut result = Vec::new();
+    let band = std::iter::once(substrate)
+        .chain(obstacles.iter().filter_map(|o| o.region))
+        .map(|r| r.budget().max_error_mm().max(tolerance.boundary_mm))
+        .fold(0.0, f64::max)
+        + substrate.uncertainty_mm.max(tolerance.boundary_mm)
+        + tolerance.numerical_mm;
+    if !band.is_finite()
+        || !(footprint.width_mm + 2.0 * band).is_finite()
+        || !(footprint.inward_mm + footprint.outward_mm + band).is_finite()
+    {
+        return Err(QueryError::InvalidInput("outline uncertainty overflow"));
+    }
+    let mut result: Vec<OutlineInterval> = Vec::new();
     for id in boundary.boundaries() {
+        let edges = ring_edges(&substrate.rings[id.ring]).collect::<Vec<_>>();
+        let perimeter = boundary.perimeter(id)?;
+        let mut spans = Vec::new();
         let mut station = 0.0;
-        for (edge, (start, end)) in ring_edges(&substrate.rings[id.ring]).enumerate() {
-            let length = start.distance_to(end);
-            let tangent = (end - start) / length;
-            let normal = Point::new(tangent.y, -tangent.x);
-            let local_from_board = Affine2 {
-                m00: tangent.x,
-                m01: tangent.y,
-                m02: -tangent.x * start.x - tangent.y * start.y,
-                m10: normal.x,
-                m11: normal.y,
-                m12: -normal.x * start.x - normal.y * start.y,
-            };
-            let mut spans = Vec::new();
-            let mut missing = Vec::new();
-            let mut cuts = vec![0.0, length];
-            let mut band: f64 = 0.0;
-            for (index, obstacle) in obstacles.iter().enumerate() {
-                let Some(region) = obstacle.region.filter(|region| !region.is_empty()) else {
-                    missing.push(index);
-                    continue;
+        for (edge, &(start, end)) in edges.iter().enumerate() {
+            let delta = end - start;
+            let length = delta.length();
+            let t = delta / length;
+            let n = Point::new(t.y, -t.x);
+            let (prev, _) = edges[(edge + edges.len() - 1) % edges.len()];
+            let (_, next) = edges[(edge + 1) % edges.len()];
+            let incoming = (start - prev) / start.distance_to(prev);
+            let outgoing = (next - end) / next.distance_to(end);
+            let prev_n = Point::new(incoming.y, -incoming.x);
+            let next_n = Point::new(outgoing.y, -outgoing.x);
+            let local = edge_frame(substrate, start, delta)?;
+            let local_obstacles = obstacles
+                .iter()
+                .map(|o| {
+                    o.region
+                        .filter(|r| !r.is_empty())
+                        .map(|r| edge_frame(r, start, delta))
+                        .transpose()
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            for (certain, padding) in [(false, band), (true, -band)] {
+                let half = (footprint.width_mm / 2.0 + padding).max(0.0);
+                let inward = (footprint.inward_mm + padding).max(0.0);
+                let outward = (footprint.outward_mm + padding).max(0.0);
+                let joins = [
+                    bevel(&local, prev_n, t, n, -inward)?,
+                    bevel(&local, prev_n, t, n, outward)?,
+                ];
+                let mut add = |lo, hi, obstacle, certain| {
+                    expand_span(
+                        &mut spans,
+                        station + lo,
+                        station + hi,
+                        half,
+                        perimeter,
+                        obstacle,
+                        certain,
+                    );
                 };
-                // The whole preparation budget reserves room for the transform
-                // and strip boolean, rather than forgetting their rounding.
-                let uncertainty = substrate.uncertainty_mm.max(tolerance.boundary_mm)
-                    + region.budget().max_error_mm().max(tolerance.boundary_mm)
-                    + tolerance.numerical_mm;
-                if !uncertainty.is_finite() {
-                    return Err(QueryError::InvalidInput("outline uncertainty overflow"));
+                // Miter offset endpoints must remain ordered. A folded offset
+                // is unsupported geometry, not proof of a mechanical failure.
+                let a = 1.0 + dot(prev_n, n);
+                let b = 1.0 + dot(next_n, n);
+                let slope = if a > 0.0 && b > 0.0 {
+                    dot(next_n, t) / b - dot(prev_n, t) / a
+                } else {
+                    f64::INFINITY
+                };
+                if footprint.width_mm + 2.0 * band >= perimeter
+                    || a <= 0.0
+                    || b <= 0.0
+                    || length - inward * slope <= 0.0
+                    || length + outward * slope <= 0.0
+                {
+                    add(0.0, length, None, false);
                 }
-                band = band.max(uncertainty);
-                let local = super::unfiltered(&transform_region(region, local_from_board)?);
-                for (certain, padding) in [(false, uncertainty), (true, -uncertainty)] {
-                    for (lo, hi) in collision_spans(&local, footprint, padding, length)? {
-                        cuts.extend([lo, hi]);
-                        spans.push((lo, hi, index, certain));
+                if footprint.inward_mm > 0.0 && inward > 0.0 {
+                    let strip = rectangle(&local, length, -inward, 0.0);
+                    let mut void = strip.difference(&local)?;
+                    if certain {
+                        void = void.disk_erode(band)?;
+                    }
+                    for (lo, hi) in projections(&void) {
+                        add(lo, hi, None, certain);
+                    }
+                    let mut void = joins[0].difference(&local)?;
+                    if certain {
+                        void = void.disk_erode(band)?;
+                    }
+                    if !void.is_empty() {
+                        add(0.0, 0.0, None, certain);
+                    }
+                    // At a sharp join a normal may touch another board edge.
+                    // Such contact is unresolved, including exact right angles;
+                    // numerical slivers must not turn it into a definite block.
+                    if !certain
+                        && local
+                            .prepare_query()
+                            .signed_distance(Point::new(0.0, -inward))
+                            .is_none_or(|d| d.mm >= -band)
+                    {
+                        add(0.0, 0.0, None, false);
                     }
                 }
+                for (i, obstacle) in local_obstacles.iter().enumerate() {
+                    let Some(obstacle) = obstacle else {
+                        continue;
+                    };
+                    for (lo, hi) in strip_contacts(obstacle, length, -inward, outward)? {
+                        add(lo, hi, Some(i), certain);
+                    }
+                    for join in &joins {
+                        if intersects_closed(obstacle, join)? {
+                            add(0.0, 0.0, Some(i), certain);
+                        }
+                    }
+                }
+            }
+            station += length;
+        }
+        station = 0.0;
+        for (edge, &(start, end)) in edges.iter().enumerate() {
+            let length = start.distance_to(end);
+            let mut cuts = vec![station, station + length];
+            for span in &spans {
+                cuts.extend(
+                    [span.lo, span.hi]
+                        .into_iter()
+                        .filter(|s| *s > station && *s < station + length),
+                );
             }
             cuts.sort_by(f64::total_cmp);
             cuts.dedup();
             for pair in cuts.windows(2) {
-                let midpoint = pair[0] + (pair[1] - pair[0]) / 2.0;
-                if midpoint <= pair[0]
-                    || midpoint >= pair[1]
-                    || station + pair[0] >= station + pair[1]
-                {
-                    return Err(QueryError::Numerical(
-                        "outline interval below station precision",
-                    ));
-                }
-                let mut contributors = missing.clone();
+                let mut sources = missing.clone();
+                let mut landing = OutlineState::Eligible;
                 let mut blocked = false;
-                for &(lo, hi, index, certain) in &spans {
-                    if lo <= midpoint && midpoint <= hi {
-                        contributors.push(index);
-                        blocked |= certain;
+                for span in &spans {
+                    // All span endpoints are partition cuts: overlap means
+                    // coverage of this open interval, without a sample point.
+                    if span.lo < pair[1] && span.hi > pair[0] {
+                        blocked |= span.certain;
+                        if let Some(i) = span.obstacle {
+                            sources.push(i);
+                        } else if span.certain {
+                            landing = OutlineState::Blocked;
+                        } else if landing == OutlineState::Eligible {
+                            landing = OutlineState::Unknown;
+                        }
                     }
                 }
-                contributors.sort_unstable();
-                contributors.dedup();
-                result.push(OutlineInterval {
+                sources.sort_unstable();
+                sources.dedup();
+                let interval = OutlineInterval {
                     boundary: id,
                     edge,
-                    start_mm: station + pair[0],
-                    end_mm: station + pair[1],
-                    start: start + tangent * pair[0],
-                    end: start + tangent * pair[1],
+                    start_mm: pair[0],
+                    end_mm: pair[1],
+                    start: start + (end - start) * ((pair[0] - station) / length),
+                    end: start + (end - start) * ((pair[1] - station) / length),
                     state: if blocked {
                         OutlineState::Blocked
-                    } else if contributors.is_empty() {
+                    } else if sources.is_empty() && landing == OutlineState::Eligible {
                         OutlineState::Eligible
                     } else {
                         OutlineState::Unknown
                     },
-                    obstacles: contributors,
+                    landing,
+                    obstacles: sources,
                     uncertainty_mm: band,
-                });
+                };
+                // Keep source edges, but discard redundant internal cuts.
+                if let Some(previous) = result.last_mut().filter(|p| {
+                    p.boundary == id
+                        && p.edge == edge
+                        && p.end_mm == interval.start_mm
+                        && p.state == interval.state
+                        && p.landing == landing
+                        && p.obstacles == interval.obstacles
+                }) {
+                    previous.end_mm = interval.end_mm;
+                    previous.end = interval.end;
+                } else {
+                    result.push(interval);
+                }
             }
             station += length;
         }
@@ -188,41 +285,153 @@ pub fn eligible_outline(
     Ok(result)
 }
 
-fn collision_spans(
-    obstacle: &ContourSet,
-    footprint: OutlineFootprint,
-    padding: f64,
+// Relative cross products keep attachment endpoints exactly on y=0 without
+// snapping or losing the source preparation history.
+fn edge_frame(region: &ContourSet, start: Point, delta: Point) -> Result<ContourSet, QueryError> {
+    let length = delta.length();
+    let rings = region
+        .rings
+        .iter()
+        .map(|ring| {
+            ring.iter()
+                .map(|&[x, y]| {
+                    let p = Point::new(x, y) - start;
+                    [
+                        dot(delta, p) / length,
+                        (delta.y * p.x - delta.x * p.y) / length,
+                    ]
+                })
+                .collect()
+        })
+        .collect();
+    let mut local = ContourSet::from_rings(rings, FillRule::NonZero, region.resolution.strict())?;
+    local.uncertainty_mm = local.uncertainty_mm.max(region.uncertainty_mm);
+    local.budget().check(local.uncertainty_mm)?;
+    Ok(local)
+}
+
+fn rectangle(region: &ContourSet, length: f64, bottom: f64, top: f64) -> ContourSet {
+    ContourSet::rectangle(
+        BBox::new(Point::new(0.0, bottom), Point::new(length, top)),
+        region.resolution.strict(),
+    )
+}
+
+fn bevel(
+    region: &ContourSet,
+    previous: Point,
+    t: Point,
+    n: Point,
+    depth: f64,
+) -> Result<ContourSet, QueryError> {
+    Ok(ContourSet::from_rings(
+        vec![vec![
+            [0.0, 0.0],
+            [depth * dot(previous, t), depth * dot(previous, n)],
+            [0.0, depth],
+        ]],
+        FillRule::NonZero,
+        region.resolution.strict(),
+    )?)
+}
+
+fn dot(a: Point, b: Point) -> f64 {
+    a.x * b.x + a.y * b.y
+}
+
+fn projections(region: &ContourSet) -> Vec<(f64, f64)> {
+    region
+        .connected_components()
+        .iter()
+        .map(|r| (r.bbox().min.x, r.bbox().max.x))
+        .collect()
+}
+
+// Regularized booleans discard line/point contacts. Clip original edges to the
+// CLOSED strip as well: even a point contact blocks a nonzero centre interval.
+fn strip_contacts(
+    region: &ContourSet,
     length: f64,
+    bottom: f64,
+    top: f64,
 ) -> Result<Vec<(f64, f64)>, QueryError> {
-    let half_width = footprint.width_mm / 2.0 + padding;
-    let bottom = -footprint.inward_mm - padding;
-    let top = footprint.outward_mm + padding;
-    if !half_width.is_finite() || !bottom.is_finite() || !(top + length + half_width).is_finite() {
-        return Err(QueryError::InvalidInput("outline footprint overflow"));
-    }
-    if half_width <= 0.0 || bottom >= top {
+    if bottom >= top {
         return Ok(Vec::new());
     }
-    // Clip in X too: obstacles far from this edge cannot contribute. The
-    // half-width expansion restores all possible centre positions in [0,L].
-    let strip = ContourSet::rectangle(
-        BBox::new(
-            Point::new(-half_width, bottom),
-            Point::new(length + half_width, top),
-        ),
-        obstacle.resolution.strict(),
-    );
-    let clipped = obstacle.intersection(&strip)?;
-    Ok(clipped
-        .connected_components()
-        .into_iter()
-        .filter_map(|part| {
-            let bounds = part.bbox();
-            let lo = (bounds.min.x - half_width).max(0.0);
-            let hi = (bounds.max.x + half_width).min(length);
-            (hi > lo).then_some((lo, hi))
-        })
-        .collect())
+    let mut spans = projections(&region.intersection(&rectangle(region, length, bottom, top))?);
+    for (a, b) in region.rings.iter().flat_map(ring_edges) {
+        let mut lo: f64 = 0.0;
+        let mut hi: f64 = 1.0;
+        for (v, d, min, max) in [(a.x, b.x - a.x, 0.0, length), (a.y, b.y - a.y, bottom, top)] {
+            if d == 0.0 {
+                if v < min || v > max {
+                    hi = -1.0;
+                }
+            } else {
+                let p = (min - v) / d;
+                let q = (max - v) / d;
+                lo = lo.max(p.min(q));
+                hi = hi.min(p.max(q));
+            }
+        }
+        if lo <= hi {
+            let p = a.x + lo * (b.x - a.x);
+            let q = a.x + hi * (b.x - a.x);
+            spans.push((p.min(q), p.max(q)));
+        }
+    }
+    Ok(spans)
+}
+
+fn intersects_closed(a: &ContourSet, b: &ContourSet) -> Result<bool, QueryError> {
+    if b.is_empty() {
+        return Ok(false);
+    }
+    if !a.intersection(b)?.is_empty() {
+        return Ok(true);
+    }
+    Ok(a.rings.iter().flat_map(ring_edges).any(|(p, q)| {
+        b.rings
+            .iter()
+            .flat_map(ring_edges)
+            .any(|(u, v)| crate::geom::dist::segments(p, q, u, v).0 == 0.0)
+    }))
+}
+
+fn expand_span(
+    spans: &mut Vec<Span>,
+    lo: f64,
+    hi: f64,
+    half: f64,
+    perimeter: f64,
+    obstacle: Option<usize>,
+    certain: bool,
+) {
+    if hi - lo + 2.0 * half >= perimeter {
+        spans.push(Span {
+            lo: 0.0,
+            hi: perimeter,
+            obstacle,
+            certain,
+        });
+        return;
+    }
+    let start = (lo - half).rem_euclid(perimeter);
+    let end = start + hi - lo + 2.0 * half;
+    spans.push(Span {
+        lo: start,
+        hi: end.min(perimeter),
+        obstacle,
+        certain,
+    });
+    if end > perimeter {
+        spans.push(Span {
+            lo: 0.0,
+            hi: end - perimeter,
+            obstacle,
+            certain,
+        });
+    }
 }
 
 #[cfg(test)]
