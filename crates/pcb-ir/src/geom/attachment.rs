@@ -16,6 +16,8 @@
 //! [`PolygonTopology`] and [`CutterReachability`] are model results, **not**
 //! certified source-curve topology, toolpath generation, or physical separation.
 
+pub mod outline;
+
 use super::dist::{self, Distance};
 use super::region::{ring_edges, segment_inside_intervals};
 use super::{AccuracyError, Affine2, ContourSet, FillRule, Point, PreparedRegion};

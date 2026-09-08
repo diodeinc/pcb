@@ -17,6 +17,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Add deterministic elastic support selection with explicit compliance limits, conflict constraints, exhaustive proof status, work budgets, and independent full-system response checks.
 - Add standalone elastic support analysis with beam and triangular plate elements, explicit stiffness and constraints, and singular-mode diagnostics.
 - Add experimental single mouse-bite tab geometry and reproducible straight/curved break coupons to `pcb-ir`; physical fracture validation remains outstanding.
+- Add boundary-following clearance intervals with inward landing checks, preserving substrate geometry and reporting missing obstacle evidence.
 
 ### Changed
 
@@ -29,6 +30,8 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Reconnect all affected nets when schematic repair moves symbols out of a short.
+- Mark standard-library bare test pads and plated test holes as native KiCad test points.
+- Mark standard-library fiducial pads as global fiducials in KiCad layouts.
 - Preserve curves that continue after a closed subpath during polygon preparation.
 - Require experimental tab anchors and witnesses to be resolved interior points of the original regions.
 - Reject experimental tab perforations that overlap support or lack resolved clearance from it.

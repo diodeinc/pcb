@@ -151,6 +151,7 @@
 		(size 2 2)
 		(drill 1)
 		(layers "*.Cu" "*.Mask")
+		(property pad_prop_testpoint)
 		(remove_unused_layers no)
 		(uuid "4c0db315-c5e6-4b9a-8e7e-fcc8fc5d5da2")
 	)
