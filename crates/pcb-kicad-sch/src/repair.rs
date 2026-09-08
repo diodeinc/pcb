@@ -309,6 +309,16 @@ pub(crate) fn plan_connectivity_repair_core(
             }
             for location in locations {
                 if relocate_symbols.insert(location.clone()) {
+                    // Relocation detaches every pin, not just the pin in the
+                    // short. Rebuild the other nets that were valid before
+                    // repair as well, using the original physical provenance.
+                    for island in observed
+                        .islands
+                        .values()
+                        .filter(|island| island.pins.iter().any(|pin| pin.is_on_symbol(&location)))
+                    {
+                        reconnect_nets.extend(expected_names_for_island(expected, island));
+                    }
                     remove_items(
                         &mut simulated,
                         &BTreeSet::from([ConnectivityItemRef::Symbol {

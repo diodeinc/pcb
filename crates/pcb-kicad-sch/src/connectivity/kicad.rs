@@ -74,6 +74,10 @@ impl PhysicalPinRef {
             point: point.into(),
         }
     }
+
+    pub(crate) fn is_on_symbol(&self, location: &SymbolLocation) -> bool {
+        self.page_id == location.page_id && self.symbol_id == location.symbol_id
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
