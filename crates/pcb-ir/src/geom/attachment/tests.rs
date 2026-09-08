@@ -553,6 +553,51 @@ fn stored_membership_uncertainty_keeps_additive_numerical_guard() {
 }
 
 #[test]
+fn numerical_overlap_requires_a_deep_interior_witness() {
+    let footprint = rect(0.0, 0.0, 1.0, 1.0);
+    let tolerance = QueryTolerance {
+        numerical_mm: 0.001,
+        ..TOL
+    };
+    for (depth, rejected) in [(0.0005, false), (0.001, false), (0.01, true)] {
+        let obstacle = rect(1.0 - depth, 0.0, 1.0, 1.0);
+        let checks = check_footprints(
+            &footprint,
+            &ContourSet::empty(RESOLUTION),
+            &[Obstacle {
+                id: "overlap",
+                region: &obstacle,
+            }],
+            0.0,
+            tolerance,
+        )
+        .unwrap();
+        if rejected {
+            assert_eq!(
+                checks[0].decision,
+                Decision::Rejected(GeometricRejection::FootprintOverlap)
+            );
+        } else {
+            assert!(matches!(checks[0].decision, Decision::Unresolved(_)));
+        }
+    }
+}
+
+#[test]
+fn transform_preserves_nonzero_significance_for_following_operations() {
+    let resolution = RESOLUTION.with_tolerance(0.1);
+    let region = ContourSet::rectangle(BBox::new(Point::ZERO, Point::new(2.0, 2.0)), resolution);
+    let moved = transform_region(&region, Affine2::IDENTITY).unwrap();
+    assert_eq!(moved.resolution, resolution);
+    assert!(
+        moved
+            .intersection(&rect(0.0, 0.0, 0.05, 0.05))
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
 fn invalid_queries_are_errors_not_geometric_rejections() {
     let region = rect(0.0, 0.0, 1.0, 1.0);
     assert!(

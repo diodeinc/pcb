@@ -331,6 +331,7 @@ pub fn transform_region(region: &ContourSet, transform: Affine2) -> Result<Conto
         .collect::<Vec<_>>();
     let mut transformed =
         ContourSet::from_contours(&contours, FillRule::NonZero, region.resolution.strict())?;
+    transformed.resolution = region.resolution;
     // Empty results have no contour on which to carry preparation history.
     transformed.uncertainty_mm = transformed
         .uncertainty_mm
@@ -436,7 +437,20 @@ pub fn check_footprints<'a>(
                         "polygon footprints overlap; source-boundary uncertainty requires refinement",
                     )
                 } else {
-                    Decision::Rejected(GeometricRejection::FootprintOverlap)
+                    // A nonempty numerical intersection alone is not a
+                    // collision certificate. Verify an interior witness
+                    // against both original input boundaries.
+                    let guard = tolerance.numerical_mm + overlap.uncertainty_mm;
+                    let footprint_query = footprint.prepare_query();
+                    let penetrates =
+                        has_penetration_witness(&overlap, [&footprint_query, &prepared], guard);
+                    if penetrates {
+                        Decision::Rejected(GeometricRejection::FootprintOverlap)
+                    } else {
+                        Decision::Unresolved(
+                            "overlap has no penetration witness beyond the numerical uncertainty band",
+                        )
+                    }
                 }
             } else if let Some(d) = distance {
                 if !d.mm.is_finite() {
@@ -469,6 +483,35 @@ pub fn check_footprints<'a>(
         }
     }
     Ok(checks)
+}
+
+/// Enumerate every horizontal vertex slab and every filled span, including
+/// concavities and holes. These are sufficient witnesses, not a penetration
+/// depth optimizer: absence of a deep witness leaves the query unresolved.
+fn has_penetration_witness(overlap: &ContourSet, inputs: [&PreparedRegion; 2], guard: f64) -> bool {
+    let mut heights = overlap
+        .rings
+        .iter()
+        .flatten()
+        .map(|p| p[1])
+        .collect::<Vec<_>>();
+    heights.sort_by(f64::total_cmp);
+    heights.dedup();
+    heights.windows(2).any(|heights| {
+        let y = heights[0] + (heights[1] - heights[0]) / 2.0;
+        let start = Point::new(overlap.bbox.min.x, y);
+        let end = Point::new(overlap.bbox.max.x, y);
+        segment_inside_intervals(overlap, start, end)
+            .into_iter()
+            .any(|(a, b)| {
+                let point = start + (end - start) * (a + (b - a) / 2.0);
+                inputs.iter().all(|input| {
+                    input
+                        .signed_distance(point)
+                        .is_some_and(|distance| distance.mm + distance.uncertainty_mm < -guard)
+                })
+            })
+    })
 }
 
 /// Witness classification in a polygon-model snapshot. Outside is geometric;
