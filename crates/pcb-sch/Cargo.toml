@@ -33,6 +33,3 @@ urlencoding = { workspace = true, optional = true }
 [features]
 default = []
 table = ["comfy-table", "colored", "supports-hyperlinks", "terminal_hyperlink", "urlencoding"]
-
-[dev-dependencies]
-tempfile = { workspace = true }
