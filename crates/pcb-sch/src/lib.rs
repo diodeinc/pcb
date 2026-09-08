@@ -1091,62 +1091,6 @@ impl Net {
     }
 }
 
-/// Fluent builder for constructing [`Schematic`] structures.
-///
-/// Example:
-/// ```rust
-/// use pcb_sch::*;
-/// # use std::path::Path;
-/// let root_mod = ModuleRef::from_path(Path::new("/project/root.pmod"), "Root");
-/// let root_ref = InstanceRef::new(root_mod.clone(), Vec::new());
-/// let mut builder = Schematic::builder();
-/// builder.add_instance(root_ref.clone(), Instance::module(root_mod));
-/// builder.add_net(Net::new("Ground".to_string(), "GND", 0));
-/// let sch = builder.build();
-/// ```
-#[derive(Default)]
-pub struct SchematicBuilder {
-    schematic: Schematic,
-}
-
-impl SchematicBuilder {
-    /// Create a fresh builder with an empty schematic.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Insert (or replace) an [`Instance`] record.
-    pub fn add_instance(&mut self, reference: InstanceRef, instance: Instance) -> &mut Self {
-        self.schematic.add_instance(reference, instance);
-        self
-    }
-
-    /// Insert (or replace) a [`Net`].
-    pub fn add_net(&mut self, net: Net) -> &mut Self {
-        self.schematic.add_net(net);
-        self
-    }
-
-    /// Finish building and return the [`Schematic`].
-    pub fn build(self) -> Schematic {
-        self.schematic
-    }
-}
-
-impl From<SchematicBuilder> for Schematic {
-    fn from(builder: SchematicBuilder) -> Self {
-        builder.build()
-    }
-}
-
-// Provide a convenient entry-point on the [`Schematic`] type itself.
-impl Schematic {
-    /// Start building a new schematic using the fluent [`SchematicBuilder`].
-    pub fn builder() -> SchematicBuilder {
-        SchematicBuilder::default()
-    }
-}
-
 // Tests
 #[cfg(test)]
 mod tests {
