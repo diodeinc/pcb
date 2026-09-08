@@ -571,6 +571,31 @@ fn record_netlist_payload(
     true
 }
 
+fn coalesce_watched_file_changes(
+    connection: &Connection,
+    mut params: DidChangeWatchedFilesParams,
+    pending: &mut VecDeque<Message>,
+) -> DidChangeWatchedFilesParams {
+    // Stdio uses a zero-capacity channel: give its reader a brief chance to
+    // hand over the next event. Requests and other messages remain barriers.
+    while let Ok(message) = connection
+        .receiver
+        .recv_timeout(std::time::Duration::from_millis(1))
+    {
+        if let Message::Notification(notification) = &message
+            && notification.method == DidChangeWatchedFiles::METHOD
+            && let Ok(next) =
+                serde_json::from_value::<DidChangeWatchedFilesParams>(notification.params.clone())
+        {
+            params.changes.extend(next.changes);
+        } else {
+            pending.push_back(message);
+            break;
+        }
+    }
+    params
+}
+
 /// The logic implementations of stuff
 impl<T: LspContext> Backend<T> {
     fn server_capabilities(context: &T, settings: LspServerSettings) -> ServerCapabilities {
@@ -1927,6 +1952,7 @@ impl<T: LspContext> Backend<T> {
             }
             DidChangeWatchedFiles::METHOD => {
                 self.with_notification_params(notification, |params| {
+                    let params = coalesce_watched_file_changes(&self.connection, params, pending);
                     self.maybe_log_error(self.did_change_watched_files(params))
                 });
             }
@@ -2240,6 +2266,68 @@ mod tests {
 
     fn protocol_uri(uri: &Url) -> Uri {
         uri.as_str().parse().unwrap()
+    }
+
+    #[test]
+    fn coalesces_file_events_without_crossing_message_boundaries() -> anyhow::Result<()> {
+        use lsp_server::{Connection, Message};
+        use lsp_types::{DidChangeWatchedFilesParams, notification::DidChangeWatchedFiles};
+        use std::collections::VecDeque;
+
+        let event = |name, typ| FileEvent {
+            uri: protocol_uri(&temp_file_uri(name)),
+            typ,
+        };
+        let first = event("first.kicad_sym", FileChangeType::CHANGED);
+        let second = event("second.kicad_sym", FileChangeType::DELETED);
+        let third = event("second.kicad_sym", FileChangeType::CREATED);
+        let notification = |changes| {
+            Message::Notification(new_notification::<DidChangeWatchedFiles>(
+                DidChangeWatchedFilesParams { changes },
+            ))
+        };
+        for boundary in [
+            serde_json::json!({"id": 1, "method": "zener/evaluate", "params": {}}),
+            serde_json::json!({"method": "textDocument/didClose", "params": {}}),
+            serde_json::json!({"method": "workspace/didChangeWatchedFiles", "params": {"changes": "invalid"}}),
+        ] {
+            let (client, server) = Connection::memory();
+            client.sender.send(notification(vec![second.clone()]))?;
+            client.sender.send(notification(vec![third.clone()]))?;
+            client
+                .sender
+                .send(serde_json::from_value(boundary.clone())?)?;
+            let after = notification(vec![first.clone()]);
+            client.sender.send(after.clone())?;
+
+            let mut pending = VecDeque::new();
+            let result = super::coalesce_watched_file_changes(
+                &server,
+                DidChangeWatchedFilesParams {
+                    changes: vec![first.clone()],
+                },
+                &mut pending,
+            );
+            assert_eq!(
+                result.changes,
+                vec![first.clone(), second.clone(), third.clone()]
+            );
+            assert_eq!(pending.len(), 1);
+            // Message serialization includes jsonrpc; compare parsed messages.
+            assert_eq!(
+                serde_json::to_value(pending.pop_front().unwrap())?,
+                serde_json::to_value(serde_json::from_value::<Message>(boundary)?)?
+            );
+            assert_eq!(
+                serde_json::to_value(server.receiver.try_recv()?)?,
+                serde_json::to_value(after)?
+            );
+            let unchanged =
+                super::coalesce_watched_file_changes(&server, result.clone(), &mut pending);
+            assert_eq!(unchanged.changes, result.changes);
+            assert!(pending.is_empty());
+        }
+        Ok(())
     }
 
     #[test]
