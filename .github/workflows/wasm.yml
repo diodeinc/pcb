@@ -42,7 +42,7 @@ jobs:
           node-version: '24'
 
       - name: Check portable Rust libraries
-        run: cargo check --locked --target wasm32-unknown-unknown -p ipc2581 -p pcb-ir -p gerberx2 -p pcb-ipc2581-tools --no-default-features
+        run: cargo check --locked --target wasm32-unknown-unknown -p ipc2581 -p pcb-ir -p gerberx2 -p pcb-ipc2581-tools -p pcb-elastic --no-default-features
 
       - name: Build IPC WASM package
         run: ./bin/build-wasm-bundle.sh ipc

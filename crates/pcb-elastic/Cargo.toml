@@ -1,0 +1,12 @@
+[package]
+name = "pcb-elastic"
+version.workspace = true
+edition.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+description = "Deterministic small-system linear elastic support analysis"
+
+[dependencies]
+nalgebra = { version = "0.35", default-features = false, features = ["std"] }
+thiserror.workspace = true

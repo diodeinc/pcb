@@ -194,6 +194,11 @@ opt-level = 2
 [profile.dev.package.ipc2581]
 opt-level = 2
 
+# Dense elastic validation/solves must stay practical on refinement fixtures.
+# Keep debug assertions and full checks; optimize only this numerical crate.
+[profile.dev.package.pcb-elastic]
+opt-level = 2
+
 # Test binaries are short-lived and do not need the full debug information that
 # made this workspace's integration-test artifacts hundreds of megabytes each.
 [profile.test]
