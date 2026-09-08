@@ -451,19 +451,6 @@ impl KiCadCliBuilder {
     }
 }
 
-/// Direct function for simple KiCad CLI calls
-pub fn kicad_cli<I, S>(args: I) -> Result<()>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<str>,
-{
-    let mut builder = KiCadCliBuilder::new();
-    for arg in args {
-        builder = builder.arg(arg.as_ref());
-    }
-    builder.run()
-}
-
 /// Run KiCad DRC checks, write the raw KiCad JSON report to `output_path`, and return the parsed report.
 ///
 /// Set `schematic_parity=true` to have KiCad include schematic-vs-layout parity diagnostics
