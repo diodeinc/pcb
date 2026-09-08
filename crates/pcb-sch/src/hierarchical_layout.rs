@@ -94,22 +94,6 @@ impl BoundingBox {
     }
 }
 
-/// Represents a component or module that can be placed
-#[derive(Debug, Clone)]
-pub struct LayoutItem {
-    pub id: String,
-    pub bounds: BoundingBox,
-    pub is_module: bool,
-    pub children: Vec<String>, // IDs of child items
-}
-
-/// Represents a placement decision
-#[derive(Debug, Clone)]
-pub struct Placement {
-    pub item_id: String,
-    pub position: Point, // Position of the item's top-left corner
-}
-
 /// The main hierarchical layout engine
 pub struct HierarchicalLayout {
     /// Component sizes (id -> size)
