@@ -1149,8 +1149,8 @@ pub fn stroke_paint(width: f64, cap: crate::geom::LineCap) -> Paint {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geom::path::PathCmd;
     use crate::geom::LineCap;
+    use crate::geom::path::PathCmd;
 
     #[test]
     fn stores_layers_objects_and_paths_in_fat_struct_arenas() {
