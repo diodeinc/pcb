@@ -188,7 +188,8 @@ the material/fixture model and its response convergence remain ENG-1434's work.
 
 ## Verification and limitations
 
-`cargo nextest run -p pcb-elastic` runs hand-built matrices/meshes only. Tests cover
+`cargo nextest run -p pcb-elastic` runs hand-built matrices/meshes plus the
+support-selection tests. Tests cover
 beam analytical tip response and uniform-load refinement; triangle rigid modes,
 quadratic curvature/attachment patch and pressure resultant; manufactured clamped
 plate refinement on perturbed triangles; thickness scaling; optional supports
