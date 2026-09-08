@@ -6,6 +6,7 @@
 pub(crate) mod accuracy;
 mod affine;
 mod arc;
+pub mod attachment;
 mod bbox;
 pub mod bridge;
 pub mod copper_balance;

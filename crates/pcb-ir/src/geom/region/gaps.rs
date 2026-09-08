@@ -115,7 +115,7 @@ impl ContourSet {
     /// each component. Regularized rings nest without crossing and holes
     /// are wound opposite their outer ring, so a hole belongs to the
     /// smallest outer ring around it.
-    fn ring_components(&self) -> (Vec<usize>, Vec<usize>) {
+    pub(crate) fn ring_components(&self) -> (Vec<usize>, Vec<usize>) {
         let areas = self.rings.iter().map(ring_signed_area).collect::<Vec<_>>();
         let mut outers = (0..self.rings.len())
             .filter(|&ring| areas[ring] > 0.0)
