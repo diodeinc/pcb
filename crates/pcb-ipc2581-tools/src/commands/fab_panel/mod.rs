@@ -619,10 +619,9 @@ fn physical_stackup(xml: &str, source_index: usize) -> Result<PhysicalStackup> {
                         layer_index + 1
                     )
                 })?;
-            let specs = layer
-                .spec_refs
+            let specs = stackup_layer
+                .combined_spec_refs(&ecad.cad_data.layers)
                 .iter()
-                .chain(stackup_layer.spec_refs.iter().filter(|reference| !layer.spec_refs.contains(reference)))
                 .map(spec_evidence)
                 .collect();
 

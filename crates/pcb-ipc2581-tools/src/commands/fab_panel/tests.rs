@@ -101,6 +101,68 @@ fn multiple_stackup_specs_reach_fab_comparison_and_property_accessors() {
 }
 
 #[test]
+fn cad_data_layer_specs_reconcile_with_stackup_position_evidence() {
+    for (stack_ref, conflicting) in [("", false), ("a", false), ("b", false), ("b", true)] {
+        let (material, dk, color, finish) = if conflicting {
+            ("PTFE", "2.1", "BLUE", "S")
+        } else {
+            ("FR4", "4.2", "RED", "OSP")
+        };
+        let xml = assembly_panel_xml(20.0, 20.0)
+            .replace("<CadHeader units=\"MILLIMETER\"/>", &format!(r#"<CadHeader units="MILLIMETER"><Spec name="a"><General type="MATERIAL"><Property text="FR4"/><ColorTerm name="RED"/></General><Dielectric type="DIELECTRIC_CONSTANT"><Property value="4.2"/></Dielectric><SurfaceFinish type="OSP"/></Spec><Spec name="b"><General type="MATERIAL"><Property text="{material}"/><ColorTerm name="{color}"/></General><Dielectric type="DIELECTRIC_CONSTANT"><Property value="{dk}"/></Dielectric><SurfaceFinish type="{finish}"/></Spec></CadHeader>"#))
+            .replace("side=\"TOP\" polarity=\"POSITIVE\"/>", "side=\"TOP\" polarity=\"POSITIVE\"><SpecRef id=\"a\"/></Layer>");
+        let xml = if stack_ref.is_empty() {
+            xml
+        } else {
+            xml.replace(
+                "sequence=\"0\"/>",
+                &format!("sequence=\"0\"><SpecRef id=\"{stack_ref}\"/></StackupLayer>"),
+            )
+        };
+        let ipc = Ipc2581::parse(&xml).unwrap();
+        let imported = pcb_ir::import::ipc2581::import_design(&ipc, Resolution::default()).unwrap();
+        let metadata = imported.physical_board_metadata();
+        assert_eq!(
+            metadata.layers[0].spec_refs.len(),
+            if stack_ref == "b" { 2 } else { 1 }
+        );
+        assert_eq!(
+            metadata.layers[0]
+                .material
+                .resolved()
+                .map(|value| imported.resolve(*value)),
+            if conflicting { None } else { Some("FR4") }
+        );
+        for role in ["SOLDERMASK", "COATINGNONCOND"] {
+            let ipc = Ipc2581::parse(&xml.replace("CONDUCTOR", role)).unwrap();
+            let details = crate::accessors::IpcAccessor::new(&ipc)
+                .stackup_details()
+                .unwrap();
+            assert_eq!(
+                details.layers[0].material.as_deref(),
+                if conflicting { None } else { Some("FR4") }
+            );
+            assert_eq!(
+                details.layers[0].dielectric_constant,
+                if conflicting { None } else { Some(4.2) }
+            );
+            if role == "SOLDERMASK" {
+                assert_eq!(
+                    details.soldermask_color.and_then(|color| color.name),
+                    if conflicting {
+                        None
+                    } else {
+                        Some("RED".to_string())
+                    }
+                );
+            } else {
+                assert_eq!(details.surface_finish.is_some(), !conflicting);
+            }
+        }
+    }
+}
+
+#[test]
 fn external_specs_remain_comparable_and_keep_their_output_identity() {
     let xml = assembly_panel_xml(20.0, 20.0)
         .replace(

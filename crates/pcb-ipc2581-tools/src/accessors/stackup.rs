@@ -288,8 +288,8 @@ impl<'a> IpcAccessor<'a> {
             let layer_function = layer_map.get(&layer_name).copied();
 
             // Check if this is a soldermask or silkscreen layer
-            for spec_ref in &stackup_layer.spec_refs {
-                let spec_name = self.ipc.resolve(*spec_ref).to_string();
+            for spec_ref in stackup_layer.combined_spec_refs(&ecad.cad_data.layers) {
+                let spec_name = self.ipc.resolve(spec_ref).to_string();
                 if let Some(spec) = spec_map.get(&spec_name) {
                     // Extract color from Spec (try multiple sources)
                     let mut color_name = spec.color_term.map(|c| self.ipc.resolve(c).to_string());
@@ -354,7 +354,7 @@ impl<'a> IpcAccessor<'a> {
             // A single display value is available only when referenced
             // evidence agrees; never select the last or first conflicting spec.
             let specs = stackup_layer
-                .spec_refs
+                .combined_spec_refs(&ecad.cad_data.layers)
                 .iter()
                 .filter_map(|reference| ecad.cad_header.specs.get(reference))
                 .collect::<Vec<_>>();
@@ -413,6 +413,7 @@ impl<'a> IpcAccessor<'a> {
         // Per IPC-2581C spec section 8.1.1.16: SurfaceFinish is referenced by
         // StackupLayer elements that reference a Layer with layerFunction
         // COATINGCOND or COATINGNONCOND
+        let ecad = self.ecad()?;
         let mut finishes = Vec::new();
         for stackup_layer in stackup_layers {
             let layer_name = self.ipc.resolve(stackup_layer.layer_ref).to_string();
@@ -427,8 +428,8 @@ impl<'a> IpcAccessor<'a> {
             }
 
             // Check if spec has surface finish
-            for spec_ref in &stackup_layer.spec_refs {
-                let spec_name = self.ipc.resolve(*spec_ref).to_string();
+            for spec_ref in stackup_layer.combined_spec_refs(&ecad.cad_data.layers) {
+                let spec_name = self.ipc.resolve(spec_ref).to_string();
                 if let Some(spec) = spec_map.get(&spec_name)
                     && let Some(surface_finish) = &spec.surface_finish
                 {
