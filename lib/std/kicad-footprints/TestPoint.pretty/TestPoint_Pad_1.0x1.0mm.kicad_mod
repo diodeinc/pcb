@@ -150,6 +150,7 @@
 		(at 0 0)
 		(size 1 1)
 		(layers "F.Cu" "F.Mask")
+		(property pad_prop_testpoint)
 		(uuid "c7a53b80-2670-4411-8770-45df62759000")
 	)
 	(embedded_fonts no)

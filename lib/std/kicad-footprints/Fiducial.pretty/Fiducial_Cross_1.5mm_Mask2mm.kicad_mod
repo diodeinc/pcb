@@ -71,6 +71,7 @@
 		(at 0 0)
 		(size 0.25 0.25)
 		(layers "F.Cu" "F.Mask")
+		(property pad_prop_fiducial_glob)
 		(solder_mask_margin 0.875)
 		(clearance 0.975)
 	)
@@ -78,6 +79,7 @@
 		(at 0 0)
 		(size 0.25 0.25)
 		(layers "F.Cu" "F.Mask")
+		(property pad_prop_fiducial_glob)
 		(options
 			(clearance outline)
 			(anchor circle)
