@@ -202,6 +202,82 @@ fn complete_reconciliation_recovers_from_invalid_initial_analysis() {
 }
 
 #[test]
+fn relocating_shorted_symbols_reconnects_their_other_nets() {
+    let netlist = common::compile_fixture("analysis", "simple.zen");
+    let mut document = plan_reconciliation(None, &netlist, "simple.kicad_sch")
+        .unwrap()
+        .apply(None)
+        .unwrap();
+    // Touch only R1's LEFT pin to R2's RIGHT pin. Their other pins carry
+    // MID, which is valid before repair and must survive moving the symbols.
+    document.pages[0]
+        .items
+        .retain(|item| matches!(item, SchItem::Symbol(_)));
+    let target = common::pin_point(&document, "R1.R", "1");
+    let source = common::pin_point(&document, "R2.R", "2");
+    let symbol = managed_symbol_mut(&mut document, "R2.R");
+    let new_at = Point::new(
+        symbol.at.x + target.x - source.x,
+        symbol.at.y + target.y - source.y,
+    );
+    move_symbol(symbol, new_at);
+    for (path, pin, net) in [
+        ("R1.R", "1", "LEFT"),
+        ("R1.R", "2", "MID"),
+        ("R2.R", "1", "MID"),
+        ("R2.R", "2", "RIGHT"),
+    ] {
+        let point = common::pin_point(&document, path, pin);
+        document.pages[0]
+            .items
+            .push(SchItem::Label(pcb_kicad_sch::Label::new(
+                format!("{path}-{pin}"),
+                net,
+                point,
+            )));
+    }
+    let inspection = inspect_schematic(&document, &netlist).unwrap();
+    assert_eq!(inspection.issues.len(), 1, "{:#?}", inspection.issues);
+    let issue = &inspection.issues[0];
+    assert!(
+        matches!(&issue.issue, SchematicIssue::Shorted { net_names, .. }
+        if net_names == &BTreeSet::from(["LEFT".into(), "RIGHT".into()]))
+    );
+    let selected = BTreeSet::from([issue.key.clone()]);
+    let intent = plan_connectivity_repair(
+        &document,
+        &netlist,
+        &inspection,
+        &selected,
+        &BTreeSet::new(),
+    )
+    .unwrap();
+    assert!(!intent.relocated_symbols().is_empty());
+    assert_eq!(
+        intent.reconnect_nets(),
+        &BTreeSet::from(["LEFT".into(), "MID".into(), "RIGHT".into()])
+    );
+    assert!(intent.driver_kind("MID", &document.pages[0].id).is_some());
+
+    let plan = plan_reconciliation(Some(&document), &netlist, "simple.kicad_sch").unwrap();
+    let repaired = plan.apply(Some(&document)).unwrap();
+    assert!(
+        inspect_schematic(&repaired, &netlist)
+            .unwrap()
+            .analysis
+            .is_equivalent()
+    );
+    assert_eq!(plan.revert(&repaired).unwrap(), document);
+    let scoped = plan_repairs(&document, &netlist, &inspection, selected)
+        .unwrap()
+        .apply(Some(&document))
+        .unwrap();
+    assert_eq!(scoped, repaired);
+    pcb_kicad_sch::verify_connectivity_repair(&document, &inspection, &netlist, &intent, &scoped)
+        .unwrap();
+}
+
+#[test]
 fn directly_overlapping_component_pins_relocate_the_affected_symbols() {
     let netlist = common::compile_fixture("analysis", "simple.zen");
     let mut document = plan_reconciliation(None, &netlist, "simple.kicad_sch")
