@@ -219,14 +219,14 @@ impl AnalysisMesh {
             {
                 let vertices = face.vertices().map(|v| offset + v.fix().index());
                 let [a, b, c] = vertices.map(|v| mesh.vertices[v]);
-                let twice_area = cross(b - a, c - a);
+                let twice_area = orientation(a, b, c);
                 if !twice_area.is_finite() || twice_area <= 0.0 {
                     return Err(MeshError::DegenerateElement);
                 }
                 let lengths = [a.distance_to(b), b.distance_to(c), c.distance_to(a)];
                 let angle = [(b - a, c - a), (a - b, c - b), (a - c, b - c)]
                     .into_iter()
-                    .map(|(u, v)| cross(u, v).abs().atan2(dot(u, v)).to_degrees())
+                    .map(|(u, v)| twice_area.atan2(dot(u, v)).to_degrees())
                     .fold(180.0, f64::min);
                 mesh.quality.min_angle_degrees = mesh.quality.min_angle_degrees.min(angle);
                 mesh.quality.max_area_mm2 = mesh.quality.max_area_mm2.max(twice_area / 2.0);
@@ -355,13 +355,12 @@ impl AnalysisMesh {
         let triangle = self.elements.get(element)?;
         let mut nearest: Option<MeshAttachment> = None;
         let [a, b, c] = triangle.vertices.map(|v| self.vertices[v]);
-        let coord = |p: Point| robust::Coord { x: p.x, y: p.y };
         // Use the triangulator's adaptive orientation predicate for exact signs
         // of represented inputs. An epsilon band would also accept exterior points.
         let areas = [
-            robust::orient2d(coord(b), coord(c), coord(point)),
-            robust::orient2d(coord(c), coord(a), coord(point)),
-            robust::orient2d(coord(a), coord(b), coord(point)),
+            orientation(b, c, point),
+            orientation(c, a, point),
+            orientation(a, b, point),
         ];
         let sum = areas.iter().sum::<f64>();
         if areas.iter().all(|w| w.is_finite() && *w >= 0.0) && sum.is_finite() && sum > 0.0 {
@@ -395,8 +394,9 @@ impl AnalysisMesh {
     }
 }
 
-fn cross(a: Point, b: Point) -> f64 {
-    a.x * b.y - a.y * b.x
+fn orientation(a: Point, b: Point, c: Point) -> f64 {
+    let coord = |p: Point| robust::Coord { x: p.x, y: p.y };
+    robust::orient2d(coord(a), coord(b), coord(c))
 }
 fn dot(a: Point, b: Point) -> f64 {
     a.x * b.x + a.y * b.y

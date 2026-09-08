@@ -1,6 +1,10 @@
 use super::*;
 use crate::geom::{Affine2, BBox, FillRule, Mirror, Resolution, shapes};
 
+fn cross(a: Point, b: Point) -> f64 {
+    a.x * b.y - a.y * b.x
+}
+
 fn options(area: f64) -> MeshOptions {
     MeshOptions {
         max_area_mm2: area,
@@ -386,5 +390,39 @@ fn restored_regions_must_have_valid_resolution_and_accuracy_history() {
                 uncertainty
             );
         }
+    }
+}
+
+#[test]
+fn constructor_preserves_cancellation_prone_thin_triangles() {
+    let points = [
+        [-3.656357558875988, 3.4743373693723267],
+        [2.6377461897661405, -2.449309742605783],
+        [-0.5380377200017632, 0.5395547465475277],
+    ];
+    // Exact rational determinant of the represented binary coordinates, rounded
+    // to f64. Ordinary translated determinants give either zero or 3.55e-15.
+    let expected_area = 6.649046188380301e-16 / 2.0;
+    for scale in [0.25, 1.0, 4.0] {
+        // Start at the vertex for which upstream polygon area remains positive.
+        let ring = (0..3)
+            .map(|i| points[(i + 1) % 3].map(|x| x * scale))
+            .collect();
+        let region = ContourSet::from_regularized(vec![ring], Resolution::default().strict(), 0.0);
+        assert_eq!(region.rings.len(), 1);
+        let mesh = AnalysisMesh::new(
+            &region,
+            MeshOptions {
+                max_area_mm2: 1.0,
+                min_angle_degrees: 0.0,
+                max_additional_vertices: 0,
+            },
+        )
+        .unwrap();
+        assert_eq!(mesh.elements.len(), 1);
+        assert_eq!(mesh.boundary.len(), 3);
+        assert!((mesh.quality.area_mm2 / (expected_area * scale * scale) - 1.0).abs() < 1e-14);
+        assert!(mesh.quality.min_angle_degrees > 0.0);
+        assert_eq!(mesh.refinement, RefinementStatus::TargetsMet);
     }
 }
