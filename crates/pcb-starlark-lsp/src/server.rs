@@ -578,10 +578,14 @@ fn coalesce_watched_file_changes(
 ) -> DidChangeWatchedFilesParams {
     // Stdio uses a zero-capacity channel: give its reader a brief chance to
     // hand over the next event. Requests and other messages remain barriers.
-    while let Ok(message) = connection
-        .receiver
-        .recv_timeout(std::time::Duration::from_millis(1))
-    {
+    // Limit each batch to 256 notifications so continuous events still refresh.
+    for _ in 1..256 {
+        let Ok(message) = connection
+            .receiver
+            .recv_timeout(std::time::Duration::from_millis(1))
+        else {
+            break;
+        };
         if let Message::Notification(notification) = &message
             && notification.method == DidChangeWatchedFiles::METHOD
             && let Ok(next) =
@@ -1786,6 +1790,8 @@ impl<T: LspContext> Backend<T> {
 
         // Watch symbols before evaluation: a failed component must still observe
         // the symbol edit that fixes it, even when no schematic was produced.
+        // String globs are workspace-scoped. Add editable external libraries to
+        // the editor workspace to receive their changes too.
         let kind = Some(WatchKind::Create | WatchKind::Change | WatchKind::Delete);
         self.connection
             .sender
@@ -2327,6 +2333,36 @@ mod tests {
             assert_eq!(unchanged.changes, result.changes);
             assert!(pending.is_empty());
         }
+        Ok(())
+    }
+
+    #[test]
+    fn file_event_batches_are_bounded_without_dropping_the_remainder() -> anyhow::Result<()> {
+        let (client, server) = lsp_server::Connection::memory();
+        let params = |index| lsp_types::DidChangeWatchedFilesParams {
+            changes: vec![FileEvent {
+                uri: protocol_uri(&temp_file_uri(&format!("{index}.kicad_sym"))),
+                typ: FileChangeType::CHANGED,
+            }],
+        };
+        for index in 1..=256 {
+            client
+                .sender
+                .send(lsp_server::Message::Notification(new_notification::<
+                    lsp_types::notification::DidChangeWatchedFiles,
+                >(params(
+                    index,
+                ))))?;
+        }
+        let mut pending = std::collections::VecDeque::new();
+        let result = super::coalesce_watched_file_changes(&server, params(0), &mut pending);
+        let expected: Vec<_> = (0..256).flat_map(|index| params(index).changes).collect();
+        assert_eq!(result.changes, expected);
+        assert!(pending.is_empty());
+        let lsp_server::Message::Notification(remainder) = server.receiver.try_recv()? else {
+            panic!("expected the next batch's notification");
+        };
+        assert_eq!(remainder.params, serde_json::to_value(params(256))?);
         Ok(())
     }
 
