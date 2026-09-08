@@ -1358,11 +1358,18 @@ fn copper_weight_oz(imported: &ImportedDesign, layer: Symbol) -> Option<f64> {
         .stackups
         .iter()
         .flat_map(|stackup| &stackup.layers)
-        .find(|candidate| candidate.layer_ref == layer)?;
-    let mut weights = stackup_layer
-        .spec_refs
+        .find(|candidate| candidate.layer_ref == layer);
+    let references = match stackup_layer {
+        Some(position) => position.combined_spec_refs(&imported.layer_definitions),
+        None => imported
+            .layer_definitions
+            .iter()
+            .find(|definition| definition.name == layer)?
+            .spec_refs
+            .clone(),
+    };
+    let mut weights = references
         .iter()
-        .chain(stackup_layer.spec_ref.iter())
         .filter_map(|reference| imported.specs.get(reference))
         .filter_map(|spec| spec.copper_weight_oz);
     if let Some(weight) = weights.next() {
@@ -1372,7 +1379,7 @@ fn copper_weight_oz(imported: &ImportedDesign, layer: Symbol) -> Option<f64> {
             .all(|candidate| candidate == weight)
             .then_some(weight);
     }
-    stackup_layer
+    stackup_layer?
         .thickness
         .map(|millimeters| millimeters / 0.0348)
 }
@@ -1681,6 +1688,31 @@ mod tests {
                 let imported = import_design(&ipc, Resolution::default()).unwrap();
                 let layer = imported.layer_definitions[0].name;
                 assert_eq!(copper_weight_oz(&imported, layer), expected);
+                let layer_xml = xml.replace(refs, "").replace(
+                    r#"side="TOP" polarity="POSITIVE"/>"#,
+                    &format!(r#"side="TOP" polarity="POSITIVE">{refs}</Layer>"#),
+                );
+                let ipc = Ipc2581::parse(&layer_xml).unwrap();
+                let mut layer_only = import_design(&ipc, Resolution::default()).unwrap();
+                assert_eq!(
+                    copper_weight_oz(&layer_only, layer_only.layer_definitions[0].name),
+                    expected
+                );
+                layer_only.stackups.clear();
+                assert_eq!(
+                    copper_weight_oz(&layer_only, layer_only.layer_definitions[0].name),
+                    expected
+                );
+                let mixed_xml = xml.replace(refs, r#"<SpecRef id="a"/>"#).replace(
+                    r#"side="TOP" polarity="POSITIVE"/>"#,
+                    r#"side="TOP" polarity="POSITIVE"><SpecRef id="b"/></Layer>"#,
+                );
+                let ipc = Ipc2581::parse(&mixed_xml).unwrap();
+                let mixed = import_design(&ipc, Resolution::default()).unwrap();
+                assert_eq!(
+                    copper_weight_oz(&mixed, mixed.layer_definitions[0].name),
+                    expected
+                );
                 let mut compatibility = imported.clone();
                 let layer = &mut compatibility.stackups[0].layers[0];
                 layer.spec_ref = Some(layer.spec_refs[0]);

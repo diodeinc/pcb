@@ -551,8 +551,13 @@ fn multiple_stackup_specs_preserve_provenance_and_reconcile_without_last_ref_win
         assert!(source.loss_tangent.is_none());
         let metadata = imported.physical_board_metadata();
         let layer = &metadata.layers[0];
-        assert_eq!(layer.spec_refs, source.spec_refs);
-        assert!(layer.spec_ref.is_none());
+        let mut unique_refs = source.spec_refs.clone();
+        unique_refs.dedup();
+        assert_eq!(layer.spec_refs, unique_refs);
+        assert_eq!(
+            layer.spec_ref,
+            (unique_refs.len() == 1).then_some(unique_refs[0])
+        );
         if refs.contains(&"b") {
             let Association::Conflicting(values) = &layer.material else {
                 panic!("different resolved specs must conflict");

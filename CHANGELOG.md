@@ -36,6 +36,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 - Mark standard-library bare test pads and plated test holes as native KiCad test points.
 - Mark standard-library fiducial pads as global fiducials in KiCad layouts.
+- Reconcile IPC-2581 layer and stackup specification references for physical metadata and manufacturing properties.
 - Preserve curves that continue after a closed subpath during polygon preparation.
 - Require experimental tab anchors and witnesses to be resolved interior points of the original regions.
 - Preserve fractional IPC-2581 stackup sequences when ordering physical layers.

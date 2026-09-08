@@ -139,6 +139,27 @@ pub struct StackupLayer {
     pub layer_number: Option<f64>,
 }
 
+impl StackupLayer {
+    /// Unique direct specifications for this physical layer: stackup-position
+    /// refs (including legacy singular evidence), then CadData Layer refs.
+    /// Root and group specifications are not implicitly inherited.
+    pub fn combined_spec_refs(&self, layers: &[Layer]) -> Vec<Symbol> {
+        let mut references = Vec::new();
+        for reference in self.spec_refs.iter().chain(self.spec_ref.iter()).chain(
+            layers
+                .iter()
+                .find(|layer| layer.name == self.layer_ref)
+                .into_iter()
+                .flat_map(|layer| &layer.spec_refs),
+        ) {
+            if !references.contains(reference) {
+                references.push(*reference);
+            }
+        }
+        references
+    }
+}
+
 /// Step represents a design (board, panel, etc.)
 #[derive(Debug, Clone)]
 pub struct Step {

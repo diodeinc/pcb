@@ -115,6 +115,8 @@ pub struct BoardMaterialLayer {
     pub material: Association<Symbol>,
     /// Single-reference compatibility view; use spec_refs for full provenance.
     pub spec_ref: Option<Symbol>,
+    /// Unique direct StackupLayer and CadData Layer references. Original scopes
+    /// remain available on ImportedDesign's stackups and layer_definitions.
     pub spec_refs: Vec<Symbol>,
 }
 
@@ -340,13 +342,7 @@ impl ImportedDesign {
         };
         for layer in layers {
             let layer_ref = layer.layer_ref;
-            let mut spec_refs = layer.spec_refs.clone();
-            // Retain legacy callers' explicitly supplied singular evidence too.
-            if let Some(reference) = layer.spec_ref
-                && !spec_refs.contains(&reference)
-            {
-                spec_refs.push(reference);
-            }
+            let spec_refs = layer.combined_spec_refs(&self.layer_definitions);
             let mut materials = Vec::new();
             let mut conflicting_layer_specs = false;
             for reference in &spec_refs {
