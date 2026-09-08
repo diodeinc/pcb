@@ -14,6 +14,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Add `--accuracy-um` to set the geometry accuracy for Gerber, IPC-2581, and release output.
 - Keep circles and ellipses exact in exports and rendering.
 - Add reusable polygon-boundary, attachment clearance, cutter reachability, and break-removal connectivity queries to `pcb-ir`, with explicit uncertainty and model limitations.
+- Add deterministic elastic support selection with explicit compliance limits, conflict constraints, exhaustive proof status, work budgets, and independent full-system response checks.
 - Add standalone elastic support analysis with beam and triangular plate elements, explicit stiffness and constraints, and singular-mode diagnostics.
 
 ### Changed

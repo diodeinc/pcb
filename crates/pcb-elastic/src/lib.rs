@@ -7,6 +7,7 @@
 //! coordinates, not physically restrained solutions. Inspect status and modes.
 
 pub mod elements;
+pub mod selection;
 pub use nalgebra::{DMatrix, DVector};
 use thiserror::Error;
 
