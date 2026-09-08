@@ -10,30 +10,26 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
-- Expose IPC-2581 source lands even after copper removal.
-- Add global `--accuracy-um` (1–100 whole micrometres, default 10) for IPC-2581 geometry, Gerber operations, and release HTML; DFM stays at 10 µm and copper balancing at 50 µm.
-- Keep circles and ellipses exact through placement, export, and rendering, preparing curved geometry to a stated accuracy.
+- Support KiCad 9 schematics, saving edited pages as KiCad 10.
+- Add `--accuracy-um` to set the geometry accuracy for Gerber, IPC-2581, and release output.
+- Keep circles and ellipses exact in exports and rendering.
 
 ### Changed
 
-- Reuse prepared contour apertures during Gerber export without changing geometry or emitted files.
-- Model KiCad sheet graphics and text as editable, UUID-addressed items, including source-preserving saves of moved annotations.
-- Consolidate `pcb bom` table and JSON rows by selected offer.
-- Upgrade all remaining bundled standard-library and example symbols to KiCad 10 format.
+- Preserve sheet graphics and text annotations when updating KiCad schematics.
+- Group `pcb bom` rows by selected offer.
+- Upgrade bundled symbols to KiCad 10 format.
 - Create a starter `spec.md` when scaffolding a new board repository.
 
 ### Fixed
 
-- Support KiCad 9 schematics, upgrading edited pages to KiCad 10.
-- Preserve caller geometry accuracy through IPC import, relief generation, and export helpers.
-- Return geometry errors instead of panicking during physical feature association and DFM board outline preparation.
-- Migrate registry references in root-level `.zen` files in container workspaces.
-- Make `pcb rectify fix` and `pcb rectify audit` exit non-zero on batch evaluation errors.
-- Report malformed SPICE `PARAMS:` tokens instead of panicking.
-- Escape inserted KiCad `Path` properties during import so special characters do not break layout sync.
-- Keep inward decimation within the boundary deviation limit for spikes beyond chord endpoints.
-- Honor explicit `in_bom` overrides and inherit omitted values in KiCad `extends` symbols.
-- Import metric-only `0402Metric`/`0603Metric` passives as imperial `01005`/`0201` packages, ignoring library namespaces in package detection.
+- Report malformed SPICE `PARAMS:` tokens instead of crashing.
+- Migrate root-level `.zen` files in container workspaces.
+- Exit non-zero from `pcb rectify fix` and `pcb rectify audit` when batch evaluation fails.
+- Escape special characters in KiCad `Path` properties during import.
+- Keep simplified geometry within the accuracy limit near sharp spikes.
+- Respect `in_bom` on KiCad `extends` symbols.
+- Import metric-only `0402Metric`/`0603Metric` passives as `01005`/`0201` packages.
 
 ## [0.4.51] - 2026-09-05
 
