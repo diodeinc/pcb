@@ -12,6 +12,9 @@ categories = ["graphics", "rendering", "hardware-support"]
 
 [dev-dependencies]
 pcb-sexpr = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
 
 [dependencies]
 anyhow = { workspace = true }

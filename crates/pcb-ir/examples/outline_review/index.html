@@ -1,0 +1,929 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Eligible outline · courtyard review</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #1f3039;
+        --muted: #64757e;
+        --line: #dbe2e5;
+        --paper: #f5f7f7;
+        --eligible: #078259;
+        --blocked: #d3414a;
+        --unknown: #c68a12;
+        --top: #5886aa;
+        --bottom: #936faf;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--paper);
+        font:
+          14px/1.5 system-ui,
+          sans-serif;
+        color: var(--ink);
+      }
+      header {
+        padding: 22px 30px;
+        background: white;
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px;
+      }
+      h1 {
+        font-size: 24px;
+        letter-spacing: -0.7px;
+        margin: 2px 0;
+      }
+      h2 {
+        font-size: 19px;
+        margin: 0;
+      }
+      h3 {
+        font-size: 13px;
+        margin: 0 0 10px;
+      }
+      .eyebrow {
+        font:
+          11px/1.5 ui-monospace,
+          monospace;
+        letter-spacing: 1.8px;
+        color: var(--muted);
+        text-transform: uppercase;
+      }
+      .pill {
+        border: 1px solid var(--line);
+        padding: 6px 11px;
+        border-radius: 20px;
+        font-size: 12px;
+        white-space: nowrap;
+      }
+      .layout {
+        display: grid;
+        grid-template-columns: 185px minmax(350px, 1fr) 285px;
+        min-height: calc(100vh - 103px);
+      }
+      nav {
+        padding: 24px 14px;
+        border-right: 1px solid var(--line);
+        background: #eef2f2;
+      }
+      nav .eyebrow {
+        padding-left: 12px;
+        margin-bottom: 14px;
+      }
+      button,
+      select {
+        font: inherit;
+        color: inherit;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: white;
+        padding: 7px 10px;
+      }
+      button {
+        cursor: pointer;
+      }
+      button:hover {
+        background: #f6f9f8;
+      }
+      button:focus-visible,
+      select:focus-visible {
+        outline: 3px solid #5599cf;
+        outline-offset: 2px;
+      }
+      nav button {
+        width: 100%;
+        text-align: left;
+        background: transparent;
+        border-color: transparent;
+        margin: 3px 0;
+        padding: 11px 12px;
+      }
+      nav button[aria-current="true"] {
+        background: white;
+        border-color: var(--line);
+        box-shadow: 0 2px 3px #20303a08;
+        font-weight: 650;
+      }
+      nav small {
+        display: block;
+        color: var(--muted);
+        font-weight: 400;
+        font-size: 11px;
+        margin-top: 3px;
+      }
+      main {
+        min-width: 0;
+        padding: 23px;
+      }
+      aside {
+        padding: 23px 20px;
+        background: white;
+        border-left: 1px solid var(--line);
+      }
+      .subtle {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 15px;
+      }
+      .controls {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+      .controls label {
+        font-size: 12px;
+        display: flex;
+        align-items: center;
+        gap: 5px;
+      }
+      .stats {
+        display: flex;
+        gap: 25px;
+        border-top: 1px solid var(--line);
+        padding: 16px 0;
+      }
+      .stat strong {
+        font-size: 24px;
+        font-weight: 600;
+        display: block;
+        line-height: 1.2;
+        letter-spacing: -0.5px;
+      }
+      .stat span {
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .Eligible {
+        color: var(--eligible);
+      }
+      .Blocked {
+        color: var(--blocked);
+      }
+      .Unknown {
+        color: var(--unknown);
+      }
+      .notice {
+        border: 1px solid #e5d5a5;
+        background: #fffbef;
+        color: #796022;
+        padding: 10px 13px;
+        font-size: 12px;
+        border-radius: 6px;
+        margin-bottom: 14px;
+      }
+      .drawing {
+        position: relative;
+        background: white;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        overflow: hidden;
+      }
+      .drawing svg {
+        display: block;
+        width: 100%;
+        height: 525px;
+        touch-action: none;
+      }
+      .drawing .hint {
+        padding: 9px 13px;
+        border-top: 1px solid var(--line);
+        font-size: 11px;
+        color: var(--muted);
+        background: #fafbfb;
+      }
+      .drawingTools {
+        position: absolute;
+        right: 12px;
+        top: 12px;
+        display: flex;
+        gap: 4px;
+      }
+      .drawingTools button {
+        padding: 2px 9px;
+      }
+      .legend {
+        display: flex;
+        gap: 15px;
+        font-size: 11px;
+        margin: 14px 0;
+        flex-wrap: wrap;
+      }
+      .swatch {
+        display: inline-block;
+        width: 17px;
+        height: 3px;
+        vertical-align: middle;
+        margin-right: 5px;
+      }
+      .section {
+        border-top: 1px solid var(--line);
+        padding-top: 17px;
+        margin-top: 20px;
+      }
+      .metric {
+        display: flex;
+        justify-content: space-between;
+        margin: 8px 0;
+        font-size: 12px;
+        gap: 8px;
+      }
+      .metric span:first-child {
+        color: var(--muted);
+      }
+      .sources {
+        padding: 0;
+        list-style: none;
+        margin: 12px 0;
+      }
+      .sources li {
+        font:
+          12px/1.5 ui-monospace,
+          monospace;
+        background: #f0f4f6;
+        padding: 7px 9px;
+        border-radius: 4px;
+        margin: 5px 0;
+        overflow-wrap: anywhere;
+      }
+      .missing {
+        font-size: 11px;
+        line-height: 1.7;
+        max-height: 165px;
+        overflow: auto;
+      }
+      .missing div {
+        padding: 4px 0;
+        border-bottom: 1px solid #edf0f1;
+      }
+      details {
+        font-size: 12px;
+      }
+      summary {
+        cursor: pointer;
+        font-weight: 600;
+      }
+      pre {
+        font:
+          10px/1.5 ui-monospace,
+          monospace;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        max-height: 300px;
+        overflow: auto;
+      }
+      #intervalSelect {
+        width: 100%;
+        font-size: 11px;
+        margin: 10px 0;
+      }
+      #selectionState {
+        font-size: 18px;
+        font-weight: 650;
+      }
+      .endpoint {
+        pointer-events: none;
+      }
+      .tab {
+        fill: #225fba22;
+        stroke: #225fba;
+        stroke-width: 2;
+        vector-effect: non-scaling-stroke;
+        pointer-events: none;
+      }
+      .label {
+        font-size: 1.15px;
+        fill: #526573;
+        pointer-events: none;
+      }
+      .footer {
+        font-size: 11px;
+        color: var(--muted);
+        margin-top: 18px;
+        max-width: 780px;
+      }
+      .toggle {
+        display: block;
+        font-size: 12px;
+        margin: 8px 0;
+      }
+      a {
+        color: #315c80;
+      }
+      .error {
+        padding: 30px;
+        color: #ad2937;
+      }
+      @media (max-width: 1100px) {
+        .layout {
+          grid-template-columns: 150px minmax(300px, 1fr);
+        }
+        aside {
+          grid-column: 2;
+          border-top: 1px solid var(--line);
+          border-left: 0;
+        }
+        .drawing svg {
+          height: 450px;
+        }
+      }
+      @media (max-width: 650px) {
+        header {
+          padding: 17px;
+        }
+        header .pill {
+          display: none;
+        }
+        .layout {
+          display: block;
+        }
+        nav {
+          display: flex;
+          overflow: auto;
+          padding: 10px;
+          gap: 5px;
+        }
+        nav .eyebrow {
+          display: none;
+        }
+        nav button {
+          min-width: 105px;
+        }
+        main {
+          padding: 14px;
+        }
+        .toolbar {
+          align-items: start;
+          flex-direction: column;
+        }
+        .drawing svg {
+          height: 400px;
+        }
+        aside {
+          padding: 20px;
+        }
+        .stats {
+          gap: 20px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div>
+        <div class="eyebrow">Board geometry / Stage 01</div>
+        <h1>Where could a support begin?</h1>
+      </div>
+      <div class="pill">Courtyard-only · no frame or mechanical claim</div>
+    </header>
+    <div class="layout">
+      <nav aria-label="Corpus boards">
+        <div class="eyebrow">Source boards</div>
+        <div id="boards"></div>
+      </nav>
+      <main>
+        <div class="toolbar">
+          <div>
+            <h2 id="boardTitle">Loading…</h2>
+            <div id="boardSubtitle" class="subtle"></div>
+          </div>
+          <div class="controls">
+            <label for="width"
+              >Tab width
+              <select id="width"></select></label
+            ><label><input type="checkbox" id="strict" />Strict evidence</label>
+          </div>
+        </div>
+        <div class="stats" id="stats"></div>
+        <div class="notice" id="notice"></div>
+        <div class="drawing">
+          <div class="drawingTools">
+            <button id="zoomIn" aria-label="Zoom in">+</button
+            ><button id="zoomOut" aria-label="Zoom out">−</button
+            ><button id="fit">Fit</button>
+          </div>
+          <svg
+            id="drawing"
+            role="img"
+            aria-label="Original board with courtyard exclusions and eligible boundary intervals"
+          >
+            <defs>
+              <pattern
+                id="grid"
+                width="5"
+                height="5"
+                patternUnits="userSpaceOnUse"
+              >
+                <path
+                  d="M 5 0 L 0 0 0 5"
+                  fill="none"
+                  stroke="#e9eef0"
+                  stroke-width=".04"
+                />
+              </pattern>
+            </defs>
+            <g id="geometry" transform="scale(1,-1)"></g>
+          </svg>
+          <div class="hint">
+            Hover an outline interval to inspect its full tab footprint. Click
+            to pin; Esc to release. Scroll to zoom.
+          </div>
+        </div>
+        <div class="legend">
+          <span
+            ><i class="swatch" style="background: var(--eligible)"></i>Eligible
+            centre interval</span
+          ><span
+            ><i class="swatch" style="background: var(--blocked)"></i>Blocked by
+            courtyard</span
+          ><span
+            ><i class="swatch" style="background: var(--unknown)"></i>Unknown /
+            uncertainty band (dots enlarged)</span
+          >
+        </div>
+        <div class="controls">
+          <label><input id="top" type="checkbox" checked />Top courtyards</label
+          ><label
+            ><input id="bottom" type="checkbox" checked />Bottom
+            courtyards</label
+          ><label><input id="labels" type="checkbox" />Component labels</label
+          ><span class="subtle"
+            >Visibility only; both sides always constrain eligibility.</span
+          >
+        </div>
+        <p class="footer">
+          The thin charcoal line is the unchanged board outline. Thick colors
+          classify tab <strong>centres</strong>, not material to remove. All
+          results use the full rectangular footprint, not a centre-only
+          intersection. Corners and internal rings do not establish
+          inward-facing edge eligibility, frame connectivity, router access or
+          strength.
+        </p>
+        <details class="section">
+          <summary>Source provenance &amp; exact review inputs</summary>
+          <pre id="provenance"></pre>
+        </details>
+      </main>
+      <aside>
+        <div class="eyebrow">Boundary inspector</div>
+        <select
+          id="intervalSelect"
+          aria-label="Inspect boundary interval"
+        ></select>
+        <div id="selectionState">Select an interval</div>
+        <div class="subtle" id="selectionHint"></div>
+        <div id="metrics"></div>
+        <ul class="sources" id="sources"></ul>
+        <div class="section">
+          <h3>Footprint used in this review</h3>
+          <div id="footprintMetrics"></div>
+          <p class="subtle">
+            Blue rectangle = full proposed footprint at the selected centre.
+            Dimensions are review inputs, not manufacturing recommendations. No
+            implicit extra clearance.
+          </p>
+        </div>
+        <div class="section">
+          <h3>Evidence gaps</h3>
+          <div class="missing" id="missing"></div>
+          <p class="subtle" id="coverage"></p>
+        </div>
+        <div class="section">
+          <h3>Courtyard contract</h3>
+          <p class="subtle">
+            Read directly from the original KiCad layout. One closed polygon or
+            circle per required side. Missing geometry is never replaced with a
+            body, Fab drawing, silk, pad hull or bounding box.
+          </p>
+          <p class="subtle">
+            Closure and provenance are checked. Dimensions, connector mating
+            space and full KLC compliance still require footprint review.
+          </p>
+        </div>
+      </aside>
+    </div>
+    <script type="module">
+      const $ = (id) => document.getElementById(id);
+      const ns = "http://www.w3.org/2000/svg",
+        colors = {
+          Eligible: "#078259",
+          Blocked: "#d3414a",
+          Unknown: "#c68a12",
+        };
+      const svg = (tag, attrs, parent) => {
+        const el = document.createElementNS(ns, tag);
+        for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+        parent.append(el);
+        return el;
+      };
+      const text = (tag, value, parent, cls) => {
+        const el = document.createElement(tag);
+        el.textContent = value;
+        if (cls) el.className = cls;
+        parent.append(el);
+        return el;
+      };
+      const metric = (parent, label, value) => {
+        const row = text("div", "", parent, "metric");
+        text("span", label, row);
+        text("span", value, row);
+      };
+      let data,
+        board,
+        scenario,
+        pinned = false,
+        view,
+        selected = 0;
+      const state = (i) => ($("strict").checked ? i.strict_state : i.state);
+      const fmt = (v) => `${v.toFixed(2)} mm`;
+      function fit() {
+        const [x0, y0, x1, y1] = board.review_bounds;
+        const pad = Math.max(5, scenario.outward_mm + 2);
+        view = [x0 - pad, -y1 - pad, x1 - x0 + 2 * pad, y1 - y0 + 2 * pad];
+        applyView();
+      }
+      function applyView() {
+        $("drawing").setAttribute("viewBox", view.join(" "));
+      }
+      function zoom(factor) {
+        const [x, y, w, h] = view;
+        view = [
+          x + (w * (1 - factor)) / 2,
+          y + (h * (1 - factor)) / 2,
+          w * factor,
+          h * factor,
+        ];
+        applyView();
+      }
+      function chooseBoard(index) {
+        board = data.boards[index];
+        for (const [b, i] of [...$("boards").children].map((b, i) => [b, i]))
+          b.setAttribute("aria-current", i === index);
+        $("width").replaceChildren();
+        board.scenarios.forEach((s, i) => {
+          const option = text("option", `${s.width_mm} mm`, $("width"));
+          option.value = i;
+        });
+        $("boardTitle").textContent = board.name;
+        $("boardSubtitle").textContent =
+          `${board.obstacles.length} source courtyards · ${board.source.components.filter((c) => c.dnp).length} DNP footprints excluded`;
+        render(true);
+      }
+      function render(reset = false) {
+        scenario = board.scenarios[+$("width").value];
+        pinned = false;
+        const strict = $("strict").checked;
+        const totals = { Eligible: 0, Blocked: 0, Unknown: 0 };
+        scenario.intervals.forEach(
+          (i) => (totals[state(i)] += i.end_mm - i.start_mm),
+        );
+        $("stats").replaceChildren();
+        for (const name of Object.keys(totals)) {
+          const box = text("div", "", $("stats"), "stat");
+          text("strong", fmt(totals[name]), box, name);
+          text(
+            "span",
+            name === "Eligible" && !strict
+              ? "POTENTIALLY ELIGIBLE"
+              : name.toUpperCase(),
+            box,
+          );
+        }
+        $("notice").textContent = strict
+          ? `Strict evidence: ${board.missing.length} footprints have missing or unsupported courtyards. Unproved intervals remain unknown.`
+          : `Best-effort preview: ${board.missing.length} footprints with missing or unsupported courtyards are omitted. Green is conditional on that missing evidence; enable Strict evidence to see the difference.`;
+        $("footprintMetrics").replaceChildren();
+        metric($("footprintMetrics"), "Width", fmt(scenario.width_mm));
+        metric(
+          $("footprintMetrics"),
+          "Inward landing",
+          fmt(scenario.inward_mm),
+        );
+        metric(
+          $("footprintMetrics"),
+          "Outward extent",
+          fmt(scenario.outward_mm),
+        );
+        $("missing").replaceChildren();
+        board.missing.forEach((m) => text("div", m, $("missing")));
+        if (!board.missing.length)
+          text("div", "No missing courtyards", $("missing"));
+        $("coverage").textContent =
+          `${board.source.rule_area_count} source rule areas found. This run filters courtyards only: rule areas, copper, drills and routing are not exclusion constraints. No material or Z-height assumptions.`;
+        $("provenance").textContent = JSON.stringify(
+          {
+            source: board.source.provenance,
+            layout_sha256: board.source.layout_sha256,
+            xml_sha256: board.source.xml_sha256,
+            kicad_version: board.source.kicad_version,
+            contract: board.source.contract,
+            accuracy_mm: data.accuracy_mm,
+            substrate_uncertainty_mm: board.substrate_uncertainty_mm,
+            numerical_guard_mm: scenario.numerical_mm,
+            footprint: {
+              width_mm: scenario.width_mm,
+              inward_mm: scenario.inward_mm,
+              outward_mm: scenario.outward_mm,
+            },
+            diagnostics: board.diagnostics,
+          },
+          null,
+          2,
+        );
+        const root = $("geometry");
+        root.replaceChildren();
+        const [x0, y0, x1, y1] = board.bounds;
+        svg(
+          "rect",
+          {
+            x: x0 - 50,
+            y: y0 - 50,
+            width: x1 - x0 + 100,
+            height: y1 - y0 + 100,
+            fill: "url(#grid)",
+          },
+          root,
+        );
+        svg(
+          "path",
+          {
+            d: board.substrate,
+            fill: "#f0f4f3",
+            stroke: "#344851",
+            "stroke-width": 1,
+            "vector-effect": "non-scaling-stroke",
+            "fill-rule": "evenodd",
+          },
+          root,
+        );
+        const envelopes = svg("g", {}, root);
+        board.obstacles.forEach((o) => {
+          if (!$(o.side === "Top" ? "top" : "bottom").checked) return;
+          const color = o.side === "Top" ? "#5886aa" : "#936faf";
+          const el = svg(
+            "path",
+            {
+              d: o.path,
+              fill: color,
+              "fill-opacity": 0.08,
+              stroke: color,
+              "stroke-opacity": 0.6,
+              "stroke-width": 0.8,
+              "stroke-dasharray": o.side === "Bottom" ? "3 2" : "none",
+              "vector-effect": "non-scaling-stroke",
+              "fill-rule": "evenodd",
+              "data-obstacle": o.id,
+            },
+            envelopes,
+          );
+          svg("title", {}, el).textContent = o.id;
+        });
+        const lines = svg("g", {}, root),
+          bands = svg("g", { class: "endpoint" }, root),
+          hits = svg("g", {}, root);
+        scenario.intervals.forEach((i, index) => {
+          const attrs = {
+            x1: i.start[0],
+            y1: i.start[1],
+            x2: i.end[0],
+            y2: i.end[1],
+            "vector-effect": "non-scaling-stroke",
+          };
+          svg(
+            "line",
+            {
+              ...attrs,
+              stroke: colors[state(i)],
+              "stroke-width": 4,
+              "data-state": state(i),
+            },
+            lines,
+          );
+          if (state(i) === "Unknown" && i.end_mm - i.start_mm < 0.1)
+            svg(
+              "circle",
+              {
+                cx: (i.start[0] + i.end[0]) / 2,
+                cy: (i.start[1] + i.end[1]) / 2,
+                r: 0.22,
+                fill: colors.Unknown,
+                stroke: "white",
+                "stroke-width": 1,
+                "vector-effect": "non-scaling-stroke",
+              },
+              bands,
+            );
+          const hit = svg(
+            "line",
+            {
+              ...attrs,
+              stroke: "transparent",
+              "stroke-width": 15,
+              "data-interval": index,
+            },
+            hits,
+          );
+          hit.addEventListener("pointermove", (event) => {
+            if (!pinned) inspect(index, event);
+          });
+          hit.addEventListener("click", (event) => {
+            pinned = !pinned;
+            inspect(index, event);
+          });
+        });
+        const labels = svg("g", {}, root);
+        if ($("labels").checked)
+          board.source.components
+            .filter((c) => !c.dnp)
+            .forEach((c) => {
+              const [x, y] = c.at;
+              const el = svg(
+                "text",
+                {
+                  transform: `translate(${x},${y}) scale(1,-1)`,
+                  "text-anchor": "middle",
+                  class: "label",
+                },
+                labels,
+              );
+              el.textContent = c.id;
+            });
+        svg("g", { id: "selection" }, root);
+        $("intervalSelect").replaceChildren();
+        scenario.intervals.forEach((i, index) => {
+          const option = text(
+            "option",
+            `${state(i)} · ring ${i.ring} / edge ${i.edge} · ${fmt(i.end_mm - i.start_mm)}`,
+            $("intervalSelect"),
+          );
+          option.value = index;
+        });
+        selected = Math.max(
+          0,
+          scenario.intervals.findIndex(
+            (i) =>
+              state(i) === "Blocked" &&
+              i.end_mm - i.start_mm > scenario.width_mm,
+          ),
+        );
+        inspect(selected);
+        if (reset || !view) fit();
+      }
+      function inspect(index, event) {
+        selected = index;
+        $("intervalSelect").value = index;
+        const i = scenario.intervals[index],
+          dx = i.end[0] - i.start[0],
+          dy = i.end[1] - i.start[1],
+          length = Math.hypot(dx, dy),
+          t = [dx / length, dy / length],
+          n = [t[1], -t[0]];
+        let f = 0.5;
+        if (event) {
+          const point = new DOMPoint(
+            event.clientX,
+            event.clientY,
+          ).matrixTransform($("geometry").getScreenCTM().inverse());
+          f = Math.max(
+            0.001,
+            Math.min(
+              0.999,
+              ((point.x - i.start[0]) * dx + (point.y - i.start[1]) * dy) /
+                (length * length),
+            ),
+          );
+        }
+        const p = [i.start[0] + dx * f, i.start[1] + dy * f];
+        const corners = [
+          [-1, -scenario.inward_mm],
+          [1, -scenario.inward_mm],
+          [1, scenario.outward_mm],
+          [-1, scenario.outward_mm],
+        ].map(([sign, d]) => [
+          p[0] + (sign * t[0] * scenario.width_mm) / 2 + n[0] * d,
+          p[1] + (sign * t[1] * scenario.width_mm) / 2 + n[1] * d,
+        ]);
+        const group = $("selection");
+        group.replaceChildren();
+        svg(
+          "polygon",
+          { points: corners.map((p) => p.join(",")).join(" "), class: "tab" },
+          group,
+        );
+        svg(
+          "circle",
+          { cx: p[0], cy: p[1], r: 0.17, fill: "#225fba", class: "endpoint" },
+          group,
+        );
+        svg(
+          "line",
+          {
+            x1: i.start[0],
+            y1: i.start[1],
+            x2: i.end[0],
+            y2: i.end[1],
+            stroke: colors[state(i)],
+            "stroke-width": 7,
+            "vector-effect": "non-scaling-stroke",
+            class: "endpoint",
+          },
+          group,
+        );
+        $("selectionState").textContent = state(i);
+        $("selectionState").className = state(i);
+        $("selectionHint").textContent = pinned
+          ? "Pinned · click outline or press Esc to release"
+          : "Hover to move the complete footprint";
+        $("metrics").replaceChildren();
+        metric($("metrics"), "Ring / polygon edge", `${i.ring} / ${i.edge}`);
+        metric(
+          $("metrics"),
+          "Arclength interval",
+          `${i.start_mm.toFixed(2)} – ${i.end_mm.toFixed(2)}`,
+        );
+        metric($("metrics"), "Interval length", fmt(i.end_mm - i.start_mm));
+        metric($("metrics"), "Comparison band", fmt(i.uncertainty_mm));
+        $("sources").replaceChildren();
+        i.sources.forEach((s) => text("li", s, $("sources")));
+        if (!i.sources.length)
+          text(
+            "li",
+            state(i) === "Unknown"
+              ? "Missing courtyard evidence"
+              : "Clears all included courtyards",
+            $("sources"),
+          );
+        if ($("strict").checked && board.missing.length)
+          text(
+            "li",
+            `${board.missing.length} missing courtyard sources also remain unresolved`,
+            $("sources"),
+          );
+        for (const el of document.querySelectorAll("[data-obstacle]")) {
+          const active = i.sources.includes(el.getAttribute("data-obstacle"));
+          el.setAttribute("fill-opacity", active ? 0.25 : 0.08);
+          el.setAttribute("stroke-width", active ? 1.8 : 0.8);
+        }
+      }
+      $("width").addEventListener("change", () => render());
+      for (const id of ["strict", "top", "bottom", "labels"])
+        $(id).addEventListener("change", () => render());
+      $("intervalSelect").addEventListener("change", () => {
+        pinned = true;
+        inspect(+$("intervalSelect").value);
+      });
+      $("fit").onclick = fit;
+      $("zoomIn").onclick = () => zoom(0.8);
+      $("zoomOut").onclick = () => zoom(1.25);
+      $("drawing").addEventListener(
+        "wheel",
+        (e) => {
+          e.preventDefault();
+          zoom(e.deltaY > 0 ? 1.1 : 0.9);
+        },
+        { passive: false },
+      );
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") {
+          pinned = false;
+          inspect(selected);
+        }
+      });
+      try {
+        const response = await fetch("data.json");
+        if (!response.ok)
+          throw Error(`Cannot load review data: ${response.status}`);
+        data = await response.json();
+        data.boards.forEach((b, i) => {
+          const button = text("button", b.name, $("boards"));
+          text(
+            "small",
+            `${b.obstacles.length} courtyards · ${b.missing.length} gaps`,
+            button,
+          );
+          button.onclick = () => chooseBoard(i);
+        });
+        chooseBoard(0);
+      } catch (error) {
+        $("boardTitle").textContent = "Review could not load";
+        $("notice").textContent = String(error);
+        $("notice").className = "error";
+      }
+    </script>
+  </body>
+</html>
