@@ -28,6 +28,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- Mark standard-library fiducial pads as global fiducials in KiCad layouts.
 - Preserve curves that continue after a closed subpath during polygon preparation.
 - Require experimental tab anchors and witnesses to be resolved interior points of the original regions.
 - Reject experimental tab perforations that overlap support or lack resolved clearance from it.

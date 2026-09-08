@@ -71,6 +71,7 @@
 		(at 0 0)
 		(size 0.75 0.75)
 		(layers "F.Cu" "F.Mask")
+		(property pad_prop_fiducial_glob)
 		(solder_mask_margin 0.75)
 		(clearance 0.85)
 	)
