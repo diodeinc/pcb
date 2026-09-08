@@ -16,6 +16,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 - Add reusable polygon-boundary, attachment clearance, cutter reachability, and break-removal connectivity queries to `pcb-ir`, with explicit uncertainty and model limitations.
 - Add deterministic elastic support selection with explicit compliance limits, conflict constraints, exhaustive proof status, work budgets, and independent full-system response checks.
 - Add standalone elastic support analysis with beam and triangular plate elements, explicit stiffness and constraints, and singular-mode diagnostics.
+- Add experimental single mouse-bite tab geometry and reproducible straight/curved break coupons to `pcb-ir`; physical fracture validation remains outstanding.
 
 ### Changed
 
@@ -27,6 +28,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Fixed
 
+- Preserve curves that continue after a closed subpath during polygon preparation.
+- Require experimental tab anchors and witnesses to be resolved interior points of the original regions.
+- Reject experimental tab perforations that overlap support or lack resolved clearance from it.
+- Preserve exact arc endpoints during curve preparation to avoid numerical zero-length edges in release builds.
 - Report malformed SPICE `PARAMS:` tokens instead of crashing.
 - Migrate root-level `.zen` files in container workspaces.
 - Exit non-zero from `pcb rectify fix` and `pcb rectify audit` when batch evaluation fails.

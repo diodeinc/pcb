@@ -25,10 +25,8 @@ pub(super) fn flatten_contours(contours: &[ContourBuf], accuracy: f64) -> (Vec<R
     };
     let mut rings = Vec::new();
     let mut current = Vec::new();
-    kurbo::flatten(
-        bez_path,
-        flatten_error.max(f64::MIN_POSITIVE),
-        |element| match element {
+    crate::geom::path::flatten_path(bez_path, flatten_error.max(f64::MIN_POSITIVE), |element| {
+        match element {
             kurbo::PathEl::MoveTo(point) => {
                 push_ring(&mut rings, &mut current);
                 current.push([point.x, point.y]);
@@ -38,8 +36,8 @@ pub(super) fn flatten_contours(contours: &[ContourBuf], accuracy: f64) -> (Vec<R
             kurbo::PathEl::QuadTo(..) | kurbo::PathEl::CurveTo(..) => {
                 unreachable!("kurbo::flatten emits lines")
             }
-        },
-    );
+        }
+    });
     push_ring(&mut rings, &mut current);
     (rings, conversion_error + flatten_error)
 }
