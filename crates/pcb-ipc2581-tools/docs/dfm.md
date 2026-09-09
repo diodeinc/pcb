@@ -213,15 +213,23 @@ thickness source. Witness separation does not encode the ratio.
 
 Morphological opening and closing are deliberately candidate stages for width
 and soldermask-web checks. Each candidate residue is measured on the medial
-axis of the boundary around it — the Voronoi diagram of the nearby boundary
-segments — as the diameter of its narrowest maximal inscribed disk. Disks
-tangent only to incident segments are corner spokes and carry no width, so
-one-sided residue (the bite an isolated corner sheds) measures nothing; disks
-that a larger disk contains within the flattening tolerance are branches the
-tessellation sprouted and are pruned, so a flattened arc measures its diameter
-while a tapered spur still measures its tip. Bounds and spatial indices have
-the same one-way contract: they can prove work unnecessary, but they cannot
-emit a finding without the exact geometric measurement.
+axis of the unsnapped prepared boundary, as an inscribed disk diameter. The
+checker constructs the analytic point/point, point/line, and line/line
+bisectors of nearby nonincident segments. Quadratic roots delimit valid
+contact domains, nearest-boundary intervals, residue crossings, and radius
+limits. Vertices and spans share this construction; no snap-grid repair,
+sample-dependent disk pruning, or angular tuning margin decides eligibility.
+The contacts must be equidistant, globally nearest, and strictly obtuse from
+the center beyond numerical roundoff. Endpoint normal cones exclude corner
+contacts shadowed by adjoining edges. The disk radius must exceed its recorded
+boundary uncertainty. The minimum and its evidence come from the same analytic
+axis; flattening is used only to draw it, not to measure it.
+This is a resolved-contact measurement of the prepared geometry, not a
+reconstruction of intended curves from an already polygonal input. Source
+boundary uncertainty contributes to scalar width, but does not bound contact
+direction or certify source-branch correspondence or topology. Bounds and
+spatial indices can prove work unnecessary, but cannot emit a finding without
+the geometric measurement.
 
 Copper-clearance ownership is retained through that same ordered artwork
 composition. Dark features add material to their owner; clears and final
