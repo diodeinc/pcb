@@ -15,14 +15,13 @@ mod query;
 mod simplification;
 #[cfg(test)]
 mod tests;
+mod widths;
 
 pub use booleans::PaintComposer;
 pub(crate) use booleans::difference_shapes;
 pub use flattening::rings_to_contours;
+pub(crate) use gaps::TwoSidedResidualComponent;
 pub use gaps::{DiskGapRegularization, GapRegularizationError};
-// Preserve the existing crate-visible type paths, including inferred result types.
-#[allow(unused_imports)]
-pub(crate) use gaps::{InscribedDisk, TwoSidedResidualComponent, WidthAxisSegment};
 pub use query::PreparedRegion;
 pub(crate) use simplification::{decimate_rings_inward, simplify_rings};
 pub use simplification::{simplify_shapes, simplify_shapes_on_grid};

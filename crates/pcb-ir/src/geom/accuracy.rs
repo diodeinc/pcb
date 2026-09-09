@@ -56,6 +56,8 @@
 //! rounding. Every operation checks the accumulated total against the
 //! region's budget and fails rather than return a region it cannot certify;
 //! combining regions prepared at different budgets takes the tighter one.
+//! This bounds positional error, not nearest-contact motion, normals, or
+//! correspondence between individual source and prepared boundary branches.
 //!
 //! The band is about the *source* boundary, not the boundary of the exactly
 //! composed set. Two source features that adjoin or overlap along a curve

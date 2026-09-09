@@ -9,7 +9,6 @@ use crate::geom::{AccuracyError, Resolution};
 use std::collections::BTreeMap;
 
 use crate::geom::bbox::BBox;
-use crate::geom::dist;
 use crate::geom::grid::CellGrid;
 use crate::geom::point::Point;
 use crate::geom::region::{ContourSet, PreparedRegion, TwoSidedResidualComponent, ring_edges};
@@ -644,8 +643,8 @@ fn connected_line_groups(lines: &[(Point, Point)]) -> Vec<Vec<usize>> {
 pub struct ThinPiece {
     pub bbox: BBox,
     pub area_mm2: f64,
-    /// Exact separation of the two opposing source-boundary branches in the
-    /// flattened polygon representation; both branches count as flattened.
+    /// Minimum separation of the two opposing source-boundary branches,
+    /// carrying the uncertainty of both prepared boundaries.
     pub width: Distance,
     /// Approximate longitudinal extent (half the residue perimeter).
     pub length_mm: f64,
@@ -669,12 +668,13 @@ pub struct WidthDisk {
 pub struct ThinSite {
     pub bbox: BBox,
     pub disk: WidthDisk,
-    /// Cells of the verified medial axis. A zero-dimensional cell repeats
-    /// its point so vertices and spans share one representation.
+    /// Display polylines of the verified analytic medial-axis curves. A
+    /// zero-dimensional curve repeats its point so vertices and spans share
+    /// one representation; measurement does not use this flattening.
     pub axis: Vec<Vec<Point>>,
-    /// Actual source-boundary contacts along the verified axis. A vertex
-    /// contact is a zero-length segment; these also retain isolated disk
-    /// tangencies so occurrence attribution can prove the entire construction.
+    /// Source-boundary contact motion along the same analytic curves. A
+    /// vertex contact is a zero-length segment; these also retain isolated
+    /// disk tangencies so occurrence attribution can prove the construction.
     pub walls: Vec<(Point, Point)>,
 }
 
@@ -724,108 +724,43 @@ pub fn min_width_disk(region: &ContourSet) -> Result<Option<WidthDisk>, Accuracy
         .min_by(|left, right| left.width.mm.total_cmp(&right.width.mm)))
 }
 
-/// Convert the conservative opening/closing candidates into authoritative
-/// measurements. A candidate is reportable only when the exact distance
-/// between its opposing source-boundary branches is certainly below the
-/// requested minimum; this is what prevents offset tessellation from
-/// creating findings.
+/// Measure the retained analytic bisectors and their opposing source contacts.
+/// Only widths below the requested minimum beyond their scalar boundary
+/// uncertainty are reportable. This does not recover topology lost in
+/// preparation.
 fn pieces(components: Vec<TwoSidedResidualComponent>, minimum_mm: f64) -> Vec<ThinPiece> {
     let mut pieces = components
         .into_iter()
-        .filter(|component| component.width.certainly_below(minimum_mm))
         .filter_map(|component| {
             let narrow_axis = component
                 .axis
                 .iter()
                 .flat_map(|axis| {
-                    let reach = (minimum_mm
-                        - component.width.uncertainty_mm
-                        - 2.0 * axis.uncertainty_mm
-                        - 1e-6)
-                        / 2.0;
-                    if reach <= 0.0 {
+                    let reach = (minimum_mm - 2.0 * component.boundary_uncertainty_mm) / 2.0;
+                    let minimum_radius = component.boundary_uncertainty_mm.next_up();
+                    let maximum_radius = reach.next_down();
+                    if maximum_radius < minimum_radius {
                         return Vec::new();
                     }
-                    let first = segment_capsule_intervals(
-                        axis.start,
-                        axis.end,
-                        axis.first_wall.0,
-                        axis.first_wall.1,
-                        reach,
-                    );
-                    let second = segment_capsule_intervals(
-                        axis.start,
-                        axis.end,
-                        axis.second_wall.0,
-                        axis.second_wall.1,
-                        reach,
-                    );
-                    let delta = axis.end - axis.start;
-                    first
-                        .iter()
-                        .flat_map(|&first| {
-                            second
-                                .iter()
-                                .filter_map(move |&second| intersect_interval(first, second))
-                        })
-                        .map(|(start, end)| {
-                            let (start, end) =
-                                (axis.start + delta * start, axis.start + delta * end);
-                            let at = |t| start + (end - start) * t;
-                            let radius_at = |t| {
-                                let center = at(t);
-                                (dist::point_segment(center, axis.first_wall.0, axis.first_wall.1)
-                                    .0
-                                    + dist::point_segment(
-                                        center,
-                                        axis.second_wall.0,
-                                        axis.second_wall.1,
-                                    )
-                                    .0)
-                                    / 2.0
-                            };
-                            let (mut low, mut high) = (0.0, 1.0);
-                            for _ in 0..40 {
-                                let a = (2.0 * low + high) / 3.0;
-                                let b = (low + 2.0 * high) / 3.0;
-                                if radius_at(a) < radius_at(b) {
-                                    high = b;
-                                } else {
-                                    low = a;
-                                }
-                            }
-                            let t = [0.0, (low + high) / 2.0, 1.0]
-                                .into_iter()
-                                .min_by(|&a, &b| radius_at(a).total_cmp(&radius_at(b)))
-                                .unwrap();
-                            let center = at(t);
-                            let radius_mm = radius_at(t);
-                            let first =
-                                dist::point_segment(center, axis.first_wall.0, axis.first_wall.1).1;
-                            let second =
-                                dist::point_segment(center, axis.second_wall.0, axis.second_wall.1)
-                                    .1;
-                            let walls = [axis.first_wall, axis.second_wall].map(|(a, b)| {
-                                (
-                                    dist::point_segment(start, a, b).1,
-                                    dist::point_segment(end, a, b).1,
-                                )
-                            });
-                            let mut width = Distance::with_uncertainty(
+                    axis.clipped_radius(minimum_radius, maximum_radius)
+                        .into_iter()
+                        .map(|axis| {
+                            let (center, radius_mm, first, second) = axis.minimum();
+                            let width = Distance::with_uncertainty(
                                 2.0 * radius_mm,
                                 first,
                                 second,
-                                component.width.uncertainty_mm,
+                                2.0 * component.boundary_uncertainty_mm,
                             );
-                            width.uncertainty_mm += 2.0 * axis.uncertainty_mm;
                             (
-                                (start, end),
+                                axis.endpoints(),
                                 WidthDisk {
                                     center,
                                     radius_mm,
                                     width,
                                 },
-                                walls,
+                                axis.walls(),
+                                axis.polyline(component.region.budget().max_error_mm()),
                             )
                         })
                         .collect::<Vec<_>>()
@@ -833,7 +768,7 @@ fn pieces(components: Vec<TwoSidedResidualComponent>, minimum_mm: f64) -> Vec<Th
                 .collect::<Vec<_>>();
             let lines = narrow_axis
                 .iter()
-                .map(|(line, _, _)| *line)
+                .map(|(line, _, _, _)| *line)
                 .collect::<Vec<_>>();
             let sites = connected_line_groups(&lines)
                 .into_iter()
@@ -862,7 +797,7 @@ fn pieces(components: Vec<TwoSidedResidualComponent>, minimum_mm: f64) -> Vec<Th
                             let (start, end) = lines[index];
                             bbox.include_point(start);
                             bbox.include_point(end);
-                            vec![start, end]
+                            narrow_axis[index].3.clone()
                         })
                         .collect();
                     ThinSite {
@@ -873,15 +808,14 @@ fn pieces(components: Vec<TwoSidedResidualComponent>, minimum_mm: f64) -> Vec<Th
                     }
                 })
                 .collect::<Vec<_>>();
-            let disk = WidthDisk {
-                center: component.disk.center,
-                radius_mm: component.disk.radius,
-                width: component.width,
-            };
-            (!sites.is_empty()).then_some(ThinPiece {
+            let disk = sites
+                .iter()
+                .map(|site| site.disk)
+                .min_by(|left, right| left.width.mm.total_cmp(&right.width.mm))?;
+            Some(ThinPiece {
                 bbox: component.region.bbox,
                 area_mm2: component.region.area(),
-                width: component.width,
+                width: disk.width,
                 length_mm: region_perimeter(&component.region) / 2.0,
                 disk,
                 sites,
@@ -1224,10 +1158,10 @@ mod tests {
     }
 
     #[test]
-    fn sub_resolution_backtracking_does_not_create_opposing_walls() {
-        // A real zone boundary can contain a tiny reversal inside an otherwise
-        // smooth clearance wall. The opening sheds the resulting nib, but its
-        // two locally reversed edges are still one wall, not a copper width.
+    fn exact_backtracking_does_not_inherit_unrecorded_grid_uncertainty() {
+        // This polygon states an approximately 2.1 µm narrowing. Its exact
+        // contacts qualify, even though the former snap-grid construction
+        // suppressed it. Only recorded boundary error can make it unresolved.
         let hole_points = [
             (139.5, -98.5),
             (140.5, -98.5),
@@ -1266,7 +1200,7 @@ mod tests {
             .chain(std::iter::once(PathCmd::close()))
             .collect(),
         );
-        let region = ContourSet::from_contours(
+        let mut region = ContourSet::from_contours(
             &[rect_at(139.0, -101.0, 141.0, -98.0), hole],
             FillRule::NonZero,
             res(tol::REGION_MM),
@@ -1280,8 +1214,12 @@ mod tests {
                 .difference(&region.disk_open(candidate_radius).unwrap())
                 .unwrap()
                 .is_empty(),
-            "the opening must still localize the one-sided nib"
+            "the opening must still localize the nib"
         );
+        let pieces = thin_features(&region, 0.127).unwrap();
+        assert_eq!(pieces.len(), 1);
+        assert!((0.002..0.003).contains(&pieces[0].width.mm));
+        region.uncertainty_mm = 0.002;
         assert!(thin_features(&region, 0.127).unwrap().is_empty());
     }
 
@@ -1419,6 +1357,50 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn faceted_copper_cap_requires_resolved_opposing_contacts() {
+        // Reduced from a KiCad GND fill and its identical IPC polygon. The
+        // straight tongue is 0.134 mm wide; its cap has nearly perpendicular
+        // facets. The uncertainty is the imported layer's recorded value,
+        // not a tolerance chosen to suppress this fixture.
+        let ring = [
+            [147.5, -105.8405],
+            [148.678434, -105.8405],
+            [148.722628, -105.858806],
+            [148.740934, -105.903],
+            [148.722628, -105.947194],
+            [148.713628, -105.956194],
+            [148.669434, -105.9745],
+            [147.5, -105.9745],
+        ];
+        for scale in [1.0, 0.5] {
+            for first in 0..ring.len() {
+                let points = ring
+                    .iter()
+                    .cycle()
+                    .skip(first)
+                    .take(ring.len())
+                    .map(|&[x, y]| [x, -105.9 + (y + 105.9) * scale])
+                    .collect();
+                let mut region =
+                    ContourSet::from_rings(vec![points], FillRule::NonZero, Resolution::default())
+                        .unwrap();
+                region.uncertainty_mm = 0.003246093757;
+                let findings = thin_features(&region, 0.127).unwrap();
+                if scale == 1.0 {
+                    assert!(findings.is_empty(), "cap rotation {first}: {findings:?}");
+                } else {
+                    assert!(!findings.is_empty(), "a genuinely narrow tongue must fail");
+                    assert!(
+                        findings
+                            .iter()
+                            .all(|piece| piece.width.certainly_below(0.127))
+                    );
+                }
+            }
+        }
     }
 
     #[test]
