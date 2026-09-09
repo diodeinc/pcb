@@ -213,9 +213,8 @@ fn execute_task<T>(
 
     spinner.finish();
     eprintln!(
-        "{}: {} ({}) {name}",
+        "{}: ({}) {name}",
         format_cumulative_time(cumulative_duration),
-        "✓".green(),
         format_task_duration(task_duration)
     );
     Ok(output)

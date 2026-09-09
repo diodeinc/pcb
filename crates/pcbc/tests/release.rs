@@ -234,7 +234,16 @@ fn test_release_check_does_not_publish_or_modify_authored_sources() {
         .run()
         .unwrap();
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("not equivalent"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("not equivalent"));
+    let stage = stderr
+        .lines()
+        .find(|line| line.contains("Generating netlist from staged sources"))
+        .unwrap();
+    assert!(
+        !stage.contains('✓'),
+        "blocked stage claimed success: {stage}"
+    );
 }
 
 #[test]
