@@ -21,6 +21,7 @@ mod path;
 mod release;
 mod schematic_apply_common;
 mod schematic_apply_flow;
+mod sim;
 mod simple;
 mod sync;
 mod tag;

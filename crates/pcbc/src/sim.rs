@@ -119,7 +119,10 @@ fn simulate_one(
     }
 
     // Write .cir next to the zen file so ngspice resolves relative paths correctly
-    let zen_dir = zen_path.parent().unwrap_or(std::path::Path::new("."));
+    let zen_dir = zen_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(std::path::Path::new("."));
     let mut tmp = tempfile::Builder::new()
         .suffix(".cir")
         .tempfile_in(zen_dir)?;
