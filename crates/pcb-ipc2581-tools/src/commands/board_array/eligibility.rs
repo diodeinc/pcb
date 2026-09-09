@@ -1,8 +1,11 @@
 //! Analysis only: canonical board outline clearance, not a mouse-bite panel.
 use anyhow::{Context, Result, bail};
-use ipc2581::{Ipc2581, types::LayerFunction};
+use ipc2581::{
+    Ipc2581, Symbol,
+    types::{LayerFunction, UserPrimitive, UserShapeType, ecad::SetFeature},
+};
 use pcb_ir::{
-    dialects::ipc::{ArtworkScope, ProfileSet, profile_occurrences_for},
+    dialects::ipc::{ArtworkScope, LayoutStepKind, ProfileSet, profile_occurrences_for},
     geom::{
         ContourBuf, ContourSet, FillRule, PathCmd, PathOp, Resolution, Segment,
         attachment::{
@@ -22,7 +25,6 @@ struct Evidence {
 
 struct CourtyardGroup {
     component: Option<ipc2581::Symbol>,
-    layout: pcb_ir::import::ipc2581::LayoutOccurrenceId,
     contours: Vec<ContourBuf>,
     sources: Vec<String>,
     positive: bool,
@@ -31,6 +33,7 @@ struct CourtyardGroup {
 /// Analyze one canonical board, including profile cutouts. Explicit exclusions
 /// are already in canonical board coordinates, in mm. No coverage is inferred
 /// for unexported keep-outs, and no manufacturing allowances are selected here.
+/// Multiple board definitions and unresolved courtyard references are unsupported.
 pub fn analyze(
     xml: &str,
     footprint: OutlineFootprint,
@@ -42,17 +45,23 @@ pub fn analyze(
         bail!("clearance must be finite and nonnegative");
     }
     let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
+    validate_courtyard_references(&ipc)?;
     // Keep small substrate cutouts and courtyard regions; accuracy remains the
     // caller's existing geometry budget (--accuracy-um in the CLI).
     let resolution = resolution.strict();
     let imported = import_design(&ipc, resolution)?;
     let doc = &imported.geometry;
-    if let Some(error) = doc
-        .diagnostics
+    // Both BoardOutlines and ArtworkScope::Board must select the same board.
+    // Do not resolve mixed-board panels in this analysis-only phase.
+    if doc
+        .layout
+        .steps
         .iter()
-        .find(|d| d.severity == pcb_ir::geom::Severity::Error)
+        .filter(|step| step.kind == LayoutStepKind::Board)
+        .count()
+        != 1
     {
-        bail!("unsupported input: {}", error.message);
+        bail!("unsupported input: outline eligibility requires exactly one board definition");
     }
     let profiles = profile_occurrences_for(doc, ProfileSet::BoardOutlines);
     if profiles.is_empty() {
@@ -164,16 +173,16 @@ fn courtyard_evidence(imported: &ImportedDesign, resolution: Resolution) -> Resu
                 occurrence.id.feature.0, occurrence.id.placement
             );
             let positive = feature.polarity == pcb_ir::geom::Polarity::Dark && !contours.is_empty();
-            if let Some(group) = groups.iter_mut().find(|g| {
-                component.is_some() && g.component == component && g.layout == occurrence.id.layout
-            }) {
+            if let Some(group) = groups
+                .iter_mut()
+                .find(|g| component.is_some() && g.component == component)
+            {
                 group.contours.extend(contours);
                 group.sources.push(source);
                 group.positive &= positive;
             } else {
                 groups.push(CourtyardGroup {
                     component,
-                    layout: occurrence.id.layout,
                     contours,
                     sources: vec![source],
                     positive,
@@ -187,7 +196,7 @@ fn courtyard_evidence(imported: &ImportedDesign, resolution: Resolution) -> Resu
                 None
             };
             if region.as_ref().is_some_and(|r| !r.is_empty()) {
-                covered.push((group.component, group.layout, layer.side));
+                covered.push((group.component, layer.side));
             }
             evidence.push(Evidence {
                 id: format!(
@@ -214,11 +223,7 @@ fn courtyard_evidence(imported: &ImportedDesign, resolution: Resolution) -> Resu
             .and_then(|l| l.side);
         if component.source.ref_des.is_none()
             || side.is_none()
-            || !covered.iter().any(|&(reference, layout, courtyard_side)| {
-                reference == component.source.ref_des
-                    && layout == occurrence.id.layout
-                    && courtyard_side == side
-            })
+            || !covered.contains(&(component.source.ref_des, side))
         {
             evidence.push(Evidence {
                 id: format!(
@@ -235,6 +240,106 @@ fn courtyard_evidence(imported: &ImportedDesign, resolution: Resolution) -> Resu
         }
     }
     Ok(evidence)
+}
+
+// Import is intentionally permissive and may discard unresolved references,
+// including nested shapes without diagnostics. Check source evidence first:
+// a surviving sibling must not make an incomplete courtyard appear complete.
+fn validate_courtyard_references(ipc: &Ipc2581) -> Result<()> {
+    let cad = &ipc
+        .ecad()
+        .context("IPC-2581 file has no ECAD section")?
+        .cad_data;
+    let mut features = cad
+        .steps
+        .iter()
+        .flat_map(|step| &step.layer_features)
+        .filter(|features| {
+            cad.layers.iter().any(|layer| {
+                layer.name == features.layer_ref && layer.layer_function == LayerFunction::Courtyard
+            })
+        })
+        .flat_map(|layer| &layer.sets)
+        .flat_map(|set| &set.features)
+        .collect::<Vec<_>>();
+    while let Some(feature) = features.pop() {
+        match feature {
+            SetFeature::PlacementGroup(group) => features.extend(&group.features),
+            SetFeature::StandardPrimitiveRef(reference) => {
+                if !ipc
+                    .content()
+                    .dictionary_standard
+                    .entries
+                    .iter()
+                    .any(|entry| entry.id == reference.id)
+                {
+                    bail!(
+                        "unsupported input: missing courtyard standard primitive '{}'",
+                        ipc.resolve(reference.id)
+                    );
+                }
+            }
+            SetFeature::UserPrimitiveRef(reference) => {
+                let primitive = ipc
+                    .content()
+                    .dictionary_user
+                    .entries
+                    .iter()
+                    .rev() // Match the importer's last-definition-wins map.
+                    .find(|entry| entry.id == reference.id)
+                    .with_context(|| {
+                        format!(
+                            "unsupported input: missing courtyard user primitive '{}'",
+                            ipc.resolve(reference.id)
+                        )
+                    })?;
+                validate_user_primitive(ipc, &primitive.primitive, &mut vec![reference.id])?;
+            }
+            SetFeature::UserPrimitive(feature) => {
+                validate_user_primitive(ipc, &feature.primitive, &mut Vec::new())?
+            }
+            // Padstack selection has its own permissive reference resolution;
+            // it is not a supported source of courtyard envelopes in this phase.
+            SetFeature::Pad(_) => bail!("unsupported input: courtyard padstack evidence"),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn validate_user_primitive(
+    ipc: &Ipc2581,
+    primitive: &UserPrimitive,
+    ancestors: &mut Vec<Symbol>,
+) -> Result<()> {
+    let UserPrimitive::UserSpecial(special) = primitive;
+    for shape in &special.shapes {
+        if let UserShapeType::UserPrimitiveRef(id) = shape.shape {
+            if ancestors.contains(&id) {
+                bail!(
+                    "unsupported input: cyclic courtyard user primitive '{}'",
+                    ipc.resolve(id)
+                );
+            }
+            let entry = ipc
+                .content()
+                .dictionary_user
+                .entries
+                .iter()
+                .rev()
+                .find(|entry| entry.id == id)
+                .with_context(|| {
+                    format!(
+                        "unsupported input: missing courtyard user primitive '{}'",
+                        ipc.resolve(id)
+                    )
+                })?;
+            ancestors.push(id);
+            validate_user_primitive(ipc, &entry.primitive, ancestors)?;
+            ancestors.pop();
+        }
+    }
+    Ok(())
 }
 
 // KiCad can export a single courtyard as separate line/arc features. Join only
@@ -380,8 +485,8 @@ mod tests {
           </Step></CadData></Ecad></IPC-2581>"#,
             bottom = courtyard
                 .replace("U1", "U2")
-                .replace("x=\"8\" y=\"1\"", "x=\"19\" y=\"6\"")
-                .replace("rotation=\"90\"", "rotation=\"0\"")
+                .replace("x=\"8\" y=\"1\"", "x=\"23\" y=\"6\"")
+                .replace("rotation=\"90\"", "rotation=\"0\" mirror=\"true\"")
         )
     }
 
@@ -391,6 +496,65 @@ mod tests {
             inward_mm: 0.2,
             outward_mm: 1.0,
         }
+    }
+
+    #[test]
+    fn surviving_courtyard_does_not_hide_unresolved_source_references() {
+        for (feature, dictionary) in [
+            ("<UserPrimitiveRef id=\"missing\"/>", ""),
+            ("<StandardPrimitiveRef id=\"missing\"/>", ""),
+            (
+                "<UserPrimitiveRef id=\"outer\"/>",
+                r#"<DictionaryUser units="MILLIMETER"><EntryUser id="outer"><UserSpecial><Circle diameter="1"/><UserPrimitiveRef id="missing"/></UserSpecial></EntryUser></DictionaryUser>"#,
+            ),
+            (
+                "<UserPrimitiveRef id=\"outer\"/>",
+                r#"<DictionaryUser units="MILLIMETER"><EntryUser id="outer"><UserSpecial><Circle diameter="1"/></UserSpecial></EntryUser><EntryUser id="outer"><UserSpecial><UserPrimitiveRef id="missing"/></UserSpecial></EntryUser></DictionaryUser>"#,
+            ),
+        ] {
+            let xml = fixture()
+                .replace("</Content>", &format!("{dictionary}</Content>"))
+                .replacen("</LayerFeature>", &format!("<Set componentRef=\"U1\"><Features><Location x=\"19\" y=\"1\"/>{feature}</Features></Set></LayerFeature>"), 1);
+            let error = analyze(&xml, footprint(), 0.0, &[], Resolution::default()).unwrap_err();
+            assert!(error.to_string().contains("missing"), "{error:#}");
+        }
+    }
+
+    #[test]
+    fn shared_nested_primitives_are_valid_but_cycles_are_unsupported() {
+        let dictionary = r#"<DictionaryUser units="MILLIMETER">
+          <EntryUser id="outer"><UserSpecial><UserPrimitiveRef id="inner"/><UserPrimitiveRef id="inner"/></UserSpecial></EntryUser>
+          <EntryUser id="inner"><UserSpecial><Circle diameter="1"/></UserSpecial></EntryUser>
+          </DictionaryUser>"#;
+        let xml = fixture().replace("</Content>", &format!("{dictionary}</Content>"))
+            .replacen("</LayerFeature>", r#"<Set componentRef="U1"><Features><Location x="8" y="3"/><UserPrimitiveRef id="outer"/></Features></Set></LayerFeature>"#, 1);
+        let report = analyze(&xml, footprint(), 0.0, &[], Resolution::default()).unwrap();
+        assert!(
+            report["evidence"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|e| e["available"] == true)
+        );
+        let cyclic = xml.replace(
+            "<Circle diameter=\"1\"/>",
+            "<UserPrimitiveRef id=\"outer\"/>",
+        );
+        let error = analyze(&cyclic, footprint(), 0.0, &[], Resolution::default()).unwrap_err();
+        assert!(error.to_string().contains("cyclic"), "{error:#}");
+    }
+
+    #[test]
+    fn zero_count_board_repeat_cannot_mix_substrate_and_evidence() {
+        let xml = fixture().replace("<StepRef name=\"board\"/>", "<StepRef name=\"panel\"/>")
+            .replace("<Step name=\"board\"", r#"<Step name="panel" type="PALLET"><StepRepeat stepRef="unused" nx="0" ny="1"/><StepRepeat stepRef="board" nx="1" ny="1"/></Step>
+              <Step name="unused" type="BOARD"><Profile><Polygon><PolyBegin x="100" y="100"/><PolyStepSegment x="120" y="100"/><PolyStepSegment x="120" y="110"/><PolyStepSegment x="100" y="110"/><PolyStepSegment x="100" y="100"/></Polygon></Profile></Step>
+              <Step name="board""#);
+        let error = analyze(&xml, footprint(), 0.0, &[], Resolution::default()).unwrap_err();
+        assert!(
+            error.to_string().contains("one board definition"),
+            "{error:#}"
+        );
     }
 
     #[test]

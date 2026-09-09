@@ -255,7 +255,7 @@ impl CopperBalanceArgs {
 enum BoardArrayCommands {
     /// Create a rectangular board array. Generated array size must be 70-297 mm per side.
     Create {
-        /// Input IPC-2581 XML file
+        /// Input IPC-2581 XML; --mouse-bite requires one board definition.
         #[arg(value_hint = clap::ValueHint::FilePath)]
         input: PathBuf,
         /// Analyze outline eligibility only: writes JSON, NOT a mouse-bite panel.
