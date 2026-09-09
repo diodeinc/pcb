@@ -30,6 +30,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed
 
 - Reconnect all affected nets when schematic repair moves symbols out of a short.
+- Refresh stale schematics when workspace symbol files change.
 - Mark standard-library bare test pads and plated test holes as native KiCad test points.
 - Mark standard-library fiducial pads as global fiducials in KiCad layouts.
 - Preserve curves that continue after a closed subpath during polygon preparation.

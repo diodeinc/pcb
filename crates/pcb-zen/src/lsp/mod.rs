@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use serde_json::json;
 use starlark::docs::DocModule;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use url::Url;
@@ -62,7 +62,7 @@ pub struct LspEvalContext {
     resolution_cache: RwLock<HashMap<PathBuf, Arc<ResolutionResult>>>,
     workspace_root_cache: RwLock<HashMap<PathBuf, PathBuf>>,
     open_files: Arc<RwLock<HashMap<PathBuf, String>>>,
-    netlist_subscriptions: Arc<RwLock<HashMap<PathBuf, NetlistSubscription>>>,
+    netlist_subscriptions: Arc<RwLock<HashMap<PathBuf, HashMap<String, JsonValue>>>>,
     /// Per-file cache of the schematic computed right after evaluation, before
     /// the shared session module tree can be contaminated by other files.
     last_schematics: Arc<RwLock<HashMap<PathBuf, pcb_sch::Schematic>>>,
@@ -73,12 +73,6 @@ pub struct LspEvalContext {
 type CustomRequestHandler =
     dyn Fn(&str, &JsonValue) -> anyhow::Result<Option<JsonValue>> + Send + Sync;
 type SchematicHydrator = dyn Fn(&Path, &mut pcb_sch::Schematic) + Send + Sync;
-
-#[derive(Default)]
-struct NetlistSubscription {
-    inputs: HashMap<String, JsonValue>,
-    symbol_watch_paths: HashSet<PathBuf>,
-}
 
 struct OverlayFileProvider {
     base: Arc<dyn FileProvider>,
@@ -322,27 +316,7 @@ impl LspEvalContext {
         self.netlist_subscriptions
             .write()
             .unwrap()
-            .entry(key)
-            .or_default()
-            .inputs = inputs.clone();
-    }
-
-    fn set_symbol_watch_paths_for_netlist(&self, path: &Path, watched_paths: HashSet<PathBuf>) {
-        let key = self.normalize_path(path);
-        if let Some(subscription) = self.netlist_subscriptions.write().unwrap().get_mut(&key) {
-            subscription.symbol_watch_paths = watched_paths;
-        }
-    }
-
-    fn watched_symbol_paths(&self) -> Vec<PathBuf> {
-        let mut watched_paths = HashSet::new();
-        for subscription in self.netlist_subscriptions.read().unwrap().values() {
-            watched_paths.extend(subscription.symbol_watch_paths.iter().cloned());
-        }
-
-        let mut watched_paths: Vec<PathBuf> = watched_paths.into_iter().collect();
-        watched_paths.sort();
-        watched_paths
+            .insert(key, inputs.clone());
     }
 
     fn get_netlist_inputs(&self, path: &Path) -> Option<HashMap<String, JsonValue>> {
@@ -351,7 +325,7 @@ impl LspEvalContext {
             .read()
             .unwrap()
             .get(&key)
-            .map(|subscription| subscription.inputs.clone())
+            .cloned()
     }
 
     fn set_last_schematic(&self, path: &Path, schematic: pcb_sch::Schematic) {
@@ -367,46 +341,6 @@ impl LspEvalContext {
     fn clear_last_schematic(&self, path: &Path) {
         let key = self.normalize_path(path);
         self.last_schematics.write().unwrap().remove(&key);
-    }
-
-    fn maybe_update_symbol_watch_paths_from_response(
-        &self,
-        source_path: &Path,
-        response: &ZenerEvaluateResponse,
-    ) {
-        let Some(schematic) = &response.schematic else {
-            return;
-        };
-
-        let mut raw_symbol_paths = HashSet::new();
-        collect_symbol_paths(schematic, &mut raw_symbol_paths);
-        let watched_paths: HashSet<PathBuf> = raw_symbol_paths
-            .into_iter()
-            .filter_map(|raw_path| self.resolve_symbol_watch_path(source_path, &raw_path))
-            .collect();
-        self.set_symbol_watch_paths_for_netlist(source_path, watched_paths);
-    }
-
-    fn resolve_symbol_watch_path(&self, source_path: &Path, raw_path: &str) -> Option<PathBuf> {
-        if !raw_path.to_ascii_lowercase().ends_with(".kicad_sym") {
-            return None;
-        }
-
-        if Path::new(raw_path).is_absolute() {
-            return Some(PathBuf::from(raw_path));
-        }
-
-        if raw_path.starts_with(pcb_sch::PACKAGE_URI_PREFIX) {
-            return self
-                .resolution_for(source_path)
-                .resolve_package_uri(raw_path)
-                .ok();
-        }
-
-        self.config_for(source_path)
-            .resolve_path(raw_path, source_path)
-            .ok()
-            .filter(|resolved| is_kicad_symbol_file(resolved.extension()))
     }
 
     fn evaluate_with_inputs(
@@ -819,7 +753,6 @@ impl LspContext for LspEvalContext {
         let response = self
             .evaluate_with_inputs(path, &inputs)
             .map_err(|error| format!("{error:#}"))?;
-        self.maybe_update_symbol_watch_paths_from_response(path, &response);
         let params = ZenerNetlistUpdateParams {
             uri: uri.clone(),
             result: response,
@@ -832,10 +765,6 @@ impl LspContext for LspEvalContext {
         serde_json::to_value(params)
             .map(Some)
             .map_err(|error| error.to_string())
-    }
-
-    fn watched_file_paths(&self) -> Vec<PathBuf> {
-        self.watched_symbol_paths()
     }
 
     fn parse_file_with_contents(&self, uri: &LspUri, content: String) -> LspEvalResult {
@@ -1384,7 +1313,6 @@ impl LspEvalContext {
 
         let response = self.evaluate_with_inputs(path_buf, &params.inputs)?;
         self.set_netlist_subscription(path_buf, &params.inputs);
-        self.maybe_update_symbol_watch_paths_from_response(path_buf, &response);
         Ok(response)
     }
 }
@@ -1399,36 +1327,6 @@ fn position_edit_result_to_response(
             id,
             response_result: Err(error),
         },
-    }
-}
-
-fn collect_symbol_paths(value: &JsonValue, out: &mut HashSet<String>) {
-    match value {
-        JsonValue::Object(object) => {
-            if let Some(symbol_path_value) = object.get(pcb_zen_core::attrs::SYMBOL_PATH) {
-                match symbol_path_value {
-                    JsonValue::String(path) => {
-                        out.insert(path.clone());
-                    }
-                    JsonValue::Object(path_object) => {
-                        if let Some(JsonValue::String(path)) = path_object.get("String") {
-                            out.insert(path.clone());
-                        }
-                    }
-                    _ => {}
-                }
-            }
-
-            for child in object.values() {
-                collect_symbol_paths(child, out);
-            }
-        }
-        JsonValue::Array(array) => {
-            for child in array {
-                collect_symbol_paths(child, out);
-            }
-        }
-        _ => {}
     }
 }
 
@@ -1567,25 +1465,147 @@ mod tests {
     use starlark::analysis::EvalSeverity;
     use starlark::codemap::ResolvedSpan;
     use std::collections::HashMap;
-    use std::collections::HashSet;
     use std::fs;
     use std::path::Path;
 
     #[test]
-    fn closing_document_removes_netlist_subscription_and_symbol_watches() {
+    fn closing_document_removes_netlist_subscription() {
         let ctx = LspEvalContext::default();
         let path = std::env::temp_dir().join("subscribed.zen");
         let uri = LspUri::File(path.clone());
-        let symbol_path = std::env::temp_dir().join("symbols.kicad_sym");
 
         ctx.set_netlist_subscription(&path, &HashMap::new());
-        ctx.set_symbol_watch_paths_for_netlist(&path, HashSet::from([symbol_path.clone()]));
-        assert_eq!(ctx.watched_symbol_paths(), vec![symbol_path]);
+        assert_eq!(ctx.get_netlist_inputs(&path), Some(HashMap::new()));
 
         ctx.did_close_file(&uri);
 
         assert_eq!(ctx.get_netlist_inputs(&path), None);
-        assert!(ctx.watched_symbol_paths().is_empty());
+    }
+
+    #[test]
+    fn symbol_watch_recovers_failed_evaluation_without_reopening_document() -> anyhow::Result<()> {
+        use lsp_server::{Connection, Message};
+        use std::time::Duration;
+
+        let dir = tempfile::tempdir()?;
+        let root = dir.path().canonicalize()?;
+        let source_path = root.join("main.zen");
+        let symbol_path = root.join("Part.kicad_sym");
+        let uri = url::Url::from_file_path(&source_path).unwrap().to_string();
+        let symbol_uri = url::Url::from_file_path(&symbol_path).unwrap().to_string();
+        let source = r#"Component(
+    name = "U1", skip_bom = True,
+    symbol = Symbol(library = "Part.kicad_sym", name = "Part"),
+    pins = {"P": builtin.net_type("Net")("N")},
+)
+"#;
+        let symbol = r#"(kicad_symbol_lib (version 20211014) (generator kicad_symbol_editor)
+  (symbol "Part" (in_bom yes) (on_board yes)
+    (property "Reference" "U" (at 0 0 0))
+    (property "Footprint" "Part" (at 0 0 0))
+    (symbol "Part_1_1"
+      (pin passive line (at 0 0 0) (length 2.54)
+        (name "P" (effects (font (size 1.27 1.27))))
+        (number "1" (effects (font (size 1.27 1.27))))))))
+"#;
+        fs::write(
+            root.join("pcb.toml"),
+            "[workspace]\npcb-version = \"0.4\"\n",
+        )?;
+        fs::write(&source_path, source)?;
+        fs::write(
+            &symbol_path,
+            symbol.replace("\"Footprint\" \"Part\"", "\"Footprint\" \"Part.kicad_mod\""),
+        )?;
+        fs::write(
+            root.join("Part.kicad_mod"),
+            r#"(footprint "Part"
+  (version 20240108) (generator "pcbnew") (layer "F.Cu")
+  (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask")))"#,
+        )?;
+
+        let (client, server) = Connection::memory();
+        let thread = std::thread::spawn(move || {
+            super::server::server_with_connection(
+                server,
+                LspEvalContext::default().set_offline(true),
+            )
+        });
+        let send = |value| -> anyhow::Result<()> {
+            client
+                .sender
+                .send(serde_json::from_value::<Message>(value)?)?;
+            Ok(())
+        };
+        let receive =
+            |field: &str, expected: serde_json::Value| -> anyhow::Result<serde_json::Value> {
+                loop {
+                    let message = client.receiver.recv_timeout(Duration::from_secs(10))?;
+                    let value = serde_json::to_value(message)?;
+                    if value[field] == expected {
+                        return Ok(value);
+                    }
+                }
+            };
+        send(json!({"id": 1, "method": "initialize", "params": {
+            "rootUri": url::Url::from_directory_path(&root).unwrap().as_str(),
+            "capabilities": {"workspace": {"didChangeWatchedFiles": {"dynamicRegistration": true}}}
+        }}))?;
+        receive("id", json!(1))?;
+        send(json!({"method": "initialized", "params": {}}))?;
+        let registration = receive("method", json!("client/registerCapability"))?;
+        let watchers = &registration["params"]["registrations"][0]["registerOptions"]["watchers"];
+        // These watches must exist before the first evaluation, and include
+        // creation/deletion so missing or recreated symbols can recover too.
+        assert_eq!(
+            watchers,
+            &json!([
+                {"globPattern": "**/pcb.toml", "kind": 7},
+                {"globPattern": "**/*.kicad_sym", "kind": 7}
+            ])
+        );
+        send(json!({"id": registration["id"], "result": null}))?;
+        send(
+            json!({"method": "textDocument/didOpen", "params": {"textDocument": {
+                "uri": uri, "languageId": "starlark", "version": 1, "text": source
+            }}}),
+        )?;
+        send(json!({"id": 2, "method": "zener/evaluate", "params": {"uri": uri, "inputs": {}}}))?;
+        let failed = receive("id", json!(2))?;
+        assert_eq!(failed["result"]["success"], false, "{failed}");
+        assert!(
+            failed["result"]["diagnostics"]
+                .to_string()
+                .contains("Part.kicad_mod.kicad_mod"),
+            "{failed}"
+        );
+
+        // Only the dependency changes; the open .zen buffer and subscription
+        // stay unchanged. Watch notifications must push fresh netlists.
+        for (change_type, success) in [(2, true), (3, false), (1, true)] {
+            if change_type == 3 {
+                fs::remove_file(&symbol_path)?;
+            } else {
+                fs::write(&symbol_path, symbol)?;
+            }
+            send(
+                json!({"method": "workspace/didChangeWatchedFiles", "params": {"changes": [
+                    {"uri": symbol_uri, "type": change_type}
+                ]}}),
+            )?;
+            let update = receive("method", json!("zener/netlistUpdated"))?;
+            assert_eq!(update["params"]["uri"], uri);
+            assert_eq!(update["params"]["result"]["success"], success, "{update}");
+            if success {
+                assert_eq!(update["params"]["result"]["diagnostics"], json!([]));
+            }
+        }
+
+        send(json!({"id": 3, "method": "shutdown", "params": null}))?;
+        receive("id", json!(3))?;
+        send(json!({"method": "exit", "params": null}))?;
+        thread.join().unwrap()?;
+        Ok(())
     }
 
     #[test]

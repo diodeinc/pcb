@@ -24,7 +24,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use derivative::Derivative;
@@ -68,19 +67,15 @@ use lsp_types::MarkupContent;
 use lsp_types::MarkupKind;
 use lsp_types::MessageType;
 use lsp_types::OneOf;
-use lsp_types::Pattern;
 use lsp_types::PublishDiagnosticsParams;
 use lsp_types::Range;
 use lsp_types::Registration;
 use lsp_types::RegistrationParams;
-use lsp_types::RelativePattern;
 use lsp_types::ServerCapabilities;
 use lsp_types::TextDocumentSyncCapability;
 use lsp_types::TextDocumentSyncKind;
 use lsp_types::TextDocumentSyncOptions;
 use lsp_types::TextDocumentSyncSaveOptions;
-use lsp_types::Unregistration;
-use lsp_types::UnregistrationParams;
 use lsp_types::Uri;
 use lsp_types::WatchKind;
 use lsp_types::WorkDoneProgressOptions;
@@ -480,12 +475,6 @@ pub trait LspContext {
         Ok(None)
     }
 
-    /// Return absolute file paths that should be watched via
-    /// `workspace/didChangeWatchedFiles`.
-    fn watched_file_paths(&self) -> Vec<PathBuf> {
-        Vec::new()
-    }
-
     /// Handle custom LSP request messages that are not recognised by the core `starlark_lsp`
     /// implementation. Return [`Some(Response)`] when `req.method` is handled. Return [`None`]
     /// if the method is unsupported; the server then replies with JSON-RPC `MethodNotFound`.
@@ -566,11 +555,7 @@ pub(crate) struct Backend<T: LspContext> {
     published_diagnostics_by_origin: RwLock<HashMap<LspUri, HashMap<String, Vec<Diagnostic>>>>,
     /// Complete payload most recently emitted for each subscribed document.
     last_emitted_netlist_payloads: RwLock<HashMap<LspUri, JsonValue>>,
-    watched_file_paths: RwLock<HashSet<PathBuf>>,
-    watched_file_registration_id: RwLock<Option<String>>,
-    next_server_request_seq: AtomicU64,
     supports_dynamic_watched_files: bool,
-    supports_relative_watch_patterns: bool,
 }
 
 fn record_netlist_payload(
@@ -584,6 +569,35 @@ fn record_netlist_payload(
     }
     last_emitted.insert(uri.clone(), payload.clone());
     true
+}
+
+fn coalesce_watched_file_changes(
+    connection: &Connection,
+    mut params: DidChangeWatchedFilesParams,
+    pending: &mut VecDeque<Message>,
+) -> DidChangeWatchedFilesParams {
+    // Stdio uses a zero-capacity channel: give its reader a brief chance to
+    // hand over the next event. Requests and other messages remain barriers.
+    // Limit each batch to 256 notifications so continuous events still refresh.
+    for _ in 1..256 {
+        let Ok(message) = connection
+            .receiver
+            .recv_timeout(std::time::Duration::from_millis(1))
+        else {
+            break;
+        };
+        if let Message::Notification(notification) = &message
+            && notification.method == DidChangeWatchedFiles::METHOD
+            && let Ok(next) =
+                serde_json::from_value::<DidChangeWatchedFilesParams>(notification.params.clone())
+        {
+            params.changes.extend(next.changes);
+        } else {
+            pending.push_back(message);
+            break;
+        }
+    }
+    params
 }
 
 /// The logic implementations of stuff
@@ -729,7 +743,6 @@ impl<T: LspContext> Backend<T> {
             .write()
             .unwrap()
             .remove(&lsp_url);
-        self.sync_watched_file_registrations();
 
         // In eager mode we keep the cached AST so that other features continue to work even
         // when the user closes the document in the editor.
@@ -1767,134 +1780,45 @@ impl<T: LspContext> Backend<T> {
                     .remove(uri);
             }
         }
-        self.sync_watched_file_registrations();
         Ok(())
     }
 
-    fn next_server_request_id(&self, prefix: &str) -> RequestId {
-        let seq = self.next_server_request_seq.fetch_add(1, Ordering::Relaxed);
-        RequestId::from(format!("{prefix}-{seq}"))
-    }
+    fn register_file_watchers(&self) {
+        if !self.supports_dynamic_watched_files {
+            return;
+        }
 
-    fn send_client_request<P: Serialize>(&self, method: &str, params: P) {
+        // Watch symbols before evaluation: a failed component must still observe
+        // the symbol edit that fixes it, even when no schematic was produced.
+        // String globs are workspace-scoped. Add editable external libraries to
+        // the editor workspace to receive their changes too.
+        let kind = Some(WatchKind::Create | WatchKind::Change | WatchKind::Delete);
         self.connection
             .sender
             .send(Message::Request(lsp_server::Request {
-                id: self.next_server_request_id("server-request"),
-                method: method.to_owned(),
-                params: serde_json::to_value(params).unwrap(),
+                id: RequestId::from("workspace-watched-files".to_owned()),
+                method: "client/registerCapability".to_owned(),
+                params: serde_json::to_value(RegistrationParams {
+                    registrations: vec![Registration {
+                        id: "workspace-watched-files".to_owned(),
+                        method: "workspace/didChangeWatchedFiles".to_owned(),
+                        register_options: Some(
+                            serde_json::to_value(DidChangeWatchedFilesRegistrationOptions {
+                                watchers: ["**/pcb.toml", "**/*.kicad_sym"]
+                                    .into_iter()
+                                    .map(|pattern| FileSystemWatcher {
+                                        glob_pattern: GlobPattern::String(pattern.to_owned()),
+                                        kind,
+                                    })
+                                    .collect(),
+                            })
+                            .unwrap(),
+                        ),
+                    }],
+                })
+                .unwrap(),
             }))
             .unwrap();
-    }
-
-    fn file_watcher_for_path(&self, watched_path: &Path) -> Option<FileSystemWatcher> {
-        let kind = Some(WatchKind::Create | WatchKind::Change | WatchKind::Delete);
-
-        if self.supports_relative_watch_patterns
-            && let (Some(parent), Some(file_name)) =
-                (watched_path.parent(), watched_path.file_name())
-            && let Ok(base_uri) = Url::from_directory_path(parent)
-            && let Some(base_uri) = url_to_uri(&base_uri)
-        {
-            return Some(FileSystemWatcher {
-                glob_pattern: GlobPattern::Relative(RelativePattern {
-                    base_uri: OneOf::Right(base_uri),
-                    pattern: file_name.to_string_lossy().to_string(),
-                }),
-                kind,
-            });
-        }
-
-        let pattern: Pattern = watched_path.to_string_lossy().replace('\\', "/");
-        Some(FileSystemWatcher {
-            glob_pattern: GlobPattern::String(pattern),
-            kind,
-        })
-    }
-
-    fn register_manifest_watchers(&self) {
-        if !self.supports_dynamic_watched_files {
-            return;
-        }
-
-        let kind = Some(WatchKind::Create | WatchKind::Change | WatchKind::Delete);
-        self.send_client_request(
-            "client/registerCapability",
-            RegistrationParams {
-                registrations: vec![Registration {
-                    id: "manifest-watched-files".to_owned(),
-                    method: "workspace/didChangeWatchedFiles".to_owned(),
-                    register_options: Some(
-                        serde_json::to_value(DidChangeWatchedFilesRegistrationOptions {
-                            watchers: vec![FileSystemWatcher {
-                                glob_pattern: GlobPattern::String("**/pcb.toml".to_owned()),
-                                kind,
-                            }],
-                        })
-                        .unwrap(),
-                    ),
-                }],
-            },
-        );
-    }
-
-    fn sync_watched_file_registrations(&self) {
-        if !self.supports_dynamic_watched_files {
-            return;
-        }
-
-        let desired_paths: HashSet<PathBuf> =
-            self.context.watched_file_paths().into_iter().collect();
-        let current_paths = self.watched_file_paths.read().unwrap().clone();
-        if desired_paths == current_paths {
-            return;
-        }
-
-        if let Some(registration_id) = self.watched_file_registration_id.write().unwrap().take() {
-            self.send_client_request(
-                "client/unregisterCapability",
-                UnregistrationParams {
-                    unregisterations: vec![Unregistration {
-                        id: registration_id,
-                        method: "workspace/didChangeWatchedFiles".to_owned(),
-                    }],
-                },
-            );
-        }
-
-        if !desired_paths.is_empty() {
-            let mut ordered_paths: Vec<PathBuf> = desired_paths.iter().cloned().collect();
-            ordered_paths.sort();
-            let watchers: Vec<FileSystemWatcher> = ordered_paths
-                .iter()
-                .filter_map(|path| self.file_watcher_for_path(path))
-                .collect();
-
-            if !watchers.is_empty() {
-                let registration_id = format!(
-                    "watched-files-{}",
-                    self.next_server_request_seq.fetch_add(1, Ordering::Relaxed)
-                );
-                self.send_client_request(
-                    "client/registerCapability",
-                    RegistrationParams {
-                        registrations: vec![Registration {
-                            id: registration_id.clone(),
-                            method: "workspace/didChangeWatchedFiles".to_owned(),
-                            register_options: Some(
-                                serde_json::to_value(DidChangeWatchedFilesRegistrationOptions {
-                                    watchers,
-                                })
-                                .unwrap(),
-                            ),
-                        }],
-                    },
-                );
-                *self.watched_file_registration_id.write().unwrap() = Some(registration_id);
-            }
-        }
-
-        *self.watched_file_paths.write().unwrap() = desired_paths;
     }
 
     fn coalesce_did_change(
@@ -1935,11 +1859,10 @@ impl<T: LspContext> Backend<T> {
         initialize_params: InitializeParams,
         started_at: Instant,
     ) -> Result<(), ProtocolError> {
-        self.register_manifest_watchers();
+        self.register_file_watchers();
 
         // Pre-parse relevant files.
         self.preload_workspace(&initialize_params);
-        self.sync_watched_file_registrations();
         self.log_startup_information(&initialize_params, started_at);
 
         let mut pending: VecDeque<Message> = VecDeque::new();
@@ -2003,11 +1926,6 @@ impl<T: LspContext> Backend<T> {
                 }
                 if let Some(resp) = self.context.handle_custom_request(&req, initialize_params) {
                     self.send_response(resp);
-                    // Custom requests (for example `zener/evaluate`) can
-                    // mutate watched-file subscriptions in the context.
-                    // Re-sync registrations immediately so subsequent
-                    // external file edits are observed.
-                    self.sync_watched_file_registrations();
                 } else {
                     self.send_response(Response::new_err(
                         req.id,
@@ -2040,6 +1958,7 @@ impl<T: LspContext> Backend<T> {
             }
             DidChangeWatchedFiles::METHOD => {
                 self.with_notification_params(notification, |params| {
+                    let params = coalesce_watched_file_changes(&self.connection, params, pending);
                     self.maybe_log_error(self.did_change_watched_files(params))
                 });
             }
@@ -2125,10 +2044,9 @@ impl<T: LspContext> Backend<T> {
         self.log_message(
             MessageType::INFO,
             &format!(
-                "Startup mode: workspace preload={}, dynamic file watching={}, relative watch patterns={}",
+                "Startup mode: workspace preload={}, dynamic file watching={}",
                 enabled(self.context.is_eager()),
                 supported(self.supports_dynamic_watched_files),
-                supported(self.supports_relative_watch_patterns),
             ),
         );
     }
@@ -2204,9 +2122,6 @@ pub fn server_with_connection<T: LspContext>(
     let supports_dynamic_watched_files = watched_files_caps
         .and_then(|caps| caps.dynamic_registration)
         .unwrap_or(false);
-    let supports_relative_watch_patterns = watched_files_caps
-        .and_then(|caps| caps.relative_pattern_support)
-        .unwrap_or(false);
 
     Backend {
         connection,
@@ -2215,11 +2130,7 @@ pub fn server_with_connection<T: LspContext>(
         open_documents: RwLock::default(),
         published_diagnostics_by_origin: RwLock::default(),
         last_emitted_netlist_payloads: RwLock::default(),
-        watched_file_paths: RwLock::default(),
-        watched_file_registration_id: RwLock::default(),
-        next_server_request_seq: AtomicU64::new(1),
         supports_dynamic_watched_files,
-        supports_relative_watch_patterns,
     }
     .main_loop(initialization_params, started_at)?;
 
@@ -2361,6 +2272,98 @@ mod tests {
 
     fn protocol_uri(uri: &Url) -> Uri {
         uri.as_str().parse().unwrap()
+    }
+
+    #[test]
+    fn coalesces_file_events_without_crossing_message_boundaries() -> anyhow::Result<()> {
+        use lsp_server::{Connection, Message};
+        use lsp_types::{DidChangeWatchedFilesParams, notification::DidChangeWatchedFiles};
+        use std::collections::VecDeque;
+
+        let event = |name, typ| FileEvent {
+            uri: protocol_uri(&temp_file_uri(name)),
+            typ,
+        };
+        let first = event("first.kicad_sym", FileChangeType::CHANGED);
+        let second = event("second.kicad_sym", FileChangeType::DELETED);
+        let third = event("second.kicad_sym", FileChangeType::CREATED);
+        let notification = |changes| {
+            Message::Notification(new_notification::<DidChangeWatchedFiles>(
+                DidChangeWatchedFilesParams { changes },
+            ))
+        };
+        for boundary in [
+            serde_json::json!({"id": 1, "method": "zener/evaluate", "params": {}}),
+            serde_json::json!({"method": "textDocument/didClose", "params": {}}),
+            serde_json::json!({"method": "workspace/didChangeWatchedFiles", "params": {"changes": "invalid"}}),
+        ] {
+            let (client, server) = Connection::memory();
+            client.sender.send(notification(vec![second.clone()]))?;
+            client.sender.send(notification(vec![third.clone()]))?;
+            client
+                .sender
+                .send(serde_json::from_value(boundary.clone())?)?;
+            let after = notification(vec![first.clone()]);
+            client.sender.send(after.clone())?;
+
+            let mut pending = VecDeque::new();
+            let result = super::coalesce_watched_file_changes(
+                &server,
+                DidChangeWatchedFilesParams {
+                    changes: vec![first.clone()],
+                },
+                &mut pending,
+            );
+            assert_eq!(
+                result.changes,
+                vec![first.clone(), second.clone(), third.clone()]
+            );
+            assert_eq!(pending.len(), 1);
+            // Message serialization includes jsonrpc; compare parsed messages.
+            assert_eq!(
+                serde_json::to_value(pending.pop_front().unwrap())?,
+                serde_json::to_value(serde_json::from_value::<Message>(boundary)?)?
+            );
+            assert_eq!(
+                serde_json::to_value(server.receiver.try_recv()?)?,
+                serde_json::to_value(after)?
+            );
+            let unchanged =
+                super::coalesce_watched_file_changes(&server, result.clone(), &mut pending);
+            assert_eq!(unchanged.changes, result.changes);
+            assert!(pending.is_empty());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn file_event_batches_are_bounded_without_dropping_the_remainder() -> anyhow::Result<()> {
+        let (client, server) = lsp_server::Connection::memory();
+        let params = |index| lsp_types::DidChangeWatchedFilesParams {
+            changes: vec![FileEvent {
+                uri: protocol_uri(&temp_file_uri(&format!("{index}.kicad_sym"))),
+                typ: FileChangeType::CHANGED,
+            }],
+        };
+        for index in 1..=256 {
+            client
+                .sender
+                .send(lsp_server::Message::Notification(new_notification::<
+                    lsp_types::notification::DidChangeWatchedFiles,
+                >(params(
+                    index,
+                ))))?;
+        }
+        let mut pending = std::collections::VecDeque::new();
+        let result = super::coalesce_watched_file_changes(&server, params(0), &mut pending);
+        let expected: Vec<_> = (0..256).flat_map(|index| params(index).changes).collect();
+        assert_eq!(result.changes, expected);
+        assert!(pending.is_empty());
+        let lsp_server::Message::Notification(remainder) = server.receiver.try_recv()? else {
+            panic!("expected the next batch's notification");
+        };
+        assert_eq!(remainder.params, serde_json::to_value(params(256))?);
+        Ok(())
     }
 
     #[test]
@@ -3597,7 +3600,7 @@ mod tests {
         assert_eq!(messages[2], "Workspace roots: none");
         assert_eq!(
             messages[3],
-            "Startup mode: workspace preload=enabled, dynamic file watching=unsupported, relative watch patterns=unsupported"
+            "Startup mode: workspace preload=enabled, dynamic file watching=unsupported"
         );
         Ok(())
     }
