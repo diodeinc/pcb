@@ -258,9 +258,12 @@ enum BoardArrayCommands {
         /// Input IPC-2581 XML; --mouse-bite requires one board definition.
         #[arg(value_hint = clap::ValueHint::FilePath)]
         input: PathBuf,
-        /// Analyze outline eligibility only: writes JSON, NOT a mouse-bite panel.
-        #[arg(long, requires_all = ["mouse_bite_width", "mouse_bite_inward", "mouse_bite_outward", "mouse_bite_clearance"], conflicts_with_all = ["auto", "sheet", "columns", "rows", "board_margin", "edge_rail", "copper_balance", "no_copper_balance"])]
+        /// Analyze mouse-bite eligibility (or placement with --mouse-bite-plan); writes JSON, not a panel.
+        #[arg(long, requires_all = ["mouse_bite_width", "mouse_bite_inward", "mouse_bite_outward", "mouse_bite_clearance"], conflicts_with_all = ["copper_balance", "no_copper_balance"])]
         mouse_bite: bool,
+        /// JSON physical/search policy for frame-only placement and mechanics; no tab geometry.
+        #[arg(long, requires = "mouse_bite", value_hint = clap::ValueHint::FilePath)]
+        mouse_bite_plan: Option<PathBuf>,
         /// Analysis band width along the cyclic outline, in mm; no manufacturing default.
         #[arg(long, requires = "mouse_bite")]
         mouse_bite_width: Option<f64>,
@@ -471,83 +474,129 @@ pub fn execute(args: Ipc2581Args, resolution: Resolution) -> anyhow::Result<()> 
                 output,
             } => commands::bom_edit::execute_selections(&file, &selections, &output),
         },
-        Commands::BoardArray { command } => match command {
-            BoardArrayCommands::Create {
-                input,
-                mouse_bite,
-                mouse_bite_width,
-                mouse_bite_inward,
-                mouse_bite_outward,
-                mouse_bite_clearance,
-                auto,
-                sheet,
-                columns,
-                rows,
-                board_margin,
-                edge_rail,
-                copper_balance,
-                output,
-            } => {
-                if mouse_bite {
-                    return commands::board_array::eligibility::execute(
-                        &input,
-                        &output,
-                        pcb_ir::geom::attachment::outline::OutlineFootprint {
+        Commands::BoardArray { command } => {
+            match command {
+                BoardArrayCommands::Create {
+                    input,
+                    mouse_bite,
+                    mouse_bite_plan,
+                    mouse_bite_width,
+                    mouse_bite_inward,
+                    mouse_bite_outward,
+                    mouse_bite_clearance,
+                    auto,
+                    sheet,
+                    columns,
+                    rows,
+                    board_margin,
+                    edge_rail,
+                    copper_balance,
+                    output,
+                } => {
+                    if mouse_bite {
+                        let footprint = pcb_ir::geom::attachment::outline::OutlineFootprint {
                             width_mm: mouse_bite_width.expect("required by clap"),
                             inward_mm: mouse_bite_inward.expect("required by clap"),
                             outward_mm: mouse_bite_outward.expect("required by clap"),
-                        },
-                        mouse_bite_clearance.expect("required by clap"),
-                        resolution,
-                    );
-                }
-                let copper_balance = copper_balance.resolve(true);
-                if auto || sheet.is_some() {
-                    if columns.is_some()
-                        || rows.is_some()
-                        || !board_margin.is_empty()
-                        || !edge_rail.is_empty()
-                    {
-                        anyhow::bail!(
-                            "--auto/--sheet cannot be combined with manual board array options"
+                        };
+                        let clearance = mouse_bite_clearance.expect("required by clap");
+                        let manual = columns.is_some()
+                            || rows.is_some()
+                            || !board_margin.is_empty()
+                            || !edge_rail.is_empty();
+                        if let Some(config) = mouse_bite_plan {
+                            if (auto || sheet.is_some()) && manual {
+                                anyhow::bail!(
+                                    "--auto/--sheet cannot be combined with manual board array options"
+                                );
+                            }
+                            let layout = if auto || sheet.is_some() {
+                                None
+                            } else {
+                                Some(commands::board_array::BoardArrayCreateOptions {
+                                    columns: columns.unwrap_or(1),
+                                    rows: rows.unwrap_or(1),
+                                    board_margin_mm: if board_margin.is_empty() {
+                                        commands::board_array::BoardMarginMm::all(5.0)
+                                    } else {
+                                        commands::board_array::BoardMarginMm::from_css_shorthand(
+                                            &board_margin,
+                                        )?
+                                    },
+                                    edge_rail_mm: if edge_rail.is_empty() {
+                                        commands::board_array::BoardMarginMm::all(5.0)
+                                    } else {
+                                        commands::board_array::BoardMarginMm::from_css_shorthand_named("edge rail", &edge_rail)?
+                                    },
+                                })
+                            };
+                            return commands::board_array::placement::execute(
+                                &input,
+                                &output,
+                                &config,
+                                (footprint, clearance),
+                                layout,
+                                sheet,
+                                resolution,
+                            );
+                        }
+                        if auto || sheet.is_some() || manual {
+                            anyhow::bail!(
+                                "mouse-bite array layout options require --mouse-bite-plan; eligibility alone has no array layout"
+                            );
+                        }
+                        return commands::board_array::eligibility::execute(
+                            &input, &output, footprint, clearance, resolution,
                         );
                     }
-                    commands::board_array::execute_auto(
-                        &input,
-                        &output,
-                        sheet,
-                        copper_balance,
-                        resolution,
-                    )
-                } else {
-                    let board_margin_mm = if board_margin.is_empty() {
-                        commands::board_array::BoardMarginMm::all(5.0)
+                    let copper_balance = copper_balance.resolve(true);
+                    if auto || sheet.is_some() {
+                        if columns.is_some()
+                            || rows.is_some()
+                            || !board_margin.is_empty()
+                            || !edge_rail.is_empty()
+                        {
+                            anyhow::bail!(
+                                "--auto/--sheet cannot be combined with manual board array options"
+                            );
+                        }
+                        commands::board_array::execute_auto(
+                            &input,
+                            &output,
+                            sheet,
+                            copper_balance,
+                            resolution,
+                        )
                     } else {
-                        commands::board_array::BoardMarginMm::from_css_shorthand(&board_margin)?
-                    };
-                    let edge_rail_mm = if edge_rail.is_empty() {
-                        commands::board_array::BoardMarginMm::all(5.0)
-                    } else {
-                        commands::board_array::BoardMarginMm::from_css_shorthand_named(
-                            "edge rail",
-                            &edge_rail,
-                        )?
-                    };
-                    commands::board_array::execute(
-                        &input,
-                        &output,
-                        &commands::board_array::BoardArrayCreateOptions {
-                            columns: columns.unwrap_or(1),
-                            rows: rows.unwrap_or(1),
-                            board_margin_mm,
-                            edge_rail_mm,
-                        },
-                        copper_balance,
-                        resolution,
-                    )
+                        let board_margin_mm = if board_margin.is_empty() {
+                            commands::board_array::BoardMarginMm::all(5.0)
+                        } else {
+                            commands::board_array::BoardMarginMm::from_css_shorthand(&board_margin)?
+                        };
+                        let edge_rail_mm = if edge_rail.is_empty() {
+                            commands::board_array::BoardMarginMm::all(5.0)
+                        } else {
+                            commands::board_array::BoardMarginMm::from_css_shorthand_named(
+                                "edge rail",
+                                &edge_rail,
+                            )?
+                        };
+                        commands::board_array::execute(
+                            &input,
+                            &output,
+                            &commands::board_array::BoardArrayCreateOptions {
+                                columns: columns.unwrap_or(1),
+                                rows: rows.unwrap_or(1),
+                                board_margin_mm,
+                                edge_rail_mm,
+                            },
+                            copper_balance,
+                            resolution,
+                        )
+                    }
                 }
             }
-        },
+        }
         Commands::FabPanel { command } => match command {
             FabPanelCommands::Create {
                 inputs,
@@ -704,12 +753,7 @@ mod tests {
                 .map(|(_, arg)| *arg);
             assert!(crate::Cli::try_parse_from(base.into_iter().chain(args)).is_err());
         }
-        for conflicting in [
-            vec!["--auto"],
-            vec!["--columns", "2"],
-            vec!["--no-copper-balance"],
-            vec!["--board-margin", "5"],
-        ] {
+        for conflicting in [vec!["--no-copper-balance"], vec!["--copper-balance"]] {
             assert!(
                 crate::Cli::try_parse_from(base.into_iter().chain(policy).chain(conflicting))
                     .is_err()
@@ -717,6 +761,18 @@ mod tests {
         }
         assert!(
             crate::Cli::try_parse_from(base.into_iter().chain(["--mouse-bite-width", "2"]))
+                .is_err()
+        );
+        assert!(
+            crate::Cli::try_parse_from(base.into_iter().chain(policy).chain([
+                "--mouse-bite-plan",
+                "plan.json",
+                "--auto"
+            ]))
+            .is_ok()
+        );
+        assert!(
+            crate::Cli::try_parse_from(base.into_iter().chain(["--mouse-bite-plan", "plan.json"]))
                 .is_err()
         );
     }
@@ -759,5 +815,70 @@ mod tests {
         assert_eq!(report["phase"], "outline-eligibility-only");
         assert_eq!(report["manufacturing_ready"], false);
         assert!(!report["intervals"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn mouse_bite_plan_runs_auto_layout_without_emitting_panel_geometry() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("board.xml");
+        let config = dir.path().join("policy.json");
+        let output = dir.path().join("plan.json");
+        std::fs::write(
+            &input,
+            r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+            <Content roleRef="owner"><FunctionMode mode="ASSEMBLY"/><StepRef name="board"/></Content>
+            <Ecad><CadHeader units="MILLIMETER"/><CadData>
+            <Layer name="TOP" layerFunction="SIGNAL" side="TOP"/>
+            <Step name="board" type="BOARD"><Datum x="0" y="0"/>
+            <Profile><Polygon><PolyBegin x="0" y="0"/><PolyStepSegment x="40" y="0"/>
+            <PolyStepSegment x="40" y="30"/><PolyStepSegment x="0" y="30"/>
+            <PolyStepSegment x="0" y="0"/></Polygon></Profile>
+            <Component refDes="U1" part="p" layerRef="TOP" mountType="SMT"><Location x="20" y="15"/></Component>
+            </Step></CadData></Ecad></IPC-2581>"#,
+        )
+        .unwrap();
+        let docs =
+            include_str!("../../pcb-ipc2581-tools/src/commands/board_array/placement/README.md");
+        let policy = docs
+            .split("```json\n")
+            .nth(1)
+            .unwrap()
+            .split("```")
+            .next()
+            .unwrap();
+        std::fs::write(&config, policy).unwrap();
+        let args = [
+            "pcb",
+            "ipc2581",
+            "board-array",
+            "create",
+            input.to_str().unwrap(),
+            "--mouse-bite",
+            "--mouse-bite-width",
+            "2",
+            "--mouse-bite-inward",
+            "0.2",
+            "--mouse-bite-outward",
+            "2",
+            "--mouse-bite-clearance",
+            "0",
+            "--auto",
+            "--mouse-bite-plan",
+            config.to_str().unwrap(),
+            "-o",
+            output.to_str().unwrap(),
+        ];
+        let cli = crate::Cli::try_parse_from(args).unwrap();
+        let crate::Commands::Ipc2581(args) = cli.command else {
+            panic!("expected IPC command")
+        };
+        execute(args, Resolution::default()).unwrap();
+        let report: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
+        assert_eq!(report["phase"], "frame-only-placement-analysis");
+        assert_eq!(report["manufacturing_ready"], false);
+        assert!(report["layout"]["columns"].as_u64().unwrap() > 0);
+        assert_eq!(report["mechanics"]["status"], "no-proven-frame-candidates");
+        assert!(report["mechanics"]["selected_ids"].is_null());
     }
 }

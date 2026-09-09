@@ -1,4 +1,6 @@
 #![doc = include_str!("../README.md")]
+pub mod planning;
+
 use std::collections::BTreeMap;
 
 use pcb_elastic::{Contribution, DMatrix, Error, Model, Tolerances, elements::MorleyTriangle};

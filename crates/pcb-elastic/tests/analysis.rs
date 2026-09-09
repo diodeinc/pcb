@@ -504,3 +504,38 @@ fn finite_tolerance_overflow_is_a_numerical_failure() {
         Err(Error::NumericalFailure)
     ));
 }
+
+#[test]
+fn exact_zero_padding_preserves_eigenmodes_and_does_not_ground_unused_dofs() {
+    let model = Model::new(
+        vec![1.0; 81],
+        &[Contribution {
+            dofs: vec![7, 35],
+            stiffness: DMatrix::from_row_slice(2, 2, &[4.0, 1.0, 1.0, 2.0]),
+        }],
+        tolerances(),
+    )
+    .unwrap();
+    let mut loads = vec![0.0; 81];
+    loads[7] = 3.0;
+    loads[35] = -2.0;
+    let result = model.evaluate(&[], &loads, &[]).unwrap();
+    assert_eq!(result.status, Status::SingularCompatible);
+    assert_eq!(result.unsupported_modes.len(), 79);
+    close(result.displacement[7], 8.0 / 7.0, 1e-12);
+    close(result.displacement[35], -11.0 / 7.0, 1e-12);
+    for mode in &result.unsupported_modes {
+        close(mode.displacement[7], 0.0, 1e-12);
+        close(mode.displacement[35], 0.0, 1e-12);
+        close(mode.displacement.norm(), 1.0, 1e-12);
+    }
+    loads[60] = 1.0;
+    let loaded = model.evaluate(&[], &loads, &[]).unwrap();
+    assert_eq!(loaded.status, Status::SingularIncompatible);
+    assert!(
+        loaded
+            .unsupported_modes
+            .iter()
+            .any(|m| m.load_projection.abs() > 0.9)
+    );
+}

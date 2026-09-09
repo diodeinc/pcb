@@ -18,9 +18,16 @@ use pcb_ir::{
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-struct Evidence {
-    id: String,
-    region: Option<ContourSet>,
+pub(super) struct Evidence {
+    pub id: String,
+    pub region: Option<ContourSet>,
+}
+
+pub(super) struct Prepared {
+    pub report: Value,
+    pub substrate: ContourSet,
+    pub evidence: Vec<Evidence>,
+    pub intervals: Vec<pcb_ir::geom::attachment::outline::OutlineInterval>,
 }
 
 struct CourtyardGroup {
@@ -41,6 +48,16 @@ pub fn analyze(
     exclusions: &[OutlineObstacle<'_>],
     resolution: Resolution,
 ) -> Result<Value> {
+    Ok(prepare(xml, footprint, clearance_mm, exclusions, resolution)?.report)
+}
+
+pub(super) fn prepare(
+    xml: &str,
+    footprint: OutlineFootprint,
+    clearance_mm: f64,
+    exclusions: &[OutlineObstacle<'_>],
+    resolution: Resolution,
+) -> Result<Prepared> {
     if !clearance_mm.is_finite() || clearance_mm < 0.0 {
         bail!("clearance must be finite and nonnegative");
     }
@@ -106,7 +123,7 @@ pub fn analyze(
         numerical_mm: pcb_ir::geom::tol::EPSILON_MM,
     };
     let intervals = eligible_outline(&substrate, &obstacles, footprint, tolerance)?;
-    Ok(json!({
+    let report = json!({
         "phase": "outline-eligibility-only",
         "manufacturing_ready": false,
         "scope": "canonical-board",
@@ -136,7 +153,13 @@ pub fn analyze(
             "obstacles": i.obstacles.iter().map(|&index| &evidence[index].id).collect::<Vec<_>>(),
             "uncertainty_mm": i.uncertainty_mm,
         })).collect::<Vec<_>>(),
-    }))
+    });
+    Ok(Prepared {
+        report,
+        substrate,
+        evidence,
+        intervals,
+    })
 }
 
 fn courtyard_evidence(imported: &ImportedDesign, resolution: Resolution) -> Result<Vec<Evidence>> {

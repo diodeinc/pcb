@@ -37,6 +37,8 @@ log = { workspace = true }
 minijinja = { workspace = true }
 natord = { workspace = true }
 pcb-ir = { workspace = true }
+pcb-mechanics = { path = "../pcb-mechanics" }
+pcb-elastic = { path = "../pcb-elastic" }
 pcb-sch = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

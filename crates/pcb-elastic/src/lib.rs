@@ -260,6 +260,35 @@ fn spectrum(
     if a.iter().any(|x| !x.is_finite()) {
         return Err(Error::NumericalFailure);
     }
+    // Optional connections leave many DOFs identically uncoupled. Separate
+    // this exact zero block before tridiagonalization: its eigenpairs are known,
+    // and feeding the padded low-rank matrix to QR can fail to converge. This
+    // removes no small stiffness and supplies no hidden physical constraint.
+    let active = (0..a.nrows())
+        .filter(|&i| a.row(i).iter().any(|&v| v != 0.0))
+        .collect::<Vec<_>>();
+    if active.len() < a.nrows() {
+        let n = a.nrows();
+        let mut result = nalgebra::linalg::SymmetricEigen {
+            eigenvalues: DVector::zeros(n),
+            eigenvectors: DMatrix::zeros(n, n),
+        };
+        if !active.is_empty() {
+            let reduced = spectrum(DMatrix::from_fn(active.len(), active.len(), |i, j| {
+                a[(active[i], active[j])]
+            }))?;
+            for (j, &value) in reduced.eigenvalues.iter().enumerate() {
+                result.eigenvalues[j] = value;
+                for (i, &row) in active.iter().enumerate() {
+                    result.eigenvectors[(row, j)] = reduced.eigenvectors[(i, j)];
+                }
+            }
+        }
+        for (j, row) in (0..n).filter(|i| !active.contains(i)).enumerate() {
+            result.eigenvectors[(row, active.len() + j)] = 1.0;
+        }
+        return Ok(result);
+    }
     nalgebra::linalg::SymmetricEigen::try_new(a, f64::EPSILON, 100_000)
         .filter(|e| {
             e.eigenvalues
