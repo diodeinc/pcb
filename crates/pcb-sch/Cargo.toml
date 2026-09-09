@@ -19,10 +19,10 @@ rust_decimal = { workspace = true }
 rust_decimal_macros = { workspace = true }
 natord = { workspace = true }
 csv = { workspace = true }
-starlark = { workspace = true }
-starlark_map = { workspace = true }
-allocative = { workspace = true }
-pagable = { workspace = true }
+starlark = { workspace = true, optional = true }
+starlark_map = { workspace = true, optional = true }
+allocative = { workspace = true, optional = true }
+pagable = { workspace = true, optional = true }
 anyhow = { workspace = true }
 comfy-table = { workspace = true, optional = true }
 colored = { workspace = true, optional = true }
@@ -31,7 +31,8 @@ terminal_hyperlink = { workspace = true, optional = true }
 urlencoding = { workspace = true, optional = true }
 
 [features]
-default = []
+default = ["starlark"]
+starlark = ["dep:starlark", "dep:starlark_map", "dep:allocative", "dep:pagable"]
 table = ["comfy-table", "colored", "supports-hyperlinks", "terminal_hyperlink", "urlencoding"]
 
 [dev-dependencies]
