@@ -1,6 +1,9 @@
 //! Pure planning for KiCad connectivity repairs.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    borrow::Cow,
+    collections::{BTreeMap, BTreeSet},
+};
 
 use anyhow::{Result, bail};
 use pcb_sch::Schematic;
@@ -8,14 +11,14 @@ use pcb_sch::Schematic;
 use crate::{
     GEOMETRY_EPS_MM, Point, SchDocument, SchItem, SchPage, Symbol,
     analysis::{
-        ConnectivityInspection, SchematicIssue, SchematicIssueKey, analyze_connectivity,
-        ensure_issues_resolved, ensure_no_new_issues, inspect_schematic, issue_context,
-        logical_name, observed_reconcilable_connectivity,
+        ConnectivityAnalysis, ConnectivityInspection, SchematicIssue, SchematicIssueKey,
+        analyze_connectivity, ensure_issues_resolved, ensure_no_new_issues, inspect_schematic,
+        issue_context, logical_name, observed_reconcilable_connectivity,
     },
     compose,
     connectivity::{
-        ComponentIdentity, ConnectivityGraph, ConnectivityItemRef, CutNode, PhysicalIsland,
-        PinVisibility, SymbolLocation, Terminal, cut_graph,
+        ComponentIdentity, ConnectivityGraph, ConnectivityItemRef, CutNode, PhysicalConnectivity,
+        PhysicalIsland, PinVisibility, SymbolLocation, Terminal, TerminalIndex, cut_graph,
     },
     cut,
     net_symbols::NetSymbolSpec,
@@ -144,6 +147,7 @@ pub(crate) fn plan_connectivity_repair_core(
 ) -> Result<ConnectivityRepairIntent> {
     let expected = &inspection.expected;
     let observed = &inspection.physical;
+    let expected_nets = ExpectedNets::new(expected);
     let mut removals = BTreeSet::new();
     let mut relocate_symbols = BTreeSet::new();
     let selected = inspection
@@ -187,7 +191,7 @@ pub(crate) fn plan_connectivity_repair_core(
                                     .cloned(),
                             );
                         }
-                        reconnect_nets.extend(expected_names_for_island(expected, provenance));
+                        reconnect_nets.extend(expected_nets.for_island(provenance));
                     }
                 }
                 if drivers.is_empty() {
@@ -201,14 +205,14 @@ pub(crate) fn plan_connectivity_repair_core(
                 reconnect_nets.extend(net_names.iter().cloned());
                 for island in islands {
                     if let Some(provenance) = observed.islands.get(island) {
-                        reconnect_nets.extend(expected_names_for_island(expected, provenance));
+                        reconnect_nets.extend(expected_nets.for_island(provenance));
                     }
                 }
             }
             SchematicIssue::UnexpectedConnection { islands, .. } => {
                 for island in islands {
                     if let Some(provenance) = observed.islands.get(island) {
-                        reconnect_nets.extend(expected_names_for_island(expected, provenance));
+                        reconnect_nets.extend(expected_nets.for_island(provenance));
                     }
                 }
             }
@@ -244,7 +248,7 @@ pub(crate) fn plan_connectivity_repair_core(
             .values()
             .filter(|island| island.items.contains(item))
         {
-            reconnect_nets.extend(expected_names_for_island(expected, provenance));
+            reconnect_nets.extend(expected_nets.for_island(provenance));
         }
     }
 
@@ -252,25 +256,59 @@ pub(crate) fn plan_connectivity_repair_core(
     // also resolve a short without requiring a physical topology edit.
     let mut simulated = document.clone();
     remove_items(&mut simulated, &removals)?;
+    let mut current_observed = Cow::Borrowed(observed);
+    let mut current_analysis = Cow::Borrowed(&inspection.analysis);
+    if !removals.is_empty() {
+        current_observed = Cow::Owned(observed_reconcilable_connectivity(&simulated, netlist)?);
+        current_analysis = Cow::Owned(analyze_connectivity(expected, &current_observed.graph));
+    }
 
     loop {
-        let current_observed = observed_reconcilable_connectivity(&simulated, netlist)?;
-        let current_analysis = analyze_connectivity(expected, &current_observed.graph);
         let current_problems = repair_problem_counts(current_analysis.issues());
-        let Some(issue) = current_analysis.issues().iter().find(|issue| {
+        let participates = |issue: &SchematicIssue| {
             if !matches!(
                 issue,
                 SchematicIssue::Shorted { .. } | SchematicIssue::UnexpectedConnection { .. }
             ) {
                 return false;
             }
-            let context = issue_context((*issue).clone(), &current_observed.islands);
-            selected.iter().any(|selected| &selected.issue == *issue)
+            let context = issue_context(issue.clone(), &current_observed.islands);
+            selected.iter().any(|selected| &selected.issue == issue)
                 || !context.items.is_disjoint(&selected_items)
                 || !repair_problems(issue).is_disjoint(&selected_problems)
-        }) else {
+        };
+        let Some(issue) = current_analysis
+            .issues()
+            .iter()
+            .find(|issue| participates(issue))
+        else {
             break;
         };
+
+        if matches!(issue, SchematicIssue::UnexpectedConnection { .. }) {
+            let unexpected = current_analysis
+                .issues()
+                .iter()
+                .filter(|issue| {
+                    matches!(issue, SchematicIssue::UnexpectedConnection { .. })
+                        && participates(issue)
+                })
+                .collect::<Vec<_>>();
+            if let Some(batch) = verified_unexpected_connection_cuts(
+                &mut simulated,
+                netlist,
+                expected,
+                &current_observed.islands,
+                &current_problems,
+                &unexpected,
+            )? {
+                current_observed = Cow::Owned(batch.observed);
+                current_analysis = Cow::Owned(batch.analysis);
+                removals.extend(batch.removals);
+                reconnect_nets.extend(batch.reconnect_nets);
+                continue;
+            }
+        }
 
         // Whatever gets dismantled, its nets get rebuilt — including issues
         // repaired only because they overlap the selection.
@@ -282,22 +320,23 @@ pub(crate) fn plan_connectivity_repair_core(
         {
             for island in islands {
                 if let Some(provenance) = current_observed.islands.get(island) {
-                    reconnect_nets.extend(expected_names_for_island(expected, provenance));
+                    reconnect_nets.extend(expected_nets.for_island(provenance));
                 }
             }
         }
 
-        let candidates = repair_candidates(issue, expected, &current_observed.islands);
+        let candidates = repair_candidates(issue, &expected_nets, &current_observed.islands);
         if let Some(cut) = minimum_verified_cut(
-            &simulated,
+            &mut simulated,
             netlist,
             expected,
             &current_problems,
             issue,
             &candidates,
         )? {
-            remove_items(&mut simulated, &cut)?;
-            removals.extend(cut);
+            current_observed = Cow::Owned(cut.observed);
+            current_analysis = Cow::Owned(cut.analysis);
+            removals.extend(cut.removals);
             continue;
         }
 
@@ -317,7 +356,7 @@ pub(crate) fn plan_connectivity_repair_core(
                         .values()
                         .filter(|island| island.pins.iter().any(|pin| pin.is_on_symbol(&location)))
                     {
-                        reconnect_nets.extend(expected_names_for_island(expected, island));
+                        reconnect_nets.extend(expected_nets.for_island(island));
                     }
                     remove_items(
                         &mut simulated,
@@ -328,10 +367,12 @@ pub(crate) fn plan_connectivity_repair_core(
                     )?;
                 }
             }
-            continue;
+        } else {
+            remove_items(&mut simulated, &fallback)?;
+            removals.extend(fallback);
         }
-        remove_items(&mut simulated, &fallback)?;
-        removals.extend(fallback);
+        current_observed = Cow::Owned(observed_reconcilable_connectivity(&simulated, netlist)?);
+        current_analysis = Cow::Owned(analyze_connectivity(expected, &current_observed.graph));
     }
 
     removals.extend(orphaned_junctions(document, &simulated, &removals));
@@ -645,22 +686,18 @@ fn orphaned_junctions(
 /// finite cut (the sides meet only through labels or coincident pins) or the
 /// reducer does not confirm the cut, so the caller falls back to teardown.
 fn minimum_verified_cut(
-    document: &SchDocument,
+    document: &mut SchDocument,
     netlist: &Schematic,
     expected: &ConnectivityGraph,
     current_problems: &BTreeMap<RepairProblem, usize>,
     issue: &SchematicIssue,
     candidates: &BTreeSet<ConnectivityItemRef>,
-) -> Result<Option<BTreeSet<ConnectivityItemRef>>> {
+) -> Result<Option<VerifiedCuts>> {
     if candidates.is_empty() {
         return Ok(None);
     }
     let graph = cut_graph(document, PinVisibility::VisibleOnly)?;
-    let node_nets = graph
-        .nodes
-        .iter()
-        .map(|node| node_expected_nets(expected, node))
-        .collect::<Vec<_>>();
+    let node_nets = node_expected_nets(expected, &graph.nodes);
     let nodes_with = |predicate: &dyn Fn(usize, &CutNode) -> bool| {
         graph
             .nodes
@@ -745,36 +782,281 @@ fn minimum_verified_cut(
     if cut.is_empty() {
         return Ok(None);
     }
-    let mut next = document.clone();
-    remove_items(&mut next, &cut)?;
-    let observed = observed_reconcilable_connectivity(&next, netlist)?;
-    let analysis = analyze_connectivity(expected, &observed.graph);
-    let problems = repair_problem_counts(analysis.issues());
-    // The metric counts conflicts only. A cut may also split a net; the
-    // reconnect list rebuilds that, so "minimal" means the fewest removals,
-    // not the least rewiring.
-    Ok(strictly_reduces_problems(current_problems, &problems).then_some(cut))
+    Ok(
+        verify_cuts(document, netlist, expected, current_problems, &cut)?.map(
+            |(observed, analysis)| VerifiedCuts {
+                observed,
+                analysis,
+                removals: cut,
+                reconnect_nets: BTreeSet::new(),
+            },
+        ),
+    )
 }
 
 /// Expected nets a node belongs to, through its terminals or the names it
 /// drives.
-fn node_expected_nets(expected: &ConnectivityGraph, node: &CutNode) -> BTreeSet<String> {
-    let mut nets = BTreeSet::new();
-    for group in &expected.groups {
-        let Some(name) = logical_name(group) else {
-            continue;
-        };
-        if node.driver_names.iter().any(|driver| driver == name)
-            || group.terminals.iter().any(|expected_terminal| {
-                node.terminals
-                    .iter()
-                    .any(|observed| expected_terminal.matches(observed))
-            })
-        {
-            nets.insert(name.to_string());
+fn node_expected_nets(expected: &ConnectivityGraph, nodes: &[CutNode]) -> Vec<BTreeSet<String>> {
+    let mut terminals = TerminalIndex::new();
+    let names = expected
+        .groups
+        .iter()
+        .filter_map(logical_name)
+        .collect::<BTreeSet<_>>();
+    for (index, group) in expected.groups.iter().enumerate() {
+        for terminal in &group.terminals {
+            terminals.insert(terminal, index);
         }
     }
-    nets
+    nodes
+        .iter()
+        .map(|node| {
+            node.terminals
+                .iter()
+                .flat_map(|terminal| terminals.matching(terminal))
+                .filter_map(|index| logical_name(&expected.groups[index]))
+                .chain(
+                    node.driver_names
+                        .iter()
+                        .map(String::as_str)
+                        .filter(|name| names.contains(name)),
+                )
+                .map(str::to_string)
+                .collect()
+        })
+        .collect()
+}
+
+struct VerifiedCuts {
+    observed: PhysicalConnectivity,
+    analysis: ConnectivityAnalysis,
+    removals: BTreeSet<ConnectivityItemRef>,
+    reconnect_nets: BTreeSet<String>,
+}
+
+/// Isolate unexpected pins on a deletion-only graph, then verify the entire
+/// batch through the real reducer. Wires/junctions cannot merge islands, so
+/// other independent conflicts do not need to be reanalyzed after every cut.
+/// The cut graph approximates legacy power semantics: if verification rejects
+/// the batch, the caller retains the individually verified repair path.
+fn verified_unexpected_connection_cuts(
+    document: &mut SchDocument,
+    netlist: &Schematic,
+    expected: &ConnectivityGraph,
+    islands: &BTreeMap<crate::connectivity::IslandRef, PhysicalIsland>,
+    current_problems: &BTreeMap<RepairProblem, usize>,
+    issues: &[&SchematicIssue],
+) -> Result<Option<VerifiedCuts>> {
+    let expected_nets = ExpectedNets::new(expected);
+    let issues = issues
+        .iter()
+        .filter_map(|issue| {
+            let candidates = repair_candidates(issue, &expected_nets, islands);
+            (!candidates.is_empty()).then_some((*issue, candidates))
+        })
+        .collect::<Vec<_>>();
+    if issues.is_empty() {
+        return Ok(None);
+    }
+    let graph = cut_graph(document, PinVisibility::VisibleOnly)?;
+    let node_nets = node_expected_nets(expected, &graph.nodes);
+    let expected_names = expected
+        .groups
+        .iter()
+        .flat_map(|group| &group.names)
+        .collect::<BTreeSet<_>>();
+    let mut expected_terminals = TerminalIndex::new();
+    for group in &expected.groups {
+        for terminal in &group.terminals {
+            expected_terminals.insert(terminal, 0);
+        }
+    }
+    let matches_expected = graph
+        .nodes
+        .iter()
+        .map(|node| {
+            node.driver_names
+                .iter()
+                .any(|name| expected_names.contains(name))
+                || node
+                    .terminals
+                    .iter()
+                    .any(|terminal| expected_terminals.matching(terminal).next().is_some())
+        })
+        .collect::<Vec<_>>();
+    let mut terminals = TerminalIndex::new();
+    let mut item_nodes = BTreeMap::<&ConnectivityItemRef, Vec<usize>>::new();
+    let mut adjacency = vec![Vec::new(); graph.nodes.len()];
+    for (index, node) in graph.nodes.iter().enumerate() {
+        if let Some(item) = &node.item {
+            item_nodes.entry(item).or_default().push(index);
+        }
+        for terminal in &node.terminals {
+            terminals.insert(terminal, index);
+        }
+    }
+    for &(a, b) in &graph.edges {
+        adjacency[a].push(b);
+        adjacency[b].push(a);
+    }
+    let mut active = vec![true; graph.nodes.len()];
+    let mut removals = BTreeSet::new();
+    let mut reconnect_nets = BTreeSet::new();
+    for (issue, candidates) in issues {
+        let SchematicIssue::UnexpectedConnection {
+            terminals: unexpected,
+            islands: issue_islands,
+        } = issue
+        else {
+            continue;
+        };
+        let unexpected_nodes = unexpected
+            .iter()
+            .flat_map(|terminal| terminals.matching(terminal))
+            .collect::<BTreeSet<_>>();
+        let mut changed = false;
+        for terminal in unexpected {
+            let sources = terminals
+                .matching(terminal)
+                .filter(|&index| active[index])
+                .collect::<BTreeSet<_>>();
+            let mut reachable = vec![false; graph.nodes.len()];
+            let mut pending = sources.iter().copied().collect::<Vec<_>>();
+            let mut region = Vec::new();
+            let mut connected_terminals = BTreeSet::new();
+            let mut connected_to_expected = false;
+            while let Some(node) = pending.pop() {
+                if reachable[node] || !active[node] {
+                    continue;
+                }
+                reachable[node] = true;
+                region.push(node);
+                connected_terminals.extend(graph.nodes[node].terminals.iter());
+                connected_to_expected |= matches_expected[node];
+                pending.extend(adjacency[node].iter().copied());
+            }
+            if connected_terminals.len() < 2 && !connected_to_expected {
+                continue;
+            }
+            region.sort_unstable();
+            let adjacent = sources
+                .iter()
+                .flat_map(|&node| adjacency[node].iter().copied())
+                .collect::<BTreeSet<_>>();
+            let source_nets = sources
+                .iter()
+                .flat_map(|&index| node_nets[index].iter().cloned())
+                .collect::<BTreeSet<_>>();
+            let sinks = region
+                .iter()
+                .copied()
+                .filter(|index| {
+                    let node = &graph.nodes[*index];
+                    !sources.contains(index)
+                        && !adjacent.contains(index)
+                        && node_nets[*index].is_disjoint(&source_nets)
+                        && !node
+                            .driver_names
+                            .iter()
+                            .any(|name| source_nets.contains(name))
+                        && (node.item.is_none()
+                            || !node_nets[*index].is_empty()
+                            || !node.driver_names.is_empty()
+                            || unexpected_nodes.contains(index))
+                })
+                .collect::<BTreeSet<_>>();
+            let Some(cut) =
+                cut::minimum_node_cut_in_region(&graph, &sources, &sinks, &region, |index| {
+                    graph.nodes[index]
+                        .item
+                        .as_ref()
+                        .filter(|item| candidates.contains(item))
+                        .map(connectivity_item_cut_cost)
+                })
+            else {
+                continue;
+            };
+            let cut = cut
+                .into_iter()
+                .filter_map(|index| graph.nodes[index].item.clone())
+                .collect::<BTreeSet<_>>();
+            // One physical item can occur in several instances of a sheet.
+            for item in &cut {
+                for &index in &item_nodes[item] {
+                    active[index] = false;
+                }
+            }
+            removals.extend(cut);
+            changed = true;
+        }
+        if changed {
+            for island in issue_islands {
+                if let Some(island) = islands.get(island) {
+                    reconnect_nets.extend(expected_nets.for_island(island));
+                }
+            }
+        }
+    }
+    if removals.is_empty() {
+        return Ok(None);
+    }
+    let Some((observed, analysis)) =
+        verify_cuts(document, netlist, expected, current_problems, &removals)?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(VerifiedCuts {
+        observed,
+        analysis,
+        removals,
+        reconnect_nets,
+    }))
+}
+
+/// Speculate on the working document, retaining only the removed items for
+/// rollback rather than cloning all page libraries. Cuts never edit sheet
+/// pins or other retained items. Restore exact order on rejection or error.
+fn verify_cuts(
+    document: &mut SchDocument,
+    netlist: &Schematic,
+    expected: &ConnectivityGraph,
+    current_problems: &BTreeMap<RepairProblem, usize>,
+    removals: &BTreeSet<ConnectivityItemRef>,
+) -> Result<Option<(PhysicalConnectivity, ConnectivityAnalysis)>> {
+    let by_page = index_removals(removals);
+    let mut saved = Vec::new();
+    for (page_index, page) in document.pages.iter().enumerate() {
+        let Some(by_id) = by_page.get(page.id.as_str()) else {
+            continue;
+        };
+        for (item_index, item) in page.items.iter().enumerate() {
+            if item
+                .id()
+                .and_then(|id| by_id.get(id))
+                .is_some_and(|candidates| {
+                    candidates
+                        .iter()
+                        .any(|removal| item_matches(&page.id, item, removal))
+                })
+            {
+                saved.push((page_index, item_index, item.clone()));
+            }
+        }
+    }
+    remove_items(document, removals)?;
+    let result = observed_reconcilable_connectivity(document, netlist).map(|observed| {
+        let analysis = analyze_connectivity(expected, &observed.graph);
+        // Disconnected nets are rebuilt by the realizer. Only conflicts must
+        // decrease, and no existing conflict may get worse.
+        strictly_reduces_problems(current_problems, &repair_problem_counts(analysis.issues()))
+            .then_some((observed, analysis))
+    });
+    if !matches!(&result, Ok(Some(_))) {
+        for (page, index, item) in saved {
+            document.pages[page].items.insert(index, item);
+        }
+    }
+    result
 }
 
 fn relocation_candidates(
@@ -925,7 +1207,7 @@ fn connectivity_item_cut_cost(item: &ConnectivityItemRef) -> u64 {
 
 fn repair_candidates(
     issue: &SchematicIssue,
-    expected: &ConnectivityGraph,
+    expected: &ExpectedNets<'_>,
     islands: &std::collections::BTreeMap<crate::connectivity::IslandRef, PhysicalIsland>,
 ) -> BTreeSet<ConnectivityItemRef> {
     let issue_islands = match issue {
@@ -972,11 +1254,12 @@ pub(crate) fn point_on_segment(point: Point, a: Point, b: Point) -> bool {
 
 fn repair_island(
     issue: &SchematicIssue,
-    expected: &ConnectivityGraph,
+    expected: &ExpectedNets<'_>,
     island: &PhysicalIsland,
 ) -> bool {
     match issue {
-        SchematicIssue::Shorted { net_names, .. } => expected_names_for_island(expected, island)
+        SchematicIssue::Shorted { net_names, .. } => expected
+            .for_island(island)
             .intersection(net_names)
             .nth(1)
             .is_some(),
@@ -1057,44 +1340,115 @@ fn describe_terminal(document: &SchDocument, terminal: &Terminal) -> String {
     }
 }
 
-fn expected_names_for_island(
-    expected: &ConnectivityGraph,
-    island: &PhysicalIsland,
-) -> BTreeSet<String> {
-    expected
-        .groups
-        .iter()
-        .filter(|group| {
-            !group.names.is_disjoint(&island.names)
-                || group.terminals.iter().any(|expected_terminal| {
-                    island
-                        .terminals
-                        .iter()
-                        .any(|observed_terminal| expected_terminal.matches(observed_terminal))
-                })
-        })
-        .filter_map(logical_name)
-        .map(str::to_string)
-        .collect()
+struct ExpectedNets<'a> {
+    graph: &'a ConnectivityGraph,
+    terminals: TerminalIndex<'a>,
+    names: BTreeMap<&'a str, Vec<usize>>,
+}
+
+impl<'a> ExpectedNets<'a> {
+    fn new(graph: &'a ConnectivityGraph) -> Self {
+        let mut terminals = TerminalIndex::new();
+        let mut names = BTreeMap::<&str, Vec<usize>>::new();
+        for (index, group) in graph.groups.iter().enumerate() {
+            for terminal in &group.terminals {
+                terminals.insert(terminal, index);
+            }
+            for name in &group.names {
+                names.entry(name).or_default().push(index);
+            }
+        }
+        Self {
+            graph,
+            terminals,
+            names,
+        }
+    }
+
+    fn for_island(&self, island: &PhysicalIsland) -> BTreeSet<String> {
+        island
+            .terminals
+            .iter()
+            .flat_map(|terminal| self.terminals.matching(terminal))
+            .chain(
+                island
+                    .names
+                    .iter()
+                    .filter_map(|name| self.names.get(name.as_str()))
+                    .flatten()
+                    .copied(),
+            )
+            .filter_map(|index| logical_name(&self.graph.groups[index]))
+            .map(str::to_string)
+            .collect()
+    }
+}
+
+type RemovalIndex<'a> = BTreeMap<&'a str, BTreeMap<&'a str, Vec<&'a ConnectivityItemRef>>>;
+
+fn index_removals(removals: &BTreeSet<ConnectivityItemRef>) -> RemovalIndex<'_> {
+    let mut by_page = RemovalIndex::new();
+    for removal in removals {
+        let (page, id) = removal.page_and_item_id();
+        by_page
+            .entry(page)
+            .or_default()
+            .entry(id)
+            .or_default()
+            .push(removal);
+    }
+    by_page
 }
 
 pub(crate) fn remove_items(
     document: &mut SchDocument,
     removals: &BTreeSet<ConnectivityItemRef>,
 ) -> Result<()> {
+    if removals.is_empty() {
+        return Ok(());
+    }
+    let by_page = index_removals(removals);
+    let mut counts = removals
+        .iter()
+        .map(|removal| (removal, 0usize))
+        .collect::<BTreeMap<_, _>>();
+    // Validate every address before changing anything, including duplicate
+    // IDs and item-kind mismatches. Indexing limits comparisons to that ID.
+    for page in &document.pages {
+        let Some(by_id) = by_page.get(page.id.as_str()) else {
+            continue;
+        };
+        for item in &page.items {
+            let Some(candidates) = item.id().and_then(|id| by_id.get(id)) else {
+                continue;
+            };
+            for &removal in candidates {
+                let count = if let ConnectivityItemRef::SheetPin { pin_id, .. } = removal
+                    && let SchItem::Sheet(sheet) = item
+                {
+                    sheet.pins.iter().filter(|pin| &pin.id == pin_id).count()
+                } else {
+                    usize::from(item_matches(&page.id, item, removal))
+                };
+                *counts.get_mut(removal).expect("indexed removal") += count;
+            }
+        }
+    }
     for removal in removals {
-        let count = document
-            .pages
-            .iter()
-            .map(|page| matching_item_count(page, removal))
-            .sum::<usize>();
+        let count = counts[removal];
         if count != 1 {
             bail!("connectivity item {removal:?} matched {count} loaded schematic items");
         }
     }
     for page in &mut document.pages {
+        let Some(by_id) = by_page.get(page.id.as_str()) else {
+            continue;
+        };
         page.items.retain_mut(|item| {
-            for removal in removals {
+            let Some(candidates) = item.id().and_then(|id| by_id.get(id)) else {
+                return true;
+            };
+            for &removal in candidates {
                 if let ConnectivityItemRef::SheetPin {
                     page_id,
                     sheet_id,
@@ -1117,33 +1471,6 @@ pub(crate) fn remove_items(
     Ok(())
 }
 
-fn matching_item_count(page: &SchPage, item_ref: &ConnectivityItemRef) -> usize {
-    if let ConnectivityItemRef::SheetPin {
-        page_id,
-        sheet_id,
-        pin_id,
-    } = item_ref
-    {
-        if page_id != &page.id {
-            return 0;
-        }
-        return page
-            .items
-            .iter()
-            .filter_map(|item| match item {
-                SchItem::Sheet(sheet) if &sheet.id == sheet_id => Some(sheet),
-                _ => None,
-            })
-            .flat_map(|sheet| &sheet.pins)
-            .filter(|pin| &pin.id == pin_id)
-            .count();
-    }
-    page.items
-        .iter()
-        .filter(|item| item_matches(&page.id, item, item_ref))
-        .count()
-}
-
 pub(crate) fn item_matches(page_id: &str, item: &SchItem, item_ref: &ConnectivityItemRef) -> bool {
     match (item, item_ref) {
         (SchItem::Symbol(_), ConnectivityItemRef::Symbol { page_id: page, id })
@@ -1158,6 +1485,19 @@ pub(crate) fn item_matches(page_id: &str, item: &SchItem, item_ref: &Connectivit
 }
 
 impl ConnectivityItemRef {
+    fn page_and_item_id(&self) -> (&str, &str) {
+        match self {
+            Self::Symbol { page_id, id }
+            | Self::Wire { page_id, id }
+            | Self::Junction { page_id, id }
+            | Self::NoConnect { page_id, id }
+            | Self::Label { page_id, id } => (page_id, id),
+            Self::SheetPin {
+                page_id, sheet_id, ..
+            } => (page_id, sheet_id),
+        }
+    }
+
     fn is_removable_name_driver(&self) -> bool {
         matches!(self, Self::Label { .. } | Self::Symbol { .. })
     }
@@ -1236,6 +1576,230 @@ mod tests {
             )]),
             pins: Vec::new(),
             unsupported: Vec::new(),
+        }
+    }
+
+    fn unmanaged_chains(chains: usize, pins: usize) -> SchDocument {
+        let definition = SymbolDefinition::from_kicad_symbol_sexpr(
+            r#"(symbol "Test:Part" (symbol "Part_1_1"
+              (pin passive line (at 0 0 0) (length 2.54) (name "1") (number "1"))))"#,
+        )
+        .unwrap();
+        let mut page = SchPage::new("chains");
+        page.library
+            .definitions
+            .insert(definition.lib_id.clone(), definition);
+        for chain in 0..chains {
+            for pin in 0..pins {
+                let at = Point::new(pin as f64 * 9.0, chain as f64 * 10.0);
+                let mut symbol = part(at, at);
+                symbol.id = format!("part-{chain}-{pin}");
+                page.items.push(SchItem::Symbol(symbol));
+                if pin > 0 {
+                    for segment in 0..3 {
+                        page.items.push(SchItem::Wire(Wire {
+                            id: format!("wire-{chain}-{pin}-{segment}"),
+                            a: Point::new(at.x - 9.0 + segment as f64 * 3.0, at.y),
+                            b: Point::new(at.x - 6.0 + segment as f64 * 3.0, at.y),
+                            unsupported: Vec::new(),
+                        }));
+                    }
+                }
+            }
+        }
+        document(vec![page])
+    }
+
+    #[test]
+    fn batches_only_selected_conflicts_and_preserves_wire_stubs() {
+        let document = unmanaged_chains(32, 2);
+        let original = document.clone();
+        let netlist = Schematic::new();
+        let inspection = inspect_schematic(&document, &netlist).unwrap();
+        let conflicts = inspection
+            .issues
+            .iter()
+            .filter(|issue| matches!(issue.issue, SchematicIssue::UnexpectedConnection { .. }))
+            .collect::<Vec<_>>();
+        assert_eq!(conflicts.len(), 32);
+        let selected = conflicts
+            .iter()
+            .step_by(2)
+            .map(|issue| issue.key.clone())
+            .collect();
+        let intent = plan_connectivity_repair(
+            &document,
+            &netlist,
+            &inspection,
+            &selected,
+            &BTreeSet::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            intent.removals.len(),
+            16,
+            "one cut per selected three-segment path"
+        );
+        assert!(intent.relocated_symbols.is_empty());
+        assert!(intent.reconnect_nets.is_empty());
+        let after = intent.apply_edits(&document).unwrap();
+        let verified =
+            verify_connectivity_repair(&document, &inspection, &netlist, &intent, &after).unwrap();
+        for issue in conflicts.iter().skip(1).step_by(2) {
+            assert!(
+                verified
+                    .issues
+                    .iter()
+                    .any(|remaining| remaining.key == issue.key),
+                "unselected conflict changed"
+            );
+        }
+        assert_eq!(document, original, "planning is pure");
+        assert_eq!(
+            intent,
+            plan_connectivity_repair(
+                &document,
+                &netlist,
+                &inspection,
+                &selected,
+                &BTreeSet::new()
+            )
+            .unwrap()
+        );
+    }
+
+    #[test]
+    fn batch_verification_rejects_an_unverified_cut() {
+        let mut document = unmanaged_chains(2, 2);
+        let original = document.clone();
+        let netlist = Schematic::new();
+        let inspection = inspect_schematic(&document, &netlist).unwrap();
+        let issues = inspection
+            .issues
+            .iter()
+            .map(|issue| &issue.issue)
+            .filter(|issue| matches!(issue, SchematicIssue::UnexpectedConnection { .. }))
+            .collect::<Vec<_>>();
+        // A stale/overly optimistic conflict count cannot authorize edits.
+        // The real reducer must reject the batch even though graph cuts exist.
+        assert!(
+            verified_unexpected_connection_cuts(
+                &mut document,
+                &netlist,
+                &inspection.expected,
+                &inspection.physical.islands,
+                &BTreeMap::new(),
+                &issues
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert_eq!(document, original);
+    }
+
+    #[test]
+    fn failed_cut_inspection_restores_exact_item_order() {
+        let mut document = unmanaged_chains(2, 2);
+        document.pages[0].library.definitions.clear();
+        let original = document.clone();
+        let cuts = BTreeSet::from([
+            ConnectivityItemRef::Wire {
+                page_id: "chains".into(),
+                id: "wire-0-1-0".into(),
+            },
+            ConnectivityItemRef::Wire {
+                page_id: "chains".into(),
+                id: "wire-1-1-2".into(),
+            },
+        ]);
+        assert!(
+            verify_cuts(
+                &mut document,
+                &Schematic::new(),
+                &ConnectivityGraph::default(),
+                &BTreeMap::new(),
+                &cuts
+            )
+            .is_err()
+        );
+        assert_eq!(document, original);
+    }
+
+    #[test]
+    fn indexed_removals_validate_kind_page_and_duplicates_before_mutation() {
+        let mut document = unmanaged_chains(1, 2);
+        let wire = document.pages[0]
+            .items
+            .iter()
+            .find(|item| matches!(item, SchItem::Wire(_)))
+            .unwrap()
+            .clone();
+        let id = wire.id().unwrap().to_string();
+        document.pages.push(page_with("other", vec![wire.clone()]));
+        let original = document.clone();
+        let selected = ConnectivityItemRef::Wire {
+            page_id: "chains".into(),
+            id: id.clone(),
+        };
+        let wrong_kind = ConnectivityItemRef::Symbol {
+            page_id: "chains".into(),
+            id: id.clone(),
+        };
+        assert!(
+            remove_items(
+                &mut document,
+                &BTreeSet::from([selected.clone(), wrong_kind])
+            )
+            .is_err()
+        );
+        assert_eq!(document, original);
+        document.pages[0].items.push(wire.clone());
+        let duplicated = document.clone();
+        assert!(remove_items(&mut document, &BTreeSet::from([selected.clone()])).is_err());
+        assert_eq!(document, duplicated);
+        document.pages[0].items.pop();
+        remove_items(&mut document, &BTreeSet::from([selected])).unwrap();
+        assert_eq!(document.pages[1].items, vec![wire]);
+        assert!(
+            !document.pages[0]
+                .items
+                .iter()
+                .any(|item| item.id() == Some(id.as_str()))
+        );
+    }
+
+    #[test]
+    #[ignore = "release-mode synthetic performance benchmark; run explicitly"]
+    fn benchmark_unexpected_connection_repairs() {
+        for (chains, pins) in [(64, 2), (256, 2), (1024, 2), (1, 256)] {
+            let document = unmanaged_chains(chains, pins);
+            let netlist = Schematic::new();
+            let inspection = inspect_schematic(&document, &netlist).unwrap();
+            let selected = inspection
+                .issues
+                .iter()
+                .filter(|issue| matches!(issue.issue, SchematicIssue::UnexpectedConnection { .. }))
+                .map(|issue| issue.key.clone())
+                .collect();
+            let start = std::time::Instant::now();
+            let intent = plan_connectivity_repair(
+                &document,
+                &netlist,
+                &inspection,
+                &selected,
+                &BTreeSet::new(),
+            )
+            .unwrap();
+            eprintln!(
+                "chains={chains} pins={pins} planning={:?} removals={}",
+                start.elapsed(),
+                intent.removals.len()
+            );
+            if pins == 2 {
+                assert_eq!(intent.removals.len(), chains);
+            }
+            let after = intent.apply_edits(&document).unwrap();
+            verify_connectivity_repair(&document, &inspection, &netlist, &intent, &after).unwrap();
         }
     }
 
@@ -1439,7 +2003,7 @@ mod tests {
         };
 
         assert_eq!(
-            repair_candidates(&issue, &expected, &islands),
+            repair_candidates(&issue, &ExpectedNets::new(&expected), &islands),
             BTreeSet::from([wire("bridge")])
         );
     }
@@ -1461,7 +2025,11 @@ mod tests {
         };
 
         assert_eq!(
-            repair_candidates(&issue, &ConnectivityGraph::default(), &islands),
+            repair_candidates(
+                &issue,
+                &ExpectedNets::new(&ConnectivityGraph::default()),
+                &islands
+            ),
             BTreeSet::from([wire("unexpected-connection")])
         );
     }

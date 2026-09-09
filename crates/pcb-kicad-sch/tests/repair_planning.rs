@@ -12,6 +12,48 @@ use pcb_kicad_sch::{
 };
 
 #[test]
+fn batch_cut_removes_a_shared_wire_from_every_sheet_instance() {
+    use common::kicad_builder::{KicadBuilder, TestPin};
+
+    let mut builder = KicadBuilder::new();
+    builder
+        .sheet("shared.kicad_sch", &[])
+        .sheet("shared.kicad_sch", &[])
+        .add_page("shared", "shared.kicad_sch")
+        .define_symbol("Test:OnePin", &[TestPin::passive("1", (0.0, 0.0))])
+        .component("Test:OnePin", None, (0.0, 0.0))
+        .component("Test:OnePin", None, (9.0, 0.0))
+        .global_label("SHARED", (0.0, 0.0))
+        .wire((0.0, 0.0), (3.0, 0.0))
+        .wire((3.0, 0.0), (6.0, 0.0))
+        .wire((6.0, 0.0), (9.0, 0.0));
+    let document = builder.build();
+    let netlist = pcb_sch::Schematic::new();
+    let inspection = inspect_schematic(&document, &netlist).unwrap();
+    let selected = inspection
+        .issues
+        .iter()
+        .filter(|issue| matches!(issue.issue, SchematicIssue::UnexpectedConnection { .. }))
+        .map(|issue| issue.key.clone())
+        .collect();
+    let intent = plan_connectivity_repair(
+        &document,
+        &netlist,
+        &inspection,
+        &selected,
+        &BTreeSet::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        intent.removals().len(),
+        1,
+        "the same file item occurs in both instances"
+    );
+    let after = intent.apply_edits(&document).unwrap();
+    verify_connectivity_repair(&document, &inspection, &netlist, &intent, &after).unwrap();
+}
+
+#[test]
 fn chooses_one_deterministic_wire_when_single_item_repairs_are_ambiguous() {
     let netlist = common::compile_fixture("analysis", "simple.zen");
     let mut document = plan_reconciliation(None, &netlist, "simple.kicad_sch")

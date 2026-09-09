@@ -113,32 +113,60 @@ pub(crate) fn minimum_node_cut(
     sinks: &BTreeSet<usize>,
     cost: impl Fn(usize) -> Option<u64>,
 ) -> Option<Vec<usize>> {
+    minimum_node_cut_in_region(
+        graph,
+        sources,
+        sinks,
+        &(0..graph.nodes.len()).collect::<Vec<_>>(),
+        cost,
+    )
+}
+
+/// The caller supplies the live source-reachable region in original node
+/// order. Unrelated islands and deleted items cannot carry flow.
+pub(crate) fn minimum_node_cut_in_region(
+    graph: &CutGraph,
+    sources: &BTreeSet<usize>,
+    sinks: &BTreeSet<usize>,
+    original_nodes: &[usize],
+    cost: impl Fn(usize) -> Option<u64>,
+) -> Option<Vec<usize>> {
     if sources.is_empty() || sinks.is_empty() || !sources.is_disjoint(sinks) {
         return None;
     }
-    let nodes = graph.nodes.len();
+    let mut indices = vec![usize::MAX; graph.nodes.len()];
+    for (index, &node) in original_nodes.iter().enumerate() {
+        indices[node] = index;
+    }
+    let nodes = original_nodes.len();
     let entry = |node: usize| 2 * node;
     let exit = |node: usize| 2 * node + 1;
     let source = 2 * nodes;
     let sink = 2 * nodes + 1;
     let mut network = FlowNetwork::new(2 * nodes + 2);
     let mut costs = Vec::with_capacity(nodes);
-    for node in 0..nodes {
-        let node_cost = cost(node);
+    for (node, &original) in original_nodes.iter().enumerate() {
+        let node_cost = cost(original);
         costs.push(node_cost);
         network.add_arc(entry(node), exit(node), node_cost.unwrap_or(INFINITE));
     }
     // An undirected edge lets flow leave either node and enter the other, so
     // every path through a node still pays that node's entry-to-exit arc.
-    for (a, b) in &graph.edges {
-        network.add_arc(exit(*a), entry(*b), INFINITE);
-        network.add_arc(exit(*b), entry(*a), INFINITE);
+    for &(a, b) in &graph.edges {
+        if indices[a] != usize::MAX && indices[b] != usize::MAX {
+            network.add_arc(exit(indices[a]), entry(indices[b]), INFINITE);
+            network.add_arc(exit(indices[b]), entry(indices[a]), INFINITE);
+        }
     }
     for node in sources {
-        network.add_arc(source, entry(*node), INFINITE);
+        if indices[*node] != usize::MAX {
+            network.add_arc(source, entry(indices[*node]), INFINITE);
+        }
     }
     for node in sinks {
-        network.add_arc(exit(*node), sink, INFINITE);
+        if indices[*node] != usize::MAX {
+            network.add_arc(exit(indices[*node]), sink, INFINITE);
+        }
     }
     let flow = network.max_flow(source, sink, INFINITE);
     if flow >= INFINITE {
@@ -147,6 +175,7 @@ pub(crate) fn minimum_node_cut(
     let reachable = network.reachable(source);
     let cut = (0..nodes)
         .filter(|node| costs[*node].is_some() && reachable[entry(*node)] && !reachable[exit(*node)])
+        .map(|node| original_nodes[node])
         .collect::<Vec<_>>();
     (!cut.is_empty()).then_some(cut)
 }
@@ -198,6 +227,30 @@ mod tests {
             matches!(node, 1 | 2).then_some(1)
         });
         assert_eq!(cut, Some(vec![1, 2]));
+    }
+
+    #[test]
+    fn region_cut_keeps_original_costs_and_ignores_deleted_paths() {
+        let graph = graph(7, &[(0, 2), (2, 4), (4, 6), (0, 1), (1, 6)]);
+        let sources = BTreeSet::from([0]);
+        let sinks = BTreeSet::from([6]);
+        let cost = |node| match node {
+            1 | 4 => Some(1),
+            2 => Some(3),
+            _ => None,
+        };
+        assert_eq!(
+            minimum_node_cut(&graph, &sources, &sinks, cost),
+            Some(vec![1, 4])
+        );
+        assert_eq!(
+            minimum_node_cut_in_region(&graph, &sources, &sinks, &[0, 2, 4, 6], cost),
+            Some(vec![4])
+        );
+        assert_eq!(
+            minimum_node_cut_in_region(&graph, &sources, &sinks, &[0, 2], cost),
+            None
+        );
     }
 
     #[test]
