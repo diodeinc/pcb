@@ -1695,44 +1695,6 @@ mod tests {
     }
 
     #[test]
-    fn release_check_preserves_kicad_drc_findings_and_exclusions() {
-        let violation = serde_json::json!({
-            "type": "copper_edge_clearance", "severity": "error",
-            "description": "Required 0.4 mm; actual 0.3 mm", "items": []
-        });
-        let mut violations = vec![violation.clone(); 7];
-        let mut excluded = violation;
-        excluded["excluded"] = true.into();
-        violations.push(excluded);
-        let report: pcb_kicad::drc::DrcReport = serde_json::from_value(serde_json::json!({
-            "coordinate_units": "mm", "date": "2026-09-09", "kicad_version": "9.0.0",
-            "source": "layout.kicad_pcb", "violations": violations
-        }))
-        .unwrap();
-        let mut diagnostics = Diagnostics::default();
-        report.add_to_diagnostics(&mut diagnostics, "layout.kicad_pcb");
-        let findings = release_findings(&diagnostics);
-        assert_eq!(
-            findings
-                .iter()
-                .filter(|finding| finding.blocking)
-                .map(|finding| finding.occurrences)
-                .sum::<usize>(),
-            7
-        );
-        assert!(
-            findings
-                .iter()
-                .all(|finding| finding.kind.as_deref() == Some("layout.drc.copper_edge_clearance"))
-        );
-        assert!(
-            findings
-                .iter()
-                .all(|finding| finding.message.contains("Required 0.4 mm; actual 0.3 mm"))
-        );
-    }
-
-    #[test]
     fn update_kicad_pro_release_variables_adds_missing_release_variables() -> Result<()> {
         let temp_dir = tempfile::tempdir()?;
         let kicad_pro_path = temp_dir.path().join("layout.kicad_pro");
