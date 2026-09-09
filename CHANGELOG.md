@@ -10,6 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
+- Add `pcb publish --check` to run release preflight without publishing.
 - Add mesh-based elastic support selection with finite-area connections.
 - Add analysis-only `board-array create --mouse-bite` outline eligibility reports.
 - Support KiCad 9 schematics, saving edited pages as KiCad 10.

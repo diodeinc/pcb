@@ -8,7 +8,6 @@ use pcb_ui::{Colorize, Spinner, Style, StyledText};
 
 use crate::bom::generate_bom_with_fallback;
 use crate::bundle::{self, MetadataInput, SourceBundlePlan};
-use pcb_zen::WorkspaceInfo;
 use pcb_zen::workspace::WorkspaceInfoExt;
 use pcb_zen_core::resolution::ResolutionResult;
 use pcb_zen_core::{Diagnostics, DiagnosticsPass, EvalOutput};
@@ -214,9 +213,8 @@ fn execute_task<T>(
 
     spinner.finish();
     eprintln!(
-        "{}: {} ({}) {name}",
+        "{}: ({}) {name}",
         format_cumulative_time(cumulative_duration),
-        "✓".green(),
         format_task_duration(task_duration)
     );
     Ok(output)
@@ -230,28 +228,135 @@ fn execute_tasks(info: &ReleaseInfo, tasks: &[(&str, TaskFn)], start_time: Insta
     Ok(())
 }
 
-/// Build a release for a board file. Used by `pcb publish --board`.
-/// If version is provided (e.g. "v1.2.3"), uses that. Otherwise uses git commit hash.
-/// Takes pre-resolved workspace info to avoid duplicate resolution.
-/// Returns the path to the created release zip file.
+fn release_blocked(diagnostics: &Diagnostics) -> bool {
+    diagnostics.error_count() > 0
+        || pcbc::kicad_schematic::has_unsuppressed_schematic_diagnostics(diagnostics)
+}
+
+fn release_diagnostics(
+    diagnostics: &Diagnostics,
+    workspace_root: &Path,
+    staging: &Path,
+) -> Vec<pcb_zen_core::diagnostics::DiagnosticReport> {
+    let staged_src = staging.join("src").to_string_lossy().into_owned();
+    let workspace_root = workspace_root.to_string_lossy();
+    diagnostics
+        .iter()
+        .map(|diagnostic| {
+            let mut report =
+                pcb_zen_core::diagnostics::DiagnosticReport::from_diagnostic(diagnostic);
+            // Release gating uses the outer severity, not the nested cause's.
+            report.severity = diagnostic.severity;
+            report.location = report.location.replace(&staged_src, &workspace_root);
+            report.body = report.body.replace(&staged_src, &workspace_root);
+            for frame in &mut report.stack {
+                frame.location = frame.location.replace(&staged_src, &workspace_root);
+                frame.message = frame.message.replace(&staged_src, &workspace_root);
+            }
+            report
+        })
+        .collect()
+}
+
+pub struct BoardReleaseOptions {
+    pub version: Option<String>,
+    pub suppress: Vec<String>,
+    pub exclude: Vec<ArtifactType>,
+    pub geometry_resolution: Resolution,
+    pub check: bool,
+}
+
+/// Run release preflight, then generate assets and an archive unless `check` is set.
+/// Check mode returns no archive and leaves no persistent release staging.
 pub fn build_board_release(
-    workspace: WorkspaceInfo,
+    workspace_root: &Path,
     zen_path: PathBuf,
     board_name: String,
-    suppress: Vec<String>,
-    version: Option<String>,
-    exclude: Vec<ArtifactType>,
-    geometry_resolution: Resolution,
-) -> Result<PathBuf> {
+    options: BoardReleaseOptions,
+) -> Result<Option<PathBuf>> {
+    let start_time = Instant::now();
+    let temporary = options.check.then(tempfile::tempdir).transpose()?;
+    let mut diagnostics = Diagnostics::default();
+    let outcome = preflight_board_release(
+        zen_path.clone(),
+        board_name,
+        &options,
+        temporary.as_ref().map(|dir| dir.path().join("release")),
+        &mut diagnostics,
+    );
+    // Check mode stops here, including on preflight failure, before any assets.
+    if let Some(temporary) = temporary {
+        if let Err(error) = &outcome {
+            diagnostics
+                .diagnostics
+                .push(pcb_zen_core::Diagnostic::categorized(
+                    &zen_path.to_string_lossy(),
+                    &format!("{error:#}"),
+                    "release.preflight",
+                    starlark::errors::EvalSeverity::Error,
+                ));
+        }
+        let layout_checked = !release_blocked(&diagnostics)
+            && !options.exclude.contains(&ArtifactType::Drc)
+            && outcome
+                .as_ref()
+                .ok()
+                .and_then(Option::as_ref)
+                .is_some_and(ReleaseInfo::has_layout);
+        let report = serde_json::json!({
+            "schemaVersion": 1,
+            "layoutChecked": layout_checked,
+            "diagnostics": release_diagnostics(&diagnostics, workspace_root, &temporary.path().join("release")),
+        });
+        pcb_ui::write_stdout(|stdout| {
+            serde_json::to_writer(&mut *stdout, &report)?;
+            writeln!(stdout)?;
+            Ok(())
+        })?;
+        outcome?.context("Evaluation failed")?;
+        anyhow::ensure!(!release_blocked(&diagnostics), "Release preflight failed");
+        return Ok(None);
+    }
+    let release_info = outcome?.context("Evaluation failed")?;
+    execute_task(
+        &release_info,
+        "Reviewing release preflight",
+        start_time,
+        |info, spinner| review_release_preflight(info, spinner, &mut diagnostics),
+    )?;
+
+    let manufacturing_tasks = get_manufacturing_tasks(&options.exclude, release_info.has_layout());
+    execute_tasks(&release_info, &manufacturing_tasks, start_time)?;
+    execute_tasks(&release_info, FINALIZATION_TASKS, start_time)?;
+    let zip_path = archive_zip_path(&release_info);
+    eprintln!(
+        "{} {}",
+        "✓".green(),
+        format!("Release {} staged successfully", release_info.version).bold()
+    );
+    display_release_info(&release_info);
+    eprintln!(
+        "Archive: {}",
+        zip_path.display().to_string().with_style(Style::Cyan)
+    );
+    Ok(Some(zip_path))
+}
+
+fn preflight_board_release(
+    zen_path: PathBuf,
+    board_name: String,
+    options: &BoardReleaseOptions,
+    staging_override: Option<PathBuf>,
+    diagnostics: &mut Diagnostics,
+) -> Result<Option<ReleaseInfo>> {
     let start_time = Instant::now();
 
     let release_info = {
         let info_spinner = Spinner::builder("Gathering release information").start();
 
-        let package_url = workspace.package_url_for_zen(&zen_path);
-
         info_spinner.set_message("Resolving dependencies");
         let resolution = crate::resolve::resolve(Some(&zen_path), false)?;
+        let package_url = resolution.workspace_info.package_url_for_zen(&zen_path);
         info_spinner.set_message("Evaluating zen file");
 
         // Evaluate the zen file for layout discovery and the authored design BOM.
@@ -265,7 +370,11 @@ pub fn build_board_release(
                 diagnostics.apply_passes(&passes);
             });
             info_spinner.finish();
-            anyhow::bail!("Evaluation failed");
+            diagnostics
+                .diagnostics
+                .extend(eval_result.diagnostics.diagnostics);
+            anyhow::ensure!(diagnostics.has_errors(), "Evaluation produced no output");
+            return Ok(None);
         }
 
         info_spinner.finish();
@@ -278,14 +387,16 @@ pub fn build_board_release(
         let git_hash = git::rev_parse_head(workspace_root).unwrap_or_else(|| "unknown".to_string());
 
         // Use provided version, or fall back to short git hash
-        let version = version.unwrap_or_else(|| {
+        let version = options.version.clone().unwrap_or_else(|| {
             git::rev_parse_short_head(workspace_root).unwrap_or_else(|| "unknown".to_string())
         });
 
         // Create release staging directory in workspace root with flat structure
-        let staging_dir = workspace_root
-            .join(".pcb/releases")
-            .join(format!("{}-{}", board_name, version));
+        let staging_dir = staging_override.unwrap_or_else(|| {
+            workspace_root
+                .join(".pcb/releases")
+                .join(format!("{}-{}", board_name, version))
+        });
 
         // Output directory and name use defaults
         let output_dir = workspace_root.join(".pcb/releases");
@@ -333,9 +444,9 @@ pub fn build_board_release(
             design_bom,
             output_dir,
             output_name,
-            suppress,
+            suppress: options.suppress.clone(),
             resolution,
-            geometry_resolution,
+            geometry_resolution: options.geometry_resolution,
             root_package_url: package_url,
         };
 
@@ -358,30 +469,8 @@ pub fn build_board_release(
         ensure_board_compatible_with_installed_kicad(&kicad_pcb_path)?;
     }
 
-    run_release_preflight(&release_info, &exclude, start_time)?;
-
-    let manufacturing_tasks = get_manufacturing_tasks(&exclude, release_info.has_layout());
-    execute_tasks(&release_info, &manufacturing_tasks, start_time)?;
-
-    // Execute finalization tasks
-    execute_tasks(&release_info, FINALIZATION_TASKS, start_time)?;
-
-    // Calculate archive path
-    let zip_path = archive_zip_path(&release_info);
-
-    eprintln!(
-        "{} {}",
-        "✓".green(),
-        format!("Release {} staged successfully", release_info.version).bold()
-    );
-    display_release_info(&release_info);
-
-    eprintln!(
-        "Archive: {}",
-        zip_path.display().to_string().with_style(Style::Cyan)
-    );
-
-    Ok(zip_path)
+    run_release_preflight(&release_info, &options.exclude, start_time, diagnostics)?;
+    Ok(Some(release_info))
 }
 
 /// Display release information summary
@@ -639,6 +728,7 @@ fn run_release_preflight(
     info: &ReleaseInfo,
     excluded: &[ArtifactType],
     start_time: Instant,
+    diagnostics: &mut Diagnostics,
 ) -> Result<()> {
     execute_task(
         info,
@@ -646,12 +736,15 @@ fn run_release_preflight(
         start_time,
         copy_sources,
     )?;
-    let mut diagnostics = execute_task(
+    execute_task(
         info,
         "Generating netlist from staged sources",
         start_time,
-        validate_build,
+        |info, spinner| validate_build(info, spinner, diagnostics),
     )?;
+    if release_blocked(diagnostics) {
+        return Ok(());
+    }
     execute_task(
         info,
         "Substituting version variables",
@@ -660,9 +753,15 @@ fn run_release_preflight(
     )?;
 
     if info.has_layout() && !excluded.contains(&ArtifactType::Drc) {
-        diagnostics.diagnostics.extend(
-            execute_task(info, "Running KiCad DRC checks", start_time, run_kicad_drc)?.diagnostics,
-        );
+        execute_task(
+            info,
+            "Running KiCad DRC checks",
+            start_time,
+            |info, _spinner| run_kicad_drc(info, diagnostics),
+        )?;
+        if release_blocked(diagnostics) {
+            return Ok(());
+        }
     }
     if !excluded.contains(&ArtifactType::Bom) {
         diagnostics.diagnostics.extend(
@@ -676,12 +775,10 @@ fn run_release_preflight(
         );
     }
 
-    execute_task(
-        info,
-        "Reviewing release preflight",
-        start_time,
-        |info, spinner| review_release_preflight(info, spinner, &mut diagnostics),
-    )
+    // Process late-added BOM warnings before either JSON or interactive review.
+    pcb_zen_core::FilterHiddenPass.apply(diagnostics);
+    pcb_zen_core::SuppressPass::new(info.suppress.clone()).apply(diagnostics);
+    Ok(())
 }
 
 fn review_release_preflight(
@@ -690,6 +787,13 @@ fn review_release_preflight(
     diagnostics: &mut Diagnostics,
 ) -> Result<()> {
     spinner.suspend(|| crate::drc::render_diagnostics(diagnostics, &info.suppress, false));
+    if pcbc::kicad_schematic::has_unsuppressed_schematic_diagnostics(diagnostics) {
+        anyhow::bail!(
+            "Linked KiCad schematic is not equivalent. Run `pcb apply schematic {}` before publishing.",
+            info.zen_path.display()
+        );
+    }
+    anyhow::ensure!(diagnostics.error_count() == 0, "Release preflight failed");
     let warning_count = diagnostics.warning_count();
     if !confirm_continue_on_warnings(
         spinner,
@@ -722,7 +826,11 @@ impl DiagnosticsPass for RenderBuildErrorsPass {
 }
 
 /// Validate that the staged zen file can be built successfully.
-fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<Diagnostics> {
+fn validate_build(
+    info: &ReleaseInfo,
+    spinner: &Spinner,
+    diagnostics: &mut Diagnostics,
+) -> Result<()> {
     // Calculate the zen file path in the staging directory
     let zen_file_rel = info
         .zen_path
@@ -764,17 +872,14 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<Diagnostics> 
 
     let crate::build::BuildResult {
         schematic,
-        diagnostics,
+        diagnostics: build_diagnostics,
         ..
     } = build_result;
-    if pcbc::kicad_schematic::has_unsuppressed_schematic_diagnostics(&diagnostics) {
-        anyhow::bail!(
-            "Linked KiCad schematic is not equivalent. Run `pcb apply schematic {}` before publishing.",
-            info.zen_path.display()
-        );
-    }
-    if diagnostics.error_count() > 0 {
-        std::process::exit(1);
+    diagnostics
+        .diagnostics
+        .extend(build_diagnostics.diagnostics);
+    if release_blocked(diagnostics) {
+        return Ok(());
     }
 
     // Write fp-lib-table with correct vendor/ paths to staged layout directory
@@ -793,7 +898,7 @@ fn validate_build(info: &ReleaseInfo, spinner: &Spinner) -> Result<Diagnostics> 
             .context("Failed to write netlist.json")?;
     }
 
-    Ok(diagnostics)
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -1468,8 +1573,7 @@ fn generate_vrml_model(info: &ReleaseInfo, _spinner: &Spinner) -> Result<()> {
 }
 
 /// Run KiCad DRC checks on the layout file
-fn run_kicad_drc(info: &ReleaseInfo, spinner: &Spinner) -> Result<Diagnostics> {
-    let mut diagnostics = pcb_zen_core::Diagnostics::default();
+fn run_kicad_drc(info: &ReleaseInfo, diagnostics: &mut Diagnostics) -> Result<()> {
     let netlist_json_path = info.staging_dir.join("netlist.json");
     let netlist_json = fs::read_to_string(&netlist_json_path)
         .with_context(|| format!("Failed to read {}", netlist_json_path.display()))?;
@@ -1483,7 +1587,7 @@ fn run_kicad_drc(info: &ReleaseInfo, spinner: &Spinner) -> Result<Diagnostics> {
             check: true,
             ..Default::default()
         },
-        &mut diagnostics,
+        diagnostics,
     )?
     else {
         anyhow::bail!("No layout directory for DRC checks");
@@ -1495,22 +1599,38 @@ fn run_kicad_drc(info: &ReleaseInfo, spinner: &Spinner) -> Result<Diagnostics> {
     // Run DRC, writing raw KiCad JSON report to staging directory
     let drc_json_path = info.staging_dir.join("drc.json");
     let report = pcb_kicad::run_drc(&kicad_pcb_path, false, working_dir, &drc_json_path)?;
-    report.add_to_diagnostics(&mut diagnostics, &display_pcb_file.to_string_lossy());
+    report.add_to_diagnostics(diagnostics, &display_pcb_file.to_string_lossy());
 
-    pcb_zen_core::SuppressPass::new(info.suppress.clone()).apply(&mut diagnostics);
-    if diagnostics.error_count() > 0 {
-        spinner.suspend(|| {
-            crate::drc::render_diagnostics(&mut active_errors(&diagnostics), &[], false)
-        });
-        std::process::exit(1);
-    }
-
-    Ok(diagnostics)
+    pcb_zen_core::SuppressPass::new(info.suppress.clone()).apply(diagnostics);
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn release_check_respects_suppression_and_outer_severity() {
+        use pcb_zen_core::Diagnostic;
+        use starlark::errors::EvalSeverity::{Error, Warning};
+
+        let error = Diagnostic::new("clearance", Error, Path::new("layout.kicad_pcb"));
+        let mut suppressed = error.clone();
+        suppressed.suppressed = true;
+        let wrapped = Diagnostic::new("downgraded", Warning, Path::new("board.zen"))
+            .with_child(Some(Box::new(error)));
+        let diagnostics = Diagnostics {
+            diagnostics: vec![suppressed, wrapped],
+        };
+        assert!(!release_blocked(&diagnostics));
+        let findings =
+            release_diagnostics(&diagnostics, Path::new("/repo"), Path::new("/tmp/release"));
+        assert_eq!(
+            serde_json::to_value(&findings[1]).unwrap()["severity"],
+            "warning"
+        );
+        assert!(findings[0].suppressed);
+    }
 
     #[test]
     fn update_kicad_pro_release_variables_adds_missing_release_variables() -> Result<()> {
