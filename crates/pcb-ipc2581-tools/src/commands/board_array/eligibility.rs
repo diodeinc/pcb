@@ -1,0 +1,607 @@
+//! Analysis only: canonical board outline clearance, not a mouse-bite panel.
+use anyhow::{Context, Result, bail};
+use ipc2581::{Ipc2581, types::LayerFunction};
+use pcb_ir::{
+    dialects::ipc::{ArtworkScope, ProfileSet, profile_occurrences_for},
+    geom::{
+        ContourBuf, ContourSet, FillRule, PathCmd, PathOp, Resolution, Segment,
+        attachment::{
+            QueryTolerance,
+            outline::{OutlineFootprint, OutlineObstacle, eligible_outline},
+        },
+    },
+    import::ipc2581::{ImportedDesign, LayerId, import_design},
+};
+use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
+
+struct Evidence {
+    id: String,
+    region: Option<ContourSet>,
+}
+
+struct CourtyardGroup {
+    component: Option<ipc2581::Symbol>,
+    layout: pcb_ir::import::ipc2581::LayoutOccurrenceId,
+    contours: Vec<ContourBuf>,
+    sources: Vec<String>,
+    positive: bool,
+}
+
+/// Analyze one canonical board, including profile cutouts. Explicit exclusions
+/// are already in canonical board coordinates, in mm. No coverage is inferred
+/// for unexported keep-outs, and no manufacturing allowances are selected here.
+pub fn analyze(
+    xml: &str,
+    footprint: OutlineFootprint,
+    clearance_mm: f64,
+    exclusions: &[OutlineObstacle<'_>],
+    resolution: Resolution,
+) -> Result<Value> {
+    if !clearance_mm.is_finite() || clearance_mm < 0.0 {
+        bail!("clearance must be finite and nonnegative");
+    }
+    let ipc = Ipc2581::parse(xml).context("Failed to parse IPC-2581 input")?;
+    // Keep small substrate cutouts and courtyard regions; accuracy remains the
+    // caller's existing geometry budget (--accuracy-um in the CLI).
+    let resolution = resolution.strict();
+    let imported = import_design(&ipc, resolution)?;
+    let doc = &imported.geometry;
+    if let Some(error) = doc
+        .diagnostics
+        .iter()
+        .find(|d| d.severity == pcb_ir::geom::Severity::Error)
+    {
+        bail!("unsupported input: {}", error.message);
+    }
+    let profiles = profile_occurrences_for(doc, ProfileSet::BoardOutlines);
+    if profiles.is_empty() {
+        bail!("unsupported input: canonical board has no substrate profile");
+    }
+    let mut substrate = ContourSet::empty(resolution);
+    for occurrence in profiles {
+        let mut region = ContourSet::from_contours(
+            &doc.transformed_path_contours(occurrence.profile.outer_path, occurrence.transform),
+            FillRule::EvenOdd,
+            resolution,
+        )?;
+        for cutout in occurrence.profile.cutouts.slice(&doc.profile_cutouts) {
+            let hole = ContourSet::from_contours(
+                &doc.transformed_path_contours(cutout.path, occurrence.transform),
+                FillRule::EvenOdd,
+                resolution,
+            )?;
+            region = region.difference(&hole)?;
+        }
+        substrate = substrate.union(&region)?;
+    }
+    let mut evidence = courtyard_evidence(&imported, resolution)?;
+    evidence.extend(exclusions.iter().map(|exclusion| Evidence {
+        id: format!("explicit:{}", exclusion.id),
+        region: exclusion.region.cloned(),
+    }));
+    for obstacle in &mut evidence {
+        if let Some(region) = &mut obstacle.region {
+            *region = region.disk_dilate(clearance_mm)?;
+        }
+    }
+    let obstacles = evidence
+        .iter()
+        .map(|e| OutlineObstacle {
+            id: &e.id,
+            region: e.region.as_ref(),
+        })
+        .collect::<Vec<_>>();
+    let tolerance = QueryTolerance {
+        boundary_mm: 0.0,
+        numerical_mm: pcb_ir::geom::tol::EPSILON_MM,
+    };
+    let intervals = eligible_outline(&substrate, &obstacles, footprint, tolerance)?;
+    Ok(json!({
+        "phase": "outline-eligibility-only",
+        "manufacturing_ready": false,
+        "scope": "canonical-board",
+        "source_xml_sha256": hex::encode(Sha256::digest(xml.as_bytes())),
+        "units": "mm",
+        "policy": {
+            "width_mm": footprint.width_mm, "inward_mm": footprint.inward_mm,
+            "outward_mm": footprint.outward_mm, "clearance_mm": clearance_mm,
+            "accuracy_mm": resolution.accuracy.max_error_mm(),
+            "significance_mm": resolution.tolerance_mm,
+            "boundary_mm": tolerance.boundary_mm, "numerical_mm": tolerance.numerical_mm,
+        },
+        "limitations": [
+            "Eligible means clear only of supplied courtyard/exclusion evidence on the prepared polygon model; interval endpoints carry no guarantee.",
+            "Closed courtyard contours are filled conservatively, regardless of outline ink styling. Both board sides are included without additional mirroring.",
+            "Missing applicable component courtyard evidence is Unknown. No body-free classifications or fallback envelopes are inferred.",
+            "General keep-out export coverage is not established. No copper, pad, drill, stackup or 3D collision checks are performed.",
+            "No tabs, perforations, frame connections, router access, mechanics or panel export are generated."
+        ],
+        "diagnostics": doc.diagnostics.iter().map(|d| json!({"severity": format!("{:?}", d.severity), "message": d.message})).collect::<Vec<_>>(),
+        "evidence": evidence.iter().map(|e| json!({"id": e.id, "available": e.region.as_ref().is_some_and(|r| !r.is_empty())})).collect::<Vec<_>>(),
+        "intervals": intervals.iter().map(|i| json!({
+            "ring": i.boundary.ring, "edge": i.edge,
+            "start_mm": i.start_mm, "end_mm": i.end_mm,
+            "start": [i.start.x, i.start.y], "end": [i.end.x, i.end.y],
+            "state": format!("{:?}", i.state), "landing": format!("{:?}", i.landing),
+            "obstacles": i.obstacles.iter().map(|&index| &evidence[index].id).collect::<Vec<_>>(),
+            "uncertainty_mm": i.uncertainty_mm,
+        })).collect::<Vec<_>>(),
+    }))
+}
+
+fn courtyard_evidence(imported: &ImportedDesign, resolution: Resolution) -> Result<Vec<Evidence>> {
+    let mut evidence = Vec::new();
+    let mut covered = Vec::new();
+    for (index, layer) in imported
+        .layer_definitions
+        .iter()
+        .enumerate()
+        .filter(|(_, layer)| layer.layer_function == LayerFunction::Courtyard)
+    {
+        let mut groups: Vec<CourtyardGroup> = Vec::new();
+        for occurrence in
+            imported.feature_occurrences(LayerId(index as u32), ArtworkScope::Board)?
+        {
+            let feature = imported.feature_definition(occurrence.id.feature).unwrap();
+            if feature.source_layer_ref != Some(layer.name) {
+                continue;
+            }
+            let component = feature
+                .set
+                .and_then(|set| imported.geometry.feature_sets[set as usize].component_ref);
+            let contours = feature
+                .paths
+                .indices()
+                .flat_map(|path| {
+                    imported
+                        .geometry
+                        .transformed_path_contours(path, occurrence.root_from_local)
+                })
+                .collect::<Vec<_>>();
+            let source = format!(
+                "feature-{}:placement-{:?}",
+                occurrence.id.feature.0, occurrence.id.placement
+            );
+            let positive = feature.polarity == pcb_ir::geom::Polarity::Dark && !contours.is_empty();
+            if let Some(group) = groups.iter_mut().find(|g| {
+                component.is_some() && g.component == component && g.layout == occurrence.id.layout
+            }) {
+                group.contours.extend(contours);
+                group.sources.push(source);
+                group.positive &= positive;
+            } else {
+                groups.push(CourtyardGroup {
+                    component,
+                    layout: occurrence.id.layout,
+                    contours,
+                    sources: vec![source],
+                    positive,
+                });
+            }
+        }
+        for group in groups {
+            let region = if group.positive {
+                courtyard_region(&group.contours, resolution)?
+            } else {
+                None
+            };
+            if region.as_ref().is_some_and(|r| !r.is_empty()) {
+                covered.push((group.component, group.layout, layer.side));
+            }
+            evidence.push(Evidence {
+                id: format!(
+                    "courtyard:{}:{}:{}",
+                    imported.resolve(layer.name),
+                    group
+                        .component
+                        .map(|c| imported.resolve(c))
+                        .unwrap_or("unassociated"),
+                    group.sources.join(",")
+                ),
+                region,
+            });
+        }
+    }
+    for occurrence in imported.component_occurrences(ArtworkScope::Board)? {
+        let component = imported
+            .component_definition(occurrence.id.component)
+            .unwrap();
+        let side = imported
+            .layer_definitions
+            .iter()
+            .find(|l| l.name == component.source.layer_ref)
+            .and_then(|l| l.side);
+        if component.source.ref_des.is_none()
+            || side.is_none()
+            || !covered.iter().any(|&(reference, layout, courtyard_side)| {
+                reference == component.source.ref_des
+                    && layout == occurrence.id.layout
+                    && courtyard_side == side
+            })
+        {
+            evidence.push(Evidence {
+                id: format!(
+                    "missing-courtyard:{}:component-{}",
+                    component
+                        .source
+                        .ref_des
+                        .map(|r| imported.resolve(r))
+                        .unwrap_or("unnamed"),
+                    occurrence.id.component.0
+                ),
+                region: None,
+            });
+        }
+    }
+    Ok(evidence)
+}
+
+// KiCad can export a single courtyard as separate line/arc features. Join only
+// exact, unambiguous endpoints within one component/layer occurrence. No gap
+// snapping, hull, or ink-width envelope substitutes for missing source evidence.
+fn courtyard_region(contours: &[ContourBuf], resolution: Resolution) -> Result<Option<ContourSet>> {
+    let mut loops = Vec::new();
+    let mut segments = Vec::new();
+    let uncertainty = contours
+        .iter()
+        .map(|c| c.uncertainty_mm)
+        .fold(0.0, f64::max);
+    for contour in contours {
+        if contour.cmds.last().is_some_and(|c| c.op == PathOp::Close) {
+            loops.push(contour.clone());
+        } else {
+            segments.extend(contour.segments());
+        }
+    }
+    // A degree other than two means a gap, branch or duplicated segment.
+    if segments.iter().any(|s| {
+        [s.start(), s.end()].iter().any(|p| {
+            segments
+                .iter()
+                .map(|s| usize::from(s.start() == *p) + usize::from(s.end() == *p))
+                .sum::<usize>()
+                != 2
+        })
+    }) {
+        return Ok(None);
+    }
+    while let Some(first) = segments.pop() {
+        let start = first.start();
+        let mut end = first.end();
+        let mut cmds = vec![PathCmd::move_to(start), segment_command(first, false)];
+        while end != start {
+            let Some(index) = segments
+                .iter()
+                .position(|s| s.start() == end || s.end() == end)
+            else {
+                return Ok(None);
+            };
+            let segment = segments.remove(index);
+            let reverse = segment.end() == end;
+            end = if reverse {
+                segment.start()
+            } else {
+                segment.end()
+            };
+            cmds.push(segment_command(segment, reverse));
+        }
+        cmds.push(PathCmd::close());
+        loops.push(ContourBuf::new(cmds).with_uncertainty(uncertainty));
+    }
+    if loops.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(ContourSet::from_filled_contours(&loops, resolution)?))
+}
+
+fn segment_command(segment: Segment, reverse: bool) -> PathCmd {
+    let end = if reverse {
+        segment.start()
+    } else {
+        segment.end()
+    };
+    match segment {
+        Segment::Line { .. } => PathCmd::line_to(end),
+        Segment::Arc(arc) => PathCmd::arc_to(end, arc.center, arc.clockwise ^ reverse),
+        Segment::Ellipse(arc) => PathCmd::ellipse_to(
+            end,
+            arc.center,
+            arc.x_axis,
+            arc.y_axis,
+            arc.clockwise ^ reverse,
+        ),
+        Segment::Cubic { c1, c2, .. } => {
+            if reverse {
+                PathCmd::cubic_to(c2, c1, end)
+            } else {
+                PathCmd::cubic_to(c1, c2, end)
+            }
+        }
+    }
+}
+
+#[cfg(feature = "cli")]
+pub fn execute(
+    input: &std::path::Path,
+    output: &std::path::Path,
+    footprint: OutlineFootprint,
+    clearance_mm: f64,
+    resolution: Resolution,
+) -> Result<()> {
+    let xml = crate::utils::file::load_ipc_file(input)?;
+    let report = analyze(&xml, footprint, clearance_mm, &[], resolution)?;
+    let mut json = serde_json::to_vec_pretty(&report)?;
+    json.push(b'\n');
+    if output.as_os_str() == "-" {
+        pcb_ui::write_stdout(|stdout| stdout.write_all(&json))?;
+    } else {
+        std::fs::write(output, json)?;
+    }
+    anstream::eprintln!("Outline eligibility analysis only; no mouse-bite panel generated.");
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pcb_ir::geom::Point;
+
+    // Asymmetric local outline, translated/rotated top occurrence, and a
+    // separately placed bottom occurrence. Component placement must not be
+    // applied to already placed feature geometry (nor bottom mirrored again).
+    fn fixture() -> String {
+        let courtyard = r#"<Set componentRef="U1"><Features>
+            <Xform rotation="90"/><Location x="8" y="1"/>
+            <Polygon><PolyBegin x="0" y="0"/>
+            <PolyStepSegment x="4" y="0"/><PolyStepSegment x="4" y="2"/>
+            <PolyStepSegment x="0" y="2"/><PolyStepSegment x="0" y="0"/>
+            <LineDesc lineWidth="0.05"/><FillDesc fillProperty="HOLLOW"/>
+            </Polygon></Features></Set>"#;
+        format!(
+            r#"<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581">
+          <Content roleRef="owner"><FunctionMode mode="ASSEMBLY"/><StepRef name="board"/></Content>
+          <Ecad><CadHeader units="MILLIMETER"/><CadData>
+          <Layer name="TOP" layerFunction="SIGNAL" side="TOP"/>
+          <Layer name="BOTTOM" layerFunction="SIGNAL" side="BOTTOM"/>
+          <Layer name="F.Courtyard" layerFunction="COURTYARD" side="TOP"/>
+          <Layer name="B.Courtyard" layerFunction="COURTYARD" side="BOTTOM"/>
+          <Step name="board" type="BOARD"><Datum x="0" y="0"/>
+          <Profile><Polygon><PolyBegin x="0" y="0"/><PolyStepSegment x="20" y="0"/>
+          <PolyStepSegment x="20" y="10"/><PolyStepSegment x="0" y="10"/>
+          <PolyStepSegment x="0" y="0"/></Polygon>
+          <Cutout><Polygon><PolyBegin x="10" y="3"/><PolyStepSegment x="12" y="3"/>
+          <PolyStepSegment x="12" y="5"/><PolyStepSegment x="10" y="5"/>
+          <PolyStepSegment x="10" y="3"/></Polygon></Cutout></Profile>
+          <Component refDes="U1" part="p" layerRef="TOP" mountType="SMT"><Location x="100" y="100"/></Component>
+          <Component refDes="U2" part="p" layerRef="BOTTOM" mountType="SMT"><Xform mirror="true"/><Location x="200" y="100"/></Component>
+          <LayerFeature layerRef="F.Courtyard">{courtyard}</LayerFeature>
+          <LayerFeature layerRef="B.Courtyard">{bottom}</LayerFeature>
+          </Step></CadData></Ecad></IPC-2581>"#,
+            bottom = courtyard
+                .replace("U1", "U2")
+                .replace("x=\"8\" y=\"1\"", "x=\"19\" y=\"6\"")
+                .replace("rotation=\"90\"", "rotation=\"0\"")
+        )
+    }
+
+    fn footprint() -> OutlineFootprint {
+        OutlineFootprint {
+            width_mm: 1.0,
+            inward_mm: 0.2,
+            outward_mm: 1.0,
+        }
+    }
+
+    #[test]
+    fn fragmented_courtyard_joins_by_component_but_gaps_remain_unknown() {
+        let xml = fixture();
+        let start = xml.find("<LayerFeature layerRef=\"F.Courtyard\">").unwrap();
+        let end = start + xml[start..].find("</LayerFeature>").unwrap();
+        let lines = [(0, 0, 4, 0), (4, 2, 4, 0), (0, 2, 4, 2), (0, 2, 0, 0)];
+        let sets = lines.iter().map(|(x1, y1, x2, y2)| format!(r#"<Set componentRef="U1"><Features><Xform rotation="90"/><Location x="8" y="1"/><Line startX="{x1}" startY="{y1}" endX="{x2}" endY="{y2}"><LineDesc lineWidth="0.05"/></Line></Features></Set>"#)).collect::<Vec<_>>();
+        for count in [4, 3] {
+            let mut xml = xml.clone();
+            xml.replace_range(
+                start..end,
+                &format!(
+                    "<LayerFeature layerRef=\"F.Courtyard\">{}",
+                    sets[..count].join("")
+                ),
+            );
+            let imported =
+                import_design(&Ipc2581::parse(&xml).unwrap(), Resolution::default()).unwrap();
+            let evidence = courtyard_evidence(&imported, Resolution::default()).unwrap();
+            let top = &evidence[0];
+            if count == 4 {
+                assert!(
+                    top.region
+                        .as_ref()
+                        .unwrap()
+                        .prepare_query()
+                        .signed_distance(Point::new(7.0, 3.0))
+                        .unwrap()
+                        .mm
+                        < -0.9
+                );
+                assert_eq!(top.id.matches("feature-").count(), 4);
+            } else {
+                assert!(top.region.is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn reversed_curve_join_preserves_the_enclosed_side_and_uncertainty() {
+        let arc = ContourBuf::new(vec![
+            PathCmd::move_to(Point::new(2.0, 0.0)),
+            PathCmd::arc_to(Point::new(-2.0, 0.0), Point::new(0.0, 0.0), false),
+        ])
+        .with_uncertainty(0.001);
+        // Joining starts with this line and must reverse the arc.
+        let line = ContourBuf::new(vec![
+            PathCmd::move_to(Point::new(2.0, 0.0)),
+            PathCmd::line_to(Point::new(-2.0, 0.0)),
+        ]);
+        let region = courtyard_region(&[arc, line], Resolution::default())
+            .unwrap()
+            .unwrap();
+        assert!(
+            region
+                .prepare_query()
+                .signed_distance(Point::new(0.0, 1.0))
+                .unwrap()
+                .mm
+                < -0.9
+        );
+        assert!(
+            region
+                .prepare_query()
+                .signed_distance(Point::new(0.0, -1.0))
+                .unwrap()
+                .mm
+                > 0.9
+        );
+        assert!(region.uncertainty_mm >= 0.001);
+    }
+
+    #[test]
+    fn courtyard_occurrences_fill_hollow_envelopes_on_both_sides() {
+        let ipc = Ipc2581::parse(&fixture()).unwrap();
+        let imported = import_design(&ipc, Resolution::default()).unwrap();
+        let evidence = courtyard_evidence(&imported, Resolution::default()).unwrap();
+        assert_eq!(
+            evidence.len(),
+            2,
+            "both components have applicable evidence"
+        );
+        let top = evidence[0].region.as_ref().unwrap();
+        let bottom = evidence[1].region.as_ref().unwrap();
+        assert!(
+            top.prepare_query()
+                .signed_distance(Point::new(7.0, 3.0))
+                .unwrap()
+                .mm
+                < -0.9
+        );
+        assert!(
+            bottom
+                .prepare_query()
+                .signed_distance(Point::new(21.0, 7.0))
+                .unwrap()
+                .mm
+                < -0.9
+        );
+        assert!(
+            top.prepare_query()
+                .signed_distance(Point::new(3.0, 7.0))
+                .unwrap()
+                .mm
+                > 0.0
+        );
+        let report = analyze(&fixture(), footprint(), 0.0, &[], Resolution::default()).unwrap();
+        assert_eq!(report["manufacturing_ready"], false);
+        assert!(
+            report["intervals"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|i| i["state"] == "Eligible")
+        );
+        assert!(
+            report["intervals"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|i| i["ring"] == 1)
+        );
+        assert!(report["intervals"].as_array().unwrap().iter().any(|i| {
+            i["state"] == "Blocked"
+                && i["obstacles"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|id| id.as_str().unwrap().contains("B.Courtyard:U2"))
+        }));
+        // At y=5.25 on the right edge, width alone cannot reach the bottom
+        // courtyard beginning at y=6; an explicit 0.5 mm expansion can.
+        for (clearance, expected) in [(0.0, "Eligible"), (0.5, "Blocked")] {
+            let report = analyze(
+                &fixture(),
+                footprint(),
+                clearance,
+                &[],
+                Resolution::default(),
+            )
+            .unwrap();
+            let interval = report["intervals"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|i| {
+                    i["start"][0] == 20.0
+                        && i["end"][0] == 20.0
+                        && i["start"][1]
+                            .as_f64()
+                            .unwrap()
+                            .min(i["end"][1].as_f64().unwrap())
+                            < 5.25
+                        && i["start"][1]
+                            .as_f64()
+                            .unwrap()
+                            .max(i["end"][1].as_f64().unwrap())
+                            > 5.25
+                })
+                .unwrap();
+            assert_eq!(interval["state"], expected);
+        }
+    }
+
+    #[test]
+    fn missing_applicable_courtyard_is_unknown_even_with_opposite_side_evidence() {
+        let xml = fixture().replace(
+            "layerRef=\"BOTTOM\" mountType",
+            "layerRef=\"TOP\" mountType",
+        );
+        let report = analyze(&xml, footprint(), 0.0, &[], Resolution::default()).unwrap();
+        let intervals = report["intervals"].as_array().unwrap();
+        assert!(intervals.iter().any(|i| i["state"] == "Unknown"));
+        assert!(!intervals.iter().any(|i| i["state"] == "Eligible"));
+        assert!(report["evidence"].as_array().unwrap().iter().any(|e| {
+            e["id"]
+                .as_str()
+                .unwrap()
+                .starts_with("missing-courtyard:U2")
+                && e["available"] == false
+        }));
+    }
+
+    #[test]
+    fn explicit_missing_exclusion_and_invalid_policy_are_not_clearance() {
+        let xml = fixture();
+        let report = analyze(
+            &xml,
+            footprint(),
+            0.0,
+            &[OutlineObstacle {
+                id: "connector-overhang",
+                region: None,
+            }],
+            Resolution::default(),
+        )
+        .unwrap();
+        assert!(
+            !report["intervals"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|i| i["state"] == "Eligible")
+        );
+        assert!(analyze(&xml, footprint(), -0.1, &[], Resolution::default()).is_err());
+        let invalid = OutlineFootprint {
+            width_mm: 0.0,
+            ..footprint()
+        };
+        assert!(analyze(&xml, invalid, 0.0, &[], Resolution::default()).is_err());
+    }
+}

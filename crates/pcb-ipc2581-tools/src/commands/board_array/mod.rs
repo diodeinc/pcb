@@ -3,6 +3,8 @@ use std::collections::HashSet;
 #[cfg(feature = "cli")]
 use std::path::Path;
 
+pub mod eligibility;
+
 use super::board_array_auto::{
     AutoBoardArrayPlan, AutoSheetSize, TargetSizeMm, auto_board_array_plan,
     auto_board_array_plan_for_sheet,
