@@ -21,6 +21,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
+- Allow schematic and BOM consumers to omit the Starlark interpreter bindings.
 - Preserve sheet graphics and text annotations when updating KiCad schematics.
 - Add constrained region analysis meshes with boundary provenance, validated input accuracy, refinement diagnostics, and robust element-sided barycentric attachments to `pcb-ir`.
 - Group `pcb bom` rows by selected offer.
