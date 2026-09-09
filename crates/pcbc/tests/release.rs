@@ -191,6 +191,10 @@ fn test_release_check_does_not_publish_or_modify_authored_sources() {
     for (source, status) in [
         ("# Unsaved to Git\n", "pass"),
         ("fail(\"release-check diagnostic\")\n", "blocked"),
+        (
+            "warn(\"release-check diagnostic\", kind=\"sch.mismatch\")\n",
+            "blocked",
+        ),
     ] {
         sb.write("boards/TestBoard.zen", source);
         let before = sb.cmd("git", ["diff", "HEAD"]).read().unwrap();
@@ -204,17 +208,16 @@ fn test_release_check_does_not_publish_or_modify_authored_sources() {
         assert_eq!(output.status.success(), status == "pass");
         let report: Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(report["schemaVersion"], 1);
-        assert_eq!(report["status"], status);
         assert_eq!(report["layoutChecked"], false);
         if status == "blocked" {
             assert!(
-                report["findings"]
+                report["diagnostics"]
                     .as_array()
                     .unwrap()
                     .iter()
                     .any(|finding| {
-                        finding["blocking"] == true
-                            && finding["message"]
+                        (finding["severity"] == "error" || finding["kind"] == "sch.mismatch")
+                            && finding["body"]
                                 .as_str()
                                 .unwrap()
                                 .contains("release-check diagnostic")
@@ -227,6 +230,16 @@ fn test_release_check_does_not_publish_or_modify_authored_sources() {
         assert_eq!(sb.cmd("git", ["rev-parse", "HEAD"]).read().unwrap(), head);
         assert!(sb.cmd("git", ["tag"]).read().unwrap().is_empty());
     }
+
+    // A schematic warning must also stop normal publishing, not just check mode.
+    let output = sb
+        .run("pcbc", ["publish", "boards/TestBoard.zen"])
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("not equivalent"));
 }
 
 #[test]
@@ -243,7 +256,7 @@ fn test_release_check_requires_board_target() {
 }
 
 #[test]
-fn test_release_check_operational_failure_is_incomplete() {
+fn test_release_check_operational_failure_is_a_diagnostic() {
     let mut sb = Sandbox::new();
     sb.cwd("src")
         .write("pcb.toml", PCB_TOML)
@@ -270,10 +283,11 @@ fn test_release_check_operational_failure_is_incomplete() {
         .unwrap();
     assert!(!output.status.success());
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(report["status"], "incomplete");
     assert_eq!(report["layoutChecked"], false);
-    assert_eq!(report["findings"], serde_json::json!([]));
-    assert!(report["message"].as_str().unwrap().contains(".kicad_pro"));
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["kind"], "release.preflight");
+    assert_eq!(diagnostic["severity"], "error");
+    assert!(diagnostic["body"].as_str().unwrap().contains(".kicad_pro"));
     assert!(!sb.root_path().join("src/.pcb/releases").exists());
     assert_eq!(std::fs::read_dir(&temporary).unwrap().count(), 0);
 }
@@ -312,7 +326,6 @@ fn test_release_check_drc_exclusion_does_not_claim_layout_checked() {
         .run()
         .unwrap();
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(report["status"], "pass");
     assert_eq!(report["layoutChecked"], false);
     assert!(!sb.root_path().join("src/.pcb/releases").exists());
     assert_eq!(sb.cmd("git", ["diff", "HEAD"]).read().unwrap(), before);
@@ -356,8 +369,7 @@ fn test_release_check_respects_bom_suppression_and_exclusion() {
             .run()
             .unwrap();
         let report: Value = serde_json::from_slice(&output.stdout).unwrap();
-        assert_eq!(report["status"], "pass"); // Sourceability warnings are not release blockers.
-        let bom_findings = report["findings"]
+        let bom_findings = report["diagnostics"]
             .as_array()
             .unwrap()
             .iter()
@@ -367,7 +379,7 @@ fn test_release_check_respects_bom_suppression_and_exclusion() {
         assert_eq!(bom_findings.len(), if excluded { 0 } else { 2 });
         for finding in bom_findings {
             assert_eq!(finding["suppressed"], flags.contains(&"-S"));
-            assert_eq!(finding["blocking"], false);
+            assert_eq!(finding["severity"], "warning");
         }
     }
 }
