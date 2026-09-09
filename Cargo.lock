@@ -4419,6 +4419,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "pcb-mechanics"
+version = "0.4.51"
+dependencies = [
+ "pcb-elastic",
+ "pcb-ir",
+]
+
+[[package]]
 name = "pcb-native-dialog"
 version = "0.4.51"
 dependencies = [
