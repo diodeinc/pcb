@@ -10,7 +10,7 @@ use crate::{
     connectivity::{
         ComponentIdentity, ComponentOrigin, ConnectionGroup, ConnectionOrigin, ConnectivityGraph,
         ConnectivityItemRef, IslandRef, PhysicalConnectivity, PhysicalIsland, PinVisibility,
-        SymbolLocation, Terminal, not_connected_terminals, reduce_with_provenance,
+        SymbolLocation, Terminal, TerminalIndex, not_connected_terminals, reduce_with_provenance,
     },
     symbol,
 };
@@ -634,13 +634,62 @@ pub fn analyze_connectivity(
     expected: &ConnectivityGraph,
     observed: &ConnectivityGraph,
 ) -> ConnectivityAnalysis {
+    let matches = GroupMatches::new(expected, observed);
     let components = analyze_components(expected, observed);
-    let nets = analyze_nets(expected, observed);
-    let issues = collect_issues(expected, observed, &components, &nets);
+    let nets = analyze_nets(expected, observed, &matches);
+    let issues = collect_issues(expected, observed, &components, &nets, &matches);
     ConnectivityAnalysis {
         components,
         nets,
         issues,
+    }
+}
+
+/// Compute the group relation once in both directions. Lists contain unique
+/// group indices in source order, independent of terminal/key lookup order.
+struct GroupMatches<'a> {
+    observed_by_expected: Vec<Vec<usize>>,
+    expected_by_observed: Vec<Vec<usize>>,
+    expected_terminals: TerminalIndex<'a>,
+    observed_terminals: TerminalIndex<'a>,
+}
+
+impl<'a> GroupMatches<'a> {
+    fn new(expected: &'a ConnectivityGraph, observed: &'a ConnectivityGraph) -> Self {
+        let mut matches = Self {
+            observed_by_expected: Vec::with_capacity(expected.groups.len()),
+            expected_by_observed: vec![Vec::new(); observed.groups.len()],
+            expected_terminals: TerminalIndex::new(),
+            observed_terminals: TerminalIndex::new(),
+        };
+        let mut observed_names = BTreeMap::<&str, Vec<usize>>::new();
+        for (index, group) in observed.groups.iter().enumerate() {
+            for name in &group.names {
+                observed_names.entry(name).or_default().push(index);
+            }
+            for terminal in &group.terminals {
+                matches.observed_terminals.insert(terminal, index);
+            }
+        }
+        for (expected_index, group) in expected.groups.iter().enumerate() {
+            let mut observed_indices = Vec::new();
+            for name in &group.names {
+                if let Some(indices) = observed_names.get(name.as_str()) {
+                    observed_indices.extend_from_slice(indices);
+                }
+            }
+            for terminal in &group.terminals {
+                matches.expected_terminals.insert(terminal, expected_index);
+                observed_indices.extend(matches.observed_terminals.matching(terminal));
+            }
+            observed_indices.sort_unstable();
+            observed_indices.dedup();
+            for &observed_index in &observed_indices {
+                matches.expected_by_observed[observed_index].push(expected_index);
+            }
+            matches.observed_by_expected.push(observed_indices);
+        }
+        matches
     }
 }
 
@@ -698,33 +747,33 @@ fn observed_component_locations(
 fn analyze_nets(
     expected: &ConnectivityGraph,
     observed: &ConnectivityGraph,
+    matches: &GroupMatches<'_>,
 ) -> BTreeMap<String, NetAnalysis> {
     expected
         .groups
         .iter()
-        .filter_map(|expected_group| {
+        .enumerate()
+        .filter_map(|(expected_index, expected_group)| {
             let name = logical_name(expected_group)?;
-            let matching_groups = observed
-                .groups
+            let matching_groups = matches.observed_by_expected[expected_index]
                 .iter()
-                .filter(|observed_group| groups_match(expected_group, observed_group))
-                .collect::<Vec<_>>();
+                .map(|&index| &observed.groups[index]);
             let missing_terminals = expected_group
                 .terminals
                 .iter()
                 .filter(|expected_terminal| {
-                    !matching_groups.iter().any(|observed_group| {
-                        observed_group
-                            .terminals
-                            .iter()
-                            .any(|observed_terminal| expected_terminal.matches(observed_terminal))
-                    })
+                    // A terminal match itself implies a group match, so no
+                    // restriction to matching_groups is necessary here.
+                    matches
+                        .observed_terminals
+                        .matching(expected_terminal)
+                        .next()
+                        .is_none()
                 })
                 .cloned()
                 .collect::<Vec<_>>();
             let connected_islands = matching_groups
-                .iter()
-                .map(|group| kicad_islands(group))
+                .map(kicad_islands)
                 .filter(|islands| !islands.is_empty())
                 .collect::<Vec<_>>();
             let islands = connected_islands.iter().flatten().cloned().collect();
@@ -742,25 +791,16 @@ fn analyze_nets(
         .collect()
 }
 
-fn groups_match(expected: &ConnectionGroup, observed: &ConnectionGroup) -> bool {
-    !expected.names.is_disjoint(&observed.names)
-        || expected.terminals.iter().any(|expected_terminal| {
-            observed
-                .terminals
-                .iter()
-                .any(|observed_terminal| expected_terminal.matches(observed_terminal))
-        })
-}
-
 fn collect_issues(
     expected: &ConnectivityGraph,
     observed: &ConnectivityGraph,
     components: &BTreeMap<SymbolSlotKey, ComponentAnalysis>,
     nets: &BTreeMap<String, NetAnalysis>,
+    matches: &GroupMatches<'_>,
 ) -> Vec<SchematicIssue> {
     let mut issues = Vec::new();
     collect_component_issues(expected, observed, components, &mut issues);
-    collect_connection_issues(expected, observed, nets, &mut issues);
+    collect_connection_issues(expected, observed, nets, matches, &mut issues);
     issues
 }
 
@@ -819,13 +859,13 @@ fn collect_connection_issues(
     expected: &ConnectivityGraph,
     observed: &ConnectivityGraph,
     nets: &BTreeMap<String, NetAnalysis>,
+    matches: &GroupMatches<'_>,
     issues: &mut Vec<SchematicIssue>,
 ) {
-    for observed_group in &observed.groups {
-        let matching_expected = expected
-            .groups
+    for (observed_index, observed_group) in observed.groups.iter().enumerate() {
+        let matching_expected = matches.expected_by_observed[observed_index]
             .iter()
-            .filter(|expected_group| groups_match(expected_group, observed_group))
+            .map(|&index| &expected.groups[index])
             .collect::<Vec<_>>();
         let matching_names = matching_expected
             .iter()
@@ -839,15 +879,10 @@ fn collect_connection_issues(
         }
 
         for name in &observed_group.names {
-            let accepted = matching_expected.iter().any(|group| {
-                group.names.contains(name)
-                    || group.terminals.iter().any(|terminal| {
-                        matches!(
-                            terminal,
-                            Terminal::InterfacePort { name: port_name } if port_name == name
-                        )
-                    })
-            });
+            let port = Terminal::InterfacePort { name: name.clone() };
+            let accepted = matching_expected
+                .iter()
+                .any(|group| group.names.contains(name) || group.terminals.contains(&port));
             if !accepted {
                 issues.push(SchematicIssue::UnexpectedNet {
                     net_name: name.clone(),
@@ -860,12 +895,12 @@ fn collect_connection_issues(
             .terminals
             .iter()
             .filter(|observed_terminal| {
-                !matching_expected.iter().any(|expected_group| {
-                    expected_group
-                        .terminals
-                        .iter()
-                        .any(|expected_terminal| expected_terminal.matches(observed_terminal))
-                })
+                // Any direct terminal match also matches its owning group.
+                matches
+                    .expected_terminals
+                    .matching(observed_terminal)
+                    .next()
+                    .is_none()
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -944,6 +979,146 @@ mod tests {
         Label, LabelKind, LabelShape, Point, Rotation, SchItem, SchPage, Symbol, SymbolDefinition,
         SymbolField,
     };
+
+    #[test]
+    fn indexed_group_matching_preserves_analysis_and_source_order() {
+        let pin = |name: &str, number: &str| Terminal::ComponentPin {
+            component: ComponentIdentity::ManagedPath("U1".into()),
+            pin_name: name.into(),
+            pin_numbers: BTreeSet::from([number.into()]),
+        };
+        let a = pin("A", "1");
+        let bridge = pin("A", "2");
+        let c = pin("B", "2");
+        let missing = pin("D", "4");
+        let port = Terminal::InterfacePort { name: "P".into() };
+        let expected_group = |name: &str, terminals: BTreeSet<Terminal>| ConnectionGroup {
+            names: BTreeSet::from([name.into()]),
+            terminals,
+            origins: BTreeSet::from([ConnectionOrigin::ZenerNet { name: name.into() }]),
+        };
+        let island = |index| IslandRef {
+            page_id: "page".into(),
+            index,
+        };
+        let observed_group =
+            |index, names: &[&str], terminals: BTreeSet<Terminal>| ConnectionGroup {
+                names: names.iter().map(|name| (*name).into()).collect(),
+                terminals,
+                origins: BTreeSet::from([ConnectionOrigin::KiCadIsland(island(index))]),
+            };
+        let expected = ConnectivityGraph {
+            components: Vec::new(),
+            groups: vec![
+                expected_group("N", BTreeSet::from([a.clone(), port.clone()])),
+                expected_group("Z", BTreeSet::from([missing.clone()])),
+                ConnectionGroup::default(),
+            ],
+        };
+        let observed = ConnectivityGraph {
+            components: Vec::new(),
+            groups: vec![
+                observed_group(9, &["Z"], BTreeSet::new()),
+                // N matches by name, pin name, pin number and a second
+                // terminal. Z matches by name alone. Neither is duplicated.
+                observed_group(5, &["N", "Z"], BTreeSet::from([a, bridge, c.clone()])),
+                observed_group(2, &["P"], BTreeSet::from([port])),
+                // c matches bridge, but not a: no transitive group match.
+                observed_group(1, &["EXTRA"], BTreeSet::from([c.clone()])),
+                ConnectionGroup::default(),
+            ],
+        };
+        let matches = GroupMatches::new(&expected, &observed);
+        let brute_force = |left: &ConnectionGroup, right: &ConnectionGroup| {
+            !left.names.is_disjoint(&right.names)
+                || left
+                    .terminals
+                    .iter()
+                    .any(|a| right.terminals.iter().any(|b| a.matches(b)))
+        };
+        for (index, group) in expected.groups.iter().enumerate() {
+            assert_eq!(
+                matches.observed_by_expected[index],
+                observed
+                    .groups
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, other)| brute_force(group, other).then_some(index))
+                    .collect::<Vec<_>>()
+            );
+        }
+        for (index, group) in observed.groups.iter().enumerate() {
+            assert_eq!(
+                matches.expected_by_observed[index],
+                expected
+                    .groups
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, other)| brute_force(other, group).then_some(index))
+                    .collect::<Vec<_>>()
+            );
+        }
+
+        let analysis = analyze_connectivity(&expected, &observed);
+        let n_islands = vec![island(5), island(2)];
+        let z_islands = vec![island(9), island(5)];
+        assert_eq!(
+            analysis,
+            ConnectivityAnalysis {
+                components: BTreeMap::new(),
+                nets: BTreeMap::from([
+                    (
+                        "N".into(),
+                        NetAnalysis {
+                            name: "N".into(),
+                            expected_terminals: expected.groups[0]
+                                .terminals
+                                .iter()
+                                .cloned()
+                                .collect(),
+                            missing_terminals: Vec::new(),
+                            islands: n_islands.clone(),
+                            connected_islands: vec![vec![island(5)], vec![island(2)]],
+                        }
+                    ),
+                    (
+                        "Z".into(),
+                        NetAnalysis {
+                            name: "Z".into(),
+                            expected_terminals: vec![missing.clone()],
+                            missing_terminals: vec![missing.clone()],
+                            islands: z_islands.clone(),
+                            connected_islands: vec![vec![island(9)], vec![island(5)]],
+                        }
+                    ),
+                ]),
+                issues: vec![
+                    SchematicIssue::Shorted {
+                        islands: vec![island(5)],
+                        net_names: BTreeSet::from(["N".into(), "Z".into()]),
+                    },
+                    SchematicIssue::UnexpectedConnection {
+                        islands: vec![island(5)],
+                        terminals: vec![c],
+                    },
+                    SchematicIssue::UnexpectedNet {
+                        net_name: "EXTRA".into(),
+                        islands: vec![island(1)],
+                    },
+                    SchematicIssue::DisconnectedNet {
+                        net_name: "N".into(),
+                        islands: n_islands,
+                        missing_terminals: Vec::new(),
+                    },
+                    SchematicIssue::DisconnectedNet {
+                        net_name: "Z".into(),
+                        islands: z_islands,
+                        missing_terminals: vec![missing],
+                    },
+                ],
+            }
+        );
+    }
 
     #[test]
     fn reports_missing_component_slot() {
