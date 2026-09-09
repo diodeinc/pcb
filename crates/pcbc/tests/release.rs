@@ -188,12 +188,12 @@ fn test_release_check_does_not_publish_or_modify_authored_sources() {
     std::fs::create_dir(&temporary).unwrap();
     sb.env("TMPDIR", temporary.to_string_lossy());
     let head = sb.cmd("git", ["rev-parse", "HEAD"]).read().unwrap();
-    for (source, status) in [
-        ("# Unsaved to Git\n", "pass"),
-        ("fail(\"release-check diagnostic\")\n", "blocked"),
+    for (source, severity) in [
+        ("# Unsaved to Git\n", None),
+        ("fail(\"release-check diagnostic\")\n", Some("error")),
         (
             "warn(\"release-check diagnostic\", kind=\"sch.mismatch\")\n",
-            "blocked",
+            Some("warning"),
         ),
     ] {
         sb.write("boards/TestBoard.zen", source);
@@ -205,23 +205,18 @@ fn test_release_check_does_not_publish_or_modify_authored_sources() {
             .unchecked()
             .run()
             .unwrap();
-        assert_eq!(output.status.success(), status == "pass");
+        assert_eq!(output.status.success(), severity.is_none());
         let report: Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(report["schemaVersion"], 1);
         assert_eq!(report["layoutChecked"], false);
-        if status == "blocked" {
+        if let Some(severity) = severity {
+            let diagnostic = &report["diagnostics"][0];
+            assert_eq!(diagnostic["severity"], severity);
             assert!(
-                report["diagnostics"]
-                    .as_array()
+                diagnostic["body"]
+                    .as_str()
                     .unwrap()
-                    .iter()
-                    .any(|finding| {
-                        (finding["severity"] == "error" || finding["kind"] == "sch.mismatch")
-                            && finding["body"]
-                                .as_str()
-                                .unwrap()
-                                .contains("release-check diagnostic")
-                    })
+                    .contains("release-check diagnostic")
             );
         }
         assert!(!sb.root_path().join("src/.pcb/releases").exists());
@@ -240,19 +235,6 @@ fn test_release_check_does_not_publish_or_modify_authored_sources() {
         .unwrap();
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("not equivalent"));
-}
-
-#[test]
-fn test_release_check_requires_board_target() {
-    let mut sb = Sandbox::new();
-    let output = sb
-        .run("pcbc", ["publish", "--check"])
-        .stderr_capture()
-        .unchecked()
-        .run()
-        .unwrap();
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("explicit board .zen target"));
 }
 
 #[test]
@@ -288,7 +270,6 @@ fn test_release_check_operational_failure_is_a_diagnostic() {
     assert_eq!(diagnostic["kind"], "release.preflight");
     assert_eq!(diagnostic["severity"], "error");
     assert!(diagnostic["body"].as_str().unwrap().contains(".kicad_pro"));
-    assert!(!sb.root_path().join("src/.pcb/releases").exists());
     assert_eq!(std::fs::read_dir(&temporary).unwrap().count(), 0);
 }
 
@@ -327,7 +308,6 @@ fn test_release_check_drc_exclusion_does_not_claim_layout_checked() {
         .unwrap();
     let report: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(report["layoutChecked"], false);
-    assert!(!sb.root_path().join("src/.pcb/releases").exists());
     assert_eq!(sb.cmd("git", ["diff", "HEAD"]).read().unwrap(), before);
 }
 

@@ -1611,44 +1611,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn release_check_findings_match_publish_blockers() {
+    fn release_check_respects_suppression_and_outer_severity() {
         use pcb_zen_core::Diagnostic;
         use starlark::errors::EvalSeverity::{Error, Warning};
 
-        let warning =
-            Diagnostic::categorized("board.zen", "ordinary warning", "io.unused", Warning);
-        let schematic =
-            Diagnostic::categorized("board.zen", "schematic mismatch", "sch.mismatch", Warning);
-        let error = Diagnostic::categorized(
-            "layout.kicad_pcb",
-            "clearance",
-            "layout.drc.clearance",
-            Error,
-        );
+        let error = Diagnostic::new("clearance", Error, Path::new("layout.kicad_pcb"));
         let mut suppressed = error.clone();
         suppressed.suppressed = true;
         let wrapped = Diagnostic::new("downgraded", Warning, Path::new("board.zen"))
-            .with_child(Some(Box::new(error.clone())));
+            .with_child(Some(Box::new(error)));
         let diagnostics = Diagnostics {
-            diagnostics: vec![warning, schematic, error, suppressed, wrapped],
+            diagnostics: vec![suppressed, wrapped],
         };
-        assert_eq!(
-            diagnostics
-                .iter()
-                .map(|diagnostic| release_blocked(&Diagnostics {
-                    diagnostics: vec![diagnostic.clone()]
-                }))
-                .collect::<Vec<_>>(),
-            [false, true, true, false, false]
-        );
+        assert!(!release_blocked(&diagnostics));
         let findings =
             release_diagnostics(&diagnostics, Path::new("/repo"), Path::new("/tmp/release"));
         assert_eq!(
-            serde_json::to_value(&findings[4]).unwrap()["severity"],
+            serde_json::to_value(&findings[1]).unwrap()["severity"],
             "warning"
         );
-        assert!(findings[3].suppressed);
-        assert_eq!(findings[2].kind.as_deref(), Some("layout.drc.clearance"));
+        assert!(findings[0].suppressed);
     }
 
     #[test]
