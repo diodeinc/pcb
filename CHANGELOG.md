@@ -8,6 +8,10 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ## [Unreleased]
 
+### Changed
+
+- Speed up schematic connectivity analysis and repair planning with indexed terminal matching and verified batches of local wire cuts.
+
 ## [0.4.52] - 2026-09-09
 
 ### Added
@@ -26,7 +30,6 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Changed
 
-- Speed up schematic connectivity analysis and repair planning with indexed terminal matching and verified batches of local wire cuts.
 - Allow schematic and BOM consumers to omit the Starlark interpreter bindings.
 - Preserve sheet graphics and text annotations when updating KiCad schematics.
 - Add constrained region analysis meshes with boundary provenance, validated input accuracy, refinement diagnostics, and robust element-sided barycentric attachments to `pcb-ir`.
