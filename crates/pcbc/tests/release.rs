@@ -175,6 +175,275 @@ fn find_staging_dir(sb: &Sandbox, board_name: &str) -> String {
 }
 
 #[test]
+fn test_release_check_does_not_publish_or_modify_authored_sources() {
+    let mut sb = Sandbox::new();
+    sb.cwd("src")
+        .write("pcb.toml", PCB_TOML)
+        .write("boards/pcb.toml", BOARD_PCB_TOML)
+        .write("boards/TestBoard.zen", "# No components or layout\n")
+        .init_git()
+        .commit("Initial commit")
+        .sync();
+    let temporary = sb.root_path().join("check-tmp");
+    std::fs::create_dir(&temporary).unwrap();
+    sb.env("TMPDIR", temporary.to_string_lossy());
+    // An unstaged edit is legal in check mode and must remain untouched.
+    sb.write("boards/TestBoard.zen", "# Unsaved to Git\n");
+    let before = sb.cmd("git", ["diff", "HEAD"]).read().unwrap();
+    let head = sb.cmd("git", ["rev-parse", "HEAD"]).read().unwrap();
+    let output = sb
+        .run("pcbc", ["publish", "boards/TestBoard.zen", "--check"])
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["schemaVersion"], 1);
+    assert_eq!(report["status"], "pass");
+    assert_eq!(report["layoutChecked"], false);
+    assert!(!sb.root_path().join("src/.pcb/releases").exists());
+    assert_eq!(std::fs::read_dir(&temporary).unwrap().count(), 0);
+    assert_eq!(sb.cmd("git", ["diff", "HEAD"]).read().unwrap(), before);
+    assert_eq!(sb.cmd("git", ["rev-parse", "HEAD"]).read().unwrap(), head);
+    assert!(sb.cmd("git", ["tag"]).read().unwrap().is_empty());
+
+    sb.write(
+        "boards/TestBoard.zen",
+        "fail(\"release-check diagnostic\")\n",
+    );
+    let output = sb
+        .run("pcbc", ["publish", "boards/TestBoard.zen", "--check"])
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+    assert!(!output.status.success());
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["status"], "blocked");
+    assert!(
+        report["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|finding| finding["blocking"] == true)
+    );
+    assert!(report.to_string().contains("release-check diagnostic"));
+    assert!(!sb.root_path().join("src/.pcb/releases").exists());
+    assert_eq!(std::fs::read_dir(&temporary).unwrap().count(), 0);
+    assert_eq!(sb.cmd("git", ["rev-parse", "HEAD"]).read().unwrap(), head);
+
+    // The ordinary release path uses the same preflight and rejects this input too.
+    let output = sb
+        .run("pcbc", ["publish", "boards/TestBoard.zen"])
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("release-check diagnostic"));
+    assert!(!sb.root_path().join("src/.pcb/releases").exists());
+
+    // Once preflight succeeds, only the ordinary path continues to an archive.
+    sb.write("boards/TestBoard.zen", "# No components or layout\n");
+    sb.run("pcbc", ["publish", "boards/TestBoard.zen"])
+        .stdout_capture()
+        .stderr_capture()
+        .run()
+        .expect("local release build failed");
+    assert!(
+        std::fs::read_dir(sb.root_path().join("src/.pcb/releases"))
+            .unwrap()
+            .any(|entry| entry
+                .unwrap()
+                .path()
+                .extension()
+                .is_some_and(|ext| ext == "zip"))
+    );
+    assert_eq!(sb.cmd("git", ["rev-parse", "HEAD"]).read().unwrap(), head);
+    assert!(sb.cmd("git", ["tag"]).read().unwrap().is_empty());
+}
+
+#[test]
+fn test_release_check_rejects_publication_options() {
+    let mut sb = Sandbox::new();
+    sb.cwd("src").write("pcb.toml", PCB_TOML).sync();
+    for option in ["--bump=patch", "--force", "--no-build", "--no-push"] {
+        let output = sb
+            .run("pcbc", ["publish", "board.zen", "--check", option])
+            .stdout_capture()
+            .stderr_capture()
+            .unchecked()
+            .run()
+            .unwrap();
+        assert!(!output.status.success(), "accepted {option}");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("cannot be used with"));
+    }
+
+    let output = sb
+        .run("pcbc", ["publish", "--check"])
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("explicit board .zen target"));
+}
+
+#[test]
+fn test_release_check_operational_failure_is_incomplete() {
+    let mut sb = Sandbox::new();
+    sb.cwd("src")
+        .write("pcb.toml", PCB_TOML)
+        .write("boards/pcb.toml", BOARD_PCB_TOML)
+        .write(
+            "boards/TestBoard.zen",
+            "Layout(name=\"TestBoard\", path=\"layout\")\n",
+        )
+        .write("boards/layout/one.kicad_pro", "{}")
+        .write("boards/layout/two.kicad_pro", "{}")
+        .init_git()
+        .commit("Initial commit")
+        .sync();
+    let before = sb.cmd("git", ["diff", "HEAD"]).read().unwrap();
+    let temporary = sb.root_path().join("check-tmp");
+    std::fs::create_dir(&temporary).unwrap();
+    sb.env("TMPDIR", temporary.to_string_lossy());
+
+    let output = sb
+        .run("pcbc", ["publish", "boards/TestBoard.zen", "--check"])
+        .stdout_capture()
+        .stderr_capture()
+        .unchecked()
+        .run()
+        .unwrap();
+    assert!(!output.status.success());
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["status"], "incomplete");
+    assert_eq!(report["layoutChecked"], false);
+    assert_eq!(report["findings"], serde_json::json!([]));
+    assert!(report["message"].as_str().unwrap().contains(".kicad_pro"));
+    assert!(!sb.root_path().join("src/.pcb/releases").exists());
+    assert_eq!(std::fs::read_dir(&temporary).unwrap().count(), 0);
+    assert_eq!(sb.cmd("git", ["diff", "HEAD"]).read().unwrap(), before);
+}
+
+#[test]
+fn test_release_check_drc_exclusion_does_not_claim_layout_checked() {
+    let mut sb = Sandbox::new();
+    sb.cwd("src")
+        .write("pcb.toml", PCB_TOML)
+        .write("boards/pcb.toml", BOARD_PCB_TOML)
+        .write(
+            "boards/TestBoard.zen",
+            "Layout(name=\"TestBoard\", path=\"layout\")\n",
+        )
+        .write("boards/layout/layout.kicad_pro", "{}")
+        .write("boards/layout/layout.kicad_pcb", "(kicad_pcb)")
+        .init_git()
+        .commit("Initial commit")
+        .sync();
+    let before = sb.cmd("git", ["diff", "HEAD"]).read().unwrap();
+    let output = sb
+        .run(
+            "pcbc",
+            [
+                "publish",
+                "boards/TestBoard.zen",
+                "--check",
+                "--exclude",
+                "drc",
+                "--exclude",
+                "bom",
+            ],
+        )
+        .stdout_capture()
+        .stderr_capture()
+        .run()
+        .unwrap();
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["status"], "pass");
+    assert_eq!(report["layoutChecked"], false);
+    let log = String::from_utf8_lossy(&output.stderr);
+    assert!(!log.contains("Running KiCad DRC checks"));
+    assert!(!log.contains("Generating design BOM"));
+    assert!(!sb.root_path().join("src/.pcb/releases").exists());
+    assert_eq!(sb.cmd("git", ["diff", "HEAD"]).read().unwrap(), before);
+}
+
+#[test]
+fn test_release_check_respects_bom_suppression_and_exclusion() {
+    let server = MockServer::start();
+    let bom_match = server.mock(|when, then| {
+        when.method(POST)
+            .path("/api/boms/match")
+            .query_param("strict", "true");
+        then.status(200).json_body(serde_json::json!({
+            "results": (["GENERIC.R", "AUTHORED.R"].map(|path| serde_json::json!({
+                "designEntry": { "path": path },
+                "offerIds": [], "offerStockClasses": {},
+                "match": "MATCH_EXACT", "selectedOfferId": null
+            }))),
+            "offers": {}
+        }));
+    });
+    let mut sb = Sandbox::new();
+    sb.cwd("src")
+        .env("DIODE_API_URL", server.base_url())
+        .env("NO_PROXY", "127.0.0.1,localhost")
+        .env("no_proxy", "127.0.0.1,localhost")
+        .write("pcb.toml", PCB_TOML)
+        .write("boards/pcb.toml", BOARD_PCB_TOML)
+        .write("boards/TestBoard.zen", BOM_INTENT_BOARD_ZEN)
+        .init_git()
+        .commit("Initial commit")
+        .sync();
+
+    for flags in [vec![], vec!["-S", "bom"], vec!["--exclude", "bom"]] {
+        let mut args = vec!["publish", "boards/TestBoard.zen", "--check"];
+        args.extend(&flags);
+        let requests_before = bom_match.calls();
+        let output = sb
+            .run("pcbc", args)
+            .stdout_capture()
+            .stderr_capture()
+            .run()
+            .unwrap();
+        let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(report["status"], "pass"); // Sourceability warnings are not release blockers.
+        let bom_findings = report["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|finding| finding["kind"] == "bom.sourceability.no_offers")
+            .collect::<Vec<_>>();
+        let excluded = flags.contains(&"--exclude");
+        assert_eq!(bom_findings.len(), if excluded { 0 } else { 2 });
+        for finding in bom_findings {
+            assert_eq!(finding["suppressed"], flags.contains(&"-S"));
+            assert_eq!(finding["blocking"], false);
+        }
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr).contains("Generating design BOM"),
+            !excluded
+        );
+        // Identical build hydration and sourcing inputs share the existing cache,
+        // including across subsequent checks with different reporting options.
+        assert_eq!(
+            bom_match.calls() - requests_before,
+            if flags.is_empty() { 1 } else { 0 }
+        );
+    }
+}
+
+#[test]
 fn test_publish_board_source_only() {
     let mut sb = Sandbox::new();
     sb.cwd("src")

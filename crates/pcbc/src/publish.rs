@@ -140,6 +140,10 @@ impl fmt::Display for BumpStrategy {
 #[derive(Args, Debug)]
 #[command(about = "Publish packages or board releases")]
 pub struct PublishArgs {
+    /// Check a board's release preflight and print JSON, without publishing
+    #[arg(long, conflicts_with_all = ["bump", "force", "no_push", "no_build"])]
+    pub check: bool,
+
     /// Skip preflight checks (uncommitted changes, branch, remote)
     #[arg(long, short = 'f', hide = true)]
     pub force: bool,
@@ -468,6 +472,10 @@ pub fn execute(args: PublishArgs, resolution: Resolution) -> Result<()> {
         return publish_board(&path, &args, resolution);
     }
 
+    if args.check {
+        bail!("--check requires an explicit board .zen target");
+    }
+
     // Otherwise, publish packages
     publish_packages(&path, &args)
 }
@@ -518,17 +526,17 @@ fn publish_board(zen_path: &Path, args: &PublishArgs, resolution: Resolution) ->
 
     ensure_board_publish_has_no_workspace_overrides(&workspace)?;
 
-    // Local hash release: no --bump, just build the archive
+    let mut options = release::BoardReleaseOptions {
+        version: None,
+        suppress: args.suppress.clone(),
+        exclude: args.exclude.clone(),
+        geometry_resolution: resolution,
+        check: args.check,
+    };
+
+    // Local hash release: --check stops the build after preflight.
     if args.bump.is_none() {
-        let _zip_path = release::build_board_release(
-            workspace,
-            board_path,
-            board_name,
-            args.suppress.clone(),
-            None, // version = None means use git hash
-            args.exclude.clone(),
-            resolution,
-        )?;
+        release::build_board_release(&workspace.root, board_path, board_name, options)?;
         return Ok(());
     }
 
@@ -568,22 +576,19 @@ fn publish_board(zen_path: &Path, args: &PublishArgs, resolution: Resolution) ->
     let tag_name = tags::build_tag_name(&tag_prefix, &next_version);
 
     // Build the release archive
-    let _zip_path = release::build_board_release(
-        workspace.clone(),
-        board_path,
-        board_name.clone(),
-        args.suppress.clone(),
-        Some(format!("v{}", next_version)),
-        args.exclude.clone(),
-        resolution,
-    )?;
+    options.version = Some(format!("v{}", next_version));
+    let Some(zip_path) =
+        release::build_board_release(&workspace.root, board_path, board_name.clone(), options)?
+    else {
+        return Ok(());
+    };
 
     // Upload to API (must succeed before creating tag)
     if !args.no_push {
         let ws_name = release_workspace_name(&workspace)?;
         let ctx = pcb_diode_api::WorkspaceContext::from_workspace_root(&workspace.root);
         eprintln!("Uploading release to Diode...");
-        let result = pcb_diode_api::upload_release(&_zip_path, &ws_name, &ctx)?;
+        let result = pcb_diode_api::upload_release(&zip_path, &ws_name, &ctx)?;
         if let Some(release_id) = result.release_id {
             eprintln!(
                 "{} Release uploaded: {}",
