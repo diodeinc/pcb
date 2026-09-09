@@ -11,7 +11,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Added
 
 - Add mesh-based elastic support selection with finite-area connections.
-- Add opt-in `board-array create --mouse-bite` outline eligibility JSON using real substrate and courtyard evidence; this analysis-only phase does not generate a panel.
+- Add analysis-only `board-array create --mouse-bite` outline eligibility reports.
 - Support KiCad 9 schematics, saving edited pages as KiCad 10.
 - Add `--accuracy-um` to set the geometry accuracy for Gerber, IPC-2581, and release output.
 - Keep circles and ellipses exact in exports and rendering.
