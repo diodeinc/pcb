@@ -10,7 +10,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 
 ### Added
 
-- Add a pure mesh-to-mechanics adapter with finite-area elastic connections and explicit board/frame support selection inputs.
+- Add mesh-based elastic support selection with finite-area connections.
 - Support KiCad 9 schematics, saving edited pages as KiCad 10.
 - Add `--accuracy-um` to set the geometry accuracy for Gerber, IPC-2581, and release output.
 - Keep circles and ellipses exact in exports and rendering.
