@@ -370,3 +370,80 @@ fn single_file_hashing() {
         ));
     });
 }
+
+#[test]
+fn publisher_and_consumer_hashes_use_package_local_ignore_rules() {
+    let repo = CanonicalTestDir::new();
+    let home = tempfile::tempdir().unwrap();
+    let git = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .current_dir(repo.root())
+            .env("HOME", home.path())
+            .env("XDG_CONFIG_HOME", home.path())
+            .env("GIT_CONFIG_GLOBAL", home.path().join("gitconfig"))
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .args(args)
+            .output()
+            .expect("run git");
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output.stdout
+    };
+    git(&["init", "-b", "main"]);
+    repo.add_file(".gitignore", "/pkg/ancestor-git.txt\n");
+    repo.add_file(".ignore", "/pkg/ancestor-ignore.txt\n");
+    repo.add_file("pkg/.gitignore", "*.log\n");
+    repo.add_file("pkg/.ignore", "*.tmp\n");
+    repo.add_file("pkg/pcb.toml", "[package]\n");
+    for name in [
+        "main.zen",
+        "ancestor-git.txt",
+        "ancestor-ignore.txt",
+        "debug.log",
+        "local.tmp",
+    ] {
+        repo.add_file(&format!("pkg/{name}"), "tracked content\n");
+    }
+    git(&["add", "-f", ".gitignore", ".ignore", "pkg"]);
+    git(&[
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "-m",
+        "initial",
+    ]);
+    // Local exclusions must not remove committed package content.
+    repo.add_file(".git/info/exclude", "/pkg/main.zen\n");
+
+    // The consumer receives only the package subtree, without ancestor rules.
+    let package = repo.root().join("pkg");
+    let extract = tempfile::tempdir().expect("extract tempdir");
+    let archive = git(&["archive", "--format=tar", "HEAD:pkg"]);
+    tar::Archive::new(archive.as_slice())
+        .unpack(extract.path())
+        .unwrap();
+    assert!(!extract.path().join(".git").exists());
+    for name in [".gitignore", ".ignore", "debug.log", "local.tmp"] {
+        assert!(extract.path().join(name).is_file());
+    }
+    for root in [package.as_path(), extract.path()] {
+        assert_eq!(
+            list_canonical_tar_entries(root, None).unwrap(),
+            [
+                "ancestor-git.txt",
+                "ancestor-ignore.txt",
+                "main.zen",
+                "pcb.toml"
+            ]
+        );
+    }
+    assert_eq!(
+        compute_content_hash_from_dir(&package).unwrap(),
+        compute_content_hash_from_dir(extract.path()).unwrap(),
+    );
+}
